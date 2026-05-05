@@ -60,14 +60,14 @@ git init
 git add .
 git commit -m "initial commit"
 
-echo "Creating GitHub repository..."
-gh repo create "$PROJECT_NAME" --public --source=. --push
+echo "Creating GitHub repository in WebJamApps organization..."
+gh repo create "WebJamApps/$PROJECT_NAME" --public --source=. --push
 
 # 3. Branching and Protection
 echo "Setting up branches..."
 git checkout -b dev
 git push -u origin dev
-gh repo edit "JoshuaVSherman/$PROJECT_NAME" --default-branch dev
+gh repo edit "WebJamApps/$PROJECT_NAME" --default-branch dev
 
 echo "Applying branch protection..."
 PROTECTION_JSON='{
@@ -81,7 +81,7 @@ PROTECTION_JSON='{
   "restrictions": null
 }'
 
-echo "$PROTECTION_JSON" | gh api -X PUT "/repos/JoshuaVSherman/$PROJECT_NAME/branches/main/protection" --input -
-echo "$PROTECTION_JSON" | gh api -X PUT "/repos/JoshuaVSherman/$PROJECT_NAME/branches/dev/protection" --input -
+echo "$PROTECTION_JSON" | gh api -X PUT "/repos/WebJamApps/$PROJECT_NAME/branches/main/protection" --input -
+echo "$PROTECTION_JSON" | gh api -X PUT "/repos/WebJamApps/$PROJECT_NAME/branches/dev/protection" --input -
 
 echo "--- $PROJECT_NAME is ready! ---"
