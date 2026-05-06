@@ -72,7 +72,7 @@ gh repo edit "WebJamApps/$PROJECT_NAME" --default-branch dev
 echo "Applying branch protection..."
 PROTECTION_JSON='{
   "required_status_checks": null,
-  "enforce_admins": true,
+  "enforce_admins": false,
   "required_pull_request_reviews": {
     "dismiss_stale_reviews": true,
     "require_code_owner_reviews": false,
