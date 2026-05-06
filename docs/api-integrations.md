@@ -1,5 +1,10 @@
 # API Integrations for Claude and Gemini
 
+> **Scope:** This document is a *snapshot of one specific machine's setup*
+> and contains hard-coded paths under `/home/joshua/`. For a generic,
+> reusable recipe with no personal paths, see
+> [ai-assistant-google-setup.md](./ai-assistant-google-setup.md).
+
 Status of Google API integrations available to AI assistants in this workspace.
 
 **Last verified:** 2026-05-06 (Gmail + Tasks unlocked same day)
