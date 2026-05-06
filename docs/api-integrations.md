@@ -2,7 +2,7 @@
 
 Status of Google API integrations available to AI assistants in this workspace.
 
-**Last verified:** 2026-05-06
+**Last verified:** 2026-05-06 (Gmail + Tasks unlocked same day)
 
 ---
 
@@ -15,8 +15,8 @@ Status of Google API integrations available to AI assistants in this workspace.
 | Google Sheets | ✅ Working | ✅ Working | Read, append, format |
 | Google Slides | ✅ Working | ✅ Working | Read, create, edit |
 | Google Calendar | ✅ Working | ✅ Working | List/create/update/delete events |
-| Google Tasks | ⚠️ API enabled, OAuth scope missing | ⚠️ Same | Cannot call yet |
-| Gmail (send/draft) | ⚠️ API enabled, OAuth scope missing | ⚠️ Same | Cannot call yet |
+| Google Tasks | ✅ Working | ⚠️ Separate OAuth needed | List + CRUD on lists/tasks |
+| Gmail (send/draft) | ✅ Working | ⚠️ Separate OAuth needed | Read, send, draft, label, search, delete |
 | Gmail "scheduled send" | ❌ Not natively supported by Gmail API | ❌ Same | Workaround: draft + cron/Apps Script |
 
 ---
@@ -26,8 +26,8 @@ Status of Google API integrations available to AI assistants in this workspace.
 Both Claude (via the `google-drive` MCP) and Gemini (via its OAuth client) use the same GCP project.
 
 - **Project number:** `65848821625`
-- **APIs enabled:** Drive, Docs, Sheets, Slides, Calendar, **Tasks, Gmail** (last two enabled 2026-05-06 but not yet usable — see "Pending work" below)
-- **OAuth client credentials:** Desktop app, JSON downloaded to `/home/joshua/.config/google-drive-mcp/gcp-oauth.keys.json`
+- **APIs enabled:** Drive, Docs, Sheets, Slides, Calendar, Tasks, Gmail
+- **OAuth client credentials:** Desktop app, JSON at `/home/joshua/.config/google-drive-mcp/gcp-oauth.keys.json`. The same Desktop OAuth client is reused by all three MCP servers (loopback redirect on `localhost:3000`).
 
 ---
 
@@ -39,25 +39,22 @@ claude mcp list
 
 Currently:
 
-| MCP Name | Source | Purpose |
-|---|---|---|
-| `claude.ai Google Drive` | hosted (drivemcp.googleapis.com) | Lightweight Drive read/search via Anthropic-managed proxy |
-| `google-drive` | npx `@piotr-agier/google-drive-mcp` | Full Drive + Docs + Sheets + Slides + Calendar with local OAuth |
+| MCP Name | Source | Purpose | Token file |
+|---|---|---|---|
+| `claude.ai Google Drive` | hosted (drivemcp.googleapis.com) | Lightweight Drive read/search via Anthropic-managed proxy | (managed) |
+| `google-drive` | npx `@piotr-agier/google-drive-mcp` | Drive + Docs + Sheets + Slides + Calendar | `~/.config/google-drive-mcp/tokens.json` |
+| `gmail` | npx `@gongrzhe/server-gmail-autoauth-mcp` | Gmail read/send/draft/label/search/delete | `~/.gmail-mcp/credentials.json` |
+| `google-tasks` | npx `mcp-googletasks-vrob` | Task lists + tasks CRUD | `~/.config/mcp-googletasks-vrob/credentials.json` |
 
-The `google-drive` MCP is the primary one — it owns the OAuth token and exposes the most tools.
+Each MCP has its own credentials file with its own scopes; all three reuse the same Desktop OAuth client from `~/.config/google-drive-mcp/gcp-oauth.keys.json`.
 
-### Token + scopes (Claude side)
+### Granted scopes per MCP
 
-- **Token file:** `/home/joshua/.config/google-drive-mcp/tokens.json`
-- **Granted OAuth scopes:**
-  - `drive`, `drive.file`, `drive.readonly`
-  - `documents`
-  - `spreadsheets`
-  - `presentations`
-  - `calendar`, `calendar.events`
-- **NOT yet granted:** `tasks`, `gmail.send`, `gmail.compose`, `gmail.modify`
+- **`google-drive`:** `drive`, `drive.file`, `drive.readonly`, `documents`, `spreadsheets`, `presentations`, `calendar`, `calendar.events`
+- **`gmail`:** `gmail.modify`, `gmail.settings.basic`
+- **`google-tasks`:** `tasks`
 
-The token auto-refreshes via the stored refresh token. If a call returns `401 invalid_grant`, delete `tokens.json` and re-run the MCP's auth flow.
+Tokens auto-refresh via stored refresh tokens. If any MCP call returns `401 invalid_grant`, delete that MCP's credentials file and re-run its auth flow.
 
 ---
 
@@ -71,24 +68,23 @@ For coordination, a status note is kept in **Drive: My Drive / GEMINI / API_Inte
 
 ## Verified live tests (2026-05-06)
 
-Re-runnable smoke tests:
+Each MCP has its own token file. Re-runnable smoke tests:
 
 ```bash
-# Calendar (works)
+# Calendar (200)
 TOKEN=$(jq -r '.access_token' ~/.config/google-drive-mcp/tokens.json)
 curl -s -H "Authorization: Bearer $TOKEN" \
   https://www.googleapis.com/calendar/v3/users/me/calendarList | jq '.items | length'
-# → 4
 
-# Tasks (currently 403 — scope missing)
+# Gmail (200)
+TOKEN=$(jq -r '.access_token' ~/.gmail-mcp/credentials.json)
 curl -s -H "Authorization: Bearer $TOKEN" \
-  https://tasks.googleapis.com/tasks/v1/users/@me/lists | jq '.error.message // "OK"'
-# → "Request had insufficient authentication scopes."
+  https://gmail.googleapis.com/gmail/v1/users/me/profile | jq '.emailAddress'
 
-# Gmail (currently 403 — scope missing)
+# Tasks (200)
+TOKEN=$(jq -r '.access_token' ~/.config/mcp-googletasks-vrob/credentials.json)
 curl -s -H "Authorization: Bearer $TOKEN" \
-  https://gmail.googleapis.com/gmail/v1/users/me/profile | jq '.error.message // "OK"'
-# → "Request had insufficient authentication scopes."
+  https://tasks.googleapis.com/tasks/v1/users/@me/lists | jq '.items[].title'
 ```
 
 ---
@@ -112,41 +108,26 @@ For batch Drive cleanup (delete by date, find large files, etc.), see [rclone-se
 
 ---
 
-## Pending work — to unlock Tasks + Gmail
-
-Two paths; pick one. Path B is recommended for cleaner separation.
-
-### Path A — extend the existing `google-drive` MCP
-
-1. Modify the MCP's requested scopes to add:
-   - `https://www.googleapis.com/auth/tasks`
-   - `https://www.googleapis.com/auth/gmail.send`
-   - `https://www.googleapis.com/auth/gmail.compose`
-2. Delete `~/.config/google-drive-mcp/tokens.json`
-3. Re-run the MCP's auth flow — Joshua re-consents in the browser
-4. Verify with the curl smoke tests above (should return 200)
-
-The `@piotr-agier/google-drive-mcp` package would need to be forked or PR'd to add Tasks/Gmail tool definitions. The auth piece alone isn't enough — the MCP also needs to expose the tools.
-
-### Path B — install dedicated MCP servers (recommended)
-
-Each MCP handles its own OAuth flow. Cleaner separation; faster path.
+## How the MCPs were installed (for reference / re-install)
 
 ```bash
-# Gmail
+# Gmail MCP
 claude mcp add gmail -- npx -y @gongrzhe/server-gmail-autoauth-mcp
-
-# First-time setup for the Gmail MCP:
 mkdir -p ~/.gmail-mcp
-cp ~/.config/google-drive-mcp/gcp-oauth.keys.json ~/.gmail-mcp/   # reuse existing OAuth client
-npx @gongrzhe/server-gmail-autoauth-mcp auth                       # browser flow
+cp ~/.config/google-drive-mcp/gcp-oauth.keys.json ~/.gmail-mcp/
+npx @gongrzhe/server-gmail-autoauth-mcp auth        # browser flow
+
+# Google Tasks MCP
+CLIENT_ID=$(jq -r '.installed.client_id' ~/.gmail-mcp/gcp-oauth.keys.json)
+CLIENT_SECRET=$(jq -r '.installed.client_secret' ~/.gmail-mcp/gcp-oauth.keys.json)
+claude mcp add google-tasks \
+  --env "GOOGLE_CLIENT_ID=$CLIENT_ID" \
+  --env "GOOGLE_CLIENT_SECRET=$CLIENT_SECRET" \
+  --env "OAUTH_PORT=3000" \
+  -- npx -y mcp-googletasks-vrob
+# Auth happens by asking Claude "Please authenticate with Google Tasks" — the
+# MCP exposes an `authenticate` tool that returns a URL for browser consent.
 ```
-
-For Tasks: as of 2026-05-06, no widely-maintained Tasks-only MCP exists on npm. Options:
-
-- Search again later (`npm search "google tasks mcp"`)
-- Build a minimal one (Tasks API has ~6 methods)
-- Use a calendar-event-as-task workaround
 
 ---
 
