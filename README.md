@@ -9,6 +9,8 @@ project directories that live alongside it on the same machine.
 
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
+- **`gig-scraper/`** — Playwright + xlsx scrapers for JoshMariaMusic gig booking
+- **`gemma-cli/`** — local Gemma 4 Coordinator (Python package; editable pip install with its own venv)
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace
 
 ## Getting started
@@ -26,6 +28,32 @@ Then read:
 - [docs/ai-assistant-google-setup.md](docs/ai-assistant-google-setup.md) — generic recipe for setting up Google Drive/Calendar/Gmail/Tasks MCP servers for Claude Code
 - [docs/rclone-setup.md](docs/rclone-setup.md) — mounting Google Drive locally via rclone + systemd
 - [docs/api-integrations.md](docs/api-integrations.md) — reference snapshot of one working setup (machine-specific paths; use the generic guide above for your own setup)
+
+## gemma-cli setup notes
+
+`gemma-cli/` is a Python package designed for editable install in its own venv. From `web-jam-tools/gemma-cli/`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+Optionally put it on your PATH so `gemma` works from anywhere:
+
+```bash
+ln -s "$(pwd)/.venv/bin/gemma" ~/.local/bin/gemma
+```
+
+### Compatibility symlink (if migrating from a previous location)
+
+`gemma-cli` lived at `~/WebJamApps/gemma-cli/` (a sibling of `web-jam-tools/`) before being moved inside this repo on 2026-05-13. Existing wrapper scripts, cron entries, or shell aliases that reference the old absolute path keep working if you leave a symlink at the old location pointing to the new one:
+
+```bash
+ln -s ~/WebJamApps/web-jam-tools/gemma-cli ~/WebJamApps/gemma-cli
+```
+
+Why a symlink instead of rebuilding: a Python venv bakes absolute paths into its activate script, shebang lines, and `.pth` files. The symlink lets every existing reference resolve transparently without needing to recreate the venv or grep your dotfiles for the old path.
 
 ## Contributing
 
