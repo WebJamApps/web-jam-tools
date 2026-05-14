@@ -70,7 +70,7 @@ def chat(
             "tools": [t.schema() for t in tools],
             "options": {"temperature": DEFAULT_TEMPERATURE},
         }
-        resp = requests.post(OLLAMA_URL, json=body, timeout=300)
+        resp = requests.post(OLLAMA_URL, json=body, timeout=600)
         resp.raise_for_status()
         data = resp.json()
         msg = data["message"]
