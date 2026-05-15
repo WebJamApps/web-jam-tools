@@ -102,15 +102,34 @@ _NEXT_TASK_PREFIX = (
 )
 
 
+def _wrapper_name_for_model(model: str) -> str:
+    """Derive the conventional wrapper command name from the model tag.
+
+    Matches the names of the wrappers under ~/.local/bin/ on the maintainer's
+    machine: `llama` for Llama models, `gemma` for everything else.
+    """
+    return "llama" if model.startswith("llama") else "gemma"
+
+
+def _role_for_model(model: str) -> str:
+    """Map a model tag to its team role per CLAUDE.md AI TEAM STRUCTURE."""
+    if model.startswith("gemma"):
+        return "Media Specialist"
+    return "Coordinator"
+
+
 def _repl(model: str, verbose: bool) -> None:
-    print(f"gemma (Coordinator REPL — {model}). Tools: Drive, Calendar, Gmail.")
+    name = _wrapper_name_for_model(model)
+    role = _role_for_model(model)
+    print(f"{name} ({role} REPL — {model}). Tools: Drive, Calendar, Gmail.")
     print("Commands: /next (run next queued task), /done (remove first queued task),")
     print("          /reset (clear session memory), verbose (toggle tool logging),")
     print("          exit / Ctrl-D (quit).\n")
+    prompt = f"{name}> "
     history: list = []
     while True:
         try:
-            line = input("gemma> ").strip()
+            line = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return
