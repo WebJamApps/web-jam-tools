@@ -150,7 +150,7 @@ def _repl(model: str, verbose: bool) -> None:
             try:
                 from gemma_cli.queue import get_next_task
 
-                task, total = get_next_task()
+                task, total = get_next_task(model)
                 if not task:
                     print("(queue empty)")
                     print()
@@ -173,7 +173,7 @@ def _repl(model: str, verbose: bool) -> None:
             try:
                 from gemma_cli.queue import delete_first_task
 
-                remaining = delete_first_task()
+                remaining = delete_first_task(model)
                 print(f"Removed first task. {remaining} remaining in queue.")
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")

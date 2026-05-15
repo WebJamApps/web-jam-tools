@@ -1,8 +1,14 @@
-"""Persistent task queue support for gemma-tasks.txt on Drive.
+"""Persistent task queue support — model-aware.
 
-Used by the REPL `/next` and `/done` commands. Reads/writes the queue file
-deterministically via the Drive REST API so the model never has to (and can't
-hallucinate) the contents of its own queue.
+Used by the REPL `/next` and `/done` commands. Reads/writes the right queue
+file deterministically via the Drive REST API so the model never has to (and
+can't hallucinate) the contents of its own queue.
+
+As of 2026-05-15 there are TWO queues, one per laptop role:
+  - llama-tasks.txt → Coordinator (Llama 3.3 70B on the desktop)
+  - gemma-tasks.txt → Media Specialist (Gemma 4 on the laptop)
+
+Lookup is by model tag. Unknown models default to gemma-tasks.txt for safety.
 """
 
 from __future__ import annotations
@@ -13,10 +19,18 @@ import re
 
 import requests
 
-TASKS_FILE_ID = "15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP"
+TASKS_FILE_IDS = {
+    "llama3.3:70b": "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g",  # llama-tasks.txt (Coordinator)
+    "gemma4:e4b": "15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP",  # gemma-tasks.txt (Media Specialist)
+}
+DEFAULT_FALLBACK_FILE_ID = "15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP"
 DRIVE_TOKEN_PATH = os.path.expanduser("~/.config/google-drive-mcp/tokens.json")
 DRIVE_KEYS_PATH = os.path.expanduser("~/.config/google-drive-mcp/gcp-oauth.keys.json")
 TASK_LINE_RE = re.compile(r"^task\s+\d+", re.IGNORECASE)
+
+
+def _file_id_for_model(model: str) -> str:
+    return TASKS_FILE_IDS.get(model, DEFAULT_FALLBACK_FILE_ID)
 
 
 def _drive_access_token() -> str:
@@ -43,10 +57,11 @@ def _drive_access_token() -> str:
     return new_token
 
 
-def _download() -> str:
+def _download(model: str) -> str:
     token = _drive_access_token()
+    file_id = _file_id_for_model(model)
     resp = requests.get(
-        f"https://www.googleapis.com/drive/v3/files/{TASKS_FILE_ID}",
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
         headers={"Authorization": f"Bearer {token}"},
         params={"alt": "media"},
         timeout=30,
@@ -55,10 +70,11 @@ def _download() -> str:
     return resp.text
 
 
-def _upload(content: str) -> None:
+def _upload(model: str, content: str) -> None:
     token = _drive_access_token()
+    file_id = _file_id_for_model(model)
     resp = requests.patch(
-        f"https://www.googleapis.com/upload/drive/v3/files/{TASKS_FILE_ID}",
+        f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "text/plain"},
         params={"uploadType": "media"},
         data=content.encode("utf-8"),
@@ -77,18 +93,18 @@ def _parse_tasks(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def get_next_task() -> tuple[str | None, int]:
-    """Return (next_task_text_or_None, total_count_in_queue)."""
-    text = _download()
+def get_next_task(model: str) -> tuple[str | None, int]:
+    """Return (next_task_text_or_None, total_count_in_queue) for this model's queue."""
+    text = _download(model)
     tasks = _parse_tasks(text)
     if not tasks:
         return None, 0
     return tasks[0][1], len(tasks)
 
 
-def delete_first_task() -> int:
-    """Delete the first task. Return remaining count."""
-    text = _download()
+def delete_first_task(model: str) -> int:
+    """Delete the first task from this model's queue. Return remaining count."""
+    text = _download(model)
     tasks = _parse_tasks(text)
     if not tasks:
         return 0
@@ -101,5 +117,5 @@ def delete_first_task() -> int:
     while new_lines and new_lines[-1].strip() == "":
         new_lines.pop()
     new_text = "\n".join(new_lines) + "\n"
-    _upload(new_text)
+    _upload(model, new_text)
     return len(tasks) - 1
