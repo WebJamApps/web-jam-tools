@@ -1,0 +1,119 @@
+{
+  "folders": [
+    { "name": "JaMmusic", "path": "JaMmusic" },
+    { "name": "CollegeLutheran", "path": "CollegeLutheran" },
+    { "name": "AppersonAuto", "path": "AppersonAuto" },
+    { "name": "web-jam-back", "path": "web-jam-back" },
+    { "name": "WebJamSocketCluster", "path": "WebJamSocketCluster" },
+    { "name": "WebJamPg", "path": "WebJamPg" },
+    { "name": "web-jam-tools", "path": "web-jam-tools" }
+  ],
+  "settings": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.eslint": "explicit",
+      "source.fixAll.stylelint": "explicit"
+    },
+    "eslint.workingDirectories": [
+      { "pattern": "./*" }
+    ],
+    "vitest.disableWorkspaceWarning": true,
+    "files.exclude": {
+      "**/node_modules": true,
+      "**/.git": true,
+      "**/coverage": true,
+      "**/dist": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/coverage": true,
+      "**/dist": true,
+      "**/package-lock.json": true
+    },
+    "typescript.tsdk": "JaMmusic/node_modules/typescript/lib",
+    "typescript.enablePromptUseWorkspaceTsdk": true,
+    "git.ignoredRepositories": [
+      "/home/joshua/WebJamApps/web-jam-back/JaMmusic",
+      "/home/joshua/WebJamApps/WebJamSocketCluster/JaMmusic"
+    ]
+  },
+  "extensions": {
+    "recommendations": [
+      "vitest.explorer",
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode",
+      "stylelint.vscode-stylelint",
+      "eamodio.gitlens",
+      "google.gemini-cli-vscode-ide-companion",
+      "google.geminicodeassist"
+    ],
+    "unwantedRecommendations": [
+      "orta.vscode-jest",
+      "hbenl.vscode-test-explorer",
+      "ms-vscode.test-adapter-converter"
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "web-jam-back: dev (install + run)",
+        "type": "shell",
+        "command": "git checkout dev && npm install --ignore-scripts && npm run dev",
+        "options": {
+          "cwd": "${workspaceFolder:web-jam-back}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "new",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
+        },
+        "isBackground": true,
+        "problemMatcher": []
+      },
+      {
+        "label": "WebJamSocketCluster: dev (install + run)",
+        "type": "shell",
+        "command": "git checkout dev && npm install --ignore-scripts && npm run dev",
+        "options": {
+          "cwd": "${workspaceFolder:WebJamSocketCluster}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "new",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
+        },
+        "isBackground": true,
+        "problemMatcher": []
+      },
+      {
+        "label": "Start backend + socket cluster (dev)",
+        "dependsOn": [
+          "web-jam-back: dev (install + run)",
+          "WebJamSocketCluster: dev (install + run)"
+        ],
+        "dependsOrder": "parallel",
+        "problemMatcher": []
+      },
+      {
+        "label": "Gemma: Coordinator REPL (gemma)",
+        "type": "shell",
+        "command": "gemma",
+        "presentation": {
+          "panel": "dedicated",
+          "reveal": "always",
+          "focus": true,
+          "showReuseMessage": false,
+          "clear": false
+        },
+        "problemMatcher": []
+      }
+    ]
+  }
+}
