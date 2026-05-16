@@ -59,17 +59,54 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", text.lower())).strip()
 
 
+# Short common English words that carry little meaning. Filtered out before
+# token-overlap comparison so paraphrases like "favorite venue to play at" vs
+# "likes to play at" can be detected as referring to the same content.
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "am", "do", "does", "did", "have", "has", "had",
+    "at", "in", "on", "of", "to", "for", "from", "with", "by", "as", "into",
+    "about", "over", "under", "after", "before",
+    "and", "or", "but", "if", "that", "this", "these", "those",
+    "i", "me", "my", "you", "your", "he", "she", "it", "his", "her", "its",
+    "we", "our", "they", "their", "them",
+    "what", "which", "who", "whom", "when", "where", "why", "how",
+    "no", "not", "also", "all", "any", "some", "such", "so",
+    "will", "would", "could", "should", "may", "might", "must", "can",
+    "than", "then",
+})
+
+
+def _content_tokens(normalized_text: str) -> set[str]:
+    """Tokenize a `_normalize`d string; drop stopwords and 1-char tokens.
+
+    Returned set represents the content-bearing words of a fact, suitable for
+    overlap comparison between two facts.
+    """
+    return {t for t in normalized_text.split() if len(t) > 1 and t not in _STOPWORDS}
+
+
 def _extract_fact_body(line: str) -> str:
     """Strip leading bullet + timestamp prefix from a REMEMBERED FACTS line."""
     return _TIMESTAMP_PREFIX.sub("", line).strip()
 
 
 def find_duplicate(entry: str, file_id: str = LLAMA_MD_ID) -> str | None:
-    """Return the existing line if `entry` is a near-duplicate of one already in the file.
+    """Return the existing line if `entry` is a near-duplicate of one already saved.
 
-    Match heuristic: after normalization, treat as duplicate when the new entry is a
-    substring of an existing fact OR an existing fact is a substring of the new entry.
-    Catches both shorter-new vs longer-existing and the reverse.
+    Two heuristics in order; first match wins:
+
+    1. Normalized substring containment — catches literal repeats and shorter-vs-
+       longer-form versions of the same fact ("Sign emails as X" vs "Sign emails
+       as X instead of Y").
+
+    2. Content-token overlap — drops stopwords and short tokens, then compares
+       remaining content words. If shared / smaller-set >= 0.6, treat as a near
+       duplicate. Catches paraphrases like "Josh's favorite venue to play at is
+       Stave & Cork" vs "Josh likes to play at Stave & Cork" — same fact, different
+       wording, no literal substring overlap.
+
+    Returns the existing line (with timestamp) on match, else None.
     """
     try:
         current = _read_file(file_id)
@@ -78,6 +115,7 @@ def find_duplicate(entry: str, file_id: str = LLAMA_MD_ID) -> str | None:
     normalized_new = _normalize(entry)
     if len(normalized_new) < 5:
         return None
+    new_tokens = _content_tokens(normalized_new)
     for line in current.splitlines():
         line = line.rstrip()
         if not line.lstrip().startswith("-"):
@@ -88,6 +126,13 @@ def find_duplicate(entry: str, file_id: str = LLAMA_MD_ID) -> str | None:
             continue
         if normalized_new in normalized_existing or normalized_existing in normalized_new:
             return line
+        if len(new_tokens) >= 2:
+            existing_tokens = _content_tokens(normalized_existing)
+            if len(existing_tokens) >= 2:
+                shared = new_tokens & existing_tokens
+                smaller = min(len(new_tokens), len(existing_tokens))
+                if len(shared) / smaller >= 0.6:
+                    return line
     return None
 
 
