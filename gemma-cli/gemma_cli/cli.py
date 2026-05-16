@@ -166,6 +166,10 @@ def _repl(model: str, verbose: bool) -> None:
     print("          exit / Ctrl-D (quit).\n")
     prompt = f"{name}> "
     history: list = []
+    # Tracks the first ~80 chars of the most recently /next-ed task so we can
+    # warn Josh if he runs /next twice without /done in between. In-session
+    # only; doesn't survive REPL restart.
+    last_next_task: str | None = None
     while True:
         try:
             line = input(prompt).strip()
@@ -182,6 +186,7 @@ def _repl(model: str, verbose: bool) -> None:
             continue
         if line.lower() in {"/reset", "reset"}:
             history = []
+            last_next_task = None
             print("(session memory cleared)")
             print()
             continue
@@ -224,6 +229,14 @@ def _repl(model: str, verbose: bool) -> None:
                     print("(queue empty)")
                     print()
                     continue
+                # Normalize for re-run detection: collapse whitespace, take first 80 chars.
+                signature = " ".join(task.split())[:80]
+                if signature == last_next_task:
+                    print(
+                        "(reminder: this task was started earlier in this session — "
+                        "run /done to mark it complete, or proceed to re-run.)"
+                    )
+                last_next_task = signature
                 print(f"=== Next task (of {total} in queue) ===")
                 print(task)
                 print()
@@ -244,6 +257,7 @@ def _repl(model: str, verbose: bool) -> None:
                 from gemma_cli.queue import delete_first_task
 
                 remaining = delete_first_task(model)
+                last_next_task = None
                 print(f"Removed first task. {remaining} remaining in queue.")
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
