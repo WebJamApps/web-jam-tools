@@ -53,6 +53,17 @@ ln -s ~/WebJamApps/web-jam-tools/WebJamApps.code-workspace ~/WebJamApps/WebJamAp
 
 Then `File → Open Workspace from File...` → that symlink (or the file directly).
 
+## VSCode Python settings (`.vscode/settings.json`)
+
+A committed `.vscode/settings.json` configures VSCode's Python extension to behave well with the `gemma-cli/` venv:
+
+- **`python.defaultInterpreterPath`** points at `gemma-cli/.venv/bin/python` so VSCode's autocomplete, linting, and jump-to-definition work on `gemma_cli/*` source without "Import could not be resolved" errors.
+- **`python.terminal.activateEnvironment: false`** disables auto-activation of the venv when opening integrated terminals. On some Linux setups, auto-activation adds a ~10-second startup delay and prints a spurious `^C` (SIGINT) into the terminal. Disabling it makes VSCode terminals open as fast as external ones.
+
+This is safe because the `llama` / `gemma` wrapper scripts at `~/.local/bin/` invoke the venv's Python directly — no shell activation is needed to run them. Both VSCode integrated and external terminals behave the same for running the REPLs.
+
+The settings file is committed so a fresh checkout gets the same environment without manual config. If you clone this repo and create `gemma-cli/.venv`, the interpreter path resolves automatically via `${workspaceFolder}`.
+
 ## gemma-cli setup notes
 
 `gemma-cli/` is a Python package designed for editable install in its own venv. From `web-jam-tools/gemma-cli/`:

@@ -7,16 +7,29 @@ the model emits, feed results back, repeat until the model returns a plain reply
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import requests
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+
+def _ollama_chat_url() -> str:
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    if not host.startswith(("http://", "https://")):
+        host = f"http://{host}"
+    return f"{host}/api/chat"
+
+
+OLLAMA_URL = _ollama_chat_url()
 DEFAULT_MODEL = "gemma4:e4b"
 MAX_TURNS = 8
 # Lower temperature = less creative filling-in = less hallucination on drafting tasks.
-DEFAULT_TEMPERATURE = 0.2
+# 0.0 enforces deterministic sampling. Tried 0.1 on 2026-05-16 to fix ambiguous
+# over-trigger ("what's going on?") — instead it caused clear smalltalk like "how
+# do you feel today?" to over-fire too. Reverted to 0.0. The over-trigger on truly
+# ambiguous input is an accepted cost; clear smalltalk handling is more important.
+DEFAULT_TEMPERATURE = 0.0
 
 
 @dataclass
@@ -68,7 +81,7 @@ def chat(
             "stream": False,
             "messages": messages,
             "tools": [t.schema() for t in tools],
-            "options": {"temperature": DEFAULT_TEMPERATURE},
+            "options": {"temperature": DEFAULT_TEMPERATURE, "num_predict": 2048},
         }
         resp = requests.post(OLLAMA_URL, json=body, timeout=1200)
         resp.raise_for_status()

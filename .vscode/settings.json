@@ -1,0 +1,34 @@
+{
+  // VSCode Python configuration for the web-jam-tools workspace.
+  //
+  // The Python work in this repo lives under gemma-cli/, which uses its own
+  // venv. The two settings below are deliberately paired:
+  //
+  //   1. defaultInterpreterPath  → points VSCode's Python extension at the
+  //                                gemma-cli venv so editor features
+  //                                (autocomplete, linting, jump-to-def) work
+  //                                correctly on gemma_cli/* source files.
+  //                                Without this, you get "Import 'googleapiclient'
+  //                                could not be resolved" squiggles everywhere.
+  //
+  //   2. terminal.activateEnvironment → set to false so opening an integrated
+  //                                terminal does NOT auto-source the venv.
+  //                                Auto-activation adds a ~10-second startup
+  //                                delay and (on some Linux setups) prints a
+  //                                spurious "^C" / SIGINT during initialization.
+  //                                The `llama` and `gemma` wrapper scripts at
+  //                                ~/.local/bin/ invoke the venv's Python
+  //                                directly, so shell-level activation isn't
+  //                                needed anyway.
+  //
+  // Net effect: IDE features work, terminals open fast, both VSCode integrated
+  // and external terminals behave the same for running `llama` / `gemma`.
+  //
+  // ${workspaceFolder} resolves to this folder (web-jam-tools/) when settings
+  // are stored at .vscode/settings.json. If you check out this repo at a
+  // different absolute path, the interpreter path stays valid as long as
+  // gemma-cli/.venv exists.
+
+  "python.defaultInterpreterPath": "${workspaceFolder}/gemma-cli/.venv/bin/python",
+  "python.terminal.activateEnvironment": false
+}
