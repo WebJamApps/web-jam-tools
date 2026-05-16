@@ -12,20 +12,44 @@ import argparse
 import sys
 
 from gemma_cli.llm import DEFAULT_MODEL, chat
+from gemma_cli.memory import append_memory, load_memory
 from gemma_cli.tools.calendar import TOOLS as CALENDAR_TOOLS
 from gemma_cli.tools.drive import TOOLS as DRIVE_TOOLS
 from gemma_cli.tools.gmail import TOOLS as GMAIL_TOOLS
+from gemma_cli.tools.memory import TOOLS as MEMORY_TOOLS
 
-ALL_TOOLS = DRIVE_TOOLS + CALENDAR_TOOLS + GMAIL_TOOLS
+ALL_TOOLS = DRIVE_TOOLS + CALENDAR_TOOLS + GMAIL_TOOLS + MEMORY_TOOLS
 
 SYSTEM_PROMPT = (
     "You are the Coordinator for Josh Sherman's personal projects (JoshMariaMusic "
     "gig booking and MariaParty retirement party)."
-    "\n\nTOOL-USE MANDATE (most important rule):"
-    "\nWhen the user asks about ANY Drive file, calendar event, or email — you MUST call the "
-    "appropriate tool. Never answer from memory or assumption. If a file is large, use "
-    "drive_read_text_file_lines or drive_search_in_file (NOT the full-read tool). If unsure "
-    "which tool, call drive_list_files first to find the file ID."
+    "\n\nTOOL-USE POLICY (most important rule):"
+    "\n\nDEFAULT BEHAVIOR: do NOT call tools. Reply to Josh directly using language."
+    "\n\nUSE A TOOL ONLY when ALL THREE of these are true:"
+    "\n  (a) Josh asks about a SPECIFIC, IDENTIFIABLE resource — a named Drive file, a named calendar event, a specific Gmail thread or sender — OR he explicitly asks for an action like 'list my drive', 'read claude-opus-tasks.txt', 'show today's events', 'search emails for X', 'create a calendar event for Y'."
+    "\n  (b) The answer depends on live data only the tool can retrieve — current Drive contents, the real calendar, actual email contents. Not just topics he's mentioned in conversation."
+    "\n  (c) You can identify exactly which tool and exactly what arguments to pass."
+    "\n\nIF ANY of (a)(b)(c) IS UNCLEAR — do NOT call a tool. Reply conversationally, or ask Josh a clarifying question."
+    "\n\nEXAMPLES — USE a tool:"
+    "\n- 'list the files in my drive' → drive_list_files"
+    "\n- 'read claude-opus-tasks.txt' → drive_list_files (to find ID) then drive_read_text_file"
+    "\n- 'what's on my calendar today?' → calendar_list_events"
+    "\n- 'create an event for Maria's party at 5pm on May 30' → calendar_create_event"
+    "\n- 'search my emails for Bobby at Mac n Bob's' → gmail_search"
+    "\n\nEXAMPLES — do NOT use a tool, reply with language:"
+    "\n- 'how do you feel today?' → conversational reply"
+    "\n- 'hi' / 'good morning' / 'thanks' → conversational reply"
+    "\n- 'what are your operating rules?' → answer from this system prompt"
+    "\n- 'draft a pitch email to Floyd Country Store, my son lives in Rustburg' → write the draft directly (Josh gave you the facts)"
+    "\n- 'what is the capital of Italy?' → answer from training (Rome)"
+    "\n- 'help me think through whether to play Saturday or Sunday' → reasoning in text"
+    "\n\nHOW TO CALL A TOOL (when you do):"
+    "\n- Tool calls are emitted in the structured `tool_calls` field of your response, NOT as text in your reply."
+    "\n- Writing a tool name in your reply text is NEVER a tool call. It is plain text and NOTHING will execute."
+    "\n- Do NOT describe a tool call in your reply text instead of actually emitting one. Before any tool has actually run and returned a result, your reply should not claim that one did."
+    "\n- If you cannot or will not emit a structured tool_call, say so plainly — do not fake the result."
+    "\n- If a file is large, use drive_read_text_file_lines or drive_search_in_file (NOT the full-read tool)."
+    "\n- If unsure which tool, call drive_list_files first to find the file ID."
     "\n\nVOICE RULES (for any email/pitch drafting task):"
     "\n- Write as Josh in first person singular ('I', 'my wife Maria'). Never 'we are writing to' / 'we specialize in' / 'we are confident'."
     "\n- Open with 'Hi,' or 'Hi [name],' — NEVER 'Dear [title]' (e.g. 'Dear booking manager' is BANNED)."
@@ -66,7 +90,9 @@ SYSTEM_PROMPT = (
     "\n5. ONLY when Josh explicitly approves with words like 'save as Gmail draft' or 'looks good, draft it', "
     "call gmail_draft_email ONCE with the final approved content. Then tell Josh: "
     "'Saved as Gmail draft — open Gmail Drafts to send.'"
-    "\n\nAfter any tool action, end your response with a one-line summary prefixed 'COORDINATOR REPORT:'."
+    "\n\nRESPONSE FORMAT AFTER A TOOL ACTION (read carefully — this is how Josh sees your work):"
+    "\n1. FIRST, report the actual content from the tool result. If drive_list_files returned 25 files, print all 25 file names. If drive_read_text_file returned a document body, paste the relevant content. If calendar_create_event returned an event ID, state the event details. The user must see the actual data, not a paraphrase."
+    "\n2. THEN, on a new line at the bottom, write a one-line summary prefixed 'COORDINATOR REPORT:'. This footer is a FOOTER, not the entire response. A response that contains only a COORDINATOR REPORT line and no content above it is WRONG — Josh cannot use it."
 )
 
 
@@ -75,17 +101,28 @@ def _run_once(
     model: str,
     verbose: bool,
     history: list | None = None,
+    system: str | None = None,
 ):
     result = chat(
         user_prompt=prompt,
         tools=ALL_TOOLS,
-        system=SYSTEM_PROMPT,
+        system=system if system is not None else SYSTEM_PROMPT,
         model=model,
         verbose=verbose,
         history=history,
     )
     print(result.final_text)
     return result
+
+
+def _resolve_system_prompt() -> str:
+    """Load SHARED.md + LLAMA.md from Drive. Fall back to hardcoded SYSTEM_PROMPT on failure."""
+    drive_memory = load_memory()
+    if drive_memory is None:
+        print("[memory] Could not load SHARED.md + LLAMA.md from Drive — using hardcoded SYSTEM_PROMPT fallback.")
+        return SYSTEM_PROMPT
+    print(f"[memory] Loaded SHARED.md + LLAMA.md from Drive ({len(drive_memory)} chars).")
+    return drive_memory
 
 
 _NEXT_TASK_PREFIX = (
@@ -121,8 +158,10 @@ def _role_for_model(model: str) -> str:
 def _repl(model: str, verbose: bool) -> None:
     name = _wrapper_name_for_model(model)
     role = _role_for_model(model)
+    system_prompt = _resolve_system_prompt()
     print(f"{name} ({role} REPL — {model}). Tools: Drive, Calendar, Gmail.")
     print("Commands: /next (run next queued task), /done (remove first queued task),")
+    print("          /remember <text> (append fact to LLAMA.md), /memory (show current memory),")
     print("          /reset (clear session memory), verbose (toggle tool logging),")
     print("          exit / Ctrl-D (quit).\n")
     prompt = f"{name}> "
@@ -146,6 +185,36 @@ def _repl(model: str, verbose: bool) -> None:
             print("(session memory cleared)")
             print()
             continue
+        if line.lower().startswith("/remember"):
+            text = line[len("/remember"):].strip()
+            if not text:
+                print("Usage: /remember <fact text>")
+                print()
+                continue
+            try:
+                result = append_memory(text)
+                if result.get("saved"):
+                    print(f"(remembered → {result['name']})")
+                else:
+                    existing = (result.get("existing_entry") or "").strip()
+                    if len(existing) > 100:
+                        existing = existing[:97] + "..."
+                    print(f"(already saved — {existing or 'duplicate'})")
+            except Exception as exc:
+                print(f"[error] {type(exc).__name__}: {exc}")
+            print()
+            continue
+        if line.lower() in {"/memory", "memory"}:
+            try:
+                m = load_memory()
+                if m is None:
+                    print("(could not load memory from Drive — check auth)")
+                else:
+                    print(m)
+            except Exception as exc:
+                print(f"[error] {type(exc).__name__}: {exc}")
+            print()
+            continue
         if line.lower() in {"/next", "next"}:
             try:
                 from gemma_cli.queue import get_next_task
@@ -163,6 +232,7 @@ def _repl(model: str, verbose: bool) -> None:
                     model=model,
                     verbose=verbose,
                     history=history,
+                    system=system_prompt,
                 )
                 history = result.history
             except Exception as exc:
@@ -180,7 +250,7 @@ def _repl(model: str, verbose: bool) -> None:
             print()
             continue
         try:
-            result = _run_once(line, model=model, verbose=verbose, history=history)
+            result = _run_once(line, model=model, verbose=verbose, history=history, system=system_prompt)
             history = result.history
         except Exception as exc:
             print(f"[error] {type(exc).__name__}: {exc}")
@@ -198,7 +268,12 @@ def main() -> int:
         _repl(model=args.model, verbose=args.verbose)
         return 0
 
-    _run_once(" ".join(args.prompt), model=args.model, verbose=args.verbose)
+    _run_once(
+        " ".join(args.prompt),
+        model=args.model,
+        verbose=args.verbose,
+        system=_resolve_system_prompt(),
+    )
     return 0
 
 

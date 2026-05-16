@@ -35,7 +35,8 @@
     "git.ignoredRepositories": [
       "/home/joshua/WebJamApps/web-jam-back/JaMmusic",
       "/home/joshua/WebJamApps/WebJamSocketCluster/JaMmusic"
-    ]
+    ],
+    "python.terminal.activateEnvironment": false
   },
   "extensions": {
     "recommendations": [
