@@ -102,10 +102,11 @@ def _run_once(
     verbose: bool,
     history: list | None = None,
     system: str | None = None,
+    tools: list | None = None,
 ):
     result = chat(
         user_prompt=prompt,
-        tools=ALL_TOOLS,
+        tools=tools if tools is not None else ALL_TOOLS,
         system=system if system is not None else SYSTEM_PROMPT,
         model=model,
         verbose=verbose,
@@ -139,6 +140,39 @@ _NEXT_TASK_PREFIX = (
 )
 
 
+_VERIFICATION_TASK_PREFIX = (
+    "VERIFICATION REQUEST (this is NOT an execution request).\n\n"
+    "Josh already attempted this task earlier in this session. He wants to know "
+    "whether it actually completed successfully. Your job is to CHECK, not to redo.\n\n"
+    "What to do:\n"
+    "1. Use ONLY the read-only tools available to you (the runtime has filtered the "
+    "tool set — write tools are NOT present in this turn). Inspect the relevant Drive "
+    "file, calendar event, or email to determine current state.\n"
+    "2. Decide whether the task's intended outcome is already in place.\n"
+    "3. Report in this exact format on three lines:\n"
+    "   STATUS: COMPLETE | INCOMPLETE | UNCERTAIN\n"
+    "   EVIDENCE: which resource you checked and what you found.\n"
+    "   NEXT STEP: either 'Josh can run /done to mark this complete' (if COMPLETE) "
+    "or 'requires re-execution because <reason>' (if INCOMPLETE/UNCERTAIN).\n\n"
+    "Do NOT attempt to execute the task. Do NOT call any tool that writes, creates, "
+    "updates, or saves anything (those tools are not available to you in this turn).\n"
+    "Do NOT call remember_fact — this verification is session-scoped.\n\n"
+    "Here is the task you previously attempted:\n\n"
+)
+
+
+# Tools that only read state. Used to build the verify-mode tool subset so a model
+# in VERIFICATION mode can't accidentally execute the task.
+_READ_ONLY_TOOL_NAMES = frozenset({
+    "drive_list_files",
+    "drive_read_text_file",
+    "drive_read_text_file_lines",
+    "drive_search_in_file",
+    "calendar_list_events",
+    "gmail_search",
+})
+
+
 def _wrapper_name_for_model(model: str) -> str:
     """Derive the conventional wrapper command name from the model tag.
 
@@ -160,7 +194,8 @@ def _repl(model: str, verbose: bool) -> None:
     role = _role_for_model(model)
     system_prompt = _resolve_system_prompt()
     print(f"{name} ({role} REPL — {model}). Tools: Drive, Calendar, Gmail.")
-    print("Commands: /next (run next queued task), /done (remove first queued task),")
+    print("Commands: /next [--force] (run next queued task; re-runs auto-switch to read-only verify mode unless --force),")
+    print("          /done (remove first queued task),")
     print("          /remember <text> (append fact to LLAMA.md), /memory (show current memory),")
     print("          /reset (clear session memory), verbose (toggle tool logging),")
     print("          exit / Ctrl-D (quit).\n")
@@ -220,7 +255,9 @@ def _repl(model: str, verbose: bool) -> None:
                 print(f"[error] {type(exc).__name__}: {exc}")
             print()
             continue
-        if line.lower() in {"/next", "next"}:
+        parts = line.lower().split()
+        if parts and parts[0] in {"/next", "next"}:
+            force = any(p in {"--force", "force"} for p in parts[1:])
             try:
                 from gemma_cli.queue import get_next_task
 
@@ -231,22 +268,41 @@ def _repl(model: str, verbose: bool) -> None:
                     continue
                 # Normalize for re-run detection: collapse whitespace, take first 80 chars.
                 signature = " ".join(task.split())[:80]
-                if signature == last_next_task:
-                    print(
-                        "(reminder: this task was started earlier in this session — "
-                        "run /done to mark it complete, or proceed to re-run.)"
-                    )
+                matches_last = (signature == last_next_task)
+                is_rerun = matches_last and not force
                 last_next_task = signature
+
                 print(f"=== Next task (of {total} in queue) ===")
                 print(task)
                 print()
-                result = _run_once(
-                    _NEXT_TASK_PREFIX + task,
-                    model=model,
-                    verbose=verbose,
-                    history=history,
-                    system=system_prompt,
-                )
+
+                if is_rerun:
+                    print(
+                        "(reminder: this task was already attempted in this session — "
+                        "running VERIFICATION mode with read-only tools. To force a "
+                        "real re-execute, type: /next --force)"
+                    )
+                    print()
+                    verify_tools = [t for t in ALL_TOOLS if t.name in _READ_ONLY_TOOL_NAMES]
+                    result = _run_once(
+                        _VERIFICATION_TASK_PREFIX + task,
+                        model=model,
+                        verbose=verbose,
+                        history=history,
+                        system=system_prompt,
+                        tools=verify_tools,
+                    )
+                else:
+                    if matches_last and force:
+                        print("(forced re-execute — bypassing verify mode)")
+                        print()
+                    result = _run_once(
+                        _NEXT_TASK_PREFIX + task,
+                        model=model,
+                        verbose=verbose,
+                        history=history,
+                        system=system_prompt,
+                    )
                 history = result.history
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
