@@ -1,0 +1,18 @@
+{
+  "name": "gig-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-off Playwright + xlsx scrapers used by JoshMariaMusic gig booking work. Pulls data from joshandmariamusic.com (gigs, songs) and reads the Gig Booking Worksheet xlsx.",
+  "scripts": {
+    "scrape:gigs": "node scrape_gigs.js",
+    "scrape:songs": "node scrape_songs.js",
+    "fetch:songs": "node fetch_api_songs.js",
+    "read:xlsx": "node read_excel.js",
+    "list:buttons": "node list_buttons.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.59.1",
+    "xlsx": "^0.18.5"
+  }
+}
