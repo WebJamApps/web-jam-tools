@@ -54,6 +54,14 @@ MAX_TURNS = 8
 # do you feel today?" to over-fire too. Reverted to 0.0. The over-trigger on truly
 # ambiguous input is an accepted cost; clear smalltalk handling is more important.
 DEFAULT_TEMPERATURE = 0.0
+# Ollama's default num_ctx is often 4096 or 8192 depending on the model. SHARED.md
+# + LLAMA.md is ~15K chars (~3700 tokens) before tool schemas and history, so the
+# default silently truncates the EARLY parts of the system prompt — including the
+# "WHEN NOT TO USE TOOLS" rules — leaving only the later RESPONSE FORMAT section.
+# Symptom (2026-05-17): "hi" triggers drive_list_files even with explicit prompt
+# rules forbidding it. 16384 keeps the full prompt + room for tool schemas, history,
+# and a 2048-token reply. KV-cache grows ~4-8GB at 70B which fits in OMEN's 80GB RAM.
+DEFAULT_NUM_CTX = 16384
 
 
 @dataclass
@@ -106,7 +114,11 @@ def chat(
             "stream": False,
             "messages": messages,
             "tools": [t.schema() for t in tools],
-            "options": {"temperature": DEFAULT_TEMPERATURE, "num_predict": 2048},
+            "options": {
+                "temperature": DEFAULT_TEMPERATURE,
+                "num_predict": 2048,
+                "num_ctx": DEFAULT_NUM_CTX,
+            },
         }
         resp = requests.post(OLLAMA_URL, json=body, timeout=1200)
         resp.raise_for_status()

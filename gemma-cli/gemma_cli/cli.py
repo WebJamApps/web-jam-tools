@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from gemma_cli.llm import DEFAULT_MODEL, chat
@@ -124,6 +125,45 @@ def _resolve_system_prompt() -> str:
         return SYSTEM_PROMPT
     print(f"[memory] Loaded SHARED.md + LLAMA.md from Drive ({len(drive_memory)} chars).")
     return drive_memory
+
+
+# Smalltalk gate (added 2026-05-17). Llama 3.3 70B Q4 ignores prompt-level rules
+# forbidding tool use on greetings — the tool schemas in the request body act as a
+# strong attractor and the model fires drive_list_files({}) on "hi". Hardcoded
+# prompt strengthening, temp 0.0, num_ctx 16384, and the NO-COORDINATOR-REPORT
+# rule all failed to suppress it. Pragmatic fix: detect smalltalk client-side and
+# call the model WITHOUT tools attached for those turns. Removes the attractor at
+# the protocol layer instead of relying on the model to follow instructions.
+_SMALLTALK_EXACT = frozenset({
+    "hi", "hello", "hey", "yo", "sup", "howdy",
+    "thanks", "thank you", "thx", "ty",
+    "bye", "goodbye", "cya", "later",
+    "ok", "okay", "k", "kk", "cool", "nice", "got it", "gotcha",
+    "yes", "yeah", "yep", "no", "nope", "nah",
+    "lol", "haha",
+})
+
+_SMALLTALK_PATTERNS = (
+    re.compile(r"^good\s+(morning|afternoon|evening|night|day)[.! ]*$", re.IGNORECASE),
+    re.compile(r"^how\s+(are|is|was)\s+(you|it|things|your\s+day)[?.! ]*$", re.IGNORECASE),
+    re.compile(r"^(what'?s\s+up|whats?up|wassup)[?.! ]*$", re.IGNORECASE),
+    re.compile(r"^(how'?s\s+it\s+going|hows\s+it\s+going)[?.! ]*$", re.IGNORECASE),
+)
+
+
+def _is_smalltalk(text: str) -> bool:
+    """Return True for clear conversational openers that should NOT trigger tools.
+
+    Conservative on purpose — only catches clean smalltalk. Anything ambiguous
+    falls through to the normal tool-enabled path so the model can still use
+    tools when there's actual work to do.
+    """
+    normalized = text.strip().rstrip(".!?").strip().lower()
+    if not normalized:
+        return False
+    if normalized in _SMALLTALK_EXACT:
+        return True
+    return any(p.match(text.strip()) for p in _SMALLTALK_PATTERNS)
 
 
 _NEXT_TASK_PREFIX = (
@@ -320,7 +360,18 @@ def _repl(model: str, verbose: bool) -> None:
             print()
             continue
         try:
-            result = _run_once(line, model=model, verbose=verbose, history=history, system=system_prompt)
+            # Smalltalk gate: strip tool schemas for clear conversational openers
+            # so the model can't fire drive_list_files({}) on "hi". See _is_smalltalk
+            # docstring for rationale.
+            turn_tools = [] if _is_smalltalk(line) else None
+            result = _run_once(
+                line,
+                model=model,
+                verbose=verbose,
+                history=history,
+                system=system_prompt,
+                tools=turn_tools,
+            )
             history = result.history
         except Exception as exc:
             print(f"[error] {type(exc).__name__}: {exc}")
