@@ -7,6 +7,8 @@ the Coordinator never sends without an explicit Josh instruction.
 from __future__ import annotations
 
 import base64
+import html as _html_lib
+import re
 from email.message import EmailMessage
 from typing import Any
 
@@ -16,6 +18,10 @@ from gemma_cli.auth import load_gmail_credentials
 from gemma_cli.llm import Tool
 
 _service = None
+
+# Matches http:// and https:// URLs. Excludes whitespace and a few common
+# trailing punctuation chars that are usually NOT part of the URL.
+_URL_RE = re.compile(r"https?://[^\s<>\"')]+[^\s<>\"').,;:!?]")
 
 
 def _gmail():
@@ -27,6 +33,28 @@ def _gmail():
     return _service
 
 
+def _plain_body_to_html(body: str) -> str:
+    """Convert a plain-text body to HTML with clickable <a> links.
+
+    Tokenizes on URL boundaries, HTML-escapes the non-URL text, wraps URLs in
+    <a> tags, and converts newlines to <br>. Without this, the bare URLs in
+    draft bodies render as non-clickable text in Gmail's compose/draft UI.
+    """
+    parts: list[str] = []
+    last_end = 0
+    for m in _URL_RE.finditer(body):
+        if m.start() > last_end:
+            parts.append(_html_lib.escape(body[last_end:m.start()]))
+        url = m.group(0)
+        parts.append(
+            f'<a href="{_html_lib.escape(url, quote=True)}">{_html_lib.escape(url)}</a>'
+        )
+        last_end = m.end()
+    if last_end < len(body):
+        parts.append(_html_lib.escape(body[last_end:]))
+    return "<html><body>" + "".join(parts).replace("\n", "<br>\n") + "</body></html>"
+
+
 def _build_raw(to: str, subject: str, body: str, cc: str = "", bcc: str = "") -> str:
     msg = EmailMessage()
     msg["To"] = to
@@ -35,7 +63,10 @@ def _build_raw(to: str, subject: str, body: str, cc: str = "", bcc: str = "") ->
         msg["Cc"] = cc
     if bcc:
         msg["Bcc"] = bcc
-    msg.set_content(body)
+    msg.set_content(body)  # text/plain for plain-only clients
+    # multipart/alternative with HTML — URLs become clickable <a> tags so the
+    # draft editor and the recipient both see them as links instead of text.
+    msg.add_alternative(_plain_body_to_html(body), subtype="html")
     return base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
 
