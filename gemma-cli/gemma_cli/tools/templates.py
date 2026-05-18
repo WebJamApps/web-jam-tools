@@ -31,9 +31,18 @@ of the locked prose.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from gemma_cli.llm import Tool
+
+
+# A "concrete" date_range must contain at least one digit (a day number).
+# Phrases like "late summer or fall" or "this summer" have no digits and are
+# silently disallowed at the protocol layer — the LLM cannot bypass this rule
+# the way it ignores prompt-level instructions. Forces llama to ask Josh for
+# specific days before the tool will accept the call.
+_DATE_DIGIT_RE = re.compile(r"\d")
 
 
 # The originals + midrange subjects are static; pub_brewery's subject depends on
@@ -167,6 +176,22 @@ def generate_venue_email_from_template(
                 "weekend of August'."
             ),
         }
+    if not _DATE_DIGIT_RE.search(drange):
+        # No digit anywhere → date_range is a vague phrase like "late summer or
+        # fall" or "this summer". Reject it at the protocol layer so the LLM
+        # cannot bypass the LLAMA.md rule by hallucinating a vague string.
+        return {
+            "error": (
+                f"date_range '{drange}' has no day numbers in it — it is too "
+                "vague to use in a venue-outreach email. Acceptable values "
+                "must contain specific calendar days, e.g. 'August 14-16', "
+                "'August 28, 29, or 30', 'September 5 or 6'. Phrases like "
+                "'late summer or fall', 'this fall', 'summer dates', "
+                "'sometime in August' are NOT acceptable. ASK Josh for the "
+                "specific days he wants to offer for this venue, then call "
+                "this tool again."
+            ),
+        }
     bperiod = booking_period.strip()
     if not bperiod:
         return {
@@ -176,6 +201,20 @@ def generate_venue_email_from_template(
                 "Josh's open booking window changes over the year — do NOT "
                 "guess or hardcode a month. Use the same word in the body and "
                 "subject."
+            ),
+        }
+    if any(ch.isdigit() for ch in bperiod) or "/" in bperiod or len(bperiod) > 30:
+        # booking_period should be a clean noun/adjective like "August", "fall",
+        # "September". Digits (a year), slashes, or excessive length signal a
+        # vague concatenation like "late summer/fall 2026" that the LLM tried
+        # to pass instead of asking Josh for a clean month name.
+        return {
+            "error": (
+                f"booking_period '{bperiod}' is malformed. It must be a clean "
+                "short noun or adjective like 'August', 'September', 'fall', "
+                "or 'late summer' — NO year, NO slashes, NO multiple seasons "
+                "concatenated. ASK Josh which single booking window he means "
+                "(it should match the month name in his date_range answer)."
             ),
         }
     greeting_name = contact_name.strip() or "there"
