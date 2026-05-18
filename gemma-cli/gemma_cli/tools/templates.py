@@ -1,22 +1,32 @@
-"""Email-template tool: render venue-outreach emails from Josh's approved scaffolds.
+"""Email-template tool: render venue-outreach emails from Josh's approved templates.
 
-Q4 Llama 3.3 70B drifts toward marketing-copy phrasing when asked to write a venue
-outreach email "in Josh's style" — even when SHARED.md's EXAMPLE PITCHES are loaded
-in the system prompt, the model attends weakly to them and produces "I came across X
-while looking for..." / "We look forward to hearing from you" style output. The
-templates are visible to the model but not strong enough attractors against the
-model's training-data prior for "professional outreach email".
+Q4 Llama 3.3 70B drifts toward marketing-copy phrasing when asked to write a
+venue-outreach email "in Josh's style" — even when the system prompt contains
+voice rules. Protocol-layer fix: move template rendering into code so the model
+picks a template + supplies slot values, and the prose is locked.
 
-Protocol-layer fix (same pattern as the smalltalk gate in cli.py): move template
-rendering into code. The model picks a template ('A' or 'B') and supplies slot
-values; this handler returns a fully-formed email body that matches Josh's approved
-templates byte-for-byte. The model cannot drift on tone because the model isn't
-writing the prose — it's picking a template and extracting slot values from the
-venue task.
+THE TEMPLATES BELOW MIRROR JOSH'S CANONICAL APPROVED PITCH EMAIL FILES IN DRIVE
+(My Drive/JoshMariaMusic, last edited 2026-05-11):
 
-The two templates here MUST stay in sync with the EXAMPLE PITCHES section of
-SHARED.md in Drive (Josh's source of truth for voice). If Josh edits SHARED.md to
-revise the templates, this module must be updated as well — and vice versa.
+  - Pitch Email – Originals Venues.txt        id 1m6MGI9EQGBl0sOTpKH9zguOn7N6Xecfw
+  - Pitch Email – MidRange Cafe Bar.txt       id 1ik4rvZtlTyY5t0mw56u09sJFodKj4Fa1
+  - Pitch Email – Pub Festival Brewery.txt    id 1Yz3FqDNNnY82epfk1q6Q-OxlZg0KvKGv
+
+When Josh edits the Drive copy, this module must be updated to match — or vice
+versa. The code is the runtime source of truth; the Drive files are the human-
+readable canonical copies that Josh approves. See
+reference_approved_pitch_email_templates.md in Opus's memory for the full
+context on which set is canonical.
+
+Slot design:
+  - template (required, enum: 'originals' / 'midrange' / 'pub_brewery')
+  - venue_name (required)
+  - contact_name (optional; if empty, greeting is "Hi," instead of "Hi <name>,")
+  - date_range (optional, default 'June 26, 27, or 28')
+
+Subjects are hardcoded per template (mirrors the Drive files). The phone, URL,
+song links, venue history paragraph, and 12-year experience claim are all part
+of the locked prose.
 """
 
 from __future__ import annotations
@@ -25,71 +35,134 @@ from typing import Any
 
 from gemma_cli.llm import Tool
 
-# Template A: warm tone, for venues where Josh has a personal hook to the area
-# (a family member nearby, a prior visit, a friend, etc.). The hook is what makes
-# this template feel personal rather than generic — without one, use Template B.
-_TEMPLATE_A = (
-    "Hi,\n"
-    "My wife Maria and I are an acoustic duo from Salem, VA. We're free {date_range} "
-    "and would love to play {day_of_week} at your place. {personal_hook}\n"
-    "Let me know if any of those dates work.\n"
-    "Thanks — Josh & Maria, joshandmariamusic.com"
+
+_DEFAULT_DATE_RANGE = "June 26, 27, or 28"
+
+
+_SUBJECT = {
+    "originals": "Performance Inquiry: Josh and Maria (Original Americana/Roots Duo)",
+    "midrange": "Performance Inquiry: Josh and Maria (Husband-Wife Acoustic Duo)",
+    "pub_brewery": "Booking Inquiry: Josh and Maria (Acoustic Duo) - June Dates",
+}
+
+
+_TEMPLATE_ORIGINALS = (
+    "Hi {greeting_name},\n"
+    "\n"
+    "My name is Josh Sherman, and I perform with my wife Maria as the husband-wife acoustic duo \"Josh and Maria.\" We are based in Salem, VA, and we are long-time admirers of {venue_name}'s commitment to showcasing original music.\n"
+    "\n"
+    "We are currently booking our June run and would love to be considered for a slot on {date_range}. As an established regional act with over 12 years of experience, we offer a professional, tight set of original Americana and roots music that we think would be a perfect fit for your listening room environment.\n"
+    "\n"
+    "Maria and I have spent over eleven years honing our acoustic duo sound — close-harmony Americana and roots music built around our original songwriting. We've released live recordings of songs like Dark Light, Misty Rainy Morning, and Good Enough, and have built a steady following across southwest Virginia at venues that take songwriting seriously. Listening rooms are where we feel most at home.\n"
+    "\n"
+    "A few live samples of our original songwriting:\n"
+    "- Dark Light (Original) - live at Salem Farmers Market: https://web-jam.com/music/songs?id=69fdcc4b586f5175c6db44a7\n"
+    "- Misty Rainy Morning (Original): https://web-jam.com/music/songs?id=5f5e6b7d13772f0004a091ad\n"
+    "- Good Enough (Original) - live at Salem Farmers Market: https://web-jam.com/music/songs?id=69fdcf2b586f5175c6db44ab\n"
+    "\n"
+    "You can find our full repertoire and performance history at https://www.joshandmariamusic.com.\n"
+    "\n"
+    "Thank you for your time and for everything you do to champion original music in our region. We look forward to hearing from you!\n"
+    "\n"
+    "Best,\n"
+    "\n"
+    "Josh Sherman\n"
+    "540-494-8035\n"
+    "https://www.joshandmariamusic.com\n"
 )
 
-# Template B: professional tone, for new venues with no personal hook. Keeps things
-# concise and offers to send more material on request.
-_TEMPLATE_B = (
-    "Hi,\n"
-    "I'm Josh Sherman — my wife and I play as Josh and Maria, an acoustic duo out of "
-    "Salem, VA. I came across {venue_name} and wanted to ask about booking. We have "
-    "{day_of_week} open between {date_range}. Happy to send a short sample or talk "
-    "through what we play.\n"
-    "Thanks — Josh & Maria, joshandmariamusic.com"
+
+_TEMPLATE_MIDRANGE = (
+    "Hi {greeting_name},\n"
+    "\n"
+    "My name is Josh Sherman, and I perform with my wife Maria as the acoustic duo \"Josh and Maria.\" We are a regional act based in Salem, VA, and we are currently booking our June run and would love to be considered for a slot at {venue_name}.\n"
+    "\n"
+    "We have {date_range} available. We've been performing together for over 12 years, offering a tight, professional set that balances original singer-songwriter material with select covers. We pride ourselves on being reliable, easy to work with, and a great fit for rooms that appreciate harmony-driven Americana.\n"
+    "\n"
+    "Maria and I have been writing and performing together for over eleven years — the kind of close harmony that comes from a shared kitchen table — balancing our own songwriting with a careful selection of covers. We've built a steady regional following with regular shows at Stave & Cork in Salem; two summers running at the Pete Dye River Course clubhouse in Blacksburg; the Salem farmers market summer after summer; and repeat appearances at Music in the Park in Marion. We take care of our audience and the room.\n"
+    "\n"
+    "A few live samples from our repertoire:\n"
+    "- Proud Mary (CCR) - live at Olde Salem Brewing: https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3\n"
+    "- Country Roads (John Denver) - live at Gusto's Pizza: https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e\n"
+    "- Dark Light (Original) - live at Salem Farmers Market: https://web-jam.com/music/songs?id=69fdcc4b586f5175c6db44a7\n"
+    "\n"
+    "Full music links and performance history available at https://www.joshandmariamusic.com.\n"
+    "\n"
+    "Thank you for your time and for supporting live music. We look forward to the possibility of working with you.\n"
+    "\n"
+    "Best,\n"
+    "\n"
+    "Josh Sherman\n"
+    "540-494-8035\n"
+    "https://www.joshandmariamusic.com\n"
 )
+
+
+_TEMPLATE_PUB_BREWERY = (
+    "Hi {greeting_name},\n"
+    "\n"
+    "I'm reaching out from Josh and Maria, a professional husband-wife acoustic duo based in Salem, VA. We are currently filling our summer schedule and would love to bring our energetic acoustic set to {venue_name}.\n"
+    "\n"
+    "We have {date_range} available and are looking to book a 2-3 hour set. We've spent over 12 years performing at festivals, breweries, and venues throughout Southwest Virginia, providing a versatile mix of original Americana and crowd-pleasing covers.\n"
+    "\n"
+    "Beyond the originals, we know how to read a room. We've built our live set across the Roanoke Valley — regular shows at Stave & Cork in Salem, two summers running at the Pete Dye River Course clubhouse in Blacksburg, the Salem farmers market summer after summer, and Music in the Park up in Marion — so we're equally comfortable filling a dance floor on a Saturday night and holding a quiet room at a Sunday brunch. We bring our own PA.\n"
+    "\n"
+    "A few live samples from our set:\n"
+    "- Proud Mary (CCR) - live at Olde Salem Brewing: https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3\n"
+    "- I'm Yours (Jason Mraz) - live at Salem Farmers Market: https://web-jam.com/music/songs?id=69fdcd7a586f5175c6db44a9\n"
+    "- Country Roads (John Denver) - live at Gusto's Pizza: https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e\n"
+    "\n"
+    "Our full performance history and music can be found at https://www.joshandmariamusic.com.\n"
+    "\n"
+    "Is now a good time to talk about booking one of those June dates? We'd love to discuss details!\n"
+    "\n"
+    "Best regards,\n"
+    "\n"
+    "Josh Sherman\n"
+    "540-494-8035\n"
+    "https://www.joshandmariamusic.com\n"
+)
+
+
+_TEMPLATE_BODIES = {
+    "originals": _TEMPLATE_ORIGINALS,
+    "midrange": _TEMPLATE_MIDRANGE,
+    "pub_brewery": _TEMPLATE_PUB_BREWERY,
+}
 
 
 def generate_venue_email_from_template(
     template: str,
     venue_name: str,
-    date_range: str,
-    day_of_week: str = "Saturday",
-    personal_hook: str = "",
+    contact_name: str = "",
+    date_range: str = "",
 ) -> dict[str, Any]:
     """Render a venue-outreach email using one of Josh's approved templates.
 
-    Returns a dict with `subject`, `body`, and `template_used`. On invalid input,
-    returns `{"error": "..."}` so the model can self-correct in the same turn.
+    Returns `subject`, `body`, and `template_used`. On invalid input returns
+    `{"error": "..."}` so the model can self-correct in the same turn.
     """
-    t = template.strip().upper()
-    if t == "A":
-        if not personal_hook.strip():
-            return {
-                "error": (
-                    "Template A requires a non-empty personal_hook (e.g. "
-                    "'My son lives in Rustburg, so we're in the area anyway'). "
-                    "For new venues with no personal hook, use Template B instead."
-                ),
-            }
-        body = _TEMPLATE_A.format(
-            date_range=date_range.strip(),
-            day_of_week=day_of_week.strip(),
-            personal_hook=personal_hook.strip(),
-        )
-    elif t == "B":
-        body = _TEMPLATE_B.format(
-            venue_name=venue_name.strip(),
-            date_range=date_range.strip(),
-            day_of_week=day_of_week.strip(),
-        )
-    else:
+    t = template.strip().lower().replace("-", "_")
+    if t not in _TEMPLATE_BODIES:
         return {
             "error": (
-                f"Unknown template '{template}'. Use 'A' (warm tone with a personal "
-                "hook to the area) or 'B' (professional tone for a new venue)."
+                f"Unknown template '{template}'. Use one of: "
+                "'originals' (listening rooms / original-music venues), "
+                "'midrange' (cafes / bars / mid-range venues), "
+                "'pub_brewery' (breweries / pubs / festivals)."
             ),
         }
+    vname = venue_name.strip()
+    if not vname:
+        return {"error": "venue_name is required and must be non-empty."}
+    greeting_name = contact_name.strip() or "there"
+    body = _TEMPLATE_BODIES[t].format(
+        greeting_name=greeting_name,
+        venue_name=vname,
+        date_range=(date_range.strip() or _DEFAULT_DATE_RANGE),
+    )
     return {
-        "subject": f"Live Music at {venue_name.strip()} — Josh and Maria",
+        "subject": _SUBJECT[t],
         "body": body,
         "template_used": t,
     }
@@ -100,53 +173,61 @@ TOOLS: list[Tool] = [
         name="generate_venue_email_from_template",
         description=(
             "Render a venue-outreach email using one of Josh's APPROVED templates. "
-            "Use this INSTEAD of writing the email body from scratch. Two templates:\n"
-            "  - Template A (warm): when you can supply a personal_hook tying Josh "
-            "to the venue's area (family nearby, prior visit, etc.).\n"
-            "  - Template B (professional): for new venues with no personal hook.\n"
+            "Use this INSTEAD of writing the email body from scratch. Three templates, "
+            "picked by venue type:\n"
+            "  - 'originals' — listening rooms, venues focused on original songwriter "
+            "music. Pitches the original repertoire (Dark Light, Misty Rainy Morning, "
+            "Good Enough) and the close-harmony Americana identity.\n"
+            "  - 'midrange' — cafes, bars, mid-range venues. Pitches harmony-driven "
+            "Americana with a mix of originals + select covers (Proud Mary, Country "
+            "Roads, Dark Light samples).\n"
+            "  - 'pub_brewery' — breweries, pubs, festivals. Pitches the energetic "
+            "crowd-pleasing set with covers + originals (Proud Mary, I'm Yours, "
+            "Country Roads samples). Bring-own-PA, 2-3 hour set focus.\n"
             "Returns subject + body. After calling, PRINT the returned body to Josh "
-            "in your reply and wait for approval before calling gmail_draft_email. "
-            "This tool exists because writing email prose from scratch produces "
-            "marketing-copy that does not match Josh's voice."
+            "in your reply and wait for explicit approval before calling "
+            "gmail_draft_email. This tool exists because writing email prose from "
+            "scratch produces marketing-copy that does not match Josh's voice."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "template": {
                     "type": "string",
-                    "enum": ["A", "B"],
+                    "enum": ["originals", "midrange", "pub_brewery"],
                     "description": (
-                        "A = warm tone with a personal_hook to the area; "
-                        "B = professional tone for a new venue with no hook."
+                        "Venue type: 'originals' (listening room / songwriter), "
+                        "'midrange' (cafe / bar / mid-range), "
+                        "'pub_brewery' (brewery / pub / festival)."
                     ),
                 },
                 "venue_name": {
                     "type": "string",
-                    "description": "Name of the venue exactly as Josh would address it (e.g. 'Solstice Farm Brewery').",
+                    "description": (
+                        "Name of the venue exactly as it should appear in the email "
+                        "(e.g. 'Solstice Farm Brewery', 'The Floyd Country Store')."
+                    ),
+                },
+                "contact_name": {
+                    "type": "string",
+                    "description": (
+                        "Optional: the booker's name for the greeting line. If left "
+                        "empty, the greeting will be 'Hi there,'. Use the booker's "
+                        "name when the task supplies it (e.g. 'Bobby' becomes "
+                        "'Hi Bobby,'); otherwise leave empty."
+                    ),
                 },
                 "date_range": {
                     "type": "string",
                     "description": (
-                        "When Josh is available, in natural language as it would "
-                        "appear in the email (e.g. 'the last two weeks of June', "
-                        "'June 14 and 28', 'late summer or fall 2026')."
-                    ),
-                },
-                "day_of_week": {
-                    "type": "string",
-                    "description": "Day of week being requested (e.g. 'Saturday'). Defaults to 'Saturday'.",
-                },
-                "personal_hook": {
-                    "type": "string",
-                    "description": (
-                        "REQUIRED for Template A. A short sentence connecting Josh "
-                        "to the venue's area (e.g. 'My son lives in Rustburg, so "
-                        "we're in the area anyway and it would be a real treat to "
-                        "get on your stage.'). Leave empty when using Template B."
+                        "Optional: dates Josh is offering, as a natural-language "
+                        "fragment that fits the sentence pattern in the template. "
+                        "Defaults to 'June 26, 27, or 28'. Override only when the "
+                        "task specifies different dates."
                     ),
                 },
             },
-            "required": ["template", "venue_name", "date_range"],
+            "required": ["template", "venue_name"],
         },
         handler=generate_venue_email_from_template,
     ),
