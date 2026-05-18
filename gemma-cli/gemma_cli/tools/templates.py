@@ -36,10 +36,11 @@ from typing import Any
 from gemma_cli.llm import Tool
 
 
-_SUBJECT = {
+# The originals + midrange subjects are static; pub_brewery's subject depends on
+# the booking_period slot and is built dynamically inside the handler below.
+_SUBJECT_STATIC = {
     "originals": "Performance Inquiry: Josh and Maria (Original Americana/Roots Duo)",
     "midrange": "Performance Inquiry: Josh and Maria (Husband-Wife Acoustic Duo)",
-    "pub_brewery": "Booking Inquiry: Josh and Maria (Acoustic Duo) - August Dates",
 }
 
 
@@ -48,7 +49,7 @@ _TEMPLATE_ORIGINALS = (
     "\n"
     "My name is Josh Sherman, and I perform with my wife Maria as the husband-wife acoustic duo \"Josh and Maria.\" We are based in Salem, VA, and we are long-time admirers of {venue_name}'s commitment to showcasing original music.\n"
     "\n"
-    "We are currently booking our August run and would love to be considered for a slot on {date_range}. As an established regional act with over 12 years of experience, we offer a professional, tight set of original Americana and roots music that we think would be a perfect fit for your listening room environment.\n"
+    "We are currently booking our {booking_period} run and would love to be considered for a slot on {date_range}. As an established regional act with over 12 years of experience, we offer a professional, tight set of original Americana and roots music that we think would be a perfect fit for your listening room environment.\n"
     "\n"
     "Maria and I have spent over eleven years honing our acoustic duo sound — close-harmony Americana and roots music built around our original songwriting. We've released live recordings of songs like Dark Light, Misty Rainy Morning, and Good Enough, and have built a steady following across southwest Virginia at venues that take songwriting seriously. Listening rooms are where we feel most at home.\n"
     "\n"
@@ -72,7 +73,7 @@ _TEMPLATE_ORIGINALS = (
 _TEMPLATE_MIDRANGE = (
     "Hi {greeting_name},\n"
     "\n"
-    "My name is Josh Sherman, and I perform with my wife Maria as the acoustic duo \"Josh and Maria.\" We are a regional act based in Salem, VA, and we are currently booking our June run and would love to be considered for a slot at {venue_name}.\n"
+    "My name is Josh Sherman, and I perform with my wife Maria as the acoustic duo \"Josh and Maria.\" We are a regional act based in Salem, VA, and we are currently booking our {booking_period} run and would love to be considered for a slot at {venue_name}.\n"
     "\n"
     "We have {date_range} available. We've been performing together for over 12 years, offering a tight, professional set that balances original singer-songwriter material with select covers. We pride ourselves on being reliable, easy to work with, and a great fit for rooms that appreciate harmony-driven Americana.\n"
     "\n"
@@ -98,7 +99,7 @@ _TEMPLATE_MIDRANGE = (
 _TEMPLATE_PUB_BREWERY = (
     "Hi {greeting_name},\n"
     "\n"
-    "My name is Josh Sherman — my wife and I play as Josh and Maria, a professional husband-wife acoustic duo based in Salem, VA. We still have a few summer dates open and would love to bring our energetic acoustic set to {venue_name}.\n"
+    "My name is Josh Sherman — my wife and I play as Josh and Maria, a professional husband-wife acoustic duo based in Salem, VA. We still have a few {booking_period} dates open and would love to bring our energetic acoustic set to {venue_name}.\n"
     "\n"
     "We have {date_range} available and are looking to book a 2-3 hour set. We've spent over 12 years performing at festivals, breweries, and venues throughout Southwest Virginia, providing a versatile mix of original Americana and crowd-pleasing covers.\n"
     "\n"
@@ -133,6 +134,7 @@ def generate_venue_email_from_template(
     template: str,
     venue_name: str,
     date_range: str,
+    booking_period: str,
     contact_name: str = "",
 ) -> dict[str, Any]:
     """Render a venue-outreach email using one of Josh's approved templates.
@@ -158,10 +160,22 @@ def generate_venue_email_from_template(
         return {
             "error": (
                 "date_range is required. ASK Josh which dates to offer for "
-                "this venue — different venues may get different dates. Josh "
-                "is currently booking for August (June and July are booked). "
-                "Example acceptable values: 'August 28, 29, or 30', 'any "
-                "Saturday in August', 'the last weekend of August'."
+                "this venue — different venues may get different dates. Josh's "
+                "current booking window changes over the year (do NOT guess "
+                "or use a placeholder). Example acceptable values: "
+                "'August 28, 29, or 30', 'any Saturday in August', 'the last "
+                "weekend of August'."
+            ),
+        }
+    bperiod = booking_period.strip()
+    if not bperiod:
+        return {
+            "error": (
+                "booking_period is required. ASK Josh which booking window to "
+                "reference (e.g. 'August', 'fall', 'late summer', 'September'). "
+                "Josh's open booking window changes over the year — do NOT "
+                "guess or hardcode a month. Use the same word in the body and "
+                "subject."
             ),
         }
     greeting_name = contact_name.strip() or "there"
@@ -169,9 +183,17 @@ def generate_venue_email_from_template(
         greeting_name=greeting_name,
         venue_name=vname,
         date_range=drange,
+        booking_period=bperiod,
     )
+    if t == "pub_brewery":
+        subject = (
+            f"Booking Inquiry: Josh and Maria (Acoustic Duo) - "
+            f"{bperiod.title()} Dates"
+        )
+    else:
+        subject = _SUBJECT_STATIC[t]
     return {
-        "subject": _SUBJECT[t],
+        "subject": subject,
         "body": body,
         "template_used": t,
     }
@@ -229,18 +251,31 @@ TOOLS: list[Tool] = [
                 "date_range": {
                     "type": "string",
                     "description": (
-                        "REQUIRED. The dates Josh is offering, as a natural-"
-                        "language fragment that fits the sentence pattern in the "
-                        "template (e.g. 'August 28, 29, or 30', 'the last "
-                        "weekend of August', 'any Saturday in August'). ASK JOSH "
-                        "for this value BEFORE calling the tool — do not guess, "
-                        "do not substitute a placeholder, do not use 'TBD' or "
-                        "'(date range)'. Josh is currently booking for August "
-                        "(June and July are booked)."
+                        "REQUIRED. The specific dates Josh is offering, as a "
+                        "natural-language fragment that fits the sentence "
+                        "pattern in the template (e.g. 'August 28, 29, or 30', "
+                        "'the last weekend of August', 'any Saturday in "
+                        "August'). ASK JOSH for this value BEFORE calling the "
+                        "tool — do not guess, do not substitute a placeholder, "
+                        "do not use 'TBD' or '(date range)'. Josh's current "
+                        "booking window changes over the year."
+                    ),
+                },
+                "booking_period": {
+                    "type": "string",
+                    "description": (
+                        "REQUIRED. The booking window referenced in the body "
+                        "and (for pub_brewery) subject — a short noun or "
+                        "adjective that fits patterns like 'our {X} run' and "
+                        "'a few {X} dates open'. Examples: 'August', 'fall', "
+                        "'late summer', 'September'. ASK JOSH for this value "
+                        "BEFORE calling the tool — Josh's open booking window "
+                        "changes over the year, do not guess or hardcode a "
+                        "month."
                     ),
                 },
             },
-            "required": ["template", "venue_name", "date_range"],
+            "required": ["template", "venue_name", "date_range", "booking_period"],
         },
         handler=generate_venue_email_from_template,
     ),
