@@ -194,6 +194,247 @@ def _check_email_task_used_template_tool(
     return not used
 
 
+# Pre-dispatch collector for venue-outreach email tasks (added 2026-05-18).
+# Yesterday's protocol-layer fixes (template tool + validators + runtime hook)
+# stopped llama from inventing prose but NOT from inventing dates — Q4 70B will
+# reliably make up a plausible-looking date_range rather than ask Josh for one.
+# The fix removes the opportunity: the REPL collects venue/dates/template from
+# Josh BEFORE dispatching to llama, and injects them as exact values the model
+# must use verbatim. See memory: project_llama_dispatcher_date_design.
+
+# Broader keyword trigger that fires on tasks lacking the explicit
+# `_EMAIL_TASK_RE` category labels. Tag-style match (Venue Outreach Email /
+# Pitch Email) is preferred; this is the fallback for natural-language tasks.
+_OUTREACH_KEYWORD_RE = re.compile(
+    r"\bdraft\s+(an?\s+)?(email|outreach|pitch)\b"
+    r"|\bwrite\s+(an?\s+)?(email|pitch)\s+to\b"
+    r"|\b(outreach|pitch)\s+email\b"
+    r"|\bemail\s+(to|for)\s+(?!confirm|cancel)",
+    re.IGNORECASE,
+)
+
+# Explicit `venue:` line in the task body — wins over title regex.
+_VENUE_FIELD_RE = re.compile(r"^\s*venue\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+
+# Title pattern `Task N — {Venue} — ...` (or colons / hyphens / en-dashes).
+_TASK_TITLE_VENUE_RE = re.compile(
+    r"^Task\s+\d+\s*[—–:\-]\s*(.+?)\s*[—–:\-]",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Verbs that suggest the regex grabbed the action phrase instead of a venue.
+_VENUE_SUSPECT_VERBS_RE = re.compile(
+    r"\b(draft|send|email|update|verify|write|compose|reach|contact|follow|book)\b",
+    re.IGNORECASE,
+)
+
+# Month-name + nearby digit in the task body. Limited to 40 chars between the
+# month name and the digit so we don't span sentences and grab unrelated numbers.
+_DATES_IN_BODY_RE = re.compile(
+    r"\b(January|February|March|April|May|June|July|August|September|October|November|December"
+    r"|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b[^.\n]{0,40}\d",
+    re.IGNORECASE,
+)
+
+# Used by _parse_dates to pull out the month(s) and (optional) year.
+_MONTH_NAME_RE = re.compile(
+    r"\b(January|February|March|April|May|June|July|August|September|October|November|December"
+    r"|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b",
+    re.IGNORECASE,
+)
+_MONTH_FULL = {
+    "jan": "January", "january": "January",
+    "feb": "February", "february": "February",
+    "mar": "March", "march": "March",
+    "apr": "April", "april": "April",
+    "may": "May",
+    "jun": "June", "june": "June",
+    "jul": "July", "july": "July",
+    "aug": "August", "august": "August",
+    "sep": "September", "sept": "September", "september": "September",
+    "oct": "October", "october": "October",
+    "nov": "November", "november": "November",
+    "dec": "December", "december": "December",
+}
+
+# Template auto-detect — HIGH confidence (silent echo, no prompt).
+_TEMPLATE_HIGH_CONFIDENCE = (
+    (re.compile(r"\b(brewery|brewing|taproom|microbrewery|pub|tavern|alehouse)\b", re.IGNORECASE), "pub_brewery"),
+    (re.compile(r"\blistening\s+room\b|\bcoffee\s*house\b|\bcoffeehouse\b", re.IGNORECASE), "originals"),
+)
+_TEMPLATE_CHOICES = ("originals", "midrange", "pub_brewery")
+_TEMPLATE_DEFAULT = "midrange"
+
+
+def _is_outreach_task(task: str) -> bool:
+    """Trigger detection (A): explicit tag wins; broader keyword regex is fallback."""
+    if _EMAIL_TASK_RE.search(task):
+        return True
+    return bool(_OUTREACH_KEYWORD_RE.search(task))
+
+
+def _extract_venue(task: str) -> str | None:
+    """Venue extraction (E): explicit field wins; else title regex; else None."""
+    m = _VENUE_FIELD_RE.search(task)
+    if m:
+        return m.group(1).strip()
+    m = _TASK_TITLE_VENUE_RE.search(task)
+    if m:
+        candidate = m.group(1).strip()
+        # Suspect-result check: if it looks like an action phrase, treat as parse miss.
+        if _VENUE_SUSPECT_VERBS_RE.search(candidate):
+            return None
+        return candidate
+    return None
+
+
+def _extract_dates_from_body(task: str) -> str | None:
+    """Return the first date-bearing substring (month-name + nearby digit) or None."""
+    m = _DATES_IN_BODY_RE.search(task)
+    if not m:
+        return None
+    # Return the matched span trimmed of trailing whitespace.
+    return m.group(0).strip()
+
+
+def _parse_dates(date_input: str) -> tuple[str, str | None]:
+    """Parse free-form dates into (date_range, booking_period).
+
+    `date_range` is the verbatim input (validator only requires a digit).
+    `booking_period` is the single month name extracted from the input — the
+    template validator forbids digits, slashes, or strings >30 chars, so we
+    can't include a year. Returns None if the input has multiple months or no
+    month name; caller then prompts for it explicitly.
+    """
+    found = _MONTH_NAME_RE.findall(date_input)
+    if not found:
+        return date_input, None
+    normalized: list[str] = []
+    for raw in found:
+        full = _MONTH_FULL.get(raw.lower())
+        if full and full not in normalized:
+            normalized.append(full)
+    if len(normalized) != 1:
+        return date_input, None
+    return date_input, normalized[0]
+
+
+def _detect_template_high_confidence(venue: str) -> str | None:
+    """Return a template name if the venue name has an unambiguous keyword; else None."""
+    for pattern, template in _TEMPLATE_HIGH_CONFIDENCE:
+        if pattern.search(venue):
+            return template
+    return None
+
+
+def _prompt_with_cancel(prompt_text: str) -> str | None:
+    """Ask Josh a question. Empty input re-prompts; `cancel` returns None.
+
+    Returns the non-empty input string, or None if Josh typed cancel.
+    """
+    while True:
+        try:
+            reply = input(prompt_text).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if reply.lower() == "cancel":
+            return None
+        if reply:
+            return reply
+        # empty → silent re-prompt
+
+
+def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None]:
+    """For venue-outreach tasks, gather venue/dates/template from Josh and return
+    an augmented task body (with the values appended for llama to use verbatim).
+
+    Returns (augmented_task, cancel_reason):
+      - (augmented_task, None) → dispatch with the augmented body
+      - (task, None)           → not an outreach task; dispatch original task unchanged
+      - (None, reason)         → Josh cancelled; caller should skip dispatch
+    """
+    if not _is_outreach_task(task):
+        return task, None
+
+    # E — venue
+    venue = _extract_venue(task)
+    if venue is None:
+        venue = _prompt_with_cancel("What's the venue name for this task? (or 'cancel') ")
+        if venue is None:
+            return None, "cancelled at venue prompt"
+
+    # Date detection in body, else dates prompt.
+    # date_range MUST contain a digit (templates.py validator rejects vague phrases
+    # without day numbers); body regex already requires this by construction, but
+    # the explicit-prompt path needs to enforce it to avoid downstream rejection.
+    body_dates = _extract_dates_from_body(task)
+    if body_dates:
+        print(f"Found dates in task: {body_dates} — using these.")
+        date_input = body_dates
+    else:
+        while True:
+            date_input = _prompt_with_cancel(
+                f"Which dates do you want me to offer for {venue}? "
+                "(e.g. 'the weekend of August 14-16', or 'cancel') "
+            )
+            if date_input is None:
+                return None, "cancelled at dates prompt"
+            if any(ch.isdigit() for ch in date_input):
+                break
+            print("(needs at least one day number — e.g. 'August 14-16', "
+                  "not 'any Saturday in August')")
+
+    # B — parse
+    date_range, booking_period = _parse_dates(date_input)
+    if booking_period is None:
+        print("(couldn't pick a single month name from that — needs an explicit booking_period)")
+        bp = _prompt_with_cancel(
+            "What's the booking window? (single noun, no digits, no slashes — "
+            "e.g. 'August', 'fall', 'late summer', or 'cancel') "
+        )
+        if bp is None:
+            return None, "cancelled at booking_period prompt"
+        # Soft sanity check — mirrors the templates.py validator at line 206.
+        if any(ch.isdigit() for ch in bp) or "/" in bp or len(bp) > 30:
+            print(f"(warning: '{bp}' will trip the template validator — sending anyway)")
+        booking_period = bp
+
+    # D — template
+    template = _detect_template_high_confidence(venue)
+    if template:
+        print(f"Using template: {template} (matched on venue name '{venue}').")
+    else:
+        # Empty input ACCEPTS the default here (one-keystroke confirm UX),
+        # so we don't use _prompt_with_cancel which re-prompts on empty.
+        try:
+            reply = input(
+                f"No clear template signal for '{venue}'. Defaulting to {_TEMPLATE_DEFAULT} — "
+                f"press Enter to confirm or type one of: {', '.join(_TEMPLATE_CHOICES)} (or 'cancel') "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None, "cancelled at template prompt"
+        reply_lower = reply.lower()
+        if reply_lower == "cancel":
+            return None, "cancelled at template prompt"
+        if not reply_lower:
+            template = _TEMPLATE_DEFAULT
+        elif reply_lower in _TEMPLATE_CHOICES:
+            template = reply_lower
+        else:
+            print(f"(unrecognized template '{reply}' — using default {_TEMPLATE_DEFAULT})")
+            template = _TEMPLATE_DEFAULT
+
+    augmented = (
+        f"{task}\n\n"
+        f"Josh has specified: venue_name='{venue}', date_range='{date_range}', "
+        f"booking_period='{booking_period}', template='{template}'. "
+        f"Use these EXACT values — do not modify or substitute."
+    )
+    return augmented, None
+
+
 def _is_smalltalk(text: str) -> bool:
     """Return True for clear conversational openers that should NOT trigger tools.
 
@@ -438,6 +679,19 @@ def _repl(model: str, verbose: bool) -> None:
                     if matches_last and force:
                         print("(forced re-execute — bypassing verify mode)")
                         print()
+                    # Pre-dispatch collector (added 2026-05-18): for venue-outreach
+                    # tasks, ask Josh for venue/dates/template before sending to
+                    # llama so the model can't hallucinate them. See
+                    # _collect_outreach_inputs docstring.
+                    dispatched_task, cancel_reason = _collect_outreach_inputs(task)
+                    if cancel_reason is not None:
+                        print(f"(task not dispatched — {cancel_reason}. Stays in queue; "
+                              "run /next again when ready.)")
+                        # Reset last_next_task so the next /next runs fresh (no
+                        # spurious verify-mode trigger from this non-attempt).
+                        last_next_task = None
+                        print()
+                        continue
                     # Email-draft approval gate: strip gmail_draft_email from the
                     # tool set on /next dispatch. The user CANNOT have approved a
                     # draft on the same turn they ran /next — gmail_draft_email
@@ -445,7 +699,7 @@ def _repl(model: str, verbose: bool) -> None:
                     # See _has_email_draft_approval docstring.
                     next_tools = _strip_email_draft_save(ALL_TOOLS)
                     result = _run_once(
-                        _NEXT_TASK_PREFIX + task,
+                        _NEXT_TASK_PREFIX + dispatched_task,
                         model=model,
                         verbose=verbose,
                         history=history,
