@@ -18,8 +18,9 @@ from gemma_cli.tools.calendar import TOOLS as CALENDAR_TOOLS
 from gemma_cli.tools.drive import TOOLS as DRIVE_TOOLS
 from gemma_cli.tools.gmail import TOOLS as GMAIL_TOOLS
 from gemma_cli.tools.memory import TOOLS as MEMORY_TOOLS
+from gemma_cli.tools.templates import TOOLS as TEMPLATE_TOOLS
 
-ALL_TOOLS = DRIVE_TOOLS + CALENDAR_TOOLS + GMAIL_TOOLS + MEMORY_TOOLS
+ALL_TOOLS = DRIVE_TOOLS + CALENDAR_TOOLS + GMAIL_TOOLS + MEMORY_TOOLS + TEMPLATE_TOOLS
 
 SYSTEM_PROMPT = (
     "You are the Coordinator for Josh Sherman's personal projects (JoshMariaMusic "
@@ -164,6 +165,65 @@ def _is_smalltalk(text: str) -> bool:
     if normalized in _SMALLTALK_EXACT:
         return True
     return any(p.match(text.strip()) for p in _SMALLTALK_PATTERNS)
+
+
+# Email-draft approval gate (added 2026-05-17). Same class of bug as the smalltalk
+# gate: when /next dispatches a venue-email task, llama reaches for gmail_draft_email
+# on turn 1 BEFORE Josh has reviewed the draft, violating the STANDARD EMAIL-DRAFTING
+# FLOW (print draft → iterate with Josh → only call gmail_draft_email after explicit
+# approval). Removing the tool from the request body on un-approved turns means the
+# model physically cannot fire it.
+_EMAIL_DRAFT_SAVE_TOOL_NAMES = frozenset({"gmail_draft_email"})
+
+# Substrings that count as Josh authorizing the draft to be saved as a Gmail draft.
+# Compared against `line.lower()` so any casing matches. Conservative — must contain
+# an explicit "save / draft / send / ship / approve" word; a passive "looks fine" is
+# not enough.
+_APPROVAL_PHRASES = (
+    "save as gmail draft",
+    "save it as a gmail draft",
+    "save the draft",
+    "save it as gmail draft",
+    "save as draft",
+    "save it as draft",
+    "save the email",
+    "save to gmail",
+    "save the gmail draft",
+    "draft it",
+    "draft this",
+    "save it",
+    "go ahead and save",
+    "go ahead and draft",
+    "go ahead, save",
+    "go ahead, draft",
+    "ship it",
+    "send it",
+    "looks good, save",
+    "looks good, draft",
+    "looks good draft",
+    "looks good save",
+    "approve",
+    "approved",
+    "i approve",
+)
+
+
+def _has_email_draft_approval(text: str) -> bool:
+    """Return True if Josh's input authorizes calling gmail_draft_email.
+
+    Conservative on purpose — without an explicit approval signal, the gate
+    keeps gmail_draft_email out of the request body. Josh can always re-prompt
+    with a clear "save as Gmail draft" to release the gate.
+    """
+    lower = text.lower().strip()
+    if not lower:
+        return False
+    return any(phrase in lower for phrase in _APPROVAL_PHRASES)
+
+
+def _strip_email_draft_save(tools: list) -> list:
+    """Remove gmail_draft_email (and any other approval-gated save tools)."""
+    return [t for t in tools if t.name not in _EMAIL_DRAFT_SAVE_TOOL_NAMES]
 
 
 _NEXT_TASK_PREFIX = (
@@ -336,12 +396,19 @@ def _repl(model: str, verbose: bool) -> None:
                     if matches_last and force:
                         print("(forced re-execute — bypassing verify mode)")
                         print()
+                    # Email-draft approval gate: strip gmail_draft_email from the
+                    # tool set on /next dispatch. The user CANNOT have approved a
+                    # draft on the same turn they ran /next — gmail_draft_email
+                    # belongs to the next turn (after Josh reviews + approves).
+                    # See _has_email_draft_approval docstring.
+                    next_tools = _strip_email_draft_save(ALL_TOOLS)
                     result = _run_once(
                         _NEXT_TASK_PREFIX + task,
                         model=model,
                         verbose=verbose,
                         history=history,
                         system=system_prompt,
+                        tools=next_tools,
                     )
                 history = result.history
             except Exception as exc:
@@ -363,7 +430,17 @@ def _repl(model: str, verbose: bool) -> None:
             # Smalltalk gate: strip tool schemas for clear conversational openers
             # so the model can't fire drive_list_files({}) on "hi". See _is_smalltalk
             # docstring for rationale.
-            turn_tools = [] if _is_smalltalk(line) else None
+            #
+            # Email-draft approval gate: independently, strip gmail_draft_email
+            # from the tool set unless the user's input contains an approval phrase.
+            # Prevents llama from saving a draft to Gmail before Josh reviews it.
+            # See _has_email_draft_approval docstring.
+            if _is_smalltalk(line):
+                turn_tools: list | None = []
+            elif _has_email_draft_approval(line):
+                turn_tools = None  # full tool set; gmail_draft_email is allowed
+            else:
+                turn_tools = _strip_email_draft_save(ALL_TOOLS)
             result = _run_once(
                 line,
                 model=model,
