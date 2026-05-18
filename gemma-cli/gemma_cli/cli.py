@@ -19,7 +19,9 @@ from gemma_cli.tools.drive import TOOLS as DRIVE_TOOLS
 from gemma_cli.tools.gmail import TOOLS as GMAIL_TOOLS
 from gemma_cli.tools.memory import TOOLS as MEMORY_TOOLS
 from gemma_cli.tools.templates import TOOLS as TEMPLATE_TOOLS
+from gemma_cli.tools.templates import generate_venue_email_from_template
 from gemma_cli.tools.venue_contacts import TOOLS as VENUE_CONTACT_TOOLS
+from gemma_cli.tools.venue_contacts import lookup_venue_contact, lookup_venue_email_on_web
 
 ALL_TOOLS = DRIVE_TOOLS + CALENDAR_TOOLS + GMAIL_TOOLS + MEMORY_TOOLS + TEMPLATE_TOOLS + VENUE_CONTACT_TOOLS
 
@@ -224,6 +226,14 @@ _VENUE_NAME_FIELD_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# Bullet-list "Website: X" field — same source as the Name field above. Used
+# by the email-discovery chain to pass a URL to lookup_venue_email_on_web when
+# the venue isn't in the xlsx yet.
+_VENUE_WEBSITE_FIELD_RE = re.compile(
+    r"^\s*[-*•]?\s*Website\s*:\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 # Title pattern `Task N — {Venue} — ...` (or colons / hyphens / en-dashes).
 _TASK_TITLE_VENUE_RE = re.compile(
     r"^Task\s+\d+\s*[—–:\-]\s*(.+?)\s*[—–:\-]",
@@ -340,6 +350,74 @@ def _detect_template_high_confidence(venue: str) -> str | None:
     return None
 
 
+def _extract_website(task: str) -> str | None:
+    """Pull a `Website: X` field out of the task body. Returns a https-prefixed
+    URL, or None if no Website field is found."""
+    m = _VENUE_WEBSITE_FIELD_RE.search(task)
+    if not m:
+        return None
+    url = m.group(1).strip()
+    if not url:
+        return None
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    return url
+
+
+def _find_venue_email(venue: str, task: str) -> tuple[str | None, str, str | None]:
+    """3-tier email discovery: xlsx -> web scrape -> Josh prompt.
+
+    Returns (email, contact_name, cancel_reason). On success email is non-empty
+    and cancel_reason is None. On cancel email is None and cancel_reason
+    describes which prompt was cancelled.
+    """
+    # Tier 1 — xlsx
+    contact = lookup_venue_contact(venue)
+    if contact.get("found"):
+        email = (contact.get("email") or "").strip()
+        contact_name = (contact.get("contact") or "").strip()
+        if email:
+            print(f"Found in xlsx: {email}" + (f" ({contact_name})" if contact_name else ""))
+            return email, contact_name, None
+        print(f"({venue} is in the xlsx but has no email on file — trying web scrape)")
+    else:
+        print(f"({venue} not in xlsx — trying web scrape)")
+
+    # Tier 2 — web scrape
+    website = _extract_website(task)
+    if not website:
+        # No Website: field; let Josh provide one (or skip web scrape entirely).
+        try:
+            reply = input(
+                f"What's {venue}'s website URL? "
+                "(press Enter to skip web scrape and type the email directly, or 'cancel') "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None, "", "cancelled at website prompt"
+        if reply.lower() == "cancel":
+            return None, "", "cancelled at website prompt"
+        if reply:
+            if not reply.startswith(("http://", "https://")):
+                reply = "https://" + reply
+            website = reply
+    if website:
+        print(f"Searching {website} for contact email...")
+        web = lookup_venue_email_on_web(website)
+        email = (web.get("email") or "").strip() if isinstance(web, dict) else ""
+        if email:
+            print(f"Found email via web scrape: {email}")
+            print("(consider running update_venue_contact later to save it to the xlsx)")
+            return email, "", None
+        print(f"(no usable email found at {website})")
+
+    # Tier 3 — Josh prompt
+    email = _prompt_with_cancel(f"What's the TO email for {venue}? (or 'cancel') ")
+    if email is None:
+        return None, "", "cancelled at email prompt"
+    return email, "", None
+
+
 def _prompt_with_cancel(prompt_text: str) -> str | None:
     """Ask Josh a question. Empty input re-prompts; `cancel` returns None.
 
@@ -358,24 +436,35 @@ def _prompt_with_cancel(prompt_text: str) -> str | None:
         # empty → silent re-prompt
 
 
-def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None]:
-    """For venue-outreach tasks, gather venue/dates/template from Josh and return
-    an augmented task body (with the values appended for llama to use verbatim).
+def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None, dict | None]:
+    """For venue-outreach tasks, gather venue/dates/template from Josh, render
+    the email by calling generate_venue_email_from_template DIRECTLY (Option B,
+    2026-05-18), and return an augmented task body containing the pre-rendered
+    draft. Llama's job shrinks to printing the draft and handling approval.
 
-    Returns (augmented_task, cancel_reason):
-      - (augmented_task, None) → dispatch with the augmented body
-      - (task, None)           → not an outreach task; dispatch original task unchanged
-      - (None, reason)         → Josh cancelled; caller should skip dispatch
+    Returns (augmented_task, cancel_reason, pre_rendered_data):
+      - (augmented_task, None, pre_rendered) → dispatch a pre-rendered outreach task
+      - (augmented_task, None, None)         → outreach task with rendering failure;
+                                                falls back to the prior "use these
+                                                EXACT values" prefix (llama renders)
+      - (task,           None, None)         → not an outreach task; pass through unchanged
+      - (None,           reason, None)       → Josh cancelled; caller should skip dispatch
+
+    The pre_rendered_data dict contains keys: to, subject, body, venue,
+    contact_name, template, date_range, booking_period. The caller uses
+    pre_rendered_data is not None as the signal to suppress the
+    _check_email_task_used_template_tool runtime hook (llama is NOT supposed
+    to call the template tool when the dispatcher already rendered).
     """
     if not _is_outreach_task(task):
-        return task, None
+        return task, None, None
 
     # E — venue
     venue = _extract_venue(task)
     if venue is None:
         venue = _prompt_with_cancel("What's the venue name for this task? (or 'cancel') ")
         if venue is None:
-            return None, "cancelled at venue prompt"
+            return None, "cancelled at venue prompt", None
 
     # Date detection in body, else dates prompt.
     # date_range MUST contain a digit (templates.py validator rejects vague phrases
@@ -392,7 +481,7 @@ def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None]:
                 "(e.g. 'the weekend of August 14-16', or 'cancel') "
             )
             if date_input is None:
-                return None, "cancelled at dates prompt"
+                return None, "cancelled at dates prompt", None
             if any(ch.isdigit() for ch in date_input):
                 break
             print("(needs at least one day number — e.g. 'August 14-16', "
@@ -407,7 +496,7 @@ def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None]:
             "e.g. 'August', 'fall', 'late summer', or 'cancel') "
         )
         if bp is None:
-            return None, "cancelled at booking_period prompt"
+            return None, "cancelled at booking_period prompt", None
         # Soft sanity check — mirrors the templates.py validator at line 206.
         if any(ch.isdigit() for ch in bp) or "/" in bp or len(bp) > 30:
             print(f"(warning: '{bp}' will trip the template validator — sending anyway)")
@@ -427,10 +516,10 @@ def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None]:
             ).strip()
         except (EOFError, KeyboardInterrupt):
             print()
-            return None, "cancelled at template prompt"
+            return None, "cancelled at template prompt", None
         reply_lower = reply.lower()
         if reply_lower == "cancel":
-            return None, "cancelled at template prompt"
+            return None, "cancelled at template prompt", None
         if not reply_lower:
             template = _TEMPLATE_DEFAULT
         elif reply_lower in _TEMPLATE_CHOICES:
@@ -439,13 +528,77 @@ def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None]:
             print(f"(unrecognized template '{reply}' — using default {_TEMPLATE_DEFAULT})")
             template = _TEMPLATE_DEFAULT
 
+    # Option B (2026-05-18): pre-render by calling tools directly. Removes llama
+    # from the parameter-filling path entirely so it cannot hallucinate
+    # template / booking_period / venue substitutions on a re-prompt.
+
+    # Discover TO email via xlsx -> web -> prompt chain
+    to_email, contact_name, cancel_reason = _find_venue_email(venue, task)
+    if cancel_reason is not None:
+        return None, cancel_reason, None
+
+    # Render the email by calling the tool handler directly
+    rendered = generate_venue_email_from_template(
+        template=template,
+        venue_name=venue,
+        date_range=date_range,
+        booking_period=booking_period,
+        contact_name=contact_name,
+    )
+    if isinstance(rendered, dict) and "error" in rendered:
+        # Defensive — shouldn't trip because our values already pass the validators
+        # individually, but if the renderer rejects anything, fall back to the
+        # prior "use these EXACT values" prefix and let llama call the tool.
+        print(f"(template renderer rejected the inputs: {rendered['error']})")
+        print("(falling back to legacy prefix — llama will call the template tool itself)")
+        augmented = (
+            f"{task}\n\n"
+            f"Josh has specified: venue_name='{venue}', date_range='{date_range}', "
+            f"booking_period='{booking_period}', template='{template}', "
+            f"to='{to_email}'"
+            f"{f', contact_name={contact_name!r}' if contact_name else ''}. "
+            f"Use these EXACT values — do not modify or substitute."
+        )
+        return augmented, None, None
+
+    subject = rendered["subject"]
+    body = rendered["body"]
+
     augmented = (
         f"{task}\n\n"
-        f"Josh has specified: venue_name='{venue}', date_range='{date_range}', "
-        f"booking_period='{booking_period}', template='{template}'. "
-        f"Use these EXACT values — do not modify or substitute."
+        f"=== PRE-RENDERED EMAIL (do not modify; do not call generate_venue_email_from_template) ===\n"
+        f"TO: {to_email}\n"
+        f"SUBJECT: {subject}\n"
+        f"BODY:\n{body}\n"
+        f"=== END PRE-RENDERED ===\n\n"
+        f"Josh has already chosen template={template}, venue_name={venue!r}, "
+        f"date_range={date_range!r}, booking_period={booking_period!r}, "
+        f"to={to_email!r}"
+        f"{f', contact_name={contact_name!r}' if contact_name else ''}, "
+        f"and the email above is the FINAL rendered draft (already generated by "
+        f"the template tool — do NOT call generate_venue_email_from_template).\n\n"
+        f"YOUR JOB:\n"
+        f"1. PRINT the TO, SUBJECT, and BODY exactly as shown above in your reply text "
+        f"so Josh can read the draft.\n"
+        f"2. WAIT for Josh's reply.\n"
+        f"3. If Josh approves (e.g. 'save as Gmail draft', 'looks good, ship it'), "
+        f"call gmail_draft_email ONCE with these EXACT TO / SUBJECT / BODY values.\n"
+        f"4. If Josh requests changes, apply the changes to the BODY in your reply "
+        f"text and reprint — do NOT call generate_venue_email_from_template again "
+        f"(the template would overwrite Josh's edits)."
     )
-    return augmented, None
+
+    pre_rendered = {
+        "to": to_email,
+        "subject": subject,
+        "body": body,
+        "venue": venue,
+        "contact_name": contact_name,
+        "template": template,
+        "date_range": date_range,
+        "booking_period": booking_period,
+    }
+    return augmented, None, pre_rendered
 
 
 def _is_smalltalk(text: str) -> bool:
@@ -693,10 +846,12 @@ def _repl(model: str, verbose: bool) -> None:
                         print("(forced re-execute — bypassing verify mode)")
                         print()
                     # Pre-dispatch collector (added 2026-05-18): for venue-outreach
-                    # tasks, ask Josh for venue/dates/template before sending to
-                    # llama so the model can't hallucinate them. See
-                    # _collect_outreach_inputs docstring.
-                    dispatched_task, cancel_reason = _collect_outreach_inputs(task)
+                    # tasks, ask Josh for venue/dates/template and PRE-RENDER the
+                    # email by calling generate_venue_email_from_template +
+                    # lookup_venue_contact directly (Option B). Llama receives the
+                    # finished draft and just presents it / handles approval.
+                    # See _collect_outreach_inputs docstring.
+                    dispatched_task, cancel_reason, pre_rendered = _collect_outreach_inputs(task)
                     if cancel_reason is not None:
                         print(f"(task not dispatched — {cancel_reason}. Stays in queue; "
                               "run /next again when ready.)")
@@ -724,7 +879,12 @@ def _repl(model: str, verbose: bool) -> None:
                     # re-prompt once with a strong correction. Q4 70B regularly
                     # bypasses the LLAMA.md instruction to use the template tool;
                     # this hook is the protocol-layer backstop.
-                    if _check_email_task_used_template_tool(
+                    #
+                    # Skipped on pre-rendered dispatches (Option B, 2026-05-18):
+                    # the dispatcher already called the template tool, so llama
+                    # is supposed to NOT call it — firing the hook would mis-fire
+                    # on every successful pre-render.
+                    if pre_rendered is None and _check_email_task_used_template_tool(
                         task, result.tool_invocations, result.final_text
                     ):
                         print(
