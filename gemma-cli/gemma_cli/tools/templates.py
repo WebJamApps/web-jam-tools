@@ -36,13 +36,10 @@ from typing import Any
 from gemma_cli.llm import Tool
 
 
-_DEFAULT_DATE_RANGE = "June 26, 27, or 28"
-
-
 _SUBJECT = {
     "originals": "Performance Inquiry: Josh and Maria (Original Americana/Roots Duo)",
     "midrange": "Performance Inquiry: Josh and Maria (Husband-Wife Acoustic Duo)",
-    "pub_brewery": "Booking Inquiry: Josh and Maria (Acoustic Duo) - June Dates",
+    "pub_brewery": "Booking Inquiry: Josh and Maria (Acoustic Duo) - August Dates",
 }
 
 
@@ -51,7 +48,7 @@ _TEMPLATE_ORIGINALS = (
     "\n"
     "My name is Josh Sherman, and I perform with my wife Maria as the husband-wife acoustic duo \"Josh and Maria.\" We are based in Salem, VA, and we are long-time admirers of {venue_name}'s commitment to showcasing original music.\n"
     "\n"
-    "We are currently booking our June run and would love to be considered for a slot on {date_range}. As an established regional act with over 12 years of experience, we offer a professional, tight set of original Americana and roots music that we think would be a perfect fit for your listening room environment.\n"
+    "We are currently booking our August run and would love to be considered for a slot on {date_range}. As an established regional act with over 12 years of experience, we offer a professional, tight set of original Americana and roots music that we think would be a perfect fit for your listening room environment.\n"
     "\n"
     "Maria and I have spent over eleven years honing our acoustic duo sound — close-harmony Americana and roots music built around our original songwriting. We've released live recordings of songs like Dark Light, Misty Rainy Morning, and Good Enough, and have built a steady following across southwest Virginia at venues that take songwriting seriously. Listening rooms are where we feel most at home.\n"
     "\n"
@@ -62,11 +59,11 @@ _TEMPLATE_ORIGINALS = (
     "\n"
     "You can find our full repertoire and performance history at https://www.joshandmariamusic.com.\n"
     "\n"
-    "Thank you for your time and for everything you do to champion original music in our region. We look forward to hearing from you!\n"
+    "Thank you for your time and for everything you do to champion original music in our region.\n"
     "\n"
     "Best,\n"
     "\n"
-    "Josh Sherman\n"
+    "Josh & Maria\n"
     "540-494-8035\n"
     "https://www.joshandmariamusic.com\n"
 )
@@ -88,11 +85,11 @@ _TEMPLATE_MIDRANGE = (
     "\n"
     "Full music links and performance history available at https://www.joshandmariamusic.com.\n"
     "\n"
-    "Thank you for your time and for supporting live music. We look forward to the possibility of working with you.\n"
+    "Let me know if any of those dates work — happy to talk through details.\n"
     "\n"
     "Best,\n"
     "\n"
-    "Josh Sherman\n"
+    "Josh & Maria\n"
     "540-494-8035\n"
     "https://www.joshandmariamusic.com\n"
 )
@@ -101,7 +98,7 @@ _TEMPLATE_MIDRANGE = (
 _TEMPLATE_PUB_BREWERY = (
     "Hi {greeting_name},\n"
     "\n"
-    "I'm reaching out from Josh and Maria, a professional husband-wife acoustic duo based in Salem, VA. We are currently filling our summer schedule and would love to bring our energetic acoustic set to {venue_name}.\n"
+    "My name is Josh Sherman — my wife and I play as Josh and Maria, a professional husband-wife acoustic duo based in Salem, VA. We still have a few summer dates open and would love to bring our energetic acoustic set to {venue_name}.\n"
     "\n"
     "We have {date_range} available and are looking to book a 2-3 hour set. We've spent over 12 years performing at festivals, breweries, and venues throughout Southwest Virginia, providing a versatile mix of original Americana and crowd-pleasing covers.\n"
     "\n"
@@ -115,11 +112,11 @@ _TEMPLATE_PUB_BREWERY = (
     "\n"
     "Our full performance history and music can be found at https://www.joshandmariamusic.com.\n"
     "\n"
-    "Is now a good time to talk about booking one of those June dates? We'd love to discuss details!\n"
+    "Let me know if any of those dates work — happy to talk through details.\n"
     "\n"
-    "Best regards,\n"
+    "Best,\n"
     "\n"
-    "Josh Sherman\n"
+    "Josh & Maria\n"
     "540-494-8035\n"
     "https://www.joshandmariamusic.com\n"
 )
@@ -135,8 +132,8 @@ _TEMPLATE_BODIES = {
 def generate_venue_email_from_template(
     template: str,
     venue_name: str,
+    date_range: str,
     contact_name: str = "",
-    date_range: str = "",
 ) -> dict[str, Any]:
     """Render a venue-outreach email using one of Josh's approved templates.
 
@@ -156,11 +153,22 @@ def generate_venue_email_from_template(
     vname = venue_name.strip()
     if not vname:
         return {"error": "venue_name is required and must be non-empty."}
+    drange = date_range.strip()
+    if not drange:
+        return {
+            "error": (
+                "date_range is required. ASK Josh which dates to offer for "
+                "this venue — different venues may get different dates. Josh "
+                "is currently booking for August (June and July are booked). "
+                "Example acceptable values: 'August 28, 29, or 30', 'any "
+                "Saturday in August', 'the last weekend of August'."
+            ),
+        }
     greeting_name = contact_name.strip() or "there"
     body = _TEMPLATE_BODIES[t].format(
         greeting_name=greeting_name,
         venue_name=vname,
-        date_range=(date_range.strip() or _DEFAULT_DATE_RANGE),
+        date_range=drange,
     )
     return {
         "subject": _SUBJECT[t],
@@ -221,14 +229,18 @@ TOOLS: list[Tool] = [
                 "date_range": {
                     "type": "string",
                     "description": (
-                        "Optional: dates Josh is offering, as a natural-language "
-                        "fragment that fits the sentence pattern in the template. "
-                        "Defaults to 'June 26, 27, or 28'. Override only when the "
-                        "task specifies different dates."
+                        "REQUIRED. The dates Josh is offering, as a natural-"
+                        "language fragment that fits the sentence pattern in the "
+                        "template (e.g. 'August 28, 29, or 30', 'the last "
+                        "weekend of August', 'any Saturday in August'). ASK JOSH "
+                        "for this value BEFORE calling the tool — do not guess, "
+                        "do not substitute a placeholder, do not use 'TBD' or "
+                        "'(date range)'. Josh is currently booking for August "
+                        "(June and July are booked)."
                     ),
                 },
             },
-            "required": ["template", "venue_name"],
+            "required": ["template", "venue_name", "date_range"],
         },
         handler=generate_venue_email_from_template,
     ),
