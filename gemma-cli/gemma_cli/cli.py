@@ -155,6 +155,45 @@ _SMALLTALK_PATTERNS = (
 )
 
 
+# Detector for venue-outreach email tasks. When /next dispatches one of these,
+# llama MUST call generate_venue_email_from_template — writing email body prose
+# from scratch is forbidden because Q4 70B drifts to marketing-copy when given
+# the chance. See _check_email_task_used_template_tool for the runtime hook.
+_EMAIL_TASK_RE = re.compile(
+    r"\bVenue\s+Outreach\s+Email\b|\bPitch\s+Email\b",
+    re.IGNORECASE,
+)
+
+# Heuristic for "the model produced email-shaped content" — used to detect when
+# llama bypassed the template tool and wrote prose. Looks for a Subject: line
+# AND a greeting-style opening on a line by itself. False positives are fine —
+# the worst outcome is one extra re-prompt.
+_EMAIL_SHAPE_RE = re.compile(r"^\s*Subject\s*:", re.IGNORECASE | re.MULTILINE)
+
+
+def _check_email_task_used_template_tool(
+    task_text: str, tool_invocations: list, final_text: str
+) -> bool:
+    """Return True if the model produced email content without using the template tool.
+
+    Only flags when ALL of these are true:
+      - the task is a venue-outreach / pitch-email task (regex match)
+      - the model's reply contains email-shaped content (Subject: line found)
+      - the model did NOT call generate_venue_email_from_template this turn
+
+    When True, the caller should re-prompt with a strong corrective message.
+    """
+    if not _EMAIL_TASK_RE.search(task_text):
+        return False
+    if not _EMAIL_SHAPE_RE.search(final_text or ""):
+        return False
+    used = any(
+        inv.get("name") == "generate_venue_email_from_template"
+        for inv in tool_invocations
+    )
+    return not used
+
+
 def _is_smalltalk(text: str) -> bool:
     """Return True for clear conversational openers that should NOT trigger tools.
 
@@ -413,6 +452,48 @@ def _repl(model: str, verbose: bool) -> None:
                         system=system_prompt,
                         tools=next_tools,
                     )
+                    # Runtime hook: if this was a venue-outreach email task and
+                    # llama wrote email prose without calling the template tool,
+                    # re-prompt once with a strong correction. Q4 70B regularly
+                    # bypasses the LLAMA.md instruction to use the template tool;
+                    # this hook is the protocol-layer backstop.
+                    if _check_email_task_used_template_tool(
+                        task, result.tool_invocations, result.final_text
+                    ):
+                        print(
+                            "\n[runtime] email task: model wrote prose without "
+                            "calling generate_venue_email_from_template — "
+                            "re-prompting for tool-based render"
+                        )
+                        correction = (
+                            "[Runtime correction — not from Josh]: That email "
+                            "body was written from scratch, but for venue-outreach "
+                            "email tasks you MUST use the "
+                            "`generate_venue_email_from_template` tool — it is "
+                            "the only way to produce the approved body (locked "
+                            "prose, the right song links, the venue history "
+                            "paragraph, the correct sign-off). Please redo: "
+                            "(1) if you don't yet have CONCRETE dates from "
+                            "Josh (month name + day numbers, NOT 'late summer' "
+                            "or similar), ask him for them first; "
+                            "(2) call lookup_venue_contact if you haven't already "
+                            "to confirm the TO address; "
+                            "(3) call generate_venue_email_from_template with "
+                            "template, venue_name, date_range, and "
+                            "booking_period — for a brewery task use "
+                            "template='pub_brewery'; "
+                            "(4) PRINT the returned subject + body to Josh "
+                            "with the TO line. Do NOT compose email prose "
+                            "yourself."
+                        )
+                        result = _run_once(
+                            correction,
+                            model=model,
+                            verbose=verbose,
+                            history=result.history,
+                            system=system_prompt,
+                            tools=next_tools,
+                        )
                 history = result.history
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
