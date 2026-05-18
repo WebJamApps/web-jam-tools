@@ -284,6 +284,11 @@ _TEMPLATE_HIGH_CONFIDENCE = (
 _TEMPLATE_CHOICES = ("originals", "midrange", "pub_brewery")
 _TEMPLATE_DEFAULT = "midrange"
 
+# Standing CC list for all venue-outreach drafts (Josh's preference 2026-05-18).
+# Maria (chemmariasherman@gmail.com) gets a copy of every booking pitch, and
+# Josh's primary inbox (joshua.v.sherman@gmail.com) gets one for personal record.
+_OUTREACH_CC = "chemmariasherman@gmail.com, joshua.v.sherman@gmail.com"
+
 
 def _is_outreach_task(task: str) -> bool:
     """Trigger detection (A): explicit tag wins; broader keyword regex is fallback."""
@@ -569,6 +574,7 @@ def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None, dict | 
         f"{task}\n\n"
         f"=== PRE-RENDERED EMAIL (do not modify; do not call generate_venue_email_from_template) ===\n"
         f"TO: {to_email}\n"
+        f"CC: {_OUTREACH_CC}\n"
         f"SUBJECT: {subject}\n"
         f"BODY:\n{body}\n"
         f"=== END PRE-RENDERED ===\n\n"
@@ -600,6 +606,7 @@ def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None, dict | 
 
     pre_rendered = {
         "to": to_email,
+        "cc": _OUTREACH_CC,
         "subject": subject,
         "body": body,
         "venue": venue,
@@ -976,10 +983,17 @@ def _repl(model: str, verbose: bool) -> None:
         # in the 2026-05-18 live test).
         if last_pre_rendered is not None and _has_email_draft_approval(line):
             pr = last_pre_rendered
-            print(f"[draft] saving to Gmail directly — TO={pr['to']}, "
-                  f"SUBJECT={pr['subject']!r}")
+            cc = pr.get("cc", "")
+            print(f"[draft] saving to Gmail directly — TO={pr['to']}"
+                  + (f", CC={cc}" if cc else "")
+                  + f", SUBJECT={pr['subject']!r}")
             try:
-                saved = draft_email(to=pr["to"], subject=pr["subject"], body=pr["body"])
+                saved = draft_email(
+                    to=pr["to"],
+                    subject=pr["subject"],
+                    body=pr["body"],
+                    cc=cc,
+                )
                 print(f"[draft] saved — draft_id={saved.get('draft_id')}")
                 if saved.get("note"):
                     print(f"        {saved['note']}")
