@@ -19,8 +19,9 @@ from gemma_cli.tools.drive import TOOLS as DRIVE_TOOLS
 from gemma_cli.tools.gmail import TOOLS as GMAIL_TOOLS
 from gemma_cli.tools.memory import TOOLS as MEMORY_TOOLS
 from gemma_cli.tools.templates import TOOLS as TEMPLATE_TOOLS
+from gemma_cli.tools.venue_contacts import TOOLS as VENUE_CONTACT_TOOLS
 
-ALL_TOOLS = DRIVE_TOOLS + CALENDAR_TOOLS + GMAIL_TOOLS + MEMORY_TOOLS + TEMPLATE_TOOLS
+ALL_TOOLS = DRIVE_TOOLS + CALENDAR_TOOLS + GMAIL_TOOLS + MEMORY_TOOLS + TEMPLATE_TOOLS + VENUE_CONTACT_TOOLS
 
 SYSTEM_PROMPT = (
     "You are the Coordinator for Josh Sherman's personal projects (JoshMariaMusic "
