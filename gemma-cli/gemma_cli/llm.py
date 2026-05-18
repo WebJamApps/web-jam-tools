@@ -56,12 +56,15 @@ MAX_TURNS = 8
 DEFAULT_TEMPERATURE = 0.0
 # Ollama's default num_ctx is often 4096 or 8192 depending on the model. SHARED.md
 # + LLAMA.md is ~15K chars (~3700 tokens) before tool schemas and history, so the
-# default silently truncates the EARLY parts of the system prompt — including the
-# "WHEN NOT TO USE TOOLS" rules — leaving only the later RESPONSE FORMAT section.
-# Symptom (2026-05-17): "hi" triggers drive_list_files even with explicit prompt
-# rules forbidding it. 16384 keeps the full prompt + room for tool schemas, history,
-# and a 2048-token reply. KV-cache grows ~4-8GB at 70B which fits in OMEN's 80GB RAM.
-DEFAULT_NUM_CTX = 16384
+# default silently truncates the EARLY parts of the system prompt. 8192 keeps the
+# full prompt + room for tool schemas, history, and a short reply.
+#
+# 2026-05-17: Tried 16384 to fit comfortably, but KV cache at 70B × 16384 ctx
+# was approaching OMEN's 80GB system RAM ceiling and causing /next dispatch to
+# hang for many minutes on first allocation per REPL session. Dialed back to
+# 8192. The client-side smalltalk and email-approval gates do not depend on the
+# larger context — they work at protocol layer, not prompt layer.
+DEFAULT_NUM_CTX = 8192
 
 
 @dataclass
