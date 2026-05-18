@@ -111,6 +111,7 @@ _TEMPLATE_PUB_BREWERY = (
     "- Proud Mary (CCR) - live at Olde Salem Brewing: https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3\n"
     "- I'm Yours (Jason Mraz) - live at Salem Farmers Market: https://web-jam.com/music/songs?id=69fdcd7a586f5175c6db44a9\n"
     "- Country Roads (John Denver) - live at Gusto's Pizza: https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e\n"
+    "- Misty Rainy Morning (Original): https://web-jam.com/music/songs?id=5f5e6b7d13772f0004a091ad\n"
     "\n"
     "Our full performance history and music can be found at https://www.joshandmariamusic.com.\n"
     "\n"
