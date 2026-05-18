@@ -17,6 +17,7 @@ from gemma_cli.memory import append_memory, load_memory
 from gemma_cli.tools.calendar import TOOLS as CALENDAR_TOOLS
 from gemma_cli.tools.drive import TOOLS as DRIVE_TOOLS
 from gemma_cli.tools.gmail import TOOLS as GMAIL_TOOLS
+from gemma_cli.tools.gmail import draft_email
 from gemma_cli.tools.memory import TOOLS as MEMORY_TOOLS
 from gemma_cli.tools.templates import TOOLS as TEMPLATE_TOOLS
 from gemma_cli.tools.templates import generate_venue_email_from_template
@@ -586,9 +587,11 @@ def _collect_outreach_inputs(task: str) -> tuple[str | None, str | None, dict | 
         f"natural, but it MUST explicitly invite Josh to approve or request edits, "
         f"and it MUST be the last thing in your reply.\n"
         f"3. STOP. Do NOT call any tool on this turn. Wait for Josh's next message.\n"
-        f"4. On Josh's NEXT turn, if he approves (e.g. 'save as Gmail draft', "
-        f"'looks good, ship it'), call gmail_draft_email ONCE with these EXACT "
-        f"TO / SUBJECT / BODY values.\n"
+        f"4. When Josh approves (e.g. 'save as Gmail draft', 'looks good, ship it'), "
+        f"the REPL will save the draft AUTOMATICALLY using the exact values above. "
+        f"You do NOT call gmail_draft_email yourself — the dispatcher intercepts "
+        f"the approval and handles the save deterministically (so the saved draft "
+        f"is always exactly what was shown to Josh, with no parameter substitution).\n"
         f"5. If Josh requests changes, apply the changes to the BODY in your reply "
         f"text and reprint with the approval question again — do NOT call "
         f"generate_venue_email_from_template again (the template would overwrite "
@@ -761,6 +764,13 @@ def _repl(model: str, verbose: bool) -> None:
     # warn Josh if he runs /next twice without /done in between. In-session
     # only; doesn't survive REPL restart.
     last_next_task: str | None = None
+    # Holds the pre-rendered email payload (to/subject/body/...) for the most
+    # recent /next outreach dispatch — set after a successful pre-render and
+    # cleared on approval-save, /next, /done, or /reset. When set, the next
+    # approval-phrase input triggers the dispatcher to save to Gmail directly
+    # (Option B follow-through, 2026-05-18) instead of letting llama call
+    # gmail_draft_email with potentially-substituted parameters.
+    last_pre_rendered: dict | None = None
     while True:
         try:
             line = input(prompt).strip()
@@ -778,6 +788,7 @@ def _repl(model: str, verbose: bool) -> None:
         if line.lower() in {"/reset", "reset"}:
             history = []
             last_next_task = None
+            last_pre_rendered = None
             print("(session memory cleared)")
             print()
             continue
@@ -929,6 +940,17 @@ def _repl(model: str, verbose: bool) -> None:
                             tools=next_tools,
                         )
                 history = result.history
+                # Stash the pre-rendered payload for the approval interceptor
+                # below. Cleared on /done, /reset, next /next, or after save.
+                # Warns if a previous draft was pending (silently overwritten).
+                if pre_rendered is not None:
+                    if last_pre_rendered is not None:
+                        print("(warning: a previous pending draft was discarded; "
+                              "new outreach task's draft is now the pending one)")
+                    last_pre_rendered = pre_rendered
+                else:
+                    # Non-outreach /next clears any stale pre-render (safety)
+                    last_pre_rendered = None
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
             print()
@@ -939,9 +961,33 @@ def _repl(model: str, verbose: bool) -> None:
 
                 remaining = delete_first_task(model)
                 last_next_task = None
+                last_pre_rendered = None
                 print(f"Removed first task. {remaining} remaining in queue.")
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
+            print()
+            continue
+        # Approval interceptor (Option B follow-through, 2026-05-18):
+        # If Josh approves a pending pre-rendered draft, the dispatcher saves it
+        # to Gmail DIRECTLY using the stored values — llama is NOT invoked on
+        # this turn. Removes the parameter-hallucination risk where llama would
+        # substitute a different venue/email from session memory (Mac n Bobs
+        # bobby@macandbobs.com for Solstice solsticefarmbrewery@gmail.com seen
+        # in the 2026-05-18 live test).
+        if last_pre_rendered is not None and _has_email_draft_approval(line):
+            pr = last_pre_rendered
+            print(f"[draft] saving to Gmail directly — TO={pr['to']}, "
+                  f"SUBJECT={pr['subject']!r}")
+            try:
+                saved = draft_email(to=pr["to"], subject=pr["subject"], body=pr["body"])
+                print(f"[draft] saved — draft_id={saved.get('draft_id')}")
+                if saved.get("note"):
+                    print(f"        {saved['note']}")
+                last_pre_rendered = None
+            except Exception as exc:
+                print(f"[draft] save failed: {type(exc).__name__}: {exc}")
+                print("(pre-rendered draft kept — say 'save as Gmail draft' "
+                      "again to retry, or /next to abandon)")
             print()
             continue
         try:
