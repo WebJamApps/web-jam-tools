@@ -106,7 +106,11 @@ def _run_once(
     system: str | None = None,
     tools: list | None = None,
 ):
-    result = chat(
+    # chat() now streams model output to stdout as it arrives — see llm.py.
+    # Do NOT print result.final_text here or we'd double-print everything that
+    # was already streamed. The fallback / synthesized-text paths inside chat()
+    # print their own explicit lines for the cases where nothing was streamed.
+    return chat(
         user_prompt=prompt,
         tools=tools if tools is not None else ALL_TOOLS,
         system=system if system is not None else SYSTEM_PROMPT,
@@ -114,8 +118,6 @@ def _run_once(
         verbose=verbose,
         history=history,
     )
-    print(result.final_text)
-    return result
 
 
 def _resolve_system_prompt() -> str:
