@@ -216,6 +216,14 @@ _OUTREACH_KEYWORD_RE = re.compile(
 # Explicit `venue:` line in the task body — wins over title regex.
 _VENUE_FIELD_RE = re.compile(r"^\s*venue\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
+# Bullet-list "Name: X" field — phone Sonnet's task format puts the venue name
+# under a "VENUE DETAILS:" section as "- Name: <venue>". Allow optional bullet
+# (-, *, •) and optional indentation.
+_VENUE_NAME_FIELD_RE = re.compile(
+    r"^\s*[-*•]?\s*Name\s*:\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 # Title pattern `Task N — {Venue} — ...` (or colons / hyphens / en-dashes).
 _TASK_TITLE_VENUE_RE = re.compile(
     r"^Task\s+\d+\s*[—–:\-]\s*(.+?)\s*[—–:\-]",
@@ -274,17 +282,22 @@ def _is_outreach_task(task: str) -> bool:
 
 
 def _extract_venue(task: str) -> str | None:
-    """Venue extraction (E): explicit field wins; else title regex; else None."""
+    """Venue extraction (E): explicit `venue:` field wins; else `- Name:` bullet
+    (phone Sonnet's task format); else `Task N — Venue — ...` title regex; else
+    None. Suspect-result check rejects action-verb-shaped matches."""
     m = _VENUE_FIELD_RE.search(task)
     if m:
         return m.group(1).strip()
+    m = _VENUE_NAME_FIELD_RE.search(task)
+    if m:
+        candidate = m.group(1).strip()
+        if not _VENUE_SUSPECT_VERBS_RE.search(candidate):
+            return candidate
     m = _TASK_TITLE_VENUE_RE.search(task)
     if m:
         candidate = m.group(1).strip()
-        # Suspect-result check: if it looks like an action phrase, treat as parse miss.
-        if _VENUE_SUSPECT_VERBS_RE.search(candidate):
-            return None
-        return candidate
+        if not _VENUE_SUSPECT_VERBS_RE.search(candidate):
+            return candidate
     return None
 
 
