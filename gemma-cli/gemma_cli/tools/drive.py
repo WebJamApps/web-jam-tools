@@ -124,6 +124,48 @@ def search_in_file(
     }
 
 
+def trash_file(file_id: str, force: bool = False) -> dict[str, Any]:
+    try:
+        check_protected_write(file_id, force=force)
+    except GuardError as exc:
+        return {"error": str(exc), "guard": "protected-file"}
+
+    f = (
+        _drive()
+        .files()
+        .update(fileId=file_id, body={"trashed": True}, fields="id,name,trashed")
+        .execute()
+    )
+    return {"id": f["id"], "name": f["name"], "trashed": f.get("trashed", True)}
+
+
+def move_file(file_id: str, new_folder: str, force: bool = False) -> dict[str, Any]:
+    try:
+        check_protected_write(file_id, force=force)
+    except GuardError as exc:
+        return {"error": str(exc), "guard": "protected-file"}
+
+    new_parent_id = _resolve_folder(new_folder)
+    if not new_parent_id:
+        return {"error": "new_folder is required (alias or folder ID)"}
+
+    current = _drive().files().get(fileId=file_id, fields="parents").execute()
+    old_parents = ",".join(current.get("parents", []))
+
+    f = (
+        _drive()
+        .files()
+        .update(
+            fileId=file_id,
+            addParents=new_parent_id,
+            removeParents=old_parents,
+            fields="id,name,parents",
+        )
+        .execute()
+    )
+    return {"id": f["id"], "name": f["name"], "parents": f.get("parents", [])}
+
+
 def create_text_file(name: str, content: str, folder: str | None = None) -> dict[str, Any]:
     try:
         check_filename(name)
@@ -241,6 +283,49 @@ TOOLS: list[Tool] = [
             },
         },
         handler=list_files,
+    ),
+    Tool(
+        name="drive_trash_file",
+        description=(
+            "Move a Drive file to Trash (reversible for 30 days). Use for routine cleanup — "
+            "duplicates, stale phone-authored task files after merge, etc. "
+            "Protected files (MariaParty RSVP MASTER, Master Plan v2, Banner Decision) "
+            "require force=true and an explicit Josh override."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "force": {
+                    "type": "boolean",
+                    "description": "Override protected-file guard. Only true on explicit Josh instruction.",
+                },
+            },
+            "required": ["file_id"],
+        },
+        handler=trash_file,
+    ),
+    Tool(
+        name="drive_move_file",
+        description=(
+            "Move a Drive file to a different folder. `new_folder` accepts a known folder alias "
+            "(CLAUDE, GEMINI, JoshMariaMusic, MariaParty) or a raw folder ID. "
+            "Replaces the file's existing parents with the new one. "
+            "Protected files require force=true and an explicit Josh override."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "new_folder": {"type": "string", "description": "Target folder alias or ID"},
+                "force": {
+                    "type": "boolean",
+                    "description": "Override protected-file guard. Only true on explicit Josh instruction.",
+                },
+            },
+            "required": ["file_id", "new_folder"],
+        },
+        handler=move_file,
     ),
     Tool(
         name="drive_create_text_file",
