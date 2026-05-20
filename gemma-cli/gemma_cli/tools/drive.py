@@ -11,6 +11,7 @@ from typing import Any
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
+import subprocess
 
 from gemma_cli.auth import load_credentials
 from gemma_cli.guards import check_filename, check_protected_write, GuardError
@@ -78,6 +79,78 @@ def _fetch_full_text(file_id: str) -> str:
     if isinstance(content, bytes):
         content = content.decode("utf-8", errors="replace")
     return content
+
+
+def download_pdf_text(file_id: str) -> dict[str, Any]:
+    """Download a Drive PDF and extract its text via pdftotext (poppler).
+
+    Returns {"file_id", "name", "text", "char_count"} on success, or
+    {"file_id", "error", "reason"} on failure. Llama never sees this — the
+    dispatcher calls it before /next to inline PDF content into the task body.
+    """
+    try:
+        meta = (
+            _drive()
+            .files()
+            .get(fileId=file_id, fields="name,mimeType,size")
+            .execute()
+        )
+    except Exception as exc:
+        return {"file_id": file_id, "error": f"metadata fetch failed: {exc}", "reason": "drive-api"}
+
+    mime = meta.get("mimeType", "")
+    if mime != "application/pdf":
+        return {
+            "file_id": file_id,
+            "name": meta.get("name", ""),
+            "error": f"not a PDF (mimeType={mime})",
+            "reason": "wrong-mime",
+        }
+
+    try:
+        pdf_bytes = _drive().files().get_media(fileId=file_id).execute()
+    except Exception as exc:
+        return {"file_id": file_id, "error": f"download failed: {exc}", "reason": "drive-api"}
+
+    if not isinstance(pdf_bytes, bytes) or not pdf_bytes:
+        return {"file_id": file_id, "error": "empty PDF download", "reason": "empty"}
+
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-layout", "-", "-"],
+            input=pdf_bytes,
+            capture_output=True,
+            timeout=30,
+        )
+    except FileNotFoundError:
+        return {"file_id": file_id, "error": "pdftotext not installed", "reason": "missing-binary"}
+    except subprocess.TimeoutExpired:
+        return {"file_id": file_id, "error": "pdftotext timed out after 30s", "reason": "timeout"}
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        return {
+            "file_id": file_id,
+            "name": meta.get("name", ""),
+            "error": f"pdftotext exit {result.returncode}: {stderr}",
+            "reason": "pdftotext-error",
+        }
+
+    text = result.stdout.decode("utf-8", errors="replace")
+    if not text.strip():
+        return {
+            "file_id": file_id,
+            "name": meta.get("name", ""),
+            "error": "pdftotext returned empty text (scanned/image-only PDF?)",
+            "reason": "no-text",
+        }
+
+    return {
+        "file_id": file_id,
+        "name": meta.get("name", ""),
+        "text": text,
+        "char_count": len(text),
+    }
 
 
 def read_text_file(file_id: str) -> dict[str, Any]:
