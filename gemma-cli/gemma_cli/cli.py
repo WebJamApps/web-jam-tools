@@ -447,7 +447,15 @@ def _inline_pdf_content(task: str) -> tuple[str, list[str]]:
 
     if not blocks:
         return task, notices
-    return task + "".join(blocks), notices
+    directive = (
+        "\n\n[DISPATCHER NOTE — the dispatcher already extracted the content of "
+        "the PDF(s) referenced in this task. Their full text is inlined below in "
+        "=== PDF CONTENT ... === blocks. Do NOT call drive_read_text_file, "
+        "drive_read_text_file_lines, drive_search_in_file, or any other "
+        "file-reading tool for those PDFs — those tools cannot decode PDF bytes "
+        "anyway. Use the inlined text directly.]"
+    )
+    return task + directive + "".join(blocks), notices
 
 
 def _is_outreach_task(task: str) -> bool:
