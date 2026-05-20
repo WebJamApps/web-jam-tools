@@ -11,6 +11,7 @@ from typing import Any
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
+import subprocess
 
 from gemma_cli.auth import load_credentials
 from gemma_cli.guards import check_filename, check_protected_write, GuardError
@@ -80,6 +81,129 @@ def _fetch_full_text(file_id: str) -> str:
     return content
 
 
+def download_pdf_text(file_id: str) -> dict[str, Any]:
+    """Download a Drive PDF and extract its text via pdftotext (poppler).
+
+    Returns {"file_id", "name", "text", "char_count"} on success, or
+    {"file_id", "error", "reason"} on failure. Llama never sees this — the
+    dispatcher calls it before /next to inline PDF content into the task body.
+    """
+    try:
+        meta = (
+            _drive()
+            .files()
+            .get(fileId=file_id, fields="name,mimeType,size")
+            .execute()
+        )
+    except Exception as exc:
+        return {"file_id": file_id, "error": f"metadata fetch failed: {exc}", "reason": "drive-api"}
+
+    mime = meta.get("mimeType", "")
+    if mime != "application/pdf":
+        return {
+            "file_id": file_id,
+            "name": meta.get("name", ""),
+            "error": f"not a PDF (mimeType={mime})",
+            "reason": "wrong-mime",
+        }
+
+    try:
+        pdf_bytes = _drive().files().get_media(fileId=file_id).execute()
+    except Exception as exc:
+        return {"file_id": file_id, "error": f"download failed: {exc}", "reason": "drive-api"}
+
+    if not isinstance(pdf_bytes, bytes) or not pdf_bytes:
+        return {"file_id": file_id, "error": "empty PDF download", "reason": "empty"}
+
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-layout", "-", "-"],
+            input=pdf_bytes,
+            capture_output=True,
+            timeout=30,
+        )
+    except FileNotFoundError:
+        return {"file_id": file_id, "error": "pdftotext not installed", "reason": "missing-binary"}
+    except subprocess.TimeoutExpired:
+        return {"file_id": file_id, "error": "pdftotext timed out after 30s", "reason": "timeout"}
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        return {
+            "file_id": file_id,
+            "name": meta.get("name", ""),
+            "error": f"pdftotext exit {result.returncode}: {stderr}",
+            "reason": "pdftotext-error",
+        }
+
+    text = result.stdout.decode("utf-8", errors="replace")
+    if not text.strip():
+        return {
+            "file_id": file_id,
+            "name": meta.get("name", ""),
+            "error": "pdftotext returned empty text (scanned/image-only PDF?)",
+            "reason": "no-text",
+        }
+
+    return {
+        "file_id": file_id,
+        "name": meta.get("name", ""),
+        "text": text,
+        "char_count": len(text),
+    }
+
+
+def find_pdf_by_name(name: str) -> dict[str, Any]:
+    """Resolve a bare PDF filename to a Drive file_id.
+
+    Tries exact `name = '...'` match first; if zero results, falls back to
+    `name contains '...'`. Used by the dispatcher to handle tasks that
+    reference PDFs by filename rather than URL.
+
+    Returns:
+      success:        {"file_id", "name", "matches": 1}
+      ambiguous:      {"file_id", "name", "matches": N, "warning": "..."} — first match used
+      not-found:      {"error", "reason": "not-found"}
+      api-error:      {"error", "reason": "drive-api"}
+    """
+    escaped = name.replace("'", "\\'")
+    try:
+        resp = (
+            _drive()
+            .files()
+            .list(
+                q=f"name = '{escaped}' and trashed = false and mimeType = 'application/pdf'",
+                pageSize=10,
+                fields="files(id,name,mimeType)",
+            )
+            .execute()
+        )
+        files = resp.get("files", [])
+        if not files:
+            resp = (
+                _drive()
+                .files()
+                .list(
+                    q=f"name contains '{escaped}' and trashed = false and mimeType = 'application/pdf'",
+                    pageSize=10,
+                    fields="files(id,name,mimeType)",
+                )
+                .execute()
+            )
+            files = resp.get("files", [])
+    except Exception as exc:
+        return {"error": f"Drive search failed: {exc}", "reason": "drive-api"}
+
+    if not files:
+        return {"error": f"no Drive PDF named '{name}' found", "reason": "not-found"}
+    result = {"file_id": files[0]["id"], "name": files[0]["name"], "matches": len(files)}
+    if len(files) > 1:
+        result["warning"] = (
+            f"multiple PDFs match '{name}' ({len(files)} found) — using first: {files[0]['name']}"
+        )
+    return result
+
+
 def read_text_file(file_id: str) -> dict[str, Any]:
     return {"id": file_id, "content": _fetch_full_text(file_id)}
 
@@ -122,6 +246,48 @@ def search_in_file(
         "match_count": len(matches),
         "matches": matches,
     }
+
+
+def trash_file(file_id: str, force: bool = False) -> dict[str, Any]:
+    try:
+        check_protected_write(file_id, force=force)
+    except GuardError as exc:
+        return {"error": str(exc), "guard": "protected-file"}
+
+    f = (
+        _drive()
+        .files()
+        .update(fileId=file_id, body={"trashed": True}, fields="id,name,trashed")
+        .execute()
+    )
+    return {"id": f["id"], "name": f["name"], "trashed": f.get("trashed", True)}
+
+
+def move_file(file_id: str, new_folder: str, force: bool = False) -> dict[str, Any]:
+    try:
+        check_protected_write(file_id, force=force)
+    except GuardError as exc:
+        return {"error": str(exc), "guard": "protected-file"}
+
+    new_parent_id = _resolve_folder(new_folder)
+    if not new_parent_id:
+        return {"error": "new_folder is required (alias or folder ID)"}
+
+    current = _drive().files().get(fileId=file_id, fields="parents").execute()
+    old_parents = ",".join(current.get("parents", []))
+
+    f = (
+        _drive()
+        .files()
+        .update(
+            fileId=file_id,
+            addParents=new_parent_id,
+            removeParents=old_parents,
+            fields="id,name,parents",
+        )
+        .execute()
+    )
+    return {"id": f["id"], "name": f["name"], "parents": f.get("parents", [])}
 
 
 def create_text_file(name: str, content: str, folder: str | None = None) -> dict[str, Any]:
@@ -241,6 +407,49 @@ TOOLS: list[Tool] = [
             },
         },
         handler=list_files,
+    ),
+    Tool(
+        name="drive_trash_file",
+        description=(
+            "Move a Drive file to Trash (reversible for 30 days). Use for routine cleanup — "
+            "duplicates, stale phone-authored task files after merge, etc. "
+            "Protected files (MariaParty RSVP MASTER, Master Plan v2, Banner Decision) "
+            "require force=true and an explicit Josh override."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "force": {
+                    "type": "boolean",
+                    "description": "Override protected-file guard. Only true on explicit Josh instruction.",
+                },
+            },
+            "required": ["file_id"],
+        },
+        handler=trash_file,
+    ),
+    Tool(
+        name="drive_move_file",
+        description=(
+            "Move a Drive file to a different folder. `new_folder` accepts a known folder alias "
+            "(CLAUDE, GEMINI, JoshMariaMusic, MariaParty) or a raw folder ID. "
+            "Replaces the file's existing parents with the new one. "
+            "Protected files require force=true and an explicit Josh override."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "new_folder": {"type": "string", "description": "Target folder alias or ID"},
+                "force": {
+                    "type": "boolean",
+                    "description": "Override protected-file guard. Only true on explicit Josh instruction.",
+                },
+            },
+            "required": ["file_id", "new_folder"],
+        },
+        handler=move_file,
     ),
     Tool(
         name="drive_create_text_file",
