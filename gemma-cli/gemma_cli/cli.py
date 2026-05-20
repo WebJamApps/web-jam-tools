@@ -16,7 +16,7 @@ from gemma_cli.llm import DEFAULT_MODEL, chat
 from gemma_cli.memory import append_memory, load_memory
 from gemma_cli.tools.calendar import TOOLS as CALENDAR_TOOLS
 from gemma_cli.tools.drive import TOOLS as DRIVE_TOOLS
-from gemma_cli.tools.drive import download_pdf_text
+from gemma_cli.tools.drive import download_pdf_text, find_pdf_by_name
 from gemma_cli.tools.gmail import TOOLS as GMAIL_TOOLS
 from gemma_cli.tools.gmail import draft_email
 from gemma_cli.tools.memory import TOOLS as MEMORY_TOOLS
@@ -307,6 +307,14 @@ _PDF_DIRECT_URL_RE = re.compile(
     r"https?://[^\s\)\]<>'\"]+\.pdf\b",
     re.IGNORECASE,
 )
+# Bare PDF filename, e.g. `Apocalypse_Ale_Works_Booking_Confirmation.pdf`.
+# Allowed chars match what survives a "type the filename in plain English"
+# task: alphanumerics, underscores, dots (other than the extension dot),
+# hyphens, and spaces ARE NOT included here — filenames with spaces would
+# need quoting in the task body and we don't try to handle that yet.
+# URL matches are scrubbed before this regex runs, so it won't pick up the
+# tail of a URL like `https://x.org/foo.pdf`.
+_PDF_FILENAME_RE = re.compile(r"\b([A-Za-z0-9_.-]+\.pdf)\b", re.IGNORECASE)
 # Per-PDF and total truncation caps (chars). Ollama default num_ctx is ~4k
 # tokens; SHARED.md + LLAMA.md already consume a large slice. Keep PDF
 # content tight so the original task and system prompt aren't squeezed out.
@@ -318,10 +326,14 @@ def _extract_pdf_refs(task: str) -> list[dict]:
     """Find PDF references in a task body.
 
     Returns a list of {"kind", "ref", "match"}:
-      - kind="drive": ref is a Drive file ID; match is the original URL string
-      - kind="url":   ref is a direct PDF URL (NOT fetched — warning only)
+      - kind="drive":    ref is a Drive file ID; match is the original URL string
+      - kind="url":      ref is a direct PDF URL (NOT fetched — warning only)
+      - kind="filename": ref is a bare filename (e.g. `foo.pdf`); the dispatcher
+                         resolves it to a Drive file_id at inline time
 
     De-duplicates by ref so the same PDF referenced twice is inlined once.
+    Filename refs that match a URL already detected (URL tail like `foo.pdf`)
+    are suppressed via pre-scrubbing.
     """
     seen: set[str] = set()
     refs: list[dict] = []
@@ -346,6 +358,18 @@ def _extract_pdf_refs(task: str) -> list[dict]:
             continue
         seen.add(url)
         refs.append({"kind": "url", "ref": url, "match": url})
+
+    # Bare filenames — scrub all URL matches first so a URL's `.pdf` tail
+    # isn't double-counted as a filename.
+    scrubbed = _PDF_DRIVE_FILE_URL_RE.sub(" ", task)
+    scrubbed = _PDF_DRIVE_OPEN_URL_RE.sub(" ", scrubbed)
+    scrubbed = _PDF_DIRECT_URL_RE.sub(" ", scrubbed)
+    for m in _PDF_FILENAME_RE.finditer(scrubbed):
+        name = m.group(1)
+        if name in seen:
+            continue
+        seen.add(name)
+        refs.append({"kind": "filename", "ref": name, "match": name})
     return refs
 
 
@@ -381,7 +405,19 @@ def _inline_pdf_content(task: str) -> tuple[str, list[str]]:
                 f"({_PDF_TOTAL_MAX_CHARS} chars) exhausted"
             )
             continue
-        result = download_pdf_text(ref["ref"])
+        if ref["kind"] == "filename":
+            resolved = find_pdf_by_name(ref["ref"])
+            if "error" in resolved:
+                notices.append(
+                    f"[pdf] could not resolve filename {ref['ref']}: {resolved['error']}"
+                )
+                continue
+            if resolved.get("warning"):
+                notices.append(f"[pdf] {resolved['warning']}")
+            file_id = resolved["file_id"]
+        else:
+            file_id = ref["ref"]
+        result = download_pdf_text(file_id)
         if "error" in result:
             notices.append(
                 f"[pdf] could not extract {result.get('name') or ref['ref']}: "

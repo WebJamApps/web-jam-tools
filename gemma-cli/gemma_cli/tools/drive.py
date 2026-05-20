@@ -153,6 +153,57 @@ def download_pdf_text(file_id: str) -> dict[str, Any]:
     }
 
 
+def find_pdf_by_name(name: str) -> dict[str, Any]:
+    """Resolve a bare PDF filename to a Drive file_id.
+
+    Tries exact `name = '...'` match first; if zero results, falls back to
+    `name contains '...'`. Used by the dispatcher to handle tasks that
+    reference PDFs by filename rather than URL.
+
+    Returns:
+      success:        {"file_id", "name", "matches": 1}
+      ambiguous:      {"file_id", "name", "matches": N, "warning": "..."} — first match used
+      not-found:      {"error", "reason": "not-found"}
+      api-error:      {"error", "reason": "drive-api"}
+    """
+    escaped = name.replace("'", "\\'")
+    try:
+        resp = (
+            _drive()
+            .files()
+            .list(
+                q=f"name = '{escaped}' and trashed = false and mimeType = 'application/pdf'",
+                pageSize=10,
+                fields="files(id,name,mimeType)",
+            )
+            .execute()
+        )
+        files = resp.get("files", [])
+        if not files:
+            resp = (
+                _drive()
+                .files()
+                .list(
+                    q=f"name contains '{escaped}' and trashed = false and mimeType = 'application/pdf'",
+                    pageSize=10,
+                    fields="files(id,name,mimeType)",
+                )
+                .execute()
+            )
+            files = resp.get("files", [])
+    except Exception as exc:
+        return {"error": f"Drive search failed: {exc}", "reason": "drive-api"}
+
+    if not files:
+        return {"error": f"no Drive PDF named '{name}' found", "reason": "not-found"}
+    result = {"file_id": files[0]["id"], "name": files[0]["name"], "matches": len(files)}
+    if len(files) > 1:
+        result["warning"] = (
+            f"multiple PDFs match '{name}' ({len(files)} found) — using first: {files[0]['name']}"
+        )
+    return result
+
+
 def read_text_file(file_id: str) -> dict[str, Any]:
     return {"id": file_id, "content": _fetch_full_text(file_id)}
 
