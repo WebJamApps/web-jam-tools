@@ -16,6 +16,7 @@ from gemma_cli.llm import DEFAULT_MODEL, chat
 from gemma_cli.memory import append_memory, load_memory
 from gemma_cli.tools.calendar import TOOLS as CALENDAR_TOOLS
 from gemma_cli.tools.drive import TOOLS as DRIVE_TOOLS
+from gemma_cli.tools.drive import download_pdf_text
 from gemma_cli.tools.gmail import TOOLS as GMAIL_TOOLS
 from gemma_cli.tools.gmail import draft_email
 from gemma_cli.tools.memory import TOOLS as MEMORY_TOOLS
@@ -288,6 +289,129 @@ _TEMPLATE_DEFAULT = "midrange"
 # Maria (chemmariasherman@gmail.com) gets a copy of every booking pitch, and
 # Josh's primary inbox (joshua.v.sherman@gmail.com) gets one for personal record.
 _OUTREACH_CC = "chemmariasherman@gmail.com, joshua.v.sherman@gmail.com"
+
+
+# PDF references in task bodies — llama is text-only, so the dispatcher
+# pre-extracts PDF text via pdftotext and inlines it into the task before
+# dispatch. Drive URLs are the supported path; direct .pdf URLs detected
+# but not fetched (warning emitted so Josh knows to provide a Drive copy).
+_PDF_DRIVE_FILE_URL_RE = re.compile(
+    r"https?://drive\.google\.com/file/d/([A-Za-z0-9_-]{20,})",
+    re.IGNORECASE,
+)
+_PDF_DRIVE_OPEN_URL_RE = re.compile(
+    r"https?://drive\.google\.com/open\?id=([A-Za-z0-9_-]{20,})",
+    re.IGNORECASE,
+)
+_PDF_DIRECT_URL_RE = re.compile(
+    r"https?://[^\s\)\]<>'\"]+\.pdf\b",
+    re.IGNORECASE,
+)
+# Per-PDF and total truncation caps (chars). Ollama default num_ctx is ~4k
+# tokens; SHARED.md + LLAMA.md already consume a large slice. Keep PDF
+# content tight so the original task and system prompt aren't squeezed out.
+_PDF_PER_FILE_MAX_CHARS = 8000
+_PDF_TOTAL_MAX_CHARS = 20000
+
+
+def _extract_pdf_refs(task: str) -> list[dict]:
+    """Find PDF references in a task body.
+
+    Returns a list of {"kind", "ref", "match"}:
+      - kind="drive": ref is a Drive file ID; match is the original URL string
+      - kind="url":   ref is a direct PDF URL (NOT fetched — warning only)
+
+    De-duplicates by ref so the same PDF referenced twice is inlined once.
+    """
+    seen: set[str] = set()
+    refs: list[dict] = []
+    for m in _PDF_DRIVE_FILE_URL_RE.finditer(task):
+        file_id = m.group(1)
+        if file_id in seen:
+            continue
+        seen.add(file_id)
+        refs.append({"kind": "drive", "ref": file_id, "match": m.group(0)})
+    for m in _PDF_DRIVE_OPEN_URL_RE.finditer(task):
+        file_id = m.group(1)
+        if file_id in seen:
+            continue
+        seen.add(file_id)
+        refs.append({"kind": "drive", "ref": file_id, "match": m.group(0)})
+    for m in _PDF_DIRECT_URL_RE.finditer(task):
+        url = m.group(0)
+        if "drive.google.com" in url.lower():
+            # Already handled by the Drive regexes above.
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        refs.append({"kind": "url", "ref": url, "match": url})
+    return refs
+
+
+def _inline_pdf_content(task: str) -> tuple[str, list[str]]:
+    """Pre-extract PDF text and append it to the task body.
+
+    Llama 3.3 70B is text-only and cannot read PDFs; the dispatcher does the
+    extraction so llama sees plain text. Each PDF is fetched via
+    `download_pdf_text` (Drive + pdftotext) and inlined as a clearly-delimited
+    block after the original body.
+
+    Returns (augmented_task, notices). `notices` is a list of human-readable
+    lines (one per PDF) that the caller should print so Josh sees what was
+    inlined or skipped. If no PDFs are referenced, returns (task, []).
+    """
+    refs = _extract_pdf_refs(task)
+    if not refs:
+        return task, []
+
+    notices: list[str] = []
+    blocks: list[str] = []
+    total_chars = 0
+
+    for ref in refs:
+        if ref["kind"] == "url":
+            notices.append(
+                f"[pdf] skipped non-Drive PDF URL (not yet supported): {ref['ref']}"
+            )
+            continue
+        if total_chars >= _PDF_TOTAL_MAX_CHARS:
+            notices.append(
+                f"[pdf] skipped {ref['match']} — total PDF inline budget "
+                f"({_PDF_TOTAL_MAX_CHARS} chars) exhausted"
+            )
+            continue
+        result = download_pdf_text(ref["ref"])
+        if "error" in result:
+            notices.append(
+                f"[pdf] could not extract {result.get('name') or ref['ref']}: "
+                f"{result['error']}"
+            )
+            continue
+        text = result["text"]
+        name = result.get("name") or ref["ref"]
+        truncated = False
+        if len(text) > _PDF_PER_FILE_MAX_CHARS:
+            text = text[:_PDF_PER_FILE_MAX_CHARS]
+            truncated = True
+        if total_chars + len(text) > _PDF_TOTAL_MAX_CHARS:
+            allowed = _PDF_TOTAL_MAX_CHARS - total_chars
+            text = text[:allowed]
+            truncated = True
+        total_chars += len(text)
+        header = f"=== PDF CONTENT: {name} (id={ref['ref']}) ==="
+        if truncated:
+            header += " [TRUNCATED]"
+        blocks.append(f"\n\n{header}\n{text}\n=== END PDF ===")
+        notices.append(
+            f"[pdf] inlined {name} ({len(text)} chars"
+            + (", truncated" if truncated else "")
+            + ")"
+        )
+
+    if not blocks:
+        return task, notices
+    return task + "".join(blocks), notices
 
 
 def _is_outreach_task(task: str) -> bool:
@@ -841,10 +965,22 @@ def _repl(model: str, verbose: bool) -> None:
                     print()
                     continue
                 # Normalize for re-run detection: collapse whitespace, take first 80 chars.
+                # Done on the ORIGINAL task (pre-PDF-inline) so the signature is
+                # stable across runs — a re-run shouldn't be misidentified just
+                # because PDF extraction produced slightly different bytes.
                 signature = " ".join(task.split())[:80]
                 matches_last = (signature == last_next_task)
                 is_rerun = matches_last and not force
                 last_next_task = signature
+
+                # Pre-extract PDF text (added 2026-05-19): llama is text-only,
+                # so any PDF referenced in the task gets its text inlined here
+                # before dispatch. No-op when the task has no PDF references.
+                task, pdf_notices = _inline_pdf_content(task)
+                for notice in pdf_notices:
+                    print(notice)
+                if pdf_notices:
+                    print()
 
                 print(f"=== Next task (of {total} in queue) ===")
                 print(task)
