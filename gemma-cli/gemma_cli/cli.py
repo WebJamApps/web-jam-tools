@@ -903,30 +903,58 @@ def _collect_email_reply_inputs(task: str) -> tuple[str, str | None, dict | None
 
     existing = lookup_venue_contact(venue_name)
     is_existing = bool(existing.get("found"))
+    match_type = existing.get("match_type", "none")
+    matched_venue_name = (
+        existing.get("venue_name", "").strip() if is_existing else venue_name
+    )
     existing_email = (existing.get("email") or "").strip() if is_existing else ""
     existing_phone = (existing.get("phone") or "").strip() if is_existing else ""
 
+    # Use the MATCHED venue name on save (not the original query) so
+    # fuzzy hits update the canonical row instead of inserting a near-
+    # spelling duplicate. The 2026-05-21 Olde Salem regression inserted
+    # row 81 because "Olde Salem Brewing" didn't substring-match row 6's
+    # "Olde Salem Brewery"; with fuzzy lookup + matched-name save, the
+    # update would have gone to row 6 correctly.
     pending = {
-        "venue_name": venue_name,
+        "venue_name": matched_venue_name,
+        "query_name": venue_name,
         "is_existing": is_existing,
+        "match_type": match_type,
         "existing_email": existing_email,
         "existing_phone": existing_phone,
     }
 
-    row_state = (
-        f"existing row (email={existing_email or '(none)'}, "
-        f"phone={existing_phone or '(none)'})"
-        if is_existing
-        else "no existing row — new row will be inserted on approval"
-    )
+    if match_type == "exact":
+        row_state = (
+            f"existing row (email={existing_email or '(none)'}, "
+            f"phone={existing_phone or '(none)'})"
+        )
+    elif match_type == "fuzzy":
+        similarity_pct = round(existing.get("similarity", 0.0) * 100)
+        row_state = (
+            f"FUZZY match to existing row '{matched_venue_name}' "
+            f"(similarity {similarity_pct}% — likely the same venue, "
+            f"queried as '{venue_name}'). Save will UPDATE that row. "
+            f"If this is actually a DIFFERENT venue, tell Josh to abort "
+            f"and reconcile manually."
+        )
+    else:
+        row_state = "no existing row — new row will be inserted on approval"
     # Imperative, exact-4-part prompt. Gemma must produce all four parts —
     # truncation after part 2 was the 2026-05-21 Olde Salem failure mode.
     # The dispatcher post-processes the reply to synthesize missing parts as
     # a backstop, but the prompt still pushes for completeness.
-    approval_question = f"Approve to append to {venue_name}'s row, or describe changes?"
+    # User-facing venue label uses the MATCHED row's name so Josh sees the
+    # canonical spelling in both the dispatcher note and the approval question.
+    # This makes a fuzzy-match save visibly different from an INSERT.
+    user_facing_venue = matched_venue_name
+    approval_question = (
+        f"Approve to append to {user_facing_venue}'s row, or describe changes?"
+    )
     augmented = (
         f"{task}\n\n"
-        f"DISPATCHER NOTE — venue is locked to: {venue_name}\n"
+        f"DISPATCHER NOTE — venue is locked to: {user_facing_venue}\n"
         f"Row state: {row_state}\n\n"
         f"Your reply MUST have EXACTLY these 4 parts, in this order, "
         f"NOTHING ELSE — no preamble, no commentary, no tool calls, "
