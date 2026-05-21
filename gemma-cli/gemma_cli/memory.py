@@ -1,37 +1,36 @@
-"""Drive-backed memory for the Coordinator (gemma4:26b post-2026-05-20 swap).
+"""Local-FS-backed memory for the Coordinator (gemma4:26b post-2026-05-20 swap).
 
 Reads SHARED.md (cross-AI rules) and GEMMA.md (Coordinator-specific rules) from
-Drive at REPL startup so the Coordinator has consistent context across sessions
-and editing the rules doesn't require a code change. Provides append_memory()
-for adding facts mid-session via the /remember REPL command or the remember_fact
-tool — with code-level deduplication so the model can't pollute GEMMA.md by
-calling remember_fact on a fact that's already saved.
+the local Dropbox-mirrored folder at REPL startup so the Coordinator has
+consistent context across sessions and editing the rules doesn't require a
+code change. Provides append_memory() for adding facts mid-session via the
+/remember REPL command or the remember_fact tool — with code-level
+deduplication so the model can't pollute GEMMA.md by calling remember_fact
+on a fact that's already saved.
 
-Locations:
-- SHARED.md: at Drive root (My Drive/SHARED.md). Whitelisted in drive-cleanup.
-- GEMMA.md: in My Drive/GEMMA/ folder (renamed from LLAMA/GEMMA.md on 2026-05-20).
-  Drive file ID is unchanged; only the display name changed.
+Migrated 2026-05-21 from Drive REST API to local filesystem reads. See
+project-web-jam-llms-migration-plan for rationale and the cross-store bridge
+that keeps Sonnet's writes flowing in. Files now live at:
+
+  /home/joshua/Dropbox/web-jam-llms/SHARED.md
+  /home/joshua/Dropbox/web-jam-llms/GEMMA.md
+
+(symlinked into /home/joshua/WebJamApps/web-jam-llms/ for VSCode visibility).
 """
 
 from __future__ import annotations
 
-import io
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
 
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-
-from gemma_cli.auth import load_credentials
-
-# Drive IDs (set 2026-05-16 when files were created).
-SHARED_MD_ID = "1X48-YCTaYScEIEJNaD4__imsMfWwMoRr"
-GEMMA_MD_ID = "1C0UV0wi_H6y5YAAojVUf7F1_hjW0xsLp"
-# Backward-compat alias — code references LLAMA_MD_ID in a few spots; keep until cleanup is complete.
-LLAMA_MD_ID = GEMMA_MD_ID
-
-_service = None
+# Local-FS memory store (migrated from Drive 2026-05-21). Paths mirror
+# queue.py's QUEUE_DIR; kept duplicated rather than imported to avoid a
+# cross-module dependency for a constant string.
+MEMORY_DIR = "/home/joshua/Dropbox/web-jam-llms"
+SHARED_MD_PATH = f"{MEMORY_DIR}/SHARED.md"
+GEMMA_MD_PATH = f"{MEMORY_DIR}/GEMMA.md"
 
 # Matches a REMEMBERED FACTS line prefix: "- 2026-05-16 11:26 UTC: "
 _TIMESTAMP_PREFIX = re.compile(
@@ -39,18 +38,24 @@ _TIMESTAMP_PREFIX = re.compile(
 )
 
 
-def _drive():
-    global _service
-    if _service is None:
-        _service = build("drive", "v3", credentials=load_credentials(), cache_discovery=False)
-    return _service
+def _read_file(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        return f.read()
 
 
-def _read_file(file_id: str) -> str:
-    content = _drive().files().get_media(fileId=file_id).execute()
-    if isinstance(content, bytes):
-        return content.decode("utf-8", errors="replace")
-    return content
+def _atomic_write(path: str, content: str) -> None:
+    """Write `content` to `path` atomically: write to `<path>.tmp`, fsync, rename.
+
+    Mirror of queue.py._atomic_write. See that docstring for rationale. Crash
+    mid-write leaves either the original file intact or the new file fully
+    written — never a partial state.
+    """
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def _normalize(text: str) -> str:
@@ -94,7 +99,7 @@ def _extract_fact_body(line: str) -> str:
     return _TIMESTAMP_PREFIX.sub("", line).strip()
 
 
-def find_duplicate(entry: str, file_id: str = LLAMA_MD_ID) -> str | None:
+def find_duplicate(entry: str, path: str = GEMMA_MD_PATH) -> str | None:
     """Return the existing line if `entry` is a near-duplicate of one already saved.
 
     Two heuristics in order; first match wins:
@@ -112,7 +117,7 @@ def find_duplicate(entry: str, file_id: str = LLAMA_MD_ID) -> str | None:
     Returns the existing line (with timestamp) on match, else None.
     """
     try:
-        current = _read_file(file_id)
+        current = _read_file(path)
     except Exception:
         return None
     normalized_new = _normalize(entry)
@@ -140,51 +145,53 @@ def find_duplicate(entry: str, file_id: str = LLAMA_MD_ID) -> str | None:
 
 
 def load_memory() -> str | None:
-    """Read SHARED.md + GEMMA.md from Drive and return the combined text.
+    """Read SHARED.md + GEMMA.md from local FS and return the combined text.
 
-    Returns None if either file fails to load (network issue, missing file),
+    Returns None if either file fails to load (missing, permission, etc.),
     so callers can fall back to a hardcoded SYSTEM_PROMPT.
     """
     try:
-        shared = _read_file(SHARED_MD_ID)
-        coordinator = _read_file(GEMMA_MD_ID)
+        shared = _read_file(SHARED_MD_PATH)
+        coordinator = _read_file(GEMMA_MD_PATH)
     except Exception:
         return None
     return f"{shared}\n\n---\n\n{coordinator}\n"
 
 
-def append_memory(entry: str, file_id: str = LLAMA_MD_ID) -> dict[str, Any]:
+def append_memory(entry: str, path: str = GEMMA_MD_PATH) -> dict[str, Any]:
     """Append a timestamped line to a memory file (default: GEMMA.md).
 
     Code-level deduplication: if a near-match already exists, skip the write and
     return {'saved': False, 'reason': 'already-saved', 'existing_entry': '<line>'}.
-    Otherwise return {'saved': True, 'id': ..., 'name': ..., 'modifiedTime': ...}.
+    Otherwise return {'saved': True, 'path': ..., 'modifiedTime': ...}.
 
     The model can't be trusted to follow the prompt-level anti-duplication rule
     (it tends to call remember_fact even on RECALL questions about saved rules),
     so the rule is enforced here instead.
+
+    Writes are atomic — see _atomic_write. Concurrent writes from another
+    process (e.g. an editor saving the same file) could race; the last writer
+    wins. In practice gemma-cli is the only writer and Dropbox handles cross-
+    machine sync with conflict-copy semantics.
     """
-    dup = find_duplicate(entry, file_id=file_id)
+    dup = find_duplicate(entry, path=path)
     if dup is not None:
         return {
             "saved": False,
             "reason": "already-saved",
             "existing_entry": dup,
         }
-    current = _read_file(file_id)
+    try:
+        current = _read_file(path)
+    except FileNotFoundError:
+        current = ""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     new_line = f"\n- {timestamp}: {entry}"
     new_content = current.rstrip() + new_line + "\n"
-    media = MediaIoBaseUpload(io.BytesIO(new_content.encode("utf-8")), mimetype="text/markdown")
-    f = (
-        _drive()
-        .files()
-        .update(fileId=file_id, media_body=media, fields="id,name,modifiedTime")
-        .execute()
-    )
+    _atomic_write(path, new_content)
     return {
         "saved": True,
-        "id": f["id"],
-        "name": f["name"],
-        "modifiedTime": f["modifiedTime"],
+        "name": os.path.basename(path),
+        "path": path,
+        "modifiedTime": datetime.now(timezone.utc).isoformat(),
     }

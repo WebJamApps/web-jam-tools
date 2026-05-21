@@ -6,7 +6,8 @@
     { "name": "web-jam-back", "path": "web-jam-back" },
     { "name": "WebJamSocketCluster", "path": "WebJamSocketCluster" },
     { "name": "WebJamPg", "path": "WebJamPg" },
-    { "name": "web-jam-tools", "path": "web-jam-tools" }
+    { "name": "web-jam-tools", "path": "web-jam-tools" },
+    { "name": "web-jam-llms", "path": "web-jam-llms" }
   ],
   "settings": {
     "editor.formatOnSave": true,
