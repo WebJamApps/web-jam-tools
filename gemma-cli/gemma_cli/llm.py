@@ -258,21 +258,25 @@ def chat(
                 # MAX_CONSECUTIVE_IDENTICAL_LINES docstring for context.
                 if "\n" in piece:
                     completed = collected_content.split("\n")
-                    if len(completed) > MAX_CONSECUTIVE_IDENTICAL_LINES:
-                        # Last MAX_CONSECUTIVE_IDENTICAL_LINES lines, excluding
-                        # any in-progress trailing line. Use lines that end with
-                        # \n only (i.e. all but the last fragment).
-                        finished_lines = completed[:-1]
-                        tail = [l.rstrip() for l in finished_lines[-MAX_CONSECUTIVE_IDENTICAL_LINES:]]
-                        non_empty_tail = [l for l in tail if l]
-                        if (len(non_empty_tail) == MAX_CONSECUTIVE_IDENTICAL_LINES
-                                and len(set(non_empty_tail)) == 1):
+                    # Exclude the in-progress trailing fragment.
+                    finished_lines = completed[:-1]
+                    # Filter to non-empty (whitespace-only) lines BEFORE taking
+                    # the tail (2026-05-21 fix): the original take-then-filter
+                    # logic missed alternating "X / blank / X / blank" patterns
+                    # because blank lines diluted the last-N window. The
+                    # Cavendish run had gemma emit "=== PROPOSED UPDATE ===\n\n"
+                    # 14+ times — every other line blank, so the guard never
+                    # found N non-empties in the last N positions.
+                    non_empty = [l.rstrip() for l in finished_lines if l.strip()]
+                    if len(non_empty) >= MAX_CONSECUTIVE_IDENTICAL_LINES:
+                        tail = non_empty[-MAX_CONSECUTIVE_IDENTICAL_LINES:]
+                        if len(set(tail)) == 1:
                             sys.stdout.write("\n")
                             sys.stdout.flush()
                             print(
                                 f"[runtime] output line repeated "
                                 f"{MAX_CONSECUTIVE_IDENTICAL_LINES}× consecutively "
-                                f"({non_empty_tail[-1][:60]!r}) — aborting stream"
+                                f"({tail[-1][:60]!r}) — aborting stream"
                             )
                             line_repetition_aborted = True
                             break
