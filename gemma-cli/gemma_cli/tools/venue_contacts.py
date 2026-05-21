@@ -73,7 +73,21 @@ _SECTION_HEADER_TOKENS = frozenset({
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 # Common venue-website pages where booking emails tend to live. Tried in order.
-_CONTACT_PATHS = ("/", "/contact", "/contact-us", "/contact/", "/booking", "/book", "/booking/", "/about", "/about-us")
+# Restaurant/brewery venues frequently put their booking email on an /events
+# or /private-events page rather than a generic /contact — added 2026-05-21
+# after the 419 West miss (info@419-west.com lived only on /events).
+_CONTACT_PATHS = (
+    "/",
+    "/contact", "/contact-us", "/contact/",
+    "/booking", "/book", "/booking/",
+    "/about", "/about-us",
+    "/events", "/events/",
+    "/private-events", "/private-events/",
+    "/private-dining", "/private-dining/",
+    "/parties", "/parties/",
+    "/host", "/host-an-event",
+    "/inquiry", "/inquiries",
+)
 
 # Emails we should never propose as a venue booker. Common webhost / privacy /
 # generic-platform addresses that appear on many sites without being the venue.
@@ -246,8 +260,16 @@ def lookup_venue_email_on_web(website_url: str) -> dict[str, Any]:
                     emails_found[addr] = candidate
         except Exception:
             pass
-        if emails_found:
-            break  # found at least one — stop early; no need to scrape more pages
+        # Stop early ONLY if we've found a same-domain email — the venue's own
+        # address is the canonical booker. If we've only found third-party
+        # gmail/yahoo addresses (often dev/designer credits embedded in JS, or
+        # personal addresses unrelated to bookings), keep scanning the rest of
+        # _CONTACT_PATHS — a real venue email may live on /events or similar.
+        # 2026-05-21: 419 West had impallari@gmail.com (typography designer)
+        # in homepage JS; the old break here caused us to miss info@419-west.com
+        # which was on /events.
+        if any(addr.split("@", 1)[1].lower() == domain for addr in emails_found):
+            break
 
     if not emails_found:
         return {
