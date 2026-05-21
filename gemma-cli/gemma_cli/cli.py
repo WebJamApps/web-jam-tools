@@ -816,11 +816,17 @@ _EMAIL_REPLY_VENUE_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Marker block gemma is instructed to wrap the proposed notes in. Captured at
+# Markers gemma is instructed to wrap the proposed notes in. Captured at
 # approval time and passed verbatim as the `notes` arg to update_venue_contact.
-_PROPOSED_NOTES_BLOCK_RE = re.compile(
-    r"===\s*PROPOSED\s+NOTES\s*===\s*\n(.*?)\n===\s*END\s+NOTES\s*===",
-    re.DOTALL | re.IGNORECASE,
+# Split into START/END so the parser can apply "latest START marker wins"
+# semantics — a later (possibly truncated) reprint always supersedes an
+# earlier complete block. The 2026-05-21 Olde Salem run had gemma truncate
+# mid-flow (num_predict cap, post-task mode); the parser must be robust.
+_PROPOSED_NOTES_START_RE = re.compile(
+    r"===\s*PROPOSED\s+NOTES\s*===\s*\n", re.IGNORECASE
+)
+_PROPOSED_NOTES_END_RE = re.compile(
+    r"\n===\s*END\s+NOTES\s*===", re.IGNORECASE
 )
 
 
@@ -935,20 +941,33 @@ def _collect_email_reply_inputs(task: str) -> tuple[str, str | None, dict | None
         f"save deterministically when Josh approves (you do NOT call "
         f"update_venue_contact — it has been stripped from your tool set).\n"
         f"6. If Josh requests changes, reprint the markers with the revised "
-        f"notes and re-ask for approval. Still do not call any tool."
+        f"notes and re-ask for approval. Still do not call any tool.\n"
+        f"7. Do NOT emit a 'COORDINATOR REPORT' on this turn. The task is "
+        f"NOT complete until Josh approves and the dispatcher saves. "
+        f"COORDINATOR REPORT is reserved for after the save."
     )
     return augmented, None, pending
 
 
 def _extract_proposed_notes(text: str) -> str:
     """Pull the content between === PROPOSED NOTES === and === END NOTES ===
-    markers from a gemma reply. Returns "" if markers weren't present."""
+    from a gemma reply. Semantics: LATEST start marker wins (a reprint always
+    supersedes an earlier attempt). If the END marker is missing after the
+    latest start (truncated reply), take everything to end of string.
+
+    Returns "" if no START marker is present at all.
+    """
     if not text:
         return ""
-    m = _PROPOSED_NOTES_BLOCK_RE.search(text)
-    if not m:
+    starts = list(_PROPOSED_NOTES_START_RE.finditer(text))
+    if not starts:
         return ""
-    return m.group(1).strip()
+    last_start = starts[-1]
+    rest = text[last_start.end():]
+    end = _PROPOSED_NOTES_END_RE.search(rest)
+    if end:
+        return rest[:end.start()].strip()
+    return rest.strip()
 
 
 def _is_outreach_task(task: str) -> bool:
@@ -1666,6 +1685,7 @@ def _repl(model: str, verbose: bool) -> None:
                     # default — the template tool + pre-render keep that path
                     # tight already.
                     dispatch_max_turns = 3 if gig_pre_rendered is not None else None
+                    pre_dispatch_history_len = len(history)
                     result = _run_once(
                         _NEXT_TASK_PREFIX + dispatched_task,
                         model=model,
@@ -1746,9 +1766,18 @@ def _repl(model: str, verbose: bool) -> None:
                         print("(warning: a previous pending email-reply update was "
                               "discarded; new email-reply task's update is now the "
                               "pending one)")
-                    # Stash gemma's reply alongside the venue so the approval
-                    # interceptor can parse the marker block on the next turn.
-                    email_reply_pending["last_reply"] = result.final_text or ""
+                    # Capture ALL assistant content from this dispatch — gemma
+                    # may have emitted the marker block on a turn the chat()
+                    # loop continued past (tool call also fired, or a
+                    # COORDINATOR REPORT triggered post-task mode that returned
+                    # final_text=""). Joining from history ensures every
+                    # assistant turn in this dispatch is parseable.
+                    dispatch_msgs = result.history[pre_dispatch_history_len:]
+                    dispatch_assistant_text = "\n".join(
+                        m.get("content", "") for m in dispatch_msgs
+                        if m.get("role") == "assistant" and m.get("content")
+                    )
+                    email_reply_pending["last_reply"] = dispatch_assistant_text
                     last_pending_email_reply = email_reply_pending
                     last_pre_rendered = None
                     last_pre_rendered_gig_update = None
@@ -1916,6 +1945,7 @@ def _repl(model: str, verbose: bool) -> None:
                 turn_tools: list | None = []
             else:
                 turn_tools = _strip_idle_writes(ALL_TOOLS)
+            pre_turn_history_len = len(history)
             result = _run_once(
                 line,
                 model=model,
@@ -1925,6 +1955,22 @@ def _repl(model: str, verbose: bool) -> None:
                 tools=turn_tools,
             )
             history = result.history
+            # Phase 2 follow-through (2026-05-21): while an email-reply update
+            # is pending, refresh the captured reply text with this turn's
+            # assistant content so a later 'approve' parses the most-recent
+            # marker block. Handles the case where Josh re-prompts gemma to
+            # reprint after a truncated initial reply.
+            if last_pending_email_reply is not None:
+                new_msgs = history[pre_turn_history_len:]
+                new_assistant_text = "\n".join(
+                    m.get("content", "") for m in new_msgs
+                    if m.get("role") == "assistant" and m.get("content")
+                )
+                if new_assistant_text:
+                    prior = last_pending_email_reply.get("last_reply", "")
+                    last_pending_email_reply["last_reply"] = (
+                        f"{prior}\n{new_assistant_text}" if prior else new_assistant_text
+                    )
         except Exception as exc:
             print(f"[error] {type(exc).__name__}: {exc}")
         print()
