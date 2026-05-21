@@ -478,15 +478,18 @@ def _inline_pdf_content(task: str) -> tuple[str, list[str]]:
 # outreach in PR #11 applies: pre-render the tool call in Python, llama just
 # presents and asks for approval, approval interceptor calls the tool directly.
 
-# Triggers: explicit tags from phone Sonnet's task format win; broader keyword
-# regex catches natural-language gig-tracking tasks (e.g. "update gig booking
-# records after Apocalypse called").
+# Triggers: explicit tags from phone Sonnet's task format always qualify;
+# broader keyword regex catches natural-language gig-tracking tasks
+# (e.g. "update gig booking records after Apocalypse called") but only when
+# a PDF block is also inlined — see _is_gig_tracking_task.
+_GIG_EXPLICIT_TAG_RE = re.compile(
+    r"\bGig\s+Tracking\s+Update\b|\bConfirmation\s+Ingestion\b",
+    re.IGNORECASE,
+)
 _GIG_TRACKING_TASK_RE = re.compile(
-    r"\bGig\s+Tracking\s+Update\b"
-    r"|\bConfirmation\s+Ingestion\b"
-    r"|\bbooking\s+confirmation\b"
+    r"\bbooking\s+confirmation\b"
     r"|\bgig\s+tracking\b"
-    r"|\bupdate\s+(?:the\s+)?gig\s+booking\s+records?\b",
+    r"|\bupdate\s+(?:the\s+)?gig\s+(?:booking|tracking)\s+records?\b",
     re.IGNORECASE,
 )
 
@@ -524,8 +527,23 @@ _PDF_CONTENT_BLOCK_RE = re.compile(
 
 
 def _is_gig_tracking_task(task: str) -> bool:
-    """Trigger detection: explicit tag wins; broader keyword regex is fallback."""
-    return bool(_GIG_TRACKING_TASK_RE.search(task))
+    """Trigger detection for the Phase 1 PDF-confirmation dispatcher.
+
+    Two cases qualify:
+    - Explicit phone-Sonnet tag (`Gig Tracking Update` / `Confirmation
+      Ingestion`) — always wins; phone Sonnet asserts the task type.
+    - Keyword match AND a PDF content block is inlined — the field
+      extractor expects PDF-label lines, so prose-only tasks (e.g. an
+      email transcript from a venue reply) have nothing to extract and
+      must fall through to gemma's regular path. Without the PDF gate,
+      we'd push every such task into manual fallback prompts. See the
+      Olde Salem regression 2026-05-21.
+    """
+    if _GIG_EXPLICIT_TAG_RE.search(task):
+        return True
+    if _GIG_TRACKING_TASK_RE.search(task) and _PDF_CONTENT_BLOCK_RE.search(task):
+        return True
+    return False
 
 
 def _extract_action_items(content: str) -> str:
@@ -635,7 +653,7 @@ def _prompt_gig_tracking_fallback(venue_hint: str) -> dict[str, str] | None:
     Per Task 36 spec: "Keep llama out of the extraction path entirely." So even
     on fallback, the dispatcher (not llama) handles the field collection.
     """
-    print("(could not auto-extract enough fields from the PDF — falling back to prompts)")
+    print("(could not auto-extract enough gig-tracking fields — falling back to prompts)")
     print("Type 'cancel' on any prompt to abort, or leave blank to skip an optional field.")
 
     venue_prompt = "Venue name"
