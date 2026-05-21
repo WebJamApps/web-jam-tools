@@ -25,6 +25,7 @@ venue names.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -36,6 +37,13 @@ from gemma_cli.llm import Tool
 
 
 XLSX_PATH = "/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx"
+
+# Fuzzy-match threshold for venue-name lookup. 0.85 catches the Olde Salem
+# Brewing / Olde Salem Brewery case (similarity ~0.95) and similar
+# Brewery↔Brewing / Inn↔Tavern suffix swaps, without conflating clearly
+# distinct venues. Tuned 2026-05-21 after the Olde Salem duplicate-row
+# regression that inserted row 81 alongside the canonical row 6.
+_FUZZY_MATCH_THRESHOLD = 0.85
 
 # Column indexes in the xlsx (1-based per openpyxl). Verified 2026-05-18 by
 # reading the sheet headers in Sheet1 row 1: 'Name', 'Contact', 'email',
@@ -90,8 +98,36 @@ def _normalize(s: Any) -> str:
     return str(s).strip().lower() if s is not None else ""
 
 
+def _row_to_contact_dict(name: Any, row: tuple) -> dict[str, Any]:
+    """Build the contact dict from an xlsx row. Used by both exact and fuzzy paths."""
+    return {
+        "found": True,
+        "venue_name": str(name).strip(),
+        "contact": _str_or_empty(row, _COL_CONTACT),
+        "email": _str_or_empty(row, _COL_EMAIL),
+        "phone": _str_or_empty(row, _COL_PHONE) or _str_or_empty(row, 15),  # col 15 = 'Phone' fallback
+        "type_of_gig": _str_or_empty(row, _COL_TYPE_OF_GIG),
+        "last_played": _str_or_empty(row, _COL_LAST_PLAYED),
+        "comments": _str_or_empty(row, _COL_COMMENTS),
+        "location": _str_or_empty(row, _COL_LOCATION),
+        "status": _str_or_empty(row, _COL_STATUS),
+        "notes": _str_or_empty(row, _COL_NOTES),
+    }
+
+
 def lookup_venue_contact(venue_name: str) -> dict[str, Any]:
-    """Look up a venue in the xlsx by name (case-insensitive substring match)."""
+    """Look up a venue in the xlsx by name.
+
+    Two-pass strategy:
+    1. Substring match (case-insensitive) — handles exact + obvious partials.
+    2. Fuzzy match (difflib.SequenceMatcher, threshold 0.85) — catches near-
+       spelling variants like "Olde Salem Brewing" ↔ "Olde Salem Brewery"
+       that would otherwise produce a duplicate row on update.
+
+    Return dict includes `match_type` ("exact" or "fuzzy") and, when fuzzy,
+    `similarity` (0.0-1.0). Callers should treat fuzzy hits as candidates
+    needing user confirmation, not auto-applied updates.
+    """
     target = venue_name.strip().lower()
     if not target:
         return {"found": False, "error": "venue_name is required."}
@@ -101,31 +137,41 @@ def lookup_venue_contact(venue_name: str) -> dict[str, Any]:
         return {"found": False, "error": f"Could not open xlsx: {type(exc).__name__}: {exc}"}
     try:
         ws = wb.active
+        best_fuzzy: tuple[float, Any, tuple] | None = None
         for row in ws.iter_rows(min_row=1, values_only=True):
             if not row:
                 continue
             name = row[_COL_NAME - 1]
             if not name or _is_section_header(name):
                 continue
-            if target in _normalize(name):
-                return {
-                    "found": True,
-                    "venue_name": str(name).strip(),
-                    "contact": _str_or_empty(row, _COL_CONTACT),
-                    "email": _str_or_empty(row, _COL_EMAIL),
-                    "phone": _str_or_empty(row, _COL_PHONE) or _str_or_empty(row, 15),  # col 15 = 'Phone' fallback
-                    "type_of_gig": _str_or_empty(row, _COL_TYPE_OF_GIG),
-                    "last_played": _str_or_empty(row, _COL_LAST_PLAYED),
-                    "comments": _str_or_empty(row, _COL_COMMENTS),
-                    "location": _str_or_empty(row, _COL_LOCATION),
-                    "status": _str_or_empty(row, _COL_STATUS),
-                    "notes": _str_or_empty(row, _COL_NOTES),
-                }
+            row_norm = _normalize(name)
+            # Pass 1: substring (existing exact-ish behavior)
+            if target in row_norm:
+                result = _row_to_contact_dict(name, row)
+                result["match_type"] = "exact"
+                result["query"] = venue_name
+                return result
+            # Pass 2 setup: track best fuzzy candidate for after the loop
+            similarity = SequenceMatcher(None, target, row_norm).ratio()
+            if similarity >= _FUZZY_MATCH_THRESHOLD and (
+                best_fuzzy is None or similarity > best_fuzzy[0]
+            ):
+                best_fuzzy = (similarity, name, row)
+        if best_fuzzy is not None:
+            similarity, name, row = best_fuzzy
+            result = _row_to_contact_dict(name, row)
+            result["match_type"] = "fuzzy"
+            result["similarity"] = round(similarity, 3)
+            result["query"] = venue_name
+            return result
         return {
             "found": False,
             "venue_name": venue_name,
+            "match_type": "none",
+            "query": venue_name,
             "note": (
-                f"No row in the xlsx matched '{venue_name}'. Next step: call "
+                f"No row in the xlsx matched '{venue_name}' (exact or fuzzy "
+                f"≥{_FUZZY_MATCH_THRESHOLD}). Next step: call "
                 "`lookup_venue_email_on_web` with the venue's website URL, then "
                 "(if a booker email is found) call `update_venue_contact` to "
                 "add the venue to the xlsx for next time."
