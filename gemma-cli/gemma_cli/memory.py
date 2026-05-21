@@ -191,6 +191,7 @@ def append_memory(entry: str, path: str = GEMMA_MD_PATH) -> dict[str, Any]:
     _atomic_write(path, new_content)
     return {
         "saved": True,
+        "name": os.path.basename(path),
         "path": path,
         "modifiedTime": datetime.now(timezone.utc).isoformat(),
     }

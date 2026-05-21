@@ -1639,7 +1639,7 @@ def _repl(model: str, verbose: bool) -> None:
     print(f"{name} ({role} REPL — {model}). Tools: Drive, Calendar, Gmail.")
     print("Commands: /next [--force] (run next queued task; re-runs auto-switch to read-only verify mode unless --force),")
     print("          /done (remove first queued task),")
-    print("          /remember <text> (append fact to your persistent memory file in Drive), /memory (show current memory),")
+    print("          /remember <text> (append fact to GEMMA.md in /home/joshua/Dropbox/web-jam-llms/), /memory (show current memory),")
     print("          /reset (clear session memory), verbose (toggle tool logging),")
     print("          exit / Ctrl-D (quit).\n")
     prompt = f"{name}> "
