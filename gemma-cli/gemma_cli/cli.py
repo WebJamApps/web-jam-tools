@@ -531,6 +531,19 @@ _GIG_VENUE_TRACKER_FOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Explicit-notes extraction (added 2026-05-21). Dead-venue cleanup tasks
+# spell out the notes verbatim — e.g. `set status/notes to: "Permanently
+# closed as of early 2026. ..."` — leaving nothing for gemma to summarize.
+# When this matches, the Phase 2 dispatcher uses the captured string
+# directly and skips invoking gemma entirely. Cavendish run had gemma
+# loop on `=== PROPOSED UPDATE ===` because it had no language work to do
+# but was being asked to produce a notes block.
+_EXPLICIT_NOTES_RE = re.compile(
+    r"set\s+(?:status\s*\/\s*notes?|notes?\s*\/\s*status|status|notes?)\s+"
+    r"to\s*:?\s*[\"'“‘]([^\"'“”‘’]+)[\"'”’]",
+    re.IGNORECASE,
+)
+
 # PDF field regexes (from the Apocalypse Ale Works PDF format — reference impl).
 # Each captures the value portion of a labeled line. Lines look like
 # "Venue Name    Apocalypse Ale Works" (label and value separated by whitespace).
@@ -973,6 +986,18 @@ def _collect_email_reply_inputs(task: str) -> tuple[str, str | None, dict | None
         "existing_email": existing_email,
         "existing_phone": existing_phone,
     }
+
+    # Explicit-notes fast path (added 2026-05-21). When the task body already
+    # specifies the notes verbatim — e.g. `set notes to: "Permanently closed
+    # as of early 2026. Pitch email bounced. Do not contact."` — there is no
+    # language work for gemma. Stash the captured string on pending and return
+    # the task unchanged; the dispatch flow checks `pending['explicit_notes']`
+    # and skips the gemma invocation entirely, printing a pre-render block and
+    # waiting for approval. Mirrors the outreach pre-render pattern (Option B).
+    explicit_notes_match = _EXPLICIT_NOTES_RE.search(task)
+    if explicit_notes_match:
+        pending["explicit_notes"] = explicit_notes_match.group(1).strip()
+        return task, None, pending
 
     if match_type == "exact":
         row_state = (
@@ -1805,6 +1830,38 @@ def _repl(model: str, verbose: bool) -> None:
                             last_next_task = None
                             print()
                             continue
+                    # Explicit-notes skip-gemma fast path (added 2026-05-21).
+                    # When the task body specifies the notes verbatim (e.g.
+                    # dead-venue cleanup), the collector stashed them on
+                    # pending — invoking gemma here would just spin (Cavendish
+                    # run looped on `=== PROPOSED UPDATE ===` 14× before the
+                    # repetition guard aborted). Print the pre-render block,
+                    # stash pending, and continue to wait for Josh's approval.
+                    if (email_reply_pending is not None
+                            and email_reply_pending.get("explicit_notes")):
+                        venue = email_reply_pending["venue_name"]
+                        notes = email_reply_pending["explicit_notes"]
+                        action_label = (
+                            "UPDATE" if email_reply_pending.get("is_existing")
+                            else "INSERT"
+                        )
+                        print()
+                        print("=== PRE-RENDERED UPDATE ===")
+                        print(f"VENUE: {venue}")
+                        print(f"ACTION: {action_label} row in xlsx")
+                        print(f"NOTES: {notes}")
+                        print("=== END PRE-RENDERED ===")
+                        print()
+                        print(
+                            f"Approve to {action_label.lower()} {venue}'s row "
+                            f"with these notes, or describe changes?"
+                        )
+                        last_pending_email_reply = email_reply_pending
+                        last_pre_rendered = None
+                        last_pre_rendered_gig_update = None
+                        last_sent_outreach = None
+                        print()
+                        continue
                     # Approval-gated save tools (gmail_draft_email +
                     # update_venue_contact) stripped on /next dispatch. The user
                     # CANNOT have approved a draft on the same turn they ran
@@ -2125,7 +2182,12 @@ def _repl(model: str, verbose: bool) -> None:
         # this turn.
         if last_pending_email_reply is not None and _has_email_draft_approval(line):
             er = last_pending_email_reply
-            notes = _extract_proposed_notes(er.get("last_reply", ""))
+            # Explicit-notes fast path: the collector captured the notes
+            # verbatim from the task body; no marker parsing needed.
+            if er.get("explicit_notes"):
+                notes = er["explicit_notes"]
+            else:
+                notes = _extract_proposed_notes(er.get("last_reply", ""))
             if not notes:
                 print("[email-reply] could not find a `=== PROPOSED NOTES ===` block "
                       "in gemma's last reply — nothing to save.")
