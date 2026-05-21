@@ -919,26 +919,27 @@ def _collect_email_reply_inputs(task: str) -> tuple[str, str | None, dict | None
         if is_existing
         else "no existing row — new row will be inserted on approval"
     )
-    # Terse, format-first prompt. Gemma must emit the marker block FIRST with
-    # NO preamble — preamble eats num_predict budget and was the root cause of
-    # the Olde Salem truncation 2026-05-21. Tools are stripped to [] for this
-    # dispatch (cli.py side); the prompt reinforces that to keep gemma from
-    # attempting tool calls anyway.
+    # Imperative, exact-4-part prompt. Gemma must produce all four parts —
+    # truncation after part 2 was the 2026-05-21 Olde Salem failure mode.
+    # The dispatcher post-processes the reply to synthesize missing parts as
+    # a backstop, but the prompt still pushes for completeness.
+    approval_question = f"Approve to append to {venue_name}'s row, or describe changes?"
     augmented = (
         f"{task}\n\n"
         f"DISPATCHER NOTE — venue is locked to: {venue_name}\n"
         f"Row state: {row_state}\n\n"
-        f"YOUR ENTIRE REPLY must be EXACTLY this 5-line shape, NO PREAMBLE, "
-        f"NO commentary, NO tool calls, NO COORDINATOR REPORT:\n\n"
-        f"=== PROPOSED NOTES ===\n"
-        f"<2-3 factual sentences from the transcript: their response, any "
-        f"timeline, recommended follow-up. Quote names/dates verbatim; "
-        f"invent nothing.>\n"
-        f"=== END NOTES ===\n"
-        f"Approve to append to {venue_name}'s row, or describe changes?\n\n"
-        f"Start your reply with `=== PROPOSED NOTES ===` on the very first "
-        f"line — anything before that marker is wasted output. Josh approves "
-        f"by typing 'approve'; the dispatcher saves automatically."
+        f"Your reply MUST have EXACTLY these 4 parts, in this order, "
+        f"NOTHING ELSE — no preamble, no commentary, no tool calls, "
+        f"no COORDINATOR REPORT:\n\n"
+        f"PART 1 — the literal line: === PROPOSED NOTES ===\n"
+        f"PART 2 — your 2-3 sentence summary of the venue's response, "
+        f"timeline, and recommended follow-up. Quote names/dates "
+        f"verbatim; invent nothing.\n"
+        f"PART 3 — the literal line: === END NOTES ===\n"
+        f"PART 4 — the literal line: {approval_question}\n\n"
+        f"If your reply is missing PART 3 or PART 4, it is INCOMPLETE. "
+        f"Do not stop after PART 2. The format is mandatory; emit all "
+        f"four parts."
     )
     return augmented, None, pending
 
@@ -1782,10 +1783,6 @@ def _repl(model: str, verbose: bool) -> None:
                         m.get("content", "") for m in dispatch_msgs
                         if m.get("role") == "assistant" and m.get("content")
                     )
-                    # Diagnostic: if gemma returned no assistant content at all,
-                    # surface that explicitly so the silent-dispatch failure
-                    # mode (2026-05-21) is visible. Without this print, the
-                    # prompt just returns and Josh has no signal.
                     if not dispatch_assistant_text:
                         print("\n[dispatch] gemma returned no content for this "
                               "email-reply task — re-prompt it with: 'please print "
@@ -1795,6 +1792,32 @@ def _repl(model: str, verbose: bool) -> None:
                               "=== PROPOSED NOTES === block. Re-prompt it with: "
                               "'use the marker format from the dispatch instructions' "
                               "and try again.")
+                    else:
+                        # Post-processing backstop (2026-05-21): gemma reliably
+                        # emits PART 1 + PART 2 but drops PART 3 (END marker)
+                        # and PART 4 (approval question) on truncation. Print
+                        # whatever's missing ourselves so Josh always sees the
+                        # complete format and knows the next step. The stashed
+                        # text is also patched so the lenient parser has clean
+                        # input on approval.
+                        approval_q = (
+                            f"Approve to append to "
+                            f"{email_reply_pending['venue_name']}'s row, "
+                            f"or describe changes?"
+                        )
+                        synthesized: list[str] = []
+                        if "=== END NOTES ===" not in dispatch_assistant_text:
+                            synthesized.append("=== END NOTES ===")
+                        if approval_q not in dispatch_assistant_text and \
+                                "approve to append" not in dispatch_assistant_text.lower():
+                            synthesized.append(approval_q)
+                        if synthesized:
+                            print()  # spacer between gemma's content and synth
+                            for line in synthesized:
+                                print(line)
+                            dispatch_assistant_text = (
+                                f"{dispatch_assistant_text}\n" + "\n".join(synthesized)
+                            )
                     email_reply_pending["last_reply"] = dispatch_assistant_text
                     last_pending_email_reply = email_reply_pending
                     last_pre_rendered = None
