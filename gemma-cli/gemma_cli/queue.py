@@ -4,9 +4,15 @@ Used by the REPL `/next` and `/done` commands. Reads/writes the right queue
 file deterministically via the Drive REST API so the model never has to (and
 can't hallucinate) the contents of its own queue.
 
-As of 2026-05-15 there are TWO queues, one per laptop role:
-  - llama-tasks.txt → Coordinator (Llama 3.3 70B on the desktop)
-  - gemma-tasks.txt → Media Specialist (Gemma 4 on the laptop)
+As of 2026-05-20 (post-swap) there is ONE queue:
+  - gemma-tasks.txt → Coordinator (gemma4:26b on the OMEN)
+
+History: pre-2026-05-20 there were two queues — llama-tasks.txt for the
+Llama 3.3 70B Coordinator and gemma-tasks.txt for the gemma4:e4b Media
+Specialist. The Media Specialist role was retired and llama-tasks.txt was
+renamed to gemma-tasks.txt (Drive ID 1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g
+preserved). The old gemma-tasks.txt (id 15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP)
+was trashed.
 
 Lookup is by model tag. Unknown models default to gemma-tasks.txt for safety.
 """
@@ -20,10 +26,9 @@ import re
 import requests
 
 TASKS_FILE_IDS = {
-    "llama3.3:70b": "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g",  # llama-tasks.txt (Coordinator)
-    "gemma4:e4b": "15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP",  # gemma-tasks.txt (Media Specialist)
+    "gemma4:26b": "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g",  # gemma-tasks.txt (Coordinator, post-2026-05-20)
 }
-DEFAULT_FALLBACK_FILE_ID = "15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP"
+DEFAULT_FALLBACK_FILE_ID = "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g"
 DRIVE_TOKEN_PATH = os.path.expanduser("~/.config/google-drive-mcp/tokens.json")
 DRIVE_KEYS_PATH = os.path.expanduser("~/.config/google-drive-mcp/gcp-oauth.keys.json")
 TASK_LINE_RE = re.compile(r"^task\s+\d+", re.IGNORECASE)
@@ -57,6 +62,40 @@ def _drive_access_token() -> str:
     return new_token
 
 
+def _unmojibake(text: str, max_passes: int = 3) -> str:
+    """Conservatively reverse UTF-8-as-Latin-1 mojibake (double or triple).
+
+    Phone Sonnet's task uploads sometimes double- or triple-encode multi-byte
+    UTF-8 chars (em-dashes, smart quotes), producing `Ã¢ÂÂ`-style mojibake in
+    the file content. Each pass: encode as Latin-1, decode as UTF-8. Stop when
+    the heuristic mojibake-marker count stops decreasing or when the round-trip
+    fails — so clean text and legitimate single accented chars are never modified.
+    """
+    def score(s: str) -> int:
+        # UTF-8 multi-byte chars decoded as Latin-1 always produce a RUN of
+        # consecutive U+0080-U+00FF characters. Count adjacent-high-bit pairs:
+        # clean text and a lone accented char (Café, Naïve) score 0; mojibake
+        # of any length scores >= 1 and drops by at least 1 per unwind pass.
+        count = 0
+        prev_high = False
+        for ch in s:
+            is_high = 0x80 <= ord(ch) <= 0xFF
+            if is_high and prev_high:
+                count += 1
+            prev_high = is_high
+        return count
+
+    for _ in range(max_passes):
+        try:
+            candidate = text.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+        if score(candidate) >= score(text):
+            break  # not making progress — stop before we damage clean text
+        text = candidate
+    return text
+
+
 def _download(model: str) -> str:
     token = _drive_access_token()
     file_id = _file_id_for_model(model)
@@ -67,7 +106,14 @@ def _download(model: str) -> str:
         timeout=30,
     )
     resp.raise_for_status()
-    return resp.text
+    # Decode as UTF-8 explicitly. The Drive API serves plain-text files without
+    # a charset in the Content-Type header, so `resp.text` would fall back to
+    # ISO-8859-1 per RFC 2616 and mangle any multi-byte UTF-8 (em-dashes,
+    # smart quotes, etc.) into `ÃÂ¢` mojibake when printed to a UTF-8 terminal.
+    # Then run a defensive unmojibake pass for files whose contents were
+    # already double/triple-encoded at upload time (phone Sonnet writes
+    # mojibaked task files; the unwind is idempotent on clean text).
+    return _unmojibake(resp.content.decode("utf-8"))
 
 
 def _upload(model: str, content: str) -> None:
