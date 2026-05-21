@@ -511,7 +511,23 @@ _GIG_EXPLICIT_TAG_RE = re.compile(
 _GIG_TRACKING_TASK_RE = re.compile(
     r"\bbooking\s+confirmation\b"
     r"|\bgig\s+tracking\b"
-    r"|\bupdate\s+(?:the\s+)?gig\s+(?:booking|tracking)\s+records?\b",
+    r"|\bupdate\s+(?:the\s+)?gig\s+(?:booking|tracking)\s+records?\b"
+    # Broadened 2026-05-21: "update venue tracker" / "venue tracker" /
+    # "update venue contact" cover the dead-venue cleanup tasks (e.g.
+    # Cavendish Brewing — permanently closed) that previously misclassified
+    # as outreach because the description contained "pitch email".
+    r"|\bupdate\s+(?:the\s+)?venue\s+(?:tracker|contact|record)\b"
+    r"|\bvenue\s+tracker\b"
+    r"|\bmark\s+(?:the\s+venue\s+)?as\s+(?:permanently\s+)?closed\b",
+    re.IGNORECASE,
+)
+
+# Venue extraction for "Update venue tracker for <X> —" style task titles.
+# Used by the Phase 2 collector before falling back to the colon-prefix
+# pattern. Stops on em-dash, hyphen, colon, or end-of-line.
+_GIG_VENUE_TRACKER_FOR_RE = re.compile(
+    r"\bupdate\s+(?:the\s+)?venue\s+(?:tracker|contact|record)\s+for\s+"
+    r"([A-Za-z][A-Za-z0-9 &'\-\.]{1,80}?)\s*(?:[—–\-:]|$)",
     re.IGNORECASE,
 )
 
@@ -874,6 +890,14 @@ def _is_email_reply_gig_task(task: str) -> bool:
 def _extract_venue_from_email_reply_task(task: str) -> str:
     """Pull the venue name out of a prose gig-reply task. Returns "" if the
     prefix shape didn't match; caller should prompt Josh."""
+    # "Update venue tracker for <X> —" pattern wins when present (added
+    # 2026-05-21 for dead-venue cleanup tasks where there's no colon-delimited
+    # venue prefix).
+    m = _GIG_VENUE_TRACKER_FOR_RE.search(task)
+    if m:
+        candidate = m.group(1).strip()
+        if candidate and not _GIG_TRACKING_TASK_RE.search(candidate):
+            return candidate
     m = _EMAIL_REPLY_VENUE_PREFIX_RE.match(task)
     if not m:
         return ""
@@ -1013,7 +1037,16 @@ def _extract_proposed_notes(text: str) -> str:
 
 
 def _is_outreach_task(task: str) -> bool:
-    """Trigger detection (A): explicit tag wins; broader keyword regex is fallback."""
+    """Trigger detection (A): explicit tag wins; broader keyword regex is fallback.
+
+    Gig-tracking signals win over outreach detection (added 2026-05-21).
+    Without this guard, a venue-cleanup task that describes a previous
+    "pitch email" — e.g. "Update venue tracker for Cavendish Brewing
+    Company — pitch email bounced" — gets misclassified as a new outreach
+    and gemma prompts for venue/dates to draft a fresh pitch.
+    """
+    if _GIG_TRACKING_TASK_RE.search(task):
+        return False
     if _EMAIL_TASK_RE.search(task):
         return True
     return bool(_OUTREACH_KEYWORD_RE.search(task))
