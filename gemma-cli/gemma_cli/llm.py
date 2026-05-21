@@ -47,7 +47,7 @@ def _ollama_chat_url() -> str:
 
 
 OLLAMA_URL = _ollama_chat_url()
-DEFAULT_MODEL = "gemma4:e4b"
+DEFAULT_MODEL = "gemma4:26b"
 MAX_TURNS = 8
 # Lower temperature = less creative filling-in = less hallucination on drafting tasks.
 # 0.0 enforces deterministic sampling. Tried 0.1 on 2026-05-16 to fix ambiguous
@@ -56,7 +56,7 @@ MAX_TURNS = 8
 # ambiguous input is an accepted cost; clear smalltalk handling is more important.
 DEFAULT_TEMPERATURE = 0.0
 # Ollama's default num_ctx is often 4096 or 8192 depending on the model. SHARED.md
-# + LLAMA.md is ~15K chars (~3700 tokens) before tool schemas and history, so the
+# + GEMMA.md is ~15K chars (~3700 tokens) before tool schemas and history, so the
 # default silently truncates the EARLY parts of the system prompt. 8192 keeps the
 # full prompt + room for tool schemas, history, and a short reply.
 #
