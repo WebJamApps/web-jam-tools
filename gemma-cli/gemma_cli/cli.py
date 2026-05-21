@@ -137,14 +137,32 @@ def _run_once(
     )
 
 
+def _today_preamble() -> str:
+    """Today's date as a single-line preamble for the system prompt.
+
+    gemma4:26b's training cutoff means it doesn't natively know the current
+    year — the 2026-05-21 Olde Salem run produced 'Josh should follow up in
+    early 2025' for a venue that's full through end of 2026, off by two
+    years. Injecting the date at REPL start (and every /next via
+    _resolve_system_prompt being called fresh) keeps relative-date
+    reasoning grounded.
+    """
+    from datetime import date
+    return f"Today's date is {date.today().isoformat()}.\n\n"
+
+
 def _resolve_system_prompt() -> str:
-    """Load SHARED.md + Coordinator memory from Drive. Fall back to hardcoded SYSTEM_PROMPT on failure."""
+    """Load SHARED.md + Coordinator memory from Drive. Fall back to hardcoded SYSTEM_PROMPT on failure.
+
+    Always prepends today's date so the model has a grounded reference for
+    any relative-date reasoning ('follow up next year', 'in 6 months', etc.).
+    """
     drive_memory = load_memory()
     if drive_memory is None:
         print("[memory] Could not load Drive memory — using hardcoded SYSTEM_PROMPT fallback.")
-        return SYSTEM_PROMPT
+        return _today_preamble() + SYSTEM_PROMPT
     print(f"[memory] Loaded Drive memory ({len(drive_memory)} chars).")
-    return drive_memory
+    return _today_preamble() + drive_memory
 
 
 # Smalltalk gate (added 2026-05-17). Llama 3.3 70B Q4 ignores prompt-level rules
