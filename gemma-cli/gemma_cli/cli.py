@@ -23,7 +23,11 @@ from gemma_cli.tools.memory import TOOLS as MEMORY_TOOLS
 from gemma_cli.tools.templates import TOOLS as TEMPLATE_TOOLS
 from gemma_cli.tools.templates import generate_venue_email_from_template
 from gemma_cli.tools.venue_contacts import TOOLS as VENUE_CONTACT_TOOLS
-from gemma_cli.tools.venue_contacts import lookup_venue_contact, lookup_venue_email_on_web
+from gemma_cli.tools.venue_contacts import (
+    lookup_venue_contact,
+    lookup_venue_email_on_web,
+    update_venue_contact,
+)
 
 ALL_TOOLS = DRIVE_TOOLS + CALENDAR_TOOLS + GMAIL_TOOLS + MEMORY_TOOLS + TEMPLATE_TOOLS + VENUE_CONTACT_TOOLS
 
@@ -110,11 +114,18 @@ def _run_once(
     history: list | None = None,
     system: str | None = None,
     tools: list | None = None,
+    max_turns: int | None = None,
+    num_predict: int | None = None,
 ):
     # chat() now streams model output to stdout as it arrives — see llm.py.
     # Do NOT print result.final_text here or we'd double-print everything that
     # was already streamed. The fallback / synthesized-text paths inside chat()
     # print their own explicit lines for the cases where nothing was streamed.
+    kwargs: dict = {}
+    if max_turns is not None:
+        kwargs["max_turns"] = max_turns
+    if num_predict is not None:
+        kwargs["num_predict"] = num_predict
     return chat(
         user_prompt=prompt,
         tools=tools if tools is not None else ALL_TOOLS,
@@ -122,17 +133,36 @@ def _run_once(
         model=model,
         verbose=verbose,
         history=history,
+        **kwargs,
     )
 
 
+def _today_preamble() -> str:
+    """Today's date as a single-line preamble for the system prompt.
+
+    gemma4:26b's training cutoff means it doesn't natively know the current
+    year — the 2026-05-21 Olde Salem run produced 'Josh should follow up in
+    early 2025' for a venue that's full through end of 2026, off by two
+    years. Injecting the date at REPL start (and every /next via
+    _resolve_system_prompt being called fresh) keeps relative-date
+    reasoning grounded.
+    """
+    from datetime import date
+    return f"Today's date is {date.today().isoformat()}.\n\n"
+
+
 def _resolve_system_prompt() -> str:
-    """Load SHARED.md + Coordinator memory from Drive. Fall back to hardcoded SYSTEM_PROMPT on failure."""
+    """Load SHARED.md + Coordinator memory from Drive. Fall back to hardcoded SYSTEM_PROMPT on failure.
+
+    Always prepends today's date so the model has a grounded reference for
+    any relative-date reasoning ('follow up next year', 'in 6 months', etc.).
+    """
     drive_memory = load_memory()
     if drive_memory is None:
         print("[memory] Could not load Drive memory — using hardcoded SYSTEM_PROMPT fallback.")
-        return SYSTEM_PROMPT
+        return _today_preamble() + SYSTEM_PROMPT
     print(f"[memory] Loaded Drive memory ({len(drive_memory)} chars).")
-    return drive_memory
+    return _today_preamble() + drive_memory
 
 
 # Smalltalk gate (added 2026-05-17). Llama 3.3 70B Q4 ignores prompt-level rules
@@ -456,6 +486,529 @@ def _inline_pdf_content(task: str) -> tuple[str, list[str]]:
         "anyway. Use the inlined text directly.]"
     )
     return task + directive + "".join(blocks), notices
+
+
+# --- Gig-tracking dispatcher (Task 36 Phase 1, added 2026-05-21) ---
+#
+# Trigger: 2026-05-20 live test of feat-pdf-pre-extraction on the Apocalypse Ale
+# Works booking confirmation PDF. PDF inlining worked but llama drifted in
+# follow-through: hallucinated an `add_gig_booking` tool, hunted for nonexistent
+# "Gig Booking Records" files, wrote thin notes that missed phone-confirmed
+# status / target dates / duration / texting follow-up, and skipped
+# lookup_venue_contact. Same architectural pattern that worked for venue
+# outreach in PR #11 applies: pre-render the tool call in Python, llama just
+# presents and asks for approval, approval interceptor calls the tool directly.
+
+# Triggers: explicit tags from phone Sonnet's task format always qualify;
+# broader keyword regex catches natural-language gig-tracking tasks
+# (e.g. "update gig booking records after Apocalypse called") but only when
+# a PDF block is also inlined — see _is_gig_tracking_task.
+_GIG_EXPLICIT_TAG_RE = re.compile(
+    r"\bGig\s+Tracking\s+Update\b|\bConfirmation\s+Ingestion\b",
+    re.IGNORECASE,
+)
+_GIG_TRACKING_TASK_RE = re.compile(
+    r"\bbooking\s+confirmation\b"
+    r"|\bgig\s+tracking\b"
+    r"|\bupdate\s+(?:the\s+)?gig\s+(?:booking|tracking)\s+records?\b",
+    re.IGNORECASE,
+)
+
+# PDF field regexes (from the Apocalypse Ale Works PDF format — reference impl).
+# Each captures the value portion of a labeled line. Lines look like
+# "Venue Name    Apocalypse Ale Works" (label and value separated by whitespace).
+_GIG_VENUE_RE = re.compile(r"^\s*Venue\s+Name\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_GIG_LOCATION_RE = re.compile(r"^\s*Location\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_GIG_CONTACT_TEXT_RE = re.compile(
+    r"^\s*Contact\s+Text\s+Line\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE
+)
+_GIG_TARGET_RE = re.compile(
+    r"^\s*Target\s+Timeline\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE
+)
+_GIG_DURATION_RE = re.compile(r"^\s*Duration\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_GIG_STATUS_RE = re.compile(r"^\s*Status\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_GIG_ACTION_ITEMS_HEADER_RE = re.compile(
+    r"^\s*Action\s+Items\s*:?\s*$", re.IGNORECASE
+)
+# Loose ALL-CAPS heading detector — used to terminate Action Items capture when
+# the PDF moves on to the next section. 4+ uppercase letters (with optional
+# spaces/colon) on a line by itself.
+_GIG_HEADING_RE = re.compile(r"^[A-Z][A-Z\s]{3,}:?\s*$")
+# Phone digits inside Contact Text Line value (e.g. "Apocalypse will text:
+# 434-258-8761"). Captures the formatted phone for the notes callout.
+_GIG_PHONE_RE = re.compile(r"\b(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b")
+
+# PDF content block delimiters (produced by `_inline_pdf_content`). Extraction
+# only reads from inside these blocks so we don't accidentally match labels in
+# the task body proper.
+_PDF_CONTENT_BLOCK_RE = re.compile(
+    r"=== PDF CONTENT:.*?===\n(.*?)\n=== END PDF ===",
+    re.DOTALL,
+)
+
+
+def _is_gig_tracking_task(task: str) -> bool:
+    """Trigger detection for the Phase 1 PDF-confirmation dispatcher.
+
+    Two cases qualify:
+    - Explicit phone-Sonnet tag (`Gig Tracking Update` / `Confirmation
+      Ingestion`) — always wins; phone Sonnet asserts the task type.
+    - Keyword match AND a PDF content block is inlined — the field
+      extractor expects PDF-label lines, so prose-only tasks (e.g. an
+      email transcript from a venue reply) have nothing to extract and
+      must fall through to gemma's regular path. Without the PDF gate,
+      we'd push every such task into manual fallback prompts. See the
+      Olde Salem regression 2026-05-21.
+    """
+    if _GIG_EXPLICIT_TAG_RE.search(task):
+        return True
+    if _GIG_TRACKING_TASK_RE.search(task) and _PDF_CONTENT_BLOCK_RE.search(task):
+        return True
+    return False
+
+
+def _extract_action_items(content: str) -> str:
+    """Capture Action Items block: lines after the header until blank line or
+    next ALL-CAPS heading. Returns "" if no header found."""
+    capturing = False
+    items: list[str] = []
+    for line in content.split("\n"):
+        if not capturing:
+            if _GIG_ACTION_ITEMS_HEADER_RE.match(line):
+                capturing = True
+            continue
+        stripped = line.strip()
+        if not stripped:
+            break
+        if _GIG_HEADING_RE.match(line):
+            break
+        items.append(stripped)
+    return "\n".join(items)
+
+
+def _extract_gig_tracking_fields(task: str) -> dict[str, str]:
+    """Pull the 6 labeled fields + action items out of inlined PDF content.
+
+    Reads ONLY from PDF content blocks (between `=== PDF CONTENT ===` and
+    `=== END PDF ===`) so we don't accidentally match labels in the task body
+    proper. Returns a dict with keys: venue_name, location, contact_text,
+    phone, target_timeline, duration, status, action_items. Missing fields are
+    empty strings (caller checks the count).
+    """
+    blocks = _PDF_CONTENT_BLOCK_RE.findall(task)
+    content = "\n".join(blocks) if blocks else ""
+    if not content:
+        return {}
+
+    fields: dict[str, str] = {}
+    for key, pattern in (
+        ("venue_name", _GIG_VENUE_RE),
+        ("location", _GIG_LOCATION_RE),
+        ("contact_text", _GIG_CONTACT_TEXT_RE),
+        ("target_timeline", _GIG_TARGET_RE),
+        ("duration", _GIG_DURATION_RE),
+        ("status", _GIG_STATUS_RE),
+    ):
+        m = pattern.search(content)
+        fields[key] = m.group(1).strip() if m else ""
+
+    # Phone digits inside Contact Text Line (if any)
+    if fields.get("contact_text"):
+        m = _GIG_PHONE_RE.search(fields["contact_text"])
+        fields["phone"] = m.group(1) if m else ""
+    else:
+        fields["phone"] = ""
+
+    fields["action_items"] = _extract_action_items(content)
+    return fields
+
+
+def _count_extracted_fields(fields: dict[str, str]) -> int:
+    """Count how many of the 6 primary fields auto-extracted. Used by the
+    vendor-variation toleration check (need ≥ 3 to proceed without prompting)."""
+    return sum(
+        1 for key in ("venue_name", "location", "contact_text",
+                      "target_timeline", "duration", "status")
+        if fields.get(key)
+    )
+
+
+def _build_gig_tracking_notes(fields: dict[str, str]) -> str:
+    """Compose a rich notes string from the extracted PDF fields.
+
+    Includes status, target dates, duration, and action items verbatim. Always
+    appends the manual texting callout ("Josh: please manually text X to lock
+    weekend dates") until Task 35 (SMS tool) lands, at which point the callout
+    becomes a `draft_text` call in the same preview.
+    """
+    import datetime as _dt
+
+    parts: list[str] = []
+    today = _dt.date.today().isoformat()
+    parts.append(f"Booking confirmation ingested {today}.")
+    if fields.get("status"):
+        parts.append(f"Status: {fields['status']}.")
+    if fields.get("target_timeline"):
+        parts.append(f"Target: {fields['target_timeline']}.")
+    if fields.get("duration"):
+        parts.append(f"Duration: {fields['duration']}.")
+    action = fields.get("action_items") or ""
+    if action:
+        # Collapse multi-line action items into a single semicolon-joined string
+        # so the xlsx notes cell stays single-line-friendly.
+        flat = "; ".join(s for s in action.split("\n") if s.strip())
+        parts.append(f"Action items: {flat}.")
+    phone = fields.get("phone") or ""
+    if phone:
+        parts.append(
+            f"Josh: please manually text {phone} to lock weekend dates "
+            "(SMS tool pending — Task 35)."
+        )
+    return " ".join(parts)
+
+
+def _prompt_gig_tracking_fallback(venue_hint: str) -> dict[str, str] | None:
+    """Vendor variation toleration: PDF didn't yield enough fields; prompt
+    Josh for each one interactively. Returns dict or None on cancel.
+
+    Per Task 36 spec: "Keep llama out of the extraction path entirely." So even
+    on fallback, the dispatcher (not llama) handles the field collection.
+    """
+    print("(could not auto-extract enough gig-tracking fields — falling back to prompts)")
+    print("Type 'cancel' on any prompt to abort, or leave blank to skip an optional field.")
+
+    venue_prompt = "Venue name"
+    if venue_hint:
+        venue_prompt += f" (hint from PDF: {venue_hint})"
+    venue_prompt += ": "
+    venue = _prompt_with_cancel(venue_prompt)
+    if venue is None:
+        return None
+
+    def _optional(label: str) -> str | None:
+        """Read an optional field — empty string is accepted; 'cancel' aborts."""
+        try:
+            reply = input(f"{label} (blank to skip, or 'cancel'): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if reply.lower() == "cancel":
+            return None
+        return reply
+
+    location = _optional("Location (e.g. 'Forest, VA')")
+    if location is None:
+        return None
+    phone = _optional("Phone (e.g. '434-258-8761')")
+    if phone is None:
+        return None
+    target = _optional("Target timeline (e.g. 'Oct/Nov 2026 weekends')")
+    if target is None:
+        return None
+    duration = _optional("Duration (e.g. '3-hour set')")
+    if duration is None:
+        return None
+    status = _optional("Status (e.g. 'phone-confirmed, awaiting date lock')")
+    if status is None:
+        return None
+    actions = _optional("Action items (semicolon-separated)")
+    if actions is None:
+        return None
+
+    return {
+        "venue_name": venue,
+        "location": location,
+        "contact_text": phone,  # synthesize Contact Text Line from phone
+        "phone": phone,
+        "target_timeline": target,
+        "duration": duration,
+        "status": status,
+        "action_items": actions,
+    }
+
+
+def _collect_gig_tracking_inputs(task: str) -> tuple[str, str | None, dict | None]:
+    """For gig-tracking tasks, extract booking fields from the inlined PDF and
+    pre-build the `update_venue_contact` call args. Llama receives a finished
+    preview and only handles presentation + approval.
+
+    Returns (augmented_task, cancel_reason, pre_rendered_data):
+      - (augmented_task, None, pre_rendered) → dispatch a pre-rendered gig task
+      - (task,           None, None)         → not a gig-tracking task; pass through
+      - (None,           reason, None)       → Josh cancelled the fallback prompts
+
+    Mirrors `_collect_outreach_inputs` for the gig-tracking task type.
+    """
+    if not _is_gig_tracking_task(task):
+        return task, None, None
+
+    fields = _extract_gig_tracking_fields(task)
+    if _count_extracted_fields(fields) < 3:
+        # Vendor variation toleration — prompt Josh directly. Keep llama out.
+        manual = _prompt_gig_tracking_fallback(fields.get("venue_name") or "")
+        if manual is None:
+            return None, "cancelled at gig-tracking fallback prompt", None
+        fields = manual
+
+    venue_name = fields.get("venue_name", "").strip()
+    if not venue_name:
+        # Shouldn't happen — extraction or fallback should have produced one.
+        # Treat as cancel rather than save with an empty key.
+        return None, "no venue name extracted from PDF or fallback", None
+
+    # Pre-lookup: existing row vs new insert. Result feeds the preview.
+    existing = lookup_venue_contact(venue_name)
+    is_existing = bool(existing.get("found"))
+    existing_email = (existing.get("email") or "").strip() if is_existing else ""
+    existing_phone = (existing.get("phone") or "").strip() if is_existing else ""
+
+    notes = _build_gig_tracking_notes(fields)
+    phone = (fields.get("phone") or existing_phone or "").strip()
+    location = (fields.get("location") or "").strip()
+
+    # The args we'll pass to update_venue_contact on approval. We only overwrite
+    # email if the PDF actually provided one (it usually doesn't — that's why
+    # we don't auto-overwrite an existing email). Phone gets written if we
+    # extracted one and there's none on file. Location gets written if we have
+    # one. Notes ALWAYS get appended (the venue_contacts handler appends rather
+    # than overwriting when an existing row has notes).
+    pre_rendered = {
+        "venue_name": venue_name,
+        "email": "",  # don't overwrite — PDF doesn't supply this
+        "contact": "",  # ditto
+        "phone": "" if existing_phone else phone,
+        "location": location,
+        "notes": notes,
+        "action": "update" if is_existing else "create",
+    }
+
+    action_label = "UPDATE existing row" if is_existing else "INSERT new row"
+    augmented = (
+        f"{task}\n\n"
+        f"=== PRE-FILLED UPDATE (do not modify; do not call update_venue_contact) ===\n"
+        f"ACTION: {action_label}\n"
+        f"VENUE: {venue_name}\n"
+        f"EMAIL: {existing_email or '(none on file; not changing)'}\n"
+        f"PHONE: {phone or '(none)'}"
+        f"{'  [already on file — not changing]' if existing_phone and phone == '' else ''}\n"
+        f"LOCATION: {location or '(none)'}\n"
+        f"NOTES (will append to existing notes column):\n"
+        f"  {notes}\n"
+        f"=== END PRE-FILLED ===\n\n"
+        f"Josh has already pre-built this Gig Booking Worksheet update from the "
+        f"booking confirmation PDF inlined above. The dispatcher determined the "
+        f"action ({action_label}) by calling lookup_venue_contact.\n\n"
+        f"YOUR JOB (do these in order — do NOT call any tool yet):\n"
+        f"1. PRINT the PRE-FILLED UPDATE block above EXACTLY as shown so Josh "
+        f"can review it.\n"
+        f"2. End with a clear approval question on its own line — e.g.: "
+        f"'Approve to save, or describe changes?'. It MUST explicitly invite "
+        f"Josh to approve or request edits, and it MUST be the last thing in "
+        f"your reply.\n"
+        f"3. STOP. Do NOT call any tool on this turn. Wait for Josh's next "
+        f"message.\n"
+        f"4. When Josh approves (e.g. 'approve', 'looks good, save'), the REPL "
+        f"will save the xlsx AUTOMATICALLY using the values above. You do NOT "
+        f"call update_venue_contact yourself — the dispatcher intercepts the "
+        f"approval and handles the save deterministically.\n"
+        f"5. If Josh requests changes, apply them to the BODY in your reply "
+        f"text and reprint with the approval question — do NOT call "
+        f"update_venue_contact (the tool is stripped from your set anyway)."
+    )
+    return augmented, None, pre_rendered
+
+
+# Task 36 Phase 2 (2026-05-21): email-reply gig-tracking dispatcher.
+# Handles prose tasks like "Olde Salem Brewing: update gig tracking records
+# accordingly using the following email transcript: ...". Phase 1 only covers
+# structured PDF booking confirmations; without Phase 2 these fall through to
+# gemma without `update_venue_contact` in its tool set and the model flounders.
+#
+# Shape: dispatcher extracts venue + looks up existing row deterministically;
+# gemma writes the notes summary (a language task) wrapped in markers; the
+# approval interceptor parses the marker block and calls update_venue_contact
+# directly with (stored venue, parsed notes).
+
+# Venue prefix from prose openers: optional "task N:" stripped, then the venue
+# name is everything before the next colon. Restricted to a sensible char set
+# so we don't grab a half-sentence by accident.
+_EMAIL_REPLY_VENUE_PREFIX_RE = re.compile(
+    r"^\s*(?:task\s+\d+\s*:\s*)?([A-Za-z][A-Za-z0-9 &'\-\.]{1,80}?)\s*:\s*",
+    re.IGNORECASE,
+)
+
+# Markers gemma is instructed to wrap the proposed notes in. Captured at
+# approval time and passed verbatim as the `notes` arg to update_venue_contact.
+# Split into START/END so the parser can apply "latest START marker wins"
+# semantics — a later (possibly truncated) reprint always supersedes an
+# earlier complete block. The 2026-05-21 Olde Salem run had gemma truncate
+# mid-flow (num_predict cap, post-task mode); the parser must be robust.
+_PROPOSED_NOTES_START_RE = re.compile(
+    r"===\s*PROPOSED\s+NOTES\s*===\s*\n", re.IGNORECASE
+)
+_PROPOSED_NOTES_END_RE = re.compile(
+    r"\n===\s*END\s+NOTES\s*===", re.IGNORECASE
+)
+
+
+def _is_email_reply_gig_task(task: str) -> bool:
+    """Phase 2 detection: gig-tracking-keyword task that's neither a PDF
+    booking confirmation (Phase 1) nor an explicit phone-Sonnet tag.
+
+    These are the prose follow-ups — typically "Venue: update gig tracking
+    records using the email transcript below" — that fall through Phase 1's
+    PDF gate. Without this dispatcher, gemma sees a task whose keywords
+    match a save-flow but has no write tool (stripped on dispatch) and
+    no template, and tends to flounder (Olde Salem regression 2026-05-21).
+    """
+    if not _GIG_TRACKING_TASK_RE.search(task):
+        return False
+    if _PDF_CONTENT_BLOCK_RE.search(task):
+        return False  # Phase 1 owns PDF confirmations
+    if _GIG_EXPLICIT_TAG_RE.search(task):
+        return False  # explicit tags are Phase 1's domain too
+    return True
+
+
+def _extract_venue_from_email_reply_task(task: str) -> str:
+    """Pull the venue name out of a prose gig-reply task. Returns "" if the
+    prefix shape didn't match; caller should prompt Josh."""
+    m = _EMAIL_REPLY_VENUE_PREFIX_RE.match(task)
+    if not m:
+        return ""
+    candidate = m.group(1).strip()
+    # Don't grab generic words that look venue-like but aren't (e.g. "Update"
+    # in "Update gig tracking..."). If the candidate IS itself a keyword from
+    # the gig-tracking regex, reject.
+    if _GIG_TRACKING_TASK_RE.search(candidate):
+        return ""
+    return candidate
+
+
+def _prompt_email_reply_venue() -> str | None:
+    """Fallback prompt when the prose prefix didn't yield a venue name."""
+    print("(could not auto-extract venue name from task — falling back to prompt)")
+    print("Type 'cancel' to abort.")
+    try:
+        reply = input("Venue name: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if not reply or reply.lower() == "cancel":
+        return None
+    return reply
+
+
+def _collect_email_reply_inputs(task: str) -> tuple[str, str | None, dict | None]:
+    """For prose email-reply gig tasks, extract the venue + lookup the existing
+    row, then augment the task with marker-wrapped output instructions for
+    gemma. The approval interceptor parses gemma's reply for the markers and
+    saves via update_venue_contact directly.
+
+    Returns (augmented_task, cancel_reason, pending_data):
+      - (augmented_task, None, pending) → dispatch with marker instructions
+      - (task,           None, None)    → not a Phase 2 task; pass through
+      - (None,           reason, None)  → Josh cancelled venue prompt
+    """
+    if not _is_email_reply_gig_task(task):
+        return task, None, None
+
+    venue_name = _extract_venue_from_email_reply_task(task)
+    if not venue_name:
+        venue_name = _prompt_email_reply_venue() or ""
+        if not venue_name:
+            return None, "cancelled at email-reply venue prompt", None
+
+    existing = lookup_venue_contact(venue_name)
+    is_existing = bool(existing.get("found"))
+    match_type = existing.get("match_type", "none")
+    matched_venue_name = (
+        existing.get("venue_name", "").strip() if is_existing else venue_name
+    )
+    existing_email = (existing.get("email") or "").strip() if is_existing else ""
+    existing_phone = (existing.get("phone") or "").strip() if is_existing else ""
+
+    # Use the MATCHED venue name on save (not the original query) so
+    # fuzzy hits update the canonical row instead of inserting a near-
+    # spelling duplicate. The 2026-05-21 Olde Salem regression inserted
+    # row 81 because "Olde Salem Brewing" didn't substring-match row 6's
+    # "Olde Salem Brewery"; with fuzzy lookup + matched-name save, the
+    # update would have gone to row 6 correctly.
+    pending = {
+        "venue_name": matched_venue_name,
+        "query_name": venue_name,
+        "is_existing": is_existing,
+        "match_type": match_type,
+        "existing_email": existing_email,
+        "existing_phone": existing_phone,
+    }
+
+    if match_type == "exact":
+        row_state = (
+            f"existing row (email={existing_email or '(none)'}, "
+            f"phone={existing_phone or '(none)'})"
+        )
+    elif match_type == "fuzzy":
+        similarity_pct = round(existing.get("similarity", 0.0) * 100)
+        row_state = (
+            f"FUZZY match to existing row '{matched_venue_name}' "
+            f"(similarity {similarity_pct}% — likely the same venue, "
+            f"queried as '{venue_name}'). Save will UPDATE that row. "
+            f"If this is actually a DIFFERENT venue, tell Josh to abort "
+            f"and reconcile manually."
+        )
+    else:
+        row_state = "no existing row — new row will be inserted on approval"
+    # Imperative, exact-4-part prompt. Gemma must produce all four parts —
+    # truncation after part 2 was the 2026-05-21 Olde Salem failure mode.
+    # The dispatcher post-processes the reply to synthesize missing parts as
+    # a backstop, but the prompt still pushes for completeness.
+    # User-facing venue label uses the MATCHED row's name so Josh sees the
+    # canonical spelling in both the dispatcher note and the approval question.
+    # This makes a fuzzy-match save visibly different from an INSERT.
+    user_facing_venue = matched_venue_name
+    approval_question = (
+        f"Approve to append to {user_facing_venue}'s row, or describe changes?"
+    )
+    augmented = (
+        f"{task}\n\n"
+        f"DISPATCHER NOTE — venue is locked to: {user_facing_venue}\n"
+        f"Row state: {row_state}\n\n"
+        f"Your reply MUST have EXACTLY these 4 parts, in this order, "
+        f"NOTHING ELSE — no preamble, no commentary, no tool calls, "
+        f"no COORDINATOR REPORT:\n\n"
+        f"PART 1 — the literal line: === PROPOSED NOTES ===\n"
+        f"PART 2 — your 2-3 sentence summary of the venue's response, "
+        f"timeline, and recommended follow-up. Quote names/dates "
+        f"verbatim; invent nothing.\n"
+        f"PART 3 — the literal line: === END NOTES ===\n"
+        f"PART 4 — the literal line: {approval_question}\n\n"
+        f"If your reply is missing PART 3 or PART 4, it is INCOMPLETE. "
+        f"Do not stop after PART 2. The format is mandatory; emit all "
+        f"four parts."
+    )
+    return augmented, None, pending
+
+
+def _extract_proposed_notes(text: str) -> str:
+    """Pull the content between === PROPOSED NOTES === and === END NOTES ===
+    from a gemma reply. Semantics: LATEST start marker wins (a reprint always
+    supersedes an earlier attempt). If the END marker is missing after the
+    latest start (truncated reply), take everything to end of string.
+
+    Returns "" if no START marker is present at all.
+    """
+    if not text:
+        return ""
+    starts = list(_PROPOSED_NOTES_START_RE.finditer(text))
+    if not starts:
+        return ""
+    last_start = starts[-1]
+    rest = text[last_start.end():]
+    end = _PROPOSED_NOTES_END_RE.search(rest)
+    if end:
+        return rest[:end.start()].strip()
+    return rest.strip()
 
 
 def _is_outreach_task(task: str) -> bool:
@@ -809,6 +1362,17 @@ def _is_smalltalk(text: str) -> bool:
 # model physically cannot fire it.
 _EMAIL_DRAFT_SAVE_TOOL_NAMES = frozenset({"gmail_draft_email"})
 
+# Task 36 Phase 1 (added 2026-05-21): write-tools stripped on /next dispatch.
+# These never belong on the dispatch turn — the approval interceptors in _repl
+# call them directly when Josh approves a pre-rendered draft. Mirrors PR #11's
+# gmail_draft_email gate and extends it with update_venue_contact for gig
+# tracking. Phase 2 P2-3 generalizes the per-turn idle strip; this constant
+# remains the canonical "approval-gated writes" set.
+_DISPATCH_SAVE_TOOL_NAMES = frozenset({
+    "gmail_draft_email",
+    "update_venue_contact",
+})
+
 # Substrings that count as Josh authorizing the draft to be saved as a Gmail draft.
 # Compared against `line.lower()` so any casing matches. Conservative — must contain
 # an explicit "save / draft / send / ship / approve" word; a passive "looks fine" is
@@ -858,6 +1422,43 @@ def _has_email_draft_approval(text: str) -> bool:
 def _strip_email_draft_save(tools: list) -> list:
     """Remove gmail_draft_email (and any other approval-gated save tools)."""
     return [t for t in tools if t.name not in _EMAIL_DRAFT_SAVE_TOOL_NAMES]
+
+
+def _strip_dispatch_saves(tools: list) -> list:
+    """Remove all approval-gated save tools (gmail_draft_email + update_venue_contact).
+
+    Used on /next dispatch so llama physically cannot save while presenting a
+    pre-rendered draft. The approval interceptors in _repl call the underlying
+    handlers directly when Josh approves.
+    """
+    return [t for t in tools if t.name not in _DISPATCH_SAVE_TOOL_NAMES]
+
+
+# Task 36 Phase 2 P2-3 (added 2026-05-21): write tools stripped at the per-turn
+# level whenever there is no active pre-rendered dispatch state. In idle
+# conversation llama can read but cannot mutate Josh's data — period. That
+# alone would have prevented the 2026-05-20 Solstice Farm Brewery destructive
+# write (post-task drift that overwrote the email with a hallucinated address).
+# remember_fact is intentionally NOT stripped — it's gemma-cli's own memory
+# system and the existing tool description supports model-autonomous saves
+# for cross-session facts. Drive write tools (create/update/trash/move) and
+# calendar create are included because they all mutate user-visible state.
+_IDLE_WRITE_TOOL_NAMES = frozenset({
+    "gmail_draft_email",
+    "update_venue_contact",
+    "drive_create_text_file",
+    "drive_update_text_file",
+    "drive_trash_file",
+    "drive_move_file",
+    "calendar_create_event",
+})
+
+
+def _strip_idle_writes(tools: list) -> list:
+    """Per-turn idle strip: remove all write-capable tools. Used when no
+    pre-rendered dispatch state is pending and the user input does not contain
+    an approval phrase."""
+    return [t for t in tools if t.name not in _IDLE_WRITE_TOOL_NAMES]
 
 
 _NEXT_TASK_PREFIX = (
@@ -946,6 +1547,18 @@ def _repl(model: str, verbose: bool) -> None:
     # (Option B follow-through, 2026-05-18) instead of letting llama call
     # gmail_draft_email with potentially-substituted parameters.
     last_pre_rendered: dict | None = None
+    # Parallel state for gig-tracking pre-rendered xlsx updates (Task 36 Phase 1,
+    # 2026-05-21). Holds the args to pass to update_venue_contact when Josh
+    # approves; cleared on save / /next / /done / /reset. Mirrors
+    # last_pre_rendered (email) above.
+    last_pre_rendered_gig_update: dict | None = None
+    # Parallel state for Phase 2 email-reply gig updates (Task 36 Phase 2,
+    # 2026-05-21). Holds {venue_name, is_existing, ...} captured at dispatch;
+    # the notes payload is parsed from gemma's marker block at approval time
+    # (not stored deterministically because the notes summary is gemma's
+    # language work, not deterministic Python). Cleared on save / /next /
+    # /done / /reset alongside the other pending vars.
+    last_pending_email_reply: dict | None = None
     while True:
         try:
             line = input(prompt).strip()
@@ -964,6 +1577,8 @@ def _repl(model: str, verbose: bool) -> None:
             history = []
             last_next_task = None
             last_pre_rendered = None
+            last_pre_rendered_gig_update = None
+            last_pending_email_reply = None
             print("(session memory cleared)")
             print()
             continue
@@ -1065,12 +1680,63 @@ def _repl(model: str, verbose: bool) -> None:
                         last_next_task = None
                         print()
                         continue
-                    # Email-draft approval gate: strip gmail_draft_email from the
-                    # tool set on /next dispatch. The user CANNOT have approved a
-                    # draft on the same turn they ran /next — gmail_draft_email
-                    # belongs to the next turn (after Josh reviews + approves).
-                    # See _has_email_draft_approval docstring.
-                    next_tools = _strip_email_draft_save(ALL_TOOLS)
+                    # Task 36 Phase 1 (2026-05-21): gig-tracking dispatcher. Only
+                    # runs when outreach didn't pre-render (the two task types
+                    # are mutually exclusive in practice). Extracts booking
+                    # fields from the inlined PDF and pre-builds the
+                    # update_venue_contact args. See _collect_gig_tracking_inputs.
+                    gig_pre_rendered: dict | None = None
+                    if pre_rendered is None:
+                        dispatched_task, cancel_reason, gig_pre_rendered = (
+                            _collect_gig_tracking_inputs(dispatched_task)
+                        )
+                        if cancel_reason is not None:
+                            print(f"(task not dispatched — {cancel_reason}. Stays in queue; "
+                                  "run /next again when ready.)")
+                            last_next_task = None
+                            print()
+                            continue
+                    # Task 36 Phase 2 (2026-05-21): email-reply gig dispatcher.
+                    # Runs only when neither outreach nor Phase 1 fired. Handles
+                    # prose "Venue: update gig tracking records using email
+                    # transcript ..." tasks. Pre-extracts venue + looks up the
+                    # row; gemma writes the notes summary; approval interceptor
+                    # parses marker block and saves. See _collect_email_reply_inputs.
+                    email_reply_pending: dict | None = None
+                    if pre_rendered is None and gig_pre_rendered is None:
+                        dispatched_task, cancel_reason, email_reply_pending = (
+                            _collect_email_reply_inputs(dispatched_task)
+                        )
+                        if cancel_reason is not None:
+                            print(f"(task not dispatched — {cancel_reason}. Stays in queue; "
+                                  "run /next again when ready.)")
+                            last_next_task = None
+                            print()
+                            continue
+                    # Approval-gated save tools (gmail_draft_email +
+                    # update_venue_contact) stripped on /next dispatch. The user
+                    # CANNOT have approved a draft on the same turn they ran
+                    # /next — those belong to the next turn (after Josh
+                    # reviews). See _strip_dispatch_saves docstring.
+                    next_tools = _strip_dispatch_saves(ALL_TOOLS)
+                    # Task 36 Phase 2 P2-2 (2026-05-21): gig-tracking tasks get
+                    # max_turns=3 instead of the default 8. Today's drift
+                    # (Apocalypse run) consumed ~6 of 8 turns wandering; 3
+                    # forces convergence or a clean stop. Outreach keeps the
+                    # default — the template tool + pre-render keep that path
+                    # tight already.
+                    dispatch_max_turns = 3 if gig_pre_rendered is not None else None
+                    # Phase 2 email-reply dispatch (2026-05-21): bump
+                    # num_predict so the marker block has room even if gemma
+                    # includes preamble. Tools stay with _strip_dispatch_saves
+                    # (no save tools, but read tools remain) — a fully-empty
+                    # tools list caused gemma to return empty content on the
+                    # first 2026-05-21 retry. max_turns left at default so
+                    # gemma can recover from any single-turn confusion.
+                    dispatch_num_predict: int | None = None
+                    if email_reply_pending is not None:
+                        dispatch_num_predict = 4096
+                    pre_dispatch_history_len = len(history)
                     result = _run_once(
                         _NEXT_TASK_PREFIX + dispatched_task,
                         model=model,
@@ -1078,6 +1744,8 @@ def _repl(model: str, verbose: bool) -> None:
                         history=history,
                         system=system_prompt,
                         tools=next_tools,
+                        max_turns=dispatch_max_turns,
+                        num_predict=dispatch_num_predict,
                     )
                     # Runtime hook: if this was a venue-outreach email task and
                     # llama wrote email prose without calling the template tool,
@@ -1135,9 +1803,92 @@ def _repl(model: str, verbose: bool) -> None:
                         print("(warning: a previous pending draft was discarded; "
                               "new outreach task's draft is now the pending one)")
                     last_pre_rendered = pre_rendered
-                else:
-                    # Non-outreach /next clears any stale pre-render (safety)
+                    # New outreach /next clears any stale pending
+                    last_pre_rendered_gig_update = None
+                    last_pending_email_reply = None
+                elif gig_pre_rendered is not None:
+                    if last_pre_rendered_gig_update is not None:
+                        print("(warning: a previous pending gig update was discarded; "
+                              "new gig-tracking task's update is now the pending one)")
+                    last_pre_rendered_gig_update = gig_pre_rendered
                     last_pre_rendered = None
+                    last_pending_email_reply = None
+                elif email_reply_pending is not None:
+                    if last_pending_email_reply is not None:
+                        print("(warning: a previous pending email-reply update was "
+                              "discarded; new email-reply task's update is now the "
+                              "pending one)")
+                    # Capture ALL assistant content from this dispatch — gemma
+                    # may have emitted the marker block on a turn the chat()
+                    # loop continued past (tool call also fired, or a
+                    # COORDINATOR REPORT triggered post-task mode that returned
+                    # final_text=""). Joining from history ensures every
+                    # assistant turn in this dispatch is parseable.
+                    dispatch_msgs = result.history[pre_dispatch_history_len:]
+                    dispatch_assistant_text = "\n".join(
+                        m.get("content", "") for m in dispatch_msgs
+                        if m.get("role") == "assistant" and m.get("content")
+                    )
+                    if not dispatch_assistant_text:
+                        print("\n[dispatch] gemma returned no content for this "
+                              "email-reply task — re-prompt it with: 'please print "
+                              "the === PROPOSED NOTES === block now' and try again.")
+                    elif "=== PROPOSED NOTES ===" not in dispatch_assistant_text:
+                        print("\n[dispatch] gemma replied but did NOT print the "
+                              "=== PROPOSED NOTES === block. Re-prompt it with: "
+                              "'use the marker format from the dispatch instructions' "
+                              "and try again.")
+                    else:
+                        # Post-processing backstop (2026-05-21): gemma reliably
+                        # emits PART 1 + PART 2 but drops PART 3 (END marker)
+                        # and PART 4 (approval question) on truncation. Print
+                        # whatever's missing ourselves so Josh always sees the
+                        # complete format and knows the next step. The stashed
+                        # text is also patched so the lenient parser has clean
+                        # input on approval.
+                        approval_q = (
+                            f"Approve to append to "
+                            f"{email_reply_pending['venue_name']}'s row, "
+                            f"or describe changes?"
+                        )
+                        synthesized: list[str] = []
+                        if "=== END NOTES ===" not in dispatch_assistant_text:
+                            synthesized.append("=== END NOTES ===")
+                        if approval_q not in dispatch_assistant_text and \
+                                "approve to append" not in dispatch_assistant_text.lower():
+                            synthesized.append(approval_q)
+                        if synthesized:
+                            print()  # spacer between gemma's content and synth
+                            for line in synthesized:
+                                print(line)
+                            dispatch_assistant_text = (
+                                f"{dispatch_assistant_text}\n" + "\n".join(synthesized)
+                            )
+                    email_reply_pending["last_reply"] = dispatch_assistant_text
+                    last_pending_email_reply = email_reply_pending
+                    last_pre_rendered = None
+                    last_pre_rendered_gig_update = None
+                else:
+                    # Non-dispatch /next clears any stale pre-render (safety)
+                    last_pre_rendered = None
+                    last_pre_rendered_gig_update = None
+                    last_pending_email_reply = None
+                # Task 36 Phase 2 P2-5 (2026-05-21): false COORDINATOR REPORT
+                # detection. If the model emitted a COORDINATOR REPORT but a
+                # pre-rendered draft is now awaiting approval, the report is
+                # premature — warn Josh so he knows the draft is still pending
+                # and the report is misleading. State NOT cleared (the interceptor
+                # below still fires on Josh's next approval phrase).
+                if (last_pre_rendered is not None
+                        or last_pre_rendered_gig_update is not None
+                        or last_pending_email_reply is not None) and \
+                        "COORDINATOR REPORT:" in (result.final_text or ""):
+                    print(
+                        "\n[runtime] WARNING: model emitted COORDINATOR REPORT, but a "
+                        "pre-rendered draft is still awaiting your approval. The report is "
+                        "premature — the dispatcher has NOT saved anything yet. Say "
+                        "'approve' to save, or describe changes."
+                    )
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
             print()
@@ -1149,6 +1900,8 @@ def _repl(model: str, verbose: bool) -> None:
                 remaining = delete_first_task(model)
                 last_next_task = None
                 last_pre_rendered = None
+                last_pre_rendered_gig_update = None
+                last_pending_email_reply = None
                 print(f"Removed first task. {remaining} remaining in queue.")
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
@@ -1184,21 +1937,102 @@ def _repl(model: str, verbose: bool) -> None:
                       "again to retry, or /next to abandon)")
             print()
             continue
+        # Task 36 Phase 1 (2026-05-21) approval interceptor for gig-tracking:
+        # mirrors the email-draft interceptor above. When Josh approves a
+        # pending pre-rendered xlsx update, the dispatcher calls
+        # update_venue_contact DIRECTLY with the stored args — llama is NOT
+        # invoked on this turn. Removes the parameter-hallucination /
+        # destructive-write risk seen in the 2026-05-20 Solstice run.
+        if last_pre_rendered_gig_update is not None and _has_email_draft_approval(line):
+            gu = last_pre_rendered_gig_update
+            print(f"[gig-update] saving to xlsx directly — VENUE={gu['venue_name']!r}, "
+                  f"ACTION={gu['action']}")
+            try:
+                saved = update_venue_contact(
+                    venue_name=gu["venue_name"],
+                    email=gu.get("email", ""),
+                    contact=gu.get("contact", ""),
+                    phone=gu.get("phone", ""),
+                    location=gu.get("location", ""),
+                    notes=gu.get("notes", ""),
+                )
+                if saved.get("updated"):
+                    print(f"[gig-update] saved — {saved.get('action')} at row "
+                          f"{saved.get('row')}")
+                    if saved.get("note"):
+                        print(f"            {saved['note']}")
+                    last_pre_rendered_gig_update = None
+                else:
+                    print(f"[gig-update] save failed: {saved.get('error')}")
+                    print("(pre-rendered update kept — say 'approve' again to retry, "
+                          "or /next to abandon)")
+            except Exception as exc:
+                print(f"[gig-update] save failed: {type(exc).__name__}: {exc}")
+                print("(pre-rendered update kept — say 'approve' again to retry, "
+                      "or /next to abandon)")
+            print()
+            continue
+        # Task 36 Phase 2 (2026-05-21) approval interceptor for email-reply
+        # gig-tracking. When Josh approves, parse the marker block out of the
+        # last gemma reply for the notes payload, then call update_venue_contact
+        # directly with (stored venue, parsed notes). Gemma is NOT invoked on
+        # this turn.
+        if last_pending_email_reply is not None and _has_email_draft_approval(line):
+            er = last_pending_email_reply
+            notes = _extract_proposed_notes(er.get("last_reply", ""))
+            if not notes:
+                print("[email-reply] could not find a `=== PROPOSED NOTES ===` block "
+                      "in gemma's last reply — nothing to save.")
+                print("(pending update kept — re-ask gemma to print the markers and "
+                      "approve again, or /next to abandon)")
+                print()
+                continue
+            action_label = "UPDATE" if er.get("is_existing") else "INSERT"
+            print(f"[email-reply] saving to xlsx directly — VENUE={er['venue_name']!r}, "
+                  f"ACTION={action_label}")
+            try:
+                saved = update_venue_contact(
+                    venue_name=er["venue_name"],
+                    email="",
+                    contact="",
+                    phone="",
+                    location="",
+                    notes=notes,
+                )
+                if saved.get("updated"):
+                    print(f"[email-reply] saved — {saved.get('action')} at row "
+                          f"{saved.get('row')}")
+                    if saved.get("note"):
+                        print(f"            {saved['note']}")
+                    last_pending_email_reply = None
+                else:
+                    print(f"[email-reply] save failed: {saved.get('error')}")
+                    print("(pending update kept — say 'approve' again to retry, "
+                          "or /next to abandon)")
+            except Exception as exc:
+                print(f"[email-reply] save failed: {type(exc).__name__}: {exc}")
+                print("(pending update kept — say 'approve' again to retry, "
+                      "or /next to abandon)")
+            print()
+            continue
         try:
             # Smalltalk gate: strip tool schemas for clear conversational openers
             # so the model can't fire drive_list_files({}) on "hi". See _is_smalltalk
             # docstring for rationale.
             #
-            # Email-draft approval gate: independently, strip gmail_draft_email
-            # from the tool set unless the user's input contains an approval phrase.
-            # Prevents llama from saving a draft to Gmail before Josh reviews it.
-            # See _has_email_draft_approval docstring.
+            # Task 36 Phase 2 P2-3 (2026-05-21): per-turn idle write-tool gate.
+            # In idle conversation (no pending dispatch state), strip ALL write
+            # tools so llama can read but not mutate Josh's data. This is the
+            # framework-level defense that would have prevented the 2026-05-20
+            # Solstice destructive write. The interceptors above handle the
+            # approval-and-dispatch path; this branch is only reached when no
+            # interceptor fired (no pending state, OR pending state without an
+            # approval phrase in the input).
             if _is_smalltalk(line):
                 turn_tools: list | None = []
-            elif _has_email_draft_approval(line):
-                turn_tools = None  # full tool set; gmail_draft_email is allowed
             else:
-                turn_tools = _strip_email_draft_save(ALL_TOOLS)
+                turn_tools = _strip_idle_writes(ALL_TOOLS)
+            pre_turn_history_len = len(history)
             result = _run_once(
                 line,
                 model=model,
@@ -1208,6 +2042,22 @@ def _repl(model: str, verbose: bool) -> None:
                 tools=turn_tools,
             )
             history = result.history
+            # Phase 2 follow-through (2026-05-21): while an email-reply update
+            # is pending, refresh the captured reply text with this turn's
+            # assistant content so a later 'approve' parses the most-recent
+            # marker block. Handles the case where Josh re-prompts gemma to
+            # reprint after a truncated initial reply.
+            if last_pending_email_reply is not None:
+                new_msgs = history[pre_turn_history_len:]
+                new_assistant_text = "\n".join(
+                    m.get("content", "") for m in new_msgs
+                    if m.get("role") == "assistant" and m.get("content")
+                )
+                if new_assistant_text:
+                    prior = last_pending_email_reply.get("last_reply", "")
+                    last_pending_email_reply["last_reply"] = (
+                        f"{prior}\n{new_assistant_text}" if prior else new_assistant_text
+                    )
         except Exception as exc:
             print(f"[error] {type(exc).__name__}: {exc}")
         print()
