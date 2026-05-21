@@ -210,11 +210,20 @@ def _is_useful_email(email: str, website_domain: str | None = None) -> bool:
     local, _, domain = email_lower.partition("@")
     if not domain:
         return False
-    if domain in _EMAIL_BLOCKLIST_DOMAINS:
+    # Subdomain-aware blocklist (2026-05-21): the scraper found
+    # `<hash>@sentry.wixpress.com` on castroanoke.com — the literal-match check
+    # missed it because the blocklist had `wixpress.com` only. Treat any
+    # subdomain of a blocked domain as blocked too.
+    if any(domain == bad or domain.endswith("." + bad) for bad in _EMAIL_BLOCKLIST_DOMAINS):
         return False
     if local in _EMAIL_BLOCKLIST_LOCALPARTS:
         return False
     if any(local.startswith(bad) for bad in ("noreply", "no-reply", "donotreply")):
+        return False
+    # Machine-generated local parts (Sentry DSN public keys, tracking pixels,
+    # transactional-email signing tokens) are 32+ chars of pure hex. Real
+    # booker addresses are short and contain non-hex letters.
+    if len(local) >= 32 and all(c in "0123456789abcdef" for c in local):
         return False
     return True
 
