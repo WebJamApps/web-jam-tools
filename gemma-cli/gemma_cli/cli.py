@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from datetime import date
 
 from gemma_cli.llm import DEFAULT_MODEL, chat
 from gemma_cli.memory import append_memory, load_memory
@@ -1433,6 +1434,35 @@ def _has_email_draft_approval(text: str) -> bool:
     return any(phrase in lower for phrase in _APPROVAL_PHRASES)
 
 
+# Substrings that count as Josh confirming a previously-drafted outreach email
+# was sent from Gmail. Only consulted when last_sent_outreach is set (populated
+# right after a successful draft save), so the phrases scope naturally to the
+# post-save window and the records update fires WITHOUT invoking gemma.
+# Added 2026-05-21 to fix delayed-recovery drift where gemma forgot which venue
+# the just-saved draft belonged to.
+_SENT_CONFIRMATION_PHRASES = (
+    "i sent it",
+    "i sent the email",
+    "email sent",
+    "sent the email",
+    "sent it",
+    "update records",
+    "update the records",
+    "update our records",
+    "update booking records",
+    "update the booking records",
+    "update our booking records",
+)
+
+
+def _has_send_confirmation(text: str) -> bool:
+    """Return True if Josh's input confirms the outreach email was sent."""
+    lower = text.lower().strip()
+    if not lower:
+        return False
+    return any(phrase in lower for phrase in _SENT_CONFIRMATION_PHRASES)
+
+
 def _strip_email_draft_save(tools: list) -> list:
     """Remove gmail_draft_email (and any other approval-gated save tools)."""
     return [t for t in tools if t.name not in _EMAIL_DRAFT_SAVE_TOOL_NAMES]
@@ -1573,6 +1603,14 @@ def _repl(model: str, verbose: bool) -> None:
     # language work, not deterministic Python). Cleared on save / /next /
     # /done / /reset alongside the other pending vars.
     last_pending_email_reply: dict | None = None
+    # Send-confirmation state (added 2026-05-21). Populated after a draft is
+    # saved successfully with {venue, to, contact_name, date_range,
+    # booking_period}. When Josh later says "I sent it" / "update records",
+    # the interceptor below calls update_venue_contact deterministically —
+    # no reliance on gemma reading prior turns from chat history (delayed-
+    # recovery drift observed in the 419 West live run). Cleared on save /
+    # /reset / /done / new outreach /next.
+    last_sent_outreach: dict | None = None
     while True:
         try:
             line = input(prompt).strip()
@@ -1593,6 +1631,7 @@ def _repl(model: str, verbose: bool) -> None:
             last_pre_rendered = None
             last_pre_rendered_gig_update = None
             last_pending_email_reply = None
+            last_sent_outreach = None
             print("(session memory cleared)")
             print()
             continue
@@ -1817,9 +1856,12 @@ def _repl(model: str, verbose: bool) -> None:
                         print("(warning: a previous pending draft was discarded; "
                               "new outreach task's draft is now the pending one)")
                     last_pre_rendered = pre_rendered
-                    # New outreach /next clears any stale pending
+                    # New outreach /next clears any stale pending. Also clears
+                    # last_sent_outreach so a confirmation phrase after this
+                    # /next can't update the PREVIOUS venue's row.
                     last_pre_rendered_gig_update = None
                     last_pending_email_reply = None
+                    last_sent_outreach = None
                 elif gig_pre_rendered is not None:
                     if last_pre_rendered_gig_update is not None:
                         print("(warning: a previous pending gig update was discarded; "
@@ -1916,6 +1958,7 @@ def _repl(model: str, verbose: bool) -> None:
                 last_pre_rendered = None
                 last_pre_rendered_gig_update = None
                 last_pending_email_reply = None
+                last_sent_outreach = None
                 print(f"Removed first task. {remaining} remaining in queue.")
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
@@ -1944,11 +1987,61 @@ def _repl(model: str, verbose: bool) -> None:
                 print(f"[draft] saved — draft_id={saved.get('draft_id')}")
                 if saved.get("note"):
                     print(f"        {saved['note']}")
+                # Stash deterministic venue + contact details so a later
+                # "I sent it" / "update records" turn can log the outreach
+                # without asking gemma to recall context from chat history
+                # (delayed-recovery drift fix, 2026-05-21).
+                last_sent_outreach = {
+                    "venue": pr.get("venue", ""),
+                    "to": pr.get("to", ""),
+                    "contact_name": pr.get("contact_name", ""),
+                    "date_range": pr.get("date_range", ""),
+                    "booking_period": pr.get("booking_period", ""),
+                }
+                print("(after sending from Gmail, say 'I sent it' or 'update "
+                      "records' and I'll log the outreach in the booking sheet)")
                 last_pre_rendered = None
             except Exception as exc:
                 print(f"[draft] save failed: {type(exc).__name__}: {exc}")
                 print("(pre-rendered draft kept — say 'save as Gmail draft' "
                       "again to retry, or /next to abandon)")
+            print()
+            continue
+        # Send-confirmation interceptor (added 2026-05-21): after a draft is
+        # saved, Josh sends from Gmail and says "I sent it" or "update records".
+        # Without this, gemma loses the venue context across turns and asks
+        # what venue/status to update (delayed-recovery drift seen in the 419
+        # West live run). The breadcrumb populated at draft save lets us call
+        # update_venue_contact deterministically — gemma is NOT invoked here.
+        if last_sent_outreach is not None and _has_send_confirmation(line):
+            so = last_sent_outreach
+            today = date.today().isoformat()
+            recipient = so.get("to") or so.get("contact_name") or "venue"
+            period = so.get("booking_period") or so.get("date_range") or ""
+            notes = f"{today}: Outreach email sent to {recipient}"
+            if period:
+                notes += f" re: {period}"
+            print(f"[outreach-sent] logging to xlsx — VENUE={so['venue']!r}, "
+                  f"NOTES={notes!r}")
+            try:
+                saved = update_venue_contact(
+                    venue_name=so["venue"],
+                    notes=notes,
+                )
+                if saved.get("updated"):
+                    print(f"[outreach-sent] saved — {saved.get('action')} "
+                          f"at row {saved.get('row')}")
+                    if saved.get("note"):
+                        print(f"               {saved['note']}")
+                    last_sent_outreach = None
+                else:
+                    print(f"[outreach-sent] save failed: {saved.get('error')}")
+                    print("(pending records update kept — try the confirmation "
+                          "phrase again, or /next to abandon)")
+            except Exception as exc:
+                print(f"[outreach-sent] save failed: {type(exc).__name__}: {exc}")
+                print("(pending records update kept — try the confirmation "
+                      "phrase again, or /next to abandon)")
             print()
             continue
         # Task 36 Phase 1 (2026-05-21) approval interceptor for gig-tracking:
