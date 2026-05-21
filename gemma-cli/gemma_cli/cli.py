@@ -797,6 +797,160 @@ def _collect_gig_tracking_inputs(task: str) -> tuple[str, str | None, dict | Non
     return augmented, None, pre_rendered
 
 
+# Task 36 Phase 2 (2026-05-21): email-reply gig-tracking dispatcher.
+# Handles prose tasks like "Olde Salem Brewing: update gig tracking records
+# accordingly using the following email transcript: ...". Phase 1 only covers
+# structured PDF booking confirmations; without Phase 2 these fall through to
+# gemma without `update_venue_contact` in its tool set and the model flounders.
+#
+# Shape: dispatcher extracts venue + looks up existing row deterministically;
+# gemma writes the notes summary (a language task) wrapped in markers; the
+# approval interceptor parses the marker block and calls update_venue_contact
+# directly with (stored venue, parsed notes).
+
+# Venue prefix from prose openers: optional "task N:" stripped, then the venue
+# name is everything before the next colon. Restricted to a sensible char set
+# so we don't grab a half-sentence by accident.
+_EMAIL_REPLY_VENUE_PREFIX_RE = re.compile(
+    r"^\s*(?:task\s+\d+\s*:\s*)?([A-Za-z][A-Za-z0-9 &'\-\.]{1,80}?)\s*:\s*",
+    re.IGNORECASE,
+)
+
+# Marker block gemma is instructed to wrap the proposed notes in. Captured at
+# approval time and passed verbatim as the `notes` arg to update_venue_contact.
+_PROPOSED_NOTES_BLOCK_RE = re.compile(
+    r"===\s*PROPOSED\s+NOTES\s*===\s*\n(.*?)\n===\s*END\s+NOTES\s*===",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _is_email_reply_gig_task(task: str) -> bool:
+    """Phase 2 detection: gig-tracking-keyword task that's neither a PDF
+    booking confirmation (Phase 1) nor an explicit phone-Sonnet tag.
+
+    These are the prose follow-ups — typically "Venue: update gig tracking
+    records using the email transcript below" — that fall through Phase 1's
+    PDF gate. Without this dispatcher, gemma sees a task whose keywords
+    match a save-flow but has no write tool (stripped on dispatch) and
+    no template, and tends to flounder (Olde Salem regression 2026-05-21).
+    """
+    if not _GIG_TRACKING_TASK_RE.search(task):
+        return False
+    if _PDF_CONTENT_BLOCK_RE.search(task):
+        return False  # Phase 1 owns PDF confirmations
+    if _GIG_EXPLICIT_TAG_RE.search(task):
+        return False  # explicit tags are Phase 1's domain too
+    return True
+
+
+def _extract_venue_from_email_reply_task(task: str) -> str:
+    """Pull the venue name out of a prose gig-reply task. Returns "" if the
+    prefix shape didn't match; caller should prompt Josh."""
+    m = _EMAIL_REPLY_VENUE_PREFIX_RE.match(task)
+    if not m:
+        return ""
+    candidate = m.group(1).strip()
+    # Don't grab generic words that look venue-like but aren't (e.g. "Update"
+    # in "Update gig tracking..."). If the candidate IS itself a keyword from
+    # the gig-tracking regex, reject.
+    if _GIG_TRACKING_TASK_RE.search(candidate):
+        return ""
+    return candidate
+
+
+def _prompt_email_reply_venue() -> str | None:
+    """Fallback prompt when the prose prefix didn't yield a venue name."""
+    print("(could not auto-extract venue name from task — falling back to prompt)")
+    print("Type 'cancel' to abort.")
+    try:
+        reply = input("Venue name: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if not reply or reply.lower() == "cancel":
+        return None
+    return reply
+
+
+def _collect_email_reply_inputs(task: str) -> tuple[str, str | None, dict | None]:
+    """For prose email-reply gig tasks, extract the venue + lookup the existing
+    row, then augment the task with marker-wrapped output instructions for
+    gemma. The approval interceptor parses gemma's reply for the markers and
+    saves via update_venue_contact directly.
+
+    Returns (augmented_task, cancel_reason, pending_data):
+      - (augmented_task, None, pending) → dispatch with marker instructions
+      - (task,           None, None)    → not a Phase 2 task; pass through
+      - (None,           reason, None)  → Josh cancelled venue prompt
+    """
+    if not _is_email_reply_gig_task(task):
+        return task, None, None
+
+    venue_name = _extract_venue_from_email_reply_task(task)
+    if not venue_name:
+        venue_name = _prompt_email_reply_venue() or ""
+        if not venue_name:
+            return None, "cancelled at email-reply venue prompt", None
+
+    existing = lookup_venue_contact(venue_name)
+    is_existing = bool(existing.get("found"))
+    existing_email = (existing.get("email") or "").strip() if is_existing else ""
+    existing_phone = (existing.get("phone") or "").strip() if is_existing else ""
+
+    pending = {
+        "venue_name": venue_name,
+        "is_existing": is_existing,
+        "existing_email": existing_email,
+        "existing_phone": existing_phone,
+    }
+
+    row_state = (
+        f"existing row (email={existing_email or '(none)'}, "
+        f"phone={existing_phone or '(none)'})"
+        if is_existing
+        else "(no existing row — a NEW row will be inserted on approval)"
+    )
+    augmented = (
+        f"{task}\n\n"
+        f"=== DISPATCHER NOTE — do not modify ===\n"
+        f"VENUE (locked): {venue_name}\n"
+        f"ROW STATE: {row_state}\n"
+        f"=== END DISPATCHER NOTE ===\n\n"
+        f"YOUR JOB (do these in order — do NOT call any tool):\n"
+        f"1. Read the email transcript / context in the task above.\n"
+        f"2. Write a CONCISE notes summary (2-4 sentences) capturing: the "
+        f"venue's response, any timeline they mentioned, any next-step "
+        f"intentions on either side, and a recommended follow-up reminder "
+        f"if appropriate. Be factual — quote dates and names from the "
+        f"transcript; do NOT invent details.\n"
+        f"3. Output your summary wrapped in markers EXACTLY like this "
+        f"(the dispatcher parses these literal lines):\n"
+        f"   === PROPOSED NOTES ===\n"
+        f"   <your 2-4 sentence summary here>\n"
+        f"   === END NOTES ===\n"
+        f"4. End your reply with a clear approval question on its own line, "
+        f"e.g.: 'Approve to append to {venue_name}'s row, or describe "
+        f"changes?'\n"
+        f"5. STOP. Do NOT call ANY tool on this turn. The dispatcher will "
+        f"save deterministically when Josh approves (you do NOT call "
+        f"update_venue_contact — it has been stripped from your tool set).\n"
+        f"6. If Josh requests changes, reprint the markers with the revised "
+        f"notes and re-ask for approval. Still do not call any tool."
+    )
+    return augmented, None, pending
+
+
+def _extract_proposed_notes(text: str) -> str:
+    """Pull the content between === PROPOSED NOTES === and === END NOTES ===
+    markers from a gemma reply. Returns "" if markers weren't present."""
+    if not text:
+        return ""
+    m = _PROPOSED_NOTES_BLOCK_RE.search(text)
+    if not m:
+        return ""
+    return m.group(1).strip()
+
+
 def _is_outreach_task(task: str) -> bool:
     """Trigger detection (A): explicit tag wins; broader keyword regex is fallback."""
     if _EMAIL_TASK_RE.search(task):
@@ -1338,6 +1492,13 @@ def _repl(model: str, verbose: bool) -> None:
     # approves; cleared on save / /next / /done / /reset. Mirrors
     # last_pre_rendered (email) above.
     last_pre_rendered_gig_update: dict | None = None
+    # Parallel state for Phase 2 email-reply gig updates (Task 36 Phase 2,
+    # 2026-05-21). Holds {venue_name, is_existing, ...} captured at dispatch;
+    # the notes payload is parsed from gemma's marker block at approval time
+    # (not stored deterministically because the notes summary is gemma's
+    # language work, not deterministic Python). Cleared on save / /next /
+    # /done / /reset alongside the other pending vars.
+    last_pending_email_reply: dict | None = None
     while True:
         try:
             line = input(prompt).strip()
@@ -1357,6 +1518,7 @@ def _repl(model: str, verbose: bool) -> None:
             last_next_task = None
             last_pre_rendered = None
             last_pre_rendered_gig_update = None
+            last_pending_email_reply = None
             print("(session memory cleared)")
             print()
             continue
@@ -1474,6 +1636,23 @@ def _repl(model: str, verbose: bool) -> None:
                             last_next_task = None
                             print()
                             continue
+                    # Task 36 Phase 2 (2026-05-21): email-reply gig dispatcher.
+                    # Runs only when neither outreach nor Phase 1 fired. Handles
+                    # prose "Venue: update gig tracking records using email
+                    # transcript ..." tasks. Pre-extracts venue + looks up the
+                    # row; gemma writes the notes summary; approval interceptor
+                    # parses marker block and saves. See _collect_email_reply_inputs.
+                    email_reply_pending: dict | None = None
+                    if pre_rendered is None and gig_pre_rendered is None:
+                        dispatched_task, cancel_reason, email_reply_pending = (
+                            _collect_email_reply_inputs(dispatched_task)
+                        )
+                        if cancel_reason is not None:
+                            print(f"(task not dispatched — {cancel_reason}. Stays in queue; "
+                                  "run /next again when ready.)")
+                            last_next_task = None
+                            print()
+                            continue
                     # Approval-gated save tools (gmail_draft_email +
                     # update_venue_contact) stripped on /next dispatch. The user
                     # CANNOT have approved a draft on the same turn they ran
@@ -1552,19 +1731,32 @@ def _repl(model: str, verbose: bool) -> None:
                         print("(warning: a previous pending draft was discarded; "
                               "new outreach task's draft is now the pending one)")
                     last_pre_rendered = pre_rendered
-                    # New outreach /next clears any stale gig-update pending
+                    # New outreach /next clears any stale pending
                     last_pre_rendered_gig_update = None
+                    last_pending_email_reply = None
                 elif gig_pre_rendered is not None:
                     if last_pre_rendered_gig_update is not None:
                         print("(warning: a previous pending gig update was discarded; "
                               "new gig-tracking task's update is now the pending one)")
                     last_pre_rendered_gig_update = gig_pre_rendered
-                    # New gig /next clears any stale email pending
                     last_pre_rendered = None
+                    last_pending_email_reply = None
+                elif email_reply_pending is not None:
+                    if last_pending_email_reply is not None:
+                        print("(warning: a previous pending email-reply update was "
+                              "discarded; new email-reply task's update is now the "
+                              "pending one)")
+                    # Stash gemma's reply alongside the venue so the approval
+                    # interceptor can parse the marker block on the next turn.
+                    email_reply_pending["last_reply"] = result.final_text or ""
+                    last_pending_email_reply = email_reply_pending
+                    last_pre_rendered = None
+                    last_pre_rendered_gig_update = None
                 else:
                     # Non-dispatch /next clears any stale pre-render (safety)
                     last_pre_rendered = None
                     last_pre_rendered_gig_update = None
+                    last_pending_email_reply = None
                 # Task 36 Phase 2 P2-5 (2026-05-21): false COORDINATOR REPORT
                 # detection. If the model emitted a COORDINATOR REPORT but a
                 # pre-rendered draft is now awaiting approval, the report is
@@ -1572,7 +1764,8 @@ def _repl(model: str, verbose: bool) -> None:
                 # and the report is misleading. State NOT cleared (the interceptor
                 # below still fires on Josh's next approval phrase).
                 if (last_pre_rendered is not None
-                        or last_pre_rendered_gig_update is not None) and \
+                        or last_pre_rendered_gig_update is not None
+                        or last_pending_email_reply is not None) and \
                         "COORDINATOR REPORT:" in (result.final_text or ""):
                     print(
                         "\n[runtime] WARNING: model emitted COORDINATOR REPORT, but a "
@@ -1592,6 +1785,7 @@ def _repl(model: str, verbose: bool) -> None:
                 last_next_task = None
                 last_pre_rendered = None
                 last_pre_rendered_gig_update = None
+                last_pending_email_reply = None
                 print(f"Removed first task. {remaining} remaining in queue.")
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
@@ -1659,6 +1853,49 @@ def _repl(model: str, verbose: bool) -> None:
             except Exception as exc:
                 print(f"[gig-update] save failed: {type(exc).__name__}: {exc}")
                 print("(pre-rendered update kept — say 'approve' again to retry, "
+                      "or /next to abandon)")
+            print()
+            continue
+        # Task 36 Phase 2 (2026-05-21) approval interceptor for email-reply
+        # gig-tracking. When Josh approves, parse the marker block out of the
+        # last gemma reply for the notes payload, then call update_venue_contact
+        # directly with (stored venue, parsed notes). Gemma is NOT invoked on
+        # this turn.
+        if last_pending_email_reply is not None and _has_email_draft_approval(line):
+            er = last_pending_email_reply
+            notes = _extract_proposed_notes(er.get("last_reply", ""))
+            if not notes:
+                print("[email-reply] could not find a `=== PROPOSED NOTES ===` block "
+                      "in gemma's last reply — nothing to save.")
+                print("(pending update kept — re-ask gemma to print the markers and "
+                      "approve again, or /next to abandon)")
+                print()
+                continue
+            action_label = "UPDATE" if er.get("is_existing") else "INSERT"
+            print(f"[email-reply] saving to xlsx directly — VENUE={er['venue_name']!r}, "
+                  f"ACTION={action_label}")
+            try:
+                saved = update_venue_contact(
+                    venue_name=er["venue_name"],
+                    email="",
+                    contact="",
+                    phone="",
+                    location="",
+                    notes=notes,
+                )
+                if saved.get("updated"):
+                    print(f"[email-reply] saved — {saved.get('action')} at row "
+                          f"{saved.get('row')}")
+                    if saved.get("note"):
+                        print(f"            {saved['note']}")
+                    last_pending_email_reply = None
+                else:
+                    print(f"[email-reply] save failed: {saved.get('error')}")
+                    print("(pending update kept — say 'approve' again to retry, "
+                          "or /next to abandon)")
+            except Exception as exc:
+                print(f"[email-reply] save failed: {type(exc).__name__}: {exc}")
+                print("(pending update kept — say 'approve' again to retry, "
                       "or /next to abandon)")
             print()
             continue
