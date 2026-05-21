@@ -115,6 +115,7 @@ def _run_once(
     system: str | None = None,
     tools: list | None = None,
     max_turns: int | None = None,
+    num_predict: int | None = None,
 ):
     # chat() now streams model output to stdout as it arrives — see llm.py.
     # Do NOT print result.final_text here or we'd double-print everything that
@@ -123,6 +124,8 @@ def _run_once(
     kwargs: dict = {}
     if max_turns is not None:
         kwargs["max_turns"] = max_turns
+    if num_predict is not None:
+        kwargs["num_predict"] = num_predict
     return chat(
         user_prompt=prompt,
         tools=tools if tools is not None else ALL_TOOLS,
@@ -914,37 +917,28 @@ def _collect_email_reply_inputs(task: str) -> tuple[str, str | None, dict | None
         f"existing row (email={existing_email or '(none)'}, "
         f"phone={existing_phone or '(none)'})"
         if is_existing
-        else "(no existing row — a NEW row will be inserted on approval)"
+        else "no existing row — new row will be inserted on approval"
     )
+    # Terse, format-first prompt. Gemma must emit the marker block FIRST with
+    # NO preamble — preamble eats num_predict budget and was the root cause of
+    # the Olde Salem truncation 2026-05-21. Tools are stripped to [] for this
+    # dispatch (cli.py side); the prompt reinforces that to keep gemma from
+    # attempting tool calls anyway.
     augmented = (
         f"{task}\n\n"
-        f"=== DISPATCHER NOTE — do not modify ===\n"
-        f"VENUE (locked): {venue_name}\n"
-        f"ROW STATE: {row_state}\n"
-        f"=== END DISPATCHER NOTE ===\n\n"
-        f"YOUR JOB (do these in order — do NOT call any tool):\n"
-        f"1. Read the email transcript / context in the task above.\n"
-        f"2. Write a CONCISE notes summary (2-4 sentences) capturing: the "
-        f"venue's response, any timeline they mentioned, any next-step "
-        f"intentions on either side, and a recommended follow-up reminder "
-        f"if appropriate. Be factual — quote dates and names from the "
-        f"transcript; do NOT invent details.\n"
-        f"3. Output your summary wrapped in markers EXACTLY like this "
-        f"(the dispatcher parses these literal lines):\n"
-        f"   === PROPOSED NOTES ===\n"
-        f"   <your 2-4 sentence summary here>\n"
-        f"   === END NOTES ===\n"
-        f"4. End your reply with a clear approval question on its own line, "
-        f"e.g.: 'Approve to append to {venue_name}'s row, or describe "
-        f"changes?'\n"
-        f"5. STOP. Do NOT call ANY tool on this turn. The dispatcher will "
-        f"save deterministically when Josh approves (you do NOT call "
-        f"update_venue_contact — it has been stripped from your tool set).\n"
-        f"6. If Josh requests changes, reprint the markers with the revised "
-        f"notes and re-ask for approval. Still do not call any tool.\n"
-        f"7. Do NOT emit a 'COORDINATOR REPORT' on this turn. The task is "
-        f"NOT complete until Josh approves and the dispatcher saves. "
-        f"COORDINATOR REPORT is reserved for after the save."
+        f"DISPATCHER NOTE — venue is locked to: {venue_name}\n"
+        f"Row state: {row_state}\n\n"
+        f"YOUR ENTIRE REPLY must be EXACTLY this 5-line shape, NO PREAMBLE, "
+        f"NO commentary, NO tool calls, NO COORDINATOR REPORT:\n\n"
+        f"=== PROPOSED NOTES ===\n"
+        f"<2-3 factual sentences from the transcript: their response, any "
+        f"timeline, recommended follow-up. Quote names/dates verbatim; "
+        f"invent nothing.>\n"
+        f"=== END NOTES ===\n"
+        f"Approve to append to {venue_name}'s row, or describe changes?\n\n"
+        f"Start your reply with `=== PROPOSED NOTES ===` on the very first "
+        f"line — anything before that marker is wasted output. Josh approves "
+        f"by typing 'approve'; the dispatcher saves automatically."
     )
     return augmented, None, pending
 
@@ -1685,6 +1679,16 @@ def _repl(model: str, verbose: bool) -> None:
                     # default — the template tool + pre-render keep that path
                     # tight already.
                     dispatch_max_turns = 3 if gig_pre_rendered is not None else None
+                    # Phase 2 email-reply dispatch (2026-05-21): strip tools
+                    # entirely AND bump num_predict. Gemma is just emitting a
+                    # text marker block — no tool needed, and the tool schemas
+                    # would eat ~1500 input tokens leaving little room for the
+                    # marker block to fit. max_turns=1 forces a single emission.
+                    dispatch_num_predict: int | None = None
+                    if email_reply_pending is not None:
+                        next_tools = []
+                        dispatch_max_turns = 1
+                        dispatch_num_predict = 4096
                     pre_dispatch_history_len = len(history)
                     result = _run_once(
                         _NEXT_TASK_PREFIX + dispatched_task,
@@ -1694,6 +1698,7 @@ def _repl(model: str, verbose: bool) -> None:
                         system=system_prompt,
                         tools=next_tools,
                         max_turns=dispatch_max_turns,
+                        num_predict=dispatch_num_predict,
                     )
                     # Runtime hook: if this was a venue-outreach email task and
                     # llama wrote email prose without calling the template tool,
