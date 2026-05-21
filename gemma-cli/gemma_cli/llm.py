@@ -50,6 +50,15 @@ _INLINE_TOOL_CALLS_LIST_RE = re.compile(
 # was tight when a single task hit two different inline-JSON shapes in a row.
 MAX_INLINE_CORRECTIONS = 4
 
+# Identical-call loop guard: if the model emits the same (name, args) tool call
+# this many times in a row, abort the chat() loop with an error result instead
+# of letting it spin. Added 2026-05-21 after the Olde Salem run: gemma4:26b
+# emitted `drive:list_files` 80+ times in a row (the MCP-style name doesn't
+# match the actual `drive_list_files` registration, so every call returned
+# "Unknown tool", and the model didn't notice). Without a guard, only MAX_TURNS
+# bounds the damage — and the model can fit many tool calls per turn.
+MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
+
 
 def _detect_inline_tool_call(content: str) -> str | None:
     """Return the attempted tool name if `content` contains an inline-JSON tool call.
@@ -68,6 +77,25 @@ def _detect_inline_tool_call(content: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def _normalize_tool_name(name: str, known: set[str]) -> str:
+    """Coerce model-emitted tool names to a registered tool name when possible.
+
+    gemma4:26b sometimes emits MCP-style names with a colon separator
+    (`drive:list_files`) instead of the underscored form we register
+    (`drive_list_files`). Without this coercion every call returns
+    "Unknown tool" and the model can spin retrying the same broken name.
+
+    Returns the original name unchanged if no safe normalization yields a hit.
+    """
+    if name in known:
+        return name
+    # MCP-style colon → underscore (full string)
+    candidate = name.replace(":", "_")
+    if candidate in known:
+        return candidate
+    return name
 
 
 def _ollama_chat_url() -> str:
@@ -279,16 +307,22 @@ def chat(
                 history=[m for m in messages if m.get("role") != "system"],
             )
 
+        known_tool_names = set(tool_by_name.keys())
+        loop_aborted = False
         for call in tool_calls:
             fn = call["function"]
-            name = fn["name"]
+            raw_name = fn["name"]
+            name = _normalize_tool_name(raw_name, known_tool_names)
             args = fn.get("arguments") or {}
             if isinstance(args, str):
                 args = json.loads(args)
             if verbose:
-                print(f"[tool] {name}({json.dumps(args)})")
+                if name != raw_name:
+                    print(f"[tool] {raw_name} → normalized to {name}({json.dumps(args)})")
+                else:
+                    print(f"[tool] {name}({json.dumps(args)})")
             if name not in tool_by_name:
-                result: Any = {"error": f"Unknown tool: {name}"}
+                result: Any = {"error": f"Unknown tool: {raw_name}"}
             else:
                 try:
                     result = tool_by_name[name].handler(**args)
@@ -300,6 +334,38 @@ def chat(
                     "role": "tool",
                     "content": json.dumps(result, default=str),
                 }
+            )
+            # Identical-call loop guard: if the last N invocations are the same
+            # (name + args), the model is spinning. Abort so it can't burn the
+            # MAX_TURNS budget on a single broken call. See
+            # MAX_CONSECUTIVE_IDENTICAL_CALLS docstring for context.
+            if len(invocations) >= MAX_CONSECUTIVE_IDENTICAL_CALLS:
+                tail = invocations[-MAX_CONSECUTIVE_IDENTICAL_CALLS:]
+                first = tail[0]
+                if all(
+                    inv["name"] == first["name"] and inv["args"] == first["args"]
+                    for inv in tail
+                ):
+                    loop_aborted = True
+                    if verbose:
+                        print(
+                            f"[runtime] identical tool call repeated "
+                            f"{MAX_CONSECUTIVE_IDENTICAL_CALLS}× in a row "
+                            f"({first['name']}) — aborting to prevent spin"
+                        )
+                    break
+        if loop_aborted:
+            err_text = (
+                f"(aborted: tool call `{invocations[-1]['name']}` was repeated "
+                f"{MAX_CONSECUTIVE_IDENTICAL_CALLS} times in a row with the same "
+                f"arguments — the model is stuck. Last result: "
+                f"{json.dumps(invocations[-1]['result'], default=str)[:200]})"
+            )
+            print(err_text)
+            return ChatResult(
+                final_text=err_text,
+                tool_invocations=invocations,
+                history=[m for m in messages if m.get("role") != "system"],
             )
 
     fallback_text = "(max tool-call turns reached without a final answer)"
