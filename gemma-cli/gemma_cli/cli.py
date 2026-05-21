@@ -861,10 +861,16 @@ _EMAIL_REPLY_VENUE_PREFIX_RE = re.compile(
 # earlier complete block. The 2026-05-21 Olde Salem run had gemma truncate
 # mid-flow (num_predict cap, post-task mode); the parser must be robust.
 _PROPOSED_NOTES_START_RE = re.compile(
-    r"===\s*PROPOSED\s+NOTES\s*===\s*\n", re.IGNORECASE
+    # Accept NOTES (canonical) and UPDATE/RECORD (common gemma improvisations).
+    # The Cavendish run had gemma emit `=== PROPOSED UPDATE ===` because the
+    # task body said "Update to make:" — the parser-side leniency catches that
+    # without forcing a re-prompt.
+    r"===\s*PROPOSED\s+(?:NOTES|UPDATE|RECORD)\s*===\s*\n",
+    re.IGNORECASE,
 )
 _PROPOSED_NOTES_END_RE = re.compile(
-    r"\n===\s*END\s+NOTES\s*===", re.IGNORECASE
+    r"\n===\s*END\s+(?:NOTES|UPDATE|RECORD)\s*===",
+    re.IGNORECASE,
 )
 
 
