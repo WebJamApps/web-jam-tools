@@ -12,9 +12,12 @@ A three-phase Drive housekeeper. **Always do all three phases in order. Never sk
 Authoritative storage split:
 
 - **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `gemma-tasks.txt`, `claude-opus-tasks.txt`, `SHARED.md`, `GEMMA.md`. The Coordinator (gemma4:26b) and Claude Code read these directly via local FS.
+- **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/`): all venue deliverables — pitch templates, sent outreach, DRAFTs, research, project log, social copy. Authoritative since Task 42 migration 2026-05-21.
+- **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/MariaParty/`): retired retirement-party docs (RSVP MASTER, Master Plan v2, Banner Decision, etc.). Project complete 2026-05-21 except for food scheduling — Sonnet has no involvement going forward.
 - **Drive** (My Drive root): `claude-sonnet-tasks.txt` (phone Sonnet's own queue — Drive is authoritative). Phone Sonnet also drops cross-queue task contributions into Drive root using `for-gemma-<name>.txt` / `for-opus-<name>.txt` (or the older `<queue>-YYYY-MM-DD-HHMM.txt` pattern); drive-cleanup is the bridge that pulls them into Dropbox.
+- **Drive** (`gdrive:JoshMariaMusic/`): READ-ONLY mirror of 4 Sonnet-readable files only — `Pitch Email – MidRange Cafe Bar.txt`, `Pitch Email – Originals Venues.txt`, `Pitch Email – Pub Festival Brewery.txt`, `Online Form Information Block.txt`. Dropbox-authoritative; drive-cleanup pushes Dropbox→Drive on every run so phone Sonnet always sees fresh templates.
 
-The Drive originals of `gemma-tasks.txt`, `claude-opus-tasks.txt`, and `GEMMA.md` were trashed 2026-05-21 — they had no readers (Opus and the Coordinator both read locally; phone Sonnet does not consult them). Only `SHARED.md` remains as a Drive snapshot — phone Sonnet may consult it as cross-AI rules, so drive-cleanup refreshes it from Dropbox via rclone whenever the local SHARED.md changes.
+The Drive originals of `gemma-tasks.txt`, `claude-opus-tasks.txt`, and `GEMMA.md` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only `SHARED.md` and the 4-file JMM mirror remain as Drive snapshots — phone Sonnet consults them.
 
 ## Phase 1 — Analyze (read-only)
 
@@ -88,7 +91,28 @@ Drive-only — Sonnet's queue does not move. Append to canonical `claude-sonnet-
 
 Moves / trashes / dedupes — use the appropriate Drive MCP tool. Verify high-stakes changes with a follow-up read.
 
-After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state.
+### Mirror refresh (always — runs unconditionally each invocation)
+
+After Phase 3 actions complete (or even if there were none), refresh the read-only Drive snapshots of files Dropbox-side users edit but Sonnet reads phone-side:
+
+```bash
+# Cross-AI rules (SHARED.md): single file, infrequent change
+rclone copy /home/joshua/Dropbox/web-jam-llms/SHARED.md gdrive: --update
+
+# Venue-outreach mirror: 4 Sonnet-readable templates
+rclone copy /home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/ gdrive:JoshMariaMusic/ \
+  --include "Pitch Email – MidRange Cafe Bar.txt" \
+  --include "Pitch Email – Originals Venues.txt" \
+  --include "Pitch Email – Pub Festival Brewery.txt" \
+  --include "Online Form Information Block.txt" \
+  --update
+```
+
+`rclone --update` is a no-op when source and dest match modification time + size, so the refresh is cheap. If Josh has edited a template in Dropbox since the last drive-cleanup run, the next run pushes the update to Drive and phone Sonnet sees it on its next read.
+
+**Do not push other files from `Dropbox/joshandmariamusic/JoshMariaMusic/`** — only the 4 Sonnet-readable templates above are mirrored. The rest stays Dropbox-only.
+
+After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current.
 
 ## Hard rules
 
