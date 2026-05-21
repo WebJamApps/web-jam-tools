@@ -160,12 +160,17 @@ def chat(
     verbose: bool = False,
     history: list[dict[str, Any]] | None = None,
     max_turns: int | None = None,
+    num_predict: int | None = None,
 ) -> ChatResult:
     # Task 36 Phase 2 P2-2 (2026-05-21): callers can pass `max_turns` to override
     # the module default. cli.py uses this to cap gig-tracking dispatches at 3
     # turns (down from 8) — today's drift consumed ~6 of 8 turns wandering;
     # 3 forces convergence or a clean stop.
     effective_max_turns = MAX_TURNS if max_turns is None else max_turns
+    # Phase 2 follow-up (2026-05-21): callers can also override num_predict.
+    # cli.py raises it for email-reply dispatches so the marker block fits
+    # even when gemma includes preamble before printing the markers.
+    effective_num_predict = 2048 if num_predict is None else num_predict
 
     tool_by_name = {t.name: t for t in tools}
     messages: list[dict[str, Any]] = []
@@ -208,7 +213,7 @@ def chat(
             "tools": [t.schema() for t in tools],
             "options": {
                 "temperature": DEFAULT_TEMPERATURE,
-                "num_predict": 2048,
+                "num_predict": effective_num_predict,
                 "num_ctx": DEFAULT_NUM_CTX,
             },
         }
