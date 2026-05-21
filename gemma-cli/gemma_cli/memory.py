@@ -1,15 +1,16 @@
-"""Drive-backed memory for the llama Coordinator.
+"""Drive-backed memory for the Coordinator (gemma4:26b post-2026-05-20 swap).
 
-Reads SHARED.md (cross-AI rules) and LLAMA.md (Coordinator-specific rules) from
+Reads SHARED.md (cross-AI rules) and GEMMA.md (Coordinator-specific rules) from
 Drive at REPL startup so the Coordinator has consistent context across sessions
 and editing the rules doesn't require a code change. Provides append_memory()
 for adding facts mid-session via the /remember REPL command or the remember_fact
-tool — with code-level deduplication so the model can't pollute LLAMA.md by
+tool — with code-level deduplication so the model can't pollute GEMMA.md by
 calling remember_fact on a fact that's already saved.
 
-Locations (2026-05-16):
+Locations:
 - SHARED.md: at Drive root (My Drive/SHARED.md). Whitelisted in drive-cleanup.
-- LLAMA.md: in My Drive/LLAMA/ folder.
+- GEMMA.md: in My Drive/GEMMA/ folder (renamed from LLAMA/GEMMA.md on 2026-05-20).
+  Drive file ID is unchanged; only the display name changed.
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ from gemma_cli.auth import load_credentials
 
 # Drive IDs (set 2026-05-16 when files were created).
 SHARED_MD_ID = "1X48-YCTaYScEIEJNaD4__imsMfWwMoRr"
-LLAMA_MD_ID = "1C0UV0wi_H6y5YAAojVUf7F1_hjW0xsLp"
+GEMMA_MD_ID = "1C0UV0wi_H6y5YAAojVUf7F1_hjW0xsLp"
+# Backward-compat alias — code references LLAMA_MD_ID in a few spots; keep until cleanup is complete.
+LLAMA_MD_ID = GEMMA_MD_ID
 
 _service = None
 
@@ -137,21 +140,21 @@ def find_duplicate(entry: str, file_id: str = LLAMA_MD_ID) -> str | None:
 
 
 def load_memory() -> str | None:
-    """Read SHARED.md + LLAMA.md from Drive and return the combined text.
+    """Read SHARED.md + GEMMA.md from Drive and return the combined text.
 
     Returns None if either file fails to load (network issue, missing file),
     so callers can fall back to a hardcoded SYSTEM_PROMPT.
     """
     try:
         shared = _read_file(SHARED_MD_ID)
-        llama = _read_file(LLAMA_MD_ID)
+        coordinator = _read_file(GEMMA_MD_ID)
     except Exception:
         return None
-    return f"{shared}\n\n---\n\n{llama}\n"
+    return f"{shared}\n\n---\n\n{coordinator}\n"
 
 
 def append_memory(entry: str, file_id: str = LLAMA_MD_ID) -> dict[str, Any]:
-    """Append a timestamped line to a memory file (default: LLAMA.md).
+    """Append a timestamped line to a memory file (default: GEMMA.md).
 
     Code-level deduplication: if a near-match already exists, skip the write and
     return {'saved': False, 'reason': 'already-saved', 'existing_entry': '<line>'}.
