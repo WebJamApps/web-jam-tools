@@ -4,9 +4,15 @@ Used by the REPL `/next` and `/done` commands. Reads/writes the right queue
 file deterministically via the Drive REST API so the model never has to (and
 can't hallucinate) the contents of its own queue.
 
-As of 2026-05-15 there are TWO queues, one per laptop role:
-  - llama-tasks.txt → Coordinator (Llama 3.3 70B on the desktop)
-  - gemma-tasks.txt → Media Specialist (Gemma 4 on the laptop)
+As of 2026-05-20 (post-swap) there is ONE queue:
+  - gemma-tasks.txt → Coordinator (gemma4:26b on the OMEN)
+
+History: pre-2026-05-20 there were two queues — llama-tasks.txt for the
+Llama 3.3 70B Coordinator and gemma-tasks.txt for the gemma4:e4b Media
+Specialist. The Media Specialist role was retired and llama-tasks.txt was
+renamed to gemma-tasks.txt (Drive ID 1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g
+preserved). The old gemma-tasks.txt (id 15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP)
+was trashed.
 
 Lookup is by model tag. Unknown models default to gemma-tasks.txt for safety.
 """
@@ -20,10 +26,9 @@ import re
 import requests
 
 TASKS_FILE_IDS = {
-    "llama3.3:70b": "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g",  # llama-tasks.txt (Coordinator)
-    "gemma4:e4b": "15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP",  # gemma-tasks.txt (Media Specialist)
+    "gemma4:26b": "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g",  # gemma-tasks.txt (Coordinator, post-2026-05-20)
 }
-DEFAULT_FALLBACK_FILE_ID = "15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP"
+DEFAULT_FALLBACK_FILE_ID = "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g"
 DRIVE_TOKEN_PATH = os.path.expanduser("~/.config/google-drive-mcp/tokens.json")
 DRIVE_KEYS_PATH = os.path.expanduser("~/.config/google-drive-mcp/gcp-oauth.keys.json")
 TASK_LINE_RE = re.compile(r"^task\s+\d+", re.IGNORECASE)

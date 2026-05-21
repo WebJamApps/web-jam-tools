@@ -179,7 +179,7 @@ def generate_venue_email_from_template(
     if not _DATE_DIGIT_RE.search(drange):
         # No digit anywhere → date_range is a vague phrase like "late summer or
         # fall" or "this summer". Reject it at the protocol layer so the LLM
-        # cannot bypass the LLAMA.md rule by hallucinating a vague string.
+        # cannot bypass the GEMMA.md rule by hallucinating a vague string.
         return {
             "error": (
                 f"date_range '{drange}' has no day numbers in it — it is too "

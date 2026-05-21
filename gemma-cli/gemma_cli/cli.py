@@ -126,12 +126,12 @@ def _run_once(
 
 
 def _resolve_system_prompt() -> str:
-    """Load SHARED.md + LLAMA.md from Drive. Fall back to hardcoded SYSTEM_PROMPT on failure."""
+    """Load SHARED.md + Coordinator memory from Drive. Fall back to hardcoded SYSTEM_PROMPT on failure."""
     drive_memory = load_memory()
     if drive_memory is None:
-        print("[memory] Could not load SHARED.md + LLAMA.md from Drive — using hardcoded SYSTEM_PROMPT fallback.")
+        print("[memory] Could not load Drive memory — using hardcoded SYSTEM_PROMPT fallback.")
         return SYSTEM_PROMPT
-    print(f"[memory] Loaded SHARED.md + LLAMA.md from Drive ({len(drive_memory)} chars).")
+    print(f"[memory] Loaded Drive memory ({len(drive_memory)} chars).")
     return drive_memory
 
 
@@ -316,7 +316,7 @@ _PDF_DIRECT_URL_RE = re.compile(
 # tail of a URL like `https://x.org/foo.pdf`.
 _PDF_FILENAME_RE = re.compile(r"\b([A-Za-z0-9_.-]+\.pdf)\b", re.IGNORECASE)
 # Per-PDF and total truncation caps (chars). Ollama default num_ctx is ~4k
-# tokens; SHARED.md + LLAMA.md already consume a large slice. Keep PDF
+# tokens; SHARED.md + GEMMA.md already consume a large slice. Keep PDF
 # content tight so the original task and system prompt aren't squeezed out.
 _PDF_PER_FILE_MAX_CHARS = 8000
 _PDF_TOTAL_MAX_CHARS = 20000
@@ -917,9 +917,9 @@ def _wrapper_name_for_model(model: str) -> str:
 
 
 def _role_for_model(model: str) -> str:
-    """Map a model tag to its team role per CLAUDE.md AI TEAM STRUCTURE."""
-    if model.startswith("gemma"):
-        return "Media Specialist"
+    """Map a model tag to its team role per CLAUDE.md AI TEAM STRUCTURE.
+    Post-2026-05-20 swap: gemma4:26b is the Coordinator (replaced Llama 3.3 70B).
+    Older gemma4:e4b (laptop) had been the Media Specialist; that variant is retired."""
     return "Coordinator"
 
 
@@ -930,7 +930,7 @@ def _repl(model: str, verbose: bool) -> None:
     print(f"{name} ({role} REPL — {model}). Tools: Drive, Calendar, Gmail.")
     print("Commands: /next [--force] (run next queued task; re-runs auto-switch to read-only verify mode unless --force),")
     print("          /done (remove first queued task),")
-    print("          /remember <text> (append fact to LLAMA.md), /memory (show current memory),")
+    print("          /remember <text> (append fact to your persistent memory file in Drive), /memory (show current memory),")
     print("          /reset (clear session memory), verbose (toggle tool logging),")
     print("          exit / Ctrl-D (quit).\n")
     prompt = f"{name}> "
@@ -1082,7 +1082,7 @@ def _repl(model: str, verbose: bool) -> None:
                     # Runtime hook: if this was a venue-outreach email task and
                     # llama wrote email prose without calling the template tool,
                     # re-prompt once with a strong correction. Q4 70B regularly
-                    # bypasses the LLAMA.md instruction to use the template tool;
+                    # bypasses the GEMMA.md instruction to use the template tool;
                     # this hook is the protocol-layer backstop.
                     #
                     # Skipped on pre-rendered dispatches (Option B, 2026-05-18):
