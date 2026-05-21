@@ -1679,15 +1679,15 @@ def _repl(model: str, verbose: bool) -> None:
                     # default — the template tool + pre-render keep that path
                     # tight already.
                     dispatch_max_turns = 3 if gig_pre_rendered is not None else None
-                    # Phase 2 email-reply dispatch (2026-05-21): strip tools
-                    # entirely AND bump num_predict. Gemma is just emitting a
-                    # text marker block — no tool needed, and the tool schemas
-                    # would eat ~1500 input tokens leaving little room for the
-                    # marker block to fit. max_turns=1 forces a single emission.
+                    # Phase 2 email-reply dispatch (2026-05-21): bump
+                    # num_predict so the marker block has room even if gemma
+                    # includes preamble. Tools stay with _strip_dispatch_saves
+                    # (no save tools, but read tools remain) — a fully-empty
+                    # tools list caused gemma to return empty content on the
+                    # first 2026-05-21 retry. max_turns left at default so
+                    # gemma can recover from any single-turn confusion.
                     dispatch_num_predict: int | None = None
                     if email_reply_pending is not None:
-                        next_tools = []
-                        dispatch_max_turns = 1
                         dispatch_num_predict = 4096
                     pre_dispatch_history_len = len(history)
                     result = _run_once(
@@ -1782,6 +1782,19 @@ def _repl(model: str, verbose: bool) -> None:
                         m.get("content", "") for m in dispatch_msgs
                         if m.get("role") == "assistant" and m.get("content")
                     )
+                    # Diagnostic: if gemma returned no assistant content at all,
+                    # surface that explicitly so the silent-dispatch failure
+                    # mode (2026-05-21) is visible. Without this print, the
+                    # prompt just returns and Josh has no signal.
+                    if not dispatch_assistant_text:
+                        print("\n[dispatch] gemma returned no content for this "
+                              "email-reply task — re-prompt it with: 'please print "
+                              "the === PROPOSED NOTES === block now' and try again.")
+                    elif "=== PROPOSED NOTES ===" not in dispatch_assistant_text:
+                        print("\n[dispatch] gemma replied but did NOT print the "
+                              "=== PROPOSED NOTES === block. Re-prompt it with: "
+                              "'use the marker format from the dispatch instructions' "
+                              "and try again.")
                     email_reply_pending["last_reply"] = dispatch_assistant_text
                     last_pending_email_reply = email_reply_pending
                     last_pre_rendered = None
