@@ -1131,9 +1131,18 @@ def _find_venue_email(venue: str, task: str) -> tuple[str | None, str, str | Non
     if website:
         print(f"Searching {website} for contact email...")
         web = lookup_venue_email_on_web(website)
-        email = (web.get("email") or "").strip() if isinstance(web, dict) else ""
+        # Tool returns `best_email` (the ranked top result). Falling back to
+        # `email` as well in case the tool's return shape ever evolves — until
+        # 2026-05-21 this code read only `email`, which never existed in the
+        # return dict, so the scrape result was silently dropped on every
+        # call (419 West miss surfaced this).
+        email = (
+            (web.get("best_email") or web.get("email") or "").strip()
+            if isinstance(web, dict) else ""
+        )
         if email:
-            print(f"Found email via web scrape: {email}")
+            source = web.get("source_page", "") if isinstance(web, dict) else ""
+            print(f"Found email via web scrape: {email}" + (f" (from {source})" if source else ""))
             print("(consider running update_venue_contact later to save it to the xlsx)")
             return email, "", None
         print(f"(no usable email found at {website})")
