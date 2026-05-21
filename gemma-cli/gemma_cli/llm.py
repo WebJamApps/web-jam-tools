@@ -59,6 +59,14 @@ MAX_INLINE_CORRECTIONS = 4
 # bounds the damage — and the model can fit many tool calls per turn.
 MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
 
+# Text-output line-repetition guard: if the model emits the same non-empty
+# line this many times consecutively during streaming, abort the current
+# response. Added 2026-05-21 after the 419 West run: gemma4:26b printed
+# `To: info@419west.com` (a corrupted version of the dispatcher's email)
+# 100+ times before Josh Ctrl-C'd. Tool-call loops are caught by
+# MAX_CONSECUTIVE_IDENTICAL_CALLS; this is the text-output analog.
+MAX_CONSECUTIVE_IDENTICAL_LINES = 5
+
 
 def _detect_inline_tool_call(content: str) -> str | None:
     """Return the attempted tool name if `content` contains an inline-JSON tool call.
@@ -228,6 +236,7 @@ def chat(
         collected_content = ""
         collected_tool_calls: list[dict[str, Any]] = []
         any_content_printed = False
+        line_repetition_aborted = False
         for raw_line in resp.iter_lines():
             if not raw_line:
                 continue
@@ -242,6 +251,35 @@ def chat(
                 sys.stdout.flush()
                 collected_content += piece
                 any_content_printed = True
+                # Output-line repetition guard: when piece contains a newline,
+                # check the last N completed lines. If the last
+                # MAX_CONSECUTIVE_IDENTICAL_LINES non-empty lines are all
+                # identical, abort — gemma is in a text-emission loop. See
+                # MAX_CONSECUTIVE_IDENTICAL_LINES docstring for context.
+                if "\n" in piece:
+                    completed = collected_content.split("\n")
+                    # Exclude the in-progress trailing fragment.
+                    finished_lines = completed[:-1]
+                    # Filter to non-empty (whitespace-only) lines BEFORE taking
+                    # the tail (2026-05-21 fix): the original take-then-filter
+                    # logic missed alternating "X / blank / X / blank" patterns
+                    # because blank lines diluted the last-N window. The
+                    # Cavendish run had gemma emit "=== PROPOSED UPDATE ===\n\n"
+                    # 14+ times — every other line blank, so the guard never
+                    # found N non-empties in the last N positions.
+                    non_empty = [l.rstrip() for l in finished_lines if l.strip()]
+                    if len(non_empty) >= MAX_CONSECUTIVE_IDENTICAL_LINES:
+                        tail = non_empty[-MAX_CONSECUTIVE_IDENTICAL_LINES:]
+                        if len(set(tail)) == 1:
+                            sys.stdout.write("\n")
+                            sys.stdout.flush()
+                            print(
+                                f"[runtime] output line repeated "
+                                f"{MAX_CONSECUTIVE_IDENTICAL_LINES}× consecutively "
+                                f"({tail[-1][:60]!r}) — aborting stream"
+                            )
+                            line_repetition_aborted = True
+                            break
             tc_piece = msg_chunk.get("tool_calls") or []
             if tc_piece:
                 collected_tool_calls.extend(tc_piece)

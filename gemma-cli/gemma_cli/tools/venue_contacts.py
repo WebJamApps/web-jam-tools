@@ -45,6 +45,17 @@ XLSX_PATH = "/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.x
 # regression that inserted row 81 alongside the canonical row 6.
 _FUZZY_MATCH_THRESHOLD = 0.85
 
+# Common business-suffix words stripped from venue names before fuzzy
+# comparison (added 2026-05-21). The Cavendish run inserted a duplicate row
+# because "Cavendish Brewing Company" vs "Cavendish Brewing" only scored 0.81
+# on SequenceMatcher — under the 0.85 threshold. Canonicalizing both sides
+# to "cavendish" before the ratio makes them match exactly.
+_BUSINESS_SUFFIXES = (
+    "brewing", "brewery", "company", "co", "llc", "inc", "incorporated",
+    "restaurant", "tavern", "pub", "bar", "grill", "cafe", "café", "bistro",
+    "kitchen", "winery", "distillery", "ltd", "limited",
+)
+
 # Column indexes in the xlsx (1-based per openpyxl). Verified 2026-05-18 by
 # reading the sheet headers in Sheet1 row 1: 'Name', 'Contact', 'email',
 # 'phone #', 'type of gig', 'last played', 'comments', 'location', 'Status',
@@ -73,7 +84,21 @@ _SECTION_HEADER_TOKENS = frozenset({
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 # Common venue-website pages where booking emails tend to live. Tried in order.
-_CONTACT_PATHS = ("/", "/contact", "/contact-us", "/contact/", "/booking", "/book", "/booking/", "/about", "/about-us")
+# Restaurant/brewery venues frequently put their booking email on an /events
+# or /private-events page rather than a generic /contact — added 2026-05-21
+# after the 419 West miss (info@419-west.com lived only on /events).
+_CONTACT_PATHS = (
+    "/",
+    "/contact", "/contact-us", "/contact/",
+    "/booking", "/book", "/booking/",
+    "/about", "/about-us",
+    "/events", "/events/",
+    "/private-events", "/private-events/",
+    "/private-dining", "/private-dining/",
+    "/parties", "/parties/",
+    "/host", "/host-an-event",
+    "/inquiry", "/inquiries",
+)
 
 # Emails we should never propose as a venue booker. Common webhost / privacy /
 # generic-platform addresses that appear on many sites without being the venue.
@@ -96,6 +121,38 @@ def _is_section_header(name_cell: Any) -> bool:
 
 def _normalize(s: Any) -> str:
     return str(s).strip().lower() if s is not None else ""
+
+
+def _canonicalize_venue_name(name: Any) -> str:
+    """Lowercase + strip business-suffix words + punctuation for fuzzy match.
+
+    Without this, "Cavendish Brewing" and "Cavendish Brewing Company" sit at
+    SequenceMatcher ratio ~0.81 — below the 0.85 fuzzy threshold — and the
+    second form would insert a duplicate row. Canonicalizing both sides to
+    "cavendish" before the ratio makes them match exactly.
+
+    Strips suffix words ONLY from the trailing position so a venue like
+    "Brewery Burger Bar" (hypothetical) doesn't get its leading "Brewery"
+    chopped. Iterates because a name can end in multiple suffixes
+    (e.g. "X Brewing Company" → strip "Company" → "X Brewing" → strip
+    "Brewing" → "X").
+    """
+    s = _normalize(name)
+    # Punctuation that's noise for venue matching. Don't strip apostrophes
+    # (e.g. "Bobby's") or ampersands inside the core (e.g. "Mac & Cheese"
+    # would lose its meaning) — only the obvious separators.
+    s = re.sub(r"[.,]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _BUSINESS_SUFFIXES:
+            # Only strip when there's at least one word before the suffix.
+            if s.endswith(" " + suffix):
+                s = s[: -(len(suffix) + 1)].strip()
+                changed = True
+                break
+    return s
 
 
 def _row_to_contact_dict(name: Any, row: tuple) -> dict[str, Any]:
@@ -131,6 +188,9 @@ def lookup_venue_contact(venue_name: str) -> dict[str, Any]:
     target = venue_name.strip().lower()
     if not target:
         return {"found": False, "error": "venue_name is required."}
+    # Canonical form for the fuzzy + suffix-aware substring passes. See
+    # _canonicalize_venue_name docstring (2026-05-21 Cavendish duplicate fix).
+    target_canonical = _canonicalize_venue_name(venue_name)
     try:
         wb = load_workbook(XLSX_PATH, read_only=True, data_only=True)
     except Exception as exc:
@@ -145,14 +205,32 @@ def lookup_venue_contact(venue_name: str) -> dict[str, Any]:
             if not name or _is_section_header(name):
                 continue
             row_norm = _normalize(name)
-            # Pass 1: substring (existing exact-ish behavior)
+            # Pass 1: raw substring (existing exact-ish behavior)
             if target in row_norm:
                 result = _row_to_contact_dict(name, row)
                 result["match_type"] = "exact"
                 result["query"] = venue_name
                 return result
-            # Pass 2 setup: track best fuzzy candidate for after the loop
-            similarity = SequenceMatcher(None, target, row_norm).ratio()
+            # Pass 1b: canonical substring (added 2026-05-21). After stripping
+            # business suffixes from both sides, "cavendish brewing company"
+            # collapses to "cavendish" which substring-matches "cavendish
+            # brewing"'s canonical "cavendish". Treat this as exact too — it's
+            # the same venue with a different suffix, not a fuzzy guess.
+            row_canonical = _canonicalize_venue_name(name)
+            if target_canonical and row_canonical and (
+                target_canonical in row_canonical
+                or row_canonical in target_canonical
+            ):
+                result = _row_to_contact_dict(name, row)
+                result["match_type"] = "exact"
+                result["query"] = venue_name
+                return result
+            # Pass 2 setup: fuzzy on canonical forms (suffix-insensitive). The
+            # raw forms catch Brewing↔Brewery; canonical forms catch
+            # "X" vs "X Brewing Company".
+            similarity = SequenceMatcher(
+                None, target_canonical or target, row_canonical or row_norm
+            ).ratio()
             if similarity >= _FUZZY_MATCH_THRESHOLD and (
                 best_fuzzy is None or similarity > best_fuzzy[0]
             ):
@@ -196,11 +274,20 @@ def _is_useful_email(email: str, website_domain: str | None = None) -> bool:
     local, _, domain = email_lower.partition("@")
     if not domain:
         return False
-    if domain in _EMAIL_BLOCKLIST_DOMAINS:
+    # Subdomain-aware blocklist (2026-05-21): the scraper found
+    # `<hash>@sentry.wixpress.com` on castroanoke.com — the literal-match check
+    # missed it because the blocklist had `wixpress.com` only. Treat any
+    # subdomain of a blocked domain as blocked too.
+    if any(domain == bad or domain.endswith("." + bad) for bad in _EMAIL_BLOCKLIST_DOMAINS):
         return False
     if local in _EMAIL_BLOCKLIST_LOCALPARTS:
         return False
     if any(local.startswith(bad) for bad in ("noreply", "no-reply", "donotreply")):
+        return False
+    # Machine-generated local parts (Sentry DSN public keys, tracking pixels,
+    # transactional-email signing tokens) are 32+ chars of pure hex. Real
+    # booker addresses are short and contain non-hex letters.
+    if len(local) >= 32 and all(c in "0123456789abcdef" for c in local):
         return False
     return True
 
@@ -246,8 +333,16 @@ def lookup_venue_email_on_web(website_url: str) -> dict[str, Any]:
                     emails_found[addr] = candidate
         except Exception:
             pass
-        if emails_found:
-            break  # found at least one — stop early; no need to scrape more pages
+        # Stop early ONLY if we've found a same-domain email — the venue's own
+        # address is the canonical booker. If we've only found third-party
+        # gmail/yahoo addresses (often dev/designer credits embedded in JS, or
+        # personal addresses unrelated to bookings), keep scanning the rest of
+        # _CONTACT_PATHS — a real venue email may live on /events or similar.
+        # 2026-05-21: 419 West had impallari@gmail.com (typography designer)
+        # in homepage JS; the old break here caused us to miss info@419-west.com
+        # which was on /events.
+        if any(addr.split("@", 1)[1].lower() == domain for addr in emails_found):
+            break
 
     if not emails_found:
         return {
