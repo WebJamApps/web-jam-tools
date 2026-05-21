@@ -1,65 +1,43 @@
-"""Persistent task queue support — model-aware.
+"""Persistent task queue support — model-aware, local-FS backed.
 
 Used by the REPL `/next` and `/done` commands. Reads/writes the right queue
-file deterministically via the Drive REST API so the model never has to (and
-can't hallucinate) the contents of its own queue.
+file from the local Dropbox-mirrored folder so the model never has to (and
+can't hallucinate) the contents of its own queue. Migrated 2026-05-21 from
+the Drive REST API to local filesystem — see project-web-jam-llms-migration-plan
+for rationale and the cross-store bridge that keeps Sonnet's Drive writes
+flowing into these files.
 
-As of 2026-05-20 (post-swap) there is ONE queue:
+As of 2026-05-20 (post-Coordinator-swap) there is ONE queue:
   - gemma-tasks.txt → Coordinator (gemma4:26b on the OMEN)
 
 History: pre-2026-05-20 there were two queues — llama-tasks.txt for the
 Llama 3.3 70B Coordinator and gemma-tasks.txt for the gemma4:e4b Media
 Specialist. The Media Specialist role was retired and llama-tasks.txt was
-renamed to gemma-tasks.txt (Drive ID 1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g
-preserved). The old gemma-tasks.txt (id 15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP)
-was trashed.
+renamed to gemma-tasks.txt. Pre-2026-05-21 these lived on Drive; now they
+live at /home/joshua/Dropbox/web-jam-llms/ (symlinked into WebJamApps).
 
 Lookup is by model tag. Unknown models default to gemma-tasks.txt for safety.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 
-import requests
+# Local-FS queue store (migrated from Drive 2026-05-21). The Dropbox folder is
+# symlinked into /home/joshua/WebJamApps/web-jam-llms for VSCode visibility;
+# either path resolves to the same files via the Dropbox daemon's sync.
+QUEUE_DIR = "/home/joshua/Dropbox/web-jam-llms"
 
-TASKS_FILE_IDS = {
-    "gemma4:26b": "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g",  # gemma-tasks.txt (Coordinator, post-2026-05-20)
+TASKS_FILE_PATHS = {
+    "gemma4:26b": f"{QUEUE_DIR}/gemma-tasks.txt",  # Coordinator (post-2026-05-20)
 }
-DEFAULT_FALLBACK_FILE_ID = "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g"
-DRIVE_TOKEN_PATH = os.path.expanduser("~/.config/google-drive-mcp/tokens.json")
-DRIVE_KEYS_PATH = os.path.expanduser("~/.config/google-drive-mcp/gcp-oauth.keys.json")
+DEFAULT_FALLBACK_PATH = f"{QUEUE_DIR}/gemma-tasks.txt"
 TASK_LINE_RE = re.compile(r"^task\s+\d+", re.IGNORECASE)
 
 
-def _file_id_for_model(model: str) -> str:
-    return TASKS_FILE_IDS.get(model, DEFAULT_FALLBACK_FILE_ID)
-
-
-def _drive_access_token() -> str:
-    with open(DRIVE_TOKEN_PATH) as f:
-        tokens = json.load(f)
-    with open(DRIVE_KEYS_PATH) as f:
-        keys_raw = json.load(f)
-    keys = keys_raw.get("installed") or keys_raw.get("web") or {}
-    resp = requests.post(
-        "https://oauth2.googleapis.com/token",
-        data={
-            "client_id": keys["client_id"],
-            "client_secret": keys["client_secret"],
-            "refresh_token": tokens["refresh_token"],
-            "grant_type": "refresh_token",
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    new_token = resp.json()["access_token"]
-    tokens["access_token"] = new_token
-    with open(DRIVE_TOKEN_PATH, "w") as f:
-        json.dump(tokens, f, indent=2)
-    return new_token
+def _path_for_model(model: str) -> str:
+    return TASKS_FILE_PATHS.get(model, DEFAULT_FALLBACK_PATH)
 
 
 def _unmojibake(text: str, max_passes: int = 3) -> str:
@@ -70,6 +48,10 @@ def _unmojibake(text: str, max_passes: int = 3) -> str:
     the file content. Each pass: encode as Latin-1, decode as UTF-8. Stop when
     the heuristic mojibake-marker count stops decreasing or when the round-trip
     fails — so clean text and legitimate single accented chars are never modified.
+
+    Kept post-migration (2026-05-21) because the cross-store bridge still pulls
+    phone-Sonnet-authored task entries from Drive into these files; mojibake
+    introduced upstream still needs unwinding on the way out.
     """
     def score(s: str) -> int:
         # UTF-8 multi-byte chars decoded as Latin-1 always produce a RUN of
@@ -96,37 +78,29 @@ def _unmojibake(text: str, max_passes: int = 3) -> str:
     return text
 
 
-def _download(model: str) -> str:
-    token = _drive_access_token()
-    file_id = _file_id_for_model(model)
-    resp = requests.get(
-        f"https://www.googleapis.com/drive/v3/files/{file_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        params={"alt": "media"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    # Decode as UTF-8 explicitly. The Drive API serves plain-text files without
-    # a charset in the Content-Type header, so `resp.text` would fall back to
-    # ISO-8859-1 per RFC 2616 and mangle any multi-byte UTF-8 (em-dashes,
-    # smart quotes, etc.) into `ÃÂ¢` mojibake when printed to a UTF-8 terminal.
-    # Then run a defensive unmojibake pass for files whose contents were
-    # already double/triple-encoded at upload time (phone Sonnet writes
-    # mojibaked task files; the unwind is idempotent on clean text).
-    return _unmojibake(resp.content.decode("utf-8"))
+def _read_tasks_file(model: str) -> str:
+    """Read the queue file for `model` and defensively unwind any mojibake."""
+    path = _path_for_model(model)
+    with open(path, encoding="utf-8") as f:
+        return _unmojibake(f.read())
 
 
-def _upload(model: str, content: str) -> None:
-    token = _drive_access_token()
-    file_id = _file_id_for_model(model)
-    resp = requests.patch(
-        f"https://www.googleapis.com/upload/drive/v3/files/{file_id}",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "text/plain"},
-        params={"uploadType": "media"},
-        data=content.encode("utf-8"),
-        timeout=30,
-    )
-    resp.raise_for_status()
+def _atomic_write(path: str, content: str) -> None:
+    """Write `content` to `path` atomically: write to `<path>.tmp`, fsync, rename.
+
+    `os.replace` is atomic on POSIX within the same filesystem, so a crash
+    mid-write leaves either the original file intact or the new file fully
+    written — never a partial state. fsync ensures the data is durable on
+    disk before the rename, so a power loss between rename and final flush
+    can't surface a zero-byte file. Pattern recommended in the migration plan
+    (project-web-jam-llms-migration-plan) for any future write paths too.
+    """
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def _parse_tasks(text: str) -> list[tuple[int, str]]:
@@ -141,7 +115,7 @@ def _parse_tasks(text: str) -> list[tuple[int, str]]:
 
 def get_next_task(model: str) -> tuple[str | None, int]:
     """Return (next_task_text_or_None, total_count_in_queue) for this model's queue."""
-    text = _download(model)
+    text = _read_tasks_file(model)
     tasks = _parse_tasks(text)
     if not tasks:
         return None, 0
@@ -150,7 +124,7 @@ def get_next_task(model: str) -> tuple[str | None, int]:
 
 def delete_first_task(model: str) -> int:
     """Delete the first task from this model's queue. Return remaining count."""
-    text = _download(model)
+    text = _read_tasks_file(model)
     tasks = _parse_tasks(text)
     if not tasks:
         return 0
@@ -163,5 +137,5 @@ def delete_first_task(model: str) -> int:
     while new_lines and new_lines[-1].strip() == "":
         new_lines.pop()
     new_text = "\n".join(new_lines) + "\n"
-    _upload(model, new_text)
+    _atomic_write(_path_for_model(model), new_text)
     return len(tasks) - 1
