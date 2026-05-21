@@ -17,26 +17,85 @@ import requests
 
 
 # Detects inline JSON that the model wrote in reply text when it should have
-# emitted a structured tool_call. Pattern: `{"name": "X", "parameters": {...}}`
-# or with "arguments" instead of "parameters". Llama 3.3 70B regresses to this
-# pattern on the 2nd/3rd tool call in a multi-step task — prompt-only fixes
-# don't reliably prevent it, so we detect + re-prompt at the protocol layer.
-_INLINE_TOOL_CALL_RE = re.compile(
+# emitted a structured tool_call. Llama 3.3 70B (and to a lesser extent
+# gemma4:26b) regresses to writing tool calls as text on 2nd/3rd turns of a
+# multi-step task — prompt-only fixes don't reliably prevent it, so we detect
+# + re-prompt at the protocol layer.
+#
+# Task 36 Phase 2 P2-4 (2026-05-21): broadened from a single bare-shape regex
+# to three patterns so we catch more inline-JSON shapes:
+#   - bare:    {"name": "X", "parameters": {...}} or arguments
+#   - wrapped: "function": {"name": "X", ...}  (OpenAI / Ollama wrap)
+#   - list:    "tool_calls": [{"function": {"name": "X", ...}}]
+# The 2026-05-20 live test caught add_gig_booking via the bare pattern but
+# missed a drive_list_files emission that used the wrapped shape; this catches
+# both. ANY tool name is matched (no whitelist); the detector returns the
+# attempted name for the corrective re-prompt.
+_INLINE_TOOL_CALL_BARE_RE = re.compile(
     r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"(?:parameters|arguments)"\s*:\s*\{',
+    re.DOTALL,
+)
+_INLINE_TOOL_CALL_WRAPPED_RE = re.compile(
+    r'"function"\s*:\s*\{\s*"name"\s*:\s*"(\w+)"',
+    re.DOTALL,
+)
+_INLINE_TOOL_CALLS_LIST_RE = re.compile(
+    r'"tool_calls"\s*:\s*\[\s*\{[^}]*?"name"\s*:\s*"(\w+)"',
     re.DOTALL,
 )
 
 # Cap retries so a model that keeps emitting inline JSON doesn't burn the whole
-# MAX_TURNS budget on corrections.
-MAX_INLINE_CORRECTIONS = 2
+# MAX_TURNS budget on corrections. Bumped from 2 → 4 on 2026-05-21 (Task 36
+# Phase 2 P2-4) — the broader detector triggers more often, and 2 corrections
+# was tight when a single task hit two different inline-JSON shapes in a row.
+MAX_INLINE_CORRECTIONS = 4
+
+# Identical-call loop guard: if the model emits the same (name, args) tool call
+# this many times in a row, abort the chat() loop with an error result instead
+# of letting it spin. Added 2026-05-21 after the Olde Salem run: gemma4:26b
+# emitted `drive:list_files` 80+ times in a row (the MCP-style name doesn't
+# match the actual `drive_list_files` registration, so every call returned
+# "Unknown tool", and the model didn't notice). Without a guard, only MAX_TURNS
+# bounds the damage — and the model can fit many tool calls per turn.
+MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
 
 
 def _detect_inline_tool_call(content: str) -> str | None:
-    """Return the attempted tool name if `content` contains an inline-JSON tool call."""
+    """Return the attempted tool name if `content` contains an inline-JSON tool call.
+
+    Checks three JSON shapes (bare, wrapped, tool_calls-list); returns the
+    first match's name. Returns None if no shape matched.
+    """
     if not content:
         return None
-    match = _INLINE_TOOL_CALL_RE.search(content)
-    return match.group(1) if match else None
+    for pattern in (
+        _INLINE_TOOL_CALL_BARE_RE,
+        _INLINE_TOOL_CALL_WRAPPED_RE,
+        _INLINE_TOOL_CALLS_LIST_RE,
+    ):
+        match = pattern.search(content)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _normalize_tool_name(name: str, known: set[str]) -> str:
+    """Coerce model-emitted tool names to a registered tool name when possible.
+
+    gemma4:26b sometimes emits MCP-style names with a colon separator
+    (`drive:list_files`) instead of the underscored form we register
+    (`drive_list_files`). Without this coercion every call returns
+    "Unknown tool" and the model can spin retrying the same broken name.
+
+    Returns the original name unchanged if no safe normalization yields a hit.
+    """
+    if name in known:
+        return name
+    # MCP-style colon → underscore (full string)
+    candidate = name.replace(":", "_")
+    if candidate in known:
+        return candidate
+    return name
 
 
 def _ollama_chat_url() -> str:
@@ -100,7 +159,19 @@ def chat(
     model: str = DEFAULT_MODEL,
     verbose: bool = False,
     history: list[dict[str, Any]] | None = None,
+    max_turns: int | None = None,
+    num_predict: int | None = None,
 ) -> ChatResult:
+    # Task 36 Phase 2 P2-2 (2026-05-21): callers can pass `max_turns` to override
+    # the module default. cli.py uses this to cap gig-tracking dispatches at 3
+    # turns (down from 8) — today's drift consumed ~6 of 8 turns wandering;
+    # 3 forces convergence or a clean stop.
+    effective_max_turns = MAX_TURNS if max_turns is None else max_turns
+    # Phase 2 follow-up (2026-05-21): callers can also override num_predict.
+    # cli.py raises it for email-reply dispatches so the marker block fits
+    # even when gemma includes preamble before printing the markers.
+    effective_num_predict = 2048 if num_predict is None else num_predict
+
     tool_by_name = {t.name: t for t in tools}
     messages: list[dict[str, Any]] = []
     if system:
@@ -111,8 +182,30 @@ def chat(
 
     invocations: list[dict[str, Any]] = []
     inline_corrections = 0
+    # Task 36 Phase 2 P2-1 (2026-05-21): post-task mode. Once the model emits a
+    # COORDINATOR REPORT, subsequent tool-call rounds are capped to 1 to prevent
+    # post-task wandering (the 2026-05-20 Solstice destructive write happened
+    # 3+ turns AFTER the Apocalypse task had been declared done). Tracked per
+    # chat() call — fresh for each /next dispatch.
+    coordinator_report_emitted = False
 
-    for turn in range(MAX_TURNS):
+    for turn in range(effective_max_turns):
+        if coordinator_report_emitted:
+            # Post-task mode: hard stop immediately after the turn that emitted
+            # the COORDINATOR REPORT. Without this, a model that reported done
+            # but kept tool-calling (e.g. trivial `remember_fact` follow-ups,
+            # or — far worse — a destructive write to an unrelated venue, as
+            # seen 2026-05-20 with Solstice) could drift 4-5 turns later.
+            if verbose:
+                print(
+                    "[runtime] post-task mode — COORDINATOR REPORT already emitted; "
+                    "stopping the iteration loop to prevent drift."
+                )
+            return ChatResult(
+                final_text="",  # already streamed; no synthesis needed
+                tool_invocations=invocations,
+                history=[m for m in messages if m.get("role") != "system"],
+            )
         body = {
             "model": model,
             "stream": True,
@@ -120,7 +213,7 @@ def chat(
             "tools": [t.schema() for t in tools],
             "options": {
                 "temperature": DEFAULT_TEMPERATURE,
-                "num_predict": 2048,
+                "num_predict": effective_num_predict,
                 "num_ctx": DEFAULT_NUM_CTX,
             },
         }
@@ -163,6 +256,15 @@ def chat(
             "tool_calls": collected_tool_calls,
         }
         messages.append(msg)
+
+        # P2-1: if the model emitted a COORDINATOR REPORT this turn (regardless
+        # of whether it also emitted tool calls), arm post-task mode so the
+        # NEXT iteration of this loop is the last. A text-only COORDINATOR
+        # REPORT will fall through to the return below anyway; this only
+        # matters when the model both reported AND tool-called in the same
+        # turn (the 2026-05-20 Apocalypse → Solstice drift pattern).
+        if "COORDINATOR REPORT:" in collected_content:
+            coordinator_report_emitted = True
 
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
@@ -210,16 +312,22 @@ def chat(
                 history=[m for m in messages if m.get("role") != "system"],
             )
 
+        known_tool_names = set(tool_by_name.keys())
+        loop_aborted = False
         for call in tool_calls:
             fn = call["function"]
-            name = fn["name"]
+            raw_name = fn["name"]
+            name = _normalize_tool_name(raw_name, known_tool_names)
             args = fn.get("arguments") or {}
             if isinstance(args, str):
                 args = json.loads(args)
             if verbose:
-                print(f"[tool] {name}({json.dumps(args)})")
+                if name != raw_name:
+                    print(f"[tool] {raw_name} → normalized to {name}({json.dumps(args)})")
+                else:
+                    print(f"[tool] {name}({json.dumps(args)})")
             if name not in tool_by_name:
-                result: Any = {"error": f"Unknown tool: {name}"}
+                result: Any = {"error": f"Unknown tool: {raw_name}"}
             else:
                 try:
                     result = tool_by_name[name].handler(**args)
@@ -231,6 +339,38 @@ def chat(
                     "role": "tool",
                     "content": json.dumps(result, default=str),
                 }
+            )
+            # Identical-call loop guard: if the last N invocations are the same
+            # (name + args), the model is spinning. Abort so it can't burn the
+            # MAX_TURNS budget on a single broken call. See
+            # MAX_CONSECUTIVE_IDENTICAL_CALLS docstring for context.
+            if len(invocations) >= MAX_CONSECUTIVE_IDENTICAL_CALLS:
+                tail = invocations[-MAX_CONSECUTIVE_IDENTICAL_CALLS:]
+                first = tail[0]
+                if all(
+                    inv["name"] == first["name"] and inv["args"] == first["args"]
+                    for inv in tail
+                ):
+                    loop_aborted = True
+                    if verbose:
+                        print(
+                            f"[runtime] identical tool call repeated "
+                            f"{MAX_CONSECUTIVE_IDENTICAL_CALLS}× in a row "
+                            f"({first['name']}) — aborting to prevent spin"
+                        )
+                    break
+        if loop_aborted:
+            err_text = (
+                f"(aborted: tool call `{invocations[-1]['name']}` was repeated "
+                f"{MAX_CONSECUTIVE_IDENTICAL_CALLS} times in a row with the same "
+                f"arguments — the model is stuck. Last result: "
+                f"{json.dumps(invocations[-1]['result'], default=str)[:200]})"
+            )
+            print(err_text)
+            return ChatResult(
+                final_text=err_text,
+                tool_invocations=invocations,
+                history=[m for m in messages if m.get("role") != "system"],
             )
 
     fallback_text = "(max tool-call turns reached without a final answer)"
