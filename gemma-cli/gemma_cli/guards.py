@@ -33,11 +33,9 @@ PROTECTED_FILES: dict[str, str] = {
     "1Rz5yi81zy5ohwirUJsliF1KONIXUIQQL": (
         "claude-opus-tasks.txt at Drive root — canonical task queue for Claude Opus."
     ),
-    "15bfIDf4pJVEwbDIO4dMejLGg0hB-xFMP": (
-        "gemma-tasks.txt at Drive root — canonical task queue for Gemma (Media Specialist)."
-    ),
     "1PiobgF2vPhimDtTpQnjkWSaNQ6zaYI-g": (
-        "llama-tasks.txt at Drive root — canonical task queue for Llama 3.3 70B (Coordinator)."
+        "gemma-tasks.txt at Drive root — canonical task queue for the Coordinator (gemma4:26b on OMEN). "
+        "Renamed from llama-tasks.txt on 2026-05-20 during the Coordinator swap; Drive ID unchanged."
     ),
     "1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ": (
         "claude-sonnet-tasks.txt at Drive root — canonical task queue for Claude Sonnet on the phone app."

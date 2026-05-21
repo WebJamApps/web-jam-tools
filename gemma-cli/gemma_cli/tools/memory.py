@@ -2,7 +2,7 @@
 
 Llama calls remember_fact when Josh provides durable context (rules, decisions,
 contact details, factual corrections) that should survive into future sessions.
-The tool appends a timestamped line to LLAMA.md in Drive.
+The tool appends a timestamped line to GEMMA.md in Drive.
 
 Manual saves use the /remember REPL command instead — see cli.py.
 """
@@ -16,7 +16,7 @@ from gemma_cli.memory import append_memory
 
 
 def remember_fact(fact: str) -> dict[str, Any]:
-    """Append a fact to LLAMA.md so it survives into future sessions.
+    """Append a fact to GEMMA.md so it survives into future sessions.
 
     append_memory() performs code-level deduplication. If a near-match already
     exists, this returns {'saved': False, 'reason': 'already-saved', 'existing_entry': ...}
@@ -30,7 +30,7 @@ def remember_fact(fact: str) -> dict[str, Any]:
             "fact": fact,
             "reason": result.get("reason", "skipped"),
             "existing_entry": result.get("existing_entry"),
-            "note": "A near-duplicate is already saved in LLAMA.md. Answer Josh from the existing entry instead of saving again.",
+            "note": "A near-duplicate is already saved in GEMMA.md. Answer Josh from the existing entry instead of saving again.",
         }
     return {
         "saved": True,
@@ -44,11 +44,11 @@ TOOLS: list[Tool] = [
     Tool(
         name="remember_fact",
         description=(
-            "Append a single durable fact to your persistent memory (LLAMA.md in Drive). "
+            "Append a single durable fact to your persistent memory (GEMMA.md in Drive). "
             "Call this when Josh gives you context that should survive past this session: "
             "rules ('from now on, always X'), factual corrections, decisions about how to proceed, "
             "names/contacts/dates you'll need next session. Do NOT save ephemeral chat state, "
-            "in-progress task details, or things that are already in SHARED.md/LLAMA.md."
+            "in-progress task details, or things that are already in SHARED.md/GEMMA.md."
         ),
         parameters={
             "type": "object",
