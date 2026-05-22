@@ -91,6 +91,24 @@ Drive-only — Sonnet's queue does not move. Append to canonical `claude-sonnet-
 
 Moves / trashes / dedupes — use the appropriate Drive MCP tool. Verify high-stakes changes with a follow-up read.
 
+### Queue renumber (Phase 1 surfacing → Phase 3 execute, added 2026-05-22)
+
+If Phase 1 analysis spots a canonical queue with non-step-multiple task numbers (e.g. tasks numbered `2, 21, 22, 24, 27, 29, ...` — gaps from deletions or non-uniform spacing), surface a renumber-to-5 proposal as a Phase 2 finding. On approval, run:
+
+```bash
+# dry-run first (recommended)
+~/WebJamApps/web-jam-tools/scripts/renumber-queue.py \
+  --path ~/Dropbox/web-jam-llms/claude-opus-tasks.txt --dry-run
+
+# apply after Josh approves the plan
+~/WebJamApps/web-jam-tools/scripts/renumber-queue.py \
+  --path ~/Dropbox/web-jam-llms/claude-opus-tasks.txt
+```
+
+`--model gemma4:26b` works too (resolves to the gemma-tasks.txt path). Step defaults to 5 starting at 0; pass `--step` / `--start` for other shapes. Atomic write under the hood (the script imports `gemma_cli.queue`, which uses `.tmp + os.replace`).
+
+Surfacing rule: propose renumber when the queue has more than 2 tasks AND the existing numbers are not already at step `--step` starting at `--start`. Skip if Josh would have to renumber every single task for trivial reason (cosmetic; not worth churning Dropbox revision history daily).
+
 ### Mirror refresh (always — runs unconditionally each invocation)
 
 After Phase 3 actions complete (or even if there were none), refresh the read-only Drive snapshots of files Dropbox-side users edit but Sonnet reads phone-side:
