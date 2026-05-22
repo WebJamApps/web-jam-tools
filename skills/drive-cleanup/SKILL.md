@@ -111,6 +111,27 @@ Surfacing rule: propose renumber when the queue has more than 2 tasks AND the ex
 
 **Scope:** the renumber utility only handles Dropbox-resident queues (`gemma-tasks.txt`, `claude-opus-tasks.txt`). **`claude-sonnet-tasks.txt` (on Drive) is intentionally out of scope** — would require an rclone download / renumber / upload roundtrip the script doesn't do. Josh's call 2026-05-22; revisit if Sonnet's queue ever ends up with messy numbering that's worth fixing.
 
+**`claude-opus-tasks.txt` ONLY — headline compression pass (added 2026-05-22):** when renumbering the Opus queue, also compress long task bodies. Many Opus tasks are multi-paragraph specs Josh hand-wrote (Task 34 is ~30 lines, Task 35 has phases A-F, etc.) — they bloat the queue file and make scanning it tedious. The compression workflow:
+
+1. For each task body with more than ~3 lines of detail, **save the full body to a memory file** at `~/.claude/projects/-home-joshua-WebJamApps-JaMmusic/memory/task_spec_<content-derived-slug>.md` with frontmatter type `project`. The slug derives from the task's CONTENT (e.g. `task_spec_elca_devotional_source_swap`), NOT its number — task numbers change with renumber, so number-based slugs go stale.
+2. **Replace the task body in the queue with a one-line headline** plus a `[[task-spec-<slug>]]` cross-ref. Example before:
+   ```text
+   Task 21 (added 2026-05-16): Switch the daily CollegeLutheran devotional source from ELCA Prayer Ventures to a different ELCA resource. Current setup pulls from Prayer Ventures and stores day-N files in `My Drive/CollegeLutheran/devotional/PV_<YYYY-MM>/` (e.g. PV_2026-05 has day-01 through day-31). Josh wants to swap to another official ELCA resource.
+   [+ several more paragraphs of detail]
+   ```
+   After:
+   ```text
+   Task 5 (added 2026-05-16): Swap CL daily devotional source from ELCA Prayer Ventures to another official ELCA resource. [[task-spec-elca-devotional-source-swap]]
+   ```
+3. The memory file holds the FULL details. When Josh later says "start Task 5", load `[[task-spec-elca-devotional-source-swap]]` first to recover context, then execute.
+4. Add the memory file to `MEMORY.md` so it's loaded into context proactively when relevant (same pattern as project memories).
+
+Skip compression for tasks already short (1-2 sentence headlines) — those are already in the desired shape.
+
+Also: when Josh later asks to **delete a task**, leave the memory file in place. Memory files are history; only the queue entry goes away. (If a task spec becomes truly obsolete and Josh wants the memory pruned, that's a separate `/remember` cleanup.)
+
+Apply this compression ONLY to `claude-opus-tasks.txt` — gemma's queue tasks tend to be short operational items that don't need compression, and gemma doesn't use the same memory system.
+
 ### Mirror refresh (always — runs unconditionally each invocation)
 
 After Phase 3 actions complete (or even if there were none), refresh the read-only Drive snapshots of files Dropbox-side users edit but Sonnet reads phone-side:
