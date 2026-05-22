@@ -109,6 +109,8 @@ If Phase 1 analysis spots a canonical queue with non-step-multiple task numbers 
 
 Surfacing rule: propose renumber when the queue has more than 2 tasks AND the existing numbers are not already at step `--step` starting at `--start`. Skip if Josh would have to renumber every single task for trivial reason (cosmetic; not worth churning Dropbox revision history daily).
 
+**Scope:** the renumber utility only handles Dropbox-resident queues (`gemma-tasks.txt`, `claude-opus-tasks.txt`). **`claude-sonnet-tasks.txt` (on Drive) is intentionally out of scope** — would require an rclone download / renumber / upload roundtrip the script doesn't do. Josh's call 2026-05-22; revisit if Sonnet's queue ever ends up with messy numbering that's worth fixing.
+
 ### Mirror refresh (always — runs unconditionally each invocation)
 
 After Phase 3 actions complete (or even if there were none), refresh the read-only Drive snapshots of files Dropbox-side users edit but Sonnet reads phone-side:
