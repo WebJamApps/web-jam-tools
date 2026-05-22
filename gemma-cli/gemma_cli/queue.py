@@ -122,6 +122,76 @@ def get_next_task(model: str) -> tuple[str | None, int]:
     return tasks[0][1], len(tasks)
 
 
+def renumber_tasks_in_file(
+    path: str, step: int = 5, start: int = 0, dry_run: bool = False
+) -> dict:
+    """Rewrite task headers in `path` to step-multiples (Task 0, Task 5, Task 10, …).
+
+    Useful after deletions leave gaps (Task 5, 28, 36 …) or before inserting
+    new tasks between existing ones. Only rewrites the HEADER line of each
+    task block — task bodies that reference "Task N" elsewhere are untouched.
+
+    Args:
+        path: absolute path to the queue file.
+        step: spacing between consecutive task numbers (default 5).
+        start: number for the first task (default 0).
+        dry_run: if True, return the plan without writing.
+
+    Returns a dict:
+        {
+          "path": <path>,
+          "before": [old numbers in file order],
+          "after":  [new numbers in file order],
+          "written": True if file was modified, False if no-op or dry-run,
+        }
+
+    No-op (returns written=False) when before == after (already step-multiples
+    starting at `start`). Pause-for-approval semantics: callers should run
+    once with dry_run=True, show the user the plan, then re-run with
+    dry_run=False on approval.
+    """
+    with open(path, encoding="utf-8") as f:
+        text = _unmojibake(f.read())
+    lines = text.splitlines(keepends=False)
+    task_starts = [i for i, line in enumerate(lines) if TASK_LINE_RE.match(line.strip())]
+
+    before_nums: list[int] = []
+    for idx in task_starts:
+        m = re.match(r"^\s*task\s+(\d+)", lines[idx], re.IGNORECASE)
+        if m:
+            before_nums.append(int(m.group(1)))
+
+    after_nums = [start + i * step for i in range(len(task_starts))]
+
+    if before_nums == after_nums:
+        return {"path": path, "before": before_nums, "after": after_nums, "written": False}
+    if dry_run:
+        return {"path": path, "before": before_nums, "after": after_nums, "written": False}
+
+    new_lines = list(lines)
+    for line_idx, new_num in zip(task_starts, after_nums):
+        # Preserve leading whitespace, the original "Task" / "task" case, the
+        # spacing between "Task" and the number, and everything after the number.
+        m = re.match(r"^(\s*)(task)(\s+)\d+(.*)$", new_lines[line_idx], re.IGNORECASE)
+        if m:
+            new_lines[line_idx] = f"{m.group(1)}{m.group(2)}{m.group(3)}{new_num}{m.group(4)}"
+
+    new_text = "\n".join(new_lines)
+    if text.endswith("\n"):
+        new_text += "\n"
+    _atomic_write(path, new_text)
+    return {"path": path, "before": before_nums, "after": after_nums, "written": True}
+
+
+def renumber_tasks(
+    model: str, step: int = 5, start: int = 0, dry_run: bool = False
+) -> dict:
+    """Renumber the queue for `model` to step-multiples. See renumber_tasks_in_file."""
+    return renumber_tasks_in_file(
+        _path_for_model(model), step=step, start=start, dry_run=dry_run
+    )
+
+
 def delete_first_task(model: str) -> int:
     """Delete the first task from this model's queue. Return remaining count."""
     text = _read_tasks_file(model)
