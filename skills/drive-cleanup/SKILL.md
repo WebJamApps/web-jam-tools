@@ -39,7 +39,7 @@ Use the `mcp__google-drive__*` tools. Check at minimum:
 - **Misplaced deliverable artifacts** at root (pitch emails, drafts, EPK material) — should live in `JoshMariaMusic`, `CollegeLutheran`, or `MariaParty` per the file-placement rule.
 - **Stray ephemeral files** (timestamped backups older than 7 days, log dumps) — flag for trash.
 - **Allowed non-queue files at root (whitelist — DO NOT flag):**
-  - `processed-*` files — bridge audit trail. Keep them.
+  - `processed-*` files — legacy audit-trail leftovers from before 2026-05-27. New bridges are trashed, not renamed; existing `processed-*` files can be flagged for trash on a manual cleanup pass but should not be auto-actioned.
   - (`SHARED.md` is already covered in the canonical-files-at-root list above.)
 
 ### B. Project folders (CLAUDE, GEMMA, GEMINI, JoshMariaMusic, MariaParty, CollegeLutheran)
@@ -47,11 +47,25 @@ Use the `mcp__google-drive__*` tools. Check at minimum:
 - Within-folder duplicates (same name).
 - Files violating the file-placement rule (e.g., a deliverable artifact stuck in CLAUDE that should be in JoshMariaMusic).
 
-### C. Out-of-scope (do NOT touch without explicit instruction)
+### C. Task-queue health scan (BOTH queues)
+
+**Always run this every invocation, even if there were no Drive-side bridges.** Scan BOTH local Dropbox queues:
+
+- `~/Dropbox/web-jam-llms/claude-opus-tasks.txt`
+- `~/Dropbox/web-jam-llms/gemma-tasks.txt`
+
+For each queue:
+
+1. **Numbering check (BOTH queues)** — extract every `Task N` header (case-insensitive, `^\s*task\s+\d+`) and verify they are at uniform step 5 starting from 0 (so `0, 5, 10, 15, ...`). If not, OR if there are duplicate task numbers (common after bridges from multiple source files each numbered `1, 2, 3`), surface a renumber-to-5 proposal as a Phase 2 finding. Also flag any typos in header lines (e.g. `Taslk N` instead of `Task N`) — fix them before renumbering, since the renumber script's regex requires `task` to match. Skip only if the queue has ≤2 tasks.
+2. **Headline length check (OPUS QUEUE ONLY)** — for each task, count non-blank lines from its `Task N` header up to the next `Task M` header (or EOF). Any task with more than 3 non-blank body lines is a compression candidate. Surface as a Phase 2 finding: "compress N tasks (Task X, Task Y, ...) — extract bodies to memory files, leave one-line headlines + `[[task-spec-<slug>]]` cross-refs." Gemma's queue tasks tend to be short operational items that don't need compression, and the Coordinator doesn't use the memory system; do NOT compress gemma queue entries.
+
+Surfacing these is mandatory — if all checks pass cleanly for a queue, say so in the Phase 2 report ("Opus queue: 12 tasks, all at step-5 numbering, all headline-sized — clean." / "Gemma queue: 8 tasks, all at step-5 numbering — clean."). Don't silently omit either queue.
+
+### D. Out-of-scope (do NOT touch without explicit instruction)
 
 - Any file in MariaParty marked protected: `MariaParty RSVP MASTER`, `MariaParty Master Plan v2`, `MariaParty Banner Decision`.
 - Files Josh has explicitly named in a current task as "leave alone."
-- `processed-*` files at root — bridge audit trail; never delete.
+- `processed-*` files at root — legacy audit-trail files from before 2026-05-27. Don't auto-action; surface to Josh if a manual cleanup pass is wanted.
 
 ## Phase 2 — Report + await approval
 
@@ -60,7 +74,7 @@ Present findings as a clear table per category. Format:
 ```
 | # | Issue | File(s) (with id) | Proposed action |
 |---|---|---|---|
-| 1 | Sonnet bridge file pending | for-gemma-cavendish-cleanup.txt (id X) | Append to Dropbox gemma-tasks.txt; verify; rename Drive original to processed-2026-05-21-cavendish-cleanup.txt |
+| 1 | Sonnet bridge file pending | for-gemma-cavendish-cleanup.txt (id X) | Append to Dropbox gemma-tasks.txt; verify; trash Drive original |
 | 2 | Phone-Sonnet queue merge | claude-sonnet-tasks-2026-05-21-0830.txt (id Y) | Merge into canonical claude-sonnet-tasks.txt on Drive, trash timestamped file |
 | 3 | Pitch email at root | "Floyd Country Store Pitch.txt" (id Z) | Move into JoshMariaMusic/ |
 ```
@@ -74,18 +88,35 @@ If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` D
 ### Bridge actions (`for-gemma-*.txt`, `for-opus-*.txt`, legacy `gemma-tasks-*.txt`, `claude-opus-tasks-*.txt`)
 
 1. **Download** the source file content from Drive.
-2. **Append** to the corresponding local Dropbox queue with atomic-write semantics (write to `<target>.tmp`, fsync, `os.replace`):
+2. **Compute the next task number for each bridge.** Before writing, read the destination queue and find the highest existing `Task N` header. Then assign each bridge content a sequential `Task N+1:`, `Task N+2:`, ... (the renumber-to-5 pass later will normalize these to step 5, but they need SOME number now so the task structure is parseable). The bridge content typically has a line like `Task: <description>` — replace that with `Task <NN>: <description>` (keeping the description text). If the bridge has multiple `Task:` lines (e.g. `Task 1:`, `Task 2:`), increment for each.
+3. **Append** to the corresponding local Dropbox queue with atomic-write semantics (write to `<target>.tmp`, fsync, `os.replace`):
    - `for-gemma-*` / `gemma-tasks-*-*.txt` → `/home/joshua/Dropbox/web-jam-llms/gemma-tasks.txt`
    - `for-opus-*` / `claude-opus-tasks-*-*.txt` → `/home/joshua/Dropbox/web-jam-llms/claude-opus-tasks.txt`
-3. **Verify** the append landed: re-read the local file and confirm the appended bytes are present. If verify fails, DO NOT rename the Drive original — leave it in place and flag the failure.
-4. **Rename** the Drive original to `processed-YYYY-MM-DD-<short-name>.txt` (today's date). DO NOT trash. The rename IS the audit trail and lets Josh recover Sonnet's original input if anything goes wrong downstream.
-5. **Append to `bridge-log.md`** at `/home/joshua/Dropbox/web-jam-llms/bridge-log.md`: timestamp (UTC), source filename, dest path, bytes appended, status (ok | failed-verify).
+4. **Verify** the append landed: re-read the local file and confirm the appended bytes are present AND that the new `Task NN:` headers parse correctly. If verify fails, DO NOT trash the Drive original — leave it in place and flag the failure.
+5. **Trash** the Drive original (move to Drive trash, recoverable for 30 days). The content is preserved in the Dropbox queue and in `bridge-log.md`; the Drive copy is no longer needed once the bridge succeeds. Josh's decision 2026-05-27 — keeps Drive root clean instead of accumulating `processed-*` files indefinitely.
+6. **Append to `bridge-log.md`** at `/home/joshua/Dropbox/web-jam-llms/bridge-log.md`: timestamp (UTC), source filename, dest path, bytes appended, assigned task numbers, status (ok | failed-verify).
+7. **Re-run the Phase 1.C opus-queue health scan** (renumber + compression) — bridging just added new tasks that may need compression and definitely shifted the numbering off step-5. The renumber+compress pass is what normalizes the queue back into shape.
 
 (Drive snapshots of the gemma/opus queues no longer exist — see "Storage model" above — so there's no Drive-side refresh step for bridge actions. `SHARED.md` is the only Dropbox-source file with a Drive snapshot; if a bridge or rule change updates `/home/joshua/Dropbox/web-jam-llms/SHARED.md`, refresh the Drive snapshot via `rclone copy /home/joshua/Dropbox/web-jam-llms/SHARED.md gdrive: --update`.)
 
 ### Sonnet queue merges (`claude-sonnet-tasks-*.txt`)
 
 Drive-only — Sonnet's queue does not move. Append to canonical `claude-sonnet-tasks.txt` on Drive, renumber tasks if needed, then trash the timestamped source.
+
+### Sonnet re-uploads (same-name file at root that already exists in a project folder)
+
+Phone Sonnet **cannot edit Drive files in place** — it has no write capability. When it wants to revise a file that lives in a project folder (e.g. `CLAUDE/Gig Promotion Strategy.md`, `JoshMariaMusic/Pitch Email – ...`), it uploads a fresh copy to Drive **root** because it also can't navigate into folders. So a same-name duplicate at Drive root next to an existing folder copy is the standard "Sonnet revised this file" signal, not a stray.
+
+Workflow when detected:
+
+1. Download both: the root copy AND the folder copy.
+2. `diff` them to confirm the root copy is genuinely a revision (not an accidental re-upload of an older version).
+3. If the root copy is newer/revised: use `mcp__google-drive__updateTextFile` against the FOLDER copy's file id, passing the root copy's content. This overwrites the in-folder file with the new content while preserving its file id (so any existing references to that id stay valid).
+4. Re-download the folder copy and verify the bytes match the root copy.
+5. Trash the root copy via `mcp__google-drive__deleteItem`.
+6. If the diff shows the root copy is OLDER than the folder copy (rare — would mean Sonnet uploaded a stale revision), surface to Josh; don't overwrite. The folder copy is authoritative when it's newer.
+
+Surface in Phase 2 as: `Sonnet re-upload of <filename>: root copy (modified <date>) vs folder copy (modified <date>) — propose update folder copy with root content + trash root.`
 
 ### Other actions
 
@@ -147,20 +178,38 @@ rclone copy /home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/ gdrive:JoshMa
   --include "Pitch Email – Pub Festival Brewery.txt" \
   --include "Online Form Information Block.txt" \
   --update
+
+# Venue booking master (Gig Booking Worksheet xlsx): Dropbox is the SOLE master.
+# Push a read-only copy to Sonnet's Drive CLAUDE folder so the phone side sees
+# current status. Sonnet/Gemini must NOT edit the Drive copy — to change a venue
+# they leave a task for gemma, which writes the Dropbox master via
+# update_venue_contact. (Replaces the old Drive→Dropbox `cp` sync, which ran the
+# wrong direction and could clobber the master — removed 2026-05-28.)
+rclone copy "/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx" gdrive:CLAUDE/ --update
 ```
 
 `rclone --update` is a no-op when source and dest match modification time + size, so the refresh is cheap. If Josh has edited a template in Dropbox since the last drive-cleanup run, the next run pushes the update to Drive and phone Sonnet sees it on its next read.
 
 **Do not push other files from `Dropbox/joshandmariamusic/JoshMariaMusic/`** — only the 4 Sonnet-readable templates above are mirrored. The rest stays Dropbox-only.
 
-After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current.
+### Gig-progress summary (regenerate each run — never let it go stale)
+
+After the xlsx mirror push above, REBUILD a short status digest from the master xlsx so phone Sonnet has a readable view of booking progress without parsing the raw sheet:
+
+1. Read `/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx` (openpyxl, or the gemma-cli venue tools).
+2. Build a brief digest: total venues; counts by campaign status (Sent / Followed-up / Confirmed / Passed / Not-contacted); the most recent CONFIRMED gigs with dates; recent PASSED venues; and any venues awaiting follow-up.
+3. **Overwrite** `Gig Booking Status.md` in the Drive CLAUDE folder (`gdrive:CLAUDE/Gig Booking Status.md`) with that digest, stamped with the run timestamp.
+
+Because it is **regenerated from the master on EVERY run** (session-start + daily 07:00 + manual), it cannot drift — it's always a fresh snapshot of the current xlsx, never a hand-maintained file that rots. Sonnet reads it for "where are we on bookings?" without touching the xlsx.
+
+After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current, and a "gig status: rebuilt" line confirming the digest was regenerated from the xlsx.
 
 ## Hard rules
 
 - **Never delete a canonical queue** — neither the Dropbox originals (`gemma-tasks.txt`, `claude-opus-tasks.txt`) nor `claude-sonnet-tasks.txt` on Drive.
 - **Never delete `SHARED.md`** (Dropbox original or Drive snapshot) or `GEMMA.md` (Dropbox-only).
-- **Bridge: verify before rename.** Never rename a Drive original to `processed-*` until the Dropbox append is verified.
-- **Bridge: keep `processed-*` originals forever.** They are recoverable history.
+- **Bridge: verify before trash.** Never trash a Drive original until the Dropbox append is verified.
+- **Bridge: trash, don't rename.** The pre-2026-05-27 convention was to rename to `processed-*` for an indefinite audit trail. Current convention: trash. The content lives in the Dropbox queue + `bridge-log.md`; Drive's 30-day trash window is enough recovery.
 - **Never modify protected MariaParty files** without explicit Josh override.
 - **When merging task files**, preserve task numbering. If two source files both have "Task 1," renumber sequentially in the destination.
 - **Trash, don't permanently delete.** All deletes go to Drive trash so Josh can recover.
