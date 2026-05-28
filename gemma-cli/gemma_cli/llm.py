@@ -59,6 +59,17 @@ MAX_INLINE_CORRECTIONS = 4
 # bounds the damage — and the model can fit many tool calls per turn.
 MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
 
+# Cyclic-call loop guard (added 2026-05-28). The consecutive guard above only
+# fires when the SAME (name, args) repeats back-to-back. gemma4:26b also loops
+# *cyclically*: on the gig-sheet lookup it searched Drive with
+# name contains 'Gig' → 'Booking' → 'Venue' → 'Sheet' → (repeat) endlessly, so
+# no two consecutive calls matched and MAX_CONSECUTIVE_IDENTICAL_CALLS never
+# tripped. This guard counts each (name, args) signature across the whole
+# chat() dispatch and aborts once any one signature recurs this many times
+# total. Set above the consecutive threshold so a brief legitimate re-query
+# (same tool, same args, twice) isn't punished.
+MAX_TOTAL_IDENTICAL_CALLS = 4
+
 # Text-output line-repetition guard: if the model emits the same non-empty
 # line this many times consecutively during streaming, abort the current
 # response. Added 2026-05-21 after the 419 West run: gemma4:26b printed
@@ -273,6 +284,10 @@ def chat(
     messages.append({"role": "user", "content": user_prompt})
 
     invocations: list[dict[str, Any]] = []
+    # Cumulative (name, args) signature counts across the whole dispatch — feeds
+    # the cyclic-call guard (MAX_TOTAL_IDENTICAL_CALLS). Persists across turns,
+    # like `invocations`, since cyclic loops can span turn boundaries.
+    call_signature_counts: dict[str, int] = {}
     inline_corrections = 0
     # Task 36 Phase 2 P2-1 (2026-05-21): post-task mode. Once the model emits a
     # COORDINATOR REPORT, subsequent tool-call rounds are capped to 1 to prevent
@@ -470,7 +485,7 @@ def chat(
             )
 
         known_tool_names = set(tool_by_name.keys())
-        loop_aborted = False
+        loop_abort_reason: str | None = None
         for call in tool_calls:
             fn = call["function"]
             raw_name = fn["name"]
@@ -497,6 +512,28 @@ def chat(
                     "content": json.dumps(result, default=str),
                 }
             )
+            # Cyclic-call loop guard: count this (name, args) signature across
+            # the whole dispatch. Catches cyclic loops the consecutive guard
+            # below misses (e.g. Drive searches rotating through
+            # 'Gig'/'Booking'/'Venue'/'Sheet' forever). See
+            # MAX_TOTAL_IDENTICAL_CALLS docstring for context.
+            sig = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+            call_signature_counts[sig] = call_signature_counts.get(sig, 0) + 1
+            if call_signature_counts[sig] >= MAX_TOTAL_IDENTICAL_CALLS:
+                loop_abort_reason = (
+                    f"(aborted: tool call `{name}` with the same arguments was "
+                    f"made {call_signature_counts[sig]} times during this task — "
+                    f"the model is looping (often cyclically across a handful of "
+                    f"queries) and not converging. Last result: "
+                    f"{json.dumps(result, default=str)[:200]})"
+                )
+                if verbose:
+                    print(
+                        f"[runtime] tool call signature repeated "
+                        f"{call_signature_counts[sig]}× total ({name}) — "
+                        f"aborting to prevent cyclic spin"
+                    )
+                break
             # Identical-call loop guard: if the last N invocations are the same
             # (name + args), the model is spinning. Abort so it can't burn the
             # MAX_TURNS budget on a single broken call. See
@@ -508,7 +545,12 @@ def chat(
                     inv["name"] == first["name"] and inv["args"] == first["args"]
                     for inv in tail
                 ):
-                    loop_aborted = True
+                    loop_abort_reason = (
+                        f"(aborted: tool call `{invocations[-1]['name']}` was repeated "
+                        f"{MAX_CONSECUTIVE_IDENTICAL_CALLS} times in a row with the same "
+                        f"arguments — the model is stuck. Last result: "
+                        f"{json.dumps(invocations[-1]['result'], default=str)[:200]})"
+                    )
                     if verbose:
                         print(
                             f"[runtime] identical tool call repeated "
@@ -516,16 +558,10 @@ def chat(
                             f"({first['name']}) — aborting to prevent spin"
                         )
                     break
-        if loop_aborted:
-            err_text = (
-                f"(aborted: tool call `{invocations[-1]['name']}` was repeated "
-                f"{MAX_CONSECUTIVE_IDENTICAL_CALLS} times in a row with the same "
-                f"arguments — the model is stuck. Last result: "
-                f"{json.dumps(invocations[-1]['result'], default=str)[:200]})"
-            )
-            print(err_text)
+        if loop_abort_reason:
+            print(loop_abort_reason)
             return ChatResult(
-                final_text=err_text,
+                final_text=loop_abort_reason,
                 tool_invocations=invocations,
                 history=[m for m in messages if m.get("role") != "system"],
             )
