@@ -518,7 +518,15 @@ _GIG_TRACKING_TASK_RE = re.compile(
     # as outreach because the description contained "pitch email".
     r"|\bupdate\s+(?:the\s+)?venue\s+(?:tracker|contact|record)\b"
     r"|\bvenue\s+tracker\b"
-    r"|\bmark\s+(?:the\s+venue\s+)?as\s+(?:permanently\s+)?closed\b",
+    r"|\bmark\s+(?:the\s+venue\s+)?as\s+(?:permanently\s+)?closed\b"
+    # Broadened 2026-05-28: "gig booking spreadsheet/worksheet/sheet" and
+    # "add or update entry/row" cover the structured-entry tasks Josh writes
+    # directly (e.g. "Update the gig booking spreadsheet / Add or update entry
+    # for Grandin Farmers Market: ..."). These previously matched no gig
+    # phrasing, fell through to free-form gemma, and the model leaked tool
+    # tokens instead of saving. See _extract_bulleted_gig_fields.
+    r"|\bgig\s+booking\s+(?:spreadsheet|worksheet|sheet)\b"
+    r"|\badd\s+or\s+update\s+(?:the\s+)?(?:entry|row)\b",
     re.IGNORECASE,
 )
 
@@ -530,6 +538,60 @@ _GIG_VENUE_TRACKER_FOR_RE = re.compile(
     r"([A-Za-z][A-Za-z0-9 &'\-\.]{1,80}?)\s*(?:[—–\-:]|$)",
     re.IGNORECASE,
 )
+
+# Venue extraction for "Add or update entry for <X>:" structured-entry tasks
+# (added 2026-05-28). Stops on em-dash, hyphen, colon, or end-of-line.
+_GIG_ENTRY_FOR_RE = re.compile(
+    r"\b(?:add\s+or\s+update\s+|update\s+|add\s+)?(?:entry|row)\s+for\s+"
+    r"([A-Za-z][A-Za-z0-9 &'\-\.]{1,80}?)\s*(?:[—–\-:]|$)",
+    re.IGNORECASE,
+)
+
+# Structured bulleted-field extraction (added 2026-05-28). Josh writes
+# fully-specified gig tasks as a markdown bullet list:
+#   - Contact: Connie Kenny, Food Access Manager
+#   - Email: connie@leapforlocalfood.org
+#   - Phone: 540.339.6531
+#   - Status: PASSED — no music budget this year
+#   - Notes: Warm relationship, keep on list for future years
+# Every field is given, so there is no language work for gemma — the dispatcher
+# parses these directly and pre-renders the update, skipping gemma entirely
+# (same intent as the explicit-notes fast path). The leading bullet is optional
+# so "Contact: ..." without a dash also matches.
+_GIG_BULLET_FIELD_RE = re.compile(
+    r"^\s*[-*•]?\s*(contact|email|phone|status|notes?)\s*:\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extract_bulleted_gig_fields(task: str) -> dict[str, str]:
+    """Parse `- Field: value` lines from a structured-entry gig task.
+
+    Returns a dict with any of contact/email/phone/status/notes that were
+    present (first occurrence wins). Empty dict if none matched.
+    """
+    out: dict[str, str] = {}
+    for m in _GIG_BULLET_FIELD_RE.finditer(task):
+        label = m.group(1).lower()
+        value = m.group(2).strip()
+        if not value:
+            continue
+        if label.startswith("note"):
+            label = "notes"
+        out.setdefault(label, value)
+    return out
+
+
+def _build_bulleted_notes(fields: dict[str, str]) -> str:
+    """Combine Status + Notes from a parsed bulleted entry into the single
+    notes string written to the xlsx notes column. The venue_contacts handler
+    appends this to any existing notes rather than overwriting."""
+    parts: list[str] = []
+    if fields.get("status"):
+        parts.append(f"Status: {fields['status']}")
+    if fields.get("notes"):
+        parts.append(fields["notes"])
+    return " — ".join(parts)
 
 # Explicit-notes extraction (added 2026-05-21). Dead-venue cleanup tasks
 # spell out the notes verbatim — e.g. `set status/notes to: "Permanently
@@ -917,6 +979,12 @@ def _extract_venue_from_email_reply_task(task: str) -> str:
         candidate = m.group(1).strip()
         if candidate and not _GIG_TRACKING_TASK_RE.search(candidate):
             return candidate
+    # "Add or update entry for <X>:" structured-entry tasks (added 2026-05-28).
+    m = _GIG_ENTRY_FOR_RE.search(task)
+    if m:
+        candidate = m.group(1).strip()
+        if candidate and not _GIG_TRACKING_TASK_RE.search(candidate):
+            return candidate
     m = _EMAIL_REPLY_VENUE_PREFIX_RE.match(task)
     if not m:
         return ""
@@ -997,6 +1065,20 @@ def _collect_email_reply_inputs(task: str) -> tuple[str, str | None, dict | None
     explicit_notes_match = _EXPLICIT_NOTES_RE.search(task)
     if explicit_notes_match:
         pending["explicit_notes"] = explicit_notes_match.group(1).strip()
+        return task, None, pending
+
+    # Structured bulleted-entry fast path (added 2026-05-28). The task spells
+    # out every field (`- Contact:`, `- Email:`, `- Phone:`, `- Status:`,
+    # `- Notes:`), so there is no language work for gemma. Build the notes
+    # string from Status + Notes and carry contact/email/phone through to the
+    # save — skipping gemma entirely (same flow as explicit_notes). Requires at
+    # least a status or notes value so we don't misfire on a bare contact line.
+    bulleted = _extract_bulleted_gig_fields(task)
+    if bulleted and (bulleted.get("status") or bulleted.get("notes")):
+        pending["explicit_notes"] = _build_bulleted_notes(bulleted)
+        pending["email"] = bulleted.get("email", "")
+        pending["contact"] = bulleted.get("contact", "")
+        pending["phone"] = bulleted.get("phone", "")
         return task, None, pending
 
     if match_type == "exact":
@@ -1986,6 +2068,12 @@ def _repl(model: str, verbose: bool) -> None:
                         print("=== PRE-RENDERED UPDATE ===")
                         print(f"VENUE: {venue}")
                         print(f"ACTION: {action_label} row in xlsx")
+                        if email_reply_pending.get("contact"):
+                            print(f"CONTACT: {email_reply_pending['contact']}")
+                        if email_reply_pending.get("email"):
+                            print(f"EMAIL: {email_reply_pending['email']}")
+                        if email_reply_pending.get("phone"):
+                            print(f"PHONE: {email_reply_pending['phone']}")
                         print(f"NOTES: {notes}")
                         print("=== END PRE-RENDERED ===")
                         print()
@@ -2382,9 +2470,9 @@ def _repl(model: str, verbose: bool) -> None:
             try:
                 saved = update_venue_contact(
                     venue_name=er["venue_name"],
-                    email="",
-                    contact="",
-                    phone="",
+                    email=er.get("email", ""),
+                    contact=er.get("contact", ""),
+                    phone=er.get("phone", ""),
                     location="",
                     notes=notes,
                 )
