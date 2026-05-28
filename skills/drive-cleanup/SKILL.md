@@ -192,7 +192,17 @@ rclone copy "/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.x
 
 **Do not push other files from `Dropbox/joshandmariamusic/JoshMariaMusic/`** — only the 4 Sonnet-readable templates above are mirrored. The rest stays Dropbox-only.
 
-After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current.
+### Gig-progress summary (regenerate each run — never let it go stale)
+
+After the xlsx mirror push above, REBUILD a short status digest from the master xlsx so phone Sonnet has a readable view of booking progress without parsing the raw sheet:
+
+1. Read `/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx` (openpyxl, or the gemma-cli venue tools).
+2. Build a brief digest: total venues; counts by campaign status (Sent / Followed-up / Confirmed / Passed / Not-contacted); the most recent CONFIRMED gigs with dates; recent PASSED venues; and any venues awaiting follow-up.
+3. **Overwrite** `Gig Booking Status.md` in the Drive CLAUDE folder (`gdrive:CLAUDE/Gig Booking Status.md`) with that digest, stamped with the run timestamp.
+
+Because it is **regenerated from the master on EVERY run** (session-start + daily 07:00 + manual), it cannot drift — it's always a fresh snapshot of the current xlsx, never a hand-maintained file that rots. Sonnet reads it for "where are we on bookings?" without touching the xlsx.
+
+After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current, and a "gig status: rebuilt" line confirming the digest was regenerated from the xlsx.
 
 ## Hard rules
 
