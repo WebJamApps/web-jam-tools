@@ -55,7 +55,7 @@ On the phone, the `mcp__claude_ai_Gmail__*` tools operate on **threads and label
 | Action | Laptop — `mcp__gmail__*` | Phone — `mcp__claude_ai_Gmail__*` |
 |---|---|---|
 | `archive` | `modify_email` removing `INBOX`. Don't mark read if it was unread. | `unlabel_thread` removing `INBOX`. |
-| `delete` | `delete_email` (moves to Trash). | No delete tool — `label_thread` adding `TRASH` + `unlabel_thread` removing `INBOX`. If that's unavailable, archive instead and tell Josh to delete it later on the laptop. |
+| `delete` | `delete_email` (moves to Trash). | `label_thread` (or `label_message`) adding `TRASH` — moves it to Trash. (`TRASH` is a supported system label; there's just no dedicated delete tool.) |
 | `draft reply` | `draft_email` with `inReplyTo` + `threadId` from the source message. **Print the draft for Josh's review before saving.** | `create_draft` referencing the thread. **Print the draft for Josh's review before saving.** |
 | `label <name>` | `get_or_create_label` then `modify_email` adding the label. | `list_labels` (or `create_label` if missing) then `label_thread` adding it. |
 | `mark important` | `modify_email` adding `IMPORTANT`. | `label_thread` adding `IMPORTANT`. |
