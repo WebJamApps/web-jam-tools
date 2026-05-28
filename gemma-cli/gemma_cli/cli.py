@@ -13,7 +13,7 @@ import re
 import sys
 from datetime import date
 
-from gemma_cli.llm import DEFAULT_MODEL, chat
+from gemma_cli.llm import DEFAULT_MODEL, chat, ping_ollama
 from gemma_cli.memory import append_memory, load_memory
 from gemma_cli.tools.calendar import TOOLS as CALENDAR_TOOLS
 from gemma_cli.tools.drive import TOOLS as DRIVE_TOOLS
@@ -1632,16 +1632,29 @@ def _role_for_model(model: str) -> str:
     return "Coordinator"
 
 
+def _print_ping_status(model: str) -> None:
+    """Print a one-line Ollama reachability summary for the configured host + model."""
+    status = ping_ollama(model=model, timeout=3.0)
+    if status["ok"]:
+        loaded = "loaded" if status["model_loaded"] else "NOT LOADED — `ollama pull` or `ollama run` it"
+        print(f"✓ Ollama @ {status['host']} ({status['elapsed_ms']} ms) · {model} {loaded}")
+    else:
+        print(f"✗ Ollama @ {status['host']} unreachable — {status['error']}")
+        print("  → start the OMEN (or whatever host OLLAMA_HOST points at), then type /ping to retry.")
+
+
 def _repl(model: str, verbose: bool) -> None:
     name = _wrapper_name_for_model(model)
     role = _role_for_model(model)
     system_prompt = _resolve_system_prompt()
     print(f"{name} ({role} REPL — {model}). Tools: Drive, Calendar, Gmail.")
     print("Commands: /next [--force] (run next queued task; re-runs auto-switch to read-only verify mode unless --force),")
-    print("          /done (remove first queued task),")
+    print("          /done (remove first queued task), /ping (re-check Ollama host reachability),")
     print("          /remember <text> (append fact to GEMMA.md in /home/joshua/Dropbox/web-jam-llms/), /memory (show current memory),")
     print("          /reset (clear session memory), verbose (toggle tool logging),")
-    print("          exit / Ctrl-D (quit).\n")
+    print("          exit / Ctrl-D (quit).")
+    _print_ping_status(model)
+    print()
     prompt = f"{name}> "
     history: list = []
     # Tracks the first ~80 chars of the most recently /next-ed task so we can
@@ -1716,6 +1729,10 @@ def _repl(model: str, verbose: bool) -> None:
                     print(f"(already saved — {existing or 'duplicate'})")
             except Exception as exc:
                 print(f"[error] {type(exc).__name__}: {exc}")
+            print()
+            continue
+        if line.lower() in {"/ping", "ping"}:
+            _print_ping_status(model)
             print()
             continue
         if line.lower() in {"/memory", "memory"}:

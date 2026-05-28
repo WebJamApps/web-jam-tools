@@ -106,14 +106,78 @@ def _normalize_tool_name(name: str, known: set[str]) -> str:
     return name
 
 
-def _ollama_chat_url() -> str:
+def _ollama_host() -> str:
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     if not host.startswith(("http://", "https://")):
         host = f"http://{host}"
-    return f"{host}/api/chat"
+    return host
+
+
+def _ollama_chat_url() -> str:
+    return f"{_ollama_host()}/api/chat"
 
 
 OLLAMA_URL = _ollama_chat_url()
+
+
+def ping_ollama(model: str | None = None, timeout: float = 3.0) -> dict:
+    """Check if the Ollama server is reachable and return a status dict.
+
+    Used by gemma-cli on startup and via the /ping REPL command to confirm
+    the OMEN is on + Ollama is running + the desired model is loaded — before
+    Josh types a prompt that would otherwise hang waiting for a 1200-second
+    timeout.
+
+    Returns:
+        {
+          "ok": bool,
+          "host": "http://...",
+          "models": [<model names>] if ok else [],
+          "model_loaded": bool if `model` was provided, else None,
+          "error": <str> if not ok,
+          "elapsed_ms": <int>,
+        }
+    """
+    import time
+    host = _ollama_host()
+    url = f"{host}/api/tags"
+    started = time.monotonic()
+    try:
+        import requests
+        resp = requests.get(url, timeout=timeout)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if resp.status_code != 200:
+            return {
+                "ok": False, "host": host, "models": [],
+                "model_loaded": None,
+                "error": f"HTTP {resp.status_code}",
+                "elapsed_ms": elapsed_ms,
+            }
+        data = resp.json()
+        models = [m.get("name", "") for m in data.get("models", [])]
+        model_loaded = None if model is None else (model in models)
+        return {
+            "ok": True, "host": host, "models": models,
+            "model_loaded": model_loaded,
+            "error": None,
+            "elapsed_ms": elapsed_ms,
+        }
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        # Trim noisy requests stack-trace messages to just the exception name
+        # for the common cases (ConnectTimeout, ConnectionError) — keeping the
+        # full message for unexpected types so debugging stays possible.
+        err_name = type(exc).__name__
+        if err_name in {"ConnectTimeout", "ConnectionError", "ReadTimeout", "Timeout"}:
+            error = f"{err_name} ({timeout:.0f}s)"
+        else:
+            error = f"{err_name}: {exc}"
+        return {
+            "ok": False, "host": host, "models": [],
+            "model_loaded": None,
+            "error": error,
+            "elapsed_ms": elapsed_ms,
+        }
 DEFAULT_MODEL = "gemma4:26b"
 MAX_TURNS = 8
 # Lower temperature = less creative filling-in = less hallucination on drafting tasks.
