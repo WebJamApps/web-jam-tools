@@ -1527,6 +1527,114 @@ def _has_send_confirmation(text: str) -> bool:
     return any(phrase in lower for phrase in _SENT_CONFIRMATION_PHRASES)
 
 
+# Freeform email-drafting dispatcher (added 2026-05-28). Some queued tasks ask
+# gemma to WRITE an email body — a polite decline, a custom reply — and give the
+# recipient + subject but NOT a template (so the venue-outreach template flow
+# doesn't apply). gemma writes a good body on the /next turn but reliably DROPS
+# it across the approve turn — the body lives only in chat history, which
+# gemma4:26b loses (Connie/Grandin Farmers Market run, 2026-05-28: "approve"
+# reached the model cold and it apologised for having no context). The fix
+# mirrors the Phase 2 email-reply pattern: pre-extract To/Subject
+# deterministically, make gemma wrap the body in === EMAIL DRAFT === markers,
+# parse the body out of its reply, and stash {to, subject, body} as a
+# pre-rendered draft so the existing approval interceptor saves it to Gmail
+# directly — no model involvement on the approve turn.
+_EMAIL_TO_RE = re.compile(
+    r"^\s*To:\s*.*?([^\s<>@]+@[^\s<>]+)", re.IGNORECASE | re.MULTILINE
+)
+_EMAIL_SUBJECT_RE = re.compile(
+    r"^\s*(Subject|Re):\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE
+)
+_EMAIL_DRAFT_START_RE = re.compile(r"^[ \t]*=== EMAIL DRAFT ===[ \t]*$", re.MULTILINE)
+_EMAIL_DRAFT_END_RE = re.compile(r"^[ \t]*=== END EMAIL DRAFT ===[ \t]*$", re.MULTILINE)
+
+
+def _extract_email_to_subject(task: str) -> tuple[str, str] | None:
+    """Pull (to, subject) from a task's `To:` and `Subject:`/`Re:` header lines.
+
+    Returns None if either is missing. A `Re:` line yields a `Re: ...` subject so
+    the draft keeps the reply prefix; a `Subject:` line is used verbatim.
+    """
+    to_match = _EMAIL_TO_RE.search(task)
+    subj_match = _EMAIL_SUBJECT_RE.search(task)
+    if not to_match or not subj_match:
+        return None
+    keyword, value = subj_match.group(1), subj_match.group(2).strip()
+    subject = f"Re: {value}" if keyword.lower() == "re" else value
+    return to_match.group(1).strip(), subject
+
+
+def _is_freeform_email_task(task: str) -> bool:
+    """True for tasks that ask gemma to WRITE an email body (decline / custom
+    reply) with an explicit recipient + subject, but that are NOT template
+    venue-outreach tasks (those own their own pre-render flow). Conservative:
+    needs a `To:` line, a `Subject:`/`Re:` line, and an explicit drafting signal.
+    """
+    if _is_outreach_task(task):
+        return False
+    if _extract_email_to_subject(task) is None:
+        return False
+    low = task.lower()
+    if "gmail_draft_email" in low:
+        return True
+    if re.search(r"\bdraft\b[^\n]*\b(email|reply|response|note)\b", low):
+        return True
+    if re.search(r"\b(reply|respond)\b[^\n]*\bemail\b", low):
+        return True
+    return False
+
+
+def _collect_freeform_email_inputs(task: str) -> tuple[str, dict | None]:
+    """For freeform email-drafting tasks, pre-extract To/Subject and augment the
+    task with marker-wrapped body instructions for gemma. The post-dispatch
+    handler parses gemma's reply for the markers and stashes {to, subject, body}
+    as a pre-rendered draft. Returns (augmented_task, pending) or (task, None).
+    """
+    if not _is_freeform_email_task(task):
+        return task, None
+    to_subject = _extract_email_to_subject(task)
+    if to_subject is None:
+        return task, None
+    to_addr, subject = to_subject
+    approval_question = "Approve to save this as a Gmail draft, or describe changes?"
+    augmented = (
+        f"{task}\n\n"
+        f"DISPATCHER NOTE — recipient is locked to: {to_addr}\n"
+        f"Subject is locked to: {subject}\n"
+        f"Write ONLY the email body (the message Josh will send). Do NOT invent "
+        f"facts, dates, or placeholders; use only what the task gives you.\n\n"
+        f"Your reply MUST have EXACTLY these 4 parts, in this order, NOTHING "
+        f"ELSE — no preamble, no commentary, no tool calls, no COORDINATOR "
+        f"REPORT:\n\n"
+        f"PART 1 — the literal line: === EMAIL DRAFT ===\n"
+        f"PART 2 — the full email body (greeting through sign-off).\n"
+        f"PART 3 — the literal line: === END EMAIL DRAFT ===\n"
+        f"PART 4 — the literal line: {approval_question}\n\n"
+        f"If your reply is missing PART 3 or PART 4, it is INCOMPLETE. Do not "
+        f"stop after PART 2. The format is mandatory; emit all four parts."
+    )
+    return augmented, {"to": to_addr, "subject": subject}
+
+
+def _extract_email_draft(text: str) -> str:
+    """Pull the body between === EMAIL DRAFT === and === END EMAIL DRAFT === from
+    a gemma reply. LATEST start marker wins (a reprint supersedes an earlier
+    attempt). If the END marker is missing after the latest start (truncated
+    reply), take everything to end of string. Returns "" if no START marker.
+    """
+    if not text:
+        return ""
+    starts = list(_EMAIL_DRAFT_START_RE.finditer(text))
+    if not starts:
+        return ""
+    last_start = starts[-1]
+    rest = text[last_start.end():]
+    end = _EMAIL_DRAFT_END_RE.search(rest)
+    if end:
+        return rest[:end.start()].strip()
+    return rest.strip()
+
+
 def _strip_email_draft_save(tools: list) -> list:
     """Remove gmail_draft_email (and any other approval-gated save tools)."""
     return [t for t in tools if t.name not in _EMAIL_DRAFT_SAVE_TOOL_NAMES]
@@ -1847,6 +1955,18 @@ def _repl(model: str, verbose: bool) -> None:
                             last_next_task = None
                             print()
                             continue
+                    # Freeform email-drafting dispatcher (added 2026-05-28). Runs
+                    # only when none of the template/gig/email-reply collectors
+                    # claimed the task. Pre-extracts To/Subject and tells gemma to
+                    # wrap the body in === EMAIL DRAFT === markers; the
+                    # post-dispatch handler parses the body and stashes it as a
+                    # pre-rendered draft for the approval interceptor.
+                    freeform_email_pending: dict | None = None
+                    if (pre_rendered is None and gig_pre_rendered is None
+                            and email_reply_pending is None):
+                        dispatched_task, freeform_email_pending = (
+                            _collect_freeform_email_inputs(dispatched_task)
+                        )
                     # Explicit-notes skip-gemma fast path (added 2026-05-21).
                     # When the task body specifies the notes verbatim (e.g.
                     # dead-venue cleanup), the collector stashed them on
@@ -1900,7 +2020,7 @@ def _repl(model: str, verbose: bool) -> None:
                     # first 2026-05-21 retry. max_turns left at default so
                     # gemma can recover from any single-turn confusion.
                     dispatch_num_predict: int | None = None
-                    if email_reply_pending is not None:
+                    if email_reply_pending is not None or freeform_email_pending is not None:
                         dispatch_num_predict = 4096
                     pre_dispatch_history_len = len(history)
                     result = _run_once(
@@ -2037,6 +2157,45 @@ def _repl(model: str, verbose: bool) -> None:
                     last_pending_email_reply = email_reply_pending
                     last_pre_rendered = None
                     last_pre_rendered_gig_update = None
+                elif freeform_email_pending is not None:
+                    if last_pre_rendered is not None:
+                        print("(warning: a previous pending draft was discarded; "
+                              "new email task's draft is now the pending one)")
+                    # Capture ALL assistant content from this dispatch so the
+                    # marker block is found even if gemma also fired a read tool
+                    # or split the reply across turns (mirrors the email-reply
+                    # capture above).
+                    dispatch_msgs = result.history[pre_dispatch_history_len:]
+                    dispatch_assistant_text = "\n".join(
+                        m.get("content", "") for m in dispatch_msgs
+                        if m.get("role") == "assistant" and m.get("content")
+                    )
+                    body = _extract_email_draft(dispatch_assistant_text)
+                    if not body:
+                        print("\n[dispatch] gemma did not return an "
+                              "=== EMAIL DRAFT === block — re-prompt it with: "
+                              "'print the === EMAIL DRAFT === block now' and try "
+                              "again.")
+                        last_pre_rendered = None
+                        last_pre_rendered_gig_update = None
+                        last_pending_email_reply = None
+                    else:
+                        # Backstop: gemma may emit the body but drop PART 4. Print
+                        # the approval question ourselves so Josh always sees the
+                        # next step.
+                        approval_q = ("Approve to save this as a Gmail draft, "
+                                      "or describe changes?")
+                        if approval_q.lower() not in dispatch_assistant_text.lower():
+                            print()
+                            print(approval_q)
+                        last_pre_rendered = {
+                            "to": freeform_email_pending["to"],
+                            "subject": freeform_email_pending["subject"],
+                            "body": body,
+                        }
+                        last_pre_rendered_gig_update = None
+                        last_pending_email_reply = None
+                        last_sent_outreach = None
                 else:
                     # Non-dispatch /next clears any stale pre-render (safety)
                     last_pre_rendered = None
@@ -2103,16 +2262,21 @@ def _repl(model: str, verbose: bool) -> None:
                 # Stash deterministic venue + contact details so a later
                 # "I sent it" / "update records" turn can log the outreach
                 # without asking gemma to recall context from chat history
-                # (delayed-recovery drift fix, 2026-05-21).
-                last_sent_outreach = {
-                    "venue": pr.get("venue", ""),
-                    "to": pr.get("to", ""),
-                    "contact_name": pr.get("contact_name", ""),
-                    "date_range": pr.get("date_range", ""),
-                    "booking_period": pr.get("booking_period", ""),
-                }
-                print("(after sending from Gmail, say 'I sent it' or 'update "
-                      "records' and I'll log the outreach in the booking sheet)")
+                # (delayed-recovery drift fix, 2026-05-21). Skipped for
+                # pre-written reply drafts (no venue) — those aren't booking
+                # outreach, so there's nothing to log to the sheet (2026-05-28).
+                if pr.get("venue"):
+                    last_sent_outreach = {
+                        "venue": pr.get("venue", ""),
+                        "to": pr.get("to", ""),
+                        "contact_name": pr.get("contact_name", ""),
+                        "date_range": pr.get("date_range", ""),
+                        "booking_period": pr.get("booking_period", ""),
+                    }
+                    print("(after sending from Gmail, say 'I sent it' or 'update "
+                          "records' and I'll log the outreach in the booking sheet)")
+                else:
+                    print("(open Gmail Drafts to review and send)")
                 last_pre_rendered = None
             except Exception as exc:
                 print(f"[draft] save failed: {type(exc).__name__}: {exc}")
