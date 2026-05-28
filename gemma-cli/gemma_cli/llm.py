@@ -67,6 +67,26 @@ MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
 # MAX_CONSECUTIVE_IDENTICAL_CALLS; this is the text-output analog.
 MAX_CONSECUTIVE_IDENTICAL_LINES = 5
 
+# Leaked chat-template tool tokens (added 2026-05-28). gemma4:26b sometimes
+# emits its tool-call template tokens as plain CONTENT (e.g. `<tool_call|>`,
+# `<|tool_response|>`) alongside pseudo-tool-call text like
+# `call:drive:drive.list_files{...}` — instead of a real structured tool_call —
+# then runs away repeating them with NO newlines and VARYING args. That dodges
+# both guards above: MAX_CONSECUTIVE_IDENTICAL_CALLS sees no real invocations,
+# and MAX_CONSECUTIVE_IDENTICAL_LINES needs repeated identical *lines*. The
+# stream then only stops at num_predict or a manual Ctrl-C (Task 5 Drive
+# meltdown, 2026-05-28). These tokens never belong in real content, so a few of
+# them is a reliable signal to abort — protects ANY task type.
+_LEAKED_TOOL_TOKENS = (
+    "<tool_call|>",
+    "<|tool_call|>",
+    "<tool_call>",
+    "<|tool_response|>",
+    "<|tool_response>",
+    "<tool_response|>",
+)
+MAX_LEAKED_TOOL_TOKENS = 3
+
 
 def _detect_inline_tool_call(content: str) -> str | None:
     """Return the attempted tool name if `content` contains an inline-JSON tool call.
@@ -301,6 +321,7 @@ def chat(
         collected_tool_calls: list[dict[str, Any]] = []
         any_content_printed = False
         line_repetition_aborted = False
+        leaked_token_aborted = False
         for raw_line in resp.iter_lines():
             if not raw_line:
                 continue
@@ -315,6 +336,24 @@ def chat(
                 sys.stdout.flush()
                 collected_content += piece
                 any_content_printed = True
+                # Leaked-tool-token guard (added 2026-05-28): abort if the model
+                # is spewing chat-template tool tokens as content (see
+                # _LEAKED_TOOL_TOKENS). A few of these means gemma is
+                # hallucinating tool calls and looping with no newlines, which
+                # the line guard below can't catch. Pre-filtered on "<" so the
+                # count only runs on template-shaped pieces.
+                if not leaked_token_aborted and "<" in piece:
+                    leaked = sum(collected_content.count(t) for t in _LEAKED_TOOL_TOKENS)
+                    if leaked >= MAX_LEAKED_TOOL_TOKENS:
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        print(
+                            f"[runtime] model leaked tool-call template tokens "
+                            f"{leaked}× as text — aborting stream (gemma emitted "
+                            f"malformed tool calls instead of a real one)"
+                        )
+                        leaked_token_aborted = True
+                        break
                 # Output-line repetition guard: when piece contains a newline,
                 # check the last N completed lines. If the last
                 # MAX_CONSECUTIVE_IDENTICAL_LINES non-empty lines are all
@@ -352,6 +391,22 @@ def chat(
         if any_content_printed:
             sys.stdout.write("\n")
             sys.stdout.flush()
+        if leaked_token_aborted:
+            # Don't append the garbage as an assistant turn — keep history clean
+            # and return a clear error so the dispatcher/REPL stops instead of
+            # treating the leaked tokens as a real answer.
+            err_text = (
+                "(aborted: the model leaked tool-call template tokens instead of "
+                "emitting a real tool call, and was repeating them — stopped the "
+                "stream. This task type needs a deterministic dispatcher or a "
+                "retry; gemma can't tool-call reliably here.)"
+            )
+            print(err_text)
+            return ChatResult(
+                final_text=err_text,
+                tool_invocations=invocations,
+                history=[m for m in messages if m.get("role") != "system"],
+            )
         msg = {
             "role": "assistant",
             "content": collected_content,
