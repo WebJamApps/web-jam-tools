@@ -128,15 +128,17 @@ If Phase 1 analysis spots a canonical queue with non-step-multiple task numbers 
 
 ```bash
 # dry-run first (recommended)
-~/WebJamApps/web-jam-tools/scripts/renumber-queue.py \
+deno run --allow-read --allow-write \
+  ~/WebJamApps/web-jam-tools/src/task-queue/cli.ts renumber \
   --path ~/Dropbox/web-jam-llms/claude-opus-tasks.txt --dry-run
 
 # apply after Josh approves the plan
-~/WebJamApps/web-jam-tools/scripts/renumber-queue.py \
+deno run --allow-read --allow-write \
+  ~/WebJamApps/web-jam-tools/src/task-queue/cli.ts renumber \
   --path ~/Dropbox/web-jam-llms/claude-opus-tasks.txt
 ```
 
-`--model gemma4:26b` works too (resolves to the gemma-tasks.txt path). Step defaults to 5 starting at 0; pass `--step` / `--start` for other shapes. Atomic write under the hood (the script imports `gemma_cli.queue`, which uses `.tmp + os.replace`).
+For the gemma queue, point `--path` at `gemma-tasks.txt`. Step defaults to 5 from 0; pass `--step` / `--start` for other shapes. The Deno `task-queue` CLI is the **single source of truth** for these queues: it reads fresh, writes atomically (tmp + fsync + rename), recognizes typo'd headers (e.g. `talk 5`), and **aborts without writing** if renumbering would lose a task or create a duplicate number. (It also has `dedupe` — bump duplicate numbers to the next free one — and `validate`.) The old `scripts/renumber-queue.py` now just shells out to this same CLI, so either entry point is safe.
 
 Surfacing rule: propose renumber when the queue has more than 2 tasks AND the existing numbers are not already at step `--step` starting at `--start`. Skip if Josh would have to renumber every single task for trivial reason (cosmetic; not worth churning Dropbox revision history daily).
 

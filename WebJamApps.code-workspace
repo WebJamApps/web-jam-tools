@@ -47,7 +47,8 @@
       "stylelint.vscode-stylelint",
       "eamodio.gitlens",
       "google.gemini-cli-vscode-ide-companion",
-      "google.geminicodeassist"
+      "google.geminicodeassist",
+      "denoland.vscode-deno"
     ],
     "unwantedRecommendations": [
       "orta.vscode-jest",
