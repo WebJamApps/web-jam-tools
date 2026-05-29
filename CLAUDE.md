@@ -15,10 +15,14 @@ documentation across the WebJamApps workspace. This file orients Claude
 ## Hard rules
 
 - **Never merge to `dev` or `main`.** A human reviewer is the mandatory gatekeeper (per GEMINI.md).
-- **Never commit `node_modules/`.** It is covered by `.gitignore` — keep it that way.
+- **Always start on a feature branch off `dev`** before editing code, and bump the semver `version` on push (enforced by `~/.claude/hooks/`).
+- **JS/TS is Deno, not Node.** All TypeScript lives under `src/` + `test/` and runs on Deno (`deno task ...`); there is no `package.json` or `node_modules`. Python (`gemma-cli/`, `scripts/`) is unchanged.
 
 ## Layout
 
 - `docs/` — markdown documentation
-- `scripts/` — workspace bootstrap (`bootstrap-project.sh`, `check-env.sh`) and gig-scraping scripts
-- `package.json` — deps for the scripts (xlsx, playwright)
+- `src/` — Deno TypeScript tools: `task-queue/` (master task-list CLI), `gig-scraper/` (Playwright + xlsx scrapers), `devotional/` (daily God Pause sender)
+- `test/` — Deno tests
+- `deno.json` — Deno config: tasks, import map, fmt + lint
+- `scripts/` — workspace bootstrap (`bootstrap-project.sh`, `check-env.sh`) + Python/shell helpers
+- `gemma-cli/` — the Coordinator REPL (Python, own venv)
