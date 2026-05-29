@@ -1,0 +1,3 @@
+# Merging to main requires approval from a repo admin (code owner).
+# Applies only where branch protection enables "require review from Code Owners" — i.e. main.
+*  @JoshuaVSherman @LinuxBozo @chemmom2 @WebJamAdm
