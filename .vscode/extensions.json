@@ -1,0 +1,7 @@
+{
+  // Recommended extensions for web-jam-tools. The Deno extension powers
+  // src/ + test/ (the task-queue tool); see .vscode/settings.json deno.enablePaths.
+  "recommendations": [
+    "denoland.vscode-deno"
+  ]
+}
