@@ -20,3 +20,6 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+
+# gig-scraper debug artifact
+src/gig-scraper/page_debug.html

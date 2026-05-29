@@ -59,6 +59,17 @@ MAX_INLINE_CORRECTIONS = 4
 # bounds the damage — and the model can fit many tool calls per turn.
 MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
 
+# Cyclic-call loop guard (added 2026-05-28). The consecutive guard above only
+# fires when the SAME (name, args) repeats back-to-back. gemma4:26b also loops
+# *cyclically*: on the gig-sheet lookup it searched Drive with
+# name contains 'Gig' → 'Booking' → 'Venue' → 'Sheet' → (repeat) endlessly, so
+# no two consecutive calls matched and MAX_CONSECUTIVE_IDENTICAL_CALLS never
+# tripped. This guard counts each (name, args) signature across the whole
+# chat() dispatch and aborts once any one signature recurs this many times
+# total. Set above the consecutive threshold so a brief legitimate re-query
+# (same tool, same args, twice) isn't punished.
+MAX_TOTAL_IDENTICAL_CALLS = 4
+
 # Text-output line-repetition guard: if the model emits the same non-empty
 # line this many times consecutively during streaming, abort the current
 # response. Added 2026-05-21 after the 419 West run: gemma4:26b printed
@@ -66,6 +77,26 @@ MAX_CONSECUTIVE_IDENTICAL_CALLS = 3
 # 100+ times before Josh Ctrl-C'd. Tool-call loops are caught by
 # MAX_CONSECUTIVE_IDENTICAL_CALLS; this is the text-output analog.
 MAX_CONSECUTIVE_IDENTICAL_LINES = 5
+
+# Leaked chat-template tool tokens (added 2026-05-28). gemma4:26b sometimes
+# emits its tool-call template tokens as plain CONTENT (e.g. `<tool_call|>`,
+# `<|tool_response|>`) alongside pseudo-tool-call text like
+# `call:drive:drive.list_files{...}` — instead of a real structured tool_call —
+# then runs away repeating them with NO newlines and VARYING args. That dodges
+# both guards above: MAX_CONSECUTIVE_IDENTICAL_CALLS sees no real invocations,
+# and MAX_CONSECUTIVE_IDENTICAL_LINES needs repeated identical *lines*. The
+# stream then only stops at num_predict or a manual Ctrl-C (Task 5 Drive
+# meltdown, 2026-05-28). These tokens never belong in real content, so a few of
+# them is a reliable signal to abort — protects ANY task type.
+_LEAKED_TOOL_TOKENS = (
+    "<tool_call|>",
+    "<|tool_call|>",
+    "<tool_call>",
+    "<|tool_response|>",
+    "<|tool_response>",
+    "<tool_response|>",
+)
+MAX_LEAKED_TOOL_TOKENS = 3
 
 
 def _detect_inline_tool_call(content: str) -> str | None:
@@ -106,14 +137,78 @@ def _normalize_tool_name(name: str, known: set[str]) -> str:
     return name
 
 
-def _ollama_chat_url() -> str:
+def _ollama_host() -> str:
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     if not host.startswith(("http://", "https://")):
         host = f"http://{host}"
-    return f"{host}/api/chat"
+    return host
+
+
+def _ollama_chat_url() -> str:
+    return f"{_ollama_host()}/api/chat"
 
 
 OLLAMA_URL = _ollama_chat_url()
+
+
+def ping_ollama(model: str | None = None, timeout: float = 3.0) -> dict:
+    """Check if the Ollama server is reachable and return a status dict.
+
+    Used by gemma-cli on startup and via the /ping REPL command to confirm
+    the OMEN is on + Ollama is running + the desired model is loaded — before
+    Josh types a prompt that would otherwise hang waiting for a 1200-second
+    timeout.
+
+    Returns:
+        {
+          "ok": bool,
+          "host": "http://...",
+          "models": [<model names>] if ok else [],
+          "model_loaded": bool if `model` was provided, else None,
+          "error": <str> if not ok,
+          "elapsed_ms": <int>,
+        }
+    """
+    import time
+    host = _ollama_host()
+    url = f"{host}/api/tags"
+    started = time.monotonic()
+    try:
+        import requests
+        resp = requests.get(url, timeout=timeout)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if resp.status_code != 200:
+            return {
+                "ok": False, "host": host, "models": [],
+                "model_loaded": None,
+                "error": f"HTTP {resp.status_code}",
+                "elapsed_ms": elapsed_ms,
+            }
+        data = resp.json()
+        models = [m.get("name", "") for m in data.get("models", [])]
+        model_loaded = None if model is None else (model in models)
+        return {
+            "ok": True, "host": host, "models": models,
+            "model_loaded": model_loaded,
+            "error": None,
+            "elapsed_ms": elapsed_ms,
+        }
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        # Trim noisy requests stack-trace messages to just the exception name
+        # for the common cases (ConnectTimeout, ConnectionError) — keeping the
+        # full message for unexpected types so debugging stays possible.
+        err_name = type(exc).__name__
+        if err_name in {"ConnectTimeout", "ConnectionError", "ReadTimeout", "Timeout"}:
+            error = f"{err_name} ({timeout:.0f}s)"
+        else:
+            error = f"{err_name}: {exc}"
+        return {
+            "ok": False, "host": host, "models": [],
+            "model_loaded": None,
+            "error": error,
+            "elapsed_ms": elapsed_ms,
+        }
 DEFAULT_MODEL = "gemma4:26b"
 MAX_TURNS = 8
 # Lower temperature = less creative filling-in = less hallucination on drafting tasks.
@@ -189,6 +284,10 @@ def chat(
     messages.append({"role": "user", "content": user_prompt})
 
     invocations: list[dict[str, Any]] = []
+    # Cumulative (name, args) signature counts across the whole dispatch — feeds
+    # the cyclic-call guard (MAX_TOTAL_IDENTICAL_CALLS). Persists across turns,
+    # like `invocations`, since cyclic loops can span turn boundaries.
+    call_signature_counts: dict[str, int] = {}
     inline_corrections = 0
     # Task 36 Phase 2 P2-1 (2026-05-21): post-task mode. Once the model emits a
     # COORDINATOR REPORT, subsequent tool-call rounds are capped to 1 to prevent
@@ -237,6 +336,7 @@ def chat(
         collected_tool_calls: list[dict[str, Any]] = []
         any_content_printed = False
         line_repetition_aborted = False
+        leaked_token_aborted = False
         for raw_line in resp.iter_lines():
             if not raw_line:
                 continue
@@ -251,6 +351,24 @@ def chat(
                 sys.stdout.flush()
                 collected_content += piece
                 any_content_printed = True
+                # Leaked-tool-token guard (added 2026-05-28): abort if the model
+                # is spewing chat-template tool tokens as content (see
+                # _LEAKED_TOOL_TOKENS). A few of these means gemma is
+                # hallucinating tool calls and looping with no newlines, which
+                # the line guard below can't catch. Pre-filtered on "<" so the
+                # count only runs on template-shaped pieces.
+                if not leaked_token_aborted and "<" in piece:
+                    leaked = sum(collected_content.count(t) for t in _LEAKED_TOOL_TOKENS)
+                    if leaked >= MAX_LEAKED_TOOL_TOKENS:
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        print(
+                            f"[runtime] model leaked tool-call template tokens "
+                            f"{leaked}× as text — aborting stream (gemma emitted "
+                            f"malformed tool calls instead of a real one)"
+                        )
+                        leaked_token_aborted = True
+                        break
                 # Output-line repetition guard: when piece contains a newline,
                 # check the last N completed lines. If the last
                 # MAX_CONSECUTIVE_IDENTICAL_LINES non-empty lines are all
@@ -288,6 +406,22 @@ def chat(
         if any_content_printed:
             sys.stdout.write("\n")
             sys.stdout.flush()
+        if leaked_token_aborted:
+            # Don't append the garbage as an assistant turn — keep history clean
+            # and return a clear error so the dispatcher/REPL stops instead of
+            # treating the leaked tokens as a real answer.
+            err_text = (
+                "(aborted: the model leaked tool-call template tokens instead of "
+                "emitting a real tool call, and was repeating them — stopped the "
+                "stream. This task type needs a deterministic dispatcher or a "
+                "retry; gemma can't tool-call reliably here.)"
+            )
+            print(err_text)
+            return ChatResult(
+                final_text=err_text,
+                tool_invocations=invocations,
+                history=[m for m in messages if m.get("role") != "system"],
+            )
         msg = {
             "role": "assistant",
             "content": collected_content,
@@ -351,7 +485,7 @@ def chat(
             )
 
         known_tool_names = set(tool_by_name.keys())
-        loop_aborted = False
+        loop_abort_reason: str | None = None
         for call in tool_calls:
             fn = call["function"]
             raw_name = fn["name"]
@@ -378,6 +512,28 @@ def chat(
                     "content": json.dumps(result, default=str),
                 }
             )
+            # Cyclic-call loop guard: count this (name, args) signature across
+            # the whole dispatch. Catches cyclic loops the consecutive guard
+            # below misses (e.g. Drive searches rotating through
+            # 'Gig'/'Booking'/'Venue'/'Sheet' forever). See
+            # MAX_TOTAL_IDENTICAL_CALLS docstring for context.
+            sig = f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+            call_signature_counts[sig] = call_signature_counts.get(sig, 0) + 1
+            if call_signature_counts[sig] >= MAX_TOTAL_IDENTICAL_CALLS:
+                loop_abort_reason = (
+                    f"(aborted: tool call `{name}` with the same arguments was "
+                    f"made {call_signature_counts[sig]} times during this task — "
+                    f"the model is looping (often cyclically across a handful of "
+                    f"queries) and not converging. Last result: "
+                    f"{json.dumps(result, default=str)[:200]})"
+                )
+                if verbose:
+                    print(
+                        f"[runtime] tool call signature repeated "
+                        f"{call_signature_counts[sig]}× total ({name}) — "
+                        f"aborting to prevent cyclic spin"
+                    )
+                break
             # Identical-call loop guard: if the last N invocations are the same
             # (name + args), the model is spinning. Abort so it can't burn the
             # MAX_TURNS budget on a single broken call. See
@@ -389,7 +545,12 @@ def chat(
                     inv["name"] == first["name"] and inv["args"] == first["args"]
                     for inv in tail
                 ):
-                    loop_aborted = True
+                    loop_abort_reason = (
+                        f"(aborted: tool call `{invocations[-1]['name']}` was repeated "
+                        f"{MAX_CONSECUTIVE_IDENTICAL_CALLS} times in a row with the same "
+                        f"arguments — the model is stuck. Last result: "
+                        f"{json.dumps(invocations[-1]['result'], default=str)[:200]})"
+                    )
                     if verbose:
                         print(
                             f"[runtime] identical tool call repeated "
@@ -397,16 +558,10 @@ def chat(
                             f"({first['name']}) — aborting to prevent spin"
                         )
                     break
-        if loop_aborted:
-            err_text = (
-                f"(aborted: tool call `{invocations[-1]['name']}` was repeated "
-                f"{MAX_CONSECUTIVE_IDENTICAL_CALLS} times in a row with the same "
-                f"arguments — the model is stuck. Last result: "
-                f"{json.dumps(invocations[-1]['result'], default=str)[:200]})"
-            )
-            print(err_text)
+        if loop_abort_reason:
+            print(loop_abort_reason)
             return ChatResult(
-                final_text=err_text,
+                final_text=loop_abort_reason,
                 tool_invocations=invocations,
                 history=[m for m in messages if m.get("role") != "system"],
             )
