@@ -61,7 +61,7 @@
       {
         "label": "web-jam-back: dev (install + run)",
         "type": "shell",
-        "command": "git checkout dev && npm install --ignore-scripts && npm run dev",
+        "command": "npm install --ignore-scripts && (fuser -k 7000/tcp 2>/dev/null || true) && PORT=7000 npm run dev",
         "options": {
           "cwd": "${workspaceFolder:web-jam-back}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
@@ -79,7 +79,7 @@
       {
         "label": "WebJamSocketCluster: dev (install + run)",
         "type": "shell",
-        "command": "git checkout dev && npm install --ignore-scripts && npm run dev",
+        "command": "npm install --ignore-scripts && (fuser -k 8000/tcp 2>/dev/null || true) && PORT=8000 npm run dev",
         "options": {
           "cwd": "${workspaceFolder:WebJamSocketCluster}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
@@ -92,6 +92,72 @@
           "clear": true
         },
         "isBackground": true,
+        "problemMatcher": []
+      },
+      {
+        "label": "JaMmusic: dev (install + run)",
+        "type": "shell",
+        "command": "npm install && (fuser -k 7878/tcp 2>/dev/null || true) && npm run dev",
+        "options": {
+          "cwd": "${workspaceFolder:JaMmusic}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "new",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
+        },
+        "isBackground": true,
+        "problemMatcher": []
+      },
+      {
+        "label": "CollegeLutheran: dev (install + run)",
+        "type": "shell",
+        "command": "npm install && (fuser -k 7777/tcp 2>/dev/null || true) && npm run dev",
+        "options": {
+          "cwd": "${workspaceFolder:CollegeLutheran}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "new",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
+        },
+        "isBackground": true,
+        "problemMatcher": []
+      },
+      {
+        "label": "AppersonAuto: dev (install + run)",
+        "type": "shell",
+        "command": "npm install && (fuser -k 7779/tcp 2>/dev/null || true) && npm run dev",
+        "options": {
+          "cwd": "${workspaceFolder:AppersonAuto}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "new",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
+        },
+        "isBackground": true,
+        "problemMatcher": []
+      },
+      {
+        "label": "Start All Apps (dev)",
+        "dependsOn": [
+          "web-jam-back: dev (install + run)",
+          "WebJamSocketCluster: dev (install + run)",
+          "JaMmusic: dev (install + run)",
+          "CollegeLutheran: dev (install + run)",
+          "AppersonAuto: dev (install + run)"
+        ],
+        "dependsOrder": "parallel",
         "problemMatcher": []
       },
       {
