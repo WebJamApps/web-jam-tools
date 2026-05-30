@@ -60,7 +60,7 @@
       {
         "label": "web-jam-back: dev (install + run)",
         "type": "shell",
-        "command": "git checkout dev && npm install --ignore-scripts && npm run dev",
+        "command": "npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:web-jam-back}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
@@ -78,7 +78,7 @@
       {
         "label": "WebJamSocketCluster: dev (install + run)",
         "type": "shell",
-        "command": "git checkout dev && npm install --ignore-scripts && npm run dev",
+        "command": "npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:WebJamSocketCluster}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
