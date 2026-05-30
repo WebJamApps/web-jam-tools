@@ -194,6 +194,83 @@
         "problemMatcher": []
       },
       {
+        "label": "web-jam-back: checkout dev + install",
+        "type": "shell",
+        "command": "git checkout dev && git pull --ff-only && npm install",
+        "options": {
+          "cwd": "${workspaceFolder:web-jam-back}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "WebJamSocketCluster: checkout dev + install",
+        "type": "shell",
+        "command": "git checkout dev && git pull --ff-only && npm install",
+        "options": {
+          "cwd": "${workspaceFolder:WebJamSocketCluster}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "JaMmusic: checkout dev + install",
+        "type": "shell",
+        "command": "git checkout dev && git pull --ff-only && npm install",
+        "options": {
+          "cwd": "${workspaceFolder:JaMmusic}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "CollegeLutheran: checkout dev + install",
+        "type": "shell",
+        "command": "git checkout dev && git pull --ff-only && npm install",
+        "options": {
+          "cwd": "${workspaceFolder:CollegeLutheran}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "AppersonAuto: checkout dev + install",
+        "type": "shell",
+        "command": "git checkout dev && git pull --ff-only && npm install",
+        "options": {
+          "cwd": "${workspaceFolder:AppersonAuto}",
+          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+        },
+        "presentation": {
+          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "Checkout dev + install (ALL)",
+        "dependsOn": [
+          "web-jam-back: checkout dev + install",
+          "WebJamSocketCluster: checkout dev + install",
+          "JaMmusic: checkout dev + install",
+          "CollegeLutheran: checkout dev + install",
+          "AppersonAuto: checkout dev + install"
+        ],
+        "dependsOrder": "parallel",
+        "problemMatcher": []
+      },
+      {
         "label": "Gemma: Coordinator REPL (gemma)",
         "type": "shell",
         "command": "gemma",
