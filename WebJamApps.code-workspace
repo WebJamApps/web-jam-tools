@@ -60,7 +60,7 @@
       {
         "label": "web-jam-back: dev (install + run)",
         "type": "shell",
-        "command": "npm install --ignore-scripts && npm run dev",
+        "command": "fuser -k 7000/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:web-jam-back}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
@@ -78,7 +78,7 @@
       {
         "label": "WebJamSocketCluster: dev (install + run)",
         "type": "shell",
-        "command": "npm install --ignore-scripts && npm run dev",
+        "command": "fuser -k 8888/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:WebJamSocketCluster}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
@@ -96,7 +96,7 @@
       {
         "label": "JaMmusic: dev (install + run) [7878]",
         "type": "shell",
-        "command": "npm install --ignore-scripts && npm run dev",
+        "command": "fuser -k 7878/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:JaMmusic}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
@@ -114,7 +114,7 @@
       {
         "label": "CollegeLutheran: dev (install + run) [7777]",
         "type": "shell",
-        "command": "npm install --ignore-scripts && npm run dev",
+        "command": "fuser -k 7777/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:CollegeLutheran}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
@@ -132,7 +132,7 @@
       {
         "label": "AppersonAuto: dev (install + run) [7779]",
         "type": "shell",
-        "command": "npm install --ignore-scripts && npm run dev",
+        "command": "fuser -k 7779/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:AppersonAuto}",
           "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
@@ -157,7 +157,7 @@
         "problemMatcher": []
       },
       {
-        "label": "Start all servers (parallel)",
+        "label": "Start ALL projects (dev)",
         "dependsOn": [
           "web-jam-back: dev (install + run)",
           "WebJamSocketCluster: dev (install + run)",
@@ -166,15 +166,6 @@
           "AppersonAuto: dev (install + run) [7779]"
         ],
         "dependsOrder": "parallel",
-        "problemMatcher": []
-      },
-      {
-        "label": "Start ALL projects (dev)",
-        "dependsOn": [
-          "Kill dev ports (7000/7777/7779/7878/8888)",
-          "Start all servers (parallel)"
-        ],
-        "dependsOrder": "sequence",
         "problemMatcher": []
       },
       {
