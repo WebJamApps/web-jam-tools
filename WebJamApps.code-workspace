@@ -19,6 +19,7 @@
       { "pattern": "./*" }
     ],
     "vitest.disableWorkspaceWarning": true,
+    "vitest.configSearchPatternExclude": "{**/node_modules/**,**/vendor/**,**/.*/**,**/*.d.ts,**/JaMmusic/**}",
     "files.exclude": {
       "**/node_modules": true,
       "**/.git": true,
