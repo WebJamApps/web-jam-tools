@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "version": "1.0.4",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
