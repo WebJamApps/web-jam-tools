@@ -37,12 +37,20 @@ DEFAULT_MODELS='Claude Opus 4.6 (Thinking)|Claude Sonnet 4.6 (Thinking)|Gemini 3
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- parse args ---
-# Interactive is the default; --headless (-H) runs unattended (auto-approves tools).
+# Interactive is the default. Leading flags (any order, before the optional task):
+#   --headless / -H   run unattended (auto-approves tools)
+#   --setup-only      do the queue/issue + git-branch setup, print the task, and
+#                     STOP without launching agy. Used by the `/next` agy skill:
+#                     you're already inside agy, so agy itself does the coding.
 HEADLESS=0
-if [ "${1:-}" = "--headless" ] || [ "${1:-}" = "-H" ]; then
-  HEADLESS=1
-  shift
-fi
+SETUP_ONLY=0
+while [ $# -gt 0 ]; do
+  case "${1:-}" in
+    --headless|-H) HEADLESS=1; shift ;;
+    --setup-only)  SETUP_ONLY=1; shift ;;
+    *) break ;;
+  esac
+done
 TASK_ARG="${1:-}"
 
 # --- resolve task text + target repo ---
@@ -138,6 +146,21 @@ Rules:
   new dependencies.
 - When finished, summarize what you changed and confirm lint and tests are green.
 EOF
+
+# --- setup-only: emit the prepared task for an in-REPL agent (the /next skill) ---
+# The branch is already created and checked out above; agy reads this block and
+# does the coding itself, so we stop here (no model probe, no nested agy launch).
+if [ "$SETUP_ONLY" -eq 1 ]; then
+  cat <<EOF2
+=== GEMINI-TASK READY ===
+REPO_DIR: $REPO_DIR
+BRANCH: $BRANCH
+=== TASK PROMPT (implement this) ===
+$PROMPT
+=== END TASK ===
+EOF2
+  exit 0
+fi
 
 # --- pick the most capable currently-available model (fallback on rate limits) ---
 echo "Selecting model (most capable available)..."
