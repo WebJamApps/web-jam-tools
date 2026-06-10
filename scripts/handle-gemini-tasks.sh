@@ -10,10 +10,10 @@
 #      Line format: "<repo-name>: <task description>"  (# and blank lines ignored)
 #   2. GitHub issue labeled `gemini`: pass "<Repo>#<num>" (title + body = the task)
 #
-# Usage:
-#   handle-gemini-tasks.sh                       # run the FIRST queue line
-#   handle-gemini-tasks.sh CollegeLutheran#123   # run a gemini-labeled issue
-#   handle-gemini-tasks.sh -i [...]              # interactive instead of headless
+# Usage (interactive by default — you drive/watch gemini in the REPL):
+#   handle-gemini-tasks.sh                        # run the FIRST queue line
+#   handle-gemini-tasks.sh CollegeLutheran#123    # run a gemini-labeled issue
+#   handle-gemini-tasks.sh --headless [...]       # unattended; walks the model chain
 #
 # This script NEVER pushes, opens PRs, or edits the queue file — Josh deletes the
 # queue line himself after accepting the work (queue management is manual).
@@ -23,9 +23,9 @@ set -euo pipefail
 QUEUE_FILE="$HOME/Dropbox/web-jam-llms/gemini-tasks.txt"
 WEBJAM="$HOME/WebJamApps"
 
-# Model fallback chain (headless): try the capable pro model first; if a run
-# fails — e.g. the preview model is out of tokens/quota — retry with the next.
-# Override per-run with: GEMINI_MODELS="modelA modelB" handle-gemini-tasks.sh
+# Model chain: interactive runs start on the first (pro) model — you can switch
+# in-REPL with /model. --headless runs walk the chain, falling back when a model
+# is out of quota. Override per-run with: GEMINI_MODELS="modelA modelB" ...
 # Note: the free tier grants NO quota for gemini-3.1-pro (limit 0); gemini-3-pro
 # and the 2.5-pro tiers have a small daily free quota, the flash tiers a larger
 # one — hence pro-first, flash-fallback.
@@ -33,9 +33,10 @@ WEBJAM="$HOME/WebJamApps"
 MODELS=(${GEMINI_MODELS:-gemini-3-pro-preview gemini-2.5-pro gemini-3.5-flash gemini-2.5-flash})
 
 # --- parse args ---
-INTERACTIVE=0
-if [ "${1:-}" = "-i" ]; then
-  INTERACTIVE=1
+# Interactive is the default; --headless (-H) runs unattended with the fallback chain.
+HEADLESS=0
+if [ "${1:-}" = "--headless" ] || [ "${1:-}" = "-H" ]; then
+  HEADLESS=1
   shift
 fi
 TASK_ARG="${1:-}"
@@ -157,11 +158,8 @@ run_gemini() {
       gemini --skip-trust "$@"
 }
 
-if [ "$INTERACTIVE" -eq 1 ]; then
-  # Interactive: Josh is driving — use the primary model, no auto-fallback.
-  run_gemini -m "${MODELS[0]}" -i "$PROMPT"
-else
-  # Headless: walk the model chain until one run succeeds.
+if [ "$HEADLESS" -eq 1 ]; then
+  # Headless (opt-in): walk the model chain until one run succeeds.
   GEMINI_OK=0
   for model in "${MODELS[@]}"; do
     echo ">>> gemini (headless) — model: $model"
@@ -173,6 +171,11 @@ else
     echo "!!! model '$model' failed (out of tokens or error) — trying next fallback if any." >&2
   done
   [ "$GEMINI_OK" -eq 1 ] || echo "!!! all models failed: ${MODELS[*]}" >&2
+else
+  # Interactive (default): drop into the gemini REPL on the pro model with the
+  # task preloaded. You drive it, watch it work, and switch models with /model
+  # if the pro tier is tapped out.
+  run_gemini -m "${MODELS[0]}" -i "$PROMPT"
 fi
 
 # --- finish summary ---
