@@ -1,0 +1,6 @@
+{
+  "name": "webjam-tasks",
+  "version": "1.0.0",
+  "description": "WebJamApps agy task lane: /next runs the next queued coding task (queue or agy-labeled issue), sets up a fresh dev branch, and implements it in-session.",
+  "author": { "name": "josh" }
+}
