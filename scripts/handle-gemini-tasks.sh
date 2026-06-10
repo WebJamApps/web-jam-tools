@@ -10,7 +10,7 @@
 # exposes capable models — Claude Opus/Sonnet 4.6, Gemini 3.1 Pro, etc.
 #
 # Task sources (two):
-#   1. Queue file (default): ~/Dropbox/web-jam-llms/gemini-tasks.txt
+#   1. Queue file (default): ~/Dropbox/web-jam-llms/agy-tasks.txt
 #      Line format: "<repo-name>: <task description>"  (# and blank lines ignored)
 #   2. GitHub issue labeled `gemini`: pass "<Repo>#<num>" (title + body = the task)
 #
@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-QUEUE_FILE="$HOME/Dropbox/web-jam-llms/gemini-tasks.txt"
+QUEUE_FILE="$HOME/Dropbox/web-jam-llms/agy-tasks.txt"
 WEBJAM="$HOME/WebJamApps"
 AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 
