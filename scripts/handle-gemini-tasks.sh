@@ -125,11 +125,28 @@ Rules:
 - When finished, summarize what you changed and confirm lint and tests are green.
 EOF
 
-# --- run gemini (checkpointing comes from ~/.gemini/settings.json) ---
+# --- run gemini ---
+# Strip the IDE-companion env vars that VS Code's integrated terminal injects, so
+# gemini's workspace is JUST this repo (cwd) instead of the whole multi-root VS
+# Code workspace. gemini enables IDE mode only when both GEMINI_CLI_IDE_SERVER_PORT
+# and GEMINI_CLI_IDE_WORKSPACE_PATH are set; clearing the IDE env vars keeps the
+# task scoped to one repo (no context bloat, and no crash if some other workspace
+# folder is missing). Checkpointing comes from ~/.gemini/settings.json.
+run_gemini() {
+  env -u GEMINI_CLI_IDE_SERVER_PORT \
+      -u GEMINI_CLI_IDE_WORKSPACE_PATH \
+      -u GEMINI_CLI_IDE_PID \
+      -u GEMINI_CLI_IDE_AUTH_TOKEN \
+      -u GEMINI_CLI_IDE_CONNECTION_TYPE \
+      -u GEMINI_CLI_IDE_SERVER_STDIO_COMMAND \
+      -u GEMINI_CLI_IDE_SERVER_STDIO_ARGS \
+      gemini "$@"
+}
+
 if [ "$INTERACTIVE" -eq 1 ]; then
-  gemini -i "$PROMPT"
+  run_gemini -i "$PROMPT"
 else
-  gemini -p "$PROMPT"
+  run_gemini -p "$PROMPT"
 fi
 
 # --- finish summary ---
