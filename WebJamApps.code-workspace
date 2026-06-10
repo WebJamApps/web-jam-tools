@@ -71,8 +71,6 @@
       "esbenp.prettier-vscode",
       "stylelint.vscode-stylelint",
       "eamodio.gitlens",
-      "google.gemini-cli-vscode-ide-companion",
-      "google.geminicodeassist",
       "denoland.vscode-deno"
     ],
     "unwantedRecommendations": [
