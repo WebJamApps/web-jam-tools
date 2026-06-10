@@ -12,11 +12,11 @@
 # Task sources (two):
 #   1. Queue file (default): ~/Dropbox/web-jam-llms/agy-tasks.txt
 #      Line format: "<repo-name>: <task description>"  (# and blank lines ignored)
-#   2. GitHub issue labeled `gemini`: pass "<Repo>#<num>" (title + body = the task)
+#   2. GitHub issue labeled `agy`: pass "<Repo>#<num>" (title + body = the task)
 #
 # Usage (interactive by default — you drive/watch agy in the REPL):
 #   handle-gemini-tasks.sh                        # run the FIRST queue line
-#   handle-gemini-tasks.sh CollegeLutheran#123    # run a gemini-labeled issue
+#   handle-gemini-tasks.sh CollegeLutheran#123    # run an agy-labeled issue
 #   handle-gemini-tasks.sh --headless [...]       # unattended; auto-approves tools
 #
 # This script NEVER pushes, opens PRs, or edits the queue file — Josh deletes the
