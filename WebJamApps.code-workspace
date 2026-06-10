@@ -25,10 +25,6 @@
       "path": "WebJamSocketCluster"
     },
     {
-      "name": "WebJamPg",
-      "path": "WebJamPg"
-    },
-    {
       "name": "web-jam-tools",
       "path": "web-jam-tools"
     },
