@@ -23,6 +23,15 @@ set -euo pipefail
 QUEUE_FILE="$HOME/Dropbox/web-jam-llms/gemini-tasks.txt"
 WEBJAM="$HOME/WebJamApps"
 
+# Model fallback chain (headless): try the capable pro model first; if a run
+# fails — e.g. the preview model is out of tokens/quota — retry with the next.
+# Override per-run with: GEMINI_MODELS="modelA modelB" handle-gemini-tasks.sh
+# Note: the free tier grants NO quota for gemini-3.1-pro (limit 0); gemini-3-pro
+# and the 2.5-pro tiers have a small daily free quota, the flash tiers a larger
+# one — hence pro-first, flash-fallback.
+# shellcheck disable=SC2206
+MODELS=(${GEMINI_MODELS:-gemini-3-pro-preview gemini-2.5-pro gemini-3.5-flash gemini-2.5-flash})
+
 # --- parse args ---
 INTERACTIVE=0
 if [ "${1:-}" = "-i" ]; then
@@ -132,6 +141,10 @@ EOF
 # and GEMINI_CLI_IDE_WORKSPACE_PATH are set; clearing the IDE env vars keeps the
 # task scoped to one repo (no context bloat, and no crash if some other workspace
 # folder is missing). Checkpointing comes from ~/.gemini/settings.json.
+# Also unset GEMINI_API_KEY: the lane authenticates via "Login with Google"
+# (oauth-personal / Code Assist) for pro-model access. A stray free-tier
+# GEMINI_API_KEY in the env would route to a tier with zero pro quota. Requires a
+# one-time `gemini` interactive login (Login with Google) on this machine.
 run_gemini() {
   env -u GEMINI_CLI_IDE_SERVER_PORT \
       -u GEMINI_CLI_IDE_WORKSPACE_PATH \
@@ -140,13 +153,26 @@ run_gemini() {
       -u GEMINI_CLI_IDE_CONNECTION_TYPE \
       -u GEMINI_CLI_IDE_SERVER_STDIO_COMMAND \
       -u GEMINI_CLI_IDE_SERVER_STDIO_ARGS \
-      gemini "$@"
+      -u GEMINI_API_KEY \
+      gemini --skip-trust "$@"
 }
 
 if [ "$INTERACTIVE" -eq 1 ]; then
-  run_gemini -i "$PROMPT"
+  # Interactive: Josh is driving — use the primary model, no auto-fallback.
+  run_gemini -m "${MODELS[0]}" -i "$PROMPT"
 else
-  run_gemini -p "$PROMPT"
+  # Headless: walk the model chain until one run succeeds.
+  GEMINI_OK=0
+  for model in "${MODELS[@]}"; do
+    echo ">>> gemini (headless) — model: $model"
+    if run_gemini -m "$model" -p "$PROMPT"; then
+      GEMINI_OK=1
+      echo ">>> gemini finished on model: $model"
+      break
+    fi
+    echo "!!! model '$model' failed (out of tokens or error) — trying next fallback if any." >&2
+  done
+  [ "$GEMINI_OK" -eq 1 ] || echo "!!! all models failed: ${MODELS[*]}" >&2
 fi
 
 # --- finish summary ---
