@@ -1,13 +1,37 @@
 {
   "folders": [
-    { "name": "JaMmusic", "path": "JaMmusic" },
-    { "name": "CollegeLutheran", "path": "CollegeLutheran" },
-    { "name": "AppersonAuto", "path": "AppersonAuto" },
-    { "name": "web-jam-back", "path": "web-jam-back" },
-    { "name": "WebJamSocketCluster", "path": "WebJamSocketCluster" },
-    { "name": "WebJamPg", "path": "WebJamPg" },
-    { "name": "web-jam-tools", "path": "web-jam-tools" },
-    { "name": "web-jam-llms", "path": "web-jam-llms" }
+    {
+      "name": "Temp",
+      "path": "temp"
+    },
+    {
+      "name": "JaMmusic",
+      "path": "JaMmusic"
+    },
+    {
+      "name": "CollegeLutheran",
+      "path": "CollegeLutheran"
+    },
+    {
+      "name": "AppersonAuto",
+      "path": "AppersonAuto"
+    },
+    {
+      "name": "web-jam-back",
+      "path": "web-jam-back"
+    },
+    {
+      "name": "WebJamSocketCluster",
+      "path": "WebJamSocketCluster"
+    },
+    {
+      "name": "web-jam-tools",
+      "path": "web-jam-tools"
+    },
+    {
+      "name": "web-jam-llms",
+      "path": "web-jam-llms"
+    }
   ],
   "settings": {
     "editor.formatOnSave": true,
@@ -16,9 +40,12 @@
       "source.fixAll.stylelint": "explicit"
     },
     "eslint.workingDirectories": [
-      { "pattern": "./*" }
+      {
+        "pattern": "./*"
+      }
     ],
     "vitest.disableWorkspaceWarning": true,
+    "vitest.configSearchPatternExclude": "{**/node_modules/**,**/vendor/**,**/.*/**,**/*.d.ts,**/JaMmusic/**}",
     "files.exclude": {
       "**/node_modules": true,
       "**/.git": true,
@@ -44,8 +71,6 @@
       "esbenp.prettier-vscode",
       "stylelint.vscode-stylelint",
       "eamodio.gitlens",
-      "google.gemini-cli-vscode-ide-companion",
-      "google.geminicodeassist",
       "denoland.vscode-deno"
     ],
     "unwantedRecommendations": [
@@ -63,7 +88,13 @@
         "command": "fuser -k 7000/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:web-jam-back}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
           "panel": "dedicated",
@@ -81,7 +112,13 @@
         "command": "fuser -k 8888/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:WebJamSocketCluster}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
           "panel": "dedicated",
@@ -99,7 +136,13 @@
         "command": "fuser -k 7878/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:JaMmusic}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
           "panel": "dedicated",
@@ -117,7 +160,13 @@
         "command": "fuser -k 7777/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:CollegeLutheran}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
           "panel": "dedicated",
@@ -135,7 +184,13 @@
         "command": "fuser -k 7779/tcp 2>/dev/null; npm install --ignore-scripts && npm run dev",
         "options": {
           "cwd": "${workspaceFolder:AppersonAuto}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
           "panel": "dedicated",
@@ -173,7 +228,13 @@
         "type": "shell",
         "command": "for p in 7000 7777 7779 7878 8888; do fuser -k \"$p/tcp\" 2>/dev/null && echo \"killed :$p\" || echo \"nothing on :$p\"; done",
         "options": {
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
           "panel": "shared",
@@ -190,10 +251,20 @@
         "command": "git checkout dev && git pull --ff-only && npm install",
         "options": {
           "cwd": "${workspaceFolder:web-jam-back}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
-          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+          "panel": "dedicated",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
         },
         "problemMatcher": []
       },
@@ -203,10 +274,20 @@
         "command": "git checkout dev && git pull --ff-only && npm install",
         "options": {
           "cwd": "${workspaceFolder:WebJamSocketCluster}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
-          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+          "panel": "dedicated",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
         },
         "problemMatcher": []
       },
@@ -216,10 +297,20 @@
         "command": "git checkout dev && git pull --ff-only && npm install",
         "options": {
           "cwd": "${workspaceFolder:JaMmusic}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
-          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+          "panel": "dedicated",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
         },
         "problemMatcher": []
       },
@@ -229,10 +320,20 @@
         "command": "git checkout dev && git pull --ff-only && npm install",
         "options": {
           "cwd": "${workspaceFolder:CollegeLutheran}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
-          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+          "panel": "dedicated",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
         },
         "problemMatcher": []
       },
@@ -242,10 +343,20 @@
         "command": "git checkout dev && git pull --ff-only && npm install",
         "options": {
           "cwd": "${workspaceFolder:AppersonAuto}",
-          "shell": { "executable": "/bin/bash", "args": ["-l", "-c"] }
+          "shell": {
+            "executable": "/bin/bash",
+            "args": [
+              "-l",
+              "-c"
+            ]
+          }
         },
         "presentation": {
-          "panel": "dedicated", "reveal": "always", "focus": false, "showReuseMessage": false, "clear": true
+          "panel": "dedicated",
+          "reveal": "always",
+          "focus": false,
+          "showReuseMessage": false,
+          "clear": true
         },
         "problemMatcher": []
       },
