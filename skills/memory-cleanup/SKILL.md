@@ -47,6 +47,15 @@ findings table as text. **It must not write, edit, or delete anything.**
 Give the subagent this surfaces list and the staleness policy. It reports, for every
 finding: `surface | entry | finding | proposed action (keep / update / merge / delete)`.
 
+**Command discipline (so the scan never triggers permission prompts):** the subagent
+must use the dedicated Read / Glob / Grep tools for all file inspection — not Bash
+equivalents. Bash is allowed only as single, simple commands that match Josh's
+standing allowlist: `ls …`, `cat …`, `grep …`, `gh issue view …`, `gh pr view …`.
+Never use compound or ad-hoc Bash: no `cd … && …` chains, no `for`/`while` loops,
+no `;`-chained commands, no inline `python3 -c`/`node -e`, no heredocs. If a check
+seems to need a loop, run the simple command once per target instead, or do it with
+Read/Glob/Grep. Pass this paragraph to the subagent verbatim in its prompt.
+
 ### Surfaces to audit (11)
 
 | # | Surface | Checks |
