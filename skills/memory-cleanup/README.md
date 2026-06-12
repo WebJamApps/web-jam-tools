@@ -7,12 +7,28 @@ unresolved-links panel that doubles as a dangling-`[[link]]` detector.
 Memory files are already Obsidian-compatible — they use YAML frontmatter and `[[wiki]]`
 links, no conversion needed.
 
-## One-time setup (done by the skill build, except the last manual step)
+## One-time setup
 
-1. **Obsidian installed** on the laptop (flatpak `md.obsidian.Obsidian`, or snap / the
-   official `.deb` as fallback).
-2. **Cross-AI store symlinked into the projects tree** so it shows up alongside the
-   per-project memory dirs:
+1. **Install Obsidian — MUST be run by Josh in a NATIVE terminal**, not from Claude
+   Code / the VS Code integrated terminal. Claude Code runs inside the VS Code **snap**
+   sandbox, where `XDG_DATA_HOME` is redirected to `~/snap/code/<rev>/.local/share/`.
+   A `flatpak --user install` from there lands in that throwaway sandbox dir (not your
+   real `~/.local/share/flatpak`), and nesting flatpak's bubblewrap inside the snap
+   fails to launch (`Bad file descriptor` / "commit … not installed"). So an agent
+   cannot install or verify Obsidian for you — do it yourself:
+
+   ```bash
+   # in a real terminal (Ctrl+Alt+T), uses the existing SYSTEM flathub remote:
+   flatpak install flathub md.obsidian.Obsidian   # polkit will ask for your password
+   flatpak run md.obsidian.Obsidian               # confirm it opens
+   ```
+
+   Fallback if you'd rather avoid flatpak entirely: the official `.deb` from
+   <https://obsidian.md> (`sudo apt install ./obsidian_*.deb`) — also un-sandboxed and
+   shows up in the app launcher.
+2. **Cross-AI store symlinked into the projects tree** (done by the build — this part
+   is a plain symlink in real `$HOME`, unaffected by the snap redirect) so it shows up
+   alongside the per-project memory dirs:
 
    ```bash
    ln -s ~/Dropbox/web-jam-llms ~/.claude/projects/dropbox-web-jam-llms
