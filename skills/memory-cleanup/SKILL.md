@@ -127,6 +127,13 @@ Only after approval, and only for approved rows:
 ## Hard rules
 
 - **Approval-gated.** No writes happen before Phase 2 approval. The scan is read-only.
+- **No unilateral deferrals.** Approval covers every approved row IN FULL, in this run.
+  Never execute part of the findings and report the rest as "deferred — too large for
+  this run." If a finding is genuinely big (e.g. a bulk dangling-links pass), it must
+  appear in the Phase 2 table as its own numbered row so Josh can approve or defer it
+  HIMSELF. Once he says "yes" / "do all", every approved row gets executed before the
+  turn ends — running long is acceptable; silently shrinking scope is not. (The only
+  built-in exception is surface #9/Drive, which is flag-only by design.)
 - **Edits only the surfaces table.** Never code, never other repo files.
 - **Index↔file together.** Never leave a `MEMORY.md` line pointing at a deleted file,
   or a file with no index line.
