@@ -115,6 +115,12 @@ all 11 were checked. Then **STOP and wait for explicit approval.** Accept "yes",
 Only after approval, and only for approved rows:
 
 1. Apply each edit/delete in the parent session (the subagent never writes).
+   **Repo files are special (surfaces #3/#4 — per-repo `CLAUDE.md`/`AGENTS.md`):**
+   never leave these edits dirty in a working tree. For each affected repo:
+   check `git status -sb` first, create a feature branch off `dev` (stash/restore
+   if the checkout is on an unrelated branch), bump the repo's semver, commit,
+   push, and open a **draft PR** to `dev` — Josh reviews and merges. All other
+   surfaces (memory dirs, Dropbox cross-AI files) are edited in place as before.
 2. **Keep indexes in sync:** when you delete or rename a memory file, remove or update
    its `MEMORY.md` index line in the same dir. When you merge memories, update the
    index lines to match.
@@ -127,6 +133,13 @@ Only after approval, and only for approved rows:
 ## Hard rules
 
 - **Approval-gated.** No writes happen before Phase 2 approval. The scan is read-only.
+- **No unilateral deferrals.** Approval covers every approved row IN FULL, in this run.
+  Never execute part of the findings and report the rest as "deferred — too large for
+  this run." If a finding is genuinely big (e.g. a bulk dangling-links pass), it must
+  appear in the Phase 2 table as its own numbered row so Josh can approve or defer it
+  HIMSELF. Once he says "yes" / "do all", every approved row gets executed before the
+  turn ends — running long is acceptable; silently shrinking scope is not. (The only
+  built-in exception is surface #9/Drive, which is flag-only by design.)
 - **Edits only the surfaces table.** Never code, never other repo files.
 - **Index↔file together.** Never leave a `MEMORY.md` line pointing at a deleted file,
   or a file with no index line.
