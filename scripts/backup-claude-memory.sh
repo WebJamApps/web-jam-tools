@@ -44,5 +44,10 @@ rclone sync "$SRC_SHARED" "$DST/shared-memory" \
     --exclude '.tmp' \
     --exclude '*~'
 
+# Global Claude Code instructions. Not under any memory/ dir, so the loops above
+# miss it — but it carries durable cross-project rules and routing notes, so back
+# it up too. copyto (single file) keeps it flat at the backup root.
+rclone copyto "$HOME/.claude/CLAUDE.md" "$DST/CLAUDE.md"
+
 # Append-only log (Dropbox revisions handle the per-run audit trail).
 echo "$(ts) claude-memory backup ok" >> "$LOG"
