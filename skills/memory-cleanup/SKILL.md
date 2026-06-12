@@ -115,6 +115,12 @@ all 11 were checked. Then **STOP and wait for explicit approval.** Accept "yes",
 Only after approval, and only for approved rows:
 
 1. Apply each edit/delete in the parent session (the subagent never writes).
+   **Repo files are special (surfaces #3/#4 — per-repo `CLAUDE.md`/`AGENTS.md`):**
+   never leave these edits dirty in a working tree. For each affected repo:
+   check `git status -sb` first, create a feature branch off `dev` (stash/restore
+   if the checkout is on an unrelated branch), bump the repo's semver, commit,
+   push, and open a **draft PR** to `dev` — Josh reviews and merges. All other
+   surfaces (memory dirs, Dropbox cross-AI files) are edited in place as before.
 2. **Keep indexes in sync:** when you delete or rename a memory file, remove or update
    its `MEMORY.md` index line in the same dir. When you merge memories, update the
    index lines to match.
