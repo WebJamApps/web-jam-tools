@@ -1,6 +1,6 @@
 ---
 name: drive-cleanup
-description: Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative gemma/opus queues. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Triggered automatically at session start and at 07:00 daily; can also be invoked manually with /drive-cleanup.
+description: Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative gemma/opus queues. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 (analyze) runs on a cheap Haiku subagent. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.
 ---
 
 # drive-cleanup
@@ -19,7 +19,21 @@ Authoritative storage split:
 
 The Drive originals of `gemma-tasks.txt`, `claude-opus-tasks.txt`, and `GEMMA.md` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only `SHARED.md` and the 4-file JMM mirror remain as Drive snapshots — phone Sonnet consults them.
 
-## Phase 1 — Analyze (read-only)
+## Phase 1 — Analyze (read-only, on a Haiku subagent)
+
+Delegate the entire Phase-1 scan to a **Haiku subagent** (Agent tool, `model: "haiku"`)
+regardless of the parent session's model — it is inventory + rule-matching, well within
+Haiku's ability, and keeps cost minimal. The subagent does read-only work only: it uses
+the `mcp__google-drive__*` tools (and reads the local Dropbox queues), classifies every
+item, and returns the findings table as text. **It must not write, edit, trash, or move
+anything.** Phase 2 (approval) and Phase 3 (execute) run in the PARENT session.
+Precedent: the /memory-cleanup scan (web-jam-tools#48).
+
+**Closed-world classification (mandatory):** the subagent must place EVERY My-Drive-root
+item into exactly one bucket — **canonical** (expected resident file) / **known folder** /
+**finding** (needs an action) / **ambiguous** (cannot classify) — and report a count
+reconciliation line, e.g. `16 root items found, 16 classified (9 canonical, 4 folders, 2
+findings, 1 ambiguous)`. Silence must never be confusable with "missed it."
 
 Use the `mcp__google-drive__*` tools. Check at minimum:
 
@@ -38,6 +52,8 @@ Use the `mcp__google-drive__*` tools. Check at minimum:
   - `claude-sonnet-tasks-<YYYY-MM-DD-HHMM>.txt` → merge into canonical `claude-sonnet-tasks.txt` on Drive, then trash the timestamped file.
 - **Misplaced deliverable artifacts** at root (pitch emails, drafts, EPK material) — should live in `JoshMariaMusic`, `CollegeLutheran`, or `MariaParty` per the file-placement rule.
 - **Stray ephemeral files** (timestamped backups older than 7 days, log dumps) — flag for trash.
+- **Unknown personal docs at root** — non-project files that aren't deliverables for JoshMariaMusic / CollegeLutheran / MariaParty (e.g. recipe / travel / home-maintenance PDFs). Propose **moving into a `Misc/` folder** on Drive (create `Misc/` on first approved use). Not trash, and not "ask every time" — the standing policy is move-to-Misc (Josh's call 2026-06-12).
+- **Old `drive-cleanup-pending-report.md` copies at root** — this skill's own report file. Retain the **latest only**; each run proposes trashing the older copies (past runs left 8 accumulated). Surface as a finding; never auto-trash.
 - **Allowed non-queue files at root (whitelist — DO NOT flag):**
   - `processed-*` files — legacy audit-trail leftovers from before 2026-05-27. New bridges are trashed, not renamed; existing `processed-*` files can be flagged for trash on a manual cleanup pass but should not be auto-actioned.
   - (`SHARED.md` is already covered in the canonical-files-at-root list above.)
@@ -47,19 +63,24 @@ Use the `mcp__google-drive__*` tools. Check at minimum:
 - Within-folder duplicates (same name).
 - Files violating the file-placement rule (e.g., a deliverable artifact stuck in CLAUDE that should be in JoshMariaMusic).
 
-### C. Task-queue health scan (BOTH queues)
+### C. Task-queue health scan (ALL FOUR Dropbox queues)
 
-**Always run this every invocation, even if there were no Drive-side bridges.** Scan BOTH local Dropbox queues:
+**Always run this every invocation, even if there were no Drive-side bridges.** Scan all four local Dropbox queues:
 
 - `~/Dropbox/web-jam-llms/claude-opus-tasks.txt`
 - `~/Dropbox/web-jam-llms/gemma-tasks.txt`
+- `~/Dropbox/web-jam-llms/agy-tasks.txt`
+- `~/Dropbox/web-jam-llms/claude-fable-tasks.txt`
 
-For each queue:
+(`claude-sonnet-tasks.txt` is Drive-resident and handled under the root scan above, not here.)
 
-1. **Numbering check (BOTH queues)** — extract every `Task N` header (case-insensitive, `^\s*task\s+\d+`) and verify they are at uniform step 5 starting from 0 (so `0, 5, 10, 15, ...`). If not, OR if there are duplicate task numbers (common after bridges from multiple source files each numbered `1, 2, 3`), surface a renumber-to-5 proposal as a Phase 2 finding. Also flag any typos in header lines (e.g. `Taslk N` instead of `Task N`) — fix them before renumbering, since the renumber script's regex requires `task` to match. Skip only if the queue has ≤2 tasks.
-2. **Headline length check (OPUS QUEUE ONLY)** — for each task, count non-blank lines from its `Task N` header up to the next `Task M` header (or EOF). Any task with more than 3 non-blank body lines is a compression candidate. Surface as a Phase 2 finding: "compress N tasks (Task X, Task Y, ...) — extract bodies to memory files, leave one-line headlines + `[[task-spec-<slug>]]` cross-refs." Gemma's queue tasks tend to be short operational items that don't need compression, and the Coordinator doesn't use the memory system; do NOT compress gemma queue entries.
+For each queue, report its task count so Josh sees it was checked. Then, for the **Opus queue ONLY**:
 
-Surfacing these is mandatory — if all checks pass cleanly for a queue, say so in the Phase 2 report ("Opus queue: 12 tasks, all at step-5 numbering, all headline-sized — clean." / "Gemma queue: 8 tasks, all at step-5 numbering — clean."). Don't silently omit either queue.
+- **Headline length check (OPUS QUEUE ONLY)** — for each task, count non-blank lines from its `Task N` header up to the next `Task M` header (or EOF). Any task with more than 3 non-blank body lines is a compression candidate. Surface as a Phase 2 finding: "compress N tasks (Task X, Task Y, ...) — extract bodies to memory files, leave one-line headlines + `[[task-spec-<slug>]]` cross-refs." The gemma / agy / fable queues are short operational items that don't need compression — do NOT compress them.
+
+**Never propose renumbering (Josh's call 2026-06-12).** Number gaps AND duplicate task numbers are fine — bridged or new tasks are simply appended to the bottom of the queue file. This skill must not contain or surface any uniform-step ("renumber to 5") check or proposal. (A typo'd header like `Taslk N` may still be noted for a manual fix, but never as part of a renumber.)
+
+Surfacing is mandatory — if a queue is clean, say so in the Phase 2 report ("Opus queue: 12 tasks, all headline-sized — clean." / "Gemma queue: 8 tasks — clean."). Don't silently omit any of the four.
 
 ### D. Out-of-scope (do NOT touch without explicit instruction)
 
@@ -69,7 +90,7 @@ Surfacing these is mandatory — if all checks pass cleanly for a queue, say so 
 
 ## Phase 2 — Report + await approval
 
-Present findings as a clear table per category. Format:
+Lead with the Phase-1 **count reconciliation** line (every root item classified — e.g. "16 root items found, 16 classified") so Josh can see nothing was skipped. Then present findings as a clear table per category. Format:
 
 ```
 | # | Issue | File(s) (with id) | Proposed action |
@@ -81,21 +102,21 @@ Present findings as a clear table per category. Format:
 
 End with explicit prompt: **"Approve these actions? Reply yes / no / specific numbers (e.g., 1,3)."**
 
-If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` Do not proceed to Phase 3.
+If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` Do not proceed to Phase 3 — but still write the stamp file (see **Triggering**) so the daily reminder clears.
 
 ## Phase 3 — Execute (only after explicit approval)
 
 ### Bridge actions (`for-gemma-*.txt`, `for-opus-*.txt`, legacy `gemma-tasks-*.txt`, `claude-opus-tasks-*.txt`)
 
 1. **Download** the source file content from Drive.
-2. **Compute the next task number for each bridge.** Before writing, read the destination queue and find the highest existing `Task N` header. Then assign each bridge content a sequential `Task N+1:`, `Task N+2:`, ... (the renumber-to-5 pass later will normalize these to step 5, but they need SOME number now so the task structure is parseable). The bridge content typically has a line like `Task: <description>` — replace that with `Task <NN>: <description>` (keeping the description text). If the bridge has multiple `Task:` lines (e.g. `Task 1:`, `Task 2:`), increment for each.
-3. **Append** to the corresponding local Dropbox queue with atomic-write semantics (write to `<target>.tmp`, fsync, `os.replace`):
+2. **Assign each bridge a task number.** Read the destination queue, find the highest existing `Task N` header, and number each bridge `Task N+1:`, `Task N+2:`, … The bridge content typically has a `Task: <description>` line — replace it with `Task <NN>: <description>` (keeping the text); increment for each `Task:` line in the bridge. Gaps or duplicate numbers are fine — just append at the bottom; **never renumber** the existing queue.
+3. **Append** to the corresponding local Dropbox queue with atomic-write semantics (write to `<target>.tmp`, fsync, `os.replace`). **Wrap the merged text at 120 columns:** insert line breaks so no appended line exceeds 120 characters, breaking at word boundaries; continuation lines must stay unambiguously part of the same task entry (match the queue files' existing multi-line body convention).
    - `for-gemma-*` / `gemma-tasks-*-*.txt` → `/home/joshua/Dropbox/web-jam-llms/gemma-tasks.txt`
    - `for-opus-*` / `claude-opus-tasks-*-*.txt` → `/home/joshua/Dropbox/web-jam-llms/claude-opus-tasks.txt`
 4. **Verify** the append landed: re-read the local file and confirm the appended bytes are present AND that the new `Task NN:` headers parse correctly. If verify fails, DO NOT trash the Drive original — leave it in place and flag the failure.
 5. **Trash** the Drive original (move to Drive trash, recoverable for 30 days). The content is preserved in the Dropbox queue and in `bridge-log.md`; the Drive copy is no longer needed once the bridge succeeds. Josh's decision 2026-05-27 — keeps Drive root clean instead of accumulating `processed-*` files indefinitely.
 6. **Append to `bridge-log.md`** at `/home/joshua/Dropbox/web-jam-llms/bridge-log.md`: timestamp (UTC), source filename, dest path, bytes appended, assigned task numbers, status (ok | failed-verify).
-7. **Re-run the Phase 1.C opus-queue health scan** (renumber + compression) — bridging just added new tasks that may need compression and definitely shifted the numbering off step-5. The renumber+compress pass is what normalizes the queue back into shape.
+7. **Re-run the Phase 1.C Opus-queue compression check** — bridging may have added a long task body worth compressing to a one-line headline + `[[task-spec-<slug>]]`. (No renumbering — that is retired; appended tasks simply live at the bottom.)
 
 (Drive snapshots of the gemma/opus queues no longer exist — see "Storage model" above — so there's no Drive-side refresh step for bridge actions. `SHARED.md` is the only Dropbox-source file with a Drive snapshot; if a bridge or rule change updates `/home/joshua/Dropbox/web-jam-llms/SHARED.md`, refresh the Drive snapshot via `rclone copy /home/joshua/Dropbox/web-jam-llms/SHARED.md gdrive: --update`.)
 
@@ -122,29 +143,14 @@ Surface in Phase 2 as: `Sonnet re-upload of <filename>: root copy (modified <dat
 
 Moves / trashes / dedupes — use the appropriate Drive MCP tool. Verify high-stakes changes with a follow-up read.
 
-### Queue renumber (Phase 1 surfacing → Phase 3 execute, added 2026-05-22)
+### Queue renumber — RETIRED (Josh's call 2026-06-12)
 
-If Phase 1 analysis spots a canonical queue with non-step-multiple task numbers (e.g. tasks numbered `2, 21, 22, 24, 27, 29, ...` — gaps from deletions or non-uniform spacing), surface a renumber-to-5 proposal as a Phase 2 finding. On approval, run:
+Renumbering is no longer done. Number gaps and duplicate task numbers are fine; bridged and
+new tasks are appended to the bottom of the queue file as-is (see Phase 3 bridge step 2). Do
+not propose, surface, or run any renumber-to-5 pass. (The Deno `task-queue` CLI's `renumber`
+command still exists for manual use, but this skill never invokes it.)
 
-```bash
-# dry-run first (recommended)
-deno run --allow-read --allow-write \
-  ~/WebJamApps/web-jam-tools/src/task-queue/cli.ts renumber \
-  --path ~/Dropbox/web-jam-llms/claude-opus-tasks.txt --dry-run
-
-# apply after Josh approves the plan
-deno run --allow-read --allow-write \
-  ~/WebJamApps/web-jam-tools/src/task-queue/cli.ts renumber \
-  --path ~/Dropbox/web-jam-llms/claude-opus-tasks.txt
-```
-
-For the gemma queue, point `--path` at `gemma-tasks.txt`. Step defaults to 5 from 0; pass `--step` / `--start` for other shapes. The Deno `task-queue` CLI is the **single source of truth** for these queues: it reads fresh, writes atomically (tmp + fsync + rename), recognizes typo'd headers (e.g. `talk 5`), and **aborts without writing** if renumbering would lose a task or create a duplicate number. (It also has `dedupe` — bump duplicate numbers to the next free one — and `validate`.) The old `scripts/renumber-queue.py` now just shells out to this same CLI, so either entry point is safe.
-
-Surfacing rule: propose renumber when the queue has more than 2 tasks AND the existing numbers are not already at step `--step` starting at `--start`. Skip if Josh would have to renumber every single task for trivial reason (cosmetic; not worth churning Dropbox revision history daily).
-
-**Scope:** the renumber utility only handles Dropbox-resident queues (`gemma-tasks.txt`, `claude-opus-tasks.txt`). **`claude-sonnet-tasks.txt` (on Drive) is intentionally out of scope** — would require an rclone download / renumber / upload roundtrip the script doesn't do. Josh's call 2026-05-22; revisit if Sonnet's queue ever ends up with messy numbering that's worth fixing.
-
-**`claude-opus-tasks.txt` ONLY — headline compression pass (added 2026-05-22):** when renumbering the Opus queue, also compress long task bodies. Many Opus tasks are multi-paragraph specs Josh hand-wrote (Task 34 is ~30 lines, Task 35 has phases A-F, etc.) — they bloat the queue file and make scanning it tedious. The compression workflow:
+**`claude-opus-tasks.txt` ONLY — headline compression pass (added 2026-05-22):** independently of bridging (renumbering is retired), the Opus queue can get a headline-compression pass. Many Opus tasks are multi-paragraph specs Josh hand-wrote (Task 34 is ~30 lines, Task 35 has phases A-F, etc.) — they bloat the queue file and make scanning it tedious. The compression workflow:
 
 1. For each task body with more than ~3 lines of detail, **save the full body to a memory file** at `~/.claude/projects/-home-joshua-WebJamApps-JaMmusic/memory/task_spec_<content-derived-slug>.md` with frontmatter type `project`. The slug derives from the task's CONTENT (e.g. `task_spec_elca_devotional_source_swap`), NOT its number — task numbers change with renumber, so number-based slugs go stale.
 2. **Replace the task body in the queue with a one-line headline** plus a `[[task-spec-<slug>]]` cross-ref. Example before:
@@ -202,9 +208,9 @@ After the xlsx mirror push above, REBUILD a short status digest from the master 
 2. Build a brief digest: total venues; counts by campaign status (Sent / Followed-up / Confirmed / Passed / Not-contacted); the most recent CONFIRMED gigs with dates; recent PASSED venues; and any venues awaiting follow-up.
 3. **Overwrite** `Gig Booking Status.md` in the Drive CLAUDE folder (`gdrive:CLAUDE/Gig Booking Status.md`) with that digest, stamped with the run timestamp.
 
-Because it is **regenerated from the master on EVERY run** (session-start + daily 07:00 + manual), it cannot drift — it's always a fresh snapshot of the current xlsx, never a hand-maintained file that rots. Sonnet reads it for "where are we on bookings?" without touching the xlsx.
+Because it is **regenerated from the master on EVERY run** (manual or reminder-prompted), it cannot drift — it's always a fresh snapshot of the current xlsx, never a hand-maintained file that rots. Sonnet reads it for "where are we on bookings?" without touching the xlsx.
 
-After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current, and a "gig status: rebuilt" line confirming the digest was regenerated from the xlsx.
+After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current, and a "gig status: rebuilt" line confirming the digest was regenerated from the xlsx. **Finally, write today's ISO date to `~/.claude/skills/drive-cleanup/last-run.txt`** (even if zero actions were approved) so the session-start reminder clears for the day.
 
 ## Hard rules
 
@@ -218,9 +224,18 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Triggering
 
-- Auto-runs at session start via the `SessionStart` hook in `~/.claude/settings.json`.
-- Auto-runs at 07:00 ET daily via a scheduled routine (created with the `schedule` skill).
-- Manual: invoke via the Skill tool or just type `/drive-cleanup`.
+- **Reminder-only, never auto-run.** A `SessionStart` hook in `~/.claude/settings.json`
+  prints "Drive cleanup has not run today …" when the stamp file is missing or not today's
+  date. The hook NEVER invokes this skill — Josh starts it himself (same as /memory-cleanup).
+- **Stamp file:** after a completed run, write today's ISO date to
+  `~/.claude/skills/drive-cleanup/last-run.txt` — write it even on a zero-action / clean
+  run, so the reminder clears for the day. The local skill dir is the right home for
+  runtime state (handle-gmails / memory-cleanup precedent).
+- **Manual:** invoke via the Skill tool or just type `/drive-cleanup`.
+- The old **07:00 daily run is retired** (Josh's call 2026-06-12): the reminder + manual
+  invocation are the only triggers. If a scheduled routine for drive-cleanup ever turns up
+  (none in crontab or hooks as of 2026-06-12), show it to Josh and remove it with his OK.
+  Never create a headless run — Phase 2 needs his interactive approval.
 
 ## See also
 
