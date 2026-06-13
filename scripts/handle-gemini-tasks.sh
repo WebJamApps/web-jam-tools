@@ -19,8 +19,9 @@
 #   handle-gemini-tasks.sh CollegeLutheran#123    # run an agy-labeled issue
 #   handle-gemini-tasks.sh --headless [...]       # unattended; auto-approves tools
 #
-# This script NEVER pushes, opens PRs, or edits the queue file — Josh deletes the
-# queue line himself after accepting the work (queue management is manual).
+# This script never edits the queue file — Josh deletes the queue line himself
+# after accepting the work (queue management is manual). The agent finishes a task
+# by opening a draft PR via scripts/create-draft-pr.sh (web-jam-tools#49).
 
 set -euo pipefail
 
@@ -111,10 +112,17 @@ slugify() {
 }
 SLUG="$(slugify "$SLUG_SOURCE")"
 [ -z "$SLUG" ] && SLUG="task"
-BRANCH="gemini/$SLUG"
+# Branch convention (web-jam-tools#49): <lane>/<issue#>-<slug> when the issue
+# number is known (issue form), else <lane>/<slug> (queue-line form). Lane = agy.
+if [ -n "${ISSUE_NUM:-}" ]; then
+  BRANCH_BASE="agy/${ISSUE_NUM}-${SLUG}"
+else
+  BRANCH_BASE="agy/${SLUG}"
+fi
+BRANCH="$BRANCH_BASE"
 N=2
 while git show-ref --verify --quiet "refs/heads/$BRANCH"; do
-  BRANCH="gemini/$SLUG-$N"
+  BRANCH="${BRANCH_BASE}-$N"
   N=$((N + 1))
 done
 git checkout -b "$BRANCH"
@@ -142,9 +150,11 @@ Rules:
   until both pass. Find the exact script names in this repo's AGENTS.md/GEMINI.md
   and its package.json "scripts" (commonly "npm run lint" and "npm test"; some
   repos use "npm run test:lint" / "npm run test:unit").
-- Do not push, do not create pull requests, do not switch branches, do not add
-  new dependencies.
-- When finished, summarize what you changed and confirm lint and tests are green.
+- Do not switch branches and do not add new dependencies.
+- When lint and tests are green, finish by opening a draft PR — run:
+    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>"
+  It pushes the branch and opens a draft PR based on dev with "Closes #N" baked in
+  (web-jam-tools#49). Never run \`gh pr create\` directly. Then summarize what you changed.
 EOF
 
 # --- setup-only: emit the prepared task for an in-REPL agent (the /next skill) ---
@@ -215,5 +225,5 @@ git log --oneline dev..HEAD || true
 echo "--- git status ---"
 git status --short
 echo ""
-echo "Review the diff, run the app locally, push yourself."
+echo "agy should have opened a draft PR via create-draft-pr.sh — review it on GitHub."
 echo "(Queue line NOT removed — delete it from $QUEUE_FILE after you accept the work.)"

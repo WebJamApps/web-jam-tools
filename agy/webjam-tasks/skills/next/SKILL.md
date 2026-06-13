@@ -53,7 +53,14 @@ shell script, then you (the agent) do the actual coding inside this same session
    and its `package.json` "scripts" (commonly `npm run lint` and `npm test`; some
    repos use `npm run test:lint` and `npm run test:unit`).
 
-6. Do **not** push, open pull requests, switch branches, or add dependencies. When
-   finished, summarize what changed and confirm lint and tests are green. The user
-   reviews the diff and pushes themselves; the user also deletes the queue line
-   after accepting the work.
+6. Do **not** switch branches or add dependencies. When lint and tests are green,
+   finish by opening a draft PR — run:
+
+   ```
+   ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>"
+   ```
+
+   It pushes the branch and opens a draft PR based on `dev` with `Closes #N` baked
+   in (web-jam-tools#49). Never run `gh pr create` directly. Then summarize what
+   changed and confirm lint and tests are green. Josh reviews the diff and flips the
+   draft → ready on GitHub; he also deletes the queue line after accepting the work.
