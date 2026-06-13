@@ -1,6 +1,6 @@
 ---
 name: drive-cleanup
-description: Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative gemma/opus queues. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 (analyze) runs on a cheap Haiku subagent. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.
+description: Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative gemma/opus queues. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.
 ---
 
 # drive-cleanup
@@ -19,23 +19,40 @@ Authoritative storage split:
 
 The Drive originals of `gemma-tasks.txt`, `claude-opus-tasks.txt`, and `GEMMA.md` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only `SHARED.md` and the 4-file JMM mirror remain as Drive snapshots — phone Sonnet consults them.
 
-## Phase 1 — Analyze (read-only, on a Haiku subagent)
+## Phase 1 — Analyze (deterministic pre-pass first; Haiku only for the remainder)
 
-Delegate the entire Phase-1 scan to a **Haiku subagent** (Agent tool, `model: "haiku"`)
-regardless of the parent session's model — it is inventory + rule-matching, well within
-Haiku's ability, and keeps cost minimal. The subagent does read-only work only: it uses
-the `mcp__google-drive__*` tools (and reads the local Dropbox queues), classifies every
-item, and returns the findings table as text. **It must not write, edit, trash, or move
-anything.** Phase 2 (approval) and Phase 3 (execute) run in the PARENT session.
-Precedent: the /memory-cleanup scan (web-jam-tools#48).
+**Step 1 — run the deterministic rclone pre-pass (no model, no MCP calls):**
 
-**Closed-world classification (mandatory):** the subagent must place EVERY My-Drive-root
-item into exactly one bucket — **canonical** (expected resident file) / **known folder** /
-**finding** (needs an action) / **ambiguous** (cannot classify) — and report a count
-reconciliation line, e.g. `16 root items found, 16 classified (9 canonical, 4 folders, 2
-findings, 1 ambiguous)`. Silence must never be confusable with "missed it."
+```
+~/WebJamApps/web-jam-tools/scripts/drive-cleanup-prepass.sh
+```
 
-Use the `mcp__google-drive__*` tools. Check at minimum:
+It inventories My Drive root + the JoshMariaMusic mirror via `rclone lsjson` (one call
+each, **including Drive file IDs**), mechanically resolves everything rule-shaped, and
+prints a report with a reconciliation line, a **Proposed actions** list (each with an
+exact `rclone` command), an **Ambiguous** list, and `### Status: CLEAN` or
+`ACTIONS_PROPOSED`. It is read-only — it proposes, never executes.
+
+- **If `Status: CLEAN`** → say `Drive is clean — no actions needed.`, write the stamp (see
+  **Triggering**), and **STOP**. Do NOT spawn a subagent and do NOT make a single
+  `mcp__google-drive__*` call. This is the zero-token path for clean days.
+- **Otherwise** → Step 2, for the Ambiguous remainder only.
+
+**Step 2 — Haiku subagent classifies ONLY the pre-pass's Ambiguous list:**
+
+Spawn a **Haiku subagent** (Agent tool, `model: "haiku"`) and hand it just the Ambiguous
+items (name + Drive ID) from the pre-pass. It uses `mcp__google-drive__*` reads to bucket
+each one (canonical / known folder / finding / leave-alone), returns its verdicts as text,
+and **writes, edits, trashes, moves NOTHING**. The parent then assembles the **combined**
+Phase-2 table: the pre-pass's proposed actions (already exact, with `rclone` commands +
+IDs) **plus** the subagent's verdicts on the ambiguous items. Phases 2–3 run in the parent.
+
+**Closed-world guarantee:** the pre-pass reconciliation already accounts for every root
+item; the subagent must classify every Ambiguous entry so nothing is left unbucketed.
+Reference every file by **Drive ID**, not name (duplicates make names ambiguous).
+
+The rules the pre-pass encodes (and the subagent falls back to for ambiguous items) follow.
+Check at minimum:
 
 ### A. My Drive root
 
@@ -105,6 +122,14 @@ End with explicit prompt: **"Approve these actions? Reply yes / no / specific nu
 If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` Do not proceed to Phase 3 — but still write the stamp file (see **Triggering**) so the daily reminder clears.
 
 ## Phase 3 — Execute (only after explicit approval)
+
+**Execution path (Tier 2):** `gdrive:` has full read-write scope (verified 2026-06-13,
+web-jam-tools#51), so execute trashes / moves / mirror pushes via the **exact `rclone`
+commands the pre-pass emitted** rather than `mcp__google-drive__*` calls — fewer
+round-trips, and the paths/IDs are already resolved. **Bridge-file text merges into the
+Dropbox queue files stay with the model** (queue lines must stay unambiguous and wrapped at
+120 cols — see the bridge steps below). If `gdrive:` is ever read-only, fall back to MCP for
+execution and note it in the run summary.
 
 ### Bridge actions (`for-gemma-*.txt`, `for-opus-*.txt`, legacy `gemma-tasks-*.txt`, `claude-opus-tasks-*.txt`)
 
