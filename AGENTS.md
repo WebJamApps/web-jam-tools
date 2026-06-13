@@ -13,6 +13,19 @@ This file contains instructions and context for the Gemini CLI and AI assistants
 3. **Repository Purpose:** `web-jam-tools` serves as a central hub for shared configurations, documentation of system setups, and general workspace memory.
 4. **No Merging to DEV:** Gemini is **NOT** allowed to merge PR changes to the `dev` or `main` branches. The user acts as the mandatory human-in-the-loop reviewer and is responsible for all merges.
 
+## Opening pull requests (all WebJamApps repos)
+
+Finish a coding task by running the shared script — never `gh pr create` directly:
+
+```
+~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <model>"
+```
+
+It always opens a **draft** PR based on **`dev`** with **`Closes #N`** baked in
+(derived from the `<lane>/<issue#>-<slug>` branch name) and a footer naming the
+tool + model. These are hard invariants — no flag overrides them. Josh alone
+reviews and flips draft → ready. See `skills/draft-pr/SKILL.md`.
+
 ## System Setup
 - **OS:** Ubuntu
 - **Node.js:** v24.15.0
