@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# handle-gemini-tasks.sh — web-jam-tools#43 (added 2026-06-09; retargeted to
-# Antigravity CLI `agy` on 2026-06-10 when Gemini CLI dropped its free tier).
+# handle-agy-tasks.sh — web-jam-tools#43 (added 2026-06-09 as handle-gemini-tasks.sh;
+# retargeted to Antigravity CLI `agy` on 2026-06-10 when Gemini CLI dropped its free
+# tier; renamed to handle-agy-tasks.sh in #49 once the lane was fully agy-named).
 #
 # Delegates easy/medium coding tasks to the Antigravity CLI (`agy`) to save Opus
 # tokens. Routing lane: Gemma = requirements/Q&A only, agy = easy coding, Opus =
@@ -15,12 +16,13 @@
 #   2. GitHub issue labeled `agy`: pass "<Repo>#<num>" (title + body = the task)
 #
 # Usage (interactive by default — you drive/watch agy in the REPL):
-#   handle-gemini-tasks.sh                        # run the FIRST queue line
-#   handle-gemini-tasks.sh CollegeLutheran#123    # run an agy-labeled issue
-#   handle-gemini-tasks.sh --headless [...]       # unattended; auto-approves tools
+#   handle-agy-tasks.sh                        # run the FIRST queue line
+#   handle-agy-tasks.sh CollegeLutheran#123    # run an agy-labeled issue
+#   handle-agy-tasks.sh --headless [...]       # unattended; auto-approves tools
 #
-# This script NEVER pushes, opens PRs, or edits the queue file — Josh deletes the
-# queue line himself after accepting the work (queue management is manual).
+# This script never edits the queue file — Josh deletes the queue line himself
+# after accepting the work (queue management is manual). The agent finishes a task
+# by opening a draft PR via scripts/create-draft-pr.sh (web-jam-tools#49).
 
 set -euo pipefail
 
@@ -31,7 +33,7 @@ AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 # Capability-ordered model chain (Antigravity free tier), MOST CAPABLE FIRST.
 # The wrapper probes them in order and uses the first that's currently available
 # (so rate limits on the top model fall back automatically). Override with:
-#   AGY_MODELS="Model A|Model B" handle-gemini-tasks.sh    (pipe-separated; the
+#   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
 DEFAULT_MODELS='Claude Opus 4.6 (Thinking)|Claude Sonnet 4.6 (Thinking)|Gemini 3.1 Pro (High)|Gemini 3.5 Flash (High)'
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
@@ -111,10 +113,17 @@ slugify() {
 }
 SLUG="$(slugify "$SLUG_SOURCE")"
 [ -z "$SLUG" ] && SLUG="task"
-BRANCH="gemini/$SLUG"
+# Branch convention (web-jam-tools#49): <lane>/<issue#>-<slug> when the issue
+# number is known (issue form), else <lane>/<slug> (queue-line form). Lane = agy.
+if [ -n "${ISSUE_NUM:-}" ]; then
+  BRANCH_BASE="agy/${ISSUE_NUM}-${SLUG}"
+else
+  BRANCH_BASE="agy/${SLUG}"
+fi
+BRANCH="$BRANCH_BASE"
 N=2
 while git show-ref --verify --quiet "refs/heads/$BRANCH"; do
-  BRANCH="gemini/$SLUG-$N"
+  BRANCH="${BRANCH_BASE}-$N"
   N=$((N + 1))
 done
 git checkout -b "$BRANCH"
@@ -142,9 +151,11 @@ Rules:
   until both pass. Find the exact script names in this repo's AGENTS.md/GEMINI.md
   and its package.json "scripts" (commonly "npm run lint" and "npm test"; some
   repos use "npm run test:lint" / "npm run test:unit").
-- Do not push, do not create pull requests, do not switch branches, do not add
-  new dependencies.
-- When finished, summarize what you changed and confirm lint and tests are green.
+- Do not switch branches and do not add new dependencies.
+- When lint and tests are green, finish by opening a draft PR — run:
+    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>"
+  It pushes the branch and opens a draft PR based on dev with "Closes #N" baked in
+  (web-jam-tools#49). Never run \`gh pr create\` directly. Then summarize what you changed.
 EOF
 
 # --- setup-only: emit the prepared task for an in-REPL agent (the /next skill) ---
@@ -206,7 +217,7 @@ fi
 
 # --- finish summary ---
 echo ""
-echo "================ handle-gemini-tasks finished ================"
+echo "================ handle-agy-tasks finished ================"
 echo "Repo:   $REPO_DIR"
 echo "Branch: $BRANCH"
 echo "Model:  $ACTIVE_MODEL"
@@ -215,5 +226,5 @@ git log --oneline dev..HEAD || true
 echo "--- git status ---"
 git status --short
 echo ""
-echo "Review the diff, run the app locally, push yourself."
+echo "agy should have opened a draft PR via create-draft-pr.sh — review it on GitHub."
 echo "(Queue line NOT removed — delete it from $QUEUE_FILE after you accept the work.)"
