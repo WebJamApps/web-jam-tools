@@ -16,14 +16,14 @@ shell script, then you (the agent) do the actual coding inside this same session
 1. Run this shell command and read its stdout:
 
    ```
-   ~/WebJamApps/web-jam-tools/scripts/handle-gemini-tasks.sh --setup-only
+   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only
    ```
 
    To run a specific `agy`-labeled GitHub issue instead of the next queue line,
    pass it as an argument, e.g.:
 
    ```
-   ~/WebJamApps/web-jam-tools/scripts/handle-gemini-tasks.sh --setup-only CollegeLutheran#123
+   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only CollegeLutheran#123
    ```
 
 2. The script prints a block like:
