@@ -56,7 +56,7 @@ async function refreshAccessToken(tokenPath: string, keysPath: string): Promise<
   return data.access_token;
 }
 
-function todayInEastern(): { year: string; month: string; day: string; humanDate: string } {
+export function todayInEastern(): { year: string; month: string; day: string; humanDate: string } {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric",
@@ -84,18 +84,25 @@ export type GodPause = {
   author: string;
 };
 
-async function fetchGodPause(today: ReturnType<typeof todayInEastern>): Promise<GodPause | null> {
+export async function fetchGodPause(
+  today: ReturnType<typeof todayInEastern>,
+): Promise<GodPause | null> {
   const monthUrl = `https://www.luthersem.edu/godpause/${today.year}/${today.month}/`;
   const monthResp = await fetch(monthUrl);
   if (!monthResp.ok) throw new Error(`god pause month fetch: ${monthResp.status}`);
   const monthHtml = await monthResp.text();
   const todayPrefix =
     `https://www.luthersem.edu/godpause/${today.year}/${today.month}/${today.day}/`;
-  const match = monthHtml.match(
-    new RegExp(`href="(${todayPrefix.replace(/[.]/g, "\\.")}[0-9]+/)"`),
-  );
-  if (!match) return null;
-  const dayUrl = match[1];
+  // Find the day's devotional link without building a RegExp from a variable
+  // (avoids the detect-non-literal-regexp / ReDoS rule — web-jam-tools#87).
+  // `todayPrefix` is matched as a literal substring; only the trailing numeric
+  // id segment is parsed, with a STATIC regex.
+  const marker = `href="${todayPrefix}`;
+  const markerIdx = monthHtml.indexOf(marker);
+  if (markerIdx === -1) return null;
+  const idMatch = monthHtml.slice(markerIdx + marker.length).match(/^(\d+\/)"/);
+  if (!idMatch) return null;
+  const dayUrl = todayPrefix + idMatch[1];
   const dayResp = await fetch(dayUrl);
   if (!dayResp.ok) throw new Error(`god pause day fetch: ${dayResp.status}`);
   const $ = cheerio.load(await dayResp.text());
