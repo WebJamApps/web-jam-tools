@@ -1,0 +1,56 @@
+version: 2.1
+
+# CI quality + security gate for web-jam-tools (web-jam-tools#84).
+#
+# Runs the exact same checks you can run locally, so "green locally" == "green in CI":
+#   deno task check  · lint · fmt:check · test · audit · sast
+#
+# A machine executor is used (not a container) so the Docker-based scans —
+# `audit` (Trivy) and `sast` (Semgrep) — run identically to local. Make the
+# `gate` job a REQUIRED status check on `dev` via GitHub branch protection.
+#
+# (The deploy-on-merge-to-`main` job is added separately in web-jam-tools#69.)
+
+executors:
+  linux-machine:
+    machine:
+      image: ubuntu-2404:current
+
+jobs:
+  gate:
+    executor: linux-machine
+    steps:
+      - checkout
+      - run:
+          name: Install toolchain (Deno + Node 24.16 LTS)
+          command: |
+            curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
+            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            nvm install 24.16
+            nvm alias default 24.16
+            node -v && npm -v
+      - run:
+          name: Type check
+          command: deno task check
+      - run:
+          name: Lint
+          command: deno task lint
+      - run:
+          name: Format check
+          command: deno task fmt:check
+      - run:
+          name: Unit tests
+          command: deno task test
+      - run:
+          name: Dependency + secret scan (Trivy)
+          command: deno task audit
+      - run:
+          name: SAST (Semgrep)
+          command: deno task sast
+
+workflows:
+  ci:
+    jobs:
+      - gate
