@@ -19,7 +19,7 @@
     "@std/cli": "jsr:@std/cli@^1.0.0",
     "cheerio": "npm:cheerio@^1.2.0",
     "playwright": "npm:playwright@^1.59.1",
-    "xlsx": "npm:xlsx@^0.18.5"
+    "xlsx": "npm:@e965/xlsx@^0.20.3"
   },
   "fmt": {
     "lineWidth": 100,
