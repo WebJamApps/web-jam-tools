@@ -48,7 +48,11 @@ shell script, then you (the agent) do the actual coding inside this same session
    2. `Claude Sonnet 4.6 (Thinking)`
    3. `Gemini 3.1 Pro (High)`
    4. `Gemini 3.5 Flash (High)`
-   5. `GPT-OSS 120B (Medium)` — last-resort fallback only (lowest quality); a working model beats a stalled task. Do **not** select it via difficulty routing.
+
+   There are only **two independent quota pools** (verified — web-jam-tools#79):
+   `{Claude Opus/Sonnet}` and `{Gemini Pro/Flash}`. `GPT-OSS 120B` shares Claude's
+   pool, so it is **not** a usable fallback (it's dead whenever Claude is) and is
+   excluded from the chain. Failover only ever crosses Claude ↔ Gemini.
 
    **Classification Rules (in priority order):**
    * **Explicit Override**: If the user passed an explicit model name when invoking `/next`, use it and skip classification.
@@ -60,7 +64,7 @@ shell script, then you (the agent) do the actual coding inside this same session
      * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
    * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
 
-   **Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain — down to `GPT-OSS 120B (Medium)` as the final rung before giving up.
+   **Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain. Because Claude and Gemini are the only two pools, this effectively means: if a Claude model is walled, cross to Gemini (and vice versa).
 
 4. Work **entirely inside `REPO_DIR`**: cd there first; every file edit, command,
    and commit happens in that directory. Read and follow that repo's `AGENTS.md`
