@@ -75,13 +75,22 @@ shell script, then you (the agent) do the actual coding inside this same session
    repos use `npm run test:lint` and `npm run test:unit`).
 
 7. Do **not** switch branches or add dependencies. When lint and tests are green,
-   finish by opening a draft PR — run:
+   finish by opening a draft PR. **Your summary and the real test output go IN THE
+   PR, not only in this chat reply** — pass them as flags so the PR description is
+   complete:
 
    ```
-   ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>"
+   ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
+     --author "agy — <the model you are running as>" \
+     --summary "<what changed and why>" \
+     --test-plan "<exact commands to verify + expected result>" \
+     --test-evidence "<the actual lint + test output you saw, confirming both ran green>" \
+     --closes   # include ONLY if this PR fully completes the issue; omit for a partial PR
    ```
 
-   It pushes the branch and opens a draft PR based on `dev` with `Closes #N` baked
-   in (web-jam-tools#49). Never run `gh pr create` directly. Then summarize what
-   changed and confirm lint and tests are green. Josh reviews the diff and flips the
-   draft → ready on GitHub; he also deletes the queue line after accepting the work.
+   The script is the single source of truth (web-jam-tools#49) and **refuses to open a
+   PR with an empty or placeholder description** (web-jam-tools#77) — so `--summary`,
+   `--test-plan`, and `--test-evidence` are required. By default it references the issue
+   (`Part of #N`); `--closes` makes it the completing PR (`Closes #N`). Never run
+   `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub;
+   he also deletes the queue line after accepting the work.

@@ -23,17 +23,20 @@
 #   --closes        Opt-in flag to make this PR close the issue (emits `Closes #N`).
 #   --issue N       Issue number. Normally parsed from the branch name
 #                   (<lane>/<issue#>-<slug>); use this only as a fallback.
-#   --summary       Fills "## Summary" (what changed and why).
-#   --test-plan     Fills "## How to test locally" (exact commands + expected result).
-#   --test-evidence Fills "## Test evidence" (confirmation lint + tests ran green).
+#   --summary       REQUIRED. Fills "## Summary" (what changed and why).
+#   --test-plan     REQUIRED. Fills "## How to test locally" (exact commands + expected result).
+#   --test-evidence REQUIRED. Fills "## Test evidence" (real lint + test output, ran green).
 #   --screenshots   Fills "## Screenshots"; omit the flag to omit the section.
 #
-# Content flags are optional — when absent a visible placeholder is inserted so the
-# agent (or Josh) can fill it in on GitHub. The structural invariants above always
-# hold regardless of what the agent supplies.
+# --summary, --test-plan, and --test-evidence are REQUIRED (web-jam-tools#77): the
+# script refuses to open a PR whose description is empty or left as a placeholder.
+# This is the single choke point — no caller (/next, ad-hoc, or future) can open a
+# PR with an empty description. Put the summary and real test evidence IN THE PR via
+# these flags, not only in the chat/REPL. --screenshots stays optional.
 #
-# Refuses (exit 1) when: --author missing; current branch is dev/main; working tree
-# dirty; the repo has no `dev` branch; or no issue number can be resolved.
+# Refuses (exit 1) when: --author missing; any of --summary/--test-plan/--test-evidence
+# missing or left as a placeholder; current branch is dev/main; working tree dirty;
+# the repo has no `dev` branch; or no issue number can be resolved.
 
 set -euo pipefail
 
@@ -153,10 +156,33 @@ if [ -n "$EXPECT_LANES" ]; then
   fi
 fi
 
-# --- assemble the body (placeholders for any unfilled section) ---
-SUMMARY="${SUMMARY:-_(fill in: what changed and why)_}"
-TEST_PLAN="${TEST_PLAN:-_(fill in: exact commands + expected result)_}"
-TEST_EVIDENCE="${TEST_EVIDENCE:-_(fill in: confirm lint + unit tests ran green; paste final output)_}"
+# --- require real description content (web-jam-tools#77) ---
+# The single choke point: refuse a PR with an empty/placeholder description, so no
+# caller (/next, ad-hoc, or future) can ship one. Rejects both an absent value and
+# the legacy placeholder text (in case a caller echoes it back).
+PLACEHOLDER_SUMMARY="_(fill in: what changed and why)_"
+PLACEHOLDER_TEST_PLAN="_(fill in: exact commands + expected result)_"
+PLACEHOLDER_TEST_EVIDENCE="_(fill in: confirm lint + unit tests ran green; paste final output)_"
+
+missing=()
+if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "$PLACEHOLDER_SUMMARY" ]; then
+  missing+=("--summary")
+fi
+if [ -z "$TEST_PLAN" ] || [ "$TEST_PLAN" = "$PLACEHOLDER_TEST_PLAN" ]; then
+  missing+=("--test-plan")
+fi
+if [ -z "$TEST_EVIDENCE" ] || [ "$TEST_EVIDENCE" = "$PLACEHOLDER_TEST_EVIDENCE" ]; then
+  missing+=("--test-evidence")
+fi
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "ERROR: refusing to open a PR with an empty description (web-jam-tools#77)." >&2
+  echo "       Provide real content for: ${missing[*]}" >&2
+  echo "       Put your summary + actual test output IN THE PR via these flags," >&2
+  echo "       not only in the chat/REPL reply." >&2
+  exit 1
+fi
+
+# --- assemble the body ---
 
 if [ "$CLOSES" -eq 1 ]; then
   ISSUE_REF="Closes #$ISSUE"
