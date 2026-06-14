@@ -19,8 +19,10 @@ import { Buffer } from "node:buffer";
 import * as cheerio from "cheerio";
 
 const RECIPIENT = "joshua.v.sherman@gmail.com";
-const GMAIL_TOKEN_PATH = path.join(os.homedir(), ".gmail-mcp", "credentials.json");
-const GMAIL_KEYS_PATH = path.join(os.homedir(), ".gmail-mcp", "gcp-oauth.keys.json");
+// Computed lazily (not at module load) so importing this module — e.g. from a
+// test exercising the pure compose/encode helpers — needs no --allow-sys.
+const gmailTokenPath = () => path.join(os.homedir(), ".gmail-mcp", "credentials.json");
+const gmailKeysPath = () => path.join(os.homedir(), ".gmail-mcp", "gcp-oauth.keys.json");
 
 type OauthKeys = {
   installed?: { client_id: string; client_secret: string };
@@ -73,7 +75,7 @@ function todayInEastern(): { year: string; month: string; day: string; humanDate
 
 // ---------- God Pause ----------
 
-type GodPause = {
+export type GodPause = {
   url: string;
   scriptureRef: string;
   verseText: string;
@@ -116,10 +118,23 @@ async function fetchGodPause(today: ReturnType<typeof todayInEastern>): Promise<
 
 // ---------- Gmail ----------
 
-function buildRawMessage(to: string, subject: string, body: string): string {
-  const headers = `To: ${to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\n` +
-    `Content-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: 7bit\r\n\r\n`;
-  return Buffer.from(headers + body, "utf-8").toString("base64").replace(/\+/g, "-").replace(
+export function encodeHeaderWord(s: string): string {
+  // RFC 2047 B-encoding for non-ASCII header content (e.g. the em-dash in the
+  // subject). Without it the raw UTF-8 bytes are reinterpreted as Latin-1 and
+  // render as mojibake ("God Pause Ã¢Â€Â" Friday").
+  // deno-lint-ignore no-control-regex
+  if (/^[\x00-\x7F]*$/.test(s)) return s;
+  return `=?UTF-8?B?${Buffer.from(s, "utf-8").toString("base64")}?=`;
+}
+
+export function buildRawMessage(to: string, subject: string, htmlBody: string): string {
+  // HTML body, base64-encoded with CRLF line wrapping (RFC 2045) so non-ASCII
+  // glyphs survive intact; the whole message is then base64url-encoded for the
+  // Gmail raw API.
+  const encodedBody = Buffer.from(htmlBody, "utf-8").toString("base64").replace(/.{76}/g, "$&\r\n");
+  const headers = `To: ${to}\r\nSubject: ${encodeHeaderWord(subject)}\r\nMIME-Version: 1.0\r\n` +
+    `Content-Type: text/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n`;
+  return Buffer.from(headers + encodedBody, "utf-8").toString("base64").replace(/\+/g, "-").replace(
     /\//g,
     "_",
   ).replace(/=+$/, "");
@@ -133,11 +148,11 @@ async function sendEmail(to: string, subject: string, body: string): Promise<str
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ raw }),
     });
-  let token = (await readJson<OauthTokens>(GMAIL_TOKEN_PATH)).access_token ??
-    (await refreshAccessToken(GMAIL_TOKEN_PATH, GMAIL_KEYS_PATH));
+  let token = (await readJson<OauthTokens>(gmailTokenPath())).access_token ??
+    (await refreshAccessToken(gmailTokenPath(), gmailKeysPath()));
   let resp = await send(token);
   if (resp.status === 401) {
-    token = await refreshAccessToken(GMAIL_TOKEN_PATH, GMAIL_KEYS_PATH);
+    token = await refreshAccessToken(gmailTokenPath(), gmailKeysPath());
     resp = await send(token);
   }
   if (!resp.ok) throw new Error(`gmail send: ${resp.status} ${await resp.text()}`);
@@ -146,27 +161,50 @@ async function sendEmail(to: string, subject: string, body: string): Promise<str
 
 // ---------- Compose ----------
 
-function composeBody(gp: GodPause): string {
-  const sub = "─".repeat(60);
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// God Pause emits verse markers as the literal words "Verse 35" / "Chapter 10"
+// jammed against the text ("Verse 35Then Jesus..."). Render them as a superscript
+// number (chapter boundaries as "N:1") so the passage reads like scripture.
+// Operates on already-escaped text; the inserted <sup> tags are intentional markup.
+function superscriptVerseMarkers(escaped: string): string {
+  return escaped
+    .replace(/\bChapter\s+(\d+)/g, "<sup>$1:1</sup> ")
+    .replace(/\bVerse\s+(\d+)/g, "<sup>$1</sup> ");
+}
+
+function paragraphs(escaped: string): string {
+  return escaped
+    .split(/\n\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+    .join("\n");
+}
+
+export function composeHtmlBody(gp: GodPause): string {
   const parts: string[] = [];
-  parts.push(`Scripture: ${gp.scriptureRef}`);
-  parts.push("");
+  parts.push(`<p><strong>Scripture:</strong> ${escapeHtml(gp.scriptureRef)}</p>`);
   if (gp.verseText) {
-    parts.push(gp.verseText);
-    parts.push("");
+    const verses = superscriptVerseMarkers(paragraphs(escapeHtml(gp.verseText)));
+    parts.push(
+      `<blockquote style="margin:0 0 1em;padding-left:1em;border-left:3px solid #ccc;">${verses}</blockquote>`,
+    );
   }
-  parts.push("Devotion");
-  parts.push(sub);
-  parts.push(gp.devotion);
-  parts.push("");
-  parts.push("Prayer");
-  parts.push(sub);
-  parts.push(gp.prayer);
-  parts.push("");
-  parts.push(`— ${gp.author}`);
-  parts.push(`  Source: ${gp.url}`);
-  parts.push("");
-  return parts.join("\n");
+  parts.push(`<h3 style="margin:1em 0 0.25em;">Devotion</h3>`);
+  parts.push(paragraphs(escapeHtml(gp.devotion)));
+  parts.push(`<h3 style="margin:1em 0 0.25em;">Prayer</h3>`);
+  parts.push(paragraphs(escapeHtml(gp.prayer)));
+  parts.push(
+    `<p style="margin-top:1.5em;">— ${escapeHtml(gp.author)}<br>` +
+      `<span style="color:#666;">Source: <a href="${escapeHtml(gp.url)}">${
+        escapeHtml(gp.url)
+      }</a></span></p>`,
+  );
+  return `<!doctype html><html><body style="font-family:Georgia,serif;line-height:1.5;` +
+    `color:#222;max-width:640px;">\n${parts.join("\n")}\n</body></html>`;
 }
 
 // ---------- main ----------
@@ -179,13 +217,17 @@ async function main(): Promise<number> {
     return 0;
   }
   const subject = `God Pause — ${today.humanDate}`;
-  const body = composeBody(gp);
+  const body = composeHtmlBody(gp);
   const messageId = await sendEmail(RECIPIENT, subject, body);
   console.error(`[devotional] sent ${today.humanDate} as Gmail message ${messageId}`);
   return 0;
 }
 
-main().then((code) => Deno.exit(code)).catch((err) => {
-  console.error(err);
-  Deno.exit(1);
-});
+if (import.meta.main) {
+  try {
+    Deno.exit(await main());
+  } catch (err) {
+    console.error(err);
+    Deno.exit(1);
+  }
+}
