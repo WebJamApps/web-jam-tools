@@ -79,8 +79,12 @@ name_counts = {}
 for it in files:
     name_counts[it["Name"]] = name_counts.get(it["Name"], 0) + 1
 
-def trash_cmd(name):
-    return 'rclone delete --drive-use-trash "gdrive:%s"' % name
+def trash_cmd(it):
+    # ID-targeted trash (web-jam-tools#64). By-name `rclone delete` is unsafe when
+    # several files share a name — it can't tell the doomed copy from the keeper.
+    # Emit the MCP `deleteItem <DRIVE_ID>` form the Phase-3 executor already uses
+    # (drive-cleanup SKILL.md), so the exact file is trashed by its Drive ID.
+    return 'deleteItem %s' % it.get("ID", "")
 
 actions = []      # proposed actions (findings)
 ambiguous = []    # model must classify
@@ -99,6 +103,16 @@ report_items = sorted([it for it in files if it["Name"] == REPORT_FILE],
                       key=lambda x: x.get("ModTime", ""), reverse=True)
 report_extra_ids = set(id(it) for it in report_items[1:])
 
+# canonical-name retention (web-jam-tools#64): a canonical file must be exactly one.
+# When it appears >1x, keep the latest and mark the older copies as extras to trash
+# by ID — mirrors report retention so we never flag (and trash) the keeper.
+canonical_extra_ids = set()
+for cname in CANONICAL:
+    copies = sorted([it for it in files if it["Name"] == cname],
+                    key=lambda x: x.get("ModTime", ""), reverse=True)
+    if len(copies) > 1:
+        canonical_extra_ids.update(id(it) for it in copies[1:])
+
 for it in files:
     name = it["Name"]
     fid = it.get("ID", "")
@@ -106,17 +120,18 @@ for it in files:
         if id(it) in report_extra_ids:
             actions.append(("report-retention", it,
                             "older copy of the report file — keep latest only; trash this one",
-                            trash_cmd(name)))
+                            trash_cmd(it)))
         else:
             n_canonical += 1  # latest report copy is allowed
         continue
     if name in CANONICAL:
-        if name_counts[name] > 1:
+        if id(it) in canonical_extra_ids:
             actions.append(("duplicate-canonical", it,
-                            "canonical file appears %dx — must be exactly one; trash the extra(s)"
-                            % name_counts[name], trash_cmd(name)))
+                            "canonical file appears %dx — must be exactly one; "
+                            "keep latest only, trash this older copy"
+                            % name_counts[name], trash_cmd(it)))
         else:
-            n_canonical += 1
+            n_canonical += 1  # latest (or sole) canonical copy is allowed
         continue
     if name.startswith("processed-"):
         n_canonical += 1  # whitelisted legacy audit leftover — do not flag
@@ -125,29 +140,30 @@ for it in files:
         actions.append(("bridge->gemma", it,
                         "bridge into ~/Dropbox/web-jam-llms/gemma-tasks.txt "
                         "(model: download id, append w/ 120-col wrap, verify), then trash",
-                        trash_cmd(name)))
+                        trash_cmd(it)))
         continue
     if RE_FOR_OPUS.match(name) or RE_LEGACY_OPUS.match(name):
         actions.append(("bridge->opus", it,
                         "bridge into ~/Dropbox/web-jam-llms/claude-opus-tasks.txt "
                         "(model: download id, append w/ 120-col wrap, verify), then trash",
-                        trash_cmd(name)))
+                        trash_cmd(it)))
         continue
     if RE_SONNET_TS.match(name):
         actions.append(("sonnet-queue-merge", it,
                         "merge into canonical claude-sonnet-tasks.txt on Drive (model), then trash",
-                        trash_cmd(name)))
+                        trash_cmd(it)))
         continue
     if name_counts[name] > 1:
         actions.append(("duplicate", it,
-                        "same-name duplicate at root (%dx) — Josh/model picks which to keep (use IDs)"
-                        % name_counts[name], "(resolve by ID — names collide)"))
+                        "same-name duplicate at root (%dx) — Josh/model picks which to keep, "
+                        "then trash the rest by ID (never by name)" % name_counts[name],
+                        "deleteItem %s  # only if this copy is NOT the keeper" % fid))
         continue
     a = age_days(it.get("ModTime", ""))
     if RE_DATEISH.search(name) and a is not None and a > 7:
         actions.append(("stale-timestamped", it,
                         "timestamped file older than 7 days (%.0fd) — trash candidate" % a,
-                        trash_cmd(name)))
+                        trash_cmd(it)))
         continue
     ambiguous.append(("unrecognized root file", it))
 
