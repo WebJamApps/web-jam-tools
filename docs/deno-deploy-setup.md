@@ -82,13 +82,26 @@ Now: commits on `main` deploy to **production**; commits on other branches
 ## Step 3 — Add the runtime secrets
 
 In the app → **`Settings`** → **Environment Variables** (Production context),
-add the three Gmail OAuth values:
+add the three Gmail OAuth values. The Deno UI lets you **paste `.env` lines** or
+**drag a `.env` file** — both load all three at once.
 
-| Variable | Where to get it (current laptop source) |
+| Variable | Source (current laptop creds) |
 |---|---|
 | `GMAIL_CLIENT_ID` | `~/.gmail-mcp/gcp-oauth.keys.json` → `installed.client_id` |
 | `GMAIL_CLIENT_SECRET` | `~/.gmail-mcp/gcp-oauth.keys.json` → `installed.client_secret` |
 | `GMAIL_REFRESH_TOKEN` | `~/.gmail-mcp/credentials.json` → `refresh_token` |
+
+Generate the three pasteable lines straight from those files:
+
+```bash
+jq -r '"GMAIL_CLIENT_ID=\((.installed//.web).client_id)\nGMAIL_CLIENT_SECRET=\((.installed//.web).client_secret)"' ~/.gmail-mcp/gcp-oauth.keys.json; jq -r '"GMAIL_REFRESH_TOKEN=\(.refresh_token)"' ~/.gmail-mcp/credentials.json
+```
+
+> ⚠️ **Run this in a normal terminal, NOT via Claude Code's `!` prefix.** It
+> prints the real `client_secret` and `refresh_token`; the `!` prefix would dump
+> them into the chat transcript (which is stored). Copy the three lines from
+> your terminal into Deno's env-var box. To write a file to drag instead, append
+> `> /tmp/<service>.env` and drag that, then delete it.
 
 These never live in the repo. The service refreshes a short-lived access token
 from them on each cold-start run.
