@@ -2,59 +2,55 @@
 //
 // Source: God Pause (Luther Seminary alumni) — daily devotional at
 // https://www.luthersem.edu/godpause/. Fetches today's devotion, parses it,
-// and emails it to Josh via Gmail. Runs from cron at 06:00 America/New_York.
+// and emails it to Josh via Gmail. Runs daily at 06:00 America/New_York.
 //
-// Reuses the gmail-mcp OAuth tokens at ~/.gmail-mcp/. No Drive dependency.
+// Hosting: deployed to Deno Deploy, which fires the schedule via Deno.cron
+// (see the bottom of this file) — no laptop dependency (web-jam-tools#69).
+// Gmail OAuth comes from env secrets (GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET /
+// GMAIL_REFRESH_TOKEN); Deno Deploy has no persistent filesystem, so each
+// cold-start run refreshes its own short-lived access token.
 //
-// Run: deno run --allow-net --allow-read --allow-write --allow-env --allow-sys \
-//        src/devotional/send_daily_devotional.ts
+// Run locally (single send, e.g. for testing): deno task devotional, with the
+// three GMAIL_* env vars set. NOTE: the laptop cron that used to fire this is
+// retired by #69 — do not re-add it, or every devotion sends twice.
 //
 // Replaced the 2026-05-13 ELCA Prayer Ventures pipeline on 2026-05-22
 // (Task 5 of claude-opus-tasks). Ported tsx→Deno 2026-05-29.
 
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
 import { Buffer } from "node:buffer";
 import * as cheerio from "cheerio";
 
 const RECIPIENT = "joshua.v.sherman@gmail.com";
-const GMAIL_TOKEN_PATH = path.join(os.homedir(), ".gmail-mcp", "credentials.json");
-const GMAIL_KEYS_PATH = path.join(os.homedir(), ".gmail-mcp", "gcp-oauth.keys.json");
 
-type OauthKeys = {
-  installed?: { client_id: string; client_secret: string };
-  web?: { client_id: string; client_secret: string };
-};
-type OauthTokens = { access_token?: string; refresh_token: string };
-
-async function readJson<T>(p: string): Promise<T> {
-  return JSON.parse(await fs.readFile(p, "utf-8")) as T;
+export function gmailSecrets(): { clientId: string; clientSecret: string; refreshToken: string } {
+  const clientId = Deno.env.get("GMAIL_CLIENT_ID");
+  const clientSecret = Deno.env.get("GMAIL_CLIENT_SECRET");
+  const refreshToken = Deno.env.get("GMAIL_REFRESH_TOKEN");
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error(
+      "Missing Gmail OAuth secrets: set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN",
+    );
+  }
+  return { clientId, clientSecret, refreshToken };
 }
 
-async function refreshAccessToken(tokenPath: string, keysPath: string): Promise<string> {
-  const tokens = await readJson<OauthTokens>(tokenPath);
-  const keysRaw = await readJson<OauthKeys>(keysPath);
-  const keys = keysRaw.installed ?? keysRaw.web;
-  if (!keys) throw new Error(`No installed/web client config at ${keysPath}`);
+export async function refreshAccessToken(): Promise<string> {
+  const { clientId, clientSecret, refreshToken } = gmailSecrets();
   const resp = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: keys.client_id,
-      client_secret: keys.client_secret,
-      refresh_token: tokens.refresh_token,
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
       grant_type: "refresh_token",
     }),
   });
-  if (!resp.ok) throw new Error(`token refresh ${tokenPath}: ${resp.status} ${await resp.text()}`);
-  const data = (await resp.json()) as { access_token: string };
-  tokens.access_token = data.access_token;
-  await fs.writeFile(tokenPath, JSON.stringify(tokens, null, 2));
-  return data.access_token;
+  if (!resp.ok) throw new Error(`token refresh: ${resp.status} ${await resp.text()}`);
+  return ((await resp.json()) as { access_token: string }).access_token;
 }
 
-function todayInEastern(): { year: string; month: string; day: string; humanDate: string } {
+export function todayInEastern(): { year: string; month: string; day: string; humanDate: string } {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric",
@@ -73,7 +69,7 @@ function todayInEastern(): { year: string; month: string; day: string; humanDate
 
 // ---------- God Pause ----------
 
-type GodPause = {
+export type GodPause = {
   url: string;
   scriptureRef: string;
   verseText: string;
@@ -82,18 +78,25 @@ type GodPause = {
   author: string;
 };
 
-async function fetchGodPause(today: ReturnType<typeof todayInEastern>): Promise<GodPause | null> {
+export async function fetchGodPause(
+  today: ReturnType<typeof todayInEastern>,
+): Promise<GodPause | null> {
   const monthUrl = `https://www.luthersem.edu/godpause/${today.year}/${today.month}/`;
   const monthResp = await fetch(monthUrl);
   if (!monthResp.ok) throw new Error(`god pause month fetch: ${monthResp.status}`);
   const monthHtml = await monthResp.text();
   const todayPrefix =
     `https://www.luthersem.edu/godpause/${today.year}/${today.month}/${today.day}/`;
-  const match = monthHtml.match(
-    new RegExp(`href="(${todayPrefix.replace(/[.]/g, "\\.")}[0-9]+/)"`),
-  );
-  if (!match) return null;
-  const dayUrl = match[1];
+  // Find the day's devotional link without building a RegExp from a variable
+  // (avoids the detect-non-literal-regexp / ReDoS rule — web-jam-tools#87).
+  // `todayPrefix` is matched as a literal substring; only the trailing numeric
+  // id segment is parsed, with a STATIC regex.
+  const marker = `href="${todayPrefix}`;
+  const markerIdx = monthHtml.indexOf(marker);
+  if (markerIdx === -1) return null;
+  const idMatch = monthHtml.slice(markerIdx + marker.length).match(/^(\d+\/)"/);
+  if (!idMatch) return null;
+  const dayUrl = todayPrefix + idMatch[1];
   const dayResp = await fetch(dayUrl);
   if (!dayResp.ok) throw new Error(`god pause day fetch: ${dayResp.status}`);
   const $ = cheerio.load(await dayResp.text());
@@ -116,57 +119,88 @@ async function fetchGodPause(today: ReturnType<typeof todayInEastern>): Promise<
 
 // ---------- Gmail ----------
 
-function buildRawMessage(to: string, subject: string, body: string): string {
-  const headers = `To: ${to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\n` +
-    `Content-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: 7bit\r\n\r\n`;
-  return Buffer.from(headers + body, "utf-8").toString("base64").replace(/\+/g, "-").replace(
+export function encodeHeaderWord(s: string): string {
+  // RFC 2047 B-encoding for non-ASCII header content (e.g. the em-dash in the
+  // subject). Without it the raw UTF-8 bytes are reinterpreted as Latin-1 and
+  // render as mojibake ("God Pause Ã¢Â€Â" Friday").
+  // deno-lint-ignore no-control-regex
+  if (/^[\x00-\x7F]*$/.test(s)) return s;
+  return `=?UTF-8?B?${Buffer.from(s, "utf-8").toString("base64")}?=`;
+}
+
+export function buildRawMessage(to: string, subject: string, htmlBody: string): string {
+  // HTML body, base64-encoded with CRLF line wrapping (RFC 2045) so non-ASCII
+  // glyphs survive intact; the whole message is then base64url-encoded for the
+  // Gmail raw API.
+  const encodedBody = Buffer.from(htmlBody, "utf-8").toString("base64").replace(/.{76}/g, "$&\r\n");
+  const headers = `To: ${to}\r\nSubject: ${encodeHeaderWord(subject)}\r\nMIME-Version: 1.0\r\n` +
+    `Content-Type: text/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n`;
+  return Buffer.from(headers + encodedBody, "utf-8").toString("base64").replace(/\+/g, "-").replace(
     /\//g,
     "_",
   ).replace(/=+$/, "");
 }
 
-async function sendEmail(to: string, subject: string, body: string): Promise<string> {
+export async function sendEmail(to: string, subject: string, body: string): Promise<string> {
   const raw = buildRawMessage(to, subject, body);
-  const send = (token: string) =>
-    fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ raw }),
-    });
-  let token = (await readJson<OauthTokens>(GMAIL_TOKEN_PATH)).access_token ??
-    (await refreshAccessToken(GMAIL_TOKEN_PATH, GMAIL_KEYS_PATH));
-  let resp = await send(token);
-  if (resp.status === 401) {
-    token = await refreshAccessToken(GMAIL_TOKEN_PATH, GMAIL_KEYS_PATH);
-    resp = await send(token);
-  }
+  // Each run is a cold start with no token cache, so always mint a fresh
+  // short-lived access token from the refresh token.
+  const token = await refreshAccessToken();
+  const resp = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw }),
+  });
   if (!resp.ok) throw new Error(`gmail send: ${resp.status} ${await resp.text()}`);
   return ((await resp.json()) as { id: string }).id;
 }
 
 // ---------- Compose ----------
 
-function composeBody(gp: GodPause): string {
-  const sub = "─".repeat(60);
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// God Pause emits verse markers as the literal words "Verse 35" / "Chapter 10"
+// jammed against the text ("Verse 35Then Jesus..."). Render them as a superscript
+// number (chapter boundaries as "N:1") so the passage reads like scripture.
+// Operates on already-escaped text; the inserted <sup> tags are intentional markup.
+function superscriptVerseMarkers(escaped: string): string {
+  return escaped
+    .replace(/\bChapter\s+(\d+)/g, "<sup>$1:1</sup> ")
+    .replace(/\bVerse\s+(\d+)/g, "<sup>$1</sup> ");
+}
+
+function paragraphs(escaped: string): string {
+  return escaped
+    .split(/\n\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
+    .join("\n");
+}
+
+export function composeHtmlBody(gp: GodPause): string {
   const parts: string[] = [];
-  parts.push(`Scripture: ${gp.scriptureRef}`);
-  parts.push("");
+  parts.push(`<p><strong>Scripture:</strong> ${escapeHtml(gp.scriptureRef)}</p>`);
   if (gp.verseText) {
-    parts.push(gp.verseText);
-    parts.push("");
+    const verses = superscriptVerseMarkers(paragraphs(escapeHtml(gp.verseText)));
+    parts.push(
+      `<blockquote style="margin:0 0 1em;padding-left:1em;border-left:3px solid #ccc;">${verses}</blockquote>`,
+    );
   }
-  parts.push("Devotion");
-  parts.push(sub);
-  parts.push(gp.devotion);
-  parts.push("");
-  parts.push("Prayer");
-  parts.push(sub);
-  parts.push(gp.prayer);
-  parts.push("");
-  parts.push(`— ${gp.author}`);
-  parts.push(`  Source: ${gp.url}`);
-  parts.push("");
-  return parts.join("\n");
+  parts.push(`<h3 style="margin:1em 0 0.25em;">Devotion</h3>`);
+  parts.push(paragraphs(escapeHtml(gp.devotion)));
+  parts.push(`<h3 style="margin:1em 0 0.25em;">Prayer</h3>`);
+  parts.push(paragraphs(escapeHtml(gp.prayer)));
+  parts.push(
+    `<p style="margin-top:1.5em;">— ${escapeHtml(gp.author)}<br>` +
+      `<span style="color:#666;">Source: <a href="${escapeHtml(gp.url)}">${
+        escapeHtml(gp.url)
+      }</a></span></p>`,
+  );
+  return `<!doctype html><html><body style="font-family:Georgia,serif;line-height:1.5;` +
+    `color:#222;max-width:640px;">\n${parts.join("\n")}\n</body></html>`;
 }
 
 // ---------- main ----------
@@ -179,13 +213,44 @@ async function main(): Promise<number> {
     return 0;
   }
   const subject = `God Pause — ${today.humanDate}`;
-  const body = composeBody(gp);
+  const body = composeHtmlBody(gp);
   const messageId = await sendEmail(RECIPIENT, subject, body);
   console.error(`[devotional] sent ${today.humanDate} as Gmail message ${messageId}`);
   return 0;
 }
 
-main().then((code) => Deno.exit(code)).catch((err) => {
-  console.error(err);
-  Deno.exit(1);
-});
+// Deno Deploy runs Deno.cron schedules in UTC (no timezone support), so to land
+// on 06:00 America/New_York year-round we register both candidate UTC hours —
+// 10:00 (06:00 EDT) and 11:00 (06:00 EST) — and only actually send when it is
+// in fact 06:00 in Eastern. The off-season hour is a cheap no-op (well within
+// Deno Deploy's ~1M/mo cron ceiling), and there is never a double send.
+export function easternHour(now: Date = new Date()): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      hour12: false,
+    }).format(now),
+  );
+}
+
+async function runAtSixEastern(): Promise<void> {
+  if (easternHour() !== 6) return;
+  await main();
+}
+
+if (import.meta.main) {
+  if (Deno.env.get("DENO_DEPLOYMENT_ID")) {
+    // On Deno Deploy: register the schedule and let the runtime invoke it.
+    Deno.cron("daily devotional (06:00 EDT)", "0 10 * * *", runAtSixEastern);
+    Deno.cron("daily devotional (06:00 EST)", "0 11 * * *", runAtSixEastern);
+  } else {
+    // Local / manual run (deno task devotional): send once, now.
+    try {
+      Deno.exit(await main());
+    } catch (err) {
+      console.error(err);
+      Deno.exit(1);
+    }
+  }
+}

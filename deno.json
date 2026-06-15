@@ -1,25 +1,30 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
-    "test": "deno test",
+    "test": "deno test --allow-env",
+    "coverage": "rm -rf cov_profile && deno test --allow-env --coverage=cov_profile && deno coverage cov_profile",
+    "coverage:check": "bash scripts/coverage-check.sh",
     "check": "deno check src/ test/",
     "fmt": "deno fmt src/ test/",
+    "fmt:check": "deno fmt --check src/ test/",
     "lint": "deno lint src/ test/",
+    "audit": "bash scripts/audit.sh",
+    "sast": "bash scripts/sast.sh",
     "scrape:gigs": "deno run -A src/gig-scraper/scrape_gigs.ts",
     "scrape:songs": "deno run -A src/gig-scraper/scrape_songs.ts",
     "list:buttons": "deno run -A src/gig-scraper/list_buttons.ts",
     "read:xlsx": "deno run --allow-read --allow-write src/gig-scraper/read_excel.ts",
     "fetch:songs": "deno run --allow-net src/gig-scraper/fetch_api_songs.ts",
-    "devotional": "deno run --allow-net --allow-read --allow-write --allow-env --allow-sys src/devotional/send_daily_devotional.ts"
+    "devotional": "deno run --allow-net --allow-env src/devotional/send_daily_devotional.ts"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.0",
     "@std/cli": "jsr:@std/cli@^1.0.0",
     "cheerio": "npm:cheerio@^1.2.0",
     "playwright": "npm:playwright@^1.59.1",
-    "xlsx": "npm:xlsx@^0.18.5"
+    "xlsx": "npm:@e965/xlsx@^0.20.3"
   },
   "fmt": {
     "lineWidth": 100,
