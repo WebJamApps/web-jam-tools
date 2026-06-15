@@ -37,9 +37,29 @@ invariants — no flag overrides them). By default it references the issue (`Par
 pass `--closes` to make it the completing PR (`Closes #N`). Josh alone reviews and
 flips draft → ready. See `skills/draft-pr/SKILL.md`.
 
+## CI gate (web-jam-tools)
+
+Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`),
+required-green on `dev` via branch protection. Run the **same checks locally
+before pushing** — "green locally" == "green in CI":
+
+```
+deno task check      # type check
+deno task lint
+deno task fmt:check   # formatting (deno task fmt to auto-fix)
+deno task test        # unit tests
+deno task audit       # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
+deno task sast        # Semgrep: static analysis of src/
+```
+
+`audit` and `sast` run via **Docker** (so they're identical locally and in CI) —
+Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.json`
+(Trivy can't read `deno.lock`); JSR deps are not covered. SAST findings are
+**refactored, not suppressed**. Deploy on merge to `main` is added in web-jam-tools#69.
+
 ## System Setup
 - **OS:** Ubuntu
-- **Node.js:** v24.15.0
+- **Node.js:** v24.16.0 (LTS)
 - **Rclone:** Configured for Google Drive (`gdrive:`)
 - **Persistence:** Systemd user services managed via `systemctl --user`
 
