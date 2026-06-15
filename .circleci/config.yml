@@ -12,9 +12,9 @@ version: 2.1
 # dev machine that only has Docker.
 #
 # `gate` is a REQUIRED status check on `dev` and `main` via GitHub branch
-# protection. Deployment is not a CircleCI job — Deno Deploy auto-deploys from
-# `main` (see the note above the `workflows` block and the README "Deploy"
-# section).
+# protection. The `deploy` job (below) deploys the daily-devotional service to
+# Deno Deploy from `main` only, after `gate` passes (see that job + the README
+# "Deploy" section).
 
 executors:
   ci:

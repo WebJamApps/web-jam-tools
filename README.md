@@ -73,8 +73,8 @@ on **Deno Deploy**, which fires it daily at 06:00 America/New_York via `Deno.cro
 — no laptop dependency (web-jam-tools#69).
 
 > **Setting up a new service on Deno Deploy?** Follow the step-by-step runbook:
-> [`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md) (create the app, set
-> the production branch, secrets, verify, cutover).
+> [`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md) (create the app via
+> CLI, wire CI deploy + token, secrets, verify, cutover).
 
 **Continuous deployment — `main` ONLY, driven from CI.** Deployment runs from
 **CircleCI**, not Deno Deploy's GitHub integration. The app's GitHub integration
@@ -91,10 +91,10 @@ deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPL
 org settings (`console.deno.com/webjamapps/~/settings`) → **Organization Tokens**
 and **copy its value (shown only once)** (one token deploys every app in the
 org), then add it under CircleCI → `web-jam-tools` → **Project Settings →
-Environment Variables**. `ci/circleci:
-gate` is also a required check on both `dev` and `main`, so only gate-green
-commits ever reach `main` in the first place. Flow: feature → PR → `dev` → promote `dev` → `main` → gate →
-deploy. Full setup steps for a new service are in
+Environment Variables**. `ci/circleci: gate` is also a required check on both
+`dev` and `main`, so only gate-green commits ever reach `main` in the first
+place. Flow: feature → PR → `dev` → promote `dev` → `main` → gate → deploy. Full
+setup steps for a new service are in
 [`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md).
 
 **Convention — one Deno Deploy app per microservice.** Each deployable service
