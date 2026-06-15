@@ -90,20 +90,8 @@ deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPL
 `DENO_DEPLOY_TOKEN` is a CircleCI env var. `ci/circleci: gate` is also a required
 check on both `dev` and `main`, so only gate-green commits ever reach `main` in
 the first place. Flow: feature → PR → `dev` → promote `dev` → `main` → gate →
-deploy.
-
-**One-time cutover checklist** (per service; detail in
-[`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md)):
-
-| # | Step | Where | ~Time |
-|---|------|-------|------|
-| 1 | Disconnect the app's **GitHub integration** (stops preview builds + the PR check) | Deno Deploy app → Settings | 1 min |
-| 2 | Create a **Deno Deploy access token** | Deno Deploy → Account/Org → Access Tokens | 1 min |
-| 3 | Add it to CircleCI as **`DENO_DEPLOY_TOKEN`** | CircleCI → `web-jam-tools` → Project Settings → Environment Variables | 1 min |
-| 4 | Review + merge the service PR → **`dev`** (gate green) | GitHub | 2 min |
-| 5 | Promote **`dev` → `main`** (the CI `deploy` job runs) | GitHub PR | 2 min |
-| 6 | Verify deploy + `Deno.cron` registered (+ a local test send) | Deno Deploy dashboard / terminal | 5 min |
-| 7 | Remove the old laptop `cron` line so it doesn't double-send | `crontab -e` | 1 min |
+deploy. Full setup steps for a new service are in
+[`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md).
 
 **Convention — one Deno Deploy app per microservice.** Each deployable service
 gets its own Deno Deploy **app** (named `web-jam-<service>`, e.g.
