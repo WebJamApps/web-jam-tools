@@ -5,6 +5,10 @@ WebJamApps workspace. The repo is geared toward making AI-assisted
 development (Claude Code, Gemini CLI) productive across many sibling
 project directories that live alongside it on the same machine.
 
+**Deno code coverage: 82.8%** (lines, all files; 25 tests). The CI gate **fails
+under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
+`deno task coverage`; enforce the threshold with `deno task coverage:check`.
+
 ## What's in here
 
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
@@ -32,8 +36,9 @@ Then read:
 ## Checks (CI gate)
 
 Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`). It
-must pass before a PR can be **merged into `dev`** (enforced by branch protection).
-Pushing is never blocked — CI runs the gate automatically on each push.
+must pass before a PR can be **merged into `dev` or `main`** (enforced by branch
+protection on both). Pushing is never blocked — CI runs the gate automatically on
+each push.
 
 **Recommended (not required):** run the same checks locally first, to catch
 failures before the CI round-trip. You need Deno and Docker:
@@ -42,8 +47,10 @@ failures before the CI round-trip. You need Deno and Docker:
 deno task check       # type check
 deno task lint
 deno task fmt:check   # formatting (use `deno task fmt` to auto-fix)
-deno task test        # unit tests
-deno task audit       # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
+deno task test          # unit tests
+deno task coverage      # unit tests + coverage report (lcov + HTML in cov_profile/)
+deno task coverage:check # unit tests + fail if all-files line coverage < 80% (CI gate)
+deno task audit         # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
 deno task sast        # Semgrep: static analysis of src/
 ```
 
@@ -60,6 +67,65 @@ Notes:
 - `audit` scans the **npm** dependencies: it bridges `deno.lock` → a
   `package-lock.json` that Trivy can read. JSR deps (`@std/*`) aren't covered.
 - SAST findings are **refactored, not suppressed**.
+
+## Deploy (daily-devotional service)
+
+The daily-devotional generator (`src/devotional/send_daily_devotional.ts`) runs
+on **Deno Deploy**, which fires it daily at 06:00 America/New_York via `Deno.cron`
+— no laptop dependency (web-jam-tools#69).
+
+> **Setting up a new service on Deno Deploy?** Follow the step-by-step runbook:
+> [`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md) (create the app via
+> CLI, wire CI deploy + token, secrets, verify, cutover).
+
+**Continuous deployment — `main` ONLY, driven from CI.** Deployment runs from
+**CircleCI**, not Deno Deploy's GitHub integration. The app's GitHub integration
+is **disconnected**, so Deno never builds branches — `main` is the only thing
+that ever deploys, and pull requests get **no Deno Deploy status check**. On
+merge to `main`, the CircleCI `deploy` job (which `requires` the `gate` job, so
+it runs only after the gate is green) runs:
+
+```bash
+deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPLOY_TOKEN"
+```
+
+`DENO_DEPLOY_TOKEN` is a CircleCI env var — create the token in Deno Deploy →
+org settings (`console.deno.com/webjamapps/~/settings`) → **Organization Tokens**
+and **copy its value (shown only once)** (one token deploys every app in the
+org), then add it under CircleCI → `web-jam-tools` → **Project Settings →
+Environment Variables**. `ci/circleci: gate` is also a required check on both
+`dev` and `main`, so only gate-green commits ever reach `main` in the first
+place. Flow: feature → PR → `dev` → promote `dev` → `main` → gate → deploy. Full
+setup steps for a new service are in
+[`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md).
+
+**Convention — one Deno Deploy app per microservice.** Each deployable service
+gets its own Deno Deploy **app** (named `web-jam-<service>`, e.g.
+`web-jam-devotional`), so each has isolated secrets, its own `Deno.cron`
+schedule, an independent deploy, and its own subdomain. The free tier allows up
+to **20 apps** (plus 1M requests/mo, 20 GB egress, 15h CPU/mo) — ample for this
+model; a once-daily cron is negligible against those ceilings.
+
+**Runtime secrets** live in the Deno Deploy dashboard (not in the repo): the
+three Gmail OAuth values `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and
+`GMAIL_REFRESH_TOKEN`. The script reads them via `Deno.env.get()` and refreshes a
+short-lived access token on each cold-start run (Deno Deploy has no persistent
+filesystem).
+
+**Manual / local deploy (escape hatch).** To push an ad-hoc deployment without
+going through CI (e.g. a hotfix), deploy from your machine with the same CLI. Run
+it from the repo root (the app already knows its entrypoint); it prompts for
+browser auth on first use and caches the credential in your system keyring, so
+you can omit `--token`:
+
+```bash
+deno deploy --org webjamapps --app web-jam-devotional --prod
+```
+
+**Test a single send locally** (no deploy): set the three `GMAIL_*` env vars and
+run `deno task devotional`, which sends once immediately. Do **not** re-add a
+laptop cron for it — Deno Deploy owns the schedule now, and a second scheduler
+would send every devotion twice.
 
 ## VSCode multi-root workspace
 
