@@ -2,58 +2,52 @@
 //
 // Source: God Pause (Luther Seminary alumni) — daily devotional at
 // https://www.luthersem.edu/godpause/. Fetches today's devotion, parses it,
-// and emails it to Josh via Gmail. Runs from cron at 06:00 America/New_York.
+// and emails it to Josh via Gmail. Runs daily at 06:00 America/New_York.
 //
-// Reuses the gmail-mcp OAuth tokens at ~/.gmail-mcp/. No Drive dependency.
+// Hosting: deployed to Deno Deploy, which fires the schedule via Deno.cron
+// (see the bottom of this file) — no laptop dependency (web-jam-tools#69).
+// Gmail OAuth comes from env secrets (GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET /
+// GMAIL_REFRESH_TOKEN); Deno Deploy has no persistent filesystem, so each
+// cold-start run refreshes its own short-lived access token.
 //
-// Run: deno run --allow-net --allow-read --allow-write --allow-env --allow-sys \
-//        src/devotional/send_daily_devotional.ts
+// Run locally (single send, e.g. for testing): deno task devotional, with the
+// three GMAIL_* env vars set. NOTE: the laptop cron that used to fire this is
+// retired by #69 — do not re-add it, or every devotion sends twice.
 //
 // Replaced the 2026-05-13 ELCA Prayer Ventures pipeline on 2026-05-22
 // (Task 5 of claude-opus-tasks). Ported tsx→Deno 2026-05-29.
 
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
 import { Buffer } from "node:buffer";
 import * as cheerio from "cheerio";
 
 const RECIPIENT = "joshua.v.sherman@gmail.com";
-// Computed lazily (not at module load) so importing this module — e.g. from a
-// test exercising the pure compose/encode helpers — needs no --allow-sys.
-const gmailTokenPath = () => path.join(os.homedir(), ".gmail-mcp", "credentials.json");
-const gmailKeysPath = () => path.join(os.homedir(), ".gmail-mcp", "gcp-oauth.keys.json");
 
-type OauthKeys = {
-  installed?: { client_id: string; client_secret: string };
-  web?: { client_id: string; client_secret: string };
-};
-type OauthTokens = { access_token?: string; refresh_token: string };
-
-async function readJson<T>(p: string): Promise<T> {
-  return JSON.parse(await fs.readFile(p, "utf-8")) as T;
+function gmailSecrets(): { clientId: string; clientSecret: string; refreshToken: string } {
+  const clientId = Deno.env.get("GMAIL_CLIENT_ID");
+  const clientSecret = Deno.env.get("GMAIL_CLIENT_SECRET");
+  const refreshToken = Deno.env.get("GMAIL_REFRESH_TOKEN");
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error(
+      "Missing Gmail OAuth secrets: set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN",
+    );
+  }
+  return { clientId, clientSecret, refreshToken };
 }
 
-async function refreshAccessToken(tokenPath: string, keysPath: string): Promise<string> {
-  const tokens = await readJson<OauthTokens>(tokenPath);
-  const keysRaw = await readJson<OauthKeys>(keysPath);
-  const keys = keysRaw.installed ?? keysRaw.web;
-  if (!keys) throw new Error(`No installed/web client config at ${keysPath}`);
+async function refreshAccessToken(): Promise<string> {
+  const { clientId, clientSecret, refreshToken } = gmailSecrets();
   const resp = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: keys.client_id,
-      client_secret: keys.client_secret,
-      refresh_token: tokens.refresh_token,
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
       grant_type: "refresh_token",
     }),
   });
-  if (!resp.ok) throw new Error(`token refresh ${tokenPath}: ${resp.status} ${await resp.text()}`);
-  const data = (await resp.json()) as { access_token: string };
-  tokens.access_token = data.access_token;
-  await fs.writeFile(tokenPath, JSON.stringify(tokens, null, 2));
-  return data.access_token;
+  if (!resp.ok) throw new Error(`token refresh: ${resp.status} ${await resp.text()}`);
+  return ((await resp.json()) as { access_token: string }).access_token;
 }
 
 export function todayInEastern(): { year: string; month: string; day: string; humanDate: string } {
@@ -149,19 +143,14 @@ export function buildRawMessage(to: string, subject: string, htmlBody: string): 
 
 async function sendEmail(to: string, subject: string, body: string): Promise<string> {
   const raw = buildRawMessage(to, subject, body);
-  const send = (token: string) =>
-    fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ raw }),
-    });
-  let token = (await readJson<OauthTokens>(gmailTokenPath())).access_token ??
-    (await refreshAccessToken(gmailTokenPath(), gmailKeysPath()));
-  let resp = await send(token);
-  if (resp.status === 401) {
-    token = await refreshAccessToken(gmailTokenPath(), gmailKeysPath());
-    resp = await send(token);
-  }
+  // Each run is a cold start with no token cache, so always mint a fresh
+  // short-lived access token from the refresh token.
+  const token = await refreshAccessToken();
+  const resp = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw }),
+  });
   if (!resp.ok) throw new Error(`gmail send: ${resp.status} ${await resp.text()}`);
   return ((await resp.json()) as { id: string }).id;
 }
@@ -230,11 +219,38 @@ async function main(): Promise<number> {
   return 0;
 }
 
+// Deno Deploy runs Deno.cron schedules in UTC (no timezone support), so to land
+// on 06:00 America/New_York year-round we register both candidate UTC hours —
+// 10:00 (06:00 EDT) and 11:00 (06:00 EST) — and only actually send when it is
+// in fact 06:00 in Eastern. The off-season hour is a cheap no-op (well within
+// Deno Deploy's ~1M/mo cron ceiling), and there is never a double send.
+function easternHour(): number {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      hour12: false,
+    }).format(new Date()),
+  );
+}
+
+async function runAtSixEastern(): Promise<void> {
+  if (easternHour() !== 6) return;
+  await main();
+}
+
 if (import.meta.main) {
-  try {
-    Deno.exit(await main());
-  } catch (err) {
-    console.error(err);
-    Deno.exit(1);
+  if (Deno.env.get("DENO_DEPLOYMENT_ID")) {
+    // On Deno Deploy: register the schedule and let the runtime invoke it.
+    Deno.cron("daily devotional (06:00 EDT)", "0 10 * * *", runAtSixEastern);
+    Deno.cron("daily devotional (06:00 EST)", "0 11 * * *", runAtSixEastern);
+  } else {
+    // Local / manual run (deno task devotional): send once, now.
+    try {
+      Deno.exit(await main());
+    } catch (err) {
+      console.error(err);
+      Deno.exit(1);
+    }
   }
 }
