@@ -5,6 +5,9 @@ WebJamApps workspace. The repo is geared toward making AI-assisted
 development (Claude Code, Gemini CLI) productive across many sibling
 project directories that live alongside it on the same machine.
 
+**Deno code coverage: 82.8%** (lines, all files; 25 tests). Regenerate with
+`deno task coverage`.
+
 ## What's in here
 
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
@@ -44,6 +47,7 @@ deno task check       # type check
 deno task lint
 deno task fmt:check   # formatting (use `deno task fmt` to auto-fix)
 deno task test        # unit tests
+deno task coverage    # unit tests + coverage report (lcov + HTML in cov_profile/)
 deno task audit       # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
 deno task sast        # Semgrep: static analysis of src/
 ```

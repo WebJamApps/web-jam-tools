@@ -22,7 +22,7 @@ import * as cheerio from "cheerio";
 
 const RECIPIENT = "joshua.v.sherman@gmail.com";
 
-function gmailSecrets(): { clientId: string; clientSecret: string; refreshToken: string } {
+export function gmailSecrets(): { clientId: string; clientSecret: string; refreshToken: string } {
   const clientId = Deno.env.get("GMAIL_CLIENT_ID");
   const clientSecret = Deno.env.get("GMAIL_CLIENT_SECRET");
   const refreshToken = Deno.env.get("GMAIL_REFRESH_TOKEN");
@@ -34,7 +34,7 @@ function gmailSecrets(): { clientId: string; clientSecret: string; refreshToken:
   return { clientId, clientSecret, refreshToken };
 }
 
-async function refreshAccessToken(): Promise<string> {
+export async function refreshAccessToken(): Promise<string> {
   const { clientId, clientSecret, refreshToken } = gmailSecrets();
   const resp = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -141,7 +141,7 @@ export function buildRawMessage(to: string, subject: string, htmlBody: string): 
   ).replace(/=+$/, "");
 }
 
-async function sendEmail(to: string, subject: string, body: string): Promise<string> {
+export async function sendEmail(to: string, subject: string, body: string): Promise<string> {
   const raw = buildRawMessage(to, subject, body);
   // Each run is a cold start with no token cache, so always mint a fresh
   // short-lived access token from the refresh token.
@@ -224,13 +224,13 @@ async function main(): Promise<number> {
 // 10:00 (06:00 EDT) and 11:00 (06:00 EST) — and only actually send when it is
 // in fact 06:00 in Eastern. The off-season hour is a cheap no-op (well within
 // Deno Deploy's ~1M/mo cron ceiling), and there is never a double send.
-function easternHour(): number {
+export function easternHour(now: Date = new Date()): number {
   return Number(
     new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
       hour: "2-digit",
       hour12: false,
-    }).format(new Date()),
+    }).format(now),
   );
 }
 
