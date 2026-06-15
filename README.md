@@ -32,8 +32,9 @@ Then read:
 ## Checks (CI gate)
 
 Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`). It
-must pass before a PR can be **merged into `dev`** (enforced by branch protection).
-Pushing is never blocked — CI runs the gate automatically on each push.
+must pass before a PR can be **merged into `dev` or `main`** (enforced by branch
+protection on both). Pushing is never blocked — CI runs the gate automatically on
+each push.
 
 **Recommended (not required):** run the same checks locally first, to catch
 failures before the CI round-trip. You need Deno and Docker:
@@ -60,6 +61,46 @@ Notes:
 - `audit` scans the **npm** dependencies: it bridges `deno.lock` → a
   `package-lock.json` that Trivy can read. JSR deps (`@std/*`) aren't covered.
 - SAST findings are **refactored, not suppressed**.
+
+## Deploy (daily-devotional service)
+
+The daily-devotional generator (`src/devotional/send_daily_devotional.ts`) runs
+on **Deno Deploy**, which fires it daily at 06:00 America/New_York via `Deno.cron`
+— no laptop dependency (web-jam-tools#69).
+
+**Continuous deployment.** The Deno Deploy app is connected to this GitHub repo
+and **auto-deploys from `main`**. There is no deploy job in CircleCI: because
+`ci/circleci: gate` is a required check on both `dev` and `main`, only gate-green
+commits ever reach `main`, so every auto-deploy has already passed the gate. The
+normal flow is: feature → PR → `dev` → promote `dev` → `main` → Deno Deploy
+deploys.
+
+**Runtime secrets** live in the Deno Deploy dashboard (not in the repo): the
+three Gmail OAuth values `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and
+`GMAIL_REFRESH_TOKEN`. The script reads them via `Deno.env.get()` and refreshes a
+short-lived access token on each cold-start run (Deno Deploy has no persistent
+filesystem).
+
+**Manual / local deploy (escape hatch).** To push an ad-hoc deployment without a
+`git` push (e.g. a hotfix), deploy the entrypoint from your machine with the
+`deno deploy` CLI. It prompts for browser auth on first use and caches the
+credential in your system keyring:
+
+```bash
+deno deploy \
+  --org <your-deno-deploy-org> \
+  --app web-jam-devotional \
+  --entrypoint src/devotional/send_daily_devotional.ts \
+  --prod
+```
+
+(Replace `<your-deno-deploy-org>` with your Deno Deploy organization. `--app`
+must match the Deno Deploy app name.)
+
+**Test a single send locally** (no deploy): set the three `GMAIL_*` env vars and
+run `deno task devotional`, which sends once immediately. Do **not** re-add a
+laptop cron for it — Deno Deploy owns the schedule now, and a second scheduler
+would send every devotion twice.
 
 ## VSCode multi-root workspace
 

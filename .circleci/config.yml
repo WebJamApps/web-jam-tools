@@ -11,8 +11,10 @@ version: 2.1
 # auto-detect: they use these binaries here, and fall back to Docker images on a
 # dev machine that only has Docker.
 #
-# Make the `gate` job a REQUIRED status check on `dev` via GitHub branch
-# protection. (Deploy-on-merge-to-`main` is added separately in #69.)
+# `gate` is a REQUIRED status check on `dev` and `main` via GitHub branch
+# protection. Deployment is not a CircleCI job — Deno Deploy auto-deploys from
+# `main` (see the note above the `workflows` block and the README "Deploy"
+# section).
 
 executors:
   ci:
@@ -59,38 +61,14 @@ jobs:
           name: SAST (Semgrep)
           command: deno task sast
 
-  # Continuous deployment of the daily-devotional generator to Deno Deploy
-  # (web-jam-tools#69). Runs ONLY on `main` and ONLY after `gate` is green, so
-  # the flow is: feature → PR → dev (gate required-green) → dev → main → gate →
-  # auto-deploy. Auth via the DENO_DEPLOY_TOKEN CircleCI env var (deployctl
-  # reads it from the environment). The `--project` must match the Deno Deploy
-  # project Josh created by hand (Part B); Gmail secrets live in that project's
-  # dashboard, not here.
-  deploy:
-    executor: ci
-    steps:
-      - checkout
-      - run:
-          name: Install Deno
-          command: |
-            curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
-            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
-      - run:
-          name: Deploy to Deno Deploy
-          command: |
-            deno install -gArf jsr:@deno/deployctl
-            deployctl deploy \
-              --project=web-jam-devotional \
-              --prod \
-              --entrypoint=src/devotional/send_daily_devotional.ts
+# Deployment is NOT done here. The daily-devotional service auto-deploys to the
+# (new) Deno Deploy via its native GitHub integration on merge to `main`
+# (web-jam-tools#69). The gate→deploy coupling is enforced by branch protection:
+# `ci/circleci: gate` is a required check on both `dev` and `main`, so only
+# gate-green commits ever reach `main` for Deno Deploy to pick up. (deployctl /
+# Deno Deploy Classic was the original plan but is being retired 2026-07-20.)
 
 workflows:
   ci:
     jobs:
       - gate
-      - deploy:
-          requires:
-            - gate
-          filters:
-            branches:
-              only: main
