@@ -29,6 +29,38 @@ Then read:
 - [docs/rclone-setup.md](docs/rclone-setup.md) — mounting Google Drive locally via rclone + systemd
 - [docs/api-integrations.md](docs/api-integrations.md) — reference snapshot of one working setup (machine-specific paths; use the generic guide above for your own setup)
 
+## Checks (CI gate)
+
+Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`). It
+must pass before a PR can be **merged into `dev`** (enforced by branch protection).
+Pushing is never blocked — CI runs the gate automatically on each push.
+
+**Recommended (not required):** run the same checks locally first, to catch
+failures before the CI round-trip. You need Deno and Docker:
+
+```bash
+deno task check       # type check
+deno task lint
+deno task fmt:check   # formatting (use `deno task fmt` to auto-fix)
+deno task test        # unit tests
+deno task audit       # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
+deno task sast        # Semgrep: static analysis of src/
+```
+
+Or run the entire CircleCI job locally (needs the [CircleCI CLI](https://circleci.com/docs/local-cli/)):
+
+```bash
+circleci local execute gate
+```
+
+Notes:
+
+- `audit` / `sast` use the Trivy / Semgrep **Docker images** locally (you only
+  need Docker) and the installed binaries in CI — the same scans either way.
+- `audit` scans the **npm** dependencies: it bridges `deno.lock` → a
+  `package-lock.json` that Trivy can read. JSR deps (`@std/*`) aren't covered.
+- SAST findings are **refactored, not suppressed**.
+
 ## VSCode multi-root workspace
 
 `WebJamApps.code-workspace` is a multi-root VSCode workspace that opens this repo alongside its sibling repos (JaMmusic, CollegeLutheran, AppersonAuto, web-jam-back, WebJamSocketCluster, WebJamPg). It uses **relative paths**, so for it to work the sibling repos need to be cloned next to `web-jam-tools/`:
@@ -93,6 +125,7 @@ Why a symlink instead of rebuilding: a Python venv bakes absolute paths into its
 ## Contributing
 
 - Branch from `dev`, open a PR against `dev`. Do not merge to `dev` or `main` from an AI assistant — a human reviewer is required.
+- A PR can only be **merged** into `dev` once the CI gate passes (see [Checks (CI gate)](#checks-ci-gate)). Running those checks locally first is recommended, not required.
 - Don't commit `node_modules/`, environment files, or credentials. The `.gitignore` covers the obvious cases.
 - When adding new scripts, document them in `docs/scripts.md`.
 

@@ -32,12 +32,13 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/gemma-cli/.venv/bin/python",
   "python.terminal.activateEnvironment": false,
 
-  // Deno config for the task-queue tool. SCOPED to src/ + test/ via
-  // deno.enablePaths so the Deno language server only governs those folders —
-  // gig-scraper (Node/JS), scripts/ (Node TS via tsx), and gemma-cli (Python)
+  // Deno config for the task-queue tool. SCOPED via deno.enablePaths so the
+  // Deno language server only governs Deno code — src/, test/, and the Deno
+  // audit helper scripts/audit/ (gen-npm-manifest.ts uses `Deno.*`). The rest of
+  // scripts/ (Node TS via tsx), gig-scraper (Node/JS), and gemma-cli (Python)
   // keep their normal language servers. Without this, the built-in TS server
-  // would flag `Deno.*` globals and `jsr:`/`@std/` imports as errors in src/.
-  "deno.enablePaths": ["src", "test"],
+  // would flag `Deno.*` globals and `jsr:`/`@std/` imports as errors.
+  "deno.enablePaths": ["src", "test", "scripts/audit"],
   "deno.lint": true,
   "deno.unstable": false,
   // Format-on-save via `deno fmt`. The Deno formatter only operates on files

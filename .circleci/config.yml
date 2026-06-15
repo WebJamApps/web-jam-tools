@@ -1,0 +1,65 @@
+version: 2.1
+
+# CI quality + security gate for web-jam-tools (web-jam-tools#84).
+#
+# Runs the same checks you can run locally, so "green locally" == "green in CI":
+#   deno task check · lint · fmt:check · test · audit · sast
+#
+# Uses a `docker` executor (Node 24.16 LTS base) with Deno, Trivy, and Semgrep
+# installed as binaries — so the whole gate can be reproduced locally with
+# `circleci local execute gate` (great for debugging CI). The audit/sast scripts
+# auto-detect: they use these binaries here, and fall back to Docker images on a
+# dev machine that only has Docker.
+#
+# Make the `gate` job a REQUIRED status check on `dev` via GitHub branch
+# protection. (Deploy-on-merge-to-`main` is added separately in #69.)
+
+executors:
+  ci:
+    docker:
+      - image: cimg/node:24.16
+
+jobs:
+  gate:
+    executor: ci
+    steps:
+      - checkout
+      - run:
+          name: Install Deno + Trivy + Semgrep
+          command: |
+            # Deno (pinned)
+            curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
+            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
+            # Trivy (pinned)
+            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+              | sudo sh -s -- -b /usr/local/bin v0.71.0
+            # Semgrep (via pipx)
+            sudo apt-get update -y && sudo apt-get install -y pipx
+            pipx install semgrep
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+      - run:
+          name: Tool versions
+          command: deno --version && node -v && npm -v && trivy --version && semgrep --version
+      - run:
+          name: Type check
+          command: deno task check
+      - run:
+          name: Lint
+          command: deno task lint
+      - run:
+          name: Format check
+          command: deno task fmt:check
+      - run:
+          name: Unit tests
+          command: deno task test
+      - run:
+          name: Dependency + secret scan (Trivy)
+          command: deno task audit
+      - run:
+          name: SAST (Semgrep)
+          command: deno task sast
+
+workflows:
+  ci:
+    jobs:
+      - gate
