@@ -5,8 +5,9 @@ WebJamApps workspace. The repo is geared toward making AI-assisted
 development (Claude Code, Gemini CLI) productive across many sibling
 project directories that live alongside it on the same machine.
 
-**Deno code coverage: 82.8%** (lines, all files; 25 tests). Regenerate with
-`deno task coverage`.
+**Deno code coverage: 82.8%** (lines, all files; 25 tests). The CI gate **fails
+under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
+`deno task coverage`; enforce the threshold with `deno task coverage:check`.
 
 ## What's in here
 
@@ -46,9 +47,10 @@ failures before the CI round-trip. You need Deno and Docker:
 deno task check       # type check
 deno task lint
 deno task fmt:check   # formatting (use `deno task fmt` to auto-fix)
-deno task test        # unit tests
-deno task coverage    # unit tests + coverage report (lcov + HTML in cov_profile/)
-deno task audit       # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
+deno task test          # unit tests
+deno task coverage      # unit tests + coverage report (lcov + HTML in cov_profile/)
+deno task coverage:check # unit tests + fail if all-files line coverage < 80% (CI gate)
+deno task audit         # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
 deno task sast        # Semgrep: static analysis of src/
 ```
 
