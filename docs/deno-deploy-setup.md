@@ -32,46 +32,40 @@ The service must be Deno-Deploy-ready before you wire up hosting:
   filesystem, so nothing can be read from disk.
 - No build/install step (remote + `npm:` deps resolve at deploy).
 
-## Step 1 — Create the app
+## Step 1 — Create the app (CLI, no GitHub integration)
 
-1. Go to **`console.deno.com`** and sign in with GitHub.
-2. Select (or create) the **organization** — for WebJamApps this is
-   `webjamapps` (URL: `console.deno.com/webjamapps`). Org name/slug **cannot be
-   changed after creation**.
-3. Click **`+ New App`**.
-4. **Select the GitHub repository** `WebJamApps/web-jam-tools`. If it isn't
-   listed, use **Add another GitHub account** / **Configure GitHub App
-   permissions** to grant the Deno Deploy GitHub App access to the repo.
-5. Open **`Edit app configuration`** (the build/entrypoint fields are collapsed
-   behind this button). Set:
-   - **Entry point** (required — marked with a red `*`):
-     `src/devotional/send_daily_devotional.ts`
-   - **Framework preset:** `No Preset`
-   - **Install command / Build command:** leave **empty**.
-   - Root/working directory: leave default.
-   The right-hand **APP CONFIG** summary should now show your entry point.
-6. Set the **app name / slug** to `web-jam-devotional`. (If taken, pick a
-   variant and update this doc + the README `--app` reference.)
-7. Click **`Create App`**.
+Create the app from the **CLI** so it is **not** linked to GitHub. A
+GitHub-linked app auto-builds *every* branch and posts a `deploy/<org>/<app>`
+status check on PRs — exactly what we don't want. **Do NOT use the dashboard's
+"Deploy from GitHub" flow.**
 
-> The first build may **fail or no-op** — at this point the production branch is
-> still the repo default (`dev`) and the secrets aren't set yet. That's
-> expected; the first *real* deploy happens in Step 5.
+From the repo root:
 
-## Step 2 — Deploy from CI only (disconnect Deno's GitHub integration)
+```bash
+deno deploy create \
+  --org webjamapps \
+  --app web-jam-devotional \
+  --source local \
+  --runtime-mode dynamic \
+  --entrypoint src/devotional/send_daily_devotional.ts
+```
 
-Deploy is driven from **CircleCI**, **not** Deno Deploy's GitHub integration. The
-integration builds *every* branch (preview deploys + a `deploy/<org>/<app>`
-status check on every PR), which violates "deploy only from `main`". So:
+First run opens a browser to authenticate (cached in your keyring). With no flags
+the command runs interactively. If the app name is taken, pick a variant and
+update the `--app` references here and in the README.
 
-1. **Disconnect the app's GitHub integration** in the Deno Deploy app settings
-   (`console.deno.com/webjamapps/web-jam-devotional/settings`) so Deno stops
-   auto-building branches. After this, the app deploys *only* when CI runs
-   `deno deploy`.
-2. **Create a Deno Deploy access token** (Deno Deploy dashboard → account/org
-   access tokens) and add it to **CircleCI** as the `DENO_DEPLOY_TOKEN`
-   project/context env var.
-3. The CircleCI `deploy` job (already in `.circleci/config.yml`) runs only on
+> **Already created it via the dashboard "Deploy from GitHub" flow?** Open the
+> app's **Settings**, find the **"Deploy from GitHub"** section, and click
+> **Unlink**. After that it deploys only via the CLI/CI below — no branch builds,
+> no PR check.
+
+## Step 2 — Wire CI deploy
+
+1. **Create a Deno Deploy access token** (Deno Deploy dashboard → account/org
+   **Access Tokens**) and add it to **CircleCI** as the `DENO_DEPLOY_TOKEN` env
+   var (CircleCI → `web-jam-tools` → **Project Settings → Environment
+   Variables**).
+2. The CircleCI `deploy` job (already in `.circleci/config.yml`) runs only on
    `main`, only after `gate`, and deploys with:
    ```bash
    deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPLOY_TOKEN"
