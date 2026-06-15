@@ -91,17 +91,22 @@ add the three Gmail OAuth values. The Deno UI lets you **paste `.env` lines** or
 | `GMAIL_CLIENT_SECRET` | `~/.gmail-mcp/gcp-oauth.keys.json` → `installed.client_secret` |
 | `GMAIL_REFRESH_TOKEN` | `~/.gmail-mcp/credentials.json` → `refresh_token` |
 
-Generate the three pasteable lines straight from those files:
+Generate the three pasteable lines straight from those files — three short,
+paste-safe commands (a single long-quoted one-liner tends to break on paste and
+leave the shell hung at a `>` continuation prompt):
 
 ```bash
-jq -r '"GMAIL_CLIENT_ID=\((.installed//.web).client_id)\nGMAIL_CLIENT_SECRET=\((.installed//.web).client_secret)"' ~/.gmail-mcp/gcp-oauth.keys.json; jq -r '"GMAIL_REFRESH_TOKEN=\(.refresh_token)"' ~/.gmail-mcp/credentials.json
+jq -r '"GMAIL_CLIENT_ID="+(.installed.client_id // .web.client_id)' ~/.gmail-mcp/gcp-oauth.keys.json
+jq -r '"GMAIL_CLIENT_SECRET="+(.installed.client_secret // .web.client_secret)' ~/.gmail-mcp/gcp-oauth.keys.json
+jq -r '"GMAIL_REFRESH_TOKEN="+.refresh_token' ~/.gmail-mcp/credentials.json
 ```
 
-> ⚠️ **Run this in a normal terminal, NOT via Claude Code's `!` prefix.** It
-> prints the real `client_secret` and `refresh_token`; the `!` prefix would dump
-> them into the chat transcript (which is stored). Copy the three lines from
-> your terminal into Deno's env-var box. To write a file to drag instead, append
-> `> /tmp/<service>.env` and drag that, then delete it.
+> ⚠️ **Run these in a normal terminal, NOT via Claude Code's `!` prefix.** They
+> print the real `client_secret` and `refresh_token`; the `!` prefix would dump
+> them into the chat transcript (which is stored). Copy the three `GMAIL_...=`
+> lines into Deno's env-var box (it accepts pasted `.env` lines). To make a file
+> to drag instead, redirect them to `/tmp/<service>.env`, drag it, then delete
+> it.
 
 These never live in the repo. The service refreshes a short-lived access token
 from them on each cold-start run.
