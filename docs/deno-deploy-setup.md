@@ -77,9 +77,11 @@ update the `--app` references here and in the README.
 
 ## Step 3 — Add the runtime secrets
 
-In the app → **`Settings`** → **Environment Variables** (Production context),
-add the three Gmail OAuth values. The Deno UI lets you **paste `.env` lines** or
-**drag a `.env` file** — both load all three at once.
+In the app → **`Settings`** → **Environment Variables**, add the three Gmail
+OAuth values. **They must be available to the `Production` context** — the deploy
+runs with `--prod`, so secrets scoped only to another context won't be visible at
+runtime. The Deno UI lets you **paste `.env` lines** or **drag a `.env` file** —
+both load all three at once.
 
 | Variable | Source (current laptop creds) |
 |---|---|
