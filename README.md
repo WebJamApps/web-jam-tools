@@ -89,8 +89,9 @@ deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPL
 
 `DENO_DEPLOY_TOKEN` is a CircleCI env var — create the token in Deno Deploy →
 org settings (`console.deno.com/webjamapps/~/settings`) → **Organization Tokens**
-(one token deploys every app in the org), then add it under CircleCI →
-`web-jam-tools` → **Project Settings → Environment Variables**. `ci/circleci:
+and **copy its value (shown only once)** (one token deploys every app in the
+org), then add it under CircleCI → `web-jam-tools` → **Project Settings →
+Environment Variables**. `ci/circleci:
 gate` is also a required check on both `dev` and `main`, so only gate-green
 commits ever reach `main` in the first place. Flow: feature → PR → `dev` → promote `dev` → `main` → gate →
 deploy. Full setup steps for a new service are in
