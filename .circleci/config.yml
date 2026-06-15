@@ -3,7 +3,8 @@ version: 2.1
 # CI quality + security gate for web-jam-tools (web-jam-tools#84).
 #
 # Runs the same checks you can run locally, so "green locally" == "green in CI":
-#   deno task check · lint · fmt:check · test · audit · sast
+#   deno task check · lint · fmt:check · coverage:check · audit · sast
+# (coverage:check runs the unit tests and fails under 80% all-files line coverage)
 #
 # Uses a `docker` executor (Node 24.16 LTS base) with Deno, Trivy, and Semgrep
 # installed as binaries — so the whole gate can be reproduced locally with
@@ -52,8 +53,8 @@ jobs:
           name: Format check
           command: deno task fmt:check
       - run:
-          name: Unit tests
-          command: deno task test
+          name: Unit tests + coverage (>=80% all-files line)
+          command: deno task coverage:check
       - run:
           name: Dependency + secret scan (Trivy)
           command: deno task audit

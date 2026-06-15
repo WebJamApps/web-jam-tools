@@ -5,6 +5,7 @@
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env",
     "coverage": "rm -rf cov_profile && deno test --allow-env --coverage=cov_profile && deno coverage cov_profile",
+    "coverage:check": "bash scripts/coverage-check.sh",
     "check": "deno check src/ test/",
     "fmt": "deno fmt src/ test/",
     "fmt:check": "deno fmt --check src/ test/",
