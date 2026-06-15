@@ -62,9 +62,19 @@ By default Deno Deploy treats the repo's **default branch** (`dev` here) as the
 production branch. We deploy from `main` instead, to keep the `dev`→`main`
 staging buffer.
 
-1. Open the app → **`Settings`** → **`Git`** tab.
-2. Change the **production branch** from `dev` to **`main`**.
-3. Save.
+> **Where it actually is (not obvious):** there is **no "Git" tab**. The
+> production **branch selector lives on the app's Settings page directly** —
+> `console.deno.com/<org>/<app>/settings` (e.g.
+> `console.deno.com/webjamapps/web-jam-devotional/settings`).
+
+1. Open `console.deno.com/webjamapps/web-jam-devotional/settings`.
+2. Find the **branch selector** and change it from `dev` to **`main`**. (It
+   saves on selection — there may be no separate Save button. Selecting `main`
+   also kicks off a one-off **manual build** from `main`; that build will fail
+   until the new code + secrets are in place — ignore it.)
+3. **Confirm it persisted:** reload the Settings page and check the selector
+   still shows `main`. (You can also open any resulting build → **Build
+   Details**; it should show branch `main` and **Config source: App settings**.)
 
 Now: commits on `main` deploy to **production**; commits on other branches
 (incl. `dev`) deploy as **preview** only.
