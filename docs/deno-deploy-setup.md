@@ -142,6 +142,27 @@ send the devotional (the `0 6 * * *` `deno run …send_daily_devotional.ts` line
 in `crontab -l`). Until this is done, **both** the laptop and the cloud fire at
 06:00 ET and the devotion sends **twice**.
 
+## Adding another service (monorepo)
+
+`web-jam-tools` is a **monorepo** of microservices; each deployable service is
+its **own Deno Deploy app** (free tier allows up to **20 apps**). To add one:
+
+1. **Create its app** (CLI, no GitHub link) — Step 1 with that service's name and
+   entrypoint:
+   ```bash
+   deno deploy create --org webjamapps --app web-jam-<service> \
+     --source local --runtime-mode dynamic --entrypoint src/<service>/<entry>.ts
+   ```
+2. **Add its secrets** to that app (Step 3) — each app has its own isolated env.
+3. **Add a CircleCI deploy job** for it: copy the `deploy` job in
+   `.circleci/config.yml`, rename it (e.g. `deploy-<service>`), change `--app`,
+   and add it to the `workflows` list with `requires: [gate]` and
+   `filters: { branches: { only: main } }`. The **same `DENO_DEPLOY_TOKEN`**
+   deploys every app in the org — no new token needed.
+
+Each service deploys independently from `main`, with its own entrypoint, secrets,
+schedule, and subdomain.
+
 ## Manual / local deploy (escape hatch)
 
 To push an ad-hoc deployment without going through CI (e.g. a hotfix), deploy
