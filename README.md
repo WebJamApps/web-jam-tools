@@ -76,12 +76,21 @@ on **Deno Deploy**, which fires it daily at 06:00 America/New_York via `Deno.cro
 > [`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md) (create the app, set
 > the production branch, secrets, verify, cutover).
 
-**Continuous deployment.** The Deno Deploy app is connected to this GitHub repo
-and **auto-deploys from `main`**. There is no deploy job in CircleCI: because
-`ci/circleci: gate` is a required check on both `dev` and `main`, only gate-green
-commits ever reach `main`, so every auto-deploy has already passed the gate. The
-normal flow is: feature → PR → `dev` → promote `dev` → `main` → Deno Deploy
-deploys.
+**Continuous deployment — `main` ONLY, driven from CI.** Deployment runs from
+**CircleCI**, not Deno Deploy's GitHub integration. The app's GitHub integration
+is **disconnected**, so Deno never builds branches — `main` is the only thing
+that ever deploys, and pull requests get **no Deno Deploy status check**. On
+merge to `main`, the CircleCI `deploy` job (which `requires` the `gate` job, so
+it runs only after the gate is green) runs:
+
+```bash
+deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPLOY_TOKEN"
+```
+
+`DENO_DEPLOY_TOKEN` is a CircleCI env var. `ci/circleci: gate` is also a required
+check on both `dev` and `main`, so only gate-green commits ever reach `main` in
+the first place. Flow: feature → PR → `dev` → promote `dev` → `main` → gate →
+deploy.
 
 **Convention — one Deno Deploy app per microservice.** Each deployable service
 gets its own Deno Deploy **app** (named `web-jam-<service>`, e.g.
@@ -96,21 +105,15 @@ three Gmail OAuth values `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and
 short-lived access token on each cold-start run (Deno Deploy has no persistent
 filesystem).
 
-**Manual / local deploy (escape hatch).** To push an ad-hoc deployment without a
-`git` push (e.g. a hotfix), deploy the entrypoint from your machine with the
-`deno deploy` CLI. It prompts for browser auth on first use and caches the
-credential in your system keyring:
+**Manual / local deploy (escape hatch).** To push an ad-hoc deployment without
+going through CI (e.g. a hotfix), deploy from your machine with the same CLI. Run
+it from the repo root (the app already knows its entrypoint); it prompts for
+browser auth on first use and caches the credential in your system keyring, so
+you can omit `--token`:
 
 ```bash
-deno deploy \
-  --org <your-deno-deploy-org> \
-  --app web-jam-devotional \
-  --entrypoint src/devotional/send_daily_devotional.ts \
-  --prod
+deno deploy --org webjamapps --app web-jam-devotional --prod
 ```
-
-(Replace `<your-deno-deploy-org>` with your Deno Deploy organization. `--app`
-must match the Deno Deploy app name.)
 
 **Test a single send locally** (no deploy): set the three `GMAIL_*` env vars and
 run `deno task devotional`, which sends once immediately. Do **not** re-add a

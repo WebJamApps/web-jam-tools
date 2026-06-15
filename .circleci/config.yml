@@ -61,14 +61,37 @@ jobs:
           name: SAST (Semgrep)
           command: deno task sast
 
-# Deployment is NOT done here. The daily-devotional service auto-deploys to the
-# (new) Deno Deploy via its native GitHub integration on merge to `main`
-# (web-jam-tools#69). The gate→deploy coupling is enforced by branch protection:
-# `ci/circleci: gate` is a required check on both `dev` and `main`, so only
-# gate-green commits ever reach `main` for Deno Deploy to pick up. (deployctl /
-# Deno Deploy Classic was the original plan but is being retired 2026-07-20.)
+  # Deploy the daily-devotional service to Deno Deploy — ONLY from `main`
+  # (web-jam-tools#69). Deploy is driven from CI, NOT Deno's GitHub integration
+  # (which builds every branch and posts a failing preview check on PRs). The
+  # Deno Deploy app's GitHub integration is disconnected, so `main` is the only
+  # thing that ever deploys and PRs get no Deno check. Auth via the
+  # DENO_DEPLOY_TOKEN CircleCI env var. Runs only on `main`, only after `gate`.
+  deploy:
+    executor: ci
+    steps:
+      - checkout
+      - run:
+          name: Install Deno
+          command: |
+            curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
+            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
+      - run:
+          name: Deploy to Deno Deploy (production)
+          command: |
+            deno deploy \
+              --org webjamapps \
+              --app web-jam-devotional \
+              --prod \
+              --token "$DENO_DEPLOY_TOKEN"
 
 workflows:
   ci:
     jobs:
       - gate
+      - deploy:
+          requires:
+            - gate
+          filters:
+            branches:
+              only: main
