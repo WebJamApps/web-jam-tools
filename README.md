@@ -31,9 +31,12 @@ Then read:
 
 ## Checks (CI gate)
 
-Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`),
-required-green on `dev`. Run the **same checks locally before pushing** — all you
-need is Deno and Docker:
+Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`). It
+must pass before a PR can be **merged into `dev`** (enforced by branch protection).
+Pushing is never blocked — CI runs the gate automatically on each push.
+
+**Recommended (not required):** run the same checks locally first, to catch
+failures before the CI round-trip. You need Deno and Docker:
 
 ```bash
 deno task check       # type check
@@ -122,7 +125,7 @@ Why a symlink instead of rebuilding: a Python venv bakes absolute paths into its
 ## Contributing
 
 - Branch from `dev`, open a PR against `dev`. Do not merge to `dev` or `main` from an AI assistant — a human reviewer is required.
-- Run the checks locally before pushing — see [Checks (CI gate)](#checks-ci-gate). The PR must pass the same gate in CI.
+- A PR can only be **merged** into `dev` once the CI gate passes (see [Checks (CI gate)](#checks-ci-gate)). Running those checks locally first is recommended, not required.
 - Don't commit `node_modules/`, environment files, or credentials. The `.gitignore` covers the obvious cases.
 - When adding new scripts, document them in `docs/scripts.md`.
 
