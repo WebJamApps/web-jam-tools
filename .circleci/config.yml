@@ -3,7 +3,8 @@ version: 2.1
 # CI quality + security gate for web-jam-tools (web-jam-tools#84).
 #
 # Runs the same checks you can run locally, so "green locally" == "green in CI":
-#   deno task check · lint · fmt:check · test · audit · sast
+#   deno task check · lint · fmt:check · coverage:check · audit · sast
+# (coverage:check runs the unit tests and fails under 80% all-files line coverage)
 #
 # Uses a `docker` executor (Node 24.16 LTS base) with Deno, Trivy, and Semgrep
 # installed as binaries — so the whole gate can be reproduced locally with
@@ -11,8 +12,10 @@ version: 2.1
 # auto-detect: they use these binaries here, and fall back to Docker images on a
 # dev machine that only has Docker.
 #
-# Make the `gate` job a REQUIRED status check on `dev` via GitHub branch
-# protection. (Deploy-on-merge-to-`main` is added separately in #69.)
+# `gate` is a REQUIRED status check on `dev` and `main` via GitHub branch
+# protection. The `deploy` job (below) deploys the daily-devotional service to
+# Deno Deploy from `main` only, after `gate` passes (see that job + the README
+# "Deploy" section).
 
 executors:
   ci:
@@ -50,8 +53,8 @@ jobs:
           name: Format check
           command: deno task fmt:check
       - run:
-          name: Unit tests
-          command: deno task test
+          name: Unit tests + coverage (>=80% all-files line)
+          command: deno task coverage:check
       - run:
           name: Dependency + secret scan (Trivy)
           command: deno task audit
@@ -59,7 +62,37 @@ jobs:
           name: SAST (Semgrep)
           command: deno task sast
 
+  # Deploy the daily-devotional service to Deno Deploy — ONLY from `main`
+  # (web-jam-tools#69). Deploy is driven from CI, NOT Deno's GitHub integration
+  # (which builds every branch and posts a failing preview check on PRs). The
+  # Deno Deploy app's GitHub integration is disconnected, so `main` is the only
+  # thing that ever deploys and PRs get no Deno check. Auth via the
+  # DENO_DEPLOY_TOKEN CircleCI env var. Runs only on `main`, only after `gate`.
+  deploy:
+    executor: ci
+    steps:
+      - checkout
+      - run:
+          name: Install Deno
+          command: |
+            curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
+            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
+      - run:
+          name: Deploy to Deno Deploy (production)
+          command: |
+            deno deploy \
+              --org webjamapps \
+              --app web-jam-devotional \
+              --prod \
+              --token "$DENO_DEPLOY_TOKEN"
+
 workflows:
   ci:
     jobs:
       - gate
+      - deploy:
+          requires:
+            - gate
+          filters:
+            branches:
+              only: main
