@@ -68,6 +68,10 @@ The daily-devotional generator (`src/devotional/send_daily_devotional.ts`) runs
 on **Deno Deploy**, which fires it daily at 06:00 America/New_York via `Deno.cron`
 — no laptop dependency (web-jam-tools#69).
 
+> **Setting up a new service on Deno Deploy?** Follow the step-by-step runbook:
+> [`docs/deno-deploy-setup.md`](docs/deno-deploy-setup.md) (create the app, set
+> the production branch, secrets, verify, cutover).
+
 **Continuous deployment.** The Deno Deploy app is connected to this GitHub repo
 and **auto-deploys from `main`**. There is no deploy job in CircleCI: because
 `ci/circleci: gate` is a required check on both `dev` and `main`, only gate-green
