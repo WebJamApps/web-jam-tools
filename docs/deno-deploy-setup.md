@@ -1,8 +1,10 @@
 # Deploying a service to Deno Deploy
 
 Runbook for putting a scheduled/served Deno script in this repo onto **Deno
-Deploy** (the new platform at `console.deno.com` / `app.deno.com`), with
-continuous deployment from GitHub and the CI gate enforced at merge.
+Deploy** (the new platform at `console.deno.com` / `app.deno.com`). Deployment is
+driven from **CircleCI** (`deno deploy` on `main` only) — **not** Deno's GitHub
+integration — so `main` is the only thing that ever deploys and PRs get no Deno
+check. The CI gate is enforced at merge.
 
 The worked example is the **daily-devotional** service
 (`src/devotional/send_daily_devotional.ts`, web-jam-tools#69). For a different
@@ -56,28 +58,27 @@ The service must be Deno-Deploy-ready before you wire up hosting:
 > still the repo default (`dev`) and the secrets aren't set yet. That's
 > expected; the first *real* deploy happens in Step 5.
 
-## Step 2 — Set the production branch to `main`
+## Step 2 — Deploy from CI only (disconnect Deno's GitHub integration)
 
-By default Deno Deploy treats the repo's **default branch** (`dev` here) as the
-production branch. We deploy from `main` instead, to keep the `dev`→`main`
-staging buffer.
+Deploy is driven from **CircleCI**, **not** Deno Deploy's GitHub integration. The
+integration builds *every* branch (preview deploys + a `deploy/<org>/<app>`
+status check on every PR), which violates "deploy only from `main`". So:
 
-> **Where it actually is (not obvious):** there is **no "Git" tab**. The
-> production **branch selector lives on the app's Settings page directly** —
-> `console.deno.com/<org>/<app>/settings` (e.g.
-> `console.deno.com/webjamapps/web-jam-devotional/settings`).
+1. **Disconnect the app's GitHub integration** in the Deno Deploy app settings
+   (`console.deno.com/webjamapps/web-jam-devotional/settings`) so Deno stops
+   auto-building branches. After this, the app deploys *only* when CI runs
+   `deno deploy`.
+2. **Create a Deno Deploy access token** (Deno Deploy dashboard → account/org
+   access tokens) and add it to **CircleCI** as the `DENO_DEPLOY_TOKEN`
+   project/context env var.
+3. The CircleCI `deploy` job (already in `.circleci/config.yml`) runs only on
+   `main`, only after `gate`, and deploys with:
+   ```bash
+   deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPLOY_TOKEN"
+   ```
 
-1. Open `console.deno.com/webjamapps/web-jam-devotional/settings`.
-2. Find the **branch selector** and change it from `dev` to **`main`**. (It
-   saves on selection — there may be no separate Save button. Selecting `main`
-   also kicks off a one-off **manual build** from `main`; that build will fail
-   until the new code + secrets are in place — ignore it.)
-3. **Confirm it persisted:** reload the Settings page and check the selector
-   still shows `main`. (You can also open any resulting build → **Build
-   Details**; it should show branch `main` and **Config source: App settings**.)
-
-Now: commits on `main` deploy to **production**; commits on other branches
-(incl. `dev`) deploy as **preview** only.
+> Result: **no preview deploys and no Deno check on PRs** — `main` is the only
+> thing that ever deploys.
 
 ## Step 3 — Add the runtime secrets
 
@@ -114,14 +115,14 @@ from them on each cold-start run.
 ## Step 4 — Merge the code to `dev`
 
 Merge the service PR into `dev` (the CI **gate** must be green — it's a required
-status check on `dev`). This does **not** deploy to production yet (production =
-`main`); a `dev` push is a preview deploy only.
+status check on `dev`). **Nothing deploys** — CI only deploys on `main`.
 
-## Step 5 — Promote `dev` → `main` (first production deploy)
+## Step 5 — Promote `dev` → `main` (first deploy)
 
 Open a `dev` → `main` PR and merge it (gate is also required on `main`). On
-merge, Deno Deploy auto-builds and deploys the new code to **production**, with
-the Step 3 secrets present. `Deno.cron` registers on this deploy.
+merge, the CircleCI `deploy` job runs `deno deploy … --prod` and deploys the new
+code to **production**, with the Step 3 secrets present. `Deno.cron` registers on
+this deploy.
 
 ## Step 6 — Verify
 
@@ -149,17 +150,11 @@ in `crontab -l`). Until this is done, **both** the laptop and the cloud fire at
 
 ## Manual / local deploy (escape hatch)
 
-To push an ad-hoc deployment without a `git` push (e.g. a hotfix), deploy from
-your machine with the new-platform `deno deploy` CLI (interactive browser auth
-on first use, cached in your keyring):
+To push an ad-hoc deployment without going through CI (e.g. a hotfix), deploy
+from your machine with the same CLI, run from the repo root (the app already
+knows its entrypoint). Interactive browser auth on first use is cached in your
+keyring, so you can omit `--token`:
 
 ```bash
-deno deploy \
-  --org webjamapps \
-  --app web-jam-devotional \
-  --entrypoint src/devotional/send_daily_devotional.ts \
-  --prod
+deno deploy --org webjamapps --app web-jam-devotional --prod
 ```
-
-> Add `[skip deploy]` to a commit message to make Deno Deploy skip building that
-> commit.
