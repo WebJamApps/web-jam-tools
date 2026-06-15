@@ -75,6 +75,13 @@ commits ever reach `main`, so every auto-deploy has already passed the gate. The
 normal flow is: feature → PR → `dev` → promote `dev` → `main` → Deno Deploy
 deploys.
 
+**Convention — one Deno Deploy app per microservice.** Each deployable service
+gets its own Deno Deploy **app** (named `web-jam-<service>`, e.g.
+`web-jam-devotional`), so each has isolated secrets, its own `Deno.cron`
+schedule, an independent deploy, and its own subdomain. The free tier allows up
+to **20 apps** (plus 1M requests/mo, 20 GB egress, 15h CPU/mo) — ample for this
+model; a once-daily cron is negligible against those ceilings.
+
 **Runtime secrets** live in the Deno Deploy dashboard (not in the repo): the
 three Gmail OAuth values `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and
 `GMAIL_REFRESH_TOKEN`. The script reads them via `Deno.env.get()` and refreshes a
