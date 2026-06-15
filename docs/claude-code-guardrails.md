@@ -77,13 +77,27 @@ account; the URL is deterministic).
    (R/W), Commit statuses (Read), Issues (R/W), Metadata (Read) — and
    **`Administration` is NOT present.**
 6. **Generate token**, then **copy the value (shown once)**.
-7. **Authenticate `gh` in the Claude Code environment** with it — the user runs
-   this so the token never passes through Claude:
+7. **Authenticate `gh` with the token** — run this **in a terminal** (not pasted
+   into Claude's chat) so the token never enters the transcript:
    ```bash
-   gh auth login   # GitHub.com → HTTPS → "Paste an authentication token"
+   gh auth login
    ```
-   Then `gh auth status` should show the account with the limited scopes. From
+   Answer the prompts in this order:
+   - **What account do you want to log into?** → **GitHub.com**
+   - **What is your preferred protocol for Git operations?** → **HTTPS**
+   - **Authenticate Git with your GitHub credentials?** → **Yes**
+   - **How would you like to authenticate GitHub CLI?** → **Paste an
+     authentication token**
+   - **Paste your authentication token:** → paste the token, press Enter
+
+   Then `gh auth status` should show the account authenticated via token. From
    then on, Claude's `gh`/`git` operations run under the non-admin token.
+
+   > Note: this machine's `gh` config is shared, and a fine-grained PAT
+   > authenticates as the same account — so this restricts both the Claude
+   > environment and your own terminal `gh`. Merges/admin are done via the GitHub
+   > web UI anyway. To restrict only Claude's side, use `gh`'s multi-account
+   > support instead.
 
 To rotate: create a new token the same way, re-run `gh auth login`, and delete
 the old one from the Organization Tokens / fine-grained tokens list.
