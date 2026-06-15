@@ -24,3 +24,6 @@ __pycache__/
 # gig-scraper debug artifact
 src/gig-scraper/page_debug.html
 src/gig-scraper/gig_booking_2025_data.json
+
+# Deno coverage output
+cov_profile/
