@@ -61,10 +61,11 @@ update the `--app` references here and in the README.
 
 ## Step 2 — Wire CI deploy
 
-1. **Create a Deno Deploy access token** (Deno Deploy dashboard → account/org
-   **Access Tokens**) and add it to **CircleCI** as the `DENO_DEPLOY_TOKEN` env
-   var (CircleCI → `web-jam-tools` → **Project Settings → Environment
-   Variables**).
+1. **Create a Deno Deploy access token** — org settings
+   (`console.deno.com/webjamapps/~/settings`) → **Organization Tokens** → create
+   one and copy the value (shown once). Add it to **CircleCI** as the
+   `DENO_DEPLOY_TOKEN` env var (CircleCI → `web-jam-tools` → **Project Settings →
+   Environment Variables**).
 2. The CircleCI `deploy` job (already in `.circleci/config.yml`) runs only on
    `main`, only after `gate`, and deploys with:
    ```bash
