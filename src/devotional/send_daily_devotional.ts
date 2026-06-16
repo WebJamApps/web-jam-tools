@@ -244,6 +244,11 @@ if (import.meta.main) {
     // On Deno Deploy: register the schedule and let the runtime invoke it.
     Deno.cron("daily devotional (06:00 EDT)", "0 10 * * *", runAtSixEastern);
     Deno.cron("daily devotional (06:00 EST)", "0 11 * * *", runAtSixEastern);
+    // The new Deno Deploy warms each revision by health-checking an HTTP
+    // listener; a cron-only app that never binds a port fails warming with a
+    // timeout ("The revision failed" — web-jam-tools#69). Serve a trivial
+    // response so warming passes; the cron jobs above do the real work.
+    Deno.serve(() => new Response("devotional cron service: alive\n"));
   } else {
     // Local / manual run (deno task devotional): send once, now.
     try {
