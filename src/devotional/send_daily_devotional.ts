@@ -242,12 +242,14 @@ async function runAtSixEastern(): Promise<void> {
 if (import.meta.main) {
   if (Deno.env.get("DENO_DEPLOYMENT_ID")) {
     // On Deno Deploy: register the schedule and let the runtime invoke it.
-    Deno.cron("daily devotional (06:00 EDT)", "0 10 * * *", runAtSixEastern);
-    Deno.cron("daily devotional (06:00 EST)", "0 11 * * *", runAtSixEastern);
-    // The new Deno Deploy warms each revision by health-checking an HTTP
-    // listener; a cron-only app that never binds a port fails warming with a
-    // timeout ("The revision failed" — web-jam-tools#69). Serve a trivial
-    // response so warming passes; the cron jobs above do the real work.
+    // Cron NAMES may contain only alphanumerics, whitespace, hyphens, and
+    // underscores — no parens or colons, or warm-up throws "Invalid cron name"
+    // and the revision fails (web-jam-tools#69).
+    Deno.cron("daily devotional 0600 EDT", "0 10 * * *", runAtSixEastern);
+    Deno.cron("daily devotional 0600 EST", "0 11 * * *", runAtSixEastern);
+    // Deno Deploy provisions an HTTP route per revision; serve a trivial
+    // response so the isolate stays addressable (cron itself doesn't require a
+    // server, but this is harmless and satisfies the deploy's Route step).
     Deno.serve(() => new Response("devotional cron service: alive\n"));
   } else {
     // Local / manual run (deno task devotional): send once, now.
