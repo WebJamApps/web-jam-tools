@@ -98,3 +98,35 @@ shell script, then you (the agent) do the actual coding inside this same session
    (`Part of #N`); `--closes` makes it the completing PR (`Closes #N`). Never run
    `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub;
    he also deletes the queue line after accepting the work.
+
+## PR body formatting (do this every time)
+
+The script drops your `--summary` / `--test-plan` / `--test-evidence` values
+**verbatim** under their headers — it does not reformat them, so professional
+formatting is **your** job. Fill every flag with proper markdown:
+
+- **Summary** → **bullet points**, one change per bullet — never a single run-on
+  sentence.
+- **Shell commands** → a fenced ` ```sh ` code block, never inline prose.
+- **HTML or code** → wrap every `<tag>`, snippet, or symbol in backticks or a fenced
+  block so GitHub renders it literally. Never pass a raw `<sup>35</sup>`-style tag as
+  prose — GitHub renders or swallows it and garbles the body.
+- **Before/after** → add a short before → after snippet when it aids clarity.
+
+Example of a well-formed call (bulleted summary, fenced commands + output):
+
+`````
+~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
+  --author "agy — <the model you are running as>" \
+  --summary "- Add X so Y works
+- Refactor Z to stop duplicating W" \
+  --test-plan "Run:
+```sh
+npm test
+```
+Expect: lint + unit green." \
+  --test-evidence "```
+ok | 42 passed | 0 failed
+```" \
+  --closes
+`````
