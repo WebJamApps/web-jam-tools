@@ -149,7 +149,7 @@ Triggered manually (`/memory-cleanup` in any Claude Code session) or by the sess
 - Stale project memories (issue/PR closed; flag for delete or condense)
 - Dangling `[[links]]` (target slug has no matching memory file)
 - MEMORY.md index lines that don't match their files
-- Outdated or contradicted lines in `SHARED.md` / `GEMMA.md`
+- Outdated or contradicted lines in `SHARED.md`
 - Task-queue lines referencing closed issues or merged PRs
 
 Approval flow: findings table → Josh approves selectively → execute.

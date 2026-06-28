@@ -1,6 +1,6 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write
 /**
- * Master task-list CLI for the claude-opus-tasks / gemma-tasks queues. (Deno.)
+ * Master task-list CLI for the claude-opus-tasks queue. (Deno.)
  *
  * Every command reads the file FRESH from disk (never a cached snapshot —
  * Josh, 2026-05-29: the list is master). Every mutating command re-parses its
