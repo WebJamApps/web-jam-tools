@@ -16,7 +16,7 @@ documentation across the WebJamApps workspace. This file orients Claude
 
 - **Never merge to `dev` or `main`.** A human reviewer is the mandatory gatekeeper (per AGENTS.md).
 - **Always start on a feature branch off `dev`** before editing code, and bump the semver `version` on push (enforced by `~/.claude/hooks/`).
-- **JS/TS is Deno, not Node.** All TypeScript lives under `src/` + `test/` and runs on Deno (`deno task ...`); there is no `package.json` or `node_modules`. Python (`gemma-cli/`, `scripts/`) is unchanged.
+- **JS/TS is Deno, not Node.** All TypeScript lives under `src/` + `test/` and runs on Deno (`deno task ...`); there is no `package.json` or `node_modules`. Python (`scripts/`) is unchanged.
 
 ## Layout
 
@@ -25,4 +25,3 @@ documentation across the WebJamApps workspace. This file orients Claude
 - `test/` — Deno tests
 - `deno.json` — Deno config: tasks, import map, fmt + lint
 - `scripts/` — workspace bootstrap (`bootstrap-project.sh`, `check-env.sh`) + Python/shell helpers
-- `gemma-cli/` — the Coordinator REPL (Python, own venv)

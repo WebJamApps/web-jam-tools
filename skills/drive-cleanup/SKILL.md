@@ -1,6 +1,6 @@
 ---
 name: drive-cleanup
-description: Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative gemma/opus queues. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.
+description: Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.
 ---
 
 # drive-cleanup
@@ -11,13 +11,13 @@ A three-phase Drive housekeeper. **Always do all three phases in order. Never sk
 
 Authoritative storage split:
 
-- **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `gemma-tasks.txt`, `claude-opus-tasks.txt`, `SHARED.md`, `GEMMA.md`. The Coordinator (gemma4:26b) and Claude Code read these directly via local FS.
+- **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `claude-opus-tasks.txt`, `agy-tasks.txt`, `claude-fable-tasks.txt`, `SHARED.md`. Claude Code reads these directly via local FS.
 - **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/`): all venue deliverables — pitch templates, sent outreach, DRAFTs, research, project log, social copy. Authoritative since Task 42 migration 2026-05-21.
 - **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/MariaParty/`): retired retirement-party docs (RSVP MASTER, Master Plan v2, Banner Decision, etc.). Project complete 2026-05-21 except for food scheduling — Sonnet has no involvement going forward.
-- **Drive** (My Drive root): `claude-sonnet-tasks.txt` (phone Sonnet's own queue — Drive is authoritative). Phone Sonnet also drops cross-queue task contributions into Drive root using `for-gemma-<name>.txt` / `for-opus-<name>.txt` (or the older `<queue>-YYYY-MM-DD-HHMM.txt` pattern); drive-cleanup is the bridge that pulls them into Dropbox.
+- **Drive** (My Drive root): `claude-sonnet-tasks.txt` (phone Sonnet's own queue — Drive is authoritative). Phone Sonnet also drops cross-queue task contributions into Drive root using `for-opus-<name>.txt` (or the older `claude-opus-tasks-YYYY-MM-DD-HHMM.txt` pattern); drive-cleanup is the bridge that pulls them into Dropbox.
 - **Drive** (`gdrive:JoshMariaMusic/`): READ-ONLY mirror of 4 Sonnet-readable files only — `Pitch Email – MidRange Cafe Bar.txt`, `Pitch Email – Originals Venues.txt`, `Pitch Email – Pub Festival Brewery.txt`, `Online Form Information Block.txt`. Dropbox-authoritative; drive-cleanup pushes Dropbox→Drive on every run so phone Sonnet always sees fresh templates.
 
-The Drive originals of `gemma-tasks.txt`, `claude-opus-tasks.txt`, and `GEMMA.md` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only `SHARED.md` and the 4-file JMM mirror remain as Drive snapshots — phone Sonnet consults them.
+The Drive originals of `claude-opus-tasks.txt` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only `SHARED.md` and the 4-file JMM mirror remain as Drive snapshots — phone Sonnet consults them.
 
 ## Phase 1 — Analyze (deterministic pre-pass first; Haiku only for the remainder)
 
@@ -59,11 +59,9 @@ Check at minimum:
 - **Multiple files with the same name** — flag any duplicates. The canonical Drive-resident files should each appear EXACTLY ONCE:
   - `claude-sonnet-tasks.txt` (id `1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ`) — phone Sonnet's own queue (Drive **is** authoritative)
   - `SHARED.md` (id `1X48-YCTaYScEIEJNaD4__imsMfWwMoRr`) — Drive snapshot of the Dropbox authoritative copy; refreshed by drive-cleanup when needed
-  - (Note: as of 2026-05-21 there are NO Drive copies of `claude-opus-tasks.txt`, `gemma-tasks.txt`, or `GEMMA.md` — those are Dropbox-only.)
+  - (Note: as of 2026-05-21 there are NO Drive copies of `claude-opus-tasks.txt` — Dropbox-only.)
 - **Sonnet bridge files** awaiting merge into the Dropbox-authoritative queues:
-  - `for-gemma-<name>.txt` → BRIDGE into `/home/joshua/Dropbox/web-jam-llms/gemma-tasks.txt`
   - `for-opus-<name>.txt` → BRIDGE into `/home/joshua/Dropbox/web-jam-llms/claude-opus-tasks.txt`
-  - `gemma-tasks-<YYYY-MM-DD-HHMM>.txt` → same target as `for-gemma-*` (legacy naming)
   - `claude-opus-tasks-<YYYY-MM-DD-HHMM>.txt` → same target as `for-opus-*` (legacy naming)
 - **Phone-Sonnet queue merges** (these stay on Drive — Sonnet's queue does not move):
   - `claude-sonnet-tasks-<YYYY-MM-DD-HHMM>.txt` → merge into canonical `claude-sonnet-tasks.txt` on Drive, then trash the timestamped file.
@@ -80,12 +78,11 @@ Check at minimum:
 - Within-folder duplicates (same name).
 - Files violating the file-placement rule (e.g., a deliverable artifact stuck in CLAUDE that should be in JoshMariaMusic).
 
-### C. Task-queue health scan (ALL FOUR Dropbox queues)
+### C. Task-queue health scan (ALL THREE Dropbox queues)
 
-**Always run this every invocation, even if there were no Drive-side bridges.** Scan all four local Dropbox queues:
+**Always run this every invocation, even if there were no Drive-side bridges.** Scan all three local Dropbox queues:
 
 - `~/Dropbox/web-jam-llms/claude-opus-tasks.txt`
-- `~/Dropbox/web-jam-llms/gemma-tasks.txt`
 - `~/Dropbox/web-jam-llms/agy-tasks.txt`
 - `~/Dropbox/web-jam-llms/claude-fable-tasks.txt`
 
@@ -93,11 +90,11 @@ Check at minimum:
 
 For each queue, report its task count so Josh sees it was checked. Then, for the **Opus queue ONLY**:
 
-- **Headline length check (OPUS QUEUE ONLY)** — for each task, count non-blank lines from its `Task N` header up to the next `Task M` header (or EOF). Any task with more than 3 non-blank body lines is a compression candidate. Surface as a Phase 2 finding: "compress N tasks (Task X, Task Y, ...) — extract bodies to memory files, leave one-line headlines + `[[task-spec-<slug>]]` cross-refs." The gemma / agy / fable queues are short operational items that don't need compression — do NOT compress them.
+- **Headline length check (OPUS QUEUE ONLY)** — for each task, count non-blank lines from its `Task N` header up to the next `Task M` header (or EOF). Any task with more than 3 non-blank body lines is a compression candidate. Surface as a Phase 2 finding: "compress N tasks (Task X, Task Y, ...) — extract bodies to memory files, leave one-line headlines + `[[task-spec-<slug>]]` cross-refs." The agy / fable queues are short operational items that don't need compression — do NOT compress them.
 
 **Never propose renumbering (Josh's call 2026-06-12).** Number gaps AND duplicate task numbers are fine — bridged or new tasks are simply appended to the bottom of the queue file. This skill must not contain or surface any uniform-step ("renumber to 5") check or proposal. (A typo'd header like `Taslk N` may still be noted for a manual fix, but never as part of a renumber.)
 
-Surfacing is mandatory — if a queue is clean, say so in the Phase 2 report ("Opus queue: 12 tasks, all headline-sized — clean." / "Gemma queue: 8 tasks — clean."). Don't silently omit any of the four.
+Surfacing is mandatory — if a queue is clean, say so in the Phase 2 report ("Opus queue: 12 tasks, all headline-sized — clean." / "agy queue: 3 tasks — clean."). Don't silently omit any of the three.
 
 ### D. Out-of-scope (do NOT touch without explicit instruction)
 
@@ -112,7 +109,7 @@ Lead with the Phase-1 **count reconciliation** line (every root item classified 
 ```
 | # | Issue | File(s) (with id) | Proposed action |
 |---|---|---|---|
-| 1 | Sonnet bridge file pending | for-gemma-cavendish-cleanup.txt (id X) | Append to Dropbox gemma-tasks.txt; verify; trash Drive original |
+| 1 | Sonnet bridge file pending | for-opus-cavendish-cleanup.txt (id X) | Append to Dropbox claude-opus-tasks.txt; verify; trash Drive original |
 | 2 | Phone-Sonnet queue merge | claude-sonnet-tasks-2026-05-21-0830.txt (id Y) | Merge into canonical claude-sonnet-tasks.txt on Drive, trash timestamped file |
 | 3 | Pitch email at root | "Floyd Country Store Pitch.txt" (id Z) | Move into JoshMariaMusic/ |
 ```
@@ -131,19 +128,18 @@ Dropbox queue files stay with the model** (queue lines must stay unambiguous and
 120 cols — see the bridge steps below). If `gdrive:` is ever read-only, fall back to MCP for
 execution and note it in the run summary.
 
-### Bridge actions (`for-gemma-*.txt`, `for-opus-*.txt`, legacy `gemma-tasks-*.txt`, `claude-opus-tasks-*.txt`)
+### Bridge actions (`for-opus-*.txt`, legacy `claude-opus-tasks-*.txt`)
 
 1. **Download** the source file content from Drive.
 2. **Assign each bridge a task number.** Read the destination queue, find the highest existing `Task N` header, and number each bridge `Task N+1:`, `Task N+2:`, … The bridge content typically has a `Task: <description>` line — replace it with `Task <NN>: <description>` (keeping the text); increment for each `Task:` line in the bridge. Gaps or duplicate numbers are fine — just append at the bottom; **never renumber** the existing queue.
 3. **Append** to the corresponding local Dropbox queue with atomic-write semantics (write to `<target>.tmp`, fsync, `os.replace`). **Wrap the merged text at 120 columns:** insert line breaks so no appended line exceeds 120 characters, breaking at word boundaries; continuation lines must stay unambiguously part of the same task entry (match the queue files' existing multi-line body convention).
-   - `for-gemma-*` / `gemma-tasks-*-*.txt` → `/home/joshua/Dropbox/web-jam-llms/gemma-tasks.txt`
    - `for-opus-*` / `claude-opus-tasks-*-*.txt` → `/home/joshua/Dropbox/web-jam-llms/claude-opus-tasks.txt`
 4. **Verify** the append landed: re-read the local file and confirm the appended bytes are present AND that the new `Task NN:` headers parse correctly. If verify fails, DO NOT trash the Drive original — leave it in place and flag the failure.
 5. **Trash** the Drive original (move to Drive trash, recoverable for 30 days). The content is preserved in the Dropbox queue and in `bridge-log.md`; the Drive copy is no longer needed once the bridge succeeds. Josh's decision 2026-05-27 — keeps Drive root clean instead of accumulating `processed-*` files indefinitely.
 6. **Append to `bridge-log.md`** at `/home/joshua/Dropbox/web-jam-llms/bridge-log.md`: timestamp (UTC), source filename, dest path, bytes appended, assigned task numbers, status (ok | failed-verify).
 7. **Re-run the Phase 1.C Opus-queue compression check** — bridging may have added a long task body worth compressing to a one-line headline + `[[task-spec-<slug>]]`. (No renumbering — that is retired; appended tasks simply live at the bottom.)
 
-(Drive snapshots of the gemma/opus queues no longer exist — see "Storage model" above — so there's no Drive-side refresh step for bridge actions. `SHARED.md` is the only Dropbox-source file with a Drive snapshot; if a bridge or rule change updates `/home/joshua/Dropbox/web-jam-llms/SHARED.md`, refresh the Drive snapshot via `rclone copy /home/joshua/Dropbox/web-jam-llms/SHARED.md gdrive: --update`.)
+(Drive snapshots of the opus queue no longer exist — see "Storage model" above — so there's no Drive-side refresh step for bridge actions. `SHARED.md` is the only Dropbox-source file with a Drive snapshot; if a bridge or rule change updates `/home/joshua/Dropbox/web-jam-llms/SHARED.md`, refresh the Drive snapshot via `rclone copy /home/joshua/Dropbox/web-jam-llms/SHARED.md gdrive: --update`.)
 
 ### Sonnet queue merges (`claude-sonnet-tasks-*.txt`)
 
@@ -194,7 +190,7 @@ Skip compression for tasks already short (1-2 sentence headlines) — those are 
 
 Also: when Josh later asks to **delete a task**, leave the memory file in place. Memory files are history; only the queue entry goes away. (If a task spec becomes truly obsolete and Josh wants the memory pruned, that's a separate `/remember` cleanup.)
 
-Apply this compression ONLY to `claude-opus-tasks.txt` — gemma's queue tasks tend to be short operational items that don't need compression, and gemma doesn't use the same memory system.
+Apply this compression ONLY to `claude-opus-tasks.txt` — the agy/fable queue tasks tend to be short operational items that don't need compression.
 
 ### Mirror refresh (always — runs unconditionally each invocation)
 
@@ -215,7 +211,7 @@ rclone copy /home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/ gdrive:JoshMa
 # Venue booking master (Gig Booking Worksheet xlsx): Dropbox is the SOLE master.
 # Push a read-only copy to Sonnet's Drive CLAUDE folder so the phone side sees
 # current status. Sonnet/Gemini must NOT edit the Drive copy — to change a venue
-# they leave a task for gemma, which writes the Dropbox master via
+# they leave a task for Claude Code, which writes the Dropbox master via
 # update_venue_contact. (Replaces the old Drive→Dropbox `cp` sync, which ran the
 # wrong direction and could clobber the master — removed 2026-05-28.)
 rclone copy "/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx" gdrive:CLAUDE/ --update
@@ -229,7 +225,7 @@ rclone copy "/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.x
 
 After the xlsx mirror push above, REBUILD a short status digest from the master xlsx so phone Sonnet has a readable view of booking progress without parsing the raw sheet:
 
-1. Read `/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx` (openpyxl, or the gemma-cli venue tools).
+1. Read `/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx` (openpyxl).
 2. Build a brief digest: total venues; counts by campaign status (Sent / Followed-up / Confirmed / Passed / Not-contacted); the most recent CONFIRMED gigs with dates; recent PASSED venues; and any venues awaiting follow-up.
 3. **Overwrite** `Gig Booking Status.md` in the Drive CLAUDE folder (`gdrive:CLAUDE/Gig Booking Status.md`) with that digest, stamped with the run timestamp.
 
@@ -239,8 +235,8 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Hard rules
 
-- **Never delete a canonical queue** — neither the Dropbox originals (`gemma-tasks.txt`, `claude-opus-tasks.txt`) nor `claude-sonnet-tasks.txt` on Drive.
-- **Never delete `SHARED.md`** (Dropbox original or Drive snapshot) or `GEMMA.md` (Dropbox-only).
+- **Never delete a canonical queue** — neither the Dropbox originals (`claude-opus-tasks.txt`, `agy-tasks.txt`, `claude-fable-tasks.txt`) nor `claude-sonnet-tasks.txt` on Drive.
+- **Never delete `SHARED.md`** (Dropbox original or Drive snapshot).
 - **Bridge: verify before trash.** Never trash a Drive original until the Dropbox append is verified.
 - **Bridge: trash, don't rename.** The pre-2026-05-27 convention was to rename to `processed-*` for an indefinite audit trail. Current convention: trash. The content lives in the Dropbox queue + `bridge-log.md`; Drive's 30-day trash window is enough recovery.
 - **Never modify protected MariaParty files** without explicit Josh override.
@@ -266,4 +262,4 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 - `My Drive/CLAUDE/CLAUDE.md` — team structure, file placement rule, canonical queue IDs
 - `/home/joshua/Dropbox/web-jam-llms/bridge-log.md` — append-only audit log of every bridge action
-- Memory: `reference_ai_team_structure.md`, `reference_gemma_tasks_file.md`, `reference_claude_opus_tasks_file.md`, `reference_claude_sonnet_tasks_file.md`, `project_web_jam_llms_migration_plan.md`
+- Memory: `reference_ai_team_structure.md`, `reference_claude_opus_tasks_file.md`, `reference_claude_sonnet_tasks_file.md`, `project_web_jam_llms_migration_plan.md`
