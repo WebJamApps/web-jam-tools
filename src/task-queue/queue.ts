@@ -1,5 +1,5 @@
 /**
- * Master task-list core logic for the claude-opus-tasks / gemma-tasks queues.
+ * Master task-list core logic for the claude-opus-tasks queue.
  *
  * These files are Josh's hand-edited source of truth. Two hard invariants on
  * every write (Josh, 2026-05-29):

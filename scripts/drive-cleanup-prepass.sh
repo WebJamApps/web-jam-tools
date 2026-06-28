@@ -57,7 +57,7 @@ def age_days(modtime):
         return None
 
 CANONICAL = {"claude-sonnet-tasks.txt", "SHARED.md"}
-KNOWN_FOLDERS = {"CLAUDE", "GEMMA", "GEMINI", "JoshMariaMusic", "MariaParty",
+KNOWN_FOLDERS = {"CLAUDE", "JoshMariaMusic", "MariaParty",
                  "CollegeLutheran", "Misc"}
 REPORT_FILE = "drive-cleanup-pending-report.md"
 MIRROR = ["Pitch Email – MidRange Cafe Bar.txt",
@@ -66,9 +66,7 @@ MIRROR = ["Pitch Email – MidRange Cafe Bar.txt",
           "Online Form Information Block.txt"]
 
 TS = r"\d{4}-\d{2}-\d{2}-\d{4}"
-RE_FOR_GEMMA = re.compile(r"^for-gemma-.+\.txt$")
 RE_FOR_OPUS = re.compile(r"^for-opus-.+\.txt$")
-RE_LEGACY_GEMMA = re.compile(r"^gemma-tasks-" + TS + r"\.txt$")
 RE_LEGACY_OPUS = re.compile(r"^claude-opus-tasks-" + TS + r"\.txt$")
 RE_SONNET_TS = re.compile(r"^claude-sonnet-tasks-" + TS + r"\.txt$")
 RE_DATEISH = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -135,12 +133,6 @@ for it in files:
         continue
     if name.startswith("processed-"):
         n_canonical += 1  # whitelisted legacy audit leftover — do not flag
-        continue
-    if RE_FOR_GEMMA.match(name) or RE_LEGACY_GEMMA.match(name):
-        actions.append(("bridge->gemma", it,
-                        "bridge into ~/Dropbox/web-jam-llms/gemma-tasks.txt "
-                        "(model: download id, append w/ 120-col wrap, verify), then trash",
-                        trash_cmd(it)))
         continue
     if RE_FOR_OPUS.match(name) or RE_LEGACY_OPUS.match(name):
         actions.append(("bridge->opus", it,
