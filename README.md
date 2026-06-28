@@ -14,7 +14,6 @@ under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
 - **`gig-scraper/`** — Playwright + xlsx scrapers for JoshMariaMusic gig booking
-- **`gemma-cli/`** — local Gemma 4 Coordinator (Python package; editable pip install with its own venv)
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace
 
 ## Getting started
@@ -151,43 +150,6 @@ ln -s ~/WebJamApps/web-jam-tools/WebJamApps.code-workspace ~/WebJamApps/WebJamAp
 ```
 
 Then `File → Open Workspace from File...` → that symlink (or the file directly).
-
-## VSCode Python settings (`.vscode/settings.json`)
-
-A committed `.vscode/settings.json` configures VSCode's Python extension to behave well with the `gemma-cli/` venv:
-
-- **`python.defaultInterpreterPath`** points at `gemma-cli/.venv/bin/python` so VSCode's autocomplete, linting, and jump-to-definition work on `gemma_cli/*` source without "Import could not be resolved" errors.
-- **`python.terminal.activateEnvironment: false`** disables auto-activation of the venv when opening integrated terminals. On some Linux setups, auto-activation adds a ~10-second startup delay and prints a spurious `^C` (SIGINT) into the terminal. Disabling it makes VSCode terminals open as fast as external ones.
-
-This is safe because the `llama` / `gemma` wrapper scripts at `~/.local/bin/` invoke the venv's Python directly — no shell activation is needed to run them. Both VSCode integrated and external terminals behave the same for running the REPLs.
-
-The settings file is committed so a fresh checkout gets the same environment without manual config. If you clone this repo and create `gemma-cli/.venv`, the interpreter path resolves automatically via `${workspaceFolder}`.
-
-## gemma-cli setup notes
-
-`gemma-cli/` is a Python package designed for editable install in its own venv. From `web-jam-tools/gemma-cli/`:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-Optionally put it on your PATH so `gemma` works from anywhere:
-
-```bash
-ln -s "$(pwd)/.venv/bin/gemma" ~/.local/bin/gemma
-```
-
-### Compatibility symlink (if migrating from a previous location)
-
-`gemma-cli` lived at `~/WebJamApps/gemma-cli/` (a sibling of `web-jam-tools/`) before being moved inside this repo on 2026-05-13. Existing wrapper scripts, cron entries, or shell aliases that reference the old absolute path keep working if you leave a symlink at the old location pointing to the new one:
-
-```bash
-ln -s ~/WebJamApps/web-jam-tools/gemma-cli ~/WebJamApps/gemma-cli
-```
-
-Why a symlink instead of rebuilding: a Python venv bakes absolute paths into its activate script, shebang lines, and `.pth` files. The symlink lets every existing reference resolve transparently without needing to recreate the venv or grep your dotfiles for the old path.
 
 ## Contributing
 

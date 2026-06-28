@@ -4,8 +4,8 @@
 # tier; renamed to handle-agy-tasks.sh in #49 once the lane was fully agy-named).
 #
 # Delegates easy/medium coding tasks to the Antigravity CLI (`agy`) to save Opus
-# tokens. Routing lane: Gemma = requirements/Q&A only, agy = easy coding, Opus =
-# hard specs. Decision record: Claude memory gemini-cli-task-lane.md.
+# tokens. Routing lane: agy = easy coding, Opus = hard specs/judgment.
+# Decision record: Claude memory gemini-cli-task-lane.md.
 #
 # Auth: `agy` uses Google sign-in (run `agy` once to log in). The free tier
 # exposes capable models — Claude Opus/Sonnet 4.6, Gemini 3.1 Pro, etc.
