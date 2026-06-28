@@ -27,7 +27,8 @@ npm install     # only needed if you plan to run scripts/*.js
 
 Then read:
 
-- [GEMINI.md](GEMINI.md) — workspace rules (apply to all AI assistants and human contributors)
+- [AGENTS.md](AGENTS.md) — workspace rules (apply to all AI assistants and human contributors)
+- [docs/ai-team-playbook.md](docs/ai-team-playbook.md) — the AI team: who does what, how work flows, and where Josh approves
 - [docs/scripts.md](docs/scripts.md) — what each script does and when to use it
 - [docs/ai-assistant-google-setup.md](docs/ai-assistant-google-setup.md) — generic recipe for setting up Google Drive/Calendar/Gmail/Tasks MCP servers for Claude Code
 - [docs/rclone-setup.md](docs/rclone-setup.md) — mounting Google Drive locally via rclone + systemd
