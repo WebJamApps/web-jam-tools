@@ -57,7 +57,7 @@ def age_days(modtime):
         return None
 
 CANONICAL = {"claude-sonnet-tasks.txt", "SHARED.md"}
-KNOWN_FOLDERS = {"CLAUDE", "GEMMA", "GEMINI", "JoshMariaMusic", "MariaParty",
+KNOWN_FOLDERS = {"CLAUDE", "JoshMariaMusic", "MariaParty",
                  "CollegeLutheran", "Misc"}
 REPORT_FILE = "drive-cleanup-pending-report.md"
 MIRROR = ["Pitch Email – MidRange Cafe Bar.txt",
