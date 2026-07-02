@@ -198,21 +198,73 @@ echo "Using model: $ACTIVE_MODEL"
 
 # --- run agy ---
 if [ "$HEADLESS" -eq 1 ]; then
-  # Headless (opt-in): auto-approve tools; if the chosen model fails mid-task,
-  # walk the remaining (less capable) models.
+  # Headless (opt-in): auto-approve tools. agy's one-shot `-p` mode can END ITS
+  # TURN before a long multi-step task is actually done — it exits 0 with work
+  # uncommitted, no tests run, no PR (bit us 3x on JaMmusic#1162). A zero exit is
+  # therefore NOT treated as task success by itself: after every `-p` turn we
+  # check for REAL completion (a draft PR exists for this branch). If the turn
+  # exited zero but the PR isn't there, we re-invoke the SAME model with a
+  # "resume/finish" prompt instead of moving on. If a turn exits non-zero, that
+  # model is considered failed and we fall back to the next model in the chain
+  # (which also gets its own driver-loop rounds). AGY_MAX_ROUNDS bounds total
+  # turns spent across ALL models combined, so a stuck model can't loop forever.
+  AGY_MAX_ROUNDS="${AGY_MAX_ROUNDS:-4}"
+
+  pr_exists_for_branch() {
+    gh pr list -R "WebJamApps/$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null
+  }
+
+  CONTINUE_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. Previous turns did partial work (check \`git status\` and \`git log dev..HEAD\`). Task acceptance is NOT met until: lint and tests pass, work is committed, and a draft PR is opened via ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh. Continue from where things stand and finish. Original task follows:"
+
   AGY_OK=0
+  ROUNDS=0
   for m in "$ACTIVE_MODEL" "${REMAINING[@]}"; do
+    TURN_PROMPT="$PROMPT"
     echo ">>> agy (headless) — model: $m"
-    # --print-timeout: agy's default 5m kills long silent work stretches in -p
-    # mode (bit us on JaMmusic#1162 — Flash Medium thinks slowly; run died twice).
-    if "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$PROMPT"; then
-      AGY_OK=1
-      echo ">>> agy finished on model: $m"
+    while [ "$ROUNDS" -lt "$AGY_MAX_ROUNDS" ]; do
+      ROUNDS=$((ROUNDS + 1))
+      echo ">>> round $ROUNDS/$AGY_MAX_ROUNDS — model: $m"
+      # --print-timeout: agy's default 5m kills long silent work stretches in -p
+      # mode (bit us on JaMmusic#1162 — Flash Medium thinks slowly; run died twice).
+      if ! "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$TURN_PROMPT"; then
+        echo "!!! model '$m' failed (non-zero exit) — trying next fallback if any." >&2
+        break
+      fi
+      PR_NUM="$(pr_exists_for_branch)"
+      if [ -n "$PR_NUM" ]; then
+        AGY_OK=1
+        ACTIVE_MODEL="$m"
+        echo ">>> agy finished on model: $m — draft PR #$PR_NUM confirmed for branch $BRANCH"
+        break 2
+      fi
+      echo "!!! turn exited zero but no draft PR found for branch $BRANCH — task incomplete." >&2
+      if [ "$ROUNDS" -ge "$AGY_MAX_ROUNDS" ]; then
+        echo "!!! AGY_MAX_ROUNDS ($AGY_MAX_ROUNDS) reached — giving up on model '$m'." >&2
+        break
+      fi
+      echo ">>> re-invoking model '$m' with a continue/finish prompt (round $((ROUNDS + 1)) coming)..."
+      TURN_PROMPT="$CONTINUE_PROMPT_PREFIX"$'\n\n'"$PROMPT"
+    done
+    [ "$AGY_OK" -eq 1 ] && break
+    if [ "$ROUNDS" -ge "$AGY_MAX_ROUNDS" ]; then
+      echo "!!! total round budget (AGY_MAX_ROUNDS=$AGY_MAX_ROUNDS) exhausted — stopping." >&2
       break
     fi
-    echo "!!! model '$m' failed — trying next fallback if any." >&2
   done
-  [ "$AGY_OK" -eq 1 ] || echo "!!! all models failed: ${MODELS[*]}" >&2
+
+  if [ "$AGY_OK" -ne 1 ]; then
+    echo "" >&2
+    echo "================ handle-agy-tasks FAILED (no draft PR) ================" >&2
+    echo "Repo:   $REPO_DIR" >&2
+    echo "Branch: $BRANCH" >&2
+    echo "Models tried: ${MODELS[*]}" >&2
+    echo "Rounds used: $ROUNDS / $AGY_MAX_ROUNDS" >&2
+    echo "--- commits (dev..HEAD) ---" >&2
+    git log --oneline dev..HEAD >&2 || true
+    echo "--- git status (WIP left behind) ---" >&2
+    git status --short >&2
+    echo "=========================================================================" >&2
+  fi
 else
   # Interactive (default): drop into the agy REPL on the selected model with the
   # task preloaded. You drive it, watch it work, and switch models with /model.
