@@ -58,6 +58,23 @@ lint/test scripts, finish with a draft PR via `create-draft-pr.sh`), then runs
 tree and never edits the queue file itself — delete the queue line yourself once
 you've accepted the resulting PR.
 
+**Headless completion is driven, not one-shot.** agy's `-p` mode can end its
+turn before a long multi-step task is actually finished — it exits 0 with work
+uncommitted, no tests run, no PR opened (this bit us three times in a row on
+JaMmusic#1162). So a zero exit from `-p` is never treated as "done" by itself:
+`--headless` runs each turn with `--dangerously-skip-permissions --print-timeout
+60m`, then checks REAL completion — does `gh pr list --head "$BRANCH"` show a
+draft PR for the branch? If not, the SAME model is re-invoked with a "resume and
+finish" prompt (told to check `git status`/`git log dev..HEAD` and pick up where
+it left off) instead of the script moving on. A turn that exits **non-zero**
+(not just "finished without a PR") is what triggers falling back to the next
+model in the chain — and that next model gets its own driven rounds too.
+`AGY_MAX_ROUNDS` (env, default 4) bounds total rounds spent across *all* models
+combined, so a stuck model can't loop forever; on exhaustion the script prints a
+loud failure block including `git status --short` so you can see the WIP left
+behind. Don't assume a single `-p` invocation completes a task — the loop is
+what makes headless dispatch reliable, not the one-shot call.
+
 ## 2. Per-tier subagent prompt templates (Haiku / Sonnet / Opus)
 
 Dispatch these via the `Agent` tool (`model: "haiku"` / omit for session default /
@@ -71,6 +88,29 @@ repos (CollegeLutheran, JaMmusic, web-jam-back, AppersonAuto, WebJamSocketCluste
 `web-jam-tools` itself is Deno: swap in `deno.json` "version" and note that its
 bump is enforced automatically by a pre-push hook (`~/.claude/hooks/`), not a rule
 the subagent has to self-police.
+
+### Mandatory: PR attribution & conventions block
+
+Every generated dispatch prompt (Haiku/Sonnet/Opus, and the agy prompt in
+section 1) MUST include this block, filled in for the executing model — it is
+not optional boilerplate to trim:
+
+```
+PR attribution & conventions:
+- Finish by running the SHARED script (works from ANY repo — it lives in
+  web-jam-tools, do NOT go looking for it inside the target repo; a past agent
+  wrongly concluded it "doesn't exist" because it searched the wrong repo):
+    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <the model actually doing the work>"
+- If you must fall back to `gh pr create --draft --base dev` directly, the PR
+  body MUST end with the line `🤖 Work by <tool> — <model>`, naming the model
+  that actually did the work — NEVER the generic "🤖 Generated with Claude
+  Code" tagline. Josh tracks per-model PR quality via this footer; a miss here
+  is a real regression (it happened on web-jam-back#892, 2026-07-02).
+- Commit trailers (`Co-Authored-By:`) name the model actually doing the work,
+  not a different one.
+- One semver version bump per PR, on the PR's first commit only — follow-up
+  commits to an already-open PR keep the same version.
+```
 
 ### Haiku — mechanical / gh / research
 
@@ -87,6 +127,9 @@ Rules:
     Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>
 - Do NOT bump the package.json version — that happens once per PR, not per commit
   (skip entirely if this is a follow-up commit to an already-open PR).
+
+<Mandatory PR attribution & conventions block from above, filled in for
+"Claude Code — Haiku 4.5">
 
 Report back:
 - What you found/changed, bulleted
@@ -122,6 +165,9 @@ Rules:
       --test-evidence "<the actual lint+test output you saw>" \
       [--closes]   # only if this PR fully completes the issue
 
+<Mandatory PR attribution & conventions block from above, filled in for
+"Claude Code — Sonnet 5">
+
 Report back:
 - Summary of what changed, bulleted
 - The real lint/test output (this is what feeds --test-evidence — don't paraphrase it)
@@ -156,6 +202,9 @@ Rules:
       --test-plan "<exact commands + expected result>" \
       --test-evidence "<the actual lint+test output you saw>" \
       [--closes]
+
+<Mandatory PR attribution & conventions block from above, filled in for
+"Claude Code — Opus 4.8">
 
 Report back:
 - Summary of what changed AND the reasoning behind any judgment call, bulleted
