@@ -13,7 +13,7 @@ under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
 
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
-- **`gig-scraper/`** — Playwright + xlsx scrapers for JoshMariaMusic gig booking
+- **`gig-scraper/`** — Playwright scrapers (reference/research; venue master is Mongo)
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace
 
 ## Getting started

@@ -6,7 +6,6 @@
     "jsr:@std/fmt@^1.0.10": "1.0.10",
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "jsr:@std/internal@^1.0.14": "1.0.14",
-    "npm:@e965/xlsx@~0.20.3": "0.20.3",
     "npm:cheerio@*": "1.2.0",
     "npm:cheerio@^1.2.0": "1.2.0",
     "npm:playwright@*": "1.60.0",
@@ -34,10 +33,6 @@
     }
   },
   "npm": {
-    "@e965/xlsx@0.20.3": {
-      "integrity": "sha512-703RN/3OdsRD5mtse2HBX7Um7xwaP9tlswEG6svOtjqokXoX7rJdQj7DyabD2I+xk22RgaIIU+R6BHgkpZGB/w==",
-      "bin": true
-    },
     "boolbase@1.0.0": {
       "integrity": "sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww=="
     },
@@ -202,7 +197,6 @@
     "dependencies": [
       "jsr:@std/assert@1",
       "jsr:@std/cli@1",
-      "npm:@e965/xlsx@~0.20.3",
       "npm:cheerio@^1.2.0",
       "npm:playwright@^1.59.1"
     ]
