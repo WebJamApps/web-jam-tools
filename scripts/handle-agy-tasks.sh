@@ -31,8 +31,8 @@ WEBJAM="$HOME/WebJamApps"
 AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 
 # Cost-ordered model chain (Antigravity PAID account — Josh's prepaid Google
-# credit), CHEAPEST FIRST: Gemini Flash medium is the default lane; pricier
-# Flash (High) is the only rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
+# credit), CHEAPEST FIRST: Gemini Flash medium is the default lane; Flash (High)
+# is the only rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
 # NOT in the default chain (they drain the credit fastest — the old
 # most-capable-first order was a free-tier assumption). Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
