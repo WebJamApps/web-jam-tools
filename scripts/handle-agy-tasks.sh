@@ -32,12 +32,12 @@ AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 
 # Cost-ordered model chain (Antigravity PAID account — Josh's prepaid Google
 # credit), CHEAPEST FIRST: Gemini Flash medium is the default lane; pricier
-# Gemini tiers are rate-limit fallbacks only. Claude models are deliberately
+# Flash (High) is the only rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
 # NOT in the default chain (they drain the credit fastest — the old
 # most-capable-first order was a free-tier assumption). Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
-DEFAULT_MODELS='Gemini 3.5 Flash (Medium)|Gemini 3.5 Flash (High)|Gemini 3.1 Pro (High)'
+DEFAULT_MODELS='Gemini 3.5 Flash (Medium)|Gemini 3.5 Flash (High)'
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- parse args ---
