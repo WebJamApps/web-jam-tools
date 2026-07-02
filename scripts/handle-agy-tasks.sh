@@ -30,12 +30,14 @@ QUEUE_FILE="$HOME/Dropbox/web-jam-llms/agy-tasks.txt"
 WEBJAM="$HOME/WebJamApps"
 AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 
-# Capability-ordered model chain (Antigravity free tier), MOST CAPABLE FIRST.
-# The wrapper probes them in order and uses the first that's currently available
-# (so rate limits on the top model fall back automatically). Override with:
+# Cost-ordered model chain (Antigravity PAID account — Josh's prepaid Google
+# credit), CHEAPEST FIRST: Gemini Flash medium is the default lane; pricier
+# Gemini tiers are rate-limit fallbacks only. Claude models are deliberately
+# NOT in the default chain (they drain the credit fastest — the old
+# most-capable-first order was a free-tier assumption). Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
-DEFAULT_MODELS='Claude Opus 4.6 (Thinking)|Claude Sonnet 4.6 (Thinking)|Gemini 3.1 Pro (High)|Gemini 3.5 Flash (High)'
+DEFAULT_MODELS='Gemini 3.5 Flash (Medium)|Gemini 3.5 Flash (High)|Gemini 3.1 Pro (High)'
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- parse args ---
@@ -173,8 +175,8 @@ EOF2
   exit 0
 fi
 
-# --- pick the most capable currently-available model (fallback on rate limits) ---
-echo "Selecting model (most capable available)..."
+# --- pick the first currently-available model in the chain (cheapest first; fallback on rate limits) ---
+echo "Selecting model (cheapest available)..."
 ACTIVE_MODEL=""
 REMAINING=()
 for i in "${!MODELS[@]}"; do
