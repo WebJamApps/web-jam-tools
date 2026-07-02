@@ -203,7 +203,9 @@ if [ "$HEADLESS" -eq 1 ]; then
   AGY_OK=0
   for m in "$ACTIVE_MODEL" "${REMAINING[@]}"; do
     echo ">>> agy (headless) — model: $m"
-    if "$AGY" --model "$m" --dangerously-skip-permissions -p "$PROMPT"; then
+    # --print-timeout: agy's default 5m kills long silent work stretches in -p
+    # mode (bit us on JaMmusic#1162 — Flash Medium thinks slowly; run died twice).
+    if "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$PROMPT"; then
       AGY_OK=1
       echo ">>> agy finished on model: $m"
       break
