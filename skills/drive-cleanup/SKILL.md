@@ -207,31 +207,13 @@ rclone copy /home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/ gdrive:JoshMa
   --include "Pitch Email – Pub Festival Brewery.txt" \
   --include "Online Form Information Block.txt" \
   --update
-
-# Venue booking master (Gig Booking Worksheet xlsx): Dropbox is the SOLE master.
-# Push a read-only copy to Sonnet's Drive CLAUDE folder so the phone side sees
-# current status. Sonnet/Gemini must NOT edit the Drive copy — to change a venue
-# they leave a task for Claude Code, which writes the Dropbox master via
-# update_venue_contact. (Replaces the old Drive→Dropbox `cp` sync, which ran the
-# wrong direction and could clobber the master — removed 2026-05-28.)
-rclone copy "/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx" gdrive:CLAUDE/ --update
 ```
 
 `rclone --update` is a no-op when source and dest match modification time + size, so the refresh is cheap. If Josh has edited a template in Dropbox since the last drive-cleanup run, the next run pushes the update to Drive and phone Sonnet sees it on its next read.
 
 **Do not push other files from `Dropbox/joshandmariamusic/JoshMariaMusic/`** — only the 4 Sonnet-readable templates above are mirrored. The rest stays Dropbox-only.
 
-### Gig-progress summary (regenerate each run — never let it go stale)
-
-After the xlsx mirror push above, REBUILD a short status digest from the master xlsx so phone Sonnet has a readable view of booking progress without parsing the raw sheet:
-
-1. Read `/home/joshua/Dropbox/joshandmariamusic/Gig Booking Worksheet 2025.xlsx` (openpyxl).
-2. Build a brief digest: total venues; counts by campaign status (Sent / Followed-up / Confirmed / Passed / Not-contacted); the most recent CONFIRMED gigs with dates; recent PASSED venues; and any venues awaiting follow-up.
-3. **Overwrite** `Gig Booking Status.md` in the Drive CLAUDE folder (`gdrive:CLAUDE/Gig Booking Status.md`) with that digest, stamped with the run timestamp.
-
-Because it is **regenerated from the master on EVERY run** (manual or reminder-prompted), it cannot drift — it's always a fresh snapshot of the current xlsx, never a hand-maintained file that rots. Sonnet reads it for "where are we on bookings?" without touching the xlsx.
-
-After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current, and a "gig status: rebuilt" line confirming the digest was regenerated from the xlsx. **Finally, write today's ISO date to `~/.claude/skills/drive-cleanup/last-run.txt`** (even if zero actions were approved) so the session-start reminder clears for the day.
+After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current. **Finally, write today's ISO date to `~/.claude/skills/drive-cleanup/last-run.txt`** (even if zero actions were approved) so the session-start reminder clears for the day.
 
 ## Hard rules
 
