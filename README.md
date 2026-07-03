@@ -14,6 +14,7 @@ under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
 - **`gig-scraper/`** — Playwright scrapers (reference/research; venue master is Mongo)
+- **`skills/`** — Claude Code skills (single source of truth; symlinked into `~/.claude/skills`)
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace
 
 ## Getting started
@@ -23,6 +24,11 @@ git clone https://github.com/WebJamApps/web-jam-tools.git
 cd web-jam-tools
 npm install     # only needed if you plan to run scripts/*.js
 ```
+
+To use the Claude Code skills in `skills/`, run `scripts/install-skills.sh` — it
+symlinks each skill into `~/.claude/skills/` (existing real dirs are backed up,
+never deleted). Runtime/personal files (e.g. `rules.yaml`, `log/`) stay local and
+gitignored.
 
 Then read:
 
