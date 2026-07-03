@@ -53,6 +53,8 @@ publication (name+url, null until discovered), lastSwept, notes`.
    sweep date, issue ref) + `outreachEligible` per the email rule below.
 7. **Wrap up** — run-log comment on web-jam-tools#126; update sources.yaml
    `lastSwept` (+ any new publication/lessons) via a small PR into dev.
+   That PR MUST pass `--part-of` to create-draft-pr.sh — #126 is the standing
+   run log and must never be auto-closed (the script defaults to `Closes #N`).
 
 ## Eligibility rule (settled 2026-07-02)
 
