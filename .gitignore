@@ -27,3 +27,9 @@ src/gig-scraper/gig_booking_2025_data.json
 
 # Deno coverage output
 cov_profile/
+
+# Skill runtime/personal state — lives inside skills/ via the ~/.claude/skills
+# symlinks (scripts/install-skills.sh) and must NEVER be committed (public repo)
+skills/*/last-run.txt
+skills/*/rules.yaml
+skills/*/log/
