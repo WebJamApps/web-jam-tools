@@ -6,8 +6,9 @@ description: Mine net-new live-music venues for the gig-outreach DB from per-met
 # venue-mining
 
 Grow the venue DB (web-jam-back Mongo, master) with net-new, verified live-music
-venues. Spec + run log = web-jam-tools#126. Success metric = net-new venues
-created, NOT seed-calendar coverage.
+venues. This SKILL.md is the living spec (originally settled on web-jam-tools#126,
+closed); the run log = `runs.md` next to this file. Success metric = net-new
+venues created, NOT seed-calendar coverage.
 
 ## Invocation
 
@@ -51,10 +52,12 @@ publication (name+url, null until discovered), lastSwept, notes`.
 6. **Create** — ONE batched script call doing all `POST /venue` upserts
    (single permission click). Every create: provenance in `notes` (publication,
    sweep date, issue ref) + `outreachEligible` per the email rule below.
-7. **Wrap up** — run-log comment on web-jam-tools#126; update sources.yaml
-   `lastSwept` (+ any new publication/lessons) via a small PR into dev.
-   That PR MUST pass `--part-of` to create-draft-pr.sh — #126 is the standing
-   run log and must never be auto-closed (the script defaults to `Closes #N`).
+7. **Wrap up** — file a small issue for the run if one doesn't exist yet
+   (`venue sweep: <slug>`), then one PR into dev that closes it, containing BOTH
+   the run entry appended to `runs.md` (results, holds/rejects, lessons) AND the
+   sources.yaml update (`lastSwept` + any new publication). No long-running
+   tracking issue: every issue this skill touches gets closed by its PR
+   (create-draft-pr.sh emits `Closes #N` by default).
 
 ## Eligibility rule (settled 2026-07-02)
 
