@@ -10,17 +10,19 @@
 #   * the PR is ALWAYS a draft;
 #   * the PR is ALWAYS based on `dev`;
 #   * the body ALWAYS ends with an attribution footer naming the tool + model.
-# By default, the PR references the issue (`Part of #N`); pass `--closes` to
-# make it the completing PR (`Closes #N`).
+# By default, the PR CLOSES the issue on merge (`Closes #N`); pass --part-of for
+# a partial PR or a standing run-log/epic issue that must stay open (`Part of #N`).
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
-#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--closes] \
+#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] \
 #       [--summary TEXT] [--test-plan TEXT] [--test-evidence TEXT] [--screenshots TEXT]
 #
 #   --author        REQUIRED. e.g. "Claude Code — Opus 4.8", "agy — Gemini 3 Pro".
 #                   Lands in the footer so Josh can track per-model quality.
-#   --closes        Opt-in flag to make this PR close the issue (emits `Closes #N`).
+#   --part-of       Opt-in flag: DON'T close the issue on merge (emits `Part of #N`).
+#                   Use only for a partial PR or a standing run-log/epic issue.
+#   --closes        Deprecated no-op (closing is now the default); still accepted.
 #   --issue N       Issue number. Normally parsed from the branch name
 #                   (<lane>/<issue#>-<slug>); use this only as a fallback.
 #   --summary       REQUIRED. Fills "## Summary" (what changed and why).
@@ -51,12 +53,14 @@ TEST_PLAN=""
 TEST_EVIDENCE=""
 SCREENSHOTS=""
 HAS_SCREENSHOTS=0
-CLOSES=0
+PART_OF=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --closes)
-      CLOSES=1
+    --part-of)
+      PART_OF=1
+      shift 1 ;;
+    --closes) # deprecated no-op: closing is now the default
       shift 1 ;;
     --author|--issue|--summary|--test-plan|--test-evidence|--screenshots)
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
@@ -184,10 +188,10 @@ fi
 
 # --- assemble the body ---
 
-if [ "$CLOSES" -eq 1 ]; then
-  ISSUE_REF="Closes #$ISSUE"
-else
+if [ "$PART_OF" -eq 1 ]; then
   ISSUE_REF="Part of #$ISSUE"
+else
+  ISSUE_REF="Closes #$ISSUE"
 fi
 
 BODY="$(cat <<EOF
@@ -222,9 +226,9 @@ PR_URL="$(gh pr create --draft --base dev --title "$ISSUE_TITLE" --body "$BODY")
 
 echo ""
 echo "Draft PR opened: $PR_URL"
-if [ "$CLOSES" -eq 1 ]; then
-  echo "  base: dev | state: draft | closes: #$ISSUE | by: $AUTHOR"
-else
+if [ "$PART_OF" -eq 1 ]; then
   echo "  base: dev | state: draft | part of: #$ISSUE | by: $AUTHOR"
+else
+  echo "  base: dev | state: draft | closes: #$ISSUE | by: $AUTHOR"
 fi
 echo "Josh reviews the diff and flips draft -> ready on GitHub."

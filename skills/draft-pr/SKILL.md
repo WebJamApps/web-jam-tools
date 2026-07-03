@@ -1,6 +1,6 @@
 ---
 name: draft-pr
-description: Open a pull request the WebJamApps way — always draft, always based on dev, referencing the issue (Part of #N by default, Closes #N with --closes). Use this to finish ANY coding task in a WebJamApps repo instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
+description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs and standing run-log/epic issues). Use this to finish ANY coding task in a WebJamApps repo instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
 metadata:
   version: v1
   publisher: josh
@@ -14,8 +14,9 @@ the full invocation under "How to run it" — `--summary`, `--test-plan`, and
 `--test-evidence` are **required**).
 
 It **always** produces a draft PR based on `dev` and an attribution footer — neither
-can be overridden. By default it references the issue (`Part of #N`); pass `--closes`
-to make it the completing PR (`Closes #N`). It **refuses to open a PR with an empty or
+can be overridden. By default the PR **closes the issue on merge** (`Closes #N`); pass
+`--part-of` only when the issue must stay open (a partial PR, or a standing
+run-log/epic issue like a venue-mining run log). It **refuses to open a PR with an empty or
 placeholder description** (web-jam-tools#77). Josh alone reviews and flips draft →
 ready on GitHub.
 
@@ -38,7 +39,7 @@ the body sections via flags:
   --test-plan "Exact commands to run + expected result." \
   --test-evidence "The actual lint + test output you saw, confirming both ran green." \
   --screenshots "Only for UI-visible changes; omit the flag otherwise." \
-  --closes   # include ONLY if this PR fully completes the issue; omit for a partial PR
+  --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
 ```
 
 - `--author` is **required** (the script refuses without it).
@@ -46,8 +47,10 @@ the body sections via flags:
   refuses to open a PR with an empty or placeholder description (web-jam-tools#77).
   Put your summary and the real test output IN THE PR via these flags, not only in
   the chat reply.
-- `--closes` is opt-in: include it only on the PR that completes the issue; omit it
-  for a partial PR (the body then reads `Part of #N`).
+- Closing is the default: the body reads `Closes #N`, so the issue auto-closes when
+  Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) ONLY when
+  the issue must stay open: a partial PR, or a standing run-log/epic issue.
+  (`--closes` is a deprecated no-op, still accepted.)
 - `--screenshots` is for UI-visible changes only; omit the flag to omit the section.
 
 ## PR body formatting (do this every time)
@@ -78,8 +81,7 @@ deno task test
 Expect: all tests green." \
   --test-evidence "```
 ok | 42 passed | 0 failed
-```" \
-  --closes
+```"
 `````
 
 ## What the script refuses to do (and why that's correct — don't work around it)
