@@ -35,8 +35,24 @@ metros:
 
   - { slug: richmond,            label: Richmond VA,                      driveTier: "2.5-3.5h", publication: null, lastSwept: null }
   - { slug: asheville,           label: Asheville NC,                     driveTier: "2.5-3.5h", publication: null, lastSwept: null }
-  - { slug: charlotte-gastonia,  label: Charlotte / Gastonia NC,          driveTier: "2.5-3.5h", publication: null, lastSwept: null }
-  - { slug: rock-hill-sc,        label: Rock Hill SC,                     driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - slug: gastonia
+    label: Gastonia / Gaston County NC
+    driveTier: "2.5-3.5h"
+    publication:
+      name: Go Gaston NC (tourism directory + events)
+      url: https://gogastonnc.org    # directory strong, archive shallow; runner-up charlotteonthecheap.com
+    lastSwept: 2026-07-03
+    notes: Run 3 = +3 venues, all pitched. Covers Belmont, Mt Holly, Cramerton, Lowell NC, Cherryville. Watch geo-traps (a "Lowell" hit was Lowell MA).
+
+  - { slug: charlotte,           label: Charlotte NC (proper),            driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - slug: rock-hill-sc
+    label: Rock Hill SC
+    driveTier: "2.5-3.5h"
+    publication:
+      name: Rock Hill Connection (events calendar)
+      url: https://rockhillconnection.com/events/    # shallow archive — supplement w/ visityorkcounty.com + venue sites; heraldonline.com 403s
+    lastSwept: 2026-07-02
+    notes: Run 2 = +6 venues (3 eligible). Metro is heavily FB-only; venue-site corroboration required. Covers Fort Mill, Tega Cay, York, Clover.
   - { slug: raleigh-durham,      label: Raleigh / Durham NC,              driveTier: "2.5-3.5h", publication: null, lastSwept: null }
   - { slug: hickory,             label: Hickory NC,                       driveTier: "2.5-3.5h", publication: null, lastSwept: null }
   - { slug: charleston-wv,       label: Charleston WV,                    driveTier: "2.5-3.5h", publication: null, lastSwept: null }
