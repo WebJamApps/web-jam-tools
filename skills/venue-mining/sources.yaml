@@ -1,0 +1,43 @@
+# venue-mining per-metro source registry (web-jam-tools#126/#127)
+# Region: <= ~3.5h drive from Salem VA (settled 2026-07-02).
+# publication: null = discover that metro's local-events publication on its
+# first run, then commit it here. Cooldown: no re-sweep within 6 months of
+# lastSwept; re-sweeps scan only the delta since lastSwept.
+
+metros:
+  - slug: roanoke-salem
+    label: Roanoke / Salem VA
+    driveTier: "<1.5h"
+    publication:
+      name: The Roanoke Rambler (Happenings archive)
+      url: https://www.roanokerambler.com    # use www. URLs — bare domain redirects flakily
+    lastSwept: 2026-07-02
+    notes: Run 1 (12-mo sweep) = +14 venues, 7 pitched. Covers Vinton, Rocky Mount, Floyd spillover.
+
+  - { slug: blacksburg-nrv,      label: Blacksburg / New River Valley VA, driveTier: "<1.5h",    publication: null, lastSwept: null }
+  - { slug: lynchburg,           label: Lynchburg VA,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
+  - { slug: lexington,           label: Lexington VA,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
+  - { slug: floyd,               label: Floyd VA,                         driveTier: "<1.5h",    publication: null, lastSwept: null }
+  - { slug: martinsville,        label: Martinsville VA,                  driveTier: "<1.5h",    publication: null, lastSwept: null }
+  - { slug: rocky-mount-sml,     label: Rocky Mount / Smith Mtn Lake VA,  driveTier: "<1.5h",    publication: null, lastSwept: null }
+  - { slug: lewisburg-wv,        label: Lewisburg WV,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
+
+  - { slug: charlottesville,     label: Charlottesville VA,               driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: harrisonburg,        label: Harrisonburg VA,                  driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: staunton-waynesboro, label: Staunton / Waynesboro VA,         driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: danville,            label: Danville VA,                      driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: galax,               label: Galax VA (Crooked Road),          driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: winston-salem,       label: Winston-Salem NC,                 driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: greensboro,          label: Greensboro NC,                    driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: boone-mt-airy,       label: Boone / Mount Airy NC,            driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: bristol-tri-cities,  label: Bristol VA-TN / Tri-Cities,       driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - { slug: beckley-wv,          label: Beckley WV,                       driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+
+  - { slug: richmond,            label: Richmond VA,                      driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - { slug: asheville,           label: Asheville NC,                     driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - { slug: charlotte-gastonia,  label: Charlotte / Gastonia NC,          driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - { slug: rock-hill-sc,        label: Rock Hill SC,                     driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - { slug: raleigh-durham,      label: Raleigh / Durham NC,              driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - { slug: hickory,             label: Hickory NC,                       driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - { slug: charleston-wv,       label: Charleston WV,                    driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - { slug: winchester,          label: Winchester VA,                    driveTier: "2.5-3.5h", publication: null, lastSwept: null }
