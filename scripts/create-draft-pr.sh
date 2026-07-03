@@ -42,9 +42,10 @@
 # these flags, not only in the chat/REPL. --screenshots stays optional.
 #
 # Refuses (exit 1) when: --author missing; any of --summary/--test-plan/--test-evidence
-# missing or left as a placeholder; current branch is dev/main; working tree dirty;
-# the repo has no `dev` branch; a resolved issue is missing/closed; or --part-of is
-# passed without a resolvable issue.
+# missing or left as a placeholder; body text contains raw HTML-like tags outside
+# backticks (GitHub strips them silently — backtick them); current branch is dev/main;
+# working tree dirty; the repo has no `dev` branch; a resolved issue is missing/closed;
+# or --part-of is passed without a resolvable issue.
 
 set -euo pipefail
 
@@ -197,6 +198,28 @@ if [ "${#missing[@]}" -gt 0 ]; then
   echo "       Put your summary + actual test output IN THE PR via these flags," >&2
   echo "       not only in the chat/REPL reply." >&2
   exit 1
+fi
+
+# --- refuse raw HTML-like tags in body text (2026-07-03, after PR #137's body) ---
+# GitHub's markdown sanitizer silently STRIPS unknown tags when rendering, so raw
+# <lane>/<slug> prose collapses to garbage. Backtick spans, fenced blocks, and
+# <https://...> autolinks are fine — strip those before checking (draft-pr skill rule).
+raw_tag_check() {
+  local field="$1" text="$2" stripped
+  stripped="$(printf '%s' "$text" \
+    | sed -E 's/```[^`]*```//g; s/`[^`]*`//g; s|<[A-Za-z][A-Za-z0-9+.-]*://[^<>]*>||g')"
+  if printf '%s' "$stripped" | grep -qE '<[A-Za-z][^<>]*>'; then
+    echo "ERROR: raw HTML-like tag(s) in --$field — GitHub strips them silently:" >&2
+    printf '%s\n' "$stripped" | grep -oE '<[A-Za-z][^<>]*>' | sort -u | sed 's/^/         /' >&2
+    echo "       Wrap them in backticks so they render literally (see the draft-pr skill)." >&2
+    exit 1
+  fi
+}
+raw_tag_check summary "$SUMMARY"
+raw_tag_check test-plan "$TEST_PLAN"
+raw_tag_check test-evidence "$TEST_EVIDENCE"
+if [ "$HAS_SCREENSHOTS" -eq 1 ]; then
+  raw_tag_check screenshots "$SCREENSHOTS"
 fi
 
 # --- assemble the body ---
