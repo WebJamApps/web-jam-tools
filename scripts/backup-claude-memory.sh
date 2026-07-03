@@ -49,5 +49,17 @@ rclone sync "$SRC_SHARED" "$DST/shared-memory" \
 # it up too. copyto (single file) keeps it flat at the backup root.
 rclone copyto "$HOME/.claude/CLAUDE.md" "$DST/CLAUDE.md"
 
+# Claude Code config (web-jam-tools#139). settings.json registers hooks and
+# carries Josh's permission strings — not version-controlled in the (public)
+# hooks/ repo dir for that reason, so this backup is its only copy outside
+# the laptop. keybindings.json is optional (only exists if Josh has
+# customized shortcuts). Kept in their own subdir, mirroring CLAUDE.md above.
+mkdir -p "$DST/claude-config"
+rclone copyto "$HOME/.claude/settings.json" "$DST/claude-config/settings.json"
+rclone copyto "$HOME/.claude/CLAUDE.md" "$DST/claude-config/CLAUDE.md"
+if [ -f "$HOME/.claude/keybindings.json" ]; then
+    rclone copyto "$HOME/.claude/keybindings.json" "$DST/claude-config/keybindings.json"
+fi
+
 # Append-only log (Dropbox revisions handle the per-run audit trail).
 echo "$(ts) claude-memory backup ok" >> "$LOG"
