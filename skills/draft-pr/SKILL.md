@@ -68,6 +68,14 @@ formatting is the **caller's** job. Fill every flag with proper markdown:
   block so GitHub renders it literally. Never pass a raw `<sup>35</sup>`-style tag as
   prose — GitHub renders or swallows it and garbles the body.
 - **Before/after** → add a short before → after snippet when it aids clarity.
+- **Test plan substance (web-jam-tools#135)** → a green test suite is a gate, never
+  the whole plan. Also include steps that exercise the CHANGE itself:
+  - UI change → exact manual steps: the command to start the app (e.g. `npm run dev`),
+    the route/page to open, what to click or type, and the visible result to expect.
+  - Backend/API change → runnable requests: `curl` command(s) (or an equivalent
+    Postman-ready request description) with the expected status + response body.
+  - Docs/tooling-only change → the command or review step that shows the change took
+    effect (run the changed script once and state its expected output).
 
 Example of a well-formed call (bulleted summary, fenced commands + output):
 
@@ -80,7 +88,7 @@ Example of a well-formed call (bulleted summary, fenced commands + output):
 ```sh
 deno task test
 ```
-Expect: all tests green." \
+Expect: all tests green. Then exercise the change per Test plan substance above." \
   --test-evidence "```
 ok | 42 passed | 0 failed
 ```"
