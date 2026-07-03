@@ -163,7 +163,7 @@ Rules:
       --summary "<bulleted, filled in by you>" \
       --test-plan "<exact commands + expected result>" \
       --test-evidence "<the actual lint+test output you saw>" \
-      [--closes]   # only if this PR fully completes the issue
+      [--part-of]   # ONLY if the issue must stay open (partial PR / run-log / epic); default closes it
 
 <Mandatory PR attribution & conventions block from above, filled in for
 "Claude Code — Sonnet 5">
@@ -201,7 +201,7 @@ Rules:
       --summary "<bulleted, filled in by you>" \
       --test-plan "<exact commands + expected result>" \
       --test-evidence "<the actual lint+test output you saw>" \
-      [--closes]
+      [--part-of]   # ONLY if the issue must stay open; default closes it
 
 <Mandatory PR attribution & conventions block from above, filled in for
 "Claude Code — Opus 4.8">
