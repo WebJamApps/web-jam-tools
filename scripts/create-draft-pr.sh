@@ -31,7 +31,10 @@
 #                   OPTIONAL: no issue anywhere ⇒ PR opens without a Closes line
 #                   (title then comes from the last commit subject).
 #   --summary       REQUIRED. Fills "## Summary" (what changed and why).
-#   --test-plan     REQUIRED. Fills "## How to test locally" (exact commands + expected result).
+#   --test-plan     REQUIRED. Fills "## How to test locally". Exact commands + expected
+#                   result AND steps exercising the change itself: UI -> start command,
+#                   route, clicks, expected visible result; API -> curl/Postman request(s)
+#                   + expected response. "npm test green" alone is not enough (#135).
 #   --test-evidence REQUIRED. Fills "## Test evidence" (real lint + test output, ran green).
 #   --screenshots   Fills "## Screenshots"; omit the flag to omit the section.
 #
