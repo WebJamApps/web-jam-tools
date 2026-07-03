@@ -24,7 +24,9 @@ ready on GitHub.
 
 1. You are on a feature branch named `claude/<issue#>-<slug>` (the issue number in
    the branch is how the script derives the issue reference). If your branch lacks the
-   number, pass `--issue N` explicitly.
+   number, pass `--issue N` explicitly. **An issue is OPTIONAL** (2026-07-03): with no
+   issue resolvable, the PR simply has no Closes line and its title falls back to the
+   last commit subject — NEVER create an issue just to satisfy the script.
 2. Everything is committed (clean working tree) and lint + tests are green.
 
 ## How to run it
@@ -87,7 +89,9 @@ ok | 42 passed | 0 failed
 ## What the script refuses to do (and why that's correct — don't work around it)
 
 It exits non-zero when: `--author` is missing; any of `--summary`/`--test-plan`/
-`--test-evidence` is missing or left as a placeholder; you're on `dev`/`main`; the
-working tree is dirty; the repo has no `dev` branch; or no issue number can be
-resolved. If it refuses, fix the underlying condition — do not fall back to
-`gh pr create`.
+`--test-evidence` is missing or left as a placeholder; body text contains raw
+HTML-like tags outside backticks (GitHub strips them silently — the "wrap every
+`<tag>` in backticks" rule above is now machine-enforced); you're on `dev`/`main`;
+the working tree is dirty; the repo has no `dev` branch; a resolved issue is
+missing or closed; or `--part-of` is passed without a resolvable issue. If it
+refuses, fix the underlying condition — do not fall back to `gh pr create`.
