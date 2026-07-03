@@ -24,7 +24,9 @@ ready on GitHub.
 
 1. You are on a feature branch named `claude/<issue#>-<slug>` (the issue number in
    the branch is how the script derives the issue reference). If your branch lacks the
-   number, pass `--issue N` explicitly.
+   number, pass `--issue N` explicitly. **An issue is OPTIONAL** (2026-07-03): with no
+   issue resolvable, the PR simply has no Closes line and its title falls back to the
+   last commit subject — NEVER create an issue just to satisfy the script.
 2. Everything is committed (clean working tree) and lint + tests are green.
 
 ## How to run it
@@ -66,6 +68,14 @@ formatting is the **caller's** job. Fill every flag with proper markdown:
   block so GitHub renders it literally. Never pass a raw `<sup>35</sup>`-style tag as
   prose — GitHub renders or swallows it and garbles the body.
 - **Before/after** → add a short before → after snippet when it aids clarity.
+- **Test plan substance (web-jam-tools#135)** → a green test suite is a gate, never
+  the whole plan. Also include steps that exercise the CHANGE itself:
+  - UI change → exact manual steps: the command to start the app (e.g. `npm run dev`),
+    the route/page to open, what to click or type, and the visible result to expect.
+  - Backend/API change → runnable requests: `curl` command(s) (or an equivalent
+    Postman-ready request description) with the expected status + response body.
+  - Docs/tooling-only change → the command or review step that shows the change took
+    effect (run the changed script once and state its expected output).
 
 Example of a well-formed call (bulleted summary, fenced commands + output):
 
@@ -78,7 +88,7 @@ Example of a well-formed call (bulleted summary, fenced commands + output):
 ```sh
 deno task test
 ```
-Expect: all tests green." \
+Expect: all tests green. Then exercise the change per Test plan substance above." \
   --test-evidence "```
 ok | 42 passed | 0 failed
 ```"
@@ -87,7 +97,9 @@ ok | 42 passed | 0 failed
 ## What the script refuses to do (and why that's correct — don't work around it)
 
 It exits non-zero when: `--author` is missing; any of `--summary`/`--test-plan`/
-`--test-evidence` is missing or left as a placeholder; you're on `dev`/`main`; the
-working tree is dirty; the repo has no `dev` branch; or no issue number can be
-resolved. If it refuses, fix the underlying condition — do not fall back to
-`gh pr create`.
+`--test-evidence` is missing or left as a placeholder; body text contains raw
+HTML-like tags outside backticks (GitHub strips them silently — the "wrap every
+`<tag>` in backticks" rule above is now machine-enforced); you're on `dev`/`main`;
+the working tree is dirty; the repo has no `dev` branch; a resolved issue is
+missing or closed; or `--part-of` is passed without a resolvable issue. If it
+refuses, fix the underlying condition — do not fall back to `gh pr create`.
