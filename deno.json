@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.8.7",
+  "version": "1.8.8",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env",
@@ -34,5 +34,13 @@
     "include": ["src/", "test/"],
     "exclude": ["src/gig-scraper/*.json"],
     "rules": { "tags": ["recommended"] }
+  },
+  "deploy": {
+    "org": "webjamapps",
+    "app": "webjam-outreach-cron"
   }
 }
+
+
+
+
