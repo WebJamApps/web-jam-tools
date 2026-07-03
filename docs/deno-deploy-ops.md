@@ -68,41 +68,21 @@ The CLI deployment command `deno deploy --app <app> --prod` deploys the latest c
 
 Deno Deploy has **no native feature to skip builds based on changed paths** (e.g., "only build if src/outreach-cron/ changed"). The platform rebuilds on every push to the linked GitHub branch.
 
-### Workaround: GitHub Actions Path Filter (if GitHub-linked)
+### Resolution (settled 2026-07-03): CircleCI deploys BOTH apps; GitHub integration abandoned
 
-If the app is linked to GitHub (verified in app **Settings** → **Deploy from GitHub**), you can:
+Deno's GitHub integration is not used for either app — it builds on every push
+(docs-only included) and its flaky builds blocked a dev→main merge (issue #130).
+Instead, both apps deploy from the CircleCI `deploy` job (`.circleci/config.yml`),
+which runs on `main` only, after the `gate` job passes:
 
-1. **Unlink the app** if you want manual/CI-only deploys (current web-jam-tools approach per deno-deploy-setup.md).
-2. **Use GitHub Actions** with path filters if you want automated GitHub deploys but only for certain paths:
-   - Create a `.github/workflows/deploy-outreach-cron.yml` workflow with:
-     ```yaml
-     on:
-       push:
-         branches: [main]
-         paths:
-           - 'src/outreach-cron/**'
-           - 'deno.json'
-     jobs:
-       deploy:
-         runs-on: ubuntu-latest
-         steps:
-           - uses: actions/checkout@v4
-           - uses: denoland/deployctl@v1
-             with:
-               project: webjam-outreach-cron
-               entrypoint: src/outreach-cron/advance_cadence.ts
-               root: .
-     ```
-   - Deploy via your GitHub Actions workflow, **not** Deno's GitHub integration.
+- **web-jam-devotional** — unlinked + CircleCI-deployed since web-jam-tools#69.
+- **webjam-outreach-cron** — same treatment as of #130. One-time manual step:
+  disconnect the app's GitHub integration in the console (app → **Settings** →
+  **Deploy from GitHub** → disconnect), or both deploy paths run.
 
-### Current Setup (CircleCI)
-
-This repo deploys via CircleCI (see `.circleci/config.yml` and docs/deno-deploy-setup.md):
-- App is **unlinked from GitHub** (no auto-builds on push).
-- Deploys only from CircleCI on `main` branch.
-- Every source push triggers a test gate; only passing `main` merges deploy.
-
-This avoids pointless rebuilds; no further Deno configuration is needed.
+Net effect: deploys happen only on merges to `main` that pass the gate — better
+than path filtering (a GitHub-Actions `paths:` workaround was considered and
+rejected; no reason to keep two deploy systems).
 
 ## Verify a Deployment Succeeded
 
@@ -120,7 +100,7 @@ After deploying (CI or manual), check the app's status:
 | List builds/revisions | ❌ CLI-only (not documented) | Use dashboard |
 | Fetch build log | ❌ CLI-only | Use dashboard Deployments tab |
 | Retry failed build | ❌ CLI-only | Use dashboard "Retry" button |
-| Path-filtered builds | ❌ No native support | Use GitHub Actions filters or unlink from GitHub |
+| Path-filtered builds | ❌ No native support | Moot: both apps deploy from CircleCI (main-only, post-gate); GitHub integration disconnected |
 | REST API v1/v2 | ❌ Rejects `ddp_` tokens | API accepts `ddo_` org tokens only (not exposed via CLI) |
 
 ## Useful Docs

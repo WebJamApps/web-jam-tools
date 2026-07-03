@@ -62,11 +62,12 @@ jobs:
           name: SAST (Semgrep)
           command: deno task sast
 
-  # Deploy the daily-devotional service to Deno Deploy — ONLY from `main`
-  # (web-jam-tools#69). Deploy is driven from CI, NOT Deno's GitHub integration
-  # (which builds every branch and posts a failing preview check on PRs). The
-  # Deno Deploy app's GitHub integration is disconnected, so `main` is the only
-  # thing that ever deploys and PRs get no Deno check. Auth via the
+  # Deploy BOTH Deno Deploy apps (daily-devotional #69, outreach-cron #130) —
+  # ONLY from `main`. Deploys are driven from CI, NOT Deno's GitHub integration
+  # (which builds every branch/push — docs-only included — and posts a failing
+  # preview check on PRs; its flaky builds also blocked a dev→main merge, #130).
+  # Both apps' GitHub integrations are disconnected in the console, so `main` is
+  # the only thing that ever deploys and PRs get no Deno check. Auth via the
   # DENO_DEPLOY_TOKEN CircleCI env var. Runs only on `main`, only after `gate`.
   deploy:
     executor: ci
@@ -78,11 +79,19 @@ jobs:
             curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
       - run:
-          name: Deploy to Deno Deploy (production)
+          name: Deploy web-jam-devotional (production)
           command: |
             deno deploy \
               --org webjamapps \
               --app web-jam-devotional \
+              --prod \
+              --token "$DENO_DEPLOY_TOKEN"
+      - run:
+          name: Deploy webjam-outreach-cron (production)
+          command: |
+            deno deploy \
+              --org webjamapps \
+              --app webjam-outreach-cron \
               --prod \
               --token "$DENO_DEPLOY_TOKEN"
 
