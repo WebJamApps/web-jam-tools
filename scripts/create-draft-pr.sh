@@ -10,8 +10,11 @@
 #   * the PR is ALWAYS a draft;
 #   * the PR is ALWAYS based on `dev`;
 #   * the body ALWAYS ends with an attribution footer naming the tool + model.
-# By default, the PR CLOSES the issue on merge (`Closes #N`); pass --part-of for
-# a partial PR or a standing run-log/epic issue that must stay open (`Part of #N`).
+# When an issue is resolved (from the branch name or --issue), the PR CLOSES it on
+# merge (`Closes #N`); pass --part-of for a partial PR or a standing run-log/epic
+# issue that must stay open (`Part of #N`). An issue is OPTIONAL: with none, the PR
+# simply has no issue reference — do NOT create an issue just to satisfy this
+# script (Josh, 2026-07-03: issue-per-PR is bureaucracy for small standalone fixes).
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
@@ -25,6 +28,8 @@
 #   --closes        Deprecated no-op (closing is now the default); still accepted.
 #   --issue N       Issue number. Normally parsed from the branch name
 #                   (<lane>/<issue#>-<slug>); use this only as a fallback.
+#                   OPTIONAL: no issue anywhere ⇒ PR opens without a Closes line
+#                   (title then comes from the last commit subject).
 #   --summary       REQUIRED. Fills "## Summary" (what changed and why).
 #   --test-plan     REQUIRED. Fills "## How to test locally" (exact commands + expected result).
 #   --test-evidence REQUIRED. Fills "## Test evidence" (real lint + test output, ran green).
@@ -38,7 +43,8 @@
 #
 # Refuses (exit 1) when: --author missing; any of --summary/--test-plan/--test-evidence
 # missing or left as a placeholder; current branch is dev/main; working tree dirty;
-# the repo has no `dev` branch; or no issue number can be resolved.
+# the repo has no `dev` branch; a resolved issue is missing/closed; or --part-of is
+# passed without a resolvable issue.
 
 set -euo pipefail
 
@@ -115,21 +121,28 @@ fi
 if [ -z "$ISSUE" ] && [[ "$BRANCH" =~ ^[^/]+/([0-9]+)(-|$) ]]; then
   ISSUE="${BASH_REMATCH[1]}"
 fi
+# An issue is optional (2026-07-03): small standalone fixes don't need one, and an
+# issue must never be created just to satisfy this script. With no issue, the PR
+# has no Closes line and the title falls back to the last commit subject.
 if [ -z "$ISSUE" ]; then
-  echo "ERROR: no issue number — name the branch <lane>/<issue#>-<slug> or pass --issue N." >&2
-  exit 1
+  if [ "$PART_OF" -eq 1 ]; then
+    echo "ERROR: --part-of needs an issue — name the branch <lane>/<issue#>-<slug> or pass --issue N." >&2
+    exit 1
+  fi
+  echo "No issue resolved — opening the PR without a Closes line."
+  PR_TITLE="$(git log -1 --format=%s)"
+else
+  # --- a resolved issue must exist and be open ---
+  if ! ISSUE_STATE="$(gh issue view "$ISSUE" --json state --jq .state 2>/dev/null)"; then
+    echo "ERROR: issue #$ISSUE not found in this repo (via gh)." >&2
+    exit 1
+  fi
+  if [ "$ISSUE_STATE" != "OPEN" ]; then
+    echo "ERROR: issue #$ISSUE is $ISSUE_STATE, not OPEN." >&2
+    exit 1
+  fi
+  PR_TITLE="$(gh issue view "$ISSUE" --json title --jq .title)"
 fi
-
-# --- the issue must exist and be open ---
-if ! ISSUE_STATE="$(gh issue view "$ISSUE" --json state --jq .state 2>/dev/null)"; then
-  echo "ERROR: issue #$ISSUE not found in this repo (via gh)." >&2
-  exit 1
-fi
-if [ "$ISSUE_STATE" != "OPEN" ]; then
-  echo "ERROR: issue #$ISSUE is $ISSUE_STATE, not OPEN." >&2
-  exit 1
-fi
-ISSUE_TITLE="$(gh issue view "$ISSUE" --json title --jq .title)"
 
 # --- WARN (don't fail) on a lane mismatch between branch prefix and issue label ---
 # Branch lane -> acceptable issue lane label(s): agy<->agy, claude<->opus|fable
@@ -140,7 +153,7 @@ case "$BRANCH_LANE" in
   claude) EXPECT_LANES="opus fable" ;;
   *)      EXPECT_LANES="" ;;
 esac
-if [ -n "$EXPECT_LANES" ]; then
+if [ -n "$EXPECT_LANES" ] && [ -n "$ISSUE" ]; then
   mapfile -t ISSUE_LABELS < <(gh issue view "$ISSUE" --json labels --jq '.labels[].name' 2>/dev/null || true)
   ISSUE_LANES=()
   for l in "${ISSUE_LABELS[@]}"; do
@@ -188,7 +201,9 @@ fi
 
 # --- assemble the body ---
 
-if [ "$PART_OF" -eq 1 ]; then
+if [ -z "$ISSUE" ]; then
+  ISSUE_REF=""
+elif [ "$PART_OF" -eq 1 ]; then
   ISSUE_REF="Part of #$ISSUE"
 else
   ISSUE_REF="Closes #$ISSUE"
@@ -197,9 +212,9 @@ fi
 BODY="$(cat <<EOF
 ## Summary
 $SUMMARY
-
+${ISSUE_REF:+
 $ISSUE_REF
-
+}
 ## How to test locally
 $TEST_PLAN
 
@@ -221,12 +236,14 @@ BODY="$BODY
 echo "Pushing branch '$BRANCH' to origin..."
 git push -u origin HEAD
 
-echo "Opening draft PR (base dev) for issue #$ISSUE..."
-PR_URL="$(gh pr create --draft --base dev --title "$ISSUE_TITLE" --body "$BODY")"
+echo "Opening draft PR (base dev)${ISSUE:+ for issue #$ISSUE}..."
+PR_URL="$(gh pr create --draft --base dev --title "$PR_TITLE" --body "$BODY")"
 
 echo ""
 echo "Draft PR opened: $PR_URL"
-if [ "$PART_OF" -eq 1 ]; then
+if [ -z "$ISSUE" ]; then
+  echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+elif [ "$PART_OF" -eq 1 ]; then
   echo "  base: dev | state: draft | part of: #$ISSUE | by: $AUTHOR"
 else
   echo "  base: dev | state: draft | closes: #$ISSUE | by: $AUTHOR"
