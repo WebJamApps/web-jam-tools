@@ -11,13 +11,13 @@ A three-phase Drive housekeeper. **Always do all three phases in order. Never sk
 
 Authoritative storage split:
 
-- **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `claude-opus-tasks.txt`, `agy-tasks.txt`, `claude-fable-tasks.txt`, `SHARED.md`. Claude Code reads these directly via local FS.
+- **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `claude-opus-tasks.txt`, `agy-tasks.txt`, `claude-fable-tasks.txt`. Claude Code reads these directly via local FS. (Cross-AI operational rules live in `web-jam-tools/docs/cross-ai-rules.md` — repo-resident, not a Drive/Dropbox mirror.)
 - **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/`): all venue deliverables — pitch templates, sent outreach, DRAFTs, research, project log, social copy. Authoritative since Task 42 migration 2026-05-21.
 - **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/MariaParty/`): retired retirement-party docs (RSVP MASTER, Master Plan v2, Banner Decision, etc.). Project complete 2026-05-21 except for food scheduling — Sonnet has no involvement going forward.
 - **Drive** (My Drive root): `claude-sonnet-tasks.txt` (phone Sonnet's own queue — Drive is authoritative). Phone Sonnet also drops cross-queue task contributions into Drive root using `for-opus-<name>.txt` (or the older `claude-opus-tasks-YYYY-MM-DD-HHMM.txt` pattern); drive-cleanup is the bridge that pulls them into Dropbox.
 - **Drive** (`gdrive:JoshMariaMusic/`): READ-ONLY mirror of 4 Sonnet-readable files only — `Pitch Email – MidRange Cafe Bar.txt`, `Pitch Email – Originals Venues.txt`, `Pitch Email – Pub Festival Brewery.txt`, `Online Form Information Block.txt`. Dropbox-authoritative; drive-cleanup pushes Dropbox→Drive on every run so phone Sonnet always sees fresh templates.
 
-The Drive originals of `claude-opus-tasks.txt` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only `SHARED.md` and the 4-file JMM mirror remain as Drive snapshots — phone Sonnet consults them.
+The Drive originals of `claude-opus-tasks.txt` were trashed 2026-05-21 — they had no readers. The Drive `MariaParty/` folder was also trashed 2026-05-21 (project complete; no Sonnet involvement). Only the 4-file JMM mirror remains as a Drive snapshot — phone Sonnet consults it. (Cross-AI rules moved from the old `SHARED.md` Drive snapshot to `web-jam-tools/docs/cross-ai-rules.md`, read directly from GitHub — no Drive mirror needed.)
 
 ## Phase 1 — Analyze (deterministic pre-pass first; Haiku only for the remainder)
 
@@ -58,7 +58,6 @@ Check at minimum:
 
 - **Multiple files with the same name** — flag any duplicates. The canonical Drive-resident files should each appear EXACTLY ONCE:
   - `claude-sonnet-tasks.txt` (id `1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ`) — phone Sonnet's own queue (Drive **is** authoritative)
-  - `SHARED.md` (id `1X48-YCTaYScEIEJNaD4__imsMfWwMoRr`) — Drive snapshot of the Dropbox authoritative copy; refreshed by drive-cleanup when needed
   - (Note: as of 2026-05-21 there are NO Drive copies of `claude-opus-tasks.txt` — Dropbox-only.)
 - **Sonnet bridge files** awaiting merge into the Dropbox-authoritative queues:
   - `for-opus-<name>.txt` → BRIDGE into `/home/joshua/Dropbox/web-jam-llms/claude-opus-tasks.txt`
@@ -71,7 +70,7 @@ Check at minimum:
 - **Old `drive-cleanup-pending-report.md` copies at root** — this skill's own report file. Retain the **latest only**; each run proposes trashing the older copies (past runs left 8 accumulated). Surface as a finding; never auto-trash.
 - **Allowed non-queue files at root (whitelist — DO NOT flag):**
   - `processed-*` files — legacy audit-trail leftovers from before 2026-05-27. New bridges are trashed, not renamed; existing `processed-*` files can be flagged for trash on a manual cleanup pass but should not be auto-actioned.
-  - (`SHARED.md` is already covered in the canonical-files-at-root list above.)
+  - `SHARED.md` — legacy Drive snapshot, no longer refreshed by this skill (cross-AI rules moved to `web-jam-tools/docs/cross-ai-rules.md`, read directly from GitHub). Leave alone; retiring the Dropbox original + this Drive snapshot is a separate, not-yet-approved step.
 
 ### B. Project folders (CLAUDE, GEMMA, GEMINI, JoshMariaMusic, MariaParty, CollegeLutheran)
 
@@ -139,7 +138,7 @@ execution and note it in the run summary.
 6. **Append to `bridge-log.md`** at `/home/joshua/Dropbox/web-jam-llms/bridge-log.md`: timestamp (UTC), source filename, dest path, bytes appended, assigned task numbers, status (ok | failed-verify).
 7. **Re-run the Phase 1.C Opus-queue compression check** — bridging may have added a long task body worth compressing to a one-line headline + `[[task-spec-<slug>]]`. (No renumbering — that is retired; appended tasks simply live at the bottom.)
 
-(Drive snapshots of the opus queue no longer exist — see "Storage model" above — so there's no Drive-side refresh step for bridge actions. `SHARED.md` is the only Dropbox-source file with a Drive snapshot; if a bridge or rule change updates `/home/joshua/Dropbox/web-jam-llms/SHARED.md`, refresh the Drive snapshot via `rclone copy /home/joshua/Dropbox/web-jam-llms/SHARED.md gdrive: --update`.)
+(Drive snapshots of the opus queue no longer exist — see "Storage model" above — so there's no Drive-side refresh step for bridge actions. Cross-AI rules now live at `web-jam-tools/docs/cross-ai-rules.md`, read directly from GitHub, so there's no Drive mirror to refresh for that either.)
 
 ### Sonnet queue merges (`claude-sonnet-tasks-*.txt`)
 
@@ -194,12 +193,9 @@ Apply this compression ONLY to `claude-opus-tasks.txt` — the agy/fable queue t
 
 ### Mirror refresh (always — runs unconditionally each invocation)
 
-After Phase 3 actions complete (or even if there were none), refresh the read-only Drive snapshots of files Dropbox-side users edit but Sonnet reads phone-side:
+After Phase 3 actions complete (or even if there were none), refresh the read-only Drive snapshot of the venue-outreach templates Dropbox-side users edit but Sonnet reads phone-side. (Cross-AI rules no longer need a mirror push here — they now live at `web-jam-tools/docs/cross-ai-rules.md`, read directly from GitHub by any surface that needs them.)
 
 ```bash
-# Cross-AI rules (SHARED.md): single file, infrequent change
-rclone copy /home/joshua/Dropbox/web-jam-llms/SHARED.md gdrive: --update
-
 # Venue-outreach mirror: 4 Sonnet-readable templates
 rclone copy /home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/ gdrive:JoshMariaMusic/ \
   --include "Pitch Email – MidRange Cafe Bar.txt" \
