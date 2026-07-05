@@ -1,6 +1,6 @@
 ---
 name: memory-cleanup
-description: Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, the global and per-repo CLAUDE.md/AGENTS.md, the cross-AI SHARED.md/task queues, bridge-log, handle-gmails rules, and Google Drive memory/bridge files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap Haiku subagent; findings are reported as a table and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.
+description: Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, the global and per-repo CLAUDE.md/AGENTS.md, the cross-AI rules doc/task queues, bridge-log, handle-gmails rules, and Google Drive memory/bridge files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap Haiku subagent; findings are reported as a table and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.
 ---
 
 # memory-cleanup
@@ -64,7 +64,7 @@ Read/Glob/Grep. Pass this paragraph to the subagent verbatim in its prompt.
 | 2 | `~/.claude/CLAUDE.md` (global) | contradictions with memories; rules superseded by newer decisions |
 | 3 | per-repo `CLAUDE.md` (discover under `~/WebJamApps/*/`) | same as #2 |
 | 4 | per-repo `AGENTS.md` (under `~/WebJamApps/*/`) | same; also flag any leftover `GEMINI.md` files (renamed → AGENTS.md June 2026) |
-| 5 | `~/Dropbox/web-jam-llms/SHARED.md` | cross-AI rules: contradictions, superseded entries |
+| 5 | `web-jam-tools/docs/cross-ai-rules.md` | cross-AI rules: contradictions, superseded entries |
 | 6 | `~/Dropbox/web-jam-llms/{agy,claude-opus,claude-fable}-tasks.txt` | any line referencing a closed issue / merged PR → propose removal |
 | 7 | `~/Dropbox/web-jam-llms/bridge-log.md` | bridge items merged but unlogged (or logged-but-still-pending) |
 | 8 | Google Drive memory/bridge files | **FLAG only** — defer execution to `/drive-cleanup`. Do not duplicate its bridge logic. |
@@ -79,7 +79,7 @@ Read/Glob/Grep. Pass this paragraph to the subagent verbatim in its prompt.
   `gh`), propose delete or condense to a one-line "done" note.
 - **`reference`** — verify the pointer every run: is the linked issue still open? does
   the path/URL still exist? Flag dead pointers.
-- **Untyped files** (`SHARED.md`, the queues) — use the per-row rules in
+- **Untyped files** (`cross-ai-rules.md`, the queues) — use the per-row rules in
   the table above.
 
 Closure checks: `gh issue view <n> --json state` and `gh pr view <n> --json state`.
@@ -113,12 +113,13 @@ all 10 were checked. Then **STOP and wait for explicit approval.** Accept "yes",
 Only after approval, and only for approved rows:
 
 1. Apply each edit/delete in the parent session (the subagent never writes).
-   **Repo files are special (surfaces #3/#4 — per-repo `CLAUDE.md`/`AGENTS.md`):**
-   never leave these edits dirty in a working tree. For each affected repo:
-   check `git status -sb` first, create a feature branch off `dev` (stash/restore
-   if the checkout is on an unrelated branch), bump the repo's semver, commit,
-   push, and open a **draft PR** to `dev` — Josh reviews and merges. All other
-   surfaces (memory dirs, Dropbox cross-AI files) are edited in place as before.
+   **Repo files are special (surfaces #3/#4/#5 — per-repo `CLAUDE.md`/`AGENTS.md`
+   and `web-jam-tools/docs/cross-ai-rules.md`):** never leave these edits dirty in
+   a working tree. For each affected repo: check `git status -sb` first, create a
+   feature branch off `dev` (stash/restore if the checkout is on an unrelated
+   branch), bump the repo's semver, commit, push, and open a **draft PR** to `dev`
+   — Josh reviews and merges. All other surfaces (memory dirs, Dropbox task queues)
+   are edited in place as before.
 2. **Keep indexes in sync:** when you delete or rename a memory file, remove or update
    its `MEMORY.md` index line in the same dir. When you merge memories, update the
    index lines to match.
@@ -143,7 +144,7 @@ Only after approval, and only for approved rows:
   or a file with no index line.
 - **Drive is flag-only (surface #8).** Defer all Drive execution to `/drive-cleanup`; no duplicate
   bridge logic here.
-- **Never delete a canonical queue or SHARED.md** — only prune stale *lines* within them.
+- **Never delete a canonical queue or `docs/cross-ai-rules.md`** — only prune stale *lines* within them.
 - **`user` / `feedback` memories never age out** — touch them only on a clear
   contradiction Josh confirms.
 - **Stamp on every approved run**, even a zero-action one, so the daily reminder clears.
@@ -158,7 +159,7 @@ Only after approval, and only for approved rows:
 
 - `skills/memory-cleanup/README.md` — Obsidian vault setup + agent-safety rules for
   hand-editing memory files.
-- `~/.claude/CLAUDE.md` + `~/Dropbox/web-jam-llms/SHARED.md` — the two standing rules
+- `~/.claude/CLAUDE.md` + `web-jam-tools/docs/cross-ai-rules.md` — the two standing rules
   (completion-reflection; save-redirection during dispatch) this sweep backstops.
 - `/drive-cleanup` — owns all Google Drive execution (surface #9 defers to it).
 - `scripts/backup-claude-memory.sh` — what protects these memory surfaces.
