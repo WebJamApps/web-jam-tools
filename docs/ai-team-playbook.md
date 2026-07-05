@@ -2,6 +2,8 @@
 
 *For Josh. Last updated 2026-06-27. Covers the current team, what each member is best at, how workflows hand off between them, and where Josh approves.*
 
+*See [cross-ai-rules.md](cross-ai-rules.md) for the operational rules every AI on the team follows — voice rules, file placement, protected files, canonical task queues, and memory hygiene.*
+
 ---
 
 ## The team
