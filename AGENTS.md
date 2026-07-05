@@ -2,6 +2,11 @@
 
 This file contains instructions and context for the Gemini CLI and AI assistants working in this workspace.
 
+## Read also
+
+- [docs/ai-team-playbook.md](docs/ai-team-playbook.md) — the current AI team, what each tier is best at, how work hands off, and where Josh approves.
+- [docs/cross-ai-rules.md](docs/cross-ai-rules.md) — cross-AI operational rules (voice rules, file placement, protected files, canonical task queues, memory hygiene) that apply to every AI on the team.
+
 ## Workspace Overview
 - **Root Directory:** `/home/joshua/WebJamApps`
 - **Primary Projects:** JaMmusic, AppersonAuto, CollegeLutheran, web-jam-back, WebJamPg, etc.
