@@ -138,9 +138,9 @@ Triggered manually (`/drive-cleanup` in any Claude Code session) or by the sessi
 - Stray ephemeral files (old timestamped backups, log dumps)
 - Files in the `Misc/` folder older than 90 days (flagged for review)
 
-**Mirror refresh** — on every run, `/drive-cleanup` also pushes the current Dropbox `SHARED.md` back to Drive via rclone. Cheap no-op when nothing has changed; pushes updates when you've edited a template in VS Code so phone Sonnet sees the fresh copy on its next read.
+**Mirror refresh** — on every run, `/drive-cleanup` also pushes the 4 venue-outreach templates from Dropbox back to Drive via rclone (read-only snapshot phone Sonnet consults). Cheap no-op when nothing has changed; pushes updates when you've edited a template in VS Code so phone Sonnet sees the fresh copy on its next read. Cross-AI rules don't need this — they live at `docs/cross-ai-rules.md`, read directly from GitHub, no Drive mirror.
 
-**Never touched without explicit override:** the canonical task queues (`claude-sonnet-tasks.txt` on Drive; `claude-opus-tasks.txt` and `agy-tasks.txt` in Dropbox), `SHARED.md`. `processed-*` files are kept forever as the bridge audit trail.
+**Never touched without explicit override:** the canonical task queues (`claude-sonnet-tasks.txt` on Drive; `claude-opus-tasks.txt` and `agy-tasks.txt` in Dropbox). `processed-*` files are kept forever as the bridge audit trail.
 
 ---
 
@@ -151,7 +151,7 @@ Triggered manually (`/memory-cleanup` in any Claude Code session) or by the sess
 - Stale project memories (issue/PR closed; flag for delete or condense)
 - Dangling `[[links]]` (target slug has no matching memory file)
 - MEMORY.md index lines that don't match their files
-- Outdated or contradicted lines in `SHARED.md`
+- Outdated or contradicted lines in `docs/cross-ai-rules.md`
 - Task-queue lines referencing closed issues or merged PRs
 
 Approval flow: findings table → Josh approves selectively → execute.
