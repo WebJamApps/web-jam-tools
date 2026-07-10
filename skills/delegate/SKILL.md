@@ -54,9 +54,24 @@ ask a clarifying question mid-run).
 `agy/<issue#>-<slug>` (or `agy/<slug>` for queue-line tasks), composes a prompt
 wrapping the task in standing rules (commit incrementally, run this repo's real
 lint/test scripts, finish with a draft PR via `create-draft-pr.sh`), then runs
-`agy` on the most capable currently-available model. It refuses a dirty working
-tree and never edits the queue file itself — delete the queue line yourself once
-you've accepted the resulting PR.
+`agy` on the first currently-available model in a cost-ordered chain (cheapest
+first). It refuses a dirty working tree and never edits the queue file itself —
+delete the queue line yourself once you've accepted the resulting PR.
+
+**Flash High requires the `AGY_MODELS` override.** The default model chain is
+cost-ordered cheapest first — `Gemini 3.5 Flash (Medium)|Gemini 3.5 Flash (High)`
+— with High used only as a rate-limit fallback, so an issue triaged as **Flash
+High** silently runs at Flash Medium unless you override the chain on the
+invocation:
+
+```sh
+AGY_MODELS='Gemini 3.5 Flash (High)' \
+  ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
+```
+
+The value is pipe-separated (model names contain spaces, so pipes — not spaces —
+separate them; a single name needs no pipe). This bit for real: HFS#26 was
+labeled Flash High but ran on Medium, 2026-07-09.
 
 **Headless completion is driven, not one-shot.** agy's `-p` mode can end its
 turn before a long multi-step task is actually finished — it exits 0 with work
