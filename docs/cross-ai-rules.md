@@ -72,6 +72,7 @@ Never modify a queue file that isn't yours. Phone-authored bridge files at Drive
 - EMAIL: always DRAFT, never send. Save as Gmail draft for Josh's review.
 - FILES: never create a version-suffixed copy. Edit the master.
 - Never contact venues, churches, or other third parties directly — Josh handles all outreach.
+- **STATE VERIFICATION**: Before any suggestion, to-do item, or "ready for you" claim about a PR/issue/CI/deploy, run a fresh liveness check in that same turn (e.g. `gh pr view --json state,mergedAt` / `gh issue view --json state`). If state ≠ OPEN, it is done: drop it silently. `mergeable: UNKNOWN/null` on a PR usually means merged/closed — never read it as "the API is slow" and never advise merging without confirming state=OPEN. An inconclusive check is not a completed check: use a definitive fallback (local `git merge-tree`, `statusCheckRollup`) or say plainly that you could not verify — never hand Josh a verification step the agent can run itself.
 
 ## MEMORY HYGIENE (standing rules for any AI on the team)
 
