@@ -9,7 +9,7 @@ This content used to live in Dropbox `SHARED.md` (mirrored to Google Drive so ph
 Sonnet could read it). It is now maintained here in `web-jam-tools` as the single
 source of truth. AI-specific rules live in CLAUDE.md / AGENTS.md.
 
-Last updated: 2026-06-28.
+Last updated: 2026-07-11.
 
 ## VOICE RULES (for any email/pitch drafting task)
 
@@ -73,6 +73,7 @@ Never modify a queue file that isn't yours. Phone-authored bridge files at Drive
 - FILES: never create a version-suffixed copy. Edit the master.
 - Never contact venues, churches, or other third parties directly — Josh handles all outreach.
 - **STATE VERIFICATION**: Before any suggestion, to-do item, or "ready for you" claim about a PR/issue/CI/deploy, run a fresh liveness check in that same turn (e.g. `gh pr view --json state,mergedAt` / `gh issue view --json state`). If state ≠ OPEN, it is done: drop it silently. `mergeable: UNKNOWN/null` on a PR usually means merged/closed — never read it as "the API is slow" and never advise merging without confirming state=OPEN. An inconclusive check is not a completed check: use a definitive fallback (local `git merge-tree`, `statusCheckRollup`) or say plainly that you could not verify — never hand Josh a verification step the agent can run itself.
+- **ONE REPO, ONE SESSION**: never edit a repo another AI session is actively working (Josh, 2026-07-11). Before branching or editing, check `git status -sb` — a non-`dev` branch or dirty tree means another session likely has the repo in flight. Hand the change to that session/lane (route via Josh) or ask Josh first. A separate worktree or non-colliding branch does NOT make concurrent edits OK — parallel semver bumps and surprise PRs still collide.
 
 ## MEMORY HYGIENE (standing rules for any AI on the team)
 
