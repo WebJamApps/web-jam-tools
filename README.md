@@ -15,6 +15,7 @@ under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
 - **`gig-scraper/`** — Playwright scrapers (reference/research; venue master is Mongo)
 - **`skills/`** — Claude Code skills (single source of truth; symlinked into `~/.claude/skills`)
+- **`hooks/`** — Claude Code hooks (single source of truth; symlinked into `~/.claude/hooks`, wired into `~/.claude/settings.json` by `scripts/install-hooks.sh` — see [Claude Code hooks](#claude-code-hooks))
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace
 
 ## Getting started
@@ -30,6 +31,10 @@ symlinks each skill into `~/.claude/skills/` (existing real dirs are backed up,
 never deleted). Runtime/personal files (e.g. `rules.yaml`, `log/`) stay local and
 gitignored.
 
+To use the Claude Code hooks in `hooks/`, run `scripts/install-hooks.sh` — see
+[Claude Code hooks](#claude-code-hooks) below for what it does and how to
+configure the notes-sync reminder.
+
 Then read:
 
 - [AGENTS.md](AGENTS.md) — workspace rules (apply to all AI assistants and human contributors)
@@ -38,6 +43,52 @@ Then read:
 - [docs/ai-assistant-google-setup.md](docs/ai-assistant-google-setup.md) — generic recipe for setting up Google Drive/Calendar/Gmail/Tasks MCP servers for Claude Code
 - [docs/rclone-setup.md](docs/rclone-setup.md) — mounting Google Drive locally via rclone + systemd
 - [docs/api-integrations.md](docs/api-integrations.md) — reference snapshot of one working setup (machine-specific paths; use the generic guide above for your own setup)
+
+## Claude Code hooks
+
+`hooks/` is the single source of truth for this workspace's Claude Code
+hooks. `scripts/install-hooks.sh`:
+
+1. Symlinks every `hooks/*.sh` into `~/.claude/hooks/` (existing real files
+   are backed up, never deleted).
+2. Idempotently merges the `SessionStart` hooks listed in that script's
+   `SESSION_START_HOOKS` array into `~/.claude/settings.json` — only adding
+   entries that aren't already present, never touching permissions or any
+   other settings. `settings.json` is backed up to `settings.json.bak-<date>`
+   immediately before any write, and only when a write is actually
+   happening. Re-running the installer is a no-op once everything is wired.
+
+`~/.claude/settings.json` is intentionally **not** version-controlled in this
+public repo (it holds personal permission strings), so this is the only
+supported way to wire a hook up — there is no manual settings-editing step
+to follow.
+
+```bash
+scripts/install-hooks.sh
+```
+
+### `notes-sync-reminder.sh` — cross-instance notes reminder
+
+Multiple machines (Josh's laptop, the household Windows desktop, potentially
+more) run Claude Code and append cross-instance learnings to a shared notes
+file in the team Dropbox hub. This `SessionStart` hook reminds you at the
+start of a session when that file has new content since your last session on
+this machine — and says nothing when it hasn't.
+
+- **Config:** `CLAUDE_SYNC_NOTES_PATH` env var overrides the watched file.
+  Default: `$HOME/Dropbox/web-jam-llms/windows-desktop-notes.md`.
+- **Behavior:** silent no-op if the watched path doesn't exist (e.g. no
+  Dropbox share on this machine); silent if unchanged since last session; a
+  1-2 line reminder when it has changed (or the first time the hook runs on
+  a machine).
+- **State:** a content-hash marker is kept in `~/.claude/state/` (per-user,
+  gitignored, never committed), so the reminder only fires once per change.
+- **Scope (v1): POSIX/bash + coreutils only** — developed and tested on
+  Linux. It should also work unmodified under Git Bash/WSL on the Windows
+  11 desktop (bash + `sha256sum` are both present there), but that hasn't
+  been verified; if neither `sha256sum` nor `shasum` is on `PATH` it falls
+  back to an mtime+size marker instead of erroring. A native
+  PowerShell/Windows port is out of scope for v1.
 
 ## Checks (CI gate)
 
