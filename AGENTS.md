@@ -1,6 +1,6 @@
-# Gemini Instructions for WebJamApps
+# Agent Instructions for WebJamApps
 
-This file contains instructions and context for the Gemini CLI and AI assistants working in this workspace.
+This file contains instructions and context for every AI agent (Claude Code, agy/Antigravity, and any other assistant) working in this workspace.
 
 ## Read also
 
@@ -14,9 +14,9 @@ This file contains instructions and context for the Gemini CLI and AI assistants
 
 ## Collaboration Rules
 1. **Rclone Mount:** Google Drive is mounted at `~/gdrive` via a systemd user service (`rclone-gdrive.service`).
-2. **Coding Standards:** Refer to individual project `GEMINI.md` files (if present) for specific technology stacks.
+2. **Coding Standards:** Refer to individual project `AGENTS.md`/`CLAUDE.md` files (if present) for specific technology stacks.
 3. **Repository Purpose:** `web-jam-tools` serves as a central hub for shared configurations, documentation of system setups, and general workspace memory.
-4. **No Merging to DEV:** Gemini is **NOT** allowed to merge PR changes to the `dev` or `main` branches. The user acts as the mandatory human-in-the-loop reviewer and is responsible for all merges.
+4. **No Merging to DEV:** AI agents are **NOT** allowed to merge PR changes to the `dev` or `main` branches. The user acts as the mandatory human-in-the-loop reviewer and is responsible for all merges.
 
 ## Opening pull requests (all WebJamApps repos)
 
