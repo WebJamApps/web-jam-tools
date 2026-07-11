@@ -18,7 +18,7 @@
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
-#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] \
+#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--dry-run] \
 #       [--summary TEXT] [--test-plan TEXT] [--test-evidence TEXT] [--screenshots TEXT]
 #
 #   --author        REQUIRED. e.g. "Claude Code — Opus 4.8", "agy — Gemini 3 Pro".
@@ -36,7 +36,17 @@
 #                   route, clicks, expected visible result; API -> curl/Postman request(s)
 #                   + expected response. "npm test green" alone is not enough (#135).
 #   --test-evidence REQUIRED. Fills "## Test evidence" (real lint + test output, ran green).
+#                   AUTO-FENCED (web-jam-tools#150): if the value contains no ```
+#                   code fence at all, the whole value is wrapped in one before the
+#                   body is composed — raw console output otherwise garbles the
+#                   markdown (web-jam-back#935: coverage ==== separator lines
+#                   rendered as giant setext H1s). Values that already contain a
+#                   fence pass through unchanged; fencing properly yourself is
+#                   still the polite thing to do.
 #   --screenshots   Fills "## Screenshots"; omit the flag to omit the section.
+#   --dry-run       Run every guard and compose the full PR body, print it, and
+#                   exit 0 WITHOUT pushing or opening a PR. For testing this
+#                   script's composition/guards safely (web-jam-tools#150).
 #
 # --summary, --test-plan, and --test-evidence are REQUIRED (web-jam-tools#77): the
 # script refuses to open a PR whose description is empty or left as a placeholder.
@@ -64,11 +74,15 @@ TEST_EVIDENCE=""
 SCREENSHOTS=""
 HAS_SCREENSHOTS=0
 PART_OF=0
+DRY_RUN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --part-of)
       PART_OF=1
+      shift 1 ;;
+    --dry-run)
+      DRY_RUN=1
       shift 1 ;;
     --closes) # deprecated no-op: closing is now the default
       shift 1 ;;
@@ -209,6 +223,7 @@ fi
 # <https://...> autolinks are fine — strip those before checking (draft-pr skill rule).
 raw_tag_check() {
   local field="$1" text="$2" stripped
+  # shellcheck disable=SC2016 # sed pattern literals — no shell expansion wanted
   stripped="$(printf '%s' "$text" \
     | sed -E 's/```[^`]*```//g; s/`[^`]*`//g; s|<[A-Za-z][A-Za-z0-9+.-]*://[^<>]*>||g')"
   if printf '%s' "$stripped" | grep -qE '<[A-Za-z][^<>]*>'; then
@@ -223,6 +238,22 @@ raw_tag_check test-plan "$TEST_PLAN"
 raw_tag_check test-evidence "$TEST_EVIDENCE"
 if [ "$HAS_SCREENSHOTS" -eq 1 ]; then
   raw_tag_check screenshots "$SCREENSHOTS"
+fi
+
+# --- auto-fence an unfenced --test-evidence (web-jam-tools#150) ---
+# Callers across lanes keep passing raw console output, which markdown garbles
+# (web-jam-back#935: the coverage report's "====" separator lines acted as
+# setext-heading underlines, so plain output rendered as giant H1s). If the
+# value contains no ``` fence at all, wrap the whole value in one before the
+# body is composed. Detection is deliberately conservative: ANY existing fence
+# means the caller formatted the section themselves — pass through unchanged.
+# (Not applied to --test-plan: plans are legitimately prose + fenced commands,
+# and blanket-fencing would garble real markdown; see #150.)
+if ! printf '%s' "$TEST_EVIDENCE" | grep -qF '```'; then
+  echo "NOTE: --test-evidence had no code fence — auto-wrapping it in one (web-jam-tools#150)."
+  TEST_EVIDENCE="\`\`\`
+$TEST_EVIDENCE
+\`\`\`"
 fi
 
 # --- assemble the body ---
@@ -257,6 +288,18 @@ fi
 BODY="$BODY
 
 🤖 Work by $AUTHOR"
+
+# --- dry-run: print the composed body and stop — no push, no PR (web-jam-tools#150) ---
+if [ "$DRY_RUN" -eq 1 ]; then
+  cat <<EOF
+=== DRY RUN (no push, no PR opened) ===
+TITLE: $PR_TITLE
+=== COMPOSED BODY ===
+$BODY
+=== END DRY RUN ===
+EOF
+  exit 0
+fi
 
 # --- push, then open the draft PR based on dev ---
 echo "Pushing branch '$BRANCH' to origin..."
