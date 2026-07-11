@@ -13,12 +13,34 @@
 # Task sources (two):
 #   1. Queue file (default): ~/Dropbox/web-jam-llms/agy-tasks.txt
 #      Line format: "<repo-name>: <task description>"  (# and blank lines ignored)
-#   2. GitHub issue labeled `agy`: pass "<Repo>#<num>" (title + body = the task)
+#   2. GitHub issue labeled `agy`: pass "<Repo>#<num>" (title + body + comments =
+#      the task — see web-jam-tools#154 note below)
 #
 # Usage (interactive by default — you drive/watch agy in the REPL):
 #   handle-agy-tasks.sh                        # run the FIRST queue line
 #   handle-agy-tasks.sh CollegeLutheran#123    # run an agy-labeled issue
 #   handle-agy-tasks.sh --headless [...]       # unattended; auto-approves tools
+#   handle-agy-tasks.sh --dry-run CollegeLutheran#123
+#                                               # print the composed prompt and
+#                                               # exit — no agy call. Still does
+#                                               # the real git setup (checkout
+#                                               # dev, pull, create the branch),
+#                                               # same as --setup-only, so point
+#                                               # it at a scratch clone (see
+#                                               # AGY_WEBJAM_ROOT below) rather
+#                                               # than a repo you're actively
+#                                               # working in.
+#
+# web-jam-tools#154 — issue-based dispatch note: the composed prompt now also
+# includes the issue's COMMENTS (chronological, newest last, under a clear
+# delimiter), because locked decisions/spec changes kept accumulating there and
+# never reaching Flash (two real PR rejections: TimShermanMusic#3, Henrickson-
+# ForSalem#5). The issue BODY is still the canonical spec — comments are extra
+# context, not a substitute for folding decisions into the body. AND: if the
+# issue BODY still carries a BLOCKED / DO NOT START / DO-NOT-START marker
+# (case-insensitive), the script refuses to dispatch and exits non-zero —
+# update the body first. This guard only applies to issue-based dispatch, not
+# queue-line tasks (queue lines have no "body" to check).
 #
 # This script never edits the queue file — Josh deletes the queue line himself
 # after accepting the work (queue management is manual). The agent finishes a task
@@ -27,7 +49,9 @@
 set -euo pipefail
 
 QUEUE_FILE="$HOME/Dropbox/web-jam-llms/agy-tasks.txt"
-WEBJAM="$HOME/WebJamApps"
+# AGY_WEBJAM_ROOT override exists for --dry-run testing against a scratch clone
+# instead of a repo folder you're actively working in (web-jam-tools#154).
+WEBJAM="${AGY_WEBJAM_ROOT:-$HOME/WebJamApps}"
 AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 
 # Cost-ordered model chain (Antigravity PAID account — Josh's prepaid Google
@@ -46,12 +70,18 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 #   --setup-only      do the queue/issue + git-branch setup, print the task, and
 #                     STOP without launching agy. Used by the `/next` agy skill:
 #                     you're already inside agy, so agy itself does the coding.
+#   --dry-run         do the queue/issue fetch + git-branch setup, print the
+#                     composed prompt, and STOP without launching agy. For
+#                     testing prompt composition (comments folded in, BLOCKED
+#                     guard) without spending an agy call (web-jam-tools#154).
 HEADLESS=0
 SETUP_ONLY=0
+DRY_RUN=0
 while [ $# -gt 0 ]; do
   case "${1:-}" in
     --headless|-H) HEADLESS=1; shift ;;
     --setup-only)  SETUP_ONLY=1; shift ;;
+    --dry-run)     DRY_RUN=1; shift ;;
     *) break ;;
   esac
 done
@@ -66,10 +96,47 @@ if [ -n "$TASK_ARG" ]; then
   fi
   REPO="${BASH_REMATCH[1]}"
   ISSUE_NUM="${BASH_REMATCH[2]}"
-  echo "Fetching issue $REPO#$ISSUE_NUM ..."
-  ISSUE_TITLE=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title -q .title)
-  ISSUE_BODY=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json body -q .body)
-  TASK_TEXT="$ISSUE_TITLE"$'\n\n'"$ISSUE_BODY"
+  echo "Fetching issue $REPO#$ISSUE_NUM (title + body + comments) ..."
+  ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title,body,comments)
+  ISSUE_TITLE=$(jq -r '.title' <<< "$ISSUE_JSON")
+  ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
+
+  # --- BLOCKED guard (issue-based dispatch only — web-jam-tools#154) ---
+  # Refuse to dispatch when the issue BODY still carries a blocked marker.
+  # Comments are for humans; the BODY is what agy actually reads as the spec,
+  # so a stale "don't start" left in the body must stop the dispatch loudly
+  # rather than let Flash improvise (HenricksonForSalem#5 rejection). Word-
+  # bounded so "UNBLOCKED"/"unblocking" etc. don't false-positive.
+  if grep -qiE '\bBLOCKED\b|\bDO[ -]NOT[ -]START\b' <<< "$ISSUE_BODY"; then
+    echo "" >&2
+    echo "ERROR: issue $REPO#$ISSUE_NUM body still contains a BLOCKED / DO NOT" >&2
+    echo "START marker — refusing to dispatch agy against it." >&2
+    echo "Update the issue BODY first (clear the marker and fold any comment-only" >&2
+    echo "decisions into the body — the body is the spec agy reads), then retry." >&2
+    echo "" >&2
+    exit 1
+  fi
+
+  # --- fold comments into the task text (web-jam-tools#154) ---
+  # Locked decisions/spec changes keep accumulating as comments after an issue
+  # is filed; handle-agy-tasks.sh used to feed Flash title+body only, so it
+  # missed them (TimShermanMusic#3, HenricksonForSalem#5 rejections). Comments
+  # are appended chronologically (oldest first, newest last) under a clear
+  # delimiter. The BODY remains the canonical spec — comments are context.
+  COMMENTS_TEXT=$(jq -r '
+    (.comments // [])
+    | map("[" + (.author.login // "unknown") + " — " + .createdAt + "]\n" + .body)
+    | join("\n\n---\n\n")
+  ' <<< "$ISSUE_JSON")
+  MAX_COMMENT_CHARS=20000
+  if [ -n "$COMMENTS_TEXT" ]; then
+    if [ "${#COMMENTS_TEXT}" -gt "$MAX_COMMENT_CHARS" ]; then
+      COMMENTS_TEXT="${COMMENTS_TEXT:0:$MAX_COMMENT_CHARS}"$'\n\n[... comments truncated at '"$MAX_COMMENT_CHARS"' chars — see the issue on GitHub for the full discussion ...]'
+    fi
+    TASK_TEXT="$ISSUE_TITLE"$'\n\n'"$ISSUE_BODY"$'\n\n--- Discussion/decisions from issue comments (newest last) ---\n\n'"$COMMENTS_TEXT"
+  else
+    TASK_TEXT="$ISSUE_TITLE"$'\n\n'"$ISSUE_BODY"
+  fi
   SLUG_SOURCE="$ISSUE_TITLE"
 else
   # Queue file form: first non-comment, non-blank line
@@ -172,6 +239,19 @@ BRANCH: $BRANCH
 $PROMPT
 === END TASK ===
 EOF2
+  exit 0
+fi
+
+# --- dry-run: print the composed prompt and stop, no agy call (web-jam-tools#154) ---
+if [ "$DRY_RUN" -eq 1 ]; then
+  cat <<EOF3
+=== DRY RUN (no agy invocation) ===
+REPO_DIR: $REPO_DIR
+BRANCH: $BRANCH
+=== COMPOSED PROMPT ===
+$PROMPT
+=== END DRY RUN ===
+EOF3
   exit 0
 fi
 

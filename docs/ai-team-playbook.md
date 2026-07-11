@@ -37,6 +37,7 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
 - **Reviews are lean, not rewrites.** When Opus reviews a draft, the job is to flag specific issues — not redo the work.
 - **Phone apps drop only at Drive root.** They can't target a folder. Cleanup is the laptop's job via `/drive-cleanup`.
 - **Always delegate to the cheapest model that can do the job.** Haiku for mechanical one-offs, Sonnet for ordinary coding, Flash for frontend/UI, Opus for judgment and design only. Spending Opus tokens on mechanical work wastes the Anthropic budget.
+- **The issue BODY is the spec agy reads — comments are for humans.** `handle-agy-tasks.sh` composes the Flash/agy prompt from the issue title + body, and (since web-jam-tools#154) also folds in the issue's comments (chronological, newest last, clearly delimited). Comments still aren't a substitute: fold every locked decision into the BODY before dispatching, or Flash may miss it. If the BODY still contains a `BLOCKED` / `DO NOT START` marker, the script refuses to dispatch and exits non-zero — clear the marker in the body first.
 
 ---
 
