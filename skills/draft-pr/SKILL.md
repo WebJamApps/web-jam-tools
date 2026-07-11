@@ -59,7 +59,12 @@ the body sections via flags:
 
 The script drops your `--summary` / `--test-plan` / `--test-evidence` values
 **verbatim** under their headers — it does not reformat them, so professional
-formatting is the **caller's** job. Fill every flag with proper markdown:
+formatting is the **caller's** job. One machine-enforced exception (web-jam-tools#150):
+a `--test-evidence` value containing no ``` fence at all is auto-wrapped in one
+before the body is composed (raw console output otherwise garbles markdown —
+`====` separator lines render as giant H1s). A value with any existing fence
+passes through unchanged, so fence it properly yourself anyway. Fill every flag
+with proper markdown:
 
 - **Summary** → **bullet points**, one change per bullet — never a single run-on
   sentence.
