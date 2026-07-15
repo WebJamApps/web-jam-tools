@@ -222,9 +222,20 @@ Rules:
   repos use "npm run test:lint" / "npm run test:unit").
 - Do not switch branches and do not add new dependencies.
 - When lint and tests are green, finish by opening a draft PR — run:
-    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>"
-  It pushes the branch and opens a draft PR based on dev with "Closes #N" baked in
-  (web-jam-tools#49). Never run \`gh pr create\` directly. Then summarize what you changed.
+    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>" \\
+      --summary-file /tmp/pr-summary.md --test-plan-file /tmp/pr-test-plan.md --test-evidence-file /tmp/pr-test-evidence.md
+  IMPORTANT (web-jam-tools#145): a multi-line value passed inline (e.g.
+  \`--test-plan "1. ...\\n2. ...\\n3. ..."\`) gets FLATTENED to one line before the
+  script sees it — the newlines are lost and a numbered test plan renders as one
+  run-on line. Avoid this by WRITING each section to its own temp .md file with
+  your file-write tool (which preserves newlines exactly), one file per section
+  (summary / test plan / test evidence), then pass \`--summary-file\` /
+  \`--test-plan-file\` / \`--test-evidence-file\` with those paths instead of
+  inlining the text. Every section still needs real content (bulleted summary,
+  exact commands + expected result in the test plan, actual lint/test output in
+  the evidence) — the file just carries it losslessly. It pushes the branch and
+  opens a draft PR based on dev with "Closes #N" baked in (web-jam-tools#49).
+  Never run \`gh pr create\` directly. Then summarize what you changed.
 EOF
 
 # --- setup-only: emit the prepared task for an in-REPL agent (the /next skill) ---
