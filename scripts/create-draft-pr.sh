@@ -19,7 +19,9 @@
 #
 # Usage:
 #   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--dry-run] \
-#       [--summary TEXT] [--test-plan TEXT] [--test-evidence TEXT] [--screenshots TEXT]
+#       [--summary TEXT | --summary-file PATH] \
+#       [--test-plan TEXT | --test-plan-file PATH] \
+#       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
 #   --author        REQUIRED. e.g. "Claude Code — Opus 4.8", "agy — Gemini 3 Pro".
 #                   Lands in the footer so Josh can track per-model quality.
@@ -30,12 +32,14 @@
 #                   (<lane>/<issue#>-<slug>); use this only as a fallback.
 #                   OPTIONAL: no issue anywhere ⇒ PR opens without a Closes line
 #                   (title then comes from the last commit subject).
-#   --summary       REQUIRED. Fills "## Summary" (what changed and why).
-#   --test-plan     REQUIRED. Fills "## How to test locally". Exact commands + expected
-#                   result AND steps exercising the change itself: UI -> start command,
-#                   route, clicks, expected visible result; API -> curl/Postman request(s)
-#                   + expected response. "npm test green" alone is not enough (#135).
-#   --test-evidence REQUIRED. Fills "## Test evidence" (real lint + test output, ran green).
+#   --summary       REQUIRED (or --summary-file). Fills "## Summary" (what changed and why).
+#   --test-plan     REQUIRED (or --test-plan-file). Fills "## How to test locally". Exact
+#                   commands + expected result AND steps exercising the change itself:
+#                   UI -> start command, route, clicks, expected visible result;
+#                   API -> curl/Postman request(s) + expected response. "npm test
+#                   green" alone is not enough (#135).
+#   --test-evidence REQUIRED (or --test-evidence-file). Fills "## Test evidence" (real
+#                   lint + test output, ran green).
 #                   AUTO-FENCED (web-jam-tools#150): if the value contains no ```
 #                   code fence at all, the whole value is wrapped in one before the
 #                   body is composed — raw console output otherwise garbles the
@@ -43,22 +47,37 @@
 #                   rendered as giant setext H1s). Values that already contain a
 #                   fence pass through unchanged; fencing properly yourself is
 #                   still the polite thing to do.
+#   --summary-file / --test-plan-file / --test-evidence-file  PATH (web-jam-tools#145).
+#                   File-based alternative to the inline flags above — reads that
+#                   section's content from PATH instead. A multi-line shell argument
+#                   gets FLATTENED to one line during agy's headless `-p` turn (the
+#                   serialization happens upstream, outside this script's control);
+#                   a file written with a real file-write tool preserves newlines, so
+#                   headless dispatch should always use the *-file form for anything
+#                   multi-line. Refuses (exit 1) if PATH is missing or empty, or if
+#                   both the inline flag and its *-file counterpart are given for the
+#                   same section (ambiguous). File content is otherwise treated
+#                   IDENTICALLY to an inline value: same required-content, placeholder,
+#                   raw-HTML-tag, and (for test-evidence) auto-fence checks below.
 #   --screenshots   Fills "## Screenshots"; omit the flag to omit the section.
 #   --dry-run       Run every guard and compose the full PR body, print it, and
 #                   exit 0 WITHOUT pushing or opening a PR. For testing this
 #                   script's composition/guards safely (web-jam-tools#150).
 #
-# --summary, --test-plan, and --test-evidence are REQUIRED (web-jam-tools#77): the
-# script refuses to open a PR whose description is empty or left as a placeholder.
-# This is the single choke point — no caller (/next, ad-hoc, or future) can open a
-# PR with an empty description. Put the summary and real test evidence IN THE PR via
-# these flags, not only in the chat/REPL. --screenshots stays optional.
+# --summary, --test-plan, and --test-evidence are REQUIRED (web-jam-tools#77), each
+# either inline or via its *-file counterpart: the script refuses to open a PR whose
+# description is empty or left as a placeholder. This is the single choke point — no
+# caller (/next, ad-hoc, or future) can open a PR with an empty description. Put the
+# summary and real test evidence IN THE PR via these flags, not only in the
+# chat/REPL. --screenshots stays optional (inline only).
 #
 # Refuses (exit 1) when: --author missing; any of --summary/--test-plan/--test-evidence
-# missing or left as a placeholder; body text contains raw HTML-like tags outside
-# backticks (GitHub strips them silently — backtick them); current branch is dev/main;
-# working tree dirty; the repo has no `dev` branch; a resolved issue is missing/closed;
-# or --part-of is passed without a resolvable issue.
+# (inline or *-file) missing or left as a placeholder; a *-file flag points at a
+# missing or empty file; both a section's inline flag and its *-file flag are given;
+# body text contains raw HTML-like tags outside backticks (GitHub strips them
+# silently — backtick them); current branch is dev/main; working tree dirty; the
+# repo has no `dev` branch; a resolved issue is missing/closed; or --part-of is
+# passed without a resolvable issue.
 
 set -euo pipefail
 
@@ -73,6 +92,12 @@ TEST_PLAN=""
 TEST_EVIDENCE=""
 SCREENSHOTS=""
 HAS_SCREENSHOTS=0
+HAS_SUMMARY=0
+HAS_TEST_PLAN=0
+HAS_TEST_EVIDENCE=0
+SUMMARY_FILE=""
+TEST_PLAN_FILE=""
+TEST_EVIDENCE_FILE=""
 PART_OF=0
 DRY_RUN=0
 
@@ -86,15 +111,18 @@ while [ $# -gt 0 ]; do
       shift 1 ;;
     --closes) # deprecated no-op: closing is now the default
       shift 1 ;;
-    --author|--issue|--summary|--test-plan|--test-evidence|--screenshots)
+    --author|--issue|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file)
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
       case "$1" in
-        --author)        AUTHOR="$2" ;;
-        --issue)         ISSUE="$2" ;;
-        --summary)       SUMMARY="$2" ;;
-        --test-plan)     TEST_PLAN="$2" ;;
-        --test-evidence) TEST_EVIDENCE="$2" ;;
-        --screenshots)   SCREENSHOTS="$2"; HAS_SCREENSHOTS=1 ;;
+        --author)              AUTHOR="$2" ;;
+        --issue)               ISSUE="$2" ;;
+        --summary)             SUMMARY="$2"; HAS_SUMMARY=1 ;;
+        --test-plan)           TEST_PLAN="$2"; HAS_TEST_PLAN=1 ;;
+        --test-evidence)       TEST_EVIDENCE="$2"; HAS_TEST_EVIDENCE=1 ;;
+        --screenshots)         SCREENSHOTS="$2"; HAS_SCREENSHOTS=1 ;;
+        --summary-file)        SUMMARY_FILE="$2" ;;
+        --test-plan-file)      TEST_PLAN_FILE="$2" ;;
+        --test-evidence-file)  TEST_EVIDENCE_FILE="$2" ;;
       esac
       shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -189,6 +217,49 @@ if [ -n "$EXPECT_LANES" ] && [ -n "$ISSUE" ]; then
       echo "         continuing — possible queue mix-up; confirm this is the right lane." >&2
     fi
   fi
+fi
+
+# --- resolve *-file flags into content (web-jam-tools#145) ---
+# A multi-line shell argument gets flattened to one line during agy's headless
+# `-p` turn (upstream serialization, outside this script's control — #145). A
+# file written with a real file-write tool preserves newlines, so a *-file flag
+# lets a caller point at a file instead of inlining the section. Resolved content
+# then flows through the SAME validation as an inline value (placeholder check,
+# raw-tag check, and — for test-evidence — the auto-fence below).
+read_body_file() {
+  local flag="$1" path="$2" content
+  if [ ! -f "$path" ]; then
+    echo "ERROR: --$flag points at a missing file: $path" >&2
+    exit 1
+  fi
+  content="$(cat "$path")"
+  if [ -z "$content" ]; then
+    echo "ERROR: --$flag file is empty: $path" >&2
+    exit 1
+  fi
+  printf '%s' "$content"
+}
+
+if [ -n "$SUMMARY_FILE" ]; then
+  if [ "$HAS_SUMMARY" -eq 1 ]; then
+    echo "ERROR: pass --summary or --summary-file, not both." >&2
+    exit 1
+  fi
+  SUMMARY="$(read_body_file summary-file "$SUMMARY_FILE")"
+fi
+if [ -n "$TEST_PLAN_FILE" ]; then
+  if [ "$HAS_TEST_PLAN" -eq 1 ]; then
+    echo "ERROR: pass --test-plan or --test-plan-file, not both." >&2
+    exit 1
+  fi
+  TEST_PLAN="$(read_body_file test-plan-file "$TEST_PLAN_FILE")"
+fi
+if [ -n "$TEST_EVIDENCE_FILE" ]; then
+  if [ "$HAS_TEST_EVIDENCE" -eq 1 ]; then
+    echo "ERROR: pass --test-evidence or --test-evidence-file, not both." >&2
+    exit 1
+  fi
+  TEST_EVIDENCE="$(read_body_file test-evidence-file "$TEST_EVIDENCE_FILE")"
 fi
 
 # --- require real description content (web-jam-tools#77) ---
