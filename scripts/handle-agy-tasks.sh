@@ -216,6 +216,11 @@ $TASK_TEXT
 
 Rules:
 - Commit your work incrementally with clear, conventional messages as you go.
+- If this repo has a package.json at its root, bump its "version" field exactly
+  ONCE for this whole PR, on the FIRST commit (patch bump for a fix, minor bump
+  for a feature) — every commit after that keeps the same version, do not bump
+  again (web-jam-tools#181: a missing bump here was only caught by manual PR
+  review last time). Repos with no root package.json don't need this from you.
 - Before declaring done, run this repo's lint and test commands and fix issues
   until both pass. Find the exact script names in this repo's AGENTS.md/GEMINI.md
   and its package.json "scripts" (commonly "npm run lint" and "npm test"; some
@@ -305,7 +310,21 @@ if [ "$HEADLESS" -eq 1 ]; then
     gh pr list -R "WebJamApps/$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null
   }
 
+  # web-jam-tools#181 — "PR exists" alone isn't real completion for Node target
+  # repos: agy finished JaMmusic#1204 -> PR JaMmusic#1205 with NO package.json
+  # version bump, and it was only caught by manual review. Repos without a root
+  # package.json (or web-jam-tools itself, which is deno.json + pre-push-hook
+  # enforced) trivially pass — this only gates Node targets.
+  version_bump_present() {
+    if [ ! -f package.json ]; then
+      return 0
+    fi
+    git diff origin/dev..HEAD -- package.json | grep -q '^[+-].*"version"'
+  }
+
   CONTINUE_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. Previous turns did partial work (check \`git status\` and \`git log dev..HEAD\`). Task acceptance is NOT met until: lint and tests pass, work is committed, and a draft PR is opened via ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh. Continue from where things stand and finish. Original task follows:"
+
+  VERSION_BUMP_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. A draft PR already exists, but \`git diff origin/dev..HEAD -- package.json\` shows no \"version\" change — the one-bump-per-PR rule (bump package.json's \"version\" exactly once, on the PR's first commit; patch for a fix, minor for a feature) was not followed. Add a commit that bumps package.json's \"version\" field appropriately and push it — do NOT open a second PR. Original task follows:"
 
   AGY_OK=0
   ROUNDS=0
@@ -323,18 +342,24 @@ if [ "$HEADLESS" -eq 1 ]; then
       fi
       PR_NUM="$(pr_exists_for_branch)"
       if [ -n "$PR_NUM" ]; then
-        AGY_OK=1
-        ACTIVE_MODEL="$m"
-        echo ">>> agy finished on model: $m — draft PR #$PR_NUM confirmed for branch $BRANCH"
-        break 2
+        if version_bump_present; then
+          AGY_OK=1
+          ACTIVE_MODEL="$m"
+          echo ">>> agy finished on model: $m — draft PR #$PR_NUM confirmed for branch $BRANCH (package.json version bump verified)"
+          break 2
+        fi
+        echo "!!! draft PR #$PR_NUM exists but no package.json version bump found in git diff origin/dev..HEAD -- package.json — task incomplete." >&2
+        NEXT_TURN_PREFIX="$VERSION_BUMP_PROMPT_PREFIX"
+      else
+        echo "!!! turn exited zero but no draft PR found for branch $BRANCH — task incomplete." >&2
+        NEXT_TURN_PREFIX="$CONTINUE_PROMPT_PREFIX"
       fi
-      echo "!!! turn exited zero but no draft PR found for branch $BRANCH — task incomplete." >&2
       if [ "$ROUNDS" -ge "$AGY_MAX_ROUNDS" ]; then
         echo "!!! AGY_MAX_ROUNDS ($AGY_MAX_ROUNDS) reached — giving up on model '$m'." >&2
         break
       fi
-      echo ">>> re-invoking model '$m' with a continue/finish prompt (round $((ROUNDS + 1)) coming)..."
-      TURN_PROMPT="$CONTINUE_PROMPT_PREFIX"$'\n\n'"$PROMPT"
+      echo ">>> re-invoking model '$m' with a resume prompt (round $((ROUNDS + 1)) coming)..."
+      TURN_PROMPT="$NEXT_TURN_PREFIX"$'\n\n'"$PROMPT"
     done
     [ "$AGY_OK" -eq 1 ] && break
     if [ "$ROUNDS" -ge "$AGY_MAX_ROUNDS" ]; then
