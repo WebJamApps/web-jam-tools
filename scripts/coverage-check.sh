@@ -13,7 +13,7 @@ set -euo pipefail
 THRESHOLD="${COVERAGE_THRESHOLD:-80}"
 
 rm -rf cov_profile
-deno test --allow-env --coverage=cov_profile >/dev/null
+deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile >/dev/null
 report="$(deno coverage cov_profile 2>/dev/null)"
 echo "$report"
 
