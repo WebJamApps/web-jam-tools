@@ -229,6 +229,11 @@ Rules:
 - When lint and tests are green, finish by opening a draft PR — run:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>" \\
       --summary-file /tmp/pr-summary.md --test-plan-file /tmp/pr-test-plan.md --test-evidence-file /tmp/pr-test-evidence.md
+  NOTE (web-jam-tools#190): this session already exports FORCED_PR_AUTHOR with
+  the correct value, so create-draft-pr.sh will use that regardless of what you
+  pass to --author — pass the flag anyway (it's still validated against a
+  roster if the override weren't there), but don't worry about getting your own
+  model name exactly right.
   IMPORTANT (web-jam-tools#145): a multi-line value passed inline (e.g.
   \`--test-plan "1. ...\\n2. ...\\n3. ..."\`) gets FLATTENED to one line before the
   script sees it — the newlines are lost and a numbered test plan renders as one
@@ -331,6 +336,11 @@ if [ "$HEADLESS" -eq 1 ]; then
   for m in "$ACTIVE_MODEL" "${REMAINING[@]}"; do
     TURN_PROMPT="$PROMPT"
     echo ">>> agy (headless) — model: $m"
+    # web-jam-tools#190: force the exact author create-draft-pr.sh will use,
+    # regardless of what --author the model passes (or forgets). $m is the
+    # model this round is ACTUALLY running as, so this stays correct across
+    # fallback rounds — unlike the model's own self-report.
+    export FORCED_PR_AUTHOR="agy — $m"
     while [ "$ROUNDS" -lt "$AGY_MAX_ROUNDS" ]; do
       ROUNDS=$((ROUNDS + 1))
       echo ">>> round $ROUNDS/$AGY_MAX_ROUNDS — model: $m"
@@ -384,6 +394,13 @@ if [ "$HEADLESS" -eq 1 ]; then
 else
   # Interactive (default): drop into the agy REPL on the selected model with the
   # task preloaded. You drive it, watch it work, and switch models with /model.
+  # web-jam-tools#190: force the exact author for the model this REPL is
+  # LAUNCHED on (JaMmusic#1212's confabulated "Gemini 1.5 Pro" attribution
+  # happened in exactly this interactive path). KNOWN LIMITATION: if you
+  # switch models mid-session via /model, this stays pinned to the launch
+  # model — re-run with AGY_MODELS set to the new model (or export
+  # FORCED_PR_AUTHOR yourself) before finishing, if you do switch.
+  export FORCED_PR_AUTHOR="agy — $ACTIVE_MODEL"
   "$AGY" --model "$ACTIVE_MODEL" -i "$PROMPT"
 fi
 

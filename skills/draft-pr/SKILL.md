@@ -44,11 +44,19 @@ the body sections via flags:
   --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
 ```
 
-- `--author` is **required** (the script refuses without it).
+- `--author` is **required** and must name a model on the script's roster
+  (web-jam-tools#190) — off-roster names (e.g. a confabulated checkpoint) are
+  refused with the valid list printed. `FORCED_PR_AUTHOR` in the environment
+  overrides `--author` entirely; `handle-agy-tasks.sh` sets it so headless/
+  interactive agy runs never depend on a model correctly naming itself.
 - `--summary`, `--test-plan`, and `--test-evidence` are **required** — the script
   refuses to open a PR with an empty or placeholder description (web-jam-tools#77).
   Put your summary and the real test output IN THE PR via these flags, not only in
-  the chat reply.
+  the chat reply. Two more content checks (web-jam-tools#190): `--summary` is
+  refused if it has zero markdown bullet lines (a run-on paragraph doesn't count),
+  and `--test-evidence` is refused if it has no recognizable test-runner output
+  (a prose paraphrase like "all tests passed" doesn't count — paste the actual
+  runner output).
 - Closing is the default: the body reads `Closes #N`, so the issue auto-closes when
   Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) ONLY when
   the issue must stay open: a partial PR, or a standing run-log/epic issue.
@@ -101,10 +109,12 @@ ok | 42 passed | 0 failed
 
 ## What the script refuses to do (and why that's correct — don't work around it)
 
-It exits non-zero when: `--author` is missing; any of `--summary`/`--test-plan`/
-`--test-evidence` is missing or left as a placeholder; body text contains raw
-HTML-like tags outside backticks (GitHub strips them silently — the "wrap every
-`<tag>` in backticks" rule above is now machine-enforced); you're on `dev`/`main`;
-the working tree is dirty; the repo has no `dev` branch; a resolved issue is
-missing or closed; or `--part-of` is passed without a resolvable issue. If it
-refuses, fix the underlying condition — do not fall back to `gh pr create`.
+It exits non-zero when: `--author` is missing or off-roster; any of `--summary`/
+`--test-plan`/`--test-evidence` is missing or left as a placeholder; `--summary`
+has no bullet lines; `--test-evidence` has no recognizable test-runner output;
+body text contains raw HTML-like tags outside backticks (GitHub strips them
+silently — the "wrap every `<tag>` in backticks" rule above is now machine-
+enforced); you're on `dev`/`main`; the working tree is dirty; the repo has no
+`dev` branch; a resolved issue is missing or closed; or `--part-of` is passed
+without a resolvable issue. If it refuses, fix the underlying condition — do
+not fall back to `gh pr create`.
