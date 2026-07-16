@@ -45,6 +45,18 @@
 # This script never edits the queue file — Josh deletes the queue line himself
 # after accepting the work (queue management is manual). The agent finishes a task
 # by opening a draft PR via scripts/create-draft-pr.sh (web-jam-tools#49).
+#
+# web-jam-tools#187 — two resilience fixes (JaMmusic#1194: a single-model
+# AGY_MODELS override died in round 1 on a 60m print-timeout with the whole run
+# ending, since there was no fallback model):
+#   1. A non-zero headless turn exit no longer immediately burns the model —
+#      the SAME model gets one CONTINUE-prompt retry (still AGY_MAX_ROUNDS-
+#      bounded) before falling back to the next model in the chain.
+#   2. Re-running against an issue whose agy/<issue#>-* branch already exists
+#      (issue-based dispatch only) auto-detects it and RESUMES: checks it out
+#      instead of re-branching off dev, salvages a dirty tree as a `wip:`
+#      commit, and drives the headless loop with the CONTINUE prompt instead
+#      of the fresh-task prompt.
 
 set -euo pipefail
 
@@ -161,42 +173,84 @@ if [ ! -d "$REPO_DIR" ]; then
 fi
 cd "$REPO_DIR"
 
-# --- never stomp uncommitted work ---
-if [ -n "$(git status --porcelain)" ]; then
-  echo "ERROR: working tree is dirty in $REPO_DIR — commit or stash first." >&2
-  git status --short >&2
-  exit 1
-fi
-
-# --- fresh dev ---
-echo "Updating dev in $REPO ..."
-git checkout dev
-git pull
-
-# --- slug + unique branch off dev ---
-slugify() {
-  echo "$1" \
-    | tr '[:upper:]' '[:lower:]' \
-    | sed -E 's#https?://[^ ]+# #g; s/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
-    | cut -c1-40 | sed -E 's/-+$//'
-}
-SLUG="$(slugify "$SLUG_SOURCE")"
-[ -z "$SLUG" ] && SLUG="task"
-# Branch convention (web-jam-tools#49): <lane>/<issue#>-<slug> when the issue
-# number is known (issue form), else <lane>/<slug> (queue-line form). Lane = agy.
+# --- resume-mode detection (web-jam-tools#187) — auto-detect, no flag needed: if
+# an agy/<issue#>-* branch already exists for this issue (a died-mid-run branch
+# from a prior invocation — e.g. JaMmusic#1194's 60m print-timeout), resume it
+# instead of erroring on a dirty tree or creating a duplicate branch. Auto-detect
+# was chosen over a --resume flag because re-running the exact same command
+# against the same issue is the natural recovery gesture — nothing extra for
+# Josh (or a re-dispatch) to remember. Only applies to issue-based dispatch —
+# queue-line tasks have no issue number to key off, same scoping as the BLOCKED
+# guard above.
+RESUME_MODE=0
+EXISTING_BRANCH=""
 if [ -n "${ISSUE_NUM:-}" ]; then
-  BRANCH_BASE="agy/${ISSUE_NUM}-${SLUG}"
-else
-  BRANCH_BASE="agy/${SLUG}"
+  EXISTING_BRANCH="$(git for-each-ref --sort=-committerdate \
+    --format='%(refname:short)' "refs/heads/agy/${ISSUE_NUM}-*" | head -1)"
+  if [ -n "$EXISTING_BRANCH" ]; then
+    RESUME_MODE=1
+    echo "Found existing branch $EXISTING_BRANCH for issue #$ISSUE_NUM — resuming instead of starting fresh."
+  fi
 fi
-BRANCH="$BRANCH_BASE"
-N=2
-while git show-ref --verify --quiet "refs/heads/$BRANCH"; do
-  BRANCH="${BRANCH_BASE}-$N"
-  N=$((N + 1))
-done
-git checkout -b "$BRANCH"
-echo "Working on branch: $BRANCH"
+
+if [ "$RESUME_MODE" -eq 1 ]; then
+  if ! git checkout "$EXISTING_BRANCH"; then
+    echo "ERROR: could not check out existing branch $EXISTING_BRANCH — resolve manually (e.g. stash or commit whatever is currently checked out) and retry." >&2
+    exit 1
+  fi
+  if [ -n "$(git status --porcelain)" ]; then
+    # A died-mid-run branch commonly has uncommitted work (that's exactly what
+    # killed JaMmusic#1194 — nearly-complete work sitting uncommitted when the
+    # print-timeout hit). Salvage it as a WIP commit instead of refusing like
+    # the fresh-branch path below does. Credited model = this run's configured
+    # chain's first model (MODELS[0]) — the script doesn't persist which model
+    # authored prior uncommitted work, and the motivating case is a single-model
+    # AGY_MODELS override, where that's exactly right.
+    WIP_MODEL="${MODELS[0]}"
+    echo "Working tree on $EXISTING_BRANCH is dirty — committing WIP (crediting $WIP_MODEL) before resuming."
+    git add -A
+    git commit -m "wip: salvage uncommitted work from interrupted agy run (model: $WIP_MODEL)"
+  fi
+  BRANCH="$EXISTING_BRANCH"
+  echo "Resuming on branch: $BRANCH"
+else
+  # --- never stomp uncommitted work ---
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "ERROR: working tree is dirty in $REPO_DIR — commit or stash first." >&2
+    git status --short >&2
+    exit 1
+  fi
+
+  # --- fresh dev ---
+  echo "Updating dev in $REPO ..."
+  git checkout dev
+  git pull
+
+  # --- slug + unique branch off dev ---
+  slugify() {
+    echo "$1" \
+      | tr '[:upper:]' '[:lower:]' \
+      | sed -E 's#https?://[^ ]+# #g; s/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+      | cut -c1-40 | sed -E 's/-+$//'
+  }
+  SLUG="$(slugify "$SLUG_SOURCE")"
+  [ -z "$SLUG" ] && SLUG="task"
+  # Branch convention (web-jam-tools#49): <lane>/<issue#>-<slug> when the issue
+  # number is known (issue form), else <lane>/<slug> (queue-line form). Lane = agy.
+  if [ -n "${ISSUE_NUM:-}" ]; then
+    BRANCH_BASE="agy/${ISSUE_NUM}-${SLUG}"
+  else
+    BRANCH_BASE="agy/${SLUG}"
+  fi
+  BRANCH="$BRANCH_BASE"
+  N=2
+  while git show-ref --verify --quiet "refs/heads/$BRANCH"; do
+    BRANCH="${BRANCH_BASE}-$N"
+    N=$((N + 1))
+  done
+  git checkout -b "$BRANCH"
+  echo "Working on branch: $BRANCH"
+fi
 
 # --- per-repo instructions presence (agy reads AGENTS.md and GEMINI.md) ---
 if [ ! -f "GEMINI.md" ] && [ ! -f "AGENTS.md" ]; then
@@ -300,10 +354,15 @@ if [ "$HEADLESS" -eq 1 ]; then
   # therefore NOT treated as task success by itself: after every `-p` turn we
   # check for REAL completion (a draft PR exists for this branch). If the turn
   # exited zero but the PR isn't there, we re-invoke the SAME model with a
-  # "resume/finish" prompt instead of moving on. If a turn exits non-zero, that
-  # model is considered failed and we fall back to the next model in the chain
-  # (which also gets its own driver-loop rounds). AGY_MAX_ROUNDS bounds total
-  # turns spent across ALL models combined, so a stuck model can't loop forever.
+  # "resume/finish" prompt instead of moving on. If a turn exits non-zero (e.g. a
+  # --print-timeout kill), web-jam-tools#187 (JaMmusic#1194: a single-model
+  # AGY_MODELS override died in round 1 on a 60m print-timeout and the whole run
+  # ended, since there was no fallback model) gives that SAME model one
+  # CONTINUE-prompt retry first — a bad turn usually means "slow/interrupted",
+  # not "model can't do this task" — before it's declared failed and we fall
+  # back to the next model in the chain (which also gets its own driver-loop
+  # rounds). AGY_MAX_ROUNDS bounds total turns spent across ALL models combined
+  # (crash-retries included), so a stuck model can't loop forever.
   AGY_MAX_ROUNDS="${AGY_MAX_ROUNDS:-4}"
 
   pr_exists_for_branch() {
@@ -326,10 +385,20 @@ if [ "$HEADLESS" -eq 1 ]; then
 
   VERSION_BUMP_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. A draft PR already exists, but \`git diff origin/dev..HEAD -- package.json\` shows no \"version\" change — the one-bump-per-PR rule (bump package.json's \"version\" exactly once, on the PR's first commit; patch for a fix, minor for a feature) was not followed. Add a commit that bumps package.json's \"version\" field appropriately and push it — do NOT open a second PR. Original task follows:"
 
+  # web-jam-tools#187 — resume mode (an existing agy branch was found for this
+  # issue) starts the driven loop with the CONTINUE prompt instead of the
+  # fresh-task prompt, since the branch may already carry partial (possibly
+  # just-salvaged-as-WIP) work rather than being a clean slate.
+  INITIAL_TURN_PROMPT="$PROMPT"
+  if [ "$RESUME_MODE" -eq 1 ]; then
+    INITIAL_TURN_PROMPT="$CONTINUE_PROMPT_PREFIX"$'\n\n'"$PROMPT"
+  fi
+
   AGY_OK=0
   ROUNDS=0
   for m in "$ACTIVE_MODEL" "${REMAINING[@]}"; do
-    TURN_PROMPT="$PROMPT"
+    TURN_PROMPT="$INITIAL_TURN_PROMPT"
+    CRASH_RETRIED=0
     echo ">>> agy (headless) — model: $m"
     while [ "$ROUNDS" -lt "$AGY_MAX_ROUNDS" ]; do
       ROUNDS=$((ROUNDS + 1))
@@ -337,6 +406,19 @@ if [ "$HEADLESS" -eq 1 ]; then
       # --print-timeout: agy's default 5m kills long silent work stretches in -p
       # mode (bit us on JaMmusic#1162 — Flash Medium thinks slowly; run died twice).
       if ! "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$TURN_PROMPT"; then
+        # web-jam-tools#187 — one same-model retry on ANY non-zero exit (not
+        # just a detected timeout): distinguishing timeout-vs-crash would mean
+        # pattern-matching agy's error text, which is fragile (wording can
+        # change, or a tool's own output could false-positive on "timeout").
+        # The issue accepts this simpler fallback explicitly. Bounded by
+        # AGY_MAX_ROUNDS like every other round, and fires at most once per
+        # model so a genuinely broken model still falls back promptly.
+        if [ "$CRASH_RETRIED" -eq 0 ] && [ "$ROUNDS" -lt "$AGY_MAX_ROUNDS" ]; then
+          echo "!!! model '$m' failed (non-zero exit) — re-invoking same model once with a resume prompt before falling back." >&2
+          CRASH_RETRIED=1
+          TURN_PROMPT="$CONTINUE_PROMPT_PREFIX"$'\n\n'"$PROMPT"
+          continue
+        fi
         echo "!!! model '$m' failed (non-zero exit) — trying next fallback if any." >&2
         break
       fi
