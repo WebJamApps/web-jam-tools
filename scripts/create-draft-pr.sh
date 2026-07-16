@@ -23,8 +23,18 @@
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
-#   --author        REQUIRED. e.g. "Claude Code — Opus 4.8", "agy — Gemini 3 Pro".
-#                   Lands in the footer so Josh can track per-model quality.
+#   --author        REQUIRED. e.g. "Claude Code — Opus 4.8", "agy — Gemini 3.5 Flash
+#                   (Medium)". Lands in the footer so Josh can track per-model
+#                   quality. MUST name a model on the ROSTER list maintained near
+#                   the top of this script (web-jam-tools#190) — models routinely
+#                   confabulate their own checkpoint name (JaMmusic#1212: a Gemini
+#                   3.5 Flash run self-reported "Gemini 1.5 Pro"), so the script
+#                   checks the value itself rather than trusting it. Matched as a
+#                   SUBSTRING (caller format is "<tool> — <model>"), not an exact
+#                   match. FORCED_PR_AUTHOR in the environment overrides --author
+#                   entirely (see below) — headless/scripted callers that already
+#                   know the exact model should set it instead of trusting the
+#                   model to self-report correctly.
 #   --part-of       Opt-in flag: DON'T close the issue on merge (emits `Part of #N`).
 #                   Use only for a partial PR or a standing run-log/epic issue.
 #   --closes        Deprecated no-op (closing is now the default); still accepted.
@@ -64,6 +74,14 @@
 #                   exit 0 WITHOUT pushing or opening a PR. For testing this
 #                   script's composition/guards safely (web-jam-tools#150).
 #
+# FORCED_PR_AUTHOR (environment variable, not a flag): when set, REPLACES
+# whatever --author was passed (or not passed) before any check runs. It still
+# has to be on the roster — this is an override of the SOURCE of the author
+# string, not a bypass of the roster check. handle-agy-tasks.sh sets this to
+# the exact "agy — <model>" string for the model it actually invoked, so a
+# headless or interactive agy run's PR footer can never depend on the model
+# correctly naming itself (web-jam-tools#190).
+#
 # --summary, --test-plan, and --test-evidence are REQUIRED (web-jam-tools#77), each
 # either inline or via its *-file counterpart: the script refuses to open a PR whose
 # description is empty or left as a placeholder. This is the single choke point — no
@@ -71,18 +89,51 @@
 # summary and real test evidence IN THE PR via these flags, not only in the
 # chat/REPL. --screenshots stays optional (inline only).
 #
-# Refuses (exit 1) when: --author missing; any of --summary/--test-plan/--test-evidence
-# (inline or *-file) missing or left as a placeholder; a *-file flag points at a
-# missing or empty file; both a section's inline flag and its *-file flag are given;
-# body text contains raw HTML-like tags outside backticks (GitHub strips them
-# silently — backtick them); current branch is dev/main; working tree dirty; the
-# repo has no `dev` branch; a resolved issue is missing/closed; or --part-of is
-# passed without a resolvable issue.
+# Refuses (exit 1) when: --author missing or names a model not on the ROSTER
+# (web-jam-tools#190); any of --summary/--test-plan/--test-evidence (inline or
+# *-file) missing or left as a placeholder; --summary has zero markdown bullet
+# lines (web-jam-tools#190); --test-evidence (inline or *-file) has no
+# recognizable test-runner output (web-jam-tools#190); a *-file flag points at a
+# missing or empty file; both a section's inline flag and its *-file flag are
+# given; body text contains raw HTML-like tags outside backticks (GitHub strips
+# them silently — backtick them); current branch is dev/main; working tree
+# dirty; the repo has no `dev` branch; a resolved issue is missing/closed; or
+# --part-of is passed without a resolvable issue.
 
 set -euo pipefail
 
 usage() {
   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
+}
+
+# --- author roster (web-jam-tools#190) ---
+# The actual, currently-running WebJamApps model roster. Easy to extend: add a
+# line. Entries print verbatim in refusal messages; matching against --author
+# strips a leading "Claude " (see author_roster_check) because the caller
+# format is "<tool> — <model>" (e.g. "Claude Code — Sonnet 5" — the tool name
+# already says "Claude", so the model half doesn't repeat it).
+ROSTER=(
+  "Gemini 3.5 Flash (Medium)"
+  "Gemini 3.5 Flash (High)"
+  "Claude Sonnet 5"
+  "Claude Haiku 4.5"
+  "Claude Opus 4.8"
+  "Claude Fable 5"
+)
+
+author_roster_check() {
+  local author="$1" entry needle
+  for entry in "${ROSTER[@]}"; do
+    needle="${entry#Claude }"
+    if printf '%s' "$author" | grep -qF "$needle"; then
+      return 0
+    fi
+  done
+  echo "ERROR: --author '$author' does not name a model on the roster (web-jam-tools#190)." >&2
+  echo "       Models routinely misidentify their own checkpoint — this is checked," >&2
+  echo "       not trusted. Valid models:" >&2
+  printf '         - %s\n' "${ROSTER[@]}" >&2
+  exit 1
 }
 
 AUTHOR=""
@@ -130,11 +181,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# --- FORCED_PR_AUTHOR env override (web-jam-tools#190) ---
+# Wins over --author unconditionally. handle-agy-tasks.sh sets this to the exact
+# "agy — <model>" string for the model it actually invoked, so the PR footer
+# never depends on the model self-reporting correctly (still has to clear the
+# roster check below — this overrides the SOURCE of the value, not the check).
+if [ -n "${FORCED_PR_AUTHOR:-}" ]; then
+  AUTHOR="$FORCED_PR_AUTHOR"
+fi
+
 # --- required: author ---
 if [ -z "$AUTHOR" ]; then
   echo "ERROR: --author is required (e.g. --author \"Claude Code — Opus 4.8\")." >&2
   exit 1
 fi
+author_roster_check "$AUTHOR"
 
 # --- must be inside a git repo ---
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -285,6 +346,32 @@ if [ "${#missing[@]}" -gt 0 ]; then
   echo "       Provide real content for: ${missing[*]}" >&2
   echo "       Put your summary + actual test output IN THE PR via these flags," >&2
   echo "       not only in the chat/REPL reply." >&2
+  exit 1
+fi
+
+# --- refuse an unbulleted --summary (web-jam-tools#190) ---
+# JaMmusic#1212: a long agy run's summary decayed into a numbered run-on
+# paragraph instead of bullets. Require at least one markdown bullet line
+# (`- ` or `* `, optionally indented for nesting).
+if ! printf '%s' "$SUMMARY" | grep -qE '^[[:space:]]*[-*][[:space:]]'; then
+  echo "ERROR: --summary has no markdown bullet lines (web-jam-tools#190)." >&2
+  echo "       Write it as bullets (one change per line, starting with '- ' or '* ')," >&2
+  echo "       not a run-on paragraph." >&2
+  exit 1
+fi
+
+# --- refuse --test-evidence with no recognizable test-runner output (web-jam-tools#190) ---
+# JaMmusic#1212: evidence was a fenced PARAPHRASE ("All unit tests, lints, and
+# typechecks passed successfully") with no actual runner output. Heuristic only
+# (no --run-tests re-execution mode — out of scope for this pass): require a
+# line that looks like real pass/fail output. Tuned against real WebJamApps
+# output: vitest/jest "Tests: N passed" / "N passed (N)", deno's
+# "ok | N passed | 0 failed", and ✓-marked lines.
+if ! printf '%s' "$TEST_EVIDENCE" | grep -qE '[0-9]+[[:space:]]*pass|[Tt]ests?:|ok[[:space:]]*\||✓'; then
+  echo "ERROR: --test-evidence has no recognizable test-runner output (web-jam-tools#190)." >&2
+  echo "       A paraphrase like \"all tests passed successfully\" is refused — paste the" >&2
+  echo "       ACTUAL runner output (e.g. vitest/jest \"Tests: N passed\", deno" >&2
+  echo "       \"ok | N passed | 0 failed\", or ✓-marked lines)." >&2
   exit 1
 fi
 
