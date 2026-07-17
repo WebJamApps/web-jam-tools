@@ -205,7 +205,7 @@ export function composeHtmlBody(gp: GodPause): string {
 
 // ---------- main ----------
 
-async function main(): Promise<number> {
+export async function main(): Promise<number> {
   const today = todayInEastern();
   const gp = await fetchGodPause(today);
   if (!gp) {
@@ -234,8 +234,8 @@ export function easternHour(now: Date = new Date()): number {
   );
 }
 
-async function runAtSixEastern(): Promise<void> {
-  if (easternHour() !== 6) return;
+export async function runAtSixEastern(now: Date = new Date()): Promise<void> {
+  if (easternHour(now) !== 6) return;
   await main();
 }
 

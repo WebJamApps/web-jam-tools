@@ -2,15 +2,13 @@
 # coverage-check.sh (web-jam-tools#69)
 #
 # Runs the Deno test suite with coverage and FAILS if the "All files" line
-# coverage drops below the threshold (default 80%). `deno coverage` has no
+# coverage drops below the threshold (default 90%, raised from 80% by
+# web-jam-tools#152 once the suite cleared it). `deno coverage` has no
 # built-in --fail-under, so we parse its summary table. Wired into the CI gate
 # as `deno task coverage:check`.
-#
-# Threshold is 80% now; stretch goal is 90% — ratchet COVERAGE_THRESHOLD up as
-# coverage improves (override via the env var without editing this file).
 set -euo pipefail
 
-THRESHOLD="${COVERAGE_THRESHOLD:-80}"
+THRESHOLD="${COVERAGE_THRESHOLD:-90}"
 
 rm -rf cov_profile
 deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile >/dev/null
