@@ -5,8 +5,8 @@
 rules that apply to ALL of Josh's AI team — voice rules, file placement, protected
 files, canonical task queues, hard operational rules, and memory hygiene.*
 
-This content used to live in Dropbox `SHARED.md` (mirrored to Google Drive so phone
-Sonnet could read it). It is now maintained here in `web-jam-tools` as the single
+This content used to live in Dropbox `SHARED.md` (mirrored to Google Drive so Maria's
+claude.ai web Sonnet could read it). It is now maintained here in `web-jam-tools` as the single
 source of truth. AI-specific rules live in CLAUDE.md / AGENTS.md.
 
 Last updated: 2026-07-11.
@@ -53,7 +53,7 @@ Never create version-suffixed copies (V2, V3, -new, -copy) — edit the master.
 
 ## CANONICAL TASK QUEUES
 
-- claude-sonnet-tasks.txt (Drive root, id 1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ) — Claude Sonnet (phone); Drive is authoritative.
+- claude-sonnet-tasks.txt (Drive root, id 1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ) — Claude Sonnet (Josh's phone app); Drive is authoritative.
 - claude-opus-tasks.txt — Claude Opus (laptop); Dropbox-resident (web-jam-llms/).
 - agy-tasks.txt — agy/Flash lane (laptop); Dropbox-resident.
 - claude-fable-tasks.txt — Fable, when GA (laptop); Dropbox-resident.
@@ -74,6 +74,7 @@ Never modify a queue file that isn't yours. Phone-authored bridge files at Drive
 - Never contact venues, churches, or other third parties directly — Josh handles all outreach.
 - **STATE VERIFICATION**: Before any suggestion, to-do item, or "ready for you" claim about a PR/issue/CI/deploy, run a fresh liveness check in that same turn (e.g. `gh pr view --json state,mergedAt` / `gh issue view --json state`). If state ≠ OPEN, it is done: drop it silently. `mergeable: UNKNOWN/null` on a PR usually means merged/closed — never read it as "the API is slow" and never advise merging without confirming state=OPEN. An inconclusive check is not a completed check: use a definitive fallback (local `git merge-tree`, `statusCheckRollup`) or say plainly that you could not verify — never hand Josh a verification step the agent can run itself.
 - **ONE REPO, ONE SESSION**: never edit a repo another AI session is actively working (Josh, 2026-07-11). Before branching or editing, check `git status -sb` — a non-`dev` branch or dirty tree means another session likely has the repo in flight. Hand the change to that session/lane (route via Josh) or ask Josh first. A separate worktree or non-colliding branch does NOT make concurrent edits OK — parallel semver bumps and surprise PRs still collide.
+- **MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL**: Two live background jobs (e.g. a subagent + a headless agy dispatch) is the cap. When a THIRD thread (new discussion, dispatch, or background job) starts in the same session, the agent must WARN Josh first and propose a separate terminal — never comply silently. Origin: 2026-07-16, Claude A froze mid-permission-prompt while running a Sonnet subagent + a headless agy dispatch plus a new discussion; recovery required keystroke injection from another session.
 
 ## MEMORY HYGIENE (standing rules for any AI on the team)
 

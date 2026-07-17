@@ -20,8 +20,10 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
 | 4 | **Sonnet** *(Claude Code subagent)* | Laptop | Coder | Ordinary contained coding — a fix or feature across a few files, writing tests, light refactors. | *(issued via GitHub label)* |
 | 5 | **Haiku** *(Claude Code subagent)* | Laptop | Mechanic | Lookups, web research, scans, single-file/single-field edits, typo & data fixes, running tests/builds + reporting, screenshots. | *(issued via GitHub label)* |
 | 6 | **Flash** *(Gemini 3.5 Medium via agy/Antigravity)* | Laptop | Frontend / General agy | Frontend and UI coding (notably strong at it) + general agy lane. **Paid** on Josh's Google billing — a separate budget that spares the Anthropic budget. Invoked via `/next`. | `agy-tasks.txt` |
-| 7 | **Claude Mobile** *(Sonnet)* | Phone (Claude Android app) | Mobile Strategist | On-the-go reading of any Drive file, thoughtful drafting, planning. Drops task files at Drive root for the laptop to pick up. | `claude-sonnet-tasks.txt` |
-| 8 | **Gemini Mobile** | Phone (Gemini app) | Field Assistant | Voice Q&A, Calendar/Tasks entries, Maps, Hotels/Flights lookups, capturing notes during a venue phone call. Not agentic. | — |
+| 7 | **Sonnet** *(web, claude.ai)* | Web browser | Data Annotation / General tasks | Used mostly by **Maria** for data annotation and general Claude tasks. (Josh's web Sonnet is limited access; see row 9 for Josh's phone expansion.) | — |
+| 8 | **Claude Mobile** *(Sonnet)* | Phone (Claude Android app) | Mobile Strategist / GitHub Agent | On-the-go reading, thoughtful drafting, planning. **Expanding**: GitHub interaction (issues, PRs) via GitHub remote MCP connector (web-jam-tools#179/#112); moving Drive items to trash (web-jam-tools#180). Drops task files at Drive root for laptop pickup. | `claude-sonnet-tasks.txt` |
+| 9 | **Gemini Mobile** | Phone (Gemini app) | Field Assistant | Voice Q&A, Calendar/Tasks entries, Maps, Hotels/Flights lookups, capturing notes during a venue phone call. Not agentic. | — |
+| 10 | **Claude Code** *(Sonnet/Opus)* | Windows 11 (Maria's desktop) | Co-worker / Data Annotation | Part of the team; syncs cross-instance knowledge via Dropbox (`web-jam-llms/windows-desktop-notes.md`). Handles data annotation, code review, and collaborative tasks. | — |
 
 ### How work flows
 
@@ -139,7 +141,7 @@ Triggered manually (`/drive-cleanup` in any Claude Code session) or by the sessi
 - Stray ephemeral files (old timestamped backups, log dumps)
 - Files in the `Misc/` folder older than 90 days (flagged for review)
 
-**Mirror refresh** — on every run, `/drive-cleanup` also pushes the 4 venue-outreach templates from Dropbox back to Drive via rclone (read-only snapshot phone Sonnet consults). Cheap no-op when nothing has changed; pushes updates when you've edited a template in VS Code so phone Sonnet sees the fresh copy on its next read. Cross-AI rules don't need this — they live at `docs/cross-ai-rules.md`, read directly from GitHub, no Drive mirror.
+**Mirror refresh** — on every run, `/drive-cleanup` also pushes the 4 venue-outreach templates from Dropbox back to Drive via rclone (read-only snapshot Maria's claude.ai web Sonnet consults). Cheap no-op when nothing has changed; pushes updates when you've edited a template in VS Code so Maria sees the fresh copy on her next read. Cross-AI rules don't need this — they live at `docs/cross-ai-rules.md`, read directly from GitHub, no Drive mirror.
 
 **Never touched without explicit override:** the canonical task queues (`claude-sonnet-tasks.txt` on Drive; `claude-opus-tasks.txt` and `agy-tasks.txt` in Dropbox). `processed-*` files are kept forever as the bridge audit trail.
 
