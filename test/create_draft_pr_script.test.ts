@@ -22,6 +22,13 @@ const RUN_ON_SUMMARY =
 const PARAPHRASE_EVIDENCE = "All unit tests, lints, and typechecks passed successfully";
 const OFF_ROSTER_AUTHOR = "Gemini 1.5 Pro";
 const VALID_AUTHOR = "Claude Code — Sonnet 5";
+// web-jam-back#918: this exact "How to test locally" section shipped — running
+// the suite is not exercising the change (web-jam-tools#152).
+const SUITE_ONLY_TEST_PLAN =
+  "npm test        # eslint + jscpd + vitest run --coverage\nnpm run typecheck";
+const SUITE_ONLY_FENCED_TEST_PLAN = "```sh\nnpm test\nnpm run typecheck\ndeno task check\n```";
+const MIXED_TEST_PLAN =
+  "```sh\nnpm test\nnpm run typecheck\n```\nThen hit the endpoint:\n```sh\ncurl -s http://localhost:3000/api/gigs | jq\n```\nExpect a 200 with the updated gig in the JSON array.";
 
 async function makeFixtureRepo(): Promise<string> {
   const dir = await Deno.makeTempDir({ prefix: "wjt190-fixture-" });
@@ -179,4 +186,36 @@ Deno.test("paraphrased evidence via --test-evidence-file is also refused", async
   await Deno.remove(evidenceFile);
   assertEquals(res.code, 1);
   assertMatch(res.stderr, /no recognizable test-runner output/);
+});
+
+// --- test-plan substance (web-jam-tools#152) ---
+
+Deno.test("web-jam-back#918 replay: a suite-only test-plan is refused", async () => {
+  const res = await runScript(repoDir, baseArgs({ testPlan: SUITE_ONLY_TEST_PLAN }));
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /only test-suite invocations/);
+});
+
+Deno.test("a fenced suite-only test-plan (npm test + npm run typecheck + deno task check) is refused", async () => {
+  const res = await runScript(repoDir, baseArgs({ testPlan: SUITE_ONLY_FENCED_TEST_PLAN }));
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /only test-suite invocations/);
+});
+
+Deno.test("a test-plan with suite commands PLUS a curl request passes", async () => {
+  const res = await runScript(repoDir, baseArgs({ testPlan: MIXED_TEST_PLAN }));
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /=== DRY RUN/);
+});
+
+Deno.test("a test-plan with suite commands PLUS manual UI steps passes", async () => {
+  const uiPlan =
+    "Run:\n```sh\nnpm test\n```\nThen: start the app (`npm run dev`), open /settings, click Save, and confirm the new field persists after reload.";
+  const res = await runScript(repoDir, baseArgs({ testPlan: uiPlan }));
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("the default VALID_TEST_PLAN fixture (prose + backticked suite command) still passes", async () => {
+  const res = await runScript(repoDir, baseArgs());
+  assertEquals(res.code, 0, res.stderr);
 });
