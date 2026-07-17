@@ -176,7 +176,13 @@ Rules:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
       --author "Claude Code — Sonnet 5" \
       --summary "<bulleted, filled in by you>" \
-      --test-plan "<exact commands + expected result>" \
+      --test-plan "<suite command(s) PLUS steps that EXERCISE THE CHANGE: UI -> exact
+        manual steps (start command, route, clicks, expected visible result);
+        backend/API -> runnable curl + expected response; docs/tooling -> the
+        command that shows the change took effect. web-jam-tools#152: the script
+        REJECTS a plan that is only test-suite invocations (npm test, deno task
+        test, vitest, eslint, ...) with nothing else — 'the tests pass' is not a
+        test plan for the change you made>" \
       --test-evidence "<the actual lint+test output you saw>" \
       [--part-of]   # ONLY if the issue must stay open (partial PR / run-log / epic); default closes it
 
@@ -214,7 +220,13 @@ Rules:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
       --author "Claude Code — Opus 4.8" \
       --summary "<bulleted, filled in by you>" \
-      --test-plan "<exact commands + expected result>" \
+      --test-plan "<suite command(s) PLUS steps that EXERCISE THE CHANGE: UI -> exact
+        manual steps (start command, route, clicks, expected visible result);
+        backend/API -> runnable curl + expected response; docs/tooling -> the
+        command that shows the change took effect. web-jam-tools#152: the script
+        REJECTS a plan that is only test-suite invocations (npm test, deno task
+        test, vitest, eslint, ...) with nothing else — 'the tests pass' is not a
+        test plan for the change you made>" \
       --test-evidence "<the actual lint+test output you saw>" \
       [--part-of]   # ONLY if the issue must stay open; default closes it
 
