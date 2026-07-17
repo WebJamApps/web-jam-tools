@@ -112,7 +112,10 @@ ok | 42 passed | 0 failed
 It exits non-zero when: `--author` is missing or off-roster; any of `--summary`/
 `--test-plan`/`--test-evidence` is missing or left as a placeholder; `--summary`
 has no bullet lines; `--test-evidence` has no recognizable test-runner output;
-body text contains raw HTML-like tags outside backticks (GitHub strips them
+`--test-plan` is only test-suite invocations (`npm test`, `deno task test`,
+`vitest`, `eslint`, ...) with nothing exercising the CHANGE itself — the "Test
+plan substance" rule above is now machine-enforced (web-jam-tools#152); body
+text contains raw HTML-like tags outside backticks (GitHub strips them
 silently — the "wrap every `<tag>` in backticks" rule above is now machine-
 enforced); you're on `dev`/`main`; the working tree is dirty; the repo has no
 `dev` branch; a resolved issue is missing or closed; or `--part-of` is passed
