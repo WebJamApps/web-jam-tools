@@ -13,7 +13,7 @@ under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
 
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
-- **`gig-scraper/`** — Playwright scrapers (reference/research; venue master is Mongo)
+- **`src/`** — Deno TypeScript tools: task-queue (CLI), gig-scraper (Playwright + xlsx), devotional (daily email sender), outreach-cron (cadence automation)
 - **`skills/`** — Claude Code skills (single source of truth; symlinked into `~/.claude/skills`)
 - **`hooks/`** — Claude Code hooks (single source of truth; symlinked into `~/.claude/hooks`, wired into `~/.claude/settings.json` by `scripts/install-hooks.sh` — see [Claude Code hooks](#claude-code-hooks))
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace
@@ -23,7 +23,6 @@ under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
 ```bash
 git clone https://github.com/WebJamApps/web-jam-tools.git
 cd web-jam-tools
-npm install     # only needed if you plan to run scripts/*.js
 ```
 
 To use the Claude Code skills in `skills/`, run `scripts/install-skills.sh` — it
@@ -51,12 +50,12 @@ hooks. `scripts/install-hooks.sh`:
 
 1. Symlinks every `hooks/*.sh` into `~/.claude/hooks/` (existing real files
    are backed up, never deleted).
-2. Idempotently merges the `SessionStart` hooks listed in that script's
+2. Safely merges the `SessionStart` hooks listed in that script's
    `SESSION_START_HOOKS` array into `~/.claude/settings.json` — only adding
    entries that aren't already present, never touching permissions or any
    other settings. `settings.json` is backed up to `settings.json.bak-<date>`
    immediately before any write, and only when a write is actually
-   happening. Re-running the installer is a no-op once everything is wired.
+   happening. Re-running the installer is safe to do — it's a no-op once everything is wired.
 
 `~/.claude/settings.json` is intentionally **not** version-controlled in this
 public repo (it holds personal permission strings), so this is the only
@@ -217,4 +216,4 @@ Then `File → Open Workspace from File...` → that symlink (or the file direct
 
 ## License
 
-No license file is currently committed. Treat as all rights reserved unless otherwise specified by the maintainer.
+MIT License — see [LICENSE](LICENSE) file for full text.
