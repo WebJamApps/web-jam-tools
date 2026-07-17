@@ -1,10 +1,19 @@
-import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
+import {
+  assertEquals,
+  assertMatch,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import {
   easternHour,
   fetchGodPause,
   gmailSecrets,
+  main,
   refreshAccessToken,
+  runAtSixEastern,
   sendEmail,
+  todayInEastern,
 } from "../src/devotional/send_daily_devotional.ts";
 
 // --- mock harness: stub `fetch` by URL and set/restore env, around one test ---
@@ -167,5 +176,126 @@ Deno.test("fetchGodPause returns null when no devotion is linked for the day", a
     routes: { [MONTH_URL]: { body: `<a href="/godpause/2026/06/14/999/">yesterday</a>` } },
   }, async () => {
     assertEquals(await fetchGodPause(TODAY), null);
+  });
+});
+
+Deno.test("fetchGodPause throws when the month page fetch is not ok", async () => {
+  await withMocks({
+    routes: { [MONTH_URL]: { status: 500, body: "boom" } },
+  }, async () => {
+    await assertRejects(() => fetchGodPause(TODAY), Error, "god pause month fetch");
+  });
+});
+
+Deno.test("fetchGodPause throws when the day page fetch is not ok", async () => {
+  await withMocks({
+    routes: {
+      [MONTH_URL]: { body: `<a href="${DAY_URL}">today</a>` },
+      [DAY_URL]: { status: 500, body: "boom" },
+    },
+  }, async () => {
+    await assertRejects(() => fetchGodPause(TODAY), Error, "god pause day fetch");
+  });
+});
+
+Deno.test("fetchGodPause returns null when the day link's id segment doesn't parse", async () => {
+  await withMocks({
+    // href matches the day prefix but what follows isn't `<digits>/"` — idMatch fails.
+    routes: { [MONTH_URL]: { body: `<a href="${DAY_URL.replace(/\d+\/$/, "abc/")}">today</a>` } },
+  }, async () => {
+    assertEquals(await fetchGodPause(TODAY), null);
+  });
+});
+
+Deno.test("fetchGodPause returns null when devotion and prayer are both empty", async () => {
+  const emptyHtml = `
+    <div class="godpause-verse"><h2>Matthew 9:35</h2><p>Verse text.</p></div>
+    <div class="godpause-devo"></div>
+    <div class="godpause-prayer"></div>
+  `;
+  await withMocks({
+    routes: {
+      [MONTH_URL]: { body: `<a href="${DAY_URL}">today</a>` },
+      [DAY_URL]: { body: emptyHtml },
+    },
+  }, async () => {
+    assertEquals(await fetchGodPause(TODAY), null);
+  });
+});
+
+// --- todayInEastern: shape check (format-only — value depends on the real clock) ---
+
+Deno.test("todayInEastern returns a well-formed year/month/day/humanDate", () => {
+  const t = todayInEastern();
+  assertMatch(t.year, /^\d{4}$/);
+  assertMatch(t.month, /^\d{2}$/);
+  assertMatch(t.day, /^\d{2}$/);
+  assertMatch(t.humanDate, /^[A-Za-z]+, [A-Za-z]+ \d{1,2}, \d{4}$/);
+});
+
+// --- main / runAtSixEastern: end-to-end orchestration ---
+// These compute the "today" routes from the REAL current clock (same as
+// production code does internally) rather than hardcoding a date, since main()
+// isn't given an injectable "now" for its God Pause fetch.
+
+function todayRoutes(dayHtml: string) {
+  const today = todayInEastern();
+  const monthUrl = `https://www.luthersem.edu/godpause/${today.year}/${today.month}/`;
+  const todayPrefix =
+    `https://www.luthersem.edu/godpause/${today.year}/${today.month}/${today.day}/`;
+  const dayUrl = `${todayPrefix}99999/`;
+  return {
+    [monthUrl]: { body: `<a href="${dayUrl}">today</a>` },
+    [dayUrl]: { body: dayHtml },
+  };
+}
+
+Deno.test("main sends the devotion end-to-end and returns 0", async () => {
+  await withMocks({
+    env: ENV,
+    routes: {
+      ...todayRoutes(DAY_HTML),
+      "https://oauth2.googleapis.com/token": { body: JSON.stringify({ access_token: "AT" }) },
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/send": {
+        body: JSON.stringify({ id: "MID-MAIN" }),
+      },
+    },
+  }, async () => {
+    assertEquals(await main(), 0);
+  });
+});
+
+Deno.test("main returns 0 without sending when no devotion is published today", async () => {
+  const today = todayInEastern();
+  const monthUrl = `https://www.luthersem.edu/godpause/${today.year}/${today.month}/`;
+  await withMocks({
+    routes: { [monthUrl]: { body: `<a href="/godpause/other/day/">nope</a>` } },
+  }, async () => {
+    assertEquals(await main(), 0);
+  });
+});
+
+Deno.test("runAtSixEastern is a no-op when it isn't 06:00 Eastern", async () => {
+  // 2026-07-15T11:00:00Z is 07:00 EDT — not 06:00. Empty route table: if this
+  // wrongly fell through to main(), the resulting fetch would 404 and throw,
+  // failing this test — so "no throw" also proves main() was never called.
+  await withMocks({ routes: {} }, async () => {
+    await runAtSixEastern(new Date("2026-07-15T11:00:00Z"));
+  });
+});
+
+Deno.test("runAtSixEastern sends the devotion when it is 06:00 Eastern", async () => {
+  // 2026-01-15T11:00:00Z is 06:00 EST.
+  await withMocks({
+    env: ENV,
+    routes: {
+      ...todayRoutes(DAY_HTML),
+      "https://oauth2.googleapis.com/token": { body: JSON.stringify({ access_token: "AT" }) },
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages/send": {
+        body: JSON.stringify({ id: "MID-CRON" }),
+      },
+    },
+  }, async () => {
+    await runAtSixEastern(new Date("2026-01-15T11:00:00Z"));
   });
 });
