@@ -374,6 +374,30 @@ if [ "$HEADLESS" -eq 1 ]; then
     gh pr list -R "WebJamApps/$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null
   }
 
+  # web-jam-tools#152 — bypass check: "a draft PR exists" is not proof agy
+  # actually went through create-draft-pr.sh. If it disobeys the prompt rule
+  # ("Never run `gh pr create` directly") and opens the PR itself, EVERY guard
+  # in that script (author roster, real summary/test-plan/test-evidence,
+  # bulleted summary, real test-runner evidence, test-plan substance, raw-tag
+  # check) is silently skipped. create-draft-pr.sh always composes the body's
+  # LAST line as the attribution footer "🤖 Work by $AUTHOR" — and this script
+  # forces AUTHOR to "agy — $m" via FORCED_PR_AUTHOR for the model that round
+  # is actually running as (web-jam-tools#190) — so a body that doesn't end
+  # with that exact footer proves the script was bypassed. This can't be
+  # exercised against real GitHub in the test suite; verified by inspection +
+  # `bash -n` (see the PR that introduced it).
+  footer_present_for_model() {
+    local pr_num="$1" model="$2" body expected
+    body="$(gh pr view "$pr_num" -R "WebJamApps/$REPO" --json body -q .body 2>/dev/null || true)"
+    expected="🤖 Work by agy — $model"
+    # Trim trailing whitespace/newlines before the suffix check — gh's JSON
+    # decode can leave a trailing newline that would otherwise false-negative.
+    case "$(printf '%s' "$body" | sed -e 's/[[:space:]]*$//')" in
+      *"$expected") return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+
   # web-jam-tools#181 — "PR exists" alone isn't real completion for Node target
   # repos: agy finished JaMmusic#1204 -> PR JaMmusic#1205 with NO package.json
   # version bump, and it was only caught by manual review. Repos without a root
@@ -434,6 +458,24 @@ if [ "$HEADLESS" -eq 1 ]; then
       fi
       PR_NUM="$(pr_exists_for_branch)"
       if [ -n "$PR_NUM" ]; then
+        if ! footer_present_for_model "$PR_NUM" "$m"; then
+          echo "" >&2
+          echo "================ handle-agy-tasks BYPASS DETECTED (web-jam-tools#152) ================" >&2
+          echo "Draft PR #$PR_NUM exists for branch $BRANCH but its body does NOT end with the" >&2
+          echo "script-composed footer '🤖 Work by agy — $m'." >&2
+          echo "This means agy opened the PR with \`gh pr create\` directly instead of" >&2
+          echo "scripts/create-draft-pr.sh, which skips EVERY guard in that script (author" >&2
+          echo "roster, real summary/test-plan/test-evidence, bulleted summary, real" >&2
+          echo "test-runner evidence, test-plan substance, raw-HTML-tag check)." >&2
+          echo "Repo:   $REPO_DIR" >&2
+          echo "Branch: $BRANCH" >&2
+          echo "PR:     #$PR_NUM" >&2
+          echo "Not auto-retrying — a bypassing model already produced an unvetted PR; fix" >&2
+          echo "requires human judgment (close/redo the PR via create-draft-pr.sh, or accept" >&2
+          echo "it manually if it's otherwise fine)." >&2
+          echo "=========================================================================================" >&2
+          exit 1
+        fi
         if version_bump_present; then
           AGY_OK=1
           ACTIVE_MODEL="$m"

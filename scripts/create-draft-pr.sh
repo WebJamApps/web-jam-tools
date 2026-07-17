@@ -47,7 +47,11 @@
 #                   commands + expected result AND steps exercising the change itself:
 #                   UI -> start command, route, clicks, expected visible result;
 #                   API -> curl/Postman request(s) + expected response. "npm test
-#                   green" alone is not enough (#135).
+#                   green" alone is not enough (#135) — MACHINE-ENFORCED
+#                   (web-jam-tools#152): a plan whose only content is test-suite
+#                   invocations (npm test/typecheck/lint, deno task test, vitest,
+#                   eslint, ...) is refused; it must have exercise-the-change
+#                   content left over after stripping those.
 #   --test-evidence REQUIRED (or --test-evidence-file). Fills "## Test evidence" (real
 #                   lint + test output, ran green).
 #                   AUTO-FENCED (web-jam-tools#150): if the value contains no ```
@@ -93,11 +97,13 @@
 # (web-jam-tools#190); any of --summary/--test-plan/--test-evidence (inline or
 # *-file) missing or left as a placeholder; --summary has zero markdown bullet
 # lines (web-jam-tools#190); --test-evidence (inline or *-file) has no
-# recognizable test-runner output (web-jam-tools#190); a *-file flag points at a
-# missing or empty file; both a section's inline flag and its *-file flag are
-# given; body text contains raw HTML-like tags outside backticks (GitHub strips
-# them silently — backtick them); current branch is dev/main; working tree
-# dirty; the repo has no `dev` branch; a resolved issue is missing/closed; or
+# recognizable test-runner output (web-jam-tools#190); --test-plan (inline or
+# *-file) is only test-suite invocations with nothing exercising the change
+# (web-jam-tools#152); a *-file flag points at a missing or empty file; both a
+# section's inline flag and its *-file flag are given; body text contains raw
+# HTML-like tags outside backticks (GitHub strips them silently — backtick
+# them); current branch is dev/main; working tree dirty; the repo has no `dev`
+# branch; a resolved issue is missing/closed; or
 # --part-of is passed without a resolvable issue.
 
 set -euo pipefail
@@ -372,6 +378,41 @@ if ! printf '%s' "$TEST_EVIDENCE" | grep -qE '[0-9]+[[:space:]]*pass|[Tt]ests?:|
   echo "       A paraphrase like \"all tests passed successfully\" is refused — paste the" >&2
   echo "       ACTUAL runner output (e.g. vitest/jest \"Tests: N passed\", deno" >&2
   echo "       \"ok | N passed | 0 failed\", or ✓-marked lines)." >&2
+  exit 1
+fi
+
+# --- refuse a --test-plan that is only test-suite invocations (web-jam-tools#152) ---
+# web-jam-back#918: a "How to test locally" section that was just `npm test` +
+# `npm run typecheck` shipped — running the suite is obvious and isn't what this
+# section is for; it must show how to exercise the CHANGE (routes hit, curl
+# commands, manual steps, expected behavior). #135 already put this rule in the
+# draft-pr skill docs, but docs alone don't stick (subagents dispatched via the
+# delegate templates never load the skill) — so it's machine-enforced here too,
+# the same #77 pattern as the placeholder-body check.
+#
+# Cheap heuristic, not NLP: strip fenced-block markers and any line that is
+# ONLY a known suite-invocation command (npm test/typecheck/lint, deno task
+# test/check/lint/fmt/coverage:check, deno test/check/lint/fmt, vitest, eslint,
+# jscpd, pytest, yarn test/lint/typecheck — with any trailing flags/comments on
+# that same line). If nothing but blank/comment lines remains, there is no
+# exercise-the-change content — refuse. A plan with suite commands PLUS a route/
+# curl/URL/manual step keeps that step as leftover content and passes.
+test_plan_has_substance() {
+  local text="$1" stripped
+  stripped="$(printf '%s\n' "$text" | grep -vE '^[[:space:]]*```')"
+  stripped="$(printf '%s\n' "$stripped" | grep -vE '^[[:space:]]*(npm[[:space:]]+(run[[:space:]]+)?(test|typecheck|lint)|deno[[:space:]]+task[[:space:]]+(coverage:check|fmt:check|test|check|lint|fmt)|deno[[:space:]]+(test|check|lint|fmt)|(npx[[:space:]]+)?vitest|(npx[[:space:]]+)?eslint|jscpd|pytest|yarn[[:space:]]+(test|lint|typecheck))([[:space:]].*)?$')"
+  stripped="$(printf '%s\n' "$stripped" | grep -vE '^[[:space:]]*(#.*)?$')"
+  [ -n "$stripped" ]
+}
+if ! test_plan_has_substance "$TEST_PLAN"; then
+  echo "ERROR: --test-plan is only test-suite invocations (web-jam-tools#152)." >&2
+  echo "       Running the suite (npm test, deno task test, vitest, eslint, ...) is a" >&2
+  echo "       gate, not the whole plan — it doesn't show the CHANGE works. Add steps" >&2
+  echo "       that exercise it, mirroring the draft-pr skill rule:" >&2
+  echo "         UI change      -> exact manual steps (start command, route, clicks," >&2
+  echo "                           expected visible result)" >&2
+  echo "         Backend/API    -> runnable curl (or Postman-equivalent) + expected response" >&2
+  echo "         Docs/tooling   -> the command that shows the change took effect" >&2
   exit 1
 fi
 
