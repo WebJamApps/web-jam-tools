@@ -1,16 +1,21 @@
 version: 2.1
 
-# CI quality + security gate for web-jam-tools (web-jam-tools#84).
+# CI quality + security gate for web-jam-tools (web-jam-tools#84, extended #133).
 #
 # Runs the same checks you can run locally, so "green locally" == "green in CI":
 #   deno task check · lint · fmt:check · coverage:check · audit · sast
-# (coverage:check runs the unit tests and fails under 80% all-files line coverage)
+# (coverage:check runs the unit tests — including the skills/ + sources.yaml
+# validation test, web-jam-tools#133 — and fails under 90% all-files line
+# coverage)
+#   bash -n + shellcheck -S error over every tracked *.sh (scripts/, hooks/)
+#   deno.json "version" bump check (PR branches only — diffs against the
+#   merge-base with origin/dev; skipped on dev/main)
 #
-# Uses a `docker` executor (Node 24.16 LTS base) with Deno, Trivy, and Semgrep
-# installed as binaries — so the whole gate can be reproduced locally with
-# `circleci local execute gate` (great for debugging CI). The audit/sast scripts
-# auto-detect: they use these binaries here, and fall back to Docker images on a
-# dev machine that only has Docker.
+# Uses a `docker` executor (Node 24.16 LTS base) with Deno, Trivy, Semgrep, and
+# shellcheck installed as binaries — so the whole gate can be reproduced
+# locally with `circleci local execute gate` (great for debugging CI). The
+# audit/sast scripts auto-detect: they use these binaries here, and fall back
+# to Docker images on a dev machine that only has Docker.
 #
 # `gate` is a REQUIRED status check on `dev` and `main` via GitHub branch
 # protection. The `deploy` job (below) deploys the daily-devotional service to
@@ -28,7 +33,7 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Install Deno + Trivy + Semgrep
+          name: Install Deno + Trivy + Semgrep + shellcheck
           command: |
             # Deno (pinned)
             curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
@@ -37,12 +42,74 @@ jobs:
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
               | sudo sh -s -- -b /usr/local/bin v0.71.0
             # Semgrep (via pipx)
-            sudo apt-get update -y && sudo apt-get install -y pipx
+            sudo apt-get update -y && sudo apt-get install -y pipx xz-utils
             pipx install semgrep
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+            # shellcheck (pinned) — static binary, no apt version pin available
+            SHELLCHECK_VERSION="v0.10.0"
+            curl -fsSL \
+              "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+              -o /tmp/shellcheck.tar.xz
+            tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+            sudo mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+            rm -rf /tmp/shellcheck.tar.xz "/tmp/shellcheck-${SHELLCHECK_VERSION}"
       - run:
           name: Tool versions
-          command: deno --version && node -v && npm -v && trivy --version && semgrep --version
+          command: |
+            deno --version && node -v && npm -v && trivy --version && semgrep --version
+            shellcheck --version
+      - run:
+          name: Shell gate (bash -n + shellcheck -S error over tracked *.sh)
+          command: |
+            # Approach A (Josh, web-jam-tools#133): error-severity only. This
+            # catches real breakage (syntax errors, behavior-changing quoting)
+            # in scripts/create-draft-pr.sh (the PR choke point for every
+            # WebJamApps repo) and friends, WITHOUT chasing shellcheck's
+            # warning/style findings across load-bearing scripts.
+            mapfile -t SH_FILES < <(git ls-files '*.sh')
+            if [ "${#SH_FILES[@]}" -eq 0 ]; then
+              echo "No tracked *.sh files found — nothing to check."
+              exit 0
+            fi
+            echo "Checking ${#SH_FILES[@]} tracked shell script(s):"
+            printf '  %s\n' "${SH_FILES[@]}"
+            echo
+            echo "-- bash -n (syntax) --"
+            for f in "${SH_FILES[@]}"; do
+              bash -n "$f"
+            done
+            echo "OK: all scripts passed bash -n"
+            echo
+            echo "-- shellcheck -S error --"
+            shellcheck -S error "${SH_FILES[@]}"
+            echo "OK: shellcheck found no error-level findings"
+      - run:
+          name: Version bump check (PR branches only)
+          command: |
+            # web-jam-tools#133: replaces relying on the local pre-push hook
+            # alone. Skipped on dev/main (nothing to diff against itself).
+            # Falls back to the actual git branch when CIRCLE_BRANCH is unset
+            # (e.g. `circleci local execute gate`) so local reproduction works.
+            BRANCH="${CIRCLE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+            if [ "$BRANCH" = "dev" ] || [ "$BRANCH" = "main" ]; then
+              echo "On $BRANCH — version-bump check only applies to PR branches, skipping."
+              exit 0
+            fi
+            git fetch --quiet origin dev
+            MERGE_BASE="$(git merge-base HEAD origin/dev)"
+            HEAD_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('deno.json')).version)")"
+            git show "${MERGE_BASE}:deno.json" > /tmp/base-deno.json
+            BASE_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('/tmp/base-deno.json')).version)")"
+            echo "Branch: $BRANCH"
+            echo "Merge-base with origin/dev: $MERGE_BASE"
+            echo "Base version:  $BASE_VERSION"
+            echo "HEAD version:  $HEAD_VERSION"
+            if [ "$BASE_VERSION" = "$HEAD_VERSION" ]; then
+              echo 'FAIL: deno.json "version" is unchanged since the merge-base with origin/dev.' >&2
+              echo "Bump the version in deno.json (once per PR, on the first commit) before merging." >&2
+              exit 1
+            fi
+            echo "OK: version bumped from $BASE_VERSION to $HEAD_VERSION"
       - run:
           name: Type check
           command: deno task check
@@ -53,7 +120,7 @@ jobs:
           name: Format check
           command: deno task fmt:check
       - run:
-          name: Unit tests + coverage (>=80% all-files line)
+          name: Unit tests + coverage (>=90% all-files line, incl. skills/ validation)
           command: deno task coverage:check
       - run:
           name: Dependency + secret scan (Trivy)
