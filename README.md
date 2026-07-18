@@ -13,7 +13,7 @@ under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
 
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
-- **`src/`** — Deno TypeScript tools: task-queue (CLI), gig-scraper (Playwright + xlsx), devotional (daily email sender), outreach-cron (cadence automation)
+- **`src/`** — Deno TypeScript tools: task-queue (CLI), gig-scraper (Playwright + xlsx), devotional (daily email sender), outreach-cron (cadence automation), dropbox-link (share-link CLI for Setlist play links)
 - **`skills/`** — Claude Code skills (single source of truth; symlinked into `~/.claude/skills`)
 - **`hooks/`** — Claude Code hooks (single source of truth; symlinked into `~/.claude/hooks`, wired into `~/.claude/settings.json` by `scripts/install-hooks.sh` — see [Claude Code hooks](#claude-code-hooks))
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace
@@ -182,6 +182,75 @@ deno deploy --org webjamapps --app web-jam-devotional --prod
 run `deno task devotional`, which sends once immediately. Do **not** re-add a
 laptop cron for it — Deno Deploy owns the schedule now, and a second scheduler
 would send every devotion twice.
+
+## Dropbox share-link CLI
+
+`src/dropbox-link/dropbox_link_cli.ts` (web-jam-tools#171) turns a Dropbox
+file path into the two link forms used across WebJamApps when adding a song
+to the web-jam-back **Setlist**:
+
+- **Setlist form** — `www.dropbox.com/scl/fi/…?rlkey=…&dl=0` (viewer link)
+- **Songs/widget form** — `dl.dropboxusercontent.com/scl/fi/…?rlkey=…&dl=1` (direct stream)
+
+Both come from a single shared link (one Dropbox API call per path), so the
+CLI always prints both, labeled — pick whichever form the destination needs.
+
+**Input** — one or more paths, auto-detected, as args and/or newline-separated
+on stdin (batch mode):
+
+- Account-relative, e.g. `/joshandmariamusic/song.mp3` — used as-is.
+- Local, e.g. `~/Dropbox/joshandmariamusic/song.mp3` or
+  `/home/joshua/Dropbox/joshandmariamusic/song.mp3` — auto-mapped by
+  stripping the local Dropbox root.
+
+```bash
+deno task dropbox:link -- /joshandmariamusic/song.mp3
+deno task dropbox:link -- ~/Dropbox/joshandmariamusic/song.mp3
+printf '/a.mp3\n/b.mp3\n' | deno task dropbox:link --
+```
+
+**Idempotent** — re-running on the same path returns the existing shared
+link (Dropbox 409 `shared_link_already_exists` → list-and-reuse fallback),
+never a duplicate.
+
+### Auth: durable OAuth refresh token (one-time setup)
+
+No more 4-hour throwaway access tokens. The CLI holds a **refresh token**
+that never expires and mints a fresh access token on every run — env-driven,
+no hardcoded laptop paths, secrets never committed:
+
+| Env var | What it is |
+|---|---|
+| `DROPBOX_APP_KEY` | The `webjam-setlist-links` Dropbox app's key |
+| `DROPBOX_APP_SECRET` | That app's secret |
+| `DROPBOX_REFRESH_TOKEN` | Minted once via the offline OAuth flow below |
+
+This reuses the existing **`webjam-setlist-links`** Dropbox app (account
+`web.jam.adm@gmail.com`; scopes `files.metadata.read`, `sharing.read`,
+`sharing.write` already granted) — no new app to create. To mint the refresh
+token (one-time, or if it's ever revoked):
+
+1. In a browser, visit (substitute the app key):
+   ```
+   https://www.dropbox.com/oauth2/authorize?client_id=<DROPBOX_APP_KEY>&response_type=code&token_access_type=offline
+   ```
+   `token_access_type=offline` is what makes Dropbox issue a refresh token
+   instead of only a short-lived access token.
+2. Approve access as `web.jam.adm@gmail.com`; Dropbox shows an authorization
+   `code`.
+3. Exchange that code for tokens:
+   ```bash
+   curl https://api.dropboxapi.com/oauth2/token \
+     -d code=<the code from step 2> \
+     -d grant_type=authorization_code \
+     -d client_id=<DROPBOX_APP_KEY> \
+     -d client_secret=<DROPBOX_APP_SECRET>
+   ```
+   The JSON response's `refresh_token` field is the durable
+   `DROPBOX_REFRESH_TOKEN` — it does not expire under normal use.
+4. Store all three values in **KeePass**, and set them as env vars wherever
+   the CLI runs (shell profile for local/manual runs; the hosting platform's
+   secret store for anything automated). Never commit them.
 
 ## VSCode multi-root workspace
 
