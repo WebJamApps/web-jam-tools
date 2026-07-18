@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
@@ -18,7 +18,8 @@
     "fetch:songs": "deno run --allow-net src/gig-scraper/fetch_api_songs.ts",
     "devotional": "deno run --allow-net --allow-env src/devotional/send_daily_devotional.ts",
     "outreach:advance": "deno run --allow-net --allow-env src/outreach-cron/advance_cadence.ts",
-    "dropbox:link": "deno run --allow-net --allow-env src/dropbox-link/dropbox_link_cli.ts"
+    "dropbox:link": "deno run --allow-net --allow-env src/dropbox-link/dropbox_link_cli.ts",
+    "update:reaper": "bash scripts/reaper-update.sh"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.0",
