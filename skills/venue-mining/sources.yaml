@@ -15,7 +15,14 @@ metros:
     notes: Run 1 (12-mo sweep) = +14 venues, 7 pitched. Covers Vinton, Rocky Mount, Floyd spillover.
 
   - { slug: blacksburg-nrv,      label: Blacksburg / New River Valley VA, driveTier: "<1.5h",    publication: null, lastSwept: null }
-  - { slug: lynchburg,           label: Lynchburg VA,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
+  - slug: lynchburg
+    label: Lynchburg VA
+    driveTier: "<1.5h"
+    publication:
+      name: Downtown Lynchburg Association
+      url: https://www.downtownlynchburg.com/calendar
+    lastSwept: 2026-07-18
+    notes: "Run 4 = +6 venues created (1 email-eligible). Small-venue scene is FB-only; 2 rejected as too-large (TimShermanMusic leads). Incident: first POST for Starr Hill On Main (shared email info@starrhill.com) overwrote Starr Hill Pilot Brewery (Roanoke) record; restored via PUT."
   - { slug: lexington,           label: Lexington VA,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
   - { slug: floyd,               label: Floyd VA,                         driveTier: "<1.5h",    publication: null, lastSwept: null }
   - { slug: martinsville,        label: Martinsville VA,                  driveTier: "<1.5h",    publication: null, lastSwept: null }
