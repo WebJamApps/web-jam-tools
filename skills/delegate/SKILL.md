@@ -123,8 +123,11 @@ PR attribution & conventions:
   is a real regression (it happened on web-jam-back#892, 2026-07-02).
 - Commit trailers (`Co-Authored-By:`) name the model actually doing the work,
   not a different one.
-- One semver version bump per PR, on the PR's first commit only — follow-up
-  commits to an already-open PR keep the same version.
+- **One semver version bump per PR, on the first commit only** — `deno.json` for
+  web-jam-tools, `package.json` for JS/TS repos (JaMmusic, web-jam-back,
+  CollegeLutheran, AppersonAuto, TSM, HFS). The CI "Version bump check" gate blocks
+  PRs whose version is unchanged from the merge-base with `dev`. Follow-up commits
+  to an already-open PR keep the same version.
 ```
 
 ### Haiku — mechanical / gh / research
