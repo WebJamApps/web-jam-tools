@@ -71,7 +71,7 @@ export async function refreshAccessToken(): Promise<string> {
 // ---------- path auto-detection ----------
 
 // Account-relative path (starts with "/", e.g. /joshandmariamusic/song.mp3)
-// is used as-is. A local path (~/Dropbox/... or /home/<user>/Dropbox/...) is
+// is used as-is. A local path (~/Dropbox/... or /home/joshua/Dropbox/...) is
 // auto-mapped by stripping everything through the "Dropbox" root folder.
 // Pure aside from reading $HOME for "~" expansion (injectable for tests), so
 // it's unit-testable without touching the filesystem.
