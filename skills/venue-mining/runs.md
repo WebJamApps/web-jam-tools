@@ -70,3 +70,23 @@ Kitchen (house band Mon–Sat, no email) + Confluence (Cramerton; only email is
 parent nonprofit retail@ — Josh to decide). Rejected: Warp & Weft (Lowell
 MASSACHUSETTS, not NC — harvest geo-trap lesson), Bourbon Barrel (karaoke-only).
 Charlotte proper remains unswept under this slug.
+
+## Run 4 — lynchburg (2026-07-18)
+
+Publication discovered = **Downtown Lynchburg Association**
+(www.downtownlynchburg.com/calendar). 8 candidates → 6 created: **7 Rooftop Bar**
+(haley@7rooftopbar.com, `outreachEligible:true`, Fri "Sunset Sessions"; sole
+email yield), Starr Hill On Main, Palmera House, Super Rad Arcade Bar, The Water
+Dog, Dish (all created `outreachEligible:false`, FB-only booking). Rejected as
+too-large: Academy Center of the Arts, Lynchburg Amphitheater (TimShermanMusic
+leads).
+
+**Incident:** First POST for "Starr Hill On Main" used email `info@starrhill.com`
+(shared Starr Hill chain booking inbox). Email dedup in `POST /venue` → it
+**matched and overwrote the existing "Starr Hill Pilot Brewery" (Roanoke) record**,
+clobbering its name, city, website, and notes. Restored via `PUT /venue/:id`;
+original `outreachEligible` + notes restoration pending Josh's confirmation.
+
+**Lesson:** For franchise/chain venues sharing a booking inbox, create WITHOUT the
+shared email (falls back to name+city dedup), then add a location-specific contact
+via PUT after creation.
