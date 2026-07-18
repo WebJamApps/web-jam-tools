@@ -28,6 +28,10 @@ ready on GitHub.
    issue resolvable, the PR simply has no Closes line and its title falls back to the
    last commit subject — NEVER create an issue just to satisfy the script.
 2. Everything is committed (clean working tree) and lint + tests are green.
+3. **Version bump:** On the PR's first commit, bump the version once in `deno.json`
+   (web-jam-tools) or `package.json` (other repos). The CI "Version bump check" gate
+   blocks PRs with no version change from the merge-base with `dev`. Follow-up commits
+   to an already-open PR keep the same version.
 
 ## How to run it
 
