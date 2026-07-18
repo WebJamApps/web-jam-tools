@@ -115,7 +115,7 @@ Deno.test("toAccountRelativePath keeps an account-relative path as-is", () => {
   );
 });
 
-Deno.test("toAccountRelativePath maps a /home/<user>/Dropbox/... local path", () => {
+Deno.test("toAccountRelativePath maps a /home/joshua/Dropbox/... local path", () => {
   assertEquals(
     toAccountRelativePath("/home/joshua/Dropbox/joshandmariamusic/song.mp3"),
     "/joshandmariamusic/song.mp3",
