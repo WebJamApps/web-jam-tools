@@ -29,6 +29,45 @@ visibility.
 > Note: contains hard-coded paths that assume the maintainer's home
 > directory layout. Adapt before using on a different machine.
 
+### `reaper-update.sh`
+
+Downloads and installs the latest REAPER version to a specified prefix.
+Detects the currently installed version, compares it to the latest available,
+and updates in place if needed. Preserves user configuration in `~/.config/REAPER`.
+
+**Invocation options (in preference order):**
+
+1. **From anywhere** (after one-time setup):
+   ```bash
+   reaper-update
+   ```
+   One-time setup (run from repo root):
+   ```bash
+   ln -s "$PWD/scripts/reaper-update.sh" ~/.local/bin/reaper-update
+   ```
+   Requires `~/.local/bin` on PATH.
+
+2. **From inside the repo:**
+   ```bash
+   deno task update:reaper
+   ```
+
+3. **Direct script invocation:**
+   ```bash
+   bash scripts/reaper-update.sh
+   ```
+
+**Environment variables:**
+- `REAPER_PREFIX` (default: `/home/joshua/opt`) — the parent directory where REAPER is installed
+
+Example with custom prefix:
+```bash
+REAPER_PREFIX=/opt reaper-update
+```
+
+> Safety: the script checks that REAPER is not running before updating and
+> fails if it detects a running process. Quit REAPER before updating.
+
 ## Example scraping / data utilities
 
 These scripts target a specific Wix-hosted site and were built as one-offs
