@@ -35,8 +35,14 @@ Downloads and installs the latest REAPER version to a specified prefix.
 Detects the currently installed version, compares it to the latest available,
 and updates in place if needed. Preserves user configuration in `~/.config/REAPER`.
 
+**Preferred invocation:**
 ```bash
-./scripts/reaper-update.sh
+deno task update:reaper
+```
+
+Fallback (direct script invocation):
+```bash
+bash scripts/reaper-update.sh
 ```
 
 Environment variables:
@@ -44,7 +50,7 @@ Environment variables:
 
 Example with custom prefix:
 ```bash
-REAPER_PREFIX=/opt ./scripts/reaper-update.sh
+REAPER_PREFIX=/opt deno task update:reaper
 ```
 
 > Safety: the script checks that REAPER is not running before updating and
