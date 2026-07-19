@@ -95,7 +95,36 @@ const ADDRESS_RE = new RegExp(
   "i",
 );
 
-const CONTACT_LINK_RE = /contact|about|events|booking/i;
+const CONTACT_LINK_RE = /contact|about|events|booking|find us|visit|location/i;
+
+/** Extracts email and telephone from schema.org JSON-LD blocks (single object or @graph array). */
+export function extractFromJsonLd(html: string): { emails: string[]; phones: string[] } {
+  const emails: string[] = [];
+  const phones: string[] = [];
+  const $ = cheerio.load(html);
+
+  $('script[type="application/ld+json"]').each((_i, el) => {
+    try {
+      const text = $(el).html();
+      if (!text) return;
+      const data = JSON.parse(text);
+      const items = Array.isArray(data) ? data : data["@graph"] ? data["@graph"] : [data];
+      for (const item of items) {
+        if (typeof item !== "object" || !item) continue;
+        if (item.email && typeof item.email === "string") {
+          emails.push(item.email.toLowerCase());
+        }
+        if (item.telephone && typeof item.telephone === "string") {
+          phones.push(item.telephone);
+        }
+      }
+    } catch {
+      // ignore malformed JSON-LD
+    }
+  });
+
+  return { emails, phones };
+}
 
 /** Strips script/style/noscript and returns normalized visible body text. */
 export function extractVisibleText(html: string): string {
@@ -109,10 +138,16 @@ export function hasMeaningfulText(html: string): boolean {
   return extractVisibleText(html).length >= MEANINGFUL_TEXT_MIN_LENGTH;
 }
 
-/** Extracts candidate email addresses from mailto: links and page text. */
+/** Extracts candidate email addresses from mailto: links, JSON-LD, and page text. */
 export function extractEmails(html: string): string[] {
   const $ = cheerio.load(html);
   const found = new Set<string>();
+
+  // Extract from JSON-LD blocks
+  const { emails: jsonLdEmails } = extractFromJsonLd(html);
+  for (const email of jsonLdEmails) {
+    found.add(email);
+  }
 
   $('a[href^="mailto:"]').each((_i, el) => {
     const href = $(el).attr("href") ?? "";
