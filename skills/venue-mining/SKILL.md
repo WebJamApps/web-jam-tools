@@ -88,6 +88,28 @@ it is handed to Josh as a skipped venue, not silently lost. The end-of-sweep rep
 Josh supplies the address via `/venue-mining venue <name>` in `venue` mode, and the agent creates
 the venue record once the address is sourced.
 
+## Hand back venues with no reachable email
+
+A venue can be created or enriched successfully and still have **no viable email** — because
+booking runs through a web form, a phone number, a Facebook page, or a login wall. The agent has
+already done every lookup it can (website with Playwright render + Google Business +
+publication); what remains needs a human. **Never leave this as a silent blank field.**
+
+Every run ends with an explicit hand-back list of venues left without a viable email:
+
+- Venue name + city
+- **Why** there is no email: `web form only` / `phone only` / `Facebook only` / `login-walled`
+- The phone number, if one was found — often the fastest route for Josh
+- Links so Josh can finish it: the venue's website URL and its **Facebook page URL** if one was
+  visible (linking is fine; scraping is not — see Guardrails)
+
+These venues keep `outreachEligible: false` until a real email exists. Josh checks Facebook or
+calls; the agent does not.
+
+**Record the Facebook page URL in the venue's `notes` field** whenever one is found, appended as
+a dated line (there is no `facebookUrl` field yet — that is web-jam-back#895). This keeps the
+link with the record instead of only in a chat message that scrolls away.
+
 ## Enrichment for existing venues (`venue` seed mode)
 
 When using `/venue-mining venue <name>` to verify or refresh an existing venue record, the agent
