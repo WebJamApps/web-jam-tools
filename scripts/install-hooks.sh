@@ -41,6 +41,10 @@ SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
 # of the hooks already wired into settings.json).
 SESSION_START_HOOKS=(notes-sync-reminder.sh)
 
+# PreToolUse Bash hooks this installer keeps registered in settings.json.
+# These hooks run before Bash tool execution; script names only.
+PRE_TOOL_USE_BASH_HOOKS=(semver-push-reminder.sh block-secret-dumps.sh block-dangerous-git-deploy.sh authorization-check.sh fmt-push-guard.sh)
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --settings-path)
@@ -78,16 +82,24 @@ for src in "$HOOKS_SRC"/*.sh; do
   fi
 done
 
-# --- Merge SESSION_START_HOOKS into settings.json (idempotent) -------------
-merge_args=()
+# --- Merge SESSION_START_HOOKS and PRE_TOOL_USE_BASH_HOOKS into settings.json (idempotent) ---
+merge_session_start_args=()
 for name in "${SESSION_START_HOOKS[@]}"; do
   [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in SESSION_START_HOOKS)" >&2; exit 1; }
   # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
   # shell that runs the hook later, not by this installer (see header note).
-  merge_args+=('$HOME/.claude/hooks/'"$name")
+  merge_session_start_args+=('$HOME/.claude/hooks/'"$name")
 done
 
-python3 - "$SETTINGS_PATH" "${merge_args[@]}" <<'PYEOF'
+merge_bash_hooks_args=()
+for name in "${PRE_TOOL_USE_BASH_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_BASH_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_bash_hooks_args+=('$HOME/.claude/hooks/'"$name")
+done
+
+python3 - "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--bash-hooks" "${merge_bash_hooks_args[@]}" <<'PYEOF'
 import json
 import os
 import shutil
@@ -95,7 +107,20 @@ import sys
 import datetime
 
 settings_path = sys.argv[1]
-commands = sys.argv[2:]
+args = sys.argv[2:]
+
+# Parse arguments: session_start_cmds -- bash_hook_cmds
+session_start_cmds = []
+bash_hook_cmds = []
+
+if "--" in args:
+    sep_idx = args.index("--")
+    if "--bash-hooks" in args[sep_idx:]:
+        bash_sep_idx = args.index("--bash-hooks", sep_idx)
+        session_start_cmds = args[sep_idx + 1:bash_sep_idx]
+        bash_hook_cmds = args[bash_sep_idx + 1:]
+    else:
+        session_start_cmds = args[sep_idx + 1:]
 
 if os.path.exists(settings_path):
     with open(settings_path) as f:
@@ -108,25 +133,53 @@ if os.path.exists(settings_path):
 else:
     data = {}
 
+# Merge SessionStart hooks
 hooks = data.setdefault("hooks", {})
 session_start = hooks.setdefault("SessionStart", [])
 
-existing = set()
+existing_session = set()
 for entry in session_start:
     for h in entry.get("hooks", []):
         c = h.get("command")
         if c:
-            existing.add(c)
+            existing_session.add(c)
 
-added = []
-for cmd in commands:
-    if cmd not in existing:
+added_session = []
+for cmd in session_start_cmds:
+    if cmd not in existing_session:
         session_start.append({"hooks": [{"type": "command", "command": cmd}]})
-        existing.add(cmd)
-        added.append(cmd)
+        existing_session.add(cmd)
+        added_session.append(cmd)
 
-if not added:
-    print("settings.json: SessionStart hooks already up to date (no-op)")
+# Merge PreToolUse Bash hooks
+pre_tool_use = hooks.setdefault("PreToolUse", [])
+bash_matcher_entry = None
+for entry in pre_tool_use:
+    if entry.get("matcher") == "Bash":
+        bash_matcher_entry = entry
+        break
+
+if bash_hook_cmds and not bash_matcher_entry:
+    bash_matcher_entry = {"matcher": "Bash", "hooks": []}
+    pre_tool_use.append(bash_matcher_entry)
+
+existing_bash = set()
+if bash_matcher_entry:
+    for h in bash_matcher_entry.get("hooks", []):
+        c = h.get("command")
+        if c:
+            existing_bash.add(c)
+
+added_bash = []
+if bash_matcher_entry:
+    for cmd in bash_hook_cmds:
+        if cmd not in existing_bash:
+            bash_matcher_entry["hooks"].append({"type": "command", "command": cmd})
+            existing_bash.add(cmd)
+            added_bash.append(cmd)
+
+if not added_session and not added_bash:
+    print("settings.json: SessionStart and Bash PreToolUse hooks already up to date (no-op)")
     sys.exit(0)
 
 if os.path.exists(settings_path):
@@ -140,6 +193,8 @@ with open(settings_path, "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 
-for cmd in added:
+for cmd in added_session:
     print(f"settings.json: added SessionStart hook {cmd}")
+for cmd in added_bash:
+    print(f"settings.json: added Bash PreToolUse hook {cmd}")
 PYEOF
