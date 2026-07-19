@@ -2,6 +2,7 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
   extractAddress,
   extractEmails,
+  extractFromJsonLd,
   extractVenueContact,
   extractVisibleText,
   findContactLinks,
@@ -118,6 +119,109 @@ Deno.test("extractEmails returns empty array, never invents a value, when none p
   assertEquals(extractEmails(NO_CONTACT_SITE), []);
 });
 
+// --- extractFromJsonLd -------------------------------------------------------
+
+Deno.test("extractFromJsonLd extracts email from a single schema.org object", () => {
+  const html = `
+    <html>
+      <head>
+        <script type="application/ld+json">
+          {
+            "@context": "https://schema.org",
+            "@type": "MusicVenue",
+            "name": "Test Venue",
+            "email": "hi@venue.example"
+          }
+        </script>
+      </head>
+      <body></body>
+    </html>`;
+  const { emails, phones } = extractFromJsonLd(html);
+  assertEquals(emails, ["hi@venue.example"]);
+  assertEquals(phones, []);
+});
+
+Deno.test("extractFromJsonLd extracts email and telephone from JSON-LD", () => {
+  const html = `
+    <html>
+      <head>
+        <script type="application/ld+json">
+          {
+            "@type": "Restaurant",
+            "email": "contact@restaurant.example",
+            "telephone": "+1-555-123-4567"
+          }
+        </script>
+      </head>
+      <body></body>
+    </html>`;
+  const { emails, phones } = extractFromJsonLd(html);
+  assertEquals(emails, ["contact@restaurant.example"]);
+  assertEquals(phones, ["+1-555-123-4567"]);
+});
+
+Deno.test("extractFromJsonLd walks @graph array and extracts from all items", () => {
+  const html = `
+    <html>
+      <head>
+        <script type="application/ld+json">
+          {
+            "@context": "https://schema.org",
+            "@graph": [
+              {
+                "@type": "Organization",
+                "name": "Venue",
+                "email": "info@venue.example"
+              },
+              {
+                "@type": "LocalBusiness",
+                "email": "support@venue.example"
+              }
+            ]
+          }
+        </script>
+      </head>
+      <body></body>
+    </html>`;
+  const { emails, phones } = extractFromJsonLd(html);
+  assertEquals(new Set(emails), new Set(["info@venue.example", "support@venue.example"]));
+  assertEquals(phones, []);
+});
+
+Deno.test("extractFromJsonLd ignores malformed JSON-LD gracefully", () => {
+  const html = `
+    <html>
+      <head>
+        <script type="application/ld+json">
+          { broken json without closing brace
+        </script>
+      </head>
+      <body></body>
+    </html>`;
+  const { emails, phones } = extractFromJsonLd(html);
+  assertEquals(emails, []);
+  assertEquals(phones, []);
+});
+
+Deno.test("extractEmails includes emails from JSON-LD blocks", () => {
+  const html = `
+    <html>
+      <head>
+        <script type="application/ld+json">
+          {
+            "@type": "MusicVenue",
+            "email": "JsonLdEmail@venue.example"
+          }
+        </script>
+      </head>
+      <body>
+        <a href="mailto:mailto@venue.example">Contact</a>
+      </body>
+    </html>`;
+  const emails = extractEmails(html);
+  assertEquals(new Set(emails), new Set(["jsonldemail@venue.example", "mailto@venue.example"]));
+});
+
 // --- extractAddress ----------------------------------------------------------
 
 Deno.test("extractAddress finds a US street address in visible text", () => {
@@ -162,6 +266,20 @@ Deno.test("findContactLinks skips mailto/tel/hash/off-host links", () => {
     <a href="#contact">Jump</a>
     <a href="https://facebook.com/contact">Facebook contact</a>`;
   assertEquals(findContactLinks(html, "https://venue.example/", 4), []);
+});
+
+Deno.test("findContactLinks matches find us, visit, and location link text (case-insensitive)", () => {
+  const html = `
+    <a href="/findus">FIND US</a>
+    <a href="/visit">Visit Us</a>
+    <a href="/location">Location</a>
+    <a href="/hours">Hours</a>`;
+  const links = findContactLinks(html, "https://venue.example/", 4);
+  assertEquals(links.sort(), [
+    "https://venue.example/findus",
+    "https://venue.example/location",
+    "https://venue.example/visit",
+  ]);
 });
 
 // --- extractVenueContact: plain-fetch path ----------------------------------
@@ -299,4 +417,73 @@ Deno.test("extractVenueContact: honors maxExtraPages, following none when set to
   assertEquals(result.emails, [
     { email: "booking@taproom.example", sourceUrl: "https://taproom.example/" },
   ]);
+});
+
+// --- extractVenueContact: JSON-LD and new link types -------------------------
+
+Deno.test("extractVenueContact: extracts email from JSON-LD on contact page", async () => {
+  const jsonLdContact = `
+    <html>
+      <head>
+        <script type="application/ld+json">
+          {
+            "@type": "MusicVenue",
+            "email": "hi@palmerahouse.example"
+          }
+        </script>
+      </head>
+      <body>
+        <h1>Palmera House</h1>
+        <p>We host live music events and special gatherings. Reach out to learn more about booking with us. Visit our venue for an unforgettable experience.</p>
+      </body>
+    </html>`;
+  const result = await extractVenueContact("https://palmerahouse.example/contact", {
+    fetchImpl: stubFetch({
+      "https://palmerahouse.example/contact": { body: jsonLdContact },
+    }),
+    renderImpl: () => Promise.reject(new Error("renderImpl should not be called")),
+  });
+  assertEquals(result.fetchPath, "plain");
+  assertEquals(result.error, null);
+  assertEquals(result.emails, [
+    { email: "hi@palmerahouse.example", sourceUrl: "https://palmerahouse.example/contact" },
+  ]);
+});
+
+Deno.test("extractVenueContact: follows find us link and extracts email from target page", async () => {
+  const homePage = `
+    <html>
+      <body>
+        <nav>
+          <a href="/findus">FIND US</a>
+          <a href="/about">About</a>
+        </nav>
+        <h1>The Water Dog</h1>
+        <p>Live music venue in downtown Lynchburg featuring the best local and touring bands. Come enjoy great food, drinks, and live performances every weekend.</p>
+      </body>
+    </html>`;
+  const findUsPage = `
+    <html>
+      <body>
+        <h1>Find Us</h1>
+        <p>You can reach us at info@thewaterdog.example or call during business hours. We are located at 789 Riverside Ave, Lynchburg, VA 24504. Come visit us downtown.</p>
+      </body>
+    </html>`;
+  const result = await extractVenueContact("https://thewaterdog.example/", {
+    fetchImpl: stubFetch({
+      "https://thewaterdog.example/": { body: homePage },
+      "https://thewaterdog.example/findus": { body: findUsPage },
+    }),
+    renderImpl: () => Promise.reject(new Error("renderImpl should not be called")),
+  });
+  assertEquals(result.fetchPath, "plain");
+  assertEquals(result.error, null);
+  assertEquals(result.pagesVisited, [
+    "https://thewaterdog.example/",
+    "https://thewaterdog.example/findus",
+  ]);
+  const emails = result.emails.map((e) => e.email).sort();
+  assertEquals(emails, ["info@thewaterdog.example"]);
+  const waterDogHit = result.emails.find((e) => e.email === "info@thewaterdog.example");
+  assertEquals(waterDogHit?.sourceUrl, "https://thewaterdog.example/findus");
 });
