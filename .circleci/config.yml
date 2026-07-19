@@ -36,7 +36,7 @@ jobs:
           name: Install Deno + Trivy + Semgrep + shellcheck
           command: |
             # Deno (pinned)
-            curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.1
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
             # Trivy (pinned)
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
@@ -146,7 +146,7 @@ jobs:
       - run:
           name: Install Deno
           command: |
-            curl -fsSL https://deno.land/install.sh | sh -s v2.8.2
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.1
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
       - run:
           name: Deploy web-jam-devotional (production)
