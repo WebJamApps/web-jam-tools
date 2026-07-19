@@ -95,6 +95,10 @@ deno task audit       # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret sca
 deno task sast        # Semgrep: static analysis of src/
 ```
 
+**Before pushing:** run `deno task fmt` to auto-fix any formatting issues. A local
+pre-push hook (`fmt-push-guard.sh`) blocks pushes with unformatted files; this
+line is an advisory backup.
+
 `audit` and `sast` run via **Docker** (so they're identical locally and in CI) —
 Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.json`
 (Trivy can't read `deno.lock`); JSR deps are not covered. SAST findings are
