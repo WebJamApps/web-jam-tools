@@ -88,12 +88,22 @@ it is handed to Josh as a skipped venue, not silently lost. The end-of-sweep rep
 Josh supplies the address via `/venue-mining venue <name>` in `venue` mode, and the agent creates
 the venue record once the address is sourced.
 
-## Address enrichment for existing venues (`venue` seed mode)
+## Enrichment for existing venues (`venue` seed mode)
 
-When using `/venue-mining venue <name>` to verify or refresh an existing venue record, if the
-record currently has no address, the agent attempts to source one via website + Google Business
-+ publication. If an address is found, it is sent via `PUT /venue/<_id>` (partial merge, not
-a gate). This is an enrichment opportunity, not a blocker for the main `verify` task.
+When using `/venue-mining venue <name>` to verify or refresh an existing venue record, the agent
+sources the SAME field set it would collect for a new venue — **street address, email, phone,
+website** — via website (Playwright-render when a plain fetch returns an empty shell) + Google
+Business + publication.
+
+**Write back EVERY field that was sourced and is currently empty or wrong**, in one
+`PUT /venue/<_id>` per venue (partial merge — omitted fields are untouched). Do NOT write only
+the address and leave the rest for Josh to ask about: a field the run found and did not write is
+a defect, not a pending decision. Enrichment is not a blocker for the main `verify` task.
+
+Only genuinely uncertain values are held back and reported instead of written — e.g. two
+conflicting addresses with no way to tell which is current. "Josh might not want it" is not
+uncertainty. Never invent a value to fill a blank; a field with no sourced value stays empty and
+is reported as not found.
 
 ## Eligibility rule (settled 2026-07-02)
 
@@ -101,10 +111,15 @@ a gate). This is an enrichment opportunity, not a blocker for the main `verify` 
   create with `outreachEligible: true`.
 - Obviously-wrong-purpose inbox (catering@, events-form-only, private-parties@)
   or no email → `outreachEligible: false`; note why.
-- **NEVER pitch.** No POST /outreach/*, no template sends, no eligibility flips
-  on venues this run didn't create. Outreach stays behind Josh's approve gate
-  (AdminOutreach auto-approve switch; the agent token can't hold
-  outreach:approve by design).
+- The rule applies **identically to existing records in `venue` seed mode**: if
+  enrichment sources a viable booking/general email for a venue that had none,
+  set `outreachEligible: true` in the same `PUT`. An eligible venue whose email
+  turns out to be dead or wrong-purpose goes to `false` with a note. This is a
+  data-quality flip driven by the email rule above — it is not outreach.
+- **NEVER pitch.** No POST /outreach/*, no template sends. Outreach stays behind
+  Josh's approve gate (AdminOutreach auto-approve switch; the agent token can't
+  hold outreach:approve by design). Flipping `outreachEligible` marks a venue as
+  *pitchable*; it never sends anything.
 
 ## Guardrails
 
