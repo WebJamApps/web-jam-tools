@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.15.2",
+  "version": "1.16.0",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
@@ -19,6 +19,7 @@
     "devotional": "deno run --allow-net --allow-env src/devotional/send_daily_devotional.ts",
     "outreach:advance": "deno run --allow-net --allow-env src/outreach-cron/advance_cadence.ts",
     "dropbox:link": "deno run --allow-net --allow-env src/dropbox-link/dropbox_link_cli.ts",
+    "venue-contact:extract": "deno run -A src/venue-contact/cli.ts",
     "update:reaper": "bash scripts/reaper-update.sh"
   },
   "imports": {
