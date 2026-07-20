@@ -90,7 +90,16 @@ no split. The model-tier label family to recognize in any repo: `Haiku`,
 
 ## Step 3 — classify every open issue
 
-For each issue:
+For each issue, FIRST check its body (case-insensitive) for an explicit
+do-not-dispatch marker: ⛔, "BLOCKED — do not build yet", "Do not start
+until…", or equivalent wording. If present, this issue goes straight to the
+Blocked section (Step 7) with that marker's stated reason — ALWAYS, even if
+it already carries a Flash-tier label, and even if what it's waiting on is
+external (a person delivering assets, a vendor — not another GitHub issue).
+Do not label it, do not touch its existing labels, do not treat it as a
+normal candidate. Skip the rest of this step for it.
+
+Otherwise, for each issue:
 
 - Already has a Flash-tier label (`Flash` / `Flash Med` / `Flash High`,
   whatever that repo calls it) → Flash-lane candidate, go to Step 4. Record
@@ -127,6 +136,21 @@ For each issue:
   not a chat report — this is a hard rule, not a suggestion: an uncertain
   guess here is worse than surfacing it for a human to decide.
 
+  Concrete non-codework examples — these are HUMAN tasks, never label them,
+  always route to Needs review: "record and publish these songs" is a
+  recording/performance task, not code. "Get Spotify to fix their wrong
+  artist listing" is contacting an external company's platform, not code.
+  Any issue whose actual ask is a phone call, an email, manual data entry,
+  or someone else's dashboard/CMS is a human task regardless of which repo
+  it's filed in — a frontend repo still carries plenty of non-frontend
+  asks; don't default to Flash just because the repo is a frontend repo.
+
+  If you reach the end of this step with an EMPTY Needs review list, treat
+  that as suspicious, not a clean bill of health. A backlog of any real
+  size almost always has at least one ambiguous, duplicate-looking, or
+  already-done-looking issue — re-check the issues you almost flagged
+  before reporting zero.
+
   Otherwise, apply the chosen label:
 
     gh issue edit <number> --repo WebJamApps/<repo> --add-label "<label>"
@@ -142,7 +166,7 @@ title, URL, body text (for dependency/priority reading), and its Flash tier
 label (`Flash`, `Flash Med`, or `Flash High` — exactly as that repo spells
 it).
 
-## Step 5 — read dependencies
+## Step 5 — read dependencies (verify state, never assume)
 
 For each candidate, read its body (and skim comments if the body is thin)
 for dependency signals: explicit phrases ("depends on", "blocked by",
@@ -151,10 +175,28 @@ Repo#123), and a `blocked` / `dependencies` label if the repo has one.
 There's no consistent machine-readable convention across these repos — this
 is a judgment read of the issue text, not a fixed regex.
 
-A dependency can point at:
+MANDATORY — verify, don't infer: for EVERY cross-issue reference you're
+treating as a potential blocker, run this before deciding anything:
+
+  gh issue view <n> --repo WebJamApps/<repo> --json state,labels
+
+Resolve a bare `#n` reference against the candidate's OWN repo; resolve
+`Repo#n` against the named repo. The wording "depends on #983" reads
+identically whether #983 is open or closed — ONLY the verified `state`
+field decides. A CLOSED dependency is NEVER a blocker, full stop.
+
+Never mark an issue blocked without having run this check on the specific
+reference you're calling a blocker. Never mark an issue blocked "because
+its dependency is blocked" as a shortcut — walk the chain and verify each
+link; the chain must bottom out in an actually-verified OPEN,
+not-Flash-workable blocker, or nothing in the chain blocks anything. (This
+is not hypothetical: the first live run marked web-jam-back#983/#987/#980 as
+blockers while all three were CLOSED, then cascaded the error — "#1242
+blocked because #1241 is blocked" — without re-verifying #1241's own chain.)
+
+Once verified OPEN, a dependency can point at:
 - another Flash-lane candidate in this pool — fine, handle via ordering
   (Step 6).
-- an issue already closed — not a live blocker, ignore it.
 - an issue that's open but NOT Flash-workable (labeled Sonnet / Opus /
   Haiku / Fable, or in a non-front-end repo like web-jam-back) — this
   candidate cannot run yet. Route it to the Blocked section (Step 7), not
@@ -184,9 +226,18 @@ grouping.
 
 ## Step 7 — build the Blocked section
 
-Every candidate identified as blocked in Step 5 goes here instead, each with
-a one-line reason naming the blocking issue and why Flash can't clear it
-(e.g. "depends on web-jam-back#812 (Sonnet, backend endpoint not built)").
+Two kinds of entry land here:
+- Dependency-blocked candidates from Step 5 — one-line reason naming the
+  VERIFIED-open blocking issue and why Flash can't clear it (e.g. "depends
+  on web-jam-back#812 (Sonnet, backend endpoint not built)"). Never an
+  unverified reason — if you haven't run `gh issue view` on the blocker,
+  it doesn't go here.
+- Marker-blocked issues from Step 3 (an explicit ⛔/do-not-dispatch marker
+  in the body) — one-line reason quoting or paraphrasing that marker (e.g.
+  "issue body: BLOCKED — do not build yet, waiting on final logo files
+  from Josh"). These can land here even though they already carry a
+  Flash-tier label — the marker overrides normal Flash-lane routing.
+
 No further ordering is required within this section — a plain list is fine.
 
 ## Step 8 — regenerate the output file (replace, never append)
@@ -265,5 +316,11 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
   instead of a best-effort label.
 - Never blocks the chat run on flagged items — no Q&A, no waiting for an
   answer. They're reviewed from the file on Josh's own schedule.
+- Never marks an issue blocked on an unverified reference — `gh issue view`
+  the specific blocking reference first; a closed dependency is never a
+  blocker no matter how the issue text phrases it.
+- Never treats "record and publish", "get <company> to fix their listing",
+  or any other manual/external-platform ask as codework just because it's
+  filed in a frontend repo.
 - Doesn't repeat the Haiku/Sonnet/Opus/Fable/Flash routing table — that
   lives in `docs/ai-team-playbook.md`; this skill only applies it.
