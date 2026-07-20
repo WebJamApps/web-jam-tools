@@ -39,10 +39,13 @@ Instead:
    template).
 3. Relay that report to Josh essentially as-is: counts, what got newly
    labeled, numbered-list count vs. Blocked count.
-4. **Surface every flagged item prominently, separately from the routine
-   counts.** Flagged items are the one thing this skill deliberately does
-   NOT resolve on its own (see the template's flagging rule) — they need
-   Josh's judgment, not the invoking session guessing on his behalf either.
+4. **Flagged items are pending decisions, not report trivia.** After
+   delivering the run summary, present them in their own clearly-titled
+   section — never a trailing paragraph under other status, never buried.
+   Then walk them **one at a time**: ask Josh about the first, wait for his
+   answer, then move to the next. The run is not complete while a flagged
+   decision sits unanswered and unparked — either Josh decides it now or
+   explicitly parks it; "he'll get to it" is not resolution.
 
 Never run the `gh` scans, triage, or file write yourself in the invoking
 session "to save a round trip" — that's the exact expensive-token-burn this
