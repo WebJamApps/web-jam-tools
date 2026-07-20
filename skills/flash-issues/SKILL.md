@@ -39,13 +39,11 @@ Instead:
    template).
 3. Relay that report to Josh essentially as-is: counts, what got newly
    labeled, numbered-list count vs. Blocked count.
-4. **Flagged items are pending decisions, not report trivia.** After
-   delivering the run summary, present them in their own clearly-titled
-   section — never a trailing paragraph under other status, never buried.
-   Then walk them **one at a time**: ask Josh about the first, wait for his
-   answer, then move to the next. The run is not complete while a flagged
-   decision sits unanswered and unparked — either Josh decides it now or
-   explicitly parks it; "he'll get to it" is not resolution.
+4. **Never block chat on flagged items.** They live in the output file's
+   "Needs Josh's review" section (Step 8), not in a chat Q&A. State the
+   count and point at the file — "N issues need your review, see the
+   bottom of flash-issues.md" — and move on. Josh reviews them on his own
+   time; no agent waits on an answer.
 
 Never run the `gh` scans, triage, or file write yourself in the invoking
 session "to save a round trip" — that's the exact expensive-token-burn this
@@ -121,11 +119,13 @@ For each issue:
   (e.g. it's a question, a discussion, an ops/manual task), OR it looks like
   a duplicate of another open issue, OR it looks like it may already be
   done (body/title suggests completed work, or a linked PR looks merged) —
-  DO NOT GUESS. Do not apply any label and do not add it to the candidate
-  pool. Instead add it to a "Flagged for Josh" list you'll include in your
-  final report, with the issue reference and a one-line reason. This is a
-  hard rule, not a suggestion — an uncertain guess here is worse than
-  leaving it unlabeled for a human to look at.
+  DO NOT GUESS. Do not apply any label and do not add it to the Flash-lane
+  candidate pool. Instead add it to a "Needs review" list, each entry
+  carrying a concrete recommendation (e.g. "recommend: close as duplicate
+  of CollegeLutheran#45", "recommend: keep open unlabeled — human task, not
+  codework"). This list becomes the output file's bottom section (Step 8),
+  not a chat report — this is a hard rule, not a suggestion: an uncertain
+  guess here is worse than surfacing it for a human to decide.
 
   Otherwise, apply the chosen label:
 
@@ -217,19 +217,32 @@ Last updated: <ISO 8601 UTC timestamp of this run>
 
 - [AppersonAuto#88](https://github.com/WebJamApps/AppersonAuto/issues/88) — Inventory filter UI (Flash Med) — blocked: depends on AppersonAuto#85 (Sonnet, backend endpoint not built)
 
+## Needs Josh's review (no agent will touch these until you decide)
+
+- [TimShermanMusic#57](https://github.com/WebJamApps/TimShermanMusic/issues/57) — Update booking email — recommend: close as duplicate of TimShermanMusic#52
+- [HenricksonForSalem#31](https://github.com/WebJamApps/HenricksonForSalem/issues/31) — Confirm venue contact list with Mark — recommend: keep open unlabeled — human task, not codework
+
 Every list line is: full https://github.com/WebJamApps/<repo>/issues/<n>
 link, repo-prefixed reference (Repo#n) as the link text, em dash, title,
 then the Flash tier in parentheses (plus the blocked-reason clause for
 Blocked entries). Keep titles as GitHub has them — don't paraphrase.
+
+The "Needs Josh's review" section is different: no Flash tier (these got
+no model label at all), and the trailing clause is always a concrete
+recommendation instead of a tier/blocked-reason. These issues are excluded
+from the numbered list and the Blocked section — they're not Flash-lane
+candidates, they're undecided. Rebuild this section fresh every run same as
+the rest of the file: an item Josh has since resolved (labeled, closed,
+whatever) just won't re-trigger the flag next time and drops out on its own.
 
 ## Report back (this is what you hand back to the invoking session)
 
 - Repos scanned, total open issues seen, how many were already Flash-tier
   vs. newly triaged.
 - Every issue you newly labeled and what you labeled it.
-- Count in the numbered list vs. count in the Blocked section.
-- The full "Flagged for Josh" list from Step 3, if non-empty — each item
-  with its issue reference and the one-line reason you didn't guess.
+- Count in the numbered list vs. the Blocked section vs. the "Needs Josh's
+  review" section — just the count for the review section, not the list
+  (it's already in the file).
 - Confirmation the file was written to
   ~/Dropbox/web-jam-llms/flash-issues.md.
 ````
@@ -247,7 +260,10 @@ Blocked entries). Keep titles as GitHub has them — don't paraphrase.
 - Never comments on, closes, or edits anything about an issue besides adding
   a missing model label.
 - Never guesses on an issue that isn't clearly codework, looks like a
-  duplicate, or looks already-done — that's a hard flag-to-Josh case, not a
-  best-effort label.
+  duplicate, or looks already-done — no label, no candidate-pool entry,
+  goes to the file's "Needs Josh's review" section with a recommendation
+  instead of a best-effort label.
+- Never blocks the chat run on flagged items — no Q&A, no waiting for an
+  answer. They're reviewed from the file on Josh's own schedule.
 - Doesn't repeat the Haiku/Sonnet/Opus/Fable/Flash routing table — that
   lives in `docs/ai-team-playbook.md`; this skill only applies it.
