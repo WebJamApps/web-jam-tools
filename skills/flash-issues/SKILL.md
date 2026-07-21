@@ -1,6 +1,6 @@
 ---
 name: flash-issues
-description: Scan OPEN issues across the front-end repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Haiku subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
+description: Scan OPEN issues across the front-end repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Sonnet subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
 ---
 
 # flash-issues — regenerate the Flash-lane worklist
@@ -20,27 +20,29 @@ anything, and never touches any repo's code.
 `/flash-issues` only. Never triggered automatically (no session-start hook,
 no schedule) — this is a manual worklist refresh Josh asks for.
 
-## Execution model — dispatch to Haiku, never run inline
+## Execution model — dispatch to Sonnet, never run inline
 
 `/flash-issues` is almost always invoked in a Fable/Opus session, but the
 work itself (`gh label list` / `gh issue list` scanning, mechanical
-triage-labeling, dependency reading, file writing) is exactly the mechanical
-work the team's standing routing rule says goes to the cheapest capable
-model. **The invoking session does not execute Steps 1–8 itself, no matter
-how quick it looks.**
+triage-labeling, dependency reading, file writing) is exactly the kind of
+mechanical work the team's standing routing rule says goes to the cheapest
+capable model — that used to mean Haiku, but one hardened Haiku retry still
+misjudged edge cases (dropped a named example issue, re-labeled a `parked`
+issue), so Sonnet is the cheapest capable tier for this run. **The invoking
+session does not execute Steps 1–9 itself, no matter how quick it looks.**
 
 Instead:
 
-1. Launch exactly **one** subagent via the `Agent` tool with `model: "haiku"`,
-   passing the self-contained prompt in "Dispatch prompt template" below
-   verbatim (it's written to need no context from this conversation — the
-   subagent has none).
-2. Wait for the subagent's report (the Step 9 format baked into the
+1. Launch exactly **one** subagent via the `Agent` tool with
+   `model: "sonnet"`, passing the self-contained prompt in "Dispatch prompt
+   template" below verbatim (it's written to need no context from this
+   conversation — the subagent has none).
+2. Wait for the subagent's report (the Report Back format baked into the
    template).
 3. Relay that report to Josh essentially as-is: counts, what got newly
    labeled, numbered-list count vs. Blocked count.
 4. **Never block chat on flagged items.** They live in the output file's
-   "Needs Josh's review" section (Step 8), not in a chat Q&A. State the
+   "Needs Josh's review" section (Step 9), not in a chat Q&A. State the
    count and point at the file — "N issues need your review, see the
    bottom of flash-issues.md" — and move on. Josh reviews them on his own
    time; no agent waits on an answer.
@@ -52,7 +54,7 @@ defect fix exists to close off.
 ## Dispatch prompt template (pass verbatim to the `Agent` tool)
 
 Fill in nothing — this prompt is complete as written. Pass it as the `prompt`
-argument with `subagent_type` omitted/general-purpose and `model: "haiku"`.
+argument with `subagent_type` omitted/general-purpose and `model: "sonnet"`.
 
 ````
 You are doing mechanical GitHub scanning/labeling work — no code changes, no
@@ -90,14 +92,44 @@ no split. The model-tier label family to recognize in any repo: `Haiku`,
 
 ## Step 3 — classify every open issue
 
-For each issue, FIRST check its body (case-insensitive) for an explicit
-do-not-dispatch marker: ⛔, "BLOCKED — do not build yet", "Do not start
-until…", or equivalent wording. If present, this issue goes straight to the
-Blocked section (Step 7) with that marker's stated reason — ALWAYS, even if
-it already carries a Flash-tier label, and even if what it's waiting on is
-external (a person delivering assets, a vendor — not another GitHub issue).
-Do not label it, do not touch its existing labels, do not treat it as a
-normal candidate. Skip the rest of this step for it.
+For each issue, FIRST check for the `parked` label (gray, "Parked by Josh -
+agents and skills skip this issue entirely" — exists in all five repos). If
+present, skip this issue COMPLETELY: no triage, no label changes, not in
+any output section — exactly like an issue carrying a non-Flash model
+label. This is how Josh's needs-review decisions persist between runs
+instead of evaporating: a `parked` label on GitHub is remembered next run;
+leaving an issue unlabeled is not (JaMmusic#855/#768 were deliberately left
+unlabeled as parked, and the next scan just re-labeled them Flash Med
+because nothing on GitHub said otherwise — `parked` is the fix).
+
+THEN, for every issue that isn't parked, check its body (case-insensitive)
+for an explicit do-not-dispatch marker: ⛔, "BLOCKED — do not build yet",
+"Do not start until…", or equivalent wording.
+
+- **Unconditional / external marker** — nothing to check, no issue
+  reference (e.g. "⛔ waiting on final logo files from Josh", "do not
+  build yet — assets pending from the photographer"). This issue goes
+  straight to the Blocked section (Step 7) with that marker's stated
+  reason — ALWAYS, even if it already carries a Flash-tier label. Do not
+  label it, do not touch its existing labels, do not treat it as a normal
+  candidate. Skip the rest of this step for it.
+- **Conditional marker citing an issue reference** (e.g. "Do not start
+  until wjb#987 is merged/deployed") — do NOT auto-block. Resolve the
+  referenced issue right now and run the Step 5 state check
+  (`gh issue view <n> --repo WebJamApps/<repo> --json state,labels`). If
+  it's CLOSED, the condition is satisfied — the marker is cleared, and
+  this issue continues through normal classification below as if the
+  marker weren't there. If it's still OPEN, this issue IS blocked — route
+  it to the Blocked section (Step 7) with the resolved reference and its
+  verified state as the reason, same as any other dependency-block.
+  (Live failure: #1241/#1242 got marker-blocked on wjb#987 which was
+  already CLOSED — the condition had been satisfied and nobody checked.)
+- **Decision-log / discussion citation, not a dependency** — a body
+  citation like "decisions on web-jam-back#923" or "see the discussion on
+  #200" is a pointer to WHERE a decision was recorded, not something this
+  issue depends on. Never treat a decision-record or discussion-log
+  reference as a blocker, conditional or not. (Live failure: #1195/#1196
+  got blocked on wjb#923, which is a decision log, not a dependency.)
 
 Otherwise, for each issue:
 
@@ -132,7 +164,7 @@ Otherwise, for each issue:
   candidate pool. Instead add it to a "Needs review" list, each entry
   carrying a concrete recommendation (e.g. "recommend: close as duplicate
   of CollegeLutheran#45", "recommend: keep open unlabeled — human task, not
-  codework"). This list becomes the output file's bottom section (Step 8),
+  codework"). This list becomes the output file's bottom section (Step 9),
   not a chat report — this is a hard rule, not a suggestion: an uncertain
   guess here is worse than surfacing it for a human to decide.
 
@@ -240,7 +272,27 @@ Two kinds of entry land here:
 
 No further ordering is required within this section — a plain list is fine.
 
-## Step 8 — regenerate the output file (replace, never append)
+## Step 8 — reconcile: verify nothing was silently dropped
+
+Before writing anything, every open issue seen in Step 2 must land in
+EXACTLY ONE bucket:
+
+- the numbered runnable list (Step 6)
+- the Blocked section (Step 7)
+- the Needs review section (Step 3)
+- skipped — carries a non-Flash model label (Step 3)
+- skipped — carries the `parked` label (Step 3)
+
+Count each bucket, per repo and overall, and sum them. The sum MUST equal
+the total open-issue count from Step 2. If it doesn't, an issue fell
+through the cracks — find it and file it in its correct bucket before
+writing anything. Do NOT write the output file (Step 9) until the counts
+reconcile. (Live failure: JaMmusic#555 was silently dropped from every
+section on a prior run — it wasn't in the runnable list, Blocked, Needs
+review, or accounted for as skipped.) Carry this accounting into the
+Report Back section below.
+
+## Step 9 — regenerate the output file (replace, never append)
 
 Path: ~/Dropbox/web-jam-llms/flash-issues.md — fully overwrite it every
 run. It's a regenerated snapshot, not a log: never append, never merge with
@@ -292,15 +344,19 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
   vs. newly triaged.
 - Every issue you newly labeled and what you labeled it.
 - Count in the numbered list vs. the Blocked section vs. the "Needs Josh's
-  review" section — just the count for the review section, not the list
-  (it's already in the file).
+  review" section vs. skipped-parked vs. skipped-other-model-label — just
+  the counts for the review section and skipped buckets, not the lists
+  (they're already in the file, or need no listing).
+- The Step 8 reconciliation: total open issues seen vs. the sum of all five
+  buckets. Confirm they match, or state what you found missing and where
+  you filed it before writing.
 - Confirmation the file was written to
   ~/Dropbox/web-jam-llms/flash-issues.md.
 ````
 
 ## Non-goals
 
-- The invoking session never runs Steps 1–8 itself — that's the whole point
+- The invoking session never runs Steps 1–9 itself — that's the whole point
   of this fix. If you catch yourself about to run a `gh label list` or
   `gh issue list` call inline for this skill, stop and dispatch instead.
 - Never dispatches `agy` / `handle-agy-tasks.sh` — that's Josh's manual next
@@ -322,5 +378,10 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
 - Never treats "record and publish", "get <company> to fix their listing",
   or any other manual/external-platform ask as codework just because it's
   filed in a frontend repo.
+- Never touches a `parked` issue — no triage, no label, no output section.
+  It's Josh's way of parking a decision on GitHub instead of chat, and it
+  must persist run to run, not evaporate the moment it goes unlabeled.
+- Never writes the output file before the Step 8 reconciliation count
+  matches — a dropped issue is a bug, not an acceptable gap.
 - Doesn't repeat the Haiku/Sonnet/Opus/Fable/Flash routing table — that
   lives in `docs/ai-team-playbook.md`; this skill only applies it.
