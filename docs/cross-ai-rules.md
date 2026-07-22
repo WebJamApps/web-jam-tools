@@ -76,6 +76,53 @@ Never modify a queue file that isn't yours. Phone-authored bridge files at Drive
 - **ONE REPO, ONE SESSION**: never edit a repo another AI session is actively working (Josh, 2026-07-11). Before branching or editing, check `git status -sb` — a non-`dev` branch or dirty tree means another session likely has the repo in flight. Hand the change to that session/lane (route via Josh) or ask Josh first. A separate worktree or non-colliding branch does NOT make concurrent edits OK — parallel semver bumps and surprise PRs still collide.
 - **MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL**: Two live background jobs (e.g. a subagent + a headless agy dispatch) is the cap. When a THIRD thread (new discussion, dispatch, or background job) starts in the same session, the agent must WARN Josh first and propose a separate terminal — never comply silently. Origin: 2026-07-16, Claude A froze mid-permission-prompt while running a Sonnet subagent + a headless agy dispatch plus a new discussion; recovery required keystroke injection from another session.
 
+## FE/BE COUPLING (wjt#240)
+
+A change with a back-end half and a front-end half can ship half-done — e.g. the
+"venue must have a physical address" BE rule shipped before the create-Gigs "new
+venue" FE flow collected an address, and broke prod. These rules exist to prevent
+that class of failure.
+
+### Backward-compat / expand-contract rule
+
+A back-end change to a shared contract (a required field, a validation rule, a
+request/response shape that a front-end consumes) MUST be additive/non-breaking
+until the front-end ships — enforce the breaking part in a LATER change.
+
+Right order for the venue example:
+1. BE accepts venues without an address (unchanged/additive).
+2. FE is updated to collect/require the address.
+3. THEN BE enforces the address as required.
+
+Enforcing the new required field before the FE sends it is exactly what broke
+prod — never skip straight to step 3.
+
+### Coupling record convention
+
+When work has coupled BE + FE halves, cross-reference them with a
+`FE-couples: <repo>#NNN` line in the issue/PR bodies — bidirectional, each half
+names the other (the FE issue/PR gets a matching pointer back to the BE one).
+
+### Coupling-override convention
+
+A coupled BE PR that is genuinely safe to ship alone (backward-compatible per
+the expand-contract rule above, or behind a flag) carries a
+`Coupling-override: <reason>` line in the PR body to pass the merge gate.
+Example:
+
+```
+Coupling-override: additive only — address stays optional until JaMmusic#NNN ships
+```
+
+### Merge gate (summary)
+
+A coupled BE change must reach `main` via a `dev→main` PR; a required status
+check verifies the FE half is merged to the FE repo's `main` (≈ deployed, given
+auto-deploy fan-out) OR a valid `Coupling-override:` line is present. Direct CLI
+pushes to `main` stay fine for UNcoupled changes. The enforcement Action itself
+lives in the web-jam-back repo (a separate build, out of scope here) — this
+section is the canonical rule text and conventions that Action enforces.
+
 ## MEMORY HYGIENE (standing rules for any AI on the team)
 
 - Completion-reflection: when a task tracked in any memory/queue completes, update or delete that memory, its queue line, and its MEMORY.md index line in the SAME session, before ending the turn. (A session opened before the update keeps a stale view until its next launch — the session-start reminder + /memory-cleanup close that gap.)
