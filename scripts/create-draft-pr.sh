@@ -19,6 +19,7 @@
 #
 # Usage:
 #   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--dry-run] \
+#       [--update] \
 #       [--summary TEXT | --summary-file PATH] \
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
@@ -75,8 +76,24 @@
 #                   raw-HTML-tag, and (for test-evidence) auto-fence checks below.
 #   --screenshots   Fills "## Screenshots"; omit the flag to omit the section.
 #   --dry-run       Run every guard and compose the full PR body, print it, and
-#                   exit 0 WITHOUT pushing or opening a PR. For testing this
-#                   script's composition/guards safely (web-jam-tools#150).
+#                   exit 0 WITHOUT pushing or opening/editing a PR. For testing
+#                   this script's composition/guards safely (web-jam-tools#150).
+#   --update        Update the CURRENT BRANCH's existing open PR instead of
+#                   opening a new one (web-jam-tools#236). Runs through the exact
+#                   same guard pipeline as create mode — author roster, the #77
+#                   empty/placeholder check, the unbulleted-summary check, the
+#                   #190 recognizable-test-evidence check, the #152
+#                   suite-invocations-only test-plan check, and the raw-HTML-tag
+#                   check all fire on the REAL final content, not just at initial
+#                   creation. Looks the PR up via `gh pr view` for the current
+#                   branch (push happens first, same as create mode) and refuses
+#                   if none is found — open one first (omit --update). Only the
+#                   body is replaced; the title is left as-is. Exists for a
+#                   "checkpoint" PR opened early (e.g. by the delegate skill's
+#                   dispatch-checkpoint mechanism) whose body starts as a
+#                   plan/status scaffold and needs the REAL Summary/Test
+#                   plan/Test evidence swapped in — with the same guards — once
+#                   the work is actually done, without opening a second PR.
 #
 # FORCED_PR_AUTHOR (environment variable, not a flag): when set, REPLACES
 # whatever --author was passed (or not passed) before any check runs. It still
@@ -103,8 +120,9 @@
 # section's inline flag and its *-file flag are given; body text contains raw
 # HTML-like tags outside backticks (GitHub strips them silently — backtick
 # them); current branch is dev/main; working tree dirty; the repo has no `dev`
-# branch; a resolved issue is missing/closed; or
-# --part-of is passed without a resolvable issue.
+# branch; a resolved issue is missing/closed; --part-of is passed without a
+# resolvable issue; or --update is passed but the current branch has no
+# existing open PR to update.
 
 set -euo pipefail
 
@@ -157,6 +175,7 @@ TEST_PLAN_FILE=""
 TEST_EVIDENCE_FILE=""
 PART_OF=0
 DRY_RUN=0
+UPDATE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -165,6 +184,9 @@ while [ $# -gt 0 ]; do
       shift 1 ;;
     --dry-run)
       DRY_RUN=1
+      shift 1 ;;
+    --update)
+      UPDATE=1
       shift 1 ;;
     --closes) # deprecated no-op: closing is now the default
       shift 1 ;;
@@ -488,10 +510,12 @@ BODY="$BODY
 
 🤖 Work by $AUTHOR"
 
-# --- dry-run: print the composed body and stop — no push, no PR (web-jam-tools#150) ---
+# --- dry-run: print the composed body and stop — no push, no PR opened/edited (web-jam-tools#150) ---
 if [ "$DRY_RUN" -eq 1 ]; then
+  MODE_LABEL="CREATE"
+  [ "$UPDATE" -eq 1 ] && MODE_LABEL="UPDATE"
   cat <<EOF
-=== DRY RUN (no push, no PR opened) ===
+=== DRY RUN ($MODE_LABEL — no push, no PR opened/edited) ===
 TITLE: $PR_TITLE
 === COMPOSED BODY ===
 $BODY
@@ -500,20 +524,44 @@ EOF
   exit 0
 fi
 
-# --- push, then open the draft PR based on dev ---
+# --- push, then either open a new draft PR or update the existing one (web-jam-tools#236) ---
 echo "Pushing branch '$BRANCH' to origin..."
 git push -u origin HEAD
 
-echo "Opening draft PR (base dev)${ISSUE:+ for issue #$ISSUE}..."
-PR_URL="$(gh pr create --draft --base dev --title "$PR_TITLE" --body "$BODY")"
+if [ "$UPDATE" -eq 1 ]; then
+  echo "Looking up the existing PR for branch '$BRANCH'..."
+  if ! PR_NUMBER="$(gh pr view --json number --jq .number 2>/dev/null)" || [ -z "$PR_NUMBER" ]; then
+    echo "ERROR: --update passed but branch '$BRANCH' has no existing PR (via gh pr view)." >&2
+    echo "       Open one first (omit --update) — --update only edits an existing PR's body." >&2
+    exit 1
+  fi
 
-echo ""
-echo "Draft PR opened: $PR_URL"
-if [ -z "$ISSUE" ]; then
-  echo "  base: dev | state: draft | no issue | by: $AUTHOR"
-elif [ "$PART_OF" -eq 1 ]; then
-  echo "  base: dev | state: draft | part of: #$ISSUE | by: $AUTHOR"
+  echo "Updating draft PR #$PR_NUMBER body..."
+  gh pr edit "$PR_NUMBER" --body "$BODY"
+  PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
+
+  echo ""
+  echo "Draft PR updated: $PR_URL"
+  if [ -z "$ISSUE" ]; then
+    echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+  elif [ "$PART_OF" -eq 1 ]; then
+    echo "  base: dev | state: draft | part of: #$ISSUE | by: $AUTHOR"
+  else
+    echo "  base: dev | state: draft | closes: #$ISSUE | by: $AUTHOR"
+  fi
+  echo "Josh reviews the diff and flips draft -> ready on GitHub."
 else
-  echo "  base: dev | state: draft | closes: #$ISSUE | by: $AUTHOR"
+  echo "Opening draft PR (base dev)${ISSUE:+ for issue #$ISSUE}..."
+  PR_URL="$(gh pr create --draft --base dev --title "$PR_TITLE" --body "$BODY")"
+
+  echo ""
+  echo "Draft PR opened: $PR_URL"
+  if [ -z "$ISSUE" ]; then
+    echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+  elif [ "$PART_OF" -eq 1 ]; then
+    echo "  base: dev | state: draft | part of: #$ISSUE | by: $AUTHOR"
+  else
+    echo "  base: dev | state: draft | closes: #$ISSUE | by: $AUTHOR"
+  fi
+  echo "Josh reviews the diff and flips draft -> ready on GitHub."
 fi
-echo "Josh reviews the diff and flips draft -> ready on GitHub."
