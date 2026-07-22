@@ -219,3 +219,52 @@ Deno.test("the default VALID_TEST_PLAN fixture (prose + backticked suite command
   const res = await runScript(repoDir, baseArgs());
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- --update mode (web-jam-tools#236) ---
+//
+// --update runs through the exact same guard pipeline as create mode, only
+// diverging at the final push+open/edit step — which --dry-run always skips
+// (no gh call either way). So these replay the SAME guard-failure fixtures as
+// above with --update added, proving the guards fire identically in update
+// mode instead of being silently bypassed (the defect this mode fixes: a
+// hand-written `gh pr edit` at "finalize" time used to skip every guard here).
+
+Deno.test("--update: off-roster author is refused, same as create mode", async () => {
+  const res = await runScript(
+    repoDir,
+    [...baseArgs({ author: OFF_ROSTER_AUTHOR }), "--update"],
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /does not name a model on the roster/);
+});
+
+Deno.test("--update: paraphrased test-evidence is refused, same as create mode", async () => {
+  const res = await runScript(repoDir, [
+    ...baseArgs({ evidence: PARAPHRASE_EVIDENCE }),
+    "--update",
+  ]);
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /no recognizable test-runner output/);
+});
+
+Deno.test("--update: a suite-only test-plan is refused, same as create mode (web-jam-tools#152)", async () => {
+  const res = await runScript(repoDir, [
+    ...baseArgs({ testPlan: SUITE_ONLY_TEST_PLAN }),
+    "--update",
+  ]);
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /only test-suite invocations/);
+});
+
+Deno.test("--update: a well-formed call passes validation and dry-run labels it UPDATE", async () => {
+  const res = await runScript(repoDir, [...baseArgs(), "--update"]);
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /=== DRY RUN \(UPDATE/);
+  assertMatch(res.stdout, /🤖 Work by Claude Code — Sonnet 5/);
+});
+
+Deno.test("create mode (no --update) still labels dry-run CREATE", async () => {
+  const res = await runScript(repoDir, baseArgs());
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /=== DRY RUN \(CREATE/);
+});
