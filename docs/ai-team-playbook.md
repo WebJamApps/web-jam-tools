@@ -39,6 +39,7 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
 - **Reviews are lean, not rewrites.** When Opus reviews a draft, the job is to flag specific issues — not redo the work.
 - **Phone apps drop only at Drive root.** They can't target a folder. Cleanup is the laptop's job via `/drive-cleanup`.
 - **Always delegate to the cheapest model that can do the job.** Haiku for mechanical one-offs, Sonnet for ordinary coding, Flash for frontend/UI, Opus for judgment and design only. Spending Opus tokens on mechanical work wastes the Anthropic budget.
+- **Dispatch vs. inline — judge by output volume and duration, not by task category.** **Dispatch** to a Haiku/Sonnet subagent when the job is long-running or produces heavy tool output: test suites, builds, migrations, multi-file scans or edits, anything log-noisy. This keeps that output out of the Opus session's context, which is the scarce resource. **Do it inline** when it is a handful of commands with trivial output (a few lines) — e.g. pruning a merged branch, removing a stray worktree, one `gh issue view`. A cold subagent pays its own system prompt, tool schemas and briefing before running anything, and still returns a report into the Opus context; for a job this small that fixed cost exceeds the work itself. The purpose is saving money and context. **If applying the rule would cost more than ignoring it, the rule does not apply** — say so plainly rather than following it into the more expensive path.
 - **The issue BODY is the spec agy reads — comments are for humans.** `handle-agy-tasks.sh` composes the Flash/agy prompt from the issue title + body, and (since web-jam-tools#154) also folds in the issue's comments (chronological, newest last, clearly delimited). Comments still aren't a substitute: fold every locked decision into the BODY before dispatching, or Flash may miss it. If the BODY still contains a `BLOCKED` / `DO NOT START` marker, the script refuses to dispatch and exits non-zero — clear the marker in the body first.
 
 ---
@@ -205,6 +206,7 @@ Several workflows are built around **Josh approving each step** before the next 
 | Frontend / UI coding task | **Flash** (agy/Antigravity) via `/next` |
 | Ordinary contained coding task | **Sonnet** subagent (via Opus) |
 | Mechanical one-off (lookup, data fix, typo, scan) | **Haiku** subagent (via Opus) |
+| ↳ but if the job is a few commands with trivial output (prune a branch, one lookup) | **Inline** — a cold subagent costs more than the work; see "Dispatch vs. inline" above |
 | Design, architecture, multi-file judgment | **Opus** (Claude Code) |
 | Modify, move, or delete a Drive file | Claude Code on laptop (Drive MCP) or the web Drive app |
 | Save something into a Drive folder | Don't do this on phone — use the laptop |
