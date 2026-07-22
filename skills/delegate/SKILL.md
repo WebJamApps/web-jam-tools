@@ -193,34 +193,43 @@ its own:
    add a separate "checkpoint before every risky step" rule — a risky step is
    just its own checklist item, already covered by trigger 1 above.
 
-**Interaction with create-draft-pr.sh:** the script only ever calls
-`gh pr create` — it has no "update an existing PR" mode, so it can be run **at
-most once per branch** (a second call errors: a pull request already exists for
-that head). That collides with "open early, keep updated, never a second PR," so
-resolve it this way:
+**Interaction with create-draft-pr.sh:** the script supports two modes
+(web-jam-tools#236) — default CREATE (`gh pr create`, refuses if a PR already
+exists for the branch) and `--update` (`gh pr edit` on the branch's existing
+PR). Both run through the exact same guard pipeline — author roster, the #77
+empty/placeholder check, the unbulleted-summary check, the #190
+recognizable-test-evidence check, the #152 suite-invocations-only test-plan
+check, the raw-HTML-tag check — so the checkpoint flow uses ONE script for
+both ends of the PR's life instead of a hand-written `gh pr edit` that would
+silently skip all of that at the moment it matters most:
 
-- **Early open — still through the script.** Run create-draft-pr.sh right after
-  the branch, first commit, and push, passing the Plan checklist itself as
-  `--summary` (its `- [ ]` lines satisfy the bulleted-summary check), a short
-  honest `--test-plan` describing what you intend to verify (non-suite prose is
-  enough to clear the exercise-the-change check), and for `--test-evidence` the
-  REAL output of the repo's fastest check task run once at that point as a
-  **baseline** (e.g. `deno task lint` / `fmt:check`) — real output, explicitly
-  labeled a baseline, never invented pass/fail numbers. This preserves every
-  script guard (draft + base dev, author-roster check, `Closes #NNN`, attribution
-  footer, raw-HTML-tag check) at the moment the checkpoint PR is born.
+- **Early open — CREATE mode.** Run create-draft-pr.sh (no `--update`) right
+  after the branch, first commit, and push, passing the Plan checklist itself
+  as `--summary` (its `- [ ]` lines satisfy the bulleted-summary check), a
+  short honest `--test-plan` describing what you intend to verify (non-suite
+  prose clears the exercise-the-change check), and for `--test-evidence` an
+  honest, not-yet-done line that still contains the word `Tests:` so it clears
+  the recognizable-output check without inventing a result — e.g. `"Tests:
+  not yet run — this is the initial checkpoint; real evidence lands at
+  finalize."` Never fake pass/fail counts here; the guard only cares that the
+  section names itself as test output, and the real numbers arrive at
+  finalize below. This preserves every create-time guard (draft + base dev,
+  author-roster check, `Closes #NNN`, attribution footer, raw-HTML-tag check)
+  at the moment the checkpoint PR is born.
 - **Cadence updates — plain edits, not the script.** Every checklist tick and
-  "Decisions / blockers" line after that is `gh pr edit <num> --body-file <path>`
-  — never a second `create-draft-pr.sh` call (it would try to open a duplicate
-  PR and fail).
-- **Finalize — also a plain edit on the SAME PR**, not a script call: replace the
-  checkpoint scaffolding with the real sections — bulleted `## Summary`, an
-  exercise-the-change `## How to test locally`, real pass/fail `## Test
-  evidence`, `Closes #NNN`, and the `🤖 Work by <tool> — <model>` footer —
-  applying by hand the exact bar `create-draft-pr.sh` would enforce, since the
-  script itself can't touch a PR that already exists. This supersedes the
-  "Finish by running create-draft-pr.sh" line in the conventions block above for
-  dispatches using this mechanism.
+  "Decisions / blockers" line after that is `gh pr edit <num> --body-file
+  <path>` — these are lightweight status pokes, not a finished deliverable
+  description, so they don't need to clear the script's content guards; that's
+  what finalize is for.
+- **Finalize — `create-draft-pr.sh --update` on the SAME PR**, with the REAL
+  `--summary` / `--test-plan` / `--test-evidence` / `--author` (and `--part-of`
+  if applicable) — replacing the checkpoint scaffolding with bulleted `##
+  Summary`, an exercise-the-change `## How to test locally`, real pass/fail
+  `## Test evidence`, `Closes #NNN`, and the `🤖 Work by <tool> — <model>`
+  footer, with every guard re-firing on the real final content. This
+  supersedes the "Finish by running create-draft-pr.sh" line in the
+  conventions block above for dispatches using this mechanism — that line now
+  means "run it once more, with `--update`."
 
 **Applies to:** the Sonnet, Opus, and Haiku **code-change** templates below
 (anywhere a branch gets created). It's moot for a pure research/lookup Haiku
@@ -245,10 +254,12 @@ Rules:
   dev. Commit with a clear message ending exactly:
     Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>
   Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
-  open the checkpoint draft PR early (right after branch + first commit + push),
-  keep it updated at each of the two triggers, and finalize the SAME PR at the
-  end — never open a second PR. (Skip this checkpoint step entirely for a pure
-  research/lookup task that creates no branch.)
+  open the checkpoint draft PR early (right after branch + first commit + push,
+  via create-draft-pr.sh CREATE mode), keep it updated at each of the two
+  triggers via `gh pr edit`, and finalize the SAME PR at the end via
+  create-draft-pr.sh `--update` — never open a second PR. (Skip this
+  checkpoint step entirely for a pure research/lookup task that creates no
+  branch.)
 - Do NOT bump the package.json version — that happens once per PR, not per commit
   (skip entirely if this is a follow-up commit to an already-open PR).
 
@@ -282,20 +293,27 @@ Rules:
     Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 - Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
-  via create-draft-pr.sh per that subsection's recipe), keep it updated at each
-  of the two triggers via `gh pr edit`, and finalize the SAME PR at the end —
-  never open a second PR. (Skip entirely if this is a follow-up commit to an
-  already-open checkpoint PR — just keep updating it.)
+  via create-draft-pr.sh CREATE mode per that subsection's recipe), keep it
+  updated at each of the two triggers via `gh pr edit`, and finalize the SAME
+  PR at the end via create-draft-pr.sh **--update** — never open a second PR.
+  (Skip entirely if this is a follow-up commit to an already-open checkpoint
+  PR — just keep updating it, and let whichever dispatch finishes the work run
+  the `--update` finalize.)
 - Find this repo's real lint + test scripts (AGENTS.md / package.json "scripts" —
   commonly `npm run lint` + `npm test`, some repos use `npm run test:lint` /
   `npm run test:unit`) and get both green before finishing.
-- To finalize the checkpoint PR at the end, `gh pr edit` its body to real
-  sections — bulleted "## Summary", an exercise-the-change "## How to test
-  locally" (UI -> exact manual steps; backend/API -> runnable curl + expected
-  response; docs/tooling -> the command that shows the change took effect —
-  web-jam-tools#152: suite invocations alone, e.g. "npm test passes", are not a
-  test plan), real "## Test evidence" (the actual lint+test output you saw), plus
-  `Closes #NNN` and the attribution footer below.
+- To finalize the checkpoint PR at the end, run:
+    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --update \
+      --author "Claude Code — Sonnet 5" \
+      --summary "<bulleted, filled in by you>" \
+      --test-plan "<exercise-the-change steps, not just suite invocations —
+        web-jam-tools#152: UI -> exact manual steps; backend/API -> runnable
+        curl + expected response; docs/tooling -> the command that shows the
+        change took effect>" \
+      --test-evidence "<the actual lint+test output you saw>"
+  This re-runs the full guard pipeline on the real content and replaces the
+  checkpoint scaffolding in place — never a hand-written `gh pr edit` for this
+  step.
 
 <Mandatory PR attribution & conventions block from above, filled in for
 "Claude Code — Sonnet 5">
@@ -327,21 +345,28 @@ Rules:
     Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 - Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
-  via create-draft-pr.sh per that subsection's recipe), keep it updated at each
-  of the two triggers via `gh pr edit`, and finalize the SAME PR at the end —
-  never open a second PR. (Skip entirely if this is a follow-up commit to an
-  already-open checkpoint PR — just keep updating it.)
+  via create-draft-pr.sh CREATE mode per that subsection's recipe), keep it
+  updated at each of the two triggers via `gh pr edit`, and finalize the SAME
+  PR at the end via create-draft-pr.sh **--update** — never open a second PR.
+  (Skip entirely if this is a follow-up commit to an already-open checkpoint
+  PR — just keep updating it, and let whichever dispatch finishes the work run
+  the `--update` finalize.)
 - Find this repo's real lint + test scripts (AGENTS.md / package.json "scripts")
   and get both green before finishing.
 - Where there's a genuine design choice, make it and say why in the summary —
   don't ask a follow-up question you could resolve yourself with repo context.
-- To finalize the checkpoint PR at the end, `gh pr edit` its body to real
-  sections — bulleted "## Summary", an exercise-the-change "## How to test
-  locally" (UI -> exact manual steps; backend/API -> runnable curl + expected
-  response; docs/tooling -> the command that shows the change took effect —
-  web-jam-tools#152: suite invocations alone, e.g. "npm test passes", are not a
-  test plan), real "## Test evidence" (the actual lint+test output you saw), plus
-  `Closes #NNN` and the attribution footer below.
+- To finalize the checkpoint PR at the end, run:
+    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --update \
+      --author "Claude Code — Opus 4.8" \
+      --summary "<bulleted, filled in by you>" \
+      --test-plan "<exercise-the-change steps, not just suite invocations —
+        web-jam-tools#152: UI -> exact manual steps; backend/API -> runnable
+        curl + expected response; docs/tooling -> the command that shows the
+        change took effect>" \
+      --test-evidence "<the actual lint+test output you saw>"
+  This re-runs the full guard pipeline on the real content and replaces the
+  checkpoint scaffolding in place — never a hand-written `gh pr edit` for this
+  step.
 
 <Mandatory PR attribution & conventions block from above, filled in for
 "Claude Code — Opus 4.8">
