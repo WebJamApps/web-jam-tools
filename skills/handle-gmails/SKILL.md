@@ -1,17 +1,31 @@
 ---
 name: handle-gmails
-description: Process Josh's Gmail inbox one message at a time, newest first. Suggest action (archive / delete / draft reply / label / mark important / mark spam / unsubscribe / next). Pause for approval before executing. Runs on TWO surfaces — laptop Opus (Claude Code, local mcp__gmail__ tools + local files) and phone Sonnet (Claude app, mcp__claude_ai_Gmail__ tools, no filesystem). Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Per-sender auto-archive rules in rules.yaml (laptop only). Daily-handled log in log/<YYYY-MM-DD>.md (laptop only, auto-pruned after 7 days). Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar. Also invoke if a session-start hook reminder appears noting today hasn't been handled.
+description: Process Josh's Gmail inbox one message at a time, newest first. Suggest action (archive / delete / draft reply / label / mark important / mark spam / unsubscribe / next). Pause for approval before executing. Runs on TWO surfaces — laptop Haiku (Claude Code, local mcp__gmail__ tools + local files; MUST be on the Haiku model — the skill refuses to run on a pricier model) and phone Sonnet (Claude app, mcp__claude_ai_Gmail__ tools, no filesystem). Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Per-sender auto-archive rules in rules.yaml (laptop only). Daily-handled log in log/<YYYY-MM-DD>.md (laptop only, auto-pruned after 7 days). Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar. Also invoke if a session-start hook reminder appears noting today hasn't been handled.
 ---
 
 # handle-gmails
 
 Process Josh's primary Gmail (joshua.v.sherman@gmail.com) one message at a time, newest first. Includes **both read and unread** messages in `label:inbox` — Josh is trying to keep the inbox clean, not just process unread.
 
+## ⛔ Model gate — laptop MUST be on Haiku (do this FIRST)
+
+This is mechanical, high-volume triage: every message body gets pulled into context one at a time, so it must run on the **cheapest tier**. On the laptop that is **Haiku**; on the phone it is the **Sonnet** seat. **Never run it on Opus** (or any pricier model) — that burns high-tier tokens on routine cleanup.
+
+A skill cannot switch the session model itself, so on the laptop the **very first action of this skill is to check the running model** — before pulling any email:
+
+- **If the model is NOT Haiku** (e.g. Opus, or Sonnet): do **not** process any message. Stop immediately and tell Josh, verbatim:
+  > ⛔ handle-gmails must run on **Haiku** to keep Gmail cleanup cheap. Please switch models first — type `/model haiku` — then re-run `/handle-gmails`.
+
+  Then **STOP and wait.** Do not proceed with any triage until the session is on Haiku.
+- **If the model IS Haiku:** proceed with the per-session flow below.
+
+The **phone Sonnet** surface is exempt from this gate — Sonnet is the intended cheap tier on mobile.
+
 ## Surfaces — who runs this and how it loads
 
 This one skill runs on two surfaces against the **same** primary inbox. Don't run both at the same moment.
 
-| | **Laptop — Opus** (Claude Code) | **Phone — Sonnet** (Claude app) |
+| | **Laptop — Haiku** (Claude Code) | **Phone — Sonnet** (Claude app) |
 |---|---|---|
 | Gmail tools | `mcp__gmail__*` (local MCP) | `mcp__claude_ai_Gmail__*` |
 | Local filesystem | yes | **no** |
