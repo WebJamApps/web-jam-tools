@@ -5,7 +5,7 @@ This file contains instructions and context for every AI agent (Claude Code, agy
 ## Read also
 
 - [docs/ai-team-playbook.md](docs/ai-team-playbook.md) — the current AI team, what each tier is best at, how work hands off, and where Josh approves.
-- [docs/cross-ai-rules.md](docs/cross-ai-rules.md) — cross-AI operational rules (voice rules, file placement, protected files, canonical task queues, memory hygiene) that apply to every AI on the team.
+- [docs/cross-ai-rules.md](docs/cross-ai-rules.md) — cross-AI operational rules (voice rules, file placement, protected files, canonical task queues, memory hygiene) that apply to every AI on the team. Its **FE/BE COUPLING** section covers the backward-compat/expand-contract rule for shared BE/FE contracts and the `FE-couples:`/`Coupling-override:` conventions — read it before shipping a front-end half of coupled work.
 
 ## Workspace Overview
 - **Root Directory:** `/home/joshua/WebJamApps`

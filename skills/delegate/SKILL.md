@@ -112,6 +112,18 @@ repos (CollegeLutheran, JaMmusic, web-jam-back, AppersonAuto, WebJamSocketCluste
 bump is enforced automatically by a pre-push hook (`~/.claude/hooks/`), not a rule
 the subagent has to self-police.
 
+### Coupling nudge (parent-side, before dispatching)
+
+> Before dispatching an issue with a `FE-couples: <repo>#NNN` line, dispatch
+> **both** lanes — Sonnet (BE) and Flash (FE #NNN) — never the BE half alone.
+> The coupled BE change must reach `main` via a `dev→main` PR (the merge-gate
+> check blocks direct promotion until FE #NNN is merged to its `main`).
+
+See `docs/cross-ai-rules.md` § FE/BE COUPLING for the full rule (backward-compat/
+expand-contract, the `FE-couples:`/`Coupling-override:` conventions, and the
+merge gate) — this is the decision point where a parent session must catch it,
+before either lane is sent off.
+
 ### Mandatory: PR attribution & conventions block
 
 Every generated dispatch prompt (Haiku/Sonnet/Opus, and the agy prompt in
@@ -236,6 +248,14 @@ silently skip all of that at the moment it matters most:
 task that creates no branch — there's no Layer-1/Layer-2 split to protect there,
 so skip the whole mechanism.
 
+### Mandatory (code-change dispatches that can touch a backend): backward-compat contract check
+
+If the change touches a shared BE/FE contract (a required field, a validation
+rule, or a request/response shape a front-end consumes), it must stay
+additive/non-breaking until the front-end ships — see `docs/cross-ai-rules.md`
+§ FE/BE COUPLING for the full expand-contract rule and the venue-address
+example of what breaks when it's skipped.
+
 ### Haiku — mechanical / gh / research
 
 ```
@@ -262,6 +282,8 @@ Rules:
   branch.)
 - Do NOT bump the package.json version — that happens once per PR, not per commit
   (skip entirely if this is a follow-up commit to an already-open PR).
+- Follow the "Backward-compat contract check" subsection above if this touches
+  a shared BE/FE contract.
 
 <Mandatory PR attribution & conventions block from above, filled in for
 "Claude Code — Haiku 4.5">
@@ -302,6 +324,8 @@ Rules:
 - Find this repo's real lint + test scripts (AGENTS.md / package.json "scripts" —
   commonly `npm run lint` + `npm test`, some repos use `npm run test:lint` /
   `npm run test:unit`) and get both green before finishing.
+- Follow the "Backward-compat contract check" subsection above if this touches
+  a shared BE/FE contract.
 - To finalize the checkpoint PR at the end, run:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --update \
       --author "Claude Code — Sonnet 5" \
@@ -353,6 +377,8 @@ Rules:
   the `--update` finalize.)
 - Find this repo's real lint + test scripts (AGENTS.md / package.json "scripts")
   and get both green before finishing.
+- Follow the "Backward-compat contract check" subsection above if this touches
+  a shared BE/FE contract.
 - Where there's a genuine design choice, make it and say why in the summary —
   don't ask a follow-up question you could resolve yourself with repo context.
 - To finalize the checkpoint PR at the end, run:
