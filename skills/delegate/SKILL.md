@@ -98,6 +98,14 @@ prompt must be self-contained: repo path, branch, commit format, the version-bum
 rule, and an explicit report-back list. Fill in the placeholders; don't paste them
 literally.
 
+**If the authoritative spec for a task lives in a GitHub issue COMMENT** (not the
+issue body — e.g. the design got settled through back-and-forth in the comment
+thread), the dispatching parent MUST inline that spec text into the prompt's
+`Task:` field. Never pass a bare issue number expecting the sub-agent to
+reconstruct it from the issue plus its comments — a sub-agent dispatched via the
+`Agent` tool doesn't fetch the issue at all; it only ever sees what's in the
+prompt.
+
 The templates below say `package.json` "version" — that's correct for the Node
 repos (CollegeLutheran, JaMmusic, web-jam-back, AppersonAuto, WebJamSocketCluster).
 `web-jam-tools` itself is Deno: swap in `deno.json` "version" and note that its
@@ -130,6 +138,95 @@ PR attribution & conventions:
   to an already-open PR keep the same version.
 ```
 
+### Mandatory (code-change dispatches): Dispatch checkpoint (loss prevention)
+
+Code-change dispatches (anywhere a branch gets created) additionally carry this
+shared mechanism, on top of the conventions block above. It exists because a
+sub-agent's work has two layers, and only one of them survives a dead session on
+its own:
+
+- **Layer 1 (code)** survives on disk once committed — a branch plus incremental
+  `git commit`/`git push` protects it, nothing more is needed.
+- **Layer 2 (knowledge — what was done, decided, or left)** lives only in the
+  sub-agent's context. If the parent dies before the sub-agent relays its final
+  report (e.g. an account usage-cap cutoff), Layer 2 is gone even though Layer 1
+  is safely pushed. This mechanism addresses Layer 2.
+- **Key insight:** a usage-cap cutoff kills the SUB-AGENT too, mid-work — not
+  just the parent. A scheme that writes the "report" only as the sub-agent's
+  LAST action never runs in the worst case. Capture has to be INCREMENTAL,
+  landing somewhere that survives independently of either agent's context: the
+  PR body.
+
+**The mechanism:**
+
+1. The DISPATCHING PARENT fills a **Plan checklist** into the dispatch prompt —
+   the parent already knows the plan, so this is the reliable "intent" half, and
+   it scaffolds the sub-agent's job down to "keep status honest" rather than
+   "invent a tracking format."
+2. The sub-agent, EARLY — right after creating the branch and making the first
+   commit — opens a draft PR whose body is this checkpoint template:
+
+```
+## Dispatch checkpoint (auto — do not delete)
+**Issue:** #NNN   **Branch:** claude/nnn-x   **Model:** <model>
+**Resume:** checkout branch, read CURRENT STATUS, continue from first unchecked step
+
+### CURRENT STATUS
+⏳ starting
+
+### Plan
+- [ ] step 1 …
+- [ ] step 2 …
+- [ ] step 3 …
+
+### Decisions / blockers
+(sub-agent appends one line each as they happen)
+```
+
+3. **Cadence — exactly two triggers** (keep it lean; ~3-6 cheap writes total for
+   a typical dispatch):
+   - **Step completed** → tick its box and overwrite `CURRENT STATUS` with the
+     next step.
+   - **Decision or blocker** → append one line under "Decisions / blockers".
+4. **Cost levers:** OVERWRITE the bounded `CURRENT STATUS` line — never grow it
+   into a log. Milestone cadence is per checklist step, NOT per file edit. Do NOT
+   add a separate "checkpoint before every risky step" rule — a risky step is
+   just its own checklist item, already covered by trigger 1 above.
+
+**Interaction with create-draft-pr.sh:** the script only ever calls
+`gh pr create` — it has no "update an existing PR" mode, so it can be run **at
+most once per branch** (a second call errors: a pull request already exists for
+that head). That collides with "open early, keep updated, never a second PR," so
+resolve it this way:
+
+- **Early open — still through the script.** Run create-draft-pr.sh right after
+  the branch, first commit, and push, passing the Plan checklist itself as
+  `--summary` (its `- [ ]` lines satisfy the bulleted-summary check), a short
+  honest `--test-plan` describing what you intend to verify (non-suite prose is
+  enough to clear the exercise-the-change check), and for `--test-evidence` the
+  REAL output of the repo's fastest check task run once at that point as a
+  **baseline** (e.g. `deno task lint` / `fmt:check`) — real output, explicitly
+  labeled a baseline, never invented pass/fail numbers. This preserves every
+  script guard (draft + base dev, author-roster check, `Closes #NNN`, attribution
+  footer, raw-HTML-tag check) at the moment the checkpoint PR is born.
+- **Cadence updates — plain edits, not the script.** Every checklist tick and
+  "Decisions / blockers" line after that is `gh pr edit <num> --body-file <path>`
+  — never a second `create-draft-pr.sh` call (it would try to open a duplicate
+  PR and fail).
+- **Finalize — also a plain edit on the SAME PR**, not a script call: replace the
+  checkpoint scaffolding with the real sections — bulleted `## Summary`, an
+  exercise-the-change `## How to test locally`, real pass/fail `## Test
+  evidence`, `Closes #NNN`, and the `🤖 Work by <tool> — <model>` footer —
+  applying by hand the exact bar `create-draft-pr.sh` would enforce, since the
+  script itself can't touch a PR that already exists. This supersedes the
+  "Finish by running create-draft-pr.sh" line in the conventions block above for
+  dispatches using this mechanism.
+
+**Applies to:** the Sonnet, Opus, and Haiku **code-change** templates below
+(anywhere a branch gets created). It's moot for a pure research/lookup Haiku
+task that creates no branch — there's no Layer-1/Layer-2 split to protect there,
+so skip the whole mechanism.
+
 ### Haiku — mechanical / gh / research
 
 ```
@@ -137,12 +234,21 @@ You are doing mechanical work in the <repo> repo at ~/WebJamApps/<repo>.
 
 Task: <one precise, unambiguous instruction — name the exact file/field/function/gh command>
 
+<If this involves a code change, give the sub-agent a Plan checklist here (2-5
+steps) — see the "Dispatch checkpoint" subsection above; skip this whole block
+for a pure research/lookup task that creates no branch.>
+
 Rules:
 - Do not make design decisions. If the task is ambiguous (could point to more than
   one file/function/flow), STOP and report the ambiguity instead of guessing.
 - If this involves a code change: work on branch claude/<issue#>-<slug> off latest
   dev. Commit with a clear message ending exactly:
     Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>
+  Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
+  open the checkpoint draft PR early (right after branch + first commit + push),
+  keep it updated at each of the two triggers, and finalize the SAME PR at the
+  end — never open a second PR. (Skip this checkpoint step entirely for a pure
+  research/lookup task that creates no branch.)
 - Do NOT bump the package.json version — that happens once per PR, not per commit
   (skip entirely if this is a follow-up commit to an already-open PR).
 
@@ -165,6 +271,8 @@ Task: <what and why, 2-4 sentences of context>
 Setup:
 - Repo: ~/WebJamApps/<repo>
 - Branch: claude/<issue#>-<slug> (create off latest dev if it doesn't exist)
+- Plan checklist (fill this in — feeds the "Dispatch checkpoint" subsection
+  above): <2-5 steps>
 - <If this is a follow-up commit to an already-open PR #N: DO NOT bump the
   package.json version — it was already bumped once for this PR. Only bump on
   the PR's first commit.>
@@ -172,29 +280,29 @@ Setup:
 Rules:
 - Commit incrementally with clear messages ending exactly:
     Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+- Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
+  open the checkpoint draft PR early (right after branch + first commit + push,
+  via create-draft-pr.sh per that subsection's recipe), keep it updated at each
+  of the two triggers via `gh pr edit`, and finalize the SAME PR at the end —
+  never open a second PR. (Skip entirely if this is a follow-up commit to an
+  already-open checkpoint PR — just keep updating it.)
 - Find this repo's real lint + test scripts (AGENTS.md / package.json "scripts" —
   commonly `npm run lint` + `npm test`, some repos use `npm run test:lint` /
   `npm run test:unit`) and get both green before finishing.
-- <If opening a new PR:> When done, run (never call `gh pr create` directly):
-    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
-      --author "Claude Code — Sonnet 5" \
-      --summary "<bulleted, filled in by you>" \
-      --test-plan "<suite command(s) PLUS steps that EXERCISE THE CHANGE: UI -> exact
-        manual steps (start command, route, clicks, expected visible result);
-        backend/API -> runnable curl + expected response; docs/tooling -> the
-        command that shows the change took effect. web-jam-tools#152: the script
-        REJECTS a plan that is only test-suite invocations (npm test, deno task
-        test, vitest, eslint, ...) with nothing else — 'the tests pass' is not a
-        test plan for the change you made>" \
-      --test-evidence "<the actual lint+test output you saw>" \
-      [--part-of]   # ONLY if the issue must stay open (partial PR / run-log / epic); default closes it
+- To finalize the checkpoint PR at the end, `gh pr edit` its body to real
+  sections — bulleted "## Summary", an exercise-the-change "## How to test
+  locally" (UI -> exact manual steps; backend/API -> runnable curl + expected
+  response; docs/tooling -> the command that shows the change took effect —
+  web-jam-tools#152: suite invocations alone, e.g. "npm test passes", are not a
+  test plan), real "## Test evidence" (the actual lint+test output you saw), plus
+  `Closes #NNN` and the attribution footer below.
 
 <Mandatory PR attribution & conventions block from above, filled in for
 "Claude Code — Sonnet 5">
 
 Report back:
 - Summary of what changed, bulleted
-- The real lint/test output (this is what feeds --test-evidence — don't paraphrase it)
+- The real lint/test output (this is what feeds the finalized Test evidence — don't paraphrase it)
 - Any open questions or things you couldn't verify
 ```
 
@@ -209,36 +317,38 @@ routine enough for Sonnet>
 Setup:
 - Repo: ~/WebJamApps/<repo>
 - Branch: claude/<issue#>-<slug> (create off latest dev if it doesn't exist)
+- Plan checklist (fill this in — feeds the "Dispatch checkpoint" subsection
+  above): <2-5 steps>
 - <If this is a follow-up commit to an already-open PR #N: DO NOT bump the
   package.json version — only the PR's first commit bumps it.>
 
 Rules:
 - Commit incrementally with clear messages ending exactly:
     Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
+  open the checkpoint draft PR early (right after branch + first commit + push,
+  via create-draft-pr.sh per that subsection's recipe), keep it updated at each
+  of the two triggers via `gh pr edit`, and finalize the SAME PR at the end —
+  never open a second PR. (Skip entirely if this is a follow-up commit to an
+  already-open checkpoint PR — just keep updating it.)
 - Find this repo's real lint + test scripts (AGENTS.md / package.json "scripts")
   and get both green before finishing.
 - Where there's a genuine design choice, make it and say why in the summary —
   don't ask a follow-up question you could resolve yourself with repo context.
-- <If opening a new PR:> When done, run (never call `gh pr create` directly):
-    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
-      --author "Claude Code — Opus 4.8" \
-      --summary "<bulleted, filled in by you>" \
-      --test-plan "<suite command(s) PLUS steps that EXERCISE THE CHANGE: UI -> exact
-        manual steps (start command, route, clicks, expected visible result);
-        backend/API -> runnable curl + expected response; docs/tooling -> the
-        command that shows the change took effect. web-jam-tools#152: the script
-        REJECTS a plan that is only test-suite invocations (npm test, deno task
-        test, vitest, eslint, ...) with nothing else — 'the tests pass' is not a
-        test plan for the change you made>" \
-      --test-evidence "<the actual lint+test output you saw>" \
-      [--part-of]   # ONLY if the issue must stay open; default closes it
+- To finalize the checkpoint PR at the end, `gh pr edit` its body to real
+  sections — bulleted "## Summary", an exercise-the-change "## How to test
+  locally" (UI -> exact manual steps; backend/API -> runnable curl + expected
+  response; docs/tooling -> the command that shows the change took effect —
+  web-jam-tools#152: suite invocations alone, e.g. "npm test passes", are not a
+  test plan), real "## Test evidence" (the actual lint+test output you saw), plus
+  `Closes #NNN` and the attribution footer below.
 
 <Mandatory PR attribution & conventions block from above, filled in for
 "Claude Code — Opus 4.8">
 
 Report back:
 - Summary of what changed AND the reasoning behind any judgment call, bulleted
-- The real lint/test output (feeds --test-evidence — don't paraphrase it)
+- The real lint/test output (feeds the finalized Test evidence — don't paraphrase it)
 - Any open questions or things you couldn't verify
 ```
 
