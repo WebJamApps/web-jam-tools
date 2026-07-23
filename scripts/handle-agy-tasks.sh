@@ -23,13 +23,18 @@
 #   handle-agy-tasks.sh --dry-run CollegeLutheran#123
 #                                               # print the composed prompt and
 #                                               # exit — no agy call. Still does
-#                                               # the real git setup (checkout
-#                                               # dev, pull, create the branch),
-#                                               # same as --setup-only, so point
-#                                               # it at a scratch clone (see
-#                                               # AGY_WEBJAM_ROOT below) rather
-#                                               # than a repo you're actively
-#                                               # working in.
+#                                               # the real git setup (fetch dev,
+#                                               # create the branch), same as
+#                                               # --setup-only. web-jam-tools#239
+#                                               # item 2: this setup now happens
+#                                               # in an isolated /tmp worktree,
+#                                               # not the repo folder itself, so
+#                                               # AGY_WEBJAM_ROOT (below) is no
+#                                               # longer needed just to avoid
+#                                               # disturbing a repo you're
+#                                               # actively working in — it's
+#                                               # still there for other scratch-
+#                                               # clone testing needs.
 #
 # web-jam-tools#154 — issue-based dispatch note: the composed prompt now also
 # includes the issue's COMMENTS (chronological, newest last, under a clear
@@ -173,6 +178,23 @@ if [ ! -d "$REPO_DIR" ]; then
 fi
 cd "$REPO_DIR"
 
+# --- worktree isolation (web-jam-tools#239 item 2) --------------------------
+# agy runs in an isolated git worktree under /tmp instead of cd-ing/branching
+# in Josh's main clone directly, so the main clone stays free (on whatever
+# branch, even dirty) for the whole run. Prune stale worktree admin entries
+# left behind by previously-reaped /tmp worktrees first.
+git worktree prune
+
+mkdir -p /tmp/agy-worktrees
+worktree_path_for() {
+  local branch="$1"
+  local path="/tmp/agy-worktrees/${REPO}-${branch//\//-}"
+  if [ -e "$path" ]; then
+    path="$(mktemp -u "${path}.XXXXXX")"
+  fi
+  echo "$path"
+}
+
 # --- resume-mode detection (web-jam-tools#187) — auto-detect, no flag needed: if
 # an agy/<issue#>-* branch already exists for this issue (a died-mid-run branch
 # from a prior invocation — e.g. JaMmusic#1194's 60m print-timeout), resume it
@@ -181,7 +203,8 @@ cd "$REPO_DIR"
 # against the same issue is the natural recovery gesture — nothing extra for
 # Josh (or a re-dispatch) to remember. Only applies to issue-based dispatch —
 # queue-line tasks have no issue number to key off, same scoping as the BLOCKED
-# guard above.
+# guard above. This ref lookup reads local refs shared by the whole repo (main
+# clone + all its worktrees), so it runs before any worktree is created.
 RESUME_MODE=0
 EXISTING_BRANCH=""
 if [ -n "${ISSUE_NUM:-}" ]; then
@@ -194,10 +217,25 @@ if [ -n "${ISSUE_NUM:-}" ]; then
 fi
 
 if [ "$RESUME_MODE" -eq 1 ]; then
-  if ! git checkout "$EXISTING_BRANCH"; then
-    echo "ERROR: could not check out existing branch $EXISTING_BRANCH — resolve manually (e.g. stash or commit whatever is currently checked out) and retry." >&2
-    exit 1
+  BRANCH="$EXISTING_BRANCH"
+  # If a worktree for this branch is already attached — e.g. left over from a
+  # run that crashed mid-task, exactly the scenario this resume path exists
+  # for (JaMmusic#1194) — reuse it instead of trying to add a second one (git
+  # refuses to check out the same branch into two worktrees at once).
+  EXISTING_WORKTREE="$(git worktree list --porcelain \
+    | awk -v b="refs/heads/$BRANCH" '/^worktree /{p=substr($0,10)} /^branch /{if (substr($0,8)==b) print p}')"
+  if [ -n "$EXISTING_WORKTREE" ]; then
+    WORKTREE_DIR="$EXISTING_WORKTREE"
+    echo "Reusing existing worktree for $BRANCH at $WORKTREE_DIR ..."
+  else
+    WORKTREE_DIR="$(worktree_path_for "$BRANCH")"
+    echo "Adding worktree for existing branch $BRANCH at $WORKTREE_DIR ..."
+    if ! git worktree add "$WORKTREE_DIR" "$BRANCH"; then
+      echo "ERROR: could not add a worktree for existing branch $BRANCH — resolve manually (e.g. it may already be checked out elsewhere) and retry." >&2
+      exit 1
+    fi
   fi
+  cd "$WORKTREE_DIR"
   if [ -n "$(git status --porcelain)" ]; then
     # A died-mid-run branch commonly has uncommitted work (that's exactly what
     # killed JaMmusic#1194 — nearly-complete work sitting uncommitted when the
@@ -207,26 +245,20 @@ if [ "$RESUME_MODE" -eq 1 ]; then
     # authored prior uncommitted work, and the motivating case is a single-model
     # AGY_MODELS override, where that's exactly right.
     WIP_MODEL="${MODELS[0]}"
-    echo "Working tree on $EXISTING_BRANCH is dirty — committing WIP (crediting $WIP_MODEL) before resuming."
+    echo "Working tree on $BRANCH is dirty — committing WIP (crediting $WIP_MODEL) before resuming."
     git add -A
     git commit -m "wip: salvage uncommitted work from interrupted agy run (model: $WIP_MODEL)"
   fi
-  BRANCH="$EXISTING_BRANCH"
-  echo "Resuming on branch: $BRANCH"
+  echo "Resuming on branch: $BRANCH (worktree: $WORKTREE_DIR)"
 else
-  # --- never stomp uncommitted work ---
-  if [ -n "$(git status --porcelain)" ]; then
-    echo "ERROR: working tree is dirty in $REPO_DIR — commit or stash first." >&2
-    git status --short >&2
-    exit 1
-  fi
+  # --- fresh dev: fetch the latest tip without touching the main clone's own
+  # checked-out branch (that's the whole point of worktree isolation) — no
+  # local `dev` checkout/pull here; the new branch is created straight off
+  # origin/dev when the worktree is added, below.
+  echo "Fetching dev in $REPO ..."
+  git fetch origin dev
 
-  # --- fresh dev ---
-  echo "Updating dev in $REPO ..."
-  git checkout dev
-  git pull
-
-  # --- slug + unique branch off dev ---
+  # --- slug + unique branch name off dev (ref-only; no checkout yet) ---
   slugify() {
     echo "$1" \
       | tr '[:upper:]' '[:lower:]' \
@@ -248,8 +280,12 @@ else
     BRANCH="${BRANCH_BASE}-$N"
     N=$((N + 1))
   done
-  git checkout -b "$BRANCH"
-  echo "Working on branch: $BRANCH"
+
+  WORKTREE_DIR="$(worktree_path_for "$BRANCH")"
+  echo "Adding worktree for new branch $BRANCH at $WORKTREE_DIR (off origin/dev) ..."
+  git worktree add "$WORKTREE_DIR" -b "$BRANCH" origin/dev
+  cd "$WORKTREE_DIR"
+  echo "Working on branch: $BRANCH (worktree: $WORKTREE_DIR)"
 fi
 
 # --- per-repo instructions presence (agy reads AGENTS.md and GEMINI.md) ---
@@ -310,10 +346,15 @@ EOF
 # --- setup-only: emit the prepared task for an in-REPL agent (the /next skill) ---
 # The branch is already created and checked out above; agy reads this block and
 # does the coding itself, so we stop here (no model probe, no nested agy launch).
+# web-jam-tools#239 item 2: REPO_DIR here is the isolated /tmp worktree (not the
+# main clone at $REPO_DIR-the-shell-variable) — the /next skill just cds into
+# whatever path is printed, so pointing it at the worktree keeps the main clone
+# free without needing a skill change.
 if [ "$SETUP_ONLY" -eq 1 ]; then
   cat <<EOF2
 === GEMINI-TASK READY ===
-REPO_DIR: $REPO_DIR
+REPO_DIR: $WORKTREE_DIR
+MAIN_CLONE: $REPO_DIR (untouched)
 BRANCH: $BRANCH
 === TASK PROMPT (implement this) ===
 $PROMPT
@@ -326,7 +367,8 @@ fi
 if [ "$DRY_RUN" -eq 1 ]; then
   cat <<EOF3
 === DRY RUN (no agy invocation) ===
-REPO_DIR: $REPO_DIR
+REPO_DIR: $WORKTREE_DIR
+MAIN_CLONE: $REPO_DIR (untouched)
 BRANCH: $BRANCH
 === COMPOSED PROMPT ===
 $PROMPT
@@ -415,7 +457,7 @@ if [ "$HEADLESS" -eq 1 ]; then
     git diff origin/dev..HEAD -- package.json | grep -q '^[+-].*"version"'
   }
 
-  CONTINUE_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. Previous turns did partial work (check \`git status\` and \`git log dev..HEAD\`). Task acceptance is NOT met until: lint and tests pass, work is committed, and a draft PR is opened via ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh. Continue from where things stand and finish. Original task follows:"
+  CONTINUE_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. Previous turns did partial work (check \`git status\` and \`git log origin/dev..HEAD\`). Task acceptance is NOT met until: lint and tests pass, work is committed, and a draft PR is opened via ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh. Continue from where things stand and finish. Original task follows:"
 
   VERSION_BUMP_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. A draft PR already exists, but \`git diff origin/dev..HEAD -- package.json\` shows no \"version\" change — the one-bump-per-PR rule (bump package.json's \"version\" exactly once, on the PR's first commit; patch for a fix, minor for a feature) was not followed. Add a commit that bumps package.json's \"version\" field appropriately and push it — do NOT open a second PR. Original task follows:"
 
@@ -514,8 +556,8 @@ if [ "$HEADLESS" -eq 1 ]; then
     echo "Branch: $BRANCH" >&2
     echo "Models tried: ${MODELS[*]}" >&2
     echo "Rounds used: $ROUNDS / $AGY_MAX_ROUNDS" >&2
-    echo "--- commits (dev..HEAD) ---" >&2
-    git log --oneline dev..HEAD >&2 || true
+    echo "--- commits (origin/dev..HEAD) ---" >&2
+    git log --oneline origin/dev..HEAD >&2 || true
     echo "--- git status (WIP left behind) ---" >&2
     git status --short >&2
     echo "=========================================================================" >&2
@@ -536,13 +578,96 @@ fi
 # --- finish summary ---
 echo ""
 echo "================ handle-agy-tasks finished ================"
-echo "Repo:   $REPO_DIR"
-echo "Branch: $BRANCH"
-echo "Model:  $ACTIVE_MODEL"
-echo "--- commits (dev..HEAD) ---"
-git log --oneline dev..HEAD || true
+echo "Repo:     $REPO_DIR"
+echo "Worktree: $WORKTREE_DIR"
+echo "Branch:   $BRANCH"
+echo "Model:    $ACTIVE_MODEL"
+echo "--- commits (origin/dev..HEAD) ---"
+git log --oneline origin/dev..HEAD || true
 echo "--- git status ---"
 git status --short
 echo ""
 echo "agy should have opened a draft PR via create-draft-pr.sh — review it on GitHub."
 echo "(Queue line NOT removed — delete it from $QUEUE_FILE after you accept the work.)"
+
+# --- land step (web-jam-tools#239 item 2) -----------------------------------
+# Only attempt to land when a PR actually exists for this branch. If agy never
+# got that far (headless exhausted its rounds, or you quit the interactive
+# REPL early), there is nothing to land yet — the worktree is simply left in
+# place; Josh can resume/test there, and /tmp reaps it after 30 days untouched
+# (nothing is lost, since a landable branch is always pushed).
+LAND_PR_NUM="$(gh pr list -R "WebJamApps/$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || true)"
+if [ -z "$LAND_PR_NUM" ]; then
+  echo ""
+  echo "No draft PR found yet for branch $BRANCH — nothing to land. Worktree left at:"
+  echo "  $WORKTREE_DIR"
+  exit 0
+fi
+
+echo ""
+echo "================ land: draft PR #$LAND_PR_NUM found for $BRANCH ================"
+
+# Verify the worktree's work is actually committed + pushed before touching
+# anything else — a /tmp worktree that later gets reaped must never be the
+# only copy of anything.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "ERROR: worktree $WORKTREE_DIR still has uncommitted changes — not landing." >&2
+  echo "Commit/push manually in the worktree, then re-run to land, or land by hand:" >&2
+  echo "  cd $WORKTREE_DIR && git status" >&2
+  exit 1
+fi
+# NOTE: don't use @{u} here — `git worktree add -b $BRANCH origin/dev` auto-sets
+# BRANCH's upstream to origin/dev (its start point), NOT to a same-named remote
+# branch, so @{u} would never reflect whether THIS branch itself was pushed.
+# Check for origin/$BRANCH directly instead.
+if ! git rev-parse --verify "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
+  echo "Branch $BRANCH not yet pushed — pushing ..."
+  git push -u origin "$BRANCH"
+elif [ -n "$(git log "origin/$BRANCH..HEAD" --oneline)" ]; then
+  echo "Branch $BRANCH has unpushed commits — pushing ..."
+  git push origin "$BRANCH"
+fi
+
+# --- safety check on the MAIN clone --------------------------------------
+cd "$REPO_DIR"
+OLD_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+MAIN_DIRTY="$(git status --porcelain)"
+
+if [ -n "$MAIN_DIRTY" ]; then
+  echo ""
+  echo "Did NOT check out $BRANCH into your main clone — it has uncommitted changes on $OLD_BRANCH."
+  echo "Nothing lost: pushed + PR #$LAND_PR_NUM."
+  echo "Test in the worktree at $WORKTREE_DIR, or when clean run: git fetch && git checkout $BRANCH."
+  exit 0
+fi
+
+# Main clone is clean — confirm, then land. Switching away from a clean
+# branch is non-destructive (the old branch is printed so Josh can switch
+# back), so the only thing gated here is the go-ahead to proceed.
+DO_LAND=0
+if [ "$HEADLESS" -eq 1 ]; then
+  echo "NEEDS-CONFIRM: safe to check out $BRANCH"
+  DO_LAND=1
+elif [ -t 0 ]; then
+  read -r -p "Check out $BRANCH into main clone (currently on $OLD_BRANCH)? [Y/n] " ANSWER
+  case "$ANSWER" in
+    [nN]*)
+      echo "Skipped. Land manually later with: git fetch && git checkout $BRANCH"
+      ;;
+    *)
+      DO_LAND=1
+      ;;
+  esac
+else
+  # No TTY and not --headless (e.g. a piped/non-interactive invocation): there
+  # is no one to prompt, so behave like headless — print the same confirm
+  # marker and proceed.
+  echo "NEEDS-CONFIRM: safe to check out $BRANCH"
+  DO_LAND=1
+fi
+
+if [ "$DO_LAND" -eq 1 ]; then
+  git worktree remove "$WORKTREE_DIR"
+  git checkout "$BRANCH"
+  echo "Checked out $BRANCH into main clone; you were on $OLD_BRANCH — git checkout $OLD_BRANCH to return."
+fi
