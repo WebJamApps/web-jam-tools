@@ -11,6 +11,13 @@ doing mechanical work inline instead of dispatching it. Once you've decided a ta
 belongs to Flash/Haiku/Sonnet/Opus (see `docs/ai-team-playbook.md` for the routing
 table — this skill does not repeat it), use the matching section below.
 
+> "Doing mechanical work inline" above means *sizeable* work that was skipped —
+> not every small command. Dispatch vs. inline is judged by output volume and
+> duration, not task category: dispatch heavy/log-noisy jobs (test suites, builds,
+> migrations, multi-file scans), but do a handful-of-commands job with trivial
+> output inline — a cold subagent's fixed startup cost can exceed the work itself.
+> See the "Dispatch vs. inline" bullet in `docs/ai-team-playbook.md`.
+
 ## 1. Flash/agy dispatch (frontend/UI work)
 
 Flash work is executed by the Antigravity CLI (`agy`) via the wrapper script
