@@ -280,6 +280,11 @@ Rules:
   and its package.json "scripts" (commonly "npm run lint" and "npm test"; some
   repos use "npm run test:lint" / "npm run test:unit").
 - Do not switch branches and do not add new dependencies.
+- Before opening the PR (web-jam-tools#239): run the \`/learn\` slash command in
+  this session, then commit whatever changes it makes to AGENTS.md onto THIS
+  SAME branch as its own commit (e.g. "chore: fold /learn updates into
+  AGENTS.md") — do not open a separate PR or defer it to a follow-up step. If
+  \`/learn\` makes no changes, that's fine; just don't skip running it.
 - When lint and tests are green, finish by opening a draft PR — run:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>" \\
       --summary-file /tmp/pr-summary.md --test-plan-file /tmp/pr-test-plan.md --test-evidence-file /tmp/pr-test-evidence.md
