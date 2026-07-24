@@ -11,7 +11,7 @@ A three-phase Drive housekeeper. **Always do all three phases in order. Never sk
 
 Authoritative storage split:
 
-- **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `claude-opus-tasks.txt`, `agy-tasks.txt`, `claude-fable-tasks.txt`. Claude Code reads these directly via local FS. (Cross-AI operational rules live in `web-jam-tools/docs/cross-ai-rules.md` — repo-resident, not a Drive/Dropbox mirror.)
+- **Local Dropbox** (`/home/joshua/Dropbox/web-jam-llms/`, symlinked at `/home/joshua/WebJamApps/web-jam-llms/`): `claude-opus-tasks.txt`, `claude-fable-tasks.txt`. Claude Code reads these directly via local FS. (`agy-tasks.txt` was retired here too — web-jam-tools#249 — agy/Flash dispatch is GitHub-issues-only now. Cross-AI operational rules live in `web-jam-tools/docs/cross-ai-rules.md` — repo-resident, not a Drive/Dropbox mirror.)
 - **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/`): all venue deliverables — pitch templates, sent outreach, DRAFTs, research, project log, social copy. Authoritative since Task 42 migration 2026-05-21.
 - **Local Dropbox** (`/home/joshua/Dropbox/joshandmariamusic/MariaParty/`): retired retirement-party docs (RSVP MASTER, Master Plan v2, Banner Decision, etc.). Project complete 2026-05-21 except for food scheduling — Sonnet has no involvement going forward.
 - **Drive** (My Drive root): `claude-sonnet-tasks.txt` (phone Sonnet's own queue — Drive is authoritative). Phone Sonnet also drops cross-queue task contributions into Drive root using `for-opus-<name>.txt` (or the older `claude-opus-tasks-YYYY-MM-DD-HHMM.txt` pattern); drive-cleanup is the bridge that pulls them into Dropbox.
@@ -77,23 +77,22 @@ Check at minimum:
 - Within-folder duplicates (same name).
 - Files violating the file-placement rule (e.g., a deliverable artifact stuck in CLAUDE that should be in JoshMariaMusic).
 
-### C. Task-queue health scan (ALL THREE Dropbox queues)
+### C. Task-queue health scan (BOTH remaining Dropbox queues)
 
-**Always run this every invocation, even if there were no Drive-side bridges.** Scan all three local Dropbox queues:
+**Always run this every invocation, even if there were no Drive-side bridges.** Scan both local Dropbox queues (`agy-tasks.txt` was retired — web-jam-tools#249 — agy/Flash dispatch is GitHub-issues-only now, no queue file to scan):
 
 - `~/Dropbox/web-jam-llms/claude-opus-tasks.txt`
-- `~/Dropbox/web-jam-llms/agy-tasks.txt`
 - `~/Dropbox/web-jam-llms/claude-fable-tasks.txt`
 
 (`claude-sonnet-tasks.txt` is Drive-resident and handled under the root scan above, not here.)
 
 For each queue, report its task count so Josh sees it was checked. Then, for the **Opus queue ONLY**:
 
-- **Headline length check (OPUS QUEUE ONLY)** — for each task, count non-blank lines from its `Task N` header up to the next `Task M` header (or EOF). Any task with more than 3 non-blank body lines is a compression candidate. Surface as a Phase 2 finding: "compress N tasks (Task X, Task Y, ...) — extract bodies to memory files, leave one-line headlines + `[[task-spec-<slug>]]` cross-refs." The agy / fable queues are short operational items that don't need compression — do NOT compress them.
+- **Headline length check (OPUS QUEUE ONLY)** — for each task, count non-blank lines from its `Task N` header up to the next `Task M` header (or EOF). Any task with more than 3 non-blank body lines is a compression candidate. Surface as a Phase 2 finding: "compress N tasks (Task X, Task Y, ...) — extract bodies to memory files, leave one-line headlines + `[[task-spec-<slug>]]` cross-refs." The fable queue is short operational items that don't need compression — do NOT compress it.
 
 **Never propose renumbering (Josh's call 2026-06-12).** Number gaps AND duplicate task numbers are fine — bridged or new tasks are simply appended to the bottom of the queue file. This skill must not contain or surface any uniform-step ("renumber to 5") check or proposal. (A typo'd header like `Taslk N` may still be noted for a manual fix, but never as part of a renumber.)
 
-Surfacing is mandatory — if a queue is clean, say so in the Phase 2 report ("Opus queue: 12 tasks, all headline-sized — clean." / "agy queue: 3 tasks — clean."). Don't silently omit any of the three.
+Surfacing is mandatory — if a queue is clean, say so in the Phase 2 report ("Opus queue: 12 tasks, all headline-sized — clean." / "fable queue: 3 tasks — clean."). Don't silently omit either.
 
 ### D. Out-of-scope (do NOT touch without explicit instruction)
 
@@ -189,7 +188,7 @@ Skip compression for tasks already short (1-2 sentence headlines) — those are 
 
 Also: when Josh later asks to **delete a task**, leave the memory file in place. Memory files are history; only the queue entry goes away. (If a task spec becomes truly obsolete and Josh wants the memory pruned, that's a separate `/remember` cleanup.)
 
-Apply this compression ONLY to `claude-opus-tasks.txt` — the agy/fable queue tasks tend to be short operational items that don't need compression.
+Apply this compression ONLY to `claude-opus-tasks.txt` — the fable queue tasks tend to be short operational items that don't need compression.
 
 ### Mirror refresh (always — runs unconditionally each invocation)
 
@@ -213,7 +212,7 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Hard rules
 
-- **Never delete a canonical queue** — neither the Dropbox originals (`claude-opus-tasks.txt`, `agy-tasks.txt`, `claude-fable-tasks.txt`) nor `claude-sonnet-tasks.txt` on Drive.
+- **Never delete a canonical queue** — neither the Dropbox originals (`claude-opus-tasks.txt`, `claude-fable-tasks.txt`) nor `claude-sonnet-tasks.txt` on Drive. (`agy-tasks.txt` is retired — web-jam-tools#249 — there's nothing left to protect there.)
 - **Never delete `SHARED.md`** (Dropbox original or Drive snapshot).
 - **Bridge: verify before trash.** Never trash a Drive original until the Dropbox append is verified.
 - **Bridge: trash, don't rename.** The pre-2026-05-27 convention was to rename to `processed-*` for an indefinite audit trail. Current convention: trash. The content lives in the Dropbox queue + `bridge-log.md`; Drive's 30-day trash window is enough recovery.

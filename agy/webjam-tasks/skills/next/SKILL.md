@@ -1,26 +1,22 @@
 ---
 name: next
-description: Start the next queued coding task. Use when the user types /next, or says "next", "next task", or "start the next task". Pulls the first task from the agy-tasks queue (or a named agy-labeled issue), sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a named agy-labeled coding task. Use when the user types /next <Repo>#<issue-num>, or says "next", "next task", or "start the next task" with an issue in mind. Fetches the named GitHub issue, sets up a fresh git branch off dev, and implements it in that repo. Dispatch is GitHub-issues-only (web-jam-tools#249) — always name an issue.
 metadata:
   version: v1
   publisher: josh
 ---
 
-# /next — run the next queued coding task
+# /next — run a named agy-labeled coding task
 
-This skill delegates the deterministic setup (queue parsing + git branching) to a
+This skill delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
+Dispatch is GitHub-issues-only (web-jam-tools#249 removed the older queue-file
+mode) — the issue argument is required.
 
 ## Steps
 
-1. Run this shell command and read its stdout:
-
-   ```
-   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only
-   ```
-
-   To run a specific `agy`-labeled GitHub issue instead of the next queue line,
-   pass it as an argument, e.g.:
+1. Run this shell command (with the `agy`-labeled issue the user named) and read
+   its stdout:
 
    ```
    ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only CollegeLutheran#123
@@ -38,8 +34,8 @@ shell script, then you (the agent) do the actual coding inside this same session
    ```
 
    The branch is **already created and checked out** off fresh `dev`. If the script
-   exits non-zero (dirty tree, missing repo, empty queue), stop and report its error
-   to the user — do not improvise.
+   exits non-zero (dirty tree, missing repo, bad/missing issue argument), stop and
+   report its error to the user — do not improvise.
 
 3. **Select the appropriate model:** Before implementing, classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete.
 
@@ -96,8 +92,7 @@ shell script, then you (the agent) do the actual coding inside this same session
    PR with an empty or placeholder description** (web-jam-tools#77) — so `--summary`,
    `--test-plan`, and `--test-evidence` are required. By default it references the issue
    (`Part of #N`); `--closes` makes it the completing PR (`Closes #N`). Never run
-   `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub;
-   he also deletes the queue line after accepting the work.
+   `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub.
 
 ## PR body formatting (do this every time)
 
