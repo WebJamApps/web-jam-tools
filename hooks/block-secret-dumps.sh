@@ -72,7 +72,18 @@ if printf '%s' "$c" | grep -Eq 'git +config +(--list|-l)( |$|[|;&])'; then
 fi
 
 # reading known credential/secret files
-if printf '%s' "$c" | grep -Eiq '(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.env( |$|/))'; then
+#
+# The .env boundary (web-jam-tools#257 review fix) matches a literal `.`
+# (so .env.test/.env.local/.env.production are recognized too), any
+# non-identifier character (space, /, ), quote, pipe, redirect, backtick,
+# $, etc.), or end-of-string. The old `( |$|/)` boundary missed both: (a)
+# suffixed files like .env.test/.env.local fell outside the match entirely
+# (so `cat .env.test` was never even flagged), and (b) .env wrapped in
+# command substitution parens, e.g. `echo $(cat .env)` or
+# `printf '%s' "$(< .env)"`, dodged the guard because ")" wasn't in the old
+# boundary set. Still excludes real words like "environment" (the char
+# after "env" there is alnum, matching neither alternative).
+if printf '%s' "$c" | grep -Eiq '(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.env(\.|[^A-Za-z0-9_-]|$))'; then
   # cp/test exception (web-jam-tools#257): copying a secret file or checking
   # its existence never prints its contents (you could already copy-then-print
   # today), so a *simple* `cp` or `test`/`[` invocation is allowed. This is
@@ -92,7 +103,7 @@ if printf '%s' "$c" | grep -Eiq '(rclone\.conf|\.circleci-token|gcp-oauth\.keys\
     fi
   fi
   block "this command references a credential/secret file and would print its contents." \
-        "cp <path> <dest> to copy it, or test -f <path> && echo present to check existence — both are allowed for simple, unchained invocations (web-jam-tools#257)"
+        "cp <path> <dest> to copy it, or test -f <path> (then check \$?) to check existence — both allowed only as simple, unchained invocations with no pipe/redirect/substitution (web-jam-tools#257)"
 fi
 
 exit 0
