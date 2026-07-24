@@ -96,6 +96,24 @@ Deno.test("grep foo .env is still blocked", async () => {
   assertBlocked(res.stderr);
 });
 
+Deno.test("cat .env.test is still blocked (suffixed secret file, not just bare .env)", async () => {
+  const res = await runHook("cat .env.test");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat .env.local is still blocked (suffixed secret file)", async () => {
+  const res = await runHook("cat .env.local");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("echo $(cat .env) is still blocked (command substitution dump)", async () => {
+  const res = await runHook("echo $(cat .env)");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 // --- still blocked: cp/test forms that can still exfiltrate ---
 
 Deno.test("cp .env /dev/stdout is still blocked (writes contents to stdout)", async () => {
