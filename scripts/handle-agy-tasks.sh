@@ -195,24 +195,58 @@ worktree_path_for() {
   echo "$path"
 }
 
-# --- resume-mode detection (web-jam-tools#187) — auto-detect, no flag needed: if
-# an agy/<issue#>-* branch already exists for this issue (a died-mid-run branch
-# from a prior invocation — e.g. JaMmusic#1194's 60m print-timeout), resume it
-# instead of erroring on a dirty tree or creating a duplicate branch. Auto-detect
-# was chosen over a --resume flag because re-running the exact same command
-# against the same issue is the natural recovery gesture — nothing extra for
-# Josh (or a re-dispatch) to remember. Only applies to issue-based dispatch —
-# queue-line tasks have no issue number to key off, same scoping as the BLOCKED
-# guard above. This ref lookup reads local refs shared by the whole repo (main
-# clone + all its worktrees), so it runs before any worktree is created.
+# --- resume-mode detection (web-jam-tools#187, prefix-agnostic since #250) —
+# auto-detect, no flag needed: if a branch/PR already exists for this issue (a
+# died-mid-run branch from a prior invocation — e.g. JaMmusic#1194's 60m
+# print-timeout — OR a branch an INTERACTIVE agy run started, which uses the
+# `gemini/<issue#>-*` prefix, not `agy/` — e.g. JaMmusic PR#1255 on
+# `gemini/1238-find-eligible-venues-why`), resume it instead of erroring on a
+# dirty tree or, worse, forking a duplicate PR closing the same issue
+# (web-jam-tools#250). Auto-detect was chosen over a --resume flag because
+# re-running the exact same command against the same issue is the natural
+# recovery gesture — nothing extra for Josh (or a re-dispatch) to remember.
+# Only applies to issue-based dispatch — queue-line tasks have no issue number
+# to key off, same scoping as the BLOCKED guard above.
+#
+# Detection is two-tiered:
+#   1. PREFERRED: resolve the existing OPEN PR that closes/is-part-of this
+#      issue via `gh pr list` and resume ITS head branch. This is inherently
+#      prefix-agnostic (agy/, gemini/, or any other name a human/interactive
+#      run used) and also catches a branch that exists only on the remote —
+#      never fetched into this local clone — since it's fetched explicitly
+#      below. create-draft-pr.sh always renders the body as "Closes #N" or
+#      "Part of #N" (web-jam-tools#49), so matching on that phrase is reliable.
+#   2. FALLBACK: if no open PR resolves (e.g. a died-mid-run branch with no PR
+#      opened yet), scan local refs across BOTH known prefixes — `agy/` from
+#      headless/queue dispatch and `gemini/` from an interactive agy run — and
+#      pick the most recently committed if several exist. This ref lookup
+#      reads local refs shared by the whole repo (main clone + all its
+#      worktrees), so it runs before any worktree is created.
 RESUME_MODE=0
 EXISTING_BRANCH=""
 if [ -n "${ISSUE_NUM:-}" ]; then
-  EXISTING_BRANCH="$(git for-each-ref --sort=-committerdate \
-    --format='%(refname:short)' "refs/heads/agy/${ISSUE_NUM}-*" | head -1)"
-  if [ -n "$EXISTING_BRANCH" ]; then
+  PR_JQ_FILTER='.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#'"$ISSUE_NUM"'([^0-9]|$)")) | .headRefName'
+  PR_HEAD_BRANCH="$(gh pr list -R "WebJamApps/$REPO" --state open --json headRefName,body \
+    --jq "$PR_JQ_FILTER" 2>/dev/null | head -1 || true)"
+  if [ -n "$PR_HEAD_BRANCH" ]; then
+    echo "Found existing open PR head branch $PR_HEAD_BRANCH for issue #$ISSUE_NUM (via gh pr list) — resuming instead of starting fresh."
+    git fetch origin "$PR_HEAD_BRANCH"
+    if ! git show-ref --verify --quiet "refs/heads/$PR_HEAD_BRANCH"; then
+      # No local ref yet (branch only ever existed on the remote) — create one
+      # tracking the fetched remote tip. If a local ref already exists, leave
+      # it as-is here; it's brought up to date (or reused) once we're cd'd
+      # into its worktree below, where updating it is safe.
+      git branch "$PR_HEAD_BRANCH" "origin/$PR_HEAD_BRANCH"
+    fi
+    EXISTING_BRANCH="$PR_HEAD_BRANCH"
     RESUME_MODE=1
-    echo "Found existing branch $EXISTING_BRANCH for issue #$ISSUE_NUM — resuming instead of starting fresh."
+  else
+    EXISTING_BRANCH="$(git for-each-ref --sort=-committerdate \
+      --format='%(refname:short)' "refs/heads/agy/${ISSUE_NUM}-*" "refs/heads/gemini/${ISSUE_NUM}-*" | head -1)"
+    if [ -n "$EXISTING_BRANCH" ]; then
+      RESUME_MODE=1
+      echo "Found existing local branch $EXISTING_BRANCH for issue #$ISSUE_NUM (no open PR resolved via gh) — resuming instead of starting fresh."
+    fi
   fi
 fi
 
@@ -236,6 +270,17 @@ if [ "$RESUME_MODE" -eq 1 ]; then
     fi
   fi
   cd "$WORKTREE_DIR"
+  # Bring the local branch up to date with its remote counterpart before doing
+  # anything else — the PR-based detection above may have picked up a branch
+  # pushed to since this local ref was last touched (or, via the `git branch`
+  # above, one that never existed locally until just now). Best-effort and
+  # non-fatal: a real divergence needs human judgment anyway, and the existing
+  # dirty-tree handling below still runs regardless of whether this succeeds.
+  if git rev-parse --verify -q "refs/remotes/origin/$BRANCH" >/dev/null; then
+    git fetch origin "$BRANCH" 2>/dev/null || true
+    git merge --ff-only "origin/$BRANCH" 2>/dev/null \
+      || echo "NOTE: could not fast-forward $BRANCH to origin/$BRANCH (local ahead/diverged, or dirty tree) — continuing as-is." >&2
+  fi
   if [ -n "$(git status --porcelain)" ]; then
     # A died-mid-run branch commonly has uncommitted work (that's exactly what
     # killed JaMmusic#1194 — nearly-complete work sitting uncommitted when the
