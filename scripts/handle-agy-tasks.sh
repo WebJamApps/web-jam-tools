@@ -10,14 +10,13 @@
 # Auth: `agy` uses Google sign-in (run `agy` once to log in). The free tier
 # exposes capable models — Claude Opus/Sonnet 4.6, Gemini 3.1 Pro, etc.
 #
-# Task sources (two):
-#   1. Queue file (default): ~/Dropbox/web-jam-llms/agy-tasks.txt
-#      Line format: "<repo-name>: <task description>"  (# and blank lines ignored)
-#   2. GitHub issue labeled `agy`: pass "<Repo>#<num>" (title + body + comments =
-#      the task — see web-jam-tools#154 note below)
+# Task source: a GitHub issue labeled `agy`/`Flash`, passed as "<Repo>#<num>"
+# (title + body + comments = the task — see web-jam-tools#154 note below). The
+# issue argument is REQUIRED — web-jam-tools#249 removed the older queue-file
+# mode (a task line appended to ~/Dropbox/web-jam-llms/agy-tasks.txt, run with
+# no argument) once Josh moved agy/Flash dispatch to GitHub-issues-only.
 #
 # Usage (interactive by default — you drive/watch agy in the REPL):
-#   handle-agy-tasks.sh                        # run the FIRST queue line
 #   handle-agy-tasks.sh CollegeLutheran#123    # run an agy-labeled issue
 #   handle-agy-tasks.sh --headless [...]       # unattended; auto-approves tools
 #   handle-agy-tasks.sh --dry-run CollegeLutheran#123
@@ -35,6 +34,9 @@
 #                                               # actively working in — it's
 #                                               # still there for other scratch-
 #                                               # clone testing needs.
+#   handle-agy-tasks.sh                        # ERROR: no argument — prints a
+#                                               # usage message and exits
+#                                               # non-zero (web-jam-tools#249)
 #
 # web-jam-tools#154 — issue-based dispatch note: the composed prompt now also
 # includes the issue's COMMENTS (chronological, newest last, under a clear
@@ -44,12 +46,13 @@
 # context, not a substitute for folding decisions into the body. AND: if the
 # issue BODY still carries a BLOCKED / DO NOT START / DO-NOT-START marker
 # (case-insensitive), the script refuses to dispatch and exits non-zero —
-# update the body first. This guard only applies to issue-based dispatch, not
-# queue-line tasks (queue lines have no "body" to check).
+# update the body first. (Before web-jam-tools#249 this guard was noted as
+# "issue-based dispatch only" because a queue-line mode with no body to check
+# also existed; that mode is gone, so the guard now unconditionally applies to
+# every invocation.)
 #
-# This script never edits the queue file — Josh deletes the queue line himself
-# after accepting the work (queue management is manual). The agent finishes a task
-# by opening a draft PR via scripts/create-draft-pr.sh (web-jam-tools#49).
+# The agent finishes a task by opening a draft PR via scripts/create-draft-pr.sh
+# (web-jam-tools#49).
 #
 # web-jam-tools#187 — two resilience fixes (JaMmusic#1194: a single-model
 # AGY_MODELS override died in round 1 on a 60m print-timeout with the whole run
@@ -65,7 +68,6 @@
 
 set -euo pipefail
 
-QUEUE_FILE="$HOME/Dropbox/web-jam-llms/agy-tasks.txt"
 # AGY_WEBJAM_ROOT override exists for --dry-run testing against a scratch clone
 # instead of a repo folder you're actively working in (web-jam-tools#154).
 WEBJAM="${AGY_WEBJAM_ROOT:-$HOME/WebJamApps}"
@@ -84,10 +86,10 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 # --- parse args ---
 # Interactive is the default. Leading flags (any order, before the optional task):
 #   --headless / -H   run unattended (auto-approves tools)
-#   --setup-only      do the queue/issue + git-branch setup, print the task, and
+#   --setup-only      do the issue + git-branch setup, print the task, and
 #                     STOP without launching agy. Used by the `/next` agy skill:
 #                     you're already inside agy, so agy itself does the coding.
-#   --dry-run         do the queue/issue fetch + git-branch setup, print the
+#   --dry-run         do the issue fetch + git-branch setup, print the
 #                     composed prompt, and STOP without launching agy. For
 #                     testing prompt composition (comments folded in, BLOCKED
 #                     guard) without spending an agy call (web-jam-tools#154).
@@ -105,71 +107,64 @@ done
 TASK_ARG="${1:-}"
 
 # --- resolve task text + target repo ---
-if [ -n "$TASK_ARG" ]; then
-  # GitHub issue form: <Repo>#<num>
-  if [[ ! "$TASK_ARG" =~ ^([A-Za-z0-9._-]+)#([0-9]+)$ ]]; then
-    echo "ERROR: argument must look like <Repo>#<num> (e.g. CollegeLutheran#123)" >&2
-    exit 1
-  fi
-  REPO="${BASH_REMATCH[1]}"
-  ISSUE_NUM="${BASH_REMATCH[2]}"
-  echo "Fetching issue $REPO#$ISSUE_NUM (title + body + comments) ..."
-  ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title,body,comments)
-  ISSUE_TITLE=$(jq -r '.title' <<< "$ISSUE_JSON")
-  ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
-
-  # --- BLOCKED guard (issue-based dispatch only — web-jam-tools#154) ---
-  # Refuse to dispatch when the issue BODY still carries a blocked marker.
-  # Comments are for humans; the BODY is what agy actually reads as the spec,
-  # so a stale "don't start" left in the body must stop the dispatch loudly
-  # rather than let Flash improvise (HenricksonForSalem#5 rejection). Word-
-  # bounded so "UNBLOCKED"/"unblocking" etc. don't false-positive.
-  if grep -qiE '\bBLOCKED\b|\bDO[ -]NOT[ -]START\b' <<< "$ISSUE_BODY"; then
-    echo "" >&2
-    echo "ERROR: issue $REPO#$ISSUE_NUM body still contains a BLOCKED / DO NOT" >&2
-    echo "START marker — refusing to dispatch agy against it." >&2
-    echo "Update the issue BODY first (clear the marker and fold any comment-only" >&2
-    echo "decisions into the body — the body is the spec agy reads), then retry." >&2
-    echo "" >&2
-    exit 1
-  fi
-
-  # --- fold comments into the task text (web-jam-tools#154) ---
-  # Locked decisions/spec changes keep accumulating as comments after an issue
-  # is filed; handle-agy-tasks.sh used to feed Flash title+body only, so it
-  # missed them (TimShermanMusic#3, HenricksonForSalem#5 rejections). Comments
-  # are appended chronologically (oldest first, newest last) under a clear
-  # delimiter. The BODY remains the canonical spec — comments are context.
-  COMMENTS_TEXT=$(jq -r '
-    (.comments // [])
-    | map("[" + (.author.login // "unknown") + " — " + .createdAt + "]\n" + .body)
-    | join("\n\n---\n\n")
-  ' <<< "$ISSUE_JSON")
-  MAX_COMMENT_CHARS=20000
-  if [ -n "$COMMENTS_TEXT" ]; then
-    if [ "${#COMMENTS_TEXT}" -gt "$MAX_COMMENT_CHARS" ]; then
-      COMMENTS_TEXT="${COMMENTS_TEXT:0:$MAX_COMMENT_CHARS}"$'\n\n[... comments truncated at '"$MAX_COMMENT_CHARS"' chars — see the issue on GitHub for the full discussion ...]'
-    fi
-    TASK_TEXT="$ISSUE_TITLE"$'\n\n'"$ISSUE_BODY"$'\n\n--- Discussion/decisions from issue comments (newest last) ---\n\n'"$COMMENTS_TEXT"
-  else
-    TASK_TEXT="$ISSUE_TITLE"$'\n\n'"$ISSUE_BODY"
-  fi
-  SLUG_SOURCE="$ISSUE_TITLE"
-else
-  # Queue file form: first non-comment, non-blank line
-  if [ ! -f "$QUEUE_FILE" ]; then
-    echo "ERROR: queue file not found: $QUEUE_FILE" >&2
-    exit 1
-  fi
-  LINE=$(grep -vE '^[[:space:]]*(#|$)' "$QUEUE_FILE" | head -1 || true)
-  if [ -z "$LINE" ]; then
-    echo "No tasks in $QUEUE_FILE" >&2
-    exit 1
-  fi
-  REPO="$(echo "${LINE%%:*}" | xargs)"   # text before the first colon, trimmed
-  TASK_TEXT="${LINE#*: }"                 # text after the first ": "
-  SLUG_SOURCE="$TASK_TEXT"
+# GitHub issue form only: <Repo>#<num>. web-jam-tools#249 removed the
+# alternate queue-file form (no argument -> first line of agy-tasks.txt), so a
+# no-arg (or malformed) invocation now fails cleanly here instead of falling
+# through to a queue-file lookup.
+if [ -z "$TASK_ARG" ]; then
+  echo "ERROR: missing required <Repo>#<issue-num> argument." >&2
+  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] <Repo>#<issue-num>" >&2
+  echo "  e.g. $(basename "$0") --headless \"CollegeLutheran#123\"" >&2
+  exit 1
 fi
+if [[ ! "$TASK_ARG" =~ ^([A-Za-z0-9._-]+)#([0-9]+)$ ]]; then
+  echo "ERROR: argument must look like <Repo>#<num> (e.g. CollegeLutheran#123)" >&2
+  exit 1
+fi
+REPO="${BASH_REMATCH[1]}"
+ISSUE_NUM="${BASH_REMATCH[2]}"
+echo "Fetching issue $REPO#$ISSUE_NUM (title + body + comments) ..."
+ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title,body,comments)
+ISSUE_TITLE=$(jq -r '.title' <<< "$ISSUE_JSON")
+ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
+
+# --- BLOCKED guard (web-jam-tools#154) ---
+# Refuse to dispatch when the issue BODY still carries a blocked marker.
+# Comments are for humans; the BODY is what agy actually reads as the spec,
+# so a stale "don't start" left in the body must stop the dispatch loudly
+# rather than let Flash improvise (HenricksonForSalem#5 rejection). Word-
+# bounded so "UNBLOCKED"/"unblocking" etc. don't false-positive.
+if grep -qiE '\bBLOCKED\b|\bDO[ -]NOT[ -]START\b' <<< "$ISSUE_BODY"; then
+  echo "" >&2
+  echo "ERROR: issue $REPO#$ISSUE_NUM body still contains a BLOCKED / DO NOT" >&2
+  echo "START marker — refusing to dispatch agy against it." >&2
+  echo "Update the issue BODY first (clear the marker and fold any comment-only" >&2
+  echo "decisions into the body — the body is the spec agy reads), then retry." >&2
+  echo "" >&2
+  exit 1
+fi
+
+# --- fold comments into the task text (web-jam-tools#154) ---
+# Locked decisions/spec changes keep accumulating as comments after an issue
+# is filed; handle-agy-tasks.sh used to feed Flash title+body only, so it
+# missed them (TimShermanMusic#3, HenricksonForSalem#5 rejections). Comments
+# are appended chronologically (oldest first, newest last) under a clear
+# delimiter. The BODY remains the canonical spec — comments are context.
+COMMENTS_TEXT=$(jq -r '
+  (.comments // [])
+  | map("[" + (.author.login // "unknown") + " — " + .createdAt + "]\n" + .body)
+  | join("\n\n---\n\n")
+' <<< "$ISSUE_JSON")
+MAX_COMMENT_CHARS=20000
+if [ -n "$COMMENTS_TEXT" ]; then
+  if [ "${#COMMENTS_TEXT}" -gt "$MAX_COMMENT_CHARS" ]; then
+    COMMENTS_TEXT="${COMMENTS_TEXT:0:$MAX_COMMENT_CHARS}"$'\n\n[... comments truncated at '"$MAX_COMMENT_CHARS"' chars — see the issue on GitHub for the full discussion ...]'
+  fi
+  TASK_TEXT="$ISSUE_TITLE"$'\n\n'"$ISSUE_BODY"$'\n\n--- Discussion/decisions from issue comments (newest last) ---\n\n'"$COMMENTS_TEXT"
+else
+  TASK_TEXT="$ISSUE_TITLE"$'\n\n'"$ISSUE_BODY"
+fi
+SLUG_SOURCE="$ISSUE_TITLE"
 
 REPO_DIR="$WEBJAM/$REPO"
 if [ ! -d "$REPO_DIR" ]; then
@@ -205,8 +200,10 @@ worktree_path_for() {
 # (web-jam-tools#250). Auto-detect was chosen over a --resume flag because
 # re-running the exact same command against the same issue is the natural
 # recovery gesture — nothing extra for Josh (or a re-dispatch) to remember.
-# Only applies to issue-based dispatch — queue-line tasks have no issue number
-# to key off, same scoping as the BLOCKED guard above.
+# ISSUE_NUM is always set by this point — web-jam-tools#249 made the issue
+# argument mandatory (removing the queue-line mode, which had no issue number
+# to key off), so this no longer needs its own guard the way the BLOCKED guard
+# above once did.
 #
 # Detection is two-tiered:
 #   1. PREFERRED: resolve the existing OPEN PR that closes/is-part-of this
@@ -218,35 +215,33 @@ worktree_path_for() {
 #      "Part of #N" (web-jam-tools#49), so matching on that phrase is reliable.
 #   2. FALLBACK: if no open PR resolves (e.g. a died-mid-run branch with no PR
 #      opened yet), scan local refs across BOTH known prefixes — `agy/` from
-#      headless/queue dispatch and `gemini/` from an interactive agy run — and
-#      pick the most recently committed if several exist. This ref lookup
-#      reads local refs shared by the whole repo (main clone + all its
-#      worktrees), so it runs before any worktree is created.
+#      headless dispatch and `gemini/` from an interactive agy run — and pick
+#      the most recently committed if several exist. This ref lookup reads
+#      local refs shared by the whole repo (main clone + all its worktrees),
+#      so it runs before any worktree is created.
 RESUME_MODE=0
 EXISTING_BRANCH=""
-if [ -n "${ISSUE_NUM:-}" ]; then
-  PR_JQ_FILTER='.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#'"$ISSUE_NUM"'([^0-9]|$)")) | .headRefName'
-  PR_HEAD_BRANCH="$(gh pr list -R "WebJamApps/$REPO" --state open --json headRefName,body \
-    --jq "$PR_JQ_FILTER" 2>/dev/null | head -1 || true)"
-  if [ -n "$PR_HEAD_BRANCH" ]; then
-    echo "Found existing open PR head branch $PR_HEAD_BRANCH for issue #$ISSUE_NUM (via gh pr list) — resuming instead of starting fresh."
-    git fetch origin "$PR_HEAD_BRANCH"
-    if ! git show-ref --verify --quiet "refs/heads/$PR_HEAD_BRANCH"; then
-      # No local ref yet (branch only ever existed on the remote) — create one
-      # tracking the fetched remote tip. If a local ref already exists, leave
-      # it as-is here; it's brought up to date (or reused) once we're cd'd
-      # into its worktree below, where updating it is safe.
-      git branch "$PR_HEAD_BRANCH" "origin/$PR_HEAD_BRANCH"
-    fi
-    EXISTING_BRANCH="$PR_HEAD_BRANCH"
+PR_JQ_FILTER='.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#'"$ISSUE_NUM"'([^0-9]|$)")) | .headRefName'
+PR_HEAD_BRANCH="$(gh pr list -R "WebJamApps/$REPO" --state open --json headRefName,body \
+  --jq "$PR_JQ_FILTER" 2>/dev/null | head -1 || true)"
+if [ -n "$PR_HEAD_BRANCH" ]; then
+  echo "Found existing open PR head branch $PR_HEAD_BRANCH for issue #$ISSUE_NUM (via gh pr list) — resuming instead of starting fresh."
+  git fetch origin "$PR_HEAD_BRANCH"
+  if ! git show-ref --verify --quiet "refs/heads/$PR_HEAD_BRANCH"; then
+    # No local ref yet (branch only ever existed on the remote) — create one
+    # tracking the fetched remote tip. If a local ref already exists, leave
+    # it as-is here; it's brought up to date (or reused) once we're cd'd
+    # into its worktree below, where updating it is safe.
+    git branch "$PR_HEAD_BRANCH" "origin/$PR_HEAD_BRANCH"
+  fi
+  EXISTING_BRANCH="$PR_HEAD_BRANCH"
+  RESUME_MODE=1
+else
+  EXISTING_BRANCH="$(git for-each-ref --sort=-committerdate \
+    --format='%(refname:short)' "refs/heads/agy/${ISSUE_NUM}-*" "refs/heads/gemini/${ISSUE_NUM}-*" | head -1)"
+  if [ -n "$EXISTING_BRANCH" ]; then
     RESUME_MODE=1
-  else
-    EXISTING_BRANCH="$(git for-each-ref --sort=-committerdate \
-      --format='%(refname:short)' "refs/heads/agy/${ISSUE_NUM}-*" "refs/heads/gemini/${ISSUE_NUM}-*" | head -1)"
-    if [ -n "$EXISTING_BRANCH" ]; then
-      RESUME_MODE=1
-      echo "Found existing local branch $EXISTING_BRANCH for issue #$ISSUE_NUM (no open PR resolved via gh) — resuming instead of starting fresh."
-    fi
+    echo "Found existing local branch $EXISTING_BRANCH for issue #$ISSUE_NUM (no open PR resolved via gh) — resuming instead of starting fresh."
   fi
 fi
 
@@ -312,13 +307,10 @@ else
   }
   SLUG="$(slugify "$SLUG_SOURCE")"
   [ -z "$SLUG" ] && SLUG="task"
-  # Branch convention (web-jam-tools#49): <lane>/<issue#>-<slug> when the issue
-  # number is known (issue form), else <lane>/<slug> (queue-line form). Lane = agy.
-  if [ -n "${ISSUE_NUM:-}" ]; then
-    BRANCH_BASE="agy/${ISSUE_NUM}-${SLUG}"
-  else
-    BRANCH_BASE="agy/${SLUG}"
-  fi
+  # Branch convention (web-jam-tools#49): <lane>/<issue#>-<slug>. Lane = agy.
+  # (Pre-web-jam-tools#249 there was also a queue-line form with no issue
+  # number, <lane>/<slug>; that mode is gone, so ISSUE_NUM is always set here.)
+  BRANCH_BASE="agy/${ISSUE_NUM}-${SLUG}"
   BRANCH="$BRANCH_BASE"
   N=2
   while git show-ref --verify --quiet "refs/heads/$BRANCH"; do
@@ -725,7 +717,6 @@ echo "--- git status ---"
 git status --short
 echo ""
 echo "agy should have opened a draft PR via create-draft-pr.sh — review it on GitHub."
-echo "(Queue line NOT removed — delete it from $QUEUE_FILE after you accept the work.)"
 
 # --- land step (web-jam-tools#239 item 2) -----------------------------------
 # Only attempt to land when a PR actually exists for this branch. If agy never
