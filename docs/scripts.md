@@ -29,6 +29,33 @@ visibility.
 > Note: contains hard-coded paths that assume the maintainer's home
 > directory layout. Adapt before using on a different machine.
 
+### `new-agent-worktree.sh`
+
+Creates an isolated git worktree for a WebJamApps sibling repo/branch — the
+setup an agent needs to work on that repo without touching the shared main
+clone. Seeds the gitignored `.env` / `.env.test` from the repo's main clone
+into the new worktree when present (a fresh worktree never inherits
+gitignored files, which otherwise breaks local DB-backed test runs there —
+web-jam-tools#257). Prints the new worktree's absolute path as the last
+line of stdout.
+
+```bash
+scripts/new-agent-worktree.sh <Repo> <branch> [base]
+```
+
+- `Repo` — sibling directory name under the workspace root (e.g.
+  `WebJamSocketCluster`), must already be a git clone
+- `branch` — branch name to create for the new worktree
+- `base` — base ref to branch from (default: `dev`)
+
+The worktree is created at `<Repo>/.claude/worktrees/<branch>` (`/` in the
+branch name is flattened to `-`). Set `WEBJAMAPPS_ROOT` to override the
+default workspace root (`/home/joshua/WebJamApps`).
+
+> Depends on `hooks/block-secret-dumps.sh`'s `cp`/`test` exception
+> (web-jam-tools#257) — without it, an agent working inside the new
+> worktree can't re-seed these files by hand if it ever needs to.
+
 ### `reaper-update.sh`
 
 Downloads and installs the latest REAPER version to a specified prefix.
