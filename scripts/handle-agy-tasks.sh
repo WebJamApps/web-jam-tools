@@ -443,6 +443,17 @@ if [ -z "$ACTIVE_MODEL" ]; then
 fi
 echo "Using model: $ACTIVE_MODEL"
 
+# --- capture pre-run tip (web-jam-tools#252) --------------------------------
+# Recorded HERE — after resume-mode setup (WIP-salvage, model selection) but
+# before agy is actually launched — so the completion checks below can tell
+# whether THIS invocation did anything, instead of trusting "a draft PR
+# exists" / "a version bump is in the diff": in resume mode BOTH of those
+# facts can pre-date this run entirely (JaMmusic#1238: PR #1255 and its
+# version bump were already on the branch from a previous run; this run made
+# no commit at all, yet both checks passed trivially and the script reported
+# success).
+PRE_AGY_HEAD="$(git rev-parse HEAD)"
+
 # --- run agy ---
 if [ "$HEADLESS" -eq 1 ]; then
   # Headless (opt-in): auto-approve tools. agy's one-shot `-p` mode can END ITS
@@ -548,6 +559,28 @@ if [ "$HEADLESS" -eq 1 ]; then
         echo "!!! model '$m' failed (non-zero exit) — trying next fallback if any." >&2
         break
       fi
+      # --- worktree-integrity check (web-jam-tools#252) ----------------------
+      # agy's own turn just exited zero, but a zero exit doesn't mean the
+      # worktree it ran in still exists: on JaMmusic#1238 the model deleted its
+      # own working directory mid-run, which then made every trailing `git`
+      # call in this script fail with "fatal: Unable to read current working
+      # directory" — silently, since those calls weren't gated. Check for that
+      # directly and fail hard the moment it's detected, before trusting ANY
+      # PR/version-bump signal below (both would be meaningless from here on).
+      if [ ! -d "$WORKTREE_DIR" ] || ! git -C "$WORKTREE_DIR" status >/dev/null 2>&1; then
+        echo "" >&2
+        echo "================ handle-agy-tasks FAILED (worktree lost, web-jam-tools#252) ================" >&2
+        echo "Repo:     $REPO_DIR" >&2
+        echo "Branch:   $BRANCH" >&2
+        echo "Worktree: $WORKTREE_DIR" >&2
+        echo "Model:    $m (round $ROUNDS)" >&2
+        echo "The worktree directory no longer exists, or git can no longer read it —" >&2
+        echo "agy likely deleted its own working directory mid-run. Nothing after this" >&2
+        echo "point (PR state, version bump, commit count) can be trusted, so this is a" >&2
+        echo "hard failure, not a cosmetic one — no success banner." >&2
+        echo "===============================================================================" >&2
+        exit 1
+      fi
       PR_NUM="$(pr_exists_for_branch)"
       if [ -n "$PR_NUM" ]; then
         if ! footer_present_for_model "$PR_NUM" "$m"; then
@@ -568,14 +601,24 @@ if [ "$HEADLESS" -eq 1 ]; then
           echo "=========================================================================================" >&2
           exit 1
         fi
-        if version_bump_present; then
+        # web-jam-tools#252 — "a draft PR exists" and "a version bump is in the
+        # diff" are BOTH trivially true in resume mode: they can pre-date this
+        # run entirely (they did on JaMmusic#1238 — PR #1255 and its bump were
+        # already on the branch, and this run committed nothing). Require the
+        # branch tip to have actually MOVED since before this run's first turn
+        # before trusting either signal as real completion.
+        if [ "$(git rev-parse HEAD)" = "$PRE_AGY_HEAD" ]; then
+          echo "!!! draft PR #$PR_NUM exists (and package.json may already show a version bump) but HEAD is still $PRE_AGY_HEAD — unchanged since before this run started. Both facts pre-date this run in resume mode; not real completion." >&2
+          NEXT_TURN_PREFIX="$CONTINUE_PROMPT_PREFIX"
+        elif version_bump_present; then
           AGY_OK=1
           ACTIVE_MODEL="$m"
-          echo ">>> agy finished on model: $m — draft PR #$PR_NUM confirmed for branch $BRANCH (package.json version bump verified)"
+          echo ">>> agy finished on model: $m — draft PR #$PR_NUM confirmed for branch $BRANCH (package.json version bump verified this run)"
           break 2
+        else
+          echo "!!! draft PR #$PR_NUM exists but no package.json version bump found in git diff origin/dev..HEAD -- package.json — task incomplete." >&2
+          NEXT_TURN_PREFIX="$VERSION_BUMP_PROMPT_PREFIX"
         fi
-        echo "!!! draft PR #$PR_NUM exists but no package.json version bump found in git diff origin/dev..HEAD -- package.json — task incomplete." >&2
-        NEXT_TURN_PREFIX="$VERSION_BUMP_PROMPT_PREFIX"
       else
         echo "!!! turn exited zero but no draft PR found for branch $BRANCH — task incomplete." >&2
         NEXT_TURN_PREFIX="$CONTINUE_PROMPT_PREFIX"
@@ -604,8 +647,15 @@ if [ "$HEADLESS" -eq 1 ]; then
     echo "--- commits (origin/dev..HEAD) ---" >&2
     git log --oneline origin/dev..HEAD >&2 || true
     echo "--- git status (WIP left behind) ---" >&2
-    git status --short >&2
+    git status --short >&2 || true
     echo "=========================================================================" >&2
+    # web-jam-tools#252 — this branch previously fell through to the finish
+    # summary / land step below (which can itself `exit 0`, e.g. "no draft PR
+    # found yet — nothing to land") instead of stopping here. All models/
+    # rounds are exhausted at this point with no confirmed completion, so this
+    # IS the failure — exit non-zero now rather than letting later steps mask
+    # it with a zero exit.
+    exit 1
   fi
 else
   # Interactive (default): drop into the agy REPL on the selected model with the
@@ -618,6 +668,48 @@ else
   # FORCED_PR_AUTHOR yourself) before finishing, if you do switch.
   export FORCED_PR_AUTHOR="agy — $ACTIVE_MODEL"
   "$AGY" --model "$ACTIVE_MODEL" -i "$PROMPT"
+fi
+
+# --- post-run worktree-integrity check (web-jam-tools#252) ------------------
+# Belt-and-suspenders alongside the mid-loop check above: covers the
+# interactive path too (which has no per-round check of its own) and catches
+# a worktree lost on the LAST headless turn, after the loop already broke out.
+# Everything below this point (finish summary, land step) assumes the
+# worktree is a real, readable directory — verify that before trusting any of
+# it, rather than letting a deleted cwd surface as scattered, unguarded
+# "fatal: Unable to read current working directory" noise further down.
+if [ ! -d "$WORKTREE_DIR" ] || ! git -C "$WORKTREE_DIR" status >/dev/null 2>&1; then
+  echo "" >&2
+  echo "================ handle-agy-tasks FAILED (worktree lost, web-jam-tools#252) ================" >&2
+  echo "Repo:     $REPO_DIR" >&2
+  echo "Branch:   $BRANCH" >&2
+  echo "Worktree: $WORKTREE_DIR" >&2
+  echo "The worktree directory no longer exists, or git can no longer read it. Nothing" >&2
+  echo "can be trusted as real completion; treating this as a hard failure rather than" >&2
+  echo "printing a success/finish banner." >&2
+  echo "===============================================================================" >&2
+  exit 1
+fi
+
+# --- post-run no-op check, headless only (web-jam-tools#252) ----------------
+# Final safety net alongside the inline HEAD-moved gate inside the headless
+# loop above: if the tip genuinely never moved from before this run's first
+# turn AND the tree is clean, this run did nothing, full stop — say so
+# plainly and exit non-zero instead of falling through to a "finished" banner
+# and a land step that has nothing new to land. (The interactive path is
+# human-driven — a person ending a session having only reviewed code, with no
+# changes to commit, is a normal outcome there, not a failure.)
+if [ "$HEADLESS" -eq 1 ] && [ "$(git rev-parse HEAD)" = "$PRE_AGY_HEAD" ] \
+  && [ -z "$(git status --porcelain)" ]; then
+  echo "" >&2
+  echo "================ handle-agy-tasks FAILED (no-op run, web-jam-tools#252) ================" >&2
+  echo "Repo:   $REPO_DIR" >&2
+  echo "Branch: $BRANCH" >&2
+  echo "Branch tip is still $PRE_AGY_HEAD — unchanged since before this run started, and" >&2
+  echo "the worktree is clean. This run made no commit at all; whatever PR/version-bump" >&2
+  echo "state exists on this branch pre-dates this invocation." >&2
+  echo "==========================================================================================" >&2
+  exit 1
 fi
 
 # --- finish summary ---
