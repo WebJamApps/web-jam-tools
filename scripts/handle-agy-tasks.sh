@@ -38,6 +38,14 @@
 #                                               # usage message and exits
 #                                               # non-zero (web-jam-tools#249)
 #
+# AGY_EXTRA_RECIPE (web-jam-tools#235): optional env var carrying a fresh
+# local-testing recipe (plain text/markdown) supplied by Opus at dispatch
+# time as a gap-fill for THIS run only — appended to whatever material was
+# injected from docs/local-testing.md + the shared recipes doc, so Flash can
+# write real "How to test locally" steps even before that recipe has been
+# committed anywhere. e.g.:
+#   AGY_EXTRA_RECIPE="To induce a mongo error: ..." handle-agy-tasks.sh JaMmusic#1238
+#
 # web-jam-tools#154 — issue-based dispatch note: the composed prompt now also
 # includes the issue's COMMENTS (chronological, newest last, under a clear
 # delimiter), because locked decisions/spec changes kept accumulating there and
@@ -65,6 +73,26 @@
 #      instead of re-branching off dev, salvages a dirty tree as a `wip:`
 #      commit, and drives the headless loop with the CONTINUE prompt instead
 #      of the fresh-task prompt.
+#
+# web-jam-tools#235 — local-testing playbook injection: Flash's "How to test
+# locally" sections were restating diff changes instead of writing real repro
+# steps, because it had neither the operational run recipe nor how to induce
+# the error condition (tribal knowledge in Josh's head, not the diff). Fix
+# (approach "P", Opus+Josh 2026-07-23, locked): before composing $PROMPT, this
+# script reads the TARGET repo's `docs/local-testing.md` (if present) and
+# resolves any reference in it to the shared recipes doc,
+# web-jam-tools/docs/local-testing-recipes.md, injecting BOTH, fully expanded,
+# into $PROMPT — the one var both the interactive and headless paths share
+# (same pattern as the #239 `/learn` change, so both paths get identical
+# material). AGY_EXTRA_RECIPE lets Opus append a fresh, dispatch-time recipe
+# for just this run (the gap-fill), so a run is never blocked on a shared-doc
+# PR landing first. Missing per-repo doc, or a doc with no resolvable
+# reference -> the run proceeds normally with whatever material exists (or
+# none) — never a crash, never a blocked dispatch. Format ("How to test
+# locally" as an ordered list of steps a DIFFERENT developer would follow,
+# not a diff restatement) is enforced via the prompt instruction only — the
+# design explicitly rejects a new create-draft-pr.sh guard for this (a
+# brittle "is this ordered human steps?" regex would false-positive-reject).
 
 set -euo pipefail
 
@@ -334,6 +362,54 @@ if [ ! -f "GEMINI.md" ] && [ ! -f "AGENTS.md" ]; then
   echo "" >&2
 fi
 
+# --- local-testing playbook injection (web-jam-tools#235) -------------------
+# Per-repo doc convention: `docs/local-testing.md` at the target repo's root
+# (documented alongside this in docs/local-testing-recipes.md). Read from the
+# worktree (cwd here), which already reflects the branch's dev tree, exactly
+# like the AGENTS.md/GEMINI.md check just above. The shared doc lives in
+# web-jam-tools under $WEBJAM (same root override, AGY_WEBJAM_ROOT, used for
+# --dry-run scratch-clone testing per the comment at the top of this file —
+# so a test fixture can supply its own fake web-jam-tools/docs/local-testing-
+# recipes.md without touching the real repo).
+PER_REPO_TESTING_DOC="docs/local-testing.md"
+SHARED_RECIPES_DOC="$WEBJAM/web-jam-tools/docs/local-testing-recipes.md"
+LOCAL_TESTING_MATERIAL=""
+if [ -f "$PER_REPO_TESTING_DOC" ]; then
+  PER_REPO_TESTING_CONTENT="$(cat "$PER_REPO_TESTING_DOC")"
+  LOCAL_TESTING_MATERIAL="--- Per-repo local-testing doc ($REPO/$PER_REPO_TESTING_DOC) ---"$'\n\n'"$PER_REPO_TESTING_CONTENT"
+  # Resolve a reference to the shared doc: a plain filename mention is enough
+  # (repos sit at different relative depths, so matching the exact link path
+  # would be fragile). "Resolvable" also requires the shared file to actually
+  # exist on disk — a mention with no matching file degrades the same as no
+  # mention at all, per web-jam-tools#235 (never crash, never block dispatch).
+  if grep -qF 'local-testing-recipes.md' "$PER_REPO_TESTING_DOC" && [ -f "$SHARED_RECIPES_DOC" ]; then
+    SHARED_RECIPES_CONTENT="$(cat "$SHARED_RECIPES_DOC")"
+    LOCAL_TESTING_MATERIAL="$LOCAL_TESTING_MATERIAL"$'\n\n'"--- Shared recipes doc (web-jam-tools/docs/local-testing-recipes.md) ---"$'\n\n'"$SHARED_RECIPES_CONTENT"
+  fi
+fi
+# AGY_EXTRA_RECIPE: Opus-supplied dispatch-time gap-fill for this run only
+# (see the usage-block note near the top of this file) — appended last so it
+# reads as the newest/most specific material.
+if [ -n "${AGY_EXTRA_RECIPE:-}" ]; then
+  LOCAL_TESTING_MATERIAL="$LOCAL_TESTING_MATERIAL"$'\n\n'"--- Extra recipe supplied for this run only (AGY_EXTRA_RECIPE, web-jam-tools#235) ---"$'\n\n'"$AGY_EXTRA_RECIPE"
+fi
+if [ -n "$LOCAL_TESTING_MATERIAL" ]; then
+  LOCAL_TESTING_INSTRUCTIONS="Write the PR's \"How to test locally\" section as an ORDERED LIST of steps a
+  DIFFERENT developer would follow to run this repo's stack locally (and, if
+  relevant, deliberately reproduce the condition this change addresses) —
+  drawn from the local-testing material below. Do NOT restate what changed in
+  the diff; that is a different section (web-jam-tools#235).
+
+$LOCAL_TESTING_MATERIAL"
+else
+  LOCAL_TESTING_INSTRUCTIONS="No local-testing playbook material was found for this repo (no
+  $PER_REPO_TESTING_DOC, or no resolvable reference to the shared recipes doc,
+  and no AGY_EXTRA_RECIPE override) — write \"How to test locally\" best-effort
+  from what you know. Do NOT fabricate a specific operational recipe (e.g. how
+  to start a service, or how to induce an error condition) you don't actually
+  have (web-jam-tools#235)."
+fi
+
 # --- composed prompt: standing rules wrapped around the task ---
 read -r -d '' PROMPT <<EOF || true
 You are working in the $REPO repo on branch $BRANCH, already created off the latest dev.
@@ -353,6 +429,7 @@ Rules:
   and its package.json "scripts" (commonly "npm run lint" and "npm test"; some
   repos use "npm run test:lint" / "npm run test:unit").
 - Do not switch branches and do not add new dependencies.
+- $LOCAL_TESTING_INSTRUCTIONS
 - Before opening the PR (web-jam-tools#239): run the \`/learn\` slash command in
   this session, then commit whatever changes it makes to AGENTS.md onto THIS
   SAME branch as its own commit (e.g. "chore: fold /learn updates into
