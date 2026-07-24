@@ -94,9 +94,13 @@ if printf '%s' "$c" | grep -Eiq '(rclone\.conf|\.circleci-token|gcp-oauth\.keys\
   # "Simple" means: no pipe, no redirect, no command substitution, and no
   # chained command — those can still exfiltrate the value (e.g.
   # `cp .env /dev/stdout`, `test -f .env && cat .env`) and must stay blocked.
-  # When in doubt this falls through to the block below.
+  # Same reasoning covers a copy to a process file descriptor
+  # (`cp .env /proc/self/fd/1`, `/proc/1234/fd/2`) or the terminal
+  # (`cp .env /dev/tty`, `/dev/tty1`) — both dump the contents to
+  # stdout/the terminal just like /dev/stdout does, so they disqualify the
+  # exception too. When in doubt this falls through to the block below.
   if ! printf '%s' "$c" | grep -Eq '[|<>`;&]|\$\(' \
-    && ! printf '%s' "$c" | grep -Eiq '/dev/(stdout|stderr|fd/)'; then
+    && ! printf '%s' "$c" | grep -Eiq '/dev/(stdout|stderr|fd/)|/proc/[^ ]+/fd/|/dev/tty'; then
     if printf '%s' "$c" | grep -Eq '^ *cp +' \
       || printf '%s' "$c" | grep -Eq '^ *(test|\[) '; then
       exit 0
