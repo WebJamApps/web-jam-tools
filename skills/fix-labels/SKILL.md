@@ -81,11 +81,11 @@ These do **not** belong in the 3 "other" repos. Consequences:
 
 ### Priority — all 8 repos (title case)
 
-| Label           | Color     | Hex       |
-| --------------- | --------- | --------- |
-| `Top Priority`  | black     | `#000000` |
-| `High Priority` | dark red  | `#B60205` |
-| `Low Priority`  | pale pink | `#F9D0C4` |
+| Label           | Color       | Hex       |
+| --------------- | ----------- | --------- |
+| `Top Priority`  | black       | `#000000` |
+| `High Priority` | orange      | `#E8590C` |
+| `Low Priority`  | pale yellow | `#FFEC99` |
 
 Renames every existing variant to these exact names: all-caps `TOP PRIORITY` (JaM, wjb) →
 `Top Priority`; bare `High` / `Low` (wjt) → `High Priority` / `Low Priority`. Create where missing.
