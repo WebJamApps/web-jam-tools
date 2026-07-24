@@ -1,11 +1,12 @@
 # webjam-tasks — agy plugin
 
 Antigravity CLI (`agy`) plugin that registers the **`/next`** slash command for the
-WebJamApps task lane. `/next` pulls the next queued coding task (from
-`~/Dropbox/web-jam-llms/agy-tasks.txt` or a named `agy`-labeled GitHub issue), sets
-up a fresh branch off `dev`, and implements it in the current agy session. It calls
-`../../scripts/handle-agy-tasks.sh --setup-only` for the deterministic
-queue-parse + git-branch setup.
+WebJamApps task lane. `/next <Repo>#<issue-num>` pulls a named `agy`-labeled
+GitHub issue, sets up a fresh branch off `dev`, and implements it in the current
+agy session. It calls `../../scripts/handle-agy-tasks.sh --setup-only` for the
+deterministic issue-fetch + git-branch setup. (Dispatch is GitHub-issues-only —
+the older mode that pulled from `~/Dropbox/web-jam-llms/agy-tasks.txt` with no
+issue argument was removed in web-jam-tools#249.)
 
 ## Why a plugin (not a loose skill)
 
