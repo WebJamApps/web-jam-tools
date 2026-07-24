@@ -73,8 +73,26 @@ fi
 
 # reading known credential/secret files
 if printf '%s' "$c" | grep -Eiq '(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.env( |$|/))'; then
+  # cp/test exception (web-jam-tools#257): copying a secret file or checking
+  # its existence never prints its contents (you could already copy-then-print
+  # today), so a *simple* `cp` or `test`/`[` invocation is allowed. This is
+  # what unblocks seeding a gitignored .env into a fresh git worktree, which
+  # this same guard was blocking outright (even the `test -f <path>` it
+  # recommends as the safe check below was itself blocked for .env).
+  #
+  # "Simple" means: no pipe, no redirect, no command substitution, and no
+  # chained command — those can still exfiltrate the value (e.g.
+  # `cp .env /dev/stdout`, `test -f .env && cat .env`) and must stay blocked.
+  # When in doubt this falls through to the block below.
+  if ! printf '%s' "$c" | grep -Eq '[|<>`;&]|\$\(' \
+    && ! printf '%s' "$c" | grep -Eiq '/dev/(stdout|stderr|fd/)'; then
+    if printf '%s' "$c" | grep -Eq '^ *cp +' \
+      || printf '%s' "$c" | grep -Eq '^ *(test|\[) '; then
+      exit 0
+    fi
+  fi
   block "this command references a credential/secret file and would print its contents." \
-        "confirm you truly need the value; to check existence only: test -f <path> && echo present"
+        "cp <path> <dest> to copy it, or test -f <path> && echo present to check existence — both are allowed for simple, unchained invocations (web-jam-tools#257)"
 fi
 
 exit 0
