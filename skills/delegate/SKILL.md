@@ -21,12 +21,14 @@ table — this skill does not repeat it), use the matching section below.
 ## 1. Flash/agy dispatch (frontend/UI work)
 
 Flash work is executed by the Antigravity CLI (`agy`) via the wrapper script
-`~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh`. There are two entry
-points depending on whether the task already has a GitHub issue — **never do
-both** for the same task (a GitHub issue is itself the dispatch record; don't
-also mirror it into the queue file, see the `github-issue-not-queue-line` memory).
-
-**A. GitHub issue already exists, labeled `Flash`:**
+`~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh`. Dispatch is
+**GitHub-issues-only** — the task must already exist as a GitHub issue labeled
+`Flash` before you dispatch it. (A queue-file entry point — appending a line to
+`~/Dropbox/web-jam-llms/agy-tasks.txt` — used to exist as a shortcut for quick
+tasks with no issue; Josh retired it and deleted the file, since it let a
+session dispatch work with no durable record — see web-jam-tools#249. A quick
+task not worth a full write-up still gets a GitHub issue first, just a short
+one.)
 
 ```sh
 ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
@@ -38,32 +40,15 @@ also mirror it into the queue file, see the `github-issue-not-queue-line` memory
 flags first). Headless auto-approves tools and walks the model fallback chain
 unattended — use it when dispatching from inside a Claude Code session with no
 one watching a REPL. Drop `--headless` only if Josh himself wants to drive the
-agy REPL interactively.
+agy REPL interactively. The issue argument is required — a no-arg invocation
+now fails with a usage message instead of running anything.
 
-**B. No issue yet — a quick task not worth a full issue:**
-
-Append one line to the queue file, format `<repo-name>: <task description>`:
-
-```sh
-printf '%s\n' "CollegeLutheran: <precise task — name the exact button/function/flow>" >> ~/Dropbox/web-jam-llms/agy-tasks.txt
-~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless
-```
-
-The wrapper picks the **first** non-comment, non-blank line in the queue file, so
-only append when it's fine for this task to run next. The task line must be
-**unambiguous against the actual code** — "could this wording point to more than
-one button/function/flow in that repo?" If yes, name the exact one (see the
-`agy-task-lines-must-be-unambiguous` memory — a vague line like "add a spinner
-when I submit the news" silently landed on the wrong button because agy can't
-ask a clarifying question mid-run).
-
-**What the script does either way:** checks out latest `dev`, branches
-`agy/<issue#>-<slug>` (or `agy/<slug>` for queue-line tasks), composes a prompt
-wrapping the task in standing rules (commit incrementally, run this repo's real
-lint/test scripts, finish with a draft PR via `create-draft-pr.sh`), then runs
-`agy` on the first currently-available model in a cost-ordered chain (cheapest
-first). It refuses a dirty working tree and never edits the queue file itself —
-delete the queue line yourself once you've accepted the resulting PR.
+**What the script does:** checks out latest `dev`, branches
+`agy/<issue#>-<slug>`, composes a prompt wrapping the task in standing rules
+(commit incrementally, run this repo's real lint/test scripts, finish with a
+draft PR via `create-draft-pr.sh`), then runs `agy` on the first
+currently-available model in a cost-ordered chain (cheapest first). It refuses
+a dirty working tree.
 
 **Flash High requires the `AGY_MODELS` override.** The default model chain is
 cost-ordered cheapest first — `Gemini 3.5 Flash (Medium)|Gemini 3.5 Flash (High)`
@@ -415,7 +400,6 @@ Report back:
 - Don't repeat the Opus/Sonnet/Haiku/Flash/Fable routing table — that's
   `docs/ai-team-playbook.md` (migrating there from global CLAUDE.md per
   web-jam-tools#115; link there, don't duplicate).
-- Don't add a queue line for work that already has a GitHub issue.
 - Don't invent a version-bump command — WebJamApps repos bump `package.json`
   "version" (or `deno.json` for web-jam-tools) by hand, once per PR (see the
   `one-semver-bump-per-pr` memory).

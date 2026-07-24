@@ -55,8 +55,10 @@ Never create version-suffixed copies (V2, V3, -new, -copy) — edit the master.
 
 - claude-sonnet-tasks.txt (Drive root, id 1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ) — Claude Sonnet (Josh's phone app); Drive is authoritative.
 - claude-opus-tasks.txt — Claude Opus (laptop); Dropbox-resident (web-jam-llms/).
-- agy-tasks.txt — agy/Flash lane (laptop); Dropbox-resident.
 - claude-fable-tasks.txt — Fable, when GA (laptop); Dropbox-resident.
+
+agy-tasks.txt (agy/Flash lane) is RETIRED (web-jam-tools#249) — Josh deleted it
+and moved agy/Flash dispatch to GitHub-issues-only; see `skills/delegate/SKILL.md`.
 
 Never modify a queue file that isn't yours. Phone-authored bridge files at Drive root (e.g. `for-opus-<name>.txt`) are merged into the canonical queues by Claude Opus or via the drive-cleanup skill.
 
