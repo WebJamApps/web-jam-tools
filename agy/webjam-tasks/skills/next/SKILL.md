@@ -1,17 +1,81 @@
 ---
 name: next
-description: Start a named agy-labeled coding task. Use when the user types /next <Repo>#<issue-num>, or says "next", "next task", or "start the next task" with an issue in mind. Fetches the named GitHub issue, sets up a fresh git branch off dev, and implements it in that repo. Dispatch is GitHub-issues-only (web-jam-tools#249) — always name an issue.
+description: Start an agy-labeled coding task. Use when the user types /next <Repo>#<issue-num> (named mode), or /next with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/flash-issues.md read-only to resolve the next actionable issue), or says "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
   version: v1
   publisher: josh
 ---
 
-# /next — run a named agy-labeled coding task
+# /next — run an agy-labeled coding task
 
 This skill delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
-Dispatch is GitHub-issues-only (web-jam-tools#249 removed the older queue-file
-mode) — the issue argument is required.
+Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
+older stateful queue-file mode). There are two ways to arrive at that issue:
+
+- **`/next Repo#123`** (named mode) — the issue is given explicitly. Go straight
+  to "## Steps" below.
+- **`/next`** (no argument, auto-pick mode) — read-only resolve the next
+  actionable issue from `~/Dropbox/web-jam-llms/flash-issues.md`, then hand off
+  to the same "## Steps" flow below. See "## No-argument mode" first.
+
+## No-argument mode — auto-pick from flash-issues.md
+
+Use this when the user types `/next` with no argument, or says "next" /
+"next task" / "start the next task" without naming an issue. This mode is
+**read-only** against `~/Dropbox/web-jam-llms/flash-issues.md` — never edit
+that file. It only resolves a concrete `Repo#num`, then continues at step 1 of
+"## Steps" below exactly as if that issue had been named — everything from
+there on (setup, model selection, coding, PR) is identical and unmodified.
+
+### Resolution steps
+
+1. Read `~/Dropbox/web-jam-llms/flash-issues.md`. If it's missing, empty, or
+   has no numbered items, stop and tell Josh: "flash-issues.md is missing/empty
+   — run /flash-issues first." Do not improvise a substitute list.
+2. Parse **only** the numbered runnable list at the top of the file — the
+   `N. [Repo#num](...) — title (Model)` lines that appear **above** the
+   `## Blocked` heading. Ignore the `## Blocked` and `## Needs Josh's review`
+   sections (and anything else) entirely. Extract, in file order, each line's
+   `Repo` and issue `num`.
+3. Walk the extracted list top-to-bottom. For each `Repo#num`, test it in order
+   and pick the **first** one that passes BOTH checks:
+   - **Still open**:
+     `gh issue view <num> --repo WebJamApps/<Repo> --json state -q .state`
+     returns `OPEN`. (Skips anything closed/merged even if the file is stale.)
+   - **Not already started** — neither of these is true:
+     - an OPEN PR already references it:
+       ```
+       gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body \
+         --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
+       ```
+       returns something (this mirrors the same PR-matching pattern
+       `handle-agy-tasks.sh` uses for its own resume detection); OR
+     - a dispatch branch already exists for it — check both the naming
+       prefixes `handle-agy-tasks.sh` actually creates/resumes
+       (`agy/<num>-*` from headless dispatch, `gemini/<num>-*` from an
+       interactive agy run):
+       ```
+       git -C ~/WebJamApps/<Repo> for-each-ref --format='%(refname:short)' \
+         "refs/heads/agy/<num>-*" "refs/heads/gemini/<num>-*"
+       git -C ~/WebJamApps/<Repo> ls-remote --heads origin \
+         "agy/<num>-*" "gemini/<num>-*"
+       ```
+       (the second command catches a branch that only exists on the remote,
+       not yet fetched locally) returns something.
+
+   Skip any item failing either check and move to the next line.
+4. If a candidate passes both checks, that's the pick. Resolve it to
+   `Repo#num` and continue at **step 1 of "## Steps" below** — i.e. run
+   `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>`
+   and follow steps 2 onward exactly as written for the named-issue flow.
+5. If you reach the end of the list with no candidate passing (every item is
+   closed or already in flight), stop and tell Josh: "every item in
+   flash-issues.md's runnable list is closed or already in flight — re-run
+   /flash-issues to refresh it." Do not improvise a substitute list, and do
+   not fall back to the Blocked or Needs-review sections.
+
+Never write to `flash-issues.md` in this mode — it is read-only input.
 
 ## Steps
 
