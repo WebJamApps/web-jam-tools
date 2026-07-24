@@ -122,6 +122,29 @@ Deno.test("cp .env /dev/stdout is still blocked (writes contents to stdout)", as
   assertBlocked(res.stderr);
 });
 
+Deno.test("cp .env /proc/self/fd/1 is still blocked (proc fd alias for stdout)", async () => {
+  const res = await runHook("cp .env /proc/self/fd/1");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cp .env /proc/1234/fd/2 is still blocked (proc fd alias for another process' stderr)", async () => {
+  const res = await runHook("cp .env /proc/1234/fd/2");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cp .env /dev/tty is still blocked (writes contents to the terminal)", async () => {
+  const res = await runHook("cp .env /dev/tty");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cp .env /tmp/seed.env is still allowed (plain destination, not a proc fd or tty)", async () => {
+  const res = await runHook("cp .env /tmp/seed.env");
+  assertEquals(res.code, 0, res.stderr);
+});
+
 Deno.test("cp .env - | cat is still blocked (piped)", async () => {
   const res = await runHook("cp .env - | cat");
   assertEquals(res.code, 2);
