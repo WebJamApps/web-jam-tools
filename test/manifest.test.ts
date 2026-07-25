@@ -21,6 +21,7 @@ const HOOKS_DIR = new URL("../hooks/", import.meta.url).pathname;
 // Pinned set of skills/*/ directory names. Update deliberately.
 const EXPECTED_SKILL_DIRS = [
   "delegate",
+  "draft-issue",
   "draft-pr",
   "drive-cleanup",
   "fix-labels",
@@ -40,6 +41,7 @@ const EXPECTED_HOOK_SCRIPTS = [
   "fmt-push-guard.sh",
   "haiku-only-gmail-gate.sh",
   "notes-sync-reminder.sh",
+  "require-model-label-on-issue-create.sh",
   "semver-push-reminder.sh",
 ];
 
