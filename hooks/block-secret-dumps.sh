@@ -13,8 +13,137 @@ input=$(cat)
 cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
-# collapse newlines/whitespace so multi-line commands match too
-c=$(printf '%s' "$cmd" | tr '\n' ' ' | tr -s ' ')
+# Build an operation-anchored view of the command for the checks below
+# (web-jam-tools#261): strip heredoc BODY text and drop multi-word quoted
+# "prose" arguments (an issue --body, a git commit -m, a note heredoc) before
+# matching, so a secret filename or dump-command name that's merely
+# *mentioned* in prose being written elsewhere doesn't block the command —
+# only an actual command-position occurrence (a real argument token, not
+# sentence text) still does. A quoted phrase is only dropped when it carries
+# no shell operator chars ($( ` < >); a phrase that still performs a real
+# substitution/read (e.g. "$(< .env)") keeps those chars and so is kept and
+# still matches. Heredoc bodies are found via a quote-aware per-line scan (a
+# literal "<<" inside prose, e.g. "use << as a marker", is never mistaken for
+# real heredoc syntax) and, if a closing delimiter is never found, the lines
+# are put back rather than silently dropped. On any parse failure (unbalanced
+# quotes, python3 unavailable) this falls back to the old "match anywhere"
+# collapse — bias to safety, per the issue's guidance.
+c=$(CMD_FOR_PY="$cmd" python3 <<'PYEOF' 2>/dev/null
+import os
+import re
+import shlex
+
+
+def find_heredoc_marker(line):
+    """First heredoc marker (<<WORD, <<-WORD, <<'WORD', ...) outside any
+    quoted region of the line, as (word, strip_tabs), or None."""
+    in_squote = False
+    in_dquote = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if in_squote:
+            if ch == "'":
+                in_squote = False
+            i += 1
+            continue
+        if in_dquote:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == '"':
+                in_dquote = False
+            i += 1
+            continue
+        if ch == "'":
+            in_squote = True
+            i += 1
+            continue
+        if ch == '"':
+            in_dquote = True
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if ch == "<" and i + 1 < n and line[i + 1] == "<":
+            j = i + 2
+            strip_tabs = False
+            if j < n and line[j] == "-":
+                strip_tabs = True
+                j += 1
+            while j < n and line[j] == " ":
+                j += 1
+            if j < n and line[j] in ("'", '"'):
+                j += 1
+            start = j
+            while j < n and (line[j].isalnum() or line[j] == "_"):
+                j += 1
+            word = line[start:j]
+            if word:
+                return word, strip_tabs
+            i += 2
+            continue
+        i += 1
+    return None
+
+
+def strip_heredocs(text):
+    lines = text.split("\n")
+    out = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        out.append(line)
+        marker = find_heredoc_marker(line)
+        if marker:
+            word, strip_tabs = marker
+            j = i + 1
+            body = []
+            terminated = False
+            while j < n:
+                probe = lines[j].lstrip("\t") if strip_tabs else lines[j]
+                if probe.rstrip("\r") == word:
+                    terminated = True
+                    j += 1
+                    break
+                body.append(lines[j])
+                j += 1
+            if not terminated:
+                # no closing delimiter before EOF: fail safe, keep every
+                # line rather than risk silently dropping a real command
+                # that never actually ran through a heredoc.
+                out.extend(body)
+            i = j
+            continue
+        i += 1
+    return "\n".join(out)
+
+
+SHELL_OP = re.compile(r"\$\(|`|[<>|]")
+
+
+def drop_prose(text):
+    tokens = shlex.split(text, posix=True)
+    kept = [t for t in tokens if not (re.search(r"\s", t) and not SHELL_OP.search(t))]
+    return " ".join(kept)
+
+
+cmd = os.environ.get("CMD_FOR_PY", "")
+try:
+    result = drop_prose(strip_heredocs(cmd))
+except Exception:
+    result = cmd
+print(re.sub(r"\s+", " ", result).strip())
+PYEOF
+) || true
+if [ -z "$c" ]; then
+  # python3 unavailable or crashed: fall back to the old collapse so the
+  # guard still fires on unambiguous cases rather than silently no-op'ing.
+  c=$(printf '%s' "$cmd" | tr '\n' ' ' | tr -s ' ')
+fi
 
 block() {
   echo "BLOCKED (secret-dump guard): $1" >&2
