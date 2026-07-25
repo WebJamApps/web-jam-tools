@@ -14,20 +14,33 @@ cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.st
 [ -z "$cmd" ] && exit 0
 
 # Build an operation-anchored view of the command for the checks below
-# (web-jam-tools#261): strip heredoc BODY text and drop multi-word quoted
-# "prose" arguments (an issue --body, a git commit -m, a note heredoc) before
-# matching, so a secret filename or dump-command name that's merely
-# *mentioned* in prose being written elsewhere doesn't block the command —
-# only an actual command-position occurrence (a real argument token, not
-# sentence text) still does. A quoted phrase is only dropped when it carries
-# no shell operator chars ($( ` < >); a phrase that still performs a real
-# substitution/read (e.g. "$(< .env)") keeps those chars and so is kept and
-# still matches. Heredoc bodies are found via a quote-aware per-line scan (a
-# literal "<<" inside prose, e.g. "use << as a marker", is never mistaken for
-# real heredoc syntax) and, if a closing delimiter is never found, the lines
-# are put back rather than silently dropped. On any parse failure (unbalanced
-# quotes, python3 unavailable) this falls back to the old "match anywhere"
-# collapse — bias to safety, per the issue's guidance.
+# (web-jam-tools#261): strip heredoc BODY text and drop the VALUE of a known
+# prose-carrying flag (an issue --body, a git commit -m, ...) before matching,
+# so a secret filename or dump-command name that's merely *mentioned* in
+# prose being written elsewhere doesn't block the command — only an actual
+# command-position occurrence (a real argument token, not sentence text)
+# still does.
+#
+# Earlier version of this fix dropped ANY shlex token containing internal
+# whitespace, on the theory that only a quoted phrase can contain whitespace.
+# That's true, but it's not only prose that gets quoted — `bash -c "cat
+# .env"` / `sh -c 'heroku config'` quote their PAYLOAD too, and that blanket
+# rule silently dropped it, reopening exactly the dump the guard exists to
+# catch. Fixed by narrowing to an explicit flag allowlist: a token is only
+# dropped when the immediately preceding token is one of the prose-carrying
+# flags below (or via the `--flag=value` single-token form for the same
+# flags) — `-c` is deliberately NOT on this list, so a `sh -c`/`bash -c`/
+# `python3 -c`/etc. payload stays in scope for matching same as any other
+# argument. As a second safety net, a flag value is still kept (not dropped)
+# when it carries a shell operator char ($( ` < >) — a phrase that performs a
+# real substitution/read (e.g. "$(< .env)") is never treated as safe prose.
+#
+# Heredoc bodies are found via a quote-aware per-line scan (a literal "<<"
+# inside prose, e.g. "use << as a marker", is never mistaken for real heredoc
+# syntax) and, if a closing delimiter is never found, the lines are put back
+# rather than silently dropped. On any parse failure (unbalanced quotes,
+# python3 unavailable) this falls back to the old "match anywhere" collapse —
+# bias to safety, per the issue's guidance.
 c=$(CMD_FOR_PY="$cmd" python3 <<'PYEOF' 2>/dev/null
 import os
 import re
@@ -124,10 +137,46 @@ def strip_heredocs(text):
 
 SHELL_OP = re.compile(r"\$\(|`|[<>|]")
 
+# Flags whose value is free-form prose text being authored/recorded, not a
+# command argument that gets executed. Deliberately does NOT include -c
+# (sh/bash/zsh/python3/node/perl/... payloads must stay in scope for
+# matching) or --body-file-like path-only flags that don't carry inline text
+# — wait, --body-file/--summary-file/etc DO take a path, but dropping that
+# path token is harmless (a path isn't itself a read/dump operation) and
+# keeps this list symmetric with its non-file counterpart.
+PROSE_FLAGS = {
+    "--body",
+    "--body-file",
+    "-m",
+    "--message",
+    "--summary",
+    "--summary-file",
+    "--test-plan",
+    "--test-plan-file",
+    "--test-evidence",
+    "--test-evidence-file",
+    "--notes",
+    "--title",
+    "-t",
+}
+
 
 def drop_prose(text):
     tokens = shlex.split(text, posix=True)
-    kept = [t for t in tokens if not (re.search(r"\s", t) and not SHELL_OP.search(t))]
+    kept = []
+    prev_flag = None
+    for tok in tokens:
+        if "=" in tok:
+            flag, _, value = tok.partition("=")
+            if flag in PROSE_FLAGS and not SHELL_OP.search(value):
+                kept.append(flag)
+                prev_flag = None
+                continue
+        if prev_flag is not None and not SHELL_OP.search(tok):
+            prev_flag = None
+            continue
+        kept.append(tok)
+        prev_flag = tok if tok in PROSE_FLAGS else None
     return " ".join(kept)
 
 
