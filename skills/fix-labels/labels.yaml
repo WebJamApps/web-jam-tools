@@ -8,7 +8,7 @@
 #
 # Hand-edit this file when canon changes (new label, recolor, rescope, a new
 # `keep:` veto). Every top-level shape below is asserted by
-# test/skills_validation.test.ts.
+# test/fix_labels_diff.test.ts.
 
 # Named repo groups, referenced by the `repos:` field on each label below.
 # `all` is not listed here — it is computed in code as frontend + other.
@@ -45,11 +45,11 @@ labels:
   - name: Fable
     hex: "D93F0B"
     repos: all
-    # Retired/dormant, kept in every repo in case the model returns. Skill's
-    # own Non-goals say "Never touches Fable" — so the diff must never
-    # propose ANY change (create/rename/recolor/delete) for it, not just
-    # never delete.
-    neverTouch: true
+    # Retired/dormant, kept in every repo in case the model returns.
+    # DELETE-PROTECTION ONLY (Josh, 2026-07-25): missing -> still propose
+    # create; wrong color -> still propose recolor. It is just never a
+    # delete/wrong-repo-removal candidate, in any repo.
+    neverDelete: true
 
   # --- Model-tier — front-end 5 repos ONLY ---
   - name: Flash Med

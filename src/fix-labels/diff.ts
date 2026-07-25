@@ -25,11 +25,11 @@ export interface CanonicalLabel {
   /** Known misnamed variants that should be RENAMED to `name`, not deleted. */
   aliases?: string[];
   /**
-   * Never propose ANY change for this label (create/rename/recolor/delete),
-   * in any repo. Used for `Fable`: SKILL.md's Non-goals say "Never touches
-   * Fable" — stronger than merely "never delete".
+   * Delete-protection only: never propose removing/deleting this label, in
+   * any repo. Missing -> still propose create; wrong color -> still propose
+   * recolor. Used for `Fable` (Josh, 2026-07-25).
    */
-  neverTouch?: boolean;
+  neverDelete?: boolean;
 }
 
 export interface Schema {
@@ -96,12 +96,11 @@ export function classifyRepoDrift(
   const consumed = new Set<string>();
   const keepList = new Set(schema.keep[repo] ?? []);
   const actualByName = new Map(actual.map((l) => [l.name, l]));
-  const neverTouchNames = new Set(
-    schema.labels.filter((l) => l.neverTouch).map((l) => l.name),
+  const neverDeleteNames = new Set(
+    schema.labels.filter((l) => l.neverDelete).map((l) => l.name),
   );
 
   for (const label of schema.labels) {
-    if (label.neverTouch) continue; // e.g. Fable — never propose anything for it
     if (!resolveRepos(schema, label.repos).includes(repo)) continue; // not canonical here
 
     const exact = actualByName.get(label.name);
@@ -140,7 +139,7 @@ export function classifyRepoDrift(
 
   for (const actualLabel of actual) {
     if (consumed.has(actualLabel.name)) continue;
-    if (neverTouchNames.has(actualLabel.name)) continue; // never touches Fable, anywhere
+    if (neverDeleteNames.has(actualLabel.name)) continue; // e.g. Fable — never delete/remove
     if (keepList.has(actualLabel.name)) continue; // Josh-vetoed keeper for this repo
 
     const canonicalElsewhere = schema.labels.some((l) => l.name === actualLabel.name);
@@ -176,19 +175,43 @@ export async function loadSchema(path: string): Promise<Schema> {
 }
 
 // --- `gh` shell-outs (main() only — never called from the pure function) ---
+//
+// The actual `Deno.Command` invocation is INJECTED as a `CommandRunner`, so
+// every caller below can be unit-tested with a fake runner — no network, no
+// real `gh` binary required in tests (web-jam-tools#263 follow-up: CI's
+// coverage gate flagged this half of the file as untested).
 
-async function runGh(args: string[]): Promise<string> {
-  const cmd = new Deno.Command("gh", { args, stdout: "piped", stderr: "piped" });
-  const { code, stdout, stderr } = await cmd.output();
-  if (code !== 0) {
-    throw new Error(
-      `gh ${args.join(" ")} failed (exit ${code}): ${new TextDecoder().decode(stderr).trim()}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
+export interface CommandResult {
+  code: number;
+  stdout: string;
+  stderr: string;
 }
 
-export async function fetchActualLabels(repo: string): Promise<ActualLabel[]> {
+export type CommandRunner = (args: string[]) => Promise<CommandResult>;
+
+/** The real runner: shells out to `gh` via `Deno.Command`. */
+export const runGhCommand: CommandRunner = async (args: string[]) => {
+  const cmd = new Deno.Command("gh", { args, stdout: "piped", stderr: "piped" });
+  const { code, stdout, stderr } = await cmd.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
+};
+
+async function runGh(args: string[], runner: CommandRunner): Promise<string> {
+  const { code, stdout, stderr } = await runner(args);
+  if (code !== 0) {
+    throw new Error(`gh ${args.join(" ")} failed (exit ${code}): ${stderr.trim()}`);
+  }
+  return stdout;
+}
+
+export async function fetchActualLabels(
+  repo: string,
+  runner: CommandRunner = runGhCommand,
+): Promise<ActualLabel[]> {
   const out = await runGh([
     "label",
     "list",
@@ -198,12 +221,16 @@ export async function fetchActualLabels(repo: string): Promise<ActualLabel[]> {
     "name,color",
     "--limit",
     "200",
-  ]);
+  ], runner);
   const parsed = JSON.parse(out) as Array<{ name: string; color: string }>;
   return parsed.map((l) => ({ name: l.name, color: l.color }));
 }
 
-export async function fetchBlastRadius(repo: string, label: string): Promise<number> {
+export async function fetchBlastRadius(
+  repo: string,
+  label: string,
+  runner: CommandRunner = runGhCommand,
+): Promise<number> {
   const out = await runGh([
     "issue",
     "list",
@@ -217,7 +244,7 @@ export async function fetchBlastRadius(repo: string, label: string): Promise<num
     "number",
     "-q",
     "length",
-  ]);
+  ], runner);
   const n = Number(out.trim());
   if (!Number.isFinite(n)) {
     throw new Error(`blast radius for "${label}" in ${repo}: unexpected gh output "${out.trim()}"`);
@@ -226,11 +253,15 @@ export async function fetchBlastRadius(repo: string, label: string): Promise<num
 }
 
 /** Attach blast radius (open-issue count) to every remove/delete drift item. */
-export async function attachBlastRadius(repo: string, items: DriftItem[]): Promise<DriftItem[]> {
+export async function attachBlastRadius(
+  repo: string,
+  items: DriftItem[],
+  runner: CommandRunner = runGhCommand,
+): Promise<DriftItem[]> {
   const out: DriftItem[] = [];
   for (const item of items) {
     if (item.action === "remove" || item.action === "delete") {
-      out.push({ ...item, blastRadius: await fetchBlastRadius(repo, item.name) });
+      out.push({ ...item, blastRadius: await fetchBlastRadius(repo, item.name, runner) });
     } else {
       out.push(item);
     }
@@ -238,10 +269,14 @@ export async function attachBlastRadius(repo: string, items: DriftItem[]): Promi
   return out;
 }
 
-export async function scanRepo(schema: Schema, repo: string): Promise<DriftItem[]> {
-  const actual = await fetchActualLabels(repo);
+export async function scanRepo(
+  schema: Schema,
+  repo: string,
+  runner: CommandRunner = runGhCommand,
+): Promise<DriftItem[]> {
+  const actual = await fetchActualLabels(repo, runner);
   const drift = classifyRepoDrift(schema, repo, actual);
-  return await attachBlastRadius(repo, drift);
+  return await attachBlastRadius(repo, drift, runner);
 }
 
 // --- Report formatting ---
@@ -277,15 +312,19 @@ export function formatReport(perRepo: Record<string, DriftItem[]>, now: Date = n
 
 // --- main() ---
 
-const DEFAULT_SCHEMA_PATH =
+export const DEFAULT_SCHEMA_PATH =
   new URL("../../skills/fix-labels/labels.yaml", import.meta.url).pathname;
 
-export async function main(args: string[] = Deno.args): Promise<number> {
+export async function main(
+  args: string[] = Deno.args,
+  runner: CommandRunner = runGhCommand,
+  schemaPath: string = DEFAULT_SCHEMA_PATH,
+): Promise<number> {
   const jsonOutput = args.includes("--json");
 
   let schema: Schema;
   try {
-    schema = await loadSchema(DEFAULT_SCHEMA_PATH);
+    schema = await loadSchema(schemaPath);
   } catch (err) {
     console.error(
       `fix-labels:diff: failed to load schema: ${err instanceof Error ? err.message : err}`,
@@ -296,7 +335,7 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   const perRepo: Record<string, DriftItem[]> = {};
   try {
     for (const repo of allRepos(schema)) {
-      perRepo[repo] = await scanRepo(schema, repo);
+      perRepo[repo] = await scanRepo(schema, repo, runner);
     }
   } catch (err) {
     console.error(`fix-labels:diff: scan failed: ${err instanceof Error ? err.message : err}`);
