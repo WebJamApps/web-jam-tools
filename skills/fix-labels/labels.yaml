@@ -1,0 +1,112 @@
+# labels.yaml — web-jam-tools#263
+#
+# Single source of truth for the canonical GitHub label schema enforced by
+# /fix-labels across the 8 active WebJamApps repos. Parsed by
+# src/fix-labels/diff.ts (@std/yaml) — that script computes drift by
+# comparing this file against each repo's actual `gh label list` output. No
+# name/hex pair is restated in skills/fix-labels/SKILL.md; this file is it.
+#
+# Hand-edit this file when canon changes (new label, recolor, rescope, a new
+# `keep:` veto). Every top-level shape below is asserted by
+# test/fix_labels_diff.test.ts.
+
+# Named repo groups, referenced by the `repos:` field on each label below.
+# `all` is not listed here — it is computed in code as frontend + other.
+repoClasses:
+  frontend:
+    - JaMmusic
+    - CollegeLutheran
+    - AppersonAuto
+    - TimShermanMusic
+    - HenricksonForSalem
+  other:
+    - web-jam-back
+    - WebJamSocketCluster
+    - web-jam-tools
+  # The 4 booking-epic repos that carry `gig-outreach` (web-jam-tools#263,
+  # "gig-outreach — 4 booking-epic repos ONLY"). NOT the same set as `other`.
+  gigOutreach:
+    - JaMmusic
+    - web-jam-back
+    - WebJamSocketCluster
+    - web-jam-tools
+
+labels:
+  # --- Model-tier — all 8 repos ---
+  - name: Haiku
+    hex: "0E8A16"
+    repos: all
+  - name: Sonnet
+    hex: "1D76DB"
+    repos: all
+  - name: Opus
+    hex: "B392F0"
+    repos: all
+  - name: Fable
+    hex: "D93F0B"
+    repos: all
+    # Retired/dormant, kept in every repo in case the model returns.
+    # DELETE-PROTECTION ONLY (Josh, 2026-07-25): missing -> still propose
+    # create; wrong color -> still propose recolor. It is just never a
+    # delete/wrong-repo-removal candidate, in any repo.
+    neverDelete: true
+
+  # --- Model-tier — front-end 5 repos ONLY ---
+  - name: Flash Med
+    hex: "FBCA04"
+    repos: frontend
+  - name: Flash High
+    hex: "E67E22"
+    repos: frontend
+
+  # --- Priority — all 8 repos (title case) ---
+  - name: Top Priority
+    hex: "000000"
+    repos: all
+    # All-caps variant seen in JaMmusic / web-jam-back.
+    aliases:
+      - "TOP PRIORITY"
+  - name: High Priority
+    hex: "E8590C"
+    repos: all
+    # Bare variant seen in web-jam-tools.
+    aliases:
+      - "High"
+  - name: Low Priority
+    hex: "FFEC99"
+    repos: all
+    # Bare variant seen in web-jam-tools.
+    aliases:
+      - "Low"
+
+  # --- Status — all 8 repos ---
+  - name: blocked
+    hex: "E11D21"
+    repos: all
+  - name: parked
+    hex: "C2C2C2"
+    repos: all
+
+  # --- gig-outreach — 4 booking-epic repos ONLY ---
+  - name: gig-outreach
+    hex: "006B75"
+    repos: gigOutreach
+
+  # --- GitHub defaults — all 8 repos (only these two are kept) ---
+  - name: bug
+    hex: "D73A4A"
+    repos: all
+  - name: enhancement
+    hex: "A2EEEF"
+    repos: all
+
+# Per-repo list of non-canonical label names that are explicitly preserved
+# and must NEVER be proposed for delete, even though they're not on the
+# `labels:` master list above. Seeded with the two Josh vetoed on the
+# 2026-07-25 run — without this, every future run re-proposes them and Josh
+# has to veto them again forever.
+keep:
+  web-jam-back:
+    - timshermanmusic
+  web-jam-tools:
+    - backup-restore
