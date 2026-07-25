@@ -51,13 +51,13 @@ currently-available model in a cost-ordered chain (cheapest first). It refuses
 a dirty working tree.
 
 **Flash High requires the `AGY_MODELS` override.** The default model chain is
-cost-ordered cheapest first — `Gemini 3.5 Flash (Medium)|Gemini 3.5 Flash (High)`
+cost-ordered cheapest first — `Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)`
 — with High used only as a rate-limit fallback, so an issue triaged as **Flash
 High** silently runs at Flash Medium unless you override the chain on the
 invocation:
 
 ```sh
-AGY_MODELS='Gemini 3.5 Flash (High)' \
+AGY_MODELS='Gemini 3.6 Flash (High)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 ```
 

@@ -43,7 +43,7 @@ SESSION_START_HOOKS=(notes-sync-reminder.sh)
 
 # PreToolUse Bash hooks this installer keeps registered in settings.json.
 # These hooks run before Bash tool execution; script names only.
-PRE_TOOL_USE_BASH_HOOKS=(semver-push-reminder.sh block-secret-dumps.sh block-dangerous-git-deploy.sh authorization-check.sh fmt-push-guard.sh)
+PRE_TOOL_USE_BASH_HOOKS=(semver-push-reminder.sh block-secret-dumps.sh block-dangerous-git-deploy.sh authorization-check.sh fmt-push-guard.sh block-agy-non-flash-model.sh)
 
 while [ $# -gt 0 ]; do
   case "$1" in
