@@ -302,7 +302,7 @@ Every entry — in BOTH the numbered list and the Blocked section — MUST end
 with its Flash tier in parentheses, exactly as that repo spells it
 (`Flash`, `Flash Med`, or `Flash High`). Josh uses this to know whether to
 run agy with the plain default chain or override it with
-AGY_MODELS='Gemini 3.5 Flash (High)'.
+AGY_MODELS='Gemini 3.6 Flash (High)'.
 
 Output template:
 
