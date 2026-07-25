@@ -222,6 +222,157 @@ Deno.test("rclone config show is still blocked", async () => {
   assertBlocked(res.stderr);
 });
 
+// --- web-jam-tools#261: prose mentions are allowed, operations still block ---
+
+Deno.test("gh issue create --body naming .env / rclone config show as examples is allowed", async () => {
+  const res = await runHook(
+    `gh issue create --title "hook over-fires" --body "This documents examples like cat .env, rclone config show, and heroku config that stay blocked."`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue create --body-file, fed by a heredoc mentioning secrets in prose, is allowed", async () => {
+  const res = await runHook(
+    [
+      "cat > /tmp/note.md <<'EOF'",
+      "Examples of blocked commands: cat .env, rclone config show gdrive, heroku config -a myapp.",
+      "EOF",
+      'gh issue create --title "x" --body-file /tmp/note.md',
+    ].join("\n"),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a heredoc note whose text contains a secret filename is allowed", async () => {
+  const res = await runHook(
+    [
+      "python3 <<'EOF'",
+      'note = "remember: .env holds secrets, back it up safely"',
+      "print(note)",
+      "EOF",
+    ].join("\n"),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("git commit -m mentioning a secret filename in prose is allowed", async () => {
+  const res = await runHook('git commit -m "document .env.example handling for onboarding"');
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("--body=<prose> single-token form is allowed", async () => {
+  const res = await runHook(
+    `gh issue create --title "x" --body="This documents examples like cat .env, rclone config show, and heroku config that stay blocked."`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// --- regression: a quoted -c payload must not be treated as prose just
+// because it contains whitespace (it's a real command, not a note being
+// authored). An earlier version of the flag-value drop rule keyed on
+// "does this quoted token contain whitespace" rather than "is this the
+// value of a known prose flag", which silently let bash -c/sh -c/etc.
+// payloads bypass the guard entirely. ---
+
+Deno.test("bash -c reading a secret file is still blocked (not a prose flag)", async () => {
+  const res = await runHook(`bash -c "cat .env"`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("sh -c running a whole-config dump is still blocked (not a prose flag)", async () => {
+  const res = await runHook(`sh -c 'heroku config -a myapp'`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a non-shell interpreter's -c payload naming a secret file is still blocked", async () => {
+  const res = await runHook(
+    `python3 -c "data = open('.env').read(); print(data)"`,
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a command-substitution read wrapped in double quotes is still blocked (not treated as prose)", async () => {
+  const res = await runHook(`printf '%s' "$(< .env)"`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("source .env is still blocked", async () => {
+  const res = await runHook("source .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test(". .env is still blocked (dot-source form)", async () => {
+  const res = await runHook(". .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("echo .env is still blocked (command-position token, not prose)", async () => {
+  const res = await runHook("echo .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("sed -n 1p .env is still blocked", async () => {
+  const res = await runHook("sed -n 1p .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("awk '{print}' .env is still blocked", async () => {
+  const res = await runHook("awk '{print}' .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("tee .env is still blocked", async () => {
+  const res = await runHook("tee .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat < .env (input redirect) is still blocked", async () => {
+  const res = await runHook("cat < .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("x=$(cat .env) (command substitution assignment) is still blocked", async () => {
+  const res = await runHook("x=$(cat .env)");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("ls; cat .env (semicolon chain) is still blocked", async () => {
+  const res = await runHook("ls; cat .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("ls && cat .env (chain) is still blocked", async () => {
+  const res = await runHook("ls && cat .env");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a literal '<<' inside quoted prose on one line doesn't swallow a real dump on the next line", async () => {
+  // If the quoted "<<" in line 1 were mistaken for a real heredoc marker, the
+  // scanner would go hunting for a terminator and could consume line 2 (the
+  // actual dangerous command) as "heredoc body" — silently hiding it from
+  // every check below. It must not: dquote-tracking means "<<" inside quotes
+  // is never treated as a marker, so line 2 stays intact and still blocks.
+  const res = await runHook(
+    ['echo "use << as a marker inside prose"', "cat .env"].join("\n"),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 // --- unrelated commands pass through untouched ---
 
 Deno.test("a command with no secret-file reference is allowed", async () => {
