@@ -30,6 +30,14 @@ export interface CanonicalLabel {
    * recolor. Used for `Fable` (Josh, 2026-07-25).
    */
   neverDelete?: boolean;
+  /**
+   * Machine-readable marker: this label routes an issue to a model tier.
+   * The single source of truth for "what is a model label" (web-jam-tools#265)
+   * — hooks/require-model-label-on-issue-create.sh derives its valid-label
+   * list by selecting entries where this is true, so there is no second
+   * hardcoded copy of the six names anywhere.
+   */
+  modelTier?: boolean;
 }
 
 export interface Schema {
