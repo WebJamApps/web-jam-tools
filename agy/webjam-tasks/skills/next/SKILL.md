@@ -107,7 +107,7 @@ Never write to `flash-issues.md` in this mode — it is read-only input.
    1. `Claude Opus 4.6 (Thinking)`
    2. `Claude Sonnet 4.6 (Thinking)`
    3. `Gemini 3.1 Pro (High)`
-   4. `Gemini 3.5 Flash (High)`
+   4. `Gemini 3.6 Flash (High)`
 
    There are only **two independent quota pools** (verified — web-jam-tools#79):
    `{Claude Opus/Sonnet}` and `{Gemini Pro/Flash}`. `GPT-OSS 120B` shares Claude's
@@ -119,7 +119,7 @@ Never write to `flash-issues.md` in this mode — it is read-only input.
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:
-     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini 3.5 Flash (High)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
+     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini 3.6 Flash (High)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
      * *Ordinary Coding*: → `Claude Sonnet 4.6 (Thinking)`.
      * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
    * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
