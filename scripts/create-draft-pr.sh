@@ -24,12 +24,12 @@
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
-#   --author        REQUIRED. e.g. "Claude Code — Opus 4.8", "agy — Gemini 3.5 Flash
+#   --author        REQUIRED. e.g. "Claude Code — Opus 4.8", "agy — Gemini 3.6 Flash
 #                   (Medium)". Lands in the footer so Josh can track per-model
 #                   quality. MUST name a model on the ROSTER list maintained near
 #                   the top of this script (web-jam-tools#190) — models routinely
 #                   confabulate their own checkpoint name (JaMmusic#1212: a Gemini
-#                   3.5 Flash run self-reported "Gemini 1.5 Pro"), so the script
+#                   Flash run self-reported "Gemini 1.5 Pro"), so the script
 #                   checks the value itself rather than trusting it. Matched as a
 #                   SUBSTRING (caller format is "<tool> — <model>"), not an exact
 #                   match. FORCED_PR_AUTHOR in the environment overrides --author
@@ -137,8 +137,8 @@ usage() {
 # format is "<tool> — <model>" (e.g. "Claude Code — Sonnet 5" — the tool name
 # already says "Claude", so the model half doesn't repeat it).
 ROSTER=(
-  "Gemini 3.5 Flash (Medium)"
-  "Gemini 3.5 Flash (High)"
+  "Gemini 3.6 Flash (Medium)"
+  "Gemini 3.6 Flash (High)"
   "Claude Sonnet 5"
   "Claude Haiku 4.5"
   "Claude Opus 4.8"
