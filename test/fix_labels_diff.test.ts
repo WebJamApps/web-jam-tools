@@ -208,12 +208,25 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
 
   const byName = new Map(schema.labels.map((l) => [l.name, l]));
   assertEquals(byName.get("Haiku")?.hex, "0E8A16");
+  assertEquals(byName.get("Haiku")?.modelTier, true);
   assertEquals(byName.get("Sonnet")?.hex, "1D76DB");
+  assertEquals(byName.get("Sonnet")?.modelTier, true);
   assertEquals(byName.get("Opus")?.hex, "B392F0");
+  assertEquals(byName.get("Opus")?.modelTier, true);
   assertEquals(byName.get("Fable")?.hex, "D93F0B");
   assertEquals(byName.get("Fable")?.neverDelete, true);
+  assertEquals(byName.get("Fable")?.modelTier, true);
   assertEquals(byName.get("Flash Med")?.hex, "FBCA04");
+  assertEquals(byName.get("Flash Med")?.modelTier, true);
   assertEquals(byName.get("Flash High")?.hex, "E67E22");
+  assertEquals(byName.get("Flash High")?.modelTier, true);
+  // Non-model labels must NOT carry the marker — otherwise the hook's
+  // valid-label derivation (select modelTier: true) would silently widen.
+  assertEquals(byName.get("Top Priority")?.modelTier, undefined);
+  assertEquals(byName.get("bug")?.modelTier, undefined);
+  assertEquals(byName.get("blocked")?.modelTier, undefined);
+  const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();
+  assertEquals(modelTierNames, ["Fable", "Flash High", "Flash Med", "Haiku", "Opus", "Sonnet"]);
   assertEquals(byName.get("Top Priority")?.hex, "000000");
   assertEquals(byName.get("Top Priority")?.aliases, ["TOP PRIORITY"]);
   assertEquals(byName.get("High Priority")?.hex, "E8590C");
