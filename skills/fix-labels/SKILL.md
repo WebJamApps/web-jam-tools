@@ -1,15 +1,24 @@
 ---
 name: fix-labels
-description: Recurring GitHub issue-label drift-detector across the 8 active WebJamApps repos. Compares each repo's current labels against a fixed canonical schema baked into this file, reports drift (missing / misnamed / miscolored / wrong-repo / non-canonical) with blast radius per label, waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports "no changes"; re-run anytime to catch drift that accumulates over time.
+description: Recurring GitHub issue-label drift-detector across the 8 active WebJamApps repos. Computes drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports "no changes"; re-run anytime to catch drift that accumulates over time.
 ---
 
 # fix-labels — canonical GitHub label drift-detector
 
-A **recurring** drift-detector, not a one-time cleanup. Every run compares each repo's current
-labels against the fixed canonical schema below, reports what has drifted (with blast radius on
-anything destructive), waits for Josh's per-item approval, then applies only the approved changes. A
-clean workspace reports "no changes." Re-run anytime — drift accumulates as repos pick up ad hoc
-labels between runs.
+A **recurring** drift-detector, not a one-time cleanup. Every run computes each repo's drift
+against `labels.yaml` — in code, via `deno task fix-labels:diff`, not by eye — reports what has
+drifted (with blast radius on anything destructive), waits for Josh's per-item approval, then
+applies only the approved changes and re-scans to confirm the apply actually worked. A clean
+workspace reports "no changes." Re-run anytime — drift accumulates as repos pick up ad hoc labels
+between runs.
+
+`web-jam-tools#263`: an earlier version of this skill asked the model to eyeball ~150 name/color
+pairs across 8 repos in prose. That run reported all 8 repos clean while four real defects
+survived — a `blocked` label that existed miscolored got reported (and applied) as "missing", two
+priority labels stayed miscolored because they were never flagged, a front-end repo's `Flash`
+split lost half its replacement pair, and `Flash High`'s wrong color went unnoticed in all 5
+front-end repos. The diff is now computed by `src/fix-labels/diff.ts`, unit-tested against exactly
+those four defects (`test/fix_labels_diff.test.ts`) so they can't silently regress.
 
 ## ⛔ Model gate — MUST be on Haiku (do this FIRST)
 
@@ -38,151 +47,97 @@ the skill file only.
 
 `/fix-labels` only. Manual invocation, never automatic — no session-start hook, no schedule.
 
-## Repo classes
+## The canonical schema — `labels.yaml` is the single source of truth
+
+Every canonical label name, hex color, and which repos carry it lives in
+[`labels.yaml`](./labels.yaml) beside this file, parsed by `src/fix-labels/diff.ts`
+(`deno task fix-labels:diff`). This skill file never restates those name/hex pairs — one source of
+truth, not two that can drift apart.
+
+Shape, for orientation (see `labels.yaml` for the actual current values):
+
+- **Model-tier** — `Haiku` / `Sonnet` / `Opus` / `Fable` across all 8 repos; `Flash Med` /
+  `Flash High` additionally in the 5 front-end repos only. `Fable` is retired/dormant and marked
+  `neverTouch` in the schema — the scripted diff never proposes any change for it, in any repo.
+- **Priority** — `Top Priority` / `High Priority` / `Low Priority`, title case, across all 8 repos.
+  `labels.yaml` records known misnamed variants (all-caps `TOP PRIORITY`, bare `High` / `Low`) as
+  aliases, so the diff proposes a rename that preserves issue associations, not a delete+create.
+- **Status** — `blocked` / `parked`, across all 8 repos.
+- **gig-outreach** — only on the 4 booking-epic repos (JaMmusic, web-jam-back,
+  WebJamSocketCluster, web-jam-tools) — not the 4 client sites.
+- **GitHub defaults** — only `bug` and `enhancement` are kept, at GitHub's standard colors; every
+  other GitHub default label (`documentation`, `question`, `duplicate`, `good first issue`,
+  `help wanted`, `invalid`, `wontfix`) is a non-canonical delete candidate.
+- **Everything else** — any label not in `labels.yaml`'s `labels:` list is non-canonical, unless
+  it's on that repo's `keep:` list (Josh-vetoed keepers, so he never has to re-veto the same label
+  forever — currently `timshermanmusic` in web-jam-back, `backup-restore` in web-jam-tools).
+
+Repo classes (also in `labels.yaml`, under `repoClasses:`):
 
 | Class             | Repos                                                                        |
-| ----------------- | ---------------------------------------------------------------------------- |
+| ----------------- | ----------------------------------------------------------------------------- |
 | **Front-end (5)** | JaMmusic, CollegeLutheran, AppersonAuto, TimShermanMusic, HenricksonForSalem |
 | **Other (3)**     | web-jam-back, WebJamSocketCluster, web-jam-tools                             |
 
-All 8 together are "all repos" below unless a schema row says otherwise. Full slugs are
-`WebJamApps/<repo>` for every `gh --repo` call.
-
-## The canonical schema (master list)
-
-This is the single source of truth this skill enforces. One canonical name and one canonical color
-per label, applied uniformly across every repo that should carry it.
-
-### Model-tier — all 8 repos
-
-| Label    | Color      | Hex       |
-| -------- | ---------- | --------- |
-| `Haiku`  | green      | `#0E8A16` |
-| `Sonnet` | blue       | `#1D76DB` |
-| `Opus`   | purple     | `#B392F0` |
-| `Fable`  | orange-red | `#D93F0B` |
-
-`Fable` is retired/dormant but **kept** in every repo in case the model returns — never a delete
-candidate.
-
-### Model-tier — front-end 5 repos ONLY
-
-| Label        | Color  | Hex       |
-| ------------ | ------ | --------- |
-| `Flash Med`  | gold   | `#FBCA04` |
-| `Flash High` | orange | `#E67E22` |
-
-These do **not** belong in the 3 "other" repos. Consequences:
-
-- TimShermanMusic's single `Flash` label → split into `Flash Med` + `Flash High` (propose create
-  both, propose remove the old `Flash`).
-- The single `Flash` label in web-jam-back / WebJamSocketCluster / web-jam-tools → delete candidate
-  (not part of the canonical schema for those 3 repos at all).
-
-### Priority — all 8 repos (title case)
-
-| Label           | Color       | Hex       |
-| --------------- | ----------- | --------- |
-| `Top Priority`  | black       | `#000000` |
-| `High Priority` | orange      | `#E8590C` |
-| `Low Priority`  | pale yellow | `#FFEC99` |
-
-Renames every existing variant to these exact names: all-caps `TOP PRIORITY` (JaM, wjb) →
-`Top Priority`; bare `High` / `Low` (wjt) → `High Priority` / `Low Priority`. Create where missing.
-
-### Status — all 8 repos
-
-| Label     | Color      | Hex       |
-| --------- | ---------- | --------- |
-| `blocked` | bright red | `#E11D21` |
-| `parked`  | gray       | `#C2C2C2` |
-
-`blocked` currently exists in only 3 repos with 3 different colors; `parked` exists in the 5
-front-end repos. Both become uniform, present, and this color, in all 8.
-
-### gig-outreach — 4 booking-epic repos ONLY
-
-| Label          | Color | Hex       | Repos                                                      |
-| -------------- | ----- | --------- | ---------------------------------------------------------- |
-| `gig-outreach` | teal  | `#006B75` | JaMmusic, web-jam-back, WebJamSocketCluster, web-jam-tools |
-
-Not the client sites (CollegeLutheran, AppersonAuto, TimShermanMusic, HenricksonForSalem) —
-`gig-outreach` in any of those 4 is a wrong-repo removal candidate.
-
-### GitHub defaults — all 8 repos
-
-| Label         | Color      | Hex       |
-| ------------- | ---------- | --------- |
-| `bug`         | rose red   | `#D73A4A` |
-| `enhancement` | light cyan | `#A2EEEF` |
-
-Keep **only** `bug` and `enhancement`, at GitHub's standard colors. Every other GitHub default —
-`documentation`, `question`, `duplicate`, `good first issue`, `help wanted`, `invalid`, `wontfix` —
-is a **delete candidate**; Josh doesn't use them.
-
-### Everything else
-
-Any label not on this master list — repo-specific one-offs like `codex`, `agents`, or anything else
-that isn't in one of the tables above — is a **delete candidate**, reported at report-out for Josh
-to approve or veto per label. Nothing here is assumed; every non-canonical label gets its own line
-in the report.
+All 8 together are "all repos" below. Full slugs are `WebJamApps/<repo>` for every `gh --repo` call.
 
 ## Flow
 
 1. **Model gate** (above) — confirm Haiku before anything else.
-2. **Scan.** For each of the 8 repos, run:
+2. **Run the task.**
    ```
-   gh label list --repo WebJamApps/<repo> --json name,color
+   deno task fix-labels:diff
    ```
-   Use the actual returned names/colors — don't assume a prior run's spellings still hold.
-3. **Diff against the canonical schema** (below, per drift type) to build one drift list per repo.
-4. **Report.** Present every proposed change, grouped by repo, in the Report format below — every
-   remove/delete line carries its blast radius (see "Blast radius" below). Present the full report
-   before asking for any approval; don't drip items one at a time.
-5. **Approve/veto per item.** Ask Josh to approve or veto each proposed change — he can approve a
+   This shells out to `gh label list --repo WebJamApps/<repo> --json name,color` for all 8 repos,
+   diffs each repo's actual labels against `labels.yaml` **in code** (`classifyRepoDrift` in
+   `src/fix-labels/diff.ts`), computes blast radius for every proposed remove/delete line, and
+   prints the Report format below, ready to relay. No eyeballing, no hex comparison in prose — the
+   task computes the diff, the model never compares label lists by reading them side by side.
+3. **Present the task's output.** Present the full report before asking for any approval; don't
+   drip items one at a time.
+4. **Approve/veto per item.** Ask Josh to approve or veto each proposed change — he can approve a
    whole repo's block at once ("all good for JaMmusic") or call out individual line items to skip.
    Nothing applies until approved. **Never auto-apply anything** — not even an "obviously safe"
    create.
-6. **Apply** only what was approved, using the mechanics below.
-7. **Confirm.** After applying, report back per-repo what actually changed (created / renamed /
-   recolored / removed / deleted), and note anything Josh vetoed so it's clear it will resurface
-   next run.
-8. If a repo has zero drift, report "no changes" for it — don't omit it silently; Josh should see
-   every repo was actually checked.
+5. **Apply** only what was approved, using the mechanics below.
+6. **Re-scan (mandatory).** Re-run `deno task fix-labels:diff` after applying, and report **that**
+   output to Josh — never a replay of the apply log's `echo` lines. Expected result: an empty drift
+   list except for lines Josh explicitly vetoed (those are expected to resurface — say so). Anything
+   else — a line that should have been applied still showing up, an apply that silently failed — is
+   a **failed run** and must be reported as one, not glossed over.
+7. If a repo has zero drift on the re-scan, report "no changes" for it — don't omit it silently;
+   Josh should see every repo was actually checked.
 
-## Drift types (report each, every run)
-
-For each repo, walk the canonical schema against that repo's actual labels and classify every
-mismatch as one of:
+## Drift types (the task classifies every mismatch as one of these, every run)
 
 1. **Missing** — a canonical label that should exist in this repo isn't present → propose **create**
    (`gh label create`).
-2. **Misnamed** — a label exists that's clearly the canonical concept under a different name (e.g.
-   `TOP PRIORITY`, bare `High`, `Flash` where the canonical split is `Flash Med`/`Flash High`) →
-   propose **rename** (`gh label edit`). A rename preserves every issue's existing label association
-   — nothing gets un-tagged.
+2. **Misnamed** — an actual label matches a known alias of a canonical label (e.g. `TOP PRIORITY`,
+   bare `High`, per `labels.yaml`'s `aliases:`) → propose **rename** (`gh label edit`). A rename
+   preserves every issue's existing label association — nothing gets un-tagged.
 3. **Miscolored** — the canonical label is present with the right name but the wrong color → propose
-   **recolor** (`gh label edit`).
+   **recolor** (`gh label edit`). A label that exists under the right name is ALWAYS miscolored, not
+   missing, even if its color is badly wrong — this is exactly the case (`blocked` in
+   CollegeLutheran) that the eyeballed version of this skill got wrong.
 4. **Wrong-repo placement** — a canonical label is present in a repo that shouldn't carry it (e.g.
    `Flash Med`/`Flash High` in a non-front-end repo, `gig-outreach` on a client site) → propose
    **remove** (`gh label delete`, this repo only — the label stays canonical elsewhere).
-5. **Non-canonical** — any label not on the master list at all (including GitHub defaults beyond
-   `bug`/`enhancement`) → propose **delete** (`gh label delete`).
+5. **Non-canonical** — any label not in `labels.yaml` at all (including GitHub defaults beyond
+   `bug`/`enhancement`, and a legacy label like a single `Flash` where the canonical split is
+   `Flash Med`/`Flash High`) → propose **delete** (`gh label delete`), unless it's on that repo's
+   `keep:` list.
 
 ### Blast radius (mandatory for every remove/delete)
 
-Before Josh can approve any **remove** or **delete**, show how many open issues in that repo
-currently carry the label — deleting (or removing from that repo) a label un-tags every issue that
-had it:
+`deno task fix-labels:diff` computes this automatically for every proposed remove/delete line by
+running, per label:
 
 ```
 gh issue list --repo WebJamApps/<repo> --label "<label>" --state open --json number -q 'length'
 ```
 
-Show this count inline on the proposed line, e.g.
-`remove "Flash" from web-jam-back — 3 open issues
-carry this label`. Never propose a remove/delete
-line without this count already computed and shown.
+The count is already in the task's report output — never propose a remove/delete line without it,
+and never let the model guess or skip it.
 
 ## Report format
 
@@ -206,24 +161,33 @@ no changes
 ```
 
 One block per repo, always present (even "no changes"), so Josh sees every repo was actually checked
-this run.
+this run. This is exactly what `deno task fix-labels:diff` prints — relay it, don't retype it.
 
 ## Apply mechanics
+
+**Never suppress stderr or ignore exit status on any `gh label` call — `2>/dev/null` is banned on
+every one.** Check the exit status of every `gh label create` / `edit` / `delete` invocation. A
+`create` that fails because the label already exists is not a no-op to hide — it's proof the
+report was wrong (the label existed, miscolored or not, rather than being genuinely missing), and
+must be surfaced to Josh, loudly, not swallowed. This is exactly the secondary fault
+(web-jam-tools#263) that let a failed `blocked` create in CollegeLutheran get reported as success.
 
 - **Rename / recolor**:
   ```
   gh label edit --repo WebJamApps/<repo> "<old name>" --name "<new name>" --color "<hex, no #>"
   ```
-  Preserves every issue's existing label association.
+  Preserves every issue's existing label association. Check the exit status; report any failure.
 - **Create (missing)**:
   ```
   gh label create --repo WebJamApps/<repo> "<name>" --color "<hex, no #>"
   ```
+  Check the exit status; report any failure — do not redirect stderr away from view.
 - **Delete (approved removals/non-canonical only)**:
   ```
   gh label delete --repo WebJamApps/<repo> "<name>" --yes
   ```
-  Only after the blast radius was shown for that specific label and Josh approved it.
+  Only after the blast radius was shown for that specific label and Josh approved it. Check the
+  exit status; report any failure.
 
 Apply strictly in the order Josh approved; if he vetoes one line in a repo's block, apply the rest
 of that block and skip only the vetoed line.
