@@ -106,7 +106,7 @@ Deno.test("replay #1212 defect 1: off-roster author is refused", async () => {
   const res = await runScript(repoDir, baseArgs({ author: OFF_ROSTER_AUTHOR }));
   assertEquals(res.code, 1);
   assertMatch(res.stderr, /does not name a model on the roster/);
-  assertMatch(res.stderr, /Gemini 3\.5 Flash \(Medium\)/); // valid list printed
+  assertMatch(res.stderr, /Gemini 3\.6 Flash \(Medium\)/); // valid list printed
 });
 
 Deno.test("replay #1212 defect 2: paraphrased test-evidence is refused", async () => {
@@ -135,7 +135,7 @@ Deno.test("well-formed call (web-jam-back#967-shaped) passes validation unchange
 Deno.test("roster match is by substring: agy's full model name passes", async () => {
   const res = await runScript(
     repoDir,
-    baseArgs({ author: "agy — Gemini 3.5 Flash (Medium)" }),
+    baseArgs({ author: "agy — Gemini 3.6 Flash (Medium)" }),
   );
   assertEquals(res.code, 0, res.stderr);
 });
@@ -151,10 +151,10 @@ Deno.test("FORCED_PR_AUTHOR overrides a bad --author and wins", async () => {
   const res = await runScript(
     repoDir,
     baseArgs({ author: OFF_ROSTER_AUTHOR }),
-    { FORCED_PR_AUTHOR: "agy — Gemini 3.5 Flash (High)" },
+    { FORCED_PR_AUTHOR: "agy — Gemini 3.6 Flash (High)" },
   );
   assertEquals(res.code, 0, res.stderr);
-  assertMatch(res.stdout, /🤖 Work by agy — Gemini 3\.5 Flash \(High\)/);
+  assertMatch(res.stdout, /🤖 Work by agy — Gemini 3\.6 Flash \(High\)/);
 });
 
 Deno.test("FORCED_PR_AUTHOR is still roster-checked, not a bypass", async () => {

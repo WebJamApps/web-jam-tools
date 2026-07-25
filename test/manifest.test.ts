@@ -33,6 +33,7 @@ const EXPECTED_SKILL_DIRS = [
 // Pinned set of hooks/*.sh filenames. Update deliberately.
 const EXPECTED_HOOK_SCRIPTS = [
   "authorization-check.sh",
+  "block-agy-non-flash-model.sh",
   "block-dangerous-git-deploy.sh",
   "block-secret-dumps.sh",
   "feature-branch-guard.sh",

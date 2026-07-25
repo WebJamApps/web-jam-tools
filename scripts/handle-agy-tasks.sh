@@ -108,7 +108,7 @@ AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 # most-capable-first order was a free-tier assumption). Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
-DEFAULT_MODELS='Gemini 3.5 Flash (Medium)|Gemini 3.5 Flash (High)'
+DEFAULT_MODELS='Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)'
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- parse args ---
