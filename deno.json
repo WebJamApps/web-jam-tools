@@ -20,6 +20,7 @@
     "outreach:advance": "deno run --allow-net --allow-env src/outreach-cron/advance_cadence.ts",
     "dropbox:link": "deno run --allow-net --allow-env src/dropbox-link/dropbox_link_cli.ts",
     "venue-contact:extract": "deno run -A src/venue-contact/cli.ts",
+    "fix-labels:diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/diff.ts",
     "update:reaper": "bash scripts/reaper-update.sh"
   },
   "imports": {
