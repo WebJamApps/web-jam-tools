@@ -260,6 +260,40 @@ Deno.test("git commit -m mentioning a secret filename in prose is allowed", asyn
   assertEquals(res.code, 0, res.stderr);
 });
 
+Deno.test("--body=<prose> single-token form is allowed", async () => {
+  const res = await runHook(
+    `gh issue create --title "x" --body="This documents examples like cat .env, rclone config show, and heroku config that stay blocked."`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// --- regression: a quoted -c payload must not be treated as prose just
+// because it contains whitespace (it's a real command, not a note being
+// authored). An earlier version of the flag-value drop rule keyed on
+// "does this quoted token contain whitespace" rather than "is this the
+// value of a known prose flag", which silently let bash -c/sh -c/etc.
+// payloads bypass the guard entirely. ---
+
+Deno.test("bash -c reading a secret file is still blocked (not a prose flag)", async () => {
+  const res = await runHook(`bash -c "cat .env"`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("sh -c running a whole-config dump is still blocked (not a prose flag)", async () => {
+  const res = await runHook(`sh -c 'heroku config -a myapp'`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a non-shell interpreter's -c payload naming a secret file is still blocked", async () => {
+  const res = await runHook(
+    `python3 -c "data = open('.env').read(); print(data)"`,
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 Deno.test("a command-substitution read wrapped in double quotes is still blocked (not treated as prose)", async () => {
   const res = await runHook(`printf '%s' "$(< .env)"`);
   assertEquals(res.code, 2);
