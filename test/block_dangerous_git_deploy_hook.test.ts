@@ -1,0 +1,175 @@
+// Tests for hooks/block-dangerous-git-deploy.sh — the merge/deploy guard.
+//
+// This hook had NO tests before web-jam-tools#272. It is exercised the same way
+// as the secret-dump guard: by shelling out to it with mocked PreToolUse JSON on
+// stdin, the same shape Claude Code's hook runner feeds it. Exit 2 = blocked.
+//
+// The change under test: this guard now shares hooks/lib/normalize_command.py
+// with block-secret-dumps.sh. Previously only the secret guard stripped heredoc
+// bodies and prose flag values, so text that merely MENTIONED a deploy — a PR
+// body, or a test fixture asserting `deno deploy --prod` is blocked — tripped
+// this guard while identical text passed the other. That is the inconsistency.
+import { assertEquals } from "@std/assert";
+
+const SCRIPT_PATH = new URL(
+  "../hooks/block-dangerous-git-deploy.sh",
+  import.meta.url,
+).pathname;
+
+interface RunResult {
+  code: number;
+  stderr: string;
+}
+
+async function runHook(command: string): Promise<RunResult> {
+  const input = JSON.stringify({ tool_input: { command } });
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(new TextEncoder().encode(input));
+  await writer.close();
+  const { code, stderr } = await child.output();
+  return { code, stderr: new TextDecoder().decode(stderr) };
+}
+
+function assertBlocked(stderr: string) {
+  if (!stderr.includes("BLOCKED (merge/deploy guard)")) {
+    throw new Error(`expected BLOCKED message in stderr, got: ${stderr}`);
+  }
+}
+
+// --- the four original rules must still fire ---
+
+Deno.test("gh pr merge is blocked", async () => {
+  const res = await runHook("gh pr merge 277 --squash");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a production deploy is blocked", async () => {
+  const res = await runHook(
+    'deno deploy --org webjamapps --app web-jam-devotional --prod --token "$T"',
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("deployctl deploy is blocked", async () => {
+  const res = await runHook("deployctl deploy --project=foo main.ts");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push to main is blocked", async () => {
+  const res = await runHook("git push origin main");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push to dev is blocked", async () => {
+  const res = await runHook("git push origin dev");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("branch-protection writes via gh api are blocked", async () => {
+  const res = await runHook(
+    "gh api -X PUT repos/o/r/branches/main/protection -f x=1",
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("pushing a feature branch is allowed", async () => {
+  const res = await runHook("git push -u origin claude/272-block-secret-var");
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// --- web-jam-tools#272: prose that MENTIONS a dangerous command is not one ---
+
+Deno.test("a heredoc PR body mentioning a production deploy is allowed", async () => {
+  const res = await runHook(
+    [
+      "gh pr create --body-file - <<'EOF'",
+      "This fixes the build that runs deno deploy --prod from CI.",
+      "EOF",
+    ].join("\n"),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a heredoc writing a TEST FIXTURE containing a deploy command is allowed", async () => {
+  // The exact case that blocked authoring this file's sibling tests.
+  const res = await runHook(
+    [
+      "cat >> test/some_test.ts <<'EOF'",
+      'const res = await runHook("deno deploy --prod");',
+      "EOF",
+    ].join("\n"),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a commit message mentioning gh pr merge is allowed", async () => {
+  const res = await runHook(
+    'git commit -m "explain why gh pr merge is blocked for agents"',
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a PR body mentioning a push to main is allowed", async () => {
+  const res = await runHook(
+    [
+      "gh pr create --body-file - <<'EOF'",
+      "Never run git push origin main directly.",
+      "EOF",
+    ].join("\n"),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// --- and stripping must NOT become a bypass ---
+
+Deno.test("a deploy inside an EXECUTED bash heredoc is still blocked", async () => {
+  const res = await runHook(
+    ["bash <<'EOF'", "deno deploy --prod --token x", "EOF"].join("\n"),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a merge inside an EXECUTED sh heredoc is still blocked", async () => {
+  const res = await runHook(
+    ["sh <<'EOF'", "gh pr merge 1 --admin", "EOF"].join("\n"),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a push to main inside an EXECUTED bash heredoc is still blocked", async () => {
+  const res = await runHook(
+    ["bash <<'EOF'", "git push origin main", "EOF"].join("\n"),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("an unterminated heredoc keeps its body in scope (fail safe)", async () => {
+  const res = await runHook(
+    ["cat > notes.txt <<'EOF'", "deno deploy --prod"].join("\n"),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+// --- unrelated commands pass through ---
+
+Deno.test("an ordinary command is allowed", async () => {
+  const res = await runHook("deno task test");
+  assertEquals(res.code, 0, res.stderr);
+});
