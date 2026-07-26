@@ -22,17 +22,40 @@
 # up with no manual settings edit (web-jam-tools#163; PreToolUse matcher
 # generalization web-jam-tools#265).
 #
-# Usage: scripts/install-hooks.sh [--settings-path PATH]
+# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--force]
+#   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
+#                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
+#                           the symlink step without touching the real hooks dir.
 #   --settings-path PATH   Merge into PATH instead of $HOME/.claude/settings.json
 #                           (also settable via CLAUDE_SETTINGS_PATH). Mainly for
 #                           testing the merge without touching a real settings file.
+#                           NOTE: --settings-path alone does NOT sandbox a run —
+#                           it only redirects the settings merge. The symlink step
+#                           still targets $HOME/.claude/hooks (or CLAUDE_HOOKS_DIR)
+#                           unless --hooks-dir is ALSO passed (web-jam-tools#273).
+#   --force                 Required to link into the default hooks destination when
+#                           this script is running from inside a git worktree (see
+#                           the worktree guard below). Not needed with --hooks-dir.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS_SRC="$REPO_DIR/hooks"
-HOOKS_DEST="$HOME/.claude/hooks"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
+
+# HOOKS_DEST_IS_DEFAULT tracks whether HOOKS_DEST is still the real, live
+# destination (as opposed to a caller-supplied override via --hooks-dir or
+# CLAUDE_HOOKS_DIR). The worktree guard below only fires when it's still "1" —
+# an explicit override is never touched by the guard, default or not
+# (web-jam-tools#273).
+if [ -n "${CLAUDE_HOOKS_DIR:-}" ]; then
+  HOOKS_DEST="$CLAUDE_HOOKS_DIR"
+  HOOKS_DEST_IS_DEFAULT=0
+else
+  HOOKS_DEST="$HOME/.claude/hooks"
+  HOOKS_DEST_IS_DEFAULT=1
+fi
+FORCE=0
 
 # SessionStart hooks this installer keeps registered in settings.json.
 # Script names only (must exist under hooks/); the merge step below turns
@@ -63,9 +86,18 @@ PRE_TOOL_USE_HOOKS=(
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --hooks-dir)
+      HOOKS_DEST="$2"
+      HOOKS_DEST_IS_DEFAULT=0
+      shift 2
+      ;;
     --settings-path)
       SETTINGS_PATH="$2"
       shift 2
+      ;;
+    --force)
+      FORCE=1
+      shift
       ;;
     *)
       echo "error: unknown argument: $1" >&2
@@ -75,6 +107,28 @@ while [ $# -gt 0 ]; do
 done
 
 [ -d "$HOOKS_SRC" ] || { echo "error: $HOOKS_SRC not found" >&2; exit 1; }
+
+# --- Worktree guard (web-jam-tools#273) ---
+# A git worktree is never the checkout that the live ~/.claude/hooks should
+# point at: worktrees are routinely thrown away (e.g. by agent sandboxes),
+# and if the symlinks are left pointing into one that then gets deleted,
+# every hook silently stops firing with no signal to Josh. So: refuse to
+# link into the DEFAULT destination from inside a worktree unless --force is
+# passed. An explicit --hooks-dir/CLAUDE_HOOKS_DIR override is exempt — it's
+# never the live destination in the first place.
+if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] && [ "$FORCE" != "1" ]; then
+  GIT_DIR="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+  GIT_COMMON_DIR="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$GIT_DIR" ] && [ -n "$GIT_COMMON_DIR" ] && [ "$GIT_DIR" != "$GIT_COMMON_DIR" ]; then
+    echo "error: $REPO_DIR is a git worktree, not the primary checkout." >&2
+    echo "Refusing to link into the default hooks destination ($HOOKS_DEST) from a" >&2
+    echo "worktree — worktrees get deleted, which would silently strand the live" >&2
+    echo "symlinks (web-jam-tools#273). Pass --hooks-dir PATH to sandbox this run," >&2
+    echo "or --force if you really mean to repoint the live hooks from here." >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "$HOOKS_DEST"
 
 for src in "$HOOKS_SRC"/*.sh; do
@@ -118,8 +172,9 @@ for entry in "${PRE_TOOL_USE_HOOKS[@]}"; do
 done
 
 # The merge logic itself lives in its own file (web-jam-tools#265) so it can
-# be unit-tested in isolation against fixture JSON — never by running this
-# installer, which also symlinks hooks/*.sh into a real ~/.claude/hooks (see
-# test/install_hooks_merge.test.ts, and web-jam-tools#273 for why exercising
-# that symlink step outside a real install is dangerous).
+# also be unit-tested in isolation against fixture JSON, independent of the
+# symlink step above (see test/install_hooks_merge.test.ts). This installer
+# as a whole — including the symlink step — is exercised end to end, always
+# sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
+# test/install_hooks_script.test.ts (web-jam-tools#273).
 python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}"

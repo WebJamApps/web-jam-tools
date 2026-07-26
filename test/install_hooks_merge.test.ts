@@ -2,11 +2,11 @@
 //
 // Exercises scripts/merge-hooks-into-settings.py — the settings.json merge
 // logic scripts/install-hooks.sh delegates to — end-to-end via Deno.Command
-// against fixture settings.json files. This DELIBERATELY never runs
-// scripts/install-hooks.sh itself: that script also symlinks hooks/*.sh into
-// a real ~/.claude/hooks, which would repoint Josh's LIVE guards at this
-// worktree (web-jam-tools#273). The merge script is the one piece of
-// install-hooks.sh's logic that's safe and meaningful to unit-test directly.
+// against fixture settings.json files, in isolation from the symlink step.
+// install-hooks.sh itself (including that symlink step) is exercised,
+// always sandboxed, in test/install_hooks_script.test.ts (web-jam-tools#273
+// added --hooks-dir specifically so that could be done without risking
+// Josh's LIVE ~/.claude/hooks symlinks).
 
 import { assert, assertEquals } from "@std/assert";
 
