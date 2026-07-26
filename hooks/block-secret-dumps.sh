@@ -249,6 +249,38 @@ if printf '%s' "$c" | grep -Eq 'git +config +(--list|-l)( |$|[|;&])'; then
         "git config <single.key>"
 fi
 
+# Echoing a credential-NAMED variable prints its value (web-jam-tools#272).
+# The 2026-07-26 leak was a presence check, not a file dump:
+#   echo "${TOK:+SET (value hidden)}${TOK:-NOT SET}"
+# `:+` and `:-` are opposite halves — `:-` expands to the VALUE whenever the
+# var IS set, so the "hidden" branch and the real token both printed.
+#
+# Scope is deliberately narrow: only OUTPUT commands (echo/printf/print).
+# Passing a secret to a command that consumes it — curl -u "$CIRCLECI_TOKEN:"
+# — is normal and must keep working, so plain expansion elsewhere is allowed.
+#
+# Provably-safe forms are stripped before the test, so they never trigger it:
+#   ${VAR:+literal}  expands to the LITERAL, never the value
+#   ${#VAR}          expands to the length only
+safe_stripped=$(printf '%s' "$c" | sed -E \
+  -e 's/\$\{#[A-Za-z_][A-Za-z0-9_]*\}//g' \
+  -e 's/\$\{[A-Za-z_][A-Za-z0-9_]*:\+[^}]*\}//g')
+# Only the OUTPUT command's OWN arguments are examined — everything from an
+# echo/printf up to the next separator. Testing the whole command string
+# instead would misfire on  [ -n "$TOK" ] && echo SET , where the expansion
+# belongs to the test and never reaches echo. `echo` is matched after any
+# whitespace too, so a nested  bash -ic 'echo "$TOK"'  is still caught.
+# NOTE: `|| true` is required — the script runs under `set -euo pipefail`, and
+# grep -o exits 1 when it matches nothing (the common case: most commands have
+# no echo at all). Without it every ordinary command aborts the guard with
+# exit 1, which reads as neither "allow" (0) nor "block" (2).
+echo_args=$(printf '%s' "$safe_stripped" |
+  grep -oE '(^|[[:space:];&|])(echo|printf|print)[^;&|]*' | tr '\n' ' ' || true)
+if printf '%s' "$echo_args" | grep -Eiq '\$\{?[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|AUTH)[A-Za-z0-9_]*'; then
+  block "echoing a credential-named variable prints its value (\${VAR:-...} expands to the VALUE when set)." \
+        "test presence without expanding it: [ -n \"\$VAR\" ] && echo SET || echo 'NOT SET'   (or \${VAR:+SET} / \${#VAR})"
+fi
+
 # reading known credential/secret files
 #
 # The .env boundary (web-jam-tools#257 review fix) matches a literal `.`
