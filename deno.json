@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.20.1",
+  "version": "1.20.2",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
@@ -21,6 +21,7 @@
     "dropbox:link": "deno run --allow-net --allow-env src/dropbox-link/dropbox_link_cli.ts",
     "venue-contact:extract": "deno run -A src/venue-contact/cli.ts",
     "fix-labels:diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/diff.ts",
+    "fix-labels:generate-model-labels": "deno run --allow-read=skills/fix-labels/labels.yaml --allow-write=skills/fix-labels/model-labels.json src/fix-labels/generate-model-labels.ts",
     "update:reaper": "bash scripts/reaper-update.sh"
   },
   "imports": {
