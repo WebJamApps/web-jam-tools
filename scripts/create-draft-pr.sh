@@ -24,7 +24,7 @@
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
-#   --author        REQUIRED. e.g. "Claude Code — Opus 4.8", "agy — Gemini 3.6 Flash
+#   --author        REQUIRED. e.g. "Claude Code — Opus", "agy — Gemini 3.6 Flash
 #                   (Medium)". Lands in the footer so Josh can track per-model
 #                   quality. MUST name a model on the ROSTER list maintained near
 #                   the top of this script (web-jam-tools#190) — models routinely
@@ -141,8 +141,11 @@ ROSTER=(
   "Gemini 3.6 Flash (High)"
   "Claude Sonnet 5"
   "Claude Haiku 4.5"
-  "Claude Opus 4.8"
-  "Claude Opus 5"
+  # Unversioned on purpose (Josh, 2026-07-26): the roster exists to stop a
+  # model confabulating its checkpoint, and Opus ships new checkpoints faster
+  # than this list gets updated — pinning a version only produced a stale
+  # roster with no honest value to pass. Replaces "Claude Opus 4.8".
+  "Claude Opus"
   "Claude Fable 5"
 )
 
@@ -221,7 +224,7 @@ fi
 
 # --- required: author ---
 if [ -z "$AUTHOR" ]; then
-  echo "ERROR: --author is required (e.g. --author \"Claude Code — Opus 4.8\")." >&2
+  echo "ERROR: --author is required (e.g. --author \"Claude Code — Opus\")." >&2
   exit 1
 fi
 author_roster_check "$AUTHOR"
