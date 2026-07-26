@@ -33,18 +33,32 @@ repoClasses:
 
 labels:
   # --- Model-tier — all 8 repos ---
+  # `modelTier: true` is the machine-readable marker for "this is a model
+  # label" (web-jam-tools#265). src/fix-labels/generate-model-labels.ts
+  # selects these six entries into the committed sidecar
+  # skills/fix-labels/model-labels.json (`deno task
+  # fix-labels:generate-model-labels`, kept honest by
+  # test/fix_labels_model_labels_parity.test.ts), which
+  # hooks/require-model-label-on-issue-create.sh reads at runtime — that hook
+  # is bash/python and the CircleCI image has no PyYAML, so it can't parse
+  # this file directly. No second hardcoded copy of the six names exists
+  # anywhere; regenerate the sidecar after editing modelTier entries here.
   - name: Haiku
     hex: "0E8A16"
     repos: all
+    modelTier: true
   - name: Sonnet
     hex: "1D76DB"
     repos: all
+    modelTier: true
   - name: Opus
     hex: "B392F0"
     repos: all
+    modelTier: true
   - name: Fable
     hex: "D93F0B"
     repos: all
+    modelTier: true
     # Retired/dormant, kept in every repo in case the model returns.
     # DELETE-PROTECTION ONLY (Josh, 2026-07-25): missing -> still propose
     # create; wrong color -> still propose recolor. It is just never a
@@ -55,9 +69,11 @@ labels:
   - name: Flash Med
     hex: "FBCA04"
     repos: frontend
+    modelTier: true
   - name: Flash High
     hex: "E67E22"
     repos: frontend
+    modelTier: true
 
   # --- Priority — all 8 repos (title case) ---
   - name: Top Priority
