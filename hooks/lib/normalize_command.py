@@ -132,7 +132,21 @@ def strip_heredocs(text):
     return "\n".join(out)
 
 
-SHELL_OP = re.compile(r"\$\(|`|[<>|]")
+# Markers that a prose flag's value might still EXECUTE something, so the value
+# must stay in scope for matching rather than being dropped as prose.
+#
+# Narrowed in web-jam-tools#272: `<`, `>` and `|` used to be here and were
+# false-positive generators with no security value. These tokens come out of
+# shlex.split(), which has ALREADY consumed the quoting — so a `|` or `>` still
+# present inside a single token is proof it was QUOTED, hence literal text that
+# cannot act as a shell operator. Their only effect was to keep ordinary prose
+# in scope: every markdown table has `|`, every blockquote has `>`.
+#
+# `$(` and a backtick stay, because shlex discards the quote TYPE and both are
+# genuinely ambiguous: '$(cmd)' is literal but "$(cmd)" expands, and the token
+# looks identical either way. Conservative is correct there — a `--body` that
+# really does substitute a command must not be dropped from scope.
+SHELL_OP = re.compile(r"\$\(|`")
 
 # Flags whose value is free-form prose text being authored/recorded, not a
 # command argument that gets executed. Deliberately does NOT include -c

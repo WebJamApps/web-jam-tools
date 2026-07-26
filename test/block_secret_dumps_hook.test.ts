@@ -157,6 +157,40 @@ Deno.test("test -f .env && cat .env is still blocked (chained dump)", async () =
   assertBlocked(res.stderr);
 });
 
+// --- web-jam-tools#272: narrowed SHELL_OP — quoted <, > and | are literal ---
+//
+// These characters reach the matcher only AFTER shlex has consumed the quoting,
+// so one still present inside a token proves it was quoted and cannot act as a
+// shell operator. Keeping prose in scope because it contained a markdown table
+// was pure false-positive. `$(` and backticks still keep a value in scope.
+
+Deno.test("a prose flag whose value has a markdown table pipe is still treated as prose", async () => {
+  const res = await runHook(
+    `gh issue create --title "rotate creds" --body "| file | status |"`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a prose value naming a secret file alongside a table pipe is allowed", async () => {
+  const res = await runHook(
+    `gh issue create --body "| ~/.bashrc | needs rotating |"`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a prose value with a blockquote > naming a secret file is allowed", async () => {
+  const res = await runHook(
+    `gh issue create --body "> the .env file holds the key"`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("but a prose value with real command substitution stays IN SCOPE and is blocked", async () => {
+  const res = await runHook('gh issue create --body "$(cat .env)"');
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 // --- web-jam-tools#272: echoing a credential-NAMED variable ---
 //
 // The 2026-07-26 leak was not a file dump at all — it was a presence check:
