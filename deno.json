@@ -43,7 +43,22 @@
   },
   "deploy": {
     "org": "webjamapps",
-    "app": "webjam-outreach-cron"
+    "app": "web-jam-devotional",
+    "entrypoint": "src/devotional/send_daily_devotional.ts",
+    "exclude": [
+      "test/",
+      "docs/",
+      "hooks/",
+      "skills/",
+      "scripts/",
+      "cov_profile/",
+      "src/gig-scraper/",
+      "src/venue-contact/",
+      "src/fix-labels/",
+      "src/task-queue/",
+      "src/dropbox-link/",
+      "src/outreach-cron/"
+    ]
   }
 }
 
