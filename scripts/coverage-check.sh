@@ -11,7 +11,13 @@ set -euo pipefail
 THRESHOLD="${COVERAGE_THRESHOLD:-90}"
 
 rm -rf cov_profile
-deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile >/dev/null
+# web-jam-tools#275: do NOT redirect test output. This line used to end in
+# `>/dev/null`, which sent every test name and every failure detail to the
+# void — deno writes results to stdout and only its terminal `error: Test
+# failed` to stderr. A failing CI build therefore showed a bare "Test failed"
+# with no test name, and unrelated stderr `Download ...` lines directly above
+# it read as the cause. That cost a whole wrong root-cause diagnosis.
+deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile
 report="$(deno coverage cov_profile 2>/dev/null)"
 echo "$report"
 

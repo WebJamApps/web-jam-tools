@@ -30,6 +30,14 @@ export interface CanonicalLabel {
    * recolor. Used for `Fable` (Josh, 2026-07-25).
    */
   neverDelete?: boolean;
+  /**
+   * Machine-readable marker: this label routes an issue to a model tier.
+   * The single source of truth for "what is a model label" (web-jam-tools#265)
+   * — hooks/require-model-label-on-issue-create.sh derives its valid-label
+   * list by selecting entries where this is true, so there is no second
+   * hardcoded copy of the six names anywhere.
+   */
+  modelTier?: boolean;
 }
 
 export interface Schema {
@@ -152,6 +160,25 @@ export function classifyRepoDrift(
   }
 
   return drift;
+}
+
+/**
+ * Model-label names: schema entries carrying `modelTier: true`, sorted for a
+ * deterministic order. The single computation, shared by
+ * scripts/tasks/tests that need "what is a model label" — currently the
+ * skills/fix-labels/model-labels.json generator (src/fix-labels/
+ * generate-model-labels.ts) and its parity test
+ * (test/fix_labels_model_labels_parity.test.ts). Not used by the hook
+ * itself (hooks/require-model-label-on-issue-create.sh) — that script is
+ * bash/python and reads the generated JSON sidecar, never this module or
+ * labels.yaml directly (web-jam-tools#265 CI fix: the CircleCI image has no
+ * PyYAML).
+ */
+export function computeModelLabels(schema: Schema): string[] {
+  return schema.labels
+    .filter((entry) => entry.modelTier === true)
+    .map((entry) => entry.name)
+    .sort();
 }
 
 // --- Schema loading ---
