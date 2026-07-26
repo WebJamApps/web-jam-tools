@@ -142,6 +142,7 @@ ROSTER=(
   "Claude Sonnet 5"
   "Claude Haiku 4.5"
   "Claude Opus 4.8"
+  "Claude Opus 5"
   "Claude Fable 5"
 )
 
