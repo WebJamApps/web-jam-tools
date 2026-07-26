@@ -102,6 +102,13 @@ labels:
   - name: parked
     hex: "C2C2C2"
     repos: all
+  - name: Josh
+    hex: "795548"
+    repos: all
+    # Marks an issue whose work only Josh can do — a manual step no agent can
+    # perform (generating a credential, clicking through a vendor console, a
+    # purchase, a physical action). Its purpose is to make his manual to-dos
+    # findable in GitHub instead of being lost as a footnote in a chat session.
 
   # --- gig-outreach — 4 booking-epic repos ONLY ---
   - name: gig-outreach
