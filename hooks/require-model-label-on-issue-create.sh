@@ -16,10 +16,14 @@
 #   - MCP: any `mcp__*__issue_write` tool (server-agnostic match) whose
 #     method is "create" (labels arrive as a JSON array field).
 #
-# Valid labels are read from skills/fix-labels/labels.yaml — the entries
-# carrying `modelTier: true` — never hardcoded here. Two independent
-# definitions of "what is a model label" would drift, and then /fix-labels
-# and this guard would disagree about which repos are correct.
+# Valid labels are read from the generated JSON sidecar
+# skills/fix-labels/model-labels.json — labels.yaml's `modelTier: true`
+# entries, computed by src/fix-labels/generate-model-labels.ts — never
+# hardcoded here. labels.yaml stays the single hand-edited source of truth;
+# this hook reads the sidecar (stdlib `json`, no PyYAML — the CircleCI image
+# doesn't have it, web-jam-tools#265 CI fix) so it never needs to parse YAML
+# itself. test/fix_labels_model_labels_parity.test.ts fails CI if the
+# sidecar ever drifts from labels.yaml.
 #
 # Fail CLOSED on ambiguity: a call that is clearly creating an issue but
 # whose labels can't be confidently parsed is DENIED, not allowed. A false
@@ -29,25 +33,19 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LABELS_YAML="$REPO_DIR/skills/fix-labels/labels.yaml"
+MODEL_LABELS_JSON="$REPO_DIR/skills/fix-labels/model-labels.json"
 
 input=$(cat)
 
-result=$(INPUT_JSON="$input" LABELS_YAML_PATH="$LABELS_YAML" python3 <<'PYEOF' 2>/dev/null
+result=$(INPUT_JSON="$input" MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" python3 <<'PYEOF' 2>/dev/null
 import json
 import os
 import re
 import shlex
-import sys
-
-try:
-    import yaml
-except ImportError:
-    print("DENY:PyYAML is unavailable, so the valid model-label list can't be loaded from labels.yaml")
-    sys.exit(0)
 
 INPUT_JSON = os.environ.get("INPUT_JSON", "")
-LABELS_PATH = os.environ.get("LABELS_YAML_PATH", "")
+MODEL_LABELS_PATH = os.environ.get("MODEL_LABELS_JSON_PATH", "")
+REGEN_HINT = "regenerate it with `deno task fix-labels:generate-model-labels`"
 
 OPERATORS = {"&&", "||", ";", "|", "(", ")"}
 ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
@@ -55,16 +53,19 @@ MCP_ISSUE_WRITE_RE = re.compile(r"^mcp__.*__issue_write$")
 
 
 def load_model_labels():
-    """Valid model labels: labels.yaml entries with modelTier: true. The
-    single source of truth (web-jam-tools#265) — no second copy here."""
-    with open(LABELS_PATH) as f:
-        data = yaml.safe_load(f)
-    names = {
-        entry["name"]
-        for entry in (data.get("labels") or [])
-        if isinstance(entry, dict) and entry.get("modelTier")
-    }
-    return names
+    """Valid model labels: the modelLabels array in the generated JSON
+    sidecar skills/fix-labels/model-labels.json (labels.yaml entries with
+    modelTier: true — web-jam-tools#265, the single source of truth, no
+    second copy here). Fails CLOSED (raises) if the sidecar is missing,
+    unparseable, or empty."""
+    with open(MODEL_LABELS_PATH) as f:
+        data = json.load(f)
+    names = data.get("modelLabels")
+    if not isinstance(names, list) or not names:
+        raise ValueError(f"modelLabels field is missing or empty ({REGEN_HINT})")
+    if not all(isinstance(n, str) and n for n in names):
+        raise ValueError(f"modelLabels field contains a non-string/empty entry ({REGEN_HINT})")
+    return set(names)
 
 
 def find_gh_issue_create_args(tokens):
@@ -172,7 +173,7 @@ def main():
             try:
                 model_labels = load_model_labels()
             except Exception as e:
-                print(f"DENY:couldn't load valid model labels from labels.yaml ({e})")
+                print(f"DENY:couldn't load valid model labels from model-labels.json ({e})")
                 return
             labels, ok = extract_label_values(args)
             if not ok:
@@ -197,7 +198,7 @@ def main():
         try:
             model_labels = load_model_labels()
         except Exception as e:
-            print(f"DENY:couldn't load valid model labels from labels.yaml ({e})")
+            print(f"DENY:couldn't load valid model labels from model-labels.json ({e})")
             return
         raw_labels = tool_input.get("labels")
         if not isinstance(raw_labels, list) or not all(isinstance(x, str) for x in raw_labels):
@@ -225,7 +226,7 @@ if [ -z "$result" ]; then
         && printf '%s' "$input" | grep -Eq '\bissue\b' \
         && printf '%s' "$input" | grep -Eq '\bcreate\b'); then
     echo "BLOCKED (model-label guard): couldn't parse this issue-create call (hook parser failure)." >&2
-    echo "Valid model labels are the modelTier: true entries in skills/fix-labels/labels.yaml — retry with exactly one, or rephrase so the command parses." >&2
+    echo "Valid model labels are in skills/fix-labels/model-labels.json (generated from labels.yaml's modelTier: true entries) — retry with exactly one, or rephrase so the command parses." >&2
     echo "(design: web-jam-tools#265)" >&2
     exit 2
   fi
