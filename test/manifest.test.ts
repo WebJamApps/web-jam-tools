@@ -42,6 +42,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   "haiku-only-gmail-gate.sh",
   "notes-sync-reminder.sh",
   "require-model-label-on-issue-create.sh",
+  // PostToolUse output scanner (web-jam-tools#272) — the first non-PreToolUse
+  // guard here, and the only one that inspects output rather than commands.
+  "scan-output-for-secrets.sh",
   "semver-push-reminder.sh",
 ];
 

@@ -84,6 +84,15 @@ PRE_TOOL_USE_HOOKS=(
   "mcp__.*__issue_write::require-model-label-on-issue-create.sh"
 )
 
+# PostToolUse hooks, same "<matcher>::<script>" shape (web-jam-tools#272).
+# The PreToolUse guards are blocklists and can only stop leak shapes someone
+# enumerated in advance; three credentials leaked in two days in three shapes
+# nobody had. This scans tool OUTPUT for credential-shaped strings instead, so
+# it does not depend on knowing how the value got printed.
+POST_TOOL_USE_HOOKS=(
+  "Bash::scan-output-for-secrets.sh"
+)
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --hooks-dir)
@@ -177,4 +186,14 @@ done
 # as a whole — including the symlink step — is exercised end to end, always
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
-python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}"
+merge_post_tool_use_args=()
+for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
+  matcher="${entry%%::*}"
+  name="${entry#*::}"
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in POST_TOOL_USE_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_post_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
+done
+
+python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
