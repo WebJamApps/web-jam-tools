@@ -157,6 +157,123 @@ Deno.test("test -f .env && cat .env is still blocked (chained dump)", async () =
   assertBlocked(res.stderr);
 });
 
+// --- web-jam-tools#272: narrowed SHELL_OP — quoted <, > and | are literal ---
+//
+// These characters reach the matcher only AFTER shlex has consumed the quoting,
+// so one still present inside a token proves it was quoted and cannot act as a
+// shell operator. Keeping prose in scope because it contained a markdown table
+// was pure false-positive. `$(` and backticks still keep a value in scope.
+
+Deno.test("a prose flag whose value has a markdown table pipe is still treated as prose", async () => {
+  const res = await runHook(
+    `gh issue create --title "rotate creds" --body "| file | status |"`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a prose value naming a secret file alongside a table pipe is allowed", async () => {
+  const res = await runHook(
+    `gh issue create --body "| ~/.bashrc | needs rotating |"`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a prose value with a blockquote > naming a secret file is allowed", async () => {
+  const res = await runHook(
+    `gh issue create --body "> the .env file holds the key"`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("but a prose value with real command substitution stays IN SCOPE and is blocked", async () => {
+  const res = await runHook('gh issue create --body "$(cat .env)"');
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+// --- web-jam-tools#272: echoing a credential-NAMED variable ---
+//
+// The 2026-07-26 leak was not a file dump at all — it was a presence check:
+//   echo "${TOK:+SET (value hidden)}${TOK:-NOT SET}"
+// `:+` fires when SET and expands to the LITERAL; `:-` fires when UNSET but
+// expands to the VALUE whenever the var IS set. Writing both halves on one
+// line always prints the secret. No rule in this guard covered that shape,
+// so it was allowed — correctly, per the rules as written.
+
+Deno.test("the exact 2026-07-26 leak — :+ and :- on one line — is blocked", async () => {
+  const res = await runHook(
+    `bash -ic 'echo "\${DENO_DEPLOY_TOKEN:+SET (value hidden)}\${DENO_DEPLOY_TOKEN:-NOT SET}"'`,
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("plain echo of a *_TOKEN variable is blocked", async () => {
+  const res = await runHook('echo "$GH_TOKEN"');
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("unbraced echo of a token variable is blocked", async () => {
+  const res = await runHook("echo $DROPBOX_REFRESH_TOKEN");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("printf of a *_SECRET_* variable is blocked", async () => {
+  const res = await runHook('printf "%s" "${AWS_SECRET_ACCESS_KEY}"');
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a :- default on an API key is blocked (that is the value-expanding half)", async () => {
+  const res = await runHook('echo "key=${GOOGLE_API_KEY:-none}"');
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("PASSWORD-named variables are covered too", async () => {
+  const res = await runHook('echo "${DB_PASSWORD}"');
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+// --- must stay allowed: CONSUMING a secret is normal work; only OUTPUT is barred ---
+
+Deno.test("passing a token to curl -u still works (documented CircleCI idiom)", async () => {
+  const res = await runHook(
+    'curl -s -u "$CIRCLECI_TOKEN:" https://circleci.com/api/v1.1/me',
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test('the safe presence check [ -n "$VAR" ] && echo SET is allowed', async () => {
+  const res = await runHook(
+    '[ -n "$DENO_DEPLOY_TOKEN" ] && echo SET || echo "NOT SET"',
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("${VAR:+SET} alone is allowed — :+ expands to the literal, never the value", async () => {
+  const res = await runHook('echo "${DENO_DEPLOY_TOKEN:+SET}"');
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("${#VAR} length check is allowed", async () => {
+  const res = await runHook('echo "${#GH_TOKEN}"');
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("echoing a non-credential variable is untouched", async () => {
+  const res = await runHook('echo "$HOME/$USER"');
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a plain echo with no expansion is untouched", async () => {
+  const res = await runHook('echo "hello world"');
+  assertEquals(res.code, 0, res.stderr);
+});
+
 Deno.test("test -f .env; cat .env is still blocked (chained via semicolon)", async () => {
   const res = await runHook("test -f .env; cat .env");
   assertEquals(res.code, 2);
@@ -243,7 +360,15 @@ Deno.test("gh issue create --body-file, fed by a heredoc mentioning secrets in p
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("a heredoc note whose text contains a secret filename is allowed", async () => {
+// BEHAVIOUR CHANGE (web-jam-tools#272). This previously asserted `code, 0`:
+// heredoc bodies were stripped unconditionally, so a python payload mentioning
+// .env was allowed. That was a bypass — a heredoc fed to an INTERPRETER is
+// executed, so `python3 <<EOF / print(open('.env').read()) / EOF` was invisible
+// to every rule in this guard. The normalizer now keeps interpreter-fed bodies
+// in scope, which necessarily also catches a benign mention like this one.
+// Blocking prose inside an executable payload is the safe direction; rephrase
+// or write the note to a file instead.
+Deno.test("a mention of a secret file inside an EXECUTED python heredoc is blocked", async () => {
   const res = await runHook(
     [
       "python3 <<'EOF'",
@@ -252,7 +377,85 @@ Deno.test("a heredoc note whose text contains a secret filename is allowed", asy
       "EOF",
     ].join("\n"),
   );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("the real bypass — reading a secret file inside a bash heredoc — is blocked", async () => {
+  const res = await runHook(
+    ["bash <<'EOF'", "cat .env", "EOF"].join("\n"),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a NON-executed heredoc body (gh issue --body-file -) is still allowed to mention a secret file", async () => {
+  const res = await runHook(
+    [
+      "gh issue create --body-file - <<'EOF'",
+      "the .env file needs rotating",
+      "EOF",
+    ].join("\n"),
+  );
   assertEquals(res.code, 0, res.stderr);
+});
+
+// --- web-jam-tools#272 Layer 1: shell rc / profile / netrc / npmrc etc ---
+
+Deno.test("tail ~/.bashrc is blocked (the 2026-07-25 Dropbox token leak)", async () => {
+  const res = await runHook("tail -15 ~/.bashrc");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat ~/.zshrc is blocked", async () => {
+  const res = await runHook("cat ~/.zshrc");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("grep in ~/.netrc is blocked", async () => {
+  const res = await runHook("grep machine ~/.netrc");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat ~/.npmrc is blocked", async () => {
+  const res = await runHook("cat ~/.npmrc");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat gh hosts.yml is blocked", async () => {
+  const res = await runHook("cat ~/.config/gh/hosts.yml");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat agy settings.json is blocked (the 2026-07-25 Google key leak)", async () => {
+  const res = await runHook("cat ~/.gemini/antigravity-cli/settings.json");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+// --- must stay allowed: WRITING to an rc file is normal work ---
+
+Deno.test("appending an export to ~/.bashrc with >> is allowed", async () => {
+  const res = await runHook(`echo 'export FOO=1' >> ~/.bashrc`);
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("appending a shell function to ~/.bashrc via heredoc is allowed", async () => {
+  const res = await runHook(
+    ["cat >> ~/.bashrc <<'EOF'", "myfunc() { echo hi; }", "EOF"].join("\n"),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("redirecting a secret file INTO something else is still blocked", async () => {
+  const res = await runHook("cat .env > /tmp/copy");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
 });
 
 Deno.test("git commit -m mentioning a secret filename in prose is allowed", async () => {
