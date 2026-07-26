@@ -74,6 +74,18 @@
 #                   same section (ambiguous). File content is otherwise treated
 #                   IDENTICALLY to an inline value: same required-content, placeholder,
 #                   raw-HTML-tag, and (for test-evidence) auto-fence checks below.
+#                   REQUIRED for rich content (web-jam-tools#272): an inline
+#                   --summary/--test-plan/--test-evidence whose value is
+#                   multi-line or contains a backtick or a `|` is REFUSED, with
+#                   a pointer to its *-file counterpart. An inline value travels
+#                   on the command line, where the PreToolUse Bash guards read
+#                   it; their prose-flag exemption is skipped whenever the value
+#                   holds a shell metacharacter, and real markdown always does.
+#                   So a PR body that legitimately NAMES a credential file or
+#                   quotes a blocked command was being refused by the guard
+#                   rather than by this script. A *-file flag puts only a PATH
+#                   on the command line, keeping the content out of scope.
+#                   Short, plain inline values are still accepted.
 #   --screenshots   Fills "## Screenshots"; omit the flag to omit the section.
 #   --dry-run       Run every guard and compose the full PR body, print it, and
 #                   exit 0 WITHOUT pushing or opening/editing a PR. For testing
@@ -311,6 +323,43 @@ if [ -n "$EXPECT_LANES" ] && [ -n "$ISSUE" ]; then
     fi
   fi
 fi
+
+# --- rich prose must come from a file, not the command line (web-jam-tools#272) ---
+# An inline flag value travels ON THE COMMAND LINE, where the PreToolUse Bash
+# guards read it. They try to exempt prose flags, but that exemption is skipped
+# whenever the value contains a shell metacharacter — and real markdown always
+# does (backticks in code spans, | in tables). So the guards end up scanning a
+# PR body as if it were a command, and a body that legitimately NAMES a
+# credential file or quotes a blocked command gets refused. Composing PR #283
+# was refused twice for exactly this.
+#
+# A *-file flag puts only a PATH on the command line, so the content is never
+# scanned. That is also already the required form for anything multi-line
+# (#145: inline multi-line args get flattened during agy's headless turn), so
+# this makes one rule out of two.
+require_file_flag_for_rich_prose() {
+  local flag="$1" value="$2" inline="$3"
+  [ "$inline" -eq 1 ] || return 0
+  # Explicit checks rather than a `case` glob: a quoted '|' inside a case
+  # pattern is fragile to read and was silently over-matching.
+  rich=0
+  printf '%s' "$value" | grep -Fq '`' && rich=1
+  printf '%s' "$value" | grep -Fq '|' && rich=1
+  [ "$(printf '%s' "$value" | wc -l)" -gt 0 ] && rich=1
+  if [ "$rich" -eq 1 ]; then
+      echo "ERROR: --$flag has multi-line or markdown content — pass --$flag-file PATH instead." >&2
+      echo "       Inline values travel on the command line, where the secret-dump and" >&2
+      echo "       merge/deploy guards scan them; a PR body that names a credential file or" >&2
+      echo "       quotes a blocked command is then refused (web-jam-tools#272). Writing the" >&2
+      echo "       content to a file and passing the path keeps it out of scope entirely," >&2
+      echo "       and is already required for multi-line content (web-jam-tools#145)." >&2
+      exit 1
+  fi
+}
+
+require_file_flag_for_rich_prose "summary" "$SUMMARY" "$HAS_SUMMARY"
+require_file_flag_for_rich_prose "test-plan" "$TEST_PLAN" "$HAS_TEST_PLAN"
+require_file_flag_for_rich_prose "test-evidence" "$TEST_EVIDENCE" "$HAS_TEST_EVIDENCE"
 
 # --- resolve *-file flags into content (web-jam-tools#145) ---
 # A multi-line shell argument gets flattened to one line during agy's headless
