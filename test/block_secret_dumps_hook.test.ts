@@ -326,7 +326,15 @@ Deno.test("gh issue create --body-file, fed by a heredoc mentioning secrets in p
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("a heredoc note whose text contains a secret filename is allowed", async () => {
+// BEHAVIOUR CHANGE (web-jam-tools#272). This previously asserted `code, 0`:
+// heredoc bodies were stripped unconditionally, so a python payload mentioning
+// .env was allowed. That was a bypass — a heredoc fed to an INTERPRETER is
+// executed, so `python3 <<EOF / print(open('.env').read()) / EOF` was invisible
+// to every rule in this guard. The normalizer now keeps interpreter-fed bodies
+// in scope, which necessarily also catches a benign mention like this one.
+// Blocking prose inside an executable payload is the safe direction; rephrase
+// or write the note to a file instead.
+Deno.test("a mention of a secret file inside an EXECUTED python heredoc is blocked", async () => {
   const res = await runHook(
     [
       "python3 <<'EOF'",
@@ -335,7 +343,85 @@ Deno.test("a heredoc note whose text contains a secret filename is allowed", asy
       "EOF",
     ].join("\n"),
   );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("the real bypass — reading a secret file inside a bash heredoc — is blocked", async () => {
+  const res = await runHook(
+    ["bash <<'EOF'", "cat .env", "EOF"].join("\n"),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a NON-executed heredoc body (gh issue --body-file -) is still allowed to mention a secret file", async () => {
+  const res = await runHook(
+    [
+      "gh issue create --body-file - <<'EOF'",
+      "the .env file needs rotating",
+      "EOF",
+    ].join("\n"),
+  );
   assertEquals(res.code, 0, res.stderr);
+});
+
+// --- web-jam-tools#272 Layer 1: shell rc / profile / netrc / npmrc etc ---
+
+Deno.test("tail ~/.bashrc is blocked (the 2026-07-25 Dropbox token leak)", async () => {
+  const res = await runHook("tail -15 ~/.bashrc");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat ~/.zshrc is blocked", async () => {
+  const res = await runHook("cat ~/.zshrc");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("grep in ~/.netrc is blocked", async () => {
+  const res = await runHook("grep machine ~/.netrc");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat ~/.npmrc is blocked", async () => {
+  const res = await runHook("cat ~/.npmrc");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat gh hosts.yml is blocked", async () => {
+  const res = await runHook("cat ~/.config/gh/hosts.yml");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("cat agy settings.json is blocked (the 2026-07-25 Google key leak)", async () => {
+  const res = await runHook("cat ~/.gemini/antigravity-cli/settings.json");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+// --- must stay allowed: WRITING to an rc file is normal work ---
+
+Deno.test("appending an export to ~/.bashrc with >> is allowed", async () => {
+  const res = await runHook(`echo 'export FOO=1' >> ~/.bashrc`);
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("appending a shell function to ~/.bashrc via heredoc is allowed", async () => {
+  const res = await runHook(
+    ["cat >> ~/.bashrc <<'EOF'", "myfunc() { echo hi; }", "EOF"].join("\n"),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("redirecting a secret file INTO something else is still blocked", async () => {
+  const res = await runHook("cat .env > /tmp/copy");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
 });
 
 Deno.test("git commit -m mentioning a secret filename in prose is allowed", async () => {

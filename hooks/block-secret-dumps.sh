@@ -41,153 +41,10 @@ cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.st
 # rather than silently dropped. On any parse failure (unbalanced quotes,
 # python3 unavailable) this falls back to the old "match anywhere" collapse —
 # bias to safety, per the issue's guidance.
-c=$(CMD_FOR_PY="$cmd" python3 <<'PYEOF' 2>/dev/null
-import os
-import re
-import shlex
-
-
-def find_heredoc_marker(line):
-    """First heredoc marker (<<WORD, <<-WORD, <<'WORD', ...) outside any
-    quoted region of the line, as (word, strip_tabs), or None."""
-    in_squote = False
-    in_dquote = False
-    i = 0
-    n = len(line)
-    while i < n:
-        ch = line[i]
-        if in_squote:
-            if ch == "'":
-                in_squote = False
-            i += 1
-            continue
-        if in_dquote:
-            if ch == "\\" and i + 1 < n:
-                i += 2
-                continue
-            if ch == '"':
-                in_dquote = False
-            i += 1
-            continue
-        if ch == "'":
-            in_squote = True
-            i += 1
-            continue
-        if ch == '"':
-            in_dquote = True
-            i += 1
-            continue
-        if ch == "\\" and i + 1 < n:
-            i += 2
-            continue
-        if ch == "<" and i + 1 < n and line[i + 1] == "<":
-            j = i + 2
-            strip_tabs = False
-            if j < n and line[j] == "-":
-                strip_tabs = True
-                j += 1
-            while j < n and line[j] == " ":
-                j += 1
-            if j < n and line[j] in ("'", '"'):
-                j += 1
-            start = j
-            while j < n and (line[j].isalnum() or line[j] == "_"):
-                j += 1
-            word = line[start:j]
-            if word:
-                return word, strip_tabs
-            i += 2
-            continue
-        i += 1
-    return None
-
-
-def strip_heredocs(text):
-    lines = text.split("\n")
-    out = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i]
-        out.append(line)
-        marker = find_heredoc_marker(line)
-        if marker:
-            word, strip_tabs = marker
-            j = i + 1
-            body = []
-            terminated = False
-            while j < n:
-                probe = lines[j].lstrip("\t") if strip_tabs else lines[j]
-                if probe.rstrip("\r") == word:
-                    terminated = True
-                    j += 1
-                    break
-                body.append(lines[j])
-                j += 1
-            if not terminated:
-                # no closing delimiter before EOF: fail safe, keep every
-                # line rather than risk silently dropping a real command
-                # that never actually ran through a heredoc.
-                out.extend(body)
-            i = j
-            continue
-        i += 1
-    return "\n".join(out)
-
-
-SHELL_OP = re.compile(r"\$\(|`|[<>|]")
-
-# Flags whose value is free-form prose text being authored/recorded, not a
-# command argument that gets executed. Deliberately does NOT include -c
-# (sh/bash/zsh/python3/node/perl/... payloads must stay in scope for
-# matching) or --body-file-like path-only flags that don't carry inline text
-# — wait, --body-file/--summary-file/etc DO take a path, but dropping that
-# path token is harmless (a path isn't itself a read/dump operation) and
-# keeps this list symmetric with its non-file counterpart.
-PROSE_FLAGS = {
-    "--body",
-    "--body-file",
-    "-m",
-    "--message",
-    "--summary",
-    "--summary-file",
-    "--test-plan",
-    "--test-plan-file",
-    "--test-evidence",
-    "--test-evidence-file",
-    "--notes",
-    "--title",
-    "-t",
-}
-
-
-def drop_prose(text):
-    tokens = shlex.split(text, posix=True)
-    kept = []
-    prev_flag = None
-    for tok in tokens:
-        if "=" in tok:
-            flag, _, value = tok.partition("=")
-            if flag in PROSE_FLAGS and not SHELL_OP.search(value):
-                kept.append(flag)
-                prev_flag = None
-                continue
-        if prev_flag is not None and not SHELL_OP.search(tok):
-            prev_flag = None
-            continue
-        kept.append(tok)
-        prev_flag = tok if tok in PROSE_FLAGS else None
-    return " ".join(kept)
-
-
-cmd = os.environ.get("CMD_FOR_PY", "")
-try:
-    result = drop_prose(strip_heredocs(cmd))
-except Exception:
-    result = cmd
-print(re.sub(r"\s+", " ", result).strip())
-PYEOF
-) || true
+# Resolve this hook's REAL directory (it is installed as a symlink into
+# ~/.claude/hooks, so readlink -f is required) to find the shared normalizer.
+HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+c=$(CMD_FOR_PY="$cmd" python3 "$HOOK_DIR/lib/normalize_command.py" 2>/dev/null) || true
 if [ -z "$c" ]; then
   # python3 unavailable or crashed: fall back to the old collapse so the
   # guard still fires on unambiguous cases rather than silently no-op'ing.
@@ -293,7 +150,25 @@ fi
 # `printf '%s' "$(< .env)"`, dodged the guard because ")" wasn't in the old
 # boundary set. Still excludes real words like "environment" (the char
 # after "env" there is alnum, matching neither alternative).
-if printf '%s' "$c" | grep -Eiq '(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.env(\.|[^A-Za-z0-9_-]|$))'; then
+# web-jam-tools#272: shell rc/profile files, .netrc, .npmrc, gh's hosts.yml and
+# agy's settings.json all hold live credentials and were NOT on this list — that
+# is how a Dropbox refresh token (tail -15 ~/.bashrc) and a Google API key
+# (agy settings.json) reached transcripts on 2026-07-25.
+SECRET_FILE_RE='(rclone\.conf|\.circleci-token|gcp-oauth\.keys\.json|oauth_creds|credentials\.json|client_secret|/token\.json|google-drive-mcp/|\.bashrc|\.bash_profile|\.zshrc|\.zprofile|/\.profile|\.netrc|\.npmrc|\.config/gh/hosts\.yml|antigravity-cli/settings\.json|\.env(\.|[^A-Za-z0-9_-]|$))'
+if printf '%s' "$c" | grep -Eiq "$SECRET_FILE_RE"; then
+  # WRITE-ONLY exception (web-jam-tools#272): appending to ~/.bashrc is normal,
+  # safe work — the guard must block READING these files, not writing to them.
+  # Strip every redirect target (`> path`, `>> path`); if no secret path
+  # remains, the file was only ever written to, never read.
+  #   cat >> ~/.bashrc <<'EOF' ... EOF   -> allowed (heredoc body, not the file)
+  #   echo 'export X=1' >> ~/.bashrc     -> allowed
+  #   cat .env > /tmp/x                  -> still BLOCKED (.env is read here)
+  # `tee` is deliberately NOT covered: it copies stdin to stdout as well as to
+  # the file, so `tee .env` is never write-only.
+  write_stripped=$(printf '%s' "$c" | sed -E 's/>>?[[:space:]]*[^[:space:];&|]+//g')
+  if ! printf '%s' "$write_stripped" | grep -Eiq "$SECRET_FILE_RE"; then
+    exit 0
+  fi
   # cp/test exception (web-jam-tools#257): copying a secret file or checking
   # its existence never prints its contents (you could already copy-then-print
   # today), so a *simple* `cp` or `test`/`[` invocation is allowed. This is
