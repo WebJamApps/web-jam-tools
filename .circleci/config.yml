@@ -30,6 +30,12 @@ executors:
 jobs:
   gate:
     executor: ci
+    environment:
+      # web-jam-tools#275: explicit, cacheable Deno dependency dir. Without
+      # this every build re-resolves + re-downloads npm/jsr deps (incl.
+      # playwright) from scratch, and a registry blip fails the whole gate
+      # as an unattributable "Test failed".
+      DENO_DIR: /home/circleci/.cache/deno
     steps:
       - checkout
       - run:
@@ -58,6 +64,33 @@ jobs:
           command: |
             deno --version && node -v && npm -v && trivy --version && semgrep --version
             shellcheck --version
+      - restore_cache:
+          keys:
+            - deno-deps-v1-{{ checksum "deno.json" }}-{{ checksum "deno.lock" }}
+      - run:
+          name: Warm Deno dependency cache (deno install, retries 3x with backoff)
+          command: |
+            # web-jam-tools#275: dedicated, retried step for the npm/jsr
+            # fetch so a transient registry failure fails a step named for
+            # what it does, instead of masquerading as "Test failed" inside
+            # coverage:check. `deno install` (no args) resolves + caches
+            # every dependency in deno.json/deno.lock into $DENO_DIR; on a
+            # cache hit (restore_cache above) it does no network I/O at all.
+            attempt=1
+            until deno install; do
+              if [ "$attempt" -ge 3 ]; then
+                echo "FAIL: dependency warm-up failed after ${attempt} attempts" >&2
+                exit 1
+              fi
+              backoff=$((attempt * 5))
+              echo "Dependency fetch failed (attempt ${attempt}/3) — retrying in ${backoff}s..." >&2
+              sleep "$backoff"
+              attempt=$((attempt + 1))
+            done
+      - save_cache:
+          key: deno-deps-v1-{{ checksum "deno.json" }}-{{ checksum "deno.lock" }}
+          paths:
+            - /home/circleci/.cache/deno
       - run:
           name: Shell gate (bash -n + shellcheck -S error over tracked *.sh)
           command: |
