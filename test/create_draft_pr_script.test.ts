@@ -58,11 +58,52 @@ interface RunResult {
   stderr: string;
 }
 
+// web-jam-tools#272: the script now REFUSES an inline --summary/--test-plan/
+// --test-evidence carrying markdown structure (backticks or a table pipe),
+// because an inline value travels on the command line where the PreToolUse
+// guards scan it. Rich fixtures therefore have to reach the script as files.
+//
+// This helper performs that swap so the existing cases keep testing what they
+// were written to test (roster, placeholder, bullets, evidence, test-plan
+// substance) rather than all collapsing onto the new rule. The refusal itself
+// is covered by its own dedicated tests below.
+const RICH = /[`|]|\n/;
+const FILE_FLAG: Record<string, string> = {
+  "--summary": "--summary-file",
+  "--test-plan": "--test-plan-file",
+  "--test-evidence": "--test-evidence-file",
+};
+
+async function toFileFlags(args: string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    const fileFlag = FILE_FLAG[flag];
+    const value = args[i + 1];
+    if (fileFlag && value !== undefined && RICH.test(value)) {
+      // Deliberately OUTSIDE the fixture repo: a file written into that working
+      // tree shows up as untracked and trips the script's own dirty-tree guard.
+      const path = await Deno.makeTempFile({ prefix: "wjt272-", suffix: ".md" });
+      await Deno.writeTextFile(path, value);
+      out.push(fileFlag, path);
+      i++;
+      continue;
+    }
+    out.push(flag);
+  }
+  return out;
+}
+
 async function runScript(
   cwd: string,
-  args: string[],
+  rawArgs: string[],
   env: Record<string, string> = {},
+  // raw: skip the file-flag swap above and pass the args through untouched.
+  // Required by the tests that assert the inline-refusal itself — otherwise the
+  // harness would helpfully convert away the very thing under test.
+  opts: { raw?: boolean } = {},
 ): Promise<RunResult> {
+  const args = opts.raw ? rawArgs : await toFileFlags(rawArgs);
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, ...args, "--dry-run"],
     cwd,
@@ -267,4 +308,110 @@ Deno.test("create mode (no --update) still labels dry-run CREATE", async () => {
   const res = await runScript(repoDir, baseArgs());
   assertEquals(res.code, 0, res.stderr);
   assertMatch(res.stdout, /=== DRY RUN \(CREATE/);
+});
+
+// --- web-jam-tools#272: rich prose must arrive as a file, not inline ---
+//
+// An inline value travels on the command line, where the PreToolUse Bash guards
+// read it. Their prose-flag exemption is skipped whenever the value contains a
+// shell metacharacter, and real markdown always does — so a PR body naming a
+// credential file or quoting a blocked command gets refused by the guard rather
+// than by this script. A *-file flag puts only a PATH on the command line.
+
+Deno.test("an inline --summary containing backticks is refused, pointing at --summary-file", async () => {
+  const res = await runScript(
+    repoDir,
+    [
+      "--author",
+      VALID_AUTHOR,
+      "--summary",
+      "- see `deno task test` for details",
+      "--test-plan",
+      "plain plan exercising the change by hitting the route",
+      "--test-evidence",
+      "ok 42 passed 0 failed",
+    ],
+    {},
+    { raw: true },
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /pass --summary-file PATH instead/);
+});
+
+Deno.test("an inline --test-plan containing a table pipe is refused", async () => {
+  const res = await runScript(
+    repoDir,
+    [
+      "--author",
+      VALID_AUTHOR,
+      "--summary",
+      "- a bullet",
+      "--test-plan",
+      "| step | expected |",
+      "--test-evidence",
+      "ok 42 passed 0 failed",
+    ],
+    {},
+    { raw: true },
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /pass --test-plan-file PATH instead/);
+});
+
+Deno.test("a multi-line inline --test-evidence is refused", async () => {
+  const res = await runScript(
+    repoDir,
+    [
+      "--author",
+      VALID_AUTHOR,
+      "--summary",
+      "- a bullet",
+      "--test-plan",
+      "plain plan exercising the change by hitting the route",
+      "--test-evidence",
+      "ok 42 passed\nsecond line",
+    ],
+    {},
+    { raw: true },
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /pass --test-evidence-file PATH instead/);
+});
+
+Deno.test("the refusal explains WHY, naming the guard interaction", async () => {
+  const res = await runScript(
+    repoDir,
+    [
+      "--author",
+      VALID_AUTHOR,
+      "--summary",
+      "- see `x`",
+      "--test-plan",
+      "plain plan exercising the change by hitting the route",
+      "--test-evidence",
+      "ok 42 passed 0 failed",
+    ],
+    {},
+    { raw: true },
+  );
+  assertMatch(res.stderr, /guards scan them/);
+});
+
+Deno.test("a short plain inline value is still accepted (no needless friction)", async () => {
+  const res = await runScript(
+    repoDir,
+    [
+      "--author",
+      VALID_AUTHOR,
+      "--summary",
+      "- one plain bullet with no markup",
+      "--test-plan",
+      "plain plan exercising the change by hitting the route",
+      "--test-evidence",
+      "ok 42 passed 0 failed",
+    ],
+    {},
+    { raw: true },
+  );
+  assertEquals(res.code, 0, res.stderr);
 });
