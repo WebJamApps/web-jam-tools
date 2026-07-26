@@ -162,6 +162,25 @@ export function classifyRepoDrift(
   return drift;
 }
 
+/**
+ * Model-label names: schema entries carrying `modelTier: true`, sorted for a
+ * deterministic order. The single computation, shared by
+ * scripts/tasks/tests that need "what is a model label" — currently the
+ * skills/fix-labels/model-labels.json generator (src/fix-labels/
+ * generate-model-labels.ts) and its parity test
+ * (test/fix_labels_model_labels_parity.test.ts). Not used by the hook
+ * itself (hooks/require-model-label-on-issue-create.sh) — that script is
+ * bash/python and reads the generated JSON sidecar, never this module or
+ * labels.yaml directly (web-jam-tools#265 CI fix: the CircleCI image has no
+ * PyYAML).
+ */
+export function computeModelLabels(schema: Schema): string[] {
+  return schema.labels
+    .filter((entry) => entry.modelTier === true)
+    .map((entry) => entry.name)
+    .sort();
+}
+
 // --- Schema loading ---
 
 export async function loadSchema(path: string): Promise<Schema> {

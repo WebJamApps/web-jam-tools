@@ -34,9 +34,15 @@ repoClasses:
 labels:
   # --- Model-tier — all 8 repos ---
   # `modelTier: true` is the machine-readable marker for "this is a model
-  # label" (web-jam-tools#265) — hooks/require-model-label-on-issue-create.sh
-  # derives its valid-label list by selecting these six entries, so there is
-  # no second hardcoded copy of the six names anywhere.
+  # label" (web-jam-tools#265). src/fix-labels/generate-model-labels.ts
+  # selects these six entries into the committed sidecar
+  # skills/fix-labels/model-labels.json (`deno task
+  # fix-labels:generate-model-labels`, kept honest by
+  # test/fix_labels_model_labels_parity.test.ts), which
+  # hooks/require-model-label-on-issue-create.sh reads at runtime — that hook
+  # is bash/python and the CircleCI image has no PyYAML, so it can't parse
+  # this file directly. No second hardcoded copy of the six names exists
+  # anywhere; regenerate the sidecar after editing modelTier entries here.
   - name: Haiku
     hex: "0E8A16"
     repos: all

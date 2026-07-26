@@ -22,7 +22,9 @@ issue rather than switching, but don't default to Opus/Fable for a fresh `/draft
 `hooks/require-model-label-on-issue-create.sh` (web-jam-tools#265) is a hard gate: it denies any
 `gh issue create` or MCP `issue_write` create call that doesn't carry exactly one label from
 `skills/fix-labels/labels.yaml`'s `modelTier: true` entries (`Haiku`, `Sonnet`, `Opus`, `Fable`,
-`Flash Med`, `Flash High`). That hook closes the silent-omission hole — it cannot judge whether the
+`Flash Med`, `Flash High`) — read at runtime from the generated sidecar
+`skills/fix-labels/model-labels.json`, since the hook is bash/python and can't parse YAML in CI.
+That hook closes the silent-omission hole — it cannot judge whether the
 label is the *right* one, whether the body cites its references correctly, whether a duplicate
 already exists, or whether the acceptance criteria actually let the issue close. This skill is the
 quality layer on top of that floor. Skipping this skill still gets caught by the hook if you forget
@@ -104,6 +106,7 @@ EOF
 ## If the hook denies the call
 
 The denial message names what's wrong (no model label / multiple model labels / unparseable) and
-lists the valid labels straight from `skills/fix-labels/labels.yaml`. Fix the `--label` flags (or
+lists the valid labels straight from `skills/fix-labels/model-labels.json` (generated from
+`skills/fix-labels/labels.yaml`). Fix the `--label` flags (or
 the MCP `labels` array) per the message and retry — there is no bypass, and there shouldn't be one:
 the hook exists because "add the label after" is exactly how web-jam-tools#263 shipped unlabeled.
