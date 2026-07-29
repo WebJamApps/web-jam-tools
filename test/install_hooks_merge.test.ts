@@ -254,6 +254,183 @@ Deno.test("different matchers get separate PreToolUse entries", async () => {
   });
 });
 
+// --- Pruning stale matcher entries (web-jam-tools#293) ---
+
+Deno.test("installing a hook with a new matcher removes its stale entry from the old matcher", async () => {
+  await withTempSettings(
+    {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "mcp__gmail__.*",
+            hooks: [{ type: "command", command: "$HOME/.claude/hooks/haiku-only-gmail-gate.sh" }],
+          },
+        ],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--pre-tool-use",
+        "mcp__(gmail|claude_ai_Gmail)__.*::$HOME/.claude/hooks/haiku-only-gmail-gate.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+      assert(
+        res.stdout.includes("replaced stale matcher (mcp__gmail__.*)"),
+        `expected replace message, got: ${res.stdout}`,
+      );
+
+      const data = await readJson(path);
+      assertEquals(data.hooks.PreToolUse.length, 1);
+      assertEquals(data.hooks.PreToolUse[0].matcher, "mcp__(gmail|claude_ai_Gmail)__.*");
+      assertEquals(
+        data.hooks.PreToolUse[0].hooks[0].command,
+        "$HOME/.claude/hooks/haiku-only-gmail-gate.sh",
+      );
+    },
+  );
+});
+
+Deno.test("an unrelated hand-added entry pointing outside managed hooks is preserved untouched", async () => {
+  await withTempSettings(
+    {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: "/some/other/hook.sh --flag" }],
+          },
+          {
+            matcher: "Edit|Write",
+            hooks: [{ type: "command", command: "$HOME/.claude/hooks/feature-branch-guard.sh" }],
+          },
+        ],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--pre-tool-use",
+        "Bash::$HOME/.claude/hooks/a.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+
+      const data = await readJson(path);
+      // Should have Bash (with both the hand-added and new hook) and Edit|Write (untouched)
+      assertEquals(data.hooks.PreToolUse.length, 2);
+      const bashEntry = data.hooks.PreToolUse.find((e: HookEntry) => e.matcher === "Bash");
+      const editEntry = data.hooks.PreToolUse.find((e: HookEntry) => e.matcher === "Edit|Write");
+      assertEquals(
+        bashEntry?.hooks.map((h: HookCmd) => h.command),
+        ["/some/other/hook.sh --flag", "$HOME/.claude/hooks/a.sh"],
+      );
+      assertEquals(editEntry?.hooks.map((h: HookCmd) => h.command), [
+        "$HOME/.claude/hooks/feature-branch-guard.sh",
+      ]);
+    },
+  );
+});
+
+Deno.test("installing an unchanged hook twice is idempotent: no duplicate, no replace message", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const args = [
+      "--pre-tool-use",
+      "mcp__(gmail|claude_ai_Gmail)__.*::$HOME/.claude/hooks/haiku-only-gmail-gate.sh",
+    ];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    assert(first.stdout.includes("added PreToolUse hook"));
+
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+    assert(
+      !second.stdout.includes("replaced"),
+      `should not print replace message on idempotent re-run, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.hooks.PreToolUse.length, 1);
+    assertEquals(data.hooks.PreToolUse[0].hooks.length, 1);
+  });
+});
+
+Deno.test("a matcher entry holding TWO commands, only one being re-pointed, keeps the other", async () => {
+  await withTempSettings(
+    {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [
+              { type: "command", command: "$HOME/.claude/hooks/foo.sh" },
+              { type: "command", command: "$HOME/.claude/hooks/bar.sh" },
+            ],
+          },
+        ],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--pre-tool-use",
+        "Edit|Write::$HOME/.claude/hooks/foo.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+      assert(
+        res.stdout.includes("replaced stale matcher (Bash)"),
+        `expected replace message, got: ${res.stdout}`,
+      );
+
+      const data = await readJson(path);
+      // Should have Bash (with only bar.sh) and Edit|Write (with foo.sh)
+      assertEquals(data.hooks.PreToolUse.length, 2);
+      const bashEntry = data.hooks.PreToolUse.find((e: HookEntry) => e.matcher === "Bash");
+      const editEntry = data.hooks.PreToolUse.find((e: HookEntry) => e.matcher === "Edit|Write");
+      assertEquals(bashEntry?.hooks.map((h: HookCmd) => h.command), [
+        "$HOME/.claude/hooks/bar.sh",
+      ]);
+      assertEquals(editEntry?.hooks.map((h: HookCmd) => h.command), [
+        "$HOME/.claude/hooks/foo.sh",
+      ]);
+    },
+  );
+});
+
+Deno.test("pruning in PostToolUse works the same way as PreToolUse", async () => {
+  await withTempSettings(
+    {
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: "$HOME/.claude/hooks/check-output.sh" }],
+          },
+        ],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--post-tool-use",
+        "Edit|Write::$HOME/.claude/hooks/check-output.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+      assert(
+        res.stdout.includes("replaced stale matcher (Bash)"),
+        `expected replace message, got: ${res.stdout}`,
+      );
+
+      const data = await readJson(path);
+      assertEquals(data.hooks.PostToolUse.length, 1);
+      assertEquals(data.hooks.PostToolUse[0].matcher, "Edit|Write");
+      assertEquals(
+        data.hooks.PostToolUse[0].hooks[0].command,
+        "$HOME/.claude/hooks/check-output.sh",
+      );
+    },
+  );
+});
+
 // --- Idempotency ---
 
 Deno.test("re-running with the same hooks does not duplicate entries", async () => {
