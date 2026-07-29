@@ -64,6 +64,7 @@ interface SettingsJson {
   hooks: {
     SessionStart: HookEntry[];
     PreToolUse: HookEntry[];
+    PostToolUse?: HookEntry[];
     Stop?: HookEntry[];
   };
 }
@@ -421,6 +422,7 @@ Deno.test("pruning in PostToolUse works the same way as PreToolUse", async () =>
       );
 
       const data = await readJson(path);
+      assert(data.hooks.PostToolUse, "PostToolUse should exist");
       assertEquals(data.hooks.PostToolUse.length, 1);
       assertEquals(data.hooks.PostToolUse[0].matcher, "Edit|Write");
       assertEquals(
