@@ -41,6 +41,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   "fmt-push-guard.sh",
   "haiku-only-gmail-gate.sh",
   "notes-sync-reminder.sh",
+  // Stop hook (web-jam-tools#290) — detective-only warning when an Opus
+  // turn racks up edits with zero subagent spawns.
+  "opus-no-delegation-warning.sh",
   "require-model-label-on-issue-create.sh",
   // PostToolUse output scanner (web-jam-tools#272) — the first non-PreToolUse
   // guard here, and the only one that inspects output rather than commands.
