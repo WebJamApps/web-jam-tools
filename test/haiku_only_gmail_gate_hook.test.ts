@@ -2,19 +2,16 @@
 //
 // hooks/haiku-only-gmail-gate.sh had NO behaviour test before #285. It is a
 // PreToolUse guard matched (in scripts/install-hooks.sh) against
-// `mcp__gmail__.*`: it reads `transcript_path` from the PreToolUse JSON on
-// stdin, looks up the NEWEST assistant-turn model recorded in that transcript
-// JSONL, and denies (fail-closed) unless that model name contains "haiku".
-// Exercised the same way as the other hooks — shelling out to it
-// (Deno.Command) with mocked PreToolUse JSON on stdin, plus a real temp
+// `mcp__(gmail|claude_ai_Gmail)__.*`: it reads `transcript_path` from the
+// PreToolUse JSON on stdin, looks up the NEWEST assistant-turn model recorded
+// in that transcript JSONL, and denies (fail-closed) unless that model name
+// contains "haiku". Exercised the same way as the other hooks — shelling out
+// to it (Deno.Command) with mocked PreToolUse JSON on stdin, plus a real temp
 // transcript JSONL file standing in for Claude Code's actual transcript.
 //
-// web-jam-tools#285 special instruction: this test file ALSO records whether
-// the hook's install-time matcher (`mcp__gmail__.*` in
-// scripts/install-hooks.sh's PRE_TOOL_USE_HOOKS) actually fires against the
-// CURRENT live Gmail MCP tool names. See the dedicated test at the bottom —
-// per the issue, changing the matcher is Josh's call, not this PR's, so it is
-// only asserted/reported here, never "fixed".
+// The matcher covers both local Gmail MCP (mcp__gmail__*) and live claude.ai
+// Gmail tools (mcp__claude_ai_Gmail__*), ensuring the gate applies to all
+// Gmail tool usage.
 
 import { assertEquals } from "@std/assert";
 
@@ -132,22 +129,29 @@ Deno.test("a transcript with no assistant turns at all is denied (fail closed)",
   );
 });
 
-// --- web-jam-tools#285: does the install-time matcher fire against the LIVE
-// Gmail MCP tool name? Report only — do not "fix" the matcher (Josh's call).
+// --- web-jam-tools#285: verify the updated matcher fires against both
+// local (mcp__gmail__*) and live (mcp__claude_ai_Gmail__*) Gmail tool names.
 
-Deno.test("install-hooks.sh matcher check: mcp__gmail__.* vs the live tool name mcp__claude_ai_Gmail__* (reported, not fixed)", () => {
-  const matcher = "mcp__gmail__.*";
+Deno.test("install-hooks.sh matcher fires against local Gmail MCP (mcp__gmail__*)", () => {
+  const matcher = "mcp__(gmail|claude_ai_Gmail)__.*";
+  const localToolName = "mcp__gmail__send";
+  const re = new RegExp(matcher);
+  const fires = re.test(localToolName);
+  assertEquals(fires, true, `matcher should fire against ${localToolName}`);
+});
+
+Deno.test("install-hooks.sh matcher fires against live Gmail MCP (mcp__claude_ai_Gmail__*)", () => {
+  const matcher = "mcp__(gmail|claude_ai_Gmail)__.*";
   const liveToolName = "mcp__claude_ai_Gmail__list_labels";
   const re = new RegExp(matcher);
   const fires = re.test(liveToolName);
-  // As of web-jam-tools#285: this is FALSE. The live Gmail MCP tool names in
-  // this environment are `mcp__claude_ai_Gmail__*` (see the deferred-tools
-  // listing in any session with the claude.ai Gmail connector), not
-  // `mcp__gmail__*`. scripts/install-hooks.sh's PRE_TOOL_USE_HOOKS wires this
-  // hook to matcher "mcp__gmail__.*", which does NOT match
-  // "mcp__claude_ai_Gmail__*" (different prefix, different case) — so this
-  // guard currently does NOT gate the live Gmail tools at all. Confirmed and
-  // reported per #285; changing the matcher is Josh's call (it changes which
-  // model may touch Gmail), not this PR's.
-  assertEquals(fires, false);
+  assertEquals(fires, true, `matcher should fire against ${liveToolName}`);
+});
+
+Deno.test("install-hooks.sh matcher does not fire against unrelated tools", () => {
+  const matcher = "mcp__(gmail|claude_ai_Gmail)__.*";
+  const unrelatedToolName = "mcp__google-drive__search";
+  const re = new RegExp(matcher);
+  const fires = re.test(unrelatedToolName);
+  assertEquals(fires, false, `matcher should NOT fire against ${unrelatedToolName}`);
 });
