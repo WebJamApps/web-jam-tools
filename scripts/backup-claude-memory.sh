@@ -18,9 +18,16 @@
 
 set -euo pipefail
 
-SRC_PROJECTS="$HOME/.claude/projects"
-SRC_SHARED="$HOME/.claude/shared-memory"
-DST="$HOME/Dropbox/web-jam-llms/claude-backup"
+# CLAUDE_DIR / BACKUP_DST_DIR are overridable (web-jam-tools#304) so the
+# settings.json secret-literal guard added below can be exercised end to end
+# against a throwaway fixture directory instead of Josh's real
+# ~/.claude + ~/Dropbox — mirrors the --hooks-dir/--settings-path override
+# convention already used by scripts/install-hooks.sh.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+SRC_PROJECTS="$CLAUDE_DIR/projects"
+SRC_SHARED="$CLAUDE_DIR/shared-memory"
+DST="${BACKUP_DST_DIR:-$HOME/Dropbox/web-jam-llms/claude-backup}"
 LOG="$DST/backup-log.txt"
 
 mkdir -p "$DST/projects" "$DST/shared-memory"
@@ -49,18 +56,36 @@ rclone sync "$SRC_SHARED" "$DST/shared-memory" \
 # Global Claude Code instructions. Not under any memory/ dir, so the loops above
 # miss it — but it carries durable cross-project rules and routing notes, so back
 # it up too. copyto (single file) keeps it flat at the backup root.
-rclone copyto "$HOME/.claude/CLAUDE.md" "$DST/CLAUDE.md"
+rclone copyto "$CLAUDE_DIR/CLAUDE.md" "$DST/CLAUDE.md"
 
 # Claude Code config (web-jam-tools#139). settings.json registers hooks and
 # carries Josh's permission strings — not version-controlled in the (public)
 # hooks/ repo dir for that reason, so this backup is its only copy outside
 # the laptop. keybindings.json is optional (only exists if Josh has
 # customized shortcuts). Kept in their own subdir, mirroring CLAUDE.md above.
+# web-jam-tools#304: settings.json can end up holding a credential-shaped
+# literal in permissions.allow — Claude Code persists an approved Bash
+# command VERBATIM, secret included, if one was ever passed as a literal
+# argument (the actual 2026-05-22 incident: a live Gemini API key sat here
+# for ~2 months, replicated to Dropbox by this very script twice daily).
+# Refuse to copy settings.json in that state rather than faithfully
+# replicating a leak on a schedule; everything else in this script still
+# runs. Reuses scripts/scan-settings-for-secrets.sh (exit 1 = found) so this
+# guard and the standalone scanner never disagree about what counts as a
+# "credential-shaped literal" — never prints the matched value, only its
+# shape name.
 mkdir -p "$DST/claude-config"
-rclone copyto "$HOME/.claude/settings.json" "$DST/claude-config/settings.json"
-rclone copyto "$HOME/.claude/CLAUDE.md" "$DST/claude-config/CLAUDE.md"
-if [ -f "$HOME/.claude/keybindings.json" ]; then
-    rclone copyto "$HOME/.claude/keybindings.json" "$DST/claude-config/keybindings.json"
+if [ -f "$CLAUDE_DIR/settings.json" ]; then
+  if scan_warning=$(CLAUDE_SETTINGS_PATH="$CLAUDE_DIR/settings.json" "$REPO_DIR/scripts/scan-settings-for-secrets.sh" 2>&1 >/dev/null); then
+    rclone copyto "$CLAUDE_DIR/settings.json" "$DST/claude-config/settings.json"
+  else
+    echo "$(ts) REFUSED settings.json backup: credential-shaped literal found in permissions (web-jam-tools#304). Run scripts/scan-settings-for-secrets.sh, remove the entry, and rotate the credential." | tee -a "$LOG" >&2
+    echo "$scan_warning" >&2
+  fi
+fi
+rclone copyto "$CLAUDE_DIR/CLAUDE.md" "$DST/claude-config/CLAUDE.md"
+if [ -f "$CLAUDE_DIR/keybindings.json" ]; then
+    rclone copyto "$CLAUDE_DIR/keybindings.json" "$DST/claude-config/keybindings.json"
 fi
 
 # Append-only log (Dropbox revisions handle the per-run audit trail).
