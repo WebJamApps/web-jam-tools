@@ -193,15 +193,15 @@ Deno.test("wires an Edit|Write matcher (feature-branch-guard.sh's matcher)", asy
   });
 });
 
-Deno.test("wires the gmail gate's matcher EXACTLY as-is (mcp__gmail__.*)", async () => {
+Deno.test("wires the gmail gate's matcher EXACTLY as-is (mcp__(gmail|claude_ai_Gmail)__.*)", async () => {
   await withTempSettings(undefined, async (path) => {
     const res = await runMerge(path, [
       "--pre-tool-use",
-      "mcp__gmail__.*::$HOME/.claude/hooks/haiku-only-gmail-gate.sh",
+      "mcp__(gmail|claude_ai_Gmail)__.*::$HOME/.claude/hooks/haiku-only-gmail-gate.sh",
     ]);
     assertEquals(res.code, 0, res.stderr);
     const data = await readJson(path);
-    assertEquals(data.hooks.PreToolUse[0].matcher, "mcp__gmail__.*");
+    assertEquals(data.hooks.PreToolUse[0].matcher, "mcp__(gmail|claude_ai_Gmail)__.*");
     assertEquals(
       data.hooks.PreToolUse[0].hooks[0].command,
       "$HOME/.claude/hooks/haiku-only-gmail-gate.sh",
@@ -245,12 +245,12 @@ Deno.test("different matchers get separate PreToolUse entries", async () => {
       "--pre-tool-use",
       "Bash::$HOME/.claude/hooks/a.sh",
       "Edit|Write::$HOME/.claude/hooks/feature-branch-guard.sh",
-      "mcp__gmail__.*::$HOME/.claude/hooks/haiku-only-gmail-gate.sh",
+      "mcp__(gmail|claude_ai_Gmail)__.*::$HOME/.claude/hooks/haiku-only-gmail-gate.sh",
     ]);
     assertEquals(res.code, 0, res.stderr);
     const data = await readJson(path);
     const matchers = data.hooks.PreToolUse.map((e: HookEntry) => e.matcher).sort();
-    assertEquals(matchers, ["Bash", "Edit|Write", "mcp__gmail__.*"]);
+    assertEquals(matchers, ["Bash", "Edit|Write", "mcp__(gmail|claude_ai_Gmail)__.*"]);
   });
 });
 
