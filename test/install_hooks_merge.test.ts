@@ -96,6 +96,84 @@ Deno.test("merge into a nonexistent settings.json creates it with SessionStart +
   });
 });
 
+// --- Stop hooks (web-jam-tools#290): flat, no-matcher shape like SessionStart ---
+
+Deno.test("merges a --stop hook into hooks.Stop as a flat, no-matcher entry", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--stop",
+      "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    const data = await readJson(path);
+    assertEquals(data.hooks.Stop, [
+      {
+        hooks: [
+          { type: "command", command: "$HOME/.claude/hooks/opus-no-delegation-warning.sh" },
+        ],
+      },
+    ]);
+  });
+});
+
+Deno.test("re-running with the same --stop hook does not duplicate it", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const args = ["--stop", "$HOME/.claude/hooks/opus-no-delegation-warning.sh"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+    const data = await readJson(path);
+    assertEquals(data.hooks.Stop?.length, 1);
+    assertEquals(data.hooks.Stop?.[0].hooks.length, 1);
+  });
+});
+
+Deno.test("a pre-existing Stop hook (not installer-managed) is preserved when a new --stop hook is added", async () => {
+  await withTempSettings(
+    {
+      hooks: {
+        Stop: [{ hooks: [{ type: "command", command: "some-other-stop-hook.sh" }] }],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--stop",
+        "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+      const data = await readJson(path);
+      assertEquals(data.hooks.Stop?.length, 2);
+      assertEquals(data.hooks.Stop?.[0].hooks[0].command, "some-other-stop-hook.sh");
+      assertEquals(
+        data.hooks.Stop?.[1].hooks[0].command,
+        "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+      );
+    },
+  );
+});
+
+Deno.test("--stop, --pre-tool-use and SessionStart all merge together in one invocation", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "$HOME/.claude/hooks/notes-sync-reminder.sh",
+      "--stop",
+      "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+      "--pre-tool-use",
+      "Bash::$HOME/.claude/hooks/block-secret-dumps.sh",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    const data = await readJson(path);
+    assertEquals(data.hooks.SessionStart.length, 1);
+    assertEquals(data.hooks.Stop?.length, 1);
+    assertEquals(data.hooks.PreToolUse.length, 1);
+  });
+});
+
 // --- Arbitrary matchers (the point of web-jam-tools#265) ---
 
 Deno.test("wires an Edit|Write matcher (feature-branch-guard.sh's matcher)", async () => {
