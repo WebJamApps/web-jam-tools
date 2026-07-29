@@ -64,6 +64,12 @@ FORCE=0
 # of the hooks already wired into settings.json).
 SESSION_START_HOOKS=(notes-sync-reminder.sh)
 
+# Stop hooks this installer keeps registered in settings.json (web-jam-tools#290).
+# Same flat, no-matcher shape as SESSION_START_HOOKS — Stop fires
+# unconditionally at the end of a turn, same as SessionStart fires
+# unconditionally at the start of a session.
+STOP_HOOKS=(opus-no-delegation-warning.sh)
+
 # PreToolUse hooks this installer keeps registered in settings.json, as
 # "<matcher>::<script>" pairs (web-jam-tools#265 — generalized from a
 # Bash-only array so a hook can be wired to ANY PreToolUse matcher, not just
@@ -161,13 +167,21 @@ for src in "$HOOKS_SRC"/*.sh; do
   fi
 done
 
-# --- Merge SESSION_START_HOOKS and PRE_TOOL_USE_HOOKS into settings.json (idempotent) ---
+# --- Merge SESSION_START_HOOKS, STOP_HOOKS and PRE_TOOL_USE_HOOKS into settings.json (idempotent) ---
 merge_session_start_args=()
 for name in "${SESSION_START_HOOKS[@]}"; do
   [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in SESSION_START_HOOKS)" >&2; exit 1; }
   # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
   # shell that runs the hook later, not by this installer (see header note).
   merge_session_start_args+=('$HOME/.claude/hooks/'"$name")
+done
+
+merge_stop_args=()
+for name in "${STOP_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in STOP_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_stop_args+=('$HOME/.claude/hooks/'"$name")
 done
 
 merge_pre_tool_use_args=()
@@ -196,4 +210,4 @@ for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
   merge_post_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
 done
 
-python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
+python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
