@@ -101,3 +101,41 @@ Deno.test("skills/ directory set exactly matches the pinned manifest", () => {
 Deno.test("hooks/*.sh file set exactly matches the pinned manifest", () => {
   assertExactSet(listHookScripts(), EXPECTED_HOOK_SCRIPTS, "hooks/*.sh files");
 });
+
+// web-jam-tools#285 — a hook could ship with no behaviour test and the gate
+// stayed green (hooks/block-dangerous-git-deploy.sh ran unguarded for six
+// weeks with zero tests). This asserts every hooks/*.sh has a corresponding
+// test/<hook_name_underscored>_hook.test.ts, the convention the five hooks
+// tested before #285 already follow. Hooks are enumerated dynamically via
+// listHookScripts() (not a hardcoded list) so this assertion needs no edit
+// when a hook is added/removed elsewhere — it only cares that whatever is on
+// disk right now has a matching test file.
+
+function expectedTestFileFor(hookScript: string): string {
+  const base = hookScript.replace(/\.sh$/, "").replace(/-/g, "_");
+  return `${base}_hook.test.ts`;
+}
+
+function testFileExists(name: string): boolean {
+  try {
+    Deno.statSync(new URL(`./${name}`, import.meta.url));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+Deno.test("every hooks/*.sh has a corresponding behaviour test", () => {
+  const missing = listHookScripts()
+    .map((hook) => ({ hook, testFile: expectedTestFileFor(hook) }))
+    .filter(({ testFile }) => !testFileExists(testFile))
+    .map(({ hook, testFile }) => `  hooks/${hook} -> expected test/${testFile} (missing)`);
+
+  assert(
+    missing.length === 0,
+    "Every hooks/*.sh needs a behaviour test named test/<hook_name_underscored>_hook.test.ts " +
+      "(web-jam-tools#285 — a hook shipped with no test and the gate stayed green).\n" +
+      missing.join("\n") +
+      "\n  See test/block_agy_non_flash_model_hook.test.ts for the established pattern.",
+  );
+});
