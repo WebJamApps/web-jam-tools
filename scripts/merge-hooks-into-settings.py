@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """merge-hooks-into-settings.py — web-jam-tools#265
 
-Idempotently merges SessionStart and PreToolUse (any matcher) hook commands
-into a Claude Code settings.json. Pulled out of install-hooks.sh's old
-embedded heredoc into its own file so the merge logic can be unit-tested in
-isolation, against a fixture settings.json, WITHOUT ever running
-install-hooks.sh itself (which also symlinks hooks/*.sh into a real
-~/.claude/hooks — see web-jam-tools#273 for why that's dangerous to trigger
-outside a real install).
+Idempotently merges SessionStart, Stop, and PreToolUse/PostToolUse (any
+matcher) hook commands into a Claude Code settings.json. Pulled out of
+install-hooks.sh's old embedded heredoc into its own file so the merge logic
+can be unit-tested in isolation, against a fixture settings.json, WITHOUT
+ever running install-hooks.sh itself (which also symlinks hooks/*.sh into a
+real ~/.claude/hooks — see web-jam-tools#273 for why that's dangerous to
+trigger outside a real install).
 
 Usage:
     merge-hooks-into-settings.py SETTINGS_PATH -- SESSION_START_CMD... \\
-        --pre-tool-use "MATCHER::CMD"...
+        --stop STOP_CMD... \\
+        --pre-tool-use "MATCHER::CMD"... \\
+        --post-tool-use "MATCHER::CMD"...
+
+Stop hooks (web-jam-tools#290) are merged the same shape as SessionStart —
+a flat list, no matcher, deduped by command — since Stop fires unconditionally
+at the end of a turn, same as SessionStart fires unconditionally at the start
+of a session.
 
 Every other settings.json key (permissions, other hook events, etc.) is left
 untouched. Backs up settings.json to settings.json.bak-<date> immediately
@@ -27,6 +34,7 @@ import sys
 def merge(settings_path: str, args: list[str]) -> int:
     # Parse arguments: session_start_cmds -- "<matcher>::<cmd>" pairs
     session_start_cmds: list[str] = []
+    stop_cmds: list[str] = []
     pre_tool_use_pairs: list[tuple[str, str]] = []
 
     post_tool_use_pairs: list[tuple[str, str]] = []
@@ -35,10 +43,11 @@ def merge(settings_path: str, args: list[str]) -> int:
         sep_idx = args.index("--")
         rest = args[sep_idx + 1 :]
 
-        # Split the tail on the two optional section flags. Everything before
-        # --pre-tool-use is SessionStart; --post-tool-use (web-jam-tools#272)
-        # is parsed the same way as --pre-tool-use, so a PostToolUse output
-        # scanner can be installer-managed rather than hand-added.
+        # Split the tail on the optional section flags. Everything before the
+        # first recognized section flag is SessionStart; --stop
+        # (web-jam-tools#290), --pre-tool-use, and --post-tool-use
+        # (web-jam-tools#272) are each parsed as their own section so a hook
+        # can be wired to any of these events without a hand-edit.
         def _section(names: list[str], src: list[str]) -> tuple[list[str], dict]:
             idxs = {n: src.index(n) for n in names if n in src}
             first = min(idxs.values()) if idxs else len(src)
@@ -51,8 +60,9 @@ def merge(settings_path: str, args: list[str]) -> int:
             return head, sections
 
         session_start_cmds, sections = _section(
-            ["--pre-tool-use", "--post-tool-use"], rest
+            ["--stop", "--pre-tool-use", "--post-tool-use"], rest
         )
+        stop_cmds = list(sections.get("--stop", []))
         for pair in sections.get("--pre-tool-use", []):
             matcher, cmd = pair.split("::", 1)
             pre_tool_use_pairs.append((matcher, cmd))
@@ -74,23 +84,31 @@ def merge(settings_path: str, args: list[str]) -> int:
     else:
         data = {}
 
-    # Merge SessionStart hooks
     hooks = data.setdefault("hooks", {})
-    session_start = hooks.setdefault("SessionStart", [])
 
-    existing_session = set()
-    for entry in session_start:
-        for h in entry.get("hooks", []):
-            c = h.get("command")
-            if c:
-                existing_session.add(c)
+    # Merge a flat (no-matcher) hook event — SessionStart and Stop both fire
+    # unconditionally, so both are a plain list of {"hooks": [...]} entries,
+    # deduped by command, rather than the matcher-keyed shape PreToolUse/
+    # PostToolUse use below.
+    def merge_flat_hooks(kind: str, cmds: list[str]) -> list[str]:
+        bucket = hooks.setdefault(kind, [])
+        existing = set()
+        for entry in bucket:
+            for h in entry.get("hooks", []):
+                c = h.get("command")
+                if c:
+                    existing.add(c)
 
-    added_session = []
-    for cmd in session_start_cmds:
-        if cmd not in existing_session:
-            session_start.append({"hooks": [{"type": "command", "command": cmd}]})
-            existing_session.add(cmd)
-            added_session.append(cmd)
+        added: list[str] = []
+        for cmd in cmds:
+            if cmd not in existing:
+                bucket.append({"hooks": [{"type": "command", "command": cmd}]})
+                existing.add(cmd)
+                added.append(cmd)
+        return added
+
+    added_session = merge_flat_hooks("SessionStart", session_start_cmds)
+    added_stop = merge_flat_hooks("Stop", stop_cmds)
 
     # Merge PreToolUse hooks, keyed by matcher (web-jam-tools#265 —
     # generalized from a Bash-only merge so ANY PreToolUse matcher can be
@@ -125,10 +143,15 @@ def merge(settings_path: str, args: list[str]) -> int:
     added_pre_tool_use = merge_matcher_hooks("PreToolUse", pre_tool_use_pairs)
     added_post_tool_use = merge_matcher_hooks("PostToolUse", post_tool_use_pairs)
 
-    if not added_session and not added_pre_tool_use and not added_post_tool_use:
+    if (
+        not added_session
+        and not added_stop
+        and not added_pre_tool_use
+        and not added_post_tool_use
+    ):
         print(
-            "settings.json: SessionStart, PreToolUse and PostToolUse hooks "
-            "already up to date (no-op)"
+            "settings.json: SessionStart, Stop, PreToolUse and PostToolUse "
+            "hooks already up to date (no-op)"
         )
         return 0
 
@@ -145,6 +168,8 @@ def merge(settings_path: str, args: list[str]) -> int:
 
     for cmd in added_session:
         print(f"settings.json: added SessionStart hook {cmd}")
+    for cmd in added_stop:
+        print(f"settings.json: added Stop hook {cmd}")
     for matcher, cmd in added_pre_tool_use:
         print(f"settings.json: added PreToolUse hook ({matcher}) {cmd}")
     for matcher, cmd in added_post_tool_use:
