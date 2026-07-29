@@ -11,6 +11,17 @@
 // the --hooks-dir/--settings-path override convention in
 // scripts/install-hooks.sh.
 //
+// rclone itself is NOT installed on the CircleCI test image, so the real
+// binary is never invoked here — a stub `rclone` executable is put on PATH
+// instead. The stub logs every invocation's subcommand + args (unit-separator
+// delimited, one line per call) to a file this test controls, and always
+// exits 0. Asserting against that log is *stronger* than asserting against
+// real copied files: it proves the actual acceptance criterion from #304 —
+// no rclone invocation ever targets settings.json when it holds a
+// credential-shaped literal, while the other backup steps (CLAUDE.md,
+// shared-memory sync, ...) still run — rather than only checking the
+// script's own exit code.
+//
 // Every credential string is SYNTHETIC, assembled at runtime via string
 // concatenation so no complete credential-shaped literal sits in this file
 // at rest.
@@ -20,38 +31,72 @@ import { assertEquals } from "@std/assert";
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const SCRIPT_PATH = `${REPO_ROOT}scripts/backup-claude-memory.sh`;
 
+const ARG_SEP = ""; // unit separator — safe even if a path contains a space
+
 interface RunResult {
   code: number;
   stdout: string;
   stderr: string;
+  invocations: string[][]; // one entry per rclone call: [subcommand, ...args]
+}
+
+// Writes an executable `rclone` stub into binDir that appends every
+// invocation ($1 = subcommand, rest = args) to logPath and always exits 0 —
+// never touches the network or the real filesystem beyond that log.
+async function installRcloneStub(binDir: string, logPath: string): Promise<void> {
+  const stub = `#!/usr/bin/env bash
+{
+  printf '%s' "$1"
+  shift
+  for a in "$@"; do
+    printf '${ARG_SEP}%s' "$a"
+  done
+  printf '\\n'
+} >> "${logPath}"
+exit 0
+`;
+  const stubPath = `${binDir}/rclone`;
+  await Deno.writeTextFile(stubPath, stub);
+  await Deno.chmod(stubPath, 0o755);
+}
+
+async function readInvocations(logPath: string): Promise<string[][]> {
+  let content = "";
+  try {
+    content = await Deno.readTextFile(logPath);
+  } catch {
+    return []; // stub never ran (e.g. no calls at all) — treat as no invocations
+  }
+  return content
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => line.split(ARG_SEP));
 }
 
 async function runBackup(claudeDir: string, dstDir: string): Promise<RunResult> {
+  const binDir = await Deno.makeTempDir({ prefix: "wjt-rclone-stub-bin-" });
+  const logPath = `${binDir}/rclone-invocations.log`;
+  await installRcloneStub(binDir, logPath);
+
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
     env: {
       ...Deno.env.toObject(),
       CLAUDE_DIR: claudeDir,
       BACKUP_DST_DIR: dstDir,
+      PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
     },
     stdout: "piped",
     stderr: "piped",
   });
   const { code, stdout, stderr } = await cmd.output();
+  const invocations = await readInvocations(logPath);
   return {
     code,
     stdout: new TextDecoder().decode(stdout),
     stderr: new TextDecoder().decode(stderr),
+    invocations,
   };
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await Deno.stat(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function setUpFixtureClaudeDir(settingsContents: unknown): Promise<string> {
@@ -61,6 +106,14 @@ async function setUpFixtureClaudeDir(settingsContents: unknown): Promise<string>
   await Deno.writeTextFile(`${dir}/CLAUDE.md`, "# fixture\n");
   await Deno.writeTextFile(`${dir}/settings.json`, JSON.stringify(settingsContents));
   return dir;
+}
+
+function hasInvocation(
+  invocations: string[][],
+  subcommand: string,
+  mustIncludeArg: string,
+): boolean {
+  return invocations.some((inv) => inv[0] === subcommand && inv.includes(mustIncludeArg));
 }
 
 const FAKE_GOOGLE_KEY = "AIza" + "B".repeat(35);
@@ -76,8 +129,12 @@ Deno.test("refuses to copy settings.json containing a credential-shaped literal"
   const res = await runBackup(claudeDir, dstDir);
   assertEquals(res.code, 0, res.stderr); // the script itself still exits clean
 
-  if (await pathExists(`${dstDir}/claude-config/settings.json`)) {
-    throw new Error("settings.json was copied despite containing a credential-shaped literal");
+  if (hasInvocation(res.invocations, "copyto", `${claudeDir}/settings.json`)) {
+    throw new Error(
+      `rclone was invoked against settings.json despite it containing a credential-shaped literal: ${
+        JSON.stringify(res.invocations)
+      }`,
+    );
   }
   if (!res.stderr.includes("REFUSED settings.json backup")) {
     throw new Error(`expected a REFUSED message on stderr, got: ${res.stderr}`);
@@ -86,9 +143,21 @@ Deno.test("refuses to copy settings.json containing a credential-shaped literal"
     throw new Error("the backup script echoed the secret value back into stderr");
   }
 
-  // Everything else in the backup still ran.
-  if (!(await pathExists(`${dstDir}/claude-config/CLAUDE.md`))) {
-    throw new Error("CLAUDE.md backup should still have run alongside the refusal");
+  // Everything else in the backup still ran — the refusal is scoped to
+  // settings.json only.
+  if (!hasInvocation(res.invocations, "copyto", `${claudeDir}/CLAUDE.md`)) {
+    throw new Error(
+      `CLAUDE.md backup should still have run alongside the refusal, got: ${
+        JSON.stringify(res.invocations)
+      }`,
+    );
+  }
+  if (!res.invocations.some((inv) => inv[0] === "sync")) {
+    throw new Error(
+      `shared-memory sync should still have run alongside the refusal, got: ${
+        JSON.stringify(res.invocations)
+      }`,
+    );
   }
 });
 
@@ -101,8 +170,12 @@ Deno.test("copies settings.json normally when it has no credential-shaped litera
   const res = await runBackup(claudeDir, dstDir);
   assertEquals(res.code, 0, res.stderr);
 
-  if (!(await pathExists(`${dstDir}/claude-config/settings.json`))) {
-    throw new Error("settings.json should have been copied — it contains no credential literal");
+  if (!hasInvocation(res.invocations, "copyto", `${claudeDir}/settings.json`)) {
+    throw new Error(
+      `expected an rclone copyto of settings.json (no credential literal present), got: ${
+        JSON.stringify(res.invocations)
+      }`,
+    );
   }
   if (res.stderr.includes("REFUSED")) {
     throw new Error(`did not expect a refusal for a clean settings.json, got: ${res.stderr}`);
@@ -118,7 +191,15 @@ Deno.test("backup with no settings.json at all still completes cleanly", async (
 
   const res = await runBackup(claudeDir, dstDir);
   assertEquals(res.code, 0, res.stderr);
-  if (await pathExists(`${dstDir}/claude-config/settings.json`)) {
-    throw new Error("settings.json should not exist when there was no source file");
+
+  if (res.invocations.some((inv) => inv.some((arg) => arg.includes("settings.json")))) {
+    throw new Error(
+      `no rclone invocation should reference settings.json when there was no source file, got: ${
+        JSON.stringify(res.invocations)
+      }`,
+    );
+  }
+  if (!hasInvocation(res.invocations, "copyto", `${claudeDir}/CLAUDE.md`)) {
+    throw new Error("CLAUDE.md backup should still have run");
   }
 });
