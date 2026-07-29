@@ -9,6 +9,11 @@ ever running install-hooks.sh itself (which also symlinks hooks/*.sh into a
 real ~/.claude/hooks — see web-jam-tools#273 for why that's dangerous to
 trigger outside a real install).
 
+Prunes stale hook entries when a hook's matcher changes (web-jam-tools#293):
+when installing a hook with a new matcher, any existing entry for the same
+script (in any other matcher) is removed, keeping only one entry per managed
+hook script.
+
 Usage:
     merge-hooks-into-settings.py SETTINGS_PATH -- SESSION_START_CMD... \\
         --stop STOP_CMD... \\
@@ -116,6 +121,14 @@ def merge(settings_path: str, args: list[str]) -> int:
     # regex like "mcp__.*__issue_write"). Idempotent per (matcher, command)
     # pair: re-running never duplicates an entry, and an existing matcher
     # entry with unrelated commands is left alone.
+    #
+    # web-jam-tools#293: prunes stale entries when a hook's matcher changes.
+    # When installing (matcher, cmd), any existing entry for the same script
+    # path in other matchers is removed, keeping only one entry per script.
+    def extract_script_path(cmd: str) -> str:
+        """Extract the script path (first whitespace-separated token) from a command."""
+        return cmd.split()[0] if cmd else cmd
+
     def merge_matcher_hooks(kind: str, pairs: list[tuple[str, str]]):
         bucket = hooks.setdefault(kind, [])
         matcher_entries = {}
@@ -124,8 +137,16 @@ def merge(settings_path: str, args: list[str]) -> int:
             if m is not None:
                 matcher_entries[m] = entry
 
+        # Build a set of script paths being installed this run.
+        scripts_being_installed = set()
+        for _matcher, cmd in pairs:
+            scripts_being_installed.add(extract_script_path(cmd))
+
         added: list[tuple[str, str]] = []
+        pruned: list[tuple[str, str]] = []  # (script_path, old_matcher)
+
         for matcher, cmd in pairs:
+            script_path = extract_script_path(cmd)
             entry = matcher_entries.get(matcher)
             if entry is None:
                 entry = {"matcher": matcher, "hooks": []}
@@ -138,16 +159,40 @@ def merge(settings_path: str, args: list[str]) -> int:
             if cmd not in existing:
                 entry["hooks"].append({"type": "command", "command": cmd})
                 added.append((matcher, cmd))
-        return added
 
-    added_pre_tool_use = merge_matcher_hooks("PreToolUse", pre_tool_use_pairs)
-    added_post_tool_use = merge_matcher_hooks("PostToolUse", post_tool_use_pairs)
+            # Prune this script from any other matcher (web-jam-tools#293).
+            # Only prune scripts that are being installed this run (conservative).
+            for other_matcher, other_entry in list(matcher_entries.items()):
+                if other_matcher == matcher:
+                    continue
+                other_hooks = other_entry.get("hooks", [])
+                remaining = []
+                for h in other_hooks:
+                    h_cmd = h.get("command")
+                    if h_cmd and extract_script_path(h_cmd) == script_path:
+                        # This hook has the same script path; prune it.
+                        pruned.append((script_path, other_matcher))
+                    else:
+                        remaining.append(h)
+                other_entry["hooks"] = remaining
+
+                # Delete the entry if it's now empty.
+                if not remaining:
+                    bucket.remove(other_entry)
+                    del matcher_entries[other_matcher]
+
+        return added, pruned
+
+    added_pre_tool_use, pruned_pre_tool_use = merge_matcher_hooks("PreToolUse", pre_tool_use_pairs)
+    added_post_tool_use, pruned_post_tool_use = merge_matcher_hooks("PostToolUse", post_tool_use_pairs)
 
     if (
         not added_session
         and not added_stop
         and not added_pre_tool_use
         and not added_post_tool_use
+        and not pruned_pre_tool_use
+        and not pruned_post_tool_use
     ):
         print(
             "settings.json: SessionStart, Stop, PreToolUse and PostToolUse "
@@ -174,6 +219,10 @@ def merge(settings_path: str, args: list[str]) -> int:
         print(f"settings.json: added PreToolUse hook ({matcher}) {cmd}")
     for matcher, cmd in added_post_tool_use:
         print(f"settings.json: added PostToolUse hook ({matcher}) {cmd}")
+    for script_path, old_matcher in pruned_pre_tool_use:
+        print(f"settings.json: PreToolUse {script_path}: replaced stale matcher ({old_matcher})")
+    for script_path, old_matcher in pruned_post_tool_use:
+        print(f"settings.json: PostToolUse {script_path}: replaced stale matcher ({old_matcher})")
     return 0
 
 
