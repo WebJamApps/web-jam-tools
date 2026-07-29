@@ -81,6 +81,7 @@ STOP_HOOKS=(opus-no-delegation-warning.sh)
 PRE_TOOL_USE_HOOKS=(
   "Bash::semver-push-reminder.sh"
   "Bash::block-secret-dumps.sh"
+  "Bash::block-secret-literals.sh"
   "Bash::block-dangerous-git-deploy.sh"
   "Bash::authorization-check.sh"
   "Bash::fmt-push-guard.sh"
