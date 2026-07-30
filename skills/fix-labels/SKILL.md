@@ -101,7 +101,7 @@ name** — see the design amendment on web-jam-tools#287 "fix-labels skill expan
 (2026-07-29). Canonical topics currently in use, per `labels.yaml`'s `milestoneTopics:` (see that
 file for the current values — not restated here):
 
-- `gig-outreach` — JaMmusic, web-jam-back, web-jam-tools.
+- `gig-outreach` — JaMmusic, web-jam-back, web-jam-tools, WebJamSocketCluster.
 - `backup-restore` — web-jam-tools.
 - `timshermanmusic` — web-jam-back, JaMmusic, WebJamSocketCluster.
 
