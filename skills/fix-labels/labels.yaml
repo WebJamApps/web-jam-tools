@@ -1,4 +1,4 @@
-# labels.yaml — web-jam-tools#263
+# labels.yaml — web-jam-tools#263, pruned per web-jam-tools#300
 #
 # Single source of truth for the canonical GitHub label schema enforced by
 # /fix-labels across the 8 active WebJamApps repos. Parsed by
@@ -9,6 +9,12 @@
 # Hand-edit this file when canon changes (new label, recolor, rescope, a new
 # `keep:` veto). Every top-level shape below is asserted by
 # test/fix_labels_diff.test.ts.
+#
+# web-jam-tools#300 pruned priority labels (-> native `Priority` issue
+# field), topic labels (-> per-repo milestones, see `milestoneTopics:`
+# below), `bug`/`enhancement` (-> native issue Types), and `blocked` (->
+# native issue dependencies). Deleting the now-orphaned labels from GitHub
+# itself is a separate, deliberate step — web-jam-tools#299 — not done here.
 
 # Named repo groups, referenced by the `repos:` field on each label below.
 # `all` is not listed here — it is computed in code as frontend + other.
@@ -63,6 +69,10 @@ labels:
     # DELETE-PROTECTION ONLY (Josh, 2026-07-25): missing -> still propose
     # create; wrong color -> still propose recolor. It is just never a
     # delete/wrong-repo-removal candidate, in any repo.
+    # web-jam-tools#300: NOT one of the four prune categories (priority /
+    # topic / bug+enhancement / blocked-family), and NOT explicitly named in
+    # that issue's "Keep" list either — ambiguous, so left in place
+    # conservatively. Flagged in that issue's closing report for Josh.
     neverDelete: true
 
   # --- Model-tier — front-end 5 repos ONLY ---
@@ -74,31 +84,14 @@ labels:
     hex: "E67E22"
     repos: frontend
     modelTier: true
-
-  # --- Priority — all 8 repos (title case) ---
-  - name: Top Priority
-    hex: "000000"
-    repos: all
-    # All-caps variant seen in JaMmusic / web-jam-back.
-    aliases:
-      - "TOP PRIORITY"
-  - name: High Priority
-    hex: "E8590C"
-    repos: all
-    # Bare variant seen in web-jam-tools.
-    aliases:
-      - "High"
-  - name: Low Priority
-    hex: "FFEC99"
-    repos: all
-    # Bare variant seen in web-jam-tools.
-    aliases:
-      - "Low"
+  - name: Flash Low
+    hex: "FEF2C0"
+    repos: frontend
+    modelTier: true
 
   # --- Status — all 8 repos ---
-  - name: blocked
-    hex: "E11D21"
-    repos: all
+  # `parked` and `Josh` are NOT priority/topic/type/dependency labels, so
+  # they are outside every web-jam-tools#300 prune category and are kept.
   - name: parked
     hex: "C2C2C2"
     repos: all
@@ -110,26 +103,46 @@ labels:
     # purchase, a physical action). Its purpose is to make his manual to-dos
     # findable in GitHub instead of being lost as a footnote in a chat session.
 
-  # --- gig-outreach — 4 booking-epic repos ONLY ---
+# --- Canonical topic milestones (web-jam-tools#300) ---
+#
+# Topic labels (formerly `gig-outreach` above, plus the `backup-restore`
+# `keep:` entry) are replaced by per-repo MILESTONES, not a native issue
+# field — see the design amendment on web-jam-tools#287 "fix-labels skill
+# expanded / corrected" (2026-07-29): no custom field renders when unset, so
+# none is writable by Josh by hand; milestones are the only surface that is
+# both always-visible-when-unset and writable in the GitHub UI.
+#
+# Cross-repo topic matching is by EXACT milestone name — a typo or a missing
+# milestone silently splits or hides a topic. src/fix-labels/milestone-diff.ts
+# (`deno task fix-labels:milestone-diff`) diffs each listed repo's actual
+# milestones against this list, per repo: missing / misspelled (typo or
+# case-variant, proposed as a rename) / non-canonical (not on this list at
+# all, or a canonical name present in a repo not listed below).
+milestoneTopics:
   - name: gig-outreach
-    hex: "006B75"
-    repos: gigOutreach
-
-  # --- GitHub defaults — all 8 repos (only these two are kept) ---
-  - name: bug
-    hex: "D73A4A"
-    repos: all
-  - name: enhancement
-    hex: "A2EEEF"
-    repos: all
+    repos:
+      - JaMmusic
+      - web-jam-back
+      - web-jam-tools
+  - name: backup-restore
+    repos:
+      - web-jam-tools
 
 # Per-repo list of non-canonical label names that are explicitly preserved
 # and must NEVER be proposed for delete, even though they're not on the
-# `labels:` master list above. Seeded with the two Josh vetoed on the
-# 2026-07-25 run — without this, every future run re-proposes them and Josh
-# has to veto them again forever.
+# `labels:` master list above.
+#
+# web-jam-tools#300: `backup-restore` (web-jam-tools) was removed from this
+# list — it is a topic label with a working milestone replacement (see
+# `milestoneTopics:` above), so it is no longer a delete-protected keeper;
+# it will surface as an ordinary non-canonical delete candidate for
+# web-jam-tools#299 "Delete replaced labels org-wide, after migration".
+#
+# `timshermanmusic` (web-jam-back) is left AS-IS: it is not on the canonical
+# topics list above (only `gig-outreach` / `backup-restore` are), so it is
+# ambiguous whether it should migrate to a milestone too or stay a label for
+# an unrelated reason — flagged for Josh in the web-jam-tools#300 closing
+# report rather than decided here.
 keep:
   web-jam-back:
     - timshermanmusic
-  web-jam-tools:
-    - backup-restore
