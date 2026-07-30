@@ -176,11 +176,14 @@ export async function fetchActualMilestones(
   repo: string,
   runner: CommandRunner = runGhCommand,
 ): Promise<ActualMilestone[]> {
+  // `state` MUST travel in the query string, not as a `-f` form field: `gh api`
+  // treats any request carrying form fields as a POST, so `-f state=all` tried
+  // to CREATE a milestone and GitHub rejected it with HTTP 422 ("all is not a
+  // member of [open, closed]" / "title wasn't supplied"). That made this scan —
+  // and therefore the whole milestone half of /fix-labels — fail every run.
   const out = await runGh([
     "api",
-    `repos/WebJamApps/${repo}/milestones`,
-    "-f",
-    "state=all",
+    `repos/WebJamApps/${repo}/milestones?state=all`,
     "--paginate",
   ], runner);
   const parsed = JSON.parse(out) as Array<{ title: string; number: number; state: string }>;
