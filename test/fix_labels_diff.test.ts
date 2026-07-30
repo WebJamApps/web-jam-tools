@@ -260,7 +260,12 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "timshermanmusic",
   ]);
   const gigOutreachTopic = schema.milestoneTopics.find((t) => t.name === "gig-outreach");
-  assertEquals(gigOutreachTopic?.repos, ["JaMmusic", "web-jam-back", "web-jam-tools"]);
+  assertEquals(gigOutreachTopic?.repos, [
+    "JaMmusic",
+    "web-jam-back",
+    "web-jam-tools",
+    "WebJamSocketCluster",
+  ]);
   const backupRestoreTopic = schema.milestoneTopics.find((t) => t.name === "backup-restore");
   assertEquals(backupRestoreTopic?.repos, ["web-jam-tools"]);
   const timShermanMusicTopic = schema.milestoneTopics.find((t) => t.name === "timshermanmusic");
