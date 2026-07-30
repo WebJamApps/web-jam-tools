@@ -2,11 +2,12 @@
 """merge-hooks-into-settings.py — web-jam-tools#265
 
 Idempotently merges SessionStart, Stop, and PreToolUse/PostToolUse (any
-matcher) hook commands into a Claude Code settings.json. Pulled out of
-install-hooks.sh's old embedded heredoc into its own file so the merge logic
-can be unit-tested in isolation, against a fixture settings.json, WITHOUT
-ever running install-hooks.sh itself (which also symlinks hooks/*.sh into a
-real ~/.claude/hooks — see web-jam-tools#273 for why that's dangerous to
+matcher) hook commands, plus a flat list of `permissions.deny` patterns,
+into a Claude Code settings.json. Pulled out of install-hooks.sh's old
+embedded heredoc into its own file so the merge logic can be unit-tested
+in isolation, against a fixture settings.json, WITHOUT ever running
+install-hooks.sh itself (which also symlinks hooks/*.sh into a real
+~/.claude/hooks — see web-jam-tools#273 for why that's dangerous to
 trigger outside a real install).
 
 Prunes stale hook entries when a hook's matcher changes (web-jam-tools#293):
@@ -18,16 +19,24 @@ Usage:
     merge-hooks-into-settings.py SETTINGS_PATH -- SESSION_START_CMD... \\
         --stop STOP_CMD... \\
         --pre-tool-use "MATCHER::CMD"... \\
-        --post-tool-use "MATCHER::CMD"...
+        --post-tool-use "MATCHER::CMD"... \\
+        --deny "PATTERN"...
 
 Stop hooks (web-jam-tools#290) are merged the same shape as SessionStart —
 a flat list, no matcher, deduped by command — since Stop fires unconditionally
 at the end of a turn, same as SessionStart fires unconditionally at the start
 of a session.
 
-Every other settings.json key (permissions, other hook events, etc.) is left
-untouched. Backs up settings.json to settings.json.bak-<date> immediately
-before any write, and only if a write is actually happening.
+--deny (web-jam-tools#308) merges a flat list of Bash permission-pattern
+strings into permissions.deny, deduped by exact string, appended in order.
+It is PURELY ADDITIVE: permissions.allow and permissions.ask are never read
+or written, and any pre-existing permissions.deny entries (hand-added or
+from a previous run) are kept, never reordered or removed.
+
+Every other settings.json key (permissions.allow, permissions.ask, other
+hook events, etc.) is left untouched. Backs up settings.json to
+settings.json.bak-<date> immediately before any write, and only if a write
+is actually happening.
 """
 import datetime
 import json
@@ -43,6 +52,7 @@ def merge(settings_path: str, args: list[str]) -> int:
     pre_tool_use_pairs: list[tuple[str, str]] = []
 
     post_tool_use_pairs: list[tuple[str, str]] = []
+    deny_patterns: list[str] = []
 
     if "--" in args:
         sep_idx = args.index("--")
@@ -50,9 +60,10 @@ def merge(settings_path: str, args: list[str]) -> int:
 
         # Split the tail on the optional section flags. Everything before the
         # first recognized section flag is SessionStart; --stop
-        # (web-jam-tools#290), --pre-tool-use, and --post-tool-use
-        # (web-jam-tools#272) are each parsed as their own section so a hook
-        # can be wired to any of these events without a hand-edit.
+        # (web-jam-tools#290), --pre-tool-use, --post-tool-use
+        # (web-jam-tools#272), and --deny (web-jam-tools#308) are each parsed
+        # as their own section so a hook or deny pattern can be wired without
+        # a hand-edit.
         def _section(names: list[str], src: list[str]) -> tuple[list[str], dict]:
             idxs = {n: src.index(n) for n in names if n in src}
             first = min(idxs.values()) if idxs else len(src)
@@ -65,7 +76,7 @@ def merge(settings_path: str, args: list[str]) -> int:
             return head, sections
 
         session_start_cmds, sections = _section(
-            ["--stop", "--pre-tool-use", "--post-tool-use"], rest
+            ["--stop", "--pre-tool-use", "--post-tool-use", "--deny"], rest
         )
         stop_cmds = list(sections.get("--stop", []))
         for pair in sections.get("--pre-tool-use", []):
@@ -74,6 +85,7 @@ def merge(settings_path: str, args: list[str]) -> int:
         for pair in sections.get("--post-tool-use", []):
             matcher, cmd = pair.split("::", 1)
             post_tool_use_pairs.append((matcher, cmd))
+        deny_patterns = list(sections.get("--deny", []))
 
     if os.path.exists(settings_path):
         with open(settings_path) as f:
@@ -186,6 +198,31 @@ def merge(settings_path: str, args: list[str]) -> int:
     added_pre_tool_use, pruned_pre_tool_use = merge_matcher_hooks("PreToolUse", pre_tool_use_pairs)
     added_post_tool_use, pruned_post_tool_use = merge_matcher_hooks("PostToolUse", post_tool_use_pairs)
 
+    # Merge permissions.deny (web-jam-tools#308): a flat list of Bash
+    # permission-pattern strings, deduped by exact string, appended in
+    # order. PURELY ADDITIVE — permissions.allow and permissions.ask are
+    # never touched, and any pre-existing permissions.deny entries (hand-
+    # added, or from a previous run) are kept exactly as-is: this only ever
+    # appends new entries, never reorders or removes existing ones.
+    def merge_deny(patterns: list[str]) -> list[str]:
+        if not patterns:
+            # Nothing to add: don't even touch/create the "permissions" or
+            # "deny" keys — a settings.json with no permissions.deny key at
+            # all must stay that way when this run carries no --deny args.
+            return []
+        permissions = data.setdefault("permissions", {})
+        deny_list = permissions.setdefault("deny", [])
+        existing = set(deny_list)
+        added: list[str] = []
+        for pattern in patterns:
+            if pattern not in existing:
+                deny_list.append(pattern)
+                existing.add(pattern)
+                added.append(pattern)
+        return added
+
+    added_deny = merge_deny(deny_patterns)
+
     if (
         not added_session
         and not added_stop
@@ -193,10 +230,11 @@ def merge(settings_path: str, args: list[str]) -> int:
         and not added_post_tool_use
         and not pruned_pre_tool_use
         and not pruned_post_tool_use
+        and not added_deny
     ):
         print(
-            "settings.json: SessionStart, Stop, PreToolUse and PostToolUse "
-            "hooks already up to date (no-op)"
+            "settings.json: SessionStart, Stop, PreToolUse, PostToolUse hooks "
+            "and permissions.deny already up to date (no-op)"
         )
         return 0
 
@@ -223,6 +261,8 @@ def merge(settings_path: str, args: list[str]) -> int:
         print(f"settings.json: PreToolUse {script_path}: replaced stale matcher ({old_matcher})")
     for script_path, old_matcher in pruned_post_tool_use:
         print(f"settings.json: PostToolUse {script_path}: replaced stale matcher ({old_matcher})")
+    for pattern in added_deny:
+        print(f"settings.json: added permissions.deny rule {pattern}")
     return 0
 
 

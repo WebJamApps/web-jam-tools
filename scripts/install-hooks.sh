@@ -6,21 +6,29 @@
 #    file is backed up (never deleted) to ~/.claude/hooks/<name>.bak-<date>.
 #
 # 2. Idempotently merges the SessionStart hook(s) listed in
-#    SESSION_START_HOOKS, and the PreToolUse hook(s) (any matcher) listed in
-#    PRE_TOOL_USE_HOOKS, below into ~/.claude/settings.json (only adding
-#    entries that aren't already there; every other key — permissions,
-#    other hook events, etc. — is left untouched). settings.json is backed
-#    up to settings.json.bak-<date> immediately before any write, and only
-#    if a write is actually happening.
+#    SESSION_START_HOOKS, the PreToolUse hook(s) (any matcher) listed in
+#    PRE_TOOL_USE_HOOKS, and the permissions.deny patterns listed in
+#    DENY_RULES, below into ~/.claude/settings.json (only adding entries
+#    that aren't already there; every other key — permissions.allow,
+#    permissions.ask, other hook events, etc. — is left untouched).
+#    settings.json is backed up to settings.json.bak-<date> immediately
+#    before any write, and only if a write is actually happening.
 #
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
-# scripts/backup-claude-memory.sh). SESSION_START_HOOKS / PRE_TOOL_USE_HOOKS
-# below are the hooks THIS script keeps registered automatically; add a new
-# hook's script name (+ matcher, for PreToolUse) there and re-run to wire it
-# up with no manual settings edit (web-jam-tools#163; PreToolUse matcher
-# generalization web-jam-tools#265).
+# scripts/backup-claude-memory.sh). SESSION_START_HOOKS / PRE_TOOL_USE_HOOKS /
+# DENY_RULES below are the hooks and deny patterns THIS script keeps
+# registered automatically; add a new hook's script name (+ matcher, for
+# PreToolUse) or a new deny pattern there and re-run to wire it up with no
+# manual settings edit (web-jam-tools#163; PreToolUse matcher generalization
+# web-jam-tools#265; DENY_RULES web-jam-tools#308).
+#
+# DENY_RULES is purely additive and versioned here so the same deny patterns
+# are both checked into the repo AND live on this laptop's real
+# ~/.claude/settings.json — it never touches permissions.allow/ask, and
+# never removes or reorders any existing permissions.deny entry (hand-added
+# or from a previous run).
 #
 # Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--force]
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
@@ -98,6 +106,68 @@ PRE_TOOL_USE_HOOKS=(
 # it does not depend on knowing how the value got printed.
 POST_TOOL_USE_HOOKS=(
   "Bash::scan-output-for-secrets.sh"
+)
+
+# permissions.deny patterns this installer keeps registered in settings.json
+# (web-jam-tools#308). A PreToolUse hook can only be *advisory* — it injects
+# text into the agent's context and lets the command run — so it cannot
+# stop a destructive command an agent has rationalized past. A deny rule is
+# a genuine, deterministic refusal by the harness itself: the tool call is
+# never attempted. These specifically block the ways `git push`/`git branch`
+# can delete or clobber a REMOTE ref (deleting a remote branch is never
+# something an agent should do without Josh explicitly naming that branch —
+# see docs/cross-ai-rules.md's OPERATIONAL HARD RULES). Local branch
+# cleanup (`git branch -d/-D` on a local ref, `git fetch --prune`) is
+# UNAFFECTED by any of these patterns and remains permitted.
+#
+# Written in Claude Code's Bash permission-pattern syntax (see
+# https://code.claude.com/docs/en/permissions): a bare `*` matches any
+# sequence of characters including spaces and can appear at any position;
+# `word *` (space before the trailing `*`) requires `word` to be followed by
+# a space or end-of-string, so both "flag right after `git push`" and "flag
+# after other args" need their own entries, as do "flag mid-command" and
+# "flag as the last token" — hence several variants per flag below. Deny
+# always wins over any matching allow rule, so these hold even if a broader
+# `git push` allow rule exists.
+DENY_RULES=(
+  # git push --delete / -d <branch>  (explicit remote branch deletion)
+  'Bash(git push --delete *)'
+  'Bash(git push --delete)'
+  'Bash(git push * --delete *)'
+  'Bash(git push * --delete)'
+  'Bash(git push -d *)'
+  'Bash(git push -d)'
+  'Bash(git push * -d *)'
+  'Bash(git push * -d)'
+
+  # git push <remote> :<branch>  (empty-source colon refspec — also deletes)
+  'Bash(git push * :*)'
+
+  # git push --force / -f / --force-with-lease
+  'Bash(git push --force *)'
+  'Bash(git push --force)'
+  'Bash(git push * --force *)'
+  'Bash(git push * --force)'
+  'Bash(git push -f *)'
+  'Bash(git push -f)'
+  'Bash(git push * -f *)'
+  'Bash(git push * -f)'
+  'Bash(git push --force-with-lease*)'
+  'Bash(git push * --force-with-lease*)'
+
+  # git branch -D / --delete --force against a remotes/ ref (local ref
+  # deletion of a REMOTE-tracking branch is out of scope of the local
+  # cleanup allowance; plain local branches are untouched by this pattern)
+  'Bash(git branch -D remotes/*)'
+  'Bash(git branch * -D remotes/*)'
+  'Bash(git branch --delete --force remotes/*)'
+  'Bash(git branch * --delete --force remotes/*)'
+
+  # git push --mirror / --prune (both can delete remote refs wholesale)
+  'Bash(git push --mirror*)'
+  'Bash(git push * --mirror*)'
+  'Bash(git push --prune*)'
+  'Bash(git push * --prune*)'
 )
 
 while [ $# -gt 0 ]; do
@@ -211,4 +281,6 @@ for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
   merge_post_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
 done
 
-python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
+merge_deny_args=("${DENY_RULES[@]}")
+
+python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}"
