@@ -1,16 +1,25 @@
 ---
 name: fix-labels
-description: Recurring GitHub issue-label drift-detector across the 8 active WebJamApps repos. Computes drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports "no changes"; re-run anytime to catch drift that accumulates over time.
+description: Recurring GitHub issue-label AND topic-milestone drift-detector across the active WebJamApps repos. Computes label drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, and milestone-name drift (missing / misspelled / non-canonical) the same way (`deno task fix-labels:milestone-diff`). Waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports "no changes"; re-run anytime to catch drift that accumulates over time.
 ---
 
-# fix-labels — canonical GitHub label drift-detector
+# fix-labels — canonical GitHub label + topic-milestone drift-detector
 
-A **recurring** drift-detector, not a one-time cleanup. Every run computes each repo's drift
-against `labels.yaml` — in code, via `deno task fix-labels:diff`, not by eye — reports what has
-drifted (with blast radius on anything destructive), waits for Josh's per-item approval, then
-applies only the approved changes and re-scans to confirm the apply actually worked. A clean
-workspace reports "no changes." Re-run anytime — drift accumulates as repos pick up ad hoc labels
-between runs.
+A **recurring** drift-detector, not a one-time cleanup. Every run computes each repo's label drift
+against `labels.yaml` — in code, via `deno task fix-labels:diff`, not by eye — and each repo's
+topic-milestone drift the same way, via `deno task fix-labels:milestone-diff` (web-jam-tools#300).
+It reports what has drifted (with blast radius on anything destructive), waits for Josh's per-item
+approval, then applies only the approved changes and re-scans to confirm the apply actually
+worked. A clean workspace reports "no changes." Re-run anytime — drift accumulates as repos pick
+up ad hoc labels or milestones between runs.
+
+`web-jam-tools#300`: topic labels (`gig-outreach`, plus a `backup-restore` label kept by hand) were
+pruned from `labels.yaml` in favor of per-repo MILESTONES — see the design amendment on
+web-jam-tools#287 "fix-labels skill expanded / corrected" (2026-07-29). No custom GitHub issue
+field renders when it's unset, so none was ever a writable surface for Josh by hand; a milestone
+is the only surface that is both always-visible-when-unset and writable in the UI. Because
+cross-repo topic matching is by **exact milestone name**, a typo or a missing milestone silently
+splits or hides a topic — that's what `fix-labels:milestone-diff` guards against.
 
 `web-jam-tools#263`: an earlier version of this skill asked the model to eyeball ~150 name/color
 pairs across 8 repos in prose. That run reported all 8 repos clean while four real defects
@@ -22,9 +31,10 @@ those four defects (`test/fix_labels_diff.test.ts`) so they can't silently regre
 
 ## ⛔ Model gate — MUST be on Haiku (do this FIRST)
 
-This is mechanical, high-volume `gh label` / `gh issue list` scanning across 8 repos, so it must run
-on the cheapest tier that can do it: **Haiku**. A skill cannot switch the session model itself, so
-the **very first action of this skill is to check the running model** — before scanning any repo:
+This is mechanical, high-volume `gh label` / `gh issue list` / `gh api .../milestones` scanning
+across the active repos, so it must run on the cheapest tier that can do it: **Haiku**. A skill
+cannot switch the session model itself, so the **very first action of this skill is to check the
+running model** — before scanning any repo:
 
 - **If the model is NOT Haiku** (e.g. Opus, Sonnet): do **not** scan anything. Stop immediately and
   tell Josh, verbatim:
@@ -49,28 +59,30 @@ the skill file only.
 
 ## The canonical schema — `labels.yaml` is the single source of truth
 
-Every canonical label name, hex color, and which repos carry it lives in
-[`labels.yaml`](./labels.yaml) beside this file, parsed by `src/fix-labels/diff.ts`
-(`deno task fix-labels:diff`). This skill file never restates those name/hex pairs — one source of
-truth, not two that can drift apart.
+Every canonical label name, hex color, which repos carry it, and every canonical topic milestone
+lives in [`labels.yaml`](./labels.yaml) beside this file, parsed by `src/fix-labels/diff.ts`
+(`deno task fix-labels:diff`) and `src/fix-labels/milestone-diff.ts`
+(`deno task fix-labels:milestone-diff`). This skill file never restates those name/hex pairs or
+topic names — one source of truth, not two that can drift apart.
 
 Shape, for orientation (see `labels.yaml` for the actual current values):
 
 - **Model-tier** — `Haiku` / `Sonnet` / `Opus` / `Fable` across all 8 repos; `Flash Med` /
-  `Flash High` additionally in the 5 front-end repos only. `Fable` is retired/dormant and marked
-  `neverTouch` in the schema — the scripted diff never proposes any change for it, in any repo.
-- **Priority** — `Top Priority` / `High Priority` / `Low Priority`, title case, across all 8 repos.
-  `labels.yaml` records known misnamed variants (all-caps `TOP PRIORITY`, bare `High` / `Low`) as
-  aliases, so the diff proposes a rename that preserves issue associations, not a delete+create.
-- **Status** — `blocked` / `parked`, across all 8 repos.
-- **gig-outreach** — only on the 4 booking-epic repos (JaMmusic, web-jam-back,
-  WebJamSocketCluster, web-jam-tools) — not the 4 client sites.
-- **GitHub defaults** — only `bug` and `enhancement` are kept, at GitHub's standard colors; every
-  other GitHub default label (`documentation`, `question`, `duplicate`, `good first issue`,
-  `help wanted`, `invalid`, `wontfix`) is a non-canonical delete candidate.
+  `Flash High` / `Flash Low` additionally in the 5 front-end repos only. `Fable` is retired/dormant
+  and marked `neverDelete` in the schema — the scripted diff never proposes removing it, in any
+  repo.
+- **Status** — `parked` / `Josh`, across all 8 repos.
 - **Everything else** — any label not in `labels.yaml`'s `labels:` list is non-canonical, unless
   it's on that repo's `keep:` list (Josh-vetoed keepers, so he never has to re-veto the same label
-  forever — currently `timshermanmusic` in web-jam-back, `backup-restore` in web-jam-tools).
+  forever — currently empty; see `labels.yaml` for the up-to-date list).
+
+`web-jam-tools#300` pruned priority labels (`Top Priority`/`High Priority`/`Low Priority` → native
+`Priority` issue field), topic labels (`gig-outreach`, and the `backup-restore` and
+`timshermanmusic` keep-list entries → per-repo milestones, below), `bug`/`enhancement` (→ native
+issue Types), and `blocked` (→ native issue dependencies) from `labels.yaml` — they now surface as
+ordinary non-canonical delete candidates rather than canonical entries. Deleting them from GitHub
+itself is a separate, deliberate step: web-jam-tools#299 "Delete replaced labels org-wide, after
+migration".
 
 Repo classes (also in `labels.yaml`, under `repoClasses:`):
 
@@ -81,30 +93,59 @@ Repo classes (also in `labels.yaml`, under `repoClasses:`):
 
 All 8 together are "all repos" below. Full slugs are `WebJamApps/<repo>` for every `gh --repo` call.
 
+## Canonical topic milestones — `labels.yaml`'s `milestoneTopics:`
+
+`web-jam-tools#300`: topics (formerly the `gig-outreach` label and the hand-kept `backup-restore`
+and `timshermanmusic` labels) now live as per-repo **milestones**, matched cross-repo by **exact
+name** — see the design amendment on web-jam-tools#287 "fix-labels skill expanded / corrected"
+(2026-07-29). Canonical topics currently in use, per `labels.yaml`'s `milestoneTopics:` (see that
+file for the current values — not restated here):
+
+- `gig-outreach` — JaMmusic, web-jam-back, web-jam-tools.
+- `backup-restore` — web-jam-tools.
+- `timshermanmusic` — web-jam-back, JaMmusic, WebJamSocketCluster.
+
+`deno task fix-labels:milestone-diff` fetches each listed repo's actual milestones
+(`gh api repos/WebJamApps/<repo>/milestones`) and classifies every mismatch:
+
+1. **Missing** — a repo that should carry a topic milestone doesn't have one → propose **create**.
+2. **Misspelled** — an existing milestone is a case-variant or a close typo (small edit distance) of
+   a canonical topic name → propose **rename**, preserving every issue's existing milestone
+   association (a rename, not a delete+create).
+3. **Non-canonical** — a milestone that doesn't match any canonical topic name at all, OR matches a
+   canonical name but in a repo that topic isn't designated for → flagged for Josh's review. This
+   skill never auto-deletes or auto-renames a non-canonical milestone away — Josh decides case by
+   case (it could be a genuine release milestone, not a topic typo).
+
 ## Flow
 
 1. **Model gate** (above) — confirm Haiku before anything else.
-2. **Run the task.**
+2. **Run both tasks.**
    ```
    deno task fix-labels:diff
+   deno task fix-labels:milestone-diff
    ```
-   This shells out to `gh label list --repo WebJamApps/<repo> --json name,color` for all 8 repos,
-   diffs each repo's actual labels against `labels.yaml` **in code** (`classifyRepoDrift` in
-   `src/fix-labels/diff.ts`), computes blast radius for every proposed remove/delete line, and
-   prints the Report format below, ready to relay. No eyeballing, no hex comparison in prose — the
-   task computes the diff, the model never compares label lists by reading them side by side.
-3. **Present the task's output.** Present the full report before asking for any approval; don't
-   drip items one at a time.
-4. **Approve/veto per item.** Ask Josh to approve or veto each proposed change — he can approve a
-   whole repo's block at once ("all good for JaMmusic") or call out individual line items to skip.
-   Nothing applies until approved. **Never auto-apply anything** — not even an "obviously safe"
-   create.
+   The first shells out to `gh label list --repo WebJamApps/<repo> --json name,color` for all 8
+   repos, diffs each repo's actual labels against `labels.yaml` **in code** (`classifyRepoDrift` in
+   `src/fix-labels/diff.ts`), and computes blast radius for every proposed remove/delete line. The
+   second shells out to `gh api repos/WebJamApps/<repo>/milestones` for the repos named in
+   `labels.yaml`'s `milestoneTopics:`, and diffs actual milestone names against the canonical topic
+   list **in code** (`classifyMilestoneDrift` in `src/fix-labels/milestone-diff.ts`). No eyeballing,
+   no comparison in prose — the tasks compute the diff, the model never compares lists by reading
+   them side by side.
+3. **Present both reports.** Present the full label report and the full milestone report before
+   asking for any approval; don't drip items one at a time.
+4. **Approve/veto per item.** Ask Josh to approve or veto each proposed change (label AND
+   milestone) — he can approve a whole repo's block at once ("all good for JaMmusic") or call out
+   individual line items to skip. Nothing applies until approved. **Never auto-apply anything** —
+   not even an "obviously safe" create, and never act on a milestone flagged NON-CANONICAL/REVIEW
+   without Josh's explicit call on what to do with it.
 5. **Apply** only what was approved, using the mechanics below.
-6. **Re-scan (mandatory).** Re-run `deno task fix-labels:diff` after applying, and report **that**
-   output to Josh — never a replay of the apply log's `echo` lines. Expected result: an empty drift
-   list except for lines Josh explicitly vetoed (those are expected to resurface — say so). Anything
-   else — a line that should have been applied still showing up, an apply that silently failed — is
-   a **failed run** and must be reported as one, not glossed over.
+6. **Re-scan (mandatory).** Re-run both tasks after applying, and report **that** output to Josh —
+   never a replay of the apply log's `echo` lines. Expected result: an empty drift list except for
+   lines Josh explicitly vetoed (those are expected to resurface — say so). Anything else — a line
+   that should have been applied still showing up, an apply that silently failed — is a **failed
+   run** and must be reported as one, not glossed over.
 7. If a repo has zero drift on the re-scan, report "no changes" for it — don't omit it silently;
    Josh should see every repo was actually checked.
 
@@ -120,12 +161,13 @@ All 8 together are "all repos" below. Full slugs are `WebJamApps/<repo>` for eve
    missing, even if its color is badly wrong — this is exactly the case (`blocked` in
    CollegeLutheran) that the eyeballed version of this skill got wrong.
 4. **Wrong-repo placement** — a canonical label is present in a repo that shouldn't carry it (e.g.
-   `Flash Med`/`Flash High` in a non-front-end repo, `gig-outreach` on a client site) → propose
-   **remove** (`gh label delete`, this repo only — the label stays canonical elsewhere).
-5. **Non-canonical** — any label not in `labels.yaml` at all (including GitHub defaults beyond
-   `bug`/`enhancement`, and a legacy label like a single `Flash` where the canonical split is
-   `Flash Med`/`Flash High`) → propose **delete** (`gh label delete`), unless it's on that repo's
-   `keep:` list.
+   `Flash Med`/`Flash High`/`Flash Low` in a non-front-end repo) → propose **remove**
+   (`gh label delete`, this repo only — the label stays canonical elsewhere).
+5. **Non-canonical** — any label not in `labels.yaml` at all — including every GitHub default
+   label, a legacy label like a single `Flash` where the canonical split is `Flash Med`/`Flash
+   High`/`Flash Low`, and (as of web-jam-tools#300) the pruned `Top Priority`/`High
+   Priority`/`Low Priority`/`bug`/`enhancement`/`blocked`/`gig-outreach` labels if still present on
+   a repo — propose **delete** (`gh label delete`), unless it's on that repo's `keep:` list.
 
 ### Blast radius (mandatory for every remove/delete)
 
@@ -145,13 +187,13 @@ and never let the model guess or skip it.
 ## fix-labels report — <ISO 8601 UTC timestamp>
 
 ### JaMmusic
-- CREATE `blocked` (#E11D21) — missing
-- RENAME `TOP PRIORITY` → `Top Priority` (color also updates to #000000)
+- CREATE `Flash Low` (#FEF2C0) — missing
+- RECOLOR `parked` #0206d8 → #C2C2C2 — miscolored
 - DELETE `codex` — non-canonical — 2 open issues carry this label
 
 ### web-jam-back
-- CREATE `Top Priority` (#000000) — missing
-- REMOVE `Flash` — wrong-repo (not canonical for this repo) — 5 open issues carry this label
+- DELETE `Top Priority` — non-canonical — 3 open issues carry this label
+- REMOVE `Flash Med` — wrong-repo (not canonical for this repo) — 5 open issues carry this label
 - DELETE `wontfix` — non-canonical GitHub default — 0 open issues carry this label
 
 ### CollegeLutheran
@@ -162,6 +204,25 @@ no changes
 
 One block per repo, always present (even "no changes"), so Josh sees every repo was actually checked
 this run. This is exactly what `deno task fix-labels:diff` prints — relay it, don't retype it.
+
+The milestone report follows the same one-block-per-repo shape, scoped to the repos named in
+`labels.yaml`'s `milestoneTopics:`:
+
+```
+## fix-labels milestone report — <ISO 8601 UTC timestamp>
+
+### JaMmusic
+no changes
+
+### web-jam-back
+- RENAME milestone `Gig-Outreach` → `gig-outreach` — misspelled
+
+### web-jam-tools
+- CREATE milestone `backup-restore` — missing
+- REVIEW milestone `v2-release` — non-canonical, not on the topic list
+```
+
+This is exactly what `deno task fix-labels:milestone-diff` prints — relay it, don't retype it.
 
 ## Apply mechanics
 
@@ -192,6 +253,27 @@ must be surfaced to Josh, loudly, not swallowed. This is exactly the secondary f
 Apply strictly in the order Josh approved; if he vetoes one line in a repo's block, apply the rest
 of that block and skip only the vetoed line.
 
+### Milestone apply mechanics (web-jam-tools#300)
+
+`gh` has no built-in `gh milestone` subcommand, so every milestone mutation goes through `gh api`.
+Same rule as labels: never suppress stderr or ignore exit status; a `create` that fails because the
+milestone already exists must be surfaced, not swallowed.
+
+- **Create (missing)**:
+  ```
+  gh api repos/WebJamApps/<repo>/milestones -f title="<canonical name>"
+  ```
+- **Rename (misspelled)**: milestones are identified by number, not name — look it up from the
+  drift item (`fetchActualMilestones`/`classifyMilestoneDrift` already attach it), then:
+  ```
+  gh api -X PATCH repos/WebJamApps/<repo>/milestones/<number> -f title="<canonical name>"
+  ```
+  Preserves every issue's existing milestone association — nothing gets un-tagged.
+- **Non-canonical / REVIEW**: this skill takes **no automated action** here — deleting or renaming
+  a milestone Josh hasn't specifically approved is out of scope for this skill (and deleting
+  milestones from GitHub is out of scope for web-jam-tools#300 entirely). Report it and wait for
+  Josh's explicit instruction on what, if anything, to do with it.
+
 ## Non-goals
 
 - Never runs unprompted — manual `/fix-labels` invocation only.
@@ -199,8 +281,13 @@ of that block and skip only the vetoed line.
 - Never auto-applies anything, including creates that look obviously safe.
 - Never deletes or removes a label without first computing and showing its blast radius.
 - Never touches `Fable` — retired/dormant, but always kept.
-- Never adds `Flash Med`/`Flash High`/`gig-outreach` outside their scoped repo lists above.
-- Never invents a new label name or color outside the canonical schema in this file — if a repo has
-  a label that doesn't map cleanly to any schema row, it's a non-canonical delete candidate, not a
-  judgment call to reclassify on the fly.
-- Never edits code, comments on issues, or touches anything besides `gh label` state.
+- Never adds `Flash Med`/`Flash High`/`Flash Low` outside their scoped repo list (frontend) above.
+- Never invents a new label name/color or topic milestone name outside the canonical schema in this
+  file — if a repo has a label or milestone that doesn't map cleanly to any schema entry, it's a
+  non-canonical candidate, not a judgment call to reclassify on the fly.
+- Never deletes or renames a milestone flagged non-canonical without Josh's explicit per-item call
+  — this skill has no automated milestone-delete action at all, approved or not.
+- A mass org-wide cleanup of the labels web-jam-tools#300 pruned from canon is a separate,
+  deliberate step — web-jam-tools#299 "Delete replaced labels org-wide, after migration" — not
+  something this skill's normal per-label approve/apply flow should be used to bulk-drive.
+- Never edits code, comments on issues, or touches anything besides `gh label`/milestone state.

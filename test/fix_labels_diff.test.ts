@@ -66,6 +66,7 @@ const mockSchema: Schema = {
   keep: {
     OtherA: ["special-keep"],
   },
+  milestoneTopics: [],
 };
 
 Deno.test("resolveRepos: 'all' is frontend + other, in order", () => {
@@ -197,14 +198,12 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "WebJamSocketCluster",
     "web-jam-tools",
   ]);
-  assertEquals(schema.repoClasses.gigOutreach, [
-    "JaMmusic",
-    "web-jam-back",
-    "WebJamSocketCluster",
-    "web-jam-tools",
-  ]);
-  assertEquals(schema.keep["web-jam-back"], ["timshermanmusic"]);
-  assertEquals(schema.keep["web-jam-tools"], ["backup-restore"]);
+  // web-jam-tools#300 + follow-up decision: both `backup-restore`
+  // (web-jam-tools) and `timshermanmusic` (web-jam-back) were removed from
+  // `keep:` — both are topic labels with working milestone replacements now
+  // (Josh confirmed `timshermanmusic` IS a canonical topic, resolving the
+  // earlier ambiguity flag), so neither is delete-protected anymore.
+  assertEquals(schema.keep, {});
 
   const byName = new Map(schema.labels.map((l) => [l.name, l]));
   assertEquals(byName.get("Haiku")?.hex, "0E8A16");
@@ -220,27 +219,55 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Flash Med")?.modelTier, true);
   assertEquals(byName.get("Flash High")?.hex, "E67E22");
   assertEquals(byName.get("Flash High")?.modelTier, true);
-  // Non-model labels must NOT carry the marker — otherwise the hook's
-  // valid-label derivation (select modelTier: true) would silently widen.
-  assertEquals(byName.get("Top Priority")?.modelTier, undefined);
-  assertEquals(byName.get("bug")?.modelTier, undefined);
-  assertEquals(byName.get("blocked")?.modelTier, undefined);
+  assertEquals(byName.get("Flash Low")?.hex, "FEF2C0");
+  assertEquals(byName.get("Flash Low")?.modelTier, true);
+  assertEquals(byName.get("Flash Low")?.repos, "frontend");
   const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();
-  assertEquals(modelTierNames, ["Fable", "Flash High", "Flash Med", "Haiku", "Opus", "Sonnet"]);
-  assertEquals(byName.get("Top Priority")?.hex, "000000");
-  assertEquals(byName.get("Top Priority")?.aliases, ["TOP PRIORITY"]);
-  assertEquals(byName.get("High Priority")?.hex, "E8590C");
-  assertEquals(byName.get("High Priority")?.aliases, ["High"]);
-  assertEquals(byName.get("Low Priority")?.hex, "FFEC99");
-  assertEquals(byName.get("Low Priority")?.aliases, ["Low"]);
-  assertEquals(byName.get("blocked")?.hex, "E11D21");
+  assertEquals(modelTierNames, [
+    "Fable",
+    "Flash High",
+    "Flash Low",
+    "Flash Med",
+    "Haiku",
+    "Opus",
+    "Sonnet",
+  ]);
   assertEquals(byName.get("parked")?.hex, "C2C2C2");
-  assertEquals(byName.get("gig-outreach")?.hex, "006B75");
-  assertEquals(byName.get("bug")?.hex, "D73A4A");
-  assertEquals(byName.get("enhancement")?.hex, "A2EEEF");
+  assertEquals(byName.get("Josh")?.hex, "795548");
+
+  // web-jam-tools#300: pruned labels (native-field/milestone/type/dependency
+  // replacements now exist) must be gone from the canonical schema entirely.
+  for (
+    const pruned of [
+      "Top Priority",
+      "High Priority",
+      "Low Priority",
+      "blocked",
+      "gig-outreach",
+      "bug",
+      "enhancement",
+    ]
+  ) {
+    assertEquals(byName.get(pruned), undefined, `expected "${pruned}" to be pruned`);
+  }
+
+  // web-jam-tools#300: canonical topic milestones, replacing the pruned
+  // `gig-outreach` label, the pruned `backup-restore` keep-list entry, and
+  // (follow-up decision) the pruned `timshermanmusic` keep-list entry.
+  assertEquals(schema.milestoneTopics.map((t) => t.name), [
+    "gig-outreach",
+    "backup-restore",
+    "timshermanmusic",
+  ]);
+  const gigOutreachTopic = schema.milestoneTopics.find((t) => t.name === "gig-outreach");
+  assertEquals(gigOutreachTopic?.repos, ["JaMmusic", "web-jam-back", "web-jam-tools"]);
+  const backupRestoreTopic = schema.milestoneTopics.find((t) => t.name === "backup-restore");
+  assertEquals(backupRestoreTopic?.repos, ["web-jam-tools"]);
+  const timShermanMusicTopic = schema.milestoneTopics.find((t) => t.name === "timshermanmusic");
+  assertEquals(timShermanMusicTopic?.repos, ["web-jam-back", "JaMmusic", "WebJamSocketCluster"]);
 });
 
-Deno.test("real defect 1: JaMmusic High/Low Priority miscolored — must classify MISCOLORED, not missing", async () => {
+Deno.test("web-jam-tools#300: a pruned priority label still present on GitHub is now a non-canonical delete candidate", async () => {
   const schema = await loadSchema(LABELS_YAML_PATH);
   const actual: ActualLabel[] = [
     { name: "High Priority", color: "0d13bf" },
@@ -249,29 +276,22 @@ Deno.test("real defect 1: JaMmusic High/Low Priority miscolored — must classif
   const drift = classifyRepoDrift(schema, "JaMmusic", actual);
 
   const high = findByName(drift, "High Priority");
-  assertEquals(high?.kind, "miscolored");
-  assertEquals(high?.fromHex, "0d13bf");
-  assertEquals(high?.hex, "E8590C");
+  assertEquals(high?.kind, "non-canonical");
+  assertEquals(high?.action, "delete");
 
   const low = findByName(drift, "Low Priority");
-  assertEquals(low?.kind, "miscolored");
-  assertEquals(low?.fromHex, "21ddbc");
-  assertEquals(low?.hex, "FFEC99");
+  assertEquals(low?.kind, "non-canonical");
+  assertEquals(low?.action, "delete");
 });
 
-Deno.test("real defect 2: CollegeLutheran `blocked` exists miscolored — must classify MISCOLORED, never MISSING", async () => {
+Deno.test("web-jam-tools#300: a pruned `blocked` label still present on GitHub is now a non-canonical delete candidate", async () => {
   const schema = await loadSchema(LABELS_YAML_PATH);
   const actual: ActualLabel[] = [{ name: "blocked", color: "0206d8" }];
   const drift = classifyRepoDrift(schema, "CollegeLutheran", actual);
 
   const blocked = findByName(drift, "blocked");
-  assertEquals(blocked?.kind, "miscolored");
-  assertEquals(blocked?.action, "recolor");
-  assertEquals(blocked?.fromHex, "0206d8");
-  assertEquals(blocked?.hex, "E11D21");
-  // The original run's bug: this must never be "missing" / "create" — that's
-  // what produced the swallowed "label already exists" create failure.
-  assert(blocked?.kind !== "missing");
+  assertEquals(blocked?.kind, "non-canonical");
+  assertEquals(blocked?.action, "delete");
 });
 
 Deno.test("real defect 3: TimShermanMusic single 'Flash' — split proposes BOTH Flash Med and Flash High, deletes old Flash", async () => {
