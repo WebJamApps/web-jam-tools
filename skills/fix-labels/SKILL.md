@@ -74,14 +74,15 @@ Shape, for orientation (see `labels.yaml` for the actual current values):
 - **Status** — `parked` / `Josh`, across all 8 repos.
 - **Everything else** — any label not in `labels.yaml`'s `labels:` list is non-canonical, unless
   it's on that repo's `keep:` list (Josh-vetoed keepers, so he never has to re-veto the same label
-  forever — currently `timshermanmusic` in web-jam-back).
+  forever — currently empty; see `labels.yaml` for the up-to-date list).
 
 `web-jam-tools#300` pruned priority labels (`Top Priority`/`High Priority`/`Low Priority` → native
-`Priority` issue field), topic labels (`gig-outreach`, and the `backup-restore` keep-list entry →
-per-repo milestones, below), `bug`/`enhancement` (→ native issue Types), and `blocked` (→ native
-issue dependencies) from `labels.yaml` — they now surface as ordinary non-canonical delete
-candidates rather than canonical entries. Deleting them from GitHub itself is a separate,
-deliberate step: web-jam-tools#299 "Delete replaced labels org-wide, after migration".
+`Priority` issue field), topic labels (`gig-outreach`, and the `backup-restore` and
+`timshermanmusic` keep-list entries → per-repo milestones, below), `bug`/`enhancement` (→ native
+issue Types), and `blocked` (→ native issue dependencies) from `labels.yaml` — they now surface as
+ordinary non-canonical delete candidates rather than canonical entries. Deleting them from GitHub
+itself is a separate, deliberate step: web-jam-tools#299 "Delete replaced labels org-wide, after
+migration".
 
 Repo classes (also in `labels.yaml`, under `repoClasses:`):
 
@@ -95,13 +96,14 @@ All 8 together are "all repos" below. Full slugs are `WebJamApps/<repo>` for eve
 ## Canonical topic milestones — `labels.yaml`'s `milestoneTopics:`
 
 `web-jam-tools#300`: topics (formerly the `gig-outreach` label and the hand-kept `backup-restore`
-label) now live as per-repo **milestones**, matched cross-repo by **exact name** — see the design
-amendment on web-jam-tools#287 "fix-labels skill expanded / corrected" (2026-07-29). Canonical
-topics currently in use, per `labels.yaml`'s `milestoneTopics:` (see that file for the current
-values — not restated here):
+and `timshermanmusic` labels) now live as per-repo **milestones**, matched cross-repo by **exact
+name** — see the design amendment on web-jam-tools#287 "fix-labels skill expanded / corrected"
+(2026-07-29). Canonical topics currently in use, per `labels.yaml`'s `milestoneTopics:` (see that
+file for the current values — not restated here):
 
 - `gig-outreach` — JaMmusic, web-jam-back, web-jam-tools.
 - `backup-restore` — web-jam-tools.
+- `timshermanmusic` — web-jam-back, JaMmusic, WebJamSocketCluster.
 
 `deno task fix-labels:milestone-diff` fetches each listed repo's actual milestones
 (`gh api repos/WebJamApps/<repo>/milestones`) and classifies every mismatch:
