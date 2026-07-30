@@ -69,10 +69,12 @@ labels:
     # DELETE-PROTECTION ONLY (Josh, 2026-07-25): missing -> still propose
     # create; wrong color -> still propose recolor. It is just never a
     # delete/wrong-repo-removal candidate, in any repo.
-    # web-jam-tools#300: NOT one of the four prune categories (priority /
-    # topic / bug+enhancement / blocked-family), and NOT explicitly named in
-    # that issue's "Keep" list either — ambiguous, so left in place
-    # conservatively. Flagged in that issue's closing report for Josh.
+    # web-jam-tools#300: flagged ambiguous (not one of the four prune
+    # categories, not named in the issue's explicit "Keep" list either) —
+    # Josh's call: LEAVE AS-IS, no schema change. He separately migrated all
+    # 24 open `Fable`-labelled issues to `Opus` live on GitHub (0 open
+    # issues carry `Fable` now); that was live metadata work, not a canon
+    # change, so this entry (and its neverDelete protection) is unchanged.
     neverDelete: true
 
   # --- Model-tier — front-end 5 repos ONLY ---
@@ -127,22 +129,29 @@ milestoneTopics:
   - name: backup-restore
     repos:
       - web-jam-tools
+  # web-jam-tools#300 follow-up: Josh's call — `timshermanmusic` IS a
+  # canonical topic, not an unrelated keeper. Milestone already created live
+  # in all three repos below, with the 5 historical (closed) issues assigned
+  # (web-jam-back#922, web-jam-back#897, JaMmusic#1182,
+  # WebJamSocketCluster#237, WebJamSocketCluster#94). This repo list must
+  # match those three repos exactly, or the milestone-drift check reports
+  # false drift. 0 open issues carry it as of this writing — mainly for
+  # future use.
+  - name: timshermanmusic
+    repos:
+      - web-jam-back
+      - JaMmusic
+      - WebJamSocketCluster
 
 # Per-repo list of non-canonical label names that are explicitly preserved
 # and must NEVER be proposed for delete, even though they're not on the
 # `labels:` master list above.
 #
-# web-jam-tools#300: `backup-restore` (web-jam-tools) was removed from this
-# list — it is a topic label with a working milestone replacement (see
-# `milestoneTopics:` above), so it is no longer a delete-protected keeper;
-# it will surface as an ordinary non-canonical delete candidate for
-# web-jam-tools#299 "Delete replaced labels org-wide, after migration".
-#
-# `timshermanmusic` (web-jam-back) is left AS-IS: it is not on the canonical
-# topics list above (only `gig-outreach` / `backup-restore` are), so it is
-# ambiguous whether it should migrate to a milestone too or stay a label for
-# an unrelated reason — flagged for Josh in the web-jam-tools#300 closing
-# report rather than decided here.
-keep:
-  web-jam-back:
-    - timshermanmusic
+# web-jam-tools#300: `backup-restore` (web-jam-tools) and `timshermanmusic`
+# (web-jam-back) were both removed from this list — they are topic labels
+# with working milestone replacements now (see `milestoneTopics:` above), so
+# neither is a delete-protected keeper anymore; both will surface as
+# ordinary non-canonical delete candidates for web-jam-tools#299 "Delete
+# replaced labels org-wide, after migration". Empty for now — restore this
+# comment's shape (`<repo>: [<label>]`) the next time Josh vetoes a new one.
+keep: {}

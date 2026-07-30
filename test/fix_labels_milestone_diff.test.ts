@@ -163,7 +163,11 @@ Deno.test("classifyMilestoneDrift: NON-CANONICAL — a milestone entirely off th
 
 Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tools#300's canonical topics", async () => {
   const schema = await loadSchema(LABELS_YAML_PATH);
-  assertEquals(schema.milestoneTopics.map((t) => t.name), ["gig-outreach", "backup-restore"]);
+  assertEquals(schema.milestoneTopics.map((t) => t.name), [
+    "gig-outreach",
+    "backup-restore",
+    "timshermanmusic",
+  ]);
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "gig-outreach")?.repos,
     ["JaMmusic", "web-jam-back", "web-jam-tools"],
@@ -172,7 +176,18 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     schema.milestoneTopics.find((t) => t.name === "backup-restore")?.repos,
     ["web-jam-tools"],
   );
-  assertEquals(milestoneTopicRepos(schema), ["JaMmusic", "web-jam-back", "web-jam-tools"]);
+  // web-jam-tools#300 follow-up decision: `timshermanmusic` IS canonical,
+  // scoped to the exact 3 repos where Josh created the milestone live.
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "timshermanmusic")?.repos,
+    ["web-jam-back", "JaMmusic", "WebJamSocketCluster"],
+  );
+  assertEquals(milestoneTopicRepos(schema), [
+    "JaMmusic",
+    "web-jam-back",
+    "web-jam-tools",
+    "WebJamSocketCluster",
+  ]);
 });
 
 // --- Report formatting ---
