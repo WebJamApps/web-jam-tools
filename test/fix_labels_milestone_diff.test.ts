@@ -167,10 +167,25 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     "gig-outreach",
     "backup-restore",
     "timshermanmusic",
+    "Access Controls",
   ]);
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "gig-outreach")?.repos,
     ["JaMmusic", "web-jam-back", "web-jam-tools", "WebJamSocketCluster"],
+  );
+  // web-jam-tools#315: created live in all 8 active repos on 2026-07-30.
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "Access Controls")?.repos,
+    [
+      "JaMmusic",
+      "CollegeLutheran",
+      "AppersonAuto",
+      "TimShermanMusic",
+      "HenricksonForSalem",
+      "web-jam-back",
+      "WebJamSocketCluster",
+      "web-jam-tools",
+    ],
   );
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "backup-restore")?.repos,
@@ -182,11 +197,17 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     schema.milestoneTopics.find((t) => t.name === "timshermanmusic")?.repos,
     ["web-jam-back", "JaMmusic", "WebJamSocketCluster"],
   );
+  // web-jam-tools#315 widened this union to all 8 active repos, since
+  // "Access Controls" is scoped to every one of them.
   assertEquals(milestoneTopicRepos(schema), [
     "JaMmusic",
     "web-jam-back",
     "web-jam-tools",
     "WebJamSocketCluster",
+    "CollegeLutheran",
+    "AppersonAuto",
+    "TimShermanMusic",
+    "HenricksonForSalem",
   ]);
 });
 

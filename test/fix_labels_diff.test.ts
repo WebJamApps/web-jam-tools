@@ -254,11 +254,17 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   // web-jam-tools#300: canonical topic milestones, replacing the pruned
   // `gig-outreach` label, the pruned `backup-restore` keep-list entry, and
   // (follow-up decision) the pruned `timshermanmusic` keep-list entry.
+  // web-jam-tools#315 added "Access Controls" across all 8 active repos.
   assertEquals(schema.milestoneTopics.map((t) => t.name), [
     "gig-outreach",
     "backup-restore",
     "timshermanmusic",
+    "Access Controls",
   ]);
+  const accessControlsTopic = schema.milestoneTopics.find(
+    (t) => t.name === "Access Controls",
+  );
+  assertEquals(accessControlsTopic?.repos.length, 8);
   const gigOutreachTopic = schema.milestoneTopics.find((t) => t.name === "gig-outreach");
   assertEquals(gigOutreachTopic?.repos, [
     "JaMmusic",
