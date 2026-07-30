@@ -198,12 +198,12 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "WebJamSocketCluster",
     "web-jam-tools",
   ]);
-  // web-jam-tools#300: `backup-restore` was removed from web-jam-tools' keep
-  // list — it's a topic label with a working milestone replacement now, so
-  // it's no longer delete-protected. `timshermanmusic` is left alone
-  // (ambiguous — not on the canonical topics list).
-  assertEquals(schema.keep["web-jam-back"], ["timshermanmusic"]);
-  assertEquals(schema.keep["web-jam-tools"], undefined);
+  // web-jam-tools#300 + follow-up decision: both `backup-restore`
+  // (web-jam-tools) and `timshermanmusic` (web-jam-back) were removed from
+  // `keep:` — both are topic labels with working milestone replacements now
+  // (Josh confirmed `timshermanmusic` IS a canonical topic, resolving the
+  // earlier ambiguity flag), so neither is delete-protected anymore.
+  assertEquals(schema.keep, {});
 
   const byName = new Map(schema.labels.map((l) => [l.name, l]));
   assertEquals(byName.get("Haiku")?.hex, "0E8A16");
@@ -252,12 +252,19 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   }
 
   // web-jam-tools#300: canonical topic milestones, replacing the pruned
-  // `gig-outreach` label and the pruned `backup-restore` keep-list entry.
-  assertEquals(schema.milestoneTopics.map((t) => t.name), ["gig-outreach", "backup-restore"]);
+  // `gig-outreach` label, the pruned `backup-restore` keep-list entry, and
+  // (follow-up decision) the pruned `timshermanmusic` keep-list entry.
+  assertEquals(schema.milestoneTopics.map((t) => t.name), [
+    "gig-outreach",
+    "backup-restore",
+    "timshermanmusic",
+  ]);
   const gigOutreachTopic = schema.milestoneTopics.find((t) => t.name === "gig-outreach");
   assertEquals(gigOutreachTopic?.repos, ["JaMmusic", "web-jam-back", "web-jam-tools"]);
   const backupRestoreTopic = schema.milestoneTopics.find((t) => t.name === "backup-restore");
   assertEquals(backupRestoreTopic?.repos, ["web-jam-tools"]);
+  const timShermanMusicTopic = schema.milestoneTopics.find((t) => t.name === "timshermanmusic");
+  assertEquals(timShermanMusicTopic?.repos, ["web-jam-back", "JaMmusic", "WebJamSocketCluster"]);
 });
 
 Deno.test("web-jam-tools#300: a pruned priority label still present on GitHub is now a non-canonical delete candidate", async () => {
