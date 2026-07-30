@@ -143,6 +143,25 @@ milestoneTopics:
       - web-jam-back
       - JaMmusic
       - WebJamSocketCluster
+  # web-jam-tools#315 "Restrict Claude and Flash Dropbox access to
+  # web-jam-llms and JoshMariaMusic only" — Josh's call, created live in all 8
+  # active repos on 2026-07-30. Covers restricting what AI agents and
+  # integrations can reach: Dropbox, filesystem, connectors, credentials.
+  #
+  # NOTE: this is the only canonical milestone using Title Case with a space;
+  # the three above are lowercase-kebab topic names. Matching is by EXACT
+  # name, so the live milestones and this entry agree — but if the convention
+  # is ever normalised, rename the live milestones and this entry together.
+  - name: Access Controls
+    repos:
+      - JaMmusic
+      - CollegeLutheran
+      - AppersonAuto
+      - TimShermanMusic
+      - HenricksonForSalem
+      - web-jam-back
+      - WebJamSocketCluster
+      - web-jam-tools
 
 # Per-repo list of non-canonical label names that are explicitly preserved
 # and must NEVER be proposed for delete, even though they're not on the
