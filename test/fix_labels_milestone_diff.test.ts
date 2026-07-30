@@ -170,7 +170,7 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
   ]);
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "gig-outreach")?.repos,
-    ["JaMmusic", "web-jam-back", "web-jam-tools"],
+    ["JaMmusic", "web-jam-back", "web-jam-tools", "WebJamSocketCluster"],
   );
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "backup-restore")?.repos,
