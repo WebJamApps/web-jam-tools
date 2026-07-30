@@ -1,0 +1,16 @@
+{
+  "webjam-merge-deploy-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/block-merge-deploy.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
