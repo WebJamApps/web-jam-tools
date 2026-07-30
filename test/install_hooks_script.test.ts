@@ -98,11 +98,55 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     const settings = JSON.parse(await Deno.readTextFile(settingsPath));
     assert(settings.hooks.SessionStart.length > 0);
     assert(settings.hooks.PreToolUse.length > 0);
+    // web-jam-tools#308: DENY_RULES land in permissions.deny too.
+    assert(Array.isArray(settings.permissions?.deny) && settings.permissions.deny.length > 0);
+    assert(
+      settings.permissions.deny.includes("Bash(git push --delete *)"),
+      "expected the git push --delete deny pattern to be present",
+    );
   } finally {
     await Deno.remove(hooksDir, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
   }
 });
+
+// --- CLAUDE_SETTINGS_PATH env override (web-jam-tools#308) ---
+
+Deno.test(
+  "CLAUDE_SETTINGS_PATH env var is honored for the deny-rule merge, same as --settings-path",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const res = await run(
+        "bash",
+        [INSTALL_SCRIPT, "--hooks-dir", hooksDir],
+        { CLAUDE_SETTINGS_PATH: settingsPath },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assert(
+        settings.permissions?.deny?.includes("Bash(git push --force *)"),
+        "expected the git push --force deny pattern to be present via CLAUDE_SETTINGS_PATH",
+      );
+
+      // Re-run: idempotent, no duplicate entries.
+      const second = await run(
+        "bash",
+        [INSTALL_SCRIPT, "--hooks-dir", hooksDir],
+        { CLAUDE_SETTINGS_PATH: settingsPath },
+      );
+      assertEquals(second.code, 0, second.stdout + second.stderr);
+      const settings2 = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings2.permissions.deny.length, settings.permissions.deny.length);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
 
 // --- Default destination formula is unchanged ---
 
