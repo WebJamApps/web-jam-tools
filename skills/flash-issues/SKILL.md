@@ -62,6 +62,28 @@ repo checkout needed beyond `gh` calls. Task: regenerate the Flash-lane
 worklist file that Josh (the product owner) reads by hand to run agy himself
 when Claude is out of tokens.
 
+## Implementation approach — REST issue payload, not search qualifiers
+
+Priority, Issue Type, and topic used to live on labels; they now live on
+native GitHub metadata (org `Priority`/`Type` fields, per-repo Milestones,
+native issue dependencies) — model-lane labels (`Haiku`/`Sonnet`/`Opus`/
+`Flash Med`/`Flash High`/`Flash Low`) are the only labels this skill still
+reads or writes.
+
+`field.Priority:<value>` and `type:<value>` are confirmed-live `gh search
+issues` qualifiers (verified with a discriminating control: a nonsense value
+returns `[]`, a real value returns real, non-free-text-matching hits) — but
+this skill does NOT use search for per-candidate reads. Instead, every
+Flash-lane candidate gets one `gh api repos/{o}/{r}/issues/{n}` call
+(Step 5), because that single REST payload already contains Priority
+(`issue_field_values`), Type (`type.name`), and the dependency count
+(`issue_dependencies_summary`) together — cheaper than several targeted
+searches per issue — and REST is index-free/immediate, so there's no ~15–40s
+search-index lag to design around. Topic (Milestone) comes for free off the
+Step 2 issue-list call. Search remains the right tool for bulk cross-repo
+discovery (e.g. `/fix-labels`' milestone-consistency check), just not for
+this skill's per-issue reads.
+
 ## Scope — these five repos, exactly these slugs
 
 WebJamApps/JaMmusic
@@ -88,7 +110,14 @@ no split. The model-tier label family to recognize in any repo: `Haiku`,
 ## Step 2 — list open issues per repo
 
   gh issue list --repo WebJamApps/<repo> --state open --limit 200 \
-    --json number,title,labels,body,url
+    --json number,title,labels,body,url,milestone
+
+`milestone` is the topic/area signal (the old `Area` custom field was
+deleted; topics now live in per-repo Milestones, name-identical across
+repos — `gig-outreach`, `backup-restore`, etc.). It's read here for free,
+alongside the same call that already reads labels — no extra request. This
+skill doesn't gate Flash-lane candidacy on topic, so it's carried through
+purely for context in the output (Step 9), not used as a filter.
 
 ## Step 3 — classify every open issue
 
@@ -115,8 +144,8 @@ for an explicit do-not-dispatch marker: ⛔, "BLOCKED — do not build yet",
   candidate. Skip the rest of this step for it.
 - **Conditional marker citing an issue reference** (e.g. "Do not start
   until wjb#987 is merged/deployed") — do NOT auto-block. Resolve the
-  referenced issue right now and run the Step 5 state check
-  (`gh issue view <n> --repo WebJamApps/<repo> --json state,labels`). If
+  referenced issue right now:
+  `gh issue view <n> --repo WebJamApps/<repo> --json state`. If
   it's CLOSED, the condition is satisfied — the marker is cleared, and
   this issue continues through normal classification below as if the
   marker weren't there. If it's still OPEN, this issue IS blocked — route
@@ -194,63 +223,86 @@ Otherwise, for each issue:
 
 Collect every Flash-lane candidate (pre-existing + newly labeled in Step 3)
 from all five repos into one list. Each entry needs: repo, issue number,
-title, URL, body text (for dependency/priority reading), and its Flash tier
-label (`Flash`, `Flash Med`, or `Flash High` — exactly as that repo spells
-it).
+title, URL, milestone (if any, from Step 2 — for output context only), and
+its Flash tier label (`Flash`, `Flash Med`, or `Flash High` — exactly as
+that repo spells it).
 
-## Step 5 — read dependencies (verify state, never assume)
+## Step 5 — read Priority, Type, and dependencies (native metadata, not labels)
 
-For each candidate, read its body (and skim comments if the body is thin)
-for dependency signals: explicit phrases ("depends on", "blocked by",
-"requires", "after #", "upstream of"), cross-issue references (#123 or
-Repo#123), and a `blocked` / `dependencies` label if the repo has one.
-There's no consistent machine-readable convention across these repos — this
-is a judgment read of the issue text, not a fixed regex.
+For each Flash-lane candidate, fetch its full REST payload once — this one
+call returns everything else this step needs, no body-text phrase-matching
+and no `blocked` label to read:
 
-MANDATORY — verify, don't infer: for EVERY cross-issue reference you're
-treating as a potential blocker, run this before deciding anything:
+  gh api repos/WebJamApps/<repo>/issues/<n>
 
-  gh issue view <n> --repo WebJamApps/<repo> --json state,labels
+From the response:
 
-Resolve a bare `#n` reference against the candidate's OWN repo; resolve
-`Repo#n` against the named repo. The wording "depends on #983" reads
-identically whether #983 is open or closed — ONLY the verified `state`
-field decides. A CLOSED dependency is NEVER a blocker, full stop.
+- **Priority** — the entry in `.issue_field_values[]` whose
+  `issue_field_name` is `"Priority"`; its value is
+  `.single_select_option.name`. If `issue_field_values` is empty or has no
+  `Priority` entry, the priority is **Medium** — blank means Medium, never
+  ask Josh to set it, never write it.
+- **Type** — `.type.name` (`Bug` / `Feature` / `Task` / `Epic`, or `null` if
+  unset). Used only as an ordering tie-break in Step 6 — this skill has
+  never gated Flash-lane candidacy on Type and doesn't start now.
+- **Dependency count** — `.issue_dependencies_summary.total_blocked_by`. If
+  it's `0`, this candidate has no blockers — skip straight to Step 6.
 
-Never mark an issue blocked without having run this check on the specific
-reference you're calling a blocker. Never mark an issue blocked "because
-its dependency is blocked" as a shortcut — walk the chain and verify each
-link; the chain must bottom out in an actually-verified OPEN,
-not-Flash-workable blocker, or nothing in the chain blocks anything. (This
-is not hypothetical: the first live run marked web-jam-back#983/#987/#980 as
-blockers while all three were CLOSED, then cascaded the error — "#1242
-blocked because #1241 is blocked" — without re-verifying #1241's own chain.)
+If `total_blocked_by` > 0, fetch the actual blockers with one more call:
 
-Once verified OPEN, a dependency can point at:
-- another Flash-lane candidate in this pool — fine, handle via ordering
-  (Step 6).
-- an issue that's open but NOT Flash-workable (labeled Sonnet / Opus /
-  Haiku / Fable, or in a non-front-end repo like web-jam-back) — this
-  candidate cannot run yet. Route it to the Blocked section (Step 7), not
-  the numbered list.
-- an open Flash-lane issue that, for whatever reason, isn't going into this
-  file — treat the same as "not Flash-workable right now" and block it,
-  with the reason named.
+  gh api repos/WebJamApps/<repo>/issues/<n>/dependencies/blocked_by
+
+This returns a full issue object for every direct blocker — `state`,
+`number`, `repository.full_name`, `title`, `labels[]`, all inline, no
+further lookups needed. For each blocker:
+
+- `state == "closed"` — not a blocker, full stop. A closed dependency is
+  NEVER a blocker no matter how the candidate's body phrased the
+  relationship. Ignore it.
+- `state == "open"` and it's itself a Flash-lane candidate in this run's
+  pool (same repo + number as a Step 4 entry) — a same-pool dependency,
+  handle it via ordering only (Step 6); it does not route this candidate to
+  Blocked.
+- `state == "open"` and it is NOT a Flash-lane candidate in the pool (a
+  different model label read straight off its own `labels[]`, or it lives
+  in a non-front-end repo) — this candidate cannot run yet. Route it to the
+  Blocked section (Step 7), naming the blocker (`Repo#n`) and the reason
+  taken from its own `labels[]` (e.g. "Sonnet, backend endpoint not
+  built") — no extra `gh issue view` call, the label is already in this
+  response.
+
+Because `blocked_by` reports each direct blocker's own live `state`, there
+is no chain to walk and nothing to cascade: if a blocker is itself blocked,
+that surfaces naturally when *it* gets processed as its own candidate (or,
+if it isn't in the pool, its own state is all this candidate needs). Never
+mark an issue blocked "because its dependency is blocked" as a shortcut
+through unfetched data — the direct blocker's own `state` on this call is
+the only thing that decides. (This closes off the failure class from the
+label-era version of this skill, where web-jam-back#983/#987/#980 were
+marked as blockers while CLOSED and the error cascaded — native
+dependencies always report the blocker's live state directly, so there's
+nothing left to go stale.)
+
+Body text is still read for the ⛔ / do-not-dispatch marker check (Step 3)
+and for Needs-review judgment calls — this step only changes how
+*dependency* and *priority* signals are sourced.
 
 ## Step 6 — order the runnable list
 
 Among candidates with no blocking dependency (or whose only dependencies
 are themselves in this pool):
 
-1. Priority labels first, where the repo has one (e.g. JaMmusic's
-   `TOP PRIORITY`). Not every repo has a priority label — most don't.
-2. Where no priority label exists, use judgment from the issue content:
-   bugs/breakage generally outrank polish, and a clearer/better-specified
-   issue is easier for agy to execute unattended than a vague one — prefer
+1. Native **Priority** first (read in Step 5): `Urgent` > `High` > `Medium`
+   (blank) > `Low`. Every repo has this — it's an org-level field, not a
+   per-repo label.
+2. Within the same Priority tier, native **Type** (Step 5) breaks the tie:
+   `Bug` outranks everything else. If neither candidate has a Type set,
+   fall back to judgment from the issue content — a clearer/better-specified
+   issue is easier for agy to execute unattended than a vague one; prefer
    ordering agy toward issues it can actually finish.
-3. Dependency ordering wins over priority ordering. If issue B depends on
-   issue A and both are in the runnable list, A must appear before B
-   regardless of B's priority label. Never list a dependency after its
+3. Dependency ordering wins over Priority/Type ordering. If issue B depends
+   on issue A and both are in the runnable list, A must appear before B
+   regardless of B's Priority or Type. Never list a dependency after its
    dependent.
 
 Number the result 1, 2, 3, … — plain sequential numbering, not per-repo
@@ -262,8 +314,8 @@ Two kinds of entry land here:
 - Dependency-blocked candidates from Step 5 — one-line reason naming the
   VERIFIED-open blocking issue and why Flash can't clear it (e.g. "depends
   on web-jam-back#812 (Sonnet, backend endpoint not built)"). Never an
-  unverified reason — if you haven't run `gh issue view` on the blocker,
-  it doesn't go here.
+  unverified reason — if the blocker's `state` didn't come back `"open"` on
+  the Step 5 `dependencies/blocked_by` call, it doesn't go here.
 - Marker-blocked issues from Step 3 (an explicit ⛔/do-not-dispatch marker
   in the body) — one-line reason quoting or paraphrasing that marker (e.g.
   "issue body: BLOCKED — do not build yet, waiting on final logo files
@@ -302,7 +354,9 @@ Every entry — in BOTH the numbered list and the Blocked section — MUST end
 with its Flash tier in parentheses, exactly as that repo spells it
 (`Flash`, `Flash Med`, or `Flash High`). Josh uses this to know whether to
 run agy with the plain default chain or override it with
-AGY_MODELS='Gemini 3.6 Flash (High)'.
+AGY_MODELS='Gemini 3.6 Flash (High)'. If the issue carries a Milestone
+(Step 2), add `, milestone: <name>` inside the same parentheses — omit the
+clause entirely when there's no Milestone, don't write "milestone: none".
 
 Output template:
 
@@ -313,8 +367,8 @@ _Regenerated by /flash-issues — do not hand-edit, next run replaces this file.
 Last updated: <ISO 8601 UTC timestamp of this run>
 
 1. [CollegeLutheran#123](https://github.com/WebJamApps/CollegeLutheran/issues/123) — Add mobile nav collapse toggle (Flash Med)
-2. [JaMmusic#1220](https://github.com/WebJamApps/JaMmusic/issues/1220) — Venue picker: filter list by metro (Flash Med)
-3. [JaMmusic#1221](https://github.com/WebJamApps/JaMmusic/issues/1221) — Venue picker: wire selection to gig form (Flash High, depends on JaMmusic#1220 above)
+2. [JaMmusic#1220](https://github.com/WebJamApps/JaMmusic/issues/1220) — Venue picker: filter list by metro (Flash Med, milestone: gig-outreach)
+3. [JaMmusic#1221](https://github.com/WebJamApps/JaMmusic/issues/1221) — Venue picker: wire selection to gig form (Flash High, milestone: gig-outreach, depends on JaMmusic#1220 above)
 
 ## Blocked (not runnable by Flash)
 
@@ -350,6 +404,9 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
 - The Step 8 reconciliation: total open issues seen vs. the sum of all five
   buckets. Confirm they match, or state what you found missing and where
   you filed it before writing.
+- Confirmation that Priority, Type, and dependencies were read from each
+  candidate's REST issue payload (Step 5) — not from any label — and that
+  topic came from Milestone (Step 2), not from a label.
 - Confirmation the file was written to
   ~/Dropbox/web-jam-llms/flash-issues.md.
 ````
@@ -372,9 +429,17 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
   instead of a best-effort label.
 - Never blocks the chat run on flagged items — no Q&A, no waiting for an
   answer. They're reviewed from the file on Josh's own schedule.
-- Never marks an issue blocked on an unverified reference — `gh issue view`
-  the specific blocking reference first; a closed dependency is never a
-  blocker no matter how the issue text phrases it.
+- Never marks an issue blocked on an unverified reference — for a Step 3
+  conditional marker, `gh issue view --json state` the specific reference
+  first; for Step 5 dependencies, the native `blocked_by` payload's own
+  `state` field is the check. A closed reference is never a blocker no
+  matter how the issue text or dependency graph phrases it.
+- Never reads or writes a priority label, topic label, `bug`/`enhancement`
+  label, or a `blocked` label. Priority and Type come from each candidate's
+  REST issue payload (Step 5), topic from Milestone (Step 2), and blocking
+  from native dependencies (Step 5) — model-lane labels
+  (`Haiku`/`Sonnet`/`Opus`/`Flash Med`/`Flash High`/`Flash Low`) are the
+  only labels this skill still touches.
 - Never treats "record and publish", "get <company> to fix their listing",
   or any other manual/external-platform ask as codework just because it's
   filed in a frontend repo.
