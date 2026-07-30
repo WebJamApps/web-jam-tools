@@ -59,8 +59,13 @@ interface HookEntry {
   matcher?: string;
   hooks: HookCmd[];
 }
+interface PermissionsJson {
+  allow?: string[];
+  ask?: string[];
+  deny?: string[];
+}
 interface SettingsJson {
-  permissions?: unknown;
+  permissions?: PermissionsJson;
   hooks: {
     SessionStart: HookEntry[];
     PreToolUse: HookEntry[];
@@ -562,3 +567,158 @@ Deno.test("invalid JSON in an existing settings.json is refused, not overwritten
     assertEquals(await Deno.readTextFile(path), "{ not valid json");
   });
 });
+
+// --- permissions.deny (web-jam-tools#308) ---
+
+Deno.test("--deny adds patterns to permissions.deny when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--deny",
+      "Bash(git push --delete *)",
+      "Bash(git push --force *)",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("added permissions.deny rule Bash(git push --delete *)"));
+    assert(res.stdout.includes("added permissions.deny rule Bash(git push --force *)"));
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.deny, [
+      "Bash(git push --delete *)",
+      "Bash(git push --force *)",
+    ]);
+  });
+});
+
+Deno.test("a second --deny run with the same patterns is a no-op", async () => {
+  // Seed a pre-existing (empty) settings.json so the first run's write is a
+  // genuine backup-triggering update, not a from-scratch file creation.
+  await withTempSettings({}, async (path) => {
+    const args = ["--deny", "Bash(git push --delete *)", "Bash(git push --force *)"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.deny?.length, 2);
+
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const backups = [...Deno.readDirSync(dir)].filter((e) => e.name.includes(".bak-"));
+    // One backup from the first (writing) run only; the no-op second run
+    // must not write (and therefore must not back up) again.
+    assertEquals(backups.length, 1);
+  });
+});
+
+Deno.test(
+  "pre-existing permissions.allow, permissions.ask, and permissions.deny entries survive a --deny merge untouched",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          allow: ["Bash(ls:*)", "Bash(npm test:*)"],
+          ask: ["Bash(rm -rf *)"],
+          deny: ["Bash(curl *)"],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--deny",
+          "Bash(git push --delete *)",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        // allow/ask are byte-for-byte untouched.
+        assertEquals(data.permissions?.allow, ["Bash(ls:*)", "Bash(npm test:*)"]);
+        assertEquals(data.permissions?.ask, ["Bash(rm -rf *)"]);
+        // deny keeps the pre-existing entry (order preserved) and appends
+        // the new one — never reordered, never removed.
+        assertEquals(data.permissions?.deny, [
+          "Bash(curl *)",
+          "Bash(git push --delete *)",
+        ]);
+      },
+    );
+  },
+);
+
+Deno.test("--deny combined with hook sections in one invocation merges both", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "$HOME/.claude/hooks/notes-sync-reminder.sh",
+      "--pre-tool-use",
+      "Bash::$HOME/.claude/hooks/block-secret-dumps.sh",
+      "--deny",
+      "Bash(git push --delete *)",
+      "Bash(git push -d *)",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+
+    const data = await readJson(path);
+    assertEquals(data.hooks.SessionStart.length, 1);
+    assertEquals(data.hooks.PreToolUse.length, 1);
+    assertEquals(data.permissions?.deny, [
+      "Bash(git push --delete *)",
+      "Bash(git push -d *)",
+    ]);
+  });
+});
+
+Deno.test(
+  "install-hooks.sh's real DENY_RULES set merges cleanly and is idempotent (sandboxed CLAUDE_SETTINGS_PATH via --settings-path)",
+  async () => {
+    // Exercises the exact deny-pattern set install-hooks.sh ships (mirrored
+    // here rather than parsed out of the shell script, to keep this test
+    // independent of bash array syntax) against a real merge run, always via
+    // the --settings-path override — never the live ~/.claude/settings.json.
+    const DENY_RULES = [
+      "Bash(git push --delete *)",
+      "Bash(git push --delete)",
+      "Bash(git push * --delete *)",
+      "Bash(git push * --delete)",
+      "Bash(git push -d *)",
+      "Bash(git push -d)",
+      "Bash(git push * -d *)",
+      "Bash(git push * -d)",
+      "Bash(git push * :*)",
+      "Bash(git push --force *)",
+      "Bash(git push --force)",
+      "Bash(git push * --force *)",
+      "Bash(git push * --force)",
+      "Bash(git push -f *)",
+      "Bash(git push -f)",
+      "Bash(git push * -f *)",
+      "Bash(git push * -f)",
+      "Bash(git push --force-with-lease*)",
+      "Bash(git push * --force-with-lease*)",
+      "Bash(git branch -D remotes/*)",
+      "Bash(git branch * -D remotes/*)",
+      "Bash(git branch --delete --force remotes/*)",
+      "Bash(git branch * --delete --force remotes/*)",
+      "Bash(git push --mirror*)",
+      "Bash(git push * --mirror*)",
+      "Bash(git push --prune*)",
+      "Bash(git push * --prune*)",
+    ];
+    await withTempSettings(undefined, async (path) => {
+      const first = await runMerge(path, ["--deny", ...DENY_RULES]);
+      assertEquals(first.code, 0, first.stderr);
+      const data = await readJson(path);
+      assertEquals(data.permissions?.deny?.length, DENY_RULES.length);
+
+      const second = await runMerge(path, ["--deny", ...DENY_RULES]);
+      assertEquals(second.code, 0, second.stderr);
+      assert(
+        second.stdout.includes("already up to date (no-op)"),
+        `expected no-op message, got: ${second.stdout}`,
+      );
+      const data2 = await readJson(path);
+      assertEquals(data2.permissions?.deny?.length, DENY_RULES.length);
+    });
+  },
+);
