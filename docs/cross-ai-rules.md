@@ -82,6 +82,42 @@ Never modify a queue file that isn't yours. Phone-authored bridge files at Drive
 - **MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL**: Two live background jobs (e.g. a subagent + a headless agy dispatch) is the cap. When a THIRD thread (new discussion, dispatch, or background job) starts in the same session, the agent must WARN Josh first and propose a separate terminal — never comply silently. Origin: 2026-07-16, Claude A froze mid-permission-prompt while running a Sonnet subagent + a headless agy dispatch plus a new discussion; recovery required keystroke injection from another session.
 - **ISSUE CITATIONS ALWAYS CARRY REPO + NUMBER + TITLE**: Every mention of a GitHub issue or PR — in chat, in a commit message, in an issue/PR body, in a memory or queue file — must be written as `repo#number "title"`, e.g. `web-jam-back#998 "email subject or title still not easy for  me to see its target venue"`. **`#` followed by digits is an ILLEGAL token in anything Josh reads.** There is no exception for a repeat mention, a list item, a parenthetical, "the one I just named", or a closing one-line offer. If you don't know the title, look it up (`gh issue view N --repo R --json title`) before writing the sentence — never emit a bare number as a placeholder. If the full citation is too verbose, shorten to the TITLE, never to the number. The violation is almost always the LAST sentence of a message (the "want me to do X?" offer, written after the careful part), so re-read the finished message and check every `#` before sending. Josh has asked for this five times (2026-07-24 → 2026-07-29); he reads these on a phone with many numbers in flight and a bare number costs him a lookup every time.
 
+## DESIGN CLAIMS MUST CARRY RECEIPTS (wjt#305)
+
+A settled design shipped an unverified claim as established fact, sitting
+unmarked right next to claims that HAD been verified with live commands. Josh
+had no way to tell an assertion from a receipt — they read as equally solid.
+These rules exist to prevent that class of failure.
+
+### Rule 1 — requirement-critical claims carry a receipt or a warning label
+
+Any statement in a design, spec, issue comment, or PR body that answers a
+stated requirement of Josh's must either:
+
+- carry its receipt inline — the exact command run and its actual output, or
+  a screenshot; or
+- be explicitly tagged `ASSUMPTION — NOT VERIFIED`.
+
+A design may **not** be marked settled/approved while any requirement-critical
+claim is unmarked. If there is no command that could produce a receipt, that
+is itself the signal that the claim needs a different kind of verification —
+say so instead of asserting it.
+
+### Rule 2 — a UI requirement can never be verified through an API
+
+If the requirement is about what Josh can **see**, the only acceptable
+evidence is a screenshot, or Josh's own confirmation that he sees it. API
+calls, REST payloads, and CLI output do not count and never have. Marking a
+design settled on API-only evidence when the requirement is a UI requirement
+is a hard blocker, not a nit.
+
+Origin: web-jam-tools#287 "fix-labels skill expanded / corrected" — the design
+asserted "field values appear in the issue sidebar and in search" without a
+screenshot, Josh accepted the design on that basis, the org-wide migration in
+web-jam-tools#298 "Migrate existing issues to native Priority/Area fields,
+Type, and dependencies (org-wide)" was verified entirely through REST, and
+Josh then could not find the `Area` field in the browser at all.
+
 ## FE/BE COUPLING (wjt#240)
 
 A change with a back-end half and a front-end half can ship half-done — e.g. the
