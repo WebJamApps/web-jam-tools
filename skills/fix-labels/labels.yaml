@@ -126,6 +126,7 @@ milestoneTopics:
       - JaMmusic
       - web-jam-back
       - web-jam-tools
+      - WebJamSocketCluster
   - name: backup-restore
     repos:
       - web-jam-tools
