@@ -40,11 +40,25 @@ export interface CanonicalLabel {
   modelTier?: boolean;
 }
 
+/**
+ * A canonical topic — formerly a `gig-outreach`-style label, now a
+ * per-repo MILESTONE (web-jam-tools#300, design amendment on
+ * web-jam-tools#287). `repos` is an explicit repo-name list (not a
+ * `repoClasses` key) because the milestone set is small and doesn't track
+ * the frontend/other split labels use.
+ */
+export interface CanonicalTopic {
+  name: string;
+  repos: string[];
+}
+
 export interface Schema {
   repoClasses: Record<string, string[]>;
   labels: CanonicalLabel[];
   /** repo name -> non-canonical label names that are never delete candidates. */
   keep: Record<string, string[]>;
+  /** Canonical topic milestones — see src/fix-labels/milestone-diff.ts. */
+  milestoneTopics: CanonicalTopic[];
 }
 
 export interface ActualLabel {
@@ -198,6 +212,9 @@ export async function loadSchema(path: string): Promise<Schema> {
   if (!parsed.keep || typeof parsed.keep !== "object") {
     parsed.keep = {};
   }
+  if (!Array.isArray(parsed.milestoneTopics)) {
+    parsed.milestoneTopics = [];
+  }
   return parsed;
 }
 
@@ -227,7 +244,8 @@ export const runGhCommand: CommandRunner = async (args: string[]) => {
   };
 };
 
-async function runGh(args: string[], runner: CommandRunner): Promise<string> {
+/** Shared by src/fix-labels/milestone-diff.ts — one `gh` shell-out wrapper, not two. */
+export async function runGh(args: string[], runner: CommandRunner): Promise<string> {
   const { code, stdout, stderr } = await runner(args);
   if (code !== 0) {
     throw new Error(`gh ${args.join(" ")} failed (exit ${code}): ${stderr.trim()}`);
