@@ -235,8 +235,22 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("parked")?.hex, "C2C2C2");
   assertEquals(byName.get("Josh")?.hex, "795548");
 
-  // web-jam-tools#300: pruned labels (native-field/milestone/type/dependency
-  // replacements now exist) must be gone from the canonical schema entirely.
+  // web-jam-tools#329 "Restore the Blocked label as canonical in
+  // labels.yaml — it was pruned in a batch Josh never ratified, and he
+  // wants it alongside native dependencies": `Blocked` (capital B) is
+  // canonical again, scoped to every repo, matching the label already
+  // live in web-jam-tools.
+  assertEquals(byName.get("Blocked")?.hex, "B60205");
+  assertEquals(byName.get("Blocked")?.repos, "all");
+  assertEquals(resolveRepos(schema, byName.get("Blocked")!.repos), allRepos(schema));
+
+  // web-jam-tools#300: pruned labels (native-field/milestone/type
+  // replacements now exist) must be gone from the canonical schema
+  // entirely. Lowercase `blocked` stays pruned — web-jam-tools#329 restored
+  // it as `Blocked` (capital B), a distinct canonical name; the old
+  // lowercase spelling is not resurrected and is still a non-canonical
+  // delete candidate if it ever turns up live (see the dedicated test
+  // below).
   for (
     const pruned of [
       "Top Priority",
@@ -300,7 +314,10 @@ Deno.test("web-jam-tools#300: a pruned priority label still present on GitHub is
   assertEquals(low?.action, "delete");
 });
 
-Deno.test("web-jam-tools#300: a pruned `blocked` label still present on GitHub is now a non-canonical delete candidate", async () => {
+Deno.test("web-jam-tools#300: a pruned lowercase `blocked` label still present on GitHub is now a non-canonical delete candidate", async () => {
+  // Distinct from the capitalized `Blocked`, which web-jam-tools#329
+  // restored as canonical below — this only proves the OLD lowercase
+  // spelling stays retired, not that `blocked` in general is non-canonical.
   const schema = await loadSchema(LABELS_YAML_PATH);
   const actual: ActualLabel[] = [{ name: "blocked", color: "0206d8" }];
   const drift = classifyRepoDrift(schema, "CollegeLutheran", actual);
@@ -308,6 +325,44 @@ Deno.test("web-jam-tools#300: a pruned `blocked` label still present on GitHub i
   const blocked = findByName(drift, "blocked");
   assertEquals(blocked?.kind, "non-canonical");
   assertEquals(blocked?.action, "delete");
+});
+
+Deno.test("web-jam-tools#329: `Blocked` (capital B) is canonical in every active repo — missing yields CREATE at #B60205", async () => {
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  for (const repo of allRepos(schema)) {
+    const drift = classifyRepoDrift(schema, repo, []); // Blocked absent from actual
+    const blocked = findByName(drift, "Blocked");
+    assertEquals(blocked?.kind, "missing", `expected Blocked missing/create in ${repo}`);
+    assertEquals(blocked?.action, "create");
+    assertEquals(blocked?.hex, "B60205");
+  }
+});
+
+Deno.test("web-jam-tools#329: `Blocked` already live at the right color is fully compliant (no drift) — matches the ad hoc web-jam-tools label", async () => {
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  const drift = classifyRepoDrift(schema, "web-jam-tools", [
+    { name: "Blocked", color: "B60205" },
+  ]);
+  assertEquals(findByName(drift, "Blocked"), undefined);
+});
+
+Deno.test("web-jam-tools#329: `Blocked` present but wrong color is MISCOLORED, not delete+create", async () => {
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  const drift = classifyRepoDrift(schema, "JaMmusic", [{ name: "Blocked", color: "cccccc" }]);
+  const blocked = findByName(drift, "Blocked");
+  assertEquals(blocked?.kind, "miscolored");
+  assertEquals(blocked?.action, "recolor");
+  assertEquals(blocked?.fromHex, "cccccc");
+  assertEquals(blocked?.hex, "B60205");
+});
+
+Deno.test("web-jam-tools#329: `Blocked` is scoped `repos: all`, so it is never a wrong-repo removal candidate in any active repo", async () => {
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  for (const repo of allRepos(schema)) {
+    const drift = classifyRepoDrift(schema, repo, [{ name: "Blocked", color: "B60205" }]);
+    const blocked = findByName(drift, "Blocked");
+    assertEquals(blocked, undefined, `expected no Blocked drift (esp. no wrong-repo) in ${repo}`);
+  }
 });
 
 Deno.test("real defect 3: TimShermanMusic single 'Flash' — split proposes BOTH Flash Med and Flash High, deletes old Flash", async () => {
