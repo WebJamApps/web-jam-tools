@@ -168,6 +168,7 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     "backup-restore",
     "timshermanmusic",
     "Access Controls",
+    "Claude Misbehaves",
   ]);
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "gig-outreach")?.repos,
@@ -197,8 +198,15 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     schema.milestoneTopics.find((t) => t.name === "timshermanmusic")?.repos,
     ["web-jam-back", "JaMmusic", "WebJamSocketCluster"],
   );
+  // Josh's call, created live in web-jam-tools on 2026-07-31 (milestone #5).
+  // web-jam-tools only for now.
+  assertEquals(
+    schema.milestoneTopics.find((t) => t.name === "Claude Misbehaves")?.repos,
+    ["web-jam-tools"],
+  );
   // web-jam-tools#315 widened this union to all 8 active repos, since
-  // "Access Controls" is scoped to every one of them.
+  // "Access Controls" is scoped to every one of them; "Claude Misbehaves"
+  // adds no new repos since web-jam-tools is already in the union.
   assertEquals(milestoneTopicRepos(schema), [
     "JaMmusic",
     "web-jam-back",
