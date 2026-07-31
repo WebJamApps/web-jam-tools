@@ -125,13 +125,14 @@ labels:
     # — matches the label already live in web-jam-tools (created ad hoc
     # 2026-07-30), no rename needed.
     #
-    # STANDING RULE, do not prune again: Josh wants BOTH the native GitHub
-    # issue-dependency relationship AND this label. The native dependency
-    # is the real relationship between issues; this label is the
-    # at-a-glance signal that makes an unworkable issue obvious in a plain
-    # list view. They are not alternatives — a future agent seeing native
-    # dependencies in use is not grounds to retire this label, and vice
-    # versa.
+    # STANDING RULE, do not prune again: Josh wants BOTH native GitHub
+    # issue-dependency links AND this label. Use native dependencies when a
+    # specific issue blocks the work — they render in the Issues list and
+    # clear on close. Use this label whenever work is unworkable for ANY
+    # reason, including cases with no issue to point at (vendor delays,
+    # credentials Josh must generate, physical actions). Native dependencies
+    # cannot express that last case, which is why this label is not
+    # redundant.
     #
     # `repos: all` (not just web-jam-tools) — Josh scans issue lists across
     # every active repo, and any of them can carry a currently-unworkable
