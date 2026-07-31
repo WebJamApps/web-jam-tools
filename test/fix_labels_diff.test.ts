@@ -269,12 +269,22 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   // `gig-outreach` label, the pruned `backup-restore` keep-list entry, and
   // (follow-up decision) the pruned `timshermanmusic` keep-list entry.
   // web-jam-tools#315 added "Access Controls" across all 8 active repos.
+  // The seven `song-recordings`.."politics" topics are from Josh's list on
+  // web-jam-tools#287 "fix-labels skill expanded / corrected" — created live
+  // as milestones on 2026-07-31 and registered here the same day.
   assertEquals(schema.milestoneTopics.map((t) => t.name), [
     "gig-outreach",
     "backup-restore",
     "timshermanmusic",
     "Access Controls",
     "Claude Misbehaves",
+    "song-recordings",
+    "set-lists",
+    "promote-gigs",
+    "venue-mining",
+    "financial",
+    "health-wellness",
+    "politics",
   ]);
   const accessControlsTopic = schema.milestoneTopics.find(
     (t) => t.name === "Access Controls",
@@ -295,6 +305,29 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     (t) => t.name === "Claude Misbehaves",
   );
   assertEquals(claudeMisbehavesTopic?.repos, ["web-jam-tools"]);
+
+  // web-jam-tools#287: the seven new topics each carry exactly the same four
+  // repos (not `all`) — JaMmusic, web-jam-back, WebJamSocketCluster, and
+  // web-jam-tools — matching the convention already used for
+  // `Access Controls` and `Claude Misbehaves` (each asserted its own repo
+  // scope above).
+  const fourRepoTopicNames = [
+    "song-recordings",
+    "set-lists",
+    "promote-gigs",
+    "venue-mining",
+    "financial",
+    "health-wellness",
+    "politics",
+  ];
+  for (const name of fourRepoTopicNames) {
+    const topic = schema.milestoneTopics.find((t) => t.name === name);
+    assertEquals(
+      topic?.repos,
+      ["JaMmusic", "web-jam-back", "WebJamSocketCluster", "web-jam-tools"],
+      `expected "${name}" to be scoped to exactly the 4 booking-epic repos`,
+    );
+  }
 });
 
 Deno.test("web-jam-tools#300: a pruned priority label still present on GitHub is now a non-canonical delete candidate", async () => {
