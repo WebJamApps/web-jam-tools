@@ -71,18 +71,27 @@ Shape, for orientation (see `labels.yaml` for the actual current values):
   `Flash High` / `Flash Low` additionally in the 5 front-end repos only. `Fable` is retired/dormant
   and marked `neverDelete` in the schema — the scripted diff never proposes removing it, in any
   repo.
-- **Status** — `parked` / `Josh`, across all 8 repos.
+- **Status** — `parked` / `Josh` / `Blocked`, across all 8 repos. `Blocked` (capital B, `B60205`) is
+  the at-a-glance signal for a currently-unworkable issue, used ALONGSIDE native GitHub
+  issue-dependency links (the real relationship) — never a substitute for them, and never the other
+  way around. Restored canonical by `web-jam-tools#329` "Restore the Blocked label as canonical in
+  labels.yaml — it was pruned in a batch Josh never ratified, and he wants it alongside native
+  dependencies" after the lowercase `blocked` was pruned without his agreement (below); do not prune
+  it again.
 - **Everything else** — any label not in `labels.yaml`'s `labels:` list is non-canonical, unless
   it's on that repo's `keep:` list (Josh-vetoed keepers, so he never has to re-veto the same label
   forever — currently empty; see `labels.yaml` for the up-to-date list).
 
 `web-jam-tools#300` pruned priority labels (`Top Priority`/`High Priority`/`Low Priority` → native
 `Priority` issue field), topic labels (`gig-outreach`, and the `backup-restore` and
-`timshermanmusic` keep-list entries → per-repo milestones, below), `bug`/`enhancement` (→ native
-issue Types), and `blocked` (→ native issue dependencies) from `labels.yaml` — they now surface as
-ordinary non-canonical delete candidates rather than canonical entries. Deleting them from GitHub
-itself is a separate, deliberate step: web-jam-tools#299 "Delete replaced labels org-wide, after
-migration".
+`timshermanmusic` keep-list entries → per-repo milestones, below), and `bug`/`enhancement` (→ native
+issue Types) from `labels.yaml` — they now surface as ordinary non-canonical delete candidates
+rather than canonical entries. Deleting them from GitHub itself is a separate, deliberate step:
+web-jam-tools#299 "Delete replaced labels org-wide, after migration". That same batch also pruned
+lowercase `blocked` (→ "native issue dependencies") — Josh never ratified that one specifically;
+`web-jam-tools#329` restored it as canonical `Blocked` (capital B, see above). The old lowercase
+`blocked` spelling stays retired and is still a non-canonical delete candidate if it ever turns up
+live.
 
 Repo classes (also in `labels.yaml`, under `repoClasses:`):
 
@@ -98,12 +107,12 @@ All 8 together are "all repos" below. Full slugs are `WebJamApps/<repo>` for eve
 `web-jam-tools#300`: topics (formerly the `gig-outreach` label and the hand-kept `backup-restore`
 and `timshermanmusic` labels) now live as per-repo **milestones**, matched cross-repo by **exact
 name** — see the design amendment on web-jam-tools#287 "fix-labels skill expanded / corrected"
-(2026-07-29). Canonical topics currently in use, per `labels.yaml`'s `milestoneTopics:` (see that
-file for the current values — not restated here):
-
-- `gig-outreach` — JaMmusic, web-jam-back, web-jam-tools, WebJamSocketCluster.
-- `backup-restore` — web-jam-tools.
-- `timshermanmusic` — web-jam-back, JaMmusic, WebJamSocketCluster.
+(2026-07-29). `labels.yaml`'s `milestoneTopics:` list is the single source of truth for which
+topics are canonical and which repos carry each one — read it there, not here. (This prose
+previously enumerated the topic → repo mapping as a hardcoded bullet list; nothing tested it, so it
+silently went stale — missing `Access Controls` after web-jam-tools#315 "Restrict Claude and Flash
+Dropbox access to web-jam-llms and JoshMariaMusic only" and missing `Claude Misbehaves` after it was
+added on a separate branch. Deleted rather than fixed, to remove the drift surface permanently.)
 
 `deno task fix-labels:milestone-diff` fetches each listed repo's actual milestones
 (`gh api repos/WebJamApps/<repo>/milestones`) and classifies every mismatch:
