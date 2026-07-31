@@ -274,6 +274,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "backup-restore",
     "timshermanmusic",
     "Access Controls",
+    "Claude Misbehaves",
   ]);
   const accessControlsTopic = schema.milestoneTopics.find(
     (t) => t.name === "Access Controls",
@@ -290,6 +291,10 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(backupRestoreTopic?.repos, ["web-jam-tools"]);
   const timShermanMusicTopic = schema.milestoneTopics.find((t) => t.name === "timshermanmusic");
   assertEquals(timShermanMusicTopic?.repos, ["web-jam-back", "JaMmusic", "WebJamSocketCluster"]);
+  const claudeMisbehavesTopic = schema.milestoneTopics.find(
+    (t) => t.name === "Claude Misbehaves",
+  );
+  assertEquals(claudeMisbehavesTopic?.repos, ["web-jam-tools"]);
 });
 
 Deno.test("web-jam-tools#300: a pruned priority label still present on GitHub is now a non-canonical delete candidate", async () => {
