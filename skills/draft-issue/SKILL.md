@@ -46,9 +46,10 @@ that's what following this skill prevents.
    - `Sonnet` — ordinary contained coding: a fix or feature across a few files, tests, light
      refactors.
    - `Opus` — genuine multi-file judgment, design/spec work, reviewing another model's output.
-   - `Flash Med` / `Flash High` — frontend/UI coding in a frontend repo (JaMmusic, CollegeLutheran,
-     AppersonAuto, TimShermanMusic, HenricksonForSalem only — `/fix-labels`'s `labels.yaml` scopes
-     these two to `repos: frontend`); pick High only when Medium is likely to need multiple retries.
+   - `Flash Med` / `Flash High` — frontend/UI coding, canonical in all 8 active repos per
+     `skills/fix-labels/labels.yaml` (Josh's call, 2026-07-31: Flash High is at Sonnet quality and
+     Flash Med a viable Haiku substitute, so both are routable everywhere, not just the front-end
+     repos); pick High only when Medium is likely to need multiple retries.
    - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
      delete-protection only, per `skills/fix-labels/labels.yaml`).
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
