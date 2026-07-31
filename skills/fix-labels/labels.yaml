@@ -12,9 +12,21 @@
 #
 # web-jam-tools#300 pruned priority labels (-> native `Priority` issue
 # field), topic labels (-> per-repo milestones, see `milestoneTopics:`
-# below), `bug`/`enhancement` (-> native issue Types), and `blocked` (->
-# native issue dependencies). Deleting the now-orphaned labels from GitHub
-# itself is a separate, deliberate step — web-jam-tools#299 — not done here.
+# below), and `bug`/`enhancement` (-> native issue Types). Deleting the
+# now-orphaned labels from GitHub itself is a separate, deliberate step —
+# web-jam-tools#299 — not done here.
+#
+# `blocked` was ALSO pruned by that same commit (7d2523d) as "-> native
+# issue dependencies", but Josh never ratified that one — it rode along in
+# the nine-label batch. web-jam-tools#329 "Restore the Blocked label as
+# canonical in labels.yaml — it was pruned in a batch Josh never ratified,
+# and he wants it alongside native dependencies" restores it (as `Blocked`,
+# capital B, see the `Blocked` entry below). Standing rule: Josh wants BOTH
+# the native GitHub issue-dependency relationship (the real relationship
+# between issues) AND the `Blocked` label (the at-a-glance signal that an
+# issue is currently unworkable, visible in a plain list view without
+# opening each issue). Neither replaces the other — do not prune `Blocked`
+# again on the theory that native dependencies make it redundant.
 
 # Named repo groups, referenced by the `repos:` field on each label below.
 # `all` is not listed here — it is computed in code as frontend + other.
@@ -104,6 +116,26 @@ labels:
     # perform (generating a credential, clicking through a vendor console, a
     # purchase, a physical action). Its purpose is to make his manual to-dos
     # findable in GitHub instead of being lost as a footnote in a chat session.
+  - name: Blocked
+    hex: "B60205"
+    repos: all
+    # RESTORED, canonical (web-jam-tools#329 "Restore the Blocked label as
+    # canonical in labels.yaml — it was pruned in a batch Josh never
+    # ratified, and he wants it alongside native dependencies"). Capital B
+    # — matches the label already live in web-jam-tools (created ad hoc
+    # 2026-07-30), no rename needed.
+    #
+    # STANDING RULE, do not prune again: Josh wants BOTH the native GitHub
+    # issue-dependency relationship AND this label. The native dependency
+    # is the real relationship between issues; this label is the
+    # at-a-glance signal that makes an unworkable issue obvious in a plain
+    # list view. They are not alternatives — a future agent seeing native
+    # dependencies in use is not grounds to retire this label, and vice
+    # versa.
+    #
+    # `repos: all` (not just web-jam-tools) — Josh scans issue lists across
+    # every active repo, and any of them can carry a currently-unworkable
+    # issue.
 
 # --- Canonical topic milestones (web-jam-tools#300) ---
 #
