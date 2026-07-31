@@ -169,6 +169,13 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     "timshermanmusic",
     "Access Controls",
     "Claude Misbehaves",
+    "song-recordings",
+    "set-lists",
+    "promote-gigs",
+    "venue-mining",
+    "financial",
+    "health-wellness",
+    "politics",
   ]);
   assertEquals(
     schema.milestoneTopics.find((t) => t.name === "gig-outreach")?.repos,
@@ -204,9 +211,31 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     schema.milestoneTopics.find((t) => t.name === "Claude Misbehaves")?.repos,
     ["web-jam-tools"],
   );
+  // web-jam-tools#287 "fix-labels skill expanded / corrected": seven topics
+  // from Josh's list, created live as milestones on 2026-07-31 in exactly
+  // these four repos each (not `all`) — matching the convention already
+  // used for "Access Controls" and "Claude Misbehaves" above.
+  for (
+    const name of [
+      "song-recordings",
+      "set-lists",
+      "promote-gigs",
+      "venue-mining",
+      "financial",
+      "health-wellness",
+      "politics",
+    ]
+  ) {
+    assertEquals(
+      schema.milestoneTopics.find((t) => t.name === name)?.repos,
+      ["JaMmusic", "web-jam-back", "WebJamSocketCluster", "web-jam-tools"],
+      `expected "${name}" to be scoped to exactly the 4 booking-epic repos`,
+    );
+  }
   // web-jam-tools#315 widened this union to all 8 active repos, since
   // "Access Controls" is scoped to every one of them; "Claude Misbehaves"
-  // adds no new repos since web-jam-tools is already in the union.
+  // and the 7 new booking-epic topics add no new repos since all 4 of their
+  // repos are already in the union.
   assertEquals(milestoneTopicRepos(schema), [
     "JaMmusic",
     "web-jam-back",
