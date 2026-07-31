@@ -210,6 +210,62 @@ milestoneTopics:
     repos:
       - web-jam-tools
 
+  # Seven topics from Josh's list on web-jam-tools#287 "fix-labels skill
+  # expanded / corrected" — never created at the time that issue landed, and
+  # created live (as milestones, in exactly these four repos each) on
+  # 2026-07-31 at his instruction. Registered here the same day so
+  # `fix-labels:milestone-diff` stops reporting them as non-canonical drift.
+  - name: song-recordings
+    repos:
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - web-jam-tools
+  - name: set-lists
+    repos:
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - web-jam-tools
+  - name: promote-gigs
+    repos:
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - web-jam-tools
+  - name: venue-mining
+    repos:
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - web-jam-tools
+  - name: financial
+    repos:
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - web-jam-tools
+  - name: health-wellness
+    repos:
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - web-jam-tools
+  - name: politics
+    repos:
+      - JaMmusic
+      - web-jam-back
+      - WebJamSocketCluster
+      - web-jam-tools
+
+# DECISION (Josh, 2026-07-31): NEITHER a `Blocker` label NOR a `depends-on`
+# label will be added, both requested on web-jam-tools#287 "fix-labels
+# skill expanded / corrected". Reason: native GitHub issue dependencies
+# already cover the blocking relationship (verified working cross-repo), and
+# for the merge-at-the-same-time case Josh chose not to add a label at all.
+# This comment exists so no future agent re-proposes either label as
+# missing — treat both as considered and declined, not overlooked.
+
 # Per-repo list of non-canonical label names that are explicitly preserved
 # and must NEVER be proposed for delete, even though they're not on the
 # `labels:` master list above.
