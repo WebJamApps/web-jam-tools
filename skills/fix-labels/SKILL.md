@@ -107,12 +107,12 @@ All 8 together are "all repos" below. Full slugs are `WebJamApps/<repo>` for eve
 `web-jam-tools#300`: topics (formerly the `gig-outreach` label and the hand-kept `backup-restore`
 and `timshermanmusic` labels) now live as per-repo **milestones**, matched cross-repo by **exact
 name** — see the design amendment on web-jam-tools#287 "fix-labels skill expanded / corrected"
-(2026-07-29). Canonical topics currently in use, per `labels.yaml`'s `milestoneTopics:` (see that
-file for the current values — not restated here):
-
-- `gig-outreach` — JaMmusic, web-jam-back, web-jam-tools, WebJamSocketCluster.
-- `backup-restore` — web-jam-tools.
-- `timshermanmusic` — web-jam-back, JaMmusic, WebJamSocketCluster.
+(2026-07-29). `labels.yaml`'s `milestoneTopics:` list is the single source of truth for which
+topics are canonical and which repos carry each one — read it there, not here. (This prose
+previously enumerated the topic → repo mapping as a hardcoded bullet list; nothing tested it, so it
+silently went stale — missing `Access Controls` after web-jam-tools#315 "Restrict Claude and Flash
+Dropbox access to web-jam-llms and JoshMariaMusic only" and missing `Claude Misbehaves` after it was
+added on a separate branch. Deleted rather than fixed, to remove the drift surface permanently.)
 
 `deno task fix-labels:milestone-diff` fetches each listed repo's actual milestones
 (`gh api repos/WebJamApps/<repo>/milestones`) and classifies every mismatch:
