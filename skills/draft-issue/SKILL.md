@@ -11,7 +11,8 @@ metadata:
 ## Execution model
 
 This is mechanical-with-light-judgment (search for duplicates, write acceptance criteria that
-close cleanly, pick one label from a six-item list) — run it on **Sonnet**, the cheapest tier that
+close cleanly, pick one label from the model-tier list in `skills/fix-labels/labels.yaml`) — run it
+on **Sonnet**, the cheapest tier that
 reliably gets the judgment calls right. It is not hard-gated to a single model the way `/fix-labels`
 and `/handle-gmails` are (this skill is the quality layer, not the floor — see "Why a skill AND a
 hook" below); if you're running on a pricier model because you're mid-conversation, finish the
@@ -21,9 +22,10 @@ issue rather than switching, but don't default to Opus/Fable for a fresh `/draft
 
 `hooks/require-model-label-on-issue-create.sh` (web-jam-tools#265) is a hard gate: it denies any
 `gh issue create` or MCP `issue_write` create call that doesn't carry exactly one label from
-`skills/fix-labels/labels.yaml`'s `modelTier: true` entries (`Haiku`, `Sonnet`, `Opus`, `Fable`,
-`Flash Med`, `Flash High`) — read at runtime from the generated sidecar
-`skills/fix-labels/model-labels.json`, since the hook is bash/python and can't parse YAML in CI.
+`skills/fix-labels/labels.yaml`'s `modelTier: true` entries — read at runtime from the generated
+sidecar `skills/fix-labels/model-labels.json` (not restated here; that list drifts every time a
+model tier is added or retired, so `labels.yaml` is the only place it lives), since the hook is
+bash/python and can't parse YAML in CI.
 That hook closes the silent-omission hole — it cannot judge whether the
 label is the *right* one, whether the body cites its references correctly, whether a duplicate
 already exists, or whether the acceptance criteria actually let the issue close. This skill is the
@@ -46,9 +48,13 @@ that's what following this skill prevents.
    - `Sonnet` — ordinary contained coding: a fix or feature across a few files, tests, light
      refactors.
    - `Opus` — genuine multi-file judgment, design/spec work, reviewing another model's output.
-   - `Flash Med` / `Flash High` — frontend/UI coding in a frontend repo (JaMmusic, CollegeLutheran,
-     AppersonAuto, TimShermanMusic, HenricksonForSalem only — `/fix-labels`'s `labels.yaml` scopes
-     these two to `repos: frontend`); pick High only when Medium is likely to need multiple retries.
+   - `Flash Med` / `Flash High` — frontend/UI coding, canonical in all 8 active repos per
+     `skills/fix-labels/labels.yaml` (Josh's call, 2026-07-31: Flash High is at Sonnet quality and
+     Flash Med a viable Haiku substitute, so both are routable everywhere, not just the front-end
+     repos); pick High only when Medium is likely to need multiple retries.
+   - `Flash Low` — frontend/UI coding, front-end repos only (`skills/fix-labels/labels.yaml`).
+     Its use case is an OPEN QUESTION — Josh said as of 2026-07-31 he is "not sure yet" what it's
+     for. Don't guess when a task might be Flash Low; ask Josh rather than applying it.
    - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
      delete-protection only, per `skills/fix-labels/labels.yaml`).
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
