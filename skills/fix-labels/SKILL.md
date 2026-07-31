@@ -67,10 +67,11 @@ topic names — one source of truth, not two that can drift apart.
 
 Shape, for orientation (see `labels.yaml` for the actual current values):
 
-- **Model-tier** — `Haiku` / `Sonnet` / `Opus` / `Fable` across all 8 repos; `Flash Med` /
-  `Flash High` / `Flash Low` additionally in the 5 front-end repos only. `Fable` is retired/dormant
-  and marked `neverDelete` in the schema — the scripted diff never proposes removing it, in any
-  repo.
+- **Model-tier** — `Haiku` / `Sonnet` / `Opus` / `Fable` / `Flash High` / `Flash Med` across all 8
+  repos; `Flash Low` scoped to the 5 front-end repos only (Josh's call, 2026-07-31 — see
+  `labels.yaml` for the current per-label scope and the open question on `Flash Low`). `Fable` is
+  retired/dormant and marked `neverDelete` in the schema — the scripted diff never proposes
+  removing it, in any repo.
 - **Status** — `parked` / `Josh` / `Blocked`, across all 8 repos. `Blocked` (capital B, `B60205`) is
   the at-a-glance signal for a currently-unworkable issue, used ALONGSIDE native GitHub
   issue-dependency links (the real relationship) — never a substitute for them, and never the other
@@ -170,8 +171,8 @@ added on a separate branch. Deleted rather than fixed, to remove the drift surfa
    missing, even if its color is badly wrong — this is exactly the case (`blocked` in
    CollegeLutheran) that the eyeballed version of this skill got wrong.
 4. **Wrong-repo placement** — a canonical label is present in a repo that shouldn't carry it (e.g.
-   `Flash Med`/`Flash High`/`Flash Low` in a non-front-end repo) → propose **remove**
-   (`gh label delete`, this repo only — the label stays canonical elsewhere).
+   `Flash Low`, scoped to front-end repos only, present in a non-front-end repo) → propose
+   **remove** (`gh label delete`, this repo only — the label stays canonical elsewhere).
 5. **Non-canonical** — any label not in `labels.yaml` at all — including every GitHub default
    label, a legacy label like a single `Flash` where the canonical split is `Flash Med`/`Flash
    High`/`Flash Low`, and (as of web-jam-tools#300) the pruned `Top Priority`/`High
@@ -202,7 +203,7 @@ and never let the model guess or skip it.
 
 ### web-jam-back
 - DELETE `Top Priority` — non-canonical — 3 open issues carry this label
-- REMOVE `Flash Med` — wrong-repo (not canonical for this repo) — 5 open issues carry this label
+- REMOVE `Flash Low` — wrong-repo (not canonical for this repo) — 5 open issues carry this label
 - DELETE `wontfix` — non-canonical GitHub default — 0 open issues carry this label
 
 ### CollegeLutheran
@@ -290,7 +291,8 @@ milestone already exists must be surfaced, not swallowed.
 - Never auto-applies anything, including creates that look obviously safe.
 - Never deletes or removes a label without first computing and showing its blast radius.
 - Never touches `Fable` — retired/dormant, but always kept.
-- Never adds `Flash Med`/`Flash High`/`Flash Low` outside their scoped repo list (frontend) above.
+- Never adds `Flash Med`/`Flash High`/`Flash Low` outside their scoped repo list in `labels.yaml`
+  above (`Flash Med`/`Flash High`: all 8 repos; `Flash Low`: front-end only).
 - Never invents a new label name/color or topic milestone name outside the canonical schema in this
   file — if a repo has a label or milestone that doesn't map cleanly to any schema entry, it's a
   non-canonical candidate, not a judgment call to reclassify on the fly.
