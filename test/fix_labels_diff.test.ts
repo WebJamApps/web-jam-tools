@@ -217,8 +217,16 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Fable")?.modelTier, true);
   assertEquals(byName.get("Flash Med")?.hex, "FBCA04");
   assertEquals(byName.get("Flash Med")?.modelTier, true);
+  // Josh's call, 2026-07-31: Flash High and Flash Med are routable in all
+  // 8 active repos, not just the 5 front-end ones — see the comment above
+  // the `labels:` entries in skills/fix-labels/labels.yaml. Flash Low stays
+  // frontend-only pending Josh's open decision on its use case. Assert this
+  // explicitly so a future agent can't quietly re-narrow Flash High/Med
+  // back to `frontend`.
+  assertEquals(byName.get("Flash Med")?.repos, "all");
   assertEquals(byName.get("Flash High")?.hex, "E67E22");
   assertEquals(byName.get("Flash High")?.modelTier, true);
+  assertEquals(byName.get("Flash High")?.repos, "all");
   assertEquals(byName.get("Flash Low")?.hex, "FEF2C0");
   assertEquals(byName.get("Flash Low")?.modelTier, true);
   assertEquals(byName.get("Flash Low")?.repos, "frontend");
@@ -395,6 +403,32 @@ Deno.test("web-jam-tools#329: `Blocked` is scoped `repos: all`, so it is never a
     const drift = classifyRepoDrift(schema, repo, [{ name: "Blocked", color: "B60205" }]);
     const blocked = findByName(drift, "Blocked");
     assertEquals(blocked, undefined, `expected no Blocked drift (esp. no wrong-repo) in ${repo}`);
+  }
+});
+
+Deno.test("web-jam-tools 2026-07-31: `Flash High` and `Flash Med` are scoped `repos: all`, so they are never wrong-repo removal candidates in web-jam-back or WebJamSocketCluster", async () => {
+  // Regression test for the standing trap described on the dispatch that
+  // widened these two labels: `Flash High` had been `repos: frontend`,
+  // so `deno task fix-labels:diff` kept proposing REMOVE for it in
+  // web-jam-back and WebJamSocketCluster, where web-jam-back#991 "Remove
+  // PUT /venue/:id once all callers use PATCH" legitimately carries it.
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  for (const repo of ["web-jam-back", "WebJamSocketCluster"]) {
+    const actual: ActualLabel[] = [
+      { name: "Flash High", color: "E67E22" },
+      { name: "Flash Med", color: "FBCA04" },
+    ];
+    const drift = classifyRepoDrift(schema, repo, actual);
+    assertEquals(
+      findByName(drift, "Flash High"),
+      undefined,
+      `expected no Flash High drift (esp. no wrong-repo) in ${repo}`,
+    );
+    assertEquals(
+      findByName(drift, "Flash Med"),
+      undefined,
+      `expected no Flash Med drift (esp. no wrong-repo) in ${repo}`,
+    );
   }
 });
 
