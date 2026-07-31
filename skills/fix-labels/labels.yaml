@@ -148,10 +148,11 @@ milestoneTopics:
   # active repos on 2026-07-30. Covers restricting what AI agents and
   # integrations can reach: Dropbox, filesystem, connectors, credentials.
   #
-  # NOTE: this is the only canonical milestone using Title Case with a space;
-  # the three above are lowercase-kebab topic names. Matching is by EXACT
-  # name, so the live milestones and this entry agree — but if the convention
-  # is ever normalised, rename the live milestones and this entry together.
+  # NOTE: this and `Claude Misbehaves` below are the canonical milestones
+  # using Title Case with a space; the three above are lowercase-kebab topic
+  # names. Matching is by EXACT name, so the live milestones and this entry
+  # agree — but if the convention is ever normalised, rename the live
+  # milestones and this entry together.
   - name: Access Controls
     repos:
       - JaMmusic
@@ -161,6 +162,19 @@ milestoneTopics:
       - HenricksonForSalem
       - web-jam-back
       - WebJamSocketCluster
+      - web-jam-tools
+  # Josh's call, created live in web-jam-tools on 2026-07-31 (milestone #5).
+  # Collects issues about an AI agent breaking one of Josh's operational
+  # rules, and the guards that stop it happening again — the existing
+  # examples being web-jam-tools#308 "Remote branches can be deleted by an
+  # agent with no authorization — advisory guard does not block (3 layers:
+  # deny rules, GitHub ruleset, HARD RULES)" and web-jam-tools#324 "No agent
+  # connects a new account, credential, or MCP server without Josh's explicit
+  # authorization — add the rule and audit where it can be mechanically
+  # enforced". web-jam-tools only for now — add repos here (and create the
+  # milestone live there) if the topic ever spans more.
+  - name: Claude Misbehaves
+    repos:
       - web-jam-tools
 
 # Per-repo list of non-canonical label names that are explicitly preserved
