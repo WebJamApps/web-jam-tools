@@ -89,14 +89,26 @@ labels:
     # change, so this entry (and its neverDelete protection) is unchanged.
     neverDelete: true
 
-  # --- Model-tier — front-end 5 repos ONLY ---
+  # --- Model-tier — Flash High/Med all 8 repos, Flash Low frontend-only ---
+  # Josh's call (2026-07-31): Flash 3.6 High is at Sonnet quality, and Flash
+  # Medium is a viable substitute for Haiku, so both must be routable in
+  # every repo, not just the 5 front-end ones — he wants routing
+  # flexibility. This widened `Flash High` and `Flash Med` from
+  # `repos: frontend` to `repos: all` (web-jam-tools, no issue — Flash High
+  # had been wrongly proposed for REMOVE in web-jam-back and
+  # WebJamSocketCluster, where web-jam-back#991 "Remove PUT /venue/:id once
+  # all callers use PATCH" already carries it live).
+  #
+  # `Flash Low` is UNCHANGED, still `repos: frontend`. OPEN QUESTION (Josh,
+  # 2026-07-31): he is "not sure yet for the Flash Low usecase" — do not
+  # widen this one without his explicit decision.
   - name: Flash Med
     hex: "FBCA04"
-    repos: frontend
+    repos: all
     modelTier: true
   - name: Flash High
     hex: "E67E22"
-    repos: frontend
+    repos: all
     modelTier: true
   - name: Flash Low
     hex: "FEF2C0"
