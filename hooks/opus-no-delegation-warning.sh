@@ -36,6 +36,24 @@
 # fails for any reason, exit 0 and stay quiet. A future reader must NOT flip
 # this to fail-closed — a warning hook that blocks or spams on ambiguous
 # input is worse than one that occasionally misses a real case.
+#
+# Path exclusions (web-jam-tools#286-follow-up, 2026-08-01): session-memory
+# bookkeeping — checkpoint files, the per-project MEMORY.md index, and the
+# session scratchpad — is inherently non-delegable. A subagent spawns cold
+# and does not inherit the parent's context, which is the exact thing this
+# bookkeeping exists to preserve, so counting it toward "should have
+# delegated" is a false positive by construction. It also characteristically
+# happens in the turn right after a dispatch, so an unfiltered count fires
+# precisely when delegation DID just occur — the worst possible time to cry
+# wolf. Excluded-path edits are IGNORED ENTIRELY (filtered out before
+# counting), not subtracted after the fact — same effect, simpler jq.
+# Excluded, matched against each Edit/Write/NotebookEdit's target path:
+#   - anything under .claude/projects/<anything>/memory/ (per-project, so we
+#     match the "memory/" segment rather than hardcoding a home directory)
+#   - MEMORY.md anywhere under .claude/
+#   - the session scratchpad: /tmp/claude-*/.../scratchpad/
+# A Task call is NEVER excluded by this logic — it's the one thing this hook
+# is trying to detect the absence of.
 set -euo pipefail
 
 # Minimum edits (Edit + Write + NotebookEdit combined) in the current turn,
@@ -53,7 +71,17 @@ case "$model" in
   *) exit 0 ;;
 esac
 
-counts="$(jq -s -c '
+# Excluded-path regexes, applied to each Edit/Write/NotebookEdit's target
+# path (Edit/Write use .input.file_path, NotebookEdit uses
+# .input.notebook_path). See the header comment for what/why.
+MEMORY_DIR_RE='\.claude/projects/[^/]+/memory/'
+MEMORY_MD_RE='\.claude/.*MEMORY\.md$'
+SCRATCHPAD_RE='^/tmp/claude-[^/]+/.*/scratchpad/'
+
+counts="$(jq -s -c \
+  --arg memDirRe "$MEMORY_DIR_RE" \
+  --arg memMdRe "$MEMORY_MD_RE" \
+  --arg scratchRe "$SCRATCHPAD_RE" '
   . as $all
   | ([range(0;length)
       | select($all[.].type=="user"
@@ -62,8 +90,17 @@ counts="$(jq -s -c '
   | ($all[($lastUserIdx + 1):])
   | map(select(.type=="assistant")
         | ((.message.content? // []) | .[]?)
-        | select(.type=="tool_use")
-        | .name)
+        | select(.type=="tool_use"))
+  | map({name, path: ((.input.file_path // .input.notebook_path) // "")})
+  | map(select(
+      if (.name=="Edit" or .name=="Write" or .name=="NotebookEdit") then
+        ((.path | test($memDirRe))
+          or (.path | test($memMdRe))
+          or (.path | test($scratchRe))
+        ) | not
+      else true end
+    ))
+  | map(.name)
   | {edits: (map(select(.=="Edit" or .=="Write" or .=="NotebookEdit")) | length),
      tasks: (map(select(.=="Task")) | length)}
 ' "$tp" 2>/dev/null || true)"
