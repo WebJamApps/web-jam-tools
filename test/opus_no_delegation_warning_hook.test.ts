@@ -73,6 +73,31 @@ function assistantToolUse(model: string, name: string, id: string): TranscriptEn
   };
 }
 
+// Same as assistantToolUse but with a target path in .input, the way
+// Edit/Write (file_path) and NotebookEdit (notebook_path) tool_use blocks
+// actually look in a real transcript — needed to exercise the path
+// exclusion logic.
+function assistantToolUseAtPath(
+  model: string,
+  name: string,
+  id: string,
+  path: string,
+): TranscriptEntry {
+  const inputKey = name === "NotebookEdit" ? "notebook_path" : "file_path";
+  return {
+    type: "assistant",
+    message: {
+      role: "assistant",
+      model,
+      content: [{ type: "tool_use", id, name, input: { [inputKey]: path } }],
+    },
+  };
+}
+
+function editTurnAtPaths(model: string, paths: string[], startId = 0): TranscriptEntry[] {
+  return paths.map((p, i) => assistantToolUseAtPath(model, "Edit", `edit-${startId + i}`, p));
+}
+
 async function withFixtureTranscript(
   entries: TranscriptEntry[],
   fn: (path: string) => Promise<void>,
@@ -285,6 +310,142 @@ Deno.test(
         parsed.systemMessage.includes(`${THRESHOLD} file edits`),
         `tool_result entry was wrongly treated as a turn boundary, got: ${res.stdout}`,
       );
+    });
+  },
+);
+
+// --- path exclusions (web-jam-tools#286-follow-up): memory/scratchpad
+// bookkeeping is non-delegable and must not count toward the threshold ---
+
+const MEMORY_DIR_PATH = "/home/joshua/.claude/projects/-home-joshua/memory/session-checkpoint.md";
+const MEMORY_MD_PATH = "/home/joshua/.claude/projects/-home-joshua/memory/MEMORY.md";
+const SCRATCHPAD_PATH =
+  "/tmp/claude-1000/-home-joshua/3315bc1a-1ac3-429e-8002-b495465bf684/scratchpad/notes.txt";
+const SOURCE_PATH_PREFIX = "/home/joshua/WebJamApps/web-jam-tools/src/file";
+
+function sourcePaths(count: number, startId = 0): string[] {
+  return Array.from({ length: count }, (_, i) => `${SOURCE_PATH_PREFIX}${startId + i}.ts`);
+}
+
+Deno.test(
+  "5 edits all under .claude/projects/<x>/memory/, zero spawns: does NOT warn (the reported false positive)",
+  async () => {
+    const entries = [
+      userTurn("do the thing"),
+      ...editTurnAtPaths(OPUS_MODEL, [
+        MEMORY_DIR_PATH,
+        MEMORY_DIR_PATH.replace("session-checkpoint", "another-checkpoint"),
+        MEMORY_DIR_PATH.replace("session-checkpoint", "new-rule"),
+        MEMORY_MD_PATH,
+        MEMORY_MD_PATH,
+      ]),
+    ];
+    await withFixtureTranscript(entries, async (path) => {
+      const res = await runHook(path);
+      assertEquals(res.code, 0, res.stderr);
+      assertEquals(res.stdout.trim(), "", `expected silence, got: ${res.stdout}`);
+    });
+  },
+);
+
+Deno.test(
+  "5 edits to ordinary repo source files, zero spawns: still DOES warn (no regression)",
+  async () => {
+    const entries = [
+      userTurn("do the thing"),
+      ...editTurnAtPaths(OPUS_MODEL, sourcePaths(THRESHOLD)),
+    ];
+    await withFixtureTranscript(entries, async (path) => {
+      const res = await runHook(path);
+      assertEquals(res.code, 0, res.stderr);
+      const parsed = JSON.parse(res.stdout);
+      assert(
+        parsed.systemMessage.includes(`${THRESHOLD} file edits`),
+        `expected message to name ${THRESHOLD}, got: ${res.stdout}`,
+      );
+    });
+  },
+);
+
+Deno.test(
+  "mix of memory edits + real source edits where the real ones ALONE clear the threshold: still warns",
+  async () => {
+    const entries = [
+      userTurn("do the thing"),
+      ...editTurnAtPaths(
+        OPUS_MODEL,
+        [MEMORY_DIR_PATH, MEMORY_MD_PATH, SCRATCHPAD_PATH, ...sourcePaths(THRESHOLD)],
+      ),
+    ];
+    await withFixtureTranscript(entries, async (path) => {
+      const res = await runHook(path);
+      assertEquals(res.code, 0, res.stderr);
+      const parsed = JSON.parse(res.stdout);
+      assert(
+        parsed.systemMessage.includes(`${THRESHOLD} file edits`),
+        `expected message to name only the ${THRESHOLD} real source edits, got: ${res.stdout}`,
+      );
+    });
+  },
+);
+
+Deno.test(
+  "mix of memory edits + real source edits where the real ones ALONE do NOT clear the threshold: does not warn",
+  async () => {
+    const entries = [
+      userTurn("do the thing"),
+      ...editTurnAtPaths(
+        OPUS_MODEL,
+        [
+          MEMORY_DIR_PATH,
+          MEMORY_MD_PATH,
+          SCRATCHPAD_PATH,
+          MEMORY_DIR_PATH.replace("session-checkpoint", "another-checkpoint"),
+          ...sourcePaths(THRESHOLD - 1),
+        ],
+      ),
+    ];
+    await withFixtureTranscript(entries, async (path) => {
+      const res = await runHook(path);
+      assertEquals(res.code, 0, res.stderr);
+      assertEquals(res.stdout.trim(), "", `expected silence, got: ${res.stdout}`);
+    });
+  },
+);
+
+Deno.test(
+  "MEMORY.md under .claude/ (not nested under a memory/ dir) is excluded",
+  async () => {
+    const entries = [
+      userTurn("do the thing"),
+      ...editTurnAtPaths(OPUS_MODEL, [
+        "/home/joshua/.claude/MEMORY.md",
+        ...sourcePaths(THRESHOLD - 1),
+      ]),
+    ];
+    await withFixtureTranscript(entries, async (path) => {
+      const res = await runHook(path);
+      assertEquals(res.code, 0, res.stderr);
+      assertEquals(res.stdout.trim(), "", `expected silence, got: ${res.stdout}`);
+    });
+  },
+);
+
+Deno.test(
+  "scratchpad edits under /tmp/claude-*/.../scratchpad/ are excluded",
+  async () => {
+    const entries = [
+      userTurn("do the thing"),
+      ...editTurnAtPaths(OPUS_MODEL, [
+        SCRATCHPAD_PATH,
+        SCRATCHPAD_PATH.replace("notes.txt", "draft.md"),
+        ...sourcePaths(THRESHOLD - 1),
+      ]),
+    ];
+    await withFixtureTranscript(entries, async (path) => {
+      const res = await runHook(path);
+      assertEquals(res.code, 0, res.stderr);
+      assertEquals(res.stdout.trim(), "", `expected silence, got: ${res.stdout}`);
     });
   },
 );
