@@ -66,4 +66,27 @@ if printf '%s' "$c" | grep -Eq 'deno +deploy( |$).*--prod( |$)' \
   block "production deploy command — deploying is Josh's decision."
 fi
 
+# 5) REST/GraphQL merge endpoints (web-jam-tools#308 follow-up). Rule 1 only
+#    matches the `gh pr merge` CLI subcommand — these hit the same underlying
+#    GitHub merge operations directly via `gh api` and bypass rule 1 entirely.
+#    Verified against the live GitHub REST/GraphQL docs before writing these
+#    patterns (PUT .../pulls/{n}/merge, POST .../merges, and the
+#    `mergePullRequest`/`mergeBranch` GraphQL mutations).
+if printf '%s' "$c" | grep -Eq 'gh +api( |$)'; then
+  # a) REST: PUT repos/{owner}/{repo}/pulls/{n}/merge — merge a pull request.
+  if printf '%s' "$c" | grep -Eq 'pulls/[^ ]+/merge( |$|\?)' \
+    && printf '%s' "$c" | grep -Eq '(-X|--method) +PUT'; then
+    block "'gh api ... pulls/N/merge' (PUT) — merging a PR via the REST API is Josh's decision."
+  fi
+  # b) REST: POST repos/{owner}/{repo}/merges — merge a branch.
+  if printf '%s' "$c" | grep -Eq 'repos/[^ ]+/merges( |$|\?)'; then
+    block "'gh api ... repos/OWNER/REPO/merges' — merging a branch via the REST API is Josh's decision."
+  fi
+  # c) GraphQL: the mergePullRequest / mergeBranch mutations via 'gh api graphql'.
+  if printf '%s' "$c" | grep -Eq 'graphql( |$)' \
+    && printf '%s' "$c" | grep -Eq 'merge(PullRequest|Branch)'; then
+    block "'gh api graphql' merge mutation — merging via the GraphQL API is Josh's decision."
+  fi
+fi
+
 exit 0
