@@ -121,6 +121,66 @@ web-jam-tools#298 "Migrate existing issues to native Priority/Area fields,
 Type, and dependencies (org-wide)" was verified entirely through REST, and
 Josh then could not find the `Area` field in the browser at all.
 
+## EPIC AND SUB-ISSUE COHERENCE (wjt#326)
+
+An epic was put in front of Josh for approval while it contradicted its own
+sub-issues. Two permission rules he had never approved sat as acceptance
+criteria on a sub-issue while the epic still listed them as awaiting his
+ruling; separately, a decision he HAD made was still recorded as "still open"
+in an epic comment written 24 minutes before he ruled. His approval gate was
+reviewing a different document than agents would have built from. These rules
+exist to prevent that class of failure.
+
+The root cause is structural, not carelessness. Sub-issues are deliberately
+written self-contained ("everything needed is below — do not go looking for
+context on the parent epic") so a dispatched agent need not load the epic.
+That is correct for dispatch economics, and it is exactly what guarantees
+drift: every decision ends up written down in three places, and a ruling
+updates only the artifact the agent happened to be editing at the time.
+
+### Rule 1 — implementation detail may be duplicated; approval status may not
+
+A sub-issue may restate as much build detail as it needs in order to stay
+self-contained. It must **never** assert whether Josh approved something.
+
+- Approval status lives in exactly ONE artifact per epic: the epic body, or a
+  single decisions-ledger comment on it that is edited in place — never
+  appended to, never superseded by a later comment.
+- Where a sub-issue needs to refer to approval status, it links: "approval
+  status: see the parent epic". It does not restate the answer.
+- An unapproved item may still be written up as an acceptance criterion, but
+  it carries `NOT APPROVED — do not build` inline, and the epic remains the
+  only place that records when that changes.
+
+Rationale: duplicated build detail that drifts produces a wrong
+implementation, which tests and review catch. Duplicated approval status that
+drifts produces work Josh never sanctioned, which nothing catches — because
+the document he reviewed told him it was still his call.
+
+### Rule 2 — run a coherence check before asking Josh to review an epic
+
+Before telling Josh an epic is ready for review or approval, dispatch a cheap
+(Haiku) read-only check that loads the epic body, every comment on it, and
+every sub-issue, and reports:
+
+- any decision recorded as settled in one artifact and open in another;
+- any acceptance criterion whose approval status is unstated or contradicted;
+- any item marked "deferred to a follow-up" with no such issue actually filed;
+- any checkbox whose ticked state disagrees with the prose around it.
+
+Report the findings to Josh together with the review request — not silently
+fixed, not omitted. "I found nothing" is a valid and useful result.
+
+This is not optional polish. Josh's review is the only gate in the workflow;
+an epic that is internally inconsistent makes that gate meaningless.
+
+### Rule 3 — "deferred to a follow-up" requires the follow-up to exist
+
+An item deferred out of an epic is filed as a real issue before the epic
+closes, or it is not deferred and stays in the epic. "Deferred" with no issue
+behind it is deletion with extra steps — and it lands hardest on exactly the
+items that got deferred because they were hard.
+
 ## FE/BE COUPLING (wjt#240)
 
 A change with a back-end half and a front-end half can ship half-done — e.g. the
