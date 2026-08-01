@@ -195,7 +195,7 @@ Deno.test("multiple distinct violations in one message are ALL reported, not jus
   const entries = [
     userTurn("do the thing"),
     assistantText(
-      'First #100 then web-jam-tools#200 bare (no title) and finally #300 to close.',
+      "First #100 then web-jam-tools#200 bare (no title) and finally #300 to close.",
     ),
   ];
   await withFixtureTranscript(entries, async (path) => {
