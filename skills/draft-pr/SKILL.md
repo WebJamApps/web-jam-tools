@@ -24,9 +24,10 @@ ready on GitHub.
 
 1. You are on a feature branch named `claude/<issue#>-<slug>` (the issue number in
    the branch is how the script derives the issue reference). If your branch lacks the
-   number, pass `--issue N` explicitly. **An issue is OPTIONAL** (2026-07-03): with no
-   issue resolvable, the PR simply has no Closes line and its title falls back to the
-   last commit subject — NEVER create an issue just to satisfy the script.
+   number, pass `--issue N` explicitly (supports full URLs like `https://github.com/OWNER/REPO/issues/N`,
+   `OWNER/REPO#N`, and bare `#N`/`N` — cross-repo issues format as `Closes OWNER/REPO#N` on merge).
+   **An issue is OPTIONAL** (2026-07-03): with no issue resolvable, the PR simply has no Closes line
+   and its title falls back to the last commit subject — NEVER create an issue just to satisfy the script.
 2. Everything is committed (clean working tree) and lint + tests are green.
 3. **Version bump:** On the PR's first commit, bump the version once in `deno.json`
    (web-jam-tools) or `package.json` (other repos). The CI "Version bump check" gate

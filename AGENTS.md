@@ -37,9 +37,9 @@ flags — not only in the chat reply:
 `--summary`, `--test-plan`, and `--test-evidence` are **required** — the script
 **refuses to open a PR with an empty or placeholder description** (web-jam-tools#77).
 It always opens a **draft** PR based on **`dev`**, with the issue number derived from
-the `<lane>/<issue#>-<slug>` branch name and a footer naming the tool + model (hard
-invariants — no flag overrides them). By default it references the issue (`Part of #N`);
-pass `--closes` to make it the completing PR (`Closes #N`). Josh alone reviews and
+the `<lane>/<issue#>-<slug>` branch name (or explicit `--issue` flag, which supports full URLs, `OWNER/REPO#N`, or bare `#N`/`N` and formats cross-repo closing lines as `Closes OWNER/REPO#N`) and a footer naming the tool + model (hard
+invariants — no flag overrides them). By default it references the issue (`Part of #N` or `Part of OWNER/REPO#N`);
+pass `--closes` to make it the completing PR (`Closes #N` or `Closes OWNER/REPO#N`). Josh alone reviews and
 flips draft → ready. See `skills/draft-pr/SKILL.md`.
 
 ### PR body formatting (do this every time)
