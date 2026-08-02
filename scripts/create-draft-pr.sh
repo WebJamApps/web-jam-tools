@@ -272,6 +272,8 @@ fi
 if [ -z "$ISSUE" ] && [[ "$BRANCH" =~ ^[^/]+/([0-9]+)(-|$) ]]; then
   ISSUE="${BASH_REMATCH[1]}"
 fi
+
+FORMATTED_ISSUE=""
 # An issue is optional (2026-07-03): small standalone fixes don't need one, and an
 # issue must never be created just to satisfy this script. With no issue, the PR
 # has no Closes line and the title falls back to the last commit subject.
@@ -283,16 +285,53 @@ if [ -z "$ISSUE" ]; then
   echo "No issue resolved — opening the PR without a Closes line."
   PR_TITLE="$(git log -1 --format=%s)"
 else
+  TARGET_OWNER_REPO=""
+  ISSUE_NUM=""
+
+  if [[ "$ISSUE" =~ ^https?://github\.com/([^/]+)/([^/]+)/issues/([0-9]+)(/.*)?$ ]]; then
+    TARGET_OWNER_REPO="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    ISSUE_NUM="${BASH_REMATCH[3]}"
+  elif [[ "$ISSUE" =~ ^([^/#]+)/([^/#]+)#([0-9]+)$ ]]; then
+    TARGET_OWNER_REPO="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    ISSUE_NUM="${BASH_REMATCH[3]}"
+  elif [[ "$ISSUE" =~ ^#?([0-9]+)$ ]]; then
+    TARGET_OWNER_REPO=""
+    ISSUE_NUM="${BASH_REMATCH[1]}"
+  else
+    echo "ERROR: invalid issue format '$ISSUE' — expected full URL, owner/repo#N, or N." >&2
+    exit 1
+  fi
+
+  CURRENT_REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
+  if [ -z "$CURRENT_REPO" ]; then
+    CURRENT_REPO="$(git remote get-url origin 2>/dev/null | sed -E 's/.*[:/]([^/]+\/[^/]+?)(\.git)?$/\1/' || true)"
+  fi
+
+  TARGET_LOWER="$(printf '%s' "$TARGET_OWNER_REPO" | tr '[:upper:]' '[:lower:]')"
+  CURRENT_LOWER="$(printf '%s' "$CURRENT_REPO" | tr '[:upper:]' '[:lower:]')"
+
+  if [ -n "$TARGET_OWNER_REPO" ] && [ -n "$CURRENT_LOWER" ] && [ "$TARGET_LOWER" != "$CURRENT_LOWER" ]; then
+    FORMATTED_ISSUE="$TARGET_OWNER_REPO#$ISSUE_NUM"
+  else
+    FORMATTED_ISSUE="#$ISSUE_NUM"
+  fi
+
+  if [ -n "$TARGET_OWNER_REPO" ]; then
+    GH_ISSUE_CMD=(gh issue view "$ISSUE_NUM" -R "$TARGET_OWNER_REPO")
+  else
+    GH_ISSUE_CMD=(gh issue view "$ISSUE_NUM")
+  fi
+
   # --- a resolved issue must exist and be open ---
-  if ! ISSUE_STATE="$(gh issue view "$ISSUE" --json state --jq .state 2>/dev/null)"; then
-    echo "ERROR: issue #$ISSUE not found in this repo (via gh)." >&2
+  if ! ISSUE_STATE="$("${GH_ISSUE_CMD[@]}" --json state --jq .state 2>/dev/null)"; then
+    echo "ERROR: issue $FORMATTED_ISSUE not found (via gh)." >&2
     exit 1
   fi
   if [ "$ISSUE_STATE" != "OPEN" ]; then
-    echo "ERROR: issue #$ISSUE is $ISSUE_STATE, not OPEN." >&2
+    echo "ERROR: issue $FORMATTED_ISSUE is $ISSUE_STATE, not OPEN." >&2
     exit 1
   fi
-  PR_TITLE="$(gh issue view "$ISSUE" --json title --jq .title)"
+  PR_TITLE="$("${GH_ISSUE_CMD[@]}" --json title --jq .title)"
 fi
 
 # --- WARN (don't fail) on a lane mismatch between branch prefix and issue label ---
@@ -305,7 +344,7 @@ case "$BRANCH_LANE" in
   *)      EXPECT_LANES="" ;;
 esac
 if [ -n "$EXPECT_LANES" ] && [ -n "$ISSUE" ]; then
-  mapfile -t ISSUE_LABELS < <(gh issue view "$ISSUE" --json labels --jq '.labels[].name' 2>/dev/null || true)
+  mapfile -t ISSUE_LABELS < <("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>/dev/null || true)
   ISSUE_LANES=()
   for l in "${ISSUE_LABELS[@]}"; do
     case "$l" in opus|agy|fable) ISSUE_LANES+=("$l") ;; esac
@@ -318,7 +357,7 @@ if [ -n "$EXPECT_LANES" ] && [ -n "$ISSUE" ]; then
       done
     done
     if [ "$matched" -eq 0 ]; then
-      echo "WARNING: branch lane '$BRANCH_LANE' doesn't match issue #$ISSUE lane label(s): ${ISSUE_LANES[*]}" >&2
+      echo "WARNING: branch lane '$BRANCH_LANE' doesn't match issue $FORMATTED_ISSUE lane label(s): ${ISSUE_LANES[*]}" >&2
       echo "         continuing — possible queue mix-up; confirm this is the right lane." >&2
     fi
   fi
@@ -535,9 +574,9 @@ fi
 if [ -z "$ISSUE" ]; then
   ISSUE_REF=""
 elif [ "$PART_OF" -eq 1 ]; then
-  ISSUE_REF="Part of #$ISSUE"
+  ISSUE_REF="Part of $FORMATTED_ISSUE"
 else
-  ISSUE_REF="Closes #$ISSUE"
+  ISSUE_REF="Closes $FORMATTED_ISSUE"
 fi
 
 BODY="$(cat <<EOF
@@ -598,9 +637,9 @@ if [ "$UPDATE" -eq 1 ]; then
   if [ -z "$ISSUE" ]; then
     echo "  base: dev | state: draft | no issue | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
-    echo "  base: dev | state: draft | part of: #$ISSUE | by: $AUTHOR"
+    echo "  base: dev | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else
-    echo "  base: dev | state: draft | closes: #$ISSUE | by: $AUTHOR"
+    echo "  base: dev | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
   fi
   echo "Josh reviews the diff and flips draft -> ready on GitHub."
 else
@@ -612,9 +651,9 @@ else
   if [ -z "$ISSUE" ]; then
     echo "  base: dev | state: draft | no issue | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
-    echo "  base: dev | state: draft | part of: #$ISSUE | by: $AUTHOR"
+    echo "  base: dev | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else
-    echo "  base: dev | state: draft | closes: #$ISSUE | by: $AUTHOR"
+    echo "  base: dev | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
   fi
   echo "Josh reviews the diff and flips draft -> ready on GitHub."
 fi
