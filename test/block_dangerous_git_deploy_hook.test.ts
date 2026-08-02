@@ -167,9 +167,74 @@ Deno.test("an unterminated heredoc keeps its body in scope (fail safe)", async (
   assertBlocked(res.stderr);
 });
 
+// --- web-jam-tools#308 follow-up gap 1: REST/GraphQL merge endpoints ---
+// Rule 1 only matches the `gh pr merge` CLI subcommand. These hit the same
+// underlying GitHub merge operations directly via `gh api` and bypassed rule
+// 1 entirely before this fix. Endpoint shapes verified against the live
+// GitHub REST/GraphQL docs (PUT .../pulls/{n}/merge, POST .../merges, and the
+// mergePullRequest/mergeBranch GraphQL mutations, confirmed against
+// https://docs.github.com/public/fpt/schema.docs.graphql).
+
+Deno.test("REST 'gh api -X PUT .../pulls/N/merge' is blocked", async () => {
+  const res = await runHook(
+    "gh api -X PUT repos/WebJamApps/web-jam-tools/pulls/314/merge -f merge_method=squash",
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("REST 'gh api --method PUT .../pulls/N/merge' is blocked", async () => {
+  const res = await runHook(
+    "gh api --method PUT repos/WebJamApps/web-jam-tools/pulls/314/merge",
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("REST 'gh api -X POST repos/OWNER/REPO/merges' (merge a branch) is blocked", async () => {
+  const res = await runHook(
+    "gh api -X POST repos/WebJamApps/web-jam-tools/merges -f base=main -f head=dev",
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("GraphQL 'gh api graphql' mergePullRequest mutation is blocked", async () => {
+  const res = await runHook(
+    "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"PR_x\"}) { pullRequest { merged } } }'",
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("GraphQL 'gh api graphql' mergeBranch mutation is blocked", async () => {
+  const res = await runHook(
+    'gh api graphql -f query=\'mutation { mergeBranch(input: {base: "main", head: "dev"}) { mergeCommit { oid } } }\'',
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 // --- unrelated commands pass through ---
 
 Deno.test("an ordinary command is allowed", async () => {
   const res = await runHook("deno task test");
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a non-merge 'gh api' read call is allowed", async () => {
+  const res = await runHook(
+    "gh api repos/WebJamApps/web-jam-tools/pulls/314 --jq .state",
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("'gh pr view' is allowed", async () => {
+  const res = await runHook("gh pr view 314");
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("pushing a feature branch (agy naming) is allowed", async () => {
+  const res = await runHook("git push -u origin agy/308-merge-guard-coverage");
   assertEquals(res.code, 0, res.stderr);
 });

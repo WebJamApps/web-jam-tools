@@ -415,3 +415,173 @@ Deno.test("a short plain inline value is still accepted (no needless friction)",
   );
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- cross-repo vs same-repo --issue formatting tests (web-jam-tools#302) ---
+
+async function makeMockGh(
+  options: { ownerRepo?: string; issueState?: string; issueTitle?: string } = {},
+) {
+  const dir = await Deno.makeTempDir({ prefix: "mock-gh-" });
+  const scriptContent = `#!/usr/bin/env bash
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  echo "${options.ownerRepo ?? "WebJamApps/web-jam-tools"}"
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "state" ]; then
+      echo "${options.issueState ?? "OPEN"}"
+      exit 0
+    elif [ "$arg" = "title" ]; then
+      echo "${options.issueTitle ?? "Test Issue Title"}"
+      exit 0
+    elif [ "$arg" = "labels" ]; then
+      echo "[]"
+      exit 0
+    fi
+  done
+fi
+exit 0
+`;
+  const ghPath = `${dir}/gh`;
+  await Deno.writeTextFile(ghPath, scriptContent);
+  await Deno.chmod(ghPath, 0o755);
+  return dir;
+}
+
+Deno.test("cross-repo --issue with full URL produces Closes OWNER/REPO#N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "https://github.com/WebJamApps/JaMmusic/issues/1250",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes WebJamApps\/JaMmusic#1250/);
+});
+
+Deno.test("same-repo --issue with full URL still produces Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "https://github.com/WebJamApps/web-jam-tools/issues/302",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #302/);
+});
+
+Deno.test("cross-repo --issue with owner/repo#N produces Closes OWNER/REPO#N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/JaMmusic#1250",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes WebJamApps\/JaMmusic#1250/);
+});
+
+Deno.test("same-repo --issue with owner/repo#N produces Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#302",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #302/);
+});
+
+Deno.test("--issue with bare #N produces Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "#1250",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #1250/);
+});
+
+Deno.test("--issue with bare N produces Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "1250",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #1250/);
+});
+
+Deno.test("cross-repo --issue with --part-of produces Part of OWNER/REPO#N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "https://github.com/WebJamApps/JaMmusic/issues/1250",
+      "--part-of",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Part of WebJamApps\/JaMmusic#1250/);
+});
+
+Deno.test("invalid --issue format is refused with error message", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "invalid-issue-string",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /invalid issue format/);
+});
