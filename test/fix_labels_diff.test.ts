@@ -281,7 +281,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "backup-restore",
     "timshermanmusic",
     "Access Controls",
-    "Claude Misbehaves",
+    "AI Misbehaves",
     "song-recordings",
     "set-lists",
     "promote-gigs",
@@ -305,15 +305,15 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(backupRestoreTopic?.repos, ["web-jam-tools"]);
   const timShermanMusicTopic = schema.milestoneTopics.find((t) => t.name === "timshermanmusic");
   assertEquals(timShermanMusicTopic?.repos, ["web-jam-back", "JaMmusic", "WebJamSocketCluster"]);
-  const claudeMisbehavesTopic = schema.milestoneTopics.find(
-    (t) => t.name === "Claude Misbehaves",
+  const aiMisbehavesTopic = schema.milestoneTopics.find(
+    (t) => t.name === "AI Misbehaves",
   );
-  assertEquals(claudeMisbehavesTopic?.repos, ["web-jam-tools"]);
+  assertEquals(aiMisbehavesTopic?.repos, ["web-jam-tools"]);
 
   // web-jam-tools#287: the seven new topics each carry exactly the same four
   // repos (not `all`) — JaMmusic, web-jam-back, WebJamSocketCluster, and
   // web-jam-tools — matching the convention already used for
-  // `Access Controls` and `Claude Misbehaves` (each asserted its own repo
+  // `Access Controls` and `AI Misbehaves` (each asserted its own repo
   // scope above).
   const fourRepoTopicNames = [
     "song-recordings",
