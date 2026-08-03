@@ -122,3 +122,22 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
 ## API Integrations
 
 See [docs/api-integrations.md](docs/api-integrations.md) for the current status of Google Drive/Docs/Sheets/Slides/Calendar/Tasks/Gmail integrations available to AI assistants. Update that file (and the dated note in Drive `My Drive / GEMINI / API_Integration_Status_*.md`) when integration state changes.
+
+## Production Monitoring
+
+Uptime monitoring for production websites is managed via `deno task monitor:uptime` (`src/uptime/cli.ts`) and 24/7 Deno Deploy edge cron `deno task monitor:cron` (`src/uptime/cron.ts` using `Deno.cron`). See [docs/uptime-monitoring.md](docs/uptime-monitoring.md) for full guide, target list, deployment steps, and verification procedures.
+
+- **Monitored Targets:**
+  - `https://joshandmariamusic.com` (HTTP 200)
+  - `https://www.joshandmariamusic.com` (HTTP 200 / redirect)
+  - `https://web-jam.com` (HTTP 200)
+  - `https://web-jam.com/music` (Content-aware check: HTTP 200 AND presence of music content elements)
+  - `https://collegelutheran.org` (HTTP 200)
+- **Alerting & Credentials:**
+  - Reads `GMAIL_USER` and `GMAIL_APP_PASSWORD` environment variables.
+  - Sends detailed failure alert emails to `joshua.v.sherman@gmail.com` via Nodemailer on failure.
+  - Silent on success (exits with code 0).
+- **Deno Deploy 24/7 Schedules:**
+  - `Deno.cron("WebJam Production Uptime Check", "*/30 * * * *", ...)` runs every 30 minutes 24/7 (silent on success, email on failure).
+  - `Deno.cron("WebJam Production Daily Heartbeat", "0 12 * * *", ...)` runs daily at 8:00 AM EDT (12:00 UTC) sending a self-health confirmation email to `joshua.v.sherman@gmail.com`.
+
