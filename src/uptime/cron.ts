@@ -1,7 +1,6 @@
 import {
   runAllChecks as defaultRunAllChecks,
   sendAlertEmail as defaultSendAlertEmail,
-  type UptimeCheckConfig,
 } from "./monitor.ts";
 
 export async function runCronCheck(

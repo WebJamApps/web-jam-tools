@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { runCronCheck } from "../src/uptime/cron.ts";
 import type { CheckResult, UptimeCheckConfig } from "../src/uptime/monitor.ts";
 
