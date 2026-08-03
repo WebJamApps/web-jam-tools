@@ -15,12 +15,12 @@ Uptime monitoring for WebJam LLC production websites is managed via Deno Deploy 
 ## How It Works
 
 1. **24/7 Edge Cron & Schedules (`src/uptime/cron.ts`)**:
-   - **30-Minute Failure Check (`*/30 * * * *`)**: Evaluates all 5 targets every 30 minutes. Silent on success; sends an immediate alert email to `joshua.v.sherman@gmail.com` on failure detailing the outage.
-   - **Daily 8:00 AM Heartbeat (`0 12 * * *`)**: Evaluates all 5 targets every morning at 8:00 AM EDT (12:00 UTC) and sends a positive status confirmation email (`[Uptime Monitor] Daily Heartbeat: All 5 Production Services Healthy`) to `joshua.v.sherman@gmail.com` confirming the monitor is active and all services are up.
+   - **30-Minute Failure Check (`*/30 * * * *`)**: Evaluates all 5 targets every 30 minutes. Silent on success; sends an immediate alert email to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` on failure detailing the outage.
+   - **Daily 8:00 AM Heartbeat (`0 12 * * *`)**: Evaluates all 5 targets every morning at 8:00 AM EDT (12:00 UTC) and sends a positive status confirmation email (`[Uptime Monitor] Daily Heartbeat: All 5 Production Services Healthy`) to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` confirming the monitor is active and all services are up.
 
-2. **Alert Credentials**:
+2. **Alert Recipients & Credentials**:
    - Environment variables: `GMAIL_USER` and `GMAIL_APP_PASSWORD`.
-   - Alert recipient: `joshua.v.sherman@gmail.com`.
+   - Alert recipients: `joshua.v.sherman@gmail.com`, `chemmariasherman@gmail.com`.
 
 ## Commands & Local Usage
 

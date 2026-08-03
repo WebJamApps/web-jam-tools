@@ -215,10 +215,16 @@ function getTransporter(
     }) as unknown as MailTransporter);
 }
 
+export const DEFAULT_ALERT_RECIPIENTS = [
+  "joshua.v.sherman@gmail.com",
+  "chemmariasherman@gmail.com",
+];
+
 export async function sendAlertEmail(
   failedResults: CheckResult[],
   env: Record<string, string | undefined> = Deno.env.toObject(),
   transporterOverride?: MailTransporter,
+  recipients: string[] = DEFAULT_ALERT_RECIPIENTS,
 ): Promise<unknown> {
   const gmailUser = env.GMAIL_USER!;
   const transporter = getTransporter(env, transporterOverride);
@@ -226,7 +232,7 @@ export async function sendAlertEmail(
 
   return await transporter.sendMail({
     from: `"Uptime Monitor" <${gmailUser}>`,
-    to: "joshua.v.sherman@gmail.com",
+    to: recipients.join(", "),
     subject,
     text,
     html,
@@ -237,6 +243,7 @@ export async function sendHeartbeatEmail(
   results: CheckResult[],
   env: Record<string, string | undefined> = Deno.env.toObject(),
   transporterOverride?: MailTransporter,
+  recipients: string[] = DEFAULT_ALERT_RECIPIENTS,
 ): Promise<unknown> {
   const gmailUser = env.GMAIL_USER!;
   const transporter = getTransporter(env, transporterOverride);
@@ -244,7 +251,7 @@ export async function sendHeartbeatEmail(
 
   return await transporter.sendMail({
     from: `"Uptime Monitor" <${gmailUser}>`,
-    to: "joshua.v.sherman@gmail.com",
+    to: recipients.join(", "),
     subject,
     text,
     html,
