@@ -125,7 +125,7 @@ See [docs/api-integrations.md](docs/api-integrations.md) for the current status 
 
 ## Production Monitoring
 
-Uptime monitoring for production websites is managed via `deno task monitor:uptime` (`src/uptime/cli.ts`) and 24/7 Deno Deploy edge cron `deno task monitor:cron` (`src/uptime/cron.ts` using `Deno.cron`).
+Uptime monitoring for production websites is managed via `deno task monitor:uptime` (`src/uptime/cli.ts`) and 24/7 Deno Deploy edge cron `deno task monitor:cron` (`src/uptime/cron.ts` using `Deno.cron`). See [docs/uptime-monitoring.md](docs/uptime-monitoring.md) for full guide, target list, deployment steps, and verification procedures.
 
 - **Monitored Targets:**
   - `https://joshandmariamusic.com` (HTTP 200)
