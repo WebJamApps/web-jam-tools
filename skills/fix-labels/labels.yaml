@@ -186,7 +186,7 @@ milestoneTopics:
   # active repos on 2026-07-30. Covers restricting what AI agents and
   # integrations can reach: Dropbox, filesystem, connectors, credentials.
   #
-  # NOTE: this and `Claude Misbehaves` below are the canonical milestones
+  # NOTE: this and `AI Misbehaves` below are the canonical milestones
   # using Title Case with a space; the three above are lowercase-kebab topic
   # names. Matching is by EXACT name, so the live milestones and this entry
   # agree — but if the convention is ever normalised, rename the live
@@ -211,7 +211,7 @@ milestoneTopics:
   # authorization — add the rule and audit where it can be mechanically
   # enforced". web-jam-tools only for now — add repos here (and create the
   # milestone live there) if the topic ever spans more.
-  - name: Claude Misbehaves
+  - name: AI Misbehaves
     repos:
       - web-jam-tools
 
