@@ -197,7 +197,8 @@ Deno.test("sendAlertEmail uses transporter to send mail", async () => {
   await sendAlertEmail(failedResults, env, mockTransporter);
 
   assert(sentOptions);
-  assertEquals(sentOptions["to"], "joshua.v.sherman@gmail.com");
+  assertStringIncludes(String(sentOptions["to"]), "joshua.v.sherman@gmail.com");
+  assertStringIncludes(String(sentOptions["to"]), "chemmariasherman@gmail.com");
   assertStringIncludes(String(sentOptions["from"]), "testuser@gmail.com");
   assertStringIncludes(String(sentOptions["subject"]), "Production Service Failure");
 });
@@ -227,6 +228,7 @@ Deno.test("sendHeartbeatEmail uses transporter to send heartbeat mail", async ()
   await sendHeartbeatEmail(results, env, mockTransporter);
 
   assert(sentOptions);
-  assertEquals(sentOptions["to"], "joshua.v.sherman@gmail.com");
+  assertStringIncludes(String(sentOptions["to"]), "joshua.v.sherman@gmail.com");
+  assertStringIncludes(String(sentOptions["to"]), "chemmariasherman@gmail.com");
   assertStringIncludes(String(sentOptions["subject"]), "Daily Heartbeat");
 });

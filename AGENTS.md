@@ -135,9 +135,9 @@ Uptime monitoring for production websites is managed via `deno task monitor:upti
   - `https://collegelutheran.org` (HTTP 200)
 - **Alerting & Credentials:**
   - Reads `GMAIL_USER` and `GMAIL_APP_PASSWORD` environment variables.
-  - Sends detailed failure alert emails to `joshua.v.sherman@gmail.com` via Nodemailer on failure.
+  - Sends detailed failure alert emails to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` via Nodemailer on failure.
   - Silent on success (exits with code 0).
 - **Deno Deploy 24/7 Schedules:**
   - `Deno.cron("WebJam Production Uptime Check", "*/30 * * * *", ...)` runs every 30 minutes 24/7 (silent on success, email on failure).
-  - `Deno.cron("WebJam Production Daily Heartbeat", "0 12 * * *", ...)` runs daily at 8:00 AM EDT (12:00 UTC) sending a self-health confirmation email to `joshua.v.sherman@gmail.com`.
+  - `Deno.cron("WebJam Production Daily Heartbeat", "0 12 * * *", ...)` runs daily at 8:00 AM EDT (12:00 UTC) sending a self-health confirmation email to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com`.
 
