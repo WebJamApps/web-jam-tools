@@ -106,6 +106,12 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
 (Trivy can't read `deno.lock`); JSR deps are not covered. SAST findings are
 **refactored, not suppressed**. Deploy on merge to `main` is added in web-jam-tools#69.
 
+## Quota & Token Hygiene
+- **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or multi-repo tasks:
+  - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into main turn outputs.
+  - Redirect large multi-line summaries, test plans, and evidence to scratch files (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling `create-draft-pr.sh`.
+  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`) when operating interactively on `Flash High`.
+
 ## System Setup
 - **OS:** Ubuntu
 - **Node.js:** v24.18.1 (LTS)
