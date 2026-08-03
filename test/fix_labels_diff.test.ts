@@ -227,14 +227,10 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Flash High")?.hex, "E67E22");
   assertEquals(byName.get("Flash High")?.modelTier, true);
   assertEquals(byName.get("Flash High")?.repos, "all");
-  assertEquals(byName.get("Flash Low")?.hex, "FEF2C0");
-  assertEquals(byName.get("Flash Low")?.modelTier, true);
-  assertEquals(byName.get("Flash Low")?.repos, "frontend");
   const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();
   assertEquals(modelTierNames, [
     "Fable",
     "Flash High",
-    "Flash Low",
     "Flash Med",
     "Haiku",
     "Opus",
