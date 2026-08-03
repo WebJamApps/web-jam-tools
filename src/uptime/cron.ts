@@ -1,15 +1,22 @@
-import { runAllChecks, sendAlertEmail } from "./monitor.ts";
+import {
+  runAllChecks as defaultRunAllChecks,
+  sendAlertEmail as defaultSendAlertEmail,
+  type UptimeCheckConfig,
+} from "./monitor.ts";
 
-export async function runCronCheck(): Promise<void> {
+export async function runCronCheck(
+  runAllChecksFn = defaultRunAllChecks,
+  sendAlertEmailFn = defaultSendAlertEmail,
+): Promise<void> {
   console.log(`[${new Date().toISOString()}] Running Deno Deploy uptime check...`);
-  const results = await runAllChecks();
+  const results = await runAllChecksFn();
   const failures = results.filter((r) => !r.success);
 
   if (failures.length > 0) {
     console.error(
       `[${new Date().toISOString()}] Uptime check failed: ${failures.length} targets down.`,
     );
-    await sendAlertEmail(failures);
+    await sendAlertEmailFn(failures);
   } else {
     console.log(`[${new Date().toISOString()}] All ${results.length} targets healthy.`);
   }
