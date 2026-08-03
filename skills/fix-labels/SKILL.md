@@ -68,9 +68,7 @@ topic names — one source of truth, not two that can drift apart.
 Shape, for orientation (see `labels.yaml` for the actual current values):
 
 - **Model-tier** — `Haiku` / `Sonnet` / `Opus` / `Fable` / `Flash High` / `Flash Med` across all 8
-  repos; `Flash Low` scoped to the 5 front-end repos only (Josh's call, 2026-07-31 — see
-  `labels.yaml` for the current per-label scope and the open question on `Flash Low`). `Fable` is
-  retired/dormant and marked `neverDelete` in the schema — the scripted diff never proposes
+  repos. `Fable` is retired/dormant and marked `neverDelete` in the schema — the scripted diff never proposes
   removing it, in any repo.
 - **Status** — `parked` / `Josh` / `Blocked`, across all 8 repos. `Blocked` (capital B, `B60205`) is
   the at-a-glance signal for a currently-unworkable issue, used ALONGSIDE native GitHub

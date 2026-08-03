@@ -11,7 +11,7 @@ version: 2.1
 #   deno.json "version" bump check (PR branches only — diffs against the
 #   merge-base with origin/dev; skipped on dev/main)
 #
-# Uses a `docker` executor (Node 24.16 LTS base) with Deno, Trivy, Semgrep, and
+# Uses a `docker` executor (Node 24.18.1 LTS base) with Deno, Trivy, Semgrep, and
 # shellcheck installed as binaries — so the whole gate can be reproduced
 # locally with `circleci local execute gate` (great for debugging CI). The
 # audit/sast scripts auto-detect: they use these binaries here, and fall back
@@ -25,7 +25,7 @@ version: 2.1
 executors:
   ci:
     docker:
-      - image: cimg/node:24.16
+      - image: cimg/node:24.18.1
 
 jobs:
   gate:
@@ -42,7 +42,7 @@ jobs:
           name: Install Deno + Trivy + Semgrep + shellcheck
           command: |
             # Deno (pinned)
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.1
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.4
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
             # Trivy (pinned)
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
@@ -144,6 +144,16 @@ jobs:
             fi
             echo "OK: version bumped from $BASE_VERSION to $HEAD_VERSION"
       - run:
+          name: PR base branch verification (main requires dev head)
+          command: |
+            TARGET="${CIRCLE_TARGET_BRANCH:-${GITHUB_BASE_REF:-}}"
+            SOURCE="${CIRCLE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+            if [ -n "$TARGET" ] && [ "$TARGET" = "main" ] && [ "$SOURCE" != "dev" ]; then
+              echo "FAIL: PRs targeting main must originate from dev branch (got: $SOURCE)." >&2
+              exit 1
+            fi
+            echo "OK: PR base/head branch verification passed (Target: ${TARGET:-default}, Source: $SOURCE)"
+      - run:
           name: Type check
           command: deno task check
       - run:
@@ -179,7 +189,7 @@ jobs:
       - run:
           name: Install Deno
           command: |
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.1
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.4
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
       - run:
           name: Deploy web-jam-devotional (production)

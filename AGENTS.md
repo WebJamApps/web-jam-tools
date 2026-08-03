@@ -6,6 +6,7 @@ This file contains instructions and context for every AI agent (Claude Code, agy
 
 - [docs/ai-team-playbook.md](docs/ai-team-playbook.md) — the current AI team, what each tier is best at, how work hands off, and where Josh approves.
 - [docs/cross-ai-rules.md](docs/cross-ai-rules.md) — cross-AI operational rules (voice rules, file placement, protected files, canonical task queues, memory hygiene) that apply to every AI on the team. Its **FE/BE COUPLING** section covers the backward-compat/expand-contract rule for shared BE/FE contracts and the `FE-couples:`/`Coupling-override:` conventions — read it before shipping a front-end half of coupled work.
+- [docs/playwright-mcp.md](docs/playwright-mcp.md) — setup and operational guidelines for using Playwright MCP server (`@playwright/mcp`) to debug production websites.
 
 ## Workspace Overview
 - **Root Directory:** `/home/joshua/WebJamApps`
@@ -37,9 +38,9 @@ flags — not only in the chat reply:
 `--summary`, `--test-plan`, and `--test-evidence` are **required** — the script
 **refuses to open a PR with an empty or placeholder description** (web-jam-tools#77).
 It always opens a **draft** PR based on **`dev`**, with the issue number derived from
-the `<lane>/<issue#>-<slug>` branch name and a footer naming the tool + model (hard
-invariants — no flag overrides them). By default it references the issue (`Part of #N`);
-pass `--closes` to make it the completing PR (`Closes #N`). Josh alone reviews and
+the `<lane>/<issue#>-<slug>` branch name (or explicit `--issue` flag, which supports full URLs, `OWNER/REPO#N`, or bare `#N`/`N` and formats cross-repo closing lines as `Closes OWNER/REPO#N`) and a footer naming the tool + model (hard
+invariants — no flag overrides them). By default it references the issue (`Part of #N` or `Part of OWNER/REPO#N`);
+pass `--closes` to make it the completing PR (`Closes #N` or `Closes OWNER/REPO#N`). Josh alone reviews and
 flips draft → ready. See `skills/draft-pr/SKILL.md`.
 
 ### PR body formatting (do this every time)
@@ -76,9 +77,10 @@ ok | 42 passed | 0 failed
 
 ### PR version-bump convention
 
-Every PR must bump the version once, on its first commit — `deno.json` in this repo.
+Every PR must bump the version once, on its first commit — `deno.json` in this repo (e.g. `"version": "1.26.x"`).
 CI's "Version bump check (PR branches only)" gate blocks PRs whose version is unchanged
-from the merge-base with `dev`.
+from the merge-base with `dev`. Always bump `deno.json` on the first commit of any new PR branch in `web-jam-tools` to prevent CircleCI gate failures.
+When invoking `create-draft-pr.sh`, pass multi-line or rich markdown values using `--summary-file`, `--test-plan-file`, and `--test-evidence-file` pointing to files (e.g. in scratch/) to prevent shell argument escaping or flattening issues.
 
 ## CI gate (web-jam-tools)
 
@@ -106,7 +108,7 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
 
 ## System Setup
 - **OS:** Ubuntu
-- **Node.js:** v24.16.0 (LTS)
+- **Node.js:** v24.18.1 (LTS)
 - **Rclone:** Configured for Google Drive (`gdrive:`)
 - **Persistence:** Systemd user services managed via `systemctl --user`
 
