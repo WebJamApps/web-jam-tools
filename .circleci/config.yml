@@ -200,11 +200,35 @@ jobs:
               --prod \
               --token "$DENO_DEPLOY_TOKEN"
 
+  deploy-uptime:
+    executor: ci
+    steps:
+      - checkout
+      - run:
+          name: Install Deno
+          command: |
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.4
+            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
+      - run:
+          name: Deploy web-jam-uptime (production)
+          command: |
+            deno deploy \
+              --org webjamapps \
+              --app web-jam-uptime \
+              --prod \
+              --token "$DENO_DEPLOY_TOKEN"
+
 workflows:
   ci:
     jobs:
       - gate
       - deploy:
+          requires:
+            - gate
+          filters:
+            branches:
+              only: main
+      - deploy-uptime:
           requires:
             - gate
           filters:
