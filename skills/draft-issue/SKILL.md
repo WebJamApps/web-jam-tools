@@ -52,9 +52,6 @@ that's what following this skill prevents.
      `skills/fix-labels/labels.yaml` (Josh's call, 2026-07-31: Flash High is at Sonnet quality and
      Flash Med a viable Haiku substitute, so both are routable everywhere, not just the front-end
      repos); pick High only when Medium is likely to need multiple retries.
-   - `Flash Low` — frontend/UI coding, front-end repos only (`skills/fix-labels/labels.yaml`).
-     Its use case is an OPEN QUESTION — Josh said as of 2026-07-31 he is "not sure yet" what it's
-     for. Don't guess when a task might be Flash Low; ask Josh rather than applying it.
    - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
      delete-protection only, per `skills/fix-labels/labels.yaml`).
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
