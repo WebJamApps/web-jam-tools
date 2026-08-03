@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { runCronCheck } from "../src/uptime/cron.ts";
+import { runCronCheck, runDailyHeartbeatCheck } from "../src/uptime/cron.ts";
 import type { CheckResult, UptimeCheckConfig } from "../src/uptime/monitor.ts";
 
 const dummyTarget: UptimeCheckConfig = {
@@ -39,4 +39,23 @@ Deno.test("runCronCheck dispatches email alert when a check fails", async () => 
   assertEquals(emailSent, true);
   assertEquals(receivedFailures.length, 1);
   assertEquals(receivedFailures[0].status, 503);
+});
+
+Deno.test("runDailyHeartbeatCheck dispatches daily status email", async () => {
+  let heartbeatSent = false;
+  let receivedResults: CheckResult[] = [];
+  const mockRunAll = () =>
+    Promise.resolve([
+      { config: dummyTarget, success: true, status: 200 },
+    ]);
+  const mockSendHeartbeat = (results: CheckResult[]) => {
+    heartbeatSent = true;
+    receivedResults = results;
+    return Promise.resolve();
+  };
+
+  await runDailyHeartbeatCheck(mockRunAll, mockSendHeartbeat);
+  assertEquals(heartbeatSent, true);
+  assertEquals(receivedResults.length, 1);
+  assertEquals(receivedResults[0].success, true);
 });

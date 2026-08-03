@@ -14,11 +14,9 @@ Uptime monitoring for WebJam LLC production websites is managed via Deno Deploy 
 
 ## How It Works
 
-1. **24/7 Edge Cron (`src/uptime/cron.ts`)**:
-   - Executes `Deno.cron("WebJam Production Uptime Check", "*/30 * * * *", ...)` every 30 minutes on Deno Deploy.
-   - Evaluates all 5 targets in parallel.
-   - **Silent on Success**: If all 5 targets pass, exits with code 0 silently (zero noise).
-   - **Alert on Failure**: If any target fails (status mismatch, missing content keyword, or connection error), uses `npm:nodemailer` to immediately dispatch an email report to `joshua.v.sherman@gmail.com`.
+1. **24/7 Edge Cron & Schedules (`src/uptime/cron.ts`)**:
+   - **30-Minute Failure Check (`*/30 * * * *`)**: Evaluates all 5 targets every 30 minutes. Silent on success; sends an immediate alert email to `joshua.v.sherman@gmail.com` on failure detailing the outage.
+   - **Daily 8:00 AM Heartbeat (`0 12 * * *`)**: Evaluates all 5 targets every morning at 8:00 AM EDT (12:00 UTC) and sends a positive status confirmation email (`[Uptime Monitor] Daily Heartbeat: All 5 Production Services Healthy`) to `joshua.v.sherman@gmail.com` confirming the monitor is active and all services are up.
 
 2. **Alert Credentials**:
    - Environment variables: `GMAIL_USER` and `GMAIL_APP_PASSWORD`.
@@ -42,11 +40,11 @@ deno task monitor:cron
    - Add `GMAIL_USER` and `GMAIL_APP_PASSWORD` to Deno Deploy Project Settings -> Environment Variables.
 
 2. **Verifying Live Operation**:
-   - Check the **Cron** tab in the Deno Deploy dashboard to view live executions and 30-minute schedule status.
+   - Check the **Cron** tab in the Deno Deploy dashboard to view live executions and 30-minute / daily 8:00 AM schedule status.
    - To perform a live failure alert test, trigger a check with a failing test target or environment flag and confirm receipt of the alert email at `joshua.v.sherman@gmail.com`.
 
 ## Changing Targets or Schedules
 
 To add new targets or modify check parameters:
 - Edit `DEFAULT_TARGETS` in `src/uptime/monitor.ts`.
-- To adjust the cron schedule frequency, edit the cron string in `src/uptime/cron.ts` (e.g. `*/15 * * * *` for 15-minute intervals).
+- To adjust the cron schedule frequency or heartbeat time, edit the cron strings in `src/uptime/cron.ts`.

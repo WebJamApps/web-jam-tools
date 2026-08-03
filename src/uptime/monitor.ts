@@ -141,6 +141,47 @@ export function formatAlertEmail(failedResults: CheckResult[]): {
   return { subject, text, html };
 }
 
+export function formatHeartbeatEmail(results: CheckResult[]): {
+  subject: string;
+  text: string;
+  html: string;
+} {
+  const failures = results.filter((r) => !r.success);
+  const isHealthy = failures.length === 0;
+
+  const subject = isHealthy
+    ? `[Uptime Monitor] Daily Heartbeat: All ${results.length} Production Services Healthy`
+    : `[Uptime Monitor] Daily Heartbeat: ${failures.length} Issue(s) Detected`;
+
+  const lines = results.map((r) => {
+    const statusStr = r.status !== undefined ? ` [${r.status}]` : "";
+    const icon = r.success ? "✓ OK" : "✗ FAIL";
+    const errorStr = r.error ? ` - Error: ${r.error}` : "";
+    return `${icon} ${r.config.name} (${r.config.url})${statusStr}${errorStr}`;
+  });
+
+  const text = `Uptime Monitoring Daily Heartbeat\n\nStatus Summary:\n${
+    lines.join("\n")
+  }\n\nTimestamp: ${new Date().toISOString()}`;
+
+  const htmlList = results
+    .map((r) => {
+      const color = r.success ? "green" : "red";
+      const icon = r.success ? "✓" : "✗";
+      const statusStr = r.status !== undefined ? ` [Status: ${r.status}]` : "";
+      const errorStr = r.error ? `<br/><small>Error: <code>${r.error}</code></small>` : "";
+      return `<li style="color: ${color};"><strong>${icon} ${r.config.name}</strong> (<a href="${r.config.url}">${r.config.url}</a>)${statusStr}${errorStr}</li>`;
+    })
+    .join("");
+
+  const html =
+    `<h2>Uptime Monitoring Daily Heartbeat</h2><p>All monitored production resources are active:</p><ul>${htmlList}</ul><p><small>Timestamp: ${
+      new Date().toISOString()
+    }</small></p>`;
+
+  return { subject, text, html };
+}
+
 export interface MailTransporter {
   sendMail(options: {
     from: string;
@@ -151,11 +192,10 @@ export interface MailTransporter {
   }): Promise<unknown>;
 }
 
-export async function sendAlertEmail(
-  failedResults: CheckResult[],
-  env: Record<string, string | undefined> = Deno.env.toObject(),
+function getTransporter(
+  env: Record<string, string | undefined>,
   transporterOverride?: MailTransporter,
-): Promise<unknown> {
+): MailTransporter {
   const gmailUser = env.GMAIL_USER;
   const gmailAppPassword = env.GMAIL_APP_PASSWORD;
 
@@ -165,7 +205,7 @@ export async function sendAlertEmail(
     );
   }
 
-  const transporter: MailTransporter = transporterOverride ??
+  return transporterOverride ??
     (nodemailer.createTransport({
       service: "gmail",
       auth: {
@@ -173,8 +213,34 @@ export async function sendAlertEmail(
         pass: gmailAppPassword,
       },
     }) as unknown as MailTransporter);
+}
 
+export async function sendAlertEmail(
+  failedResults: CheckResult[],
+  env: Record<string, string | undefined> = Deno.env.toObject(),
+  transporterOverride?: MailTransporter,
+): Promise<unknown> {
+  const gmailUser = env.GMAIL_USER!;
+  const transporter = getTransporter(env, transporterOverride);
   const { subject, text, html } = formatAlertEmail(failedResults);
+
+  return await transporter.sendMail({
+    from: `"Uptime Monitor" <${gmailUser}>`,
+    to: "joshua.v.sherman@gmail.com",
+    subject,
+    text,
+    html,
+  });
+}
+
+export async function sendHeartbeatEmail(
+  results: CheckResult[],
+  env: Record<string, string | undefined> = Deno.env.toObject(),
+  transporterOverride?: MailTransporter,
+): Promise<unknown> {
+  const gmailUser = env.GMAIL_USER!;
+  const transporter = getTransporter(env, transporterOverride);
+  const { subject, text, html } = formatHeartbeatEmail(results);
 
   return await transporter.sendMail({
     from: `"Uptime Monitor" <${gmailUser}>`,
