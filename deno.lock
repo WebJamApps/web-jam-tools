@@ -9,6 +9,8 @@
     "jsr:@std/yaml@1": "1.1.2",
     "npm:cheerio@*": "1.2.0",
     "npm:cheerio@^1.2.0": "1.2.0",
+    "npm:nodemailer@*": "6.10.1",
+    "npm:nodemailer@^6.10.0": "6.10.1",
     "npm:playwright@*": "1.60.0",
     "npm:playwright@^1.59.1": "1.60.0"
   },
@@ -140,6 +142,9 @@
       "dependencies": [
         "safer-buffer"
       ]
+    },
+    "nodemailer@6.10.1": {
+      "integrity": "sha512-Z+iLaBGVaSjbIzQ4pX6XV41HrooLsQ10ZWPUehGmuantvzWoDVBnmsdUcOIDM1t+yPor5pDhVlDESgOMEGxhHA=="
     },
     "nth-check@2.1.1": {
       "integrity": "sha512-lqjrjmaOoAnWfMmBPL+XNnynZh2+swxiX3WUE0s4yEHI6m+AwrK2UZOimIRl3X/4QctVqS8AiZjFqyOGrMXb/w==",

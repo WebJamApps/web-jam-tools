@@ -122,3 +122,19 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
 ## API Integrations
 
 See [docs/api-integrations.md](docs/api-integrations.md) for the current status of Google Drive/Docs/Sheets/Slides/Calendar/Tasks/Gmail integrations available to AI assistants. Update that file (and the dated note in Drive `My Drive / GEMINI / API_Integration_Status_*.md`) when integration state changes.
+
+## Production Monitoring
+
+Uptime monitoring for production websites is managed via `deno task monitor:uptime` (`src/uptime/cli.ts` & `src/uptime/monitor.ts`).
+
+- **Monitored Targets:**
+  - `https://joshandmariamusic.com` (HTTP 200)
+  - `https://www.joshandmariamusic.com` (HTTP 200 / redirect)
+  - `https://web-jam.com` (HTTP 200)
+  - `https://web-jam.com/music` (Content-aware check: HTTP 200 AND presence of music content elements)
+  - `https://collegelutheran.org` (HTTP 200)
+- **Alerting & Credentials:**
+  - Reads `GMAIL_USER` and `GMAIL_APP_PASSWORD` environment variables.
+  - Sends detailed failure alert emails to `joshua.v.sherman@gmail.com` via Nodemailer on failure.
+  - Silent on success (exits with code 0).
+
