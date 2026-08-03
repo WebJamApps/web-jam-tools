@@ -111,6 +111,7 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
   - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into main turn outputs.
   - Redirect large multi-line summaries, test plans, and evidence to scratch files (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling `create-draft-pr.sh`.
   - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`) when operating interactively on `Flash High`.
+  - **Automatic Flash Med Subagent Handoff on "Go":** Once requirements and implementation steps are aligned interactively on `Flash High`, automatically delegate contained execution work (coding, running test suites, branch/PR creation) down to a `Flash Med` subagent without waiting for Josh to explicitly request delegation.
 
 ## System Setup
 - **OS:** Ubuntu

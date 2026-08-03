@@ -45,7 +45,7 @@ fails with a usage message instead of running anything.
 
 **Default Tier & Bidirectional Delegation Flexibility:**
 Josh defaults to **`Flash High`** (`Gemini 3.6 Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
-- **Delegating down (`Flash High` → `Flash Med` / `Haiku`)**: When working interactively on `Flash High`, delegate mechanical sub-tasks, one-off lookups, or light test runs down to `Flash Med` or `Haiku` to conserve `Flash High` sliding quota.
+- **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session MUST automatically evaluate execution work and delegate contained/mechanical coding tasks down to a `Flash Med` subagent (`invoke_subagent` model `flash` or `handle-agy-tasks.sh`). Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
 - **Delegating up (`Flash Med` → `Flash High` / `Sonnet` / `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High`, `Sonnet`, or `Opus`.
 
 **Setting explicit model chains via `AGY_MODELS`:**
