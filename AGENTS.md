@@ -76,9 +76,9 @@ ok | 42 passed | 0 failed
 
 ### PR version-bump convention
 
-Every PR must bump the version once, on its first commit — `deno.json` in this repo.
+Every PR must bump the version once, on its first commit — `deno.json` in this repo (e.g. `"version": "1.26.x"`).
 CI's "Version bump check (PR branches only)" gate blocks PRs whose version is unchanged
-from the merge-base with `dev`.
+from the merge-base with `dev`. Always bump `deno.json` on the first commit of any new PR branch in `web-jam-tools` to prevent CircleCI gate failures.
 
 ## CI gate (web-jam-tools)
 
