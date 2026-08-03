@@ -106,6 +106,13 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
 (Trivy can't read `deno.lock`); JSR deps are not covered. SAST findings are
 **refactored, not suppressed**. Deploy on merge to `main` is added in web-jam-tools#69.
 
+## Quota & Token Hygiene
+- **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or multi-repo tasks:
+  - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into main turn outputs.
+  - Redirect large multi-line summaries, test plans, and evidence to scratch files (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling `create-draft-pr.sh`.
+  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`) when operating interactively on `Flash High`.
+  - **Automatic Flash Med Subagent Handoff on "Go":** Once requirements and implementation steps are aligned interactively on `Flash High`, automatically delegate contained execution work (coding, running test suites, branch/PR creation) down to a `Flash Med` subagent without waiting for Josh to explicitly request delegation.
+
 ## System Setup
 - **OS:** Ubuntu
 - **Node.js:** v24.18.1 (LTS)
@@ -115,3 +122,22 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
 ## API Integrations
 
 See [docs/api-integrations.md](docs/api-integrations.md) for the current status of Google Drive/Docs/Sheets/Slides/Calendar/Tasks/Gmail integrations available to AI assistants. Update that file (and the dated note in Drive `My Drive / GEMINI / API_Integration_Status_*.md`) when integration state changes.
+
+## Production Monitoring
+
+Uptime monitoring for production websites is managed via `deno task monitor:uptime` (`src/uptime/cli.ts`) and 24/7 Deno Deploy edge cron `deno task monitor:cron` (`src/uptime/cron.ts` using `Deno.cron`). See [docs/uptime-monitoring.md](docs/uptime-monitoring.md) for full guide, target list, deployment steps, and verification procedures.
+
+- **Monitored Targets:**
+  - `https://joshandmariamusic.com` (HTTP 200)
+  - `https://www.joshandmariamusic.com` (HTTP 200 / redirect)
+  - `https://web-jam.com` (HTTP 200)
+  - `https://web-jam.com/music` (Content-aware check: HTTP 200 AND presence of music content elements)
+  - `https://collegelutheran.org` (HTTP 200)
+- **Alerting & Credentials:**
+  - Reads `GMAIL_USER` and `GMAIL_APP_PASSWORD` environment variables.
+  - Sends detailed failure alert emails to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` via Nodemailer on failure.
+  - Silent on success (exits with code 0).
+- **Deno Deploy 24/7 Schedules:**
+  - `Deno.cron("WebJam Production Uptime Check", "*/30 * * * *", ...)` runs every 30 minutes 24/7 (silent on success, email on failure).
+  - `Deno.cron("WebJam Production Daily Heartbeat", "0 12 * * *", ...)` runs daily at 8:00 AM EDT (12:00 UTC) sending a self-health confirmation email to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com`.
+

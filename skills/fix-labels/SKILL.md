@@ -110,7 +110,7 @@ name** — see the design amendment on web-jam-tools#287 "fix-labels skill expan
 topics are canonical and which repos carry each one — read it there, not here. (This prose
 previously enumerated the topic → repo mapping as a hardcoded bullet list; nothing tested it, so it
 silently went stale — missing `Access Controls` after web-jam-tools#315 "Restrict Claude and Flash
-Dropbox access to web-jam-llms and JoshMariaMusic only" and missing `Claude Misbehaves` after it was
+Dropbox access to web-jam-llms and JoshMariaMusic only" and missing `AI Misbehaves` after it was
 added on a separate branch. Deleted rather than fixed, to remove the drift surface permanently.)
 
 `deno task fix-labels:milestone-diff` fetches each listed repo's actual milestones
