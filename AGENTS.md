@@ -125,7 +125,7 @@ See [docs/api-integrations.md](docs/api-integrations.md) for the current status 
 
 ## Production Monitoring
 
-Uptime monitoring for production websites is managed via `deno task monitor:uptime` (`src/uptime/cli.ts` & `src/uptime/monitor.ts`).
+Uptime monitoring for production websites is managed via `deno task monitor:uptime` (`src/uptime/cli.ts`) and 24/7 Deno Deploy edge cron `deno task monitor:cron` (`src/uptime/cron.ts` using `Deno.cron`).
 
 - **Monitored Targets:**
   - `https://joshandmariamusic.com` (HTTP 200)
@@ -137,4 +137,6 @@ Uptime monitoring for production websites is managed via `deno task monitor:upti
   - Reads `GMAIL_USER` and `GMAIL_APP_PASSWORD` environment variables.
   - Sends detailed failure alert emails to `joshua.v.sherman@gmail.com` via Nodemailer on failure.
   - Silent on success (exits with code 0).
+- **Deno Deploy 24/7 Schedule:**
+  - `Deno.cron("WebJam Production Uptime Check", "*/30 * * * *", ...)` runs every 30 minutes 24/7 on Deno Deploy.
 
