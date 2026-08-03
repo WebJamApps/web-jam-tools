@@ -18,12 +18,12 @@ table — this skill does not repeat it), use the matching section below.
 > output inline — a cold subagent's fixed startup cost can exceed the work itself.
 > See the "Dispatch vs. inline" bullet in `docs/ai-team-playbook.md`.
 
-## 1. Flash/agy dispatch (frontend/UI work)
+## 1. Flash/agy dispatch (frontend/UI & Antigravity work)
 
 Flash work is executed by the Antigravity CLI (`agy`) via the wrapper script
 `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh`. Dispatch is
 **GitHub-issues-only** — the task must already exist as a GitHub issue labeled
-`Flash` before you dispatch it. (A queue-file entry point — appending a line to
+`Flash High` or `Flash Med` before you dispatch it. (A queue-file entry point — appending a line to
 `~/Dropbox/web-jam-llms/agy-tasks.txt` — used to exist as a shortcut for quick
 tasks with no issue; Josh retired it and deleted the file, since it let a
 session dispatch work with no durable record — see web-jam-tools#249. A quick
@@ -38,32 +38,31 @@ one.)
 
 `--headless` must come **before** the issue argument (the script parses leading
 flags first). Headless auto-approves tools and walks the model fallback chain
-unattended — use it when dispatching from inside a Claude Code session with no
+unattended — use it when dispatching from inside a session with no
 one watching a REPL. Drop `--headless` only if Josh himself wants to drive the
 agy REPL interactively. The issue argument is required — a no-arg invocation
-now fails with a usage message instead of running anything.
+fails with a usage message instead of running anything.
 
-**What the script does:** checks out latest `dev`, branches
-`agy/<issue#>-<slug>`, composes a prompt wrapping the task in standing rules
-(commit incrementally, run this repo's real lint/test scripts, finish with a
-draft PR via `create-draft-pr.sh`), then runs `agy` on the first
-currently-available model in a cost-ordered chain (cheapest first). It refuses
-a dirty working tree.
+**Default Tier & Bidirectional Delegation Flexibility:**
+Josh defaults to **`Flash High`** (`Gemini 3.6 Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
+- **Delegating down (`Flash High` → `Flash Med` / `Haiku`)**: When working interactively on `Flash High`, delegate mechanical sub-tasks, one-off lookups, or light test runs down to `Flash Med` or `Haiku` to conserve `Flash High` sliding quota.
+- **Delegating up (`Flash Med` → `Flash High` / `Sonnet` / `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High`, `Sonnet`, or `Opus`.
 
-**Flash High requires the `AGY_MODELS` override.** The default model chain is
-cost-ordered cheapest first — `Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)`
-— with High used only as a rate-limit fallback, so an issue triaged as **Flash
-High** silently runs at Flash Medium unless you override the chain on the
-invocation:
+**Setting explicit model chains via `AGY_MODELS`:**
+The default fallback chain runs `Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)`. To target a specific tier directly, set `AGY_MODELS`:
 
 ```sh
+# Force Flash High default:
 AGY_MODELS='Gemini 3.6 Flash (High)' \
+  ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
+
+# Force Flash Med delegation:
+AGY_MODELS='Gemini 3.6 Flash (Medium)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 ```
 
 The value is pipe-separated (model names contain spaces, so pipes — not spaces —
-separate them; a single name needs no pipe). This bit for real: HFS#26 was
-labeled Flash High but ran on Medium, 2026-07-09.
+separate them; a single name needs no pipe). HFS#26 was labeled Flash High but ran on Medium when `AGY_MODELS` was omitted, 2026-07-09.
 
 **Headless completion is driven, not one-shot.** agy's `-p` mode can end its
 turn before a long multi-step task is actually finished — it exits 0 with work
