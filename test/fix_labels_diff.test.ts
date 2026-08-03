@@ -234,7 +234,6 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(modelTierNames, [
     "Fable",
     "Flash High",
-    "Flash Low",
     "Flash Med",
     "Haiku",
     "Opus",
