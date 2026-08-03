@@ -107,7 +107,7 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
 
 ## System Setup
 - **OS:** Ubuntu
-- **Node.js:** v24.16.0 (LTS)
+- **Node.js:** v24.18.1 (LTS)
 - **Rclone:** Configured for Google Drive (`gdrive:`)
 - **Persistence:** Systemd user services managed via `systemctl --user`
 

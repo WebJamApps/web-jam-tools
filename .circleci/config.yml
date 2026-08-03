@@ -11,7 +11,7 @@ version: 2.1
 #   deno.json "version" bump check (PR branches only — diffs against the
 #   merge-base with origin/dev; skipped on dev/main)
 #
-# Uses a `docker` executor (Node 24.16 LTS base) with Deno, Trivy, Semgrep, and
+# Uses a `docker` executor (Node 24.18.1 LTS base) with Deno, Trivy, Semgrep, and
 # shellcheck installed as binaries — so the whole gate can be reproduced
 # locally with `circleci local execute gate` (great for debugging CI). The
 # audit/sast scripts auto-detect: they use these binaries here, and fall back
@@ -25,7 +25,7 @@ version: 2.1
 executors:
   ci:
     docker:
-      - image: cimg/node:24.16
+      - image: cimg/node:24.18.1
 
 jobs:
   gate:
@@ -42,7 +42,7 @@ jobs:
           name: Install Deno + Trivy + Semgrep + shellcheck
           command: |
             # Deno (pinned)
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.1
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.4
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
             # Trivy (pinned)
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
@@ -189,7 +189,7 @@ jobs:
       - run:
           name: Install Deno
           command: |
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.1
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.4
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
       - run:
           name: Deploy web-jam-devotional (production)
