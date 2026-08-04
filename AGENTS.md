@@ -112,6 +112,8 @@ Docker must be available. `audit` bridges Deno's npm deps to a `package-lock.jso
   - Redirect large multi-line summaries, test plans, and evidence to scratch files (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling `create-draft-pr.sh`.
   - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`) when operating interactively on `Flash High`.
   - **Automatic Flash Med Subagent Handoff on "Go":** Once requirements and implementation steps are aligned interactively on `Flash High`, automatically delegate contained execution work (coding, running test suites, branch/PR creation) down to a `Flash Med` subagent without waiting for Josh to explicitly request delegation.
+  - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct the subagent to pass `--author` matching its actual model tier (e.g. `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents) when calling `create-draft-pr.sh`.
+
 
 ## System Setup
 - **OS:** Ubuntu

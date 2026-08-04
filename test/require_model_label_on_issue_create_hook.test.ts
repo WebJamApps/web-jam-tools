@@ -295,3 +295,109 @@ Deno.test("invalid JSON on stdin passes through (nothing this hook can act on)",
   const { code, stderr } = await child.output();
   assertEquals(code, 0, new TextDecoder().decode(stderr));
 });
+
+// --- Executable Issue rule pointer phrase checks (web-jam-tools#342) ---
+
+const ISSUE_342_FIXTURE_BODY = `Implement Issue #342 in /home/joshua/WebJamApps/web-jam-tools.
+
+### Instructions:
+1. Documentation Updates:
+   - skills/draft-issue/SKILL.md: Update "Before you file" section.
+2. Hook Enforcement Extension:
+   - Inspect issue bodies for unresolvable pointer phrases: "see the comment", "see comment", "read the comment first", "read comment first", "as discussed above", "as discussed in", "per the discussion", "in the epic", "see the epic".
+   - Strip code blocks/spans and quotes prior to scanning.`;
+
+Deno.test("gh issue create with forbidden pointer phrase in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "Please see the comment for details" --label Sonnet`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("see the comment"), true);
+});
+
+Deno.test("gh issue create with Issue #342 body fixture (quoted pointer phrases) is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "${
+        ISSUE_342_FIXTURE_BODY.replace(/"/g, '\\"')
+      }" --label Sonnet`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue create with pointer phrase inside code block/span or quotes is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "Rule states \`read comment first\` is banned and \\"see the epic\\" is banned." --label Sonnet`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue edit with forbidden pointer phrase in body is denied", async () => {
+  const res = await runHook(
+    bashCall(`gh issue edit 5 --body "Requirements are per the discussion"`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("per the discussion"), true);
+});
+
+Deno.test("gh issue edit on Epic issue type with forbidden pointer phrase in body is allowed (Epic exemption)", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue edit 5 --body "As discussed in the epic, see comment below" --type Epic`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue edit without body argument passes through untouched", async () => {
+  const res = await runHook(
+    bashCall(`gh issue edit 5 --add-label bug`),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("MCP issue_write create with forbidden pointer phrase in body is denied", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      title: "T",
+      body: "Please read the comment first.",
+      labels: ["Sonnet"],
+    }),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("read the comment first"), true);
+});
+
+Deno.test("MCP issue_write update with forbidden pointer phrase in body is denied", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "update",
+      issue_number: 5,
+      body: "Details are in the epic.",
+    }),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("in the epic"), true);
+});
+
+Deno.test("MCP issue_write update on Epic issue type with forbidden pointer phrase in body is allowed (Epic exemption)", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "update",
+      issue_number: 5,
+      type: "Epic",
+      body: "Details are in the epic, see the comment.",
+    }),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});

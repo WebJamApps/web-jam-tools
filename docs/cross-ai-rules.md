@@ -190,6 +190,14 @@ closes, or it is not deferred and stays in the epic. "Deferred" with no issue
 behind it is deletion with extra steps — and it lands hardest on exactly the
 items that got deferred because they were hard.
 
+## STANDALONE EXECUTABLE ISSUES AND EPIC TYPES (wjt#342)
+
+Every actionable GitHub issue body (not typed `Epic`) must be fully self-contained and executable on its own. An issue body may not rely on unresolvable pointer phrases such as "see the comment", "see comment", "read the comment first", "read comment first", "as discussed above", "as discussed in", "per the discussion", "in the epic", or "see the epic".
+
+- **Author-in-sub-issues-first guidance**: When breaking down work or decomposing an Epic into sub-issues, author the full requirements, acceptance criteria, and technical context directly in each sub-issue body *first*. Do not write the requirements only in an Epic comment or discussion thread and point sub-issues to it with pointer phrases.
+- **Sync requirements**: If requirements evolve or decisions are made during discussion in an Epic or comment thread, update the sub-issue body itself so the sub-issue remains the single, standalone source of truth for the assigned model or agent.
+- **Native `Epic` issue types**: Native issue type `Epic` (which is orthogonal to model labels like `Sonnet` or `Opus`) is exempt from pointer-phrase blocking on edit operations (`gh issue edit` or MCP `issue_write` update) to allow high-level tracking documents and comment-based discussions to evolve.
+
 ## FE/BE COUPLING (wjt#240)
 
 A change with a back-end half and a front-end half can ship half-done — e.g. the
