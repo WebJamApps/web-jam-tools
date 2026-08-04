@@ -87,7 +87,7 @@ FORCE=0
 # each into the literal command string "$HOME/.claude/hooks/<name>" (expanded
 # by the shell that runs the hook, not by this installer — matches the style
 # of the hooks already wired into settings.json).
-SESSION_START_HOOKS=(notes-sync-reminder.sh)
+SESSION_START_HOOKS=(notes-sync-reminder.sh check-install-hooks-drift.sh)
 
 # Stop hooks this installer keeps registered in settings.json (web-jam-tools#290).
 # Same flat, no-matcher shape as SESSION_START_HOOKS — Stop fires
@@ -193,8 +193,19 @@ DENY_RULES=(
   'Bash(git push * --prune*)'
 )
 
+# permissions.ask patterns this installer keeps registered in settings.json
+# (web-jam-tools#339). Patterns in permissions.ask force Claude Code to prompt
+# for confirmation before executing matching commands.
+ASK_RULES=()
+
+CHECK_MODE=0
+
 while [ $# -gt 0 ]; do
   case "$1" in
+    --check)
+      CHECK_MODE=1
+      shift
+      ;;
     --hooks-dir)
       HOOKS_DEST="$2"
       HOOKS_DEST_IS_DEFAULT=0
@@ -226,6 +237,84 @@ if [ "$AGY_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; 
 fi
 
 [ -d "$HOOKS_SRC" ] || { echo "error: $HOOKS_SRC not found" >&2; exit 1; }
+
+# --- Secret-scan gate (web-jam-tools#339) ---
+# Runs BEFORE any settings file is written or checked against. Fails closed (exit 1).
+if [ -f "$SETTINGS_PATH" ]; then
+  if ! scan_output=$(CLAUDE_SETTINGS_PATH="$SETTINGS_PATH" "$REPO_DIR/scripts/scan-settings-for-secrets.sh" 2>&1); then
+    echo "error: secret-scan gate failed on $SETTINGS_PATH" >&2
+    echo "$scan_output" >&2
+    exit 1
+  fi
+fi
+
+# --- Read-only drift check (--check mode, web-jam-tools#339) ---
+merge_session_start_args=()
+for name in "${SESSION_START_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in SESSION_START_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_session_start_args+=('$HOME/.claude/hooks/'"$name")
+done
+
+merge_stop_args=()
+for name in "${STOP_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in STOP_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_stop_args+=('$HOME/.claude/hooks/'"$name")
+done
+
+merge_pre_tool_use_args=()
+for entry in "${PRE_TOOL_USE_HOOKS[@]}"; do
+  matcher="${entry%%::*}"
+  name="${entry#*::}"
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_pre_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
+done
+
+merge_post_tool_use_args=()
+for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
+  matcher="${entry%%::*}"
+  name="${entry#*::}"
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in POST_TOOL_USE_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_post_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
+done
+
+merge_deny_args=("${DENY_RULES[@]}")
+merge_ask_args=("${ASK_RULES[@]}")
+
+if [ "$CHECK_MODE" = "1" ]; then
+  DRIFT=0
+  for src in "$HOOKS_SRC"/*.sh; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src")"
+    dest="$HOOKS_DEST/$name"
+    if [ ! -L "$dest" ] || [ "$(readlink -f "$dest")" != "$(readlink -f "$src")" ]; then
+      echo "drift: hook script $name is not linked at $dest" >&2
+      DRIFT=1
+    fi
+  done
+
+  if ! deno run --allow-read "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"; then
+    DRIFT=1
+  fi
+
+  if ! deno run --allow-read "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"; then
+    DRIFT=1
+  fi
+
+  if [ "$DRIFT" -ne 0 ]; then
+    echo "error: drift detected" >&2
+    exit 1
+  fi
+  echo "install-hooks: check passed (no drift)"
+  exit 0
+fi
 
 # --- Worktree guard (web-jam-tools#273) ---
 # A git worktree is never the checkout that the live ~/.claude/hooks should
@@ -271,51 +360,13 @@ for src in "$HOOKS_SRC"/*.sh; do
   fi
 done
 
-# --- Merge SESSION_START_HOOKS, STOP_HOOKS and PRE_TOOL_USE_HOOKS into settings.json (idempotent) ---
-merge_session_start_args=()
-for name in "${SESSION_START_HOOKS[@]}"; do
-  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in SESSION_START_HOOKS)" >&2; exit 1; }
-  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
-  # shell that runs the hook later, not by this installer (see header note).
-  merge_session_start_args+=('$HOME/.claude/hooks/'"$name")
-done
-
-merge_stop_args=()
-for name in "${STOP_HOOKS[@]}"; do
-  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in STOP_HOOKS)" >&2; exit 1; }
-  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
-  # shell that runs the hook later, not by this installer (see header note).
-  merge_stop_args+=('$HOME/.claude/hooks/'"$name")
-done
-
-merge_pre_tool_use_args=()
-for entry in "${PRE_TOOL_USE_HOOKS[@]}"; do
-  matcher="${entry%%::*}"
-  name="${entry#*::}"
-  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
-  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
-  # shell that runs the hook later, not by this installer (see header note).
-  merge_pre_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
-done
-
 # The merge logic itself lives in its own file (web-jam-tools#265) so it can
 # also be unit-tested in isolation against fixture JSON, independent of the
 # symlink step above (see test/install_hooks_merge.test.ts). This installer
 # as a whole — including the symlink step — is exercised end to end, always
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
-merge_post_tool_use_args=()
-for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
-  matcher="${entry%%::*}"
-  name="${entry#*::}"
-  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in POST_TOOL_USE_HOOKS)" >&2; exit 1; }
-  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
-  # shell that runs the hook later, not by this installer (see header note).
-  merge_post_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
-done
 
-merge_deny_args=("${DENY_RULES[@]}")
-
-deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}"
+deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
 
 deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"

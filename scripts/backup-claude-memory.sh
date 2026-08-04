@@ -77,7 +77,7 @@ rclone copyto "$CLAUDE_DIR/CLAUDE.md" "$DST/CLAUDE.md"
 mkdir -p "$DST/claude-config"
 if [ -f "$CLAUDE_DIR/settings.json" ]; then
   if scan_warning=$(CLAUDE_SETTINGS_PATH="$CLAUDE_DIR/settings.json" "$REPO_DIR/scripts/scan-settings-for-secrets.sh" 2>&1 >/dev/null); then
-    rclone copyto "$CLAUDE_DIR/settings.json" "$DST/claude-config/settings.json"
+    rclone copyto --copy-links "$CLAUDE_DIR/settings.json" "$DST/claude-config/settings.json"
   else
     echo "$(ts) REFUSED settings.json backup: credential-shaped literal found in permissions (web-jam-tools#304). Run scripts/scan-settings-for-secrets.sh, remove the entry, and rotate the credential." | tee -a "$LOG" >&2
     echo "$scan_warning" >&2
