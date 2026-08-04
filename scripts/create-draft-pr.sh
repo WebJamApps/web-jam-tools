@@ -204,8 +204,14 @@ while [ $# -gt 0 ]; do
     --update)
       UPDATE=1
       shift 1 ;;
-    --closes) # deprecated no-op: closing is now the default
-      shift 1 ;;
+    --closes)
+      if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
+        ISSUE="$2"
+        shift 2
+      else
+        shift 1
+      fi
+      ;;
     --author|--issue|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file)
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
       case "$1" in
