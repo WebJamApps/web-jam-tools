@@ -150,6 +150,8 @@ Uptime monitoring for production websites is managed via `deno task monitor:upti
 - **Deno Deploy Dynamic Containers Require `Deno.serve`**: In dynamic mode (`--runtime-mode dynamic`), entrypoint scripts must include a `Deno.serve` listener guarded by `import.meta.main` (e.g. `if (import.meta.main && typeof Deno !== "undefined" && typeof Deno.serve === "function") Deno.serve(...)`). Without `Deno.serve`, scripts containing only `Deno.cron` exit immediately after top-level execution, causing Deno Deploy to report `The revision failed`.
 - **Token Security**: `DENO_DEPLOY_TOKEN` secrets are permanently masked in Deno Console and CircleCI (`xxxxn9p8`). To align local CLI and CircleCI tokens, generate a fresh token in Deno Console (`https://console.deno.com/account/tokens`), export locally (`export DENO_DEPLOY_TOKEN="..."`), and update CircleCI via `circleci envvar create`.
 - **Pre-Push Formatting Check**: Always run `deno task fmt` (and verify `deno task fmt:check`) before pushing any commit to prevent CircleCI quality gate failures caused by unformatted TypeScript or Markdown files.
+- **Endpoint Test Coverage & Coverage Gate**: When adding or updating HTTP endpoint routes or branch logic in Deno modules (e.g. `src/uptime/cron.ts`), always export testable handler functions (like `handleHttpReq`) and add corresponding unit tests in `test/*.test.ts` covering endpoints and error paths. Uncovered HTTP endpoints lower module line coverage and can cause overall repository coverage to drop below CircleCI's strict 90% line-coverage threshold (`[coverage] FAIL: all-files line coverage < 90% threshold`).
+
 
 ## Language & Runtime Standardization
 
