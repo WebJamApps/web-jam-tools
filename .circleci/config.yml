@@ -163,6 +163,13 @@ jobs:
           name: Format check
           command: deno task fmt:check
       - run:
+          name: Install hooks drift check (--check)
+          command: |
+            temp_hooks="$(mktemp -d)"
+            temp_settings="$(mktemp -d)/settings.json"
+            bash scripts/install-hooks.sh --hooks-dir "$temp_hooks" --settings-path "$temp_settings"
+            bash scripts/install-hooks.sh --hooks-dir "$temp_hooks" --settings-path "$temp_settings" --check
+      - run:
           name: Unit tests + coverage (>=90% all-files line, incl. skills/ validation)
           command: deno task coverage:check
       - run:

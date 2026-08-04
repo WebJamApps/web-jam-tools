@@ -43,6 +43,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // carries a credential-shaped LITERAL, before it can be approved and
   // persisted verbatim into permissions.allow.
   "block-secret-literals.sh",
+  // SessionStart hook (web-jam-tools#339) — read-only drift check that
+  // verifies symlinks and settings rules are up to date.
+  "check-install-hooks-drift.sh",
   "feature-branch-guard.sh",
   "fmt-push-guard.sh",
   "haiku-only-gmail-gate.sh",

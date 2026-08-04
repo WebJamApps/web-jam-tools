@@ -418,3 +418,139 @@ Deno.test("--hooks-dir is exempt from the worktree guard (no --force needed)", a
     }
   });
 });
+
+// --- --check mode and secret-scan gate (web-jam-tools#339) ---
+
+Deno.test("install-hooks.sh --check passes on a clean sandboxed installation", async () => {
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  try {
+    const installRes = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+    ]);
+    assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+    const checkRes = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--check",
+    ]);
+    assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+    assert(checkRes.stdout.includes("check passed (no drift)"));
+  } finally {
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
+
+Deno.test("install-hooks.sh --check reports drift when a rule is removed from settings", async () => {
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  try {
+    const installRes = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+    ]);
+    assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+    // Remove DENY_RULES from settings.json
+    const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+    settings.permissions.deny = [];
+    await Deno.writeTextFile(settingsPath, JSON.stringify(settings, null, 2));
+
+    const checkRes = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--check",
+    ]);
+    assert(checkRes.code !== 0, "expected --check to fail when rule is missing");
+    assert(checkRes.stderr.includes("missing permissions.deny rule"));
+    assert(checkRes.stderr.includes("error: drift detected"));
+  } finally {
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
+
+Deno.test("install-hooks.sh --check reports drift when a hook symlink is missing", async () => {
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  try {
+    const installRes = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+    ]);
+    assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+    // Remove one hook symlink
+    await Deno.remove(`${hooksDir}/semver-push-reminder.sh`);
+
+    const checkRes = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--check",
+    ]);
+    assert(checkRes.code !== 0, "expected --check to fail when hook symlink is removed");
+    assert(checkRes.stderr.includes("drift: hook script semver-push-reminder.sh is not linked"));
+  } finally {
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
+
+Deno.test("install-hooks.sh secret-scan gate fails closed with synthetic JWT fixture", async () => {
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  const jwtSecret = "eyJ" + "X".repeat(20) + "." + "Y".repeat(20) + "." + "Z".repeat(20);
+  try {
+    await Deno.writeTextFile(
+      settingsPath,
+      JSON.stringify({
+        permissions: {
+          allow: [`Bash(export TOKEN="${jwtSecret}")`],
+        },
+      }),
+    );
+
+    const installRes = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+    ]);
+    assert(installRes.code !== 0, "secret-scan gate must fail closed");
+    assert(installRes.stderr.includes("CREDENTIAL-SHAPED LITERAL(S) FOUND"));
+    assert(installRes.stderr.includes("JWT token"));
+    assert(
+      !installRes.stderr.includes(jwtSecret),
+      "secret literal value must not be leaked in output",
+    );
+  } finally {
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
