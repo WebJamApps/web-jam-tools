@@ -117,6 +117,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::authorization-check.sh"
   "Bash::fmt-push-guard.sh"
   "Bash::block-agy-non-flash-model.sh"
+  "Bash|Edit|Write::block-human-only-credentials.sh"
   "Edit|Write::feature-branch-guard.sh"
   "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
   "mcp__.*__issue_write::require-model-label-on-issue-create.sh"
