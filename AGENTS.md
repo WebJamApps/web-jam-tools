@@ -151,5 +151,6 @@ Uptime monitoring for production websites is managed via `deno task monitor:upti
 - **Token Security**: `DENO_DEPLOY_TOKEN` secrets are permanently masked in Deno Console and CircleCI (`xxxxn9p8`). To align local CLI and CircleCI tokens, generate a fresh token in Deno Console (`https://console.deno.com/account/tokens`), export locally (`export DENO_DEPLOY_TOKEN="..."`), and update CircleCI via `circleci envvar create`.
 - **Pre-Push Formatting Check**: Always run `deno task fmt` (and verify `deno task fmt:check`) before pushing any commit to prevent CircleCI quality gate failures caused by unformatted TypeScript or Markdown files.
 
+## Language & Runtime Standardization
 
-
+- **Language & Runtime Standardization**: All helper scripts, hooks, tools, and utilities in `web-jam-tools` (and TypeScript repos) must be written in Deno/TypeScript. Do NOT introduce Python scripts; prefer Deno/TypeScript for all workspace helpers and hook parsers.
