@@ -44,3 +44,9 @@ if (typeof Deno !== "undefined" && typeof Deno.cron === "function") {
     await runDailyHeartbeatCheck();
   });
 }
+
+if (import.meta.main && typeof Deno !== "undefined" && typeof Deno.serve === "function") {
+  Deno.serve((_req) => new Response("WebJam Uptime Monitor active 24/7"));
+}
+
+
