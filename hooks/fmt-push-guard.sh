@@ -14,7 +14,7 @@
 set -euo pipefail
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
 # Collapse newlines/whitespace so multi-line commands match too

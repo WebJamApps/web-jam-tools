@@ -18,7 +18,7 @@
 # advisory guard does not block", which is why THAT gap got a real
 # permissions.deny rule instead of just another sentence in CLAUDE.md.
 #
-# Detection rule (delegated to hooks/lib/detect_bare_issue_refs.py so the
+# Detection rule (delegated to hooks/lib/detect_bare_issue_refs.ts so the
 # regex logic is independently unit-testable — see that file's docstring
 # for the full rationale): flag any `#` immediately followed by digits,
 # UNLESS a repo name sits immediately before it (no space) AND a quoted
@@ -52,7 +52,7 @@
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-DETECTOR="$HOOK_DIR/lib/detect_bare_issue_refs.py"
+DETECTOR="$HOOK_DIR/lib/detect_bare_issue_refs.ts"
 
 input="$(cat)" || exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
@@ -74,7 +74,7 @@ msg="$(tac "$tp" 2>/dev/null | jq -rs '
 
 [ -n "$msg" ] || exit 0
 
-offenders="$(MSG_FOR_PY="$msg" python3 "$DETECTOR" 2>/dev/null || true)"
+offenders="$(MSG_FOR_PY="$msg" deno run --allow-env "$DETECTOR" 2>/dev/null || true)"
 [ -n "$offenders" ] || exit 0
 
 {

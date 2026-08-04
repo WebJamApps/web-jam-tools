@@ -5,7 +5,7 @@
 set -euo pipefail
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 
 case "$cmd" in
   *"git push"*)

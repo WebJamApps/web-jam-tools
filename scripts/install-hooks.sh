@@ -316,6 +316,6 @@ done
 
 merge_deny_args=("${DENY_RULES[@]}")
 
-python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}"
+deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}"
 
-python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
+deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"

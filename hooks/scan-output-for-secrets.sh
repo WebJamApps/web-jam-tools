@@ -28,32 +28,10 @@ set -euo pipefail
 
 input=$(cat)
 
+HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # Scan the whole hook payload: tool_response shape varies by tool, and the
 # value we care about could be in stdout, stderr, or a structured field.
-match=$(printf '%s' "$input" | python3 -c '
-import sys, re
-
-TEXT = sys.stdin.read()
-
-# (name, regex) — each is a vendor-documented credential prefix plus enough
-# opaque characters that ordinary prose cannot collide with it.
-SHAPES = [
-    ("Google API key",        r"AIza[0-9A-Za-z_-]{35}"),
-    ("GitHub token",          r"gh[pousr]_[A-Za-z0-9]{36,}"),
-    ("OpenAI-style key",      r"sk-[A-Za-z0-9]{32,}"),
-    ("Slack token",           r"xox[baprs]-[A-Za-z0-9-]{10,}"),
-    ("Deno Deploy token",     r"ddp_[A-Za-z0-9]{20,}"),
-    ("Dropbox access token",  r"sl\.[A-Za-z0-9_-]{100,}"),
-    ("AWS access key id",     r"AKIA[0-9A-Z]{16}"),
-    ("Anthropic API key",     r"sk-ant-[A-Za-z0-9_-]{20,}"),
-    ("Google OAuth secret",   r"GOCSPX-[A-Za-z0-9_-]{20,}"),
-]
-
-for name, pattern in SHAPES:
-    if re.search(pattern, TEXT):
-        print(name)
-        break
-' 2>/dev/null) || true
+match=$(CMD_FOR_PY="$input" deno run --allow-env "$HOOK_DIR/lib/detect_credential_literal.ts" 2>/dev/null) || true
 
 if [ -n "$match" ]; then
   echo "🔴 CREDENTIAL LEAKED INTO TOOL OUTPUT: a $match appeared in what that command printed." >&2

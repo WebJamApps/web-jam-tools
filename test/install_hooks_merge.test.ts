@@ -11,7 +11,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 const SCRIPT_PATH = new URL(
-  "../scripts/merge-hooks-into-settings.py",
+  "../scripts/merge-hooks-into-settings.ts",
   import.meta.url,
 ).pathname;
 
@@ -22,8 +22,8 @@ interface RunResult {
 }
 
 async function runMerge(settingsPath: string, args: string[]): Promise<RunResult> {
-  const cmd = new Deno.Command("python3", {
-    args: [SCRIPT_PATH, settingsPath, "--", ...args],
+  const cmd = new Deno.Command(Deno.execPath(), {
+    args: ["run", "--allow-read", "--allow-write", SCRIPT_PATH, settingsPath, "--", ...args],
     stdout: "piped",
     stderr: "piped",
   });

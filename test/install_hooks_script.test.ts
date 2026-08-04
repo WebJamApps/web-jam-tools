@@ -28,7 +28,7 @@ import { assert, assertEquals } from "@std/assert";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
-const MERGE_SCRIPT = `${REPO_ROOT}scripts/merge-hooks-into-settings.py`;
+const MERGE_SCRIPT = `${REPO_ROOT}scripts/merge-hooks-into-settings.ts`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
 
 interface RunResult {
@@ -225,12 +225,20 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   // Copy the real script + its merge helper + the real hooks/*.sh so the
   // SESSION_START_HOOKS/PRE_TOOL_USE_HOOKS existence checks (and, for the
   // tests that go all the way through, the actual merge step) succeed
-  // exactly as they would against the real repo.
+  await Deno.copyFile(`${REPO_ROOT}deno.json`, `${mainRepo}/deno.json`);
   await Deno.mkdir(`${mainRepo}/scripts`, { recursive: true });
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
   await Deno.chmod(`${mainRepo}/scripts/install-hooks.sh`, 0o755);
-  await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.py`);
-  await Deno.mkdir(`${mainRepo}/hooks`, { recursive: true });
+  await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
+  await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
+  for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
+    if (entry.isFile) {
+      await Deno.copyFile(
+        `${HOOKS_SRC_DIR}/lib/${entry.name}`,
+        `${mainRepo}/hooks/lib/${entry.name}`,
+      );
+    }
+  }
   for (const name of shHookNames()) {
     await Deno.copyFile(`${HOOKS_SRC_DIR}/${name}`, `${mainRepo}/hooks/${name}`);
     await Deno.chmod(`${mainRepo}/hooks/${name}`, 0o755);
