@@ -308,6 +308,10 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/sync-cross-ai-rules.ts" --check; then
+    DRIFT=1
+  fi
+
   if [ "$DRIFT" -ne 0 ]; then
     echo "error: drift detected" >&2
     exit 1
