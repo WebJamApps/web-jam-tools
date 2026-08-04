@@ -10,7 +10,7 @@
 set -euo pipefail
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command','') or d.get('toolCall',{}).get('args',{}).get('CommandLine',''))" 2>/dev/null || true)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .toolCall.args.CommandLine // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 # Normalize exactly as block-secret-dumps.sh does (web-jam-tools#272). Until
 # now only that guard stripped heredoc bodies and prose flag values, so text
@@ -20,15 +20,15 @@ cmd=$(printf '%s' "$input" | python3 -c "import sys,json; d=json.load(sys.stdin)
 #
 # The shared normalizer keeps an interpreter-fed heredoc body in scope
 # (`bash <<EOF ... EOF` really executes), so stripping cannot become a bypass.
-# Falls back to the naive collapse if python3 is unavailable — bias to safety.
+# Falls back to the naive collapse if Deno is unavailable — bias to safety.
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-NORMALIZER="$HOOK_DIR/lib/normalize_command.py"
-c=$(CMD_FOR_PY="$cmd" python3 "$NORMALIZER" 2>/dev/null) || true
+NORMALIZER="$HOOK_DIR/lib/normalize_command.ts"
+c=$(CMD_FOR_PY="$cmd" deno run --allow-env "$NORMALIZER" 2>/dev/null) || true
 if [ -z "$c" ]; then
   c=$(printf '%s' "$cmd" | tr '\n' ' ' | tr -s ' ')
 fi
 # Newline-preserving form for rule 3, which splits on command separators.
-cmd_hd=$(CMD_FOR_PY="$cmd" NORMALIZE_MODE=heredoc-only python3 "$NORMALIZER" 2>/dev/null) || true
+cmd_hd=$(CMD_FOR_PY="$cmd" NORMALIZE_MODE=heredoc-only deno run --allow-env "$NORMALIZER" 2>/dev/null) || true
 [ -z "$cmd_hd" ] && cmd_hd=$cmd
 
 block() {

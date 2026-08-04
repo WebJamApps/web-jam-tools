@@ -7,4 +7,4 @@ set -euo pipefail
 input=$(cat)
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-printf '%s' "$input" | python3 "$HOOK_DIR/lib/detect_human_only_credentials.py"
+printf '%s' "$input" | deno run --allow-env --allow-read "$HOOK_DIR/lib/detect_human_only_credentials.ts"

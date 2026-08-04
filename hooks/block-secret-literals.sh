@@ -20,11 +20,11 @@
 set -euo pipefail
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-match=$(CMD_FOR_PY="$cmd" python3 "$HOOK_DIR/lib/detect_credential_literal.py" 2>/dev/null) || true
+match=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/detect_credential_literal.ts" 2>/dev/null) || true
 
 if [ -n "$match" ]; then
   echo "BLOCKED (secret-literal guard): this command contains a credential-shaped literal ($match)." >&2
