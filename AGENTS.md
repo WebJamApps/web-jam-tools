@@ -141,3 +141,11 @@ Uptime monitoring for production websites is managed via `deno task monitor:upti
   - `Deno.cron("WebJam Production Uptime Check", "*/30 * * * *", ...)` runs every 30 minutes 24/7 (silent on success, email on failure).
   - `Deno.cron("WebJam Production Daily Heartbeat", "0 12 * * *", ...)` runs daily at 8:00 AM EDT (12:00 UTC) sending a self-health confirmation email to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com`.
 
+## Deno Deploy CLI & Runtime Rules
+
+- **Root Directory Positional Argument**: Always pass `.` (workspace root) as the positional root argument to `deno deploy` (e.g. `deno deploy . --org webjamapps --app web-jam-uptime --prod`). NEVER pass an individual file path like `src/uptime/cron.ts` as the positional root argument because Deno Deploy will set `/tmp/build/src` as the working directory, isolating it from root project files (`deno.json`, `./monitor.ts`) and causing builds to hang or fail looking for dependencies.
+- **Entrypoint Configuration in `deno.json`**: Entrypoint must be configured inside `deno.json` under `"deploy": { "entrypoint": "src/uptime/cron.ts" }`. Do NOT pass `--entrypoint` to `deno deploy` (without `create`), as `--entrypoint` is only a subcommand flag for `deno deploy create`.
+- **Deno Deploy Dynamic Containers Require `Deno.serve`**: In dynamic mode (`--runtime-mode dynamic`), entrypoint scripts must include a `Deno.serve` listener guarded by `import.meta.main` (e.g. `if (import.meta.main && typeof Deno !== "undefined" && typeof Deno.serve === "function") Deno.serve(...)`). Without `Deno.serve`, scripts containing only `Deno.cron` exit immediately after top-level execution, causing Deno Deploy to report `The revision failed`.
+- **Token Security**: `DENO_DEPLOY_TOKEN` secrets are permanently masked in Deno Console and CircleCI (`xxxxn9p8`). To align local CLI and CircleCI tokens, generate a fresh token in Deno Console (`https://console.deno.com/account/tokens`), export locally (`export DENO_DEPLOY_TOKEN="..."`), and update CircleCI via `circleci envvar create`.
+
+
