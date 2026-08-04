@@ -104,6 +104,12 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       settings.permissions.deny.includes("Bash(git push --delete *)"),
       "expected the git push --delete deny pattern to be present",
     );
+
+    // web-jam-tools#345: agy hooks.json is also created and populated
+    const agyHooksPath = `${settingsDir}/hooks.json`;
+    const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+    assert(agyHooks.hooks.PreToolUse.length > 0, "expected PreToolUse in agy hooks.json");
+    assert(agyHooks.hooks.PostToolUse.length > 0, "expected PostToolUse in agy hooks.json");
   } finally {
     await Deno.remove(hooksDir, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
@@ -147,6 +153,32 @@ Deno.test(
     }
   },
 );
+
+Deno.test("AGY_HOOKS_PATH or --agy-hooks-path env var/flag is honored", async () => {
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  const agyHooksPath = `${settingsDir}/custom_agy_hooks.json`;
+  try {
+    const res = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--agy-hooks-path",
+      agyHooksPath,
+    ]);
+    assertEquals(res.code, 0, res.stdout + res.stderr);
+
+    const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+    assert(agyHooks.hooks.PreToolUse.length > 0);
+    assert(agyHooks.hooks.PostToolUse.length > 0);
+  } finally {
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
 
 // --- Default destination formula is unchanged ---
 

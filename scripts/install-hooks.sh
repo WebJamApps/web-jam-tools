@@ -30,7 +30,7 @@
 # never removes or reorders any existing permissions.deny entry (hand-added
 # or from a previous run).
 #
-# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--force]
+# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--force]
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
 #                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
 #                           the symlink step without touching the real hooks dir.
@@ -41,6 +41,8 @@
 #                           it only redirects the settings merge. The symlink step
 #                           still targets $HOME/.claude/hooks (or CLAUDE_HOOKS_DIR)
 #                           unless --hooks-dir is ALSO passed (web-jam-tools#273).
+#   --agy-hooks-path PATH  Merge agy hooks into PATH instead of $HOME/.gemini/config/hooks.json
+#                           (also settable via AGY_HOOKS_PATH).
 #   --force                 Required to link into the default hooks destination when
 #                           this script is running from inside a git worktree (see
 #                           the worktree guard below). Not needed with --hooks-dir.
@@ -49,7 +51,22 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS_SRC="$REPO_DIR/hooks"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-SETTINGS_PATH="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
+
+SETTINGS_PATH_EXPLICIT=0
+if [ -n "${CLAUDE_SETTINGS_PATH:-}" ]; then
+  SETTINGS_PATH="$CLAUDE_SETTINGS_PATH"
+  SETTINGS_PATH_EXPLICIT=1
+else
+  SETTINGS_PATH="$HOME/.claude/settings.json"
+fi
+
+AGY_HOOKS_PATH_EXPLICIT=0
+if [ -n "${AGY_HOOKS_PATH:-}" ]; then
+  AGY_HOOKS_PATH="$AGY_HOOKS_PATH"
+  AGY_HOOKS_PATH_EXPLICIT=1
+else
+  AGY_HOOKS_PATH="$HOME/.gemini/config/hooks.json"
+fi
 
 # HOOKS_DEST_IS_DEFAULT tracks whether HOOKS_DEST is still the real, live
 # destination (as opposed to a caller-supplied override via --hooks-dir or
@@ -115,10 +132,9 @@ POST_TOOL_USE_HOOKS=(
 )
 
 # permissions.deny patterns this installer keeps registered in settings.json
-# (web-jam-tools#308). A PreToolUse hook can only be *advisory* — it injects
-# text into the agent's context and lets the command run — so it cannot
-# stop a destructive command an agent has rationalized past. A deny rule is
-# a genuine, deterministic refusal by the harness itself: the tool call is
+# (web-jam-tools#308). PreToolUse hooks exit with code 2 to hard-block
+# unpermitted or destructive commands before execution. A deny rule is a
+# genuine, deterministic refusal by the harness itself: the tool call is
 # never attempted. These specifically block the ways `git push`/`git branch`
 # can delete or clobber a REMOTE ref (deleting a remote branch is never
 # something an agent should do without Josh explicitly naming that branch —
@@ -185,6 +201,12 @@ while [ $# -gt 0 ]; do
       ;;
     --settings-path)
       SETTINGS_PATH="$2"
+      SETTINGS_PATH_EXPLICIT=1
+      shift 2
+      ;;
+    --agy-hooks-path)
+      AGY_HOOKS_PATH="$2"
+      AGY_HOOKS_PATH_EXPLICIT=1
       shift 2
       ;;
     --force)
@@ -197,6 +219,10 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$AGY_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  AGY_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/hooks.json"
+fi
 
 [ -d "$HOOKS_SRC" ] || { echo "error: $HOOKS_SRC not found" >&2; exit 1; }
 
@@ -290,3 +316,5 @@ done
 merge_deny_args=("${DENY_RULES[@]}")
 
 python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}"
+
+python3 "$REPO_DIR/scripts/merge-hooks-into-settings.py" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"

@@ -223,6 +223,8 @@ def merge(settings_path: str, args: list[str]) -> int:
 
     added_deny = merge_deny(deny_patterns)
 
+    target_filename = os.path.basename(settings_path)
+
     if (
         not added_session
         and not added_stop
@@ -233,7 +235,7 @@ def merge(settings_path: str, args: list[str]) -> int:
         and not added_deny
     ):
         print(
-            "settings.json: SessionStart, Stop, PreToolUse, PostToolUse hooks "
+            f"{target_filename}: SessionStart, Stop, PreToolUse, PostToolUse hooks "
             "and permissions.deny already up to date (no-op)"
         )
         return 0
@@ -242,7 +244,7 @@ def merge(settings_path: str, args: list[str]) -> int:
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         backup = f"{settings_path}.bak-{stamp}"
         shutil.copy2(settings_path, backup)
-        print(f"settings.json: backed up previous version to {os.path.basename(backup)}")
+        print(f"{target_filename}: backed up previous version to {os.path.basename(backup)}")
 
     os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
     with open(settings_path, "w") as f:
@@ -250,19 +252,19 @@ def merge(settings_path: str, args: list[str]) -> int:
         f.write("\n")
 
     for cmd in added_session:
-        print(f"settings.json: added SessionStart hook {cmd}")
+        print(f"{target_filename}: added SessionStart hook {cmd}")
     for cmd in added_stop:
-        print(f"settings.json: added Stop hook {cmd}")
+        print(f"{target_filename}: added Stop hook {cmd}")
     for matcher, cmd in added_pre_tool_use:
-        print(f"settings.json: added PreToolUse hook ({matcher}) {cmd}")
+        print(f"{target_filename}: added PreToolUse hook ({matcher}) {cmd}")
     for matcher, cmd in added_post_tool_use:
-        print(f"settings.json: added PostToolUse hook ({matcher}) {cmd}")
+        print(f"{target_filename}: added PostToolUse hook ({matcher}) {cmd}")
     for script_path, old_matcher in pruned_pre_tool_use:
-        print(f"settings.json: PreToolUse {script_path}: replaced stale matcher ({old_matcher})")
+        print(f"{target_filename}: PreToolUse {script_path}: replaced stale matcher ({old_matcher})")
     for script_path, old_matcher in pruned_post_tool_use:
-        print(f"settings.json: PostToolUse {script_path}: replaced stale matcher ({old_matcher})")
+        print(f"{target_filename}: PostToolUse {script_path}: replaced stale matcher ({old_matcher})")
     for pattern in added_deny:
-        print(f"settings.json: added permissions.deny rule {pattern}")
+        print(f"{target_filename}: added permissions.deny rule {pattern}")
     return 0
 
 
