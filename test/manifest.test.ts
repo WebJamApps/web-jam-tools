@@ -37,6 +37,7 @@ const EXPECTED_HOOK_SCRIPTS = [
   "authorization-check.sh",
   "block-agy-non-flash-model.sh",
   "block-dangerous-git-deploy.sh",
+  "block-human-only-credentials.sh",
   "block-secret-dumps.sh",
   // PreToolUse guard (web-jam-tools#304) — blocks a Bash command that
   // carries a credential-shaped LITERAL, before it can be approved and
