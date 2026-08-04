@@ -34,14 +34,14 @@ deno task monitor:cron
 
 ## Deno Deploy Deployment & Verification
 
-1. **Deploying to Deno Deploy**:
-   - Link `web-jam-tools` repository to a Deno Deploy project on [dash.deno.com](https://dash.deno.com).
-   - Entrypoint: `src/uptime/cron.ts`.
-   - Add `GMAIL_USER` and `GMAIL_APP_PASSWORD` to Deno Deploy Project Settings -> Environment Variables.
+1. **Automated CircleCI Cloud Deployment**:
+   - Like `web-jam-devotional`, `web-jam-uptime` is automatically deployed to Deno Deploy via CircleCI's `deploy-uptime` job whenever changes are merged to `main`.
+   - Uses `DENO_DEPLOY_TOKEN` in CircleCI and deploys `src/uptime/cron.ts` to `web-jam-uptime`.
+   - **One-time Secret Setup (Dashboard)**: Under Deno Deploy Project Settings -> Environment Variables for `web-jam-uptime`, add `GMAIL_USER` and `GMAIL_APP_PASSWORD`.
 
 2. **Verifying Live Operation**:
-   - Check the **Cron** tab in the Deno Deploy dashboard to view live executions and 30-minute / daily 8:00 AM schedule status.
-   - To perform a live failure alert test, trigger a check with a failing test target or environment flag and confirm receipt of the alert email at `joshua.v.sherman@gmail.com`.
+   - Check the **Cron** tab in the Deno Deploy dashboard (`console.deno.com` / `dash.deno.com`) to view live executions and 30-minute / daily 8:00 AM schedule status.
+   - Perform live alert tests by running `deno task monitor:uptime` locally or verifying test alert email delivery to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com`.
 
 ## Changing Targets or Schedules
 
