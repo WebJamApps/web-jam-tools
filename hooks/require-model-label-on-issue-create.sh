@@ -10,7 +10,7 @@
 # Fail CLOSED on ambiguity. Exit 2 = block (stderr shown to model).
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"/.. && pwd)"
 MODEL_LABELS_JSON="$REPO_DIR/skills/fix-labels/model-labels.json"
 
 input=$(cat)
