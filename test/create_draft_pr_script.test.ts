@@ -585,3 +585,35 @@ Deno.test("invalid --issue format is refused with error message", async () => {
   assertEquals(res.code, 1);
   assertMatch(res.stderr, /invalid issue format/);
 });
+
+Deno.test("--closes with issue argument resolves issue correctly", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--closes",
+      "WebJamApps/web-jam-tools#342",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #342/);
+});
+
+Deno.test("bare --closes flag without value does not throw unknown argument error", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--closes",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+});
