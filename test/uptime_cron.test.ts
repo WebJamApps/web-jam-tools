@@ -108,4 +108,3 @@ Deno.test("handleHttpReq returns default 200 response for root path", async () =
   assertEquals(res.status, 200);
   assertEquals(await res.text(), "WebJam Uptime Monitor active 24/7");
 });
-

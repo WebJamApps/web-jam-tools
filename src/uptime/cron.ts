@@ -75,4 +75,3 @@ export async function handleHttpReq(
 if (import.meta.main && typeof Deno !== "undefined" && typeof Deno.serve === "function") {
   Deno.serve((req) => handleHttpReq(req));
 }
-
