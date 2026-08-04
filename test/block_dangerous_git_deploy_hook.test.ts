@@ -215,6 +215,60 @@ Deno.test("GraphQL 'gh api graphql' mergeBranch mutation is blocked", async () =
   assertBlocked(res.stderr);
 });
 
+// --- web-jam-tools#345: remote branch deletion blocking ---
+
+Deno.test("git push origin :branch (empty-source colon) is blocked", async () => {
+  const res = await runHook("git push origin :b");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push origin :refs/heads/branch is blocked", async () => {
+  const res = await runHook("git push origin :refs/heads/b");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push origin :branch in compound command is blocked", async () => {
+  const res = await runHook("cd /some/dir && git push origin :b");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push origin -d branch is blocked", async () => {
+  const res = await runHook("git push origin -d feature-branch");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push origin --delete branch is blocked", async () => {
+  const res = await runHook("git push origin --delete feature-branch");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push -d origin branch is blocked", async () => {
+  const res = await runHook("git push -d origin feature-branch");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push --delete origin branch is blocked", async () => {
+  const res = await runHook("git push --delete origin feature-branch");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("git push HEAD:branch (non-empty source) is allowed", async () => {
+  const res = await runHook("git push origin HEAD:my-feature");
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("git push refs/heads/a:refs/heads/b is allowed", async () => {
+  const res = await runHook("git push origin refs/heads/a:refs/heads/b");
+  assertEquals(res.code, 0, res.stderr);
+});
+
 // --- unrelated commands pass through ---
 
 Deno.test("an ordinary command is allowed", async () => {
