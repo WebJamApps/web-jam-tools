@@ -199,7 +199,7 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
     ? (toolInputRaw as Record<string, any>)
     : {};
 
-  if (toolName === "Bash") {
+  if (toolName === "Bash" || toolName === "bash" || toolName === "" || toolInput.command || toolInput.CommandLine) {
     const cmd = String(toolInput.command || "").trim();
     if (!cmd) return "PASS";
     let tokens: string[];
@@ -308,7 +308,16 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
 }
 
 if (import.meta.main) {
-  const inputJson = Deno.env.get("INPUT_JSON") || "";
+  let inputJson = Deno.env.get("INPUT_JSON") || "";
+  if (!inputJson) {
+    try {
+      inputJson = await new Response(Deno.stdin.readable).text();
+    } catch {
+      // ignore
+    }
+  }
   const modelLabelsPath = Deno.env.get("MODEL_LABELS_JSON_PATH") || "";
   console.log(checkModelLabelOnIssueCreate(inputJson, modelLabelsPath));
 }
+
+
