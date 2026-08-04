@@ -10,7 +10,7 @@
 set -euo pipefail
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+cmd=$(printf '%s' "$input" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command','') or d.get('toolCall',{}).get('args',{}).get('CommandLine',''))" 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 # Normalize exactly as block-secret-dumps.sh does (web-jam-tools#272). Until
 # now only that guard stripped heredoc bodies and prose flag values, so text
@@ -87,6 +87,14 @@ if printf '%s' "$c" | grep -Eq 'gh +api( |$)'; then
     && printf '%s' "$c" | grep -Eq 'merge(PullRequest|Branch)'; then
     block "'gh api graphql' merge mutation — merging via the GraphQL API is Josh's decision."
   fi
+fi
+
+# 6) Deleting a remote branch via 'git push' (--delete, -d, or empty-source refspec :branch).
+#    Split compound commands on separators (&&, ||, ;, |, newline) so 'git push'
+#    and the deletion spec/flag are on the SAME sub-command.
+if printf '%s' "$cmd_hd" | sed -E 's/(\&\&|\|\||;|\|)/\n/g' \
+  | grep -Eq 'git +push +(.* +)?((--delete|-d)( |$)|[[:space:]"'\'']*:[^ ]+)'; then
+  block "deleting a remote branch via 'git push' (--delete, -d, or :branch) — deleting a remote branch is Josh's decision."
 fi
 
 exit 0
