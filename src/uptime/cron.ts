@@ -46,5 +46,26 @@ if (typeof Deno !== "undefined" && typeof Deno.cron === "function") {
 }
 
 if (import.meta.main && typeof Deno !== "undefined" && typeof Deno.serve === "function") {
-  Deno.serve((_req) => new Response("WebJam Uptime Monitor active 24/7"));
+  Deno.serve(async (req) => {
+    const url = new URL(req.url);
+    if (url.pathname === "/test-heartbeat") {
+      try {
+        await runDailyHeartbeatCheck();
+        return new Response("Heartbeat email dispatched successfully!", { status: 200 });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return new Response(`Heartbeat email failed: ${msg}`, { status: 500 });
+      }
+    }
+    if (url.pathname === "/test-check") {
+      try {
+        await runCronCheck();
+        return new Response("Uptime check completed successfully!", { status: 200 });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return new Response(`Uptime check failed: ${msg}`, { status: 500 });
+      }
+    }
+    return new Response("WebJam Uptime Monitor active 24/7");
+  });
 }
