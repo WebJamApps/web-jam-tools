@@ -89,12 +89,20 @@ export function syncCrossAiRules(options: SyncOptions): {
   updatedCount: number;
   success: boolean;
 } {
+  const cwd = Deno.cwd();
   const homeDir = Deno.env.get("HOME") || "/home/joshua";
-  const defaultReposDir = join(homeDir, "WebJamApps");
+  const defaultReposDir = cwd.endsWith("web-jam-tools")
+    ? join(cwd, "..")
+    : join(homeDir, "WebJamApps");
   const reposDir = options.reposDir || defaultReposDir;
 
-  const docPath = options.docPath ||
-    join(reposDir, "web-jam-tools", "docs", "cross-ai-rules.md");
+  let docPath = options.docPath;
+  if (!docPath) {
+    const localDoc = join(cwd, "docs", "cross-ai-rules.md");
+    docPath = tryExistsSync(localDoc)
+      ? localDoc
+      : join(reposDir, "web-jam-tools", "docs", "cross-ai-rules.md");
+  }
 
   let crossAiRulesContent: string;
   try {
@@ -106,6 +114,7 @@ export function syncCrossAiRules(options: SyncOptions): {
 
   const canonicalBlock = extractHardRulesBlock(crossAiRulesContent);
 
+  const isExplicitTarget = Boolean(options.targetFiles);
   const targetFiles = options.targetFiles ||
     DEFAULT_REPOS.map((repo) => join(reposDir, repo, "AGENTS.md"));
 
@@ -120,6 +129,14 @@ export function syncCrossAiRules(options: SyncOptions): {
       fileExists = true;
     } catch {
       fileExists = false;
+    }
+
+    if (!fileExists && !isExplicitTarget) {
+      const parentDir = join(file, "..");
+      if (!tryExistsSync(parentDir)) {
+        console.log(`[SKIP] ${file} (repo directory does not exist on this machine)`);
+        continue;
+      }
     }
 
     if (options.check) {
@@ -151,6 +168,15 @@ export function syncCrossAiRules(options: SyncOptions): {
   }
 
   return { driftCount: 0, updatedCount, success: true };
+}
+
+function tryExistsSync(p: string): boolean {
+  try {
+    Deno.statSync(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 if (import.meta.main) {
