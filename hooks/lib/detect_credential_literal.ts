@@ -22,10 +22,14 @@ export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["Anthropic API key", /sk-ant-[A-Za-z0-9_-]{20,}/],
   ["OpenAI-style key", /sk-[A-Za-z0-9]{32,}/],
   ["Slack token", /xox[baprs]-[A-Za-z0-9-]{10,}/],
-  ["Deno Deploy token", /ddp_[A-Za-z0-9]{20,}/],
-  ["Dropbox access token", /sl\.[A-Za-z0-9_-]{100,}/],
+  ["Deno Deploy token", /\bdd[p]?_[A-Za-z0-9_-]{16,}/],
+  ["Dropbox access token", /sl\.[A-Za-z0-9_-]{20,}/],
   ["AWS access key id", /AKIA[0-9A-Z]{16}/],
   ["Google OAuth secret", /GOCSPX-[A-Za-z0-9_-]{20,}/],
+  ["JWT token", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+  ["Bearer token", /\bBearer\s+[A-Za-z0-9._~+/-]{15,}=*/i],
+  ["MongoDB connection string", /mongodb(?:\+srv)?:\/\/[^\s"']+/i],
+  ["Auth header flag", /(?:--header|-H)\s+["']?(?:[A-Za-z0-9_-]+:\s*)?(?:Bearer|token|Basic|Secret|[A-Za-z0-9_-]{15,})/i],
 ];
 
 export function findCredentialLiteral(text: string): string | null {

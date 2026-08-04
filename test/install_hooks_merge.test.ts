@@ -722,3 +722,107 @@ Deno.test(
     });
   },
 );
+
+// --- permissions.ask (web-jam-tools#339) ---
+
+Deno.test("--ask adds patterns to permissions.ask when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--ask",
+      "Bash(rm -rf *)",
+      "Bash(dropdb *)",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("added permissions.ask rule Bash(rm -rf *)"));
+    assert(res.stdout.includes("added permissions.ask rule Bash(dropdb *)"));
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.ask, [
+      "Bash(rm -rf *)",
+      "Bash(dropdb *)",
+    ]);
+  });
+});
+
+Deno.test("a second --ask run with the same patterns is a no-op", async () => {
+  await withTempSettings({}, async (path) => {
+    const args = ["--ask", "Bash(rm -rf *)"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.ask?.length, 1);
+  });
+});
+
+Deno.test(
+  "pre-existing permissions.allow and permissions.deny entries survive an --ask merge untouched",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          allow: ["Bash(ls:*)"],
+          deny: ["Bash(git push --delete *)"],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--ask",
+          "Bash(rm -rf *)",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
+        assertEquals(data.permissions?.deny, ["Bash(git push --delete *)"]);
+        assertEquals(data.permissions?.ask, ["Bash(rm -rf *)"]);
+      },
+    );
+  },
+);
+
+// --- --check mode in merge-hooks-into-settings.ts (web-jam-tools#339) ---
+
+Deno.test("--check returns 0 on an up-to-date settings file", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const args = ["--ask", "Bash(rm -rf *)"];
+    await runMerge(path, args);
+    const checkRes = await runMerge(path, ["--check", ...args]);
+    assertEquals(checkRes.code, 0, checkRes.stderr);
+    assert(checkRes.stdout.includes("already up to date (no-op)"));
+  });
+});
+
+Deno.test("--check returns non-zero and reports missing rules when drift exists", async () => {
+  await withTempSettings({ permissions: { ask: [] } }, async (path) => {
+    const checkRes = await runMerge(path, ["--check", "--ask", "Bash(rm -rf *)"]);
+    assertEquals(checkRes.code, 1);
+    assert(checkRes.stderr.includes("missing permissions.ask rule Bash(rm -rf *)"));
+  });
+});
+
+// --- Secret-scan gate in merge-hooks-into-settings.ts (web-jam-tools#339) ---
+
+Deno.test("secret-scan gate refuses to merge when synthetic JWT secret fixture is in permissions", async () => {
+  const jwtSecret = "eyJ" + "A".repeat(20) + "." + "B".repeat(20) + "." + "C".repeat(20);
+  await withTempSettings(
+    {
+      permissions: {
+        allow: [`Bash(export TOKEN="${jwtSecret}")`],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, ["--ask", "Bash(rm -rf *)"]);
+      assertEquals(res.code, 1);
+      assert(res.stderr.includes("SECRET DETECTED"), res.stderr);
+      assert(res.stderr.includes("JWT token"), res.stderr);
+      assert(!res.stderr.includes(jwtSecret), "secret value must not be printed");
+    },
+  );
+});
