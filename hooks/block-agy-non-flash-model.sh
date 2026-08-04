@@ -36,94 +36,11 @@
 set -euo pipefail
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
-result=$(CMD_FOR_PY="$cmd" python3 <<'PYEOF' 2>/dev/null
-import os
-import re
-import shlex
-import sys
-
-ALLOWED = {"gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"}
-OPERATORS = {"&&", "||", ";", "|", "(", ")"}
-ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
-
-cmd = os.environ.get("CMD_FOR_PY", "")
-try:
-    tokens = shlex.split(cmd, posix=True)
-except ValueError:
-    # Unbalanced quotes etc: fail open rather than guess — matches this
-    # hook's narrow scope (only ever acts on a real, parseable `agy` call).
-    print("OK")
-    sys.exit(0)
-
-# Split into simple commands on shell chain/pipe operators. shlex.split
-# already treats newlines as whitespace, so each operator survives as its
-# own token and is enough to split on.
-simple_commands = [[]]
-for tok in tokens:
-    if tok in OPERATORS:
-        simple_commands.append([])
-    else:
-        simple_commands[-1].append(tok)
-
-for sc in simple_commands:
-    if not sc:
-        continue
-
-    # Leading VAR=value assignments (standard `VAR=val cmd` shell prefix
-    # form) before the actual command token.
-    i = 0
-    env_agy_models = None
-    while i < len(sc):
-        m = ASSIGN_RE.match(sc[i])
-        if not m:
-            break
-        if m.group(1) == "AGY_MODELS":
-            env_agy_models = m.group(2)
-        i += 1
-    if i >= len(sc):
-        continue  # only assignments, no command
-
-    command_name = sc[i].rsplit("/", 1)[-1]
-    if command_name != "agy":
-        continue
-
-    args = sc[i + 1:]
-
-    if env_agy_models is not None:
-        values = [v for v in env_agy_models.split("|") if v]
-        bad = [v for v in values if v not in ALLOWED]
-        if not values or bad:
-            print("BLOCK_ENV:" + env_agy_models)
-            sys.exit(0)
-
-    j = 0
-    while j < len(args):
-        a = args[j]
-        if a == "--model":
-            if j + 1 >= len(args):
-                print("BLOCK_MODEL:(missing value)")
-                sys.exit(0)
-            val = args[j + 1]
-            if val not in ALLOWED:
-                print("BLOCK_MODEL:" + val)
-                sys.exit(0)
-            j += 2
-            continue
-        if a.startswith("--model="):
-            val = a[len("--model="):]
-            if val not in ALLOWED:
-                print("BLOCK_MODEL:" + val)
-                sys.exit(0)
-            j += 1
-            continue
-        j += 1
-
-print("OK")
-PYEOF
-) || true
+result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_agy_model.ts" 2>/dev/null) || true
 
 # python3 unavailable/crashed, or nothing came back: fail open — this is a
 # cost-control guard, not a secret-leak guard, so an unparseable command is

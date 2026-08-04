@@ -45,43 +45,4 @@ done
 
 [ -f "$SETTINGS_PATH" ] || { echo "no settings.json at $SETTINGS_PATH — nothing to scan"; exit 0; }
 
-SETTINGS_PATH="$SETTINGS_PATH" HOOKS_LIB_DIR="$REPO_DIR/hooks/lib" python3 - <<'PYEOF'
-import json
-import os
-import sys
-
-# hooks/lib is not on sys.path by default; HOOKS_LIB_DIR points at it (this
-# script lives at <repo>/scripts/, hooks/lib is a sibling of scripts/).
-sys.path.insert(0, os.environ["HOOKS_LIB_DIR"])
-from detect_credential_literal import find_credential_literal  # noqa: E402
-
-path = os.environ["SETTINGS_PATH"]
-with open(path, encoding="utf-8") as f:
-    data = json.load(f)
-
-findings = []  # (section, index, type_name) — never the matched value or full string
-permissions = data.get("permissions", {})
-for section in ("allow", "deny", "ask"):
-    entries = permissions.get(section)
-    if not isinstance(entries, list):
-        continue
-    for i, entry in enumerate(entries):
-        if not isinstance(entry, str):
-            continue
-        match = find_credential_literal(entry)
-        if match:
-            findings.append((section, i, match))
-
-if findings:
-    print("CREDENTIAL-SHAPED LITERAL(S) FOUND in permissions of " + path, file=sys.stderr)
-    for section, i, match in findings:
-        print(f"  permissions.{section}[{i}]: {match}", file=sys.stderr)
-    print("These entries are also FUNCTIONALLY USELESS — allow/deny/ask match literally,", file=sys.stderr)
-    print("so a rule containing a secret only ever matched that one exact command with", file=sys.stderr)
-    print("that one exact secret value. Remove the entry and rotate the credential.", file=sys.stderr)
-    print("(rule: web-jam-tools#304)", file=sys.stderr)
-    sys.exit(1)
-
-print(f"no credential-shaped literals found in {path}")
-sys.exit(0)
-PYEOF
+deno run --allow-read --allow-env "$REPO_DIR/scripts/scan_settings_for_secrets.ts" "$SETTINGS_PATH"

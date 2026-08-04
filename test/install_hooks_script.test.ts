@@ -28,7 +28,7 @@ import { assert, assertEquals } from "@std/assert";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
-const MERGE_SCRIPT = `${REPO_ROOT}scripts/merge-hooks-into-settings.py`;
+const MERGE_SCRIPT = `${REPO_ROOT}scripts/merge-hooks-into-settings.ts`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
 
 interface RunResult {
@@ -41,13 +41,28 @@ async function run(
   cmd: string,
   args: string[],
   env?: Record<string, string>,
+  stdinText?: string,
 ): Promise<RunResult> {
   const command = new Deno.Command(cmd, {
     args,
+    stdin: stdinText !== undefined ? "piped" : "null",
     stdout: "piped",
     stderr: "piped",
-    env,
+    env: env ? { ...Deno.env.toObject(), ...env } : undefined,
   });
+
+  if (stdinText !== undefined) {
+    const child = command.spawn();
+    const writer = child.stdin.getWriter();
+    await writer.write(new TextEncoder().encode(stdinText));
+    await writer.close();
+    const { code, stdout, stderr } = await child.output();
+    return {
+      code,
+      stdout: new TextDecoder().decode(stdout),
+      stderr: new TextDecoder().decode(stderr),
+    };
+  }
   const { code, stdout, stderr } = await command.output();
   return {
     code,
@@ -104,11 +119,81 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       settings.permissions.deny.includes("Bash(git push --delete *)"),
       "expected the git push --delete deny pattern to be present",
     );
+
+    // web-jam-tools#345: agy hooks.json is also created and populated
+    const agyHooksPath = `${settingsDir}/hooks.json`;
+    const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+    assert(agyHooks.hooks.PreToolUse.length > 0, "expected PreToolUse in agy hooks.json");
+    assert(agyHooks.hooks.PostToolUse.length > 0, "expected PostToolUse in agy hooks.json");
   } finally {
     await Deno.remove(hooksDir, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
   }
 });
+
+Deno.test(
+  "symlinked hook scripts execute correctly via symlink paths (readlink -f resolution)",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      // Test execution of require-model-label-on-issue-create.sh via the symlinked path
+      const labelHookSymlink = `${hooksDir}/require-model-label-on-issue-create.sh`;
+      const passRes = await run(
+        "bash",
+        [labelHookSymlink],
+        {},
+        JSON.stringify({
+          tool_input: {
+            command:
+              'gh issue create --repo WebJamApps/web-jam-tools --title "test" --body "standalone body text" --label Sonnet',
+          },
+        }),
+      );
+      assertEquals(passRes.code, 0, passRes.stderr + passRes.stdout);
+
+      const blockRes = await run(
+        "bash",
+        [labelHookSymlink],
+        {},
+        JSON.stringify({
+          tool_input: {
+            command:
+              'gh issue create --repo WebJamApps/web-jam-tools --title "test" --body "test" --label bug',
+          },
+        }),
+      );
+      assertEquals(blockRes.code, 2, blockRes.stdout + blockRes.stderr);
+
+      // Test execution of block-dangerous-git-deploy.sh via the symlinked path
+      const deployHookSymlink = `${hooksDir}/block-dangerous-git-deploy.sh`;
+      const deployBlockRes = await run(
+        "bash",
+        [deployHookSymlink],
+        {},
+        JSON.stringify({
+          tool_input: {
+            command: "git push origin :b",
+          },
+        }),
+      );
+      assertEquals(deployBlockRes.code, 2, deployBlockRes.stdout + deployBlockRes.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
 
 // --- CLAUDE_SETTINGS_PATH env override (web-jam-tools#308) ---
 
@@ -147,6 +232,32 @@ Deno.test(
     }
   },
 );
+
+Deno.test("AGY_HOOKS_PATH or --agy-hooks-path env var/flag is honored", async () => {
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  const agyHooksPath = `${settingsDir}/custom_agy_hooks.json`;
+  try {
+    const res = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--agy-hooks-path",
+      agyHooksPath,
+    ]);
+    assertEquals(res.code, 0, res.stdout + res.stderr);
+
+    const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+    assert(agyHooks.hooks.PreToolUse.length > 0);
+    assert(agyHooks.hooks.PostToolUse.length > 0);
+  } finally {
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
 
 // --- Default destination formula is unchanged ---
 
@@ -193,12 +304,20 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   // Copy the real script + its merge helper + the real hooks/*.sh so the
   // SESSION_START_HOOKS/PRE_TOOL_USE_HOOKS existence checks (and, for the
   // tests that go all the way through, the actual merge step) succeed
-  // exactly as they would against the real repo.
+  await Deno.copyFile(`${REPO_ROOT}deno.json`, `${mainRepo}/deno.json`);
   await Deno.mkdir(`${mainRepo}/scripts`, { recursive: true });
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
   await Deno.chmod(`${mainRepo}/scripts/install-hooks.sh`, 0o755);
-  await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.py`);
-  await Deno.mkdir(`${mainRepo}/hooks`, { recursive: true });
+  await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
+  await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
+  for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
+    if (entry.isFile) {
+      await Deno.copyFile(
+        `${HOOKS_SRC_DIR}/lib/${entry.name}`,
+        `${mainRepo}/hooks/lib/${entry.name}`,
+      );
+    }
+  }
   for (const name of shHookNames()) {
     await Deno.copyFile(`${HOOKS_SRC_DIR}/${name}`, `${mainRepo}/hooks/${name}`);
     await Deno.chmod(`${mainRepo}/hooks/${name}`, 0o755);

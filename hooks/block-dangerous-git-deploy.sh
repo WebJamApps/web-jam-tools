@@ -10,7 +10,7 @@
 set -euo pipefail
 
 input=$(cat)
-cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .toolCall.args.CommandLine // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 # Normalize exactly as block-secret-dumps.sh does (web-jam-tools#272). Until
 # now only that guard stripped heredoc bodies and prose flag values, so text
@@ -20,15 +20,15 @@ cmd=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.st
 #
 # The shared normalizer keeps an interpreter-fed heredoc body in scope
 # (`bash <<EOF ... EOF` really executes), so stripping cannot become a bypass.
-# Falls back to the naive collapse if python3 is unavailable — bias to safety.
+# Falls back to the naive collapse if Deno is unavailable — bias to safety.
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-NORMALIZER="$HOOK_DIR/lib/normalize_command.py"
-c=$(CMD_FOR_PY="$cmd" python3 "$NORMALIZER" 2>/dev/null) || true
+NORMALIZER="$HOOK_DIR/lib/normalize_command.ts"
+c=$(CMD_FOR_PY="$cmd" deno run --allow-env "$NORMALIZER" 2>/dev/null) || true
 if [ -z "$c" ]; then
   c=$(printf '%s' "$cmd" | tr '\n' ' ' | tr -s ' ')
 fi
 # Newline-preserving form for rule 3, which splits on command separators.
-cmd_hd=$(CMD_FOR_PY="$cmd" NORMALIZE_MODE=heredoc-only python3 "$NORMALIZER" 2>/dev/null) || true
+cmd_hd=$(CMD_FOR_PY="$cmd" NORMALIZE_MODE=heredoc-only deno run --allow-env "$NORMALIZER" 2>/dev/null) || true
 [ -z "$cmd_hd" ] && cmd_hd=$cmd
 
 block() {
@@ -87,6 +87,14 @@ if printf '%s' "$c" | grep -Eq 'gh +api( |$)'; then
     && printf '%s' "$c" | grep -Eq 'merge(PullRequest|Branch)'; then
     block "'gh api graphql' merge mutation — merging via the GraphQL API is Josh's decision."
   fi
+fi
+
+# 6) Deleting a remote branch via 'git push' (--delete, -d, or empty-source refspec :branch).
+#    Split compound commands on separators (&&, ||, ;, |, newline) so 'git push'
+#    and the deletion spec/flag are on the SAME sub-command.
+if printf '%s' "$cmd_hd" | sed -E 's/(\&\&|\|\||;|\|)/\n/g' \
+  | grep -Eq 'git +push +(.* +)?((--delete|-d)( |$)|[[:space:]"'\'']*:[^ ]+)'; then
+  block "deleting a remote branch via 'git push' (--delete, -d, or :branch) — deleting a remote branch is Josh's decision."
 fi
 
 exit 0

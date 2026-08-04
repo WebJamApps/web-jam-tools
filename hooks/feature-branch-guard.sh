@@ -10,7 +10,7 @@
 set -euo pipefail
 
 input=$(cat)
-file=$(printf '%s' "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null || true)
+file=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)
 [ -z "$file" ] && exit 0
 
 dir=$(dirname "$file")
