@@ -1,13 +1,17 @@
 # web-jam-tools
 
+| Branch | Build Status | Line Coverage |
+| --- | --- | --- |
+| **`dev`** | [![CircleCI (dev)](https://circleci.com/gh/WebJamApps/web-jam-tools/tree/dev.svg?style=svg)](https://circleci.com/gh/WebJamApps/web-jam-tools/tree/dev) | ![Coverage (dev)](https://img.shields.io/badge/coverage-90.3%25-brightgreen?logo=deno&label=coverage) |
+| **`main`** | [![CircleCI (main)](https://circleci.com/gh/WebJamApps/web-jam-tools/tree/main.svg?style=svg)](https://circleci.com/gh/WebJamApps/web-jam-tools/tree/main) | ![Coverage (main)](https://img.shields.io/badge/coverage-90.1%25-brightgreen?logo=deno&label=coverage) |
+
 Central hub for shared configuration, scripts, and documentation across the
 WebJamApps workspace. The repo is geared toward making AI-assisted
 development (Claude Code, Gemini CLI) productive across many sibling
 project directories that live alongside it on the same machine.
 
-**Deno code coverage: 82.8%** (lines, all files; 25 tests). The CI gate **fails
-under 80%** (all-files line); stretch goal **90%**. Regenerate the report with
-`deno task coverage`; enforce the threshold with `deno task coverage:check`.
+**Deno code coverage: 90.3%** (lines, all files; 565 tests). The CI gate **fails under 90%** (all-files line). Regenerate the report with `deno task coverage`; enforce the threshold with `deno task coverage:check`.
+
 
 ## What's in here
 
