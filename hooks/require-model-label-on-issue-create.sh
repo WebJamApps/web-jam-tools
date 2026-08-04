@@ -1,35 +1,13 @@
 #!/usr/bin/env bash
-# PreToolUse guard: deny an issue-creating call that does not carry exactly
-# one model label. Design: web-jam-tools#265 ("Hard-gate issue creation on a
-# model label", Josh's settled design 2026-07-25).
+# PreToolUse guard: deny an issue-creating or issue-editing call that violates
+# model-label or executable-issue rules.
+# Design: web-jam-tools#265 (model label on issue creation) & web-jam-tools#342 (executable issue rule).
 #
-# Rationale: the model label is what routes an issue to the cheapest tier
-# that can do the work. web-jam-tools#263 shipped with only a `bug` label and
-# no model label because the "always apply it" instruction lived in prose
-# (CLAUDE.md + memory) only, and nothing checked it. This hook makes it a
-# guarantee instead of a habit.
+# Intercepts BOTH surfaces:
+#   - Bash: `gh issue create`, `gh issue edit`
+#   - MCP: any `mcp__*__issue_write` tool call (method: create, update, edit)
 #
-# Matches BOTH surfaces, or the gate is bypassed by simply using the other
-# tool:
-#   - Bash: `gh issue create` (labels via one or more --label/-l flags, a
-#     single comma-separated value, or both mixed).
-#   - MCP: any `mcp__*__issue_write` tool (server-agnostic match) whose
-#     method is "create" (labels arrive as a JSON array field).
-#
-# Valid labels are read from the generated JSON sidecar
-# skills/fix-labels/model-labels.json — labels.yaml's `modelTier: true`
-# entries, computed by src/fix-labels/generate-model-labels.ts — never
-# hardcoded here. labels.yaml stays the single hand-edited source of truth;
-# this hook reads the sidecar (stdlib `json`, no PyYAML — the CircleCI image
-# doesn't have it, web-jam-tools#265 CI fix) so it never needs to parse YAML
-# itself. test/fix_labels_model_labels_parity.test.ts fails CI if the
-# sidecar ever drifts from labels.yaml.
-#
-# Fail CLOSED on ambiguity: a call that is clearly creating an issue but
-# whose labels can't be confidently parsed is DENIED, not allowed. A false
-# block costs one rephrase; a false allow costs the thing this hook exists
-# to prevent. Exit 2 = block (stderr shown to the model), matching the
-# existing guards' convention (block-secret-dumps.sh, feature-branch-guard.sh).
+# Fail CLOSED on ambiguity. Exit 2 = block (stderr shown to model).
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,11 +15,63 @@ MODEL_LABELS_JSON="$REPO_DIR/skills/fix-labels/model-labels.json"
 
 input=$(cat)
 
-result=$(INPUT_JSON="$input" MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" python3 <<'PYEOF' 2>/dev/null
+result=$(INPUT_JSON="$input" MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" python3 <<'PYEOF' 2>/dev/null
 import json
 import os
 import re
 import shlex
+import sys
+
+REPO_DIR = os.environ.get("REPO_DIR", "")
+if REPO_DIR:
+    lib_path = os.path.join(REPO_DIR, "hooks", "lib")
+    if lib_path not in sys.path:
+        sys.path.insert(0, lib_path)
+
+try:
+    from detect_unresolvable_issue_pointers import find_unresolvable_issue_pointers
+except ImportError:
+    FORBIDDEN_POINTER_PHRASES = [
+        "read the comment first",
+        "read comment first",
+        "see the comment",
+        "see comment",
+        "as discussed above",
+        "as discussed in",
+        "per the discussion",
+        "see the epic",
+        "in the epic",
+    ]
+
+    def _blank(match: "re.Match[str]") -> str:
+        return " " * len(match.group(0))
+
+    def strip_code_and_quotes(text: str) -> str:
+        text = re.sub(r"```+.*?```+", _blank, text, flags=re.DOTALL)
+        text = re.sub(r"`[^`\n]*`", _blank, text)
+        text = re.sub(r'"[^"\n]*"', _blank, text)
+        text = re.sub(r"'[^'\n]*'", _blank, text)
+        return text
+
+    def find_unresolvable_issue_pointers(text: str) -> list[str]:
+        if not text:
+            return []
+        stripped = strip_code_and_quotes(text)
+        seen: set[str] = set()
+        offenders: list[str] = []
+        sorted_phrases = sorted(FORBIDDEN_POINTER_PHRASES, key=len, reverse=True)
+        matched_spans: list[tuple[int, int]] = []
+        for phrase in sorted_phrases:
+            pattern = r"\b" + re.escape(phrase) + r"\b"
+            for m in re.finditer(pattern, stripped, flags=re.IGNORECASE):
+                start, end = m.span()
+                if any(s <= start and end <= e for s, e in matched_spans):
+                    continue
+                matched_spans.append((start, end))
+                if phrase not in seen:
+                    seen.add(phrase)
+                    offenders.append(phrase)
+        return offenders
 
 INPUT_JSON = os.environ.get("INPUT_JSON", "")
 MODEL_LABELS_PATH = os.environ.get("MODEL_LABELS_JSON_PATH", "")
@@ -53,11 +83,6 @@ MCP_ISSUE_WRITE_RE = re.compile(r"^mcp__.*__issue_write$")
 
 
 def load_model_labels():
-    """Valid model labels: the modelLabels array in the generated JSON
-    sidecar skills/fix-labels/model-labels.json (labels.yaml entries with
-    modelTier: true — web-jam-tools#265, the single source of truth, no
-    second copy here). Fails CLOSED (raises) if the sidecar is missing,
-    unparseable, or empty."""
     with open(MODEL_LABELS_PATH) as f:
         data = json.load(f)
     names = data.get("modelLabels")
@@ -69,15 +94,23 @@ def load_model_labels():
 
 
 def find_gh_issue_create_args(tokens):
-    """None if this simple-command isn't `gh ... issue create ...`; else the
-    argv AFTER the literal `create` token (global flags like `-R owner/repo`
-    before `issue` are tolerated)."""
     if not tokens:
         return None
     if tokens[0].rsplit("/", 1)[-1] != "gh":
         return None
     for i in range(len(tokens) - 1):
         if tokens[i] == "issue" and tokens[i + 1] == "create":
+            return tokens[i + 2:]
+    return None
+
+
+def find_gh_issue_edit_args(tokens):
+    if not tokens:
+        return None
+    if tokens[0].rsplit("/", 1)[-1] != "gh":
+        return None
+    for i in range(len(tokens) - 1):
+        if tokens[i] == "issue" and tokens[i + 1] == "edit":
             return tokens[i + 2:]
     return None
 
@@ -90,8 +123,6 @@ def strip_leading_assignments(tokens):
 
 
 def extract_label_values(args):
-    """(labels, ok). ok=False means a --label/-l flag had no value at all
-    (malformed, not just "zero model labels among real values")."""
     labels = []
     j = 0
     while j < len(args):
@@ -114,8 +145,86 @@ def extract_label_values(args):
     return (labels, True)
 
 
+def extract_body_value(args):
+    body_parts = []
+    j = 0
+    while j < len(args):
+        a = args[j]
+        if a in ("--body", "-b"):
+            if j + 1 < len(args):
+                body_parts.append(args[j + 1])
+                j += 2
+                continue
+        elif a.startswith("--body="):
+            body_parts.append(a[len("--body="):])
+            j += 1
+            continue
+        elif a.startswith("-b="):
+            body_parts.append(a[len("-b="):])
+            j += 1
+            continue
+        elif a in ("--body-file", "-F"):
+            if j + 1 < len(args):
+                filepath = args[j + 1]
+                if os.path.isfile(filepath):
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            body_parts.append(f.read())
+                    except Exception:
+                        pass
+                j += 2
+                continue
+        elif a.startswith("--body-file="):
+            filepath = a[len("--body-file="):]
+            if os.path.isfile(filepath):
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        body_parts.append(f.read())
+                except Exception:
+                    pass
+            j += 1
+            continue
+        elif a.startswith("-F="):
+            filepath = a[len("-F="):]
+            if os.path.isfile(filepath):
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        body_parts.append(f.read())
+                except Exception:
+                    pass
+            j += 1
+            continue
+        j += 1
+    return "\n".join(body_parts) if body_parts else None
+
+
+def is_epic_type(tool_input, tokens=None):
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    for key in ("type", "issue_type", "type_name"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip("'\"").lower() == "epic":
+            return True
+    labels = tool_input.get("labels")
+    if isinstance(labels, list):
+        if any(isinstance(lbl, str) and lbl.strip("'\"").lower() == "epic" for lbl in labels):
+            return True
+
+    if tokens:
+        for i, tok in enumerate(tokens):
+            if tok in ("--type", "-t", "--label", "-l", "--add-label"):
+                if i + 1 < len(tokens) and tokens[i + 1].strip("'\"").lower() == "epic":
+                    return True
+            for flag in ("--type=", "-t=", "--label=", "-l=", "--add-label="):
+                if tok.startswith(flag):
+                    val = tok[len(flag):].strip("'\"")
+                    parts = [p.strip("'\"").lower() for p in val.split(",")]
+                    if "epic" in parts:
+                        return True
+    return False
+
+
 def decide(labels, model_labels):
-    """PASS, or DENY:<reason> naming what's missing + the valid labels."""
     valid_str = ", ".join(sorted(model_labels))
     matched = sorted({label for label in labels if label in model_labels})
     if len(matched) == 0:
@@ -134,7 +243,7 @@ def main():
     try:
         payload = json.loads(INPUT_JSON)
     except Exception:
-        print("PASS")  # not JSON we understand -> nothing this hook can act on
+        print("PASS")
         return
 
     tool_name = payload.get("tool_name") or ""
@@ -150,11 +259,8 @@ def main():
         try:
             tokens = shlex.split(cmd, posix=True)
         except ValueError:
-            # Unbalanced quotes: can't parse. If the raw text looks like it's
-            # creating a gh issue, fail CLOSED rather than guess; otherwise
-            # this is out of scope and shouldn't block unrelated commands.
-            if re.search(r"\bgh\b", cmd) and re.search(r"\bissue\b", cmd) and re.search(r"\bcreate\b", cmd):
-                print("DENY:the command couldn't be parsed (unbalanced quoting) but appears to create a gh issue")
+            if re.search(r"\bgh\b", cmd) and re.search(r"\bissue\b", cmd) and (re.search(r"\bcreate\b", cmd) or re.search(r"\bedit\b", cmd)):
+                print("DENY:the command couldn't be parsed (unbalanced quoting) but appears to create/edit a gh issue")
             else:
                 print("PASS")
             return
@@ -167,33 +273,73 @@ def main():
                 simple_commands[-1].append(tok)
 
         for sc in simple_commands:
-            args = find_gh_issue_create_args(strip_leading_assignments(sc))
-            if args is None:
-                continue
-            try:
-                model_labels = load_model_labels()
-            except Exception as e:
-                print(f"DENY:couldn't load valid model labels from model-labels.json ({e})")
+            sc_tokens = strip_leading_assignments(sc)
+            create_args = find_gh_issue_create_args(sc_tokens)
+            if create_args is not None:
+                try:
+                    model_labels = load_model_labels()
+                except Exception as e:
+                    print(f"DENY:couldn't load valid model labels from model-labels.json ({e})")
+                    return
+                labels, ok = extract_label_values(create_args)
+                if not ok:
+                    print("DENY:a --label/-l flag was given with no value")
+                    return
+                res = decide(labels, model_labels)
+                if res != "PASS":
+                    print(res)
+                    return
+                body = extract_body_value(create_args)
+                if body:
+                    pointers = find_unresolvable_issue_pointers(body)
+                    if pointers:
+                        print(
+                            f"DENY:unresolvable pointer phrase '{pointers[0]}' in issue body. "
+                            f"Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics."
+                        )
+                        return
+                print("PASS")
                 return
-            labels, ok = extract_label_values(args)
-            if not ok:
-                print("DENY:a --label/-l flag was given with no value")
-                return
-            print(decide(labels, model_labels))
-            return
 
-        print("PASS")  # `gh` command, but not `issue create` (e.g. `gh issue list`)
+            edit_args = find_gh_issue_edit_args(sc_tokens)
+            if edit_args is not None:
+                if is_epic_type(tool_input, sc_tokens):
+                    print("PASS")
+                    return
+                body = extract_body_value(edit_args)
+                if body:
+                    pointers = find_unresolvable_issue_pointers(body)
+                    if pointers:
+                        print(
+                            f"DENY:unresolvable pointer phrase '{pointers[0]}' in issue body. "
+                            f"Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics."
+                        )
+                        return
+                print("PASS")
+                return
+
+        print("PASS")
         return
 
     if MCP_ISSUE_WRITE_RE.match(tool_name):
         method = tool_input.get("method")
-        if method == "update":
-            print("PASS")  # out of scope: only issue CREATION is gated
+        if method in ("update", "edit"):
+            if is_epic_type(tool_input):
+                print("PASS")
+                return
+            body = tool_input.get("body")
+            if isinstance(body, str) and body:
+                pointers = find_unresolvable_issue_pointers(body)
+                if pointers:
+                    print(
+                        f"DENY:unresolvable pointer phrase '{pointers[0]}' in issue body. "
+                        f"Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics."
+                    )
+                    return
+            print("PASS")
             return
         if method != "create":
-            # method is a required field on this tool's schema; anything
-            # other than the two known values is ambiguous -> fail CLOSED.
-            print(f"DENY:couldn't determine this issue_write call is a create (method={method!r})")
+            print(f"DENY:couldn't determine this issue_write call is a create/update (method={method!r})")
             return
         try:
             model_labels = load_model_labels()
@@ -204,10 +350,23 @@ def main():
         if not isinstance(raw_labels, list) or not all(isinstance(x, str) for x in raw_labels):
             print("DENY:the labels field is missing or not a JSON array of strings")
             return
-        print(decide(raw_labels, model_labels))
+        res = decide(raw_labels, model_labels)
+        if res != "PASS":
+            print(res)
+            return
+        body = tool_input.get("body")
+        if isinstance(body, str) and body:
+            pointers = find_unresolvable_issue_pointers(body)
+            if pointers:
+                print(
+                    f"DENY:unresolvable pointer phrase '{pointers[0]}' in issue body. "
+                    f"Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics."
+                )
+                return
+        print("PASS")
         return
 
-    print("PASS")  # neither gated surface
+    print("PASS")
 
 
 main()
@@ -215,19 +374,12 @@ PYEOF
 ) || true
 
 if [ -z "$result" ]; then
-  # python3 crashed or is unavailable entirely — we can't tell PASS from
-  # DENY. Fail closed ONLY if the raw payload looks like one of the two
-  # gated surfaces (an mcp__*__issue_write tool call, or a Bash command
-  # mentioning gh/issue/create); otherwise this hook would block every
-  # unrelated Bash/MCP call the moment python3 broke, which is a far bigger
-  # blast radius than this guard's job.
   if printf '%s' "$input" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"mcp__[^"]*__issue_write"' \
     || (printf '%s' "$input" | grep -Eq '\bgh\b' \
         && printf '%s' "$input" | grep -Eq '\bissue\b' \
-        && printf '%s' "$input" | grep -Eq '\bcreate\b'); then
-    echo "BLOCKED (model-label guard): couldn't parse this issue-create call (hook parser failure)." >&2
-    echo "Valid model labels are in skills/fix-labels/model-labels.json (generated from labels.yaml's modelTier: true entries) — retry with exactly one, or rephrase so the command parses." >&2
-    echo "(design: web-jam-tools#265)" >&2
+        && (printf '%s' "$input" | grep -Eq '\bcreate\b' || printf '%s' "$input" | grep -Eq '\bedit\b')); then
+    echo "BLOCKED (model-label guard): couldn't parse this issue create/edit call (hook parser failure)." >&2
+    echo "Check that model label and issue body meet requirements (web-jam-tools#265, web-jam-tools#342)." >&2
     exit 2
   fi
   exit 0
@@ -239,7 +391,7 @@ case "$result" in
     ;;
   DENY:*)
     echo "BLOCKED (model-label guard): ${result#DENY:}" >&2
-    echo "(design: web-jam-tools#265 — pick exactly one model label and retry)" >&2
+    echo "(rule: executable-issue / model-label — see skills/draft-issue/SKILL.md)" >&2
     exit 2
     ;;
   *)

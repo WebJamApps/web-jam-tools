@@ -61,6 +61,15 @@ that's what following this skill prevents.
    not a feature request; if the work is genuinely open-ended, scope the issue to one concrete step
    and file a follow-up for the next one rather than leaving it perpetually open (see memory
    `github-issues-must-be-closeable`).
+4. **Executable Issue rule (Every non-Epic issue must stand alone).** Every issue body not typed
+   `Epic` must stand alone without unresolvable pointer phrases (e.g., "see the comment", "see comment",
+   "read the comment first", "read comment first", "as discussed above", "as discussed in",
+   "per the discussion", "in the epic", "see the epic"). Anyone (human or AI model) picking up an
+   issue must be able to execute it directly from the issue body without hunting through issue
+   comments or parent epic threads for requirements. Sub-issues derived from an Epic must have their
+   full requirements authored directly in the sub-issue body first before creation. Note: Native issue
+   type `Epic` (which is orthogonal to model labels) is exempt from this check on edit paths (`gh issue edit`
+   or MCP update), allowing Epics to reference comments or sub-issues as discussion evolves.
 
 ## Citation format (every reference, every time)
 
