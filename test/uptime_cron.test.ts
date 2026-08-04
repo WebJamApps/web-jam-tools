@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { runCronCheck, runDailyHeartbeatCheck } from "../src/uptime/cron.ts";
+import { handleHttpReq, runCronCheck, runDailyHeartbeatCheck } from "../src/uptime/cron.ts";
 import type { CheckResult, UptimeCheckConfig } from "../src/uptime/monitor.ts";
 
 const dummyTarget: UptimeCheckConfig = {
@@ -59,3 +59,53 @@ Deno.test("runDailyHeartbeatCheck dispatches daily status email", async () => {
   assertEquals(receivedResults.length, 1);
   assertEquals(receivedResults[0].success, true);
 });
+
+Deno.test("handleHttpReq responds to /test-heartbeat endpoint", async () => {
+  let called = false;
+  const mockHeartbeat = () => {
+    called = true;
+    return Promise.resolve();
+  };
+  const req = new Request("https://example.com/test-heartbeat");
+  const res = await handleHttpReq(req, mockHeartbeat);
+  assertEquals(res.status, 200);
+  assertEquals(called, true);
+  assertEquals(await res.text(), "Heartbeat email dispatched successfully!");
+});
+
+Deno.test("handleHttpReq handles /test-heartbeat failure with 500", async () => {
+  const mockHeartbeat = () => Promise.reject(new Error("SMTP Connection Failed"));
+  const req = new Request("https://example.com/test-heartbeat");
+  const res = await handleHttpReq(req, mockHeartbeat);
+  assertEquals(res.status, 500);
+  assertEquals(await res.text(), "Heartbeat email failed: SMTP Connection Failed");
+});
+
+Deno.test("handleHttpReq responds to /test-check endpoint", async () => {
+  let called = false;
+  const mockCronCheck = () => {
+    called = true;
+    return Promise.resolve();
+  };
+  const req = new Request("https://example.com/test-check");
+  const res = await handleHttpReq(req, undefined, mockCronCheck);
+  assertEquals(res.status, 200);
+  assertEquals(called, true);
+  assertEquals(await res.text(), "Uptime check completed successfully!");
+});
+
+Deno.test("handleHttpReq handles /test-check failure with 500", async () => {
+  const mockCronCheck = () => Promise.reject(new Error("Check Failed"));
+  const req = new Request("https://example.com/test-check");
+  const res = await handleHttpReq(req, undefined, mockCronCheck);
+  assertEquals(res.status, 500);
+  assertEquals(await res.text(), "Uptime check failed: Check Failed");
+});
+
+Deno.test("handleHttpReq returns default 200 response for root path", async () => {
+  const req = new Request("https://example.com/");
+  const res = await handleHttpReq(req);
+  assertEquals(res.status, 200);
+  assertEquals(await res.text(), "WebJam Uptime Monitor active 24/7");
+});
+
