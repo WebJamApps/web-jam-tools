@@ -46,8 +46,8 @@
   },
   "deploy": {
     "org": "webjamapps",
-    "app": "web-jam-devotional",
-    "entrypoint": "src/devotional/send_daily_devotional.ts",
+    "app": "web-jam-uptime",
+    "entrypoint": "src/uptime/cron.ts",
     "exclude": [
       "test/",
       "docs/",
@@ -64,6 +64,7 @@
     ]
   }
 }
+
 
 
 
