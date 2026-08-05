@@ -178,13 +178,17 @@ Otherwise, for each issue:
     - Haiku — mechanical/one-off (lookups, single-field edits, typo/data
       fixes)
     - Sonnet — ordinary contained coding (a fix/feature across a few files)
-    - Opus — genuine multi-file judgment/design
+    - Opus — genuine multi-file judgment/design, or under-specified codework (empty or title-only body) that requires design discussion
     - Fable — architecture/specs/requirements framing
     - Flash (Med/High if the repo splits it) — full-stack coding across all 8
       active repos. Pick Med vs High AT TRIAGE (agy has no dynamic thinking to
       pick for itself): Med is the default lane; use High only when the issue
       reads as a harder/riskier task (non-trivial state, layout, complex logic,
       or multi-layer API work — not a one-line tweak).
+
+  Note: under-specified codework (empty or title-only body) must always be
+  triaged as `Opus` so it flags for design discussion rather than being
+  auto-Flashed.
 
   BEFORE applying a label, check whether this issue is actually a clean
   triage call. If it is NOT — the issue doesn't clearly read as codework
