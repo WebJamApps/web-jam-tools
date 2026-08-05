@@ -42,6 +42,31 @@ Deno.test("detect_credential_literal helper", () => {
 
   const matchVar = findCredentialLiteral('export MY_API_KEY="$MY_VAR"');
   assertEquals(matchVar, null);
+
+  // --- MongoDB connection string tests ---
+  // Must NOT flag (no userinfo, local host):
+  assertEquals(findCredentialLiteral("mongodb://localhost:27018/test_db"), null);
+  assertEquals(findCredentialLiteral("mongodb://localhost:27019/another_db?replicaSet=rs0"), null);
+  assertEquals(findCredentialLiteral("mongodb://127.0.0.1:27017"), null);
+  assertEquals(findCredentialLiteral("mongodb://localhost"), null);
+
+  // Must STILL flag:
+  assertEquals(
+    findCredentialLiteral("mongodb+srv://user:password@cluster.example.invalid/my_db"),
+    "MongoDB connection string",
+  );
+  assertEquals(
+    findCredentialLiteral("mongodb://user:password@localhost:27017/my_db"),
+    "MongoDB connection string",
+  );
+  assertEquals(
+    findCredentialLiteral("mongodb+srv://user:password@localhost.attacker.example.invalid/my_db"),
+    "MongoDB connection string",
+  );
+  assertEquals(
+    findCredentialLiteral("mongodb://cluster.example.invalid:27017/my_db"),
+    "MongoDB connection string",
+  );
 });
 
 Deno.test("detect_human_only_credentials helper", () => {

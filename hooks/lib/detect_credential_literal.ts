@@ -32,9 +32,59 @@ export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["Auth header flag", /(?:--header|-H)\s+["']?(?:[A-Za-z0-9_-]+:\s*)?(?:Bearer|token|Basic|Secret|[A-Za-z0-9_-]{15,})/i],
 ];
 
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"]);
+
+export function isFlaggableMongoDbUri(uri: string): boolean {
+  const match = uri.match(/^mongodb(?:\+srv)?:\/\/([^\s"'\/\?#]+)/i);
+  if (!match) {
+    return false;
+  }
+  const authority = match[1];
+
+  if (authority.includes("@")) {
+    return true;
+  }
+
+  const hostTokens = authority.split(",");
+  for (const token of hostTokens) {
+    const trimmed = token.trim();
+    if (!trimmed) continue;
+    let hostname: string;
+    if (trimmed.startsWith("[")) {
+      const endBracket = trimmed.indexOf("]");
+      hostname = endBracket !== -1 ? trimmed.substring(0, endBracket + 1) : trimmed;
+    } else {
+      hostname = trimmed.split(":")[0];
+    }
+
+    if (!LOCAL_HOSTS.has(hostname.toLowerCase())) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function hasFlaggableMongoDbUri(text: string): boolean {
+  const matches = text.match(/mongodb(?:\+srv)?:\/\/[^\s"']+/gi);
+  if (!matches) {
+    return false;
+  }
+  for (const uri of matches) {
+    if (isFlaggableMongoDbUri(uri)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function findCredentialLiteral(text: string): string | null {
   for (const [name, pattern] of SPECIFIC_PATTERNS) {
-    if (pattern.test(text)) {
+    if (name === "MongoDB connection string") {
+      if (hasFlaggableMongoDbUri(text)) {
+        return name;
+      }
+    } else if (pattern.test(text)) {
       return name;
     }
   }

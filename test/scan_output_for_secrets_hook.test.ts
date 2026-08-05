@@ -132,3 +132,16 @@ Deno.test("empty output is allowed", async () => {
   const res = await runHook("");
   assertEquals(res.code, 0, res.stderr);
 });
+
+Deno.test("a credential-free localhost mongodb URI in tool output is allowed", async () => {
+  const res = await runHook("Connected to mongodb://localhost:27018/test_db");
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a credentialed remote mongodb URI in tool output is detected", async () => {
+  const res = await runHook("Connecting to mongodb+srv://user:pass@cluster.example.invalid/db");
+  assertEquals(res.code, 2);
+  if (!res.stderr.includes("MongoDB connection string")) {
+    throw new Error(`expected MongoDB connection string in stderr, got: ${res.stderr}`);
+  }
+});
