@@ -41,19 +41,15 @@ that's what following this skill prevents.
    second issue for the same problem splits the discussion and the fix.
 2. **Choose the model label deliberately, not as an afterthought.** This is the thing
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
-   model label, because the label was going to be "added later." Decide the label as part of
-   deciding what the issue IS — before you write the body — from:
-   - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes,
-     running tests/builds and reporting the result.
-   - `Sonnet` — ordinary contained coding: a fix or feature across a few files, tests, light
-     refactors.
-   - `Opus` — genuine multi-file judgment, design/spec work, reviewing another model's output.
-   - `Flash Med` / `Flash High` — frontend/UI coding, canonical in all 8 active repos per
-     `skills/fix-labels/labels.yaml` (Josh's call, 2026-07-31: Flash High is at Sonnet quality and
-     Flash Med a viable Haiku substitute, so both are routable everywhere, not just the front-end
-     repos); pick High only when Medium is likely to need multiple retries.
-   - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
-     delete-protection only, per `skills/fix-labels/labels.yaml`).
+   model label, because the label was going to be "added later."    Decide the label as part of
+    deciding what the issue IS — before you write the body — from:
+    - `Flash Med` — mechanical work, documentation cleanup/link updates, single-file edits, and routine execution tasks across all repos (Josh's default choice to save token quota; viable Haiku substitute).
+    - `Flash High` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
+    - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
+    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; slightly higher capability than Flash High).
+    - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
+    - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
+      delete-protection only, per `skills/fix-labels/labels.yaml`).
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
    still pick one label, since the hook requires exactly one.
 3. **Draft acceptance criteria that let the issue CLOSE.** Concrete, checkable conditions — not a
