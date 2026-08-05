@@ -49,6 +49,7 @@ const EXPECTED_HOOK_SCRIPTS = [
   "feature-branch-guard.sh",
   "fmt-push-guard.sh",
   "haiku-only-gmail-gate.sh",
+  "memory-cleanup-reminder.sh",
   "notes-sync-reminder.sh",
   // Stop hook (web-jam-tools#290) — detective-only warning when an Opus
   // turn racks up edits with zero subagent spawns.
