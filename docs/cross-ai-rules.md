@@ -190,6 +190,10 @@ closes, or it is not deferred and stays in the epic. "Deferred" with no issue
 behind it is deletion with extra steps — and it lands hardest on exactly the
 items that got deferred because they were hard.
 
+### Rule 4 — a ruling becomes a tracked issue in the same session
+
+A ruling becomes a tracked issue in the same session. When Josh decides something, file the GitHub issue for it before the session ends. Writing it into a design document, a Dropbox record, or agent memory is not tracking the work — none of those carry a routing label, none can be dispatched, and none can be closed. A decision recorded only in a document surfaces again only if someone happens to re-read that document. This applies with particular force when the resulting work is Josh's own manual steps, which must never live only in a chat or a doc. Do not report a decision as "settled and recorded" when only a document was written. The document keeps the reasoning; the issue is the tracking surface; link them both ways.
+
 ## STANDALONE EXECUTABLE ISSUES AND EPIC TYPES (wjt#342)
 
 Every actionable GitHub issue body (not typed `Epic`) must be fully self-contained and executable on its own. An issue body may not rely on unresolvable pointer phrases such as "see the comment", "see comment", "read the comment first", "read comment first", "as discussed above", "as discussed in", "per the discussion", "in the epic", or "see the epic".
