@@ -40,10 +40,10 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
 - **Phone apps drop only at Drive root.** They can't target a folder. Cleanup is the laptop's job via `/drive-cleanup`.
 - **Always delegate to the cheapest model that can do the job.** Haiku/Flash Med for mechanical one-offs & doc cleanups, Flash High for full-stack coding & interactive work, Sonnet for complex multi-file refactoring, Opus for judgment and design only. Spending Opus tokens on mechanical work wastes the Anthropic budget.
 - **Dispatch vs. inline — judge by output volume and duration, not by task category.** **Dispatch** to a Haiku/Sonnet subagent when the job is long-running or produces heavy tool output: test suites, builds, migrations, multi-file scans or edits, anything log-noisy. This keeps that output out of the Opus session's context, which is the scarce resource. **Do it inline** when it is a handful of commands with trivial output (a few lines) — e.g. pruning a merged branch, removing a stray worktree, one `gh issue view`. A cold subagent pays its own system prompt, tool schemas and briefing before running anything, and still returns a report into the Opus context; for a job this small that fixed cost exceeds the work itself. The purpose is saving money and context. **If applying the rule would cost more than ignoring it, the rule does not apply** — say so plainly rather than following it into the more expensive path.
-- **No agent connects a new account, credential, or MCP server without Josh's explicit authorization naming it.** Discovering that something *could* be connected is never permission to connect it — see the OPERATIONAL HARD RULES section of [cross-ai-rules.md](cross-ai-rules.md) for the full rule text and origin.
+- **Credential & MCP Server Authorization:** See [cross-ai-rules.md](cross-ai-rules.md) for the operational hard rule requiring Josh's explicit authorization before connecting any new account, credential, or MCP server.
 - **Adaptive Escalation Rule (Flash Med → Subagent Boost):** Antigravity (agy) sessions should default to **`Flash Med`** for fast response times, low latency, and zero token waste. If a subtask encounters complex multi-file refactoring, difficult type/lint errors, or intricate REAPER routing/composition, the session automatically dispatches a subagent with `Model: "pro"` or `Model: "flash"` (`invoke_subagent`) to solve that specific block and report back.
 - **The issue BODY is the spec agy reads — comments are for humans.** `handle-agy-tasks.sh` composes the Flash/agy prompt from the issue title + body, and (since web-jam-tools#154) also folds in the issue's comments (chronological, newest last, clearly delimited). Comments still aren't a substitute: fold every locked decision into the BODY before dispatching, or Flash may miss it. If the BODY still contains a `BLOCKED` / `DO NOT START` marker, the script refuses to dispatch and exits non-zero — clear the marker in the body first.
-- **Laptop Dropbox Scope & Security Guardrails:** Access to `~/Dropbox` on the laptop is restricted to three approved top-level folders (`joshandmariamusic`, `web-jam-llms`, `mark_henrickson`). All other top-level folders — including `Dropbox/WebJamApps` — are explicitly denied in `permissions.deny` via `install-hooks.sh` for file tools (`Read`, `Edit`, `Write`) and Dropbox MCP mutation tools (`delete`, `move`). Note that deny rules on file tools do not constrain raw Bash commands (which use pattern-matched Bash rules), serving as an operational guardrail rather than an absolute security boundary (web-jam-tools#321).
+- **Laptop Dropbox Scope & Security Guardrails:** See [cross-ai-rules.md](cross-ai-rules.md) for the canonical list of approved Dropbox folders, denied paths, and operational hard rules.
 
 ---
 
@@ -141,7 +141,7 @@ Triggered manually (`/drive-cleanup` in any Claude Code session) or by the sessi
 
 - Duplicate files (same name appearing twice)
 - **Claude Mobile bridge files** at Drive root (`for-opus-*.txt` / `for-agy-*.txt` / legacy timestamped variants) — these get appended to the Dropbox-resident canonical queue; the Drive original is renamed to `processed-YYYY-MM-DD-<name>.txt` (kept forever as audit trail)
-- Misplaced deliverable artifacts at Drive root that should live in `JoshMariaMusic` or `CollegeLutheran`
+- Misplaced deliverable artifacts at Drive root that should live in project folders (see [cross-ai-rules.md](cross-ai-rules.md) for file placement rules)
 - Stray ephemeral files (old timestamped backups, log dumps)
 - Files in the `Misc/` folder older than 90 days (flagged for review)
 
@@ -179,7 +179,7 @@ Several workflows are built around **Josh approving each step** before the next 
 | Pitch emails / venue outreach | Before any email is actually sent | The exact wording, recipient, and whether it goes out at all. AIs draft — you send. |
 | Risky git operations (push, force-push, `reset --hard`, branch deletes) | Before Claude Code runs the command | Whether the destructive / shared-state action proceeds. Approval for one push is not approval for all pushes. |
 | `/code-review ultra` (multi-agent cloud PR review) | Triggering it at all | Only you can launch it — it's billed and Claude Code can't self-trigger. Use it when a PR is worth the spend. |
-| MariaParty protected files (RSVP MASTER, Master Plan v2, Banner Decision) | Before any edit | Explicit override required — default behavior is "do not touch." |
+| Protected files | Before any edit | Explicit override required — see [cross-ai-rules.md](cross-ai-rules.md) for the canonical list of protected files. |
 | Memory writes that would override prior guidance | When the AI flags a contradiction with an existing memory record | Whether the new info supersedes the old or both should coexist. |
 
 ### What "approve" sounds like
