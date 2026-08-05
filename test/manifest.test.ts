@@ -48,6 +48,7 @@ const EXPECTED_HOOK_SCRIPTS = [
   // verifies symlinks and settings rules are up to date.
   "check-install-hooks-drift.sh",
   "feature-branch-guard.sh",
+  "flash-issues-reminder.sh",
   "fmt-push-guard.sh",
   "haiku-only-gmail-gate.sh",
   "memory-cleanup-reminder.sh",
