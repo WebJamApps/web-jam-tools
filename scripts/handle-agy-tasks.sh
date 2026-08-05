@@ -52,9 +52,15 @@
 # never reaching Flash (two real PR rejections: TimShermanMusic#3, Henrickson-
 # ForSalem#5). The issue BODY is still the canonical spec — comments are extra
 # context, not a substitute for folding decisions into the body. AND: if the
-# issue BODY still carries a BLOCKED / DO NOT START / DO-NOT-START marker
-# (case-insensitive), the script refuses to dispatch and exits non-zero —
-# update the body first. (Before web-jam-tools#249 this guard was noted as
+# issue BODY still carries a BLOCKED / DO NOT START / DO-NOT-START marker as a
+# STATUS DECLARATION — the marker at the START of a line (optionally behind
+# markdown decoration like `>`, `#`, `*`, `-`, `_`, `**`, or an emoji), not
+# buried mid-sentence in prose — the script refuses to dispatch and exits
+# non-zero — update the body first. (web-jam-tools#395: the original word-
+# anywhere-in-body match false-positived on ordinary prose describing a guard,
+# e.g. "the hook BLOCKED the command" — scoping the match to line-start status
+# declarations fixes that while still catching a real stale marker.) (Before
+# web-jam-tools#249 this guard was noted as
 # "issue-based dispatch only" because a queue-line mode with no body to check
 # also existed; that mode is gone, so the guard now unconditionally applies to
 # every invocation.)
@@ -156,13 +162,30 @@ ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title,body,
 ISSUE_TITLE=$(jq -r '.title' <<< "$ISSUE_JSON")
 ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 
-# --- BLOCKED guard (web-jam-tools#154) ---
-# Refuse to dispatch when the issue BODY still carries a blocked marker.
-# Comments are for humans; the BODY is what agy actually reads as the spec,
-# so a stale "don't start" left in the body must stop the dispatch loudly
-# rather than let Flash improvise (HenricksonForSalem#5 rejection). Word-
-# bounded so "UNBLOCKED"/"unblocking" etc. don't false-positive.
-if grep -qiE '\bBLOCKED\b|\bDO[ -]NOT[ -]START\b' <<< "$ISSUE_BODY"; then
+# --- BLOCKED guard (web-jam-tools#154, scoped to status declarations in #395) ---
+# Refuse to dispatch when the issue BODY still carries a blocked marker AS A
+# STATUS DECLARATION, not as ordinary prose. A status declaration is the
+# marker sitting at the START of a line, optionally behind markdown
+# decoration (`>`, `#`/`##`, `*`, `-`, `_`, `**`) and/or an emoji — e.g.
+# "**BLOCKED**", "> BLOCKED: reason", "## BLOCKED", "🔴 BLOCKED". Comments are
+# for humans; the BODY is what agy actually reads as the spec, so a stale
+# "don't start" left in the body must stop the dispatch loudly rather than
+# let Flash improvise (HenricksonForSalem#5 rejection). Mid-sentence prose
+# ("...the hook BLOCKED the command...") and table cells no longer
+# false-positive (web-jam-tools#395 — a real refusal fired on prose describing
+# a guard, with no status marker present), because grep applies `^` per line
+# and a real sentence/cell never starts the physical line with the bare word.
+#
+# Implementation: `grep` (no -z) matches `^`/`$` per line already, so this
+# runs once against the whole (possibly multi-line) body. `^[^A-Za-z0-9]*`
+# consumes any run of leading non-alphanumeric bytes — whitespace, markdown
+# punctuation, and multi-byte emoji sequences all fall outside [A-Za-z0-9] —
+# so "any combination" of decoration/emoji is handled without needing a
+# PCRE/Unicode character class (portable across grep implementations). That
+# same leading-strip also keeps "UNBLOCKED"/"unblocking" excluded: stripping
+# stops at the first alphanumeric byte, which is the "U", so the marker
+# alternation is never tried starting there.
+if grep -qiE '^[^A-Za-z0-9]*(BLOCKED|DO[ -]NOT[ -]START)\b' <<< "$ISSUE_BODY"; then
   echo "" >&2
   echo "ERROR: issue $REPO#$ISSUE_NUM body still contains a BLOCKED / DO NOT" >&2
   echo "START marker — refusing to dispatch agy against it." >&2
