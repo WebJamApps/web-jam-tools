@@ -35,10 +35,12 @@ repoint the installed files as symlinks back into this repo:
 INST=~/.gemini/config/plugins/webjam-tasks
 SRC=~/WebJamApps/web-jam-tools/agy/webjam-tasks
 ln -sf "$SRC/plugin.json"          "$INST/plugin.json"
-ln -sf "$SRC/skills/next/SKILL.md" "$INST/skills/next/SKILL.md"
 ln -sf "$SRC/hooks.json"           "$INST/hooks.json"
 mkdir -p "$INST/hooks"
 ln -sf "$SRC/hooks/block-merge-deploy.sh" "$INST/hooks/block-merge-deploy.sh"
+
+# Symlink all skills under skills/ across ~/.claude/skills and ~/.gemini/config/plugins/webjam-tasks/skills:
+scripts/install-skills.sh
 ```
 
 After that, edit the files here, **restart agy**, and changes are live — no
