@@ -1,13 +1,13 @@
 ---
 name: flash-issues
-description: Scan OPEN issues across the front-end repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Sonnet subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
+description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Sonnet subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
 ---
 
 # flash-issues — regenerate the Flash-lane worklist
 
 Josh sometimes needs to run `agy` himself, by hand, with no Claude session
 available (out of tokens). This skill produces the list he reads off of:
-every open Flash-lane issue across the front-end repos, in priority order,
+every open Flash-lane issue across all 8 active WebJamApps repos, in priority order,
 with dependency ordering respected — so he can pick the next one and dispatch
 it interactively without Claude in the loop.
 
@@ -84,15 +84,18 @@ Step 2 issue-list call. Search remains the right tool for bulk cross-repo
 discovery (e.g. `/fix-labels`' milestone-consistency check), just not for
 this skill's per-issue reads.
 
-## Scope — these five repos, exactly these slugs
+## Scope — all eight active repos, exactly these slugs
 
+WebJamApps/web-jam-tools
 WebJamApps/JaMmusic
 WebJamApps/CollegeLutheran
 WebJamApps/AppersonAuto
+WebJamApps/web-jam-back
+WebJamApps/WebJamSocketCluster
 WebJamApps/TimShermanMusic
 WebJamApps/HenricksonForSalem
 
-(TimShermanMusic and HenricksonForSalem are each one word, mixed case.)
+(WebJamSocketCluster, TimShermanMusic, and HenricksonForSalem are mixed case.)
 
 ## Step 1 — read each repo's real label set (don't hardcode spellings)
 
@@ -122,7 +125,7 @@ purely for context in the output (Step 9), not used as a filter.
 ## Step 3 — classify every open issue
 
 For each issue, FIRST check for the `parked` label (gray, "Parked by Josh -
-agents and skills skip this issue entirely" — exists in all five repos). If
+agents and skills skip this issue entirely" — exists in all 8 repos). If
 present, skip this issue COMPLETELY: no triage, no label changes, not in
 any output section — exactly like an issue carrying a non-Flash model
 label. This is how Josh's needs-review decisions persist between runs
@@ -177,12 +180,11 @@ Otherwise, for each issue:
     - Sonnet — ordinary contained coding (a fix/feature across a few files)
     - Opus — genuine multi-file judgment/design
     - Fable — architecture/specs/requirements framing
-    - Flash (Med/High if the repo splits it) — frontend/UI coding, which is
-      most issues in these five repos since they're all front-end apps.
-      Pick Med vs High AT TRIAGE (agy has no dynamic thinking to pick for
-      itself): Med is the default lane; use High only when the issue reads
-      as a harder/riskier UI task (non-trivial state, layout, or
-      interaction logic — not a one-line style tweak).
+    - Flash (Med/High if the repo splits it) — full-stack coding across all 8
+      active repos. Pick Med vs High AT TRIAGE (agy has no dynamic thinking to
+      pick for itself): Med is the default lane; use High only when the issue
+      reads as a harder/riskier task (non-trivial state, layout, complex logic,
+      or multi-layer API work — not a one-line tweak).
 
   BEFORE applying a label, check whether this issue is actually a clean
   triage call. If it is NOT — the issue doesn't clearly read as codework
@@ -203,8 +205,8 @@ Otherwise, for each issue:
   artist listing" is contacting an external company's platform, not code.
   Any issue whose actual ask is a phone call, an email, manual data entry,
   or someone else's dashboard/CMS is a human task regardless of which repo
-  it's filed in — a frontend repo still carries plenty of non-frontend
-  asks; don't default to Flash just because the repo is a frontend repo.
+  it's filed in — a full-stack repo still carries plenty of non-codework
+  asks; don't default to Flash just because an issue is filed there.
 
   If you reach the end of this step with an EMPTY Needs review list, treat
   that as suspicious, not a clean bill of health. A backlog of any real
@@ -222,7 +224,7 @@ Otherwise, for each issue:
 ## Step 4 — pool the Flash-lane candidates
 
 Collect every Flash-lane candidate (pre-existing + newly labeled in Step 3)
-from all five repos into one list. Each entry needs: repo, issue number,
+from all 8 active repos into one list. Each entry needs: repo, issue number,
 title, URL, milestone (if any, from Step 2 — for output context only), and
 its Flash tier label (`Flash`, `Flash Med`, or `Flash High` — exactly as
 that repo spells it).
@@ -265,7 +267,7 @@ further lookups needed. For each blocker:
   Blocked.
 - `state == "open"` and it is NOT a Flash-lane candidate in the pool (a
   different model label read straight off its own `labels[]`, or it lives
-  in a non-front-end repo) — this candidate cannot run yet. Route it to the
+  outside this pool) — this candidate cannot run yet. Route it to the
   Blocked section (Step 7), naming the blocker (`Repo#n`) and the reason
   taken from its own `labels[]` (e.g. "Sonnet, backend endpoint not
   built") — no extra `gh issue view` call, the label is already in this
