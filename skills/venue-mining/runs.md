@@ -14,7 +14,7 @@ Golden Cactus, Montano's, Fork in the Alley, Living Proof Beer Co, The Alley Cat
 — **14 new venues total**, all `outreachEligible: false` + Rambler provenance.
 Dan Carrell found as a bonus (Parkway Brewing 2025-12-13). Hotel Roanoke Foxx
 City Jazz Club deliberately NOT added — saved as a TimShermanMusic lead.
-Contact-hunt same day: all 4 contact-less venues got phone+website via PUT
+Contact-hunt same day: all 4 contact-less venues got phone+website via PATCH
 (incl. booking email litterbox@alleycatlive.com).
 
 **Vetting outcome (same day):** Josh authorized the best 7 with emails —
@@ -84,9 +84,9 @@ leads).
 **Incident:** First POST for "Starr Hill On Main" used email `info@starrhill.com`
 (shared Starr Hill chain booking inbox). Email dedup in `POST /venue` → it
 **matched and overwrote the existing "Starr Hill Pilot Brewery" (Roanoke) record**,
-clobbering its name, city, website, and notes. Restored via `PUT /venue/:id`;
+clobbering its name, city, website, and notes. Restored via `PATCH /venue/:id`;
 original `outreachEligible` + notes restoration pending Josh's confirmation.
 
 **Lesson:** For franchise/chain venues sharing a booking inbox, create WITHOUT the
 shared email (falls back to name+city dedup), then add a location-specific contact
-via PUT after creation.
+via PATCH after creation.
