@@ -8,7 +8,7 @@ metadata:
 
 # /next — run an agy-labeled coding task
 
-This skill delegates the deterministic setup (issue fetch + git branching) to a
+This skill is installed across all agent surfaces (Claude Code, Antigravity/agy) and model tiers (Haiku, Flash, Sonnet, Opus). It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:

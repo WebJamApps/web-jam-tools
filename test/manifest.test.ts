@@ -28,6 +28,7 @@ const EXPECTED_SKILL_DIRS = [
   "flash-issues",
   "handle-gmails",
   "memory-cleanup",
+  "next",
   "pr-review",
   "venue-mining",
 ];
