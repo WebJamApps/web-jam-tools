@@ -1,6 +1,6 @@
 ---
 name: next
-description: Start an agy-labeled coding task. Use when the user types /next <Repo>#<issue-num> (named mode), or /next with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/flash-issues.md read-only to resolve the next actionable issue), or says "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start an agy-labeled coding task. Use when the user types /next <Repo>#<issue-num> (named mode), or /next with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
   version: v1
   publisher: josh
@@ -16,23 +16,29 @@ older stateful queue-file mode). There are two ways to arrive at that issue:
 - **`/next Repo#123`** (named mode) — the issue is given explicitly. Go straight
   to "## Steps" below.
 - **`/next`** (no argument, auto-pick mode) — read-only resolve the next
-  actionable issue from `~/Dropbox/web-jam-llms/flash-issues.md`, then hand off
+  actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
   to the same "## Steps" flow below. See "## No-argument mode" first.
 
-## No-argument mode — auto-pick from flash-issues.md
+## No-argument mode — auto-pick worklist based on agent surface
 
 Use this when the user types `/next` with no argument, or says "next" /
-"next task" / "start the next task" without naming an issue. This mode is
-**read-only** against `~/Dropbox/web-jam-llms/flash-issues.md` — never edit
+"next task" / "start the next task" without naming an issue.
+
+Determine which worklist file to read based on your agent surface:
+- **Claude Code (Haiku session)**: Read `~/Dropbox/web-jam-llms/haiku-issues.md`.
+- **Antigravity (Flash / agy session)**: Read `~/Dropbox/web-jam-llms/flash-issues.md`.
+
+This mode is **read-only** against the target worklist file — never edit
 that file. It only resolves a concrete `Repo#num`, then continues at step 1 of
 "## Steps" below exactly as if that issue had been named — everything from
 there on (setup, model selection, coding, PR) is identical and unmodified.
 
 ### Resolution steps
 
-1. Read `~/Dropbox/web-jam-llms/flash-issues.md`. If it's missing, empty, or
-   has no numbered items, stop and tell Josh: "flash-issues.md is missing/empty
-   — run /flash-issues first." Do not improvise a substitute list.
+1. Select the target worklist file based on the active agent surface:
+   - When running under **Claude Code** (Haiku), select `~/Dropbox/web-jam-llms/haiku-issues.md`.
+   - When running under **Antigravity** (Flash / agy), select `~/Dropbox/web-jam-llms/flash-issues.md`.
+   Read the selected worklist file. If it's missing, empty, or has no numbered items, stop and tell Josh: "<filename> is missing/empty — run the corresponding worklist skill first." Do not improvise a substitute list.
 2. Parse **only** the numbered runnable list at the top of the file — the
    `N. [Repo#num](...) — title (Model)` lines that appear **above** the
    `## Blocked` heading. Ignore the `## Blocked` and `## Needs Josh's review`
@@ -70,12 +76,9 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
    `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>`
    and follow steps 2 onward exactly as written for the named-issue flow.
 5. If you reach the end of the list with no candidate passing (every item is
-   closed or already in flight), stop and tell Josh: "every item in
-   flash-issues.md's runnable list is closed or already in flight — re-run
-   /flash-issues to refresh it." Do not improvise a substitute list, and do
-   not fall back to the Blocked or Needs-review sections.
+   closed or already in flight), stop and tell Josh: "every item in <filename>'s runnable list is closed or already in flight — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
 
-Never write to `flash-issues.md` in this mode — it is read-only input.
+Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in this mode — they are read-only input.
 
 ## Steps
 
