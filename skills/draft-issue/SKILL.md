@@ -114,10 +114,10 @@ EOF
 
 - Require `--type <Type>` (`Task`, `Bug`, `Feature`, `Epic`) on all issue creation calls.
 - Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
-- Add non-model labels (`bug`, `enhancement`, `blocked`, `Needs Design`, a priority label, ...)
+- Add non-model status labels (`Blocked`, `Needs Design`, `Josh`, `parked`, ...)
   alongside the model label freely; the hook only checks that exactly one *model* label is present,
   not that it's the only label.
-- The MCP `issue_write` create path takes `"type": "Task"` and `"labels": ["Sonnet", "bug"]` — same
+- The MCP `issue_write` create path takes `"type": "Task"` and `"labels": ["Sonnet", "Needs Design"]` — same
   native-type and model-label rules, same hook.
 
 ## If the hook denies the call
