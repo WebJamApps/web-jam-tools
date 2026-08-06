@@ -53,44 +53,89 @@ function assertBlocked(stderr: string) {
 
 // --- Bash surface: gh issue create ---
 
-Deno.test("gh issue create with a single --label model label is allowed", async () => {
+Deno.test("gh issue create without native Type is denied", async () => {
   const res = await runHook(
     bashCall(`gh issue create --title T --body B --label Sonnet`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.",
+    ),
+    true,
+  );
+});
+
+Deno.test("gh issue create with invalid native Type is denied", async () => {
+  const res = await runHook(
+    bashCall(`gh issue create --title T --body B --label Sonnet --type InvalidType`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.",
+    ),
+    true,
+  );
+});
+
+Deno.test("gh issue create with a single --label model label and --type Task is allowed", async () => {
+  const res = await runHook(
+    bashCall(`gh issue create --title T --body B --label Sonnet --type Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
+Deno.test("gh issue create with valid native types (Bug, Feature, Epic) is allowed", async () => {
+  const resBug = await runHook(
+    bashCall(`gh issue create --title T --body B --label Sonnet -t Bug`),
+  );
+  assertEquals(resBug.code, 0, resBug.stderr);
+
+  const resFeat = await runHook(
+    bashCall(`gh issue create --title T --body B --label Sonnet --type=Feature`),
+  );
+  assertEquals(resFeat.code, 0, resFeat.stderr);
+
+  const resEpic = await runHook(
+    bashCall(`gh issue create --title T --body B --label Sonnet -t=Epic`),
+  );
+  assertEquals(resEpic.code, 0, resEpic.stderr);
+});
+
 Deno.test("gh issue create with multiple --label flags (one model label among them) is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet --label bug`),
+    bashCall(`gh issue create --title T --body B --label Sonnet --label bug --type Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with -l short flag carrying the model label is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B -l Sonnet -l bug`),
+    bashCall(`gh issue create --title T --body B -l Sonnet -l bug -t Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with a comma-separated --label value is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label "Sonnet,bug"`),
+    bashCall(`gh issue create --title T --body B --label "Sonnet,bug" --type Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with --label=value single-token form is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label=Sonnet`),
+    bashCall(`gh issue create --title T --body B --label=Sonnet --type Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with ZERO model labels is denied", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label bug`),
+    bashCall(`gh issue create --title T --body B --label bug --type Task`),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -98,21 +143,21 @@ Deno.test("gh issue create with ZERO model labels is denied", async () => {
 
 Deno.test("gh issue create with a non-model label only (enhancement) is denied", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label enhancement`),
+    bashCall(`gh issue create --title T --body B --label enhancement --type Task`),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
 
 Deno.test("gh issue create with no --label flag at all is denied", async () => {
-  const res = await runHook(bashCall(`gh issue create --title T --body B`));
+  const res = await runHook(bashCall(`gh issue create --title T --body B --type Task`));
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
 
 Deno.test("gh issue create with TWO model labels is denied", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet --label Opus`),
+    bashCall(`gh issue create --title T --body B --label Sonnet --label Opus --type Task`),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -120,7 +165,7 @@ Deno.test("gh issue create with TWO model labels is denied", async () => {
 
 Deno.test("deny message lists the valid model labels", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label bug`),
+    bashCall(`gh issue create --title T --body B --label bug --type Task`),
   );
   assertEquals(res.code, 2);
   for (const label of ["Haiku", "Sonnet", "Opus", "Fable", "Flash Med", "Flash High"]) {
@@ -131,14 +176,14 @@ Deno.test("deny message lists the valid model labels", async () => {
 });
 
 Deno.test("a --label flag with no value at all is denied (malformed, fail closed)", async () => {
-  const res = await runHook(bashCall(`gh issue create --title T --body B --label`));
+  const res = await runHook(bashCall(`gh issue create --title T --body B --type Task --label`));
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
 
 Deno.test("unparseable shell quoting on what looks like a gh issue create is denied (fail closed)", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title "unterminated --label Sonnet`),
+    bashCall(`gh issue create --title "unterminated --label Sonnet --type Task`),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -173,7 +218,7 @@ Deno.test("a command with no gh reference at all passes through", async () => {
 
 Deno.test("gh issue create chained after another command (&&) is still gated", async () => {
   const res = await runHook(
-    bashCall(`echo hi && gh issue create --title T --body B --label bug`),
+    bashCall(`echo hi && gh issue create --title T --body B --label bug --type Task`),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -181,13 +226,55 @@ Deno.test("gh issue create chained after another command (&&) is still gated", a
 
 // --- MCP surface: mcp__*__issue_write ---
 
-Deno.test("MCP issue_write create with one model label in the array is allowed", async () => {
+Deno.test("MCP issue_write create without native Type is denied", async () => {
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
+      labels: ["Sonnet", "bug"],
+    }),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.",
+    ),
+    true,
+  );
+});
+
+Deno.test("MCP issue_write create with invalid native Type is denied", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "InvalidType",
+      labels: ["Sonnet", "bug"],
+    }),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.",
+    ),
+    true,
+  );
+});
+
+Deno.test("MCP issue_write create with one model label in the array and valid type is allowed", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
       labels: ["Sonnet", "bug"],
     }),
   );
@@ -198,6 +285,7 @@ Deno.test("MCP issue_write create with a different server prefix is still gated 
   const res = await runHook(
     mcpIssueWrite("mcp__github__issue_write", {
       method: "create",
+      type: "Task",
       labels: ["bug"],
     }),
   );
@@ -209,6 +297,7 @@ Deno.test("MCP issue_write create with ZERO model labels is denied", async () =>
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      type: "Task",
       labels: ["bug"],
     }),
   );
@@ -220,6 +309,7 @@ Deno.test("MCP issue_write create with no labels field at all is denied", async 
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      type: "Task",
       title: "T",
     }),
   );
@@ -231,6 +321,7 @@ Deno.test("MCP issue_write create with TWO model labels is denied", async () => 
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      type: "Task",
       labels: ["Sonnet", "Opus"],
     }),
   );
@@ -242,6 +333,7 @@ Deno.test("MCP issue_write with a non-array labels field is denied (unparseable,
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      type: "Task",
       labels: "Sonnet",
     }),
   );
@@ -310,7 +402,7 @@ const ISSUE_342_FIXTURE_BODY = `Implement Issue #342 in /home/joshua/WebJamApps/
 Deno.test("gh issue create with forbidden pointer phrase in body is denied", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "Please see the comment for details" --label Sonnet`,
+      `gh issue create --title T --body "Please see the comment for details" --label Sonnet --type Task`,
     ),
   );
   assertEquals(res.code, 2);
@@ -323,7 +415,7 @@ Deno.test("gh issue create with Issue #342 body fixture (quoted pointer phrases)
     bashCall(
       `gh issue create --title T --body "${
         ISSUE_342_FIXTURE_BODY.replace(/"/g, '\\"')
-      }" --label Sonnet`,
+      }" --label Sonnet --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -332,7 +424,7 @@ Deno.test("gh issue create with Issue #342 body fixture (quoted pointer phrases)
 Deno.test("gh issue create with pointer phrase inside code block/span or quotes is allowed", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "Rule states \`read comment first\` is banned and \\"see the epic\\" is banned." --label Sonnet`,
+      `gh issue create --title T --body "Rule states \`read comment first\` is banned and \\"see the epic\\" is banned." --label Sonnet --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -368,6 +460,7 @@ Deno.test("MCP issue_write create with forbidden pointer phrase in body is denie
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
       title: "T",
+      type: "Task",
       body: "Please read the comment first.",
       labels: ["Sonnet"],
     }),

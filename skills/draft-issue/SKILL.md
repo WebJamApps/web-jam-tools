@@ -66,6 +66,13 @@ that's what following this skill prevents.
    full requirements authored directly in the sub-issue body first before creation. Note: Native issue
    type `Epic` (which is orthogonal to model labels) is exempt from this check on edit paths (`gh issue edit`
    or MCP update), allowing Epics to reference comments or sub-issues as discussion evolves.
+5. **Require Native Issue Type (`--type`).** Every new issue creation MUST explicitly specify a
+   valid native GitHub issue type (`Task`, `Bug`, `Feature`, `Epic`) using `--type <Type>` or `-t <Type>`
+   (or `"type": "<Type>"` in MCP `issue_write`). Native issue types are enforced by
+   `hooks/require-model-label-on-issue-create.sh` (web-jam-tools#415).
+6. **Apply `Needs Design` Label when Design is Required.** For Epics or sub-issues requiring design
+   clarification before implementation, apply the canonical `Needs Design` status label alongside the chosen
+   model label and native type.
 
 ## Citation format (every reference, every time)
 
@@ -101,20 +108,22 @@ gh issue create --repo WebJamApps/<repo> \
 - ...
 EOF
 )" \
+  --type Task \
   --label Sonnet
 ```
 
+- Require `--type <Type>` (`Task`, `Bug`, `Feature`, `Epic`) on all issue creation calls.
 - Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
-- Add non-model labels (`bug`, `enhancement`, `blocked`, a priority label, ...) alongside the model
-  label freely; the hook only checks that exactly one *model* label is present, not that it's the
-  only label.
-- The MCP `issue_write` create path takes the same label as a JSON array element
-  (`"labels": ["Sonnet", "bug"]`) — same one-model-label rule, same hook.
+- Add non-model status labels (`Blocked`, `Needs Design`, `Josh`, `parked`, ...)
+  alongside the model label freely; the hook only checks that exactly one *model* label is present,
+  not that it's the only label.
+- The MCP `issue_write` create path takes `"type": "Task"` and `"labels": ["Sonnet", "Needs Design"]` — same
+  native-type and model-label rules, same hook.
 
 ## If the hook denies the call
 
-The denial message names what's wrong (no model label / multiple model labels / unparseable) and
-lists the valid labels straight from `skills/fix-labels/model-labels.json` (generated from
-`skills/fix-labels/labels.yaml`). Fix the `--label` flags (or
-the MCP `labels` array) per the message and retry — there is no bypass, and there shouldn't be one:
-the hook exists because "add the label after" is exactly how web-jam-tools#263 shipped unlabeled.
+The denial message names what's wrong (missing/invalid native issue type, no model label,
+multiple model labels, unresolvable pointer phrases, or unparseable command) and lists valid native
+types or model labels straight from `skills/fix-labels/model-labels.json`. Fix the `--type` and
+`--label` flags (or the MCP `type` and `labels` fields) per the message and retry — there is no
+bypass, and there shouldn't be one: the hook exists to enforce executable, properly categorized issues.

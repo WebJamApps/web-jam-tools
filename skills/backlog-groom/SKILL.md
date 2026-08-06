@@ -1,13 +1,19 @@
 ---
 name: backlog-groom
-description: Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, native Epic type & sub-issue desync, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.
+description: Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.
 ---
 
 # backlog-groom — cross-repo backlog health audit
 
-Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, dependency alignment, issue spec executability, and stale/completed issues.
+Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, dependency alignment, issue spec executability, untyped issues, and stale/completed issues.
 
 **Strict Interactive Gate:** This skill NEVER makes unilateral edits on GitHub. It writes its findings to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, presents a numbered table of findings to Josh in chat, and **WAITS for explicit per-item approval** before executing any label edits, issue edits, or closures on GitHub.
+
+## Execution Model
+
+- **Delegated Scan & Analysis:** Step 1 (Scan & Collect) and Step 2 (Analyze & Categorize) MUST be delegated to a single subagent running on **Flash Med** or **Haiku** to conserve token quota.
+- **Report & Summary Output:** The delegated subagent performs all cross-repo `gh` lookup calls, writes the detailed report to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, and returns ONLY the final findings table and per-repo untyped summary ratios back to the primary session.
+- **Primary Session Presentation:** The primary session renders the findings table to Josh and handles interactive approval and execution.
 
 ## Repositories in Scope (8)
 
@@ -34,16 +40,17 @@ The audit inspects every open issue across all 8 repositories against five core 
 - **Missing Blocked Label:** Issue has active, OPEN native blockers (`blocked_by` API) or un-met conditional markers, but lacks the `Blocked` label.
 - **Uncited Dependencies:** Issue body mentions dependency conditions (e.g. "depends on #123") that are not registered in native GitHub issue dependencies (`blocked_by` API).
 
-### 3. Executable Issue Spec Checks (Non-Epic Issues)
+### 3. Executable Issue Spec Checks (Non-Epic Issues) & Needs Design Awareness
 - For non-`Epic` issues, verify whether the issue body provides a self-contained, executable specification for automated agent implementation.
 - Flag unresolvable or lazy pointer phrases that require human context or reading comment threads:
   - `"see comment"` / `"read comment first"`
   - `"as discussed in"` / `"per the discussion"`
   - `"in the epic"` / `"see epic for details"`
   - `"as noted below"` (without explicit inline specs)
-- Recommend either updating the issue body with inline requirements or triaging/re-labeling to `Opus` / `Fable` for human design clarification.
+- **`Needs Design` Awareness:** For Epics or sub-issues that are not fully designed yet or require design clarification, recommend applying the canonical `Needs Design` status label or triaging/re-labeling to `Opus` for human design clarification rather than forcing immediate execution.
 
-### 4. Native Epic Type & Sub-Issue Desync
+### 4. Native Issue Types, Epic & Untyped Issue Detection
+- **Untyped Issue Detection:** Flag every OPEN issue with an unset native `Type` field (i.e. native `Type` is missing/null/empty). Report the per-repo untyped ratio (e.g. "web-jam-tools: 38 of 44 open issues untyped") and provide suggested native types (`Task`, `Bug`, `Feature`, `Epic`) for each untyped issue based on context.
 - **Native Epic Type Checks:** Verify that parent tracking issues or feature umbrellas have their native GitHub `Type` field set to `Epic`.
 - **Sub-Issue Desync:** Verify native parent/child sub-issue relationships. Flag child issues whose parent Epic is `CLOSED` but child remains `OPEN` without context, or child issues listed in Epic descriptions that are not linked natively.
 
@@ -56,26 +63,28 @@ The audit inspects every open issue across all 8 repositories against five core 
 
 ## Workflow & Execution Steps
 
-### Step 1: Scan & Collect
+### Step 1: Scan & Collect (Delegated to Subagent)
 1. Fetch all open issues for each of the 8 repos using `gh issue list` and `gh api`.
 2. Retrieve native `Priority`, `Type`, `issue_field_values`, and native dependencies (`blocked_by` API) for candidate issues.
 3. Exclude issues marked with the gray `parked` label (these are intentionally parked by Josh and skipped).
 
-### Step 2: Analyze & Categorize
+### Step 2: Analyze & Categorize (Delegated to Subagent)
 1. Evaluate each issue against the 5 audit categories above.
-2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash Med`", "Remove label `Blocked`", "Close as duplicate of #45", "Set native Type to Epic").
+2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash Med`", "Remove label `Blocked`", "Set native Type to `Task`", "Apply `Needs Design` label", "Close as duplicate of #45").
+3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped").
 
-### Step 3: Write Report File
-Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts per repo, and detailed findings.
+### Step 3: Write Report File (Delegated to Subagent)
+Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts and untyped ratios per repo, and detailed findings.
 
-### Step 4: Present Findings Table in Chat
-Render a clear, numbered Markdown table in chat:
+### Step 4: Present Findings Table in Chat (Primary Session)
+Render a clear, numbered Markdown table in chat along with per-repo untyped ratios:
 
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
 | 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash Med` label |
 | 2 | web-jam-back | #450 | Dependency Drift | Labeled `Blocked`, but blocker #412 is CLOSED | Remove `Blocked` label |
-| 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit |
+| 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
+| 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |
 
 If no drift is found across all repos, report that the backlog is 100% clean.
 
