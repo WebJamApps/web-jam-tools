@@ -142,6 +142,10 @@ labels:
     # `repos: all` (not just web-jam-tools) — Josh scans issue lists across
     # every active repo, and any of them can carry a currently-unworkable
     # issue.
+  - name: Needs Design
+    hex: "D93F0B"
+    repos: all
+    # Marks an Epic or sub-issue requiring design clarification before implementation (web-jam-tools#415).
 
 # --- Canonical topic milestones (web-jam-tools#300) ---
 #
