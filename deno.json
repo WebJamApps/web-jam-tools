@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.26.42",
+  "version": "1.27.0",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
@@ -20,6 +20,7 @@
     "outreach:advance": "deno run --allow-net --allow-env src/outreach-cron/advance_cadence.ts",
     "dropbox:link": "deno run --allow-net --allow-env src/dropbox-link/dropbox_link_cli.ts",
     "venue-contact:extract": "deno run -A src/venue-contact/cli.ts",
+    "venue-tag:diff": "deno run --allow-env=WEB_JAM_LLM_TOKEN,WEB_JAM_BACK_URL --allow-net=webjamsalem.herokuapp.com --allow-read=. src/venue-tag-diff/cli.ts",
     "fix-labels:diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/diff.ts",
     "fix-labels:milestone-diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/milestone-diff.ts",
     "fix-labels:generate-model-labels": "deno run --allow-read=skills/fix-labels/labels.yaml --allow-write=skills/fix-labels/model-labels.json src/fix-labels/generate-model-labels.ts",
@@ -60,6 +61,7 @@
       "cov_profile/",
       "src/gig-scraper/",
       "src/venue-contact/",
+      "src/venue-tag-diff/",
       "src/fix-labels/",
       "src/task-queue/",
       "src/dropbox-link/",
