@@ -37,8 +37,7 @@ that's what following this skill prevents.
 
 1. **Search for a duplicate first.** Run `gh issue list --repo WebJamApps/<repo> --state all --search
    "<keywords>"` (or `mcp__*__search_issues`) with a couple of keyword variants before creating
-   anything. If a close match exists, comment on it or reopen it instead of filing a new one — a
-   second issue for the same problem splits the discussion and the fix.
+   anything. If an OPEN issue matches, use or update that open issue. However, if a matching issue is CLOSED, do NOT modify, comment on, or attempt to reuse it — see the Closed Issues Are Immutable rule below.
 2. **Choose the model label deliberately, not as an afterthought.** This is the thing
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
    model label, because the label was going to be "added later."    Decide the label as part of
@@ -73,6 +72,7 @@ that's what following this skill prevents.
 6. **Apply `Needs Design` Label when Design is Required.** For Epics or sub-issues requiring design
    clarification before implementation, apply the canonical `Needs Design` status label alongside the chosen
    model label and native type.
+7. **Closed Issues Are Immutable.** Never modify, reopen, add comments to, or add new requirements to a closed GitHub issue. Closed issues represent finished state. When new scope, follow-up findings, or modifications arise for a closed issue, file a net-new issue citing the closed issue (repo + number + title) instead.
 
 ## Citation format (every reference, every time)
 
