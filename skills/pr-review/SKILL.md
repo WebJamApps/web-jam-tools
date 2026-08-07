@@ -29,6 +29,26 @@ Cross-model review ensures fresh perspective and catches model-specific blind sp
 
 ## Review Pipeline
 
+### Where to run it
+
+The review is read-only and API-driven — `gh pr view` and `gh pr diff` need no checkout at all.
+**Never `git checkout`, `git switch`, `git reset` or `git cherry-pick` in a shared working
+directory.** Another agent may be mid-task on the branch that is checked out there, and switching
+it pulls the working tree out from under that agent.
+
+If auditing test evidence requires actually running the suite, run it in a throwaway worktree
+under `/tmp`, never in the shared checkout and never inside the repository directory:
+
+```sh
+git -C <repo> fetch origin <headRefName>
+git -C <repo> worktree add /tmp/pr-review-<pr-num> origin/<headRefName>
+# run the suite inside /tmp/pr-review-<pr-num>
+git -C <repo> worktree remove /tmp/pr-review-<pr-num>
+```
+
+Remove the worktree when finished. Reviewing without running anything is the normal case; a
+worktree is only needed when a pasted test-evidence block has to be reproduced.
+
 ### Step 1: Fetch PR Details and Context
 1. Fetch PR details and metadata:
    ```sh
@@ -59,8 +79,15 @@ Review the PR diff and description against these mandatory audit criteria:
 3. **Package-Lock Engine Alignment**:
    - When bumping Node.js version in `package.json` `engines`, verify `package-lock.json` root engine definition was updated using `npm install --package-lock-only --ignore-scripts` (or `npm install --ignore-scripts`) so both files stay in sync without running unverified postinstall scripts.
 
-4. **Test Evidence & Test Plan Integrity**:
-   - Inspect the PR body `--test-evidence` section. It must contain actual, recognizable test runner output (e.g., `ok | 42 passed | 0 failed`), not generic prose (web-jam-tools#190).
+4. **Test Plan Integrity**:
+   - **Test evidence is OPTIONAL, and pasted suite logs are not wanted.**
+     `scripts/create-draft-pr.sh` treats `--test-evidence` as optional by design — unit-test
+     runner output in a PR body is noise to the reviewer it is meant to inform. **Never raise a
+     finding because the "Test evidence" section is absent, thin, or omits suite numbers**, and
+     never ask an author to paste `deno task test` / `npm test` output. Confirm the suites ran by
+     checking CI instead: `gh pr checks <Repo>#<pr-num>`.
+   - If a Test evidence block *is* present it must not be fabricated, but a missing or partial one
+     is not a defect and must not be reported as one.
    - Inspect the `--test-plan` section. It must contain concrete steps exercising the change itself (UI manual steps, runnable `curl` commands, or tooling commands), not just suite invocations like `npm test` or `deno task test` (web-jam-tools#152).
 
 5. **AGENTS.md Guardrails Audit**:
