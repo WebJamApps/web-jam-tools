@@ -1,18 +1,18 @@
 ---
 name: backlog-groom
-description: Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.
+description: Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, milestone coverage drift, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.
 ---
 
 # backlog-groom — cross-repo backlog health audit
 
-Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, dependency alignment, issue spec executability, untyped issues, and stale/completed issues.
+Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, dependency alignment, issue spec executability, untyped issues, milestone coverage drift, and stale/completed issues.
 
 **Strict Interactive Gate:** This skill NEVER makes unilateral edits on GitHub. It writes its findings to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, presents a numbered table of findings to Josh in chat, and **WAITS for explicit per-item approval** before executing any label edits, issue edits, or closures on GitHub.
 
 ## Execution Model
 
 - **Delegated Scan & Analysis:** Step 1 (Scan & Collect) and Step 2 (Analyze & Categorize) MUST be delegated to a single subagent running on **Flash Med** or **Haiku** to conserve token quota.
-- **Report & Summary Output:** The delegated subagent performs all cross-repo `gh` lookup calls, writes the detailed report to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, and returns ONLY the final findings table and per-repo untyped summary ratios back to the primary session.
+- **Report & Summary Output:** The delegated subagent performs all cross-repo `gh` lookup calls, writes the detailed report to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, and returns ONLY the final findings table, per-repo untyped summary ratios, and per-repo missing milestone summary ratios back to the primary session.
 - **Primary Session Presentation:** The primary session renders the findings table to Josh and handles interactive approval and execution.
 
 ## Repositories in Scope (8)
@@ -28,7 +28,7 @@ Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, de
 
 ## Audit Categories
 
-The audit inspects every open issue across all 8 repositories against five core categories:
+The audit inspects every open issue across all 8 repositories against six core categories:
 
 ### 1. Model-Label Drift
 - **Missing Model Label:** Issue has no model-tier label (`Haiku`, `Sonnet`, `Opus`, `Fable`, `Flash`, `Flash Med`, `Flash High`, `Flash Low`) assigned.
@@ -59,6 +59,13 @@ The audit inspects every open issue across all 8 repositories against five core 
 - **Duplicate Issues:** Open issues with duplicate titles, overlapping scopes, or identical requirements across the same repo.
 - **Stale Issues:** Open issues untouched for extended periods with no activity, pending external feedback, or superseded by newer architectural changes.
 
+### 6. Milestone Coverage Drift
+- **Missing Milestone Detection:** Flag every OPEN, non-`parked` issue whose native GitHub `milestone` field is null.
+- **Suggested Milestone Heuristics (in priority order):**
+  1. If the issue is a native sub-issue of an Epic that already has a Milestone assigned, suggest that parent Epic's Milestone.
+  2. Otherwise, match the issue's title and body theme against the titles and descriptions of the repo's open Milestones.
+  3. If no Epic parent exists and no clear theme match exists, suggest `"no fitting milestone — leave unassigned"` rather than guessing.
+
 ---
 
 ## Workflow & Execution Steps
@@ -69,15 +76,15 @@ The audit inspects every open issue across all 8 repositories against five core 
 3. Exclude issues marked with the gray `parked` label (these are intentionally parked by Josh and skipped).
 
 ### Step 2: Analyze & Categorize (Delegated to Subagent)
-1. Evaluate each issue against the 5 audit categories above.
-2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash Med`", "Remove label `Blocked`", "Set native Type to `Task`", "Apply `Needs Design` label", "Close as duplicate of #45").
-3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped").
+1. Evaluate each issue against the 6 audit categories above.
+2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash Med`", "Remove label `Blocked`", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
+3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
 
 ### Step 3: Write Report File (Delegated to Subagent)
-Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts and untyped ratios per repo, and detailed findings.
+Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts, untyped ratios, and missing milestone ratios per repo, and detailed findings.
 
 ### Step 4: Present Findings Table in Chat (Primary Session)
-Render a clear, numbered Markdown table in chat along with per-repo untyped ratios:
+Render a clear, numbered Markdown table in chat along with per-repo untyped ratios and missing milestone ratios:
 
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
@@ -85,11 +92,12 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 | 2 | web-jam-back | #450 | Dependency Drift | Labeled `Blocked`, but blocker #412 is CLOSED | Remove `Blocked` label |
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |
+| 5 | HenricksonForSalem | #12 | Milestone Drift | Milestone is unset | Set Milestone to "Launch Prep" |
 
 If no drift is found across all repos, report that the backlog is 100% clean.
 
 ### Step 5: Await Explicit Approval & Execute
 - **STOP and wait for Josh's response.**
 - Accept selective approvals (e.g., "approve 1, 2", "all except 3", "yes to all").
-- Execute ONLY approved actions on GitHub via `gh issue edit`, `gh label`, etc.
+- Execute ONLY approved actions on GitHub via `gh issue edit --milestone "<name>"`, `gh issue edit`, `gh label`, etc.
 - Never touch unapproved items.
