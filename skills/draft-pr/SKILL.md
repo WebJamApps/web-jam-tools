@@ -10,8 +10,8 @@ metadata:
 
 Never call `gh pr create` directly in a WebJamApps repo. Finish coding tasks by
 running the shared script, which is the single source of truth for PR creation (see
-the full invocation under "How to run it" — `--summary`, `--test-plan`, and
-`--test-evidence` are **required**).
+the full invocation under "How to run it" — `--summary` and `--test-plan` are
+**required**; `--test-evidence` is optional and normally omitted).
 
 It **always** produces a draft PR based on `dev` and an attribution footer — neither
 can be overridden. By default the PR **closes the issue on merge** (`Closes #N`); pass
@@ -44,7 +44,6 @@ the body sections via flags:
   --author "Claude Code — Opus 4.8" \
   --summary "What changed and why, in 2–4 sentences." \
   --test-plan "Exact commands to run + expected result." \
-  --test-evidence "The actual lint + test output you saw, confirming both ran green." \
   --screenshots "Only for UI-visible changes; omit the flag otherwise." \
   --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
 ```
@@ -54,14 +53,19 @@ the body sections via flags:
   refused with the valid list printed. `FORCED_PR_AUTHOR` in the environment
   overrides `--author` entirely; `handle-agy-tasks.sh` sets it so headless/
   interactive agy runs never depend on a model correctly naming itself.
-- `--summary`, `--test-plan`, and `--test-evidence` are **required** — the script
-  refuses to open a PR with an empty or placeholder description (web-jam-tools#77).
-  Put your summary and the real test output IN THE PR via these flags, not only in
-  the chat reply. Two more content checks (web-jam-tools#190): `--summary` is
-  refused if it has zero markdown bullet lines (a run-on paragraph doesn't count),
-  and `--test-evidence` is refused if it has no recognizable test-runner output
-  (a prose paraphrase like "all tests passed" doesn't count — paste the actual
-  runner output).
+- `--summary` and `--test-plan` are **required** — the script refuses to open a PR
+  with an empty or placeholder description (web-jam-tools#77). Put your summary IN
+  THE PR via these flags, not only in the chat reply. One more content check
+  (web-jam-tools#190): `--summary` is refused if it has zero markdown bullet lines
+  (a run-on paragraph doesn't count).
+- `--test-evidence` is **OPTIONAL and normally omitted.** Always run the suites and
+  confirm they pass before opening the PR — but do **not** paste unit-test runner
+  output into the body. The numbers are noise to the reviewer, and CI already
+  reports pass/fail. Reserve the flag for evidence CI cannot show: a manual
+  reproduction, a `curl` response, or a described screenshot. A PR with no "Test
+  evidence" section is correct, and a reviewer must never raise a finding about its
+  absence. If you do pass it, it is still refused when it contains no recognizable
+  output at all (a prose paraphrase like "all tests passed" doesn't count).
 - Closing is the default: the body reads `Closes #N`, so the issue auto-closes when
   Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) ONLY when
   the issue must stay open: a partial PR, or a standing run-log/epic issue.
@@ -106,17 +110,18 @@ Example of a well-formed call (bulleted summary, fenced commands + output):
 ```sh
 deno task test
 ```
-Expect: all tests green. Then exercise the change per Test plan substance above." \
-  --test-evidence "```
-ok | 42 passed | 0 failed
-```"
+Expect: all tests green. Then exercise the change per Test plan substance above."
 `````
+
+Note there is no `--test-evidence` here — that is the normal shape. Run the suites,
+confirm green, and leave the flag off.
 
 ## What the script refuses to do (and why that's correct — don't work around it)
 
-It exits non-zero when: `--author` is missing or off-roster; any of `--summary`/
-`--test-plan`/`--test-evidence` is missing or left as a placeholder; `--summary`
-has no bullet lines; `--test-evidence` has no recognizable test-runner output;
+It exits non-zero when: `--author` is missing or off-roster; either of `--summary`/
+`--test-plan` is missing or left as a placeholder; `--summary`
+has no bullet lines; a `--test-evidence` that was supplied has no recognizable
+test-runner output (omitting the flag entirely is fine);
 `--test-plan` is only test-suite invocations (`npm test`, `deno task test`,
 `vitest`, `eslint`, ...) with nothing exercising the CHANGE itself — the "Test
 plan substance" rule above is now machine-enforced (web-jam-tools#152); body

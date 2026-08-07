@@ -57,12 +57,18 @@ flags — not only in the chat reply:
   --author "<tool> — <model>" \
   --summary "<what changed and why>" \
   --test-plan "<exact commands to verify + expected result>" \
-  --test-evidence "<the actual lint + test output, confirming both ran green>" \
   --closes   # include ONLY if this PR fully completes the issue; omit for a partial PR
 ```
 
-`--summary`, `--test-plan`, and `--test-evidence` are **required** — the script
+`--summary` and `--test-plan` are **required** — the script
 **refuses to open a PR with an empty or placeholder description** (web-jam-tools#77).
+
+`--test-evidence` is **OPTIONAL and normally omitted.** Always run the suites and
+confirm they pass before opening the PR, but do **not** paste unit-test runner output
+into the body — the numbers are noise to the reviewer, and CI already reports pass/fail.
+Reserve the flag for evidence CI cannot show: a manual reproduction, a `curl` response,
+or a described screenshot. A PR with no "Test evidence" section is correct, and a
+reviewer must never raise a finding about its absence.
 It always opens a **draft** PR based on **`dev`**, with the issue number derived from
 the `<lane>/<issue#>-<slug>` branch name (or explicit `--issue` flag, which supports full URLs, `OWNER/REPO#N`, or bare `#N`/`N` and formats cross-repo closing lines as `Closes OWNER/REPO#N`) and a footer naming the tool + model (hard
 invariants — no flag overrides them). By default it references the issue (`Part of #N` or `Part of OWNER/REPO#N`);
