@@ -28,31 +28,44 @@ async function runHook(
   };
 }
 
-Deno.test("irreversible operation: gh pr merge is blocked with runnable command (R-24 & R-25)", async () => {
-  const res = await runHook({ command: "gh pr merge 123" });
-  assertEquals(res.code, 2);
-  assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
-  assertEquals(res.stderr.includes("separate terminal outside Claude Code"), true);
-  assertEquals(res.stderr.includes("gh pr merge 123"), true);
-});
+Deno.test("irreversible operations: all 17 operations blocked with exit 2 and runnable commands (R-24 & R-25)", async () => {
+  const testCases = [
+    { cmd: "gh repo delete owner/repo", desc: "gh repo delete" },
+    { cmd: "gh label delete bug", desc: "gh label delete" },
+    { cmd: "gh project delete 1", desc: "gh project delete" },
+    { cmd: "gh project item-delete --id 1", desc: "gh project item-delete" },
+    { cmd: "gh project field-delete --id 1", desc: "gh project field-delete" },
+    { cmd: "heroku addons:destroy my-addon", desc: "heroku addons:destroy" },
+    { tool: "mcp__claude_ai_GitHub_MCP__delete_file", desc: "GitHub MCP delete_file" },
+    { cmd: "gh auth token", desc: "gh auth token" },
+    { cmd: "gh issue delete 42", desc: "gh issue delete" },
+    { cmd: "gh run delete 123", desc: "gh run delete" },
+    { cmd: "gh repo sync owner/repo --force", desc: "gh repo sync --force" },
+    { cmd: "gh issue transfer 42 dest/repo", desc: "gh issue transfer" },
+    { cmd: "gh repo rename new-name", desc: "gh repo rename" },
+    { cmd: "gh workflow run deploy.yml", desc: "gh workflow run" },
+    { cmd: "gh pr merge 123", desc: "gh pr merge" },
+    {
+      tool: "mcp__claude_ai_GitHub_MCP__merge_pull_request",
+      desc: "GitHub MCP merge_pull_request",
+    },
+    { cmd: "git push origin --delete feature-branch", desc: "remote branch deletion" },
+  ];
 
-Deno.test("irreversible operation: GitHub MCP delete_file is blocked with runnable command", async () => {
-  const res = await runHook({ tool_name: "mcp__claude_ai_GitHub_MCP__delete_file" });
-  assertEquals(res.code, 2);
-  assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
-  assertEquals(res.stderr.includes("separate terminal outside Claude Code"), true);
-});
-
-Deno.test("irreversible operation: heroku addons:destroy is blocked", async () => {
-  const res = await runHook({ command: "heroku addons:destroy my-addon" });
-  assertEquals(res.code, 2);
-  assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
-});
-
-Deno.test("irreversible operation: remote branch deletion via git push is blocked", async () => {
-  const res = await runHook({ command: "git push origin --delete feature-branch" });
-  assertEquals(res.code, 2);
-  assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
+  for (const tc of testCases) {
+    const res = await runHook({ command: tc.cmd, tool_name: tc.tool });
+    assertEquals(res.code, 2, `Expected exit 2 for ${tc.desc}`);
+    assertEquals(
+      res.stderr.includes("BLOCKED (irreversible operation guard)"),
+      true,
+      `Expected block output for ${tc.desc}`,
+    );
+    assertEquals(
+      res.stderr.includes("separate terminal outside Claude Code"),
+      true,
+      `Expected runnable command instruction for ${tc.desc}`,
+    );
+  }
 });
 
 Deno.test("ordinary allowed commands pass through silently", async () => {

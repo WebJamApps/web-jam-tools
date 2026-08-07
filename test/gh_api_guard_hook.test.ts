@@ -50,4 +50,10 @@ Deno.test("gh api GET passes through silently", async () => {
   assertEquals(res.code, 0);
   assertEquals(res.stdout, "");
   assertEquals(res.stderr, "");
+
+  // Regression test: -f substring in repo name must NOT trip field flag ask decision
+  const res2 = await runHook("gh api repos/owner/my-first-repo");
+  assertEquals(res2.code, 0);
+  assertEquals(res2.stdout, "");
+  assertEquals(res2.stderr, "");
 });

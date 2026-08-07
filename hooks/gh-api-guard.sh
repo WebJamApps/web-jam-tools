@@ -24,7 +24,7 @@ if printf '%s' "$lc_cmd" | grep -Eq '(-x|--method) +delete|(-xdelete|--method=de
 fi
 
 # Check for state-changing methods (POST, PUT, PATCH) or field flags (-f, -F, --raw-field, --field, --input)
-if printf '%s' "$lc_cmd" | grep -Eq '(-x|--method) +(post|put|patch)|(-xpost|-xput|-xpatch|--method=post|--method=put|--method=patch)|(-f|-f=|--field|--raw-field|--input)'; then
+if printf '%s' "$lc_cmd" | grep -Eq '(-x|--method) +(post|put|patch)|(-xpost|-xput|-xpatch|--method=post|--method=put|--method=patch)|(^|[[:space:]])(-f[[:space:]=]|-f"|-f'\''|-f\$|-f$|-f[[:space:]]*$|-F[[:space:]=]|-F"|-F'\''|-F\$|-F$|-F[[:space:]]*$|--field|--raw-field|--input)'; then
   jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:"gh api state-changing command requires user confirmation"}}'
   exit 0
 fi
