@@ -178,3 +178,27 @@ Deno.test("a git sha is not mistaken for a credential", async () => {
   const res = await runHook("git show 2992da92f1b0c4e8a7d6b5c4e3f2a1b0c9d8e7f6");
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- URL-embedded token and placeholder tests (web-jam-tools#434) ---
+
+Deno.test("a curl command carrying a URL query token literal is blocked with safe alternative message", async () => {
+  const res = await runHook(
+    `curl "https://circleci.com/api/v1.1/project/github/foo/bar/123?token=${FAKE.google}"`,
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  if (!res.stderr.includes('don\'t "always allow" URLs carrying embedded credentials')) {
+    throw new Error(`expected URL safe alternative message in stderr, got: ${res.stderr}`);
+  }
+});
+
+Deno.test("a curl command carrying a placeholder query token (e.g. token=<token> or token=...) is allowed", async () => {
+  const res1 = await runHook('curl "https://example.com/api?token=<token>"');
+  assertEquals(res1.code, 0, res1.stderr);
+
+  const res2 = await runHook('curl "https://example.com/api?token=..."');
+  assertEquals(res2.code, 0, res2.stderr);
+
+  const res3 = await runHook('curl "https://example.com/api?token=YOUR_TOKEN_HERE"');
+  assertEquals(res3.code, 0, res3.stderr);
+});
