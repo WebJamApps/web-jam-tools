@@ -554,3 +554,100 @@ Deno.test("install-hooks.sh secret-scan gate fails closed with synthetic JWT fix
     await Deno.remove(settingsDir, { recursive: true });
   }
 });
+
+async function symlinkExists(path: string): Promise<boolean> {
+  try {
+    await Deno.lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// --- Orphaned symlink detection and --check drift (web-jam-tools#430) ---
+
+Deno.test(
+  "install-hooks.sh prunes orphaned/dangling symlinks whose target no longer exists",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const firstInstall = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(firstInstall.code, 0, firstInstall.stdout + firstInstall.stderr);
+
+      // Create an orphaned dangling symlink in hooksDir
+      const danglingPath = `${hooksDir}/retired-hook.sh`;
+      await Deno.symlink(`${HOOKS_SRC_DIR}/retired-hook.sh`, danglingPath);
+      assert(await symlinkExists(danglingPath), "dangling symlink created");
+
+      const secondInstall = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(secondInstall.code, 0, secondInstall.stdout + secondInstall.stderr);
+      assert(
+        secondInstall.stdout.includes("retired-hook.sh: pruned orphaned symlink"),
+        secondInstall.stdout,
+      );
+      assert(!(await symlinkExists(danglingPath)), "dangling symlink must be removed");
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift on dangling symlinks and stale entries",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // 1. Add dangling symlink
+      const danglingPath = `${hooksDir}/dangling-check.sh`;
+      await Deno.symlink(`${HOOKS_SRC_DIR}/dangling-check.sh`, danglingPath);
+
+      // 2. Add stale/retired hook entry in settings.json
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      settings.hooks.SessionStart.push({
+        hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-start.sh" }],
+      });
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings, null, 2));
+
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assert(checkRes.code !== 0, "expected --check to fail when drift is present");
+      assert(checkRes.stderr.includes("drift: orphaned symlink dangling-check.sh"));
+      assert(checkRes.stderr.includes("has retired SessionStart hook"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
