@@ -73,6 +73,7 @@ that's what following this skill prevents.
    clarification before implementation, apply the canonical `Needs Design` status label alongside the chosen
    model label and native type.
 7. **Closed Issues Are Immutable.** Never modify, reopen, add comments to, or add new requirements to a closed GitHub issue. Closed issues represent finished state. When new scope, follow-up findings, or modifications arise for a closed issue, file a net-new issue citing the closed issue (repo + number + title) instead.
+8. **Prompt for a Milestone Before Filing.** Check the repo's open Milestones (`gh api repos/WebJamApps/<repo>/milestones` or `gh milestone list`) before creating the issue. Select one deliberately if a fitting Milestone exists. If no open Milestone fits the issue, explicitly note so in chat or in the issue body ("no fitting milestone — leaving unassigned") rather than silently omitting it. Note: This is a skill-level nudge, not a hook gate — `hooks/require-model-label-on-issue-create.sh` continues to enforce model label + native Type.
 
 ## Citation format (every reference, every time)
 
@@ -109,16 +110,17 @@ gh issue create --repo WebJamApps/<repo> \
 EOF
 )" \
   --type Task \
-  --label Sonnet
+  --label Sonnet \
+  --milestone "v1.2"
 ```
 
 - Require `--type <Type>` (`Task`, `Bug`, `Feature`, `Epic`) on all issue creation calls.
+- Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
 - Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
 - Add non-model status labels (`Blocked`, `Needs Design`, `Josh`, `parked`, ...)
   alongside the model label freely; the hook only checks that exactly one *model* label is present,
   not that it's the only label.
-- The MCP `issue_write` create path takes `"type": "Task"` and `"labels": ["Sonnet", "Needs Design"]` — same
-  native-type and model-label rules, same hook.
+- The MCP `issue_write` create path takes `"type": "Task"`, `"milestone": 1` (milestone number), and `"labels": ["Sonnet", "Needs Design"]` — same native-type, milestone, and model-label guidelines.
 
 ## If the hook denies the call
 
