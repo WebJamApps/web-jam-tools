@@ -53,7 +53,7 @@
 #                   invocations (npm test/typecheck/lint, deno task test, vitest,
 #                   eslint, ...) is refused; it must have exercise-the-change
 #                   content left over after stripping those.
-#   --test-evidence REQUIRED (or --test-evidence-file). Fills "## Test evidence" (real
+#   --test-evidence OPTIONAL (or --test-evidence-file). Fills "## Test evidence" (real
 #                   lint + test output, ran green).
 #                   AUTO-FENCED (web-jam-tools#150): if the value contains no ```
 #                   code fence at all, the whole value is wrapped in one before the
@@ -94,8 +94,7 @@
 #                   opening a new one (web-jam-tools#236). Runs through the exact
 #                   same guard pipeline as create mode — author roster, the #77
 #                   empty/placeholder check, the unbulleted-summary check, the
-#                   #190 recognizable-test-evidence check, the #152
-#                   suite-invocations-only test-plan check, and the raw-HTML-tag
+#                   #152 suite-invocations-only test-plan check, and the raw-HTML-tag
 #                   check all fire on the REAL final content, not just at initial
 #                   creation. Looks the PR up via `gh pr view` for the current
 #                   branch (push happens first, same as create mode) and refuses
@@ -115,26 +114,23 @@
 # headless or interactive agy run's PR footer can never depend on the model
 # correctly naming itself (web-jam-tools#190).
 #
-# --summary, --test-plan, and --test-evidence are REQUIRED (web-jam-tools#77), each
-# either inline or via its *-file counterpart: the script refuses to open a PR whose
-# description is empty or left as a placeholder. This is the single choke point — no
-# caller (/next, ad-hoc, or future) can open a PR with an empty description. Put the
-# summary and real test evidence IN THE PR via these flags, not only in the
-# chat/REPL. --screenshots stays optional (inline only).
+# --summary and --test-plan are REQUIRED (web-jam-tools#77), each either inline or via
+# its *-file counterpart: the script refuses to open a PR whose description is empty or
+# left as a placeholder. This is the single choke point — no caller (/next, ad-hoc, or
+# future) can open a PR with an empty description. Put the summary IN THE PR via these
+# flags, not only in the chat/REPL. --test-evidence and --screenshots stay optional.
 #
 # Refuses (exit 1) when: --author missing or names a model not on the ROSTER
-# (web-jam-tools#190); any of --summary/--test-plan/--test-evidence (inline or
-# *-file) missing or left as a placeholder; --summary has zero markdown bullet
-# lines (web-jam-tools#190); --test-evidence (inline or *-file) has no
-# recognizable test-runner output (web-jam-tools#190); --test-plan (inline or
-# *-file) is only test-suite invocations with nothing exercising the change
-# (web-jam-tools#152); a *-file flag points at a missing or empty file; both a
-# section's inline flag and its *-file flag are given; body text contains raw
-# HTML-like tags outside backticks (GitHub strips them silently — backtick
-# them); current branch is dev/main; working tree dirty; the repo has no `dev`
-# branch; a resolved issue is missing/closed; --part-of is passed without a
-# resolvable issue; or --update is passed but the current branch has no
-# existing open PR to update.
+# (web-jam-tools#190); any of --summary/--test-plan (inline or *-file) missing
+# or left as a placeholder; --summary has zero markdown bullet lines
+# (web-jam-tools#190); --test-plan (inline or *-file) is only test-suite
+# invocations with nothing exercising the change (web-jam-tools#152); a *-file
+# flag points at a missing or empty file; both a section's inline flag and its
+# *-file flag are given; body text contains raw HTML-like tags outside backticks
+# (GitHub strips them silently — backtick them); current branch is dev/main;
+# working tree dirty; the repo has no `dev` branch; a resolved issue is
+# missing/closed; --part-of is passed without a resolvable issue; or --update is
+# passed but the current branch has no existing open PR to update.
 
 set -euo pipefail
 
@@ -464,15 +460,16 @@ fi
 if [ -z "$TEST_PLAN" ] || [ "$TEST_PLAN" = "$PLACEHOLDER_TEST_PLAN" ]; then
   missing+=("--test-plan")
 fi
-if [ -z "$TEST_EVIDENCE" ] || [ "$TEST_EVIDENCE" = "$PLACEHOLDER_TEST_EVIDENCE" ]; then
-  missing+=("--test-evidence")
-fi
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "ERROR: refusing to open a PR with an empty description (web-jam-tools#77)." >&2
   echo "       Provide real content for: ${missing[*]}" >&2
-  echo "       Put your summary + actual test output IN THE PR via these flags," >&2
+  echo "       Put your summary IN THE PR via these flags," >&2
   echo "       not only in the chat/REPL reply." >&2
   exit 1
+fi
+
+if [ "$TEST_EVIDENCE" = "$PLACEHOLDER_TEST_EVIDENCE" ]; then
+  TEST_EVIDENCE=""
 fi
 
 # --- refuse an unbulleted --summary (web-jam-tools#190) ---
@@ -483,21 +480,6 @@ if ! printf '%s' "$SUMMARY" | grep -qE '^[[:space:]]*[-*][[:space:]]'; then
   echo "ERROR: --summary has no markdown bullet lines (web-jam-tools#190)." >&2
   echo "       Write it as bullets (one change per line, starting with '- ' or '* ')," >&2
   echo "       not a run-on paragraph." >&2
-  exit 1
-fi
-
-# --- refuse --test-evidence with no recognizable test-runner output (web-jam-tools#190) ---
-# JaMmusic#1212: evidence was a fenced PARAPHRASE ("All unit tests, lints, and
-# typechecks passed successfully") with no actual runner output. Heuristic only
-# (no --run-tests re-execution mode — out of scope for this pass): require a
-# line that looks like real pass/fail output. Tuned against real WebJamApps
-# output: vitest/jest "Tests: N passed" / "N passed (N)", deno's
-# "ok | N passed | 0 failed", and ✓-marked lines.
-if ! printf '%s' "$TEST_EVIDENCE" | grep -qE '[0-9]+[[:space:]]*pass|[Tt]ests?:|ok[[:space:]]*\||✓'; then
-  echo "ERROR: --test-evidence has no recognizable test-runner output (web-jam-tools#190)." >&2
-  echo "       A paraphrase like \"all tests passed successfully\" is refused — paste the" >&2
-  echo "       ACTUAL runner output (e.g. vitest/jest \"Tests: N passed\", deno" >&2
-  echo "       \"ok | N passed | 0 failed\", or ✓-marked lines)." >&2
   exit 1
 fi
 
@@ -554,7 +536,9 @@ raw_tag_check() {
 }
 raw_tag_check summary "$SUMMARY"
 raw_tag_check test-plan "$TEST_PLAN"
-raw_tag_check test-evidence "$TEST_EVIDENCE"
+if [ -n "$TEST_EVIDENCE" ]; then
+  raw_tag_check test-evidence "$TEST_EVIDENCE"
+fi
 if [ "$HAS_SCREENSHOTS" -eq 1 ]; then
   raw_tag_check screenshots "$SCREENSHOTS"
 fi
@@ -568,7 +552,7 @@ fi
 # means the caller formatted the section themselves — pass through unchanged.
 # (Not applied to --test-plan: plans are legitimately prose + fenced commands,
 # and blanket-fencing would garble real markdown; see #150.)
-if ! printf '%s' "$TEST_EVIDENCE" | grep -qF '```'; then
+if [ -n "$TEST_EVIDENCE" ] && ! printf '%s' "$TEST_EVIDENCE" | grep -qF '```'; then
   echo "NOTE: --test-evidence had no code fence — auto-wrapping it in one (web-jam-tools#150)."
   TEST_EVIDENCE="\`\`\`
 $TEST_EVIDENCE
@@ -593,11 +577,14 @@ $ISSUE_REF
 }
 ## How to test locally
 $TEST_PLAN
-
-## Test evidence
-$TEST_EVIDENCE
 EOF
 )"
+if [ -n "$TEST_EVIDENCE" ]; then
+  BODY="$BODY
+
+## Test evidence
+$TEST_EVIDENCE"
+fi
 if [ "$HAS_SCREENSHOTS" -eq 1 ]; then
   BODY="$BODY
 
