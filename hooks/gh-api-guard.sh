@@ -13,18 +13,23 @@ if ! printf '%s' "$cmd" | grep -Eq 'gh +api( |$)'; then
   exit 0
 fi
 
-# Lowercase the command string for uniform inspection
+# Lowercase for uniform inspection, then strip quote characters so a quoted
+# method/flag value (gh api -X 'DELETE', --method='DELETE') cannot dodge the
+# unquoted-literal regexes below (web-jam-tools#425 post-approval finding).
 lc_cmd=$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')
+norm_cmd=$(printf '%s' "$lc_cmd" | tr -d "\"'")
 
 # Check for DELETE method
-if printf '%s' "$lc_cmd" | grep -Eq '(-x|--method) +delete|(-xdelete|--method=delete)'; then
+if printf '%s' "$norm_cmd" | grep -Eq '(-x|--method) +delete|(-xdelete|--method=delete)'; then
   echo "BLOCKED (gh api guard): gh api DELETE is denied (irreversible state change)." >&2
   echo "This is Josh's decision to make — propose the command and let Josh run it manually." >&2
   exit 2
 fi
 
-# Check for state-changing methods (POST, PUT, PATCH) or field flags (-f, -F, --raw-field, --field, --input)
-if printf '%s' "$lc_cmd" | grep -Eq '(-x|--method) +(post|put|patch)|(-xpost|-xput|-xpatch|--method=post|--method=put|--method=patch)|(^|[[:space:]])(-f[[:space:]=]|-f"|-f'\''|-f\$|-f$|-f[[:space:]]*$|-F[[:space:]=]|-F"|-F'\''|-F\$|-F$|-F[[:space:]]*$|--field|--raw-field|--input)'; then
+# Check for state-changing methods (POST, PUT, PATCH) or field flags (-f, --raw-field,
+# --field, --input). -F is not matched separately: $norm_cmd is already lowercased, so
+# -F can never appear in it.
+if printf '%s' "$norm_cmd" | grep -Eq '(-x|--method) +(post|put|patch)|(-xpost|-xput|-xpatch|--method=post|--method=put|--method=patch)|(^|[[:space:]])-f([[:space:]=$]|$)|--field|--raw-field|--input'; then
   jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:"gh api state-changing command requires user confirmation"}}'
   exit 0
 fi

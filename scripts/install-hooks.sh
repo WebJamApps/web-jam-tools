@@ -279,7 +279,11 @@ DENY_RULES=(
   'Edit(//home/joshua/.claude.json)'
   'Edit(//home/joshua/.claude/mcp_config.json)'
 
-  # gh api DELETE backstop patterns (R-7)
+  # gh api DELETE backstop patterns (R-7). KNOWN LIMITATION: these are literal
+  # unquoted forms and do not match a quoted method value (-X 'DELETE',
+  # --method="DELETE") — web-jam-tools#425 post-approval finding. Quoted
+  # forms are caught only by hooks/gh-api-guard.sh's normalization, not by
+  # this backstop; that hook is the authoritative guard for this class.
   'Bash(gh api -X DELETE *)'
   'Bash(gh api -X DELETE)'
   'Bash(gh api --method DELETE *)'
