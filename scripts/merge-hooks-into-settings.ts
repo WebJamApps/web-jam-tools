@@ -87,18 +87,92 @@ export function merge(settingsPath: string, args: string[]): number {
   }
   const hooks = data.hooks;
 
-  function mergeFlatHooks(kind: string, cmds: string[]): string[] {
+  const managedDirs = new Set<string>();
+  managedDirs.add("$HOME/.claude/hooks");
+  managedDirs.add("~/.claude/hooks");
+  let homeEnv: string | undefined;
+  try {
+    homeEnv = Deno.env.get("HOME");
+  } catch {
+    // env permission not granted
+  }
+  if (homeEnv) {
+    managedDirs.add(path.join(homeEnv, ".claude/hooks"));
+  }
+
+  for (const cmd of [...sessionStartCmds, ...stopCmds]) {
+    const sp = extractScriptPath(cmd);
+    const dir = path.dirname(sp);
+    if (dir && dir !== ".") managedDirs.add(dir);
+  }
+  for (const [_, cmd] of [...preToolUsePairs, ...postToolUsePairs]) {
+    const sp = extractScriptPath(cmd);
+    const dir = path.dirname(sp);
+    if (dir && dir !== ".") managedDirs.add(dir);
+  }
+
+  function isManagedHook(cmd: string): boolean {
+    const scriptPath = extractScriptPath(cmd);
+    if (!scriptPath) return false;
+    if (
+      scriptPath.startsWith("$HOME/.claude/hooks/") ||
+      scriptPath.startsWith("~/.claude/hooks/")
+    ) {
+      return true;
+    }
+    if (scriptPath.includes("/.claude/hooks/")) {
+      return true;
+    }
+    for (const dir of managedDirs) {
+      if (scriptPath.startsWith(dir.endsWith("/") ? dir : dir + "/")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function mergeFlatHooks(kind: string, cmds: string[]): [string[], string[]] {
     if (!Array.isArray(hooks[kind])) {
       hooks[kind] = [];
     }
     const bucket: Array<{ hooks: Array<{ type: string; command: string }> }> = hooks[kind];
+    const desiredScripts = new Set(cmds.map((c) => extractScriptPath(c)));
+    const desiredCmds = new Set(cmds);
+
+    const added: string[] = [];
+    const pruned: string[] = [];
+
+    for (let i = bucket.length - 1; i >= 0; i--) {
+      const entry = bucket[i];
+      if (!entry || !Array.isArray(entry.hooks)) continue;
+      const remainingHooks: Array<{ type: string; command: string }> = [];
+      for (const h of entry.hooks) {
+        if (h && h.command) {
+          const sp = extractScriptPath(h.command);
+          if (isManagedHook(h.command)) {
+            if (desiredCmds.has(h.command) || desiredScripts.has(sp)) {
+              remainingHooks.push(h);
+            } else {
+              pruned.push(h.command);
+            }
+          } else {
+            remainingHooks.push(h);
+          }
+        }
+      }
+      entry.hooks = remainingHooks;
+      if (entry.hooks.length === 0) {
+        bucket.splice(i, 1);
+      }
+    }
+
     const existing = new Set<string>();
     for (const entry of bucket) {
       for (const h of entry.hooks || []) {
         if (h && h.command) existing.add(h.command);
       }
     }
-    const added: string[] = [];
+
     for (const cmd of cmds) {
       if (!existing.has(cmd)) {
         bucket.push({ hooks: [{ type: "command", command: cmd }] });
@@ -106,21 +180,63 @@ export function merge(settingsPath: string, args: string[]): number {
         added.push(cmd);
       }
     }
-    return added;
+    return [added, pruned];
   }
 
-  const addedSession = mergeFlatHooks("SessionStart", sessionStartCmds);
-  const addedStop = mergeFlatHooks("Stop", stopCmds);
+  const [addedSession, prunedSession] = mergeFlatHooks("SessionStart", sessionStartCmds);
+  const [addedStop, prunedStop] = mergeFlatHooks("Stop", stopCmds);
 
   function mergeMatcherHooks(
     kind: string,
     pairs: Array<[string, string]>,
-  ): [Array<[string, string]>, Array<[string, string]>] {
+  ): [Array<[string, string]>, Array<[string, string]>, Array<[string, string]>] {
     if (!Array.isArray(hooks[kind])) {
       hooks[kind] = [];
     }
     const bucket: Array<{ matcher?: string; hooks: Array<{ type: string; command: string }> }> =
       hooks[kind];
+
+    const desiredScriptMatchers = new Map<string, Set<string>>();
+    for (const [matcher, cmd] of pairs) {
+      const sp = extractScriptPath(cmd);
+      if (!desiredScriptMatchers.has(sp)) {
+        desiredScriptMatchers.set(sp, new Set());
+      }
+      desiredScriptMatchers.get(sp)!.add(matcher);
+    }
+
+    const added: Array<[string, string]> = [];
+    const prunedStaleMatcher: Array<[string, string]> = [];
+    const prunedRetired: Array<[string, string]> = [];
+
+    for (let i = bucket.length - 1; i >= 0; i--) {
+      const entry = bucket[i];
+      if (!entry) continue;
+      const entryMatcher = entry.matcher || "";
+      const remainingHooks: Array<{ type: string; command: string }> = [];
+
+      for (const h of entry.hooks || []) {
+        if (!h || !h.command) continue;
+        const sp = extractScriptPath(h.command);
+        if (isManagedHook(h.command)) {
+          const matchersForScript = desiredScriptMatchers.get(sp);
+          if (matchersForScript && matchersForScript.has(entryMatcher)) {
+            remainingHooks.push(h);
+          } else if (matchersForScript && matchersForScript.size > 0) {
+            prunedStaleMatcher.push([sp, entryMatcher]);
+          } else {
+            prunedRetired.push([sp, entryMatcher]);
+          }
+        } else {
+          remainingHooks.push(h);
+        }
+      }
+      entry.hooks = remainingHooks;
+      if (entry.hooks.length === 0) {
+        bucket.splice(i, 1);
+      }
+    }
+
     const matcherEntries: Record<string, (typeof bucket)[0]> = {};
     for (const entry of bucket) {
       if (entry && entry.matcher !== undefined) {
@@ -128,11 +244,7 @@ export function merge(settingsPath: string, args: string[]): number {
       }
     }
 
-    const added: Array<[string, string]> = [];
-    const pruned: Array<[string, string]> = [];
-
     for (const [matcher, cmd] of pairs) {
-      const scriptPath = extractScriptPath(cmd);
       let entry = matcherEntries[matcher];
       if (!entry) {
         entry = { matcher, hooks: [] };
@@ -147,30 +259,14 @@ export function merge(settingsPath: string, args: string[]): number {
         entry.hooks.push({ type: "command", command: cmd });
         added.push([matcher, cmd]);
       }
-
-      for (const [otherMatcher, otherEntry] of Object.entries(matcherEntries)) {
-        if (otherMatcher === matcher) continue;
-        const remaining: Array<{ type: string; command: string }> = [];
-        for (const h of otherEntry.hooks || []) {
-          if (h && h.command && extractScriptPath(h.command) === scriptPath) {
-            pruned.push([scriptPath, otherMatcher]);
-          } else if (h) {
-            remaining.push(h);
-          }
-        }
-        otherEntry.hooks = remaining;
-        if (remaining.length === 0) {
-          const idx = bucket.indexOf(otherEntry);
-          if (idx !== -1) bucket.splice(idx, 1);
-          delete matcherEntries[otherMatcher];
-        }
-      }
     }
-    return [added, pruned];
+    return [added, prunedStaleMatcher, prunedRetired];
   }
 
-  const [addedPreToolUse, prunedPreToolUse] = mergeMatcherHooks("PreToolUse", preToolUsePairs);
-  const [addedPostToolUse, prunedPostToolUse] = mergeMatcherHooks("PostToolUse", postToolUsePairs);
+  const [addedPreToolUse, prunedPreToolUseStale, prunedPreToolUseRetired] =
+    mergeMatcherHooks("PreToolUse", preToolUsePairs);
+  const [addedPostToolUse, prunedPostToolUseStale, prunedPostToolUseRetired] =
+    mergeMatcherHooks("PostToolUse", postToolUsePairs);
 
   function mergePermissionsList(sectionName: "deny" | "ask", patterns: string[]): string[] {
     if (patterns.length === 0) return [];
@@ -247,11 +343,15 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const hasDrift = !fileExists ||
     addedSession.length > 0 ||
+    prunedSession.length > 0 ||
     addedStop.length > 0 ||
+    prunedStop.length > 0 ||
     addedPreToolUse.length > 0 ||
+    prunedPreToolUseStale.length > 0 ||
+    prunedPreToolUseRetired.length > 0 ||
     addedPostToolUse.length > 0 ||
-    prunedPreToolUse.length > 0 ||
-    prunedPostToolUse.length > 0 ||
+    prunedPostToolUseStale.length > 0 ||
+    prunedPostToolUseRetired.length > 0 ||
     addedDeny.length > 0 ||
     addedAsk.length > 0;
 
@@ -263,8 +363,14 @@ export function merge(settingsPath: string, args: string[]): number {
       for (const cmd of addedSession) {
         console.error(`${targetFilename}: missing SessionStart hook ${cmd}`);
       }
+      for (const cmd of prunedSession) {
+        console.error(`${targetFilename}: has retired SessionStart hook ${cmd}`);
+      }
       for (const cmd of addedStop) {
         console.error(`${targetFilename}: missing Stop hook ${cmd}`);
+      }
+      for (const cmd of prunedStop) {
+        console.error(`${targetFilename}: has retired Stop hook ${cmd}`);
       }
       for (const [matcher, cmd] of addedPreToolUse) {
         console.error(`${targetFilename}: missing PreToolUse hook (${matcher}) ${cmd}`);
@@ -272,14 +378,24 @@ export function merge(settingsPath: string, args: string[]): number {
       for (const [matcher, cmd] of addedPostToolUse) {
         console.error(`${targetFilename}: missing PostToolUse hook (${matcher}) ${cmd}`);
       }
-      for (const [scriptPath, oldMatcher] of prunedPreToolUse) {
+      for (const [scriptPath, oldMatcher] of prunedPreToolUseStale) {
         console.error(
           `${targetFilename}: PreToolUse ${scriptPath}: has stale matcher (${oldMatcher})`,
         );
       }
-      for (const [scriptPath, oldMatcher] of prunedPostToolUse) {
+      for (const [scriptPath, matcher] of prunedPreToolUseRetired) {
+        console.error(
+          `${targetFilename}: PreToolUse ${scriptPath}: has retired hook (${matcher})`,
+        );
+      }
+      for (const [scriptPath, oldMatcher] of prunedPostToolUseStale) {
         console.error(
           `${targetFilename}: PostToolUse ${scriptPath}: has stale matcher (${oldMatcher})`,
+        );
+      }
+      for (const [scriptPath, matcher] of prunedPostToolUseRetired) {
+        console.error(
+          `${targetFilename}: PostToolUse ${scriptPath}: has retired hook (${matcher})`,
         );
       }
       for (const pattern of addedDeny) {
@@ -321,21 +437,37 @@ export function merge(settingsPath: string, args: string[]): number {
   for (const cmd of addedSession) {
     console.log(`${targetFilename}: added SessionStart hook ${cmd}`);
   }
+  for (const cmd of prunedSession) {
+    console.log(`${targetFilename}: removed retired SessionStart hook ${cmd}`);
+  }
   for (const cmd of addedStop) console.log(`${targetFilename}: added Stop hook ${cmd}`);
+  for (const cmd of prunedStop) {
+    console.log(`${targetFilename}: removed retired Stop hook ${cmd}`);
+  }
   for (const [matcher, cmd] of addedPreToolUse) {
     console.log(`${targetFilename}: added PreToolUse hook (${matcher}) ${cmd}`);
   }
   for (const [matcher, cmd] of addedPostToolUse) {
     console.log(`${targetFilename}: added PostToolUse hook (${matcher}) ${cmd}`);
   }
-  for (const [scriptPath, oldMatcher] of prunedPreToolUse) {
+  for (const [scriptPath, oldMatcher] of prunedPreToolUseStale) {
     console.log(
       `${targetFilename}: PreToolUse ${scriptPath}: replaced stale matcher (${oldMatcher})`,
     );
   }
-  for (const [scriptPath, oldMatcher] of prunedPostToolUse) {
+  for (const [scriptPath, matcher] of prunedPreToolUseRetired) {
+    console.log(
+      `${targetFilename}: PreToolUse ${scriptPath}: removed retired hook (${matcher})`,
+    );
+  }
+  for (const [scriptPath, oldMatcher] of prunedPostToolUseStale) {
     console.log(
       `${targetFilename}: PostToolUse ${scriptPath}: replaced stale matcher (${oldMatcher})`,
+    );
+  }
+  for (const [scriptPath, matcher] of prunedPostToolUseRetired) {
+    console.log(
+      `${targetFilename}: PostToolUse ${scriptPath}: removed retired hook (${matcher})`,
     );
   }
   for (const pattern of addedDeny) {

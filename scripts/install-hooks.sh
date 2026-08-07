@@ -572,11 +572,24 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   done
 
-  if ! deno run --allow-read "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"; then
+  if [ -d "$HOOKS_DEST" ]; then
+    for dest in "$HOOKS_DEST"/*; do
+      [ -e "$dest" ] || [ -L "$dest" ] || continue
+      if [ -L "$dest" ]; then
+        name="$(basename "$dest")"
+        if [ ! -e "$dest" ] || { [ ! -e "$HOOKS_SRC/$name" ] && [[ "$(readlink "$dest")" == *"$HOOKS_SRC"* ]]; }; then
+          echo "drift: orphaned symlink $name at $dest" >&2
+          DRIFT=1
+        fi
+      fi
+    done
+  fi
+
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"; then
     DRIFT=1
   fi
 
@@ -636,6 +649,19 @@ for src in "$HOOKS_SRC"/*.sh; do
   fi
 done
 
+if [ -d "$HOOKS_DEST" ]; then
+  for dest in "$HOOKS_DEST"/*; do
+    [ -e "$dest" ] || [ -L "$dest" ] || continue
+    if [ -L "$dest" ]; then
+      name="$(basename "$dest")"
+      if [ ! -e "$dest" ] || { [ ! -e "$HOOKS_SRC/$name" ] && [[ "$(readlink "$dest")" == *"$HOOKS_SRC"* ]]; }; then
+        rm -f "$dest"
+        echo "$name: pruned orphaned symlink"
+      fi
+    fi
+  done
+fi
+
 # The merge logic itself lives in its own file (web-jam-tools#265) so it can
 # also be unit-tested in isolation against fixture JSON, independent of the
 # symlink step above (see test/install_hooks_merge.test.ts). This installer
@@ -643,6 +669,6 @@ done
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
 
-deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
