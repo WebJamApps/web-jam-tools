@@ -43,6 +43,4 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -f "$SETTINGS_PATH" ] || { echo "no settings.json at $SETTINGS_PATH — nothing to scan"; exit 0; }
-
 deno run --allow-read --allow-env "$REPO_DIR/scripts/scan_settings_for_secrets.ts" "$SETTINGS_PATH"

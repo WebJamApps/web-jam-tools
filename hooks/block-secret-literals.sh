@@ -29,8 +29,8 @@ match=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/detect_credential_
 if [ -n "$match" ]; then
   echo "BLOCKED (secret-literal guard): this command contains a credential-shaped literal ($match)." >&2
   echo "Approving it would persist the SECRET ITSELF, verbatim, into permissions.allow in ~/.claude/settings.json — permanently and in plaintext." >&2
-  echo "Safe alternative: set the variable in ~/.bashrc (e.g. export GEMINI_API_KEY=\"...\") and let the shell supply it — never pass the literal value as a command argument." >&2
-  echo "(rule: web-jam-tools#304 — secrets-in-approved-Bash-commands)" >&2
+  echo "Safe alternative: set the variable in ~/.bashrc (e.g. export GEMINI_API_KEY=\"...\") and let the shell supply it — never pass the literal value as a command argument (and don't \"always allow\" URLs carrying embedded credentials)." >&2
+  echo "(rule: web-jam-tools#304 / #434 — secrets-in-approved-Bash-commands)" >&2
   exit 2
 fi
 

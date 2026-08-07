@@ -34,6 +34,45 @@ export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"]);
 
+export function isPlaceholderValue(val: string): boolean {
+  if (!val) return true;
+  const trimmed = val.trim();
+  if (!trimmed) return true;
+
+  if (trimmed.startsWith("<") && trimmed.endsWith(">")) {
+    return true;
+  }
+
+  if (/^\.{2,}|…$/.test(trimmed)) {
+    return true;
+  }
+
+  const lower = trimmed.toLowerCase();
+  if (
+    lower === "placeholder" ||
+    lower === "example" ||
+    lower === "sample" ||
+    lower === "dummy" ||
+    lower === "todo" ||
+    lower === "xxxx" ||
+    lower === "xxx" ||
+    lower === "abc" ||
+    lower === "123" ||
+    lower === "0000"
+  ) {
+    return true;
+  }
+
+  if (
+    /^your[-_]?(?:api[-_]?)?(?:key|token|secret|password)(?:[-_]?here)?$/i.test(trimmed) ||
+    /^(?:key|token|secret|password|api[-_]?key)[-_]?(?:here|example|placeholder|name|value)?$/i.test(trimmed)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function isFlaggableMongoDbUri(uri: string): boolean {
   const match = uri.match(/^mongodb(?:\+srv)?:\/\/([^\s"'\/\?#]+)/i);
   if (!match) {
@@ -84,22 +123,39 @@ export function findCredentialLiteral(text: string): string | null {
       if (hasFlaggableMongoDbUri(text)) {
         return name;
       }
-    } else if (pattern.test(text)) {
-      return name;
+    } else {
+      const match = text.match(pattern);
+      if (match && !isPlaceholderValue(match[0])) {
+        return name;
+      }
     }
   }
 
-  const genericRe = /\bexport\s+[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"']*))/g;
+  const urlQueryParamRe =
+    /(?:[?&])(token|api[-_]?key|apikey|access[-_]?token|accesstoken|secret(?:[-_]?key)?|auth[-_]?token|authtoken|app[-_]?key)=(?:"([^"&\s]+)"|'([^'&]+)'|([^&\s"'\)`>]+))/gi;
+  let urlMatch: RegExpExecArray | null;
+  urlQueryParamRe.lastIndex = 0;
+  while ((urlMatch = urlQueryParamRe.exec(text)) !== null) {
+    const val = urlMatch[2] ?? urlMatch[3] ?? urlMatch[4] ?? "";
+    if (!val || val.startsWith("$") || isPlaceholderValue(val)) {
+      continue;
+    }
+    if (val.length < 8) {
+      continue;
+    }
+    return "URL-embedded token/key/secret parameter with a literal value";
+  }
+
+  const genericRe =
+    /\bexport\s+[A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"']*))/g;
   let match: RegExpExecArray | null;
   genericRe.lastIndex = 0;
 
   while ((match = genericRe.exec(text)) !== null) {
-    const val = match[1] ?? match[2] ?? match[3] ?? "";
-    if (!val) {
-      continue; // export FOO="" — empty, not a literal
-    }
-    if (val.startsWith("$")) {
-      continue; // export FOO=$BAR / "$BAR" — variable reference, not a literal
+    let val = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+    val = val.replace(/^\\+/, "").replace(/\\+$/, "").trim();
+    if (!val || val.startsWith("$") || isPlaceholderValue(val)) {
+      continue; // export FOO="" or FOO=$BAR or FOO="<key>" — empty, var ref, or placeholder
     }
     return "generic KEY/TOKEN/SECRET/PASSWORD export with a literal value";
   }
