@@ -23,7 +23,16 @@ interface RunResult {
 
 async function runMerge(settingsPath: string, args: string[]): Promise<RunResult> {
   const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["run", "--allow-read", "--allow-write", SCRIPT_PATH, settingsPath, "--", ...args],
+    args: [
+      "run",
+      "--allow-read",
+      "--allow-write",
+      "--allow-env",
+      SCRIPT_PATH,
+      settingsPath,
+      "--",
+      ...args,
+    ],
     stdout: "piped",
     stderr: "piped",
   });
