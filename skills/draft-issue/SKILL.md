@@ -8,6 +8,8 @@ metadata:
 
 # draft-issue — file a GitHub issue the WebJamApps way
 
+**HARD GATE:** Do you have Josh's (or other human's) explicit approval to file THIS issue, in this session? If not, STOP and ask.
+
 ## Execution model
 
 This is mechanical-with-light-judgment (search for duplicates, write acceptance criteria that
