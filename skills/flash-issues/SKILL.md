@@ -123,16 +123,14 @@ purely for context in the output (Step 9), not used as a filter.
 ## Step 3 — classify every open issue
 
 For each issue, FIRST check for the `parked` label (gray, "Parked by Josh -
-agents and skills skip this issue entirely" — exists in all 8 repos). If
+agents and skills skip this issue entirely") or the `Josh` label ("personal items
+get Josh and NO model tier — human task, not for AI Agent"). If either label is
 present, skip this issue COMPLETELY: no triage, no label changes, not in
 any output section — exactly like an issue carrying a non-Flash model
-label. This is how Josh's needs-review decisions persist between runs
-instead of evaporating: a `parked` label on GitHub is remembered next run;
-leaving an issue unlabeled is not (JaMmusic#855/#768 were deliberately left
-unlabeled as parked, and the next scan just re-labeled them Flash Med
-because nothing on GitHub said otherwise — `parked` is the fix).
+label. This is how Josh's personal items and needs-review decisions persist
+between runs instead of evaporating (`Josh` and `parked` are the fixes).
 
-THEN, for every issue that isn't parked, check its body (case-insensitive)
+THEN, for every issue that isn't parked or labeled `Josh`, check its body (case-insensitive)
 for an explicit do-not-dispatch marker: ⛔, "BLOCKED — do not build yet",
 "Do not start until…", or equivalent wording.
 
@@ -337,7 +335,7 @@ EXACTLY ONE bucket:
 - the Blocked section (Step 7)
 - the Needs review section (Step 3)
 - skipped — carries a non-Flash model label (Step 3)
-- skipped — carries the `parked` label (Step 3)
+- skipped — carries the `parked` or `Josh` label (Step 3)
 
 Count each bucket, per repo and overall, and sum them. The sum MUST equal
 the total open-issue count from Step 2. If it doesn't, an issue fell
@@ -402,7 +400,7 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
   vs. newly triaged.
 - Every issue you newly labeled and what you labeled it.
 - Count in the numbered list vs. the Blocked section vs. the "Needs Josh's
-  review" section vs. skipped-parked vs. skipped-other-model-label — just
+  review" section vs. skipped-parked/Josh vs. skipped-other-model-label — just
   the counts for the review section and skipped buckets, not the lists
   (they're already in the file, or need no listing).
 - The Step 8 reconciliation: total open issues seen vs. the sum of all five
