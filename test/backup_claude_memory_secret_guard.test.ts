@@ -289,3 +289,46 @@ Deno.test("backup-claude-memory.sh succeeds under minimal cron PATH", async () =
     "expected copyto of settings.json under minimal PATH",
   );
 });
+
+Deno.test("backup-claude-memory.sh emits scanner failure message (not credential wording) when scanner fails to run", async () => {
+  const claudeDir = await setUpFixtureClaudeDir({
+    permissions: { allow: ["Bash(ls -la)"] },
+  });
+  const dstDir = await Deno.makeTempDir({ prefix: "wjt-dropbox-fixture-" });
+  const refusalFile = `${claudeDir}/settings-backup-refusal.txt`;
+
+  // DENO_BIN points to a nonexistent binary -> scan-settings-for-secrets.sh exits 127
+  const res = await runBackupWithEnv(claudeDir, dstDir, {
+    SETTINGS_BACKUP_REFUSAL_FILE: refusalFile,
+    DENO_BIN: "/nonexistent/deno/binary",
+  });
+
+  assertEquals(res.code, 0, res.stderr);
+  assert(
+    !hasInvocation(res.invocations, "copyto", `${claudeDir}/settings.json`),
+    "should not copy settings.json when scanner failed",
+  );
+
+  assert(
+    res.stderr.includes(
+      "REFUSED settings.json backup: secret scanner failed to run (exit status 127)",
+    ),
+    `expected failure message on stderr, got: ${res.stderr}`,
+  );
+  assert(
+    !res.stderr.includes("credential-shaped literal found in permissions"),
+    `stderr should not claim a credential was found on crash: ${res.stderr}`,
+  );
+
+  const refusalText = await Deno.readTextFile(refusalFile);
+  assert(
+    refusalText.includes(
+      "REFUSED settings.json backup: secret scanner failed to run (exit status 127)",
+    ),
+    `expected failure message in refusal file, got: ${refusalText}`,
+  );
+  assert(
+    !refusalText.includes("credential-shaped literal found in permissions"),
+    `refusal file should not claim a credential was found on crash: ${refusalText}`,
+  );
+});

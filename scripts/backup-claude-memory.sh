@@ -77,11 +77,18 @@ rclone copyto "$CLAUDE_DIR/CLAUDE.md" "$DST/CLAUDE.md"
 REFUSAL_FILE="${SETTINGS_BACKUP_REFUSAL_FILE:-$CLAUDE_DIR/settings-backup-refusal.txt}"
 mkdir -p "$DST/claude-config"
 if [ -f "$CLAUDE_DIR/settings.json" ]; then
-  if scan_warning=$(CLAUDE_SETTINGS_PATH="$CLAUDE_DIR/settings.json" "$REPO_DIR/scripts/scan-settings-for-secrets.sh" 2>&1 >/dev/null); then
+  scan_code=0
+  scan_warning=$(CLAUDE_SETTINGS_PATH="$CLAUDE_DIR/settings.json" "$REPO_DIR/scripts/scan-settings-for-secrets.sh" 2>&1 >/dev/null) || scan_code=$?
+  if [ "$scan_code" -eq 0 ]; then
     rclone copyto --copy-links "$CLAUDE_DIR/settings.json" "$DST/claude-config/settings.json"
     rm -f "$REFUSAL_FILE"
-  else
+  elif [ "$scan_code" -eq 1 ]; then
     refusal_msg="$(ts) REFUSED settings.json backup: credential-shaped literal found in permissions (web-jam-tools#304). Run scripts/scan-settings-for-secrets.sh, remove the entry, and rotate the credential."
+    echo "$refusal_msg" | tee -a "$LOG" >&2
+    echo "$scan_warning" >&2
+    echo "$refusal_msg" > "$REFUSAL_FILE"
+  else
+    refusal_msg="$(ts) REFUSED settings.json backup: secret scanner failed to run (exit status ${scan_code}). Run scripts/scan-settings-for-secrets.sh to inspect the error."
     echo "$refusal_msg" | tee -a "$LOG" >&2
     echo "$scan_warning" >&2
     echo "$refusal_msg" > "$REFUSAL_FILE"
