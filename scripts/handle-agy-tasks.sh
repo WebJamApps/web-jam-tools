@@ -107,6 +107,29 @@ set -euo pipefail
 WEBJAM="${AGY_WEBJAM_ROOT:-$HOME/WebJamApps}"
 AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 
+# --- explicit environment for the `agy` subprocess (web-jam-tools#439) -----
+# `agy` is launched with an explicitly constructed environment, never the
+# caller's full inherited one: a broad inherited environment let a subagent
+# read GH_TOKEN and Dropbox credentials via a shell tool call and send them to
+# Google's API mid-run (web-jam-tools#282 section D, 2026-08-07 — full record
+# in ~/Dropbox/web-jam-llms/Access_Controls/credential-rotation-282-full-record.md).
+# Established by measurement 2026-08-07: `env -i HOME PATH USER` is sufficient
+# for agy to run normally — it authenticates from ~/.gemini/oauth_creds.json,
+# not environment variables. Add to this allowlist BY NAME as new needs arise;
+# never widen it by passing the inherited environment through.
+AGY_ENV_ALLOWLIST=(HOME PATH USER AGY_MODELS FORCED_PR_AUTHOR)
+# Rebuild right before each agy call (FORCED_PR_AUTHOR changes per model/round)
+# and use as: env -i "${AGY_ENV_ARGS[@]}" "$AGY" ...
+agy_env_args() {
+  AGY_ENV_ARGS=()
+  local name
+  for name in "${AGY_ENV_ALLOWLIST[@]}"; do
+    if [ -n "${!name+x}" ]; then
+      AGY_ENV_ARGS+=("$name=${!name}")
+    fi
+  done
+}
+
 # Cost-ordered model chain (Antigravity PAID account — Josh's prepaid Google
 # credit), CHEAPEST FIRST: Gemini Flash medium is the default lane; Flash (High)
 # is the only rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
@@ -521,7 +544,8 @@ REMAINING=()
 for i in "${!MODELS[@]}"; do
   m="${MODELS[$i]}"
   printf '  probing: %-32s ... ' "$m"
-  if timeout 90 "$AGY" --model "$m" -p "reply with: ok" >/dev/null 2>&1; then
+  agy_env_args
+  if timeout 90 env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$m" -p "reply with: ok" >/dev/null 2>&1; then
     echo "available"
     ACTIVE_MODEL="$m"
     REMAINING=("${MODELS[@]:$((i + 1))}")
@@ -634,7 +658,8 @@ if [ "$HEADLESS" -eq 1 ]; then
       echo ">>> round $ROUNDS/$AGY_MAX_ROUNDS — model: $m"
       # --print-timeout: agy's default 5m kills long silent work stretches in -p
       # mode (bit us on JaMmusic#1162 — Flash Medium thinks slowly; run died twice).
-      if ! "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$TURN_PROMPT"; then
+      agy_env_args
+      if ! env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$TURN_PROMPT"; then
         # web-jam-tools#187 — one same-model retry on ANY non-zero exit (not
         # just a detected timeout): distinguishing timeout-vs-crash would mean
         # pattern-matching agy's error text, which is fragile (wording can
@@ -759,7 +784,8 @@ else
   # model — re-run with AGY_MODELS set to the new model (or export
   # FORCED_PR_AUTHOR yourself) before finishing, if you do switch.
   export FORCED_PR_AUTHOR="agy — $ACTIVE_MODEL"
-  "$AGY" --model "$ACTIVE_MODEL" -i "$PROMPT"
+  agy_env_args
+  env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$ACTIVE_MODEL" -i "$PROMPT"
 fi
 
 # --- post-run worktree-integrity check (web-jam-tools#252) ------------------
