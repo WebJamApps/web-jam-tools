@@ -286,10 +286,11 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
 
 ## API Integrations
 
-See [docs/api-integrations.md](docs/api-integrations.md) for the current status of Google
-Drive/Docs/Sheets/Slides/Calendar/Tasks/Gmail integrations available to AI assistants. Update that
-file (and the dated note in Drive `My Drive / GEMINI / API_Integration_Status_*.md`) when
-integration state changes.
+The status of Google Drive/Docs/Sheets/Slides/Calendar/Tasks/Gmail integrations available to AI
+assistants is tracked privately, NOT in this public repo:
+`~/Dropbox/web-jam-llms/Access_Controls/api-integrations-2026-07-31.md`. Update that file (and the
+dated note in Drive `My Drive / GEMINI / API_Integration_Status_*.md`) when integration state
+changes. If you cannot read that path, STOP and say so rather than guessing.
 
 ## Production Monitoring
 
