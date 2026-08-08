@@ -133,7 +133,23 @@ Deno.test("gh issue create with --label=value single-token form is allowed", asy
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("gh issue create with ZERO model labels is denied", async () => {
+Deno.test("gh issue create with only Josh label is allowed (Josh carve-out)", async () => {
+  const res = await runHook(
+    bashCall(`gh issue create --title T --body B --label Josh --type Task`),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue create with Josh and non-model labels (Josh, Blocked) is allowed (Josh carve-out)", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body B --label Josh --label Blocked --type Task`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue create with ZERO model labels and no Josh label is still denied", async () => {
   const res = await runHook(
     bashCall(`gh issue create --title T --body B --label bug --type Task`),
   );
@@ -276,6 +292,34 @@ Deno.test("MCP issue_write create with one model label in the array and valid ty
       title: "T",
       type: "Task",
       labels: ["Sonnet", "bug"],
+    }),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("MCP issue_write create with only Josh label is allowed (Josh carve-out)", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
+      labels: ["Josh"],
+    }),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("MCP issue_write create with Josh and non-model labels is allowed (Josh carve-out)", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
+      labels: ["Josh", "Blocked"],
     }),
   );
   assertEquals(res.code, 0, res.stderr);
