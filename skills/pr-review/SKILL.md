@@ -50,36 +50,52 @@ Remove the worktree when finished. Reviewing without running anything is the nor
 worktree is only needed when a pasted test-evidence block has to be reproduced.
 
 ### Step 1: Fetch PR Details and Context
-1. Fetch PR details and metadata:
+1. Fetch PR details, metadata, and mergeability:
    ```sh
-   gh pr view <Repo>#<pr-num> --json number,title,body,author,headRefName,baseRefName,state,isDraft
+   gh pr view <Repo>#<pr-num> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus
    ```
-2. Fetch the PR diff:
+2. Fetch PR status checks (CircleCI, Snyk, etc.):
+   ```sh
+   gh pr checks <Repo>#<pr-num>
+   ```
+3. Fetch the PR diff:
    ```sh
    gh pr diff <Repo>#<pr-num>
    ```
-3. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
+4. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
    ```sh
    gh issue view <Repo>#<issue-num>
    ```
 
 ### Step 2: Audit Checklist
 
-Review the PR diff and description against these mandatory audit criteria:
+Review the PR diff, description, checks, and mergeability against these mandatory audit criteria:
 
-1. **Issue Acceptance Criteria & Scope**:
+1. **Merge Conflicts (Must Fix)**:
+   - Check `mergeable` status and `mergeStateStatus` from Step 1.
+   - If the PR has merge conflicts with the base branch (`dev` / `main`), report it as a **Must Fix** item requiring a rebase or conflict resolution before merging.
+
+2. **CircleCI & Automated Build Health (Must Fix)**:
+   - Inspect status checks from `gh pr checks`.
+   - If CircleCI (`ci/circleci: build` or equivalent pipeline) is failing, report the failure details as a **Must Fix** item.
+
+3. **Snyk Security Audits (Must Fix)**:
+   - Inspect status checks from `gh pr checks` for Snyk security failures (`security/snyk`, `snyk-code`, etc.).
+   - If Snyk security checks fail, report the failure as a **Must Fix** item. Note: If Snyk reports are inaccessible locally due to API limits or auth, ask the author/Josh for the exact Snyk failure details and vulnerability IDs per AGENTS.md guidelines.
+
+4. **Issue Acceptance Criteria & Scope**:
    - Does the diff fulfill all requirements and acceptance criteria stated in the linked issue?
    - Is the PR tightly scoped to the issue task? Are there any out-of-scope files, unintended refactors, or stray code additions?
 
-2. **Single Semver Version Bump per PR**:
+5. **Single Semver Version Bump per PR**:
    - Check `package.json` (or `deno.json` for `web-jam-tools`).
    - The version must be bumped exactly once per PR on its first commit.
    - Verify follow-up commits do not re-bump the version, and that the version is not unchanged from the merge-base with `dev`.
 
-3. **Package-Lock Engine Alignment**:
+6. **Package-Lock Engine Alignment**:
    - When bumping Node.js version in `package.json` `engines`, verify `package-lock.json` root engine definition was updated using `npm install --package-lock-only --ignore-scripts` (or `npm install --ignore-scripts`) so both files stay in sync without running unverified postinstall scripts.
 
-4. **Test Plan Integrity**:
+7. **Test Plan Integrity**:
    - **Test evidence is OPTIONAL, and pasted suite logs are not wanted.**
      `scripts/create-draft-pr.sh` treats `--test-evidence` as optional by design — unit-test
      runner output in a PR body is noise to the reviewer it is meant to inform. **Never raise a
@@ -90,7 +106,7 @@ Review the PR diff and description against these mandatory audit criteria:
      is not a defect and must not be reported as one.
    - Inspect the `--test-plan` section. It must contain concrete steps exercising the change itself (UI manual steps, runnable `curl` commands, or tooling commands), not just suite invocations like `npm test` or `deno task test` (web-jam-tools#152).
 
-5. **AGENTS.md Guardrails Audit**:
+8. **AGENTS.md Guardrails Audit**:
    - **TypeScript / Code Standards**:
      - No raw `any` types allowed in new or modified TypeScript code.
    - **Form Required Asterisks (`*`)**:
@@ -110,9 +126,10 @@ Review the PR diff and description against these mandatory audit criteria:
 
 1. Synthesize review findings into a structured review comment.
 2. Format feedback with clear section headers:
-   - **PR Review Summary**: Overall status (Approved / Changes Requested / Comment).
-   - **Checklist Verification**: Status of scope, semver bump, package-lock engine alignment, test evidence, and guardrails.
-   - **Actionable Feedback & Suggestions**: Specific code references or line numbers where changes are needed.
+   - **PR Review Summary**: Overall status (`Approved` if clean / `Changes Requested` if any Must Fix item or blocking defect exists).
+   - **Must Fix Items**: List any CircleCI failures, Snyk security failures, merge conflicts, or blocking bugs. If none, state "None".
+   - **Checklist Verification**: Status of mergeability, CI health, Snyk audits, scope, semver bump, package-lock engine alignment, test evidence, and guardrails.
+   - **Actionable Feedback & Suggestions**: Specific code references or line numbers where changes or improvements are suggested.
 3. Post comment via `gh pr review`:
    ```sh
    gh pr review <Repo>#<pr-num> --comment --body-file <scratch_review_file>

@@ -1,6 +1,6 @@
 ---
 name: flash-issues
-description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Sonnet subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
+description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Flash 3.6 High subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
 ---
 
 # flash-issues — regenerate the Flash-lane worklist
@@ -20,21 +20,19 @@ anything, and never touches any repo's code.
 `/flash-issues` only. Never triggered automatically (no session-start hook,
 no schedule) — this is a manual worklist refresh Josh asks for.
 
-## Execution model — dispatch to Sonnet, never run inline
+## Execution model — dispatch to Flash 3.6 High, never run inline
 
 `/flash-issues` is almost always invoked in a Fable/Opus session, but the
 work itself (`gh label list` / `gh issue list` scanning, mechanical
 triage-labeling, dependency reading, file writing) is exactly the kind of
 mechanical work the team's standing routing rule says goes to the cheapest
-capable model — that used to mean Haiku, but one hardened Haiku retry still
-misjudged edge cases (dropped a named example issue, re-labeled a `parked`
-issue), so Sonnet is the cheapest capable tier for this run. **The invoking
+capable model — Flash 3.6 High is the chosen tier for this run. **The invoking
 session does not execute Steps 1–9 itself, no matter how quick it looks.**
 
 Instead:
 
-1. Launch exactly **one** subagent via the `Agent` tool with
-   `model: "sonnet"`, passing the self-contained prompt in "Dispatch prompt
+1. Launch exactly **one** subagent via the `Agent` / `invoke_subagent` tool with
+   `model: "flash"` (`Gemini 3.6 Flash (High)`), passing the self-contained prompt in "Dispatch prompt
    template" below verbatim (it's written to need no context from this
    conversation — the subagent has none).
 2. Wait for the subagent's report (the Report Back format baked into the
@@ -51,10 +49,10 @@ Never run the `gh` scans, triage, or file write yourself in the invoking
 session "to save a round trip" — that's the exact expensive-token-burn this
 defect fix exists to close off.
 
-## Dispatch prompt template (pass verbatim to the `Agent` tool)
+## Dispatch prompt template (pass verbatim to the `Agent` / `invoke_subagent` tool)
 
 Fill in nothing — this prompt is complete as written. Pass it as the `prompt`
-argument with `subagent_type` omitted/general-purpose and `model: "sonnet"`.
+argument with `subagent_type` omitted/general-purpose and `model: "flash"` (`Gemini 3.6 Flash (High)`).
 
 ````
 You are doing mechanical GitHub scanning/labeling work — no code changes, no
@@ -125,16 +123,14 @@ purely for context in the output (Step 9), not used as a filter.
 ## Step 3 — classify every open issue
 
 For each issue, FIRST check for the `parked` label (gray, "Parked by Josh -
-agents and skills skip this issue entirely" — exists in all 8 repos). If
+agents and skills skip this issue entirely") or the `Josh` label ("personal items
+get Josh and NO model tier — human task, not for AI Agent"). If either label is
 present, skip this issue COMPLETELY: no triage, no label changes, not in
 any output section — exactly like an issue carrying a non-Flash model
-label. This is how Josh's needs-review decisions persist between runs
-instead of evaporating: a `parked` label on GitHub is remembered next run;
-leaving an issue unlabeled is not (JaMmusic#855/#768 were deliberately left
-unlabeled as parked, and the next scan just re-labeled them Flash Med
-because nothing on GitHub said otherwise — `parked` is the fix).
+label. This is how Josh's personal items and needs-review decisions persist
+between runs instead of evaporating (`Josh` and `parked` are the fixes).
 
-THEN, for every issue that isn't parked, check its body (case-insensitive)
+THEN, for every issue that isn't parked or labeled `Josh`, check its body (case-insensitive)
 for an explicit do-not-dispatch marker: ⛔, "BLOCKED — do not build yet",
 "Do not start until…", or equivalent wording.
 
@@ -339,7 +335,7 @@ EXACTLY ONE bucket:
 - the Blocked section (Step 7)
 - the Needs review section (Step 3)
 - skipped — carries a non-Flash model label (Step 3)
-- skipped — carries the `parked` label (Step 3)
+- skipped — carries the `parked` or `Josh` label (Step 3)
 
 Count each bucket, per repo and overall, and sum them. The sum MUST equal
 the total open-issue count from Step 2. If it doesn't, an issue fell
@@ -404,7 +400,7 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
   vs. newly triaged.
 - Every issue you newly labeled and what you labeled it.
 - Count in the numbered list vs. the Blocked section vs. the "Needs Josh's
-  review" section vs. skipped-parked vs. skipped-other-model-label — just
+  review" section vs. skipped-parked/Josh vs. skipped-other-model-label — just
   the counts for the review section and skipped buckets, not the lists
   (they're already in the file, or need no listing).
 - The Step 8 reconciliation: total open issues seen vs. the sum of all five
