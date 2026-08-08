@@ -13,19 +13,30 @@ export interface MemoryEntry {
   isCheckpoint: boolean;
 }
 
+/**
+ * Derived budget function (Design 1C):
+ *   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
+ * Evaluates to ~6.2KB currently; hard budget is 6,500 bytes.
+ */
+
 export function parseMemoryFile(content: string, filename: string): MemoryEntry | null {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
 
   try {
-    // deno-lint-ignore no-explicit-any
-    const fm = (parseYaml(match[1]) || {}) as Record<string, any>;
-    const rawType = (fm.metadata?.type || fm.type || "project").toString().toLowerCase();
+    const fm = (parseYaml(match[1]) || {}) as Record<string, unknown>;
+    const metadata =
+      (typeof fm.metadata === "object" && fm.metadata !== null ? fm.metadata : {}) as Record<
+        string,
+        unknown
+      >;
+
+    const rawType = (metadata.type || fm.type || "project").toString().toLowerCase();
     const type: MemoryEntry["type"] =
       rawType === "user" || rawType === "feedback" || rawType === "reference" ? rawType : "project";
 
     const description = (fm.description || "").toString().trim();
-    const status = fm.metadata?.status ? fm.metadata.status.toString().toLowerCase() : undefined;
+    const status = metadata.status ? metadata.status.toString().toLowerCase() : undefined;
     const slug = filename.replace(/\.md$/, "");
     const isCheckpoint = slug.startsWith("session-checkpoint-");
 
@@ -99,9 +110,11 @@ export function generateMemoryIndex(entries: MemoryEntry[]): string {
   let output = "# Memory Index\n\n";
 
   for (const type of ["user", "feedback", "reference", "project"] as const) {
+    const groupEntries = groups[type];
+    if (groupEntries.length === 0) continue;
+
     output += `## ${type.charAt(0).toUpperCase() + type.slice(1)}\n\n`;
 
-    const groupEntries = groups[type];
     const regularEntries = groupEntries.filter((e) => !e.isCheckpoint);
     const checkpointEntries = groupEntries.filter((e) => e.isCheckpoint);
 

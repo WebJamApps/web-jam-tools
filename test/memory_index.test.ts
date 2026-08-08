@@ -82,6 +82,13 @@ Deno.test("generateMemoryIndex: groups by type, sorts slugs alphabetically, form
       isCheckpoint: false,
     },
     {
+      filename: "ref-doc.md",
+      slug: "ref-doc",
+      type: "reference" as const,
+      description: "Ref desc",
+      isCheckpoint: false,
+    },
+    {
       filename: "session-checkpoint-live.md",
       slug: "session-checkpoint-live",
       type: "project" as const,
@@ -101,11 +108,30 @@ Deno.test("generateMemoryIndex: groups by type, sorts slugs alphabetically, form
 
   // Alpha comes before beta
   assert(output.includes("alpha · beta"));
+  assert(output.includes("ref-doc"));
   assert(
     output.includes(
       "- [session-checkpoint-live](session-checkpoint-live.md) — Live checkpoint desc",
     ),
   );
+});
+
+Deno.test("generateMemoryIndex: omits section headers for empty groups", () => {
+  const entries = [
+    {
+      filename: "alpha.md",
+      slug: "alpha",
+      type: "feedback" as const,
+      description: "Alpha desc",
+      isCheckpoint: false,
+    },
+  ];
+
+  const output = generateMemoryIndex(entries);
+  assert(output.includes("## Feedback"));
+  assertEquals(output.includes("## User"), false);
+  assertEquals(output.includes("## Reference"), false);
+  assertEquals(output.includes("## Project"), false);
 });
 
 Deno.test("archiveDoneCheckpoints: moves done checkpoints to archive directory", async () => {
@@ -172,6 +198,9 @@ Deno.test("runCli: write and --check flags", async () => {
   }
 });
 
+// P1-6 budget check: Derived budget function (Design 1C):
+//   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
+// Evaluates to ~6.2KB currently; 6,500 bytes is the hard upper bound limit.
 Deno.test("real memory directory index generation budget check (<= 6500 bytes)", async () => {
   const realDir = "/home/joshua/.claude/projects/-home-joshua/memory";
   try {
