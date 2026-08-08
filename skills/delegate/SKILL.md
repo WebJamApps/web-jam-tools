@@ -30,6 +30,15 @@ session dispatch work with no durable record — see web-jam-tools#249. A quick
 task not worth a full write-up still gets a GitHub issue first, just a short
 one.)
 
+**Environment (web-jam-tools#439):** the wrapper launches the `agy` binary
+itself with an explicitly constructed environment — `HOME`, `PATH`, `USER`,
+`AGY_MODELS`, `FORCED_PR_AUTHOR` only, never your full inherited shell
+environment. This is deliberate: a subagent's own shell tool call once read
+`GH_TOKEN` and Dropbox credentials out of an inherited environment and sent
+them to Google's API mid-run (web-jam-tools#282 section D, 2026-08-07).
+Dispatch through this script — never a raw `agy --model ... -p "..."` call —
+to keep that scrubbing in place.
+
 ```sh
 ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 # e.g.
