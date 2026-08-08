@@ -43,4 +43,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-deno run --allow-read --allow-env "$REPO_DIR/scripts/scan_settings_for_secrets.ts" "$SETTINGS_PATH"
+DENO_BIN="${DENO_BIN:-}"
+if [ -z "$DENO_BIN" ]; then
+  if command -v deno >/dev/null 2>&1; then
+    DENO_BIN="deno"
+  elif [ -x "$HOME/.deno/bin/deno" ]; then
+    DENO_BIN="$HOME/.deno/bin/deno"
+  elif [ -x "/usr/local/bin/deno" ]; then
+    DENO_BIN="/usr/local/bin/deno"
+  else
+    DENO_BIN="deno"
+  fi
+fi
+
+"$DENO_BIN" run --allow-read --allow-env "$REPO_DIR/scripts/scan_settings_for_secrets.ts" "$SETTINGS_PATH"
+

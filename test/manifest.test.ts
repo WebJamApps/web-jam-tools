@@ -37,6 +37,7 @@ const EXPECTED_SKILL_DIRS = [
 // Pinned set of hooks/*.sh filenames. Update deliberately.
 const EXPECTED_HOOK_SCRIPTS = [
   "backlog-groom-reminder.sh",
+  "backup-refusal-reminder.sh",
   "block-agy-non-flash-model.sh",
   "block-dangerous-git-deploy.sh",
   "block-human-only-credentials.sh",
