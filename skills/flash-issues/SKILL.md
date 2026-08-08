@@ -1,6 +1,6 @@
 ---
 name: flash-issues
-description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Sonnet subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
+description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Flash 3.6 High subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
 ---
 
 # flash-issues — regenerate the Flash-lane worklist
@@ -20,21 +20,19 @@ anything, and never touches any repo's code.
 `/flash-issues` only. Never triggered automatically (no session-start hook,
 no schedule) — this is a manual worklist refresh Josh asks for.
 
-## Execution model — dispatch to Sonnet, never run inline
+## Execution model — dispatch to Flash 3.6 High, never run inline
 
 `/flash-issues` is almost always invoked in a Fable/Opus session, but the
 work itself (`gh label list` / `gh issue list` scanning, mechanical
 triage-labeling, dependency reading, file writing) is exactly the kind of
 mechanical work the team's standing routing rule says goes to the cheapest
-capable model — that used to mean Haiku, but one hardened Haiku retry still
-misjudged edge cases (dropped a named example issue, re-labeled a `parked`
-issue), so Sonnet is the cheapest capable tier for this run. **The invoking
+capable model — Flash 3.6 High is the chosen tier for this run. **The invoking
 session does not execute Steps 1–9 itself, no matter how quick it looks.**
 
 Instead:
 
-1. Launch exactly **one** subagent via the `Agent` tool with
-   `model: "sonnet"`, passing the self-contained prompt in "Dispatch prompt
+1. Launch exactly **one** subagent via the `Agent` / `invoke_subagent` tool with
+   `model: "flash"` (`Gemini 3.6 Flash (High)`), passing the self-contained prompt in "Dispatch prompt
    template" below verbatim (it's written to need no context from this
    conversation — the subagent has none).
 2. Wait for the subagent's report (the Report Back format baked into the
@@ -51,10 +49,10 @@ Never run the `gh` scans, triage, or file write yourself in the invoking
 session "to save a round trip" — that's the exact expensive-token-burn this
 defect fix exists to close off.
 
-## Dispatch prompt template (pass verbatim to the `Agent` tool)
+## Dispatch prompt template (pass verbatim to the `Agent` / `invoke_subagent` tool)
 
 Fill in nothing — this prompt is complete as written. Pass it as the `prompt`
-argument with `subagent_type` omitted/general-purpose and `model: "sonnet"`.
+argument with `subagent_type` omitted/general-purpose and `model: "flash"` (`Gemini 3.6 Flash (High)`).
 
 ````
 You are doing mechanical GitHub scanning/labeling work — no code changes, no
