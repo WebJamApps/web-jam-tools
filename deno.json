@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.27.11",
+  "version": "1.28.0",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
@@ -24,6 +24,7 @@
     "fix-labels:diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/diff.ts",
     "fix-labels:milestone-diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/milestone-diff.ts",
     "fix-labels:generate-model-labels": "deno run --allow-read=skills/fix-labels/labels.yaml --allow-write=skills/fix-labels/model-labels.json src/fix-labels/generate-model-labels.ts",
+    "memory-index": "deno run --allow-read --allow-write --allow-env src/memory-index/cli.ts",
     "update:reaper": "bash scripts/reaper-update.sh",
     "monitor:uptime": "deno run --allow-net --allow-env src/uptime/cli.ts",
     "monitor:cron": "deno run --allow-net --allow-env src/uptime/cron.ts",
@@ -65,7 +66,8 @@
       "src/fix-labels/",
       "src/task-queue/",
       "src/dropbox-link/",
-      "src/outreach-cron/"
+      "src/outreach-cron/",
+      "src/memory-index/"
     ]
   }
 }
