@@ -66,3 +66,24 @@ Deno.test("backup-refusal-reminder.sh emits nothing when refusal file is absent 
   assertEquals(res2.code, 0, res2.stderr);
   assertEquals(res2.stdout, "");
 });
+
+Deno.test("backup-refusal-reminder.sh JSON-escapes refusal file containing double quotes, backslashes, and newlines", async () => {
+  const dir = await Deno.makeTempDir();
+  const refusalFile = `${dir}/settings-backup-refusal-special.txt`;
+  const rawMessage =
+    '2026-08-08T10:55:02Z REFUSED "settings.json" backup: path \\usr\\bin\nline2 "quoted"';
+  await Deno.writeTextFile(refusalFile, rawMessage);
+
+  const res = await runHook(refusalFile);
+  assertEquals(res.code, 0, res.stderr);
+
+  // Must parse cleanly as JSON without throwing SyntaxError
+  const parsed = JSON.parse(res.stdout);
+  assert(typeof parsed.systemMessage === "string");
+  assert(
+    parsed.systemMessage.includes(
+      'REFUSED "settings.json" backup: path \\usr\\bin\nline2 "quoted"',
+    ),
+    parsed.systemMessage,
+  );
+});
