@@ -9,7 +9,7 @@ documentation across the WebJamApps workspace. This file orients Claude
 - [AGENTS.md](AGENTS.md) — workspace rules (apply to all AI assistants)
 - [docs/scripts.md](docs/scripts.md) — index of utilities in `scripts/`
 - [docs/ai-assistant-google-setup.md](docs/ai-assistant-google-setup.md) — generic recipe to set up Google MCP servers (no personal paths)
-- [docs/api-integrations.md](docs/api-integrations.md) — machine-specific reference snapshot of one working setup
+- `docs/api-integrations.md` — REMOVED from this repo (information disclosure); it is not a broken link, do not restore it. The reference snapshot is private: `~/Dropbox/web-jam-llms/Access_Controls/api-integrations-2026-07-31.md`.
 - [docs/rclone-setup.md](docs/rclone-setup.md) — rclone Drive mount via systemd
 
 ## Hard rules
