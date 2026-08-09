@@ -148,6 +148,7 @@ any other assistant) working in this workspace.
   "gate issue creation and dispatch mechanically, and write the approval-is-per-gate rule" for the
   mechanical half of this fix (ask-rules on `gh issue create` and MCP `issue_write` create,
   installed via `scripts/install-hooks.sh`).
+- **ACCURATE TEST ASSERTIONS FOR NEWLY IMPLEMENTED FEATURES:** When writing unit tests for new features or CLI flags (such as mode-modifying flags like `--update` or `--no-close`), test assertions must explicitly verify the specific mode indicator or feature-specific output (e.g. asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than relying only on assertions shared with default paths.
 <!-- CROSS-AI-HARD-RULES-END -->
 
 ## Read also

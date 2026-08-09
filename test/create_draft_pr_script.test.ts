@@ -720,6 +720,7 @@ Deno.test("--update --no-close produces Refs #N and does not re-arm Closes #N", 
   );
   await Deno.remove(mockGhDir, { recursive: true });
   assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /=== DRY RUN \(UPDATE/);
   assertMatch(res.stdout, /Refs #459 — post-merge acceptance criteria/);
   assertNotMatch(res.stdout, /Closes #459/);
 });
