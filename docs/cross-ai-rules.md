@@ -121,6 +121,10 @@ skill.
   something else that I have not authorized."_ See web-jam-tools#324 "No agent connects a new
   account, credential, or MCP server without Josh's explicit authorization — add the rule and audit
   where it can be mechanically enforced" for the enforcement-surface audit.
+- **NO AI CLOSES OR REOPENS A GITHUB ISSUE AUTONOMOUSLY:** No agent may close (`gh issue close`) or
+  reopen (`gh issue reopen`) any GitHub issue without Josh's explicit authorization in chat naming
+  that specific issue. Always ask Josh for permission first before executing any issue close or reopen
+  command.
 - **STANDING AGENT CREDENTIAL CLASSIFICATION RULE (MACHINE-CONSUMED VS HUMAN-CONSUMED):** Whenever
   an agent encounters or generates a new credential, account identifier, or token, the agent must
   **STOP and prompt Josh to classify it** as either machine-consumed (e.g. `GITHUB_TOKEN`,
