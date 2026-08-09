@@ -102,6 +102,25 @@ The first call to a tool from this MCP will trigger a browser-based OAuth
 flow (or you can run the package's own auth subcommand if it provides one).
 Tokens are stored under the MCP's config directory.
 
+> **Node 24 Compatibility & npm Override**:
+> `@piotr-agier/google-drive-mcp` ships with legacy dependencies (`google-auth-library@^9.15.0` and `googleapis@^144`), which resolve to `gaxios@6.7.1` (`node-fetch@2.7.0`). On Node 24 (e.g. 24.17+), token auth fails with `Premature close` (`Invalid response body while trying to fetch https://oauth2.googleapis.com/token: Premature close`).
+>
+> To fix this on Node 24, configure npm `overrides` to upgrade the Google auth stack to `gaxios` 7 (which uses native fetch):
+> ```json
+> "overrides": {
+>   "google-auth-library": "^10.2.0",
+>   "googleapis": "^173.0.0"
+> }
+> ```
+> *Note: Overriding `gaxios` alone to `^7.1.0` does **not** work because `googleapis@144` imports the legacy `gaxios/build/src/common` subpath removed in `gaxios` 7. The entire `google-auth-library` and `googleapis` stack must be overridden together.*
+>
+> **Verification Step**:
+> After installation, confirm that `gaxios` resolves to version `7.x` rather than `6.x`:
+> ```bash
+> npm ls gaxios
+> ```
+> Output should show `gaxios@7.x.x` (e.g. `7.1.0`). If `gaxios@6.x` is shown, the override was not applied and OAuth token POST requests will fail under Node 24.
+
 ### Gmail
 
 ```bash
