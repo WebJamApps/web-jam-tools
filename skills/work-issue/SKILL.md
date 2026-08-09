@@ -18,8 +18,7 @@ shell script, then you (the agent) do the actual coding inside this same session
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (or `/next Repo#123`, named mode) — the issue is given explicitly. Go straight
-  to "## Steps" below.
+- **`/work-issue Repo#123`** (or `/next Repo#123`, named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then go straight to "## Steps" below.
 - **`/work-issue`** (or `/next`, no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
   to the same "## Steps" flow below. See "## No-argument mode" first.
@@ -31,13 +30,16 @@ older stateful queue-file mode). There are two ways to arrive at that issue:
 ## Model Label Check & Approval
 
 When `work-issue` begins an issue (`<Repo>#<num>`):
-1. **Read the GitHub issue's model label**: Check if the issue has a model tier label (`Flash Med`, `Flash High`, `Haiku`, `Sonnet`, `Opus`).
-2. **Compare against active session tier**: Compare the issue's model label against the active executing session tier.
-3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing:
+1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`).
+2. **Determine Agent Delegation vs Execution**:
+   - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
+   - Under **Antigravity** (e.g., Flash High interactive session): If the issue is labeled `Flash Med`, automatically delegate execution down to a `Flash Med` subagent.
+   - If the active session tier matches the issue's model label, execute the task directly in the current session.
+3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label rather than delegating down, prompt Josh for explicit approval in chat before executing:
    ```bash
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
-4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini 3.6 Flash (Medium)"`).
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents, or `--author "Claude Code — Haiku 3.5"` for Haiku subagents).
 
 ## No-argument mode — auto-pick worklist based on agent surface
 
