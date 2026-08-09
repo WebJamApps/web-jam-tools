@@ -116,7 +116,7 @@
 #
 # --summary and --test-plan are REQUIRED (web-jam-tools#77), each either inline or via
 # its *-file counterpart: the script refuses to open a PR whose description is empty or
-# left as a placeholder. This is the single choke point — no caller (/next, ad-hoc, or
+# left as a placeholder. This is the single choke point — no caller (/work-issue, ad-hoc, or
 # future) can open a PR with an empty description. Put the summary IN THE PR via these
 # flags, not only in the chat/REPL. --test-evidence and --screenshots stay optional.
 #
@@ -447,7 +447,7 @@ fi
 
 # --- require real description content (web-jam-tools#77) ---
 # The single choke point: refuse a PR with an empty/placeholder description, so no
-# caller (/next, ad-hoc, or future) can ship one. Rejects both an absent value and
+# caller (/work-issue, ad-hoc, or future) can ship one. Rejects both an absent value and
 # the legacy placeholder text (in case a caller echoes it back).
 PLACEHOLDER_SUMMARY="_(fill in: what changed and why)_"
 PLACEHOLDER_TEST_PLAN="_(fill in: exact commands + expected result)_"
