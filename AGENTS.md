@@ -4,7 +4,6 @@ This file contains instructions and context for every AI agent (Claude Code, agy
 any other assistant) working in this workspace.
 
 <!-- CROSS-AI-HARD-RULES-START -->
-
 ## OPERATIONAL HARD RULES (apply to any AI taking action on Josh's behalf)
 
 - CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
@@ -51,6 +50,10 @@ any other assistant) working in this workspace.
   something else that I have not authorized."_ See web-jam-tools#324 "No agent connects a new
   account, credential, or MCP server without Josh's explicit authorization — add the rule and audit
   where it can be mechanically enforced" for the enforcement-surface audit.
+- **NO AI CLOSES OR REOPENS A GITHUB ISSUE AUTONOMOUSLY:** No agent may close (`gh issue close`) or
+  reopen (`gh issue reopen`) any GitHub issue without Josh's explicit authorization in chat naming
+  that specific issue. Always ask Josh for permission first before executing any issue close or reopen
+  command.
 - **STANDING AGENT CREDENTIAL CLASSIFICATION RULE (MACHINE-CONSUMED VS HUMAN-CONSUMED):** Whenever
   an agent encounters or generates a new credential, account identifier, or token, the agent must
   **STOP and prompt Josh to classify it** as either machine-consumed (e.g. `GITHUB_TOKEN`,
@@ -165,7 +168,6 @@ any other assistant) working in this workspace.
 - **DESIGN WORK RUNS THROUGH `/issue-design`:** Design work — options, trade-offs, decisions worth
   recording — does not happen in plain chat. The moment a conversation turns into design, invoke
   `/issue-design` and work inside it.
-
 <!-- CROSS-AI-HARD-RULES-END -->
 
 ## Read also
