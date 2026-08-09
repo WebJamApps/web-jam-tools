@@ -36,7 +36,7 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
    |---|---|---|---|---|---|---|---|
 
 7. **Split out Josh's manual steps as pairs**, grouped by gate position in the dependency chain.
-8. **Determine the dependency chain** across the planned issues and record it.
+8. **Determine the dependency chain** across the planned issues and record it. Where an issue's deliverable is a pointer — "point X at Y" — the plan **names Y concretely**, because an unnamed target hides an ordering: if Y turns out to be something another planned issue creates, the two issues are not independent, and the implementer picks the target after the chain was already declared.
 9. **List every `Needs Design` label change as its own named item** — each removal carrying its 4-part reason.
 10. **GATE 2 — stop.** Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Approving the plan table does not approve label removals; each is ruled on separately.
 
