@@ -178,7 +178,7 @@ any other assistant) working in this workspace.
 ## Opening pull requests (all WebJamApps repos)
 
 Finish a coding task by running the shared script — never `gh pr create` directly. This applies
-**however the task was started** (via `/next` or just told to work an issue ad-hoc). Put your
+**however the task was started** (via `/work-issue` / `/next` or just told to work an issue ad-hoc). Put your
 summary and the **real test output** IN THE PR via the flags — not only in the chat reply:
 
 ```
