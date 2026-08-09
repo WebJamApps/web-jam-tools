@@ -4,6 +4,7 @@ This file contains instructions and context for every AI agent (Claude Code, agy
 any other assistant) working in this workspace.
 
 <!-- CROSS-AI-HARD-RULES-START -->
+
 ## OPERATIONAL HARD RULES (apply to any AI taking action on Josh's behalf)
 
 - CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
@@ -100,13 +101,21 @@ any other assistant) working in this workspace.
   multiple repositories (e.g. "all 8 active github repos"), no single PR in one repository may pass
   `--closes` or claim the issue is completed. PRs in individual repos must use `--part-of` so the
   tracking issue remains OPEN until the final repository's PR is merged.
-- **POST-MERGE MANUAL STEPS AND THE `--no-close` FLAG:** When an issue has any acceptance criterion requiring a manual step after the merge — an installer run, a session restart, a scheduled/cron cycle, a prod deploy, a third-party dashboard change — the PR must use `--no-close` (with an optional reason via `--no-close-reason "<text>"` or `--no-close-reason-file PATH`) when opening or updating the PR using `scripts/create-draft-pr.sh`. The issue is closed by hand once those post-merge steps are verified.
-  - **PR-open-time test:** Before opening a PR, check: *does any acceptance criterion require something an implementing agent cannot do from a branch?* If yes, pass `--no-close`.
+- **POST-MERGE MANUAL STEPS AND THE `--no-close` FLAG:** When an issue has any acceptance criterion
+  requiring a manual step after the merge — an installer run, a session restart, a scheduled/cron
+  cycle, a prod deploy, a third-party dashboard change — the PR must use `--no-close` (with an
+  optional reason via `--no-close-reason "<text>"` or `--no-close-reason-file PATH`) when opening or
+  updating the PR using `scripts/create-draft-pr.sh`. The issue is closed by hand once those
+  post-merge steps are verified.
+  - **PR-open-time test:** Before opening a PR, check: _does any acceptance criterion require
+    something an implementing agent cannot do from a branch?_ If yes, pass `--no-close`.
   - **Verification command:** To verify that a PR does not close its linked issue, run:
     ```bash
     gh pr view <N> --repo WebJamApps/<repo> --json closingIssuesReferences
     ```
-    An **empty array** (`[]`) in `closingIssuesReferences` is the only valid proof that GitHub will not auto-close the issue on merge. Body text prose alone is NOT proof, because GitHub parses the keyword rather than prose.
+    An **empty array** (`[]`) in `closingIssuesReferences` is the only valid proof that GitHub will
+    not auto-close the issue on merge. Body text prose alone is NOT proof, because GitHub parses the
+    keyword rather than prose.
 - **THE `Blocked` LABEL IS CANONICAL — NATIVE ISSUE DEPENDENCIES DO NOT REPLACE IT.** Josh wants
   BOTH: native GitHub issue-dependency links (the real relationship between issues) AND the
   `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) as the
@@ -148,7 +157,15 @@ any other assistant) working in this workspace.
   "gate issue creation and dispatch mechanically, and write the approval-is-per-gate rule" for the
   mechanical half of this fix (ask-rules on `gh issue create` and MCP `issue_write` create,
   installed via `scripts/install-hooks.sh`).
-- **ACCURATE TEST ASSERTIONS FOR NEWLY IMPLEMENTED FEATURES:** When writing unit tests for new features or CLI flags (such as mode-modifying flags like `--update` or `--no-close`), test assertions must explicitly verify the specific mode indicator or feature-specific output (e.g. asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than relying only on assertions shared with default paths.
+- **ACCURATE TEST ASSERTIONS FOR NEWLY IMPLEMENTED FEATURES:** When writing unit tests for new
+  features or CLI flags (such as mode-modifying flags like `--update` or `--no-close`), test
+  assertions must explicitly verify the specific mode indicator or feature-specific output (e.g.
+  asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than
+  relying only on assertions shared with default paths.
+- **DESIGN WORK RUNS THROUGH `/issue-design`:** Design work — options, trade-offs, decisions worth
+  recording — does not happen in plain chat. The moment a conversation turns into design, invoke
+  `/issue-design` and work inside it.
+
 <!-- CROSS-AI-HARD-RULES-END -->
 
 ## Read also
@@ -184,8 +201,8 @@ any other assistant) working in this workspace.
 ## Opening pull requests (all WebJamApps repos)
 
 Finish a coding task by running the shared script — never `gh pr create` directly. This applies
-**however the task was started** (via `/work-issue` / `/next` or just told to work an issue ad-hoc). Put your
-summary and the **real test output** IN THE PR via the flags — not only in the chat reply:
+**however the task was started** (via `/work-issue` / `/next` or just told to work an issue ad-hoc).
+Put your summary and the **real test output** IN THE PR via the flags — not only in the chat reply:
 
 ```
 ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
@@ -195,20 +212,21 @@ summary and the **real test output** IN THE PR via the flags — not only in the
   --closes   # include ONLY if this PR fully completes the issue; omit for a partial PR
 ```
 
-`--summary` and `--test-plan` are **required** — the script
-**refuses to open a PR with an empty or placeholder description** (web-jam-tools#77).
+`--summary` and `--test-plan` are **required** — the script **refuses to open a PR with an empty or
+placeholder description** (web-jam-tools#77).
 
-`--test-evidence` is **OPTIONAL and normally omitted.** Always run the suites and
-confirm they pass before opening the PR, but do **not** paste unit-test runner output
-into the body — the numbers are noise to the reviewer, and CI already reports pass/fail.
-Reserve the flag for evidence CI cannot show: a manual reproduction, a `curl` response,
-or a described screenshot. A PR with no "Test evidence" section is correct, and a
-reviewer must never raise a finding about its absence.
-It always opens a **draft** PR based on **`dev`**, with the issue number derived from
-the `<lane>/<issue#>-<slug>` branch name (or explicit `--issue` flag, which supports full URLs, `OWNER/REPO#N`, or bare `#N`/`N` and formats cross-repo closing lines as `Closes OWNER/REPO#N`) and a footer naming the tool + model (hard
-invariants — no flag overrides them). By default it references the issue (`Part of #N` or `Part of OWNER/REPO#N`);
-pass `--closes` to make it the completing PR (`Closes #N` or `Closes OWNER/REPO#N`). Josh alone reviews and
-flips draft → ready. See `skills/draft-pr/SKILL.md`.
+`--test-evidence` is **OPTIONAL and normally omitted.** Always run the suites and confirm they pass
+before opening the PR, but do **not** paste unit-test runner output into the body — the numbers are
+noise to the reviewer, and CI already reports pass/fail. Reserve the flag for evidence CI cannot
+show: a manual reproduction, a `curl` response, or a described screenshot. A PR with no "Test
+evidence" section is correct, and a reviewer must never raise a finding about its absence. It always
+opens a **draft** PR based on **`dev`**, with the issue number derived from the
+`<lane>/<issue#>-<slug>` branch name (or explicit `--issue` flag, which supports full URLs,
+`OWNER/REPO#N`, or bare `#N`/`N` and formats cross-repo closing lines as `Closes OWNER/REPO#N`) and
+a footer naming the tool + model (hard invariants — no flag overrides them). By default it
+references the issue (`Part of #N` or `Part of OWNER/REPO#N`); pass `--closes` to make it the
+completing PR (`Closes #N` or `Closes OWNER/REPO#N`). Josh alone reviews and flips draft → ready.
+See `skills/draft-pr/SKILL.md`.
 
 ### PR body formatting (do this every time)
 
@@ -275,13 +293,37 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
 `main` is added in web-jam-tools#69.
 
 ## Quota & Token Hygiene
-- **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or multi-repo tasks:
-  - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into main turn outputs.
-  - Redirect large multi-line summaries, test plans, and evidence to scratch files (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling `create-draft-pr.sh`.
-  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`) when operating interactively on `Flash High`.
-  - **Automatic Flash Med Subagent Handoff on "Go":** Once requirements and implementation steps are aligned interactively on `Flash High`, the primary session is **forbidden** from executing file edits or running test suites directly for tasks/issues labeled `Flash Med` (or `Haiku`). Upon receiving user approval ("go", "proceed", "start"), the primary session's very first tool call MUST be `invoke_subagent` (model `flash`) to delegate contained execution work (coding, running test suites, branch/PR creation) down to a `Flash Med` subagent.
-  - **Exception — trivial edits.** The primary session may make the edit directly, without `invoke_subagent`, only when **all** of these hold: it touches **one file**; it changes **no behaviour** (documentation, comment, or a single config value); and it is **under ~20 changed lines**. The session must say, in the same turn, that it is taking the exception and why. "I already have the context", "it would be faster", and "writing the brief costs as much as the work" are **not** exceptions — the three conditions above are the whole test. Rationale: delegation pays when the work is bigger than the brief; below that line the session pays to write a self-contained specification, waits for a round trip, then reviews the result, for an edit smaller than the specification. The three conditions are a mechanical proxy for that, chosen because they are auditable from the outside and a cost estimate is not.
-  - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct the subagent to pass `--author` matching its actual model tier (e.g. `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents) when calling `create-draft-pr.sh`.
+
+- **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a
+  rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or
+  multi-repo tasks:
+  - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into
+    main turn outputs.
+  - Redirect large multi-line summaries, test plans, and evidence to scratch files
+    (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling
+    `create-draft-pr.sh`.
+  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`)
+    when operating interactively on `Flash High`.
+  - **Automatic Flash Med Subagent Handoff on "Go":** Once requirements and implementation steps are
+    aligned interactively on `Flash High`, the primary session is **forbidden** from executing file
+    edits or running test suites directly for tasks/issues labeled `Flash Med` (or `Haiku`). Upon
+    receiving user approval ("go", "proceed", "start"), the primary session's very first tool call
+    MUST be `invoke_subagent` (model `flash`) to delegate contained execution work (coding, running
+    test suites, branch/PR creation) down to a `Flash Med` subagent.
+  - **Exception — trivial edits.** The primary session may make the edit directly, without
+    `invoke_subagent`, only when **all** of these hold: it touches **one file**; it changes **no
+    behaviour** (documentation, comment, or a single config value); and it is **under ~20 changed
+    lines**. The session must say, in the same turn, that it is taking the exception and why. "I
+    already have the context", "it would be faster", and "writing the brief costs as much as the
+    work" are **not** exceptions — the three conditions above are the whole test. Rationale:
+    delegation pays when the work is bigger than the brief; below that line the session pays to
+    write a self-contained specification, waits for a round trip, then reviews the result, for an
+    edit smaller than the specification. The three conditions are a mechanical proxy for that,
+    chosen because they are auditable from the outside and a cost estimate is not.
+  - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct
+    the subagent to pass `--author` matching its actual model tier (e.g.
+    `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents) when calling
+    `create-draft-pr.sh`.
 
 ## System Setup
 
