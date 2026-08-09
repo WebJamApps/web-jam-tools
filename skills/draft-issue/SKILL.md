@@ -1,6 +1,6 @@
 ---
 name: draft-issue
-description: File a GitHub issue the WebJamApps way — a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when the user says "file an issue", "open an issue", "draft an issue", or when a task needs a tracking issue instead of just being done inline.
+description: File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when the user says "file an issue", "open an issue", "draft an issue", or when a task needs a tracking issue instead of just being done inline.
 metadata:
   version: v1
   publisher: josh
@@ -53,11 +53,12 @@ that's what following this skill prevents.
       delete-protection only, per `skills/fix-labels/labels.yaml`).
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
    still pick one label, since the hook requires exactly one.
-3. **Draft acceptance criteria that let the issue CLOSE.** Concrete, checkable conditions — not a
-   standing tracker that never resolves. A "make X better" issue with no finish line is a defect,
-   not a feature request; if the work is genuinely open-ended, scope the issue to one concrete step
-   and file a follow-up for the next one rather than leaving it perpetually open (see memory
-   `github-issues-must-be-closeable`).
+3. **Draft acceptance criteria that let the issue CLOSE (Epics close when children close).**
+   Concrete, checkable conditions — not a standing tracker that never resolves. A non-epic closes
+   when its work is done; **an epic closes when its children close** (epics are not implementable
+   themselves, but close when all child issues complete). Perpetual trackers remain banned. If the
+   work is genuinely open-ended, scope the issue to one concrete step and file a follow-up for the next
+   one rather than leaving it perpetually open.
 4. **Executable Issue rule (Every non-Epic issue must stand alone).** Every issue body not typed
    `Epic` must stand alone without unresolvable pointer phrases (e.g., "see the comment", "see comment",
    "read the comment first", "read comment first", "as discussed above", "as discussed in",
@@ -76,6 +77,12 @@ that's what following this skill prevents.
    model label and native type.
 7. **Closed Issues Are Immutable.** Never modify, reopen, add comments to, or add new requirements to a closed GitHub issue. Closed issues represent finished state. When new scope, follow-up findings, or modifications arise for a closed issue, file a net-new issue citing the closed issue (repo + number + title) instead.
 8. **Prompt for a Milestone Before Filing.** Check the repo's open Milestones (`gh api repos/WebJamApps/<repo>/milestones` or `gh milestone list`) before creating the issue. Select one deliberately if a fitting Milestone exists. If no open Milestone fits the issue, explicitly note so in chat or in the issue body ("no fitting milestone — leaving unassigned") rather than silently omitting it. Note: This is a skill-level nudge, not a hook gate — `hooks/require-model-label-on-issue-create.sh` continues to enforce model label + native Type.
+9. **Deliverable-First Body Shape (What this builds).** Open the issue body directly with a section
+   titled `## What this builds` carrying a 1-2 sentence description of what is being built, immediately
+   followed by a numbered list of what it does — no history preamble, conversation background, or past context.
+10. **Set Native Priority Field via MCP, Never via `gh`.** Set the native `Priority` field (`Urgent`,
+    `High`, `Medium`, `Low`) via GitHub MCP `issue_write` → `issue_fields` (or `set_issue_field`). `gh`
+    CLI cannot set native GitHub project fields; never attempt to set native Priority via `gh`.
 
 ## Citation format (every reference, every time)
 
@@ -101,13 +108,13 @@ gh pr view 263 --repo WebJamApps/<repo> --json title -q .title
 gh issue create --repo WebJamApps/<repo> \
   --title "Short, specific title" \
   --body "$(cat <<'EOF'
-## Why
-...
+## What this builds
+<1-2 sentences describing what is being built>
+
+1. <Numbered item 1>
+2. <Numbered item 2>
 
 ## Acceptance criteria
-- ...
-
-## Non-goals
 - ...
 EOF
 )" \
@@ -122,7 +129,8 @@ EOF
 - Add non-model status labels (`Blocked`, `Needs Design`, `Josh`, `parked`, ...)
   alongside the model label freely; the hook only checks that exactly one *model* label is present,
   not that it's the only label.
-- The MCP `issue_write` create path takes `"type": "Task"`, `"milestone": 1` (milestone number), and `"labels": ["Sonnet", "Needs Design"]` — same native-type, milestone, and model-label guidelines.
+- Set native `Priority` field via GitHub MCP `issue_write` → `issue_fields`, never via `gh` CLI.
+- The MCP `issue_write` create path takes `"type": "Task"`, `"milestone": 1` (milestone number), `"labels": ["Sonnet", "Needs Design"]`, and `"issue_fields": { "Priority": "High" }` — same native-type, milestone, model-label, and native priority guidelines.
 
 ## If the hook denies the call
 
