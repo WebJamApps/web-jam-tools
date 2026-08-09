@@ -30,9 +30,9 @@ const EXPECTED_SKILL_DIRS = [
   "handle-gmails",
   "issue-design",
   "memory-cleanup",
-  "next",
   "pr-review",
   "venue-mining",
+  "work-issue",
 ];
 
 // Pinned set of hooks/*.sh filenames. Update deliberately.

@@ -1,27 +1,47 @@
 ---
-name: next
-description: Start an agy-labeled coding task. Use when the user types /next <Repo>#<issue-num> (named mode), or /next with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+name: work-issue
+description: Start an agy-labeled coding task. Use when the user types /work-issue <Repo>#<issue-num> (or alias /next <Repo>#<issue-num>) (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
   version: v1
   publisher: josh
+aliases:
+  - /next
+  - next
 ---
 
-# /next — run an agy-labeled coding task
+# /work-issue — run an agy-labeled coding task
+
+> **Alias**: `/next` (and phrases like `next`, `next task`, `start the next task`) is preserved as an active alias for `/work-issue`.
 
 This skill is installed across all agent surfaces (Claude Code, Antigravity/agy) and model tiers (Haiku, Flash, Sonnet, Opus). It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/next Repo#123`** (named mode) — the issue is given explicitly. Go straight
+- **`/work-issue Repo#123`** (or `/next Repo#123`, named mode) — the issue is given explicitly. Go straight
   to "## Steps" below.
-- **`/next`** (no argument, auto-pick mode) — read-only resolve the next
+- **`/work-issue`** (or `/next`, no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
   to the same "## Steps" flow below. See "## No-argument mode" first.
 
+## Triggers & Aliases
+- Primary Command: `/work-issue`
+- Preserved Aliases: `/next`, `next`, `next task`, `start the next task`, `work-issue`
+
+## Model Label Check & Approval
+
+When `work-issue` begins an issue (`<Repo>#<num>`):
+1. **Read the GitHub issue's model label**: Check if the issue has a model tier label (`Flash Med`, `Flash High`, `Haiku`, `Sonnet`, `Opus`).
+2. **Compare against active session tier**: Compare the issue's model label against the active executing session tier.
+3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing:
+   ```bash
+   gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
+   ```
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini 3.6 Flash (Medium)"`).
+
 ## No-argument mode — auto-pick worklist based on agent surface
 
-Use this when the user types `/next` with no argument, or says "next" /
+Use this when the user types `/work-issue` (or `/next`) with no argument, or says "work-issue" / "next" /
 "next task" / "start the next task" without naming an issue.
 
 Determine which worklist file to read based on your agent surface:
@@ -104,7 +124,13 @@ Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in th
    exits non-zero (dirty tree, missing repo, bad/missing issue argument), stop and
    report its error to the user — do not improvise.
 
-3. **Select the appropriate model:** Before implementing, classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete.
+3. **Perform Model Label Check & Model Selection:** Before implementing:
+   - Perform the **Model Label Check**:
+     1. Read the GitHub issue's model label (`Flash Med`, `Flash High`, `Haiku`, `Sonnet`, `Opus`).
+     2. Compare the issue's model label against the active executing session tier.
+     3. If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
+     4. Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier.
+   - Classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete.
 
    **Model Chain (Most to least capable):**
    1. `Claude Opus 4.6 (Thinking)`
@@ -118,7 +144,7 @@ Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in th
    excluded from the chain. Failover only ever crosses Claude ↔ Gemini.
 
    **Classification Rules (in priority order):**
-   * **Explicit Override**: If the user passed an explicit model name when invoking `/next`, use it and skip classification.
+   * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue` (or `/next`), use it and skip classification.
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:
