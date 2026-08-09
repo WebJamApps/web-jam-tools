@@ -633,3 +633,162 @@ Deno.test("bare --closes flag without value does not throw unknown argument erro
   await Deno.remove(mockGhDir, { recursive: true });
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- web-jam-tools#459 --no-close tests ---
+
+Deno.test("--no-close produces Refs #N with default reason and no Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#459",
+      "--no-close",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(
+    res.stdout,
+    /Refs #459 — post-merge acceptance criteria must be verified after merge\./,
+  );
+  assertNotMatch(res.stdout, /Closes #459/);
+});
+
+Deno.test("--no-close with --no-close-reason includes custom reason text", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#459",
+      "--no-close",
+      "--no-close-reason",
+      "manual installer run required",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Refs #459 — manual installer run required/);
+  assertNotMatch(res.stdout, /Closes #459/);
+});
+
+Deno.test("--no-close with --no-close-reason-file includes reason from file", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const reasonFile = await Deno.makeTempFile({ prefix: "wjt459-reason-", suffix: ".md" });
+  await Deno.writeTextFile(reasonFile, "cron cycle logging verification required");
+
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#459",
+      "--no-close",
+      "--no-close-reason-file",
+      reasonFile,
+    ],
+    env,
+  );
+  await Deno.remove(reasonFile);
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Refs #459 — cron cycle logging verification required/);
+  assertNotMatch(res.stdout, /Closes #459/);
+});
+
+Deno.test("--update --no-close produces Refs #N and does not re-arm Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#459",
+      "--update",
+      "--no-close",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /=== DRY RUN \(UPDATE/);
+  assertMatch(res.stdout, /Refs #459 — post-merge acceptance criteria/);
+  assertNotMatch(res.stdout, /Closes #459/);
+});
+
+Deno.test("without --no-close, output is byte-identical and produces Closes #N", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#459",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Closes #459/);
+  assertNotMatch(res.stdout, /Refs #459/);
+});
+
+Deno.test("--no-close and --part-of together is refused with error", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#459",
+      "--no-close",
+      "--part-of",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /pass --no-close or --part-of, not both/);
+});
+
+Deno.test("--no-close-reason without --no-close is refused with error", async () => {
+  const mockGhDir = await makeMockGh({ ownerRepo: "WebJamApps/web-jam-tools" });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#459",
+      "--no-close-reason",
+      "some reason",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /--no-close-reason \/ --no-close-reason-file requires --no-close/);
+});
+
+Deno.test("--no-close without issue is refused with error", async () => {
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--no-close",
+    ],
+  );
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /--no-close needs an issue/);
+});

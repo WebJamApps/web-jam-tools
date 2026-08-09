@@ -4,7 +4,6 @@ This file contains instructions and context for every AI agent (Claude Code, agy
 any other assistant) working in this workspace.
 
 <!-- CROSS-AI-HARD-RULES-START -->
-
 ## OPERATIONAL HARD RULES (apply to any AI taking action on Josh's behalf)
 
 - CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
@@ -101,6 +100,13 @@ any other assistant) working in this workspace.
   multiple repositories (e.g. "all 8 active github repos"), no single PR in one repository may pass
   `--closes` or claim the issue is completed. PRs in individual repos must use `--part-of` so the
   tracking issue remains OPEN until the final repository's PR is merged.
+- **POST-MERGE MANUAL STEPS AND THE `--no-close` FLAG:** When an issue has any acceptance criterion requiring a manual step after the merge — an installer run, a session restart, a scheduled/cron cycle, a prod deploy, a third-party dashboard change — the PR must use `--no-close` (with an optional reason via `--no-close-reason "<text>"` or `--no-close-reason-file PATH`) when opening or updating the PR using `scripts/create-draft-pr.sh`. The issue is closed by hand once those post-merge steps are verified.
+  - **PR-open-time test:** Before opening a PR, check: *does any acceptance criterion require something an implementing agent cannot do from a branch?* If yes, pass `--no-close`.
+  - **Verification command:** To verify that a PR does not close its linked issue, run:
+    ```bash
+    gh pr view <N> --repo WebJamApps/<repo> --json closingIssuesReferences
+    ```
+    An **empty array** (`[]`) in `closingIssuesReferences` is the only valid proof that GitHub will not auto-close the issue on merge. Body text prose alone is NOT proof, because GitHub parses the keyword rather than prose.
 - **THE `Blocked` LABEL IS CANONICAL — NATIVE ISSUE DEPENDENCIES DO NOT REPLACE IT.** Josh wants
   BOTH: native GitHub issue-dependency links (the real relationship between issues) AND the
   `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) as the
@@ -142,7 +148,7 @@ any other assistant) working in this workspace.
   "gate issue creation and dispatch mechanically, and write the approval-is-per-gate rule" for the
   mechanical half of this fix (ask-rules on `gh issue create` and MCP `issue_write` create,
   installed via `scripts/install-hooks.sh`).
-
+- **ACCURATE TEST ASSERTIONS FOR NEWLY IMPLEMENTED FEATURES:** When writing unit tests for new features or CLI flags (such as mode-modifying flags like `--update` or `--no-close`), test assertions must explicitly verify the specific mode indicator or feature-specific output (e.g. asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than relying only on assertions shared with default paths.
 <!-- CROSS-AI-HARD-RULES-END -->
 
 ## Read also
