@@ -81,8 +81,10 @@ Deno.test("stamp corrupt reminds with phrase 'stamp unreadable: <contents>'", as
 Deno.test("stamp stale (>= 7 days old) reminds with phrase 'last run: <ISO date>, <N> days ago'", async () => {
   await withSandbox(async (stampPath) => {
     // 10 days ago
-    const tenDaysAgoSec = Math.floor(Date.now() / 1000) - 10 * 86400;
-    const dateStr = new Date(tenDaysAgoSec * 1000).toISOString().split("T")[0];
+    const d = new Date(Date.now() - 10 * 86400 * 1000);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${
+      String(d.getDate()).padStart(2, "0")
+    }`;
     await Deno.writeTextFile(stampPath, dateStr);
 
     const res = await runHook({
@@ -98,8 +100,10 @@ Deno.test("stamp stale (>= 7 days old) reminds with phrase 'last run: <ISO date>
 Deno.test("stamp fresh (< 7 days old) outputs nothing", async () => {
   await withSandbox(async (stampPath) => {
     // 1 day ago
-    const oneDayAgoSec = Math.floor(Date.now() / 1000) - 1 * 86400;
-    const dateStr = new Date(oneDayAgoSec * 1000).toISOString().split("T")[0];
+    const d = new Date(Date.now() - 1 * 86400 * 1000);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${
+      String(d.getDate()).padStart(2, "0")
+    }`;
     await Deno.writeTextFile(stampPath, dateStr);
 
     const res = await runHook({
