@@ -89,6 +89,81 @@ Deno.test("gh api POST/PUT/PATCH or field flags trigger ask decision", async () 
   assertEquals(parsed2.hookSpecificOutput?.permissionDecision, "ask");
 });
 
+// web-jam-tools: narrow carve-out — removing an issue dependency
+// (`.../issues/<N>/dependencies/blocked_by/<ID>`) is reversible (the
+// dependency can be re-added with the corresponding POST), so it is the
+// one DELETE form allowed to pass through cleanly.
+Deno.test("gh api DELETE blocked_by dependency removal is allowed through", async () => {
+  const allowedForms = [
+    "gh api --method DELETE repos/owner/repo/issues/1/dependencies/blocked_by/2",
+    "gh api -X DELETE repos/owner/repo/issues/1/dependencies/blocked_by/2",
+    `gh api -X 'DELETE' repos/owner/repo/issues/1/dependencies/blocked_by/2`,
+    `gh api -X "DELETE" repos/owner/repo/issues/1/dependencies/blocked_by/2`,
+    `gh api --method='DELETE' repos/owner/repo/issues/1/dependencies/blocked_by/2`,
+    `gh api --method="DELETE" repos/owner/repo/issues/1/dependencies/blocked_by/2`,
+    "gh api --method=DELETE repos/owner/repo/issues/1/dependencies/blocked_by/2",
+    "gh api -XDELETE repos/owner/repo/issues/1/dependencies/blocked_by/2",
+  ];
+  for (const cmd of allowedForms) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, 0, `expected exit 0 for: ${cmd}`);
+    assertEquals(res.stdout, "", `expected no stdout (no ask/prompt) for: ${cmd}`);
+    assertEquals(res.stderr, "", `expected no block message for: ${cmd}`);
+  }
+});
+
+Deno.test("gh api DELETE to a different path is still denied", async () => {
+  const deniedForms = [
+    "gh api --method DELETE repos/owner/repo",
+    "gh api --method DELETE repos/owner/repo/issues/1",
+    "gh api --method DELETE repos/owner/repo/issues/1/dependencies/blocking/2",
+    "gh api -X DELETE user/repos/some-repo",
+  ];
+  for (const cmd of deniedForms) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, 2, `expected exit 2 for: ${cmd}`);
+    assertEquals(
+      res.stderr.includes("BLOCKED (gh api guard)"),
+      true,
+      `expected block message for: ${cmd}`,
+    );
+  }
+});
+
+// Regression: requirement is a path-shape match, anchored — not a bare
+// substring search for "blocked_by" anywhere in the command.
+Deno.test("gh api DELETE with blocked_by only as a trailing comment is denied", async () => {
+  const res = await runHook("gh api --method DELETE repos/o/r/issues/1 # blocked_by");
+  assertEquals(res.code, 2);
+  assertEquals(res.stderr.includes("BLOCKED (gh api guard)"), true);
+});
+
+// Regression: a compound/chained command must not smuggle a second,
+// disallowed DELETE past the guard just because the allowed form also
+// appears somewhere in the string.
+Deno.test("gh api DELETE inside a compound command is denied even with an allowed form present", async () => {
+  const compoundForms = [
+    "gh api --method DELETE repos/o/r/issues/1/dependencies/blocked_by/2 && " +
+    "gh api --method DELETE repos/o/r/issues/3",
+    "gh api --method DELETE repos/o/r/issues/1/dependencies/blocked_by/2; " +
+    "gh api --method DELETE repos/o/r/issues/3",
+    "gh api --method DELETE repos/o/r/issues/1/dependencies/blocked_by/2 | cat",
+    "gh api --method DELETE repos/o/r/issues/1/dependencies/blocked_by/2 extra-arg",
+    "gh api --method DELETE repos/o/r/issues/1/dependencies/blocked_by/2\necho hi",
+    "gh api --method DELETE repos/o/r/issues/1/dependencies/blocked_by/$(echo 2)",
+    "gh api --method DELETE repos/o/r/issues/1/dependencies/blocked_by/`echo 2`",
+  ];
+  for (const cmd of compoundForms) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, 2, `expected exit 2 for: ${cmd}`);
+    assertEquals(
+      res.stderr.includes("BLOCKED (gh api guard)"),
+      true,
+      `expected block message for: ${cmd}`,
+    );
+  }
+});
+
 Deno.test("gh api GET passes through silently", async () => {
   const res = await runHook("gh api repos/owner/repo");
   assertEquals(res.code, 0);
