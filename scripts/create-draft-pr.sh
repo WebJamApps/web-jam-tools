@@ -18,8 +18,9 @@
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
-#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--dry-run] \
+#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--no-close] [--dry-run] \
 #       [--update] \
+#       [--no-close-reason TEXT | --no-close-reason-file PATH] \
 #       [--summary TEXT | --summary-file PATH] \
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
@@ -36,6 +37,12 @@
 #                   entirely (see below) — headless/scripted callers that already
 #                   know the exact model should set it instead of trusting the
 #                   model to self-report correctly.
+#   --no-close      Opt-in flag: DON'T close the issue on merge (emits `Refs #N — <reason>`).
+#                   Use when an issue has post-merge acceptance criteria that can only be
+#                   verified after merge.
+#   --no-close-reason TEXT / --no-close-reason-file PATH  Stated reason why the PR does not
+#                   close the issue on merge. If omitted with --no-close, defaults to
+#                   pointing at post-merge acceptance criteria verification.
 #   --part-of       Opt-in flag: DON'T close the issue on merge (emits `Part of #N`).
 #                   Use only for a partial PR or a standing run-log/epic issue.
 #   --closes        Deprecated no-op (closing is now the default); still accepted.
@@ -186,6 +193,10 @@ SUMMARY_FILE=""
 TEST_PLAN_FILE=""
 TEST_EVIDENCE_FILE=""
 PART_OF=0
+NO_CLOSE=0
+NO_CLOSE_REASON=""
+HAS_NO_CLOSE_REASON=0
+NO_CLOSE_REASON_FILE=""
 DRY_RUN=0
 UPDATE=0
 
@@ -193,6 +204,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --part-of)
       PART_OF=1
+      shift 1 ;;
+    --no-close)
+      NO_CLOSE=1
       shift 1 ;;
     --dry-run)
       DRY_RUN=1
@@ -208,7 +222,7 @@ while [ $# -gt 0 ]; do
         shift 1
       fi
       ;;
-    --author|--issue|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file)
+    --author|--issue|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file|--no-close-reason|--no-close-reason-file)
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
       case "$1" in
         --author)              AUTHOR="$2" ;;
@@ -220,6 +234,8 @@ while [ $# -gt 0 ]; do
         --summary-file)        SUMMARY_FILE="$2" ;;
         --test-plan-file)      TEST_PLAN_FILE="$2" ;;
         --test-evidence-file)  TEST_EVIDENCE_FILE="$2" ;;
+        --no-close-reason)     NO_CLOSE_REASON="$2"; HAS_NO_CLOSE_REASON=1 ;;
+        --no-close-reason-file) NO_CLOSE_REASON_FILE="$2" ;;
       esac
       shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -275,6 +291,16 @@ if [ -z "$ISSUE" ] && [[ "$BRANCH" =~ ^[^/]+/([0-9]+)(-|$) ]]; then
   ISSUE="${BASH_REMATCH[1]}"
 fi
 
+# --- mutually exclusive flags ---
+if [ "$NO_CLOSE" -eq 1 ] && [ "$PART_OF" -eq 1 ]; then
+  echo "ERROR: pass --no-close or --part-of, not both." >&2
+  exit 1
+fi
+if [ "$NO_CLOSE" -eq 0 ] && { [ "$HAS_NO_CLOSE_REASON" -eq 1 ] || [ -n "$NO_CLOSE_REASON_FILE" ]; }; then
+  echo "ERROR: --no-close-reason / --no-close-reason-file requires --no-close." >&2
+  exit 1
+fi
+
 FORMATTED_ISSUE=""
 # An issue is optional (2026-07-03): small standalone fixes don't need one, and an
 # issue must never be created just to satisfy this script. With no issue, the PR
@@ -282,6 +308,10 @@ FORMATTED_ISSUE=""
 if [ -z "$ISSUE" ]; then
   if [ "$PART_OF" -eq 1 ]; then
     echo "ERROR: --part-of needs an issue — name the branch <lane>/<issue#>-<slug> or pass --issue N." >&2
+    exit 1
+  fi
+  if [ "$NO_CLOSE" -eq 1 ]; then
+    echo "ERROR: --no-close needs an issue — name the branch <lane>/<issue#>-<slug> or pass --issue N." >&2
     exit 1
   fi
   echo "No issue resolved — opening the PR without a Closes line."
@@ -401,6 +431,7 @@ require_file_flag_for_rich_prose() {
 require_file_flag_for_rich_prose "summary" "$SUMMARY" "$HAS_SUMMARY"
 require_file_flag_for_rich_prose "test-plan" "$TEST_PLAN" "$HAS_TEST_PLAN"
 require_file_flag_for_rich_prose "test-evidence" "$TEST_EVIDENCE" "$HAS_TEST_EVIDENCE"
+require_file_flag_for_rich_prose "no-close-reason" "$NO_CLOSE_REASON" "$HAS_NO_CLOSE_REASON"
 
 # --- resolve *-file flags into content (web-jam-tools#145) ---
 # A multi-line shell argument gets flattened to one line during agy's headless
@@ -443,6 +474,13 @@ if [ -n "$TEST_EVIDENCE_FILE" ]; then
     exit 1
   fi
   TEST_EVIDENCE="$(read_body_file test-evidence-file "$TEST_EVIDENCE_FILE")"
+fi
+if [ -n "$NO_CLOSE_REASON_FILE" ]; then
+  if [ "$HAS_NO_CLOSE_REASON" -eq 1 ]; then
+    echo "ERROR: pass --no-close-reason or --no-close-reason-file, not both." >&2
+    exit 1
+  fi
+  NO_CLOSE_REASON="$(read_body_file no-close-reason-file "$NO_CLOSE_REASON_FILE")"
 fi
 
 # --- require real description content (web-jam-tools#77) ---
@@ -542,6 +580,9 @@ fi
 if [ "$HAS_SCREENSHOTS" -eq 1 ]; then
   raw_tag_check screenshots "$SCREENSHOTS"
 fi
+if [ -n "$NO_CLOSE_REASON" ]; then
+  raw_tag_check no-close-reason "$NO_CLOSE_REASON"
+fi
 
 # --- auto-fence an unfenced --test-evidence (web-jam-tools#150) ---
 # Callers across lanes keep passing raw console output, which markdown garbles
@@ -563,6 +604,9 @@ fi
 
 if [ -z "$ISSUE" ]; then
   ISSUE_REF=""
+elif [ "$NO_CLOSE" -eq 1 ]; then
+  REASON="${NO_CLOSE_REASON:-post-merge acceptance criteria must be verified after merge.}"
+  ISSUE_REF="Refs $FORMATTED_ISSUE — $REASON"
 elif [ "$PART_OF" -eq 1 ]; then
   ISSUE_REF="Part of $FORMATTED_ISSUE"
 else
@@ -629,6 +673,8 @@ if [ "$UPDATE" -eq 1 ]; then
   echo "Draft PR updated: $PR_URL"
   if [ -z "$ISSUE" ]; then
     echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+  elif [ "$NO_CLOSE" -eq 1 ]; then
+    echo "  base: dev | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
     echo "  base: dev | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else
@@ -643,6 +689,8 @@ else
   echo "Draft PR opened: $PR_URL"
   if [ -z "$ISSUE" ]; then
     echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+  elif [ "$NO_CLOSE" -eq 1 ]; then
+    echo "  base: dev | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
     echo "  base: dev | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else

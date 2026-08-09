@@ -74,9 +74,9 @@ the body sections via flags:
   output at all (a prose paraphrase like "all tests passed" doesn't count).
 - Closing is the default: the body reads `Closes #N`, so the issue auto-closes when
   Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) ONLY when
-  the issue must stay open: a partial PR, or a standing run-log/epic issue. Post-merge
-  manual steps do not use `--part-of`; they are filed as separate `Josh` issues per
-  the two-issue pair rule in `/issue-design` so the agent issue closes normally on merge.
+  the issue must stay open: a partial PR, or a standing run-log/epic issue. Pass
+  `--no-close` (and optional `--no-close-reason` / `--no-close-reason-file`) when the PR
+  must not close the issue on merge per the rule in `docs/cross-ai-rules.md`.
   (`--closes` is a deprecated no-op, still accepted.)
 - `--screenshots` is for UI-visible changes only; omit the flag to omit the section.
 
