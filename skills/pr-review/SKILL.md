@@ -135,3 +135,16 @@ Review the PR diff, description, checks, and mergeability against these mandator
    gh pr review <Repo>#<pr-num> --comment --body-file <scratch_review_file>
    ```
    *(Note: Review comments provide feedback for the PR author and Josh. Final PR merge remains under Josh's approval.)*
+
+### A found defect is fixed before merge — never deferred
+
+**"Fix it later", "merge anyway", "not a blocker, ship it" and "we can follow up in another issue" are NOT available outcomes of a review.** A defect the review found is a defect the review is responsible for getting fixed while the PR is still open — that is the entire point of reviewing before merge rather than after.
+
+This binds the reviewing model AND the session relaying the review to Josh:
+
+- **Never recommend merging a PR with a known unfixed defect in it**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all.
+- **Never propose a follow-up issue as the answer to a defect found in the PR under review.** A new issue is where NEW work goes, not where this PR's known problems are parked.
+- **A defect in the artifact being merged is fixed in THAT PR**, not in a later one — including when the artifact is a skill, a doc, or a rule rather than code.
+- Size is not a reason to defer. "One line" and "no behavioural effect" are arguments for fixing it now, because it is cheap, not for postponing it.
+
+The reviewing model reports; it does not apply the fix itself. It names the defect, says plainly that it blocks merge, and the fix goes back to the PR's own lane on the PR's own branch.
