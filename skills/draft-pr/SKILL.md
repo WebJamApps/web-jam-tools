@@ -16,9 +16,15 @@ the full invocation under "How to run it" — `--summary` and `--test-plan` are
 It **always** produces a draft PR based on `dev` and an attribution footer — neither
 can be overridden. By default the PR **closes the issue on merge** (`Closes #N`); pass
 `--part-of` only when the issue must stay open (a partial PR, or a standing
-run-log/epic issue like a venue-mining run log). It **refuses to open a PR with an empty or
-placeholder description** (web-jam-tools#77). Josh alone reviews and flips draft →
-ready on GitHub.
+run-log/epic issue like a venue-mining run log).
+
+Post-merge manual steps no longer use `--part-of`. Instead, any post-merge manual
+step is filed as its own `Josh`-labeled issue (paired with the agent issue per the
+two-issue pair rule in `/issue-design`), so the agent's PR closes its issue normally
+(`Closes #N`).
+
+It **refuses to open a PR with an empty or placeholder description** (web-jam-tools#77).
+Josh alone reviews and flips draft → ready on GitHub.
 
 ## Before you run it
 
@@ -68,7 +74,9 @@ the body sections via flags:
   output at all (a prose paraphrase like "all tests passed" doesn't count).
 - Closing is the default: the body reads `Closes #N`, so the issue auto-closes when
   Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) ONLY when
-  the issue must stay open: a partial PR, or a standing run-log/epic issue.
+  the issue must stay open: a partial PR, or a standing run-log/epic issue. Post-merge
+  manual steps do not use `--part-of`; they are filed as separate `Josh` issues per
+  the two-issue pair rule in `/issue-design` so the agent issue closes normally on merge.
   (`--closes` is a deprecated no-op, still accepted.)
 - `--screenshots` is for UI-visible changes only; omit the flag to omit the section.
 
