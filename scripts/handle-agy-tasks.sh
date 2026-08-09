@@ -52,9 +52,15 @@
 # never reaching Flash (two real PR rejections: TimShermanMusic#3, Henrickson-
 # ForSalem#5). The issue BODY is still the canonical spec — comments are extra
 # context, not a substitute for folding decisions into the body. AND: if the
-# issue BODY still carries a BLOCKED / DO NOT START / DO-NOT-START marker
-# (case-insensitive), the script refuses to dispatch and exits non-zero —
-# update the body first. (Before web-jam-tools#249 this guard was noted as
+# issue BODY still carries a BLOCKED / DO NOT START / DO-NOT-START marker as a
+# STATUS DECLARATION — the marker at the START of a line (optionally behind
+# markdown decoration like `>`, `#`, `*`, `-`, `_`, `**`, or an emoji), not
+# buried mid-sentence in prose — the script refuses to dispatch and exits
+# non-zero — update the body first. (web-jam-tools#395: the original word-
+# anywhere-in-body match false-positived on ordinary prose describing a guard,
+# e.g. "the hook BLOCKED the command" — scoping the match to line-start status
+# declarations fixes that while still catching a real stale marker.) (Before
+# web-jam-tools#249 this guard was noted as
 # "issue-based dispatch only" because a queue-line mode with no body to check
 # also existed; that mode is gone, so the guard now unconditionally applies to
 # every invocation.)
@@ -101,6 +107,29 @@ set -euo pipefail
 WEBJAM="${AGY_WEBJAM_ROOT:-$HOME/WebJamApps}"
 AGY="$(command -v agy || echo "$HOME/.local/bin/agy")"
 
+# --- explicit environment for the `agy` subprocess (web-jam-tools#439) -----
+# `agy` is launched with an explicitly constructed environment, never the
+# caller's full inherited one: a broad inherited environment let a subagent
+# read GH_TOKEN and Dropbox credentials via a shell tool call and send them to
+# Google's API mid-run (web-jam-tools#282 section D, 2026-08-07 — full record
+# in ~/Dropbox/web-jam-llms/Access_Controls/credential-rotation-282-full-record.md).
+# Established by measurement 2026-08-07: `env -i HOME PATH USER` is sufficient
+# for agy to run normally — it authenticates from ~/.gemini/oauth_creds.json,
+# not environment variables. Add to this allowlist BY NAME as new needs arise;
+# never widen it by passing the inherited environment through.
+AGY_ENV_ALLOWLIST=(HOME PATH USER AGY_MODELS FORCED_PR_AUTHOR)
+# Rebuild right before each agy call (FORCED_PR_AUTHOR changes per model/round)
+# and use as: env -i "${AGY_ENV_ARGS[@]}" "$AGY" ...
+agy_env_args() {
+  AGY_ENV_ARGS=()
+  local name
+  for name in "${AGY_ENV_ALLOWLIST[@]}"; do
+    if [ -n "${!name+x}" ]; then
+      AGY_ENV_ARGS+=("$name=${!name}")
+    fi
+  done
+}
+
 # Cost-ordered model chain (Antigravity PAID account — Josh's prepaid Google
 # credit), CHEAPEST FIRST: Gemini Flash medium is the default lane; Flash (High)
 # is the only rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
@@ -115,7 +144,7 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 # Interactive is the default. Leading flags (any order, before the optional task):
 #   --headless / -H   run unattended (auto-approves tools)
 #   --setup-only      do the issue + git-branch setup, print the task, and
-#                     STOP without launching agy. Used by the `/next` agy skill:
+#                     STOP without launching agy. Used by the `/work-issue` (or `/next`) agy skill:
 #                     you're already inside agy, so agy itself does the coding.
 #   --dry-run         do the issue fetch + git-branch setup, print the
 #                     composed prompt, and STOP without launching agy. For
@@ -156,13 +185,30 @@ ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title,body,
 ISSUE_TITLE=$(jq -r '.title' <<< "$ISSUE_JSON")
 ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 
-# --- BLOCKED guard (web-jam-tools#154) ---
-# Refuse to dispatch when the issue BODY still carries a blocked marker.
-# Comments are for humans; the BODY is what agy actually reads as the spec,
-# so a stale "don't start" left in the body must stop the dispatch loudly
-# rather than let Flash improvise (HenricksonForSalem#5 rejection). Word-
-# bounded so "UNBLOCKED"/"unblocking" etc. don't false-positive.
-if grep -qiE '\bBLOCKED\b|\bDO[ -]NOT[ -]START\b' <<< "$ISSUE_BODY"; then
+# --- BLOCKED guard (web-jam-tools#154, scoped to status declarations in #395) ---
+# Refuse to dispatch when the issue BODY still carries a blocked marker AS A
+# STATUS DECLARATION, not as ordinary prose. A status declaration is the
+# marker sitting at the START of a line, optionally behind markdown
+# decoration (`>`, `#`/`##`, `*`, `-`, `_`, `**`) and/or an emoji — e.g.
+# "**BLOCKED**", "> BLOCKED: reason", "## BLOCKED", "🔴 BLOCKED". Comments are
+# for humans; the BODY is what agy actually reads as the spec, so a stale
+# "don't start" left in the body must stop the dispatch loudly rather than
+# let Flash improvise (HenricksonForSalem#5 rejection). Mid-sentence prose
+# ("...the hook BLOCKED the command...") and table cells no longer
+# false-positive (web-jam-tools#395 — a real refusal fired on prose describing
+# a guard, with no status marker present), because grep applies `^` per line
+# and a real sentence/cell never starts the physical line with the bare word.
+#
+# Implementation: `grep` (no -z) matches `^`/`$` per line already, so this
+# runs once against the whole (possibly multi-line) body. `^[^A-Za-z0-9]*`
+# consumes any run of leading non-alphanumeric bytes — whitespace, markdown
+# punctuation, and multi-byte emoji sequences all fall outside [A-Za-z0-9] —
+# so "any combination" of decoration/emoji is handled without needing a
+# PCRE/Unicode character class (portable across grep implementations). That
+# same leading-strip also keeps "UNBLOCKED"/"unblocking" excluded: stripping
+# stops at the first alphanumeric byte, which is the "U", so the marker
+# alternation is never tried starting there.
+if grep -qiE '^[^A-Za-z0-9]*(BLOCKED|DO[ -]NOT[ -]START)\b' <<< "$ISSUE_BODY"; then
   echo "" >&2
   echo "ERROR: issue $REPO#$ISSUE_NUM body still contains a BLOCKED / DO NOT" >&2
   echo "START marker — refusing to dispatch agy against it." >&2
@@ -457,11 +503,11 @@ Rules:
   Never run \`gh pr create\` directly. Then summarize what you changed.
 EOF
 
-# --- setup-only: emit the prepared task for an in-REPL agent (the /next skill) ---
+# --- setup-only: emit the prepared task for an in-REPL agent (the /work-issue skill) ---
 # The branch is already created and checked out above; agy reads this block and
 # does the coding itself, so we stop here (no model probe, no nested agy launch).
 # web-jam-tools#239 item 2: REPO_DIR here is the isolated /tmp worktree (not the
-# main clone at $REPO_DIR-the-shell-variable) — the /next skill just cds into
+# main clone at $REPO_DIR-the-shell-variable) — the /work-issue skill just cds into
 # whatever path is printed, so pointing it at the worktree keeps the main clone
 # free without needing a skill change.
 if [ "$SETUP_ONLY" -eq 1 ]; then
@@ -498,7 +544,8 @@ REMAINING=()
 for i in "${!MODELS[@]}"; do
   m="${MODELS[$i]}"
   printf '  probing: %-32s ... ' "$m"
-  if timeout 90 "$AGY" --model "$m" -p "reply with: ok" >/dev/null 2>&1; then
+  agy_env_args
+  if timeout 90 env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$m" -p "reply with: ok" >/dev/null 2>&1; then
     echo "available"
     ACTIVE_MODEL="$m"
     REMAINING=("${MODELS[@]:$((i + 1))}")
@@ -611,7 +658,8 @@ if [ "$HEADLESS" -eq 1 ]; then
       echo ">>> round $ROUNDS/$AGY_MAX_ROUNDS — model: $m"
       # --print-timeout: agy's default 5m kills long silent work stretches in -p
       # mode (bit us on JaMmusic#1162 — Flash Medium thinks slowly; run died twice).
-      if ! "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$TURN_PROMPT"; then
+      agy_env_args
+      if ! env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$TURN_PROMPT"; then
         # web-jam-tools#187 — one same-model retry on ANY non-zero exit (not
         # just a detected timeout): distinguishing timeout-vs-crash would mean
         # pattern-matching agy's error text, which is fragile (wording can
@@ -736,7 +784,8 @@ else
   # model — re-run with AGY_MODELS set to the new model (or export
   # FORCED_PR_AUTHOR yourself) before finishing, if you do switch.
   export FORCED_PR_AUTHOR="agy — $ACTIVE_MODEL"
-  "$AGY" --model "$ACTIVE_MODEL" -i "$PROMPT"
+  agy_env_args
+  env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$ACTIVE_MODEL" -i "$PROMPT"
 fi
 
 # --- post-run worktree-integrity check (web-jam-tools#252) ------------------

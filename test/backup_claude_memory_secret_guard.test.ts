@@ -26,7 +26,7 @@
 // concatenation so no complete credential-shaped literal sits in this file
 // at rest.
 
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const SCRIPT_PATH = `${REPO_ROOT}scripts/backup-claude-memory.sh`;
@@ -202,4 +202,133 @@ Deno.test("backup with no settings.json at all still completes cleanly", async (
   if (!hasInvocation(res.invocations, "copyto", `${claudeDir}/CLAUDE.md`)) {
     throw new Error("CLAUDE.md backup should still have run");
   }
+});
+
+// --- Refusal state file & minimal PATH tests (web-jam-tools#456) ---
+
+async function runBackupWithEnv(
+  claudeDir: string,
+  dstDir: string,
+  envOverride: Record<string, string>,
+): Promise<RunResult> {
+  const binDir = await Deno.makeTempDir({ prefix: "wjt-rclone-stub-bin-" });
+  const logPath = `${binDir}/rclone-invocations.log`;
+  await installRcloneStub(binDir, logPath);
+
+  const baseEnv = Deno.env.toObject();
+  const pathEnv = envOverride.PATH
+    ? `${binDir}:${envOverride.PATH}`
+    : `${binDir}:${baseEnv.PATH ?? ""}`;
+
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH],
+    env: {
+      ...baseEnv,
+      CLAUDE_DIR: claudeDir,
+      BACKUP_DST_DIR: dstDir,
+      ...envOverride,
+      PATH: pathEnv,
+    },
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  const invocations = await readInvocations(logPath);
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+    invocations,
+  };
+}
+
+Deno.test("creates SETTINGS_BACKUP_REFUSAL_FILE on refusal and deletes it on successful backup", async () => {
+  const claudeDir = await setUpFixtureClaudeDir({
+    permissions: {
+      allow: ["Bash(ls -la)", `Bash(export GEMINI_API_KEY="${FAKE_GOOGLE_KEY}")`],
+    },
+  });
+  const dstDir = await Deno.makeTempDir({ prefix: "wjt-dropbox-fixture-" });
+  const refusalFile = `${claudeDir}/settings-backup-refusal.txt`;
+
+  // 1. Secret present -> refusal file created
+  const res1 = await runBackupWithEnv(claudeDir, dstDir, {
+    SETTINGS_BACKUP_REFUSAL_FILE: refusalFile,
+  });
+  assertEquals(res1.code, 0, res1.stderr);
+  const refusalText = await Deno.readTextFile(refusalFile);
+  assert(refusalText.includes("REFUSED settings.json backup"), refusalText);
+
+  // 2. Secret removed -> refusal file removed & settings.json backed up
+  await Deno.writeTextFile(
+    `${claudeDir}/settings.json`,
+    JSON.stringify({ permissions: { allow: ["Bash(ls -la)"] } }),
+  );
+  const res2 = await runBackupWithEnv(claudeDir, dstDir, {
+    SETTINGS_BACKUP_REFUSAL_FILE: refusalFile,
+  });
+  assertEquals(res2.code, 0, res2.stderr);
+  let fileExists = true;
+  try {
+    await Deno.stat(refusalFile);
+  } catch {
+    fileExists = false;
+  }
+  assertEquals(fileExists, false, "refusal file should have been deleted after clean backup");
+});
+
+Deno.test("backup-claude-memory.sh succeeds under minimal cron PATH", async () => {
+  const claudeDir = await setUpFixtureClaudeDir({
+    permissions: { allow: ["Bash(ls -la)"] },
+  });
+  const dstDir = await Deno.makeTempDir({ prefix: "wjt-dropbox-fixture-" });
+  const res = await runBackupWithEnv(claudeDir, dstDir, { PATH: "/usr/bin:/bin" });
+  assertEquals(res.code, 0, res.stderr);
+  assert(
+    hasInvocation(res.invocations, "copyto", `${claudeDir}/settings.json`),
+    "expected copyto of settings.json under minimal PATH",
+  );
+});
+
+Deno.test("backup-claude-memory.sh emits scanner failure message (not credential wording) when scanner fails to run", async () => {
+  const claudeDir = await setUpFixtureClaudeDir({
+    permissions: { allow: ["Bash(ls -la)"] },
+  });
+  const dstDir = await Deno.makeTempDir({ prefix: "wjt-dropbox-fixture-" });
+  const refusalFile = `${claudeDir}/settings-backup-refusal.txt`;
+
+  // DENO_BIN points to a nonexistent binary -> scan-settings-for-secrets.sh exits 127
+  const res = await runBackupWithEnv(claudeDir, dstDir, {
+    SETTINGS_BACKUP_REFUSAL_FILE: refusalFile,
+    DENO_BIN: "/nonexistent/deno/binary",
+  });
+
+  assertEquals(res.code, 0, res.stderr);
+  assert(
+    !hasInvocation(res.invocations, "copyto", `${claudeDir}/settings.json`),
+    "should not copy settings.json when scanner failed",
+  );
+
+  assert(
+    res.stderr.includes(
+      "REFUSED settings.json backup: secret scanner failed to run (exit status 127)",
+    ),
+    `expected failure message on stderr, got: ${res.stderr}`,
+  );
+  assert(
+    !res.stderr.includes("credential-shaped literal found in permissions"),
+    `stderr should not claim a credential was found on crash: ${res.stderr}`,
+  );
+
+  const refusalText = await Deno.readTextFile(refusalFile);
+  assert(
+    refusalText.includes(
+      "REFUSED settings.json backup: secret scanner failed to run (exit status 127)",
+    ),
+    `expected failure message in refusal file, got: ${refusalText}`,
+  );
+  assert(
+    !refusalText.includes("credential-shaped literal found in permissions"),
+    `refusal file should not claim a credential was found on crash: ${refusalText}`,
+  );
 });

@@ -1,12 +1,14 @@
 ---
 name: draft-issue
-description: File a GitHub issue the WebJamApps way — a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when the user says "file an issue", "open an issue", "draft an issue", or when a task needs a tracking issue instead of just being done inline.
+description: File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when the user says "file an issue", "open an issue", "draft an issue", or when a task needs a tracking issue instead of just being done inline.
 metadata:
   version: v1
   publisher: josh
 ---
 
 # draft-issue — file a GitHub issue the WebJamApps way
+
+**HARD GATE:** Do you have Josh's (or other human's) explicit approval to file THIS issue, in this session? If not, STOP and ask.
 
 ## Execution model
 
@@ -37,30 +39,26 @@ that's what following this skill prevents.
 
 1. **Search for a duplicate first.** Run `gh issue list --repo WebJamApps/<repo> --state all --search
    "<keywords>"` (or `mcp__*__search_issues`) with a couple of keyword variants before creating
-   anything. If a close match exists, comment on it or reopen it instead of filing a new one — a
-   second issue for the same problem splits the discussion and the fix.
+   anything. If an OPEN issue matches, use or update that open issue. However, if a matching issue is CLOSED, do NOT modify, comment on, or attempt to reuse it — see the Closed Issues Are Immutable rule below.
 2. **Choose the model label deliberately, not as an afterthought.** This is the thing
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
-   model label, because the label was going to be "added later." Decide the label as part of
-   deciding what the issue IS — before you write the body — from:
-   - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes,
-     running tests/builds and reporting the result.
-   - `Sonnet` — ordinary contained coding: a fix or feature across a few files, tests, light
-     refactors.
-   - `Opus` — genuine multi-file judgment, design/spec work, reviewing another model's output.
-   - `Flash Med` / `Flash High` — frontend/UI coding, canonical in all 8 active repos per
-     `skills/fix-labels/labels.yaml` (Josh's call, 2026-07-31: Flash High is at Sonnet quality and
-     Flash Med a viable Haiku substitute, so both are routable everywhere, not just the front-end
-     repos); pick High only when Medium is likely to need multiple retries.
-   - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
-     delete-protection only, per `skills/fix-labels/labels.yaml`).
+   model label, because the label was going to be "added later."    Decide the label as part of
+    deciding what the issue IS — before you write the body — from:
+    - `Flash Med` — mechanical work, documentation cleanup/link updates, single-file edits, and routine execution tasks across all repos (Josh's default choice to save token quota; viable Haiku substitute).
+    - `Flash High` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
+    - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
+    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; slightly higher capability than Flash High).
+    - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
+    - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
+      delete-protection only, per `skills/fix-labels/labels.yaml`).
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
    still pick one label, since the hook requires exactly one.
-3. **Draft acceptance criteria that let the issue CLOSE.** Concrete, checkable conditions — not a
-   standing tracker that never resolves. A "make X better" issue with no finish line is a defect,
-   not a feature request; if the work is genuinely open-ended, scope the issue to one concrete step
-   and file a follow-up for the next one rather than leaving it perpetually open (see memory
-   `github-issues-must-be-closeable`).
+3. **Draft acceptance criteria that let the issue CLOSE (Epics close when children close).**
+   Concrete, checkable conditions — not a standing tracker that never resolves. A non-epic closes
+   when its work is done; **an epic closes when its children close** (epics are not implementable
+   themselves, but close when all child issues complete). Perpetual trackers remain banned. If the
+   work is genuinely open-ended, scope the issue to one concrete step and file a follow-up for the next
+   one rather than leaving it perpetually open.
 4. **Executable Issue rule (Every non-Epic issue must stand alone).** Every issue body not typed
    `Epic` must stand alone without unresolvable pointer phrases (e.g., "see the comment", "see comment",
    "read the comment first", "read comment first", "as discussed above", "as discussed in",
@@ -70,6 +68,21 @@ that's what following this skill prevents.
    full requirements authored directly in the sub-issue body first before creation. Note: Native issue
    type `Epic` (which is orthogonal to model labels) is exempt from this check on edit paths (`gh issue edit`
    or MCP update), allowing Epics to reference comments or sub-issues as discussion evolves.
+5. **Require Native Issue Type (`--type`).** Every new issue creation MUST explicitly specify a
+   valid native GitHub issue type (`Task`, `Bug`, `Feature`, `Epic`) using `--type <Type>` or `-t <Type>`
+   (or `"type": "<Type>"` in MCP `issue_write`). Native issue types are enforced by
+   `hooks/require-model-label-on-issue-create.sh` (web-jam-tools#415).
+6. **Apply `Needs Design` Label when Design is Required.** For Epics or sub-issues requiring design
+   clarification before implementation, apply the canonical `Needs Design` status label alongside the chosen
+   model label and native type.
+7. **Closed Issues Are Immutable.** Never modify, reopen, add comments to, or add new requirements to a closed GitHub issue. Closed issues represent finished state. When new scope, follow-up findings, or modifications arise for a closed issue, file a net-new issue citing the closed issue (repo + number + title) instead.
+8. **Prompt for a Milestone Before Filing.** Check the repo's open Milestones (`gh api repos/WebJamApps/<repo>/milestones` or `gh milestone list`) before creating the issue. Select one deliberately if a fitting Milestone exists. If no open Milestone fits the issue, explicitly note so in chat or in the issue body ("no fitting milestone — leaving unassigned") rather than silently omitting it. Note: This is a skill-level nudge, not a hook gate — `hooks/require-model-label-on-issue-create.sh` continues to enforce model label + native Type.
+9. **Deliverable-First Body Shape (What this builds).** Open the issue body directly with a section
+   titled `## What this builds` carrying a 1-2 sentence description of what is being built, immediately
+   followed by a numbered list of what it does — no history preamble, conversation background, or past context.
+10. **Set Native Priority Field via MCP, Never via `gh`.** Set the native `Priority` field (`Urgent`,
+    `High`, `Medium`, `Low`) via GitHub MCP `issue_write` → `issue_fields` (or `set_issue_field`). `gh`
+    CLI cannot set native GitHub project fields; never attempt to set native Priority via `gh`.
 
 ## Citation format (every reference, every time)
 
@@ -95,30 +108,34 @@ gh pr view 263 --repo WebJamApps/<repo> --json title -q .title
 gh issue create --repo WebJamApps/<repo> \
   --title "Short, specific title" \
   --body "$(cat <<'EOF'
-## Why
-...
+## What this builds
+<1-2 sentences describing what is being built>
+
+1. <Numbered item 1>
+2. <Numbered item 2>
 
 ## Acceptance criteria
 - ...
-
-## Non-goals
-- ...
 EOF
 )" \
-  --label Sonnet
+  --type Task \
+  --label Sonnet \
+  --milestone "v1.2"
 ```
 
+- Require `--type <Type>` (`Task`, `Bug`, `Feature`, `Epic`) on all issue creation calls.
+- Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
 - Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
-- Add non-model labels (`bug`, `enhancement`, `blocked`, a priority label, ...) alongside the model
-  label freely; the hook only checks that exactly one *model* label is present, not that it's the
-  only label.
-- The MCP `issue_write` create path takes the same label as a JSON array element
-  (`"labels": ["Sonnet", "bug"]`) — same one-model-label rule, same hook.
+- Add non-model status labels (`Blocked`, `Needs Design`, `Josh`, `parked`, ...)
+  alongside the model label freely; the hook only checks that exactly one *model* label is present,
+  not that it's the only label.
+- Set native `Priority` field via GitHub MCP `issue_write` → `issue_fields`, never via `gh` CLI.
+- The MCP `issue_write` create path takes `"type": "Task"`, `"milestone": 1` (milestone number), `"labels": ["Sonnet", "Needs Design"]`, and `"issue_fields": { "Priority": "High" }` — same native-type, milestone, model-label, and native priority guidelines.
 
 ## If the hook denies the call
 
-The denial message names what's wrong (no model label / multiple model labels / unparseable) and
-lists the valid labels straight from `skills/fix-labels/model-labels.json` (generated from
-`skills/fix-labels/labels.yaml`). Fix the `--label` flags (or
-the MCP `labels` array) per the message and retry — there is no bypass, and there shouldn't be one:
-the hook exists because "add the label after" is exactly how web-jam-tools#263 shipped unlabeled.
+The denial message names what's wrong (missing/invalid native issue type, no model label,
+multiple model labels, unresolvable pointer phrases, or unparseable command) and lists valid native
+types or model labels straight from `skills/fix-labels/model-labels.json`. Fix the `--type` and
+`--label` flags (or the MCP `type` and `labels` fields) per the message and retry — there is no
+bypass, and there shouldn't be one: the hook exists to enforce executable, properly categorized issues.

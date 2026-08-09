@@ -20,6 +20,7 @@ import { parse as parseYaml } from "@std/yaml";
 export interface CanonicalLabel {
   name: string;
   hex: string; // no leading '#'
+  description?: string;
   /** A repoClasses key, or the literal pseudo-class "all" (frontend + other). */
   repos: string;
   /** Known misnamed variants that should be RENAMED to `name`, not deleted. */
@@ -64,24 +65,35 @@ export interface Schema {
 export interface ActualLabel {
   name: string;
   color: string; // no leading '#', as `gh label list --json name,color` returns it
+  description?: string;
 }
 
 // --- Drift types ---
 
-export type DriftKind = "missing" | "misnamed" | "miscolored" | "wrong-repo" | "non-canonical";
-export type DriftAction = "create" | "rename" | "recolor" | "remove" | "delete";
+export type DriftKind =
+  | "missing"
+  | "misnamed"
+  | "miscolored"
+  | "description-drift"
+  | "wrong-repo"
+  | "non-canonical";
+export type DriftAction = "create" | "rename" | "recolor" | "redescribe" | "remove" | "delete";
 
 export interface DriftItem {
   kind: DriftKind;
   action: DriftAction;
-  /** Canonical name (create/rename/recolor target) or existing name (remove/delete). */
+  /** Canonical name (create/rename/recolor/redescribe target) or existing name (remove/delete). */
   name: string;
-  /** Canonical hex, when the action sets a color (create/rename/recolor). */
+  /** Canonical hex, when the action sets a color (create/rename/recolor/redescribe). */
   hex?: string;
+  /** Canonical description (create/rename/recolor/redescribe target). */
+  description?: string;
   /** Existing name being renamed away from (rename only). */
   fromName?: string;
   /** Existing color being replaced (rename/recolor only). */
   fromHex?: string;
+  /** Existing description being replaced (redescribe only). */
+  fromDescription?: string;
   /** Open-issue count carrying this label — attached only for remove/delete. */
   blastRadius?: number;
 }
@@ -135,6 +147,19 @@ export function classifyRepoDrift(
           name: label.name,
           hex: label.hex,
           fromHex: exact.color,
+          description: label.description,
+        });
+      }
+      const actualDesc = exact.description ?? "";
+      const canonicalDesc = label.description ?? "";
+      if (actualDesc !== canonicalDesc) {
+        drift.push({
+          kind: "description-drift",
+          action: "redescribe",
+          name: label.name,
+          hex: label.hex,
+          description: canonicalDesc,
+          fromDescription: actualDesc,
         });
       }
       continue;
@@ -150,13 +175,20 @@ export function classifyRepoDrift(
         action: "rename",
         name: label.name,
         hex: label.hex,
+        description: label.description,
         fromName: aliasMatch.name,
         fromHex: aliasMatch.color,
       });
       continue;
     }
 
-    drift.push({ kind: "missing", action: "create", name: label.name, hex: label.hex });
+    drift.push({
+      kind: "missing",
+      action: "create",
+      name: label.name,
+      hex: label.hex,
+      description: label.description,
+    });
   }
 
   for (const actualLabel of actual) {
@@ -263,12 +295,16 @@ export async function fetchActualLabels(
     "--repo",
     `WebJamApps/${repo}`,
     "--json",
-    "name,color",
+    "name,color,description",
     "--limit",
     "200",
   ], runner);
-  const parsed = JSON.parse(out) as Array<{ name: string; color: string }>;
-  return parsed.map((l) => ({ name: l.name, color: l.color }));
+  const parsed = JSON.parse(out) as Array<{
+    name: string;
+    color: string;
+    description?: string | null;
+  }>;
+  return parsed.map((l) => ({ name: l.name, color: l.color, description: l.description ?? "" }));
 }
 
 export async function fetchBlastRadius(
@@ -334,6 +370,8 @@ function formatDriftLine(item: DriftItem): string {
       return `- RENAME \`${item.fromName}\` → \`${item.name}\` (color also updates to #${item.hex})`;
     case "recolor":
       return `- RECOLOR \`${item.name}\` #${item.fromHex} → #${item.hex} — miscolored`;
+    case "redescribe":
+      return `- REDESCRIBE \`${item.name}\` "${item.fromDescription}" → "${item.description}" — description drift`;
     case "remove":
       return `- REMOVE \`${item.name}\` — wrong-repo (not canonical for this repo) — ${item.blastRadius} open issues carry this label`;
     case "delete":

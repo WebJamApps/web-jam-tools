@@ -1,38 +1,66 @@
 ---
-name: next
-description: Start an agy-labeled coding task. Use when the user types /next <Repo>#<issue-num> (named mode), or /next with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/flash-issues.md read-only to resolve the next actionable issue), or says "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+name: work-issue
+description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (or alias /next <Repo>#<issue-num>) (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
   version: v1
   publisher: josh
+aliases:
+  - /next
+  - next
 ---
 
-# /next — run an agy-labeled coding task
+# /work-issue — run a model-labeled coding task (Claude Code & Antigravity)
 
-This skill delegates the deterministic setup (issue fetch + git branching) to a
+> **Alias**: `/next` (and phrases like `next`, `next task`, `start the next task`) is preserved as an active alias for `/work-issue`.
+
+This skill is installed across all agent surfaces (Claude Code, Antigravity/agy) and model tiers (Haiku, Flash, Sonnet, Opus). It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/next Repo#123`** (named mode) — the issue is given explicitly. Go straight
-  to "## Steps" below.
-- **`/next`** (no argument, auto-pick mode) — read-only resolve the next
-  actionable issue from `~/Dropbox/web-jam-llms/flash-issues.md`, then hand off
+- **`/work-issue Repo#123`** (or `/next Repo#123`, named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then go straight to "## Steps" below.
+- **`/work-issue`** (or `/next`, no argument, auto-pick mode) — read-only resolve the next
+  actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
   to the same "## Steps" flow below. See "## No-argument mode" first.
 
-## No-argument mode — auto-pick from flash-issues.md
+## Triggers & Aliases
+- Primary Command: `/work-issue`
+- Preserved Aliases: `/next`, `next`, `next task`, `start the next task`, `work-issue`
 
-Use this when the user types `/next` with no argument, or says "next" /
-"next task" / "start the next task" without naming an issue. This mode is
-**read-only** against `~/Dropbox/web-jam-llms/flash-issues.md` — never edit
+## Model Label Check & Approval
+
+When `work-issue` begins an issue (`<Repo>#<num>`):
+1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`).
+2. **Determine Agent Delegation vs Execution**:
+   - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
+   - Under **Antigravity** (e.g., Flash High interactive session): If the issue is labeled `Flash Med`, automatically delegate execution down to a `Flash Med` subagent.
+   - If the active session tier matches the issue's model label, execute the task directly in the current session.
+3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label rather than delegating down, prompt Josh for explicit approval in chat before executing:
+   ```bash
+   gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
+   ```
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents, or `--author "Claude Code — Haiku 3.5"` for Haiku subagents).
+
+## No-argument mode — auto-pick worklist based on agent surface
+
+Use this when the user types `/work-issue` (or `/next`) with no argument, or says "work-issue" / "next" /
+"next task" / "start the next task" without naming an issue.
+
+Determine which worklist file to read based on your agent surface:
+- **Claude Code (Haiku session)**: Read `~/Dropbox/web-jam-llms/haiku-issues.md`.
+- **Antigravity (Flash / agy session)**: Read `~/Dropbox/web-jam-llms/flash-issues.md`.
+
+This mode is **read-only** against the target worklist file — never edit
 that file. It only resolves a concrete `Repo#num`, then continues at step 1 of
 "## Steps" below exactly as if that issue had been named — everything from
 there on (setup, model selection, coding, PR) is identical and unmodified.
 
 ### Resolution steps
 
-1. Read `~/Dropbox/web-jam-llms/flash-issues.md`. If it's missing, empty, or
-   has no numbered items, stop and tell Josh: "flash-issues.md is missing/empty
-   — run /flash-issues first." Do not improvise a substitute list.
+1. Select the target worklist file based on the active agent surface:
+   - When running under **Claude Code** (Haiku), select `~/Dropbox/web-jam-llms/haiku-issues.md`.
+   - When running under **Antigravity** (Flash / agy), select `~/Dropbox/web-jam-llms/flash-issues.md`.
+   Read the selected worklist file. If it's missing, empty, or has no numbered items, stop and tell Josh: "<filename> is missing/empty — run the corresponding worklist skill first." Do not improvise a substitute list.
 2. Parse **only** the numbered runnable list at the top of the file — the
    `N. [Repo#num](...) — title (Model)` lines that appear **above** the
    `## Blocked` heading. Ignore the `## Blocked` and `## Needs Josh's review`
@@ -70,16 +98,13 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
    `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>`
    and follow steps 2 onward exactly as written for the named-issue flow.
 5. If you reach the end of the list with no candidate passing (every item is
-   closed or already in flight), stop and tell Josh: "every item in
-   flash-issues.md's runnable list is closed or already in flight — re-run
-   /flash-issues to refresh it." Do not improvise a substitute list, and do
-   not fall back to the Blocked or Needs-review sections.
+   closed or already in flight), stop and tell Josh: "every item in <filename>'s runnable list is closed or already in flight — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
 
-Never write to `flash-issues.md` in this mode — it is read-only input.
+Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in this mode — they are read-only input.
 
 ## Steps
 
-1. Run this shell command (with the `agy`-labeled issue the user named) and read
+1. Run this shell command (with the target issue the user named) and read
    its stdout:
 
    ```
@@ -101,7 +126,13 @@ Never write to `flash-issues.md` in this mode — it is read-only input.
    exits non-zero (dirty tree, missing repo, bad/missing issue argument), stop and
    report its error to the user — do not improvise.
 
-3. **Select the appropriate model:** Before implementing, classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete.
+3. **Perform Model Label Check & Model Selection:** Before implementing:
+   - Perform the **Model Label Check**:
+     1. Read the GitHub issue's model label (`Flash Med`, `Flash High`, `Haiku`, `Sonnet`, `Opus`).
+     2. Compare the issue's model label against the active executing session tier.
+     3. If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
+     4. Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier.
+   - Classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete.
 
    **Model Chain (Most to least capable):**
    1. `Claude Opus 4.6 (Thinking)`
@@ -115,7 +146,7 @@ Never write to `flash-issues.md` in this mode — it is read-only input.
    excluded from the chain. Failover only ever crosses Claude ↔ Gemini.
 
    **Classification Rules (in priority order):**
-   * **Explicit Override**: If the user passed an explicit model name when invoking `/next`, use it and skip classification.
+   * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue` (or `/next`), use it and skip classification.
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:
@@ -145,7 +176,7 @@ Never write to `flash-issues.md` in this mode — it is read-only input.
 
    ```
    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
-     --author "agy — <the model you are running as>" \
+     --author "<Surface> — <Model>" \
      --summary "<what changed and why>" \
      --test-plan "<exact commands to verify + expected result>" \
      --test-evidence "<the actual lint + test output you saw, confirming both ran green>" \
@@ -176,7 +207,7 @@ Example of a well-formed call (bulleted summary, fenced commands + output):
 
 `````
 ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
-  --author "agy — <the model you are running as>" \
+  --author "<Surface> — <Model>" \
   --summary "- Add X so Y works
 - Refactor Z to stop duplicating W" \
   --test-plan "Run:

@@ -30,6 +30,15 @@ session dispatch work with no durable record — see web-jam-tools#249. A quick
 task not worth a full write-up still gets a GitHub issue first, just a short
 one.)
 
+**Environment (web-jam-tools#439):** the wrapper launches the `agy` binary
+itself with an explicitly constructed environment — `HOME`, `PATH`, `USER`,
+`AGY_MODELS`, `FORCED_PR_AUTHOR` only, never your full inherited shell
+environment. This is deliberate: a subagent's own shell tool call once read
+`GH_TOKEN` and Dropbox credentials out of an inherited environment and sent
+them to Google's API mid-run (web-jam-tools#282 section D, 2026-08-07).
+Dispatch through this script — never a raw `agy --model ... -p "..."` call —
+to keep that scrubbing in place.
+
 ```sh
 ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 # e.g.
@@ -45,7 +54,8 @@ fails with a usage message instead of running anything.
 
 **Default Tier & Bidirectional Delegation Flexibility:**
 Josh defaults to **`Flash High`** (`Gemini 3.6 Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
-- **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session MUST automatically evaluate execution work and delegate contained/mechanical coding tasks down to a `Flash Med` subagent (`invoke_subagent` model `flash` or `handle-agy-tasks.sh`). Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
+- **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session is **forbidden** from executing file edits or running test suites directly for tasks/issues labeled `Flash Med` or `Haiku`. It MUST automatically delegate contained coding tasks down to a `Flash Med` subagent (`invoke_subagent` model `flash` or `handle-agy-tasks.sh`) as its very first tool call. Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
+- **Exception — trivial edits**: the primary session may make the edit directly, without `invoke_subagent`, only when **all** of these hold: it touches **one file**; it changes **no behaviour** (documentation, comment, or a single config value); and it is **under ~20 changed lines**. The session must say, in the same turn, that it is taking the exception and why. "I already have the context", "it would be faster", and "writing the brief costs as much as the work" are **not** exceptions — the three conditions above are the whole test. Rationale: delegation pays when the work is bigger than the brief; below that line the session pays to write a self-contained specification, waits for a round trip, then reviews the result, for an edit smaller than the specification. The three conditions are a mechanical proxy for that, chosen because they are auditable from the outside and a cost estimate is not.
 - **Delegating up (`Flash Med` → `Flash High` / `Sonnet` / `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High`, `Sonnet`, or `Opus`.
 
 **Setting explicit model chains via `AGY_MODELS`:**

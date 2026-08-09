@@ -20,6 +20,7 @@ const HOOKS_DIR = new URL("../hooks/", import.meta.url).pathname;
 
 // Pinned set of skills/*/ directory names. Update deliberately.
 const EXPECTED_SKILL_DIRS = [
+  "backlog-groom",
   "delegate",
   "draft-issue",
   "draft-pr",
@@ -27,17 +28,21 @@ const EXPECTED_SKILL_DIRS = [
   "fix-labels",
   "flash-issues",
   "handle-gmails",
+  "issue-design",
   "memory-cleanup",
   "pr-review",
   "venue-mining",
+  "work-issue",
 ];
 
 // Pinned set of hooks/*.sh filenames. Update deliberately.
 const EXPECTED_HOOK_SCRIPTS = [
-  "authorization-check.sh",
+  "backlog-groom-reminder.sh",
+  "backup-refusal-reminder.sh",
   "block-agy-non-flash-model.sh",
   "block-dangerous-git-deploy.sh",
   "block-human-only-credentials.sh",
+  "block-irreversible-operations.sh",
   "block-secret-dumps.sh",
   // PreToolUse guard (web-jam-tools#304) — blocks a Bash command that
   // carries a credential-shaped LITERAL, before it can be approved and
@@ -47,8 +52,11 @@ const EXPECTED_HOOK_SCRIPTS = [
   // verifies symlinks and settings rules are up to date.
   "check-install-hooks-drift.sh",
   "feature-branch-guard.sh",
+  "flash-issues-reminder.sh",
   "fmt-push-guard.sh",
+  "gh-api-guard.sh",
   "haiku-only-gmail-gate.sh",
+  "memory-cleanup-reminder.sh",
   "notes-sync-reminder.sh",
   // Stop hook (web-jam-tools#290) — detective-only warning when an Opus
   // turn racks up edits with zero subagent spawns.

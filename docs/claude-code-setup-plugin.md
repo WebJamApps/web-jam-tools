@@ -66,4 +66,4 @@ Each repo has its own surface area (Vite frontends vs Node/Express backends vs c
 ## Cross-refs
 
 - Plugin source / marketplace: `claude-plugins-official` (see `~/.claude/plugins/known_marketplaces.json`)
-- Other docs in this folder: [api-integrations.md](api-integrations.md), [ai-assistant-google-setup.md](ai-assistant-google-setup.md)
+- Other docs in this folder: [ai-assistant-google-setup.md](ai-assistant-google-setup.md)

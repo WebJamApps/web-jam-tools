@@ -118,7 +118,7 @@ website** — via website (Playwright-render when a plain fetch returns an empty
 Business + publication.
 
 **Write back EVERY field that was sourced and is currently empty or wrong**, in one
-`PUT /venue/<_id>` per venue (partial merge — omitted fields are untouched). Do NOT write only
+`PATCH /venue/<_id>` per venue (partial merge — omitted fields are untouched). Do NOT write only
 the address and leave the rest for Josh to ask about: a field the run found and did not write is
 a defect, not a pending decision. Enrichment is not a blocker for the main `verify` task.
 
@@ -135,7 +135,7 @@ is reported as not found.
   or no email → `outreachEligible: false`; note why.
 - The rule applies **identically to existing records in `venue` seed mode**: if
   enrichment sources a viable booking/general email for a venue that had none,
-  set `outreachEligible: true` in the same `PUT`. An eligible venue whose email
+  set `outreachEligible: true` in the same `PATCH`. An eligible venue whose email
   turns out to be dead or wrong-purpose goes to `false` with a note. This is a
   data-quality flip driven by the email rule above — it is not outreach.
 - **NEVER pitch.** No POST /outreach/*, no template sends. Outreach stays behind
@@ -153,7 +153,7 @@ is reported as not found.
   exhausting its sources (website via Playwright + Google Business + publication),
   the venue is skipped and reported to Josh. Never invent an address.
 - POST /venue only for NEW venues (it dedupes by email else name+city, and
-  DUPLICATES on null city). Fixing a field on an existing record = `PUT
+  DUPLICATES on null city). Fixing a field on an existing record = `PATCH
   /venue/<_id>` (partial merge). DELETE archives.
 - **Send addresses as typed**, without client-side formatting or abbreviation —
   the backend (web-jam-back#987) normalizes them. When confirming a create,

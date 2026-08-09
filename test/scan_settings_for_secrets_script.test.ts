@@ -98,3 +98,92 @@ Deno.test("a settings.json with no permissions key at all passes", async () => {
   const res = await runScan(path);
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- settings.local.json support (web-jam-tools#434) ---
+
+Deno.test("a settings.local.json with a credential-shaped literal in permissions.allow is detected", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt-settings-local-scan-" });
+  const settingsJson = `${dir}/settings.json`;
+  const settingsLocalJson = `${dir}/settings.local.json`;
+  await Deno.writeTextFile(
+    settingsJson,
+    JSON.stringify({ permissions: { allow: ["Bash(ls -la)"] } }),
+  );
+  await Deno.writeTextFile(
+    settingsLocalJson,
+    JSON.stringify({
+      permissions: {
+        allow: [`Bash(curl "https://circleci.com/api/output?token=${FAKE_GOOGLE_KEY}")`],
+      },
+    }),
+  );
+
+  const res = await runScan(settingsJson);
+  assertEquals(res.code, 1);
+  if (!res.stderr.includes("settings.local.json")) {
+    throw new Error(`expected settings.local.json to be named in report, got: ${res.stderr}`);
+  }
+  if (!res.stderr.includes("permissions.allow[0]")) {
+    throw new Error(`expected the rule index to be named, got: ${res.stderr}`);
+  }
+});
+
+Deno.test("clean settings.json and settings.local.json pass silently", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt-settings-local-clean-" });
+  const settingsJson = `${dir}/settings.json`;
+  const settingsLocalJson = `${dir}/settings.local.json`;
+  await Deno.writeTextFile(
+    settingsJson,
+    JSON.stringify({ permissions: { allow: ["Bash(ls -la)"] } }),
+  );
+  await Deno.writeTextFile(
+    settingsLocalJson,
+    JSON.stringify({ permissions: { allow: ["Bash(git status)"] } }),
+  );
+
+  const res = await runScan(settingsJson);
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// --- Deno binary resolution tests (web-jam-tools#456) ---
+
+async function runScanWithEnv(
+  settingsPath: string,
+  env: Record<string, string>,
+): Promise<RunResult> {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH, "--settings-path", settingsPath],
+    env: {
+      ...Deno.env.toObject(),
+      ...env,
+    },
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
+}
+
+Deno.test("scan-settings-for-secrets.sh resolves deno when PATH is minimal (cron environment)", async () => {
+  const path = await writeFixture("settings.json", {
+    permissions: { allow: ["Bash(ls -la)"] },
+  });
+  const res = await runScanWithEnv(path, { PATH: "/usr/bin:/bin" });
+  assertEquals(res.code, 0, res.stderr);
+  if (!res.stdout.includes("no credential-shaped literals found")) {
+    throw new Error(`expected a clean report under minimal PATH, got: ${res.stdout}`);
+  }
+});
+
+Deno.test("scan-settings-for-secrets.sh respects DENO_BIN env var", async () => {
+  const path = await writeFixture("settings.json", {
+    permissions: { allow: ["Bash(ls -la)"] },
+  });
+  const denoExec = Deno.execPath();
+  const res = await runScanWithEnv(path, { DENO_BIN: denoExec });
+  assertEquals(res.code, 0, res.stderr);
+});

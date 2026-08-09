@@ -45,7 +45,7 @@ Then read:
 - [docs/scripts.md](docs/scripts.md) — what each script does and when to use it
 - [docs/ai-assistant-google-setup.md](docs/ai-assistant-google-setup.md) — generic recipe for setting up Google Drive/Calendar/Gmail/Tasks MCP servers for Claude Code
 - [docs/rclone-setup.md](docs/rclone-setup.md) — mounting Google Drive locally via rclone + systemd
-- [docs/api-integrations.md](docs/api-integrations.md) — reference snapshot of one working setup (machine-specific paths; use the generic guide above for your own setup)
+- `docs/api-integrations.md` — REMOVED from this repo (information disclosure). Use the generic guide above for your own setup.
 
 ## Claude Code hooks
 

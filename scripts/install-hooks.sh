@@ -87,7 +87,7 @@ FORCE=0
 # each into the literal command string "$HOME/.claude/hooks/<name>" (expanded
 # by the shell that runs the hook, not by this installer — matches the style
 # of the hooks already wired into settings.json).
-SESSION_START_HOOKS=(notes-sync-reminder.sh check-install-hooks-drift.sh)
+SESSION_START_HOOKS=(notes-sync-reminder.sh check-install-hooks-drift.sh memory-cleanup-reminder.sh flash-issues-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh)
 
 # Stop hooks this installer keeps registered in settings.json (web-jam-tools#290).
 # Same flat, no-matcher shape as SESSION_START_HOOKS — Stop fires
@@ -114,7 +114,8 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::block-secret-dumps.sh"
   "Bash::block-secret-literals.sh"
   "Bash::block-dangerous-git-deploy.sh"
-  "Bash::authorization-check.sh"
+  "Bash::gh-api-guard.sh"
+  "Bash|mcp__.*::block-irreversible-operations.sh"
   "Bash::fmt-push-guard.sh"
   "Bash::block-agy-non-flash-model.sh"
   "Bash|Edit|Write::block-human-only-credentials.sh"
@@ -191,12 +192,283 @@ DENY_RULES=(
   'Bash(git push * --mirror*)'
   'Bash(git push --prune*)'
   'Bash(git push * --prune*)'
+
+  # Laptop Dropbox deny list (web-jam-tools#321)
+  'Read(//home/joshua/Dropbox/Apps/**)'
+  'Edit(//home/joshua/Dropbox/Apps/**)'
+  'Read(//home/joshua/Dropbox/BreakPoint Ministries/**)'
+  'Edit(//home/joshua/Dropbox/BreakPoint Ministries/**)'
+  'Read(//home/joshua/Dropbox/Camera Uploads/**)'
+  'Edit(//home/joshua/Dropbox/Camera Uploads/**)'
+  'Read(//home/joshua/Dropbox/Capture/**)'
+  'Edit(//home/joshua/Dropbox/Capture/**)'
+  'Read(//home/joshua/Dropbox/CollegeLutheran/**)'
+  'Edit(//home/joshua/Dropbox/CollegeLutheran/**)'
+  'Read(//home/joshua/Dropbox/DropsyncFiles/**)'
+  'Edit(//home/joshua/Dropbox/DropsyncFiles/**)'
+  'Read(//home/joshua/Dropbox/Galapagos/**)'
+  'Edit(//home/joshua/Dropbox/Galapagos/**)'
+  'Read(//home/joshua/Dropbox/InBetween SetsMusic/**)'
+  'Edit(//home/joshua/Dropbox/InBetween SetsMusic/**)'
+  'Read(//home/joshua/Dropbox/JoshMariaMusic_private/**)'
+  'Edit(//home/joshua/Dropbox/JoshMariaMusic_private/**)'
+  'Read(//home/joshua/Dropbox/Migrated Paper Docs/**)'
+  'Edit(//home/joshua/Dropbox/Migrated Paper Docs/**)'
+  'Read(//home/joshua/Dropbox/Other (1)/**)'
+  'Edit(//home/joshua/Dropbox/Other (1)/**)'
+  'Read(//home/joshua/Dropbox/ShermanHome/**)'
+  'Edit(//home/joshua/Dropbox/ShermanHome/**)'
+  'Read(//home/joshua/Dropbox/TimShermanMusic/**)'
+  'Edit(//home/joshua/Dropbox/TimShermanMusic/**)'
+  'Read(//home/joshua/Dropbox/Web Design/**)'
+  'Edit(//home/joshua/Dropbox/Web Design/**)'
+  'Read(//home/joshua/Dropbox/WebJamApps/**)'
+  'Edit(//home/joshua/Dropbox/WebJamApps/**)'
+  'Read(//home/joshua/Dropbox/web-jam-llc/**)'
+  'Edit(//home/joshua/Dropbox/web-jam-llc/**)'
+
+  # Heroku hard denies (R-12 & Part G)
+  'Bash(heroku config:get *)'
+  'Bash(heroku config:set *)'
+  'Bash(heroku config:unset *)'
+  'Bash(heroku auth:token *)'
+  'Bash(heroku auth:token)'
+  'Bash(heroku pg:reset *)'
+  'Bash(heroku apps:destroy *)'
+  'Bash(heroku pg:backups:restore *)'
+
+  # Irreversible Part G operation deny backstops (R-24)
+  'Bash(gh repo delete *)'
+  'Bash(gh repo delete)'
+  'Bash(gh label delete *)'
+  'Bash(gh label delete)'
+  'Bash(gh project delete *)'
+  'Bash(gh project delete)'
+  'Bash(gh project item-delete *)'
+  'Bash(gh project item-delete)'
+  'Bash(gh project field-delete *)'
+  'Bash(gh project field-delete)'
+  'Bash(heroku addons:destroy *)'
+  'Bash(heroku addons:destroy)'
+  'mcp__claude_ai_GitHub_MCP__delete_file'
+  'Bash(gh auth token *)'
+  'Bash(gh auth token)'
+  'Bash(gh issue delete *)'
+  'Bash(gh issue delete)'
+  'Bash(gh run delete *)'
+  'Bash(gh run delete)'
+  'Bash(gh repo sync *--force*)'
+  'Bash(gh repo sync * --force)'
+  'Bash(gh repo sync * --force *)'
+  'Bash(gh issue transfer *)'
+  'Bash(gh issue transfer)'
+  'Bash(gh repo rename *)'
+  'Bash(gh repo rename)'
+  'Bash(gh workflow run *)'
+  'Bash(gh workflow run)'
+  'Bash(gh pr merge *)'
+  'Bash(gh pr merge)'
+  'mcp__claude_ai_GitHub_MCP__merge_pull_request'
+
+  # claude mcp launch & config denies (R-16 & R-37)
+  'Bash(claude mcp add *)'
+  'Bash(claude mcp add-json *)'
+  'Bash(claude mcp add-from-claude-desktop*)'
+  'Bash(claude mcp login *)'
+  'Bash(claude *--mcp-config*)'
+  'Edit(//home/joshua/.claude.json)'
+  'Edit(//home/joshua/.claude/mcp_config.json)'
+
+  # gh api DELETE backstop patterns (R-7). KNOWN LIMITATION: these are literal
+  # unquoted forms and do not match a quoted method value (-X 'DELETE',
+  # --method="DELETE") — web-jam-tools#425 post-approval finding. Quoted
+  # forms are caught only by hooks/gh-api-guard.sh's normalization, not by
+  # this backstop; that hook is the authoritative guard for this class.
+  'Bash(gh api -X DELETE *)'
+  'Bash(gh api -X DELETE)'
+  'Bash(gh api --method DELETE *)'
+  'Bash(gh api --method DELETE)'
+  'Bash(gh api -XDELETE *)'
+  'Bash(gh api --method=DELETE *)'
+
+  # Dropbox MCP mutation denial (web-jam-tools#321)
+  'mcp__claude_ai_Dropbox__delete'
+  'mcp__claude_ai_Dropbox__move'
 )
 
 # permissions.ask patterns this installer keeps registered in settings.json
 # (web-jam-tools#339). Patterns in permissions.ask force Claude Code to prompt
 # for confirmation before executing matching commands.
-ASK_RULES=()
+ASK_RULES=(
+  # gh pr (11 write verbs)
+  'Bash(gh pr create *)'
+  'Bash(gh pr create)'
+  'Bash(gh pr comment *)'
+  'Bash(gh pr comment)'
+  'Bash(gh pr edit *)'
+  'Bash(gh pr edit)'
+  'Bash(gh pr lock *)'
+  'Bash(gh pr ready *)'
+  'Bash(gh pr ready)'
+  'Bash(gh pr reopen *)'
+  'Bash(gh pr revert *)'
+  'Bash(gh pr review *)'
+  'Bash(gh pr review)'
+  'Bash(gh pr unlock *)'
+  'Bash(gh pr update-branch *)'
+  'Bash(gh pr update-branch)'
+  'Bash(gh pr close *)'
+
+  # gh issue (10 write verbs + develop)
+  'Bash(gh issue create *)'
+  'Bash(gh issue create)'
+  'Bash(gh issue close *)'
+  'Bash(gh issue comment *)'
+  'Bash(gh issue edit *)'
+  'Bash(gh issue lock *)'
+  'Bash(gh issue pin *)'
+  'Bash(gh issue reopen *)'
+  'Bash(gh issue unlock *)'
+  'Bash(gh issue unpin *)'
+  'Bash(gh issue develop *)'
+  'Bash(gh issue develop)'
+
+  # gh repo (7 write verbs + 4 leaves)
+  'Bash(gh repo create *)'
+  'Bash(gh repo create)'
+  'Bash(gh repo archive *)'
+  'Bash(gh repo archive)'
+  'Bash(gh repo edit *)'
+  'Bash(gh repo edit)'
+  'Bash(gh repo fork *)'
+  'Bash(gh repo fork)'
+  'Bash(gh repo sync *)'
+  'Bash(gh repo sync)'
+  'Bash(gh repo unarchive *)'
+  'Bash(gh repo autolink create *)'
+  'Bash(gh repo autolink delete *)'
+  'Bash(gh repo deploy-key add *)'
+  'Bash(gh repo deploy-key delete *)'
+
+  # gh auth (5 write verbs)
+  'Bash(gh auth login *)'
+  'Bash(gh auth login)'
+  'Bash(gh auth logout *)'
+  'Bash(gh auth logout)'
+  'Bash(gh auth refresh *)'
+  'Bash(gh auth refresh)'
+  'Bash(gh auth setup-git *)'
+  'Bash(gh auth setup-git)'
+  'Bash(gh auth switch *)'
+  'Bash(gh auth switch)'
+
+  # gh label (3 write verbs)
+  'Bash(gh label clone *)'
+  'Bash(gh label create *)'
+  'Bash(gh label edit *)'
+
+  # gh project (12 write verbs)
+  'Bash(gh project close *)'
+  'Bash(gh project close)'
+  'Bash(gh project copy *)'
+  'Bash(gh project copy)'
+  'Bash(gh project create *)'
+  'Bash(gh project create)'
+  'Bash(gh project edit *)'
+  'Bash(gh project edit)'
+  'Bash(gh project field-create *)'
+  'Bash(gh project field-create)'
+  'Bash(gh project item-add *)'
+  'Bash(gh project item-add)'
+  'Bash(gh project item-archive *)'
+  'Bash(gh project item-archive)'
+  'Bash(gh project item-create *)'
+  'Bash(gh project item-create)'
+  'Bash(gh project item-edit *)'
+  'Bash(gh project item-edit)'
+  'Bash(gh project link *)'
+  'Bash(gh project link)'
+  'Bash(gh project mark-template *)'
+  'Bash(gh project mark-template)'
+  'Bash(gh project unlink *)'
+  'Bash(gh project unlink)'
+
+  # gh release (3 write verbs)
+  'Bash(gh release create *)'
+  'Bash(gh release create)'
+  'Bash(gh release delete *)'
+  'Bash(gh release edit *)'
+
+  # gh run (2 write verbs)
+  'Bash(gh run cancel *)'
+  'Bash(gh run cancel)'
+  'Bash(gh run rerun *)'
+  'Bash(gh run rerun)'
+
+  # gh workflow (2 write verbs)
+  'Bash(gh workflow disable *)'
+  'Bash(gh workflow disable)'
+  'Bash(gh workflow enable *)'
+  'Bash(gh workflow enable)'
+
+  # gh secret / variable / cache / gpg-key / ssh-key / codespace / extension / org
+  'Bash(gh secret set *)'
+  'Bash(gh secret delete *)'
+  'Bash(gh variable set *)'
+  'Bash(gh variable delete *)'
+  'Bash(gh cache delete *)'
+  'Bash(gh gpg-key add *)'
+  'Bash(gh gpg-key delete *)'
+  'Bash(gh ssh-key add *)'
+  'Bash(gh ssh-key delete *)'
+  'Bash(gh codespace create *)'
+  'Bash(gh codespace delete *)'
+  'Bash(gh codespace edit *)'
+  'Bash(gh codespace stop *)'
+  'Bash(gh codespace rebuild *)'
+  'Bash(gh extension install *)'
+  'Bash(gh extension remove *)'
+  'Bash(gh extension upgrade *)'
+  'Bash(gh org mem-add *)'
+  'Bash(gh org mem-remove *)'
+
+  # Heroku ask rules (17 patterns)
+  'Bash(heroku ps:scale *)'
+  'Bash(heroku ps:restart *)'
+  'Bash(heroku ps:stop *)'
+  'Bash(heroku addons:create *)'
+  'Bash(heroku addons:attach *)'
+  'Bash(heroku addons:detach *)'
+  'Bash(heroku addons:upgrade *)'
+  'Bash(heroku addons:downgrade *)'
+  'Bash(heroku maintenance:on *)'
+  'Bash(heroku maintenance:off *)'
+  'Bash(heroku releases:rollback *)'
+  'Bash(heroku access:add *)'
+  'Bash(heroku access:remove *)'
+  'Bash(heroku access:update *)'
+  'Bash(heroku domains:add *)'
+  'Bash(heroku domains:remove *)'
+  'Bash(heroku domains:clear *)'
+
+  # GitHub MCP ask rules (16 tools)
+  'mcp__claude_ai_GitHub_MCP__add_comment_to_pending_review'
+  'mcp__claude_ai_GitHub_MCP__add_issue_comment'
+  'mcp__claude_ai_GitHub_MCP__add_reply_to_pull_request_comment'
+  'mcp__claude_ai_GitHub_MCP__create_branch'
+  'mcp__claude_ai_GitHub_MCP__create_or_update_file'
+  'mcp__claude_ai_GitHub_MCP__create_pull_request'
+  'mcp__claude_ai_GitHub_MCP__create_repository'
+  'mcp__claude_ai_GitHub_MCP__fork_repository'
+  'mcp__claude_ai_GitHub_MCP__issue_write'
+  'mcp__claude_ai_GitHub_MCP__pull_request_review_write'
+  'mcp__claude_ai_GitHub_MCP__push_files'
+  'mcp__claude_ai_GitHub_MCP__request_copilot_review'
+  'mcp__claude_ai_GitHub_MCP__sub_issue_write'
+  'mcp__claude_ai_GitHub_MCP__update_pull_request'
+  'mcp__claude_ai_GitHub_MCP__update_pull_request_branch'
+  'mcp__claude_ai_GitHub_MCP__run_secret_scanning'
+)
 
 CHECK_MODE=0
 
@@ -300,11 +572,28 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   done
 
-  if ! deno run --allow-read "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"; then
+  if [ -d "$HOOKS_DEST" ]; then
+    for dest in "$HOOKS_DEST"/*; do
+      [ -e "$dest" ] || [ -L "$dest" ] || continue
+      if [ -L "$dest" ]; then
+        name="$(basename "$dest")"
+        if [ ! -e "$dest" ] || { [ ! -e "$HOOKS_SRC/$name" ] && [[ "$(readlink "$dest")" == *"$HOOKS_SRC"* ]]; }; then
+          echo "drift: orphaned symlink $name at $dest" >&2
+          DRIFT=1
+        fi
+      fi
+    done
+  fi
+
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"; then
+    DRIFT=1
+  fi
+
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/sync-cross-ai-rules.ts" --check; then
     DRIFT=1
   fi
 
@@ -360,6 +649,19 @@ for src in "$HOOKS_SRC"/*.sh; do
   fi
 done
 
+if [ -d "$HOOKS_DEST" ]; then
+  for dest in "$HOOKS_DEST"/*; do
+    [ -e "$dest" ] || [ -L "$dest" ] || continue
+    if [ -L "$dest" ]; then
+      name="$(basename "$dest")"
+      if [ ! -e "$dest" ] || { [ ! -e "$HOOKS_SRC/$name" ] && [[ "$(readlink "$dest")" == *"$HOOKS_SRC"* ]]; }; then
+        rm -f "$dest"
+        echo "$name: pruned orphaned symlink"
+      fi
+    fi
+  done
+fi
+
 # The merge logic itself lives in its own file (web-jam-tools#265) so it can
 # also be unit-tested in isolation against fixture JSON, independent of the
 # symlink step above (see test/install_hooks_merge.test.ts). This installer
@@ -367,6 +669,6 @@ done
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
 
-deno run --allow-read --allow-write "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"

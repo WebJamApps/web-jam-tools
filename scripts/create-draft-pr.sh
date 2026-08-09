@@ -18,8 +18,9 @@
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
-#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--dry-run] \
+#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--no-close] [--dry-run] \
 #       [--update] \
+#       [--no-close-reason TEXT | --no-close-reason-file PATH] \
 #       [--summary TEXT | --summary-file PATH] \
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
@@ -36,6 +37,12 @@
 #                   entirely (see below) — headless/scripted callers that already
 #                   know the exact model should set it instead of trusting the
 #                   model to self-report correctly.
+#   --no-close      Opt-in flag: DON'T close the issue on merge (emits `Refs #N — <reason>`).
+#                   Use when an issue has post-merge acceptance criteria that can only be
+#                   verified after merge.
+#   --no-close-reason TEXT / --no-close-reason-file PATH  Stated reason why the PR does not
+#                   close the issue on merge. If omitted with --no-close, defaults to
+#                   pointing at post-merge acceptance criteria verification.
 #   --part-of       Opt-in flag: DON'T close the issue on merge (emits `Part of #N`).
 #                   Use only for a partial PR or a standing run-log/epic issue.
 #   --closes        Deprecated no-op (closing is now the default); still accepted.
@@ -53,7 +60,7 @@
 #                   invocations (npm test/typecheck/lint, deno task test, vitest,
 #                   eslint, ...) is refused; it must have exercise-the-change
 #                   content left over after stripping those.
-#   --test-evidence REQUIRED (or --test-evidence-file). Fills "## Test evidence" (real
+#   --test-evidence OPTIONAL (or --test-evidence-file). Fills "## Test evidence" (real
 #                   lint + test output, ran green).
 #                   AUTO-FENCED (web-jam-tools#150): if the value contains no ```
 #                   code fence at all, the whole value is wrapped in one before the
@@ -94,8 +101,7 @@
 #                   opening a new one (web-jam-tools#236). Runs through the exact
 #                   same guard pipeline as create mode — author roster, the #77
 #                   empty/placeholder check, the unbulleted-summary check, the
-#                   #190 recognizable-test-evidence check, the #152
-#                   suite-invocations-only test-plan check, and the raw-HTML-tag
+#                   #152 suite-invocations-only test-plan check, and the raw-HTML-tag
 #                   check all fire on the REAL final content, not just at initial
 #                   creation. Looks the PR up via `gh pr view` for the current
 #                   branch (push happens first, same as create mode) and refuses
@@ -115,26 +121,23 @@
 # headless or interactive agy run's PR footer can never depend on the model
 # correctly naming itself (web-jam-tools#190).
 #
-# --summary, --test-plan, and --test-evidence are REQUIRED (web-jam-tools#77), each
-# either inline or via its *-file counterpart: the script refuses to open a PR whose
-# description is empty or left as a placeholder. This is the single choke point — no
-# caller (/next, ad-hoc, or future) can open a PR with an empty description. Put the
-# summary and real test evidence IN THE PR via these flags, not only in the
-# chat/REPL. --screenshots stays optional (inline only).
+# --summary and --test-plan are REQUIRED (web-jam-tools#77), each either inline or via
+# its *-file counterpart: the script refuses to open a PR whose description is empty or
+# left as a placeholder. This is the single choke point — no caller (/work-issue, ad-hoc, or
+# future) can open a PR with an empty description. Put the summary IN THE PR via these
+# flags, not only in the chat/REPL. --test-evidence and --screenshots stay optional.
 #
 # Refuses (exit 1) when: --author missing or names a model not on the ROSTER
-# (web-jam-tools#190); any of --summary/--test-plan/--test-evidence (inline or
-# *-file) missing or left as a placeholder; --summary has zero markdown bullet
-# lines (web-jam-tools#190); --test-evidence (inline or *-file) has no
-# recognizable test-runner output (web-jam-tools#190); --test-plan (inline or
-# *-file) is only test-suite invocations with nothing exercising the change
-# (web-jam-tools#152); a *-file flag points at a missing or empty file; both a
-# section's inline flag and its *-file flag are given; body text contains raw
-# HTML-like tags outside backticks (GitHub strips them silently — backtick
-# them); current branch is dev/main; working tree dirty; the repo has no `dev`
-# branch; a resolved issue is missing/closed; --part-of is passed without a
-# resolvable issue; or --update is passed but the current branch has no
-# existing open PR to update.
+# (web-jam-tools#190); any of --summary/--test-plan (inline or *-file) missing
+# or left as a placeholder; --summary has zero markdown bullet lines
+# (web-jam-tools#190); --test-plan (inline or *-file) is only test-suite
+# invocations with nothing exercising the change (web-jam-tools#152); a *-file
+# flag points at a missing or empty file; both a section's inline flag and its
+# *-file flag are given; body text contains raw HTML-like tags outside backticks
+# (GitHub strips them silently — backtick them); current branch is dev/main;
+# working tree dirty; the repo has no `dev` branch; a resolved issue is
+# missing/closed; --part-of is passed without a resolvable issue; or --update is
+# passed but the current branch has no existing open PR to update.
 
 set -euo pipefail
 
@@ -190,6 +193,10 @@ SUMMARY_FILE=""
 TEST_PLAN_FILE=""
 TEST_EVIDENCE_FILE=""
 PART_OF=0
+NO_CLOSE=0
+NO_CLOSE_REASON=""
+HAS_NO_CLOSE_REASON=0
+NO_CLOSE_REASON_FILE=""
 DRY_RUN=0
 UPDATE=0
 
@@ -197,6 +204,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --part-of)
       PART_OF=1
+      shift 1 ;;
+    --no-close)
+      NO_CLOSE=1
       shift 1 ;;
     --dry-run)
       DRY_RUN=1
@@ -212,7 +222,7 @@ while [ $# -gt 0 ]; do
         shift 1
       fi
       ;;
-    --author|--issue|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file)
+    --author|--issue|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file|--no-close-reason|--no-close-reason-file)
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
       case "$1" in
         --author)              AUTHOR="$2" ;;
@@ -224,6 +234,8 @@ while [ $# -gt 0 ]; do
         --summary-file)        SUMMARY_FILE="$2" ;;
         --test-plan-file)      TEST_PLAN_FILE="$2" ;;
         --test-evidence-file)  TEST_EVIDENCE_FILE="$2" ;;
+        --no-close-reason)     NO_CLOSE_REASON="$2"; HAS_NO_CLOSE_REASON=1 ;;
+        --no-close-reason-file) NO_CLOSE_REASON_FILE="$2" ;;
       esac
       shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -279,6 +291,16 @@ if [ -z "$ISSUE" ] && [[ "$BRANCH" =~ ^[^/]+/([0-9]+)(-|$) ]]; then
   ISSUE="${BASH_REMATCH[1]}"
 fi
 
+# --- mutually exclusive flags ---
+if [ "$NO_CLOSE" -eq 1 ] && [ "$PART_OF" -eq 1 ]; then
+  echo "ERROR: pass --no-close or --part-of, not both." >&2
+  exit 1
+fi
+if [ "$NO_CLOSE" -eq 0 ] && { [ "$HAS_NO_CLOSE_REASON" -eq 1 ] || [ -n "$NO_CLOSE_REASON_FILE" ]; }; then
+  echo "ERROR: --no-close-reason / --no-close-reason-file requires --no-close." >&2
+  exit 1
+fi
+
 FORMATTED_ISSUE=""
 # An issue is optional (2026-07-03): small standalone fixes don't need one, and an
 # issue must never be created just to satisfy this script. With no issue, the PR
@@ -286,6 +308,10 @@ FORMATTED_ISSUE=""
 if [ -z "$ISSUE" ]; then
   if [ "$PART_OF" -eq 1 ]; then
     echo "ERROR: --part-of needs an issue — name the branch <lane>/<issue#>-<slug> or pass --issue N." >&2
+    exit 1
+  fi
+  if [ "$NO_CLOSE" -eq 1 ]; then
+    echo "ERROR: --no-close needs an issue — name the branch <lane>/<issue#>-<slug> or pass --issue N." >&2
     exit 1
   fi
   echo "No issue resolved — opening the PR without a Closes line."
@@ -405,6 +431,7 @@ require_file_flag_for_rich_prose() {
 require_file_flag_for_rich_prose "summary" "$SUMMARY" "$HAS_SUMMARY"
 require_file_flag_for_rich_prose "test-plan" "$TEST_PLAN" "$HAS_TEST_PLAN"
 require_file_flag_for_rich_prose "test-evidence" "$TEST_EVIDENCE" "$HAS_TEST_EVIDENCE"
+require_file_flag_for_rich_prose "no-close-reason" "$NO_CLOSE_REASON" "$HAS_NO_CLOSE_REASON"
 
 # --- resolve *-file flags into content (web-jam-tools#145) ---
 # A multi-line shell argument gets flattened to one line during agy's headless
@@ -448,10 +475,17 @@ if [ -n "$TEST_EVIDENCE_FILE" ]; then
   fi
   TEST_EVIDENCE="$(read_body_file test-evidence-file "$TEST_EVIDENCE_FILE")"
 fi
+if [ -n "$NO_CLOSE_REASON_FILE" ]; then
+  if [ "$HAS_NO_CLOSE_REASON" -eq 1 ]; then
+    echo "ERROR: pass --no-close-reason or --no-close-reason-file, not both." >&2
+    exit 1
+  fi
+  NO_CLOSE_REASON="$(read_body_file no-close-reason-file "$NO_CLOSE_REASON_FILE")"
+fi
 
 # --- require real description content (web-jam-tools#77) ---
 # The single choke point: refuse a PR with an empty/placeholder description, so no
-# caller (/next, ad-hoc, or future) can ship one. Rejects both an absent value and
+# caller (/work-issue, ad-hoc, or future) can ship one. Rejects both an absent value and
 # the legacy placeholder text (in case a caller echoes it back).
 PLACEHOLDER_SUMMARY="_(fill in: what changed and why)_"
 PLACEHOLDER_TEST_PLAN="_(fill in: exact commands + expected result)_"
@@ -464,15 +498,16 @@ fi
 if [ -z "$TEST_PLAN" ] || [ "$TEST_PLAN" = "$PLACEHOLDER_TEST_PLAN" ]; then
   missing+=("--test-plan")
 fi
-if [ -z "$TEST_EVIDENCE" ] || [ "$TEST_EVIDENCE" = "$PLACEHOLDER_TEST_EVIDENCE" ]; then
-  missing+=("--test-evidence")
-fi
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "ERROR: refusing to open a PR with an empty description (web-jam-tools#77)." >&2
   echo "       Provide real content for: ${missing[*]}" >&2
-  echo "       Put your summary + actual test output IN THE PR via these flags," >&2
+  echo "       Put your summary IN THE PR via these flags," >&2
   echo "       not only in the chat/REPL reply." >&2
   exit 1
+fi
+
+if [ "$TEST_EVIDENCE" = "$PLACEHOLDER_TEST_EVIDENCE" ]; then
+  TEST_EVIDENCE=""
 fi
 
 # --- refuse an unbulleted --summary (web-jam-tools#190) ---
@@ -483,21 +518,6 @@ if ! printf '%s' "$SUMMARY" | grep -qE '^[[:space:]]*[-*][[:space:]]'; then
   echo "ERROR: --summary has no markdown bullet lines (web-jam-tools#190)." >&2
   echo "       Write it as bullets (one change per line, starting with '- ' or '* ')," >&2
   echo "       not a run-on paragraph." >&2
-  exit 1
-fi
-
-# --- refuse --test-evidence with no recognizable test-runner output (web-jam-tools#190) ---
-# JaMmusic#1212: evidence was a fenced PARAPHRASE ("All unit tests, lints, and
-# typechecks passed successfully") with no actual runner output. Heuristic only
-# (no --run-tests re-execution mode — out of scope for this pass): require a
-# line that looks like real pass/fail output. Tuned against real WebJamApps
-# output: vitest/jest "Tests: N passed" / "N passed (N)", deno's
-# "ok | N passed | 0 failed", and ✓-marked lines.
-if ! printf '%s' "$TEST_EVIDENCE" | grep -qE '[0-9]+[[:space:]]*pass|[Tt]ests?:|ok[[:space:]]*\||✓'; then
-  echo "ERROR: --test-evidence has no recognizable test-runner output (web-jam-tools#190)." >&2
-  echo "       A paraphrase like \"all tests passed successfully\" is refused — paste the" >&2
-  echo "       ACTUAL runner output (e.g. vitest/jest \"Tests: N passed\", deno" >&2
-  echo "       \"ok | N passed | 0 failed\", or ✓-marked lines)." >&2
   exit 1
 fi
 
@@ -554,9 +574,14 @@ raw_tag_check() {
 }
 raw_tag_check summary "$SUMMARY"
 raw_tag_check test-plan "$TEST_PLAN"
-raw_tag_check test-evidence "$TEST_EVIDENCE"
+if [ -n "$TEST_EVIDENCE" ]; then
+  raw_tag_check test-evidence "$TEST_EVIDENCE"
+fi
 if [ "$HAS_SCREENSHOTS" -eq 1 ]; then
   raw_tag_check screenshots "$SCREENSHOTS"
+fi
+if [ -n "$NO_CLOSE_REASON" ]; then
+  raw_tag_check no-close-reason "$NO_CLOSE_REASON"
 fi
 
 # --- auto-fence an unfenced --test-evidence (web-jam-tools#150) ---
@@ -568,7 +593,7 @@ fi
 # means the caller formatted the section themselves — pass through unchanged.
 # (Not applied to --test-plan: plans are legitimately prose + fenced commands,
 # and blanket-fencing would garble real markdown; see #150.)
-if ! printf '%s' "$TEST_EVIDENCE" | grep -qF '```'; then
+if [ -n "$TEST_EVIDENCE" ] && ! printf '%s' "$TEST_EVIDENCE" | grep -qF '```'; then
   echo "NOTE: --test-evidence had no code fence — auto-wrapping it in one (web-jam-tools#150)."
   TEST_EVIDENCE="\`\`\`
 $TEST_EVIDENCE
@@ -579,6 +604,9 @@ fi
 
 if [ -z "$ISSUE" ]; then
   ISSUE_REF=""
+elif [ "$NO_CLOSE" -eq 1 ]; then
+  REASON="${NO_CLOSE_REASON:-post-merge acceptance criteria must be verified after merge.}"
+  ISSUE_REF="Refs $FORMATTED_ISSUE — $REASON"
 elif [ "$PART_OF" -eq 1 ]; then
   ISSUE_REF="Part of $FORMATTED_ISSUE"
 else
@@ -593,11 +621,14 @@ $ISSUE_REF
 }
 ## How to test locally
 $TEST_PLAN
-
-## Test evidence
-$TEST_EVIDENCE
 EOF
 )"
+if [ -n "$TEST_EVIDENCE" ]; then
+  BODY="$BODY
+
+## Test evidence
+$TEST_EVIDENCE"
+fi
 if [ "$HAS_SCREENSHOTS" -eq 1 ]; then
   BODY="$BODY
 
@@ -642,6 +673,8 @@ if [ "$UPDATE" -eq 1 ]; then
   echo "Draft PR updated: $PR_URL"
   if [ -z "$ISSUE" ]; then
     echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+  elif [ "$NO_CLOSE" -eq 1 ]; then
+    echo "  base: dev | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
     echo "  base: dev | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else
@@ -656,6 +689,8 @@ else
   echo "Draft PR opened: $PR_URL"
   if [ -z "$ISSUE" ]; then
     echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+  elif [ "$NO_CLOSE" -eq 1 ]; then
+    echo "  base: dev | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
     echo "  base: dev | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else

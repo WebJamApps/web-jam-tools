@@ -1,14 +1,14 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.26.30",
+  "version": "1.28.15",
   "tasks": {
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
     "coverage": "rm -rf cov_profile && deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile && deno coverage cov_profile",
     "coverage:check": "bash scripts/coverage-check.sh",
     "check": "deno check src/ test/",
-    "fmt": "deno fmt src/ test/",
-    "fmt:check": "deno fmt --check src/ test/",
+    "fmt": "deno fmt src/ test/ scripts/sync-cross-ai-rules.ts",
+    "fmt:check": "deno fmt --check src/ test/ scripts/sync-cross-ai-rules.ts",
     "lint": "deno lint src/ test/",
     "audit": "bash scripts/audit.sh",
     "sast": "bash scripts/sast.sh",
@@ -20,12 +20,16 @@
     "outreach:advance": "deno run --allow-net --allow-env src/outreach-cron/advance_cadence.ts",
     "dropbox:link": "deno run --allow-net --allow-env src/dropbox-link/dropbox_link_cli.ts",
     "venue-contact:extract": "deno run -A src/venue-contact/cli.ts",
+    "venue-tag:diff": "deno run --allow-env=WEB_JAM_LLM_TOKEN,WEB_JAM_BACK_URL --allow-net=webjamsalem.herokuapp.com --allow-read=. src/venue-tag-diff/cli.ts",
     "fix-labels:diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/diff.ts",
     "fix-labels:milestone-diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/milestone-diff.ts",
     "fix-labels:generate-model-labels": "deno run --allow-read=skills/fix-labels/labels.yaml --allow-write=skills/fix-labels/model-labels.json src/fix-labels/generate-model-labels.ts",
+    "memory-index": "deno run --allow-read --allow-write --allow-env src/memory-index/cli.ts",
     "update:reaper": "bash scripts/reaper-update.sh",
     "monitor:uptime": "deno run --allow-net --allow-env src/uptime/cli.ts",
-    "monitor:cron": "deno run --allow-net --allow-env src/uptime/cron.ts"
+    "monitor:cron": "deno run --allow-net --allow-env src/uptime/cron.ts",
+    "sync-cross-ai-rules:check": "deno run --allow-read --allow-env scripts/sync-cross-ai-rules.ts --check",
+    "sync-cross-ai-rules:write": "deno run --allow-read --allow-write --allow-env scripts/sync-cross-ai-rules.ts --write"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.0",
@@ -37,7 +41,7 @@
   },
   "fmt": {
     "lineWidth": 100,
-    "include": ["src/", "test/"],
+    "include": ["src/", "test/", "scripts/sync-cross-ai-rules.ts"],
     "exclude": ["src/gig-scraper/*.json"]
   },
   "lint": {
@@ -58,15 +62,12 @@
       "cov_profile/",
       "src/gig-scraper/",
       "src/venue-contact/",
+      "src/venue-tag-diff/",
       "src/fix-labels/",
       "src/task-queue/",
       "src/dropbox-link/",
-      "src/outreach-cron/"
+      "src/outreach-cron/",
+      "src/memory-index/"
     ]
   }
 }
-
-
-
-
-

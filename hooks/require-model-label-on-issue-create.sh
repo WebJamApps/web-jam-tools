@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse guard: deny an issue-creating or issue-editing call that violates
-# model-label or executable-issue rules.
-# Design: web-jam-tools#265 (model label on issue creation) & web-jam-tools#342 (executable issue rule).
+# model-label, native-type, or executable-issue rules.
+# Design: web-jam-tools#265 (model label on issue creation), web-jam-tools#342 (executable issue rule) & web-jam-tools#415 (native type).
 #
 # Intercepts BOTH surfaces:
 #   - Bash: `gh issue create`, `gh issue edit`
@@ -24,7 +24,7 @@ if [ -z "$result" ]; then
         && printf '%s' "$input" | grep -Eq '\bissue\b' \
         && (printf '%s' "$input" | grep -Eq '\bcreate\b' || printf '%s' "$input" | grep -Eq '\bedit\b')); then
     echo "BLOCKED (model-label guard): couldn't parse this issue create/edit call (hook parser failure)." >&2
-    echo "Check that model label and issue body meet requirements (web-jam-tools#265, web-jam-tools#342)." >&2
+    echo "Check that model label, native type, and issue body meet requirements (web-jam-tools#265, web-jam-tools#342, web-jam-tools#415)." >&2
     exit 2
   fi
   exit 0
@@ -36,7 +36,7 @@ case "$result" in
     ;;
   DENY:*)
     echo "BLOCKED (model-label guard): ${result#DENY:}" >&2
-    echo "(rule: executable-issue / model-label — see skills/draft-issue/SKILL.md)" >&2
+    echo "(rule: executable-issue / model-label / native-type — see skills/draft-issue/SKILL.md)" >&2
     exit 2
     ;;
   *)

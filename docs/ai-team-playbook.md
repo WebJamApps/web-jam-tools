@@ -17,9 +17,9 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
 | 1 | **Josh** | Everywhere | Product Owner | Decisions, approvals, sending the actual emails, talking to venues, final say on every workflow checkpoint | — |
 | 2 | **Fable** *(Claude Code)* | Laptop *(planned — not yet GA)* | System Architect | Requirements discussion, specs, GitHub issue writing. Never execution work a cheaper model could handle. | `claude-fable-tasks.txt` |
 | 3 | **Opus** *(Claude Code)* | Laptop | Judgment / Tech Lead | Deciding what to do, multi-file design and architecture, reviewing subagent output, conversations with Josh. Not for mechanical work — hand that to Haiku or Sonnet. | `claude-opus-tasks.txt` |
-| 4 | **Sonnet** *(Claude Code subagent)* | Laptop | Coder | Ordinary contained coding — a fix or feature across a few files, writing tests, light refactors. | *(issued via GitHub label)* |
+| 4 | **Sonnet** *(Claude Code subagent)* | Laptop | Coder | Major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (slightly higher capability than Flash High). | *(issued via GitHub label)* |
 | 5 | **Haiku** *(Claude Code subagent)* | Laptop | Mechanic | Lookups, web research, scans, single-file/single-field edits, typo & data fixes, running tests/builds + reporting, screenshots. | *(issued via GitHub label)* |
-| 6 | **Flash** *(Gemini 3.6 Medium via agy/Antigravity)* | Laptop | Frontend / General agy | Frontend and UI coding (notably strong at it) + general agy lane. **Paid** on Josh's Google billing — a separate budget that spares the Anthropic budget. Invoked via `/next`. | *(issued via GitHub label — `agy-tasks.txt` retired, web-jam-tools#249)* |
+| 6 | **Flash** *(Gemini 3.6 High / Med via agy/Antigravity)* | Laptop | Full-Stack Coder | Full-stack coding (FE, BE, APIs, tooling) across all 8 repos + general agy lane. Invoked via `/work-issue` (alias `/next`) or interactive `agy`. | *(issued via GitHub label — `agy-tasks.txt` retired, web-jam-tools#249)* |
 | 7 | **Sonnet** *(web, claude.ai)* | Web browser | Data Annotation / General tasks | Used mostly by **Maria** for data annotation and general Claude tasks. (Josh's web Sonnet is limited access; see row 9 for Josh's phone expansion.) | — |
 | 8 | **Claude Mobile** *(Sonnet)* | Phone (Claude Android app) | Mobile Strategist / GitHub Agent | On-the-go reading, thoughtful drafting, planning. **Expanding**: GitHub interaction (issues, PRs) via GitHub remote MCP connector (web-jam-tools#179/#112); moving Drive items to trash (web-jam-tools#180). Drops task files at Drive root for laptop pickup. | `claude-sonnet-tasks.txt` |
 | 9 | **Gemini Mobile** | Phone (Gemini app) | Field Assistant | Voice Q&A, Calendar/Tasks entries, Maps, Hotels/Flights lookups, capturing notes during a venue phone call. Not agentic. | — |
@@ -38,11 +38,12 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
 - **Josh handles all venue contact.** No AI emails or calls a venue directly.
 - **Reviews are lean, not rewrites.** When Opus reviews a draft, the job is to flag specific issues — not redo the work.
 - **Phone apps drop only at Drive root.** They can't target a folder. Cleanup is the laptop's job via `/drive-cleanup`.
-- **Always delegate to the cheapest model that can do the job.** Haiku for mechanical one-offs, Sonnet for ordinary coding, Flash for frontend/UI, Opus for judgment and design only. Spending Opus tokens on mechanical work wastes the Anthropic budget.
+- **Always delegate to the cheapest model that can do the job.** Haiku/Flash Med for mechanical one-offs & doc cleanups, Flash High for full-stack coding & interactive work, Sonnet for complex multi-file refactoring, Opus for judgment and design only. Spending Opus tokens on mechanical work wastes the Anthropic budget.
 - **Dispatch vs. inline — judge by output volume and duration, not by task category.** **Dispatch** to a Haiku/Sonnet subagent when the job is long-running or produces heavy tool output: test suites, builds, migrations, multi-file scans or edits, anything log-noisy. This keeps that output out of the Opus session's context, which is the scarce resource. **Do it inline** when it is a handful of commands with trivial output (a few lines) — e.g. pruning a merged branch, removing a stray worktree, one `gh issue view`. A cold subagent pays its own system prompt, tool schemas and briefing before running anything, and still returns a report into the Opus context; for a job this small that fixed cost exceeds the work itself. The purpose is saving money and context. **If applying the rule would cost more than ignoring it, the rule does not apply** — say so plainly rather than following it into the more expensive path.
-- **No agent connects a new account, credential, or MCP server without Josh's explicit authorization naming it.** Discovering that something *could* be connected is never permission to connect it — see the OPERATIONAL HARD RULES section of [cross-ai-rules.md](cross-ai-rules.md) for the full rule text and origin.
+- **Credential & MCP Server Authorization:** See [cross-ai-rules.md](cross-ai-rules.md) for the operational hard rule requiring Josh's explicit authorization before connecting any new account, credential, or MCP server.
 - **Adaptive Escalation Rule (Flash Med → Subagent Boost):** Antigravity (agy) sessions should default to **`Flash Med`** for fast response times, low latency, and zero token waste. If a subtask encounters complex multi-file refactoring, difficult type/lint errors, or intricate REAPER routing/composition, the session automatically dispatches a subagent with `Model: "pro"` or `Model: "flash"` (`invoke_subagent`) to solve that specific block and report back.
 - **The issue BODY is the spec agy reads — comments are for humans.** `handle-agy-tasks.sh` composes the Flash/agy prompt from the issue title + body, and (since web-jam-tools#154) also folds in the issue's comments (chronological, newest last, clearly delimited). Comments still aren't a substitute: fold every locked decision into the BODY before dispatching, or Flash may miss it. If the BODY still contains a `BLOCKED` / `DO NOT START` marker, the script refuses to dispatch and exits non-zero — clear the marker in the body first.
+- **Laptop Dropbox Scope & Security Guardrails:** See [cross-ai-rules.md](cross-ai-rules.md) for the canonical list of approved Dropbox folders, denied paths, and operational hard rules.
 
 ---
 
@@ -140,7 +141,7 @@ Triggered manually (`/drive-cleanup` in any Claude Code session) or by the sessi
 
 - Duplicate files (same name appearing twice)
 - **Claude Mobile bridge files** at Drive root (`for-opus-*.txt` / `for-agy-*.txt` / legacy timestamped variants) — these get appended to the Dropbox-resident canonical queue; the Drive original is renamed to `processed-YYYY-MM-DD-<name>.txt` (kept forever as audit trail)
-- Misplaced deliverable artifacts at Drive root that should live in `JoshMariaMusic` or `CollegeLutheran`
+- Misplaced deliverable artifacts at Drive root that should live in project folders (see [cross-ai-rules.md](cross-ai-rules.md) for file placement rules)
 - Stray ephemeral files (old timestamped backups, log dumps)
 - Files in the `Misc/` folder older than 90 days (flagged for review)
 
@@ -178,7 +179,7 @@ Several workflows are built around **Josh approving each step** before the next 
 | Pitch emails / venue outreach | Before any email is actually sent | The exact wording, recipient, and whether it goes out at all. AIs draft — you send. |
 | Risky git operations (push, force-push, `reset --hard`, branch deletes) | Before Claude Code runs the command | Whether the destructive / shared-state action proceeds. Approval for one push is not approval for all pushes. |
 | `/code-review ultra` (multi-agent cloud PR review) | Triggering it at all | Only you can launch it — it's billed and Claude Code can't self-trigger. Use it when a PR is worth the spend. |
-| MariaParty protected files (RSVP MASTER, Master Plan v2, Banner Decision) | Before any edit | Explicit override required — default behavior is "do not touch." |
+| Protected files | Before any edit | Explicit override required — see [cross-ai-rules.md](cross-ai-rules.md) for the canonical list of protected files. |
 | Memory writes that would override prior guidance | When the AI flags a contradiction with an existing memory record | Whether the new info supersedes the old or both should coexist. |
 
 ### What "approve" sounds like
@@ -205,7 +206,7 @@ Several workflows are built around **Josh approving each step** before the next 
 | Add a Google Task from voice | Gemini Mobile |
 | Draft a pitch email or careful text | Claude Mobile (then review later from laptop) |
 | Take notes during a venue phone call | Gemini Mobile |
-| Frontend / UI coding task | **Flash** (agy/Antigravity) via `/next` |
+| Frontend / UI coding task | **Flash** (agy/Antigravity) via `/work-issue` (alias `/next`) |
 | Ordinary contained coding task | **Sonnet** subagent (via Opus) |
 | Mechanical one-off (lookup, data fix, typo, scan) | **Haiku** subagent (via Opus) |
 | ↳ but if the job is a few commands with trivial output (prune a branch, one lookup) | **Inline** — a cold subagent costs more than the work; see "Dispatch vs. inline" above |

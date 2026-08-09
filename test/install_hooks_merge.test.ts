@@ -23,7 +23,16 @@ interface RunResult {
 
 async function runMerge(settingsPath: string, args: string[]): Promise<RunResult> {
   const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["run", "--allow-read", "--allow-write", SCRIPT_PATH, settingsPath, "--", ...args],
+    args: [
+      "run",
+      "--allow-read",
+      "--allow-write",
+      "--allow-env",
+      SCRIPT_PATH,
+      settingsPath,
+      "--",
+      ...args,
+    ],
     stdout: "piped",
     stderr: "piped",
   });
@@ -316,6 +325,7 @@ Deno.test("an unrelated hand-added entry pointing outside managed hooks is prese
       const res = await runMerge(path, [
         "--pre-tool-use",
         "Bash::$HOME/.claude/hooks/a.sh",
+        "Edit|Write::$HOME/.claude/hooks/feature-branch-guard.sh",
       ]);
       assertEquals(res.code, 0, res.stderr);
 
@@ -380,6 +390,7 @@ Deno.test("a matcher entry holding TWO commands, only one being re-pointed, keep
     async (path) => {
       const res = await runMerge(path, [
         "--pre-tool-use",
+        "Bash::$HOME/.claude/hooks/bar.sh",
         "Edit|Write::$HOME/.claude/hooks/foo.sh",
       ]);
       assertEquals(res.code, 0, res.stderr);
@@ -704,6 +715,40 @@ Deno.test(
       "Bash(git push * --mirror*)",
       "Bash(git push --prune*)",
       "Bash(git push * --prune*)",
+      "Read(//home/joshua/Dropbox/Apps/**)",
+      "Edit(//home/joshua/Dropbox/Apps/**)",
+      "Read(//home/joshua/Dropbox/BreakPoint Ministries/**)",
+      "Edit(//home/joshua/Dropbox/BreakPoint Ministries/**)",
+      "Read(//home/joshua/Dropbox/Camera Uploads/**)",
+      "Edit(//home/joshua/Dropbox/Camera Uploads/**)",
+      "Read(//home/joshua/Dropbox/Capture/**)",
+      "Edit(//home/joshua/Dropbox/Capture/**)",
+      "Read(//home/joshua/Dropbox/CollegeLutheran/**)",
+      "Edit(//home/joshua/Dropbox/CollegeLutheran/**)",
+      "Read(//home/joshua/Dropbox/DropsyncFiles/**)",
+      "Edit(//home/joshua/Dropbox/DropsyncFiles/**)",
+      "Read(//home/joshua/Dropbox/Galapagos/**)",
+      "Edit(//home/joshua/Dropbox/Galapagos/**)",
+      "Read(//home/joshua/Dropbox/InBetween SetsMusic/**)",
+      "Edit(//home/joshua/Dropbox/InBetween SetsMusic/**)",
+      "Read(//home/joshua/Dropbox/JoshMariaMusic_private/**)",
+      "Edit(//home/joshua/Dropbox/JoshMariaMusic_private/**)",
+      "Read(//home/joshua/Dropbox/Migrated Paper Docs/**)",
+      "Edit(//home/joshua/Dropbox/Migrated Paper Docs/**)",
+      "Read(//home/joshua/Dropbox/Other (1)/**)",
+      "Edit(//home/joshua/Dropbox/Other (1)/**)",
+      "Read(//home/joshua/Dropbox/ShermanHome/**)",
+      "Edit(//home/joshua/Dropbox/ShermanHome/**)",
+      "Read(//home/joshua/Dropbox/TimShermanMusic/**)",
+      "Edit(//home/joshua/Dropbox/TimShermanMusic/**)",
+      "Read(//home/joshua/Dropbox/Web Design/**)",
+      "Edit(//home/joshua/Dropbox/Web Design/**)",
+      "Read(//home/joshua/Dropbox/WebJamApps/**)",
+      "Edit(//home/joshua/Dropbox/WebJamApps/**)",
+      "Read(//home/joshua/Dropbox/web-jam-llc/**)",
+      "Edit(//home/joshua/Dropbox/web-jam-llc/**)",
+      "mcp__claude_ai_Dropbox__delete",
+      "mcp__claude_ai_Dropbox__move",
     ];
     await withTempSettings(undefined, async (path) => {
       const first = await runMerge(path, ["--deny", ...DENY_RULES]);
@@ -826,3 +871,149 @@ Deno.test("secret-scan gate refuses to merge when synthetic JWT secret fixture i
     },
   );
 });
+
+// --- Pruning retired/orphaned hook entries (web-jam-tools#430) ---
+
+Deno.test(
+  "prunes orphaned hook entries from SessionStart, Stop, PreToolUse, and PostToolUse",
+  async () => {
+    await withTempSettings(
+      {
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-start.sh" }] },
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/active-start.sh" }] },
+          ],
+          Stop: [
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-stop.sh" }] },
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/active-stop.sh" }] },
+          ],
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [
+                { type: "command", command: "$HOME/.claude/hooks/retired-pre.sh" },
+                { type: "command", command: "$HOME/.claude/hooks/active-pre.sh" },
+              ],
+            },
+          ],
+          PostToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [
+                { type: "command", command: "$HOME/.claude/hooks/retired-post.sh" },
+                { type: "command", command: "$HOME/.claude/hooks/active-post.sh" },
+              ],
+            },
+          ],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "$HOME/.claude/hooks/active-start.sh",
+          "--stop",
+          "$HOME/.claude/hooks/active-stop.sh",
+          "--pre-tool-use",
+          "Bash::$HOME/.claude/hooks/active-pre.sh",
+          "--post-tool-use",
+          "Bash::$HOME/.claude/hooks/active-post.sh",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed retired SessionStart hook $HOME/.claude/hooks/retired-start.sh",
+          ),
+        );
+        assert(
+          res.stdout.includes("removed retired Stop hook $HOME/.claude/hooks/retired-stop.sh"),
+        );
+        assert(res.stdout.includes("removed retired hook (Bash)"));
+
+        const data = await readJson(path);
+        assertEquals(data.hooks.SessionStart.length, 1);
+        assertEquals(
+          data.hooks.SessionStart[0].hooks[0].command,
+          "$HOME/.claude/hooks/active-start.sh",
+        );
+        assertEquals(data.hooks.Stop?.length, 1);
+        assertEquals(
+          data.hooks.Stop?.[0].hooks[0].command,
+          "$HOME/.claude/hooks/active-stop.sh",
+        );
+        assertEquals(data.hooks.PreToolUse.length, 1);
+        assertEquals(data.hooks.PreToolUse[0].hooks.map((h: HookCmd) => h.command), [
+          "$HOME/.claude/hooks/active-pre.sh",
+        ]);
+        assertEquals(data.hooks.PostToolUse?.length, 1);
+        assertEquals(data.hooks.PostToolUse?.[0].hooks.map((h: HookCmd) => h.command), [
+          "$HOME/.claude/hooks/active-post.sh",
+        ]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "prunes orphaned entry from agy hooks.json target",
+  async () => {
+    await withTempSettings(
+      {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [
+                { type: "command", command: "$HOME/.claude/hooks/retired-agy.sh" },
+                { type: "command", command: "$HOME/.claude/hooks/active-agy.sh" },
+              ],
+            },
+          ],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--pre-tool-use",
+          "Bash::$HOME/.claude/hooks/active-agy.sh",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        const data = await readJson(path);
+        assertEquals(data.hooks.PreToolUse.length, 1);
+        assertEquals(data.hooks.PreToolUse[0].hooks.map((h: HookCmd) => h.command), [
+          "$HOME/.claude/hooks/active-agy.sh",
+        ]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check mode in merge-hooks-into-settings.ts reports drift on stale/retired hook entries",
+  async () => {
+    await withTempSettings(
+      {
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-start.sh" }] },
+          ],
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-pre.sh" }],
+            },
+          ],
+        },
+      },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "$HOME/.claude/hooks/active-start.sh",
+          "--pre-tool-use",
+          "Bash::$HOME/.claude/hooks/active-pre.sh",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(checkRes.stderr.includes("has retired SessionStart hook"));
+        assert(checkRes.stderr.includes("has retired hook (Bash)"));
+      },
+    );
+  },
+);
