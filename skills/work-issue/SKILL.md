@@ -1,6 +1,6 @@
 ---
 name: work-issue
-description: Start an agy-labeled coding task. Use when the user types /work-issue <Repo>#<issue-num> (or alias /next <Repo>#<issue-num>) (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (or alias /next <Repo>#<issue-num>) (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
   version: v1
   publisher: josh
@@ -9,7 +9,7 @@ aliases:
   - next
 ---
 
-# /work-issue — run an agy-labeled coding task
+# /work-issue — run a model-labeled coding task (Claude Code & Antigravity)
 
 > **Alias**: `/next` (and phrases like `next`, `next task`, `start the next task`) is preserved as an active alias for `/work-issue`.
 
@@ -102,7 +102,7 @@ Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in th
 
 ## Steps
 
-1. Run this shell command (with the `agy`-labeled issue the user named) and read
+1. Run this shell command (with the target issue the user named) and read
    its stdout:
 
    ```
@@ -174,7 +174,7 @@ Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in th
 
    ```
    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
-     --author "agy — <the model you are running as>" \
+     --author "<Surface> — <Model>" \
      --summary "<what changed and why>" \
      --test-plan "<exact commands to verify + expected result>" \
      --test-evidence "<the actual lint + test output you saw, confirming both ran green>" \
@@ -205,7 +205,7 @@ Example of a well-formed call (bulleted summary, fenced commands + output):
 
 `````
 ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
-  --author "agy — <the model you are running as>" \
+  --author "<Surface> — <Model>" \
   --summary "- Add X so Y works
 - Refactor Z to stop duplicating W" \
   --test-plan "Run:
