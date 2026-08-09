@@ -168,10 +168,11 @@ added on a separate branch. Deleted rather than fixed, to remove the drift surfa
    **recolor** (`gh label edit`). A label that exists under the right name is ALWAYS miscolored, not
    missing, even if its color is badly wrong — this is exactly the case (`blocked` in
    CollegeLutheran) that the eyeballed version of this skill got wrong.
-4. **Wrong-repo placement** — a canonical label is present in a repo that shouldn't carry it (e.g.
+4. **Description drift** — the canonical label is present with the right name and color but the description differs (including empty live description vs non-empty yaml) → propose **redescribe** (`gh label edit --description`).
+5. **Wrong-repo placement** — a canonical label is present in a repo that shouldn't carry it (e.g.
    `Flash Low`, scoped to front-end repos only, present in a non-front-end repo) → propose
    **remove** (`gh label delete`, this repo only — the label stays canonical elsewhere).
-5. **Non-canonical** — any label not in `labels.yaml` at all — including every GitHub default
+6. **Non-canonical** — any label not in `labels.yaml` at all — including every GitHub default
    label, a legacy label like a single `Flash` where the canonical split is `Flash Med`/`Flash
    High`/`Flash Low`, and (as of web-jam-tools#300) the pruned `Top Priority`/`High
    Priority`/`Low Priority`/`bug`/`enhancement`/`blocked`/`gig-outreach` labels if still present on
@@ -197,6 +198,7 @@ and never let the model guess or skip it.
 ### JaMmusic
 - CREATE `Flash Low` (#FEF2C0) — missing
 - RECOLOR `parked` #0206d8 → #C2C2C2 — miscolored
+- REDESCRIBE `Haiku` "" → "Mechanical tasks: lookups, scans, single-file edits, typo/data fixes, and running test/build checks" — description drift
 - DELETE `codex` — non-canonical — 2 open issues carry this label
 
 ### web-jam-back
@@ -241,14 +243,14 @@ report was wrong (the label existed, miscolored or not, rather than being genuin
 must be surfaced to Josh, loudly, not swallowed. This is exactly the secondary fault
 (web-jam-tools#263) that let a failed `blocked` create in CollegeLutheran get reported as success.
 
-- **Rename / recolor**:
+- **Rename / recolor / redescribe**:
   ```
-  gh label edit --repo WebJamApps/<repo> "<old name>" --name "<new name>" --color "<hex, no #>"
+  gh label edit --repo WebJamApps/<repo> "<old name>" --name "<new name>" --color "<hex, no #>" --description "<description>"
   ```
   Preserves every issue's existing label association. Check the exit status; report any failure.
 - **Create (missing)**:
   ```
-  gh label create --repo WebJamApps/<repo> "<name>" --color "<hex, no #>"
+  gh label create --repo WebJamApps/<repo> "<name>" --color "<hex, no #>" --description "<description>"
   ```
   Check the exit status; report any failure — do not redirect stderr away from view.
 - **Delete (approved removals/non-canonical only)**:

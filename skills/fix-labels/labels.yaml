@@ -63,18 +63,22 @@ labels:
   # anywhere; regenerate the sidecar after editing modelTier entries here.
   - name: Haiku
     hex: "0E8A16"
+    description: "Mechanical tasks: lookups, scans, single-file edits, typo/data fixes, and running test/build checks"
     repos: all
     modelTier: true
   - name: Sonnet
     hex: "1D76DB"
+    description: "Major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases"
     repos: all
     modelTier: true
   - name: Opus
     hex: "B392F0"
+    description: "Top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs"
     repos: all
     modelTier: true
   - name: Fable
     hex: "D93F0B"
+    description: "Fable 5 remains the superior model for deep reasoning, structural planning, and long-context retention - currently unavailable"
     repos: all
     modelTier: true
     # Retired/dormant, kept in every repo in case the model returns.
@@ -101,10 +105,12 @@ labels:
   # Josh retired Flash Low on 2026-08-02.
   - name: Flash Med
     hex: "FBCA04"
+    description: "Mechanical work, documentation cleanup, single-file edits, and routine execution tasks across all repos"
     repos: all
     modelTier: true
   - name: Flash High
     hex: "E67E22"
+    description: "Full-stack coding, contained refactoring, multi-file feature edits, and interactive work across all repos"
     repos: all
     modelTier: true
 
@@ -113,9 +119,11 @@ labels:
   # they are outside every web-jam-tools#300 prune category and are kept.
   - name: parked
     hex: "C2C2C2"
+    description: "Parked issue — work on hold until unparked"
     repos: all
   - name: Josh
     hex: "795548"
+    description: "Manual step requiring Josh (credential creation, vendor dashboard action, or physical step)"
     repos: all
     # Marks an issue whose work only Josh can do — a manual step no agent can
     # perform (generating a credential, clicking through a vendor console, a
@@ -123,6 +131,7 @@ labels:
     # findable in GitHub instead of being lost as a footnote in a chat session.
   - name: Blocked
     hex: "B60205"
+    description: "Issue currently unworkable due to an upstream dependency, credential, or vendor delay"
     repos: all
     # RESTORED, canonical (web-jam-tools#329 "Restore the Blocked label as
     # canonical in labels.yaml — it was pruned in a batch Josh never
@@ -144,6 +153,7 @@ labels:
     # issue.
   - name: Needs Design
     hex: "D93F0B"
+    description: "Epic or sub-issue requiring design clarification before implementation"
     repos: all
     # Marks an Epic or sub-issue requiring design clarification before implementation (web-jam-tools#415).
 
