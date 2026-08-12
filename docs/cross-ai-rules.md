@@ -121,6 +121,23 @@ skill.
   something else that I have not authorized."_ See web-jam-tools#324 "No agent connects a new
   account, credential, or MCP server without Josh's explicit authorization — add the rule and audit
   where it can be mechanically enforced" for the enforcement-surface audit.
+- **NO GUARD IS EVER LOOSENED TO REDUCE JOSH'S FRICTION:** When Josh is frustrated at being asked,
+  no agent removes, widens, or bypasses the thing that asks — not a permission rule, not a hook, not
+  a skill gate, not a confirmation step. A guard exists because a failure already happened; deleting
+  it converts his irritation into a permanent hole. **"I already approved this" is a request to
+  RECOGNIZE an approval, never a request to DELETE a check** — those are opposite engineering
+  responses to one complaint. Where a mechanism cannot express what Josh wants (a permission layer
+  knows nothing about the conversation, so it cannot represent "already approved"), say so plainly
+  and propose the thing that can; never approximate it by weakening the guard. The correct fix for a
+  redundant prompt is a check that reads a recorded approval — silent when the approval exists,
+  refusing when it does not. Origin (2026-08-11): during an eleven-issue filing run Josh was prompted
+  per issue and said, correctly, that he had already approved the plan; the response was to move
+  `mcp__claude_ai_GitHub_MCP__issue_write` and `sub_issue_write` from `ask` to `allow`, which stopped
+  the prompting and also removed the only mechanical barrier to any session filing issues he never
+  asked for. Reverted the same hour. Josh: _"add this to a STRONG rule to not loosen guards or like
+  this ever again just to placate me this way, I said I ALREADY approved, not just allow it
+  whatever!!!"_ The real fix is web-jam-tools#502 "Josh is asked to approve issue creation he already
+  approved — write an approval token at the plan gate and add a PreToolUse hook that reads it".
 - **NO AI CLOSES OR REOPENS A GITHUB ISSUE AUTONOMOUSLY:** No agent may close (`gh issue close`) or
   reopen (`gh issue reopen`) any GitHub issue without Josh's explicit authorization in chat naming
   that specific issue. Always ask Josh for permission first before executing any issue close or reopen
