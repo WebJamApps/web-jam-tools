@@ -18,10 +18,11 @@ can be overridden. By default the PR **closes the issue on merge** (`Closes #N`)
 `--part-of` only when the issue must stay open (a partial PR, or a standing
 run-log/epic issue like a venue-mining run log).
 
-Post-merge manual steps no longer use `--part-of`. Instead, any post-merge manual
-step is filed as its own `Josh`-labeled issue (paired with the agent issue per the
-two-issue pair rule in `/issue-design`), so the agent's PR closes its issue normally
-(`Closes #N`).
+Post-merge manual steps are governed by the POST-MERGE MANUAL STEPS rule in
+`docs/cross-ai-rules.md` — read it there rather than relying on a summary here.
+In short: the step becomes its own `Josh` issue, so the agent's PR closes its own
+issue normally, and `--no-close` is reserved for a criterion that genuinely cannot
+be split out.
 
 It **refuses to open a PR with an empty or placeholder description** (web-jam-tools#77).
 Josh alone reviews and flips draft → ready on GitHub.
@@ -72,6 +73,13 @@ the body sections via flags:
   evidence" section is correct, and a reviewer must never raise a finding about its
   absence. If you do pass it, it is still refused when it contains no recognizable
   output at all (a prose paraphrase like "all tests passed" doesn't count).
+- **An issue is OPTIONAL — never create one just to open a PR.** The script resolves
+  an issue number from the branch name (`<lane>/<issue#>-<slug>`) first, then from
+  `--issue N`. If neither yields a number, the PR simply opens with no `Closes` line
+  and takes its title from the last commit subject. That is a supported, normal PR.
+  An issue becomes **mandatory only** when you pass `--part-of` or `--no-close`,
+  because both flags write a line naming an issue (`Part of #N`, `Refs #N`) and
+  cannot be written without one.
 - Closing is the default: the body reads `Closes #N`, so the issue auto-closes when
   Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) ONLY when
   the issue must stay open: a partial PR, or a standing run-log/epic issue. Pass
@@ -136,6 +144,8 @@ plan substance" rule above is now machine-enforced (web-jam-tools#152); body
 text contains raw HTML-like tags outside backticks (GitHub strips them
 silently — the "wrap every `<tag>` in backticks" rule above is now machine-
 enforced); you're on `dev`/`main`; the working tree is dirty; the repo has no
-`dev` branch; a resolved issue is missing or closed; or `--part-of` is passed
-without a resolvable issue. If it refuses, fix the underlying condition — do
-not fall back to `gh pr create`.
+`dev` branch; an issue number WAS resolved (from the branch name or `--issue`)
+but that issue does not exist or is not OPEN — this is not a requirement that
+a PR have an issue, only that a named one be real and open; or `--part-of` /
+`--no-close` is passed with no resolvable issue. If it refuses, fix the
+underlying condition — do not fall back to `gh pr create`.

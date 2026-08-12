@@ -104,14 +104,20 @@ any other assistant) working in this workspace.
   multiple repositories (e.g. "all 8 active github repos"), no single PR in one repository may pass
   `--closes` or claim the issue is completed. PRs in individual repos must use `--part-of` so the
   tracking issue remains OPEN until the final repository's PR is merged.
-- **POST-MERGE MANUAL STEPS AND THE `--no-close` FLAG:** When an issue has any acceptance criterion
-  requiring a manual step after the merge — an installer run, a session restart, a scheduled/cron
-  cycle, a prod deploy, a third-party dashboard change — the PR must use `--no-close` (with an
-  optional reason via `--no-close-reason "<text>"` or `--no-close-reason-file PATH`) when opening or
-  updating the PR using `scripts/create-draft-pr.sh`. The issue is closed by hand once those
-  post-merge steps are verified.
+- **POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE:** A manual step Josh must perform — an
+  installer run, a session restart, a scheduled/cron cycle, a prod deploy, a third-party dashboard
+  change — never lives inside an agent's execution issue. It is filed as its own `Josh`-labeled
+  issue, paired with the agent's issue and `Blocked` on it (both the label and the native
+  dependency). The agent's PR then closes the agent's issue normally with `Closes #N`, because that
+  issue no longer contains anything the agent could not do from a branch. The pairing rules live in
+  the `/issue-design` skill, which owns how those two issues are written.
   - **PR-open-time test:** Before opening a PR, check: _does any acceptance criterion require
-    something an implementing agent cannot do from a branch?_ If yes, pass `--no-close`.
+    something an implementing agent cannot do from a branch?_ If yes, that criterion belongs in a
+    separate `Josh` issue, not in this one.
+  - **`--no-close` is the residual case only.** Where a criterion genuinely cannot be split out into
+    its own issue, the PR passes `--no-close` (with an optional reason via `--no-close-reason
+    "<text>"` or `--no-close-reason-file PATH`) and Josh closes the issue by hand once the
+    post-merge steps are verified. Splitting is the default; this is the exception.
   - **Verification command:** To verify that a PR does not close its linked issue, run:
     ```bash
     gh pr view <N> --repo WebJamApps/<repo> --json closingIssuesReferences
