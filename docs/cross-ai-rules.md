@@ -270,12 +270,29 @@ skill.
      preference. Requirements live in the design document; an executable issue carries scope, build
      mechanics and repo facts, and points for the rest. A paraphrase drifts the moment it is
      written; a verbatim copy is just slower drift.
-  2. **NEVER propose machinery to hold copies in step.** A generator, a sync script, a drift check,
-     a session hook, a CI gate or a test whose purpose is to keep N copies identical **does not
-     prevent drift — it manages drift**, and it adds a second thing to maintain on top of the first.
-     If the answer to "how do we stop these copies diverging?" is a tool, the design is wrong: delete
-     the copies. **The amount of machinery is itself the diagnostic** — needing five mechanisms to
-     hold one block identical is proof the block should exist once.
+  2. **NEVER propose machinery to hold AUTHORITATIVE copies in step.** A generator, a sync script, a
+     drift check, a session hook, a CI gate or a test whose purpose is to keep N editable copies
+     identical **does not prevent drift — it manages drift**, and it adds a second thing to maintain
+     on top of the first. If the answer to "how do we stop these copies diverging?" is a tool, the
+     design is wrong: delete the copies. **The amount of machinery is itself the diagnostic** —
+     needing five mechanisms to hold one block identical is proof the block should exist once.
+
+     **The test, and it is the whole of it: if the two copies disagree, is there a genuine question
+     about which one is correct?**
+     - **Yes → this rule applies.** Each copy is editable and each is treated as the source in its
+       own context. Eight `AGENTS.md` files, each read as authoritative by whatever agent opened
+       that repo, is the banned shape.
+     - **No → this rule does NOT apply, and never did.** Backups, mirrors, caches, generated
+       artifacts and build output are one-directional and derived: written from an original, never
+       edited in place, never consulted as the truth while the original exists. A stale backup is a
+       snapshot being old, not a conflict. `claude-backup/` and the pre-scrub repo mirror under
+       `backups/` in `~/Dropbox/web-jam-llms/` are legitimate and are not what this rule is about.
+       Neither is a cache, a lockfile, or a generated `dist/`.
+
+     **Better than either: make drift physically impossible.** `~/Dropbox/web-jam-llms/package.json`
+     is a symlink to `~/WebJamApps/package.json` — one file reachable by two paths, so the copies
+     cannot diverge and no machinery is needed to check that they haven't. Where a single artifact
+     genuinely must be reachable from two places, prefer that over any mechanism that compares.
   3. **NEVER write a precedence rule.** "Where X and Y disagree, X wins" does not resolve a
      conflict; it *licenses* one, declaring drift acceptable so long as everyone knows the winner.
      Not approved, in any artifact, ever. If a difference is found, repair it in EVERY place it
