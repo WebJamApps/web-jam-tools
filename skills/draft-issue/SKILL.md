@@ -104,24 +104,24 @@ gh pr view 263 --repo WebJamApps/<repo> --json title -q .title
 
 ## How to file it
 
+Always use `scripts/create-issue.ts` (or `deno task create-issue`):
+
 ```sh
-gh issue create --repo WebJamApps/<repo> \
+deno task create-issue \
+  --repo WebJamApps/<repo> \
   --title "Short, specific title" \
-  --body "$(cat <<'EOF'
-## What this builds
-<1-2 sentences describing what is being built>
-
-1. <Numbered item 1>
-2. <Numbered item 2>
-
-## Acceptance criteria
-- ...
-EOF
-)" \
+  --body-file /path/to/body.md \
   --type Task \
   --label Sonnet \
-  --milestone "v1.2"
+  --milestone "v1.2" \
+  --priority High \
+  --parent 437
 ```
+
+`scripts/create-issue.ts` standardizes issue creation across all repos:
+- Sets labels, milestone, native issue Type (`Task`, `Bug`, `Feature`, `Epic`), native Priority (`Urgent`, `High`, `Medium`, `Low`), and attaches the parent issue link (`--parent <num>`) via GraphQL `addSubIssue`.
+- Re-reads the created issue afterwards and verifies all requested attributes stick (exits non-zero if any attribute failed to stick).
+- Prints the formatted issue on success as `repo#number "title"`.
 
 - Require `--type <Type>` (`Task`, `Bug`, `Feature`, `Epic`) on all issue creation calls.
 - Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
@@ -129,8 +129,8 @@ EOF
 - Add non-model status labels (`Blocked`, `Needs Design`, `Josh`, `parked`, ...)
   alongside the model label freely; the hook only checks that exactly one *model* label is present,
   not that it's the only label.
-- Set native `Priority` field via GitHub MCP `issue_write` → `issue_fields`, never via `gh` CLI.
-- The MCP `issue_write` create path takes `"type": "Task"`, `"milestone": 1` (milestone number), `"labels": ["Sonnet", "Needs Design"]`, and `"issue_fields": { "Priority": "High" }` — same native-type, milestone, model-label, and native priority guidelines.
+- Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
+- Attach parent issue link via `scripts/create-issue.ts --parent <parent_issue_number>`.
 
 ## If the hook denies the call
 
