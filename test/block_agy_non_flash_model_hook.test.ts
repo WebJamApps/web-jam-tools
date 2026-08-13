@@ -49,12 +49,7 @@ Deno.test("agy -i 'prompt' with no --model is allowed", async () => {
   assertEquals(res.code, 0, res.stderr);
 });
 
-// --- allowed: the three Flash 3.6 slugs ---
-
-Deno.test("agy --model gemini-3.6-flash-low is allowed", async () => {
-  const res = await runHook("agy --model gemini-3.6-flash-low");
-  assertEquals(res.code, 0, res.stderr);
-});
+// --- allowed: the two Flash 3.6 slugs ---
 
 Deno.test("agy --model gemini-3.6-flash-medium is allowed", async () => {
   const res = await runHook("agy --model gemini-3.6-flash-medium");
@@ -79,6 +74,12 @@ Deno.test("agy --model gemini-3.6-flash-medium --dangerously-skip-permissions -p
 });
 
 // --- blocked: every other --model value ---
+
+Deno.test("agy --model gemini-3.6-flash-low is blocked", async () => {
+  const res = await runHook("agy --model gemini-3.6-flash-low");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
 
 Deno.test("agy --model claude-sonnet-4-6 is blocked", async () => {
   const res = await runHook("agy --model claude-sonnet-4-6");
@@ -128,10 +129,10 @@ Deno.test("agy --model gemini-3.5-flash-low is blocked (old Flash generation)", 
   assertBlocked(res.stderr);
 });
 
-Deno.test("block message names all three permitted slugs", async () => {
+Deno.test("block message names both permitted slugs", async () => {
   const res = await runHook("agy --model claude-sonnet-4-6");
   assertEquals(res.code, 2);
-  for (const slug of ["gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"]) {
+  for (const slug of ["gemini-3.6-flash-medium", "gemini-3.6-flash-high"]) {
     if (!res.stderr.includes(slug)) {
       throw new Error(`expected block message to name ${slug}, got: ${res.stderr}`);
     }

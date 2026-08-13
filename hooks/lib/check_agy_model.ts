@@ -3,7 +3,17 @@
  */
 import { splitShellTokens } from "./normalize_command.ts";
 
-const ALLOWED = new Set(["gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"]);
+export interface AgyModelSpec {
+  slug: string;
+  displayName: string;
+}
+
+export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
+  { slug: "gemini-3.6-flash-medium", displayName: "Gemini 3.6 Flash (Medium)" },
+  { slug: "gemini-3.6-flash-high", displayName: "Gemini 3.6 Flash (High)" },
+];
+
+export const ALLOWED = new Set(ALLOWED_AGY_MODELS.map((m) => m.slug));
 const OPERATORS = new Set(["&&", "||", ";", "|", "(", ")"]);
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 
@@ -82,6 +92,11 @@ export function checkAgyModel(cmd: string): string {
 }
 
 if (import.meta.main) {
-  const cmd = Deno.env.get("CMD_FOR_PY") || Deno.args[0] || "";
-  console.log(checkAgyModel(cmd));
+  const arg = Deno.args[0] || "";
+  if (arg === "--default-models") {
+    console.log(ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"));
+  } else {
+    const cmd = Deno.env.get("CMD_FOR_PY") || arg;
+    console.log(checkAgyModel(cmd));
+  }
 }

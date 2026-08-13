@@ -137,7 +137,8 @@ agy_env_args() {
 # most-capable-first order was a free-tier assumption). Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
-DEFAULT_MODELS='Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)'
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)')
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- parse args ---

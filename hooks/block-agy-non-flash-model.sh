@@ -16,15 +16,15 @@
 #     configured default — separately pinned to Flash 3.6 Medium in
 #     ~/.gemini/antigravity-cli/settings.json, a laptop-local step outside
 #     this hook's / this repo's reach, web-jam-tools#267 item 2).
-#   - `--model` (or `--model=`) equal to one of the three Flash 3.6 slugs:
-#     gemini-3.6-flash-low, gemini-3.6-flash-medium, gemini-3.6-flash-high.
+#   - `--model` (or `--model=`) equal to one of the two Flash 3.6 slugs:
+#     gemini-3.6-flash-medium, gemini-3.6-flash-high.
 #
 # BLOCKED:
 #   - any other --model value (notably claude-sonnet-4-6,
 #     claude-opus-4-6-thinking, gpt-oss-120b-medium, gemini-3.1-pro-*, and
 #     every gemini-3.5-flash-* slug).
 #   - an AGY_MODELS=... env-var prefix on the SAME agy invocation naming
-#     anything outside those three slugs — that path bypasses --model
+#     anything outside those two slugs — that path bypasses --model
 #     entirely, so it must be checked too.
 #
 # Only fires on a literal `agy` command invocation (bare `agy` or a path
@@ -50,7 +50,7 @@ result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_agy_model.t
 
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2
-  echo "agy is restricted to Flash 3.6: gemini-3.6-flash-low, gemini-3.6-flash-medium, or gemini-3.6-flash-high — or omit --model entirely to use agy's own configured default." >&2
+  echo "agy is restricted to Flash 3.6: gemini-3.6-flash-medium or gemini-3.6-flash-high — or omit --model entirely to use agy's own configured default." >&2
   echo "(design: web-jam-tools#267 — override by rephrasing to one of the allowed slugs)" >&2
   exit 2
 }
