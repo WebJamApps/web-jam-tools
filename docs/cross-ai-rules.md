@@ -152,15 +152,35 @@ skill.
   stored in application configuration files (web-jam-tools#344 "Human-only credentials register and
   guard hook").
 - **NO AI DELETES OR FORCE-PUSHES A REMOTE BRANCH, EVER, WITHOUT AN EXPLICIT IMPERATIVE FROM JOSH
-  NAMING THAT BRANCH.** "The PR is merged" is NOT such an instruction — it states a fact, it does
-  not authorize deleting anything. Local branch cleanup after a merge (deleting a LOCAL branch with
+  NAMING THAT BRANCH — OR THE PULL REQUEST IT BELONGS TO.** "The PR is merged" is NOT such an
+  instruction — it states a fact, it does not authorize deleting anything.
+
+  **Naming the PR counts as naming the branch** (Josh, 2026-08-13: *"I can ask for a PR to be fixed
+  (not just the branch, but the PR)"*). A pull request resolves to exactly one head branch, so "fix
+  PR 521" or "rebase web-jam-tools#521" identifies the target as precisely as the branch name does,
+  and it is how Josh actually works. Resolve it before acting —
+  `gh pr view <N> --repo WebJamApps/<Repo> --json headRefName` — and act on **that** branch and no
+  other. This widens what counts as a valid imperative; it does not weaken the requirement that one
+  exist. A bare "fix it", a merged-PR notification, or your own inference that a rebase is needed
+  are still not authorization.
+
+  **DELETION is unaffected by this paragraph.** Naming a PR authorizes a `--force-with-lease` push
+  to its head branch. It never authorizes deleting that branch, and the deletion patterns stay in
+  `permissions.deny` with no prompt and no exception.
+
+  **`--force-with-lease` is `ask`, not `deny`** (`ASK_RULES` in `scripts/install-hooks.sh`), so the
+  harness prompts with the literal command before it runs and Josh answers per invocation. That
+  prompt is the mechanism enforcing this rule — a deny entry could not, since static string matching
+  has no view of whether Josh authorized anything, and it therefore refused the authorized case and
+  the unauthorized one identically. Plain `--force` remains denied outright. Local branch cleanup after a merge (deleting a LOCAL branch with
   `git branch -d`/`-D`, `git fetch --prune` to prune stale local remote-tracking refs) remains
   permitted and unchanged — this rule narrows that standing post-merge cleanup habit to local
   branches only, it does not remove it or require re-approval for it. Enforced by three independent
   layers: a harness `permissions.deny` block on the ways `git push`/`git branch` can delete or
-  clobber a remote ref (`--delete`/`-d`, empty-source colon refspecs,
-  `--force`/`-f`/`--force-with-lease`, `--mirror`, `--prune`, and `git branch -D`/`--delete --force`
-  against a `remotes/` ref — installed via `scripts/install-hooks.sh` in this repo), a GitHub
+  clobber a remote ref (`--delete`/`-d`, empty-source colon refspecs, plain `--force`/`-f`,
+  `--mirror`, `--prune`, and `git branch -D`/`--delete --force`
+  against a `remotes/` ref — installed via `scripts/install-hooks.sh` in this repo; note
+  `--force-with-lease` is `ask` rather than `deny`, per the paragraph above), a GitHub
   ruleset restricting deletions on the branches agents create (`claude/**`, `agy/**`, `dev`, `main`
   — Josh-only UI work, see web-jam-tools#308 "Remote branches can be deleted by an agent with no
   authorization — advisory guard does not block (3 layers: deny rules, GitHub ruleset, HARD
