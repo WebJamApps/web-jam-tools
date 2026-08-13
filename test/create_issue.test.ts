@@ -5,6 +5,7 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import {
   createIssueAndVerify,
+  defaultExecDeps,
   ExecDeps,
   IssueData,
   normalizeRepo,
@@ -113,6 +114,47 @@ Deno.test("verifyIssueAttributes passes when all requested attributes match", ()
   const res = verifyIssueAttributes(actual, requested);
   assertEquals(res.ok, true);
   assertEquals(res.errors.length, 0);
+});
+
+Deno.test("verifyIssueAttributes handles parent_issue_url, milestone number, and field name priority", () => {
+  const actual: IssueData = {
+    number: 514,
+    title: "Add create-issue script",
+    milestone: { title: "v1.0", number: 13 },
+    issue_field_values: [
+      {
+        issue_field_name: "Priority",
+        single_select_option: { name: "Low" },
+      },
+    ],
+    parent_issue_url: "https://api.github.com/repos/WebJamApps/web-jam-tools/issues/437",
+  };
+
+  const requested = {
+    title: "Add create-issue script",
+    bodyFile: "/tmp/b.md",
+    milestone: "13",
+    priority: "Low",
+    parent: 437,
+  };
+
+  const res = verifyIssueAttributes(actual, requested);
+  assertEquals(res.ok, true);
+});
+
+Deno.test("verifyIssueAttributes fails on type, milestone, priority, and parent missing/mismatch", () => {
+  const actual: IssueData = {
+    number: 10,
+    title: "Test",
+  };
+
+  const res1 = verifyIssueAttributes(actual, { title: "Test", bodyFile: "/b", type: "Task" });
+  assertEquals(res1.ok, false);
+  assertStringIncludes(res1.errors[0], 'Type mismatch: expected "Task", got "none"');
+
+  const res2 = verifyIssueAttributes(actual, { title: "Test", bodyFile: "/b", milestone: "v1.0" });
+  assertEquals(res2.ok, false);
+  assertStringIncludes(res2.errors[0], 'Milestone mismatch: expected "v1.0", got "none"');
 });
 
 Deno.test("verifyIssueAttributes fails on title mismatch", () => {
@@ -247,7 +289,7 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
   assertEquals(result, 'web-jam-tools#515 "My New Issue"');
 });
 
-Deno.test("createIssueAndVerify throws error if Priority verification fails", async () => {
+Deno.test("createIssueAndVerify fallback GraphQL parent check when parent missing in REST", async () => {
   const mockDeps: ExecDeps = {
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
@@ -259,15 +301,43 @@ Deno.test("createIssueAndVerify throws error if Priority verification fails", as
           stderr: "",
         });
       }
+      if (cmdStr.includes("graphql") && cmdStr.includes("GetIssueNodeIds")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              parent: { issue: { id: "P_ID" } },
+              child: { issue: { id: "C_ID" } },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("graphql") && cmdStr.includes("AddSubIssue")) {
+        return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+      }
       if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/515")) {
-        // Issue created without Priority field sticking
+        // Issue REST response without parent field
         const mockIssue: IssueData = {
           number: 515,
           title: "My New Issue",
-          labels: [{ name: "Flash High" }],
-          issue_field_values: [],
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
+      }
+      if (cmdStr.includes("graphql") && cmdStr.includes("CheckParent")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  parent: { number: 437 },
+                },
+              },
+            },
+          }),
+          stderr: "",
+        });
       }
       return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
     },
@@ -276,17 +346,180 @@ Deno.test("createIssueAndVerify throws error if Priority verification fails", as
     },
   };
 
-  const options = {
+  const result = await createIssueAndVerify({
     title: "My New Issue",
     bodyFile: "/tmp/b.md",
-    priority: "High",
-  };
+    parent: 437,
+  }, mockDeps);
+
+  assertEquals(result, 'web-jam-tools#515 "My New Issue"');
+});
+
+Deno.test("createIssueAndVerify error handling branches", async () => {
+  await assertRejects(
+    () => createIssueAndVerify({ title: "", bodyFile: "/tmp/b.md" }),
+    Error,
+    "Missing required argument --title",
+  );
 
   await assertRejects(
-    async () => {
-      await createIssueAndVerify(options, mockDeps);
-    },
+    () => createIssueAndVerify({ title: "Test", bodyFile: "" }),
     Error,
-    "Issue verification failed",
+    "Missing required argument --body-file",
   );
+
+  // gh issue create failure
+  const failCreateDeps: ExecDeps = {
+    runCmd: () => Promise.resolve({ code: 1, stdout: "", stderr: "gh create error" }),
+    readFileText: () => Promise.resolve("body"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, failCreateDeps),
+    Error,
+    "Failed to create issue",
+  );
+
+  // Unparseable issue URL
+  const badUrlDeps: ExecDeps = {
+    runCmd: () => Promise.resolve({ code: 0, stdout: "bad output format", stderr: "" }),
+    readFileText: () => Promise.resolve("body"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, badUrlDeps),
+    Error,
+    "Could not parse issue number",
+  );
+
+  // Priority patch failure
+  const failPrioDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      if (cmd.join(" ").includes("PATCH")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "prio patch error" });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b", priority: "High" }, failPrioDeps),
+    Error,
+    "Failed to set Priority field",
+  );
+
+  // Parent node ID query failure
+  const failNodeIdQueryDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      const str = cmd.join(" ");
+      if (str.includes("GetIssueNodeIds")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "node query error" });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b", parent: 100 }, failNodeIdQueryDeps),
+    Error,
+    "Failed to resolve node IDs",
+  );
+
+  // Parent node IDs missing in data
+  const missingNodeIdDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      const str = cmd.join(" ");
+      if (str.includes("GetIssueNodeIds")) {
+        return Promise.resolve({ code: 0, stdout: JSON.stringify({ data: {} }), stderr: "" });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b", parent: 100 }, missingNodeIdDeps),
+    Error,
+    "Could not resolve GraphQL node IDs",
+  );
+
+  // AddSubIssue mutation failure
+  const failSubIssueMutDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      const str = cmd.join(" ");
+      if (str.includes("GetIssueNodeIds")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: { parent: { issue: { id: "P" } }, child: { issue: { id: "C" } } },
+          }),
+          stderr: "",
+        });
+      }
+      if (str.includes("AddSubIssue")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "add sub issue error" });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b", parent: 100 }, failSubIssueMutDeps),
+    Error,
+    "Failed to attach parent sub-issue",
+  );
+
+  // Re-read API failure
+  const failReadDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      const str = cmd.join(" ");
+      if (str.includes("gh api repos/")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "read api error" });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, failReadDeps),
+    Error,
+    "Failed to re-read created issue",
+  );
+});
+
+Deno.test("defaultExecDeps executes real Deno reading and command execution", async () => {
+  const tmpFile = await Deno.makeTempFile();
+  await Deno.writeTextFile(tmpFile, "hello test");
+
+  try {
+    const text = await defaultExecDeps.readFileText(tmpFile);
+    assertEquals(text, "hello test");
+
+    const echoRes = await defaultExecDeps.runCmd(["echo", "hi"]);
+    assertEquals(echoRes.code, 0);
+    assertStringIncludes(echoRes.stdout, "hi");
+
+    const catRes = await defaultExecDeps.runCmd(["cat"], "stdin content");
+    assertEquals(catRes.code, 0);
+    assertEquals(catRes.stdout, "stdin content");
+  } finally {
+    await Deno.remove(tmpFile);
+  }
 });
