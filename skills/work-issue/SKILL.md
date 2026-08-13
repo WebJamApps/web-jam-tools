@@ -1,8 +1,8 @@
 ---
 name: work-issue
-description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (or alias /next <Repo>#<issue-num>) (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (or alias /next <Repo>#<issue-num>) (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
-  version: v1
+  version: v2
   publisher: josh
 aliases:
   - /next
@@ -18,10 +18,18 @@ shell script, then you (the agent) do the actual coding inside this same session
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (or `/next Repo#123`, named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then go straight to "## Steps" below.
+- **`/work-issue Repo#123`** (or `/next Repo#123`, named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the two pre-checks below before "## Steps".
 - **`/work-issue`** (or `/next`, no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
-  to the same "## Steps" flow below. See "## No-argument mode" first.
+  to the same flow below. See "## No-argument mode" first.
+
+**Whichever route got you here, two pre-checks run before any branch is created or any code is
+written**, and they run for a named issue and an auto-picked one alike:
+
+1. **"## Epics — resolve to a child"** — an epic is a container with no diff of its own; it resolves
+   to its startable children for Josh to pick from.
+2. **"## Design-sync check"** — an issue that contradicts the requirements document it cites is
+   defective, and working it bakes the defect into a PR. Stop and report instead.
 
 ## Triggers & Aliases
 - Primary Command: `/work-issue`
@@ -101,6 +109,69 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
    closed or already in flight), stop and tell Josh: "every item in <filename>'s runnable list is closed or already in flight — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
 
 Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in this mode — they are read-only input.
+
+## Epics — resolve to a child, never implement the epic itself
+
+Run this **before** anything else, as soon as an issue is named.
+
+```bash
+gh issue view <num> --repo WebJamApps/<Repo> --json title,body --jq .title
+gh api repos/WebJamApps/<Repo>/issues/<num> --jq '.type.name // "none"'
+```
+
+If the native issue type is **`Epic`**, do NOT set up a branch and do NOT try to implement it. An
+epic is a container: it has no diff of its own and closes only when its children close. Instead:
+
+1. List its children and their state:
+
+   ```bash
+   gh api repos/WebJamApps/<Repo>/issues/<num>/sub_issues \
+     --jq '.[] | "\(.number)\t\(.state)\t[\(.labels | map(.name) | join(","))]\t\(.title)"'
+   ```
+
+2. For each OPEN child, work out whether it is actually startable:
+   - it carries no `Blocked` label, **and**
+   - every issue its body names as a prerequisite is CLOSED
+     (`gh issue view <n> --repo WebJamApps/<Repo> --json state -q .state`), **and**
+   - it is not already in flight — no open PR references it and no dispatch branch exists for it
+     (same two checks as the no-argument mode above).
+3. Report the children to Josh as a numbered list, marking each **startable**, **blocked by
+   `<repo#number "title">`**, or **already in flight**. Cite every issue as `repo#number "title"` —
+   a bare number is unusable.
+4. **Stop and let Josh choose which child to work.** Do not auto-pick, and never pick more than one:
+   sibling children of one epic frequently touch the same repo, and two agents in one repo collide.
+5. Once he names a child, restart this skill from the top with that child as the target — including
+   the design-sync check below, which applies to the child, not the epic.
+
+If the type is anything other than `Epic`, continue.
+
+## Design-sync check — run BEFORE working the issue
+
+An issue can go stale when the requirements document it was written from changes and the issue is
+never updated. That has happened: an issue's acceptance criteria contradicted its own cited design
+section, an agent followed the issue rather than the document, and it wrote to a file outside every
+git repository to satisfy a criterion that should not have existed. Catch it here, before any code
+is written.
+
+1. Read the target issue body and look for a `## Design reference` block naming a requirements
+   document and section(s).
+   - **No such block** — say so plainly ("this issue cites no design document, so it cannot be
+     checked for drift") and continue. Do not invent a document to check against.
+2. Read the cited document at the cited sections. **If the path cannot be read, STOP and say so.**
+   Do not proceed on the issue body alone — the whole point of the pointer is that the document, not
+   the issue, carries the requirements.
+3. Compare the issue's `## What this builds` items and its acceptance criteria against those
+   sections. You are looking for one thing: **does the issue assert something the document
+   contradicts, or require something the document says is out of scope?**
+4. Report the result before doing any work:
+   - **In sync** — one line saying so, then continue to Steps.
+   - **Out of sync** — stop. Report each conflict as a table: what the issue says, what the document
+     says, and which section. Then ask Josh whether to fix the issue first. **Do not pick a side and
+     do not proceed** — if the two disagree, that is a defect in the issue, and working it either way
+     bakes the defect into a PR.
+5. Only after Josh says the issue is correct (or has had it corrected) do you continue to Steps.
+
+This check is read-only. It never edits the issue or the document on its own.
 
 ## Steps
 
