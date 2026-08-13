@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 # PreToolUse guard: hard-refuse (exit 2) the 17 irreversible operations (R-24 & R-25).
 # Hands Josh the runnable command to execute manually in a separate terminal outside Claude Code.
+#
+# Decision logic for the `tool_input.command` checks lives in
+# hooks/lib/check_irreversible_operations.ts (web-jam-tools#524) — this script
+# is a thin wrapper: it extracts the tool call from stdin JSON, hands the raw
+# Bash command to the Deno lib, and turns a BLOCK result into Josh's
+# runnable-command message. The MCP tool_name checks (delete_file,
+# merge_pull_request) stay here since they match a JSON field name directly,
+# not free-form text, so they were never exposed to the heredoc/quoting bug.
+#
+# SCOPE: this guard only ever sees a Bash tool_input.command string and an
+# MCP tool_name. It does NOT see Write/Edit file writes, and it does NOT see
+# anything agy does internally — agy's own hooks are inert
+# (web-jam-tools#432 "agy hooks do not enforce — all 12 are inert on Flash,
+# and a Stop/SessionStart entry kills the whole config; fix that, then give
+# Antigravity Gmail MCP fenced by a working hook"). Do not widen this guard to
+# compensate for that gap.
 set -euo pipefail
 
 input=$(cat)
@@ -28,83 +44,18 @@ if [[ "$tool_name" =~ merge_pull_request$ ]]; then
 fi
 
 if [ -n "$cmd" ]; then
-  # Normalize command string
-  c=$(printf '%s' "$cmd" | tr '\n' ' ' | tr -s ' ')
+  HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+  result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>/dev/null) || true
 
-  # 1) gh repo delete
-  if printf '%s' "$c" | grep -Eq 'gh +repo +delete( |$)'; then
-    block "'gh repo delete'" "$cmd"
+  # Fails CLOSED: this is a destructive-operation guard, unlike the agy
+  # cost-control guard which deliberately fails open. If the lib couldn't be
+  # evaluated at all (deno missing/crashed, empty output), block rather than
+  # let an unparseable command through.
+  if [ -z "$result" ]; then
+    block "irreversible operation (guard could not evaluate the command — failing closed)" "$cmd"
   fi
-
-  # 2) gh label delete
-  if printf '%s' "$c" | grep -Eq 'gh +label +delete( |$)'; then
-    block "'gh label delete'" "$cmd"
-  fi
-
-  # 3) gh project delete
-  if printf '%s' "$c" | grep -Eq 'gh +project +delete( |$)'; then
-    block "'gh project delete'" "$cmd"
-  fi
-
-  # 4) gh project item-delete
-  if printf '%s' "$c" | grep -Eq 'gh +project +item-delete( |$)'; then
-    block "'gh project item-delete'" "$cmd"
-  fi
-
-  # 5) gh project field-delete
-  if printf '%s' "$c" | grep -Eq 'gh +project +field-delete( |$)'; then
-    block "'gh project field-delete'" "$cmd"
-  fi
-
-  # 6) heroku addons:destroy
-  if printf '%s' "$c" | grep -Eq 'heroku +addons:destroy( |$)'; then
-    block "'heroku addons:destroy'" "$cmd"
-  fi
-
-  # 8) gh auth token
-  if printf '%s' "$c" | grep -Eq 'gh +auth +token( |$)'; then
-    block "'gh auth token' (credential exposure)" "$cmd"
-  fi
-
-  # 9) gh issue delete
-  if printf '%s' "$c" | grep -Eq 'gh +issue +delete( |$)'; then
-    block "'gh issue delete'" "$cmd"
-  fi
-
-  # 10) gh run delete
-  if printf '%s' "$c" | grep -Eq 'gh +run +delete( |$)'; then
-    block "'gh run delete'" "$cmd"
-  fi
-
-  # 11) gh repo sync --force
-  if printf '%s' "$c" | grep -Eq 'gh +repo +sync +.*--force( |$)'; then
-    block "'gh repo sync --force'" "$cmd"
-  fi
-
-  # 12) gh issue transfer
-  if printf '%s' "$c" | grep -Eq 'gh +issue +transfer( |$)'; then
-    block "'gh issue transfer'" "$cmd"
-  fi
-
-  # 13) gh repo rename
-  if printf '%s' "$c" | grep -Eq 'gh +repo +rename( |$)'; then
-    block "'gh repo rename'" "$cmd"
-  fi
-
-  # 14) gh workflow run
-  if printf '%s' "$c" | grep -Eq 'gh +workflow +run( |$)'; then
-    block "'gh workflow run'" "$cmd"
-  fi
-
-  # 15) gh pr merge
-  if printf '%s' "$c" | grep -Eq 'gh +pr +merge( |$)'; then
-    block "'gh pr merge'" "$cmd"
-  fi
-
-  # 17) Remote branch deletion via git push (--delete, -d, or :branch)
-  if printf '%s' "$c" | sed -E 's/(\&\&|\|\||;|\|)/\n/g' \
-    | grep -Eq 'git +push +(.* +)?((--delete|-d)( |$)|[[:space:]"'\'']*:[^ ]+)'; then
-    block "remote branch deletion via 'git push'" "$cmd"
+  if [ "$result" != "OK" ]; then
+    block "${result#BLOCK:}" "$cmd"
   fi
 fi
 

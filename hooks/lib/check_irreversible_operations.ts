@@ -1,0 +1,242 @@
+/**
+ * Decision logic for block-irreversible-operations.sh (web-jam-tools#524).
+ *
+ * The shell version flattened the WHOLE command string — including heredoc
+ * BODIES and the insides of quoted string literals — into one blob and
+ * grepped it. That meant a test file or doc that merely mentioned
+ * `git push --delete`, written via `cat >> file <<'EOF' ... EOF`, tripped the
+ * guard as though it were a real deletion: the guard blocked documenting the
+ * guard.
+ *
+ * Fix, matching the check_agy_model.ts precedent (decision logic in a
+ * testable Deno lib, thin shell wrapper):
+ *
+ *  1. Heredoc bodies are stripped before ANY matching, via the shared
+ *     stripHeredocs() from normalize_command.ts. It keeps an
+ *     INTERPRETER-fed body in scope (`bash <<EOF ... EOF` really executes
+ *     its body) so stripping never becomes a bypass.
+ *  2. The remote-branch-deletion check (`git push --delete`, `-d`, or the
+ *     empty-source `:branch` refspec) is tokenized with splitShellTokens and
+ *     matched POSITIONALLY against the git-push invocation's own argv, so a
+ *     quoted string (e.g. `echo "git push --delete branch"`) can no longer
+ *     masquerade as a real command, and the colon-refspec check only fires
+ *     when a colon is the FIRST character of an argument (a real
+ *     empty-source refspec) rather than anywhere after `git push`, e.g.
+ *     `git push origin HEAD:main` — a completely ordinary push — no longer
+ *     false-positives.
+ *  3. Fails CLOSED: this is a destructive-operation guard, unlike the agy
+ *     cost guard (which deliberately fails open). Any parse exception, or an
+ *     unterminated quote (an ambiguous parse — we cannot be sure what's
+ *     really being executed), blocks with a generic description rather than
+ *     passing the command through.
+ *
+ * The other 16 rules below (gh repo delete, heroku addons:destroy, etc.) are
+ * unchanged literal substring checks — same matching semantics as before —
+ * except they now run against heredoc-stripped text, so the exact false
+ * positive reported in web-jam-tools#524 (a test/doc heredoc merely
+ * mentioning one of these patterns) can no longer trip any of them.
+ *
+ * SCOPE: this only ever sees a Bash tool_input.command string. It does not
+ * see Write/Edit file writes, and it does not see anything agy does
+ * internally — agy's own hooks are inert
+ * (web-jam-tools#432 "agy hooks do not enforce...").
+ */
+import { splitShellTokens, stripHeredocs } from "./normalize_command.ts";
+
+export interface CheckResult {
+  blocked: boolean;
+  description?: string;
+}
+
+function ok(): CheckResult {
+  return { blocked: false };
+}
+
+function block(description: string): CheckResult {
+  return { blocked: true, description };
+}
+
+// Literal substring rules, unchanged from the original grep patterns other
+// than now running on heredoc-stripped text. Each pattern requires the
+// literal command words with flexible whitespace, same as the shell `grep -E`
+// version did.
+const SUBSTRING_RULES: Array<[RegExp, string]> = [
+  [/gh +repo +delete( |$)/, "'gh repo delete'"],
+  [/gh +label +delete( |$)/, "'gh label delete'"],
+  [/gh +project +delete( |$)/, "'gh project delete'"],
+  [/gh +project +item-delete( |$)/, "'gh project item-delete'"],
+  [/gh +project +field-delete( |$)/, "'gh project field-delete'"],
+  [/heroku +addons:destroy( |$)/, "'heroku addons:destroy'"],
+  [/gh +auth +token( |$)/, "'gh auth token' (credential exposure)"],
+  [/gh +issue +delete( |$)/, "'gh issue delete'"],
+  [/gh +run +delete( |$)/, "'gh run delete'"],
+  [/gh +repo +sync +.*--force( |$)/, "'gh repo sync --force'"],
+  [/gh +issue +transfer( |$)/, "'gh issue transfer'"],
+  [/gh +repo +rename( |$)/, "'gh repo rename'"],
+  [/gh +workflow +run( |$)/, "'gh workflow run'"],
+  [/gh +pr +merge( |$)/, "'gh pr merge'"],
+];
+
+const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/**
+ * Split raw command text into simple-command segments on unquoted `&&`,
+ * `||`, `;`, `|`, or a bare newline — WITHOUT requiring surrounding
+ * whitespace (unlike a token-boundary split), so `false||git push -d x` and
+ * `echo hi;git push origin :x` split correctly, not just the
+ * whitespace-padded form. Also reports whether a quote was left open (an
+ * unterminated quote is an ambiguous parse — the caller fails closed on
+ * that).
+ *
+ * A bare newline is treated the same as `;`: without this, a real
+ * multi-line script like
+ *
+ *   git status
+ *   git push origin --delete some-branch
+ *
+ * would otherwise need to be recognized as two separate commands, not one
+ * merged argv list — `splitShellTokens` alone treats `\n` as ordinary
+ * whitespace, not a command boundary.
+ */
+function splitOnOperators(text: string): { segments: string[]; unterminated: boolean } {
+  const segments: string[] = [];
+  let current = "";
+  let inSquote = false;
+  let inDquote = false;
+  let escaped = false;
+  let i = 0;
+  const n = text.length;
+
+  const flush = () => {
+    segments.push(current);
+    current = "";
+  };
+
+  while (i < n) {
+    const ch = text[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      i++;
+      continue;
+    }
+    if (ch === "\\") {
+      current += ch;
+      escaped = true;
+      i++;
+      continue;
+    }
+    if (inSquote) {
+      current += ch;
+      if (ch === "'") inSquote = false;
+      i++;
+      continue;
+    }
+    if (inDquote) {
+      current += ch;
+      if (ch === '"') inDquote = false;
+      i++;
+      continue;
+    }
+    if (ch === "'") {
+      inSquote = true;
+      current += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inDquote = true;
+      current += ch;
+      i++;
+      continue;
+    }
+    if (ch === "\n" || ch === ";") {
+      flush();
+      i++;
+      continue;
+    }
+    if ((ch === "&" && text[i + 1] === "&") || (ch === "|" && text[i + 1] === "|")) {
+      flush();
+      i += 2;
+      continue;
+    }
+    if (ch === "|") {
+      flush();
+      i++;
+      continue;
+    }
+    current += ch;
+    i++;
+  }
+  flush();
+
+  return { segments, unterminated: inSquote || inDquote };
+}
+
+/**
+ * True if this simple command's argv is a `git push` invocation that deletes
+ * a remote branch: `--delete`, `-d`, or an empty-source `:branch` refspec
+ * (colon as the FIRST character of an argument — NOT a colon anywhere, which
+ * would also match an ordinary `git push origin HEAD:main`).
+ */
+function isGitPushDeletion(argv: string[]): boolean {
+  let i = 0;
+  while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
+  if (i >= argv.length) return false;
+
+  const commandName = argv[i].split("/").pop();
+  if (commandName !== "git") return false;
+  if (argv[i + 1] !== "push") return false;
+
+  for (const a of argv.slice(i + 2)) {
+    if (a === "--delete" || a === "-d") return true;
+    if (a.length > 1 && a.startsWith(":")) return true;
+  }
+  return false;
+}
+
+export function checkIrreversibleOperation(rawCmd: string): CheckResult {
+  if (!rawCmd) return ok();
+
+  let stripped: string;
+  try {
+    stripped = stripHeredocs(rawCmd);
+  } catch {
+    return block("unparseable command (heredoc parse failure) — failing closed");
+  }
+
+  const flat = stripped.replace(/\s+/g, " ").trim();
+
+  for (const [re, desc] of SUBSTRING_RULES) {
+    if (re.test(flat)) return block(desc);
+  }
+
+  const { segments, unterminated } = splitOnOperators(stripped);
+  if (unterminated) {
+    return block("unparseable command (unterminated quote) — failing closed");
+  }
+
+  for (const seg of segments) {
+    let argv: string[];
+    try {
+      argv = splitShellTokens(seg);
+    } catch {
+      return block("unparseable command (tokenizer failure) — failing closed");
+    }
+    if (isGitPushDeletion(argv)) {
+      return block("remote branch deletion via 'git push'");
+    }
+  }
+
+  return ok();
+}
+
+if (import.meta.main) {
+  const cmd = Deno.env.get("CMD_FOR_PY") || Deno.args[0] || "";
+  const result = checkIrreversibleOperation(cmd);
+  if (result.blocked) {
+    console.log("BLOCK:" + (result.description ?? "irreversible operation"));
+  } else {
+    console.log("OK");
+  }
+}
