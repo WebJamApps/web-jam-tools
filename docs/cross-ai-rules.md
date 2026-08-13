@@ -262,6 +262,62 @@ skill.
 - **DESIGN WORK RUNS THROUGH `/issue-design`:** Design work — options, trade-offs, decisions worth
   recording — does not happen in plain chat. The moment a conversation turns into design, invoke
   `/issue-design` and work inside it.
+- **MAINTAINABILITY AND NON-DUPLICATION ARE FIRST-ORDER DESIGN CRITERIA — NOT AFTERTHOUGHTS.**
+  Every design decision is judged on who has to keep the result in step and what happens when they
+  don't. A design that is correct on the day it ships and rots quietly afterwards has failed. Five
+  binding rules, in force for every design, every issue body, every document, every code change:
+  1. **A fact lives in exactly ONE artifact. Everything else POINTS at it.** This is not a
+     preference. Requirements live in the design document; an executable issue carries scope, build
+     mechanics and repo facts, and points for the rest. A paraphrase drifts the moment it is
+     written; a verbatim copy is just slower drift.
+  2. **NEVER propose machinery to hold AUTHORITATIVE copies in step.** A generator, a sync script, a
+     drift check, a session hook, a CI gate or a test whose purpose is to keep N editable copies
+     identical **does not prevent drift — it manages drift**, and it adds a second thing to maintain
+     on top of the first. If the answer to "how do we stop these copies diverging?" is a tool, the
+     design is wrong: delete the copies. **The amount of machinery is itself the diagnostic** —
+     needing five mechanisms to hold one block identical is proof the block should exist once.
+
+     **The test, and it is the whole of it: if the two copies disagree, is there a genuine question
+     about which one is correct?**
+     - **Yes → this rule applies.** Each copy is editable and each is treated as the source in its
+       own context. Eight `AGENTS.md` files, each read as authoritative by whatever agent opened
+       that repo, is the banned shape.
+     - **No → this rule does NOT apply, and never did.** Backups, mirrors, caches, generated
+       artifacts and build output are one-directional and derived: written from an original, never
+       edited in place, never consulted as the truth while the original exists. A stale backup is a
+       snapshot being old, not a conflict. `claude-backup/` and the pre-scrub repo mirror under
+       `backups/` in `~/Dropbox/web-jam-llms/` are legitimate and are not what this rule is about.
+       Neither is a cache, a lockfile, or a generated `dist/`.
+
+     **Better than either: make drift physically impossible.** `~/Dropbox/web-jam-llms/package.json`
+     is a symlink to `~/WebJamApps/package.json` — one file reachable by two paths, so the copies
+     cannot diverge and no machinery is needed to check that they haven't. Where a single artifact
+     genuinely must be reachable from two places, prefer that over any mechanism that compares.
+  3. **NEVER write a precedence rule.** "Where X and Y disagree, X wins" does not resolve a
+     conflict; it *licenses* one, declaring drift acceptable so long as everyone knows the winner.
+     Not approved, in any artifact, ever. If a difference is found, repair it in EVERY place it
+     exists, in that session, before continuing.
+  4. **Duplication is only acceptable when removing it is impossible, and the impossibility is
+     proven and recorded** — measured against the real tools, not inferred. Record what was measured
+     and what limitation is being accepted, in the design, where the next reader will find it.
+  5. **Every design answers, in writing: who maintains this, and what breaks when they forget?**
+     If the honest answer is "an agent or Josh has to remember", the design is not finished — an
+     advisory rule binds only those who read and obey it. Push enforcement to a point that cannot
+     be skipped, and where it still cannot be made airtight, **state the gap plainly rather than
+     letting the guard be mistaken for complete coverage. An inert guard believed to be live is
+     worse than a known gap.**
+
+  Origin: web-jam-tools#437 "Eliminate the 8-way AGENTS.md duplication — the cross-AI rules block is
+  committed to 8 repos and kept in step by a sync script, a drift check, a hook, a CI gate and two
+  tests". A ~189-line rules block was committed into `AGENTS.md` in eight repositories —
+  roughly 1,500 duplicated lines — and held in step by a generator, a `--check` drift mode, a
+  SessionStart hook, a CI gate and two tests. **The CI gate never could detect drift**: the
+  generator skips repositories absent from the machine, so in CI seven of eight were skipped and the
+  gate passed having compared one file against itself. Five mechanisms, and the one that ran
+  everywhere was structurally incapable of working. Compounding it on 2026-08-13: a child issue had
+  restated requirements that its own design section contradicted, an agent followed the issue rather
+  than the document, and wrote to a file outside every git repository to satisfy a criterion that
+  should never have existed.
 
 ## DESIGN CLAIMS MUST CARRY RECEIPTS (wjt#305)
 
