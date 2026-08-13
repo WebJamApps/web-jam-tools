@@ -29,6 +29,7 @@ import { assert, assertEquals } from "@std/assert";
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
 const MERGE_SCRIPT = `${REPO_ROOT}scripts/merge-hooks-into-settings.ts`;
+const MERGE_AGENTS_MD_SCRIPT = `${REPO_ROOT}scripts/merge-agents-md-pointer.ts`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
 
 interface RunResult {
@@ -309,6 +310,7 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
   await Deno.chmod(`${mainRepo}/scripts/install-hooks.sh`, 0o755);
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
+  await Deno.copyFile(MERGE_AGENTS_MD_SCRIPT, `${mainRepo}/scripts/merge-agents-md-pointer.ts`);
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {
@@ -645,6 +647,118 @@ Deno.test(
       assert(checkRes.code !== 0, "expected --check to fail when drift is present");
       assert(checkRes.stderr.includes("drift: orphaned symlink dangling-check.sh"));
       assert(checkRes.stderr.includes("has retired SessionStart hook"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh merges rules pointer into AGENTS.md, preserves pre-existing content, and is idempotent",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agentsMdPath = `${settingsDir}/AGENTS.md`;
+
+    try {
+      const initialContent =
+        `# Pre-existing Header\n\nPre-existing intro text.\n\n## Pre-existing Section\nItem A\nItem B\n`;
+      await Deno.writeTextFile(agentsMdPath, initialContent);
+
+      const firstRun = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+      ]);
+      assertEquals(firstRun.code, 0, firstRun.stdout + firstRun.stderr);
+
+      const contentAfterFirst = await Deno.readTextFile(agentsMdPath);
+      assert(contentAfterFirst.includes("## Cross-AI hard rules"), "expected rules pointer header");
+      assert(contentAfterFirst.includes("docs/cross-ai-rules.md"), "expected pointer target file");
+      assert(contentAfterFirst.includes("# Pre-existing Header"), "pre-existing header preserved");
+      assert(contentAfterFirst.includes("Item A"), "pre-existing body text preserved");
+
+      // Idempotency: run a second time
+      const secondRun = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+      ]);
+      assertEquals(secondRun.code, 0, secondRun.stdout + secondRun.stderr);
+
+      const contentAfterSecond = await Deno.readTextFile(agentsMdPath);
+      const pointerOccurrences = contentAfterSecond.split("## Cross-AI hard rules").length - 1;
+      assertEquals(pointerOccurrences, 1, "rules pointer must not be duplicated on second run");
+
+      // Check mode passes
+      const checkRun = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+        "--check",
+      ]);
+      assertEquals(checkRun.code, 0, checkRun.stdout + checkRun.stderr);
+      assert(checkRun.stdout.includes("check passed"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift when AGENTS.md rules pointer is missing or out-of-date",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agentsMdPath = `${settingsDir}/AGENTS.md`;
+
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Strip out the pointer from AGENTS.md to simulate drift
+      await Deno.writeTextFile(agentsMdPath, "# Just Some Content\n\nNo rules pointer here.\n");
+
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+        "--check",
+      ]);
+      assert(
+        checkRes.code !== 0,
+        "expected --check to fail when AGENTS.md rules pointer is missing",
+      );
+      assert(checkRes.stderr.includes("out-of-date rules pointer"));
+      assert(checkRes.stderr.includes("error: drift detected"));
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });
