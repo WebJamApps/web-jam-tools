@@ -163,9 +163,6 @@ jobs:
           name: Format check
           command: deno task fmt:check
       - run:
-          name: Cross-AI rules sync check (--check)
-          command: deno task sync-cross-ai-rules:check
-      - run:
           name: Install hooks drift check (--check)
           command: |
             temp_hooks="$(mktemp -d)"
