@@ -122,26 +122,34 @@ gh api repos/WebJamApps/<Repo>/issues/<num> --jq '.type.name // "none"'
 If the native issue type is **`Epic`**, do NOT set up a branch and do NOT try to implement it. An
 epic is a container: it has no diff of its own and closes only when its children close. Instead:
 
-1. List its children and their state:
+1. **Run the design-sync check below against the EPIC ITSELF, first.** An epic drifts from its
+   requirements document exactly as a child does, and it drifts worse: it is long-lived, it is where
+   people read for context, and nothing forces anyone back to it once the children are filed. This
+   is not hypothetical — on 2026-08-13 an epic was found still describing its mechanism as
+   undecided and its key measurement as unperformed, a day after both were settled in the document,
+   while every one of its children was in sync. Checking only children would have missed it.
+   If the epic is out of sync, stop and report before listing anything.
+3. List its children and their state:
 
    ```bash
    gh api repos/WebJamApps/<Repo>/issues/<num>/sub_issues \
      --jq '.[] | "\(.number)\t\(.state)\t[\(.labels | map(.name) | join(","))]\t\(.title)"'
    ```
 
-2. For each OPEN child, work out whether it is actually startable:
+4. For each OPEN child, work out whether it is actually startable:
    - it carries no `Blocked` label, **and**
    - every issue its body names as a prerequisite is CLOSED
      (`gh issue view <n> --repo WebJamApps/<Repo> --json state -q .state`), **and**
    - it is not already in flight — no open PR references it and no dispatch branch exists for it
      (same two checks as the no-argument mode above).
-3. Report the children to Josh as a numbered list, marking each **startable**, **blocked by
+5. Report the children to Josh as a numbered list, marking each **startable**, **blocked by
    `<repo#number "title">`**, or **already in flight**. Cite every issue as `repo#number "title"` —
    a bare number is unusable.
-4. **Stop and let Josh choose which child to work.** Do not auto-pick, and never pick more than one:
+6. **Stop and let Josh choose which child to work.** Do not auto-pick, and never pick more than one:
    sibling children of one epic frequently touch the same repo, and two agents in one repo collide.
-5. Once he names a child, restart this skill from the top with that child as the target — including
-   the design-sync check below, which applies to the child, not the epic.
+7. Once he names a child, restart this skill from the top with that child as the target. The
+   design-sync check runs again, this time against the child — the epic passing does not vouch for
+   its children, and a child passing does not vouch for the epic. Both are checked, always.
 
 If the type is anything other than `Epic`, continue.
 
