@@ -167,7 +167,10 @@ DENY_RULES=(
   # git push <remote> :<branch>  (empty-source colon refspec — also deletes)
   'Bash(git push * :*)'
 
-  # git push --force / -f / --force-with-lease
+  # git push --force / -f  — plain force stays DENIED, always. It overwrites
+  # whatever arrived on the remote since your last fetch, with no check.
+  # NOTE: --force-with-lease is deliberately NOT here — it moved to ASK_RULES
+  # below. See the comment there for why.
   'Bash(git push --force *)'
   'Bash(git push --force)'
   'Bash(git push * --force *)'
@@ -176,8 +179,6 @@ DENY_RULES=(
   'Bash(git push -f)'
   'Bash(git push * -f *)'
   'Bash(git push * -f)'
-  'Bash(git push --force-with-lease*)'
-  'Bash(git push * --force-with-lease*)'
 
   # git branch -D / --delete --force against a remotes/ ref (local ref
   # deletion of a REMOTE-tracking branch is out of scope of the local
@@ -300,6 +301,31 @@ DENY_RULES=(
 # (web-jam-tools#339). Patterns in permissions.ask force Claude Code to prompt
 # for confirmation before executing matching commands.
 ASK_RULES=(
+  # git push --force-with-lease — ASK, not DENY (Josh, 2026-08-13:
+  # "force with lease should be allowed if I give permission").
+  #
+  # This is NOT a loosening of the remote-branch HARD RULE, which requires an
+  # explicit imperative from Josh naming the branch before any force-push. A
+  # deny rule cannot represent that: it is static string matching with no view
+  # of the conversation, so it refused the authorized case and the unauthorized
+  # one identically. An ask prompt IS the mechanism that represents it — it
+  # shows Josh the literal command including the branch name and takes his
+  # answer, per invocation, before anything runs. The check is not removed; it
+  # is moved to the only layer that can actually evaluate the condition the
+  # hard rule states.
+  #
+  # Scoped to --force-with-lease alone, which git itself refuses to run when
+  # the remote moved after your last fetch — the case where a force push
+  # destroys someone else's work is structurally prevented. Plain --force
+  # remains in DENY_RULES above with no prompt and no exception, as do branch
+  # deletion, empty-source refspecs, --mirror and --prune.
+  #
+  # Origin: 2026-08-13, a rebase of a feature branch behind an open PR could
+  # not be published at all — the deny rule blocked the push and no
+  # authorization from Josh could lift it, so the rebase was unlandable.
+  'Bash(git push --force-with-lease*)'
+  'Bash(git push * --force-with-lease*)'
+
   # gh pr (11 write verbs)
   'Bash(gh pr create *)'
   'Bash(gh pr create)'
