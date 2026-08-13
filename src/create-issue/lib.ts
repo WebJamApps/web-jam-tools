@@ -43,14 +43,15 @@ export interface ExecDeps {
   readFileText: (path: string) => Promise<string>;
 }
 
-export const PRIORITY_MAP: Record<string, { id: number; name: string }> = {
-  urgent: { id: 6835640, name: "Urgent" },
-  high: { id: 6835641, name: "High" },
-  medium: { id: 6835642, name: "Medium" },
-  low: { id: 6835643, name: "Low" },
+export const PRIORITY_MAP: Record<string, { id: number; node_id: string; name: string }> = {
+  urgent: { id: 6835640, node_id: "IFSSO_kgDOAGhNuA", name: "Urgent" },
+  high: { id: 6835641, node_id: "IFSSO_kgDOAGhNuQ", name: "High" },
+  medium: { id: 6835642, node_id: "IFSSO_kgDOAGhNug", name: "Medium" },
+  low: { id: 6835643, node_id: "IFSSO_kgDOAGhNuw", name: "Low" },
 };
 
 export const PRIORITY_FIELD_ID = 3909188;
+export const PRIORITY_FIELD_NODE_ID = "IFSS_kgDOADumRA";
 
 export function parseArgs(args: string[]): CreateIssueOptions {
   const options: CreateIssueOptions = {
@@ -245,9 +246,6 @@ export async function createIssueAndVerify(
     bodyText,
   ];
 
-  const typeName = options.type || "Task";
-  ghArgs.push("--type", typeName);
-
   if (options.milestone) {
     ghArgs.push("--milestone", options.milestone);
   }
@@ -270,31 +268,59 @@ export async function createIssueAndVerify(
   }
   const childNumber = parseInt(issueNumMatch[1], 10);
 
-  // 2. Set Priority field if requested
+  // 2. Set Priority field via GraphQL mutation if requested
   if (options.priority) {
     const normPriorityKey = options.priority.toLowerCase();
     const spec = PRIORITY_MAP[normPriorityKey];
-    const prioVal = spec ? spec.name : options.priority;
 
-    const patchPayload = JSON.stringify({
-      issue_field_values: [
-        {
-          field_id: PRIORITY_FIELD_ID,
-          value: prioVal,
-        },
-      ],
-    });
+    if (!spec) {
+      throw new Error(
+        `Invalid priority level "${options.priority}". Expected Urgent, High, Medium, or Low.`,
+      );
+    }
 
-    const patchRes = await deps.runCmd(
-      ["gh", "api", "-X", "PATCH", `repos/${repoInfo.full}/issues/${childNumber}`, "--input", "-"],
-      patchPayload,
-    );
-    if (patchRes.code !== 0) {
-      throw new Error(`Failed to set Priority field: ${patchRes.stderr || patchRes.stdout}`);
+    const childNodeQuery = `
+      query GetChildNodeId {
+        repository(owner: "${repoInfo.owner}", name: "${repoInfo.name}") {
+          issue(number: ${childNumber}) { id }
+        }
+      }
+    `;
+
+    const cRes = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${childNodeQuery}`]);
+    if (cRes.code !== 0) {
+      throw new Error(
+        `Failed to resolve child issue node ID for Priority: ${cRes.stderr || cRes.stdout}`,
+      );
+    }
+
+    const cData = JSON.parse(cRes.stdout);
+    const childNodeId = cData?.data?.repository?.issue?.id;
+    if (!childNodeId) {
+      throw new Error(`Could not resolve child issue node ID for #${childNumber}`);
+    }
+
+    const prioMutation = `
+      mutation SetPriority {
+        updateIssueFieldValue(input: {
+          issueId: "${childNodeId}",
+          issueField: {
+            fieldId: "${PRIORITY_FIELD_NODE_ID}",
+            singleSelectOptionId: "${spec.node_id}"
+          }
+        }) {
+          clientMutationId
+        }
+      }
+    `;
+
+    const pRes = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${prioMutation}`]);
+    if (pRes.code !== 0) {
+      throw new Error(`Failed to set Priority field via GraphQL: ${pRes.stderr || pRes.stdout}`);
     }
   }
 
-  // 3. Attach parent sub-issue if requested
+  // 3. Attach parent sub-issue via GraphQL addSubIssue if requested
   if (options.parent !== undefined) {
     const parentQuery = `
       query GetIssueNodeIds {

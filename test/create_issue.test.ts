@@ -232,8 +232,21 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
           stderr: "",
         });
       }
-      if (cmdStr.includes("gh api -X PATCH")) {
-        return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+      if (cmdStr.includes("graphql") && cmdStr.includes("GetChildNodeId")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: { repository: { issue: { id: "CHILD_NODE_ID" } } },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("graphql") && cmdStr.includes("SetPriority")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ data: { updateIssueFieldValue: {} } }),
+          stderr: "",
+        });
       }
       if (cmdStr.includes("graphql") && cmdStr.includes("GetIssueNodeIds")) {
         return Promise.resolve({
@@ -368,6 +381,25 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     "Missing required argument --body-file",
   );
 
+  // Invalid priority level
+  await assertRejects(
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", priority: "SuperHigh" },
+        {
+          runCmd: () =>
+            Promise.resolve({
+              code: 0,
+              stdout: "https://github.com/org/repo/issues/1\n",
+              stderr: "",
+            }),
+          readFileText: () => Promise.resolve("b"),
+        },
+      ),
+    Error,
+    'Invalid priority level "SuperHigh"',
+  );
+
   // gh issue create failure
   const failCreateDeps: ExecDeps = {
     runCmd: () => Promise.resolve({ code: 1, stdout: "", stderr: "gh create error" }),
@@ -390,11 +422,12 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     "Could not parse issue number",
   );
 
-  // Priority patch failure
-  const failPrioDeps: ExecDeps = {
+  // Priority child node ID query failure
+  const failChildNodeQueryDeps: ExecDeps = {
     runCmd: (cmd) => {
-      if (cmd.join(" ").includes("PATCH")) {
-        return Promise.resolve({ code: 1, stdout: "", stderr: "prio patch error" });
+      const str = cmd.join(" ");
+      if (str.includes("GetChildNodeId")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "node query error" });
       }
       return Promise.resolve({
         code: 0,
@@ -405,9 +438,41 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("body"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b", priority: "High" }, failPrioDeps),
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", priority: "High" },
+        failChildNodeQueryDeps,
+      ),
     Error,
-    "Failed to set Priority field",
+    "Failed to resolve child issue node ID for Priority",
+  );
+
+  // Priority GraphQL mutation failure
+  const failPrioMutDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      const str = cmd.join(" ");
+      if (str.includes("GetChildNodeId")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ data: { repository: { issue: { id: "CID" } } } }),
+          stderr: "",
+        });
+      }
+      if (str.includes("SetPriority")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "prio mut error" });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b", priority: "High" }, failPrioMutDeps),
+    Error,
+    "Failed to set Priority field via GraphQL",
   );
 
   // Parent node ID query failure
