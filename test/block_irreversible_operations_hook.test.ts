@@ -1,3 +1,11 @@
+// block_irreversible_operations_hook.test.ts — R-24 & R-25, web-jam-tools#524
+//
+// Exercises hooks/block-irreversible-operations.sh end-to-end by actually
+// shelling out to it (Deno.Command) with mocked PreToolUse JSON on stdin —
+// same pattern as test/block_agy_non_flash_model_hook.test.ts. Pure-logic
+// coverage of the underlying Deno lib lives in
+// test/check_irreversible_operations_lib.test.ts.
+
 import { assertEquals } from "@std/assert";
 
 const HOOK_PATH = new URL("../hooks/block-irreversible-operations.sh", import.meta.url).pathname;
@@ -73,4 +81,90 @@ Deno.test("ordinary allowed commands pass through silently", async () => {
   assertEquals(res.code, 0);
   assertEquals(res.stdout, "");
   assertEquals(res.stderr, "");
+});
+
+// --- the exact false-positive repro from web-jam-tools#524 ---
+//
+// The reported command was a `cat >> <file> <<'EOF' ... EOF` heredoc whose
+// BODY contained the literal deny-list text `git push --delete*` as test
+// data (asserting the pattern stays in the deny list), with no `git` command
+// anywhere in the actual command being executed.
+
+Deno.test("web-jam-tools#524 exact repro: a cat heredoc whose body contains 'git push --delete*' as test data is NOT blocked", async () => {
+  const cmd = [
+    `cat >> test/install_hooks_script.test.ts <<'EOF'`,
+    `Deno.test("deny list still contains git push --delete*, git push -d and git push origin :branch", () => {`,
+    `  assertStringIncludes(denyListSource, "git push --delete*");`,
+    `  assertStringIncludes(denyListSource, "git push -d");`,
+    `  assertStringIncludes(denyListSource, "git push origin :branch");`,
+    `});`,
+    `EOF`,
+  ].join("\n");
+  const res = await runHook({ command: cmd });
+  assertEquals(
+    res.code,
+    0,
+    `expected the heredoc write to pass through, got stderr: ${res.stderr}`,
+  );
+  assertEquals(res.stderr, "");
+});
+
+Deno.test("a real 'git push --delete' is still blocked even though the #524 repro above is not", async () => {
+  const res = await runHook({ command: "git push --delete origin somebranch" });
+  assertEquals(res.code, 2);
+  assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
+});
+
+// --- quoted string literal (no heredoc) ---
+
+Deno.test("a quoted string literal mentioning 'git push --delete' is NOT blocked", async () => {
+  const res = await runHook({ command: `echo "the deny list blocks git push --delete"` });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// --- real deletion still blocked, including chained forms ---
+
+Deno.test("real 'git push -d' is blocked", async () => {
+  const res = await runHook({ command: "git push -d origin somebranch" });
+  assertEquals(res.code, 2);
+});
+
+Deno.test("real 'git push origin :branch' (empty-source refspec) is blocked", async () => {
+  const res = await runHook({ command: "git push origin :somebranch" });
+  assertEquals(res.code, 2);
+});
+
+Deno.test("real deletion chained behind && is blocked", async () => {
+  const res = await runHook({ command: "git fetch && git push origin --delete somebranch" });
+  assertEquals(res.code, 2);
+});
+
+Deno.test("real deletion chained behind || is blocked", async () => {
+  const res = await runHook({ command: "false || git push origin -d somebranch" });
+  assertEquals(res.code, 2);
+});
+
+Deno.test("real deletion chained behind ; is blocked", async () => {
+  const res = await runHook({ command: "echo hi; git push origin :somebranch" });
+  assertEquals(res.code, 2);
+});
+
+Deno.test("real deletion chained behind a pipe is blocked", async () => {
+  const res = await runHook({ command: "echo hi | cat; git push origin --delete somebranch" });
+  assertEquals(res.code, 2);
+});
+
+// --- narrowed colon-refspec branch ---
+
+Deno.test("'git push origin HEAD:main' (an ordinary push, not a deletion) is NOT blocked", async () => {
+  const res = await runHook({ command: "git push origin HEAD:main" });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// --- fail closed ---
+
+Deno.test("an unterminated quote fails CLOSED (blocked)", async () => {
+  const res = await runHook({ command: `git push origin 'unterminated` });
+  assertEquals(res.code, 2);
+  assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
 });
