@@ -251,3 +251,8 @@ target list, deployment steps, and verification procedures.
 - **Language & Runtime Standardization**: All helper scripts, hooks, tools, and utilities in
   `web-jam-tools` (and TypeScript repos) must be written in Deno/TypeScript. Do NOT introduce Python
   scripts; prefer Deno/TypeScript for all workspace helpers and hook parsers.
+- **Native Issue Field Updates & Issue Creation**: When updating native issue fields or relationships in GitHub:
+  - **Priority Field**: Set via GraphQL mutation `updateIssueFieldValue(input: { issueId, issueField: { fieldId: "IFSS_kgDOADumRA", singleSelectOptionId } })`. Option global node IDs for `WebJamApps`: Urgent (`IFSSO_kgDOAGhNuA`), High (`IFSSO_kgDOAGhNuQ`), Medium (`IFSSO_kgDOAGhNug`), Low (`IFSSO_kgDOAGhNuw`).
+  - **Parent Issue Link**: Set via GraphQL mutation `addSubIssue(input: { issueId: parentNodeId, subIssueId: childNodeId })`.
+  - **Helper Script**: Always use `scripts/create-issue.ts` (or `deno task create-issue`), which automates creation, labels, milestone, Priority, parent link, and attribute verification in one place.
+
