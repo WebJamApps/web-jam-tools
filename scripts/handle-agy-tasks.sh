@@ -18,6 +18,11 @@
 #
 # Usage (interactive by default — you drive/watch agy in the REPL):
 #   handle-agy-tasks.sh CollegeLutheran#123    # run an agy-labeled issue
+#   handle-agy-tasks.sh --repo JaMmusic web-jam-tools#505
+#                                               # run an issue against a target
+#                                               # repo other than the issue's
+#                                               # own repo (web-jam-tools#517;
+#                                               # also via AGY_TARGET_REPO=...)
 #   handle-agy-tasks.sh --headless [...]       # unattended; auto-approves tools
 #   handle-agy-tasks.sh --dry-run CollegeLutheran#123
 #                                               # print the composed prompt and
@@ -154,11 +159,24 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 HEADLESS=0
 SETUP_ONLY=0
 DRY_RUN=0
+TARGET_REPO_OVERRIDE="${AGY_TARGET_REPO:-}"
 while [ $# -gt 0 ]; do
   case "${1:-}" in
     --headless|-H) HEADLESS=1; shift ;;
     --setup-only)  SETUP_ONLY=1; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
+    --repo)
+      if [ -z "${2:-}" ]; then
+        echo "ERROR: --repo requires a repository name argument." >&2
+        exit 1
+      fi
+      TARGET_REPO_OVERRIDE="$2"
+      shift 2
+      ;;
+    --repo=*)
+      TARGET_REPO_OVERRIDE="${1#*=}"
+      shift
+      ;;
     *) break ;;
   esac
 done
@@ -171,7 +189,7 @@ TASK_ARG="${1:-}"
 # through to a queue-file lookup.
 if [ -z "$TASK_ARG" ]; then
   echo "ERROR: missing required <Repo>#<issue-num> argument." >&2
-  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] <Repo>#<issue-num>" >&2
+  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] [--repo <Name>] <Repo>#<issue-num>" >&2
   echo "  e.g. $(basename "$0") --headless \"CollegeLutheran#123\"" >&2
   exit 1
 fi
@@ -241,7 +259,8 @@ else
 fi
 SLUG_SOURCE="$ISSUE_TITLE"
 
-REPO_DIR="$WEBJAM/$REPO"
+TARGET_REPO="${TARGET_REPO_OVERRIDE:-$REPO}"
+REPO_DIR="$WEBJAM/$TARGET_REPO"
 if [ ! -d "$REPO_DIR" ]; then
   echo "ERROR: repo folder not found: $REPO_DIR" >&2
   exit 1
@@ -258,7 +277,7 @@ git worktree prune
 mkdir -p /tmp/agy-worktrees
 worktree_path_for() {
   local branch="$1"
-  local path="/tmp/agy-worktrees/${REPO}-${branch//\//-}"
+  local path="/tmp/agy-worktrees/${TARGET_REPO}-${branch//\//-}"
   if [ -e "$path" ]; then
     path="$(mktemp -u "${path}.XXXXXX")"
   fi
@@ -297,7 +316,7 @@ worktree_path_for() {
 RESUME_MODE=0
 EXISTING_BRANCH=""
 PR_JQ_FILTER='.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#'"$ISSUE_NUM"'([^0-9]|$)")) | .headRefName'
-PR_HEAD_BRANCH="$(gh pr list -R "WebJamApps/$REPO" --state open --json headRefName,body \
+PR_HEAD_BRANCH="$(gh pr list -R "WebJamApps/$TARGET_REPO" --state open --json headRefName,body \
   --jq "$PR_JQ_FILTER" 2>/dev/null | head -1 || true)"
 if [ -n "$PR_HEAD_BRANCH" ]; then
   echo "Found existing open PR head branch $PR_HEAD_BRANCH for issue #$ISSUE_NUM (via gh pr list) — resuming instead of starting fresh."
@@ -370,7 +389,7 @@ else
   # checked-out branch (that's the whole point of worktree isolation) — no
   # local `dev` checkout/pull here; the new branch is created straight off
   # origin/dev when the worktree is added, below.
-  echo "Fetching dev in $REPO ..."
+  echo "Fetching dev in $TARGET_REPO ..."
   git fetch origin dev
 
   # --- slug + unique branch name off dev (ref-only; no checkout yet) ---
@@ -423,7 +442,7 @@ SHARED_RECIPES_DOC="$WEBJAM/web-jam-tools/docs/local-testing-recipes.md"
 LOCAL_TESTING_MATERIAL=""
 if [ -f "$PER_REPO_TESTING_DOC" ]; then
   PER_REPO_TESTING_CONTENT="$(cat "$PER_REPO_TESTING_DOC")"
-  LOCAL_TESTING_MATERIAL="--- Per-repo local-testing doc ($REPO/$PER_REPO_TESTING_DOC) ---"$'\n\n'"$PER_REPO_TESTING_CONTENT"
+  LOCAL_TESTING_MATERIAL="--- Per-repo local-testing doc ($TARGET_REPO/$PER_REPO_TESTING_DOC) ---"$'\n\n'"$PER_REPO_TESTING_CONTENT"
   # Resolve a reference to the shared doc: a plain filename mention is enough
   # (repos sit at different relative depths, so matching the exact link path
   # would be fragile). "Resolvable" also requires the shared file to actually
@@ -459,7 +478,7 @@ fi
 
 # --- composed prompt: standing rules wrapped around the task ---
 read -r -d '' PROMPT <<EOF || true
-You are working in the $REPO repo on branch $BRANCH, already created off the latest dev.
+You are working in the $TARGET_REPO repo on branch $BRANCH, already created off the latest dev.
 
 Task:
 $TASK_TEXT
@@ -591,7 +610,7 @@ if [ "$HEADLESS" -eq 1 ]; then
   AGY_MAX_ROUNDS="${AGY_MAX_ROUNDS:-4}"
 
   pr_exists_for_branch() {
-    gh pr list -R "WebJamApps/$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null
+    gh pr list -R "WebJamApps/$TARGET_REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null
   }
 
   # web-jam-tools#152 — bypass check: "a draft PR exists" is not proof agy
@@ -608,7 +627,7 @@ if [ "$HEADLESS" -eq 1 ]; then
   # `bash -n` (see the PR that introduced it).
   footer_present_for_model() {
     local pr_num="$1" model="$2" body expected
-    body="$(gh pr view "$pr_num" -R "WebJamApps/$REPO" --json body -q .body 2>/dev/null || true)"
+    body="$(gh pr view "$pr_num" -R "WebJamApps/$TARGET_REPO" --json body -q .body 2>/dev/null || true)"
     expected="🤖 Work by agy — $model"
     # Trim trailing whitespace/newlines before the suffix check — gh's JSON
     # decode can leave a trailing newline that would otherwise false-negative.
@@ -630,9 +649,9 @@ if [ "$HEADLESS" -eq 1 ]; then
     git diff origin/dev..HEAD -- package.json | grep -q '^[+-].*"version"'
   }
 
-  CONTINUE_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. Previous turns did partial work (check \`git status\` and \`git log origin/dev..HEAD\`). Task acceptance is NOT met until: lint and tests pass, work is committed, and a draft PR is opened via ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh. Continue from where things stand and finish. Original task follows:"
+  CONTINUE_PROMPT_PREFIX="You are resuming an interrupted task in the $TARGET_REPO repo on branch $BRANCH. Previous turns did partial work (check \`git status\` and \`git log origin/dev..HEAD\`). Task acceptance is NOT met until: lint and tests pass, work is committed, and a draft PR is opened via ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh. Continue from where things stand and finish. Original task follows:"
 
-  VERSION_BUMP_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. A draft PR already exists, but \`git diff origin/dev..HEAD -- package.json\` shows no \"version\" change — the one-bump-per-PR rule (bump package.json's \"version\" exactly once, on the PR's first commit; patch for a fix, minor for a feature) was not followed. Add a commit that bumps package.json's \"version\" field appropriately and push it — do NOT open a second PR. Original task follows:"
+  VERSION_BUMP_PROMPT_PREFIX="You are resuming an interrupted task in the $TARGET_REPO repo on branch $BRANCH. A draft PR already exists, but \`git diff origin/dev..HEAD -- package.json\` shows no \"version\" change — the one-bump-per-PR rule (bump package.json's \"version\" exactly once, on the PR's first commit; patch for a fix, minor for a feature) was not followed. Add a commit that bumps package.json's \"version\" field appropriately and push it — do NOT open a second PR. Original task follows:"
 
   # web-jam-tools#187 — resume mode (an existing agy branch was found for this
   # issue) starts the driven loop with the CONTINUE prompt instead of the
@@ -851,7 +870,7 @@ echo "agy should have opened a draft PR via create-draft-pr.sh — review it on 
 # REPL early), there is nothing to land yet — the worktree is simply left in
 # place; Josh can resume/test there, and /tmp reaps it after 30 days untouched
 # (nothing is lost, since a landable branch is always pushed).
-LAND_PR_NUM="$(gh pr list -R "WebJamApps/$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || true)"
+LAND_PR_NUM="$(gh pr list -R "WebJamApps/$TARGET_REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || true)"
 if [ -z "$LAND_PR_NUM" ]; then
   echo ""
   echo "No draft PR found yet for branch $BRANCH — nothing to land. Worktree left at:"
