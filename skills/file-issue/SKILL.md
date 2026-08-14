@@ -1,12 +1,12 @@
 ---
-name: draft-issue
+name: file-issue
 description: File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when the user says "file an issue", "open an issue", "draft an issue", or when a task needs a tracking issue instead of just being done inline.
 metadata:
   version: v1
   publisher: josh
 ---
 
-# draft-issue — file a GitHub issue the WebJamApps way
+# file-issue — file a GitHub issue the WebJamApps way
 
 **HARD GATE:** Do you have Josh's (or other human's) explicit approval to file THIS issue, in this session? If not, STOP and ask.
 
@@ -18,7 +18,7 @@ on **Sonnet**, the cheapest tier that
 reliably gets the judgment calls right. It is not hard-gated to a single model the way `/fix-labels`
 and `/handle-gmails` are (this skill is the quality layer, not the floor — see "Why a skill AND a
 hook" below); if you're running on a pricier model because you're mid-conversation, finish the
-issue rather than switching, but don't default to Opus/Fable for a fresh `/draft-issue` invocation.
+issue rather than switching, but don't default to Opus/Fable for a fresh `/file-issue` invocation.
 
 ## Why a skill AND a hook
 

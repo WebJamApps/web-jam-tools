@@ -218,7 +218,7 @@ skill.
   issue, paired with the agent's issue and `Blocked` on it (both the label and the native
   dependency). The agent's PR then closes the agent's issue normally with `Closes #N`, because that
   issue no longer contains anything the agent could not do from a branch. The pairing rules live in
-  the `/issue-design` skill, which owns how those two issues are written.
+  the `/design-issue` skill, which owns how those two issues are written.
   - **PR-open-time test:** Before opening a PR, check: _does any acceptance criterion require
     something an implementing agent cannot do from a branch?_ If yes, that criterion belongs in a
     separate `Josh` issue, not in this one.
@@ -279,9 +279,9 @@ skill.
   assertions must explicitly verify the specific mode indicator or feature-specific output (e.g.
   asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than
   relying only on assertions shared with default paths.
-- **DESIGN WORK RUNS THROUGH `/issue-design`:** Design work — options, trade-offs, decisions worth
+- **DESIGN WORK RUNS THROUGH `/design-issue`:** Design work — options, trade-offs, decisions worth
   recording — does not happen in plain chat. The moment a conversation turns into design, invoke
-  `/issue-design` and work inside it.
+  `/design-issue` and work inside it.
 - **MAINTAINABILITY AND NON-DUPLICATION ARE FIRST-ORDER DESIGN CRITERIA — NOT AFTERTHOUGHTS.**
   Every design decision is judged on who has to keep the result in step and what happens when they
   don't. A design that is correct on the day it ships and rots quietly afterwards has failed. Five

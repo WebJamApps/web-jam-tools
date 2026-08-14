@@ -36,7 +36,7 @@ case "$result" in
     ;;
   DENY:*)
     echo "BLOCKED (model-label guard): ${result#DENY:}" >&2
-    echo "(rule: executable-issue / model-label / native-type — see skills/draft-issue/SKILL.md)" >&2
+    echo "(rule: executable-issue / model-label / native-type — see skills/file-issue/SKILL.md)" >&2
     exit 2
     ;;
   *)
