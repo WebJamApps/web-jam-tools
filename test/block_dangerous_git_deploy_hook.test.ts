@@ -292,3 +292,86 @@ Deno.test("pushing a feature branch (agy naming) is allowed", async () => {
   const res = await runHook("git push -u origin agy/308-merge-guard-coverage");
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- false-positive fix: heredoc bodies, quotes, and comments merely
+// MENTIONING a dangerous command are not the command itself (the reported
+// 2026-08-13 repro: a heredoc body mentioning 'git push --force origin
+// main' blocked writing a file that had nothing to do with git) ---
+
+Deno.test("the exact reported repro: a heredoc body mentioning 'git push --force origin main' is allowed", async () => {
+  const res = await runHook(
+    ["cat <<EOF > /tmp/x.md", "we must not run git push --force origin main", "EOF"].join("\n"),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("the same phrase inside single quotes is allowed", async () => {
+  const res = await runHook(`echo 'we must not run git push --force origin main'`);
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("the same phrase inside double quotes is allowed", async () => {
+  const res = await runHook(`echo "we must not run git push --force origin main"`);
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("the same phrase in a # comment is allowed", async () => {
+  const res = await runHook("# we must not run git push --force origin main");
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("'gh pr merge' inside double quotes is allowed", async () => {
+  const res = await runHook(`echo "do not run gh pr merge 5"`);
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("'git push --delete' inside a # comment is allowed", async () => {
+  const res = await runHook("# git push origin --delete some-branch");
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// --- real dangerous commands must still block, including chained forms ---
+
+Deno.test("a real 'git push --force origin main' is blocked", async () => {
+  const res = await runHook("git push --force origin main");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a real push to main chained behind && is blocked", async () => {
+  const res = await runHook("git fetch && git push origin main");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a real push to main chained behind || is blocked", async () => {
+  const res = await runHook("false || git push origin main");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a real push to main chained behind ; is blocked", async () => {
+  const res = await runHook("echo hi; git push origin main");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a real push to main chained behind a pipe is blocked", async () => {
+  const res = await runHook("echo hi | cat; git push origin main");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("a real 'git push --force origin main' executed via bash -c is still blocked", async () => {
+  const res = await runHook(`bash -c "git push --force origin main; echo done"`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+// --- fail closed ---
+
+Deno.test("an unterminated quote fails CLOSED (blocked)", async () => {
+  const res = await runHook(`echo "unterminated git push --force origin main`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
