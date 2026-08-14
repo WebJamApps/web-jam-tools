@@ -42,9 +42,25 @@
  *
  * The six rules and their exact user-facing message text are unchanged from
  * the original grep-based script — this is a false-positive fix only.
+ *
+ * WRAPPER-BYPASS FIX (guard-wrapper-bypass): every rule below is positional
+ * (it inspects argv[0], argv[1], ... of a specific segment), so a wrapper
+ * program (`xargs`, `env`, `sudo`, `nohup`, `timeout`, `stdbuf`, `command`,
+ * `nice`, `ionice`, `setsid`) ahead of the real command defeated all of them,
+ * not just the `bash -c`/`sh -c` case this file already special-cased. Each
+ * segment's argv is now resolved through the SHARED
+ * `resolveThroughWrappers()` (normalize_command.ts — also used by
+ * check_irreversible_operations.ts, so the two guards don't duplicate this
+ * logic) before any positional rule runs; a nested command string (from
+ * `bash -c "..."`, `eval "..."`, `ssh host "..."`) recurses into this same
+ * top-level function with an incremented depth, capped at
+ * MAX_WRAPPER_RECURSION_DEPTH. Both that cap and MAX_WRAPPER_ITERATIONS fail
+ * CLOSED (block) rather than pass an unresolvable wrapper chain through.
  */
 import {
   ASSIGN_RE,
+  MAX_WRAPPER_RECURSION_DEPTH,
+  resolveThroughWrappers,
   splitOnOperators,
   splitShellTokens,
   stripHeredocs,
@@ -64,12 +80,6 @@ function block(description: string): CheckResult {
   return { blocked: true, description };
 }
 
-// Shells whose `-c` flag executes its next argument as shell code. A
-// heredoc body fed to one of these stays in scope (handled by
-// stripHeredocs' own INTERPRETER check); this is the equivalent guard for
-// `-c "..."` payloads, which never go through a heredoc at all.
-const SHELL_INTERPRETERS = new Set(["bash", "sh", "zsh", "ksh", "dash", "ash"]);
-
 function hasToken(argv: string[], re: RegExp): boolean {
   return argv.some((t) => re.test(t));
 }
@@ -82,13 +92,25 @@ function hasFlagValue(argv: string[], flags: string[], values: string[]): boolea
   return false;
 }
 
-function checkSegment(argv: string[]): CheckResult {
-  let i = 0;
-  while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
-  if (i >= argv.length) return ok();
+function checkSegment(argv: string[], depth: number): CheckResult {
+  const resolved = resolveThroughWrappers(argv);
+  if (resolved.kind === "cap-exceeded") {
+    return block("wrapper resolution exceeded iteration cap — failing closed");
+  }
+  if (resolved.kind === "nested") {
+    if (depth >= MAX_WRAPPER_RECURSION_DEPTH) {
+      return block("wrapper/interpreter nesting exceeded recursion cap — failing closed");
+    }
+    return checkDangerousGitDeploy(resolved.command, depth + 1);
+  }
 
-  const cmd0 = argv[i].split("/").pop();
-  const rest = argv.slice(i + 1);
+  const resolvedArgv = resolved.argv;
+  let i = 0;
+  while (i < resolvedArgv.length && ASSIGN_RE.test(resolvedArgv[i])) i++;
+  if (i >= resolvedArgv.length) return ok();
+
+  const cmd0 = resolvedArgv[i].split("/").pop();
+  const rest = resolvedArgv.slice(i + 1);
 
   // 1) Any PR merge (includes --admin / --squash / --rebase / --merge —
   //    they're just further tokens after "merge", not required here).
@@ -116,7 +138,9 @@ function checkSegment(argv: string[]): CheckResult {
       hasToken(apiArgs, /pulls\/[^ ]+\/merge(\?|$| |\/)/) &&
       hasFlagValue(apiArgs, ["-X", "--method"], ["PUT"])
     ) {
-      return block("'gh api ... pulls/N/merge' (PUT) — merging a PR via the REST API is Josh's decision.");
+      return block(
+        "'gh api ... pulls/N/merge' (PUT) — merging a PR via the REST API is Josh's decision.",
+      );
     }
 
     // 5b) REST: POST repos/{owner}/{repo}/merges — merge a branch.
@@ -132,7 +156,9 @@ function checkSegment(argv: string[]): CheckResult {
       apiArgs.includes("graphql") &&
       hasToken(apiArgs, /merge(PullRequest|Branch)/)
     ) {
-      return block("'gh api graphql' merge mutation — merging via the GraphQL API is Josh's decision.");
+      return block(
+        "'gh api graphql' merge mutation — merging via the GraphQL API is Josh's decision.",
+      );
     }
   }
 
@@ -158,28 +184,21 @@ function checkSegment(argv: string[]): CheckResult {
   //    empty-source refspec :branch). Reuses the sibling guard's exact
   //    predicate — the underlying question is identical, only the
   //    user-facing message differs.
-  if (isGitPushDeletion(argv.slice(i))) {
+  if (isGitPushDeletion(resolvedArgv.slice(i))) {
     return block(
       "deleting a remote branch via 'git push' (--delete, -d, or :branch) — deleting a remote branch is Josh's decision.",
     );
   }
 
-  // A shell's `-c "..."` payload is executed, not data — same
-  // "interpreter-fed content stays in scope" rule as heredocs, applied to
-  // an inline string instead of a heredoc body.
-  if (SHELL_INTERPRETERS.has(cmd0 ?? "")) {
-    const cIdx = rest.indexOf("-c");
-    if (cIdx !== -1 && rest[cIdx + 1] !== undefined) {
-      const inner = checkDangerousGitDeploy(rest[cIdx + 1]);
-      if (inner.blocked) return inner;
-    }
-  }
-
   return ok();
 }
 
-export function checkDangerousGitDeploy(rawCmd: string): CheckResult {
+export function checkDangerousGitDeploy(rawCmd: string, depth = 0): CheckResult {
   if (!rawCmd) return ok();
+
+  if (depth > MAX_WRAPPER_RECURSION_DEPTH) {
+    return block("wrapper/interpreter nesting exceeded recursion cap — failing closed");
+  }
 
   let stripped: string;
   try {
@@ -200,7 +219,7 @@ export function checkDangerousGitDeploy(rawCmd: string): CheckResult {
     } catch {
       return block("unparseable command (tokenizer failure) — failing closed");
     }
-    const result = checkSegment(argv);
+    const result = checkSegment(argv, depth);
     if (result.blocked) return result;
   }
 

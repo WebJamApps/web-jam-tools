@@ -213,3 +213,100 @@ Deno.test("an unterminated double quote fails CLOSED (blocked)", () => {
   const result = checkDangerousGitDeploy(`echo "unterminated git push --force origin main`);
   assertEquals(result.blocked, true);
 });
+
+// --- wrapper-bypass fix (guard-wrapper-bypass): every rule in this guard is
+// positional, so a wrapper program ahead of the real command previously
+// defeated all of them. Same shared resolveThroughWrappers() used by
+// check_irreversible_operations.ts — pin representative wrappers here too. ---
+
+Deno.test("'git push origin --delete X' wrapped in 'sudo' is blocked", () => {
+  const result = checkDangerousGitDeploy("sudo git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'timeout 30' is blocked", () => {
+  const result = checkDangerousGitDeploy("timeout 30 git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'env FOO=1' is blocked", () => {
+  const result = checkDangerousGitDeploy("env FOO=1 git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'xargs' is blocked", () => {
+  const result = checkDangerousGitDeploy("xargs git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'eval \"...\"' is blocked", () => {
+  const result = checkDangerousGitDeploy(`eval "git push origin --delete somebranch"`);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'ssh host \"...\"' is blocked", () => {
+  const result = checkDangerousGitDeploy(`ssh myhost "git push origin --delete somebranch"`);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("nested wrappers ('sudo timeout 30 git push --delete') is blocked", () => {
+  const result = checkDangerousGitDeploy("sudo timeout 30 git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("push to a protected branch (main) wrapped in 'sudo' is blocked", () => {
+  const result = checkDangerousGitDeploy("sudo git push origin main");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'gh pr merge' wrapped in 'sudo' is blocked", () => {
+  const result = checkDangerousGitDeploy("sudo gh pr merge 123 --squash");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'gh pr merge' wrapped in 'timeout 30 sh -c \"...\"' (nested + prefix) is blocked", () => {
+  const result = checkDangerousGitDeploy(`timeout 30 sh -c "gh pr merge 1 --admin"`);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("production deploy ('deno deploy --prod') wrapped in 'timeout 60' is blocked", () => {
+  const result = checkDangerousGitDeploy("timeout 60 deno deploy --org o --app a --prod --token x");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("a heredoc body merely mentioning a wrapped dangerous command is still NOT blocked", () => {
+  const cmd = [
+    `cat >> docs/notes.md <<'EOF'`,
+    `Do not run: sudo timeout 30 git push origin --delete somebranch`,
+    `EOF`,
+  ].join("\n");
+  const result = checkDangerousGitDeploy(cmd);
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("a quoted string mentioning a wrapped dangerous command is still NOT blocked", () => {
+  const result = checkDangerousGitDeploy(`echo "sudo git push origin --delete somebranch"`);
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("a harmless wrapped command ('sudo gh pr view 314') is NOT blocked", () => {
+  const result = checkDangerousGitDeploy("sudo gh pr view 314");
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("a harmless wrapped command ('env FOO=1 git status') is NOT blocked", () => {
+  const result = checkDangerousGitDeploy("env FOO=1 git status");
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("wrapper-resolution iteration cap exceeded fails CLOSED (blocked)", () => {
+  const cmd = "sudo ".repeat(30) + "gh pr view 314";
+  const result = checkDangerousGitDeploy(cmd);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("nested-command recursion depth cap exceeded fails CLOSED (blocked), even for a harmless inner command", () => {
+  const cmd = "eval ".repeat(10) + "gh pr view 314";
+  const result = checkDangerousGitDeploy(cmd);
+  assertEquals(result.blocked, true);
+});

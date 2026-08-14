@@ -23,7 +23,8 @@
 
 // Commands that EXECUTE a heredoc body rather than consume it as data. A body
 // fed to one of these must stay in scope for matching.
-const INTERPRETER = /(^|[\s;&|(])(env\s+)?((ba|z|k|da)?sh|python3?|node|deno|perl|ruby|awk|xargs)\b/;
+const INTERPRETER =
+  /(^|[\s;&|(])(env\s+)?((ba|z|k|da)?sh|python3?|node|deno|perl|ruby|awk|xargs)\b/;
 
 export function findHeredocMarker(line: string): [string, boolean] | null {
   let inSquote = false;
@@ -345,6 +346,243 @@ export function normalize(cmd: string): string {
     result = cmd;
   }
   return result.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Wrapper-program resolution (web-jam-tools, guard-wrapper-bypass fix).
+ *
+ * Both positional guards (`check_irreversible_operations.ts`'s
+ * `isGitPushDeletion`, `check_dangerous_git_deploy.ts`'s `checkSegment`)
+ * require the REAL command to sit at argv[0] (after skipping `VAR=value`
+ * assignment prefixes). That's true for a bare `git push --delete x`, but a
+ * wrapper program that execs its argument — `xargs`, `env`, `sudo`, `nohup`,
+ * `timeout`, `stdbuf`, `command`, `nice`, `ionice`, `setsid`, or an
+ * interpreter/eval/ssh form that carries a nested command STRING
+ * (`bash -c "..."`, `eval "..."`, `ssh host "..."`) — puts a different word
+ * at argv[0] and defeats the check entirely, even though the wrapped command
+ * still runs for real. `SUBSTRING_RULES`-style flat-text regex checks are
+ * unaffected (they see the whole command text regardless of argv shape);
+ * this only matters for POSITIONAL checks.
+ *
+ * `resolveWrapperLayer` peels exactly ONE layer: either returning the argv
+ * of whatever comes after the wrapper's own name/flags/required positionals,
+ * or — for the nested-string forms — the payload as a fresh command STRING
+ * that must be re-parsed (it may itself contain operators, further
+ * wrappers, etc.), or `null` if argv[0] isn't a recognized wrapper (i.e. is
+ * already the real command, or an ordinary unrelated command).
+ *
+ * `resolveThroughWrappers` loops that until it bottoms out, caps iterations
+ * so a crafted `sudo sudo sudo ...` chain can't hang the hook, and reports a
+ * `nested` command string separately from a fully-resolved `argv` so callers
+ * can recurse into their OWN top-level checker (with its own depth cap) for
+ * the nested-string case, while just re-checking `argv` positionally for the
+ * plain wrapper-peel case.
+ */
+
+// Prefix wrappers: argv[0] is the wrapper name, then flags, then (for
+// `timeout`) one required positional (the duration), then the real command's
+// own argv continues as further tokens — no re-parsing needed, just skip
+// forward.
+interface PrefixWrapperSpec {
+  // Flags that consume the NEXT token as their value when they appear as an
+  // exact standalone token (e.g. `-u joshua`, `-n 1`). An attached form like
+  // `-oL` or `-I{}` is a single token and is skipped on its own, no lookahead
+  // — that's deliberately conservative: worst case we skip one token too few
+  // and the loop below still finds the real command a token later.
+  valueFlags: Set<string>;
+  // Required non-flag positional arguments after the flags (e.g. timeout's
+  // DURATION) that belong to the wrapper, not the wrapped command.
+  positionals: number;
+}
+
+const PREFIX_WRAPPERS: Record<string, PrefixWrapperSpec> = {
+  xargs: {
+    valueFlags: new Set([
+      "-I",
+      "-n",
+      "-P",
+      "-L",
+      "-s",
+      "-a",
+      "-E",
+      "-e",
+      "-d",
+      "-l",
+      "-p",
+      "-x",
+      "--delimiter",
+      "--max-args",
+      "--max-procs",
+      "--replace",
+      "--arg-file",
+    ]),
+    positionals: 0,
+  },
+  env: {
+    valueFlags: new Set([
+      "-u",
+      "--unset",
+      "-C",
+      "--chdir",
+      "-S",
+      "--split-string",
+      "--block-signal",
+      "--ignore-signal",
+      "--default-signal",
+      "--argv0",
+    ]),
+    positionals: 0,
+  },
+  sudo: {
+    valueFlags: new Set([
+      "-u",
+      "--user",
+      "-g",
+      "--group",
+      "-p",
+      "--prompt",
+      "-r",
+      "--role",
+      "-t",
+      "--type",
+      "-C",
+      "--close-from",
+      "-h",
+      "--host",
+    ]),
+    positionals: 0,
+  },
+  nohup: { valueFlags: new Set(), positionals: 0 },
+  timeout: {
+    valueFlags: new Set(["-s", "--signal", "-k", "--kill-after"]),
+    positionals: 1,
+  },
+  stdbuf: {
+    valueFlags: new Set(["-i", "--input", "-o", "--output", "-e", "--error"]),
+    positionals: 0,
+  },
+  command: { valueFlags: new Set(), positionals: 0 },
+  nice: { valueFlags: new Set(["-n", "--adjustment"]), positionals: 0 },
+  ionice: {
+    valueFlags: new Set(["-c", "--class", "-n", "--classdata", "-p", "--pid"]),
+    positionals: 0,
+  },
+  setsid: { valueFlags: new Set(), positionals: 0 },
+};
+
+// Shells whose `-c` flag executes its next argument as shell code.
+const SHELL_INTERPRETER_NAMES = new Set(["bash", "sh", "zsh", "ksh", "dash", "ash"]);
+
+// Flags for `ssh` that consume a following value token, so the host isn't
+// mistaken for a flag's value or vice versa.
+const SSH_VALUE_FLAGS = new Set([
+  "-i",
+  "-p",
+  "-o",
+  "-l",
+  "-F",
+  "-J",
+  "-L",
+  "-R",
+  "-D",
+  "-W",
+  "-B",
+  "-b",
+  "-c",
+  "-e",
+  "-Q",
+  "-E",
+]);
+
+function basename(tok: string): string {
+  return tok.split("/").pop() ?? tok;
+}
+
+export type WrapperLayer =
+  | { kind: "argv"; argv: string[] }
+  | { kind: "nested"; command: string };
+
+/**
+ * Peel exactly one wrapper layer from `argv`. Returns `null` if argv[0]
+ * (after skipping `VAR=value` prefixes) is not a recognized wrapper — the
+ * caller should treat `argv` as already resolved.
+ */
+export function resolveWrapperLayer(argv: string[]): WrapperLayer | null {
+  let i = 0;
+  while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
+  if (i >= argv.length) return null;
+
+  const name = basename(argv[i]);
+
+  // `bash -c "..."` / `sh -c "..."` etc. — the payload is a nested command
+  // STRING, not more argv for the same command.
+  if (SHELL_INTERPRETER_NAMES.has(name) && argv[i + 1] === "-c" && i + 2 < argv.length) {
+    return { kind: "nested", command: argv.slice(i + 2).join(" ") };
+  }
+
+  // `eval "..."` — eval joins ALL its arguments with a space and re-parses
+  // the result as shell code.
+  if (name === "eval" && i + 1 < argv.length) {
+    return { kind: "nested", command: argv.slice(i + 1).join(" ") };
+  }
+
+  // `ssh host "..."` — everything after the (possibly-flagged) host is the
+  // remote command string.
+  if (name === "ssh") {
+    let j = i + 1;
+    while (j < argv.length && argv[j].startsWith("-") && argv[j] !== "-") {
+      j += SSH_VALUE_FLAGS.has(argv[j]) ? 2 : 1;
+    }
+    if (j >= argv.length) return null; // no host — nothing to resolve
+    j++; // skip the host itself
+    if (j >= argv.length) return null; // interactive session, no remote command
+    return { kind: "nested", command: argv.slice(j).join(" ") };
+  }
+
+  const spec = PREFIX_WRAPPERS[name];
+  if (!spec) return null;
+
+  let j = i + 1;
+  while (j < argv.length && argv[j].startsWith("-") && argv[j] !== "-") {
+    j += spec.valueFlags.has(argv[j]) ? 2 : 1;
+  }
+  j += spec.positionals;
+  return { kind: "argv", argv: argv.slice(Math.min(j, argv.length)) };
+}
+
+// A "sane" cap on how many prefix-wrapper layers may be peeled for a single
+// simple command — nothing legitimate nests this deep; this exists so a
+// crafted `sudo sudo sudo ...` chain can't hang the hook. Hitting it fails
+// CLOSED (block), same contract as every other parse failure in these
+// guards.
+export const MAX_WRAPPER_ITERATIONS = 25;
+
+// A "sane" cap on how many NESTED command strings (`bash -c`, `eval`, `ssh`)
+// a caller should recurse through. Hitting it also fails CLOSED.
+export const MAX_WRAPPER_RECURSION_DEPTH = 6;
+
+export type WrapperResolution =
+  | { kind: "argv"; argv: string[] }
+  | { kind: "nested"; command: string }
+  | { kind: "cap-exceeded" };
+
+/**
+ * Resolve `argv` through as many prefix-wrapper layers as needed to reach
+ * either the real command's own argv, or a nested command STRING that must
+ * be re-parsed by the caller (recursing into its own top-level checker with
+ * an incremented depth, capped at MAX_WRAPPER_RECURSION_DEPTH).
+ */
+export function resolveThroughWrappers(argv: string[]): WrapperResolution {
+  let current = argv;
+  let iterations = 0;
+  while (true) {
+    const layer = resolveWrapperLayer(current);
+    if (layer === null) return { kind: "argv", argv: current };
+    if (layer.kind === "nested") return { kind: "nested", command: layer.command };
+    current = layer.argv;
+    iterations++;
+    if (iterations > MAX_WRAPPER_ITERATIONS) return { kind: "cap-exceeded" };
+  }
 }
 
 if (import.meta.main) {

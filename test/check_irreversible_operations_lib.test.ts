@@ -156,3 +156,178 @@ Deno.test("real 'heroku addons:destroy' is blocked", () => {
   const result = checkIrreversibleOperation("heroku addons:destroy my-addon");
   assertEquals(result.blocked, true);
 });
+
+// --- wrapper-bypass fix (guard-wrapper-bypass): isGitPushDeletion is a
+// positional check requiring "git" at argv[0]; a wrapper program ahead of
+// the real command previously defeated it entirely even though the wrapped
+// deletion still ran for real. Every wrapper below must still block. ---
+
+Deno.test("'git push origin --delete X' wrapped in xargs (no flags) is blocked", () => {
+  const result = checkIrreversibleOperation("xargs git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'xargs -I{}' is blocked", () => {
+  const result = checkIrreversibleOperation("xargs -I{} git push origin --delete {}");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'xargs -n1' is blocked", () => {
+  const result = checkIrreversibleOperation("xargs -n1 git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'env' (no assignment) is blocked", () => {
+  const result = checkIrreversibleOperation("env git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'env FOO=1' is blocked", () => {
+  const result = checkIrreversibleOperation("env FOO=1 git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'sudo' is blocked", () => {
+  const result = checkIrreversibleOperation("sudo git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'sudo -u user' is blocked", () => {
+  const result = checkIrreversibleOperation("sudo -u joshua git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'nohup' is blocked", () => {
+  const result = checkIrreversibleOperation("nohup git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'timeout 30' is blocked", () => {
+  const result = checkIrreversibleOperation("timeout 30 git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'stdbuf -oL' is blocked", () => {
+  const result = checkIrreversibleOperation("stdbuf -oL git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'command' is blocked", () => {
+  const result = checkIrreversibleOperation("command git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'nice' is blocked", () => {
+  const result = checkIrreversibleOperation("nice git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'ionice' is blocked", () => {
+  const result = checkIrreversibleOperation("ionice git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'setsid' is blocked", () => {
+  const result = checkIrreversibleOperation("setsid git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'bash -c \"...\"' is blocked", () => {
+  const result = checkIrreversibleOperation(`bash -c "git push origin --delete somebranch"`);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'sh -c \"...\"' is blocked", () => {
+  const result = checkIrreversibleOperation(`sh -c "git push origin --delete somebranch"`);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'eval \"...\"' is blocked", () => {
+  const result = checkIrreversibleOperation(`eval "git push origin --delete somebranch"`);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("'git push origin --delete X' wrapped in 'ssh host \"...\"' is blocked", () => {
+  const result = checkIrreversibleOperation(`ssh myhost "git push origin --delete somebranch"`);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("nested wrappers ('sudo timeout 30 git push --delete') is blocked", () => {
+  const result = checkIrreversibleOperation("sudo timeout 30 git push origin --delete somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("nested wrappers ('sudo -u joshua timeout 30 stdbuf -oL git push --delete') is blocked", () => {
+  const result = checkIrreversibleOperation(
+    "sudo -u joshua timeout 30 stdbuf -oL git push origin --delete somebranch",
+  );
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("the '-d' form wrapped in 'sudo' is blocked", () => {
+  const result = checkIrreversibleOperation("sudo git push origin -d somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("the ':branch' empty-source refspec form wrapped in 'timeout 30' is blocked", () => {
+  const result = checkIrreversibleOperation("timeout 30 git push origin :somebranch");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("a heredoc body merely mentioning a wrapped deletion is still NOT blocked", () => {
+  const cmd = [
+    `cat >> docs/notes.md <<'EOF'`,
+    `Do not run: sudo timeout 30 git push origin --delete somebranch`,
+    `EOF`,
+  ].join("\n");
+  const result = checkIrreversibleOperation(cmd);
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("a quoted string mentioning a wrapped deletion is still NOT blocked", () => {
+  const result = checkIrreversibleOperation(`echo "sudo git push origin --delete somebranch"`);
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("a harmless wrapped command ('sudo ls') is NOT blocked", () => {
+  const result = checkIrreversibleOperation("sudo ls");
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("a harmless wrapped command ('env FOO=1 git status') is NOT blocked", () => {
+  const result = checkIrreversibleOperation("env FOO=1 git status");
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("a harmless wrapped command ('xargs echo') is NOT blocked", () => {
+  const result = checkIrreversibleOperation("xargs echo hello");
+  assertEquals(result, { blocked: false });
+});
+
+Deno.test("wrapper-resolution iteration cap exceeded fails CLOSED (blocked)", () => {
+  const cmd = "sudo ".repeat(30) + "git status";
+  const result = checkIrreversibleOperation(cmd);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("nested-command recursion depth cap exceeded fails CLOSED (blocked), even for a harmless inner command", () => {
+  const cmd = "eval ".repeat(10) + "git status";
+  const result = checkIrreversibleOperation(cmd);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("nested-command recursion within the cap still resolves and blocks a real deletion", () => {
+  const cmd = "eval ".repeat(3) + "git push origin --delete somebranch";
+  const result = checkIrreversibleOperation(cmd);
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("the SUBSTRING_RULES family ('gh repo delete') still blocks through a wrapper", () => {
+  const result = checkIrreversibleOperation("sudo gh repo delete owner/repo");
+  assertEquals(result.blocked, true);
+});
+
+Deno.test("the SUBSTRING_RULES family ('heroku addons:destroy') still blocks through a wrapper", () => {
+  const result = checkIrreversibleOperation("timeout 30 heroku addons:destroy my-addon");
+  assertEquals(result.blocked, true);
+});
