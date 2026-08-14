@@ -42,6 +42,7 @@ rules and do not reconstruct them from memory or from this file.
 4. **No Merging to DEV:** AI agents are **NOT** allowed to merge PR changes to the `dev` or `main`
    branches. The user acts as the mandatory human-in-the-loop reviewer and is responsible for all
    merges.
+5. **Isolated Worktree & Branch Discipline:** For tasks in `web-jam-tools`, always work out of an isolated git worktree. When task execution completes, ensure the main local repository working tree remains checked out on `dev` and is never left switched to a feature branch (note: this rule is specific to `web-jam-tools` and differs from UI projects).
 
 ## Opening pull requests (all WebJamApps repos)
 
