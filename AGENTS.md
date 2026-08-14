@@ -256,6 +256,11 @@ target list, deployment steps, and verification procedures.
 - **Language & Runtime Standardization**: All helper scripts, hooks, tools, and utilities in
   `web-jam-tools` (and TypeScript repos) must be written in Deno/TypeScript. Do NOT introduce Python
   scripts; prefer Deno/TypeScript for all workspace helpers and hook parsers.
+- **Path Traversal & Identifier Validation in Automation Scripts**: Any script constructing
+  filesystem paths from input plan identifiers, slugs, or keys (e.g., in memory/rule migrations or CLI
+  utilities) MUST validate each identifier against a strict safe alphanumeric pattern (e.g.,
+  `/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/`) to prevent directory traversal and accidental reads/writes/trashes
+  outside the target directory.
 - **Native Issue Field Updates & Issue Creation**: When updating native issue fields or relationships in GitHub:
   - **Priority Field**: Set via GraphQL mutation `updateIssueFieldValue(input: { issueId, issueField: { fieldId: "IFSS_kgDOADumRA", singleSelectOptionId } })`. Option global node IDs for `WebJamApps`: Urgent (`IFSSO_kgDOAGhNuA`), High (`IFSSO_kgDOAGhNuQ`), Medium (`IFSSO_kgDOAGhNug`), Low (`IFSSO_kgDOAGhNuw`).
   - **Parent Issue Link**: Set via GraphQL mutation `addSubIssue(input: { issueId: parentNodeId, subIssueId: childNodeId })`.
