@@ -104,12 +104,13 @@ SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh flash-iss
 # unconditionally at the end of a turn, same as SessionStart fires
 # unconditionally at the start of a session.
 #
-# require-issue-citation-titles.sh (web-jam-tools#311) is BLOCKING (exits 2
-# on a bare issue/PR citation), unlike opus-no-delegation-warning.sh which
-# is deliberately detective-only (always exits 0) — both are wired the same
-# way here since Stop hooks all fire unconditionally regardless of whether
-# an individual hook chooses to block.
-STOP_HOOKS=(opus-no-delegation-warning.sh require-issue-citation-titles.sh)
+# require-issue-citation-titles.sh (web-jam-tools#311) and
+# require-clear-communication.sh (web-jam-tools#531) are BLOCKING (exit 2 on
+# a violation), unlike opus-no-delegation-warning.sh which is deliberately
+# detective-only (always exits 0) — all three are wired the same way here
+# since Stop hooks all fire unconditionally regardless of whether an
+# individual hook chooses to block.
+STOP_HOOKS=(opus-no-delegation-warning.sh require-issue-citation-titles.sh require-clear-communication.sh)
 
 # PreToolUse hooks this installer keeps registered in settings.json, as
 # "<matcher>::<script>" pairs (web-jam-tools#265 — generalized from a
