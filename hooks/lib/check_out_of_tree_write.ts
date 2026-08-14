@@ -34,7 +34,7 @@ export function isAllowlisted(resolvedPath: string): boolean {
   return false;
 }
 
-export function getRepoRoot(startDir: string): string {
+export function getRepoRoot(startDir: string): string | null {
   try {
     const command = new Deno.Command("git", {
       args: ["-C", startDir, "rev-parse", "--show-toplevel"],
@@ -49,19 +49,23 @@ export function getRepoRoot(startDir: string): string {
   } catch {
     // fallback
   }
-  return path.resolve(startDir);
+  return null;
 }
 
-export function isInsideTree(targetPath: string, repoRoot: string, cwd?: string): boolean {
+export function isInsideTree(targetPath: string, repoRoot: string | null, cwd?: string): boolean {
   const baseDir = cwd ? path.resolve(cwd) : Deno.cwd();
   const expanded = expandHome(targetPath);
   const resolvedTarget = path.resolve(baseDir, expanded);
-  const resolvedRepo = path.resolve(repoRoot);
 
   if (isAllowlisted(resolvedTarget)) {
     return true;
   }
 
+  if (!repoRoot) {
+    return false;
+  }
+
+  const resolvedRepo = path.resolve(repoRoot);
   if (resolvedTarget === resolvedRepo || resolvedTarget.startsWith(resolvedRepo + "/")) {
     return true;
   }
@@ -118,8 +122,9 @@ export function main(): void {
   if (!isInsideTree(targetPath, repoRoot, cwd)) {
     const expanded = expandHome(targetPath);
     const resolvedTarget = path.resolve(cwd, expanded);
+    const repoInfo = repoRoot ? `'${repoRoot}'` : "none (not inside a git repository)";
     console.error(
-      `BLOCKED (out-of-tree write guard): attempted write to '${targetPath}' (resolved: '${resolvedTarget}') outside the repository working tree ('${repoRoot}').`,
+      `BLOCKED (out-of-tree write guard): attempted write to '${targetPath}' (resolved: '${resolvedTarget}') outside the repository working tree (${repoInfo}).`,
     );
     console.error(
       "An out-of-repo write is invisible to gh pr diff, is not undone by closing the PR, and is covered by no test or CI gate.",

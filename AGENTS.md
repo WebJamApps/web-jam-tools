@@ -43,6 +43,7 @@ rules and do not reconstruct them from memory or from this file.
    branches. The user acts as the mandatory human-in-the-loop reviewer and is responsible for all
    merges.
 5. **Isolated Worktree & Branch Discipline:** For tasks in `web-jam-tools`, always work out of an isolated git worktree. When task execution completes, ensure the main local repository working tree remains checked out on `dev` and is never left switched to a feature branch (note: this rule is specific to `web-jam-tools` and differs from UI projects).
+6. **PreToolUse Hook Path Fencing:** When implementing PreToolUse path/repo fencing hooks, do not treat a non-git working directory as an implicit trusted repository root. Fail closed on non-git directories so writes to sensitive paths (such as `~/.claude/CLAUDE.md`) remain blocked even when a session is opened at home or outside a git repository.
 
 ## Opening pull requests (all WebJamApps repos)
 
