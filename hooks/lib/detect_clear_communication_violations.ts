@@ -2,15 +2,16 @@
  * Shared clear-communication violation detector (web-jam-tools#531).
  *
  * Used by hooks/require-clear-communication.sh (a BLOCKING Stop hook) to
- * answer "does this reply violate one of the three mechanically-decidable
+ * answer "does this reply violate one of the four mechanically-decidable
  * chat-communication rules?" — same shape as
  * hooks/lib/detect_bare_issue_refs.ts's "does this text cite an issue/PR
  * without its title?".
  *
  * Only mechanically checkable things are checked here (counting `?`,
  * measuring content length after the last surviving `?`, matching a
- * configured keyword list against paragraph position) — never a judgment
- * call about importance or tone, per the issue's design constraints.
+ * configured keyword list against paragraph position, counting section-lead
+ * lines) — never a judgment call about importance or tone, per the issue's
+ * design constraints.
  *
  * Rule 1 — more than one open question to Josh in the same reply.
  * Rule 2 — a question followed by more than a configurable amount of
@@ -21,6 +22,12 @@
  * Rule 3 — a safety-critical finding (security / data-loss / credential /
  *          prod / money) appearing outside the final paragraph-delimited
  *          section of the reply.
+ * Rule 4 — one topic per message: more than a configured number of
+ *          "section leads" (a markdown heading, or a bold-run label that
+ *          starts a line) in a reply that is also over a configured length.
+ *          A list (however long) is one topic, not one per item — list-item
+ *          lines never count as section leads, and neither do table rows or
+ *          bold used mid-sentence for emphasis.
  *
  * DECISION on "rhetorical questions" (design-constraints text lists these
  * alongside quoted/coded/URL question marks as a false-positive risk for
@@ -178,11 +185,65 @@ export function findSafetyKeywordViolations(
   return violations;
 }
 
+// --- rule 4: one topic per message (section leads) ---
+//
+// A "section lead" is a line that opens a new block of discourse:
+//   - a markdown heading (`#` through `######`, up to 3 leading spaces per
+//     CommonMark), or
+//   - a line whose FIRST non-whitespace characters are a bold run (`**...**`)
+//     — the "starts a line" requirement is what distinguishes a label from
+//     bold used mid-sentence for emphasis, which never leads a line.
+// List-item lines (bulleted `-`/`*`/`+` or numbered `1.`/`1)`) are excluded
+// from candidacy entirely, regardless of what follows the marker — a queue
+// of bold-labeled list items is still one topic, the list. Table rows never
+// match either regex (they start with `|`), so no special-casing is needed
+// there. stripNonProse() (already used by rules 1/2) removes fenced/inline
+// code, quoted text, blockquote lines and URLs first, so a heading-shaped
+// line inside a code block or a quoted excerpt never counts.
+const LIST_MARKER_RE = /^\s*(?:[-*+]|\d+[.)])\s+/;
+const HEADING_RE = /^ {0,3}#{1,6}\s+\S/;
+const BOLD_LABEL_RE = /^\s*\*\*[^*\n]{1,100}\*\*/;
+
+/** Every section-lead line in `text`, in order, trimmed. */
+export function findSectionLeads(text: string): string[] {
+  const cleaned = stripNonProse(text);
+  const leads: string[] = [];
+  for (const line of cleaned.split("\n")) {
+    if (LIST_MARKER_RE.test(line)) continue;
+    if (HEADING_RE.test(line) || BOLD_LABEL_RE.test(line)) {
+      const trimmed = line.trim();
+      if (trimmed) leads.push(trimmed);
+    }
+  }
+  return leads;
+}
+
+/**
+ * Rule 4: fires only when the reply carries MORE THAN `countThreshold`
+ * section leads AND is longer than `lengthThresholdChars` — both
+ * conditions, so a normal two-section reply (a short status + next steps)
+ * is never penalized on its own, and a long single-topic reply with zero
+ * leads is never penalized either. Returns every lead found (quoted
+ * verbatim in the denial) when it fires, [] otherwise.
+ */
+export function findSectionLeadViolations(
+  text: string,
+  countThreshold: number,
+  lengthThresholdChars: number,
+): string[] {
+  if (text.length <= lengthThresholdChars) return [];
+  const leads = findSectionLeads(text);
+  if (leads.length <= countThreshold) return [];
+  return leads;
+}
+
 // --- config ---
 
 export interface ClearCommunicationConfig {
   trailingContentThresholdChars: number;
   safetyKeywords: string[];
+  sectionLeadCountThreshold: number;
+  sectionLeadLengthThresholdChars: number;
 }
 
 // Used only if hooks/clear-communication.yaml cannot be read (missing,
@@ -190,6 +251,8 @@ export interface ClearCommunicationConfig {
 // functions rather than going silently dark.
 export const DEFAULT_CONFIG: ClearCommunicationConfig = {
   trailingContentThresholdChars: 80,
+  sectionLeadCountThreshold: 2,
+  sectionLeadLengthThresholdChars: 400,
   safetyKeywords: [
     "security",
     "vulnerability",
@@ -233,7 +296,19 @@ export function loadConfig(yamlPath: string): ClearCommunicationConfig {
     const keywords = Array.isArray(data.safety_keywords)
       ? data.safety_keywords.filter((k): k is string => typeof k === "string" && k.trim() !== "")
       : DEFAULT_CONFIG.safetyKeywords;
-    return { trailingContentThresholdChars: threshold, safetyKeywords: keywords };
+    const sectionLeadCountThreshold = typeof data.section_lead_count_threshold === "number"
+      ? data.section_lead_count_threshold
+      : DEFAULT_CONFIG.sectionLeadCountThreshold;
+    const sectionLeadLengthThresholdChars =
+      typeof data.section_lead_length_threshold_chars === "number"
+        ? data.section_lead_length_threshold_chars
+        : DEFAULT_CONFIG.sectionLeadLengthThresholdChars;
+    return {
+      trailingContentThresholdChars: threshold,
+      safetyKeywords: keywords,
+      sectionLeadCountThreshold,
+      sectionLeadLengthThresholdChars,
+    };
   } catch {
     return DEFAULT_CONFIG;
   }
@@ -242,7 +317,7 @@ export function loadConfig(yamlPath: string): ClearCommunicationConfig {
 // --- report formatting ---
 
 /**
- * Runs all three rules against `text` and returns a fully-formatted,
+ * Runs all four rules against `text` and returns a fully-formatted,
  * human-readable report body naming every offending rule + token, or ""
  * if nothing fired. The calling hook wraps this with a generic
  * BLOCKED/rewrite header and footer (same split as detect_bare_issue_refs.ts,
@@ -288,6 +363,24 @@ export function buildReport(text: string, config: ClearCommunicationConfig): str
     }
     lines.push(
       "(rule: safety-finding-must-be-final — move the security/data-loss/credential/prod/money finding to the final section, or lead with it)",
+    );
+    lines.push("");
+  }
+
+  const sectionLeads = findSectionLeadViolations(
+    text,
+    config.sectionLeadCountThreshold,
+    config.sectionLeadLengthThresholdChars,
+  );
+  if (sectionLeads.length > 0) {
+    lines.push(
+      `Rule 4 — more than one topic in this reply (${sectionLeads.length} section leads found):`,
+    );
+    for (const lead of sectionLeads) {
+      lines.push(`  - "${lead}"`);
+    }
+    lines.push(
+      "(rule: one-topic-per-message — split this into separate replies, or trim to a single lead)",
     );
     lines.push("");
   }

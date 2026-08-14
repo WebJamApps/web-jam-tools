@@ -165,6 +165,134 @@ Deno.test("a safety keyword buried outside the final section is blocked", async 
   });
 });
 
+// --- required case: more than one topic (section leads) in a long reply → blocked ---
+
+function longFiller(sentences: number): string {
+  return Array(sentences)
+    .fill(
+      "This is a filler sentence long enough to push the overall message past the length threshold.",
+    )
+    .join(" ");
+}
+
+Deno.test("a long reply with more than the threshold of section leads is blocked, all named", async () => {
+  const text = [
+    "## Subagent result",
+    longFiller(3),
+    "",
+    "## Background dispatch",
+    longFiller(3),
+    "",
+    "## Decision needed",
+    longFiller(3),
+  ].join("\n");
+  const entries = [userTurn("status?"), assistantText(text)];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 2);
+    assertBlocked(res.stderr);
+    assert(res.stderr.includes("Rule 4"));
+    assert(res.stderr.includes("## Subagent result"));
+    assert(res.stderr.includes("## Background dispatch"));
+    assert(res.stderr.includes("## Decision needed"));
+  });
+});
+
+Deno.test("a long reply with exactly two section leads (the boundary) is allowed", async () => {
+  const text = [
+    "## First section",
+    longFiller(3),
+    "",
+    "## Second section",
+    longFiller(3),
+  ].join("\n");
+  const entries = [userTurn("status?"), assistantText(text)];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+  });
+});
+
+Deno.test("a long bulleted queue of six items is one topic and is allowed", async () => {
+  const text = [
+    "- First queue item to check on Monday.",
+    "- Second queue item, also worth checking.",
+    "- Third queue item with a bit more detail than the others.",
+    "- Fourth queue item.",
+    "- Fifth queue item, last one before the sixth.",
+    "- Sixth and final queue item, wrapping up the list nicely.",
+    longFiller(3),
+  ].join("\n");
+  const entries = [userTurn("status?"), assistantText(text)];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+  });
+});
+
+Deno.test("a single long explanation with no section leads is allowed regardless of length", async () => {
+  const text = longFiller(20);
+  const entries = [userTurn("status?"), assistantText(text)];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+  });
+});
+
+Deno.test("a heading inside a fenced code block does not count toward section leads", async () => {
+  const text = [
+    "## Real section one",
+    longFiller(3),
+    "",
+    "## Real section two",
+    longFiller(3),
+    "",
+    "```md",
+    "### This looks like a heading but is inside a fenced code block",
+    "```",
+    longFiller(2),
+  ].join("\n");
+  const entries = [userTurn("status?"), assistantText(text)];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+  });
+});
+
+Deno.test("bold used mid-sentence for emphasis does not count toward section leads", async () => {
+  const text = [
+    "## Real section one",
+    longFiller(3),
+    "",
+    "## Real section two",
+    "This sentence uses **emphasis** in the middle, not as a label. " + longFiller(3),
+  ].join("\n");
+  const entries = [userTurn("status?"), assistantText(text)];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+  });
+});
+
+Deno.test("a markdown table's rows do not count toward section leads", async () => {
+  const text = [
+    "## Real section one",
+    longFiller(3),
+    "",
+    "## Real section two",
+    "| Name | Status |",
+    "| --- | --- |",
+    "| **Bold cell** | done |",
+    "| Other | pending |",
+    longFiller(3),
+  ].join("\n");
+  const entries = [userTurn("status?"), assistantText(text)];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+  });
+});
+
 // --- required case: one trailing question is allowed ---
 
 Deno.test("a reply with one trailing question is allowed", async () => {

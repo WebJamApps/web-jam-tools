@@ -14,6 +14,8 @@ import {
   findMultipleQuestionViolations,
   findQuestionPositions,
   findSafetyKeywordViolations,
+  findSectionLeads,
+  findSectionLeadViolations,
   findTrailingContentViolation,
   loadConfig,
   stripNonProse,
@@ -237,6 +239,186 @@ Deno.test("trailing blank lines do not create a bogus empty 'final section'", ()
   assert(violations.every((v) => v.totalSections === 2));
 });
 
+// --- rule 4: one topic per message (section leads) ---
+//
+// Default config: sectionLeadCountThreshold = 2 (must exceed 2, i.e. 3+
+// leads to block), sectionLeadLengthThresholdChars = 400 (message must also
+// be longer than this). Both conditions are required.
+
+const COUNT_T = DEFAULT_CONFIG.sectionLeadCountThreshold;
+const LEN_T = DEFAULT_CONFIG.sectionLeadLengthThresholdChars;
+
+function longFiller(sentences: number): string {
+  return Array(sentences)
+    .fill(
+      "This is a filler sentence long enough to push the overall message past the length threshold.",
+    )
+    .join(" ");
+}
+
+Deno.test("exactly the threshold count of headings (2) in a long reply is allowed (boundary)", () => {
+  const text = [
+    "## First section",
+    longFiller(3),
+    "",
+    "## Second section",
+    longFiller(3),
+  ].join("\n");
+  assert(text.length > LEN_T);
+  assertEquals(findSectionLeadViolations(text, COUNT_T, LEN_T), []);
+});
+
+Deno.test("more than the threshold count of headings (3) in a long reply is blocked, all named", () => {
+  const text = [
+    "## First section",
+    longFiller(3),
+    "",
+    "## Second section",
+    longFiller(3),
+    "",
+    "## Third section",
+    longFiller(3),
+  ].join("\n");
+  assert(text.length > LEN_T);
+  const violations = findSectionLeadViolations(text, COUNT_T, LEN_T);
+  assertEquals(violations.length, 3);
+  assertEquals(violations, ["## First section", "## Second section", "## Third section"]);
+});
+
+Deno.test("bold-run labels that start a line count as section leads just like headings", () => {
+  const text = [
+    "**Subagent result:**",
+    longFiller(3),
+    "",
+    "**Background dispatch:**",
+    longFiller(3),
+    "",
+    "**Decision needed:**",
+    longFiller(3),
+  ].join("\n");
+  assert(text.length > LEN_T);
+  const violations = findSectionLeadViolations(text, COUNT_T, LEN_T);
+  assertEquals(violations.length, 3);
+});
+
+Deno.test("three headings in a SHORT reply (under the length threshold) is allowed", () => {
+  const text = "## A\nx\n\n## B\nx\n\n## C\nx";
+  assert(text.length <= LEN_T);
+  assertEquals(findSectionLeadViolations(text, COUNT_T, LEN_T), []);
+});
+
+// --- false positives that must NOT trigger rule 4 ---
+
+Deno.test("a long bulleted list (6 items) is ONE topic, however long", () => {
+  const text = [
+    "- First queue item to check on Monday.",
+    "- Second queue item, also worth checking.",
+    "- Third queue item with a bit more detail than the others.",
+    "- Fourth queue item.",
+    "- Fifth queue item, last one before the sixth.",
+    "- Sixth and final queue item, wrapping up the list nicely.",
+  ].join("\n");
+  assertEquals(findSectionLeads(text), []);
+});
+
+Deno.test("a long numbered list is ONE topic, however long", () => {
+  const items = Array.from(
+    { length: 6 },
+    (_, i) => `${i + 1}. Numbered queue item number ${i + 1}, with enough text to add up.`,
+  );
+  const text = items.join("\n");
+  assertEquals(findSectionLeads(text), []);
+});
+
+Deno.test("a single long explanation with no section leads is allowed regardless of length", () => {
+  const text = longFiller(20);
+  assert(text.length > LEN_T);
+  assertEquals(findSectionLeadViolations(text, COUNT_T, LEN_T), []);
+});
+
+Deno.test("a heading-shaped line inside a fenced code block does not count as a section lead", () => {
+  const text = [
+    "## Real section one",
+    longFiller(3),
+    "",
+    "## Real section two",
+    longFiller(3),
+    "",
+    "```md",
+    "### This looks like a heading but is inside a fenced code block",
+    "```",
+    longFiller(2),
+  ].join("\n");
+  assert(text.length > LEN_T);
+  // If the fenced heading were miscounted, this would be 3 leads and block.
+  assertEquals(findSectionLeadViolations(text, COUNT_T, LEN_T), []);
+});
+
+Deno.test("a heading/bold label quoted inside a blockquote does not count as a section lead", () => {
+  const text = [
+    "## Real section one",
+    longFiller(3),
+    "",
+    "## Real section two",
+    longFiller(3),
+    "",
+    "> ### Quoted heading from someone else's message",
+    "> **Quoted bold label:** also not ours",
+    longFiller(2),
+  ].join("\n");
+  assert(text.length > LEN_T);
+  assertEquals(findSectionLeadViolations(text, COUNT_T, LEN_T), []);
+});
+
+Deno.test("bold used mid-sentence for emphasis is not a section lead", () => {
+  const text = [
+    "## Real section one",
+    longFiller(3),
+    "",
+    "## Real section two",
+    "This sentence uses **emphasis** in the middle, not as a label. " + longFiller(3),
+  ].join("\n");
+  assert(text.length > LEN_T);
+  // If mid-sentence bold were miscounted as a lead, this would be 3 and block.
+  assertEquals(findSectionLeadViolations(text, COUNT_T, LEN_T), []);
+});
+
+Deno.test("a markdown table's rows (and header) are not section leads", () => {
+  const text = [
+    "## Real section one",
+    longFiller(3),
+    "",
+    "## Real section two",
+    "| Name | Status |",
+    "| --- | --- |",
+    "| **Bold cell** | done |",
+    "| Other | pending |",
+    longFiller(3),
+  ].join("\n");
+  assert(text.length > LEN_T);
+  assertEquals(findSectionLeadViolations(text, COUNT_T, LEN_T), []);
+});
+
+Deno.test("a bold-labeled list item never counts as a section lead", () => {
+  const text = [
+    "## Real section one",
+    longFiller(3),
+    "",
+    "## Real section two",
+    "- **Todo:** buy milk",
+    "- **Todo:** rotate the leaked credential",
+    "* **Also bold:** another item",
+    longFiller(3),
+  ].join("\n");
+  assert(text.length > LEN_T);
+  assertEquals(findSectionLeadViolations(text, COUNT_T, LEN_T), []);
+});
+
+Deno.test("findSectionLeads reports the exact trimmed lead text for headings and bold labels", () => {
+  const text = "#Not a heading (no space)\n## Real Heading\n**Bold Label:** rest of line";
+  assertEquals(findSectionLeads(text), ["## Real Heading", "**Bold Label:** rest of line"]);
+});
+
 // --- stripNonProse sanity (used by rules 1 and 2) ---
 
 Deno.test("stripNonProse preserves text length (positions stay valid)", () => {
@@ -263,6 +445,29 @@ Deno.test("loadConfig reads a real YAML file's threshold and keyword list", asyn
     const config = loadConfig(yamlPath);
     assertEquals(config.trailingContentThresholdChars, 5);
     assertEquals(config.safetyKeywords, ["widget", "gadget"]);
+    // Rule 4 keys are absent from this YAML — must fall back to defaults,
+    // not become undefined/NaN.
+    assertEquals(config.sectionLeadCountThreshold, DEFAULT_CONFIG.sectionLeadCountThreshold);
+    assertEquals(
+      config.sectionLeadLengthThresholdChars,
+      DEFAULT_CONFIG.sectionLeadLengthThresholdChars,
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("loadConfig reads rule 4's section-lead count and length thresholds", async () => {
+  const dir = await Deno.makeTempDir();
+  const yamlPath = `${dir}/clear-communication.yaml`;
+  try {
+    await Deno.writeTextFile(
+      yamlPath,
+      "section_lead_count_threshold: 1\nsection_lead_length_threshold_chars: 10\n",
+    );
+    const config = loadConfig(yamlPath);
+    assertEquals(config.sectionLeadCountThreshold, 1);
+    assertEquals(config.sectionLeadLengthThresholdChars, 10);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -302,4 +507,23 @@ Deno.test("buildReport names all three rules when all three fire", () => {
   assert(report.includes("at-most-one-open-question"));
   assert(report.includes("question-must-be-last"));
   assert(report.includes("safety-finding-must-be-final"));
+});
+
+Deno.test("buildReport names rule 4 and quotes every section lead when it fires", () => {
+  const text = [
+    "## Subagent result",
+    longFiller(3),
+    "",
+    "## Background dispatch",
+    longFiller(3),
+    "",
+    "## Decision needed",
+    longFiller(3),
+  ].join("\n");
+  const report = buildReport(text, DEFAULT_CONFIG);
+  assert(report.includes("Rule 4"));
+  assert(report.includes("one-topic-per-message"));
+  assert(report.includes('"## Subagent result"'));
+  assert(report.includes('"## Background dispatch"'));
+  assert(report.includes('"## Decision needed"'));
 });

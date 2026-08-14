@@ -6,7 +6,7 @@
 # chat-communication rule that has ever reliably held is the one enforced by
 # a Stop hook, not the one written down in CLAUDE.md/docs. This hook reads
 # the transcript path from stdin (same Stop-hook payload shape), extracts
-# the LAST assistant message's text, and mechanically checks three rules
+# the LAST assistant message's text, and mechanically checks four rules
 # that are decidable without a judgment call (see the detector's docstring
 # for the full rationale, including the deliberate decision on "rhetorical
 # questions"):
@@ -16,13 +16,17 @@
 #      a question must be the last thing in the message.
 #   3. A safety-critical finding (security / data-loss / credential / prod /
 #      money) appearing outside the final section of the reply.
+#   4. More than a configurable number of "section leads" (a heading or a
+#      bold-run label starting a line) in a reply that is also over a
+#      configurable length — several topics jumbled into one message. A
+#      list, however long, is one topic; list items never count as leads.
 #
 # Detection lives in hooks/lib/detect_clear_communication_violations.ts so
 # the string/regex logic is independently unit-testable (same split as
 # require-issue-citation-titles.sh / hooks/lib/detect_bare_issue_refs.ts).
-# Rule 3's keyword list and rule 2's content threshold are CONFIGURATION,
-# not hardcoded logic — tune them in hooks/clear-communication.yaml, no code
-# change needed.
+# Rule 3's keyword list, rule 2's content threshold, and rule 4's count/
+# length thresholds are CONFIGURATION, not hardcoded logic — tune them in
+# hooks/clear-communication.yaml, no code change needed.
 #
 # False positives are the primary risk (a hook that fires on ordinary
 # replies gets worked around or disabled, which is worse than no hook) — the

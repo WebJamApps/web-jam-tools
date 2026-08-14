@@ -57,3 +57,22 @@ safety_keywords:
   - force-push
   - force push
   - irreversible
+
+# Rule 4 — "one topic per message" (web-jam-tools#531 follow-up, approved by
+# Josh 2026-08-14: several async results — a subagent notification, a
+# background dispatch finishing — landing in the same turn is a fact about
+# the tooling, not a reason to jumble them into one reply). A "section lead"
+# is a markdown heading or a bold-run label that starts a line (see the
+# detector's docstring for the exact, mechanical definition) — list items,
+# table rows, and anything inside quoted/coded content never count, so a
+# long bulleted queue or a single long explanation is still ONE topic no
+# matter how long.
+#
+# The rule fires only when BOTH thresholds below are exceeded, so a normal
+# two-section reply (e.g. a short status + next steps) is never penalized on
+# its own — only a reply that is both long AND carries several separate
+# section leads, which is the actual "jumbled up several things" shape.
+# Suggested starting points below; tune against real false positives/misses,
+# same as the other three rules.
+section_lead_count_threshold: 2
+section_lead_length_threshold_chars: 400
