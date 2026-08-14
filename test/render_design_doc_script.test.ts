@@ -1,9 +1,5 @@
 import { assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
-import {
-  parseInlineMarkdown,
-  renderDesignDoc,
-  slugify,
-} from "../scripts/render_design_doc.ts";
+import { parseInlineMarkdown, renderDesignDoc, slugify } from "../scripts/render_design_doc.ts";
 
 const SCRIPT_PATH = new URL("../scripts/render-design-doc.sh", import.meta.url).pathname;
 
@@ -63,8 +59,8 @@ Normal content.
 `;
   const html = renderDesignDoc(md);
 
-  assertStringIncludes(html, '<details>\n  <summary>Rule 1</summary>');
-  assertStringIncludes(html, '<details>\n  <summary>Rule 2</summary>');
+  assertStringIncludes(html, "<details>\n  <summary>Rule 1</summary>");
+  assertStringIncludes(html, "<details>\n  <summary>Rule 2</summary>");
   assertStringIncludes(html, "<h3>Normal H3</h3>");
 });
 
@@ -150,5 +146,5 @@ Details here.
   assertStringIncludes(renderedHtml, "<title>E2E Test Doc</title>");
   assertStringIncludes(renderedHtml, '<nav class="toc">');
   assertStringIncludes(renderedHtml, '<a href="#feature-section">Feature Section</a>');
-  assertStringIncludes(renderedHtml, '<details>\n  <summary>Captured Rule</summary>');
+  assertStringIncludes(renderedHtml, "<details>\n  <summary>Captured Rule</summary>");
 });
