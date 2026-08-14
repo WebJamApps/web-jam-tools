@@ -77,7 +77,7 @@ These are properties of the skill, written as explicit refusals:
 | remove a `Needs Design` label without an ask carrying its reason | only Josh can say a design is done |
 | add `Needs Design` to anything in the approved executable set | it must not become a stub factory |
 | put a manual step inside an agent's execution issue | manual steps get their own `Josh` issue |
-| hand Josh a step with no script and no exact click path | anything an agent can produce, an agent produces |
+| hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<date>.md` |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/next`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
 
@@ -121,13 +121,29 @@ Regression matters as much as the new feature, and a full-stack test must be run
 
 ## Josh's Manual Steps
 
+Every manual step handed to Josh — whether handed over interactively in chat or filed as a GitHub issue, and whether occurring before or after Gate 1 — **must always have a numbered runbook file** created at:
+
+```
+~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<date>.md
+```
+
+There are **no carve-outs** for steps handed over in chat rather than filed as issues, and **no carve-outs** for steps that occur before Gate 1.
+
+### Runbook Format Requirements
+
+Every runbook file must follow this exact format:
+- **Sequential step numbering:** Steps must be explicitly numbered sequentially (`## STEP 1`, `## STEP 2`, ...).
+- **Literal commands:** Every shell command, script invocation, or path must be written out completely as a literal command snippet (no placeholders or fuzzy instructions).
+- **What each step proves:** Explain explicitly what each step tests or proves.
+- **What a correct result looks like:** State clearly the exact expected output, exit status, or visible behavior confirming success.
+
 Manual steps never live inside an agent's execution issue. They are **grouped by gate position** — steps needed before the same agent issue share one `Josh` issue; steps at different points in the chain are separate issues. A step that gates nothing is still its own issue.
 
 **Every manual step is a pair:**
 
 | | Issue A — the agent's | Issue B — Josh's |
 |---|---|---|
-| **Scriptable** | `Flash High`. Build `<path>` — one script Josh runs with one command. Deliverable-first, numbered list of what it does. Closes when the script merges. | `Josh` label. The exact command, from what directory, what success looks like — **and WHY he is running it**. Closes when he confirms he ran it. |
+| **Scriptable** | `Flash High`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
 | **UI** | `Flash High`. Investigate the live UI and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact click path, screen by screen, literal button and field names. Closes when the doc exists. | `Josh` label. **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he did them. |
 
 Issue B is always `Blocked` on issue A, with both the label and the native dependency. A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
