@@ -132,6 +132,7 @@ There are **no carve-outs** for steps handed over in chat rather than filed as i
 ### Runbook Format Requirements
 
 Every runbook file must follow this exact format:
+- **Sequential step numbering:** Steps must be explicitly numbered sequentially (`## STEP 1`, `## STEP 2`, ...).
 - **Literal commands:** Every shell command, script invocation, or path must be written out completely as a literal command snippet (no placeholders or fuzzy instructions).
 - **What each step proves:** Explain explicitly what each step tests or proves.
 - **What a correct result looks like:** State clearly the exact expected output, exit status, or visible behavior confirming success.
@@ -142,7 +143,7 @@ Manual steps never live inside an agent's execution issue. They are **grouped by
 
 | | Issue A — the agent's | Issue B — Josh's |
 |---|---|---|
-| **Scriptable** | `Flash High`. Build `<path>` — one script Josh runs with one command. Deliverable-first, numbered list of what it does. Closes when the script merges. | `Josh` label. The exact command, from what directory, what success looks like — **and WHY he is running it**. Closes when he confirms he ran it. |
+| **Scriptable** | `Flash High`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
 | **UI** | `Flash High`. Investigate the live UI and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact click path, screen by screen, literal button and field names. Closes when the doc exists. | `Josh` label. **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he did them. |
 
 Issue B is always `Blocked` on issue A, with both the label and the native dependency. A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
