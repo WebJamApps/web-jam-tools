@@ -292,6 +292,23 @@ export function merge(settingsPath: string, args: string[]): number {
   const addedDeny = mergePermissionsList("deny", denyPatterns);
   const addedAsk = mergePermissionsList("ask", askPatterns);
 
+  // A pattern the installer owns via one versioned array (DENY_RULES /
+  // ASK_RULES) must not remain in the OTHER permissions list — a stale copy
+  // there silently overrides the owning array's classification, since a
+  // pattern present in both permissions.deny and permissions.ask has deny
+  // win (web-jam-tools#525). ownedPatterns is this run's version of the
+  // owning array; otherSection is the list to scan for a stale copy.
+  function findCrossListed(ownedPatterns: string[], otherSection: "deny" | "ask"): string[] {
+    if (ownedPatterns.length === 0) return [];
+    if (!data.permissions || typeof data.permissions !== "object") return [];
+    if (!Array.isArray(data.permissions[otherSection])) return [];
+    const ownedSet = new Set(ownedPatterns);
+    return (data.permissions[otherSection] as string[]).filter((p) => ownedSet.has(p));
+  }
+
+  const denyOwnedInAsk = findCrossListed(denyPatterns, "ask");
+  const askOwnedInDeny = findCrossListed(askPatterns, "deny");
+
   // Secret-scan gate: check all strings in permissions and hooks for credentials
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
@@ -353,7 +370,9 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedPostToolUseStale.length > 0 ||
     prunedPostToolUseRetired.length > 0 ||
     addedDeny.length > 0 ||
-    addedAsk.length > 0;
+    addedAsk.length > 0 ||
+    denyOwnedInAsk.length > 0 ||
+    askOwnedInDeny.length > 0;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -404,6 +423,16 @@ export function merge(settingsPath: string, args: string[]): number {
       for (const pattern of addedAsk) {
         console.error(`${targetFilename}: missing permissions.ask rule ${pattern}`);
       }
+      for (const pattern of denyOwnedInAsk) {
+        console.error(
+          `${targetFilename}: permissions.ask rule ${pattern} is also in permissions.deny (stale copy)`,
+        );
+      }
+      for (const pattern of askOwnedInDeny) {
+        console.error(
+          `${targetFilename}: permissions.deny rule ${pattern} is also in permissions.ask (stale copy)`,
+        );
+      }
       return 1;
     }
     console.log(
@@ -418,6 +447,15 @@ export function merge(settingsPath: string, args: string[]): number {
         "and permissions.deny / permissions.ask already up to date (no-op)",
     );
     return 0;
+  }
+
+  if (denyOwnedInAsk.length > 0) {
+    const removeSet = new Set(denyOwnedInAsk);
+    data.permissions.ask = (data.permissions.ask as string[]).filter((p) => !removeSet.has(p));
+  }
+  if (askOwnedInDeny.length > 0) {
+    const removeSet = new Set(askOwnedInDeny);
+    data.permissions.deny = (data.permissions.deny as string[]).filter((p) => !removeSet.has(p));
   }
 
   if (tryExistsSync(settingsPath)) {
@@ -475,6 +513,16 @@ export function merge(settingsPath: string, args: string[]): number {
   }
   for (const pattern of addedAsk) {
     console.log(`${targetFilename}: added permissions.ask rule ${pattern}`);
+  }
+  for (const pattern of denyOwnedInAsk) {
+    console.log(
+      `${targetFilename}: removed permissions.ask rule ${pattern} (now owned by permissions.deny)`,
+    );
+  }
+  for (const pattern of askOwnedInDeny) {
+    console.log(
+      `${targetFilename}: removed permissions.deny rule ${pattern} (now owned by permissions.ask)`,
+    );
   }
 
   return 0;
