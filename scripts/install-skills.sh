@@ -56,5 +56,48 @@ install_to_dest() {
   done
 }
 
+prune_from_dest() {
+  local target_dest="$1" label="$2"
+  [ -d "$target_dest" ] || return 0
+
+  local canonical_skills_src
+  canonical_skills_src="$(readlink -f "$SKILLS_SRC" 2>/dev/null || echo "$SKILLS_SRC")"
+
+  shopt -s nullglob
+  for link in "$target_dest"/*; do
+    name="$(basename "$link")"
+
+    # Never touch *.bak-* directories/files
+    if [[ "$name" == *.bak-* ]]; then
+      continue
+    fi
+
+    # Check if entry is a symlink
+    if [ -L "$link" ]; then
+      local link_target
+      link_target="$(readlink "$link")" || continue
+
+      local is_pointing_to_repo=0
+      if [[ "$link_target" == "$SKILLS_SRC"* ]] || [[ "$link_target" == "$canonical_skills_src"* ]]; then
+        is_pointing_to_repo=1
+      else
+        local abs_target="$target_dest/$link_target"
+        if [[ "$abs_target" == "$SKILLS_SRC"* ]] || [[ "$abs_target" == "$canonical_skills_src"* ]]; then
+          is_pointing_to_repo=1
+        fi
+      fi
+
+      # If pointing to repo skills/ and target does not exist (dangling link), prune it
+      if [ "$is_pointing_to_repo" -eq 1 ] && [ ! -e "$link" ]; then
+        rm -f "$link"
+        echo "$label: $name: pruned stale symlink (target deleted)"
+      fi
+    fi
+  done
+  shopt -u nullglob
+}
+
+prune_from_dest "$CLAUDE_SKILLS_DEST" "Claude"
+prune_from_dest "$AGY_SKILLS_DEST" "agy"
 install_to_dest "$CLAUDE_SKILLS_DEST" "Claude"
 install_to_dest "$AGY_SKILLS_DEST" "agy"

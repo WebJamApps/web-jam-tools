@@ -1,16 +1,16 @@
 ---
-name: issue-design
+name: design-issue
 description: Design-then-issue-plan workflow prior to filing GitHub issues. Design work runs through this skill. Never dispatches (ends at "the issues exist").
 metadata:
   version: v1
   publisher: josh
 ---
 
-# /issue-design — design-then-issue-plan workflow prior to filing GitHub issues
+# /design-issue — design-then-issue-plan workflow prior to filing GitHub issues
 
-`/issue-design` turns a problem into an approved design, and then into the right set of GitHub issues — the phase *before* filing. `/draft-issue` already owns filing a single issue and is unchanged.
+`/design-issue` turns a problem into an approved design, and then into the right set of GitHub issues — the phase *before* filing. `/file-issue` already owns filing a single issue and is unchanged.
 
-Design work does not happen in plain chat. The moment a conversation turns into design — options, trade-offs, decisions worth recording — the session runs `/issue-design` and works inside it. That single rule is what lets the design machinery live in the skill instead of in memory, loading only when design is actually happening.
+Design work does not happen in plain chat. The moment a conversation turns into design — options, trade-offs, decisions worth recording — the session runs `/design-issue` and works inside it. That single rule is what lets the design machinery live in the skill instead of in memory, loading only when design is actually happening.
 
 **ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/next`.
 
@@ -44,7 +44,7 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
 
 The subagent receives the approved plan table and the design document path. It files and reports; it builds nothing.
 
-11. **File in plan order — the epic first, then each child** — invoking `/draft-issue` once per issue so the filing rules and their enforcing hook apply to every one. Attach each child to its parent as it goes; the ordering is forced by the parent/child link.
+11. **File in plan order — the epic first, then each child** — invoking `/file-issue` once per issue so the filing rules and their enforcing hook apply to every one. Attach each child to its parent as it goes; the ordering is forced by the parent/child link.
 12. **Each body carries only scope, build mechanics and repo facts**, plus a pointer to the design document and the instruction to STOP if that path cannot be read. No requirement text is restated.
 13. **Set the native Priority field** via GitHub MCP `issue_write` → `issue_fields`. (`gh` cannot set a native field).
 14. **Apply the `Blocked` label AND the native dependency** to anything not yet startable — both signals, never one.

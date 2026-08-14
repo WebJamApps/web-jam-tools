@@ -438,7 +438,7 @@ const ISSUE_342_FIXTURE_BODY = `Implement Issue #342 in /home/joshua/WebJamApps/
 
 ### Instructions:
 1. Documentation Updates:
-   - skills/draft-issue/SKILL.md: Update "Before you file" section.
+   - skills/file-issue/SKILL.md: Update "Before you file" section.
 2. Hook Enforcement Extension:
    - Inspect issue bodies for unresolvable pointer phrases: "see the comment", "see comment", "read the comment first", "read comment first", "as discussed above", "as discussed in", "per the discussion", "in the epic", "see the epic".
    - Strip code blocks/spans and quotes prior to scanning.`;
