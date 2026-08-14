@@ -40,8 +40,33 @@
  * see Write/Edit file writes, and it does not see anything agy does
  * internally — agy's own hooks are inert
  * (web-jam-tools#432 "agy hooks do not enforce...").
+ *
+ * WRAPPER-BYPASS FIX (guard-wrapper-bypass): `isGitPushDeletion` is a
+ * positional check — it requires "git" at argv[0] (after any `VAR=value`
+ * prefix). A wrapper program (`xargs`, `env`, `sudo`, `nohup`, `timeout`,
+ * `stdbuf`, `command`, `nice`, `ionice`, `setsid`, or a nested-string form
+ * like `bash -c "..."` / `eval "..."` / `ssh host "..."`) puts a different
+ * word at argv[0] and defeated the check entirely, even though the wrapped
+ * `git push --delete` still ran for real — this was a regression: before
+ * web-jam-tools#526 the rule was a flat `grep -E` over the whole command
+ * text, which a wrapper does NOT defeat, and #526's positional rewrite
+ * silently dropped that coverage. Every segment's argv is now resolved
+ * through `resolveThroughWrappers()` (shared with
+ * check_dangerous_git_deploy.ts via normalize_command.ts) before the
+ * positional check runs; a nested command string recurses into this same
+ * function with an incremented depth, capped at
+ * MAX_WRAPPER_RECURSION_DEPTH, and both that cap and
+ * MAX_WRAPPER_ITERATIONS fail CLOSED (block) rather than pass an
+ * unresolvable wrapper chain through.
  */
-import { ASSIGN_RE, splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
+import {
+  ASSIGN_RE,
+  MAX_WRAPPER_RECURSION_DEPTH,
+  resolveThroughWrappers,
+  splitOnOperators,
+  splitShellTokens,
+  stripHeredocs,
+} from "./normalize_command.ts";
 
 export interface CheckResult {
   blocked: boolean;
@@ -104,8 +129,12 @@ export function isGitPushDeletion(argv: string[]): boolean {
   return false;
 }
 
-export function checkIrreversibleOperation(rawCmd: string): CheckResult {
+export function checkIrreversibleOperation(rawCmd: string, depth = 0): CheckResult {
   if (!rawCmd) return ok();
+
+  if (depth > MAX_WRAPPER_RECURSION_DEPTH) {
+    return block("wrapper/interpreter nesting exceeded recursion cap — failing closed");
+  }
 
   let stripped: string;
   try {
@@ -132,7 +161,19 @@ export function checkIrreversibleOperation(rawCmd: string): CheckResult {
     } catch {
       return block("unparseable command (tokenizer failure) — failing closed");
     }
-    if (isGitPushDeletion(argv)) {
+
+    const resolved = resolveThroughWrappers(argv);
+    if (resolved.kind === "cap-exceeded") {
+      return block("wrapper resolution exceeded iteration cap — failing closed");
+    }
+    if (resolved.kind === "nested") {
+      const nestedResult = checkIrreversibleOperation(resolved.command, depth + 1);
+      if (nestedResult.blocked) {
+        return block(nestedResult.description ?? "blocked via wrapped/nested command");
+      }
+      continue;
+    }
+    if (isGitPushDeletion(resolved.argv)) {
       return block("remote branch deletion via 'git push'");
     }
   }
