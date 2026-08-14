@@ -765,3 +765,156 @@ Deno.test(
     }
   },
 );
+
+// --- Retracting a rule that moved between deny and ask (web-jam-tools#525) ---
+//
+// Reproduces the exact live scenario recorded on the issue: --force-with-lease
+// moved from DENY_RULES to ASK_RULES (web-jam-tools#523), but a settings.json
+// still carries it in permissions.deny from before that move — which silently
+// overrode the new ASK_RULES classification, since deny wins when a pattern is
+// in both arrays.
+
+Deno.test(
+  "installing over a settings.json with a stale deny copy of an ASK_RULES pattern removes the stale copy",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Seed exactly the pre-#525 broken state: the pattern present in BOTH
+      // arrays, as install-hooks.sh actually left it on Josh's laptop.
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({
+          permissions: {
+            deny: [
+              "Bash(git push --force-with-lease*)",
+              "Bash(git push * --force-with-lease*)",
+            ],
+            ask: [
+              "Bash(git push --force-with-lease*)",
+              "Bash(git push * --force-with-lease*)",
+            ],
+          },
+        }),
+      );
+
+      const res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+      assert(
+        res.stdout.includes(
+          "removed permissions.deny rule Bash(git push --force-with-lease*) (now owned by permissions.ask)",
+        ),
+        res.stdout,
+      );
+      assert(
+        res.stdout.includes(
+          "removed permissions.deny rule Bash(git push * --force-with-lease*) (now owned by permissions.ask)",
+        ),
+        res.stdout,
+      );
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assert(
+        !settings.permissions.deny.includes("Bash(git push --force-with-lease*)"),
+        "stale deny copy should have been removed",
+      );
+      assert(
+        !settings.permissions.deny.includes("Bash(git push * --force-with-lease*)"),
+        "stale deny copy should have been removed",
+      );
+      assert(
+        settings.permissions.ask.includes("Bash(git push --force-with-lease*)"),
+        "the ask copy should remain",
+      );
+      // Plain --force and every other remote-deleting shape stay denied —
+      // this fix only retracts a pattern the OTHER array now owns.
+      assert(
+        settings.permissions.deny.includes("Bash(git push --force *)"),
+        "plain --force must remain denied",
+      );
+
+      // Re-run: idempotent, reports no further changes.
+      const second = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(second.code, 0, second.stdout + second.stderr);
+      assert(
+        second.stdout.includes("already up to date (no-op)"),
+        `expected no-op on second run, got: ${second.stdout}`,
+      );
+      assert(
+        !second.stdout.includes("removed permissions.deny rule"),
+        `expected no further removals on second run, got: ${second.stdout}`,
+      );
+
+      // --check now passes clean (the both-arrays drift is gone).
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "--check reports drift when a DENY_RULES/ASK_RULES pattern is present in both permissions lists",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Hand-add a stale deny copy of an ASK_RULES-owned pattern to simulate
+      // drift accumulating after a clean install.
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      settings.permissions.deny.push("Bash(git push --force-with-lease*)");
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings));
+
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assert(checkRes.code !== 0, "expected --check to fail on a both-arrays pattern");
+      assert(
+        checkRes.stderr.includes(
+          "permissions.deny rule Bash(git push --force-with-lease*) is also in permissions.ask (stale copy)",
+        ),
+        checkRes.stderr,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);

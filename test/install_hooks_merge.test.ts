@@ -986,6 +986,160 @@ Deno.test(
   },
 );
 
+// --- Cross-list retraction: a rule that moved between DENY_RULES and
+// ASK_RULES must not survive as a stale copy in the array it left
+// (web-jam-tools#525) ---
+
+Deno.test(
+  "a pattern moved from --deny to --ask is removed from permissions.deny on install",
+  async () => {
+    await withTempSettings(
+      { permissions: { deny: ["Bash(git push --force-with-lease*)"] } },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--ask",
+          "Bash(git push --force-with-lease*)",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed permissions.deny rule Bash(git push --force-with-lease*) (now owned by permissions.ask)",
+          ),
+          res.stdout,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.deny, []);
+        assertEquals(data.permissions?.ask, ["Bash(git push --force-with-lease*)"]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "a pattern moved from --ask to --deny is removed from permissions.ask on install",
+  async () => {
+    await withTempSettings(
+      { permissions: { ask: ["Bash(rm -rf *)"] } },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--deny",
+          "Bash(rm -rf *)",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed permissions.ask rule Bash(rm -rf *) (now owned by permissions.deny)",
+          ),
+          res.stdout,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.ask, []);
+        assertEquals(data.permissions?.deny, ["Bash(rm -rf *)"]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "a pattern present in neither versioned array is never removed from permissions.ask or permissions.deny",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          deny: ["Bash(some-unowned-deny-rule *)"],
+          ask: ["Bash(some-unowned-ask-rule *)"],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--deny",
+          "Bash(git push --force *)",
+          "--ask",
+          "Bash(rm -rf *)",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.deny, [
+          "Bash(some-unowned-deny-rule *)",
+          "Bash(git push --force *)",
+        ]);
+        assertEquals(data.permissions?.ask, [
+          "Bash(some-unowned-ask-rule *)",
+          "Bash(rm -rf *)",
+        ]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check reports a pattern present in both permissions.deny and permissions.ask as drift",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          deny: ["Bash(git push --force-with-lease*)"],
+          ask: ["Bash(git push --force-with-lease*)"],
+        },
+      },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--ask",
+          "Bash(git push --force-with-lease*)",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(
+          checkRes.stderr.includes(
+            "permissions.deny rule Bash(git push --force-with-lease*) is also in permissions.ask (stale copy)",
+          ),
+          checkRes.stderr,
+        );
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check still passes (exit 0) on a settings file with no cross-listed patterns",
+  async () => {
+    await withTempSettings(
+      { permissions: { deny: [], ask: ["Bash(rm -rf *)"] } },
+      async (path) => {
+        const checkRes = await runMerge(path, ["--check", "--ask", "Bash(rm -rf *)"]);
+        assertEquals(checkRes.code, 0, checkRes.stderr);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "re-running the installer after a cross-list retraction is idempotent and reports no changes",
+  async () => {
+    await withTempSettings(
+      { permissions: { deny: ["Bash(git push --force-with-lease*)"] } },
+      async (path) => {
+        const args = ["--ask", "Bash(git push --force-with-lease*)"];
+        const first = await runMerge(path, args);
+        assertEquals(first.code, 0, first.stderr);
+        const second = await runMerge(path, args);
+        assertEquals(second.code, 0, second.stderr);
+        assert(
+          second.stdout.includes("already up to date (no-op)"),
+          `expected no-op message, got: ${second.stdout}`,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.deny, []);
+        assertEquals(data.permissions?.ask, ["Bash(git push --force-with-lease*)"]);
+      },
+    );
+  },
+);
+
 Deno.test(
   "--check mode in merge-hooks-into-settings.ts reports drift on stale/retired hook entries",
   async () => {
