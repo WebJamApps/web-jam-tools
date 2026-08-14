@@ -1,0 +1,59 @@
+# clear-communication.yaml — web-jam-tools#531
+#
+# Configuration for hooks/require-clear-communication.sh (a BLOCKING Stop
+# hook) and its detector, hooks/lib/detect_clear_communication_violations.ts.
+# Per the issue's design constraint, the rule-3 keyword list (and rule 2's
+# threshold) are configuration, not hardcoded logic — tune them here as
+# false positives or misses turn up in real sessions. No code change is
+# needed to retune either value.
+
+# Rule 2 — "a question must be the last thing in the message." This is the
+# number of non-whitespace characters allowed to follow the LAST surviving
+# question mark (after fenced/inline code, double-quoted text, blockquote
+# lines and URLs are stripped) before the reply is blocked. A short trailing
+# clause ("Let me know.") stays under this; a genuine additional paragraph
+# does not. Tune upward if short trailing courtesies start getting blocked,
+# downward if real violations are slipping through.
+trailing_content_threshold_chars: 80
+
+# Rule 3 — a safety-critical finding (security, data-loss, credential, prod,
+# or money) may not be buried outside the final section of a reply. Matched
+# case-insensitively as whole words/phrases against the message with
+# fenced/inline code stripped. Keep entries short and specific to reduce
+# false positives; this list is expected to need tuning once it is live.
+safety_keywords:
+  # security
+  - security
+  - vulnerability
+  - breach
+  - exploit
+  # data-loss
+  - data loss
+  - data-loss
+  - deleted data
+  - lost data
+  - wiped
+  - overwritten
+  # credential
+  - credential
+  - credentials
+  - password
+  - secret key
+  - api key
+  - leaked
+  # prod
+  - prod
+  - production
+  - outage
+  - regression
+  # money
+  - money
+  - billing
+  - payment
+  - financial
+  - invoice
+  - cost overrun
+  # other irreversible/destructive findings worth surfacing last
+  - force-push
+  - force push
+  - irreversible

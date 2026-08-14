@@ -61,6 +61,10 @@ const EXPECTED_HOOK_SCRIPTS = [
   // Stop hook (web-jam-tools#290) — detective-only warning when an Opus
   // turn racks up edits with zero subagent spawns.
   "opus-no-delegation-warning.sh",
+  // Stop hook (web-jam-tools#531) — BLOCKING: rejects a message with more
+  // than one open question, a question that isn't the last thing in the
+  // message, or a safety-critical finding buried outside the final section.
+  "require-clear-communication.sh",
   // Stop hook (web-jam-tools#311) — BLOCKING: rejects a message that cites
   // an issue/PR without its title (repo#number "title").
   "require-issue-citation-titles.sh",
