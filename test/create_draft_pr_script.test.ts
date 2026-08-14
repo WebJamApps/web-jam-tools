@@ -792,3 +792,93 @@ Deno.test("--no-close without issue is refused with error", async () => {
   assertEquals(res.code, 1);
   assertMatch(res.stderr, /--no-close needs an issue/);
 });
+
+// --- web-jam-tools#527 PR title determination tests ---
+
+Deno.test("--title flag sets PR title verbatim and overrides issue title and commit subject", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "Issue Title From GH",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#437",
+      "--part-of",
+      "--title",
+      "Explicit Title Passed Via Flag",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /TITLE: Explicit Title Passed Via Flag/);
+  assertNotMatch(res.stdout, /TITLE: Issue Title From GH/);
+});
+
+Deno.test("with --part-of and no --title, PR title comes from last commit subject", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "Epic Container Issue Title",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#437",
+      "--part-of",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /TITLE: init/);
+  assertNotMatch(res.stdout, /TITLE: Epic Container Issue Title/);
+});
+
+Deno.test("with --closes and no --title, PR title comes from issue title", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "Single Task Issue Title",
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#500",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /TITLE: Single Task Issue Title/);
+});
+
+Deno.test("with no issue and no --title, PR title comes from last commit subject", async () => {
+  const res = await runScript(
+    repoDir,
+    baseArgs(),
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /TITLE: init/);
+});
+
+Deno.test("with no issue and --title provided, PR title comes from --title flag", async () => {
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--title",
+      "Standalone Fix Without Issue",
+    ],
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /TITLE: Standalone Fix Without Issue/);
+});

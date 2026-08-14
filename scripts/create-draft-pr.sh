@@ -18,7 +18,7 @@
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
-#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--no-close] [--dry-run] \
+#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--title TEXT] [--part-of] [--no-close] [--dry-run] \
 #       [--update] \
 #       [--no-close-reason TEXT | --no-close-reason-file PATH] \
 #       [--summary TEXT | --summary-file PATH] \
@@ -46,6 +46,8 @@
 #   --part-of       Opt-in flag: DON'T close the issue on merge (emits `Part of #N`).
 #                   Use only for a partial PR or a standing run-log/epic issue.
 #   --closes        Deprecated no-op (closing is now the default); still accepted.
+#   --title TEXT    Optional PR title. Sets the title verbatim and overrides every other
+#                   source (issue title or commit subject).
 #   --issue N       Issue number. Normally parsed from the branch name
 #                   (<lane>/<issue#>-<slug>); use this only as a fallback.
 #                   OPTIONAL: no issue anywhere ⇒ PR opens without a Closes line
@@ -181,6 +183,7 @@ author_roster_check() {
 
 AUTHOR=""
 ISSUE=""
+TITLE=""
 SUMMARY=""
 TEST_PLAN=""
 TEST_EVIDENCE=""
@@ -222,11 +225,12 @@ while [ $# -gt 0 ]; do
         shift 1
       fi
       ;;
-    --author|--issue|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file|--no-close-reason|--no-close-reason-file)
+    --author|--issue|--title|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file|--no-close-reason|--no-close-reason-file)
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
       case "$1" in
         --author)              AUTHOR="$2" ;;
         --issue)               ISSUE="$2" ;;
+        --title)               TITLE="$2" ;;
         --summary)             SUMMARY="$2"; HAS_SUMMARY=1 ;;
         --test-plan)           TEST_PLAN="$2"; HAS_TEST_PLAN=1 ;;
         --test-evidence)       TEST_EVIDENCE="$2"; HAS_TEST_EVIDENCE=1 ;;
@@ -315,7 +319,11 @@ if [ -z "$ISSUE" ]; then
     exit 1
   fi
   echo "No issue resolved — opening the PR without a Closes line."
-  PR_TITLE="$(git log -1 --format=%s)"
+  if [ -n "$TITLE" ]; then
+    PR_TITLE="$TITLE"
+  else
+    PR_TITLE="$(git log -1 --format=%s)"
+  fi
 else
   TARGET_OWNER_REPO=""
   ISSUE_NUM=""
@@ -363,7 +371,13 @@ else
     echo "ERROR: issue $FORMATTED_ISSUE is $ISSUE_STATE, not OPEN." >&2
     exit 1
   fi
-  PR_TITLE="$("${GH_ISSUE_CMD[@]}" --json title --jq .title)"
+  if [ -n "$TITLE" ]; then
+    PR_TITLE="$TITLE"
+  elif [ "$PART_OF" -eq 1 ]; then
+    PR_TITLE="$(git log -1 --format=%s)"
+  else
+    PR_TITLE="$("${GH_ISSUE_CMD[@]}" --json title --jq .title)"
+  fi
 fi
 
 # --- WARN (don't fail) on a lane mismatch between branch prefix and issue label ---
