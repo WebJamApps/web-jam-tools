@@ -6,6 +6,7 @@ import { join } from "@std/path";
 import {
   captureAndVerifyRulesInDesignDoc,
   findDanglingLinks,
+  isValidSlug,
   parsePlanInput,
   runConsumeMemoryRules,
   stripSlugsFromMemoryMd,
@@ -380,6 +381,79 @@ Deno.test("shell wrapper scripts/consume-memory-rules.sh runs dry-run by default
       fileExistsAfter = false;
     }
     assert(!fileExistsAfter);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("isValidSlug validates safe slugs and rejects invalid/path-traversal identifiers", () => {
+  // Valid slugs
+  assert(isValidSlug("rule-1"));
+  assert(isValidSlug("alpha_beta"));
+  assert(isValidSlug("gamma-123"));
+  assert(isValidSlug("Rule123_test"));
+
+  // Malicious / invalid slugs
+  assert(!isValidSlug("../../../etc/passwd"));
+  assert(!isValidSlug("foo/bar"));
+  assert(!isValidSlug(".."));
+  assert(!isValidSlug(""));
+  assert(!isValidSlug(".hidden"));
+  assert(!isValidSlug("rule with spaces"));
+  assert(!isValidSlug("-leading-dash"));
+  assert(!isValidSlug("_leading_underscore"));
+});
+
+Deno.test("captureAndVerifyRulesInDesignDoc rejects invalid slug identifier", () => {
+  try {
+    captureAndVerifyRulesInDesignDoc("# Design Doc\n", [
+      { slug: "../../../etc/passwd", sourceContent: "malicious" },
+    ]);
+    assert(false, "Expected captureAndVerifyRulesInDesignDoc to throw on invalid slug");
+  } catch (err) {
+    assertStringIncludes((err as Error).message, "Invalid slug '../../../etc/passwd'");
+  }
+});
+
+Deno.test("runConsumeMemoryRules rejects plans with malicious path-traversal slugs", async () => {
+  const tempDir = await Deno.makeTempDir();
+  try {
+    const memoryDir = join(tempDir, "memory");
+    await Deno.mkdir(memoryDir);
+
+    const traversalPlan = join(tempDir, "traversal-plan.json");
+    await Deno.writeTextFile(
+      traversalPlan,
+      JSON.stringify({
+        memory_dir: memoryDir,
+        rules: [{ slug: "../../../etc/passwd", disposition: "delete" }],
+      }),
+    );
+
+    await assertRejects(
+      async () => {
+        await runConsumeMemoryRules({ planPath: traversalPlan });
+      },
+      Error,
+      "Invalid slug '../../../etc/passwd' in plan. Slugs must match /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/ and cannot contain path separators or parent directory segments.",
+    );
+
+    const subpathPlan = join(tempDir, "subpath-plan.json");
+    await Deno.writeTextFile(
+      subpathPlan,
+      JSON.stringify({
+        memory_dir: memoryDir,
+        rules: [{ slug: "foo/bar", disposition: "delete" }],
+      }),
+    );
+
+    await assertRejects(
+      async () => {
+        await runConsumeMemoryRules({ planPath: subpathPlan });
+      },
+      Error,
+      "Invalid slug 'foo/bar' in plan. Slugs must match /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/ and cannot contain path separators or parent directory segments.",
+    );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }

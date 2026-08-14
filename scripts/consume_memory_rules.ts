@@ -26,6 +26,15 @@ export interface DanglingLinkMatch {
 }
 
 /**
+ * Validates that a slug is a safe identifier matching /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/
+ * and contains no path separators, parent directory segments, or special characters.
+ */
+export function isValidSlug(slug: string): boolean {
+  if (typeof slug !== "string" || slug.length === 0) return false;
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(slug);
+}
+
+/**
  * Move a file to system trash (or fallback trash directory).
  * NEVER permanently deletes with rm / Deno.remove.
  */
@@ -215,6 +224,11 @@ export function captureAndVerifyRulesInDesignDoc(
 
   for (const rule of consumedRules) {
     const { slug, target_skill, sourceContent } = rule;
+    if (!isValidSlug(slug)) {
+      throw new Error(
+        `Invalid slug '${slug}'. Slugs must match /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/ and cannot contain path separators or parent directory segments.`,
+      );
+    }
     const sourceBytes = new TextEncoder().encode(sourceContent);
 
     const startTag = `<!-- START_CAPTURED_RULE:${slug} -->`;
@@ -301,6 +315,11 @@ export async function runConsumeMemoryRules(options: {
 
   const validDispositions = new Set(["consume", "delete", "split-or-stay", "stay"]);
   for (const rule of plan.rules) {
+    if (!isValidSlug(rule.slug)) {
+      throw new Error(
+        `Invalid slug '${rule.slug}' in plan. Slugs must match /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/ and cannot contain path separators or parent directory segments.`,
+      );
+    }
     if (!validDispositions.has(rule.disposition)) {
       throw new Error(`Invalid disposition '${rule.disposition}' for rule '${rule.slug}'. Must be one of: consume, delete, split-or-stay, stay.`);
     }
