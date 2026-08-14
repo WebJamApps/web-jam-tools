@@ -86,6 +86,14 @@ Review the PR diff, description, checks, and mergeability against these mandator
 4. **Issue Acceptance Criteria & Scope**:
    - Does the diff fulfill all requirements and acceptance criteria stated in the linked issue?
    - Is the PR tightly scoped to the issue task? Are there any out-of-scope files, unintended refactors, or stray code additions?
+   - **Exception — `AGENTS.md` updates are never a scope violation.** A `/learn`-sourced change to
+     `AGENTS.md` (an agent folding in a lesson or guardrail it picked up while doing the PR's actual
+     work) is standing cross-cutting instruction content, not scope creep — it has no natural issue
+     of its own to belong to, and routing every such tweak through a separate PR would suppress the
+     mechanism by which agents correct their own guidance. Do not raise a Must Fix (or any) finding
+     over an `AGENTS.md` diff being unrelated to the PR's linked issue. Still review the content on
+     its own merits — it must not contradict or duplicate existing `AGENTS.md`/`docs/cross-ai-rules.md`
+     text (flag that as a normal correctness finding if it does).
 
 5. **Single Semver Version Bump per PR**:
    - Check `package.json` (or `deno.json` for `web-jam-tools`).
