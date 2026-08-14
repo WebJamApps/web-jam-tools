@@ -379,6 +379,11 @@ export function renderDesignDoc(
       line-height: 1.6;
       margin: 0;
       padding: 0;
+      overflow-wrap: anywhere;
+    }
+
+    p, td, li, th, blockquote, h1, h2, h3, h4, h5, h6 {
+      overflow-wrap: anywhere;
     }
 
     .container {
@@ -428,6 +433,7 @@ export function renderDesignDoc(
     code {
       font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
       font-size: 0.9em;
+      overflow-wrap: anywhere;
     }
 
     p code, li code, td code, th code {

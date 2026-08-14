@@ -99,6 +99,7 @@ const x = 10;
 
   // Rule 5: Wide content overflow
   assertStringIncludes(html, ".table-wrapper, pre {\n      overflow-x: auto;");
+  assertStringIncludes(html, "overflow-wrap: anywhere;");
 
   // Rule 6: No external assets (no http/https link stylesheets or external scripts)
   assertMatch(html, /^((?!<link[^>]+rel=["']stylesheet["'][^>]+href=["']http).)*$/s);
