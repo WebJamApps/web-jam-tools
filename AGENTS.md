@@ -61,9 +61,9 @@ Put your summary and the **real test output** IN THE PR via the flags — not on
 placeholder description** (web-jam-tools#77).
 
 `--test-evidence` is **OPTIONAL and normally omitted.** Always run the suites and confirm they pass
-before opening the PR, but do **not** paste unit-test runner output into the body — the numbers are
-noise to the reviewer, and CI already reports pass/fail. Reserve the flag for evidence CI cannot
-show: a manual reproduction, a `curl` response, or a described screenshot. A PR with no "Test
+before opening the PR. If included, test evidence must accurately reflect a complete run on the current
+commit — never stale or partial runs. Reserve the flag for evidence CI cannot show: a manual
+reproduction, a `curl` response, or a described screenshot. A PR with no "Test
 evidence" section is correct, and a reviewer must never raise a finding about its absence. It always
 opens a **draft** PR based on **`dev`**, with the issue number derived from the
 `<lane>/<issue#>-<slug>` branch name (or explicit `--issue` flag, which supports full URLs,
