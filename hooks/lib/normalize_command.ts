@@ -208,6 +208,109 @@ export function splitShellTokens(text: string): string[] {
   return tokens;
 }
 
+// A leading `VAR=value` environment-assignment prefix on a simple command
+// (e.g. `FOO=bar git push -d branch`). Shared by every guard that needs to
+// find the REAL command name after skipping any such prefixes.
+export const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/**
+ * Split raw command text into simple-command segments on unquoted `&&`,
+ * `||`, `;`, `|`, or a bare newline — WITHOUT requiring surrounding
+ * whitespace (unlike a token-boundary split), so `false||git push -d x` and
+ * `echo hi;git push origin :x` split correctly, not just the
+ * whitespace-padded form. Also reports whether a quote was left open (an
+ * unterminated quote is an ambiguous parse — the caller fails closed on
+ * that).
+ *
+ * A bare newline is treated the same as `;`: without this, a real
+ * multi-line script like
+ *
+ *   git status
+ *   git push origin --delete some-branch
+ *
+ * would otherwise need to be recognized as two separate commands, not one
+ * merged argv list — `splitShellTokens` alone treats `\n` as ordinary
+ * whitespace, not a command boundary.
+ *
+ * Shared by hooks/lib/check_irreversible_operations.ts and
+ * hooks/lib/check_dangerous_git_deploy.ts — do not duplicate this in either
+ * lib; import it from here.
+ */
+export function splitOnOperators(text: string): { segments: string[]; unterminated: boolean } {
+  const segments: string[] = [];
+  let current = "";
+  let inSquote = false;
+  let inDquote = false;
+  let escaped = false;
+  let i = 0;
+  const n = text.length;
+
+  const flush = () => {
+    segments.push(current);
+    current = "";
+  };
+
+  while (i < n) {
+    const ch = text[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      i++;
+      continue;
+    }
+    if (ch === "\\") {
+      current += ch;
+      escaped = true;
+      i++;
+      continue;
+    }
+    if (inSquote) {
+      current += ch;
+      if (ch === "'") inSquote = false;
+      i++;
+      continue;
+    }
+    if (inDquote) {
+      current += ch;
+      if (ch === '"') inDquote = false;
+      i++;
+      continue;
+    }
+    if (ch === "'") {
+      inSquote = true;
+      current += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inDquote = true;
+      current += ch;
+      i++;
+      continue;
+    }
+    if (ch === "\n" || ch === ";") {
+      flush();
+      i++;
+      continue;
+    }
+    if ((ch === "&" && text[i + 1] === "&") || (ch === "|" && text[i + 1] === "|")) {
+      flush();
+      i += 2;
+      continue;
+    }
+    if (ch === "|") {
+      flush();
+      i++;
+      continue;
+    }
+    current += ch;
+    i++;
+  }
+  flush();
+
+  return { segments, unterminated: inSquote || inDquote };
+}
+
 export function dropProse(text: string): string {
   const tokens = splitShellTokens(text);
   const kept: string[] = [];
