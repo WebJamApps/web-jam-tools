@@ -156,15 +156,18 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 #                     composed prompt, and STOP without launching agy. For
 #                     testing prompt composition (comments folded in, BLOCKED
 #                     guard) without spending an agy call (web-jam-tools#154).
+#   --no-land         skip checking the branch out into the main clone after PR creation (web-jam-tools#513)
 HEADLESS=0
 SETUP_ONLY=0
 DRY_RUN=0
+NO_LAND=0
 TARGET_REPO_OVERRIDE="${AGY_TARGET_REPO:-}"
 while [ $# -gt 0 ]; do
   case "${1:-}" in
     --headless|-H) HEADLESS=1; shift ;;
     --setup-only)  SETUP_ONLY=1; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
+    --no-land)     NO_LAND=1; shift ;;
     --repo)
       if [ -z "${2:-}" ]; then
         echo "ERROR: --repo requires a repository name argument." >&2
@@ -189,7 +192,7 @@ TASK_ARG="${1:-}"
 # through to a queue-file lookup.
 if [ -z "$TASK_ARG" ]; then
   echo "ERROR: missing required <Repo>#<issue-num> argument." >&2
-  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] [--repo <Name>] <Repo>#<issue-num>" >&2
+  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] [--no-land] [--repo <Name>] <Repo>#<issue-num>" >&2
   echo "  e.g. $(basename "$0") --headless \"CollegeLutheran#123\"" >&2
   exit 1
 fi
@@ -903,6 +906,14 @@ elif [ -n "$(git log "origin/$BRANCH..HEAD" --oneline)" ]; then
 fi
 
 # --- safety check on the MAIN clone --------------------------------------
+if [ "$NO_LAND" -eq 1 ]; then
+  echo ""
+  echo "(--no-land specified — skipped checkout into main clone $REPO_DIR)."
+  echo "Branch $BRANCH pushed; draft PR #$LAND_PR_NUM open. Worktree left at:"
+  echo "  $WORKTREE_DIR"
+  exit 0
+fi
+
 cd "$REPO_DIR"
 OLD_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 MAIN_DIRTY="$(git status --porcelain)"
