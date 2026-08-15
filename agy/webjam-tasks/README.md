@@ -18,8 +18,8 @@ only binds Claude Code and never fires for agy (web-jam-tools#308 follow-up).
 
 agy only surfaces a skill as a slash command when the skill lives inside an
 **installed plugin** (a dir with a `plugin.json` at its root; agy auto-discovers the
-`skills/` subdir). A bare `SKILL.md` anywhere on disk is never scanned — typing
-`/work-issue` just falls through to the nearest builtin (e.g. `/context`).
+`skills/` subdir). A bare `SKILL.md` anywhere on disk is never scanned — typing an
+unregistered command just falls through to the nearest builtin (e.g. `/context`).
 
 ## Install (one-time, per machine)
 
