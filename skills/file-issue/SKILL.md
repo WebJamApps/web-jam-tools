@@ -68,9 +68,9 @@ that's what following this skill prevents.
    full requirements authored directly in the sub-issue body first before creation. Note: Native issue
    type `Epic` (which is orthogonal to model labels) is exempt from this check on edit paths (`gh issue edit`
    or MCP update), allowing Epics to reference comments or sub-issues as discussion evolves.
-5. **Require Native Issue Type (`--type`).** Every new issue creation MUST explicitly specify a
-   valid native GitHub issue type (`Task`, `Bug`, `Feature`, `Epic`) using `--type <Type>` or `-t <Type>`
-   (or `"type": "<Type>"` in MCP `issue_write`). Native issue types are enforced by
+5. **Require Native Issue Type via MCP or `create-issue.ts`.** Every new issue creation MUST explicitly specify a
+   valid native GitHub issue type (`Task`, `Bug`, `Feature`, `Epic`) using `scripts/create-issue.ts --type <Type>`
+   or `"type": "<Type>"` in the GitHub MCP `issue_write` create path. Note: `gh issue create` in `gh` CLI 2.92.0 has no `--type` flag; do NOT attempt `gh issue create --type`. Native issue types are enforced by
    `hooks/require-model-label-on-issue-create.sh` (web-jam-tools#415).
 6. **Apply `Needs Design` Label when Design is Required.** For Epics or sub-issues requiring design
    clarification before implementation, apply the canonical `Needs Design` status label alongside the chosen
@@ -81,8 +81,22 @@ that's what following this skill prevents.
    titled `## What this builds` carrying a 1-2 sentence description of what is being built, immediately
    followed by a numbered list of what it does — no history preamble, conversation background, or past context.
 10. **Set Native Priority Field via MCP, Never via `gh`.** Set the native `Priority` field (`Urgent`,
-    `High`, `Medium`, `Low`) via GitHub MCP `issue_write` → `issue_fields` (or `set_issue_field`). `gh`
-    CLI cannot set native GitHub project fields; never attempt to set native Priority via `gh`.
+    `High`, `Medium`, `Low`) via GitHub MCP `issue_write` → `issue_fields` (or `set_issue_field`, or `scripts/create-issue.ts --priority <Level>`). `gh`
+    CLI cannot set native GitHub project fields; never attempt to set native Priority via bare `gh`.
+11. **Require a `## How to test locally` Section.** Every issue body filed must include a `## How to test locally` section sitting between `## What this builds` and `## Acceptance criteria`:
+    - Carries the exact commands with their working directory and expected result, plus the one check that exercises the change itself rather than merely running the suite.
+    - Pure documentation issues are exempt (a pure documentation issue changes prose and nothing else: `docs/`, a README, or a comment block; note that a `SKILL.md` change does NOT qualify as pure documentation because skill bodies are behaviour and tested in CI).
+    - Issues labeled `Josh` carry no testing section at all, as no PR is opened for them.
+12. **Name Files Changed & State Non-Goals.**
+    - **Name files changed:** Every issue body must name the actual files it changes, verified to exist during the filing run rather than guessed, so the implementing agent starts at the edit instead of at an exploratory search. Where the exact file cannot be known ahead of time, say so plainly and name where to start looking.
+    - **State non-goals:** Every issue body must state its non-goals — what is deliberately not touched, what is not refactored, and what is left alone to avoid scope widening.
+13. **Carry Repo Dependency & Vulnerability Audit Report.**
+    - Audit each target repo once during a design run (outdated packages, runtime version, known vulnerabilities) using the repo's own tooling (`scripts/audit.sh` and `scripts/sast.sh` where they exist).
+    - Every issue body carries a short dated summary report of what the audit found for that repo (counts, vulnerabilities, and each major upgrade named).
+    - Minor and patch fixes are encouraged to be done directly in the working pull request (`npm audit fix` in Node repos or minor/patch `deno outdated --update` in Deno repos).
+    - Major upgrades are the exception and are NEVER done inline in a feature PR: each major upgrade must be flagged in the report as belonging in its own follow-on issue so it can be scheduled, labeled, and tested independently.
+    - Runtime upgrades must be LTS only, without exception (e.g. Node/Deno LTS releases only).
+    - Any vulnerability or upgrade implicated by the issue's own edited files is addressed directly in that work.
 
 ## Citation format (every reference, every time)
 
@@ -123,7 +137,7 @@ deno task create-issue \
 - Re-reads the created issue afterwards and verifies all requested attributes stick (exits non-zero if any attribute failed to stick).
 - Prints the formatted issue on success as `repo#number "title"`.
 
-- Require `--type <Type>` (`Task`, `Bug`, `Feature`, `Epic`) on all issue creation calls.
+- Require native type (`Task`, `Bug`, `Feature`, `Epic`) via `scripts/create-issue.ts --type <Type>` or GitHub MCP `issue_write` (`"type": "<Type>"`).
 - Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
 - Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
 - Add non-model status labels (`Blocked`, `Needs Design`, `Josh`, `parked`, ...)
@@ -139,3 +153,23 @@ multiple model labels, unresolvable pointer phrases, or unparseable command) and
 types or model labels straight from `skills/fix-labels/model-labels.json`. Fix the `--type` and
 `--label` flags (or the MCP `type` and `labels` fields) per the message and retry — there is no
 bypass, and there shouldn't be one: the hook exists to enforce executable, properly categorized issues.
+
+## Consumed rules
+
+### artifacts-must-be-traceable-to-decisions
+
+**STRICT (Josh, 2026-07-29):** *"you must provide accurate issues, titles, PR descriptions everything must be tracable to the agreed upon requirements and decisions I make !"*
+
+Every artifact Josh reads — issue **title AND body**, PR **title AND description**, issue comments — must accurately state the CURRENT agreed design, and every claim in it must be traceable to a requirement or decision he actually made.
+
+**Why:** the issue body is what gets read as the spec — by Josh, and by every subagent dispatched off it. When a design changes and only the title (or only a trailing comment) is updated, the body silently keeps specifying the OLD design, and the next agent implements the wrong thing. A stale body is a live defect, not a cosmetic wart. It also breaks his ability to audit what he approved: if the artifact doesn't match his decision, he cannot tell whether the decision was misunderstood or the artifact is just old.
+
+**How to apply:**
+- When a design decision changes, **rewrite the issue BODY in the same turn** — not just the title, not just an appended comment. Same for the PR description. An amendment comment is a supplement, never the fix.
+- Never leave a decision recorded only in chat. If Josh decides it, it goes into the issue/PR where the work happens.
+- Don't state a design claim the requirements don't support. If something was never verified, label it unverified — see [[design-lives-in-a-dropbox-doc]] and web-jam-tools#305 "cross-ai-rules.md: design claims must carry receipts, and a UI requirement can never be verified through an API".
+- Cite every issue/PR as `repo#number "title"` so he can trace it — see [[cite-issues-with-title-repo-number]].
+- Before handing an issue to a subagent, re-read its body and confirm it matches the current decision; if it doesn't, fix the body FIRST, then dispatch.
+
+**Origin (2026-07-29, the milestone migration):** the design moved topics from a native `Area` issue field to Milestones. Opus amended the design via a comment and renamed WebJamApps/web-jam-tools#301, but left the issue BODY still specifying "read the native `Area` field" with `field.Area:` search qualifiers and an acceptance criterion "correctly derives Area from the native Area field". Josh: *"we decided on Milestone this is NOT ACCURATE !"* The body was then rewritten. Same session, same root defect as [[verify-dont-assume]]: relying on a supplement instead of correcting the source.
+
