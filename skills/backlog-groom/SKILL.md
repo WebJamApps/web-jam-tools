@@ -37,7 +37,11 @@ The audit inspects every open issue across all 8 repositories against six core c
 
 ### 2. Native Dependencies & Blocked Label Drift
 - **Stale Blocks:** Issue is labeled `Blocked` (or has body text indicating blocked status), but all referenced blocking issues in native GitHub dependencies (`blocked_by` API) or body text are already `CLOSED`.
-- **Missing Blocked Label:** Issue has active, OPEN native blockers (`blocked_by` API) or un-met conditional markers, but lacks the `Blocked` label.
+  - **Body Reconciliation Required:** A `Blocked` label removal is never proposed on its own when the issue body carries gating prose. The finding must propose removing the `Blocked` label AND reconciling the body together as one approvable item.
+  - **Gating Prose Markers:** Targets gating prose such as a `## Blocked` or `## Depends on` section, a lock emoji marker (e.g. ⛔ or 🔒), `"do not start"`, `"must be merged first"`, `"BLOCKED on"`, or equivalents.
+  - **Satisfied Prerequisite Replacement Format:** The dependency survives as a satisfied-prerequisite note that names the blocker as `repo#number "title"` and records its closure (e.g. `*Prerequisite web-jam-back#990 "Add PATCH /venue/:id (the honest verb for our partial-merge update)" is closed.*`); only the stop order is removed. The dependency fact is preserved, never deleted.
+  - **Preserving Unproven Preconditions:** Any precondition the body carries that the blocker's closed state does not prove (such as requiring an endpoint or backend change to be deployed to production rather than merely merged) must be kept as an explicit first step for whoever starts the issue, rather than dropped with the section.
+- **Missing Blocked Label:** Issue has active, OPEN native blockers (`blocked_by` API) or un-met conditional markers, but lacks the `Blocked` label. Propose adding the `Blocked` label AND adding/updating a matching body statement stating what blocks the issue and why (citing the blocker as `repo#number "title"`).
 - **Uncited Dependencies:** Issue body mentions dependency conditions (e.g. "depends on #123") that are not registered in native GitHub issue dependencies (`blocked_by` API).
 
 ### 3. Executable Issue Spec Checks (Non-Epic Issues) & Needs Design Awareness
@@ -77,7 +81,7 @@ The audit inspects every open issue across all 8 repositories against six core c
 
 ### Step 2: Analyze & Categorize (Delegated to Subagent)
 1. Evaluate each issue against the 6 audit categories above.
-2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash Med`", "Remove label `Blocked`", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
+2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash Med`", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Add `Blocked` label & add blocker statement to body", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
 
 ### Step 3: Write Report File (Delegated to Subagent)
@@ -89,7 +93,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
 | 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash Med` label |
-| 2 | web-jam-back | #450 | Dependency Drift | Labeled `Blocked`, but blocker #412 is CLOSED | Remove `Blocked` label |
+| 2 | web-jam-back | #450 | Dependency Drift | Labeled `Blocked` & body says "do not start", but blocker web-jam-tools#412 "Title" is CLOSED | Remove `Blocked` label & reconcile body (note web-jam-tools#412 closed; preserve deploy step) |
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |
 | 5 | HenricksonForSalem | #12 | Milestone Drift | Milestone is unset | Set Milestone to "Launch Prep" |
