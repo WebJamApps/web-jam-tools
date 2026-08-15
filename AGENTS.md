@@ -172,7 +172,7 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
     chosen because they are auditable from the outside and a cost estimate is not.
   - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct
     the subagent to pass `--author` matching its actual model tier (e.g.
-    `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents) when calling
+    `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents) when calling
     `create-draft-pr.sh`.
 
 ## System Setup

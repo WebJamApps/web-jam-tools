@@ -23,7 +23,7 @@ if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "list" ]; then
   exit 0
 fi
 if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "view" ]; then
-  echo "Closes #513\\n\\n🤖 Work by agy — Gemini 3.6 Flash (Medium)"
+  echo "Closes #513\\n\\n🤖 Work by agy — Gemini 3.7 Flash (High)"
   exit 0
 fi
 echo "unstubbed gh invocation: $*" >&2

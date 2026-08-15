@@ -49,34 +49,60 @@ Deno.test("agy -i 'prompt' with no --model is allowed", async () => {
   assertEquals(res.code, 0, res.stderr);
 });
 
-// --- allowed: the two Flash 3.6 slugs ---
+// --- allowed: Flash models at 3.7+ floor ---
 
-Deno.test("agy --model gemini-3.6-flash-medium is allowed", async () => {
-  const res = await runHook("agy --model gemini-3.6-flash-medium");
+Deno.test("agy --model gemini-3.7-flash-medium is allowed", async () => {
+  const res = await runHook("agy --model gemini-3.7-flash-medium");
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("agy --model gemini-3.6-flash-high is allowed", async () => {
-  const res = await runHook("agy --model gemini-3.6-flash-high");
+Deno.test("agy --model gemini-3.7-flash-high is allowed", async () => {
+  const res = await runHook("agy --model gemini-3.7-flash-high");
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("agy --model=gemini-3.6-flash-high (single-token form) is allowed", async () => {
-  const res = await runHook("agy --model=gemini-3.6-flash-high -i hi");
+Deno.test("agy --model=gemini-3.7-flash-high (single-token form) is allowed", async () => {
+  const res = await runHook("agy --model=gemini-3.7-flash-high -i hi");
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("agy --model gemini-3.6-flash-medium --dangerously-skip-permissions -p 'x' is allowed", async () => {
+Deno.test("agy --model gemini-3.7-flash-medium --dangerously-skip-permissions -p 'x' is allowed", async () => {
   const res = await runHook(
-    `agy --model gemini-3.6-flash-medium --dangerously-skip-permissions -p "reply with: ok"`,
+    `agy --model gemini-3.7-flash-medium --dangerously-skip-permissions -p "reply with: ok"`,
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
-// --- blocked: every other --model value ---
+Deno.test("future Flash 3.8 and 4.0 models (>= 3.7 floor) are allowed", async () => {
+  const res38 = await runHook("agy --model gemini-3.8-flash-high");
+  assertEquals(res38.code, 0, res38.stderr);
+
+  const res40 = await runHook("agy --model gemini-4.0-flash-medium");
+  assertEquals(res40.code, 0, res40.stderr);
+});
+
+// --- blocked: models below the 3.7 floor and non-Flash slugs ---
+
+Deno.test("agy --model gemini-3.6-flash-medium is blocked (below 3.7 floor)", async () => {
+  const res = await runHook("agy --model gemini-3.6-flash-medium");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("agy --model gemini-3.6-flash-high is blocked (below 3.7 floor)", async () => {
+  const res = await runHook("agy --model gemini-3.6-flash-high");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
 
 Deno.test("agy --model gemini-3.6-flash-low is blocked", async () => {
   const res = await runHook("agy --model gemini-3.6-flash-low");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("agy --model gemini-3.7-flash-low is blocked", async () => {
+  const res = await runHook("agy --model gemini-3.7-flash-low");
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
@@ -129,10 +155,10 @@ Deno.test("agy --model gemini-3.5-flash-low is blocked (old Flash generation)", 
   assertBlocked(res.stderr);
 });
 
-Deno.test("block message names both permitted slugs", async () => {
+Deno.test("block message names permitted slugs", async () => {
   const res = await runHook("agy --model claude-sonnet-4-6");
   assertEquals(res.code, 2);
-  for (const slug of ["gemini-3.6-flash-medium", "gemini-3.6-flash-high"]) {
+  for (const slug of ["gemini-3.7-flash-high", "gemini-3.7-flash-medium"]) {
     if (!res.stderr.includes(slug)) {
       throw new Error(`expected block message to name ${slug}, got: ${res.stderr}`);
     }
@@ -153,21 +179,27 @@ Deno.test("AGY_MODELS='gemini-3.5-flash-high' agy -i x is blocked (old Flash gen
   assertBlocked(res.stderr);
 });
 
+Deno.test("AGY_MODELS='gemini-3.6-flash-high' agy is blocked (below 3.7 floor)", async () => {
+  const res = await runHook(`AGY_MODELS='gemini-3.6-flash-high' agy`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 Deno.test("AGY_MODELS with one good and one bad slug (pipe-separated) is blocked", async () => {
-  const res = await runHook("AGY_MODELS='gemini-3.6-flash-medium|claude-sonnet-4-6' agy");
+  const res = await runHook("AGY_MODELS='gemini-3.7-flash-medium|claude-sonnet-4-6' agy");
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
 
 // --- allowed: AGY_MODELS= env prefix naming only permitted slugs ---
 
-Deno.test("AGY_MODELS=gemini-3.6-flash-medium agy is allowed", async () => {
-  const res = await runHook("AGY_MODELS=gemini-3.6-flash-medium agy");
+Deno.test("AGY_MODELS=gemini-3.7-flash-medium agy is allowed", async () => {
+  const res = await runHook("AGY_MODELS=gemini-3.7-flash-medium agy");
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("AGY_MODELS='gemini-3.6-flash-medium|gemini-3.6-flash-high' agy is allowed (pipe-separated, both permitted)", async () => {
-  const res = await runHook("AGY_MODELS='gemini-3.6-flash-medium|gemini-3.6-flash-high' agy");
+Deno.test("AGY_MODELS='gemini-3.7-flash-high|gemini-3.7-flash-medium' agy is allowed (pipe-separated, both permitted)", async () => {
+  const res = await runHook("AGY_MODELS='gemini-3.7-flash-high|gemini-3.7-flash-medium' agy");
   assertEquals(res.code, 0, res.stderr);
 });
 

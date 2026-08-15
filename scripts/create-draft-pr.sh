@@ -25,8 +25,8 @@
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
-#   --author        REQUIRED. e.g. "Claude Code — Opus", "agy — Gemini 3.6 Flash
-#                   (Medium)". Lands in the footer so Josh can track per-model
+#   --author        REQUIRED. e.g. "Claude Code — Opus", "agy — Gemini Flash
+#                   (Medium)", "Claude Code — Sonnet 5". Lands in the footer so Josh can track per-model
 #                   quality. MUST name a model on the ROSTER list maintained near
 #                   the top of this script (web-jam-tools#190) — models routinely
 #                   confabulate their own checkpoint name (JaMmusic#1212: a Gemini
@@ -154,8 +154,8 @@ usage() {
 # format is "<tool> — <model>" (e.g. "Claude Code — Sonnet 5" — the tool name
 # already says "Claude", so the model half doesn't repeat it).
 ROSTER=(
-  "Gemini 3.6 Flash (Medium)"
-  "Gemini 3.6 Flash (High)"
+  "Gemini Flash (Medium)"
+  "Gemini Flash (High)"
   "Claude Sonnet 5"
   "Claude Haiku 4.5"
   # Unversioned on purpose (Josh, 2026-07-26): the roster exists to stop a
