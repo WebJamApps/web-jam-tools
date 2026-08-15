@@ -59,7 +59,7 @@ Put your summary and the **real test output** IN THE PR via the flags — not on
   --author "<tool> — <model>" \
   --summary "<what changed and why>" \
   --test-plan "<exact commands to verify + expected result>" \
-  --closes   # include ONLY if this PR fully completes the issue; omit for a partial PR
+  --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
 ```
 
 `--summary` and `--test-plan` are **required** — the script **refuses to open a PR with an empty or
@@ -73,9 +73,10 @@ evidence" section is correct, and a reviewer must never raise a finding about it
 opens a **draft** PR based on **`dev`**, with the issue number derived from the
 `<lane>/<issue#>-<slug>` branch name (or explicit `--issue` flag, which supports full URLs,
 `OWNER/REPO#N`, or bare `#N`/`N` and formats cross-repo closing lines as `Closes OWNER/REPO#N`) and
-a footer naming the tool + model (hard invariants — no flag overrides them). By default it
-references the issue (`Part of #N` or `Part of OWNER/REPO#N`); pass `--closes` to make it the
-completing PR (`Closes #N` or `Closes OWNER/REPO#N`). Josh alone reviews and flips draft → ready.
+a footer naming the tool + model (hard invariants — no flag overrides them). By default the PR
+closes the issue on merge (`Closes #N` or `Closes OWNER/REPO#N`); pass `--part-of` only when the
+issue must stay open (`Part of #N` or `Part of OWNER/REPO#N` for a partial PR, or a standing
+run-log/epic issue). (`--closes` is a deprecated no-op, still accepted.) Josh alone reviews and flips draft → ready.
 See `skills/draft-pr/SKILL.md`.
 
 ### PR body formatting (do this every time)
@@ -105,8 +106,7 @@ npm test
 Expect: lint + unit green." \
   --test-evidence "```
 ok | 42 passed | 0 failed
-```" \
-  --closes
+```"
 ````
 
 ### PR version-bump convention

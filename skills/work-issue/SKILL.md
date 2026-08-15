@@ -259,14 +259,15 @@ This check is read-only. It never edits the issue or the document on its own.
      --summary "<what changed and why>" \
      --test-plan "<exact commands to verify + expected result>" \
      --test-evidence "<the actual lint + test output you saw, confirming both ran green>" \
-     --closes   # include ONLY if this PR fully completes the issue; omit for a partial PR
+     --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
    ```
 
    The script is the single source of truth (web-jam-tools#49) and **refuses to open a
    PR with an empty or placeholder description** (web-jam-tools#77) — so `--summary`,
-   `--test-plan`, and `--test-evidence` are required. By default it references the issue
-   (`Part of #N`); `--closes` makes it the completing PR (`Closes #N`). Never run
-   `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub.
+   `--test-plan`, and `--test-evidence` are required. By default the PR closes the issue
+   on merge (`Closes #N`); pass `--part-of` ONLY when the issue must stay open (`Part of #N`
+   for a partial PR, or a standing run-log/epic issue). (`--closes` is a deprecated no-op,
+   still accepted.) Never run `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub.
 
 ## PR body formatting (do this every time)
 
@@ -296,6 +297,5 @@ npm test
 Expect: lint + unit green." \
   --test-evidence "```
 ok | 42 passed | 0 failed
-```" \
-  --closes
+```"
 `````
