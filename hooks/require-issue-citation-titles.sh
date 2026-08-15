@@ -53,24 +53,16 @@ set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 DETECTOR="$HOOK_DIR/lib/detect_bare_issue_refs.ts"
+SELECTOR="$HOOK_DIR/lib/select_transcript_entry.ts"
 
 input="$(cat)" || exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 [ -n "$tp" ] && [ -f "$tp" ] || exit 0
 
-# Last assistant transcript entry's text content, concatenated across any
-# text blocks it carries (an assistant entry can interleave text and
-# tool_use blocks). Reverse the file first (tac) so slurping into an array
-# and taking the first element that matches gives the ORIGINAL last
-# assistant entry — same technique opus-no-delegation-warning.sh uses to
-# recover "the current turn's model" from the same transcript shape.
-msg="$(tac "$tp" 2>/dev/null | jq -rs '
-  [ .[] | select(.type == "assistant" and ((.message.content? // null) != null)) ]
-  | first
-  | (.message.content // [])
-  | map(select(.type == "text") | .text)
-  | join("\n")
-' 2>/dev/null || true)"
+# Last genuine assistant transcript entry's text content, selected via
+# hooks/lib/select_transcript_entry.ts (excludes isSidechain and
+# isApiErrorMessage entries — web-jam-tools#565).
+msg="$(deno run --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
 
 [ -n "$msg" ] || exit 0
 
