@@ -93,7 +93,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
 | 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash Med` label |
-| 2 | web-jam-back | #450 | Dependency Drift | Labeled `Blocked` & body says "do not start", but blocker web-jam-tools#412 "Title" is CLOSED | Remove `Blocked` label & reconcile body (note web-jam-tools#412 closed; preserve deploy step) |
+| 2 | JaMmusic | #1243 | Dependency Drift | Labeled `Blocked` & body says "do not start", but blocker web-jam-back#990 "Add PATCH /venue/:id (the honest verb for our partial-merge update)" is CLOSED | Remove `Blocked` label & reconcile body (note web-jam-back#990 closed; preserve deploy step) |
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |
 | 5 | HenricksonForSalem | #12 | Milestone Drift | Milestone is unset | Set Milestone to "Launch Prep" |
