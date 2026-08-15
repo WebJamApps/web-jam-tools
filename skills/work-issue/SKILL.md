@@ -49,7 +49,7 @@ When `work-issue` begins an issue (`<Repo>#<num>`):
 
 ## Startability test
 
-An issue `<Repo>#<num>` is **startable** when it passes all three checks below:
+An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
 
 1. **Still open**:
    ```bash
@@ -88,6 +88,19 @@ An issue `<Repo>#<num>` is **startable** when it passes all three checks below:
      ```
      returns nothing.
 
+4. **Not already done (completion detection)**:
+   - **Signal 1 (Merged or closed PR)**: Query for merged or closed PRs whose body references the issue with `Closes` or `Part of`:
+     ```bash
+     gh pr list --repo WebJamApps/<Repo> --state merged --json headRefName,body \
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
+     ```
+     If a merged or closed PR already addressed the issue, the issue is **appears already done: verify and close** (not startable).
+   - **Signal 2 (Concrete mechanically checkable end state)**: When the issue's acceptance criteria name a concrete, mechanically checkable end state — a filesystem path that must exist or must not exist (e.g. `test -d /path` or `test -f /path`), or a deterministic command whose exit status decides the matter — verify that state directly.
+     - *Priority for `Josh`-labeled manual steps*: `Josh`-labeled manual steps never produce a PR, so Signal 1 can never detect them. Prioritize checking their concrete end states directly (e.g. verifying an obsolete backup directory was deleted).
+     - *Bounded scope*: Only mechanically checkable criteria are verified directly. Do not attempt open-ended verification of arbitrary prose criteria, keeping check costs flat.
+   - If either signal indicates completion, the issue is classified as **appears already done: verify and close**.
+   - **Read-only rule**: This check is strictly read-only. It never closes an issue, comments on an issue, or edits a label on its own. It reports the completion evidence and lets Josh verify and close it.
+
 ## No-argument mode — auto-pick worklist based on agent surface
 
 Use this when the user types `/work-issue` with no argument, or says "work-issue" / "next" /
@@ -113,11 +126,11 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
    `## Blocked` heading. Ignore the `## Blocked` and `## Needs Josh's review`
    sections (and anything else) entirely. Extract, in file order, each line's
    `Repo` and issue `num`.
-3. Walk the extracted list top-to-bottom. For each `Repo#num`, evaluate it using the **Startability test** above and pick the **first** one that is startable (still open, not blocked by any open native or body prerequisite, and not already in flight).
+3. Walk the extracted list top-to-bottom. For each `Repo#num`, evaluate it using the **Startability test** above and pick the **first** one that is startable (still open, not blocked by any open native or body prerequisite, not already in flight, and not already done).
 
-   Skip any item that is closed, blocked by an open dependency, or already in flight, and move to the next line.
+   Skip any item that is closed, blocked by an open dependency, already in flight, or appears already done, and move to the next line.
 4. If a candidate passes, that is the pick. Resolve it to `Repo#num` and continue to the pre-checks (Blocked-drift check and Design-sync check) and step 1 of "## Steps" below — i.e. run `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>` and follow steps 2 onward exactly as written for the named-issue flow.
-5. If you reach the end of the list with no candidate passing (every item is closed, blocked, or already in flight), stop and tell Josh: "every item in <filename>'s runnable list is closed, blocked, or already in flight — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
+5. If you reach the end of the list with no candidate passing (every item is closed, blocked, already in flight, or appears already done), stop and tell Josh: "every item in <filename>'s runnable list is closed, blocked, already in flight, or appears already done — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
 
 Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in this mode — they are read-only input.
 
@@ -150,11 +163,13 @@ epic is a container: it has no diff of its own and closes only when its children
 4. For each OPEN child, work out its status using the **Startability test** above:
    - Check native `blocked_by` dependencies and body-named prerequisites.
    - Check if an open PR or dispatch branch exists.
+   - Check if the child appears already done (via merged PR or concrete mechanically checkable acceptance criteria).
    - (Remember: the `Blocked` label alone does not veto startability; actual blocker state is the truth.)
 5. Report the children to Josh as a numbered list, marking each:
    - **startable** (or **startable (blocked drift: carries Blocked label with 0 open blockers)**),
-   - **blocked by `<repo#number "title">`** (if any native blocker or body prerequisite is OPEN), or
-   - **already in flight** (if an open PR or dispatch branch exists).
+   - **blocked by `<repo#number "title">`** (if any native blocker or body prerequisite is OPEN),
+   - **already in flight** (if an open PR or dispatch branch exists), or
+   - **appears already done: verify and close** (if a merged PR references it or concrete acceptance criteria are already satisfied).
    Cite every issue as `repo#number "title"` — a bare number is unusable.
 6. **Stop and let Josh choose which child to work.** Do not auto-pick, and never pick more than one:
    sibling children of one epic frequently touch the same repo, and two agents in one repo collide.
