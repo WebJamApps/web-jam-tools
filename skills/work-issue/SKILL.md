@@ -15,17 +15,18 @@ shell script, then you (the agent) do the actual coding inside this same session
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the two pre-checks below before "## Steps".
+- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the pre-checks below before "## Steps".
 - **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
   to the same flow below. See "## No-argument mode" first.
 
-**Whichever route got you here, two pre-checks run before any branch is created or any code is
+**Whichever route got you here, three pre-checks run before any branch is created or any code is
 written**, and they run for a named issue and an auto-picked one alike:
 
 1. **"## Epics — resolve to a child"** — an epic is a container with no diff of its own; it resolves
    to its startable children for Josh to pick from.
-2. **"## Design-sync check"** — an issue that contradicts the requirements document it cites is
+2. **"## Blocked-drift check"** — an issue carrying the `Blocked` label whose blockers are all closed (or has none) has drifted; stop and report rather than silently proceeding or assuming blocked.
+3. **"## Design-sync check"** — an issue that contradicts the requirements document it cites is
    defective, and working it bakes the defect into a PR. Stop and report instead.
 
 ## Triggers & Aliases
@@ -45,6 +46,47 @@ When `work-issue` begins an issue (`<Repo>#<num>`):
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
 4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents, or `--author "Claude Code — Haiku 3.5"` for Haiku subagents).
+
+## Startability test
+
+An issue `<Repo>#<num>` is **startable** when it passes all three checks below:
+
+1. **Still open**:
+   ```bash
+   gh issue view <num> --repo WebJamApps/<Repo> --json state -q .state
+   ```
+   returns `OPEN`. (Skips anything closed or merged.)
+
+2. **Not blocked (actual blocker state outranks label)**:
+   - **Native dependencies**: Query `blocked_by` dependencies via API:
+     ```bash
+     gh api repos/WebJamApps/<Repo>/issues/<num>/dependencies/blocked_by \
+       --jq '.[] | select(.state == "OPEN") | "\(.repository.full_name)#\(.number) \(.state) — \(.title)"'
+     ```
+     Every native `blocked_by` dependency must be CLOSED (the query above returns no output).
+   - **Body-named prerequisites**: Every prerequisite issue cited in the issue body must be CLOSED:
+     ```bash
+     gh issue view <n> --repo WebJamApps/<Repo> --json state -q .state
+     ```
+     returns `CLOSED`.
+   - **Precedence rule**: The blocker's actual state is the truth and the label is a hint. Where they disagree, the label is what is wrong. The `Blocked` label alone does NOT veto startability if all native and body blockers are CLOSED (or none exist). If an issue carries the `Blocked` label but has zero open blockers, it is startable but triggers the **Blocked-drift check** below before implementation.
+   - If any native blocker or body prerequisite is OPEN, the issue is **blocked by `<repo#number "title">`**.
+
+3. **Not already in flight**:
+   - No OPEN PR references it:
+     ```bash
+     gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body \
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
+     ```
+     returns nothing.
+   - No dispatch branch exists for it locally or on remote (`agy/<num>-*` from headless dispatch, `gemini/<num>-*` from interactive agy):
+     ```bash
+     git -C ~/WebJamApps/<Repo> for-each-ref --format='%(refname:short)' \
+       "refs/heads/agy/<num>-*" "refs/heads/gemini/<num>-*"
+     git -C ~/WebJamApps/<Repo> ls-remote --heads origin \
+       "agy/<num>-*" "gemini/<num>-*"
+     ```
+     returns nothing.
 
 ## No-argument mode — auto-pick worklist based on agent surface
 
@@ -71,39 +113,11 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
    `## Blocked` heading. Ignore the `## Blocked` and `## Needs Josh's review`
    sections (and anything else) entirely. Extract, in file order, each line's
    `Repo` and issue `num`.
-3. Walk the extracted list top-to-bottom. For each `Repo#num`, test it in order
-   and pick the **first** one that passes BOTH checks:
-   - **Still open**:
-     `gh issue view <num> --repo WebJamApps/<Repo> --json state -q .state`
-     returns `OPEN`. (Skips anything closed/merged even if the file is stale.)
-   - **Not already started** — neither of these is true:
-     - an OPEN PR already references it:
-       ```
-       gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body \
-         --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
-       ```
-       returns something (this mirrors the same PR-matching pattern
-       `handle-agy-tasks.sh` uses for its own resume detection); OR
-     - a dispatch branch already exists for it — check both the naming
-       prefixes `handle-agy-tasks.sh` actually creates/resumes
-       (`agy/<num>-*` from headless dispatch, `gemini/<num>-*` from an
-       interactive agy run):
-       ```
-       git -C ~/WebJamApps/<Repo> for-each-ref --format='%(refname:short)' \
-         "refs/heads/agy/<num>-*" "refs/heads/gemini/<num>-*"
-       git -C ~/WebJamApps/<Repo> ls-remote --heads origin \
-         "agy/<num>-*" "gemini/<num>-*"
-       ```
-       (the second command catches a branch that only exists on the remote,
-       not yet fetched locally) returns something.
+3. Walk the extracted list top-to-bottom. For each `Repo#num`, evaluate it using the **Startability test** above and pick the **first** one that is startable (still open, not blocked by any open native or body prerequisite, and not already in flight).
 
-   Skip any item failing either check and move to the next line.
-4. If a candidate passes both checks, that's the pick. Resolve it to
-   `Repo#num` and continue at **step 1 of "## Steps" below** — i.e. run
-   `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>`
-   and follow steps 2 onward exactly as written for the named-issue flow.
-5. If you reach the end of the list with no candidate passing (every item is
-   closed or already in flight), stop and tell Josh: "every item in <filename>'s runnable list is closed or already in flight — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
+   Skip any item that is closed, blocked by an open dependency, or already in flight, and move to the next line.
+4. If a candidate passes, that is the pick. Resolve it to `Repo#num` and continue to the pre-checks (Blocked-drift check and Design-sync check) and step 1 of "## Steps" below — i.e. run `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>` and follow steps 2 onward exactly as written for the named-issue flow.
+5. If you reach the end of the list with no candidate passing (every item is closed, blocked, or already in flight), stop and tell Josh: "every item in <filename>'s runnable list is closed, blocked, or already in flight — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
 
 Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in this mode — they are read-only input.
 
@@ -133,22 +147,49 @@ epic is a container: it has no diff of its own and closes only when its children
      --jq '.[] | "\(.number)\t\(.state)\t[\(.labels | map(.name) | join(","))]\t\(.title)"'
    ```
 
-4. For each OPEN child, work out whether it is actually startable:
-   - it carries no `Blocked` label, **and**
-   - every issue its body names as a prerequisite is CLOSED
-     (`gh issue view <n> --repo WebJamApps/<Repo> --json state -q .state`), **and**
-   - it is not already in flight — no open PR references it and no dispatch branch exists for it
-     (same two checks as the no-argument mode above).
-5. Report the children to Josh as a numbered list, marking each **startable**, **blocked by
-   `<repo#number "title">`**, or **already in flight**. Cite every issue as `repo#number "title"` —
-   a bare number is unusable.
+4. For each OPEN child, work out its status using the **Startability test** above:
+   - Check native `blocked_by` dependencies and body-named prerequisites.
+   - Check if an open PR or dispatch branch exists.
+   - (Remember: the `Blocked` label alone does not veto startability; actual blocker state is the truth.)
+5. Report the children to Josh as a numbered list, marking each:
+   - **startable** (or **startable (blocked drift: carries Blocked label with 0 open blockers)**),
+   - **blocked by `<repo#number "title">`** (if any native blocker or body prerequisite is OPEN), or
+   - **already in flight** (if an open PR or dispatch branch exists).
+   Cite every issue as `repo#number "title"` — a bare number is unusable.
 6. **Stop and let Josh choose which child to work.** Do not auto-pick, and never pick more than one:
    sibling children of one epic frequently touch the same repo, and two agents in one repo collide.
 7. Once he names a child, restart this skill from the top with that child as the target. The
-   design-sync check runs again, this time against the child — the epic passing does not vouch for
-   its children, and a child passing does not vouch for the epic. Both are checked, always.
+   pre-checks (Blocked-drift check and Design-sync check) run again, this time against the child — the epic passing does not vouch for its children, and a child passing does not vouch for the epic. Both are checked, always.
 
 If the type is anything other than `Epic`, continue.
+
+## Blocked-drift check — run BEFORE working the issue
+
+An issue can carry a stale `Blocked` label after all its blockers have closed, or carry the label when no native dependencies or body prerequisites ever existed. Because the blocker's actual state outranks the label (the blocker state is the truth and the label is a hint), the label alone does not prevent the issue from being worked, but the disagreement is drift that must be brought to Josh's attention before proceeding.
+
+1. Check if the target issue carries the `Blocked` label:
+   ```bash
+   gh issue view <num> --repo WebJamApps/<Repo> --json labels --jq '.labels[].name'
+   ```
+2. If `Blocked` is present:
+   - Query native `blocked_by` dependencies:
+     ```bash
+     gh api repos/WebJamApps/<Repo>/issues/<num>/dependencies/blocked_by \
+       --jq '.[] | "\(.repository.full_name)#\(.number) \(.state) — \(.title)"'
+     ```
+   - Check any prerequisites cited in the issue body.
+3. Evaluate for drift:
+   - If there are **OPEN** native blockers or **OPEN** body prerequisites: The issue is genuinely blocked. Stop and report the blocker(s) (`<repo#number "title">`) to Josh.
+   - If **ALL** native blockers and body prerequisites are **CLOSED** (or **NONE** exist): The issue carries the `Blocked` label despite having zero open blockers. This is **blocked drift**.
+4. If blocked drift is detected:
+   - **Stop and report the drift to Josh**: Report that `<Repo>#<num> "<title>"` carries the `Blocked` label, but all native and body blockers are closed (or none exist).
+   - Show the blocker state receipts.
+   - Ask Josh for confirmation before proceeding to create a branch or implement the issue.
+   - **Do NOT silently proceed** and do NOT silently ignore the label.
+5. If no `Blocked` label is present (and no open blockers exist):
+   - Continue to the Design-sync check.
+
+This check is read-only. It never edits labels, dependencies, or issue bodies on its own. Repair (removing the stale `Blocked` label or updating issue bodies) belongs to `/backlog-groom`.
 
 ## Design-sync check — run BEFORE working the issue
 
