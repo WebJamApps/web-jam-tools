@@ -45,6 +45,43 @@ export function findGhIssueEditArgs(tokens: string[]): string[] | null {
   return null;
 }
 
+export function findCreateIssueScriptArgs(tokens: string[]): string[] | null {
+  if (!tokens || tokens.length === 0) return null;
+  const cmdBase = tokens[0].split("/").pop();
+
+  // Form 1 & 2: deno task create-issue ... OR deno task issue:create ... OR deno run ... create-issue.ts ...
+  if (cmdBase === "deno") {
+    if (
+      tokens.length >= 3 &&
+      tokens[1] === "task" &&
+      (tokens[2] === "create-issue" || tokens[2] === "issue:create")
+    ) {
+      return tokens.slice(3);
+    }
+    if (tokens.length >= 2 && tokens[1] === "run") {
+      for (let i = 2; i < tokens.length; i++) {
+        const tok = tokens[i];
+        if (
+          tok.endsWith("/create-issue.ts") ||
+          tok === "create-issue.ts" ||
+          tok.endsWith("/create-issue") ||
+          tok === "create-issue"
+        ) {
+          return tokens.slice(i + 1);
+        }
+      }
+    }
+    return null;
+  }
+
+  // Form 3: scripts/create-issue.ts ... (or ./scripts/create-issue.ts)
+  if (cmdBase === "create-issue.ts" || cmdBase === "create-issue") {
+    return tokens.slice(1);
+  }
+
+  return null;
+}
+
 export function stripLeadingAssignments(tokens: string[]): string[] {
   let i = 0;
   while (i < tokens.length && ASSIGN_RE.test(tokens[i])) {
@@ -238,7 +275,10 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
     try {
       tokens = splitShellTokens(cmd);
     } catch {
-      if (/\bgh\b/.test(cmd) && /\bissue\b/.test(cmd) && (/\bcreate\b/.test(cmd) || /\bedit\b/.test(cmd))) {
+      if (
+        (/\bgh\b/.test(cmd) && /\bissue\b/.test(cmd) && (/\bcreate\b/.test(cmd) || /\bedit\b/.test(cmd))) ||
+        /\bcreate-issue\b/.test(cmd)
+      ) {
         return "DENY:the command couldn't be parsed (unbalanced quoting) but appears to create/edit a gh issue";
       }
       return "PASS";
@@ -255,7 +295,7 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
 
     for (const sc of simpleCommands) {
       const scTokens = stripLeadingAssignments(sc);
-      const createArgs = findGhIssueCreateArgs(scTokens);
+      const createArgs = findGhIssueCreateArgs(scTokens) ?? findCreateIssueScriptArgs(scTokens);
       if (createArgs !== null) {
         const typeVal = extractTypeValue(createArgs);
         if (!typeVal || !VALID_NATIVE_TYPES_LOWER.has(typeVal.toLowerCase())) {

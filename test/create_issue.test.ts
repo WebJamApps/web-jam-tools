@@ -232,6 +232,34 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
           stderr: "",
         });
       }
+      if (cmdStr.includes("graphql") && cmdStr.includes("GetChildAndTypes")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: { id: "CHILD_NODE_ID" },
+                issueTypes: {
+                  nodes: [
+                    { id: "TYPE_TASK_ID", name: "Task" },
+                    { id: "TYPE_BUG_ID", name: "Bug" },
+                    { id: "TYPE_FEAT_ID", name: "Feature" },
+                    { id: "TYPE_EPIC_ID", name: "Epic" },
+                  ],
+                },
+              },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("graphql") && cmdStr.includes("SetIssueType")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ data: { updateIssue: { clientMutationId: null } } }),
+          stderr: "",
+        });
+      }
       if (cmdStr.includes("graphql") && cmdStr.includes("GetChildNodeId")) {
         return Promise.resolve({
           code: 0,
@@ -292,6 +320,7 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
     repo: "web-jam-tools",
     title: "My New Issue",
     bodyFile: "/tmp/body.md",
+    type: "Task",
     labels: ["Flash High"],
     milestone: "token-savings",
     priority: "High",
@@ -300,6 +329,71 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
 
   const result = await createIssueAndVerify(options, mockDeps);
   assertEquals(result, 'web-jam-tools#515 "My New Issue"');
+});
+
+Deno.test("createIssueAndVerify setting type to Epic succeeds with mocked GraphQL", async () => {
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      const cmdStr = cmd.join(" ");
+
+      if (cmdStr.includes("gh issue create")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: "https://github.com/WebJamApps/web-jam-tools/issues/516\n",
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("graphql") && cmdStr.includes("GetChildAndTypes")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: { id: "CHILD_NODE_ID_516" },
+                issueTypes: {
+                  nodes: [
+                    { id: "TYPE_TASK_ID", name: "Task" },
+                    { id: "TYPE_EPIC_ID", name: "Epic" },
+                  ],
+                },
+              },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("graphql") && cmdStr.includes("SetIssueType")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ data: { updateIssue: { clientMutationId: null } } }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/516")) {
+        const mockIssue: IssueData = {
+          number: 516,
+          title: "My Epic Issue",
+          type: { name: "Epic" },
+        };
+        return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
+      }
+
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText() {
+      return Promise.resolve("## What this builds\nEpic body text");
+    },
+  };
+
+  const result = await createIssueAndVerify(
+    {
+      title: "My Epic Issue",
+      bodyFile: "/tmp/body.md",
+      type: "Epic",
+    },
+    mockDeps,
+  );
+  assertEquals(result, 'web-jam-tools#516 "My Epic Issue"');
 });
 
 Deno.test("createIssueAndVerify fallback GraphQL parent check when parent missing in REST", async () => {
@@ -379,6 +473,98 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     () => createIssueAndVerify({ title: "Test", bodyFile: "" }),
     Error,
     "Missing required argument --body-file",
+  );
+
+  // Invalid issue type
+  const failInvalidTypeDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      const str = cmd.join(" ");
+      if (str.includes("graphql") && str.includes("GetChildAndTypes")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: { id: "CID" },
+                issueTypes: { nodes: [{ id: "T1", name: "Task" }] },
+              },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("b"),
+  };
+  await assertRejects(
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", type: "UnknownType" },
+        failInvalidTypeDeps,
+      ),
+    Error,
+    'Invalid issue type "UnknownType"',
+  );
+
+  // Type query failure
+  const failTypeQueryDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      const str = cmd.join(" ");
+      if (str.includes("graphql") && str.includes("GetChildAndTypes")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "type query error" });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("b"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b", type: "Task" }, failTypeQueryDeps),
+    Error,
+    "Failed to resolve issue type info",
+  );
+
+  // Type mutation failure
+  const failTypeMutDeps: ExecDeps = {
+    runCmd: (cmd) => {
+      const str = cmd.join(" ");
+      if (str.includes("graphql") && str.includes("GetChildAndTypes")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: { id: "CID" },
+                issueTypes: { nodes: [{ id: "T1", name: "Task" }] },
+              },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (str.includes("graphql") && str.includes("SetIssueType")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "set type error" });
+      }
+      return Promise.resolve({
+        code: 0,
+        stdout: "https://github.com/org/repo/issues/1\n",
+        stderr: "",
+      });
+    },
+    readFileText: () => Promise.resolve("b"),
+  };
+  await assertRejects(
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b", type: "Task" }, failTypeMutDeps),
+    Error,
+    "Failed to set issue Type via GraphQL",
   );
 
   // Invalid priority level
