@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse guard (Bash): restrict `agy` (Antigravity CLI) invocations to
-# Flash 3.6 models only. Design: web-jam-tools#267 ("agy flash default model
-# fix", approved by Josh 2026-07-25).
+# Flash models only (Gemini 3.7+ floor). Design: web-jam-tools#267 ("agy flash
+# default model fix", approved by Josh 2026-07-25; web-jam-tools#549).
 #
 # Rationale: agy's own configured default has drifted before (Flash High
 # instead of the intended cheaper Medium), and nothing stopped an ad hoc
@@ -13,18 +13,18 @@
 #
 # ALLOWED:
 #   - a bare `agy` call with no --model flag (falls through to agy's own
-#     configured default — separately pinned to Flash 3.6 Medium in
+#     configured default — separately pinned to Flash High in
 #     ~/.gemini/antigravity-cli/settings.json, a laptop-local step outside
-#     this hook's / this repo's reach, web-jam-tools#267 item 2).
-#   - `--model` (or `--model=`) equal to one of the two Flash 3.6 slugs:
-#     gemini-3.6-flash-medium, gemini-3.6-flash-high.
+#     this hook's / this repo's reach, web-jam-tools#267 item 2, web-jam-tools#549).
+#   - `--model` (or `--model=`) equal to a Flash model at 3.7 or newer
+#     (e.g. gemini-3.7-flash-high, gemini-3.7-flash-medium).
 #
 # BLOCKED:
 #   - any other --model value (notably claude-sonnet-4-6,
 #     claude-opus-4-6-thinking, gpt-oss-120b-medium, gemini-3.1-pro-*, and
-#     every gemini-3.5-flash-* slug).
+#     every Flash slug below the 3.7 floor).
 #   - an AGY_MODELS=... env-var prefix on the SAME agy invocation naming
-#     anything outside those two slugs — that path bypasses --model
+#     anything outside allowed Flash slugs — that path bypasses --model
 #     entirely, so it must be checked too.
 #
 # Only fires on a literal `agy` command invocation (bare `agy` or a path
@@ -42,25 +42,27 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 
 result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_agy_model.ts" 2>/dev/null) || true
 
-# python3 unavailable/crashed, or nothing came back: fail open — this is a
+# python3/deno unavailable/crashed, or nothing came back: fail open — this is a
 # cost-control guard, not a secret-leak guard, so an unparseable command is
 # let through rather than guessed at.
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
+ALLOWED_SLUGS=$(deno run "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.7-flash-high or gemini-3.7-flash-medium")
+
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2
-  echo "agy is restricted to Flash 3.6: gemini-3.6-flash-medium or gemini-3.6-flash-high — or omit --model entirely to use agy's own configured default." >&2
+  echo "agy is restricted to Flash: $ALLOWED_SLUGS — or omit --model entirely to use agy's own configured default." >&2
   echo "(design: web-jam-tools#267 — override by rephrasing to one of the allowed slugs)" >&2
   exit 2
 }
 
 case "$result" in
   BLOCK_MODEL:*)
-    block "agy --model '${result#BLOCK_MODEL:}' is not an allowed Flash 3.6 slug."
+    block "agy --model '${result#BLOCK_MODEL:}' is not an allowed Flash slug."
     ;;
   BLOCK_ENV:*)
-    block "AGY_MODELS='${result#BLOCK_ENV:}' names a model outside Flash 3.6 (this path bypasses --model)."
+    block "AGY_MODELS='${result#BLOCK_ENV:}' names a model outside Flash (this path bypasses --model)."
     ;;
   *)
     exit 0

@@ -172,7 +172,7 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
     chosen because they are auditable from the outside and a cost estimate is not.
   - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct
     the subagent to pass `--author` matching its actual model tier (e.g.
-    `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents) when calling
+    `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents) when calling
     `create-draft-pr.sh`.
 
 ## System Setup
@@ -266,4 +266,5 @@ target list, deployment steps, and verification procedures.
   - **Type Field**: Set via GraphQL mutation `updateIssue(input: { id: issueId, issueTypeId })` with `issueTypeId` resolved from `repository.issueTypes`.
   - **Parent Issue Link**: Set via GraphQL mutation `addSubIssue(input: { issueId: parentNodeId, subIssueId: childNodeId })`.
   - **Helper Script**: Always use `scripts/create-issue.ts` (or `deno task create-issue`), which automates creation, labels, milestone, native Type, Priority, parent link, and attribute verification in one place.
+- **Version Scrubbing & Generic Comment Descriptions**: When executing version-migration tasks with explicit grep-to-zero requirements (such as removing retired model version strings), ensure all decorative occurrences—including header comments, rejection bullet lists, and example command strings—describe requirements generically (e.g., "every Flash slug below the 3.7 floor") rather than retaining or reintroducing retired version literals in comments.
 

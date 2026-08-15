@@ -135,15 +135,15 @@ agy_env_args() {
   done
 }
 
-# Cost-ordered model chain (Antigravity PAID account — Josh's prepaid Google
-# credit), CHEAPEST FIRST: Gemini Flash medium is the default lane; Flash (High)
-# is the only rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
+# Model chain (Antigravity PAID account — Josh's prepaid Google
+# credit): Gemini Flash High is the default lane; Flash (Medium)
+# is the rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
 # NOT in the default chain (they drain the credit fastest — the old
 # most-capable-first order was a free-tier assumption). Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)')
+DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.7 Flash (High)|Gemini 3.7 Flash (Medium)')
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- parse args ---
