@@ -90,17 +90,17 @@ These are properties of the skill, written as explicit refusals:
 
 Propose an **epic with children** when the work spans more than one repo, needs more than three issues, or has halves proved by different kinds of evidence. Otherwise propose a **flat set**, or a single issue.
 
-Never propose an epic that is only a container. An epic carries the shared context its children point at and closes when its children close. If the only thing an epic would add is a title, the plan is a flat set.
+Never propose an epic that is only a container. The heuristic test is whether there is a shared artifact the children point at (not whether the children share a cause). A design run supplies exactly such an artifact (the design document itself) by construction, so an epic produced by a design run is never "only a container" regardless of whether the underlying defects are related. An epic carries the shared context its children point at and closes when its children close. If the only thing an epic would add is a title, the plan is a flat set.
 
 The heuristic only proposes. The plan table is the gate, so a wrong call is caught there.
 
 ### Sized for Flash High
 
-Non-epic issues default to **`Flash High`** as the implementation tier. An issue is Flash-High-sized when all of these hold:
+Non-epic issues default to **`Flash High`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count. An issue is Flash-High-sized when all of these hold:
 
 - one repo;
 - one layer — frontend or backend, not both;
-- roughly eight files or fewer;
+- roughly 600 changed lines or fewer (additions + deletions), excluding lockfiles and generated files;
 - no schema or data migration;
 - acceptance criteria provable by running that repo's own test / lint / build commands.
 
