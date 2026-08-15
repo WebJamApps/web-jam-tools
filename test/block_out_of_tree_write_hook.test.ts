@@ -50,12 +50,27 @@ Deno.test("expandHome expands ~ to HOME environment variable", () => {
 });
 
 Deno.test("isAllowlisted recognizes /tmp and session scratchpad paths", () => {
+  const home = Deno.env.get("HOME") || "/home/joshua";
   assert(isAllowlisted("/tmp"));
   assert(isAllowlisted("/tmp/test.txt"));
   assert(isAllowlisted("/tmp/claude-1000/scratchpad/notes.txt"));
   assert(isAllowlisted("/var/tmp/scratch.txt"));
-  assert(!isAllowlisted("/home/joshua/.claude/CLAUDE.md"));
-  assert(!isAllowlisted("/home/joshua/WebJamApps/web-jam-tools/src/index.ts"));
+
+  // Newly allowlisted paths (web-jam-tools#548)
+  assert(isAllowlisted(`${home}/Dropbox/web-jam-llms`));
+  assert(isAllowlisted(`${home}/Dropbox/web-jam-llms/Token_Savings/design.md`));
+  assert(isAllowlisted(`${home}/.claude/shared-memory`));
+  assert(isAllowlisted(`${home}/.claude/shared-memory/global_rules.md`));
+  assert(isAllowlisted(`${home}/.claude/projects/web-jam-tools/memory`));
+  assert(isAllowlisted(`${home}/.claude/projects/web-jam-tools/memory/active_tasks.md`));
+  assert(isAllowlisted(`${home}/.claude/projects/CollegeLutheran/memory/notes.md`));
+
+  // Still denied paths
+  assert(!isAllowlisted(`${home}/.claude/CLAUDE.md`));
+  assert(!isAllowlisted(`${home}/.claude/projects/web-jam-tools/settings.json`));
+  assert(!isAllowlisted(`${home}/Desktop/random.txt`));
+  assert(!isAllowlisted("/etc/passwd"));
+  assert(!isAllowlisted(`${home}/WebJamApps/web-jam-tools/src/index.ts`));
 });
 
 Deno.test("isInsideTree correctly identifies in-tree, out-of-tree, and allowlisted paths", () => {
@@ -65,12 +80,16 @@ Deno.test("isInsideTree correctly identifies in-tree, out-of-tree, and allowlist
   assert(isInsideTree("src/index.ts", repoRoot, repoRoot));
   assert(isInsideTree(`${repoRoot}/hooks/test.ts`, repoRoot, repoRoot));
 
-  // Allowlisted (/tmp)
+  // Allowlisted (/tmp and widened paths)
   assert(isInsideTree("/tmp/foo.txt", repoRoot, repoRoot));
   assert(isInsideTree("/tmp/claude-user/scratchpad/test.md", repoRoot, repoRoot));
+  assert(isInsideTree("~/Dropbox/web-jam-llms/Token_Savings/test.md", repoRoot, repoRoot));
+  assert(isInsideTree("~/.claude/shared-memory/rules.md", repoRoot, repoRoot));
+  assert(isInsideTree("~/.claude/projects/web-jam-tools/memory/active.md", repoRoot, repoRoot));
 
-  // Out-of-tree
+  // Out-of-tree and not allowlisted
   assert(!isInsideTree("~/.claude/CLAUDE.md", repoRoot, repoRoot));
+  assert(!isInsideTree("~/.claude/projects/web-jam-tools/config.json", repoRoot, repoRoot));
   assert(!isInsideTree("../other-repo/file.ts", repoRoot, repoRoot));
   assert(!isInsideTree("/etc/passwd", repoRoot, repoRoot));
 });
@@ -94,8 +113,11 @@ Deno.test("isInsideTree denies non-allowlisted writes when repoRoot is null (non
   const nonGitDir = "/home/joshua";
   assert(!isInsideTree("~/.claude/CLAUDE.md", null, nonGitDir));
   assert(!isInsideTree("file.txt", null, nonGitDir));
-  // /tmp is still allowlisted
+  // /tmp and widened paths are still allowlisted
   assert(isInsideTree("/tmp/scratch.txt", null, nonGitDir));
+  assert(isInsideTree("~/Dropbox/web-jam-llms/design.md", null, nonGitDir));
+  assert(isInsideTree("~/.claude/shared-memory/rules.md", null, nonGitDir));
+  assert(isInsideTree("~/.claude/projects/web-jam-tools/memory/notes.md", null, nonGitDir));
 });
 
 // --- Hook Integration End-to-End Tests ---
@@ -116,6 +138,39 @@ Deno.test("write outside working tree (e.g. /etc/passwd) is DENIED", async () =>
   const res = await runHook({
     tool_name: "Edit",
     tool_input: { target_file: "/etc/passwd" },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED"));
+});
+
+Deno.test("write to ~/Dropbox/web-jam-llms/ design tree is ALLOWED (exit code 0)", async () => {
+  const res = await runHook({
+    tool_name: "Write",
+    tool_input: { file_path: "~/Dropbox/web-jam-llms/Token_Savings/design.md" },
+  });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("write to ~/.claude/projects/*/memory/ is ALLOWED (exit code 0)", async () => {
+  const res = await runHook({
+    tool_name: "Write",
+    tool_input: { file_path: "~/.claude/projects/web-jam-tools/memory/active_tasks.md" },
+  });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("write to ~/.claude/shared-memory/ is ALLOWED (exit code 0)", async () => {
+  const res = await runHook({
+    tool_name: "Edit",
+    tool_input: { file_path: "~/.claude/shared-memory/rules.md" },
+  });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("write to ~/.claude/projects/*/ outside memory/ is DENIED", async () => {
+  const res = await runHook({
+    tool_name: "Write",
+    tool_input: { file_path: "~/.claude/projects/web-jam-tools/config.json" },
   });
   assertEquals(res.code, 2);
   assert(res.stderr.includes("BLOCKED"));

@@ -31,6 +31,31 @@ export function isAllowlisted(resolvedPath: string): boolean {
   ) {
     return true;
   }
+
+  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "/home/joshua";
+
+  // Allowlist ~/Dropbox/web-jam-llms/
+  const dropboxTree = path.join(home, "Dropbox/web-jam-llms");
+  if (resolvedPath === dropboxTree || resolvedPath.startsWith(dropboxTree + "/")) {
+    return true;
+  }
+
+  // Allowlist ~/.claude/shared-memory/
+  const sharedMemoryTree = path.join(home, ".claude/shared-memory");
+  if (resolvedPath === sharedMemoryTree || resolvedPath.startsWith(sharedMemoryTree + "/")) {
+    return true;
+  }
+
+  // Allowlist ~/.claude/projects/*/memory/
+  const projectsPrefix = path.join(home, ".claude/projects");
+  if (resolvedPath.startsWith(projectsPrefix + "/")) {
+    const rel = resolvedPath.slice(projectsPrefix.length + 1);
+    const parts = rel.split("/");
+    if (parts.length >= 2 && parts[1] === "memory") {
+      return true;
+    }
+  }
+
   return false;
 }
 
