@@ -52,6 +52,34 @@ one watching a REPL. Drop `--headless` only if Josh himself wants to drive the
 agy REPL interactively. The issue argument is required — a no-arg invocation
 fails with a usage message instead of running anything.
 
+**Non-UI tasks and `--no-land` (web-jam-tools#513):**
+By default, `handle-agy-tasks.sh` checks out the created feature branch into the developer's main repository clone (`~/WebJamApps/<repo>`) after PR creation so UI changes are immediately ready for local inspection and browser testing. For non-UI work (backend, tooling, documentation, and config tasks), pass `--no-land` before the issue argument to skip checking out the branch into the main clone, preventing the local checkout from switching away from `dev`:
+
+```sh
+~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless --no-land "<Repo>#<issue-num>"
+# e.g.
+~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless --no-land "web-jam-tools#567"
+```
+
+**Dispatching `agy` via a thin Haiku subagent (Claude Code):**
+In Claude Code sessions, rather than running `handle-agy-tasks.sh` directly in a blocking Bash tool call in the main session, dispatch the script via a thin Haiku subagent (`Agent` tool with `model: "haiku"`). This offloads the long-running command execution and allows Josh to see status and progress in the session UI.
+
+- **Strict constraint — dispatch-and-report only:** The Haiku subagent wrapper exists strictly to run the dispatch command, wait for it to exit, and report the result (exit status, stdout summary, and PR URL) back to the parent session. It is **forbidden** from reading or analyzing the issue, modifying code files, running tests/linters, or reviewing the resulting PR. `handle-agy-tasks.sh` and the child `agy` instance handle the entire task lifecycle; performing task work in the wrapper duplicates effort and pays twice for the same tokens.
+
+Example subagent prompt for Haiku agy dispatch:
+
+```
+You are a thin dispatch runner.
+
+Task: Run the following command in Bash, wait for completion, and report back the resulting PR URL and status:
+  ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless [--no-land] "<Repo>#<issue-num>"
+
+Strict rules:
+- Dispatch-and-report ONLY.
+- Do NOT read the issue, do NOT edit files, do NOT run tests or linters, and do NOT review the PR.
+- Report back the exact script output, exit status, and created PR URL.
+```
+
 **Default Tier & Bidirectional Delegation Flexibility:**
 Josh defaults to **`Flash High`** (`Gemini Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
 - **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session is **forbidden** from executing file edits or running test suites directly for tasks/issues labeled `Flash Med` or `Haiku`. It MUST automatically delegate contained coding tasks down to a `Flash Med` subagent (`invoke_subagent` model `flash` or `handle-agy-tasks.sh`) as its very first tool call. Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
