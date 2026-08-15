@@ -65,8 +65,16 @@ Deno.test("isAllowlisted recognizes /tmp and session scratchpad paths", () => {
   assert(isAllowlisted(`${home}/.claude/projects/web-jam-tools/memory/active_tasks.md`));
   assert(isAllowlisted(`${home}/.claude/projects/CollegeLutheran/memory/notes.md`));
 
+  // Newly allowlisted: Markdown files directly inside ~/.claude/ (web-jam-tools#551 follow-up)
+  assert(isAllowlisted(`${home}/.claude/CLAUDE.md`));
+  assert(isAllowlisted(`${home}/.claude/anything-else.md`));
+
   // Still denied paths
-  assert(!isAllowlisted(`${home}/.claude/CLAUDE.md`));
+  assert(!isAllowlisted(`${home}/.claude/settings.json`));
+  assert(!isAllowlisted(`${home}/.claude/settings.local.json`));
+  assert(!isAllowlisted(`${home}/.claude/hooks/notes.md`)); // nested, not recursive
+  assert(!isAllowlisted(`${home}/.claude/hooks/block-out-of-tree-write.sh`));
+  assert(!isAllowlisted(`${home}/.claude/projects/-home-joshua/some-file.md`)); // only memory/ subdir is allowed
   assert(!isAllowlisted(`${home}/.claude/projects/web-jam-tools/settings.json`));
   assert(!isAllowlisted(`${home}/Desktop/random.txt`));
   assert(!isAllowlisted("/etc/passwd"));
@@ -87,8 +95,11 @@ Deno.test("isInsideTree correctly identifies in-tree, out-of-tree, and allowlist
   assert(isInsideTree("~/.claude/shared-memory/rules.md", repoRoot, repoRoot));
   assert(isInsideTree("~/.claude/projects/web-jam-tools/memory/active.md", repoRoot, repoRoot));
 
+  // Newly allowlisted: Markdown files directly inside ~/.claude/ (web-jam-tools#551 follow-up)
+  assert(isInsideTree("~/.claude/CLAUDE.md", repoRoot, repoRoot));
+
   // Out-of-tree and not allowlisted
-  assert(!isInsideTree("~/.claude/CLAUDE.md", repoRoot, repoRoot));
+  assert(!isInsideTree("~/.claude/hooks/notes.md", repoRoot, repoRoot)); // nested, not recursive
   assert(!isInsideTree("~/.claude/projects/web-jam-tools/config.json", repoRoot, repoRoot));
   assert(!isInsideTree("../other-repo/file.ts", repoRoot, repoRoot));
   assert(!isInsideTree("/etc/passwd", repoRoot, repoRoot));
@@ -111,27 +122,79 @@ Deno.test("getRepoRoot resolves git repository top-level and returns null for no
 
 Deno.test("isInsideTree denies non-allowlisted writes when repoRoot is null (non-git CWD)", () => {
   const nonGitDir = "/home/joshua";
-  assert(!isInsideTree("~/.claude/CLAUDE.md", null, nonGitDir));
+  assert(!isInsideTree("~/.claude/settings.json", null, nonGitDir));
+  assert(!isInsideTree("~/.claude/hooks/notes.md", null, nonGitDir)); // nested, not recursive
   assert(!isInsideTree("file.txt", null, nonGitDir));
   // /tmp and widened paths are still allowlisted
   assert(isInsideTree("/tmp/scratch.txt", null, nonGitDir));
   assert(isInsideTree("~/Dropbox/web-jam-llms/design.md", null, nonGitDir));
   assert(isInsideTree("~/.claude/shared-memory/rules.md", null, nonGitDir));
   assert(isInsideTree("~/.claude/projects/web-jam-tools/memory/notes.md", null, nonGitDir));
+  // Markdown directly in ~/.claude/ is allowlisted unconditionally (web-jam-tools#551 follow-up)
+  assert(isInsideTree("~/.claude/CLAUDE.md", null, nonGitDir));
 });
 
 // --- Hook Integration End-to-End Tests ---
 
-Deno.test("write to ~/.claude/CLAUDE.md is DENIED (exit code 2)", async () => {
+Deno.test("write to ~/.claude/CLAUDE.md is ALLOWED (exit code 0) (web-jam-tools#551 follow-up)", async () => {
   const res = await runHook({
     tool_name: "Write",
     tool_input: { file_path: "~/.claude/CLAUDE.md" },
   });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("write to ~/.claude/anything-else.md is ALLOWED (exit code 0)", async () => {
+  const res = await runHook({
+    tool_name: "Edit",
+    tool_input: { file_path: "~/.claude/anything-else.md" },
+  });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("write to ~/.claude/settings.json is DENIED (not .md)", async () => {
+  const res = await runHook({
+    tool_name: "Write",
+    tool_input: { file_path: "~/.claude/settings.json" },
+  });
   assertEquals(res.code, 2);
   assert(res.stderr.includes("BLOCKED"));
-  assert(res.stderr.includes("out-of-tree write guard"));
-  assert(res.stderr.includes("CLAUDE.md"));
-  assert(res.stderr.includes("invisible to gh pr diff"));
+});
+
+Deno.test("write to ~/.claude/settings.local.json is DENIED (not .md)", async () => {
+  const res = await runHook({
+    tool_name: "Write",
+    tool_input: { file_path: "~/.claude/settings.local.json" },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED"));
+});
+
+Deno.test("write to ~/.claude/hooks/notes.md is DENIED (nested one level down, not recursive)", async () => {
+  const res = await runHook({
+    tool_name: "Write",
+    tool_input: { file_path: "~/.claude/hooks/notes.md" },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED"));
+});
+
+Deno.test("write to ~/.claude/hooks/block-out-of-tree-write.sh is DENIED (the guard itself)", async () => {
+  const res = await runHook({
+    tool_name: "Edit",
+    tool_input: { file_path: "~/.claude/hooks/block-out-of-tree-write.sh" },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED"));
+});
+
+Deno.test("write to ~/.claude/projects/-home-joshua/some-file.md is DENIED (only memory/ subdir is allowed)", async () => {
+  const res = await runHook({
+    tool_name: "Write",
+    tool_input: { file_path: "~/.claude/projects/-home-joshua/some-file.md" },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED"));
 });
 
 Deno.test("write outside working tree (e.g. /etc/passwd) is DENIED", async () => {
@@ -200,12 +263,25 @@ Deno.test("write to session scratchpad under /tmp is ALLOWED", async () => {
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("write to ~/.claude/CLAUDE.md from a non-git CWD is DENIED (PR #538 review regression test)", async () => {
+Deno.test("write to ~/.claude/CLAUDE.md from a non-git CWD is ALLOWED (web-jam-tools#551 follow-up; supersedes PR #538 regression test for this path)", async () => {
   const tempNonGitDir = await Deno.makeTempDir();
   try {
     const res = await runHook({
       tool_name: "Write",
       tool_input: { file_path: "~/.claude/CLAUDE.md" },
+    }, tempNonGitDir);
+    assertEquals(res.code, 0, res.stderr);
+  } finally {
+    await Deno.remove(tempNonGitDir, { recursive: true });
+  }
+});
+
+Deno.test("write to ~/.claude/settings.json from a non-git CWD is DENIED (PR #538 review regression test)", async () => {
+  const tempNonGitDir = await Deno.makeTempDir();
+  try {
+    const res = await runHook({
+      tool_name: "Write",
+      tool_input: { file_path: "~/.claude/settings.json" },
     }, tempNonGitDir);
     assertEquals(res.code, 2);
     assert(res.stderr.includes("BLOCKED"));

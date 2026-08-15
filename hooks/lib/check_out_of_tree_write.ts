@@ -46,6 +46,15 @@ export function isAllowlisted(resolvedPath: string): boolean {
     return true;
   }
 
+  // Allowlist Markdown files directly inside ~/.claude/ (web-jam-tools#551 follow-up).
+  // Deliberately NOT recursive: only a file whose parent directory is exactly ~/.claude/
+  // qualifies. ~/.claude/hooks/notes.md, ~/.claude/projects/*/some-file.md, and any
+  // non-.md file directly in ~/.claude/ (settings.json, settings.local.json) stay blocked.
+  const claudeDir = path.join(home, ".claude");
+  if (path.dirname(resolvedPath) === claudeDir && resolvedPath.endsWith(".md")) {
+    return true;
+  }
+
   // Allowlist ~/.claude/projects/*/memory/
   const projectsPrefix = path.join(home, ".claude/projects");
   if (resolvedPath.startsWith(projectsPrefix + "/")) {
