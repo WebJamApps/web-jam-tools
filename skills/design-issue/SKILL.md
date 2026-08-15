@@ -12,7 +12,7 @@ metadata:
 
 Design work does not happen in plain chat. The moment a conversation turns into design — options, trade-offs, decisions worth recording — the session runs `/design-issue` and works inside it. That single rule is what lets the design machinery live in the skill instead of in memory, loading only when design is actually happening.
 
-**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/next`.
+**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/work-issue`.
 
 ---
 
@@ -79,7 +79,7 @@ These are properties of the skill, written as explicit refusals:
 | add `Needs Design` to anything in the approved executable set | it must not become a stub factory |
 | put a manual step inside an agent's execution issue | manual steps get their own `Josh` issue |
 | hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<date>.md` |
-| **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/next`** | absolute standing rule |
+| **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
 
 ---

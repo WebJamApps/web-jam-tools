@@ -150,7 +150,7 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 # Interactive is the default. Leading flags (any order, before the optional task):
 #   --headless / -H   run unattended (auto-approves tools)
 #   --setup-only      do the issue + git-branch setup, print the task, and
-#                     STOP without launching agy. Used by the `/work-issue` (or `/next`) agy skill:
+#                     STOP without launching agy. Used by the `/work-issue` agy skill:
 #                     you're already inside agy, so agy itself does the coding.
 #   --dry-run         do the issue fetch + git-branch setup, print the
 #                     composed prompt, and STOP without launching agy. For
