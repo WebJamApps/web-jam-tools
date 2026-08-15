@@ -1,6 +1,6 @@
 ---
 name: flash-issues
-description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Flash High subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
+description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, filter out issues with in-flight open PRs, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Flash High subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
 ---
 
 # flash-issues — regenerate the Flash-lane worklist
@@ -38,7 +38,7 @@ Instead:
 2. Wait for the subagent's report (the Report Back format baked into the
    template).
 3. Relay that report to Josh essentially as-is: counts, what got newly
-   labeled, numbered-list count vs. Blocked count.
+   labeled, numbered-list count vs. In Flight count vs. Blocked count.
 4. **Never block chat on flagged items.** They live in the output file's
    "Needs Josh's review" section (Step 9), not in a chat Q&A. State the
    count and point at the file — "N issues need your review, see the
@@ -108,10 +108,17 @@ CollegeLutheran, AppersonAuto, and HenricksonForSalem split Flash into
 no split. The model-tier label family to recognize in any repo: `Haiku`,
 `Sonnet`, `Opus`, `Fable`, and whichever Flash spelling(s) that repo has.
 
-## Step 2 — list open issues per repo
+## Step 2 — list open issues and open PRs per repo
+
+For each repo, list open issues:
 
   gh issue list --repo WebJamApps/<repo> --state open --limit 200 \
     --json number,title,labels,body,url,milestone
+
+And list open PRs:
+
+  gh pr list --repo WebJamApps/<repo> --state open \
+    --json number,headRefName,body,url,title
 
 `milestone` is the topic/area signal (the old `Area` custom field was
 deleted; topics now live in per-repo Milestones, name-identical across
@@ -119,6 +126,10 @@ repos — `gig-outreach`, `backup-restore`, etc.). It's read here for free,
 alongside the same call that already reads labels — no extra request. This
 skill doesn't gate Flash-lane candidacy on topic, so it's carried through
 purely for context in the output (Step 9), not used as a filter.
+
+Open PRs are scanned to detect in-flight candidate issues that already have
+an active PR awaiting review, so they are not suggested in the runnable list
+for re-dispatch.
 
 ## Step 3 — classify every open issue
 
@@ -221,13 +232,28 @@ Otherwise, for each issue:
   If the label you applied is Flash-tier, this issue is now also a
   Flash-lane candidate — carry it into Step 4, and record which tier.
 
-## Step 4 — pool the Flash-lane candidates
+## Step 4 — pool the Flash-lane candidates & detect in-flight issues
 
 Collect every Flash-lane candidate (pre-existing + newly labeled in Step 3)
 from all 8 active repos into one list. Each entry needs: repo, issue number,
 title, URL, milestone (if any, from Step 2 — for output context only), and
 its Flash tier label (`Flash`, `Flash Med`, or `Flash High` — exactly as
 that repo spells it).
+
+For each candidate issue `<repo>#<num>`, check whether an open PR from
+Step 2 in the same repo is currently in flight for it:
+
+- PR body matches `(?i)(closes|part of)\s+#<num>([^0-9]|$)`
+- OR PR `headRefName` starts with `agy/<num>-*`, `gemini/<num>-*`, or
+  `claude/<num>-*` (e.g. `agy/<num>-<slug>`, `gemini/<num>-<slug>`,
+  `claude/<num>-<slug>`).
+
+If an open PR matches:
+- Mark this candidate issue as **in-flight** (record the matching PR's URL
+  and branch `headRefName`).
+- In-flight issues are excluded from the numbered runnable list (Step 6) and
+  route directly to the `## In Flight (Pending PR Review)` section (Step 7),
+  preventing duplicate dispatch while PR review is pending.
 
 ## Step 5 — read Priority, Type, and dependencies (native metadata, not labels)
 
@@ -291,8 +317,9 @@ and for Needs-review judgment calls — this step only changes how
 
 ## Step 6 — order the runnable list
 
-Among candidates with no blocking dependency (or whose only dependencies
-are themselves in this pool):
+Among Flash-lane candidates that are **not in flight** (no open PR from Step 4)
+and have no blocking dependency (or whose only dependencies are themselves in
+this pool):
 
 1. Native **Priority** first (read in Step 5): `Urgent` > `High` > `Medium`
    (blank) > `Low`. Every repo has this — it's an org-level field, not a
@@ -310,7 +337,18 @@ are themselves in this pool):
 Number the result 1, 2, 3, … — plain sequential numbering, not per-repo
 grouping.
 
-## Step 7 — build the Blocked section
+## Step 7 — build the In Flight and Blocked sections
+
+### In Flight section (`## In Flight (Pending PR Review)`)
+
+Flash-lane candidates detected in Step 4 as having an open PR land here:
+- Each entry names the issue, its Flash tier (and milestone if any), and the
+  associated open PR URL and branch name.
+  Format: `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>)`
+- These issues are actively being worked or awaiting review; excluding them
+  from the runnable list prevents duplicate dispatch or wasted tokens.
+
+### Blocked section (`## Blocked (not runnable by Flash)`)
 
 Two kinds of entry land here:
 - Dependency-blocked candidates from Step 5 — one-line reason naming the
@@ -324,7 +362,7 @@ Two kinds of entry land here:
   from Josh"). These can land here even though they already carry a
   Flash-tier label — the marker overrides normal Flash-lane routing.
 
-No further ordering is required within this section — a plain list is fine.
+No further ordering is required within these sections — plain lists are fine.
 
 ## Step 8 — reconcile: verify nothing was silently dropped
 
@@ -332,6 +370,7 @@ Before writing anything, every open issue seen in Step 2 must land in
 EXACTLY ONE bucket:
 
 - the numbered runnable list (Step 6)
+- the In Flight section (Step 7)
 - the Blocked section (Step 7)
 - the Needs review section (Step 3)
 - skipped — carries a non-Flash model label (Step 3)
@@ -352,10 +391,10 @@ Path: ~/Dropbox/web-jam-llms/flash-issues.md — fully overwrite it every
 run. It's a regenerated snapshot, not a log: never append, never merge with
 the previous version's ordering.
 
-Every entry — in BOTH the numbered list and the Blocked section — MUST end
-with its Flash tier in parentheses, exactly as that repo spells it
-(`Flash`, `Flash Med`, or `Flash High`). Josh uses this to know whether to
-run agy with the plain default chain or override it with
+Every entry — in the numbered runnable list, the In Flight section, and the
+Blocked section — MUST end with its Flash tier in parentheses, exactly as that
+repo spells it (`Flash`, `Flash Med`, or `Flash High`). Josh uses this to know
+whether to run agy with the plain default chain or override it with
 AGY_MODELS='Gemini 3.7 Flash (High)'. If the issue carries a Milestone
 (Step 2), add `, milestone: <name>` inside the same parentheses — omit the
 clause entirely when there's no Milestone, don't write "milestone: none".
@@ -372,6 +411,10 @@ Last updated: <ISO 8601 UTC timestamp of this run>
 2. [JaMmusic#1220](https://github.com/WebJamApps/JaMmusic/issues/1220) — Venue picker: filter list by metro (Flash Med, milestone: gig-outreach)
 3. [JaMmusic#1221](https://github.com/WebJamApps/JaMmusic/issues/1221) — Venue picker: wire selection to gig form (Flash High, milestone: gig-outreach, depends on JaMmusic#1220 above)
 
+## In Flight (Pending PR Review)
+
+- [WebJamSocketCluster#45](https://github.com/WebJamApps/WebJamSocketCluster/issues/45) — Reconnect backoff timer (Flash Med) — PR: [WebJamSocketCluster#48](https://github.com/WebJamApps/WebJamSocketCluster/pull/48) (`agy/45-reconnect-backoff`)
+
 ## Blocked (not runnable by Flash)
 
 - [AppersonAuto#88](https://github.com/WebJamApps/AppersonAuto/issues/88) — Inventory filter UI (Flash Med) — blocked: depends on AppersonAuto#85 (Sonnet, backend endpoint not built)
@@ -383,32 +426,35 @@ Last updated: <ISO 8601 UTC timestamp of this run>
 
 Every list line is: full https://github.com/WebJamApps/<repo>/issues/<n>
 link, repo-prefixed reference (Repo#n) as the link text, em dash, title,
-then the Flash tier in parentheses (plus the blocked-reason clause for
-Blocked entries). Keep titles as GitHub has them — don't paraphrase.
+then the Flash tier in parentheses (plus the PR info clause for In Flight
+entries, or the blocked-reason clause for Blocked entries). Keep titles as
+GitHub has them — don't paraphrase.
 
 The "Needs Josh's review" section is different: no Flash tier (these got
 no model label at all), and the trailing clause is always a concrete
 recommendation instead of a tier/blocked-reason. These issues are excluded
-from the numbered list and the Blocked section — they're not Flash-lane
-candidates, they're undecided. Rebuild this section fresh every run same as
-the rest of the file: an item Josh has since resolved (labeled, closed,
+from the numbered list, In Flight section, and Blocked section — they're not
+Flash-lane candidates, they're undecided. Rebuild this section fresh every run
+same as the rest of the file: an item Josh has since resolved (labeled, closed,
 whatever) just won't re-trigger the flag next time and drops out on its own.
 
 ## Report back (this is what you hand back to the invoking session)
 
-- Repos scanned, total open issues seen, how many were already Flash-tier
+- Repos scanned, total open issues and open PRs seen, how many were already Flash-tier
   vs. newly triaged.
 - Every issue you newly labeled and what you labeled it.
-- Count in the numbered list vs. the Blocked section vs. the "Needs Josh's
-  review" section vs. skipped-parked/Josh vs. skipped-other-model-label — just
-  the counts for the review section and skipped buckets, not the lists
+- Count in the numbered list vs. the In Flight section vs. the Blocked section vs.
+  the "Needs Josh's review" section vs. skipped-parked/Josh vs. skipped-other-model-label —
+  just the counts for the review section and skipped buckets, not the lists
   (they're already in the file, or need no listing).
-- The Step 8 reconciliation: total open issues seen vs. the sum of all five
+- The Step 8 reconciliation: total open issues seen vs. the sum of all six
   buckets. Confirm they match, or state what you found missing and where
   you filed it before writing.
 - Confirmation that Priority, Type, and dependencies were read from each
   candidate's REST issue payload (Step 5) — not from any label — and that
   topic came from Milestone (Step 2), not from a label.
+- Confirmation that open PRs were scanned per repo (Step 2) and in-flight
+  issues with open PRs were filtered to the In Flight section.
 - Confirmation the file was written to
   ~/Dropbox/web-jam-llms/flash-issues.md.
 ````
@@ -431,6 +477,8 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
   instead of a best-effort label.
 - Never blocks the chat run on flagged items — no Q&A, no waiting for an
   answer. They're reviewed from the file on Josh's own schedule.
+- Never suggests an in-flight issue with an open PR in the runnable list — in-flight
+  issues route to the dedicated `## In Flight (Pending PR Review)` section.
 - Never marks an issue blocked on an unverified reference — for a Step 3
   conditional marker, `gh issue view --json state` the specific reference
   first; for Step 5 dependencies, the native `blocked_by` payload's own
