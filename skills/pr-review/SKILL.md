@@ -13,8 +13,8 @@ This skill provides a systematic pipeline for automated cross-model pull request
 ## Purpose & Model Pairing
 
 Cross-model review pair matrix:
-- **Flash High** (`Gemini 3.6 Flash (High)`) reviews PRs authored by **Sonnet** (`Claude Code — Sonnet 5`).
-- **Sonnet** (`Claude Code — Sonnet 5`) reviews PRs authored by **Flash** (`agy — Gemini 3.6 Flash`).
+- **Flash High** (`Gemini Flash (High)`) reviews PRs authored by **Sonnet** (`Claude Code — Sonnet 5`).
+- **Sonnet** (`Claude Code — Sonnet 5`) reviews PRs authored by **Flash** (`agy — Gemini Flash`).
 - **Opus** and **Josh** may invoke `/pr-review` if desired, or review PRs in their own custom/human way without using the skill.
 
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
