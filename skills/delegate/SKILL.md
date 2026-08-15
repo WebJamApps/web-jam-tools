@@ -53,21 +53,21 @@ agy REPL interactively. The issue argument is required — a no-arg invocation
 fails with a usage message instead of running anything.
 
 **Default Tier & Bidirectional Delegation Flexibility:**
-Josh defaults to **`Flash High`** (`Gemini 3.6 Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
+Josh defaults to **`Flash High`** (`Gemini Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
 - **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session is **forbidden** from executing file edits or running test suites directly for tasks/issues labeled `Flash Med` or `Haiku`. It MUST automatically delegate contained coding tasks down to a `Flash Med` subagent (`invoke_subagent` model `flash` or `handle-agy-tasks.sh`) as its very first tool call. Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
 - **Exception — trivial edits**: the primary session may make the edit directly, without `invoke_subagent`, only when **all** of these hold: it touches **one file**; it changes **no behaviour** (documentation, comment, or a single config value); and it is **under ~20 changed lines**. The session must say, in the same turn, that it is taking the exception and why. "I already have the context", "it would be faster", and "writing the brief costs as much as the work" are **not** exceptions — the three conditions above are the whole test. Rationale: delegation pays when the work is bigger than the brief; below that line the session pays to write a self-contained specification, waits for a round trip, then reviews the result, for an edit smaller than the specification. The three conditions are a mechanical proxy for that, chosen because they are auditable from the outside and a cost estimate is not.
 - **Delegating up (`Flash Med` → `Flash High` / `Sonnet` / `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High`, `Sonnet`, or `Opus`.
 
 **Setting explicit model chains via `AGY_MODELS`:**
-The default fallback chain runs `Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)`. To target a specific tier directly, set `AGY_MODELS`:
+The default fallback chain runs `Gemini 3.7 Flash (High)|Gemini 3.7 Flash (Medium)`. To target a specific tier directly, set `AGY_MODELS`:
 
 ```sh
 # Force Flash High default:
-AGY_MODELS='Gemini 3.6 Flash (High)' \
+AGY_MODELS='Gemini 3.7 Flash (High)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 
 # Force Flash Med delegation:
-AGY_MODELS='Gemini 3.6 Flash (Medium)' \
+AGY_MODELS='Gemini 3.7 Flash (Medium)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 ```
 

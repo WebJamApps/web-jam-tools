@@ -94,7 +94,7 @@ labels:
     neverDelete: true
 
   # --- Model-tier — Flash High/Med all 8 repos ---
-  # Josh's call (2026-07-31): Flash 3.6 High is at Sonnet quality, and Flash
+  # Josh's call (2026-07-31): Flash High is at Sonnet quality, and Flash
   # Medium is a viable substitute for Haiku, so both must be routable in
   # every repo, not just the 5 front-end ones — he wants routing
   # flexibility. This widened `Flash High` and `Flash Med` from
