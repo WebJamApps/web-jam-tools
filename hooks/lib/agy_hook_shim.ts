@@ -171,7 +171,9 @@ export function normalize(
     workspacePaths: payload.workspacePaths,
   };
   if (event === "PostToolUse") {
-    normalized.tool_response = { stdout: recoverPostToolOutput(transcriptText ?? "", payload.stepIdx) };
+    normalized.tool_response = {
+      stdout: recoverPostToolOutput(transcriptText ?? "", payload.stepIdx),
+    };
   }
   return { toolName, normalized };
 }
@@ -292,7 +294,9 @@ if (import.meta.main) {
     Deno.exit(1);
   }
   if (!matcherB64 || !targetHookPath) {
-    console.error("usage: agy_hook_shim.ts <PreToolUse|PostToolUse> <base64-matcher> <target-hook-path>");
+    console.error(
+      "usage: agy_hook_shim.ts <PreToolUse|PostToolUse> <base64-matcher> <target-hook-path>",
+    );
     Deno.exit(1);
   }
   let matcher: string;

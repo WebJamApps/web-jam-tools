@@ -3,7 +3,7 @@
 # scope item 7).
 #
 # Registered ONLY on the agy surface, wrapped by hooks/agy-hook-shim.sh with
-# matcher "*" (every tool call). Denies a non-Flash model chosen IN-SESSION,
+# matcher ".*" (every tool call). Denies a non-Flash model chosen IN-SESSION,
 # using the `modelName` agy's own PreToolUse payload carries directly
 # (finding 7) — a capability Claude Code hooks don't have at all.
 #
