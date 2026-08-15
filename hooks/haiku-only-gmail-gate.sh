@@ -12,13 +12,17 @@
 # so "unknown" must not silently run on an expensive model).
 set -euo pipefail
 
+HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+SELECTOR="$HOOK_DIR/lib/select_transcript_entry.ts"
+
 input="$(cat)"
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 
 model=""
 if [ -n "$tp" ] && [ -f "$tp" ]; then
-  # newest assistant turn's model = current session model
-  model="$(tac "$tp" 2>/dev/null | jq -r 'select(.message.role=="assistant") | .message.model // empty' 2>/dev/null | head -n1 || true)"
+  # newest genuine assistant turn's model = current session model
+  # (selected via hooks/lib/select_transcript_entry.ts, excluding isSidechain and isApiErrorMessage entries — web-jam-tools#566)
+  model="$(deno run --allow-read "$SELECTOR" --model "$tp" 2>/dev/null || true)"
 fi
 
 case "$model" in

@@ -60,12 +60,16 @@ set -euo pipefail
 # with zero Task calls, before this hook warns.
 THRESHOLD=5
 
+HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+SELECTOR="$HOOK_DIR/lib/select_transcript_entry.ts"
+
 input="$(cat)" || exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 [ -n "$tp" ] && [ -f "$tp" ] || exit 0
 
-# newest assistant turn's model = current session model
-model="$(tac "$tp" 2>/dev/null | jq -r 'select(.message.role=="assistant") | .message.model // empty' 2>/dev/null | head -n1 || true)"
+# newest genuine assistant turn's model = current session model
+# (selected via hooks/lib/select_transcript_entry.ts, excluding isSidechain and isApiErrorMessage entries)
+model="$(deno run --allow-read "$SELECTOR" --model "$tp" 2>/dev/null || true)"
 case "$model" in
   *opus*) ;;
   *) exit 0 ;;

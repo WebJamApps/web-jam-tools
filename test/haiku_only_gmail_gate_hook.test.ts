@@ -54,8 +54,19 @@ async function withTranscript(
   }
 }
 
-function assistantTurn(model: string): Record<string, unknown> {
-  return { message: { role: "assistant", model } };
+function assistantTurn(model: string, content = "hi"): Record<string, unknown> {
+  return { message: { role: "assistant", model, content } };
+}
+
+function sidechainTurn(model: string, content = "subagent response"): Record<string, unknown> {
+  return { isSidechain: true, message: { role: "assistant", model, content } };
+}
+
+function apiErrorMessageTurn(
+  model = "claude-haiku-4-5",
+  content = "API error occurred",
+): Record<string, unknown> {
+  return { isApiErrorMessage: true, message: { role: "assistant", model, content } };
 }
 
 function assertDenied(stdout: string) {
@@ -80,6 +91,20 @@ Deno.test("newest assistant turn on a haiku model is allowed (silent, no deny JS
   );
 });
 
+Deno.test("Haiku main session with an interleaved Sonnet subagent entry is allowed", async () => {
+  await withTranscript(
+    [
+      assistantTurn("claude-haiku-4-6"),
+      sidechainTurn("claude-sonnet-4-6"),
+    ],
+    async (transcript_path) => {
+      const res = await runHook({ transcript_path });
+      assertEquals(res.code, 0);
+      assertEquals(res.stdout, "");
+    },
+  );
+});
+
 // --- fires: newest assistant turn's model is NOT Haiku ---
 
 Deno.test("newest assistant turn on Sonnet is denied", async () => {
@@ -96,6 +121,36 @@ Deno.test("newest assistant turn on Sonnet is denied", async () => {
 Deno.test("newest assistant turn on Opus is denied", async () => {
   await withTranscript(
     [assistantTurn("claude-opus-4-6-thinking")],
+    async (transcript_path) => {
+      const res = await runHook({ transcript_path });
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout);
+    },
+  );
+});
+
+// --- web-jam-tools#566: regression tests proving interleaved subagent entries and API error entries cannot breach the gate ---
+
+Deno.test("an interleaved Haiku subagent transcript entry cannot make the gate admit an Opus session", async () => {
+  await withTranscript(
+    [
+      assistantTurn("claude-opus-4-6-thinking"),
+      sidechainTurn("claude-haiku-4-5"),
+    ],
+    async (transcript_path) => {
+      const res = await runHook({ transcript_path });
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout);
+    },
+  );
+});
+
+Deno.test("a synthetic API error message cannot make the gate admit an Opus session", async () => {
+  await withTranscript(
+    [
+      assistantTurn("claude-opus-4-6-thinking"),
+      apiErrorMessageTurn("claude-haiku-4-5"),
+    ],
     async (transcript_path) => {
       const res = await runHook({ transcript_path });
       assertEquals(res.code, 0);
