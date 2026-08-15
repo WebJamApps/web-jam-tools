@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.29.1",
+  "version": "1.30.0",
   "tasks": {
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "issue:create": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
@@ -27,6 +27,7 @@
     "fix-labels:milestone-diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/milestone-diff.ts",
     "fix-labels:generate-model-labels": "deno run --allow-read=skills/fix-labels/labels.yaml --allow-write=skills/fix-labels/model-labels.json src/fix-labels/generate-model-labels.ts",
     "memory-index": "deno run --allow-read --allow-write --allow-env src/memory-index/cli.ts",
+    "memory:consume": "bash scripts/consume-memory-rules.sh",
     "update:reaper": "bash scripts/reaper-update.sh",
     "monitor:uptime": "deno run --allow-net --allow-env src/uptime/cli.ts",
     "monitor:cron": "deno run --allow-net --allow-env src/uptime/cron.ts"
