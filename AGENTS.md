@@ -24,6 +24,9 @@ rules and do not reconstruct them from memory or from this file.
   front-end half of coupled work.
 - [docs/playwright-mcp.md](docs/playwright-mcp.md) — setup and operational guidelines for using
   Playwright MCP server (`@playwright/mcp`) to debug production websites.
+- [docs/agy-hooks.md](docs/agy-hooks.md) — the agy (Antigravity/Flash) PreToolUse/PostToolUse hook
+  contract as measured, the translation shim that makes hooks actually enforce there, and the
+  Antigravity Gmail MCP setup + send/delete fence built on top of it.
 
 ## Workspace Overview
 

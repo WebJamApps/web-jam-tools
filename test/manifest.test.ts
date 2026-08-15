@@ -37,8 +37,21 @@ const EXPECTED_SKILL_DIRS = [
 
 // Pinned set of hooks/*.sh filenames. Update deliberately.
 const EXPECTED_HOOK_SCRIPTS = [
+  // The translation shim (web-jam-tools#432) — registered by
+  // scripts/install-hooks.sh once per (matcher, hook) pair on the agy
+  // surface only. Normalizes agy's payload, enforces the matcher itself,
+  // runs the target hook unmodified, and translates its verdict into agy's
+  // own decision:"deny" veto form.
+  "agy-hook-shim.sh",
+  // agy-native in-session model guard (web-jam-tools#432 scope item 7) —
+  // denies a non-Flash model chosen mid-session via agy's `modelName`
+  // payload field, agy-only (Claude Code carries no such field).
+  "agy-model-guard.sh",
   "backlog-groom-reminder.sh",
   "backup-refusal-reminder.sh",
+  // Unconditional send/delete fence for Gmail on the agy surface
+  // (web-jam-tools#432 scope item 3) — agy-only.
+  "block-agy-gmail-send-delete.sh",
   "block-agy-non-flash-model.sh",
   "block-dangerous-git-deploy.sh",
   "block-human-only-credentials.sh",

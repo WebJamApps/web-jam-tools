@@ -146,6 +146,16 @@ POST_TOOL_USE_HOOKS=(
   "Bash::scan-output-for-secrets.sh"
 )
 
+# agy-ONLY PreToolUse hooks (web-jam-tools#432) — never wired into Claude
+# Code's settings.json, only into AGY_HOOKS_PATH (via the shim below). Both
+# depend on agy-native payload fields (raw, unprefixed MCP tool names;
+# `modelName`) that Claude Code's hook payload doesn't carry, so they would
+# either misfire or never fire there.
+AGY_ONLY_PRE_TOOL_USE_HOOKS=(
+  "send_email|delete_email|batch_delete_emails::block-agy-gmail-send-delete.sh"
+  ".*::agy-model-guard.sh"
+)
+
 # permissions.deny patterns this installer keeps registered in settings.json
 # (web-jam-tools#308). PreToolUse hooks exit with code 2 to hard-block
 # unpermitted or destructive commands before execution. A deny rule is a
@@ -605,6 +615,53 @@ for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
   merge_post_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
 done
 
+[ -e "$HOOKS_SRC/agy-hook-shim.sh" ] || { echo "error: $HOOKS_SRC/agy-hook-shim.sh not found" >&2; exit 1; }
+
+# --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432) ---
+#
+# agy ignores its own PreToolUse "matcher" JSON field entirely (finding 2),
+# and neither Claude veto mechanism (exit 2 /
+# hookSpecificOutput.permissionDecision) is honoured there (finding 5) — so
+# every hook registered directly is a no-op on that surface. Instead of
+# registering each hook script directly (as the Claude settings.json args
+# above do), every agy-side entry is wrapped in
+# hooks/agy-hook-shim.sh <event> <base64-matcher> <target-hook-path>, which
+# normalizes the payload, enforces the matcher itself, runs the target hook
+# UNMODIFIED, and translates its verdict into agy's own
+# {"decision":"deny","reason":"..."} form (verified working — finding 6).
+#
+# The matcher is base64-encoded rather than embedded as literal shell text:
+# agy's exact command-string invocation mechanism (full shell parse, vs. a
+# naive whitespace split) is not independently verifiable (agy is
+# closed-source), and several matchers below contain shell metacharacters
+# ("mcp__(gmail|claude_ai_Gmail)__.*", "Bash|mcp__.*") that would be
+# misparsed or trigger glob expansion under a naive/unquoted split. Base64
+# text is safe under either invocation mechanism.
+agy_shim_arg() {
+  local event="$1" matcher="$2" name="$3"
+  local matcher_b64
+  matcher_b64="$(printf '%s' "$matcher" | base64 | tr -d '\n')"
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  printf '%s' "$matcher"'::$HOME/.claude/hooks/agy-hook-shim.sh '"$event"' '"$matcher_b64"' $HOME/.claude/hooks/'"$name"
+}
+
+merge_agy_pre_tool_use_args=()
+for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
+  matcher="${entry%%::*}"
+  name="${entry#*::}"
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS/AGY_ONLY_PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
+  merge_agy_pre_tool_use_args+=("$(agy_shim_arg PreToolUse "$matcher" "$name")")
+done
+
+merge_agy_post_tool_use_args=()
+for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
+  matcher="${entry%%::*}"
+  name="${entry#*::}"
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in POST_TOOL_USE_HOOKS)" >&2; exit 1; }
+  merge_agy_post_tool_use_args+=("$(agy_shim_arg PostToolUse "$matcher" "$name")")
+done
+
 merge_deny_args=("${DENY_RULES[@]}")
 merge_ask_args=("${ASK_RULES[@]}")
 
@@ -637,7 +694,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
     DRIFT=1
   fi
 
@@ -720,6 +777,6 @@ fi
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH"
