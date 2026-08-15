@@ -51,7 +51,7 @@ rules and do not reconstruct them from memory or from this file.
 ## Opening pull requests (all WebJamApps repos)
 
 Finish a coding task by running the shared script — never `gh pr create` directly. This applies
-**however the task was started** (via `/work-issue` / `/next` or just told to work an issue ad-hoc).
+**however the task was started** (via `/work-issue` or just told to work an issue ad-hoc).
 Put your summary and the **real test output** IN THE PR via the flags — not only in the chat reply:
 
 ```

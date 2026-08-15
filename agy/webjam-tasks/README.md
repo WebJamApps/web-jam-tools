@@ -1,7 +1,7 @@
 # webjam-tasks — agy plugin
 
-Antigravity CLI (`agy`) plugin that registers the **`/next`** slash command for the
-WebJamApps task lane. `/next <Repo>#<issue-num>` pulls a named `agy`-labeled
+Antigravity CLI (`agy`) plugin that registers the **`/work-issue`** slash command for the
+WebJamApps task lane. `/work-issue <Repo>#<issue-num>` pulls a named `agy`-labeled
 GitHub issue, sets up a fresh branch off `dev`, and implements it in the current
 agy session. It calls `../../scripts/handle-agy-tasks.sh --setup-only` for the
 deterministic issue-fetch + git-branch setup. (Dispatch is GitHub-issues-only —
@@ -10,7 +10,7 @@ issue argument was removed in web-jam-tools#249.)
 
 It also bundles `hooks.json` + `hooks/block-merge-deploy.sh`, a PreToolUse hook
 that denies PR merges, protected-branch pushes, and production deploys inside
-**any** agy session (not just `/next`) — see "## Merge/deploy guard hook" below.
+**any** agy session (not just `/work-issue`) — see "## Merge/deploy guard hook" below.
 This is the agy-side counterpart to `hooks/block-dangerous-git-deploy.sh`, which
 only binds Claude Code and never fires for agy (web-jam-tools#308 follow-up).
 
@@ -19,7 +19,7 @@ only binds Claude Code and never fires for agy (web-jam-tools#308 follow-up).
 agy only surfaces a skill as a slash command when the skill lives inside an
 **installed plugin** (a dir with a `plugin.json` at its root; agy auto-discovers the
 `skills/` subdir). A bare `SKILL.md` anywhere on disk is never scanned — typing
-`/next` just falls through to the nearest builtin (e.g. `/context`).
+`/work-issue` just falls through to the nearest builtin (e.g. `/context`).
 
 ## Install (one-time, per machine)
 

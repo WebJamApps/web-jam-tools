@@ -1,25 +1,22 @@
 ---
 name: work-issue
-description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (or alias /next <Repo>#<issue-num>) (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
   version: v2
   publisher: josh
 aliases:
-  - /next
   - next
 ---
 
 # /work-issue — run a model-labeled coding task (Claude Code & Antigravity)
-
-> **Alias**: `/next` (and phrases like `next`, `next task`, `start the next task`) is preserved as an active alias for `/work-issue`.
 
 This skill is installed across all agent surfaces (Claude Code, Antigravity/agy) and model tiers (Haiku, Flash, Sonnet, Opus). It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (or `/next Repo#123`, named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the two pre-checks below before "## Steps".
-- **`/work-issue`** (or `/next`, no argument, auto-pick mode) — read-only resolve the next
+- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the two pre-checks below before "## Steps".
+- **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
   to the same flow below. See "## No-argument mode" first.
 
@@ -33,7 +30,7 @@ written**, and they run for a named issue and an auto-picked one alike:
 
 ## Triggers & Aliases
 - Primary Command: `/work-issue`
-- Preserved Aliases: `/next`, `next`, `next task`, `start the next task`, `work-issue`
+- Preserved Aliases: `next`, `next task`, `start the next task`, `work-issue`
 
 ## Model Label Check & Approval
 
@@ -51,7 +48,7 @@ When `work-issue` begins an issue (`<Repo>#<num>`):
 
 ## No-argument mode — auto-pick worklist based on agent surface
 
-Use this when the user types `/work-issue` (or `/next`) with no argument, or says "work-issue" / "next" /
+Use this when the user types `/work-issue` with no argument, or says "work-issue" / "next" /
 "next task" / "start the next task" without naming an issue.
 
 Determine which worklist file to read based on your agent surface:
@@ -225,7 +222,7 @@ This check is read-only. It never edits the issue or the document on its own.
    excluded from the chain. Failover only ever crosses Claude ↔ Gemini.
 
    **Classification Rules (in priority order):**
-   * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue` (or `/next`), use it and skip classification.
+   * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue`, use it and skip classification.
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:

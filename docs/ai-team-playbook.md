@@ -19,7 +19,7 @@ Think of it as a small scrum team: one Product Owner (Josh), several specialist 
 | 3 | **Opus** *(Claude Code)* | Laptop | Judgment / Tech Lead | Deciding what to do, multi-file design and architecture, reviewing subagent output, conversations with Josh. Not for mechanical work — hand that to Haiku or Sonnet. | `claude-opus-tasks.txt` |
 | 4 | **Sonnet** *(Claude Code subagent)* | Laptop | Coder | Major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (slightly higher capability than Flash High). | *(issued via GitHub label)* |
 | 5 | **Haiku** *(Claude Code subagent)* | Laptop | Mechanic | Lookups, web research, scans, single-file/single-field edits, typo & data fixes, running tests/builds + reporting, screenshots. | *(issued via GitHub label)* |
-| 6 | **Flash** *(Gemini Flash High / Med via agy/Antigravity)* | Laptop | Full-Stack Coder | Full-stack coding (FE, BE, APIs, tooling) across all 8 repos + general agy lane. Invoked via `/work-issue` (alias `/next`) or interactive `agy`. | *(issued via GitHub label — `agy-tasks.txt` retired, web-jam-tools#249)* |
+| 6 | **Flash** *(Gemini Flash High / Med via agy/Antigravity)* | Laptop | Full-Stack Coder | Full-stack coding (FE, BE, APIs, tooling) across all 8 repos + general agy lane. Invoked via `/work-issue` or interactive `agy`. | *(issued via GitHub label — `agy-tasks.txt` retired, web-jam-tools#249)* |
 | 7 | **Sonnet** *(web, claude.ai)* | Web browser | Data Annotation / General tasks | Used mostly by **Maria** for data annotation and general Claude tasks. (Josh's web Sonnet is limited access; see row 9 for Josh's phone expansion.) | — |
 | 8 | **Claude Mobile** *(Sonnet)* | Phone (Claude Android app) | Mobile Strategist / GitHub Agent | On-the-go reading, thoughtful drafting, planning. **Expanding**: GitHub interaction (issues, PRs) via GitHub remote MCP connector (web-jam-tools#179/#112); moving Drive items to trash (web-jam-tools#180). Drops task files at Drive root for laptop pickup. | `claude-sonnet-tasks.txt` |
 | 9 | **Gemini Mobile** | Phone (Gemini app) | Field Assistant | Voice Q&A, Calendar/Tasks entries, Maps, Hotels/Flights lookups, capturing notes during a venue phone call. Not agentic. | — |
@@ -206,7 +206,7 @@ Several workflows are built around **Josh approving each step** before the next 
 | Add a Google Task from voice | Gemini Mobile |
 | Draft a pitch email or careful text | Claude Mobile (then review later from laptop) |
 | Take notes during a venue phone call | Gemini Mobile |
-| Frontend / UI coding task | **Flash** (agy/Antigravity) via `/work-issue` (alias `/next`) |
+| Frontend / UI coding task | **Flash** (agy/Antigravity) via `/work-issue` |
 | Ordinary contained coding task | **Sonnet** subagent (via Opus) |
 | Mechanical one-off (lookup, data fix, typo, scan) | **Haiku** subagent (via Opus) |
 | ↳ but if the job is a few commands with trivial output (prune a branch, one lookup) | **Inline** — a cold subagent costs more than the work; see "Dispatch vs. inline" above |
