@@ -11,6 +11,10 @@ import {
   findUnresolvableIssuePointers,
   stripCodeAndQuotes,
 } from "../hooks/lib/detect_unresolvable_issue_pointers.ts";
+import {
+  extractEntryText,
+  selectLastAssistantEntry,
+} from "../hooks/lib/select_transcript_entry.ts";
 
 Deno.test("normalize_command helper", () => {
   const raw = "git commit -m 'feat: add feature' --body 'some body text'";
@@ -104,4 +108,28 @@ Deno.test("detect_unresolvable_issue_pointers helper", () => {
   const cleanText = "This issue stands alone without pointer phrases.";
   assertEquals(findUnresolvableIssuePointers(cleanText), []);
   assertEquals(stripCodeAndQuotes('"quote" `code`').trim(), "");
+});
+
+Deno.test("select_transcript_entry helper", () => {
+  const entries = [
+    { type: "user", message: { role: "user", content: "hello" } },
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+      },
+    },
+    {
+      type: "assistant",
+      isSidechain: true,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "subagent message" }],
+      },
+    },
+  ];
+  const selected = selectLastAssistantEntry(entries);
+  assertNotEquals(selected, null);
+  assertEquals(extractEntryText(selected), "real reply");
 });
