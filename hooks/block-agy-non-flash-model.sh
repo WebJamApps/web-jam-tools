@@ -22,7 +22,7 @@
 # BLOCKED:
 #   - any other --model value (notably claude-sonnet-4-6,
 #     claude-opus-4-6-thinking, gpt-oss-120b-medium, gemini-3.1-pro-*, and
-#     every legacy gemini-3.6-flash-* and gemini-3.5-flash-* slug).
+#     every Flash slug below the 3.7 floor).
 #   - an AGY_MODELS=... env-var prefix on the SAME agy invocation naming
 #     anything outside allowed Flash slugs — that path bypasses --model
 #     entirely, so it must be checked too.
