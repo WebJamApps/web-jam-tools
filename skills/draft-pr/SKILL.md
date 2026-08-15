@@ -40,6 +40,11 @@ Josh alone reviews and flips draft → ready on GitHub.
    (web-jam-tools) or `package.json` (other repos). The CI "Version bump check" gate
    blocks PRs with no version change from the merge-base with `dev`. Follow-up commits
    to an already-open PR keep the same version.
+4. **In-range dependency updates & security fixes:** `npm audit fix` (Node repos) and
+   `deno outdated --update` restricted to minor/patch (Deno repos) are allowed and encouraged
+   inside the working PR — they stay within the project's declared semver range, and the
+   PR's own test plan is where a reviewer sees the result. (Major upgrades and fixes requiring
+   breaking changes belong in their own follow-on issue, never smuggled into a feature PR).
 
 ## How to run it
 
@@ -65,6 +70,11 @@ the body sections via flags:
   THE PR via these flags, not only in the chat reply. One more content check
   (web-jam-tools#190): `--summary` is refused if it has zero markdown bullet lines
   (a run-on paragraph doesn't count).
+- `--test-plan` (or `--test-plan-file`) is **sourced from the closing issue's `## How to test locally` section**,
+  corrected to what was actually run, rather than written from scratch. The issue holds the intent,
+  written at design time by whoever understood how the change should be proved; the PR holds what the
+  implementer actually ran. (The script continues to require `--test-plan` and refuses placeholder or
+  suite-invocation-only values — web-jam-tools#77, web-jam-tools#152).
 - `--test-evidence` is **OPTIONAL and normally omitted.** Always run the suites and
   confirm they pass before opening the PR — but do **not** paste unit-test runner
   output into the body. The numbers are noise to the reviewer, and CI already
@@ -106,8 +116,9 @@ with proper markdown:
   block so GitHub renders it literally. Never pass a raw `<sup>35</sup>`-style tag as
   prose — GitHub renders or swallows it and garbles the body.
 - **Before/after** → add a short before → after snippet when it aids clarity.
-- **Test plan substance (web-jam-tools#135)** → a green test suite is a gate, never
-  the whole plan. Also include steps that exercise the CHANGE itself:
+- **Test plan substance (web-jam-tools#135)** → source `--test-plan` from the closing issue's
+  `## How to test locally` section, corrected to what was actually executed. A green test suite
+  is a gate, never the whole plan. Also include steps that exercise the CHANGE itself:
   - UI change → exact manual steps: the command to start the app (e.g. `npm run dev`),
     the route/page to open, what to click or type, and the visible result to expect.
   - Backend/API change → runnable requests: `curl` command(s) (or an equivalent
@@ -149,3 +160,54 @@ but that issue does not exist or is not OPEN — this is not a requirement that
 a PR have an issue, only that a named one be real and open; or `--part-of` /
 `--no-close` is passed with no resolvable issue. If it refuses, fix the
 underlying condition — do not fall back to `gh pr create`.
+
+## Consumed rules
+
+### dispatch-prompts-fence-test-evidence
+
+**Changed 2026-08-07** by web-jam-tools#422 "create-draft-pr.sh: omit unit test suite log
+output requirement from PR descriptions" (commit `91644b7`):
+
+- `--test-evidence` / `--test-evidence-file` is now **OPTIONAL**. Do not paste unit-test
+  suite log output into a PR body — Josh had it removed to simplify the description.
+- The web-jam-tools#190 "recognizable test-runner output" check is **deleted** from
+  `scripts/create-draft-pr.sh`; a paraphrase or an omitted section no longer fails the guard.
+- Still REQUIRED (web-jam-tools#77): `--summary` (must have ≥1 markdown bullet) and
+  `--test-plan` (must exercise the change, not just list `npm test` — web-jam-tools#152).
+
+**Why:** CI already runs and reports the suite; duplicating its log in the PR body is noise.
+
+**How to apply:** dispatch prompts should tell the agent to write multi-line sections to a
+temp `.md` file and pass `--summary-file` / `--test-plan-file` (headless `-p` flattens
+newlines in shell args) — and should NOT ask for suite output. If evidence is genuinely
+worth including (a screenshot, output that exercises the change), it is auto-fenced by the
+script (web-jam-tools#150), so raw `====` coverage banners can no longer render as H1s —
+the original 2026-07-11 failure on web-jam-back PR #935 is fixed at the script level.
+
+Related: [[pr-creation-is-skill-gated]], [[one-semver-bump-per-pr]].
+
+### pr-attribution-work-by-model
+
+Josh flagged (2026-07-02): web-jam-back PR #892 was built by Sonnet but its footer said the generic "🤖 Generated with [Claude Code](https://claude.com/claude-code)" — wrong per convention.
+
+**Why:** the repo convention (`web-jam-tools/scripts/create-draft-pr.sh`, REQUIRED `--author` flag) puts `🤖 Work by <tool> — <model>` (e.g. "Claude Code — Sonnet 5", "agy — Flash Medium") in the PR footer so Josh can track per-model quality. The generic harness tagline defeats that.
+
+**How to apply:** when Fable/Opus writes a dispatch prompt that ends in a PR, instruct the subagent to either (a) use `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <its real model>"` (it's a SHARED script in web-jam-tools, run from any repo — a Haiku agent once concluded it "doesn't exist" because it looked only inside web-jam-back), or (b) if falling back to `gh pr create`, end the body with `🤖 Work by <tool> — <model>` naming the model actually doing the work — NOT the generic tagline, and NOT Fable's name. Do not retro-edit existing PRs unless Josh asks (he explicitly declined a fix for #892). Bake this into the [[delegate-simple-coding-to-agy]] skill templates when it's next revised.
+
+### one-semver-bump-per-pr
+
+A PR carries exactly ONE semver bump (e.g. 2.9.15 → 2.9.16). Follow-up commits pushed to an already-open PR must NOT each re-bump the version.
+
+**Why:** Josh flagged a PR that went 2.9.15 → 2.9.18 in one PR — I'd bumped on every push (feature commit, then a CI tweak, then a security fix) because the PreToolUse semver hook reminds on each push. The hook's intent is "the PR's change is versioned," not "increment on every push."
+
+**SEMVER TRAP — read the current version from `origin/dev`, NEVER from the working checkout.**
+The main clone often sits on a long-merged or unrelated branch, so its `deno.json` /
+`package.json` can be several versions behind. This bit two dispatches in one session
+(2026-07-30): the checkout read `1.22.0` while `origin/dev` was already at `1.23.1`, so both
+dispatch prompts carried stale bump targets — one agent caught it independently, the other had to
+be corrected mid-flight. Always run `git show origin/dev:deno.json` (or `:package.json`) before
+naming a bump target in a dispatch prompt. Two PRs cut from the same base will also collide on
+the same next version — re-read `origin/dev` and take the next free one when CI's version-bump
+gate complains.
+
+**How to apply:** Bump once when the PR's first commit lands. On later pushes to the same branch/PR, leave the version unchanged (the hook reminder is satisfied by the already-bumped version). Only bump again for a genuinely separate PR. If a PR has already over-bumped, reset it to a single bump (correcting an unmerged version is fine — not a published downgrade). Relates to [[never-commit-to-dev]] / the git-feature-branch-and-semver rule.
