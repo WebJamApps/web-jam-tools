@@ -465,3 +465,53 @@ Deno.test("model recovery reads the NEWEST assistant message's model, not an ear
     assertEquals(res.stdout.trim(), "");
   });
 });
+
+Deno.test("interleaved subagent entry (isSidechain: true) does not confuse model detection for Opus session", async () => {
+  const entries = [
+    userTurn("do the thing"),
+    ...editTurn(OPUS_MODEL, THRESHOLD),
+    {
+      type: "assistant",
+      isSidechain: true,
+      message: {
+        role: "assistant",
+        model: HAIKU_MODEL,
+        content: [{ type: "text", text: "subagent finished" }],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout);
+    assert(
+      parsed.systemMessage.includes(`${THRESHOLD} file edits`),
+      `expected message to name ${THRESHOLD}, got: ${res.stdout}`,
+    );
+  });
+});
+
+Deno.test("synthetic API error entry (isApiErrorMessage: true) does not confuse model detection for Opus session", async () => {
+  const entries = [
+    userTurn("do the thing"),
+    ...editTurn(OPUS_MODEL, THRESHOLD),
+    {
+      type: "assistant",
+      isApiErrorMessage: true,
+      message: {
+        role: "assistant",
+        model: HAIKU_MODEL,
+        content: [{ type: "text", text: "API error retry" }],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout);
+    assert(
+      parsed.systemMessage.includes(`${THRESHOLD} file edits`),
+      `expected message to name ${THRESHOLD}, got: ${res.stdout}`,
+    );
+  });
+});
