@@ -134,6 +134,7 @@ PRE_TOOL_USE_HOOKS=(
   "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
   "mcp__.*__issue_write::require-model-label-on-issue-create.sh"
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
+  "mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
 )
 
 # PostToolUse hooks, same "<matcher>::<script>" shape (web-jam-tools#272).

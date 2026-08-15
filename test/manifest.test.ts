@@ -69,6 +69,10 @@ const EXPECTED_HOOK_SCRIPTS = [
   // an issue/PR without its title (repo#number "title").
   "require-issue-citation-titles.sh",
   "require-model-label-on-issue-create.sh",
+  // PreToolUse guard (web-jam-tools#502) — reads the plan-gate approval
+  // token and ALLOWs an issue_write/sub_issue_write call Josh already
+  // approved, or DENYs one he did not, instead of prompting either way.
+  "require-approval-token-on-issue-write.sh",
   // PostToolUse output scanner (web-jam-tools#272) — the first non-PreToolUse
   // guard here, and the only one that inspects output rather than commands.
   "scan-output-for-secrets.sh",
