@@ -22,7 +22,8 @@ if [ -z "$result" ]; then
   if printf '%s' "$input" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"mcp__[^"]*__issue_write"' \
     || (printf '%s' "$input" | grep -Eq '\bgh\b' \
         && printf '%s' "$input" | grep -Eq '\bissue\b' \
-        && (printf '%s' "$input" | grep -Eq '\bcreate\b' || printf '%s' "$input" | grep -Eq '\bedit\b')); then
+        && (printf '%s' "$input" | grep -Eq '\bcreate\b' || printf '%s' "$input" | grep -Eq '\bedit\b')) \
+    || printf '%s' "$input" | grep -Eq 'create-issue'; then
     echo "BLOCKED (model-label guard): couldn't parse this issue create/edit call (hook parser failure)." >&2
     echo "Check that model label, native type, and issue body meet requirements (web-jam-tools#265, web-jam-tools#342, web-jam-tools#415)." >&2
     exit 2

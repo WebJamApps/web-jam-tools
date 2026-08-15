@@ -538,3 +538,180 @@ Deno.test("MCP issue_write update on Epic issue type with forbidden pointer phra
   );
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- Bash surface: create-issue.ts invocation forms (web-jam-tools#553) ---
+
+// Form 1: deno task create-issue
+Deno.test("deno task create-issue without native Type is denied", async () => {
+  const res = await runHook(
+    bashCall(`deno task create-issue --title T --body-file /tmp/b.md --label "Flash High"`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.",
+    ),
+    true,
+  );
+});
+
+Deno.test("deno task create-issue with invalid native Type is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `deno task create-issue --title T --body-file /tmp/b.md --label "Flash High" --type UnknownType`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.",
+    ),
+    true,
+  );
+});
+
+Deno.test("deno task create-issue with zero model labels is denied", async () => {
+  const res = await runHook(
+    bashCall(`deno task create-issue --title T --body-file /tmp/b.md --type Task --label bug`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("deno task create-issue with multiple model labels is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `deno task create-issue --title T --body-file /tmp/b.md --type Task --label "Flash High" --label Opus`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("deno task create-issue with valid type and model label is allowed", async () => {
+  const res1 = await runHook(
+    bashCall(
+      `deno task create-issue --title T --body-file /tmp/b.md --type Task --label "Flash High"`,
+    ),
+  );
+  assertEquals(res1.code, 0, res1.stderr);
+
+  const res2 = await runHook(
+    bashCall(`deno task create-issue --title T --body-file /tmp/b.md -t Epic --label Opus`),
+  );
+  assertEquals(res2.code, 0, res2.stderr);
+
+  const res3 = await runHook(
+    bashCall(`deno task issue:create --title T --body-file /tmp/b.md --type=Bug --label=Sonnet`),
+  );
+  assertEquals(res3.code, 0, res3.stderr);
+});
+
+// Form 2: deno run ... scripts/create-issue.ts
+Deno.test("deno run scripts/create-issue.ts without native Type is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `deno run --allow-all scripts/create-issue.ts --title T --body-file /tmp/b.md --label Sonnet`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.",
+    ),
+    true,
+  );
+});
+
+Deno.test("deno run scripts/create-issue.ts with invalid native Type is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `deno run --allow-env --allow-run scripts/create-issue.ts --title T --body-file /tmp/b.md --label Sonnet --type Bad`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("deno run scripts/create-issue.ts with zero/multiple model labels is denied", async () => {
+  const resZero = await runHook(
+    bashCall(
+      `deno run --allow-all scripts/create-issue.ts --title T --body-file /tmp/b.md --type Task`,
+    ),
+  );
+  assertEquals(resZero.code, 2);
+  assertBlocked(resZero.stderr);
+
+  const resMulti = await runHook(
+    bashCall(
+      `deno run --allow-all scripts/create-issue.ts --title T --body-file /tmp/b.md --type Task --label Sonnet,Haiku`,
+    ),
+  );
+  assertEquals(resMulti.code, 2);
+  assertBlocked(resMulti.stderr);
+});
+
+Deno.test("deno run scripts/create-issue.ts with valid type and model label is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts --title T --body-file /tmp/b.md --type Feature --label Haiku`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// Form 3: direct scripts/create-issue.ts and ./scripts/create-issue.ts
+Deno.test("direct scripts/create-issue.ts without native Type is denied", async () => {
+  const res = await runHook(
+    bashCall(`scripts/create-issue.ts --title T --body-file /tmp/b.md --label Opus`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.",
+    ),
+    true,
+  );
+});
+
+Deno.test("direct ./scripts/create-issue.ts with invalid Type is denied", async () => {
+  const res = await runHook(
+    bashCall(`./scripts/create-issue.ts --title T --body-file /tmp/b.md --label Opus -t Invalid`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("direct scripts/create-issue.ts with zero/multiple model labels is denied", async () => {
+  const resZero = await runHook(
+    bashCall(`scripts/create-issue.ts --title T --body-file /tmp/b.md --type Task --label custom`),
+  );
+  assertEquals(resZero.code, 2);
+  assertBlocked(resZero.stderr);
+
+  const resMulti = await runHook(
+    bashCall(
+      `scripts/create-issue.ts --title T --body-file /tmp/b.md --type Task --label Opus --label "Flash Med"`,
+    ),
+  );
+  assertEquals(resMulti.code, 2);
+  assertBlocked(resMulti.stderr);
+});
+
+Deno.test("direct scripts/create-issue.ts with valid type and model label is allowed", async () => {
+  const res1 = await runHook(
+    bashCall(
+      `scripts/create-issue.ts --title T --body-file /tmp/b.md --type Task --label "Flash High"`,
+    ),
+  );
+  assertEquals(res1.code, 0, res1.stderr);
+
+  const res2 = await runHook(
+    bashCall(`./scripts/create-issue.ts --title T --body-file /tmp/b.md -t Epic --label Josh`),
+  );
+  assertEquals(res2.code, 0, res2.stderr);
+});

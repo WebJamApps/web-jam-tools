@@ -268,7 +268,62 @@ export async function createIssueAndVerify(
   }
   const childNumber = parseInt(issueNumMatch[1], 10);
 
-  // 2. Set Priority field via GraphQL mutation if requested
+  // 2. Set native Type field via GraphQL mutation if requested
+  if (options.type) {
+    const typeQuery = `
+      query GetChildAndTypes {
+        repository(owner: "${repoInfo.owner}", name: "${repoInfo.name}") {
+          issue(number: ${childNumber}) { id }
+          issueTypes(first: 25) {
+            nodes { id name }
+          }
+        }
+      }
+    `;
+
+    const tRes = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${typeQuery}`]);
+    if (tRes.code !== 0) {
+      throw new Error(`Failed to resolve issue type info: ${tRes.stderr || tRes.stdout}`);
+    }
+
+    const tData = JSON.parse(tRes.stdout);
+    const childNodeId = tData?.data?.repository?.issue?.id;
+    const typeNodes: Array<{ id: string; name: string }> =
+      tData?.data?.repository?.issueTypes?.nodes || [];
+    const matchedType = typeNodes.find(
+      (tn) => tn.name.toLowerCase() === options.type!.toLowerCase(),
+    );
+
+    if (!matchedType) {
+      throw new Error(
+        `Invalid issue type "${options.type}". Available types: ${
+          typeNodes.map((t) => t.name).join(", ")
+        }`,
+      );
+    }
+
+    if (!childNodeId) {
+      throw new Error(`Could not resolve child issue node ID for #${childNumber}`);
+    }
+
+    const typeMutation = `
+      mutation SetIssueType {
+        updateIssue(input: {
+          id: "${childNodeId}",
+          issueTypeId: "${matchedType.id}"
+        }) {
+          clientMutationId
+        }
+      }
+    `;
+
+    const tmRes = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${typeMutation}`]);
+    if (tmRes.code !== 0) {
+      throw new Error(`Failed to set issue Type via GraphQL: ${tmRes.stderr || tmRes.stdout}`);
+    }
+  }
+
+  // 3. Set Priority field via GraphQL mutation if requested
   if (options.priority) {
     const normPriorityKey = options.priority.toLowerCase();
     const spec = PRIORITY_MAP[normPriorityKey];
@@ -320,7 +375,7 @@ export async function createIssueAndVerify(
     }
   }
 
-  // 3. Attach parent sub-issue via GraphQL addSubIssue if requested
+  // 4. Attach parent sub-issue via GraphQL addSubIssue if requested
   if (options.parent !== undefined) {
     const parentQuery = `
       query GetIssueNodeIds {
@@ -379,7 +434,7 @@ export async function createIssueAndVerify(
     }
   }
 
-  // 4. Re-read issue to verify attributes
+  // 5. Re-read issue to verify attributes
   const readRes = await deps.runCmd(["gh", "api", `repos/${repoInfo.full}/issues/${childNumber}`]);
   if (readRes.code !== 0) {
     throw new Error(

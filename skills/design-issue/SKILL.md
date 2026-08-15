@@ -46,10 +46,11 @@ The subagent receives the approved plan table and the design document path. It f
 
 11. **File in plan order — the epic first, then each child** — invoking `/file-issue` once per issue so the filing rules and their enforcing hook apply to every one. Attach each child to its parent as it goes; the ordering is forced by the parent/child link.
 12. **Each body carries only scope, build mechanics and repo facts**, plus a pointer to the design document and the instruction to STOP if that path cannot be read. No requirement text is restated.
-13. **Set the native Priority field** via GitHub MCP `issue_write` → `issue_fields`. (`gh` cannot set a native field).
-14. **Apply the `Blocked` label AND the native dependency** to anything not yet startable — both signals, never one.
-15. **If any issue fails to file, stop.** Report which issues exist and which do not, by repo + number + title. No silent retries, no carrying on with the rest.
-16. **Update the design document's status line** to record what was filed.
+13. **Set the native issue type on every filing call** — the parent named in the plan table's `Epic / child of` column files as `--type Epic`, and every child files as its own planned type (`Task`, `Bug` or `Feature`). A type reported unset after creation is repaired to the planned type, never to the tool default.
+14. **Set the native Priority field** via GitHub MCP `issue_write` → `issue_fields`. (`gh` cannot set a native field).
+15. **Apply the `Blocked` label AND the native dependency** to anything not yet startable — both signals, never one.
+16. **If any issue fails to file, stop.** Report which issues exist and which do not, by repo + number + title. No silent retries, no carrying on with the rest.
+17. **Update the design document's status line** to record what was filed.
 
 ---
 
