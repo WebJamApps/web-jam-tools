@@ -119,8 +119,9 @@ jobs:
       - run:
           name: Version bump check (PR branches only)
           command: |
-            # web-jam-tools#133: replaces relying on the local pre-push hook
-            # alone. Skipped on dev/main (nothing to diff against itself).
+            # web-jam-tools#133 / web-jam-tools#582:
+            # Enforces that PR branches have a version strictly greater than origin/dev.
+            # Skipped on dev/main (nothing to diff against itself).
             # Falls back to the actual git branch when CIRCLE_BRANCH is unset
             # (e.g. `circleci local execute gate`) so local reproduction works.
             BRANCH="${CIRCLE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
@@ -129,20 +130,42 @@ jobs:
               exit 0
             fi
             git fetch --quiet origin dev
-            MERGE_BASE="$(git merge-base HEAD origin/dev)"
             HEAD_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('deno.json')).version)")"
-            git show "${MERGE_BASE}:deno.json" > /tmp/base-deno.json
-            BASE_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('/tmp/base-deno.json')).version)")"
+            git show "origin/dev:deno.json" > /tmp/dev-deno.json
+            DEV_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('/tmp/dev-deno.json')).version)")"
             echo "Branch: $BRANCH"
-            echo "Merge-base with origin/dev: $MERGE_BASE"
-            echo "Base version:  $BASE_VERSION"
-            echo "HEAD version:  $HEAD_VERSION"
-            if [ "$BASE_VERSION" = "$HEAD_VERSION" ]; then
-              echo 'FAIL: deno.json "version" is unchanged since the merge-base with origin/dev.' >&2
-              echo "Bump the version in deno.json (once per PR, on the first commit) before merging." >&2
-              exit 1
-            fi
-            echo "OK: version bumped from $BASE_VERSION to $HEAD_VERSION"
+            echo "origin/dev version: $DEV_VERSION"
+            echo "HEAD version:       $HEAD_VERSION"
+            deno eval '
+              function parseSemver(v) {
+                const parts = v.split(".").map(Number);
+                if (parts.length < 3 || parts.some(isNaN)) {
+                  console.error(`FAIL: invalid semver format: ${v}`);
+                  Deno.exit(1);
+                }
+                return parts;
+              }
+              function compare(a, b) {
+                const pa = parseSemver(a);
+                const pb = parseSemver(b);
+                for (let i = 0; i < 3; i++) {
+                  if (pa[i] !== pb[i]) return pa[i] - pb[i];
+                }
+                return 0;
+              }
+              const dev = Deno.args[0];
+              const head = Deno.args[1];
+              const cmp = compare(head, dev);
+              const [dMaj, dMin, dPatch] = parseSemver(dev);
+              const nextPatch = `${dMaj}.${dMin}.${dPatch + 1}`;
+              if (cmp <= 0) {
+                console.error(`FAIL: deno.json "version" (${head}) must be strictly greater than origin/dev (${dev}).`);
+                console.error(`Next available patch version on origin/dev is ${nextPatch}.`);
+                console.error("Bump the version in deno.json (once per PR, on the first commit) before merging.");
+                Deno.exit(1);
+              }
+              console.log(`OK: version bumped from ${dev} on origin/dev to ${head}`);
+            ' "$DEV_VERSION" "$HEAD_VERSION"
       - run:
           name: PR base branch verification (main requires dev head)
           command: |
