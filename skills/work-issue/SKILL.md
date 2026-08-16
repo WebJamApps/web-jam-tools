@@ -201,10 +201,15 @@ An issue can carry a stale `Blocked` label after all its blockers have closed, o
    - Show the blocker state receipts.
    - Ask Josh for confirmation before proceeding to create a branch or implement the issue.
    - **Do NOT silently proceed** and do NOT silently ignore the label.
+   - **Once Josh confirms the drift**, remove the stale `Blocked` label from the target issue (the child, if `/work-issue` was invoked against an Epic and resolved to a child — never the Epic, never any sibling) before continuing to the Design-sync check and Steps:
+     ```bash
+     gh issue edit <num> --repo WebJamApps/<Repo> --remove-label Blocked
+     ```
+     Only remove the label after Josh's confirmation — never before, never silently.
 5. If no `Blocked` label is present (and no open blockers exist):
    - Continue to the Design-sync check.
 
-This check is read-only. It never edits labels, dependencies, or issue bodies on its own. Repair (removing the stale `Blocked` label or updating issue bodies) belongs to `/backlog-groom`.
+This check is read-only up to the point of Josh's confirmation of blocked drift. The only write it may ever perform is removing that one stale `Blocked` label from the target issue after he confirms — it never edits dependencies, issue bodies, any other label, or any issue other than the target. Bulk/sweep drift repair across the backlog remains the job of `/backlog-groom`; it is not the only path for the single issue in front of you.
 
 ## Design-sync check — run BEFORE working the issue
 
