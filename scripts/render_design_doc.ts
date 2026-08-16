@@ -325,7 +325,7 @@ export function renderDesignDoc(
   const bodyHtml = bodyHtmlParts.join("\n\n");
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">

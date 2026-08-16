@@ -92,6 +92,7 @@ const x = 10;
   assertStringIncludes(html, "width: 100%;");
 
   // Rule 4: Three-place theme tokens & explicit body background
+  assertStringIncludes(html, '<html lang="en" data-theme="dark">');
   assertStringIncludes(html, ":root {");
   assertStringIncludes(html, "@media (prefers-color-scheme: dark)");
   assertStringIncludes(html, ':root[data-theme="dark"]');
