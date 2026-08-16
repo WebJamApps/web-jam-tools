@@ -134,6 +134,7 @@ These are properties of the skill, written as explicit refusals:
 | hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<date>.md` |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
+| leave superseded drafts, renamed artifacts, or obsolete intermediate runbook files behind in Dropbox upon deliverable finalization | destination folders must contain only active, canonical deliverables to prevent the accumulation of stale working duplicates |
 
 ---
 
@@ -202,6 +203,7 @@ Every runbook file must follow this exact format:
 - **One action per step, one surface per step.** A numbered step is a single physical action in a single place. Never combine opening a session with asking that session something, and never cover two surfaces in one step — two surfaces asking one question is four steps, not one. State explicitly what happens to a session afterwards (leave it open, close it, move to the next terminal). Where order matters, the numbering IS the instruction. Origin: web-jam-tools#510 "verify live that agy and Claude Code read the rules through the pointer in a converted repo" — its runbook listed both the `claude` and the `agy` launch commands under one step with the question below them, and Josh opened two terminals, closed them, then reopened them one at a time to work out the intended order. His verdict: "these should have been 4 steps".
 - **No conflating internal verification assertions with the human walkthrough script:** A runbook for a human task (e.g. demonstrating a skill, testing a UI, conducting a live walkthrough) must contain ONLY the actual steps of that activity. Never inject automated test assertions, shell commands (e.g. `test -f ... && grep ...`), or repo verification steps into a human walkthrough script. Technical verification of files or artifacts belongs in the PR test plan or issue acceptance criteria, never as a step in a human walkthrough.
 - **Never let a result depend on default tool-output rendering.** When a step's pass/fail turns on what the agent actually read or ran, the runbook must do BOTH: turn the expanded view on explicitly in the launch command (for Claude Code, `claude --verbose`), AND include a separate step that asks the agent directly, e.g. "Which exact file paths did you read to answer that?". Collapsed output renders as a summary line such as `Read 1 file` with no path, which makes the run ungradeable.
+- **Pruning intermediate runbooks upon unification:** When manual verification runbooks are merged into unified deliverables or consolidated into primary reference guides, any standalone intermediate runbook files (`.md` and `.html`) must be deleted from `~/Dropbox/web-jam-llms/<Theme>/` to avoid leaving orphaned verification drafts behind.
 
 Manual steps never live inside an agent's execution issue. They are **grouped by gate position** — steps needed before the same agent issue share one `Josh` issue; steps at different points in the chain are separate issues. A step that gates nothing is still its own issue.
 
@@ -259,8 +261,14 @@ The skill never asserts a design is complete. Wording like "design complete, rem
 
 ### Document Lifecycle & Reference Instructions
 
-- **No automatic lifecycle.** The skill never archives, moves or deletes a design document, and neither does `/memory-cleanup`. Design documents are permanent until Josh deletes them. A missing design document is a normal state, not drift.
+- **No automatic lifecycle for design documents.** The skill never archives, moves or deletes a design document, and neither does `/memory-cleanup`. Design documents (`<topic>-design-<YYYY-MM-DD>.md`) are permanent architectural records until Josh deletes them. A missing design document is a normal state, not drift.
 - **Instruction for issues pointing at doc.** Every issue pointing at a design document carries the instruction to **STOP and say so if the path cannot be read** — never to reconstruct requirements from the issue body, from comments, or from guesswork.
+- **Distinction between permanent design documents and working deliverables:** While design documents are preserved as permanent historical records, working deliverables, guides, and runbooks evolve across design and implementation and require active cleanup to avoid leaving superseded drafts behind.
+
+#### Deliverable Lifecycle & Intermediate Draft Pruning
+
+- **Prune Superseded Working Drafts:** When deliverables, guides, or runbooks are renamed, restructured, or unified during design or implementation (e.g. `shoelace-guide-granny-knots.md` → `shoelace-tying-guide.md`, or merging standalone runbooks into a unified guide), agents MUST actively delete the superseded intermediate drafts (`.md` and `.html`) from `~/Dropbox/web-jam-llms/<Theme>/` rather than leaving stale duplicates.
+- **Post-Completion Folder Audit:** Before declaring deliverables complete or closing a parent Epic, agents MUST audit the target destination folder in `~/Dropbox/web-jam-llms/<Theme>/` to ensure only the active, canonical final deliverables remain, preventing the accumulation of stale working files.
 
 ### Writing Style
 
