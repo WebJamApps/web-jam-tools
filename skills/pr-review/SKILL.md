@@ -25,7 +25,7 @@ Cross-model review ensures fresh perspective and catches model-specific blind sp
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Queries open draft/ready PRs across WebJamApps repositories using `gh pr list`.
   - Inspects PR attribution (`🤖 Work by ...` or branch prefix / `--author` flag) to identify candidate PRs authored by the opposite tier.
-  - Automatically selects the oldest un-reviewed PR authored by the opposite tier.
+  - Automatically selects the oldest un-reviewed PR authored by the opposite tier. A candidate PR is un-reviewed if it has no automated reviews carrying the `## PR Review Summary` header OR if its current head commit SHA (`commits | last | .oid`) is different from the commit SHA of its newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`).
 
 ## Review Pipeline
 
@@ -50,19 +50,28 @@ Remove the worktree when finished. Reviewing without running anything is the nor
 worktree is only needed when a pasted test-evidence block has to be reproduced.
 
 ### Step 1: Fetch PR Details and Context
-1. Fetch PR details, metadata, and mergeability:
+1. Fetch PR details, metadata, mergeability, reviews, and commits:
    ```sh
-   gh pr view <Repo>#<pr-num> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus
+   gh pr view <Repo>#<pr-num> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits
    ```
-2. Fetch PR status checks (CircleCI, Snyk, etc.):
+2. **Already-Reviewed Check**:
+   - Filter `reviews` for automated reviews carrying the `## PR Review Summary` header:
+     ```sh
+     gh pr view <Repo>#<pr-num> --json reviews,commits \
+       --jq '{last_review_sha: (.reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid), head_sha: (.commits | last | .oid)}'
+     ```
+   - Compare the commit SHA of the newest automated review (`last_review_sha` from `.commit.oid`) against the PR's current head commit SHA (`head_sha` from `.commits | last | .oid`).
+   - If equal (and a prior automated review exists at that SHA), stop and report to Josh that the PR was already reviewed at that SHA with no new commits, and post NO review comment.
+   - If new commits exist after the newest review (or if the PR has no prior automated reviews), proceed with the review. When re-reviewing after new commits, state that the review evaluates the delta since the previous review.
+3. Fetch PR status checks (CircleCI, Snyk, etc.):
    ```sh
    gh pr checks <Repo>#<pr-num>
    ```
-3. Fetch the PR diff:
+4. Fetch the PR diff:
    ```sh
    gh pr diff <Repo>#<pr-num>
    ```
-4. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
+5. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
    ```sh
    gh issue view <Repo>#<issue-num>
    ```
@@ -132,12 +141,12 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
 ### Step 3: Post Review Feedback
 
-1. Synthesize review findings into a structured review comment.
-2. Format feedback with clear section headers:
-   - **PR Review Summary**: Overall status (`Approved` if clean / `Changes Requested` if any Must Fix item or blocking defect exists).
-   - **Must Fix Items**: List any CircleCI failures, Snyk security failures, merge conflicts, or blocking bugs. If none, state "None".
-   - **Checklist Verification**: Status of mergeability, CI health, Snyk audits, scope, semver bump, package-lock engine alignment, test evidence, and guardrails.
-   - **Actionable Feedback & Suggestions**: Specific code references or line numbers where changes or improvements are suggested.
+1. Synthesize review findings into a structured review comment using severity icons so merge blockers and check statuses are immediately recognizable without reading full prose.
+2. Format feedback with clear section headers and severity icons:
+   - **PR Review Summary**: Overall status (`**✅ Approved**` if clean / `**🛑 Changes Requested**` if any Must Fix item or blocking defect exists).
+   - **Must Fix Items** (`### 🛑 Must Fix Items`): List any CircleCI failures, Snyk security failures, merge conflicts, or blocking bugs. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section).
+   - **Checklist Verification**: Status of mergeability, CI health, Snyk audits, scope, semver bump, package-lock engine alignment, test evidence, and guardrails. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **CircleCI**: 🛑 ...`).
+   - **Actionable Feedback & Suggestions** (`### 🟡 Actionable Feedback & Suggestions`): Specific code references or line numbers where changes or improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Actionable Feedback & Suggestions` with `✅ None`.
 3. Post comment via `gh pr review`:
    ```sh
    gh pr review <Repo>#<pr-num> --comment --body-file <scratch_review_file>
