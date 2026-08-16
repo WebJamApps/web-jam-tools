@@ -1,6 +1,6 @@
 ---
 name: flash-issues
-description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, filter out issues with in-flight open PRs, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Flash High subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
+description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, detect in-flight open PR review status and outstanding Must Fix items, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Flash High subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
 ---
 
 # flash-issues — regenerate the Flash-lane worklist
@@ -38,7 +38,8 @@ Instead:
 2. Wait for the subagent's report (the Report Back format baked into the
    template).
 3. Relay that report to Josh essentially as-is: counts, what got newly
-   labeled, numbered-list count vs. In Flight count vs. Blocked count.
+   labeled, numbered-list count vs. In Flight count (awaiting review vs.
+   changes requested) vs. Blocked count.
 4. **Never block chat on flagged items.** They live in the output file's
    "Needs Josh's review" section (Step 9), not in a chat Q&A. State the
    count and point at the file — "N issues need your review, see the
@@ -115,10 +116,10 @@ For each repo, list open issues:
   gh issue list --repo WebJamApps/<repo> --state open --limit 200 \
     --json number,title,labels,body,url,milestone
 
-And list open PRs:
+And list open PRs (one call per repo returning PR metadata, review history, commits, and decision status):
 
   gh pr list --repo WebJamApps/<repo> --state open \
-    --json number,headRefName,body,url,title
+    --json number,headRefName,body,url,title,reviews,commits,reviewDecision
 
 `milestone` is the topic/area signal (the old `Area` custom field was
 deleted; topics now live in per-repo Milestones, name-identical across
@@ -128,8 +129,9 @@ skill doesn't gate Flash-lane candidacy on topic, so it's carried through
 purely for context in the output (Step 9), not used as a filter.
 
 Open PRs are scanned to detect in-flight candidate issues that already have
-an active PR awaiting review, so they are not suggested in the runnable list
-for re-dispatch.
+an active PR, determine their automated review status and outstanding Must Fix items,
+and prevent duplicate dispatch while work or review is in flight. This remains exactly
+one `gh pr list` call per repo — never make per-PR follow-up API calls.
 
 ## Step 3 — classify every open issue
 
@@ -249,11 +251,26 @@ Step 2 in the same repo is currently in flight for it:
   `claude/<num>-<slug>`).
 
 If an open PR matches:
-- Mark this candidate issue as **in-flight** (record the matching PR's URL
-  and branch `headRefName`).
+- Mark this candidate issue as **in-flight** (record the matching PR's number,
+  URL, and branch `headRefName`).
+- Compute the PR's review state directly from the Step 2 payload:
+  - Reference the "Already-Reviewed Check" in `skills/pr-review/SKILL.md` to
+    determine if an automated review exists for the current head commit
+    (filter `reviews` for comments matching `(?i)## PR Review Summary` and verify
+    if `commit.oid` == `commits | last | .oid`).
+  - If no current automated review exists for the head commit SHA (or no automated
+    review exists at all), mark the PR as **awaiting review**.
+  - If a current automated review exists for the head commit SHA:
+    - Derive the Must Fix count from the review body: count lines prefixed `🛑`
+      under `### 🛑 Must Fix Items`, with `✅ None` counting as zero.
+    - If the review body contains `**🛑 Changes Requested**` or has one or more
+      Must Fix items (or `reviewDecision == "CHANGES_REQUESTED"`), mark the PR as
+      having **changes requested**, carrying the Must Fix count and the review URL.
+    - If the review is clean (contains `**✅ Approved**` with zero Must Fix items),
+      mark it as `reviewed — approved` under awaiting review.
 - In-flight issues are excluded from the numbered runnable list (Step 6) and
-  route directly to the `## In Flight (Pending PR Review)` section (Step 7),
-  preventing duplicate dispatch while PR review is pending.
+  route directly to the `## In Flight (Pending PR Review)` subsections (Step 7),
+  preventing duplicate dispatch while PR review or fix work is pending.
 
 ## Step 5 — read Priority, Type, and dependencies (native metadata, not labels)
 
@@ -341,12 +358,20 @@ grouping.
 
 ### In Flight section (`## In Flight (Pending PR Review)`)
 
-Flash-lane candidates detected in Step 4 as having an open PR land here:
-- Each entry names the issue, its Flash tier (and milestone if any), and the
-  associated open PR URL and branch name.
-  Format: `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>)`
-- These issues are actively being worked or awaiting review; excluding them
-  from the runnable list prevents duplicate dispatch or wasted tokens.
+Flash-lane candidates detected in Step 4 as having an open PR land here, split into two labeled subsections:
+
+#### `### Changes requested`
+- A current automated review exists with one or more Must Fix items (or `**🛑 Changes Requested**` / `CHANGES_REQUESTED` status).
+- Format: `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>) — changes requested: <N> must-fix — [review](<reviewUrl>)`
+  (If the specific review URL is not isolated, link `[review](<prUrl>)`).
+
+#### `### Awaiting review`
+- Open PR with no current automated review for its latest commit (or a clean approved review).
+- Format (unreviewed): `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>)`
+- Format (approved): `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>) — reviewed — approved`
+
+These issues are actively being worked or awaiting review; excluding them
+from the runnable list prevents duplicate dispatch or wasted tokens.
 
 ### Blocked section (`## Blocked (not runnable by Flash)`)
 
@@ -413,6 +438,12 @@ Last updated: <ISO 8601 UTC timestamp of this run>
 
 ## In Flight (Pending PR Review)
 
+### Changes requested
+
+- [JaMmusic#1215](https://github.com/WebJamApps/JaMmusic/issues/1215) — Gig list sorting (Flash Med, milestone: gig-outreach) — PR: [JaMmusic#1218](https://github.com/WebJamApps/JaMmusic/pull/1218) (`agy/1215-gig-list-sorting`) — changes requested: 2 must-fix — [review](https://github.com/WebJamApps/JaMmusic/pull/1218)
+
+### Awaiting review
+
 - [WebJamSocketCluster#45](https://github.com/WebJamApps/WebJamSocketCluster/issues/45) — Reconnect backoff timer (Flash Med) — PR: [WebJamSocketCluster#48](https://github.com/WebJamApps/WebJamSocketCluster/pull/48) (`agy/45-reconnect-backoff`)
 
 ## Blocked (not runnable by Flash)
@@ -443,7 +474,7 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
 - Repos scanned, total open issues and open PRs seen, how many were already Flash-tier
   vs. newly triaged.
 - Every issue you newly labeled and what you labeled it.
-- Count in the numbered list vs. the In Flight section vs. the Blocked section vs.
+- Count in the numbered list vs. the In Flight section (broken down by awaiting review vs. changes requested) vs. the Blocked section vs.
   the "Needs Josh's review" section vs. skipped-parked/Josh vs. skipped-other-model-label —
   just the counts for the review section and skipped buckets, not the lists
   (they're already in the file, or need no listing).
@@ -453,8 +484,7 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
 - Confirmation that Priority, Type, and dependencies were read from each
   candidate's REST issue payload (Step 5) — not from any label — and that
   topic came from Milestone (Step 2), not from a label.
-- Confirmation that open PRs were scanned per repo (Step 2) and in-flight
-  issues with open PRs were filtered to the In Flight section.
+- Confirmation that open PRs were scanned per repo (Step 2) with review status and Must Fix counts detected, and in-flight issues with open PRs were routed to their appropriate In Flight subsections.
 - Confirmation the file was written to
   ~/Dropbox/web-jam-llms/flash-issues.md.
 ````
