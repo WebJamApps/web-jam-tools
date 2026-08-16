@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "reaper": {
+      "command": "/home/joshua/opt/Reaper-MCP/.venv/bin/reaper-mcp",
+      "args": []
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest",
+        "--headless"
+      ]
+    },
+    "github": {
+      "command": "bash",
+      "args": [
+        "-lc",
+        "exec docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=\"$GH_TOKEN\" ghcr.io/github/github-mcp-server stdio"
+      ]
+    },
+    "gmail": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@gongrzhe/server-gmail-autoauth-mcp"
+      ]
+    }
+  }
+}
