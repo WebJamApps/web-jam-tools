@@ -207,7 +207,7 @@ Deno.test("install-agy-config.sh refuses to install and exits non-zero if master
     mcpServers: {
       github: {
         command: "docker",
-        args: ["run", "-e", "GITHUB_TOKEN=ghp_1111222233334444555566667777888899990000"],
+        args: ["run", "-e", "GITHUB_TOKEN=ghp_1111222233334444555566667777888899990000"], // webjam-fixture-ok
       },
     },
   };
@@ -258,7 +258,7 @@ Deno.test("install-agy-config.sh refuses to install and leaves master config unt
     mcpServers: {
       leakyTool: {
         command: "docker",
-        args: ["run", "-e", "TOKEN=ghp_1111222233334444555566667777888899990000"],
+        args: ["run", "-e", "TOKEN=ghp_1111222233334444555566667777888899990000"], // webjam-fixture-ok
       },
     },
   };
