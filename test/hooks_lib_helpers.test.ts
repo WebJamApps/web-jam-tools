@@ -64,13 +64,16 @@ Deno.test("detect_credential_literal helper", () => {
   assertEquals(matchUrlPlaceholder, null);
 
   // --- MongoDB connection string tests ---
-  // Must NOT flag (no userinfo, local host):
+  // A mongo URI is only a credential LITERAL when it carries userinfo
+  // (`user[:pass]@`). A bare host — local OR remote — names infrastructure,
+  // not a secret, and must NOT flag regardless of where it points.
   assertEquals(findCredentialLiteral("mongodb://localhost:27018/test_db"), null);
   assertEquals(findCredentialLiteral("mongodb://localhost:27019/another_db?replicaSet=rs0"), null);
   assertEquals(findCredentialLiteral("mongodb://127.0.0.1:27017"), null);
   assertEquals(findCredentialLiteral("mongodb://localhost"), null);
+  assertEquals(findCredentialLiteral("mongodb://cluster.example.invalid:27017/my_db"), null);
 
-  // Must STILL flag:
+  // A userinfo-bearing URI must STILL flag, whether the host is remote OR local:
   assertEquals(
     findCredentialLiteral("mongodb+srv://user:password@cluster.example.invalid/my_db"),
     "MongoDB connection string",
@@ -81,10 +84,6 @@ Deno.test("detect_credential_literal helper", () => {
   );
   assertEquals(
     findCredentialLiteral("mongodb+srv://user:password@localhost.attacker.example.invalid/my_db"),
-    "MongoDB connection string",
-  );
-  assertEquals(
-    findCredentialLiteral("mongodb://cluster.example.invalid:27017/my_db"),
     "MongoDB connection string",
   );
 });

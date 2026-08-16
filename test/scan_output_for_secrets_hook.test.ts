@@ -98,11 +98,24 @@ Deno.test("the warning names the credential type but NEVER echoes the value", as
   }
 });
 
-Deno.test("the warning tells the reader to surface and rotate it", async () => {
+Deno.test("the warning tells the reader to verify liveness before rotating, not to treat it as settled fact", async () => {
   const res = await runHook(FAKE.github);
   assertEquals(res.code, 2);
-  if (!res.stderr.includes("COMPROMISED")) {
-    throw new Error(`expected rotation guidance, got: ${res.stderr}`);
+  if (!res.stderr.includes("Verify whether it is a real, live credential")) {
+    throw new Error(`expected verify-then-rotate guidance, got: ${res.stderr}`);
+  }
+  if (res.stderr.includes("must be treated as COMPROMISED")) {
+    throw new Error(`expected no unconditional COMPROMISED claim, got: ${res.stderr}`);
+  }
+});
+
+Deno.test("the warning does not claim the value appeared in what the command printed", async () => {
+  const res = await runHook(FAKE.github);
+  assertEquals(res.code, 2);
+  if (res.stderr.includes("appeared in what that command printed")) {
+    throw new Error(
+      `expected the hook to stop attributing the match to the command, got: ${res.stderr}`,
+    );
   }
 });
 
@@ -138,8 +151,24 @@ Deno.test("a credential-free localhost mongodb URI in tool output is allowed", a
   assertEquals(res.code, 0, res.stderr);
 });
 
+// A bare remote host with no userinfo names infrastructure, not a secret —
+// this is the second false-positive class fixed alongside the fixture
+// pragma: previously ANY non-local host, credentialed or not, was flagged.
+Deno.test("a credential-free REMOTE mongodb URI in tool output is allowed", async () => {
+  const res = await runHook("Connecting to mongodb+srv://cluster.example.invalid/test_db");
+  assertEquals(res.code, 0, res.stderr);
+});
+
 Deno.test("a credentialed remote mongodb URI in tool output is detected", async () => {
   const res = await runHook("Connecting to mongodb+srv://user:pass@cluster.example.invalid/db");
+  assertEquals(res.code, 2);
+  if (!res.stderr.includes("MongoDB connection string")) {
+    throw new Error(`expected MongoDB connection string in stderr, got: ${res.stderr}`);
+  }
+});
+
+Deno.test("a credentialed LOCAL mongodb URI in tool output is still detected", async () => {
+  const res = await runHook("Connecting to mongodb://admin:hunter2@localhost:27017/db");
   assertEquals(res.code, 2);
   if (!res.stderr.includes("MongoDB connection string")) {
     throw new Error(`expected MongoDB connection string in stderr, got: ${res.stderr}`);
@@ -157,3 +186,21 @@ Deno.test("placeholder example in block-secret-literals.sh source does not trigg
   const res = await runHook('export GEMINI_API_KEY="..."');
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- fixture-pragma tests (issue-detector-false-positive) ---
+// The pragma marker is a distinct string ("webjam-fixture-ok") so these
+// literal usages below do not require importing the detector module.
+
+Deno.test("a credential-shaped literal marked with the fixture pragma is allowed", async () => {
+  const res = await runHook(`const token = "${FAKE.github}"; // webjam-fixture-ok`);
+  assertEquals(res.code, 0, res.stderr);
+});
+
+// Per-literal specificity (a marker suppresses only the adjacent match, not
+// an unrelated one elsewhere in the input) is covered at the unit level in
+// test/detect_credential_literal.test.ts using real multi-line text. It is
+// not re-tested here: this hook's payload is JSON (tool_response.stdout is
+// JSON-string-escaped before it ever reaches the detector), so an embedded
+// "\n" in the fixture arrives as the two literal characters backslash-n, not
+// a real line break — line-adjacency semantics are not observable through
+// this transport, only through direct text passed to the detector.

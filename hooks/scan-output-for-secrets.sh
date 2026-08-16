@@ -34,12 +34,16 @@ HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 match=$(CMD_FOR_PY="$input" deno run --allow-env "$HOOK_DIR/lib/detect_credential_literal.ts" 2>/dev/null) || true
 
 if [ -n "$match" ]; then
-  echo "🔴 CREDENTIAL LEAKED INTO TOOL OUTPUT: a $match appeared in what that command printed." >&2
-  echo "The value is now in the transcript and must be treated as COMPROMISED." >&2
+  echo "🔴 CREDENTIAL-SHAPED LITERAL DETECTED: a $match matched somewhere in this hook payload." >&2
+  echo "This hook scans the WHOLE payload (stdout, stderr, and structured fields), not just" >&2
+  echo "the named command's stdout — so it cannot say the value was actually printed by that" >&2
+  echo "command, only that the shape appears in the payload. Whether the value is live is" >&2
+  echo "also unverified — this is a shape match, not a liveness check." >&2
   echo "Do this now, in this turn:" >&2
   echo "  1. Tell Josh immediately — name the credential, do not bury it." >&2
-  echo "  2. Revoke/rotate it at the provider, then update ~/.bashrc, any CI env var, and KeePass." >&2
-  echo "  3. Do NOT re-run the command, and do NOT print the value again." >&2
+  echo "  2. Verify whether it is a real, live credential (vs. a declared test fixture)." >&2
+  echo "  3. If live: revoke/rotate it at the provider, then update ~/.bashrc, any CI env var, and KeePass." >&2
+  echo "  4. Do NOT re-run the command, and do NOT print the value again." >&2
   echo "(rule: never-print-files-that-hold-secrets — web-jam-tools#272)" >&2
   exit 2
 fi
