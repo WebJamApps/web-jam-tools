@@ -82,7 +82,7 @@ Deno.test("a remote host with userinfo is flagged", () => {
 });
 
 Deno.test("a local host with userinfo is flagged", () => {
-  assertEquals(isFlaggableMongoDbUri("mongodb://admin:hunter2@localhost:27017/db"), true);
+  assertEquals(isFlaggableMongoDbUri("mongodb://admin:hunter2@localhost:27017/db"), true); // webjam-fixture-ok
 });
 
 Deno.test("a remote host with NO userinfo is not flagged (infrastructure, not a secret)", () => {
@@ -120,7 +120,7 @@ Deno.test("a userinfo-bearing mongo URI on a reserved host is suppressed end to 
 
 Deno.test("a userinfo-bearing mongo URI on a resolvable host with high-entropy credentials is still caught", () => {
   const pw = variedFakeBody(24, 5);
-  const text = `mongodb+srv://svcAcct7x:${pw}@prodcluster7.realdomain.org/db`;
+  const text = `mongodb+srv://svcAcct7x:${pw}@prodcluster7.realdomain.org/db`; // webjam-fixture-ok
   assertEquals(findCredentialLiteral(text), "MongoDB connection string");
 });
 
