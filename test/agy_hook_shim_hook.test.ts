@@ -22,6 +22,7 @@ import {
   recoverPostToolOutput,
   translateVerdict,
 } from "../hooks/lib/agy_hook_shim.ts";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 const SHIM_PATH = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname;
 const HOOKS_DIR = new URL("../hooks/", import.meta.url).pathname;
@@ -265,7 +266,9 @@ Deno.test("matcher semantics: an unmapped/unknown agy tool name doesn't match a 
 // --- PostToolUse: scan-output-for-secrets.sh recovers output from transcriptPath ---
 
 Deno.test("scan-output-for-secrets.sh detects a canary credential recovered from transcriptPath", async () => {
-  const fakeGoogleKey = "AIza" + "B".repeat(35);
+  // Varied, not repeated — the credential detector's synthetic-value
+  // heuristic would otherwise auto-suppress an 8+ run of the same character.
+  const fakeGoogleKey = "AIza" + variedFakeBody(35, 50);
   const transcriptPath = await Deno.makeTempFile({ suffix: ".jsonl" });
   try {
     await Deno.writeTextFile(
