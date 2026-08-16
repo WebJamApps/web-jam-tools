@@ -39,9 +39,117 @@
  * Only the match adjacent to the marker is suppressed. Every other
  * credential-shaped literal in the same input — marked or not — is still
  * evaluated independently and reported if unmarked.
+ *
+ * SYNTHETIC-VALUE HEURISTIC (item 4, same defect)
+ * ---------------------------------------------------------------
+ * The pragma fails open: a fixture written tomorrow trips the alarm until
+ * someone remembers the marker. This second, unconditional layer catches
+ * values that are self-evidently NOT live secrets, with no marker required.
+ * It is deliberately CONSERVATIVE — when in doubt, FLAG, and a path (e.g.
+ * living under test/) is NEVER evidence on its own, only the value's own
+ * shape is. Three independent triggers, any one suppresses:
+ *
+ *   1. RESERVED/NON-RESOLVABLE HOST (RFC 2606 / RFC 6761) — a hostname
+ *      under .invalid, .example, .test, .localhost, or the reserved
+ *      example.com/example.net/example.org domains cannot resolve on the
+ *      public internet, so nothing addressed through it can be a live
+ *      credential. Only meaningful for the MongoDB category, the only one
+ *      whose match includes a host.
+ *   2. PLACEHOLDER WORDING — the matched text contains a word nobody puts
+ *      in a real secret (example, fixture, dummy, placeholder, redacted,
+ *      changeme, xxx, a "your_"/"your-" prefix, angle brackets), or — for
+ *      userinfo-style credentials specifically — the username or password
+ *      segment IS, verbatim, one of the generic nouns "user" / "password" /
+ *      "secret" / "token" standing in for a real value.
+ *   3. DEGENERATE ENTROPY — an unbroken run of 8+ identical characters, or
+ *      of 8+ strictly-sequential characters (e.g. "12345678", "abcdefgh").
+ *      Threshold rationale: for even a 16-symbol alphabet (hex), the odds
+ *      of ANY 8-long same-character run appearing by chance in a normal
+ *      live token are on the order of 1-in-16^7 — for the 62-symbol
+ *      alphanumeric alphabet most of these formats actually use, far
+ *      smaller still. 8 is comfortably below every repeat/sequence length
+ *      this repo's own test fixtures use (12-36) and comfortably above
+ *      what randomness could plausibly produce, so it errs toward "flag
+ *      the real thing" over "hide the fixture".
+ *
+ * This heuristic never narrows a detection PATTERN — it only judges a
+ * value already matched by one, exactly like isPlaceholderValue already did
+ * for a narrower set of cases.
  */
 
 export const FIXTURE_PRAGMA = "webjam-fixture-ok";
+
+const RESERVED_TLDS = ["invalid", "example", "test", "localhost"];
+const RESERVED_DOMAINS = ["example.com", "example.net", "example.org"];
+const RESERVED_HOST_RE = new RegExp(`\\.(?:${RESERVED_TLDS.join("|")})(?=[:/?#]|$)`, "i");
+
+/** Rule 1: a hostname under a reserved/non-resolvable TLD or domain (RFC 2606/6761). */
+export function hasReservedHost(text: string): boolean {
+  const lower = text.toLowerCase();
+  for (const domain of RESERVED_DOMAINS) {
+    if (lower.includes(domain)) return true;
+  }
+  return RESERVED_HOST_RE.test(text);
+}
+
+const PLACEHOLDER_WORDS = ["example", "fixture", "dummy", "placeholder", "redacted", "changeme", "xxx"];
+const GENERIC_STANDIN_WORDS = new Set(["user", "password", "secret", "token"]);
+
+/** Rule 2 (general half): a placeholder word anywhere in the matched text. */
+export function hasPlaceholderWording(text: string): boolean {
+  const lower = text.toLowerCase();
+  for (const word of PLACEHOLDER_WORDS) {
+    if (lower.includes(word)) return true;
+  }
+  if (/your[-_]/i.test(text)) return true;
+  if (text.includes("<") && text.includes(">")) return true;
+  return false;
+}
+
+/** Rule 2 (userinfo half): the user or password segment of `user[:pass]` IS, verbatim, a generic standin noun. */
+export function hasGenericStandinUserinfo(userinfo: string): boolean {
+  return userinfo.split(":").some((part) => GENERIC_STANDIN_WORDS.has(part.trim().toLowerCase()));
+}
+
+const DEGENERATE_RUN_THRESHOLD = 8;
+
+function longestRepeatedRun(s: string): number {
+  let best = 0, cur = 0, prev = "";
+  for (const ch of s) {
+    cur = ch === prev ? cur + 1 : 1;
+    prev = ch;
+    if (cur > best) best = cur;
+  }
+  return best;
+}
+
+function sameSequentialClass(a: string, b: string): boolean {
+  const digit = (c: string) => c >= "0" && c <= "9";
+  const lower = (c: string) => c >= "a" && c <= "z";
+  const upper = (c: string) => c >= "A" && c <= "Z";
+  return (digit(a) && digit(b)) || (lower(a) && lower(b)) || (upper(a) && upper(b));
+}
+
+function longestSequentialRun(s: string): number {
+  let best = s.length > 0 ? 1 : 0, cur = 1;
+  for (let i = 1; i < s.length; i++) {
+    const isNext = sameSequentialClass(s[i - 1], s[i]) && s.charCodeAt(i) === s.charCodeAt(i - 1) + 1;
+    cur = isNext ? cur + 1 : 1;
+    if (cur > best) best = cur;
+  }
+  return best;
+}
+
+/** Rule 3: a run of 8+ identical or 8+ strictly-sequential characters. */
+export function hasDegenerateEntropy(value: string): boolean {
+  return longestRepeatedRun(value) >= DEGENERATE_RUN_THRESHOLD ||
+    longestSequentialRun(value) >= DEGENERATE_RUN_THRESHOLD;
+}
+
+/** Rules 2 (general) + 3 combined — the checks meaningful for ANY matched value, not just URL-shaped ones. */
+export function looksSynthetic(value: string): boolean {
+  return hasPlaceholderWording(value) || hasDegenerateEntropy(value);
+}
 
 export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["Google/Gemini API key", /AIza[0-9A-Za-z_-]{35}/],
@@ -108,21 +216,28 @@ export function isPlaceholderValue(val: string): boolean {
  * flagged regardless of whether the host is remote OR local — a local
  * MongoDB with a live password (`mongodb://admin:hunter2@localhost:27017`)
  * is still a real credential.
+ *
+ * Returns the `user[:pass]` segment of the URI's authority, or null if
+ * there is none.
  */
-export function isFlaggableMongoDbUri(uri: string): boolean {
+export function extractMongoUserinfo(uri: string): string | null {
   const match = uri.match(/^mongodb(?:\+srv)?:\/\/([^\s"'\/\?#]+)/i);
   if (!match) {
-    return false;
+    return null;
   }
   const authority = match[1];
 
   const atIndex = authority.indexOf("@");
   if (atIndex === -1) {
-    return false;
+    return null;
   }
 
   const userinfo = authority.slice(0, atIndex);
-  return userinfo.length > 0;
+  return userinfo.length > 0 ? userinfo : null;
+}
+
+export function isFlaggableMongoDbUri(uri: string): boolean {
+  return extractMongoUserinfo(uri) !== null;
 }
 
 export function hasFlaggableMongoDbUri(text: string): boolean {
@@ -210,7 +325,11 @@ export function findCredentialLiteral(text: string): string | null {
       const uriRe = /mongodb(?:\+srv)?:\/\/[^\s"']+/gi;
       let uriMatch: RegExpExecArray | null;
       while ((uriMatch = uriRe.exec(text)) !== null) {
-        if (!isFlaggableMongoDbUri(uriMatch[0])) continue;
+        const userinfo = extractMongoUserinfo(uriMatch[0]);
+        if (userinfo === null) continue;
+        if (hasReservedHost(uriMatch[0])) continue;
+        if (hasGenericStandinUserinfo(userinfo)) continue;
+        if (looksSynthetic(uriMatch[0])) continue;
         const lineIndex = lineIndexForOffset(text, uriMatch.index);
         if (isPragmaSuppressedForLine(lines, lineIndex)) continue;
         return name;
@@ -226,6 +345,7 @@ export function findCredentialLiteral(text: string): string | null {
         continue;
       }
       if (isPlaceholderValue(match[0])) continue;
+      if (looksSynthetic(match[0])) continue;
       const lineIndex = lineIndexForOffset(text, match.index);
       if (isPragmaSuppressedForLine(lines, lineIndex)) continue;
       return name;
@@ -242,6 +362,7 @@ export function findCredentialLiteral(text: string): string | null {
     if (val.length < 8) {
       continue;
     }
+    if (looksSynthetic(val)) continue;
     const lineIndex = lineIndexForOffset(text, urlMatch.index);
     if (isPragmaSuppressedForLine(lines, lineIndex)) continue;
     return "URL-embedded token/key/secret parameter with a literal value";
@@ -255,6 +376,7 @@ export function findCredentialLiteral(text: string): string | null {
     if (!val || val.startsWith("$") || isPlaceholderValue(val)) {
       continue; // export FOO="" or FOO=$BAR or FOO="<key>" — empty, var ref, or placeholder
     }
+    if (looksSynthetic(val)) continue;
     const lineIndex = lineIndexForOffset(text, match.index);
     if (isPragmaSuppressedForLine(lines, lineIndex)) continue;
     return "generic KEY/TOKEN/SECRET/PASSWORD export with a literal value";

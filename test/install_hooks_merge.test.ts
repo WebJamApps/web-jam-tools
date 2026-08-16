@@ -9,6 +9,7 @@
 // Josh's LIVE ~/.claude/hooks symlinks).
 
 import { assert, assertEquals } from "@std/assert";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 const SCRIPT_PATH = new URL(
   "../scripts/merge-hooks-into-settings.ts",
@@ -855,7 +856,11 @@ Deno.test("--check returns non-zero and reports missing rules when drift exists"
 // --- Secret-scan gate in merge-hooks-into-settings.ts (web-jam-tools#339) ---
 
 Deno.test("secret-scan gate refuses to merge when synthetic JWT secret fixture is in permissions", async () => {
-  const jwtSecret = "eyJ" + "A".repeat(20) + "." + "B".repeat(20) + "." + "C".repeat(20);
+  // Varied per-segment, not repeated — the credential detector's
+  // synthetic-value heuristic would otherwise auto-suppress an 8+ run of
+  // the same character, defeating this "must fail closed" fixture.
+  const jwtSecret = "eyJ" + variedFakeBody(20, 60) + "." + variedFakeBody(20, 61) + "." +
+    variedFakeBody(20, 62);
   await withTempSettings(
     {
       permissions: {

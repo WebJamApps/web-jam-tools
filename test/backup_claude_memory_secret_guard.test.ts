@@ -27,6 +27,7 @@
 // at rest.
 
 import { assert, assertEquals } from "@std/assert";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const SCRIPT_PATH = `${REPO_ROOT}scripts/backup-claude-memory.sh`;
@@ -116,7 +117,10 @@ function hasInvocation(
   return invocations.some((inv) => inv[0] === subcommand && inv.includes(mustIncludeArg));
 }
 
-const FAKE_GOOGLE_KEY = "AIza" + "B".repeat(35);
+// Varied, not repeated — hooks/lib/detect_credential_literal.ts's
+// synthetic-value heuristic would otherwise auto-suppress an 8+ run of the
+// same character, defeating these "must be detected/refused" fixtures.
+const FAKE_GOOGLE_KEY = "AIza" + variedFakeBody(35, 40);
 
 Deno.test("refuses to copy settings.json containing a credential-shaped literal", async () => {
   const claudeDir = await setUpFixtureClaudeDir({

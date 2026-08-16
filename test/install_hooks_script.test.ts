@@ -25,6 +25,7 @@
 //     from a worktree itself.
 
 import { assert, assertEquals } from "@std/assert";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
@@ -526,7 +527,11 @@ Deno.test("install-hooks.sh secret-scan gate fails closed with synthetic JWT fix
   const hooksDir = await Deno.makeTempDir();
   const settingsDir = await Deno.makeTempDir();
   const settingsPath = `${settingsDir}/settings.json`;
-  const jwtSecret = "eyJ" + "X".repeat(20) + "." + "Y".repeat(20) + "." + "Z".repeat(20);
+  // Varied per-segment, not repeated — the credential detector's
+  // synthetic-value heuristic would otherwise auto-suppress an 8+ run of
+  // the same character, defeating this "must fail closed" fixture.
+  const jwtSecret = "eyJ" + variedFakeBody(20, 70) + "." + variedFakeBody(20, 71) + "." +
+    variedFakeBody(20, 72);
   try {
     await Deno.writeTextFile(
       settingsPath,
