@@ -57,7 +57,7 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
    | # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |
    |---|---|---|---|---|---|---|---|
 
-8. **Split out manual steps as pairs**, grouped by gate position in the dependency chain. **Issue & Document Title Rule for Manual Steps:** Never include personal names (e.g. "Josh:") in issue titles or document titles. Issue titles must be professional, action-oriented, and role-agnostic (e.g. "Manual verification: ...", "Verification: ..."), with ownership designated exclusively by the `Josh` label or assignment, never embedded as a name prefix.
+8. **Split out manual steps as pairs**, grouped by gate position in the dependency chain. Manual documentation / UI inspection (e.g. verifying generated Markdown/HTML in Google Chrome) and live demonstration / procedure walkthroughs (e.g. executing real-world steps with a learner or external party) are distinct verification surfaces and must be split into separate standalone pairs/issues. **Issue & Document Title Rule for Manual Steps:** Never include personal names (e.g. "Josh:") in issue titles or document titles. Issue titles must be professional, action-oriented, and role-agnostic (e.g. "Manual verification: ...", "Verification: ..."), with ownership designated exclusively by the `Josh` label or assignment, never embedded as a name prefix.
 9. **Determine the dependency chain** across the planned issues and record it. Where an issue's deliverable is a pointer — "point X at Y" — the plan **names Y concretely**, because an unnamed target hides an ordering: if Y turns out to be something another planned issue creates, the two issues are not independent, and the implementer picks the target after the chain was already declared.
 10. **List every `Needs Design` label change as its own named item** — each removal carrying its 4-part reason.
 11. **GATE 2 — stop.** Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Approving the plan table does not approve label removals; each is ruled on separately. Nothing is filed to GitHub until Gate 2 passes.
@@ -130,6 +130,7 @@ These are properties of the skill, written as explicit refusals:
 | remove a `Needs Design` label without an ask carrying its reason | only Josh can say a design is done |
 | add `Needs Design` to anything in the approved executable set | it must not become a stub factory |
 | put a manual step inside an agent's execution issue | manual steps get their own `Josh` issue |
+| combine artifact/doc/UI review and live procedure walkthroughs into a single manual issue | inspecting rendered artifacts in Google Chrome and executing live procedures with learners or external parties are distinct verification surfaces with different gates and acceptance criteria |
 | hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<date>.md` |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
@@ -182,6 +183,14 @@ Every manual step handed to Josh — whether handed over interactively in chat o
 
 There are **no carve-outs** for steps handed over in chat rather than filed as issues, and **no carve-outs** for steps that occur before Gate 1.
 
+### Separate Verification Surfaces (No Composite Manual Issues)
+
+Manual artifact / documentation / UI inspection (e.g., verifying generated Markdown/HTML or live web UIs in Google Chrome) and live demonstration / procedure walkthroughs (e.g., executing real-world instructional steps with a learner or external party) are fundamentally distinct verification surfaces with different execution contexts, timelines, and acceptance criteria.
+
+- **NEVER combine artifact/doc/UI inspection and live procedure walkthroughs into a single composite `Josh` issue.**
+- They must always be planned and filed as separate, standalone `Josh` manual verification issues, each with its own distinct runbook path and close criteria.
+- **Example precedent:** In web-jam-tools#614 ("what is the best way to show a person how to tie a shoe string and relate this to granny knots"), manual visual inspection of the generated documentation in Google Chrome was improperly combined with the live shoelace tying teaching walkthrough into a single issue (web-jam-tools#622 "Manual verification: verify shoelace reference guide in Google Chrome"). Under this rule, documentation/UI review in Google Chrome and real-world instructional walkthroughs with learners must always be planned and filed as distinct standalone `Josh` issues.
+
 ### Runbook Format Requirements
 
 Every runbook file must follow this exact format:
@@ -204,9 +213,10 @@ Never prefix issue titles or runbook document titles with a personal name (e.g. 
 | | Issue A — the agent's | Issue B — the manual verification pair |
 |---|---|---|
 | **Scriptable** | `Flash High`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
-| **UI** | `Flash High`. Investigate the live UI and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact click path, screen by screen, literal button and field names. Closes when the doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he did them. |
+| **UI / Doc Review** | `Flash High`. Investigate the live UI or generate documentation/artifacts and write the inspection instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact click path or document inspection steps in Google Chrome. Closes when the doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he inspected them in Google Chrome. |
+| **Live Procedure / Walkthrough** | `Flash High`. Author the procedure walkthrough guide / instructional runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`. Closes when the runbook exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he executed the live demonstration/walkthrough with the learner or external party. |
 
-Issue B is always `Blocked` on issue A, with both the label and the native dependency. A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
+Artifact/doc review and live procedure walkthroughs are distinct pairs and must NEVER be collapsed into a single composite pair or issue. Issue B is always `Blocked` on issue A, with both the label and the native dependency. A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
 
 This replaces the old "Josh's run is an Epic checkbox" rule and `--part-of` convention for post-merge manual steps: a remaining manual step becomes its own issue, so the agent's PR closes the agent's issue normally.
 
