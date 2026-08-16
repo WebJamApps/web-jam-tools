@@ -1,0 +1,24 @@
+{
+  "deploy": {
+    "org": "webjamapps",
+    "app": "web-jam-devotional",
+    "entrypoint": "src/devotional/send_daily_devotional.ts",
+    "exclude": [
+      "test/",
+      "docs/",
+      "hooks/",
+      "skills/",
+      "scripts/",
+      "cov_profile/",
+      "src/gig-scraper/",
+      "src/venue-contact/",
+      "src/venue-tag-diff/",
+      "src/fix-labels/",
+      "src/task-queue/",
+      "src/dropbox-link/",
+      "src/outreach-cron/",
+      "src/memory-index/",
+      "src/uptime/"
+    ]
+  }
+}

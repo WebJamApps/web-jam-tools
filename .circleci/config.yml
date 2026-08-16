@@ -224,11 +224,12 @@ jobs:
       - run:
           name: Deploy web-jam-devotional (production)
           command: |
-            deno deploy \
-              --org webjamapps \
-              --app web-jam-devotional \
+            deno deploy . \
+              --config deno.devotional.json \
               --prod \
-              --token "$DENO_DEPLOY_TOKEN"
+              --token "$DENO_DEPLOY_TOKEN" \
+              --non-interactive \
+              --json
 
   deploy-uptime:
     executor: ci
@@ -242,11 +243,12 @@ jobs:
       - run:
           name: Deploy web-jam-uptime (production)
           command: |
-            deno deploy \
-              --org webjamapps \
-              --app web-jam-uptime \
+            deno deploy . \
+              --config deno.uptime.json \
               --prod \
-              --token "$DENO_DEPLOY_TOKEN"
+              --token "$DENO_DEPLOY_TOKEN" \
+              --non-interactive \
+              --json
 
 workflows:
   ci:

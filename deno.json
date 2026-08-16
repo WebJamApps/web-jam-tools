@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
-  "version": "1.30.24",
+  "version": "1.30.25",
   "tasks": {
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "issue:create": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
@@ -29,8 +29,8 @@
     "memory-index": "deno run --allow-read --allow-write --allow-env src/memory-index/cli.ts",
     "memory:consume": "bash scripts/consume-memory-rules.sh",
     "update:reaper": "bash scripts/reaper-update.sh",
-    "monitor:uptime": "deno run --allow-net --allow-env src/uptime/cli.ts",
-    "monitor:cron": "deno run --allow-net --allow-env src/uptime/cron.ts"
+    "monitor:uptime": "deno run --allow-net --allow-env --allow-sys src/uptime/cli.ts",
+    "monitor:cron": "deno run --allow-net --allow-env --allow-sys src/uptime/cron.ts"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.19",
@@ -63,26 +63,5 @@
         "recommended"
       ]
     }
-  },
-  "deploy": {
-    "org": "webjamapps",
-    "app": "web-jam-uptime",
-    "entrypoint": "src/uptime/cron.ts",
-    "exclude": [
-      "test/",
-      "docs/",
-      "hooks/",
-      "skills/",
-      "scripts/",
-      "cov_profile/",
-      "src/gig-scraper/",
-      "src/venue-contact/",
-      "src/venue-tag-diff/",
-      "src/fix-labels/",
-      "src/task-queue/",
-      "src/dropbox-link/",
-      "src/outreach-cron/",
-      "src/memory-index/"
-    ]
   }
 }

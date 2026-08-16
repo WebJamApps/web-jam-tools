@@ -69,7 +69,7 @@ update the `--app` references here and in the README.
 2. The CircleCI `deploy` job (already in `.circleci/config.yml`) runs only on
    `main`, only after `gate`, and deploys with:
    ```bash
-   deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPLOY_TOKEN"
+   deno deploy . --config deno.devotional.json --prod --token "$DENO_DEPLOY_TOKEN" --non-interactive --json
    ```
 
 > Result: **no preview deploys and no Deno check on PRs** — `main` is the only
@@ -117,7 +117,7 @@ status check on `dev`). **Nothing deploys** — CI only deploys on `main`.
 ## Step 5 — Promote `dev` → `main` (first deploy)
 
 Open a `dev` → `main` PR and merge it (gate is also required on `main`). On
-merge, the CircleCI `deploy` job runs `deno deploy … --prod` and deploys the new
+merge, the CircleCI `deploy` job runs `deno deploy . --config deno.devotional.json --prod …` and deploys the new
 code to **production**, with the Step 3 secrets present. `Deno.cron` registers on
 this deploy.
 
@@ -150,15 +150,16 @@ in `crontab -l`). Until this is done, **both** the laptop and the cloud fire at
 `web-jam-tools` is a **monorepo** of microservices; each deployable service is
 its **own Deno Deploy app** (free tier allows up to **20 apps**). To add one:
 
-1. **Create its app** (CLI, no GitHub link) — Step 1 with that service's name and
+1. **Create its isolated deploy config** `deno.<service>.json` with `"deploy": { "org": "webjamapps", "app": "web-jam-<service>", "entrypoint": "src/<service>/<entry>.ts", "exclude": [...] }`.
+2. **Create its app** (CLI, no GitHub link) — Step 1 with that service's name and
    entrypoint:
    ```bash
    deno deploy create --org webjamapps --app web-jam-<service> \
      --source local --runtime-mode dynamic --entrypoint src/<service>/<entry>.ts
    ```
-2. **Add its secrets** to that app (Step 3) — each app has its own isolated env.
-3. **Add a CircleCI deploy job** for it: copy the `deploy` job in
-   `.circleci/config.yml`, rename it (e.g. `deploy-<service>`), change `--app`,
+3. **Add its secrets** to that app (Step 3) — each app has its own isolated env.
+4. **Add a CircleCI deploy job** for it: copy the `deploy` job in
+   `.circleci/config.yml`, rename it (e.g. `deploy-<service>`), specify `--config deno.<service>.json`,
    and add it to the `workflows` list with `requires: [gate]` and
    `filters: { branches: { only: main } }`. The **same `DENO_DEPLOY_TOKEN`**
    deploys every app in the org — no new token needed.
@@ -169,10 +170,9 @@ schedule, and subdomain.
 ## Manual / local deploy (escape hatch)
 
 To push an ad-hoc deployment without going through CI (e.g. a hotfix), deploy
-from your machine with the same CLI, run from the repo root (the app already
-knows its entrypoint). Interactive browser auth on first use is cached in your
+from your machine with the same CLI, run from the repo root with the target config. Interactive browser auth on first use is cached in your
 keyring, so you can omit `--token`:
 
 ```bash
-deno deploy --org webjamapps --app web-jam-devotional --prod
+deno deploy . --config deno.devotional.json --prod
 ```
