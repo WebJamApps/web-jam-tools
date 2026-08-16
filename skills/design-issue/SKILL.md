@@ -61,6 +61,18 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 10. **List every `Needs Design` label change as its own named item** — each removal carrying its 4-part reason.
 11. **GATE 2 — stop.** Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Approving the plan table does not approve label removals; each is ruled on separately. Nothing is filed to GitHub until Gate 2 passes.
 
+   **Write the issue-approval token upon Gate 2 approval:** The moment Josh explicitly approves the plan table, write the issue-approval token for the planned repo and exact titles (via `scripts/write_issue_approval_token.ts`) so subsequent `mcp__*__issue_write` and `mcp__*__sub_issue_write` calls pass `hooks/require-approval-token-on-issue-write.sh` without repetitive authorization prompts:
+
+   ```sh
+   deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts \
+     --session-id "<session-id>" \
+     --repo "<owner/repo>" \
+     --title "<exact title 1>" \
+     --title "<exact title 2>"
+   ```
+
+   The token records the approving session's id, the target `owner/repo`, the exact approved titles, and a bounded expiry (default 4 hours) at `$HOME/.claude/state/issue-approval-token.json` (honoring `ISSUE_APPROVAL_TOKEN_PATH`).
+
 ### Phase 3 — Filing (Sonnet subagent / Flash High session)
 
 Filing delegates to a subagent only when delegating moves the work down a tier (Opus design hands off to a Sonnet subagent; agy already on Flash High files directly itself with no self-delegation). The subagent or session receives the approved plan table and the design document path. It files and reports; it builds nothing.
@@ -93,10 +105,10 @@ When a run finishes, the skill reads the memory surfaces for rules that fire onl
 
 ## The Two Approval Gates
 
-| Gate | The skill waits for | It must not, before that gate |
-|---|---|---|
-| 1 — design | Josh's explicit approval of the design document | write anything to any GitHub issue |
-| 2 — plan | Josh's explicit approval of the issue plan table | create, edit or label any issue |
+| Gate | The skill waits for | It must not, before that gate | When it passes |
+|---|---|---|---|
+| 1 — design | Josh's explicit approval of the design document | write anything to any GitHub issue | record design approval |
+| 2 — plan | Josh's explicit approval of the issue plan table | create, edit or label any issue | write the issue-approval token (`scripts/write_issue_approval_token.ts`) and proceed to Phase 3 filing |
 
 Nothing is filed to GitHub until GATE 2 passes.
 
