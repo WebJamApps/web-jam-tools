@@ -119,7 +119,7 @@ Every PR must bump the version once, on its first commit — `deno.json` in this
 is unchanged from the merge-base with `dev`. Always bump `deno.json` on the first commit of any new
 PR branch in `web-jam-tools` to prevent CircleCI gate failures. When invoking `create-draft-pr.sh`,
 pass multi-line or rich markdown values using `--summary-file`, `--test-plan-file`, and
-`--test-evidence-file` pointing to files (e.g. in scratch/) to prevent shell argument escaping or
+`--test-evidence-file` pointing to temporary files in /tmp/ (e.g. /tmp/pr-summary.md) — never create scratch files or scratch/ directories inside the repo to prevent shell argument escaping or
 flattening issues.
 
 ## CI gate (web-jam-tools)
@@ -152,7 +152,7 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
   multi-repo tasks:
   - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into
     main turn outputs.
-  - Redirect large multi-line summaries, test plans, and evidence to scratch files
+  - Redirect large multi-line summaries, test plans, and evidence to temporary files in /tmp/
     (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling
     `create-draft-pr.sh`.
   - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`)

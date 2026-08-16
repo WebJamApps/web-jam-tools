@@ -80,6 +80,7 @@ skill.
 - CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
 - EMAIL: always DRAFT, never send. Save as Gmail draft for Josh's review.
 - FILES: never create a version-suffixed copy. Edit the master.
+- **NO SCRATCH FILES OR SCRATCH FOLDERS IN GIT REPOSITORIES**: Never create scratch files, draft markdown files, temporary summaries, or a `scratch/` folder inside any GitHub repository workspace. All temporary files (such as `--summary-file`, `--test-plan-file`, `--test-evidence-file` for `create-draft-pr.sh`, or scratch issue templates) MUST be written to `/tmp/` (e.g. `/tmp/pr-summary.md`) or the agent session artifact scratch directory, and cleaned up when done, keeping repository working trees completely clean.
 - Never contact venues, churches, or other third parties directly — Josh handles all outreach.
 - **STATE VERIFICATION**: Before any suggestion, to-do item, or "ready for you" claim about a
   PR/issue/CI/deploy, run a fresh liveness check in that same turn (e.g.
