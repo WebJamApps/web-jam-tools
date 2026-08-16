@@ -51,10 +51,51 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# If master file does not exist yet but a real dest file exists, copy it in first
-if [ ! -e "$SRC_CONFIG" ] && [ -f "$DEST_CONFIG" ] && [ ! -L "$DEST_CONFIG" ]; then
-  mkdir -p "$(dirname "$SRC_CONFIG")"
-  cp -p "$DEST_CONFIG" "$SRC_CONFIG"
+# If a real dest file exists, preserve its contents in the master repo copy
+if [ -f "$DEST_CONFIG" ] && [ ! -L "$DEST_CONFIG" ]; then
+  if [ ! -e "$SRC_CONFIG" ]; then
+    mkdir -p "$(dirname "$SRC_CONFIG")"
+    cp -p "$DEST_CONFIG" "$SRC_CONFIG"
+  else
+    # Reconcile any servers or top-level keys in DEST_CONFIG not already in SRC_CONFIG
+    deno eval '
+      const destPath = Deno.args[0];
+      const srcPath = Deno.args[1];
+      try {
+        const destRaw = Deno.readTextFileSync(destPath);
+        const destJson = JSON.parse(destRaw);
+        const srcRaw = Deno.readTextFileSync(srcPath);
+        const srcJson = JSON.parse(srcRaw);
+        let modified = false;
+
+        if (destJson && typeof destJson === "object" && srcJson && typeof srcJson === "object") {
+          if (destJson.mcpServers && typeof destJson.mcpServers === "object") {
+            if (!srcJson.mcpServers || typeof srcJson.mcpServers !== "object") {
+              srcJson.mcpServers = {};
+              modified = true;
+            }
+            for (const [key, val] of Object.entries(destJson.mcpServers)) {
+              if (!(key in srcJson.mcpServers)) {
+                srcJson.mcpServers[key] = val;
+                modified = true;
+              }
+            }
+          }
+          for (const [key, val] of Object.entries(destJson)) {
+            if (key !== "mcpServers" && !(key in srcJson)) {
+              srcJson[key] = val;
+              modified = true;
+            }
+          }
+        }
+        if (modified) {
+          Deno.writeTextFileSync(srcPath, JSON.stringify(srcJson, null, 2) + "\n");
+        }
+      } catch {
+        // If parsing fails, let backup preservation handle it
+      }
+    ' "$DEST_CONFIG" "$SRC_CONFIG"
+  fi
 fi
 
 if [ ! -f "$SRC_CONFIG" ]; then

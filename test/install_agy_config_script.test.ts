@@ -87,15 +87,31 @@ Deno.test("install-agy-config.sh is idempotent on second run (no-op, exit 0)", a
   }
 });
 
-Deno.test("install-agy-config.sh preserves pre-existing real file by backing it up", async () => {
+Deno.test("install-agy-config.sh preserves pre-existing real file by reconciling entries into master and backing it up", async () => {
   const dir = await Deno.makeTempDir({ prefix: "wjt604-realfile-" });
+  const masterPath = `${dir}/master_mcp_config.json`;
   const destPath = `${dir}/mcp_config.json`;
-  const originalContent = JSON.stringify({ custom: "data" }, null, 2);
+
+  const initialMaster = {
+    mcpServers: {
+      reaper: { command: "reaper-mcp", args: [] },
+      playwright: { command: "playwright-mcp", args: [] },
+    },
+  };
+  const realDestContent = {
+    mcpServers: {
+      playwright: { command: "playwright-mcp", args: [] },
+      customTool: { command: "custom-mcp", args: ["--flag"] },
+    },
+    customExtraField: "customValue",
+  };
+
   try {
-    await Deno.writeTextFile(destPath, originalContent);
+    await Deno.writeTextFile(masterPath, JSON.stringify(initialMaster, null, 2));
+    await Deno.writeTextFile(destPath, JSON.stringify(realDestContent, null, 2));
 
     const cmd = new Deno.Command("bash", {
-      args: [SCRIPT_PATH, "--mcp-config-path", destPath],
+      args: [SCRIPT_PATH, "--mcp-src-path", masterPath, "--mcp-config-path", destPath],
       stdout: "piped",
       stderr: "piped",
     });
@@ -108,12 +124,24 @@ Deno.test("install-agy-config.sh preserves pre-existing real file by backing it 
     const lstat = await Deno.lstat(destPath);
     assertEquals(lstat.isSymlink, true);
 
+    // Verify backup file exists and matches the original real file
     const backups = [...Deno.readDirSync(dir)].filter((e) =>
       e.name.startsWith("mcp_config.json.bak-")
     );
     assertEquals(backups.length, 1);
     const backupContent = await Deno.readTextFile(`${dir}/${backups[0].name}`);
-    assertEquals(backupContent, originalContent);
+    assertEquals(JSON.parse(backupContent), realDestContent);
+
+    // Verify the master copy in the repo was updated to include customTool and customExtraField
+    const updatedMaster = JSON.parse(await Deno.readTextFile(masterPath));
+    assertEquals(updatedMaster.mcpServers.reaper, initialMaster.mcpServers.reaper);
+    assertEquals(updatedMaster.mcpServers.playwright, initialMaster.mcpServers.playwright);
+    assertEquals(updatedMaster.mcpServers.customTool, realDestContent.mcpServers.customTool);
+    assertEquals(updatedMaster.customExtraField, "customValue");
+
+    // Reading through the symlink resolves to the updated master
+    const resolvedFromSymlink = JSON.parse(await Deno.readTextFile(destPath));
+    assertEquals(resolvedFromSymlink, updatedMaster);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
