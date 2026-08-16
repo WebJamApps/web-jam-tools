@@ -40,6 +40,7 @@ A decision is not ready to put to Josh until two conditions are met:
 - **The incomplete set:** Naming two options while a third and better one goes unwritten.
 - **The unexplained mechanism:** A question resting on machinery Josh has never seen.
 - **The buried premise:** A question whose real subject is a fact discovered mid-answer, presented as an aside rather than the thing being decided.
+- **The jargon barrier & academic framing:** Using specialized academic, educational, theoretical, or institutional vocabulary (e.g. "pedagogy", "learner diagnostics", "pedagogical assessment", "fine-motor coordination", "chirality", "topological isomorphism") or framing everyday human activities as formal educational/evaluative testing instead of plain, tangible physical terms (e.g. "left-over-right vs. right-over-left", "showing someone", "kids / small hands", "looking at the knots side-by-side"). Every concept and interaction must be described in plain, everyday conversational language anyone can follow without academic pretension.
 
 The test is Josh's reply: if it comes back as *"I need more details to decide"* or *"I am confused"*, the question was defective, and the repair belongs in the question rather than in a follow-up patching around it.
 
@@ -56,7 +57,7 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
    | # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |
    |---|---|---|---|---|---|---|---|
 
-8. **Split out Josh's manual steps as pairs**, grouped by gate position in the dependency chain.
+8. **Split out manual steps as pairs**, grouped by gate position in the dependency chain. **Issue & Document Title Rule for Manual Steps:** Never include personal names (e.g. "Josh:") in issue titles or document titles. Issue titles must be professional, action-oriented, and role-agnostic (e.g. "Manual verification: ...", "Verification: ..."), with ownership designated exclusively by the `Josh` label or assignment, never embedded as a name prefix.
 9. **Determine the dependency chain** across the planned issues and record it. Where an issue's deliverable is a pointer — "point X at Y" — the plan **names Y concretely**, because an unnamed target hides an ordering: if Y turns out to be something another planned issue creates, the two issues are not independent, and the implementer picks the target after the chain was already declared.
 10. **List every `Needs Design` label change as its own named item** — each removal carrying its 4-part reason.
 11. **GATE 2 — stop.** Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Approving the plan table does not approve label removals; each is ruled on separately. Nothing is filed to GitHub until Gate 2 passes.
@@ -171,7 +172,7 @@ Regression matters as much as the new feature, and a full-stack test must be run
 
 ---
 
-## Josh's Manual Steps
+## Manual Steps & Verification Pairs
 
 Every manual step handed to Josh — whether handed over interactively in chat or filed as a GitHub issue, and whether occurring before or after Gate 1 — **must always have a numbered runbook file** created at:
 
@@ -184,21 +185,26 @@ There are **no carve-outs** for steps handed over in chat rather than filed as i
 ### Runbook Format Requirements
 
 Every runbook file must follow this exact format:
+- **Professional, role-agnostic title:** Never include personal names (e.g. do NOT use `# Josh Walkthrough Runbook: ...`). Use action-oriented titles like `# Walkthrough Runbook: ...` or `# Manual Verification Runbook: ...`.
 - **Sequential step numbering:** Steps must be explicitly numbered sequentially (`## STEP 1`, `## STEP 2`, ...).
 - **Literal commands:** Every shell command, script invocation, or path must be written out completely as a literal command snippet (no placeholders or fuzzy instructions).
 - **What each step proves:** Explain explicitly what each step tests or proves.
 - **What a correct result looks like:** State clearly the exact expected output, exit status, or visible behavior confirming success.
-- **One action per step, one surface per step.** A numbered step is a single physical action in a single place. Never combine opening a session with asking that session something, and never cover two surfaces in one step — two surfaces asking one question is four steps, not one. State explicitly what happens to a session afterwards (leave it open, close it, move to the next terminal). Where order matters, the numbering IS the instruction. Origin: web-jam-tools#510 "Josh: verify live that agy and Claude Code read the rules through the pointer in a converted repo" — its runbook listed both the `claude` and the `agy` launch commands under one step with the question below them, and Josh opened two terminals, closed them, then reopened them one at a time to work out the intended order. His verdict: "these should have been 4 steps".
-- **Never let a result depend on default tool-output rendering.** When a step's pass/fail turns on what the agent actually read or ran, the runbook must do BOTH: turn the expanded view on explicitly in the launch command (for Claude Code, `claude --verbose`), AND include a separate step that asks the agent directly, e.g. "Which exact file paths did you read to answer that?". Collapsed output renders as a summary line such as `Read 1 file` with no path, which makes the run ungradeable — this happened on the first attempt at the verification step of web-jam-tools#510 "Josh: verify live that agy and Claude Code read the rules through the pointer in a converted repo".
+- **One action per step, one surface per step.** A numbered step is a single physical action in a single place. Never combine opening a session with asking that session something, and never cover two surfaces in one step — two surfaces asking one question is four steps, not one. State explicitly what happens to a session afterwards (leave it open, close it, move to the next terminal). Where order matters, the numbering IS the instruction. Origin: web-jam-tools#510 "verify live that agy and Claude Code read the rules through the pointer in a converted repo" — its runbook listed both the `claude` and the `agy` launch commands under one step with the question below them, and Josh opened two terminals, closed them, then reopened them one at a time to work out the intended order. His verdict: "these should have been 4 steps".
+- **No conflating internal verification assertions with the human walkthrough script:** A runbook for a human task (e.g. demonstrating a skill, testing a UI, conducting a live walkthrough) must contain ONLY the actual steps of that activity. Never inject automated test assertions, shell commands (e.g. `test -f ... && grep ...`), or repo verification steps into a human walkthrough script. Technical verification of files or artifacts belongs in the PR test plan or issue acceptance criteria, never as a step in a human walkthrough.
+- **Never let a result depend on default tool-output rendering.** When a step's pass/fail turns on what the agent actually read or ran, the runbook must do BOTH: turn the expanded view on explicitly in the launch command (for Claude Code, `claude --verbose`), AND include a separate step that asks the agent directly, e.g. "Which exact file paths did you read to answer that?". Collapsed output renders as a summary line such as `Read 1 file` with no path, which makes the run ungradeable.
 
 Manual steps never live inside an agent's execution issue. They are **grouped by gate position** — steps needed before the same agent issue share one `Josh` issue; steps at different points in the chain are separate issues. A step that gates nothing is still its own issue.
 
+**Issue & Runbook Title Rule for Manual Steps:**
+Never prefix issue titles or runbook document titles with a personal name (e.g. do NOT name an issue "Josh: ..."). Use professional, action-oriented titles like "Manual verification: ..." and use the `Josh` label exclusively to designate responsibility.
+
 **Every manual step is a pair:**
 
-| | Issue A — the agent's | Issue B — Josh's |
+| | Issue A — the agent's | Issue B — the manual verification pair |
 |---|---|---|
-| **Scriptable** | `Flash High`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
-| **UI** | `Flash High`. Investigate the live UI and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact click path, screen by screen, literal button and field names. Closes when the doc exists. | `Josh` label. **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he did them. |
+| **Scriptable** | `Flash High`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
+| **UI** | `Flash High`. Investigate the live UI and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact click path, screen by screen, literal button and field names. Closes when the doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he did them. |
 
 Issue B is always `Blocked` on issue A, with both the label and the native dependency. A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
 

@@ -110,7 +110,7 @@ export function renderDesignDoc(
         .replace(/[*_`[\]]/g, "")
         .replace(/\([^)]*\)/g, "")
         .trim();
-      let baseSlug = slugify(cleanTitle) || "section";
+      const baseSlug = slugify(cleanTitle) || "section";
       let slug = baseSlug;
       let counter = 1;
       while (usedSlugs.has(slug)) {
@@ -190,7 +190,9 @@ export function renderDesignDoc(
               bodyHtmlParts.push(`</div>\n</details>`);
             }
             bodyHtmlParts.push(
-              `<details>\n  <summary>${parseInlineMarkdown(text)}</summary>\n  <div class="appendix-content">`,
+              `<details>\n  <summary>${
+                parseInlineMarkdown(text)
+              }</summary>\n  <div class="appendix-content">`,
             );
             inAppendixDetails = true;
           } else {
@@ -233,8 +235,7 @@ export function renderDesignDoc(
         const headerCells = parseRow(tableLines[0]);
         const bodyRows = tableLines.slice(2).map(parseRow);
 
-        let tableHtml =
-          `<div class="table-wrapper">\n<table>\n<thead>\n<tr>\n`;
+        let tableHtml = `<div class="table-wrapper">\n<table>\n<thead>\n<tr>\n`;
         for (const cell of headerCells) {
           tableHtml += `  <th>${parseInlineMarkdown(cell)}</th>\n`;
         }
@@ -277,9 +278,7 @@ export function renderDesignDoc(
       const listItems: string[] = [];
       while (i < lines.length) {
         const itemLine = lines[i].trim();
-        const m = isOl
-          ? itemLine.match(/^(\d+)\.\s+(.*)$/)
-          : itemLine.match(/^([-*+])\s+(.*)$/);
+        const m = isOl ? itemLine.match(/^(\d+)\.\s+(.*)$/) : itemLine.match(/^([-*+])\s+(.*)$/);
         if (m) {
           listItems.push(m[2]);
           i++;
