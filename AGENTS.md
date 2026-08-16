@@ -222,15 +222,16 @@ target list, deployment steps, and verification procedures.
 ## Deno Deploy CLI & Runtime Rules
 
 - **Root Directory Positional Argument**: Always pass `.` (workspace root) as the positional root
-  argument to `deno deploy` (e.g. `deno deploy . --org webjamapps --app web-jam-uptime --prod`).
+  argument to `deno deploy` (e.g. `deno deploy . --config deno.uptime.json --prod`).
   NEVER pass an individual file path like `src/uptime/cron.ts` as the positional root argument
   because Deno Deploy will set `/tmp/build/src` as the working directory, isolating it from root
   project files (`deno.json`, `./monitor.ts`) and causing builds to hang or fail looking for
   dependencies.
-- **Entrypoint Configuration in `deno.json`**: Entrypoint must be configured inside `deno.json`
-  under `"deploy": { "entrypoint": "src/uptime/cron.ts" }`. Do NOT pass `--entrypoint` to
-  `deno deploy` (without `create`), as `--entrypoint` is only a subcommand flag for
-  `deno deploy create`.
+- **Entrypoint Configuration in Isolated Configs**: Entrypoint and app metadata must be configured inside
+  isolated `deno.<service>.json` config files (e.g. `deno.uptime.json`, `deno.devotional.json`)
+  under `"deploy": { "org": "webjamapps", "app": "...", "entrypoint": "...", "exclude": [...] }`
+  and passed via `--config deno.<service>.json`. Do NOT pass `--entrypoint` to `deno deploy`
+  (without `create`), as `--entrypoint` is only a subcommand flag for `deno deploy create`.
 - **Deno Deploy Dynamic Containers Require `Deno.serve`**: In dynamic mode
   (`--runtime-mode dynamic`), entrypoint scripts must include a `Deno.serve` listener guarded by
   `import.meta.main` (e.g.

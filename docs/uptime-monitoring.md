@@ -36,7 +36,10 @@ deno task monitor:cron
 
 1. **Automated CircleCI Cloud Deployment**:
    - Like `web-jam-devotional`, `web-jam-uptime` is automatically deployed to Deno Deploy via CircleCI's `deploy-uptime` job whenever changes are merged to `main`.
-   - Uses `DENO_DEPLOY_TOKEN` in CircleCI and deploys `src/uptime/cron.ts` to `web-jam-uptime`.
+   - Uses `DENO_DEPLOY_TOKEN` in CircleCI and deploys with isolated config `deno.uptime.json` targeting repo root `.`:
+     ```sh
+     deno deploy . --config deno.uptime.json --prod --token "$DENO_DEPLOY_TOKEN" --non-interactive --json
+     ```
    - **One-time Secret Setup (Dashboard)**: Under Deno Deploy Project Settings -> Environment Variables for `web-jam-uptime`, add `GMAIL_USER` and `GMAIL_APP_PASSWORD`.
 
 2. **Verifying Live Operation**:
