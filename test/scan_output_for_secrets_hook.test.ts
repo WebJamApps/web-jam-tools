@@ -175,7 +175,7 @@ Deno.test("a credentialed remote mongodb URI in tool output is detected", async 
   // (not the later runHook call) so `deno fmt` line-wrapping a long call
   // can never separate it from the literal it annotates.
   const pw = variedFakeBody(20, 18);
-  const uri = `mongodb+srv://svcAcct7x:${pw}@prodcluster9.mongodb.net/db`; // webjam-fixture-ok
+  const uri = `mongodb+srv://svcAcct7x:${pw}@prodcluster9.realdomain.org/db`; // webjam-fixture-ok
   const res = await runHook(`Connecting to ${uri}`);
   assertEquals(res.code, 2);
   if (!res.stderr.includes("MongoDB connection string")) {

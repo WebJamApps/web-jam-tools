@@ -110,7 +110,7 @@ Deno.test("hasReservedHost: a .invalid / .example / .test / .localhost host is r
 });
 
 Deno.test("hasReservedHost: a resolvable-looking production host is NOT reserved", () => {
-  assertEquals(hasReservedHost("mongodb+srv://user:pw@prodcluster7.mongodb.net/db"), false);
+  assertEquals(hasReservedHost("mongodb+srv://user:pw@prodcluster7.realdomain.org/db"), false);
 });
 
 Deno.test("a userinfo-bearing mongo URI on a reserved host is suppressed end to end", () => {
@@ -120,7 +120,7 @@ Deno.test("a userinfo-bearing mongo URI on a reserved host is suppressed end to 
 
 Deno.test("a userinfo-bearing mongo URI on a resolvable host with high-entropy credentials is still caught", () => {
   const pw = variedFakeBody(24, 5);
-  const text = `mongodb+srv://svcAcct7x:${pw}@prodcluster7.mongodb.net/db`;
+  const text = `mongodb+srv://svcAcct7x:${pw}@prodcluster7.realdomain.org/db`;
   assertEquals(findCredentialLiteral(text), "MongoDB connection string");
 });
 
