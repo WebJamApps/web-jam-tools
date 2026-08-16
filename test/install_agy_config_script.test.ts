@@ -238,3 +238,58 @@ Deno.test("install-agy-config.sh refuses to install and exits non-zero if master
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("install-agy-config.sh refuses to install and leaves master config untouched when real dest contains credential literal", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt604-dest-secret-" });
+  const masterPath = `${dir}/master_mcp_config.json`;
+  const destPath = `${dir}/mcp_config.json`;
+
+  const initialMasterContent = JSON.stringify(
+    {
+      mcpServers: {
+        reaper: { command: "reaper-mcp", args: [] },
+      },
+    },
+    null,
+    2,
+  ) + "\n";
+
+  const secretDestConfig = {
+    mcpServers: {
+      leakyTool: {
+        command: "docker",
+        args: ["run", "-e", "TOKEN=ghp_1111222233334444555566667777888899990000"],
+      },
+    },
+  };
+
+  try {
+    await Deno.writeTextFile(masterPath, initialMasterContent);
+    await Deno.writeTextFile(destPath, JSON.stringify(secretDestConfig, null, 2));
+
+    const cmd = new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--mcp-src-path", masterPath, "--mcp-config-path", destPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const { code, stderr } = await cmd.output();
+    const stderrStr = new TextDecoder().decode(stderr);
+    assert(code !== 0, `Expected non-zero exit code, got ${code}`);
+    assertStringIncludes(stderrStr, "contains a credential-shaped literal (GitHub token)");
+    assertStringIncludes(stderrStr, "Refusing to install symlink");
+
+    // Assert destination was NOT converted to a symlink
+    const lstat = await Deno.lstat(destPath);
+    assertEquals(lstat.isSymlink, false, "Destination must not be symlinked on refusal");
+
+    // Assert master config file on disk was NEVER modified
+    const masterAfter = await Deno.readTextFile(masterPath);
+    assertEquals(
+      masterAfter,
+      initialMasterContent,
+      "Master config must remain byte-for-byte unchanged on refusal",
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

@@ -51,65 +51,98 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# If a real dest file exists, preserve its contents in the master repo copy
-if [ -f "$DEST_CONFIG" ] && [ ! -L "$DEST_CONFIG" ]; then
-  if [ ! -e "$SRC_CONFIG" ]; then
-    mkdir -p "$(dirname "$SRC_CONFIG")"
-    cp -p "$DEST_CONFIG" "$SRC_CONFIG"
-  else
-    # Reconcile any servers or top-level keys in DEST_CONFIG not already in SRC_CONFIG
-    deno eval '
-      const destPath = Deno.args[0];
-      const srcPath = Deno.args[1];
+# Reconcile local-only entries and validate credential guard in-memory BEFORE touching disk
+deno eval '
+  const srcPath = Deno.args[0];
+  const destPath = Deno.args[1];
+  const detectLibPath = Deno.args[2];
+
+  const { findCredentialLiteral } = await import("file://" + detectLibPath);
+
+  let srcExists = false;
+  let srcJson: Record<string, unknown> = {};
+  let srcRaw = "";
+  try {
+    srcRaw = Deno.readTextFileSync(srcPath);
+    srcJson = JSON.parse(srcRaw);
+    srcExists = true;
+  } catch (e) {
+    if (!(e instanceof Deno.errors.NotFound)) {
+      console.error(`error: ${srcPath} is not valid JSON: ${e}`);
+      Deno.exit(1);
+    }
+  }
+
+  let destIsRealFile = false;
+  let destJson: Record<string, unknown> = {};
+  let destRaw = "";
+  try {
+    const lstat = Deno.lstatSync(destPath);
+    if (lstat.isFile && !lstat.isSymlink) {
+      destIsRealFile = true;
+      destRaw = Deno.readTextFileSync(destPath);
       try {
-        const destRaw = Deno.readTextFileSync(destPath);
-        const destJson = JSON.parse(destRaw);
-        const srcRaw = Deno.readTextFileSync(srcPath);
-        const srcJson = JSON.parse(srcRaw);
-        let modified = false;
-
-        if (destJson && typeof destJson === "object" && srcJson && typeof srcJson === "object") {
-          if (destJson.mcpServers && typeof destJson.mcpServers === "object") {
-            if (!srcJson.mcpServers || typeof srcJson.mcpServers !== "object") {
-              srcJson.mcpServers = {};
-              modified = true;
-            }
-            for (const [key, val] of Object.entries(destJson.mcpServers)) {
-              if (!(key in srcJson.mcpServers)) {
-                srcJson.mcpServers[key] = val;
-                modified = true;
-              }
-            }
-          }
-          for (const [key, val] of Object.entries(destJson)) {
-            if (key !== "mcpServers" && !(key in srcJson)) {
-              srcJson[key] = val;
-              modified = true;
-            }
-          }
-        }
-        if (modified) {
-          Deno.writeTextFileSync(srcPath, JSON.stringify(srcJson, null, 2) + "\n");
-        }
+        destJson = JSON.parse(destRaw);
       } catch {
-        // If parsing fails, let backup preservation handle it
+        // Non-JSON destination file — will be preserved in .bak backup
       }
-    ' "$DEST_CONFIG" "$SRC_CONFIG"
-  fi
-fi
+    }
+  } catch {
+    // destPath does not exist
+  }
 
-if [ ! -f "$SRC_CONFIG" ]; then
-  echo "error: master config not found at $SRC_CONFIG" >&2
-  exit 1
-fi
+  if (!srcExists && !destIsRealFile) {
+    console.error(`error: master config not found at ${srcPath}`);
+    Deno.exit(1);
+  }
 
-# Verify master config contains no credential-shaped literals
-MATCH=$(CMD_FOR_PY="$(cat "$SRC_CONFIG")" deno run --allow-env "$REPO_DIR/hooks/lib/detect_credential_literal.ts" 2>/dev/null || true)
-if [ -n "$MATCH" ]; then
-  echo "error: $SRC_CONFIG contains a credential-shaped literal ($MATCH)" >&2
-  echo "Refusing to install symlink. No entry may store a secret; tokens must be referenced from the environment at launch." >&2
-  exit 1
-fi
+  let candidateJson: Record<string, unknown> = {};
+  let modified = false;
+
+  if (!srcExists && destIsRealFile) {
+    candidateJson = destJson;
+    modified = true;
+  } else {
+    candidateJson = JSON.parse(JSON.stringify(srcJson));
+    if (destIsRealFile && destJson && typeof destJson === "object") {
+      if (destJson.mcpServers && typeof destJson.mcpServers === "object") {
+        if (!candidateJson.mcpServers || typeof candidateJson.mcpServers !== "object") {
+          candidateJson.mcpServers = {};
+          modified = true;
+        }
+        const candidateServers = candidateJson.mcpServers as Record<string, unknown>;
+        for (const [key, val] of Object.entries(destJson.mcpServers as Record<string, unknown>)) {
+          if (!(key in candidateServers)) {
+            candidateServers[key] = val;
+            modified = true;
+          }
+        }
+      }
+      for (const [key, val] of Object.entries(destJson)) {
+        if (key !== "mcpServers" && !(key in candidateJson)) {
+          candidateJson[key] = val;
+          modified = true;
+        }
+      }
+    }
+  }
+
+  // Check candidate config for credential-shaped literals BEFORE writing to srcPath
+  const candidateText = JSON.stringify(candidateJson, null, 2) + "\n";
+  const match = findCredentialLiteral(candidateText);
+  if (match) {
+    console.error(`error: ${srcPath} contains a credential-shaped literal (${match})`);
+    console.error("Refusing to install symlink. No entry may store a secret; tokens must be referenced from the environment at launch.");
+    Deno.exit(1);
+  }
+
+  // Only update srcPath once verified clean
+  if (modified) {
+    const dir = srcPath.slice(0, srcPath.lastIndexOf("/"));
+    if (dir) Deno.mkdirSync(dir, { recursive: true });
+    Deno.writeTextFileSync(srcPath, candidateText);
+  }
+' "$SRC_CONFIG" "$DEST_CONFIG" "$REPO_DIR/hooks/lib/detect_credential_literal.ts"
 
 # Ensure destination directory exists
 mkdir -p "$(dirname "$DEST_CONFIG")"
