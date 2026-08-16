@@ -21,6 +21,7 @@ const HOOKS_DIR = new URL("../hooks/", import.meta.url).pathname;
 // Pinned set of skills/*/ directory names. Update deliberately.
 const EXPECTED_SKILL_DIRS = [
   "backlog-groom",
+  "book-gig",
   "delegate",
   "design-issue",
   "draft-pr",

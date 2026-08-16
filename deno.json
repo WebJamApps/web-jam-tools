@@ -4,6 +4,7 @@
   "tasks": {
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "issue:create": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
+    "book-gig": "deno run --allow-all src/book-gig/cli.ts",
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
     "coverage": "rm -rf cov_profile && deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile && deno coverage cov_profile",
