@@ -8,6 +8,7 @@ import { assertEquals } from "@std/assert";
 import {
   extractEntryModel,
   extractEntryText,
+  isUserTurnBoundary,
   loadTranscript,
   parseTranscriptJsonl,
   selectLastAssistantEntry,
@@ -121,6 +122,172 @@ Deno.test("selectLastAssistantEntry: returns null when all assistant entries are
     assistantEntry("API error", { isApiErrorMessage: true }),
   ];
   assertEquals(selectLastAssistantEntry(entries), null);
+});
+
+// --- isUserTurnBoundary tests ---
+
+Deno.test("isUserTurnBoundary: identifies genuine user messages with string content", () => {
+  assertEquals(isUserTurnBoundary(userEntry("hello")), true);
+  assertEquals(
+    isUserTurnBoundary({ type: "user", message: { role: "user", content: "hi" } }),
+    true,
+  );
+});
+
+Deno.test("isUserTurnBoundary: identifies genuine user messages with text content blocks", () => {
+  const entry: TranscriptEntry = {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "text", text: "user prompt text" }],
+    },
+  };
+  assertEquals(isUserTurnBoundary(entry), true);
+});
+
+Deno.test("isUserTurnBoundary: returns false for tool_result entries and content blocks", () => {
+  assertEquals(
+    isUserTurnBoundary({ type: "tool_result", message: { role: "user", content: "ok" } }),
+    false,
+  );
+  const userWithToolResult: TranscriptEntry = {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "t1", content: "output" }],
+    },
+  };
+  assertEquals(isUserTurnBoundary(userWithToolResult), false);
+});
+
+Deno.test("isUserTurnBoundary: returns false for sidechain and apiErrorMessage entries", () => {
+  assertEquals(
+    isUserTurnBoundary({
+      type: "user",
+      isSidechain: true,
+      message: { role: "user", content: "hi" },
+    }),
+    false,
+  );
+  assertEquals(
+    isUserTurnBoundary({
+      type: "user",
+      isApiErrorMessage: true,
+      message: { role: "user", content: "err" },
+    }),
+    false,
+  );
+});
+
+Deno.test("isUserTurnBoundary: returns false for non-user entries", () => {
+  assertEquals(isUserTurnBoundary(null), false);
+  assertEquals(isUserTurnBoundary(undefined), false);
+  assertEquals(isUserTurnBoundary({ type: "assistant" }), false);
+  assertEquals(isUserTurnBoundary({ type: "attachment" }), false);
+  assertEquals(isUserTurnBoundary({ type: "queue-operation" }), false);
+});
+
+// --- turn boundary and text fallback tests (web-jam-tools#596) ---
+
+Deno.test("selectLastAssistantEntry: never returns an entry from before the most recent user entry", () => {
+  const prevTurnAssistant = assistantEntry("Previous turn reply with bare ref #299");
+  const toolUseEntry = assistantEntry([{ type: "tool_use", id: "t1", name: "Edit", input: {} }]);
+  const entries = [
+    userEntry("Turn 1 prompt"),
+    prevTurnAssistant,
+    userEntry("Turn 2 prompt — current turn"),
+    toolUseEntry,
+  ];
+
+  // In the current turn (Turn 2), the only assistant entry carries no text.
+  // It must return null rather than reaching back into Turn 1.
+  const selected = selectLastAssistantEntry(entries);
+  assertEquals(selected, null);
+});
+
+Deno.test("selectLastAssistantEntry: falls back within the current turn to the last assistant entry that carries text", () => {
+  const turn1Assistant = assistantEntry("Turn 1 text");
+  const turn2AssistantText = assistantEntry("Turn 2 initial explanation of the plan");
+  const turn2ToolUse = assistantEntry([{ type: "tool_use", id: "t1", name: "Edit", input: {} }]);
+
+  const entries = [
+    userEntry("Turn 1"),
+    turn1Assistant,
+    userEntry("Turn 2"),
+    turn2AssistantText,
+    turn2ToolUse,
+  ];
+
+  const selected = selectLastAssistantEntry(entries);
+  assertEquals(selected, turn2AssistantText);
+  assertEquals(extractEntryText(selected), "Turn 2 initial explanation of the plan");
+});
+
+Deno.test("selectLastAssistantEntry: selects the last text-bearing entry in a turn spanning multiple assistant text entries", () => {
+  const text1 = assistantEntry("First assistant text in turn");
+  const text2 = assistantEntry("Second assistant text in turn");
+  const toolUse = assistantEntry([{ type: "tool_use", id: "t2", name: "Bash", input: {} }]);
+
+  const entries = [
+    userEntry("Turn prompt"),
+    text1,
+    text2,
+    toolUse,
+  ];
+
+  const selected = selectLastAssistantEntry(entries);
+  assertEquals(selected, text2);
+  assertEquals(extractEntryText(selected), "Second assistant text in turn");
+});
+
+Deno.test("selectLastAssistantEntry: returns null when current turn contains no assistant text at all", () => {
+  const toolUse1 = assistantEntry([{ type: "tool_use", id: "t1", name: "Bash", input: {} }]);
+  const toolUse2 = assistantEntry([{ type: "tool_use", id: "t2", name: "Edit", input: {} }]);
+
+  const entries = [
+    userEntry("Run some commands"),
+    toolUse1,
+    toolUse2,
+  ];
+
+  assertEquals(selectLastAssistantEntry(entries), null);
+});
+
+Deno.test("selectLastAssistantEntry: tool_result in current turn does not break turn boundary", () => {
+  const text1 = assistantEntry("Starting work");
+  const toolUse = assistantEntry([{ type: "tool_use", id: "t1", name: "Bash", input: {} }]);
+  const toolResultEntry: TranscriptEntry = {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "t1", content: "command output" }],
+    },
+  };
+  const text2 = assistantEntry("Finishing work");
+
+  const entries = [
+    userEntry("Please work on task"),
+    text1,
+    toolUse,
+    toolResultEntry,
+    text2,
+  ];
+
+  const selected = selectLastAssistantEntry(entries);
+  assertEquals(selected, text2);
+  assertEquals(extractEntryText(selected), "Finishing work");
+});
+
+Deno.test("selectLastAssistantEntry: with requireText: false returns tool-use entry in current turn", () => {
+  const toolUse = assistantEntry(
+    [{ type: "tool_use", id: "t1", name: "Bash", input: {} }],
+    { model: "claude-haiku-3-5" },
+  );
+  const entries = [userEntry("Run tool"), toolUse];
+
+  const selected = selectLastAssistantEntry(entries, { requireText: false });
+  assertEquals(selected, toolUse);
+  assertEquals(extractEntryModel(selected), "claude-haiku-3-5");
 });
 
 // --- extractEntryText tests ---
@@ -327,4 +494,45 @@ Deno.test("CLI: fails open (exit 0, empty output) on missing file", async () => 
   const res = await runCli(["--text", "/path/that/does/not/exist.jsonl"]);
   assertEquals(res.code, 0, res.stderr);
   assertEquals(res.stdout.trim(), "");
+});
+
+Deno.test("CLI: --text returns empty when current turn contains only tool-use, never returning previous turn text", async () => {
+  const dir = await Deno.makeTempDir();
+  const filePath = `${dir}/transcript.jsonl`;
+  try {
+    const lines = [
+      JSON.stringify(userEntry("Turn 1 prompt")),
+      JSON.stringify(assistantEntry("Turn 1 assistant text referencing bare #123")),
+      JSON.stringify(userEntry("Turn 2 prompt — current turn")),
+      JSON.stringify(assistantEntry([{ type: "tool_use", id: "t1", name: "Edit", input: {} }])),
+    ].join("\n");
+    await Deno.writeTextFile(filePath, lines);
+
+    const res = await runCli(["--text", filePath]);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stdout.trim(), "");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: --text returns earlier text within current turn when trailing entry is tool-use", async () => {
+  const dir = await Deno.makeTempDir();
+  const filePath = `${dir}/transcript.jsonl`;
+  try {
+    const lines = [
+      JSON.stringify(userEntry("Turn 1 prompt")),
+      JSON.stringify(assistantEntry("Turn 1 text")),
+      JSON.stringify(userEntry("Turn 2 prompt")),
+      JSON.stringify(assistantEntry("Turn 2 plan of action")),
+      JSON.stringify(assistantEntry([{ type: "tool_use", id: "t1", name: "Bash", input: {} }])),
+    ].join("\n");
+    await Deno.writeTextFile(filePath, lines);
+
+    const res = await runCli(["--text", filePath]);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stdout.trim(), "Turn 2 plan of action");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
