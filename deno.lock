@@ -1,16 +1,17 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@std/assert@1": "1.0.19",
-    "jsr:@std/cli@1": "1.0.30",
+    "jsr:@std/assert@^1.0.19": "1.0.19",
+    "jsr:@std/cli@^1.0.32": "1.0.32",
     "jsr:@std/fmt@^1.0.10": "1.0.10",
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "jsr:@std/internal@^1.0.14": "1.0.14",
     "jsr:@std/path@1": "1.1.6",
-    "jsr:@std/yaml@1": "1.1.2",
+    "jsr:@std/path@^1.1.6": "1.1.6",
+    "jsr:@std/yaml@^1.2.0": "1.2.0",
     "npm:cheerio@^1.2.0": "1.2.0",
     "npm:nodemailer@^9.0.1": "9.0.3",
-    "npm:playwright@^1.59.1": "1.61.1"
+    "npm:playwright@^1.62.1": "1.62.1"
   },
   "jsr": {
     "@std/assert@1.0.19": {
@@ -19,8 +20,8 @@
         "jsr:@std/internal@^1.0.12"
       ]
     },
-    "@std/cli@1.0.30": {
-      "integrity": "769446536522d0417d7127ebcabcafac1ab0ce6766d0eb3fca1d36326fe98d13",
+    "@std/cli@1.0.32": {
+      "integrity": "188b3a100d6202d64e3f5bd3d799c7fa4f6d77f92cc65eb7f641c1fa0aa92a66",
       "dependencies": [
         "jsr:@std/fmt",
         "jsr:@std/internal@^1.0.14"
@@ -38,8 +39,8 @@
         "jsr:@std/internal@^1.0.14"
       ]
     },
-    "@std/yaml@1.1.2": {
-      "integrity": "de612653c036749ba2044165e316f52412b0f0698afffb7ee80b5331d6d2abae"
+    "@std/yaml@1.2.0": {
+      "integrity": "20beb41e4983ba3437dbefac62b14061ab058e8a187596f19d28ff9035f6e6cf"
     }
   },
   "npm": {
@@ -175,12 +176,12 @@
         "entities@6.0.1"
       ]
     },
-    "playwright-core@1.61.1": {
-      "integrity": "sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg==",
+    "playwright-core@1.62.1": {
+      "integrity": "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
       "bin": true
     },
-    "playwright@1.61.1": {
-      "integrity": "sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ==",
+    "playwright@1.62.1": {
+      "integrity": "sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==",
       "dependencies": [
         "playwright-core"
       ],
@@ -289,12 +290,12 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@std/assert@1",
-      "jsr:@std/cli@1",
-      "jsr:@std/path@1",
-      "jsr:@std/yaml@1",
+      "jsr:@std/assert@^1.0.19",
+      "jsr:@std/cli@^1.0.32",
+      "jsr:@std/path@^1.1.6",
+      "jsr:@std/yaml@^1.2.0",
       "npm:cheerio@^1.2.0",
-      "npm:playwright@^1.59.1"
+      "npm:playwright@^1.62.1"
     ]
   }
 }

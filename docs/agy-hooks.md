@@ -134,7 +134,7 @@ existing `~/.gmail-mcp/` credentials — no new OAuth grant, no new account. It 
 ([web-jam-tools#316](https://github.com/WebJamApps/web-jam-tools/issues/316)) and is not affected
 by any of this.
 
-### 🟢 Gemini / Antigravity CLI (`~/.gemini/config/mcp_config.json`)
+### 🟢 Gemini / Antigravity CLI (`agy/config/mcp_config.json` → `~/.gemini/config/mcp_config.json`)
 
 ```json
 {
@@ -145,11 +145,25 @@ by any of this.
     },
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--headless"]
+      "args": [
+        "-y",
+        "@playwright/mcp@latest",
+        "--headless"
+      ]
+    },
+    "github": {
+      "command": "bash",
+      "args": [
+        "-lc",
+        "exec docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=\"$GH_TOKEN\" ghcr.io/github/github-mcp-server stdio"
+      ]
     },
     "gmail": {
       "command": "npx",
-      "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"]
+      "args": [
+        "-y",
+        "@gongrzhe/server-gmail-autoauth-mcp"
+      ]
     }
   }
 }
@@ -159,24 +173,23 @@ by any of this.
 
 **This change is deliberately NOT applied to any live config by this repo's automation.**
 Connecting a new MCP server to a Flash surface requires Josh's explicit authorization naming that
-connection — working this issue is not that authorization. `scripts/merge-agy-gmail-mcp.ts` /
-`scripts/install-agy-gmail-mcp.sh` exist so the change is reproducible instead of a hand-applied,
-untracked laptop edit, but neither script is wired into `scripts/install-hooks.sh` or run by any
-agent session. When Josh is ready:
+connection — working this issue is not that authorization. `scripts/install-agy-config.sh` exists
+so the change is reproducible instead of a hand-applied, untracked laptop edit, but it is not wired
+into `scripts/install-hooks.sh` or run by any agent session. When Josh is ready:
 
 ```sh
 # 1. Install the hooks first (send/delete fence + model guard), if not already installed:
 scripts/install-hooks.sh
 
-# 2. Then add the gmail MCP server entry:
-scripts/install-agy-gmail-mcp.sh
+# 2. Symlink Antigravity's mcp_config.json to the master copy in this repo:
+scripts/install-agy-config.sh
 
 # 3. Restart agy — it reads hooks.json and mcp_config.json at startup.
 ```
 
-`--mcp-config-path PATH` (or `AGY_MCP_CONFIG_PATH`) sandboxes the merge to a different path, for
-testing. The merge is purely additive and idempotent — it never touches the `playwright`/`reaper`
-entries or any other top-level key, and re-running it when the entry already matches is a no-op.
+`--mcp-config-path PATH` (or `AGY_MCP_CONFIG_PATH`) sandboxes the install to a different path for
+testing. The installer is idempotent — an already-correct symlink is left alone, and an existing real
+file is backed up before being replaced by the symlink.
 
 ## 7. Send/delete fence
 
@@ -193,8 +206,8 @@ Being explicit about the gap between "built and tested against sandboxed fixture
 live," per this repo's honesty convention (see `agy/webjam-tasks/README.md`'s "Merge/deploy guard
 hook" section for the same disclosure on a related agy-native hook):
 
-- **The `gmail` MCP server entry has not been applied to `~/.gemini/config/mcp_config.json`.**
-  Building the reproducible mechanism (§6) is this issue's scope; applying it is Josh's.
+- **The symlink has not been applied to `~/.gemini/config/mcp_config.json`.**
+  Building the reproducible mechanism (`scripts/install-agy-config.sh`, §6) is this issue's scope; applying it is Josh's.
 - **Nothing here has been verified live on Antigravity after a restart.** All coverage above is
   end-to-end against the real payload SHAPE (`toolCall.name`/`args`, `transcriptPath`, `modelName`,
   ...) driven through `hooks/agy-hook-shim.sh` via `Deno.Command`, asserting the shim's emitted
