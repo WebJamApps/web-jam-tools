@@ -214,7 +214,7 @@ export function isPlaceholderValue(val: string): boolean {
  * infrastructure, not a secret, and must not be flagged regardless of
  * whether the host is remote or local. A userinfo-bearing URI must still be
  * flagged regardless of whether the host is remote OR local — a local
- * MongoDB with a live password (`mongodb://admin:hunter2@localhost:27017`)
+ * MongoDB with a live password (`mongodb://admin:hunter2@localhost:27017`) — webjam-fixture-ok
  * is still a real credential.
  *
  * Returns the `user[:pass]` segment of the URI's authority, or null if
