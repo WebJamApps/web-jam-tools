@@ -240,6 +240,11 @@ skill.
     Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached
     under that same Epic (marked `Blocked` on the coding child). The parent Epic body carries the
     sub-issue list and closes when all sub-issues close.
+  - **Manual Step Issue & Document Title Rule:** Never prefix issue titles or runbook document
+    titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional,
+    action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and
+    responsibility are designated exclusively by the `Josh` label or assignees, never by embedding
+    a personal name in the issue or document title.
 - **THE `Blocked` LABEL IS CANONICAL — NATIVE ISSUE DEPENDENCIES DO NOT REPLACE IT.** Josh wants
   BOTH: native GitHub issue-dependency links (the real relationship between issues) AND the
   `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) as the
