@@ -2,7 +2,7 @@
 name: pr-review
 description: Cross-model PR review pipeline where Flash High reviews Sonnet PRs, and Sonnet reviews Flash PRs. Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open PRs by the opposite model tier). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `gh pr review --comment`.
 metadata:
-  version: v1
+  version: v2
   publisher: josh
 ---
 
@@ -23,9 +23,15 @@ Cross-model review ensures fresh perspective and catches model-specific blind sp
 
 - **Named mode**: `/pr-review <Repo>#<pr-num>` (e.g. `/pr-review web-jam-tools#363` or `https://github.com/WebJamApps/web-jam-tools/pull/363`).
 - **Auto-detect mode**: `/pr-review` (with no arguments).
-  - Queries open draft/ready PRs across WebJamApps repositories using `gh pr list`.
-  - Inspects PR attribution (`🤖 Work by ...` or branch prefix / `--author` flag) to identify candidate PRs authored by the opposite tier.
-  - Automatically selects the oldest un-reviewed PR authored by the opposite tier. A candidate PR is un-reviewed if it has no automated reviews carrying the `## PR Review Summary` header OR if its current head commit SHA (`commits | last | .oid`) is different from the commit SHA of its newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`).
+  - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list in [`skills/flash-issues/SKILL.md`](../flash-issues/SKILL.md) under "Scope — all eight active repos, exactly these slugs").
+  - Matches candidate Flash-authored PRs across **both** Flash tiers: `Gemini Flash (Medium)` and `Gemini Flash (High)` as spelled in the `ROSTER` array in `scripts/create-draft-pr.sh` (e.g. matching `Gemini Flash (Medium)` and `Gemini Flash (High)` in the PR body trailer `🤖 Work by ...` or `--author` attribution).
+  - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
+    - Compares the commit SHA of the newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`) against the PR's current head commit SHA (`commits | last | .oid`).
+    - If equal (`head_sha == last_review_sha`), mark as `reviewed at current head`. Already-reviewed PRs are included in the pick-list rather than filtered out.
+    - If no prior automated review exists or if new commits have been pushed since the last automated review (`head_sha != last_review_sha`), mark as `needs review`.
+  - Builds and displays a numbered pick-list table carrying per row: repo, PR number, PR title, author tier (`Gemini Flash (Medium)` / `Gemini Flash (High)`), age in days, draft/ready state, and review status.
+  - **Stops and waits for Josh**: The skill STOPS and waits for Josh to choose a PR by number from the numbered pick-list before fetching, posting, or beginning any review. It **never** silently auto-selects a PR.
+  - **Empty result handling**: If no open Flash-authored PRs exist across any of the eight active repositories, reports plainly that no open Flash-authored PRs were found (e.g., *"No open Flash-authored (`Gemini Flash (Medium)` or `Gemini Flash (High)`) PRs found across the eight active WebJamApps repositories."*) and stops immediately, without falling through to named mode.
 
 ## Review Pipeline
 
