@@ -86,7 +86,7 @@ Deno.test("detect_credential_literal helper", () => {
   // flag" case here needs a value the heuristic does NOT cover.
   assertEquals(
     findCredentialLiteral(
-      "mongodb+srv://svcAcct7x:" + variedFakeBody(20, 91) + "@prodcluster1.mongodb.net/my_db",
+      "mongodb+srv://svcAcct7x:" + variedFakeBody(20, 91) + "@prodcluster1.realdomain.org/my_db",
     ), // webjam-fixture-ok
     "MongoDB connection string",
   );
