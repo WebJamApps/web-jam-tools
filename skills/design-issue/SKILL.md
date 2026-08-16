@@ -204,6 +204,14 @@ Issue B is always `Blocked` on issue A, with both the label and the native depen
 
 This replaces the old "Josh's run is an Epic checkbox" rule and `--part-of` convention for post-merge manual steps: a remaining manual step becomes its own issue, so the agent's PR closes the agent's issue normally.
 
+### Designed Issues with Paired Manual Steps Become Parent Epics
+
+When `/design-issue` resolves an existing issue into paired implementation and Josh manual verification tasks:
+1. **Convert the target designed issue into native type `Epic`** (via GraphQL `updateIssue` with the repo's `Epic` `issueTypeId`).
+2. **File the executable coding work as a child `Task` sub-issue** attached under that Epic.
+3. **File the paired `Josh` manual verification step as a child `Task` sub-issue** attached under that same Epic (labeled `Blocked` and natives-linked to the coding child).
+4. **Author the parent Epic body with the sub-issue list and closing criteria** ("Closes when all sub-issues close").
+
 ---
 
 ## The `Needs Design` Label

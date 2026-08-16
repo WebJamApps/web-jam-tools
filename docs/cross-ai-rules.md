@@ -233,6 +233,13 @@ skill.
     An **empty array** (`[]`) in `closingIssuesReferences` is the only valid proof that GitHub will
     not auto-close the issue on merge. Body text prose alone is NOT proof, because GitHub parses the
     keyword rather than prose.
+  - **Designed Issues with Paired Manual Steps Become Parent Epics:** When `/design-issue` resolves an
+    existing issue into paired implementation and Josh manual verification tasks, convert the target
+    designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic`
+    `issueTypeId`), file the executable coding work as a child `Task` sub-issue attached under that
+    Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached
+    under that same Epic (marked `Blocked` on the coding child). The parent Epic body carries the
+    sub-issue list and closes when all sub-issues close.
 - **THE `Blocked` LABEL IS CANONICAL — NATIVE ISSUE DEPENDENCIES DO NOT REPLACE IT.** Josh wants
   BOTH: native GitHub issue-dependency links (the real relationship between issues) AND the
   `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) as the
