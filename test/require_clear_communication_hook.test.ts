@@ -435,3 +435,77 @@ Deno.test("invalid JSON on stdin stays silent, exit 0 (fail-open)", async () => 
   const { code, stderr } = await child.output();
   assertEquals(code, 0, new TextDecoder().decode(stderr));
 });
+
+// --- turn boundary tests (web-jam-tools#596) ---
+
+Deno.test("reproduces issue #596: previous turn contains clear-communication violation, current turn contains only tool-use -> allowed (exit 0)", async () => {
+  const entries = [
+    userTurn("first request"),
+    assistantText("Should I do X? Should I do Y? Should I do Z?"), // violating text in previous turn
+    userTurn("second request — current turn"),
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "t1", name: "Edit", input: {} }],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stderr.trim(), "");
+  });
+});
+
+Deno.test("current turn contains clear-communication violation followed by trailing tool-use -> blocked (exit 2)", async () => {
+  const entries = [
+    userTurn("first request"),
+    assistantText("Clean first reply."),
+    userTurn("second request — current turn"),
+    assistantText("Should I dispatch the Sonnet agent now? Should I also open the issue?"),
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 2);
+    assertBlocked(res.stderr);
+    assert(res.stderr.includes("Rule 1"));
+    assert(res.stderr.includes("Should I dispatch the Sonnet agent now?"));
+    assert(res.stderr.includes("Should I also open the issue?"));
+  });
+});
+
+Deno.test("current turn contains entry with text block and trailing tool_use block -> blocked (exit 2)", async () => {
+  const entries = [
+    userTurn("second request — current turn"),
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [
+          {
+            type: "text",
+            text: "Should I dispatch the Sonnet agent now? Should I also open the issue?",
+          },
+          { type: "tool_use", id: "t1", name: "Bash", input: {} },
+        ],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 2);
+    assertBlocked(res.stderr);
+    assert(res.stderr.includes("Rule 1"));
+  });
+});

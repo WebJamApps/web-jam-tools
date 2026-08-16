@@ -358,3 +358,48 @@ Deno.test("a real reply with a bare citation is blocked even when followed by cl
     assertBlocked(res.stderr, "#299");
   });
 });
+
+// --- turn boundary tests (web-jam-tools#596) ---
+
+Deno.test("reproduces issue #596: previous turn contains bare citation, current turn contains only tool-use -> allowed (exit 0)", async () => {
+  const entries = [
+    userTurn("first request"),
+    assistantText("See #299 for details."), // violating text in previous turn
+    userTurn("second request — current turn"),
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "t1", name: "Edit", input: {} }],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stderr.trim(), "");
+  });
+});
+
+Deno.test("current turn contains bare citation followed by tool-use -> blocked (exit 2)", async () => {
+  const entries = [
+    userTurn("first request"),
+    assistantText("Clean first reply."),
+    userTurn("second request — current turn"),
+    assistantText("Working on #299 now."),
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 2);
+    assertBlocked(res.stderr, "#299");
+  });
+});

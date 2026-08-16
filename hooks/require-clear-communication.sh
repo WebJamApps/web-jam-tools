@@ -35,10 +35,10 @@
 # URLs before rule 1/2 ever look for a "?", and rule 3 only looks at text
 # outside fenced/inline code.
 #
-# IMPORTANT — transcript entry selection (web-jam-tools#531, added scope):
-# unlike require-issue-citation-titles.sh's simpler
-# `select(.type == "assistant" and content != null) | first` (on the
-# tac'd/reversed array), this hook ALSO excludes:
+# IMPORTANT — transcript entry selection (web-jam-tools#531, web-jam-tools#596):
+# selects the last genuine main-thread assistant entry in the current turn via
+# hooks/lib/select_transcript_entry.ts. Excludes:
+#   - entries before the most recent genuine user entry (turn boundary isolation)
 #   - isSidechain:true entries — a subagent's own transcript lines are
 #     interleaved into the SAME transcript file and are typed "assistant"
 #     too; they are never the message actually sent to Josh.
@@ -51,38 +51,21 @@
 #     the author's side, since rewriting the real message can't change what
 #     is being judged. Confirmed present in real transcripts on this laptop
 #     (top-level fields, siblings of "message", not nested under it).
-# require-issue-citation-titles.sh reportedly mis-fired on 2026-08-14 in a
-# way consistent with this exact failure mode; fixing THAT hook is a
-# separate, out-of-scope defect. This hook does not inherit the gap.
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 DETECTOR="$HOOK_DIR/lib/detect_clear_communication_violations.ts"
+SELECTOR="$HOOK_DIR/lib/select_transcript_entry.ts"
 CONFIG="$HOOK_DIR/clear-communication.yaml"
 
 input="$(cat)" || exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 [ -n "$tp" ] && [ -f "$tp" ] || exit 0
 
-# Last GENUINE main-thread assistant entry's text content, concatenated
-# across any text blocks it carries. Reverse the file first (tac) so
-# slurping into an array and taking the first element that matches gives the
-# ORIGINAL last qualifying assistant entry (same technique
-# require-issue-citation-titles.sh uses) — but see the "IMPORTANT" header
-# comment above for the two extra exclusions this hook applies that the
-# citation hook does not.
-msg="$(tac "$tp" 2>/dev/null | jq -rs '
-  [ .[] | select(
-      .type == "assistant"
-      and ((.message.content? // null) != null)
-      and ((.isSidechain // false) | not)
-      and ((.isApiErrorMessage // false) | not)
-    ) ]
-  | first
-  | (.message.content // [])
-  | map(select(.type == "text") | .text)
-  | join("\n")
-' 2>/dev/null || true)"
+# Last genuine assistant transcript entry's text content, selected via
+# hooks/lib/select_transcript_entry.ts (excludes isSidechain and
+# isApiErrorMessage entries, bounds search to current turn — web-jam-tools#596).
+msg="$(deno run --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
 
 [ -n "$msg" ] || exit 0
 

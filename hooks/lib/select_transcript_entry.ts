@@ -14,6 +14,7 @@
  *   - hooks/require-issue-citation-titles.sh (Stop hook, web-jam-tools#565)
  *   - hooks/opus-no-delegation-warning.sh (Stop hook, web-jam-tools#566)
  *   - hooks/haiku-only-gmail-gate.sh (PreToolUse hook, web-jam-tools#566)
+ *   - hooks/require-clear-communication.sh (Stop hook, web-jam-tools#596)
  *
  * CLI usage:
  *   deno run --allow-read hooks/lib/select_transcript_entry.ts [--text|--model|--json] [path/to/transcript.jsonl]
@@ -41,23 +42,74 @@ export interface TranscriptEntry {
   [key: string]: unknown;
 }
 
+export interface SelectOptions {
+  /**
+   * If true (default), selects the last assistant entry in the current turn
+   * that carries non-empty text content.
+   * If false, selects the last assistant entry in the current turn regardless
+   * of whether it carries text (e.g. for model extraction).
+   */
+  requireText?: boolean;
+}
+
 /**
- * Selects the last genuine main-thread assistant transcript entry.
+ * Checks if a transcript entry represents a genuine user turn boundary
+ * (i.e. a prompt typed by the user, not a tool_result fed back during the assistant's turn).
+ */
+export function isUserTurnBoundary(entry: TranscriptEntry | null | undefined): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.isSidechain === true) return false;
+  if (entry.isApiErrorMessage === true) return false;
+
+  const isUser = entry.type === "user" || entry.message?.role === "user";
+  if (!isUser) return false;
+
+  if (entry.type === "tool_result") return false;
+
+  const content = entry.message?.content;
+  if (Array.isArray(content)) {
+    const hasToolResult = content.some(
+      (b) => b && typeof b === "object" && (b.type === "tool_result" || "tool_use_id" in b),
+    );
+    if (hasToolResult) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Selects the last genuine main-thread assistant transcript entry from the current turn.
  *
  * Traverses entries in reverse chronological order (from the end of the array)
- * and returns the first entry that matches all criteria:
- *   - type == "assistant" or message.role == "assistant"
- *   - message.content is not null / undefined
- *   - isSidechain is not true
- *   - isApiErrorMessage is not true
+ * and bounds the search to the current turn (stops at the most recent user entry
+ * and never reads past it).
+ *
+ * Excludes:
+ *   - entries before the most recent genuine user entry (turn boundary)
+ *   - entries where isSidechain == true
+ *   - entries where isApiErrorMessage == true
+ *   - entries with null / undefined message or content
+ *   - entries without text content when options.requireText is true (default)
  *
  * @param entries Array of parsed transcript entries in chronological order.
- * @returns The last matching assistant entry, or null if none match.
+ * @param options Selection options (requireText defaults to true).
+ * @returns The matching assistant entry in the current turn, or null if none match.
  */
 export function selectLastAssistantEntry(
   entries: readonly TranscriptEntry[],
+  options?: SelectOptions,
 ): TranscriptEntry | null {
+  const requireText = options?.requireText ?? true;
+
+  let lastUserIdx = -1;
   for (let i = entries.length - 1; i >= 0; i--) {
+    if (isUserTurnBoundary(entries[i])) {
+      lastUserIdx = i;
+      break;
+    }
+  }
+
+  for (let i = entries.length - 1; i > lastUserIdx; i--) {
     const entry = entries[i];
     if (!entry || typeof entry !== "object") continue;
 
@@ -69,6 +121,13 @@ export function selectLastAssistantEntry(
 
     if (!entry.message || entry.message.content === null || entry.message.content === undefined) {
       continue;
+    }
+
+    if (requireText) {
+      const text = extractEntryText(entry);
+      if (text.trim() === "") {
+        continue;
+      }
     }
 
     return entry;
@@ -209,19 +268,20 @@ if (import.meta.main) {
       entries = await loadTranscript(raw);
     }
 
-    const selected = selectLastAssistantEntry(entries);
-
     if (mode === "text") {
+      const selected = selectLastAssistantEntry(entries, { requireText: true });
       const text = extractEntryText(selected);
       if (text !== "") {
         console.log(text);
       }
     } else if (mode === "model") {
+      const selected = selectLastAssistantEntry(entries, { requireText: false });
       const model = extractEntryModel(selected);
       if (model !== "") {
         console.log(model);
       }
     } else if (mode === "json") {
+      const selected = selectLastAssistantEntry(entries, { requireText: true });
       if (selected) {
         console.log(JSON.stringify(selected));
       }
