@@ -9,6 +9,7 @@ import {
 } from "../src/book-gig/candidates.ts";
 import { BANNED_VOICE_WORDS, renderPitch, validateVoiceRules } from "../src/book-gig/pitch.ts";
 import { formatDraftPayload, writeDropboxRunLog } from "../src/book-gig/gmail.ts";
+import { renderDarkHtml } from "../src/book-gig/html.ts";
 import { runBookGigCli } from "../src/book-gig/cli.ts";
 import type { CandidateVenue, TargetWeekend } from "../src/book-gig/types.ts";
 
@@ -242,12 +243,77 @@ Deno.test("formatDraftPayload and writeDropboxRunLog: formats and writes run log
     };
     const logPath = await writeDropboxRunLog(result, tmpDir);
     assert(logPath !== null);
-    const content = await Deno.readTextFile(logPath);
-    assertStringIncludes(content, "Parkway Brewing");
-    assertStringIncludes(content, "October 16–18, 2026");
+    const mdContent = await Deno.readTextFile(logPath);
+    assertStringIncludes(mdContent, "Parkway Brewing");
+    assertStringIncludes(mdContent, "October 16–18, 2026");
+
+    // Verify corresponding HTML artifact was created
+    const htmlPath = logPath.replace(/\.md$/, ".html");
+    const htmlContent = await Deno.readTextFile(htmlPath);
+    assertStringIncludes(htmlContent, "<!DOCTYPE html>");
+    assertStringIncludes(htmlContent, "Parkway Brewing");
+    assertStringIncludes(htmlContent, "--bg-primary: #121212");
+    assertStringIncludes(htmlContent, 'name="viewport"');
+    assertStringIncludes(htmlContent, "Copy Email");
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
+});
+
+Deno.test("renderDarkHtml: generates responsive Dark Mode HTML for multiple venues and empty state", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue1: CandidateVenue = {
+    _id: "v1",
+    name: "Macado's",
+    city: "Roanoke",
+    usState: "VA",
+    email: "info@macados.com",
+    reason: { spacingNote: "Eligible" },
+  };
+
+  const venue2: CandidateVenue = {
+    _id: "v2",
+    name: "Starr Hill",
+    email: "booking@starrhill.com",
+    secondaryEmail: "manager@starrhill.com",
+  };
+
+  const pitch1 = renderPitch(venue1, weekend);
+  const pitch2 = renderPitch(venue2, weekend);
+
+  const resultWithVenues = {
+    weekend,
+    location: { raw: "Lynchburg, VA", city: "Lynchburg", state: "VA" },
+    candidates: [venue1, venue2],
+    density: { count: 2, isSparse: false },
+    pitches: [pitch1, pitch2],
+  };
+
+  const html = renderDarkHtml(resultWithVenues);
+  assertStringIncludes(html, "Macado&#039;s");
+  assertStringIncludes(html, "Starr Hill");
+  assertStringIncludes(html, "manager@starrhill.com");
+  assertStringIncludes(html, "Lynchburg, VA");
+
+  // Empty result
+  const emptyResult = {
+    weekend,
+    candidates: [],
+    density: { count: 0, isSparse: true },
+    pitches: [],
+  };
+  const emptyHtml = renderDarkHtml(emptyResult);
+  assertStringIncludes(emptyHtml, "No venues found matching criteria");
+  assertStringIncludes(emptyHtml, "No pitches drafted.");
 });
 
 Deno.test("fetchCandidates: fetches candidates with bare array and handles error status", async () => {

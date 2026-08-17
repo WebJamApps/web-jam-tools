@@ -18,7 +18,17 @@ export async function fetchCandidates(
   const backendUrl = options.backendUrl ||
     Deno.env.get("WEB_JAM_BACK_URL") ||
     "https://webjamsalem.herokuapp.com";
-  const token = options.token || Deno.env.get("WEB_JAM_LLM_TOKEN");
+  let token = options.token || Deno.env.get("WEB_JAM_LLM_TOKEN");
+  if (!token) {
+    try {
+      const home = Deno.env.get("HOME");
+      if (home) {
+        token = (await Deno.readTextFile(`${home}/Dropbox/web-jam-llms/web-jam-llm.token`)).trim();
+      }
+    } catch {
+      // ignore if token file not accessible
+    }
+  }
 
   const targetDatesParam = encodeURIComponent(`${options.weekend.start} to ${options.weekend.end}`);
   const url = `${backendUrl}/outreach/candidates?targetDates=${targetDatesParam}`;

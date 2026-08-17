@@ -1,6 +1,7 @@
 // src/book-gig/gmail.ts — Gmail draft creation and run logging for /book-gig
 
 import type { BookGigResult, PitchEmail } from "./types.ts";
+import { renderDarkHtml } from "./html.ts";
 
 export interface CreateDraftResult {
   venueId: string;
@@ -30,7 +31,7 @@ export function formatDraftPayload(pitch: PitchEmail): {
 }
 
 /**
- * Record an outreach run log in Dropbox for Josh's records
+ * Record an outreach run log in Dropbox for Josh's records (Markdown + Responsive Dark Mode HTML)
  */
 export async function writeDropboxRunLog(
   result: BookGigResult,
@@ -39,7 +40,8 @@ export async function writeDropboxRunLog(
   try {
     await Deno.mkdir(outputDir, { recursive: true });
     const dateSlug = `${result.weekend.start}-to-${result.weekend.end}`;
-    const filePath = `${outputDir}/book-gig-run-${dateSlug}.md`;
+    const mdPath = `${outputDir}/book-gig-run-${dateSlug}.md`;
+    const htmlPath = `${outputDir}/book-gig-run-${dateSlug}.html`;
 
     const candidateRows = result.candidates.map((c, i) =>
       `| ${i + 1} | ${c.name} | ${c.city || "—"}, ${c.usState || "—"} | ${c.email || "—"} | ${
@@ -89,8 +91,13 @@ ${pitchBlocks || "*No pitches generated.*"}
 *Note: All pitch emails are created as Gmail Drafts for Josh's manual review. No automated sending was performed.*
 `;
 
-    await Deno.writeTextFile(filePath, content);
-    return filePath;
+    await Deno.writeTextFile(mdPath, content);
+
+    // Generate and write standalone responsive Dark Mode HTML for Chrome review
+    const htmlContent = renderDarkHtml(result);
+    await Deno.writeTextFile(htmlPath, htmlContent);
+
+    return mdPath;
   } catch (err) {
     console.warn(`[book-gig] Failed to write run log to Dropbox: ${(err as Error).message}`);
     return null;

@@ -52,7 +52,7 @@ graph TD
   `| # | Venue Name | City, State | Booking Email | Spacing Reason |`
 - Josh approves the target list (e.g. "all", "1, 2, 4", or "skip X").
 
-### 5. Pitch Drafting & Gmail Drafts
+### 5. Pitch Drafting, Gmail Drafts & Responsive HTML Review Artifact
 - Generates personalized emails strictly conforming to `docs/cross-ai-rules.md` **Voice Rules**:
   - First-person singular ("I", "my wife Maria", "my wife and I play as Josh and Maria, an acoustic duo out of Salem, VA").
   - Salutation: `Hi,` or `Hi [Name],` (never "Dear [Title]").
@@ -60,7 +60,8 @@ graph TD
   - Warm coffee-shop conversational tone.
   - Preserves personal hooks (e.g. "son lives in Rustburg" or past performance note).
 - Creates Gmail drafts in `joshua.v.sherman@gmail.com` for 1-click review and sending.
-- Records outreach campaign metadata in MongoDB and logs run summary in `~/Dropbox/web-jam-llms/gig-outreach/`.
+- Records outreach campaign metadata in MongoDB.
+- **Responsive Dark Mode HTML Artifact:** Generates both a Markdown summary and a standalone Dark Mode `.html` review artifact in `~/Dropbox/web-jam-llms/gig-outreach/book-gig-run-<weekend>.html` for 1-click visual inspection in Google Chrome, responsive across desktop and cellphone screens with copyable pitch cards and candidate tables.
 
 ## What It Refuses to Do
 
