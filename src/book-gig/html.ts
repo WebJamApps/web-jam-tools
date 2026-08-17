@@ -11,6 +11,46 @@ function escapeHtml(str: string): string {
     .replace(/'/g, "&#039;");
 }
 
+function renderPitchCard(p: PitchEmail, idx: number): string {
+  const safeVenue = escapeHtml(p.venueName);
+  const safeTo = escapeHtml(p.to);
+  const safeSecondary = p.secondaryTo ? escapeHtml(p.secondaryTo) : "";
+  const safeSubject = escapeHtml(p.subject);
+  const safePitchText = escapeHtml(p.body);
+  const cardId = `pitch-body-${idx + 1}`;
+
+  const secondaryMeta = safeSecondary
+    ? `<span class="meta-secondary">(${safeSecondary})</span>`
+    : "";
+
+  return [
+    `<section class="pitch-card" id="pitch-${idx + 1}">`,
+    `  <header class="pitch-header">`,
+    `    <div class="pitch-title-wrap">`,
+    `      <span class="pitch-num">#${idx + 1}</span>`,
+    `      <h3 class="pitch-venue">${safeVenue}</h3>`,
+    `    </div>`,
+    `    <div class="pitch-meta">`,
+    `      <span class="to-label">To:</span>`,
+    `      <a href="mailto:${safeTo}" class="meta-email">${safeTo}</a>`,
+    `      ${secondaryMeta}`,
+    `    </div>`,
+    `  </header>`,
+    `  <div class="pitch-subject">`,
+    `    <strong>Subject:</strong> <span>${safeSubject}</span>`,
+    `  </div>`,
+    `  <div class="pitch-body-wrap">`,
+    `    <div class="pitch-actions">`,
+    `      <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('${cardId}').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Email', 2000)">`,
+    `        Copy Email`,
+    `      </button>`,
+    `    </div>`,
+    '    <pre class="pitch-body" id="' + cardId + '">' + safePitchText + "</pre>",
+    `  </div>`,
+    `</section>`,
+  ].join("\n");
+}
+
 export function renderDarkHtml(result: BookGigResult): string {
   const weekend = result.weekend;
   const weekendLabel = escapeHtml(weekend.label || `${weekend.start} to ${weekend.end}`);
@@ -45,42 +85,7 @@ export function renderDarkHtml(result: BookGigResult): string {
       </tr>`;
   }).join("\n");
 
-  const pitchCards = result.pitches.map((p: PitchEmail, idx: number) => {
-    const venueName = escapeHtml(p.venueName);
-    const toEmail = escapeHtml(p.to);
-    const secondaryEmail = p.secondaryTo ? escapeHtml(p.secondaryTo) : null;
-    const subject = escapeHtml(p.subject);
-    const body = escapeHtml(p.body);
-    const cardId = `pitch-body-${idx + 1}`;
-
-    return `
-      <section class="pitch-card" id="pitch-${idx + 1}">
-        <header class="pitch-header">
-          <div class="pitch-title-wrap">
-            <span class="pitch-num">#${idx + 1}</span>
-            <h3 class="pitch-venue">${venueName}</h3>
-          </div>
-          <div class="pitch-meta">
-            <span class="to-label">To:</span>
-            <a href="mailto:${toEmail}" class="meta-email">${toEmail}</a>
-            ${secondaryEmail ? `<span class="meta-secondary">(${secondaryEmail})</span>` : ""}
-          </div>
-        </header>
-
-        <div class="pitch-subject">
-          <strong>Subject:</strong> <span>${subject}</span>
-        </div>
-
-        <div class="pitch-body-wrap">
-          <div class="pitch-actions">
-            <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('${cardId}').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Email', 2000)">
-              Copy Email
-            </button>
-          </div>
-          <pre class="pitch-body" id="${cardId}">${body}</pre>
-        </div>
-      </section>`;
-  }).join("\n");
+  const pitchCards = result.pitches.map(renderPitchCard).join("\n");
 
   return `<!DOCTYPE html>
 <html lang="en">
