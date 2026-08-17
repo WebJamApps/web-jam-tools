@@ -97,10 +97,12 @@ export async function runBookGigCli(args: string[]): Promise<BookGigResult> {
     pitches,
   };
 
-  // 6. Write run log to Dropbox
+  // 6. Write run log to Dropbox (Markdown + Responsive Dark Mode HTML)
   const logPath = await writeDropboxRunLog(result);
   if (logPath) {
     console.log(`📝 Saved run summary log to: ${logPath}`);
+    const htmlPath = logPath.replace(/\.md$/, ".html");
+    console.log(`🌐 Saved Dark Mode HTML review artifact to: ${htmlPath}`);
   }
 
   return result;
