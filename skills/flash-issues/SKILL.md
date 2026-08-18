@@ -38,8 +38,7 @@ Instead:
 2. Wait for the subagent's report (the Report Back format baked into the
    template).
 3. Relay that report to Josh essentially as-is: counts, what got newly
-   labeled, numbered-list count vs. In Flight count (awaiting review vs.
-   changes requested) vs. Blocked count.
+   labeled, fix-bucket count (changes requested vs. CI failing) vs. numbered-list count vs. In Flight awaiting-review count vs. Blocked count.
 4. **Never block chat on flagged items.** They live in the output file's
    "Needs Josh's review" section (Step 9), not in a chat Q&A. State the
    count and point at the file — "N issues need your review, see the
@@ -116,10 +115,10 @@ For each repo, list open issues:
   gh issue list --repo WebJamApps/<repo> --state open --limit 200 \
     --json number,title,labels,body,url,milestone
 
-And list open PRs (one call per repo returning PR metadata, review history, commits, and decision status):
+And list open PRs (one call per repo returning PR metadata, review history, commits, decision status, and CI check status):
 
   gh pr list --repo WebJamApps/<repo> --state open \
-    --json number,headRefName,body,url,title,reviews,commits,reviewDecision
+    --json number,headRefName,body,url,title,reviews,commits,reviewDecision,statusCheckRollup
 
 `milestone` is the topic/area signal (the old `Area` custom field was
 deleted; topics now live in per-repo Milestones, name-identical across
@@ -129,8 +128,8 @@ skill doesn't gate Flash-lane candidacy on topic, so it's carried through
 purely for context in the output (Step 9), not used as a filter.
 
 Open PRs are scanned to detect in-flight candidate issues that already have
-an active PR, determine their automated review status and outstanding Must Fix items,
-and prevent duplicate dispatch while work or review is in flight. This remains exactly
+an active PR, determine their CI check status and automated review status (including outstanding Must Fix items),
+and categorize them into actionable fix work vs. pending review. This remains exactly
 one `gh pr list` call per repo — never make per-PR follow-up API calls.
 
 ## Step 3 — classify every open issue
@@ -253,24 +252,23 @@ Step 2 in the same repo is currently in flight for it:
 If an open PR matches:
 - Mark this candidate issue as **in-flight** (record the matching PR's number,
   URL, and branch `headRefName`).
-- Compute the PR's review state directly from the Step 2 payload:
-  - Reference the "Already-Reviewed Check" in `skills/pr-review/SKILL.md` to
+- Compute the PR's CI check status and review state directly from the Step 2 payload:
+  - **CI status**: Check `statusCheckRollup`. Count checks where conclusion or state indicates failure (`FAILURE` or `ERROR`).
+  - **Review status**: Reference the "Already-Reviewed Check" in `skills/pr-review/SKILL.md` to
     determine if an automated review exists for the current head commit
     (filter `reviews` for comments matching `(?i)## PR Review Summary` and verify
     if `commit.oid` == `commits | last | .oid`).
-  - If no current automated review exists for the head commit SHA (or no automated
-    review exists at all), mark the PR as **awaiting review**.
-  - If a current automated review exists for the head commit SHA:
-    - Derive the Must Fix count from the review body: count lines prefixed `🛑`
-      under `### 🛑 Must Fix Items`, with `✅ None` counting as zero.
-    - If the review body contains `**🛑 Changes Requested**` or has one or more
-      Must Fix items (or `reviewDecision == "CHANGES_REQUESTED"`), mark the PR as
-      having **changes requested**, carrying the Must Fix count and the review URL.
-    - If the review is clean (contains `**✅ Approved**` with zero Must Fix items),
-      mark it as `reviewed — approved` under awaiting review.
-- In-flight issues are excluded from the numbered runnable list (Step 6) and
-  route directly to the `## In Flight (Pending PR Review)` subsections (Step 7),
-  preventing duplicate dispatch while PR review or fix work is pending.
+    - If a current automated review exists for the head commit SHA:
+      - Derive the Must Fix count from the review body: count lines prefixed `🛑`
+        under `### 🛑 Must Fix Items`, with `✅ None` counting as zero.
+  - Classify the in-flight PR into one of two buckets:
+    - **Fix bucket (`## Fix your open PRs first`)** — actionable author fix work required:
+      1. `changes requested: <N> must fix` — a current automated review exists with one or more Must Fix items (or `reviewDecision == "CHANGES_REQUESTED"` / contains `**🛑 Changes Requested**`).
+      2. `CI failing` — failing or error checks exist in `statusCheckRollup` and no review has been completed yet (or prior to clean review).
+    - **Awaiting review (`## In Flight (Pending PR Review)`)** — waiting on review or Josh merge:
+      1. Unreviewed with green CI — zero failing checks in `statusCheckRollup` and no current automated review for the head commit SHA.
+      2. Clean approved review — current automated review contains `**✅ Approved**` with zero Must Fix items, and CI checks are green (waiting on Josh to merge).
+- In-flight issues are excluded from the numbered runnable list (Step 6). Candidates in the fix bucket route to the `## Fix your open PRs first` section (rendered above the numbered list in Step 7), while candidates awaiting review route to the `## In Flight (Pending PR Review)` section (Step 7).
 
 ## Step 5 — read Priority, Type, and dependencies (native metadata, not labels)
 
@@ -354,24 +352,30 @@ this pool):
 Number the result 1, 2, 3, … — plain sequential numbering, not per-repo
 grouping.
 
-## Step 7 — build the In Flight and Blocked sections
+## Step 7 — build the Fix your open PRs first, In Flight, and Blocked sections
+
+### Fix your open PRs first section (`## Fix your open PRs first`)
+
+Flash-lane candidates detected in Step 4 as having an open PR in the fix bucket land here. This section is rendered **above** the numbered runnable list in the final output file so that required author fixes are prioritized before starting net-new tasks.
+
+Entries in this section are classified by reason:
+- **Changes requested**: A current automated review exists with one or more Must Fix items (or `**🛑 Changes Requested**` / `CHANGES_REQUESTED` status).
+  Format: `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>) — changes requested: <N> must fix — [review](<reviewUrl>)`
+  (If the specific review URL is not isolated, link `[review](<prUrl>)`).
+- **CI failing**: The PR has failing or error checks in `statusCheckRollup` with no automated review completed yet.
+  Format: `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>) — CI failing — [review](<prUrl>)`
 
 ### In Flight section (`## In Flight (Pending PR Review)`)
 
-Flash-lane candidates detected in Step 4 as having an open PR land here, split into two labeled subsections:
+Flash-lane candidates detected in Step 4 as having an open PR that is merely awaiting review land here (rendered below the numbered runnable list).
 
-#### `### Changes requested`
-- A current automated review exists with one or more Must Fix items (or `**🛑 Changes Requested**` / `CHANGES_REQUESTED` status).
-- Format: `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>) — changes requested: <N> must-fix — [review](<reviewUrl>)`
-  (If the specific review URL is not isolated, link `[review](<prUrl>)`).
+Two states land here:
+- **Unreviewed (green CI)**: Open PR with passing CI checks and no current automated review for its latest commit.
+  Format: `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>)`
+- **Reviewed & approved**: Open PR with a clean approved review and zero Must Fix items (waiting on Josh to merge).
+  Format: `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>) — reviewed — approved`
 
-#### `### Awaiting review`
-- Open PR with no current automated review for its latest commit (or a clean approved review).
-- Format (unreviewed): `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>)`
-- Format (approved): `- [Repo#<num>](<issueUrl>) — <title> (<Tier>[, milestone: <name>]) — PR: [Repo#<prNum>](<prUrl>) (<headRefName>) — reviewed — approved`
-
-These issues are actively being worked or awaiting review; excluding them
-from the runnable list prevents duplicate dispatch or wasted tokens.
+These issues are actively in review or waiting to merge; excluding them from the runnable list prevents duplicate dispatch or wasted tokens.
 
 ### Blocked section (`## Blocked (not runnable by Flash)`)
 
@@ -394,8 +398,9 @@ No further ordering is required within these sections — plain lists are fine.
 Before writing anything, every open issue seen in Step 2 must land in
 EXACTLY ONE bucket:
 
+- the Fix your open PRs first section (Step 7)
 - the numbered runnable list (Step 6)
-- the In Flight section (Step 7)
+- the In Flight (awaiting review) section (Step 7)
 - the Blocked section (Step 7)
 - the Needs review section (Step 3)
 - skipped — carries a non-Flash model label (Step 3)
@@ -416,7 +421,7 @@ Path: ~/Dropbox/web-jam-llms/flash-issues.md — fully overwrite it every
 run. It's a regenerated snapshot, not a log: never append, never merge with
 the previous version's ordering.
 
-Every entry — in the numbered runnable list, the In Flight section, and the
+Every entry — in the Fix your open PRs first section, the numbered runnable list, the In Flight section, and the
 Blocked section — MUST end with its Flash tier in parentheses, exactly as that
 repo spells it (`Flash`, `Flash Med`, or `Flash High`). Josh uses this to know
 whether to run agy with the plain default chain or override it with
@@ -432,19 +437,19 @@ _Regenerated by /flash-issues — do not hand-edit, next run replaces this file.
 
 Last updated: <ISO 8601 UTC timestamp of this run>
 
+## Fix your open PRs first
+
+- [JaMmusic#1215](https://github.com/WebJamApps/JaMmusic/issues/1215) — Gig list sorting (Flash Med, milestone: gig-outreach) — PR: [JaMmusic#1218](https://github.com/WebJamApps/JaMmusic/pull/1218) (`agy/1215-gig-list-sorting`) — changes requested: 2 must fix — [review](https://github.com/WebJamApps/JaMmusic/pull/1218)
+- [AppersonAuto#90](https://github.com/WebJamApps/AppersonAuto/issues/90) — Fix date picker (Flash Med) — PR: [AppersonAuto#92](https://github.com/WebJamApps/AppersonAuto/pull/92) (`agy/90-fix-date-picker`) — CI failing — [review](https://github.com/WebJamApps/AppersonAuto/pull/92)
+
 1. [CollegeLutheran#123](https://github.com/WebJamApps/CollegeLutheran/issues/123) — Add mobile nav collapse toggle (Flash Med)
 2. [JaMmusic#1220](https://github.com/WebJamApps/JaMmusic/issues/1220) — Venue picker: filter list by metro (Flash Med, milestone: gig-outreach)
 3. [JaMmusic#1221](https://github.com/WebJamApps/JaMmusic/issues/1221) — Venue picker: wire selection to gig form (Flash High, milestone: gig-outreach, depends on JaMmusic#1220 above)
 
 ## In Flight (Pending PR Review)
 
-### Changes requested
-
-- [JaMmusic#1215](https://github.com/WebJamApps/JaMmusic/issues/1215) — Gig list sorting (Flash Med, milestone: gig-outreach) — PR: [JaMmusic#1218](https://github.com/WebJamApps/JaMmusic/pull/1218) (`agy/1215-gig-list-sorting`) — changes requested: 2 must-fix — [review](https://github.com/WebJamApps/JaMmusic/pull/1218)
-
-### Awaiting review
-
 - [WebJamSocketCluster#45](https://github.com/WebJamApps/WebJamSocketCluster/issues/45) — Reconnect backoff timer (Flash Med) — PR: [WebJamSocketCluster#48](https://github.com/WebJamApps/WebJamSocketCluster/pull/48) (`agy/45-reconnect-backoff`)
+- [TimShermanMusic#66](https://github.com/WebJamApps/TimShermanMusic/issues/66) — Slideshow transition (Flash Med) — PR: [TimShermanMusic#67](https://github.com/WebJamApps/TimShermanMusic/pull/67) (`agy/66-slideshow-transition`) — reviewed — approved
 
 ## Blocked (not runnable by Flash)
 
@@ -474,17 +479,17 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
 - Repos scanned, total open issues and open PRs seen, how many were already Flash-tier
   vs. newly triaged.
 - Every issue you newly labeled and what you labeled it.
-- Count in the numbered list vs. the In Flight section (broken down by awaiting review vs. changes requested) vs. the Blocked section vs.
+- Count in the Fix your open PRs first section (broken down by changes requested vs. CI failing) vs. the numbered list vs. the In Flight (awaiting review) section (unreviewed vs. approved) vs. the Blocked section vs.
   the "Needs Josh's review" section vs. skipped-parked/Josh vs. skipped-other-model-label —
   just the counts for the review section and skipped buckets, not the lists
   (they're already in the file, or need no listing).
-- The Step 8 reconciliation: total open issues seen vs. the sum of all six
+- The Step 8 reconciliation: total open issues seen vs. the sum of all seven
   buckets. Confirm they match, or state what you found missing and where
   you filed it before writing.
 - Confirmation that Priority, Type, and dependencies were read from each
   candidate's REST issue payload (Step 5) — not from any label — and that
   topic came from Milestone (Step 2), not from a label.
-- Confirmation that open PRs were scanned per repo (Step 2) with review status and Must Fix counts detected, and in-flight issues with open PRs were routed to their appropriate In Flight subsections.
+- Confirmation that open PRs were scanned per repo (Step 2) with CI status and review status (including Must Fix counts) detected, and in-flight issues with open PRs were routed to their appropriate sections (Fix your open PRs first vs. In Flight awaiting review).
 - Confirmation the file was written to
   ~/Dropbox/web-jam-llms/flash-issues.md.
 ````
@@ -507,8 +512,8 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
   instead of a best-effort label.
 - Never blocks the chat run on flagged items — no Q&A, no waiting for an
   answer. They're reviewed from the file on Josh's own schedule.
-- Never suggests an in-flight issue with an open PR in the runnable list — in-flight
-  issues route to the dedicated `## In Flight (Pending PR Review)` section.
+- Never suggests an in-flight issue with an open PR in the numbered runnable list — in-flight
+  issues route to the dedicated `## Fix your open PRs first` or `## In Flight (Pending PR Review)` sections.
 - Never marks an issue blocked on an unverified reference — for a Step 3
   conditional marker, `gh issue view --json state` the specific reference
   first; for Step 5 dependencies, the native `blocked_by` payload's own

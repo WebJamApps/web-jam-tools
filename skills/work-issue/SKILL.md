@@ -2,7 +2,7 @@
 name: work-issue
 description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
-  version: v2
+  version: v3
   publisher: josh
 aliases:
   - next
@@ -72,21 +72,24 @@ An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
    - **Precedence rule**: The blocker's actual state is the truth and the label is a hint. Where they disagree, the label is what is wrong. The `Blocked` label alone does NOT veto startability if all native and body blockers are CLOSED (or none exist). If an issue carries the `Blocked` label but has zero open blockers, it is startable but triggers the **Blocked-drift check** below before implementation.
    - If any native blocker or body prerequisite is OPEN, the issue is **blocked by `<repo#number "title">`**.
 
-3. **Not already in flight**:
-   - No OPEN PR references it:
+3. **Not already in flight (with resume carve-out for fix-bucket PRs)**:
+   - Check if an OPEN PR references it:
      ```bash
-     gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body \
-       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
+     gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body,reviews,commits,statusCheckRollup \
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)"))'
      ```
-     returns nothing.
-   - No dispatch branch exists for it locally or on remote (`agy/<num>-*` from headless dispatch, `gemini/<num>-*` from interactive agy):
+   - **Fix-bucket resume carve-out**: If an OPEN PR exists for this issue, check whether it belongs to the **fix bucket** — having changes requested (one or more Must Fix items in its current automated review) or failing CI checks (`statusCheckRollup` has failures/errors). If so, the skill proceeds in **resume mode** rather than stopping:
+     - No new branch is cut off `dev`.
+     - It relies on the resume mechanism in `scripts/handle-agy-tasks.sh` (which auto-detects an existing branch or open PR for the issue and resumes the PR's head branch).
+   - **Awaiting review (non-startable)**: If the OPEN PR is merely awaiting review (green CI with no review, or a clean approved review), the issue remains **non-startable** ("already in flight"). Stop and report that PR review or merge is pending.
+   - For net-new issues with no open PR, verify no dispatch branch exists for it locally or on remote (`agy/<num>-*` from headless dispatch, `gemini/<num>-*` from interactive agy):
      ```bash
      git -C ~/WebJamApps/<Repo> for-each-ref --format='%(refname:short)' \
        "refs/heads/agy/<num>-*" "refs/heads/gemini/<num>-*"
      git -C ~/WebJamApps/<Repo> ls-remote --heads origin \
        "agy/<num>-*" "gemini/<num>-*"
      ```
-     returns nothing.
+     returns nothing (unless in resume mode for an existing branch).
 
 4. **Not already done (completion detection)**:
    - **Signal 1 (Merged or closed PR)**: Query for merged or closed PRs whose body references the issue with `Closes` or `Part of`:
