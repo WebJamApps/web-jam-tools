@@ -1,18 +1,22 @@
 /**
- * Unit tests for src/install-skills/lib.ts and scripts/install-skills.ts (web-jam-tools#669)
+ * Unit tests for src/install-skills/lib.ts and scripts/install-skills.ts (web-jam-tools#668, web-jam-tools#669)
  */
 
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertFalse, assertRejects, assertStringIncludes } from "@std/assert";
 import { join } from "@std/path";
 import {
+  DEFAULT_RETENTION_MS,
   defaultExecDeps,
   ExecDeps,
   getTimestamp,
   installSkills,
   installToDest,
   isUnsafeSourcePath,
+  migrateLegacyBackups,
   parseArgs,
+  parseBackupTimestamp,
   pruneFromDest,
+  pruneOldBackups,
   resolveAndValidateRepoDir,
 } from "../src/install-skills/lib.ts";
 
@@ -27,6 +31,12 @@ Deno.test("parseArgs parses all supported CLI flags", () => {
     "/home/user/.claude/skills",
     "--agy-dest",
     "/home/user/.gemini/skills",
+    "--claude-backup-dest",
+    "/home/user/.claude/skills-backups",
+    "--agy-backup-dest",
+    "/home/user/.gemini/skills-backups",
+    "--retention-days",
+    "30",
     "--force",
     "--dry-run",
     "-q",
@@ -37,6 +47,9 @@ Deno.test("parseArgs parses all supported CLI flags", () => {
   assertEquals(parsed.repoDir, "/home/user/repo");
   assertEquals(parsed.claudeDest, "/home/user/.claude/skills");
   assertEquals(parsed.agyDest, "/home/user/.gemini/skills");
+  assertEquals(parsed.claudeBackupDest, "/home/user/.claude/skills-backups");
+  assertEquals(parsed.agyBackupDest, "/home/user/.gemini/skills-backups");
+  assertEquals(parsed.retentionMs, 30 * 24 * 60 * 60 * 1000);
   assertEquals(parsed.force, true);
   assertEquals(parsed.dryRun, true);
   assertEquals(parsed.quiet, true);
@@ -48,6 +61,9 @@ Deno.test("parseArgs handles equals format (--key=val)", () => {
     "--repo-dir=/tmp/repo",
     "--claude-dest=/tmp/claude",
     "--agy-dest=/tmp/agy",
+    "--claude-backup-dest=/tmp/claude-bak",
+    "--agy-backup-dest=/tmp/agy-bak",
+    "--retention-days=7",
     "--quiet",
   ];
 
@@ -55,6 +71,9 @@ Deno.test("parseArgs handles equals format (--key=val)", () => {
   assertEquals(parsed.repoDir, "/tmp/repo");
   assertEquals(parsed.claudeDest, "/tmp/claude");
   assertEquals(parsed.agyDest, "/tmp/agy");
+  assertEquals(parsed.claudeBackupDest, "/tmp/claude-bak");
+  assertEquals(parsed.agyBackupDest, "/tmp/agy-bak");
+  assertEquals(parsed.retentionMs, 7 * 24 * 60 * 60 * 1000);
   assertEquals(parsed.quiet, true);
 });
 
@@ -62,6 +81,19 @@ Deno.test("getTimestamp formats YYYYMMDD-HHMMSS format correctly", () => {
   const date = new Date(2026, 7, 19, 14, 30, 45); // Aug 19, 2026 14:30:45
   const stamp = getTimestamp(date);
   assertEquals(stamp, "20260819-143045");
+});
+
+Deno.test("parseBackupTimestamp extracts Date from backup directory names", () => {
+  const date = parseBackupTimestamp("work-issue.bak-20260819-083339");
+  assertEquals(date?.getFullYear(), 2026);
+  assertEquals(date?.getMonth(), 7); // Aug
+  assertEquals(date?.getDate(), 19);
+  assertEquals(date?.getHours(), 8);
+  assertEquals(date?.getMinutes(), 33);
+  assertEquals(date?.getSeconds(), 39);
+
+  const invalid = parseBackupTimestamp("not-a-backup-folder");
+  assertEquals(invalid, null);
 });
 
 Deno.test("isUnsafeSourcePath identifies temporary and unsafe directories", () => {
@@ -147,7 +179,99 @@ Deno.test("resolveAndValidateRepoDir accepts non-worktree repositories", async (
   assertEquals(resolved, "/home/joshua/WebJamApps/web-jam-tools");
 });
 
-Deno.test("pruneFromDest removes dangling symlinks to inside-repo and outside-repo targets, preserving bak dirs", async () => {
+Deno.test("migrateLegacyBackups moves legacy *.bak-* entries out of skills directory", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "wjt-migrate-test-" });
+  const skillsDir = join(tempDir, "skills");
+  const backupDir = join(tempDir, "skills-backups");
+
+  await Deno.mkdir(skillsDir, { recursive: true });
+
+  // Create legacy backup directories inside skills directory
+  const legacy1 = join(skillsDir, "design-issue.bak-20260819-082414");
+  const legacy2 = join(skillsDir, "draft-pr.bak-20260702-204420");
+  await Deno.mkdir(legacy1, { recursive: true });
+  await Deno.writeTextFile(join(legacy1, "SKILL.md"), "# Old Design Issue");
+  await Deno.mkdir(legacy2, { recursive: true });
+  await Deno.writeTextFile(join(legacy2, "SKILL.md"), "# Old Draft PR");
+
+  // Create a real active skill
+  const realSkill = join(skillsDir, "active-skill");
+  await Deno.mkdir(realSkill, { recursive: true });
+
+  const messages = await migrateLegacyBackups(skillsDir, backupDir, "Claude");
+  assertEquals(messages.length, 2);
+  assertStringIncludes(messages[0], "migrated legacy backup design-issue.bak-20260819-082414");
+  assertStringIncludes(messages[1], "migrated legacy backup draft-pr.bak-20260702-204420");
+
+  // Check that legacy backups no longer exist in skillsDir
+  let hasLegacy1 = false;
+  try {
+    await Deno.stat(legacy1);
+    hasLegacy1 = true;
+  } catch {
+    hasLegacy1 = false;
+  }
+  assertFalse(hasLegacy1, "Legacy backup 1 must not exist in skills directory");
+
+  // Check that backups were preserved in backupDir
+  const migrated1 = await Deno.readTextFile(
+    join(backupDir, "design-issue.bak-20260819-082414", "SKILL.md"),
+  );
+  assertEquals(migrated1, "# Old Design Issue");
+
+  const migrated2 = await Deno.readTextFile(
+    join(backupDir, "draft-pr.bak-20260702-204420", "SKILL.md"),
+  );
+  assertEquals(migrated2, "# Old Draft PR");
+
+  // Active skill was untouched
+  const realStat = await Deno.stat(realSkill);
+  assertEquals(realStat.isDirectory, true);
+});
+
+Deno.test("pruneOldBackups prunes backups older than retention window", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "wjt-retention-test-" });
+  const backupDir = join(tempDir, "skills-backups");
+  await Deno.mkdir(backupDir, { recursive: true });
+
+  // 1. Stale backup (30 days old)
+  const stale1 = join(backupDir, "draft-pr.bak-20260702-120000");
+  await Deno.mkdir(stale1, { recursive: true });
+
+  // 2. Fresh backup (2 days old relative to Aug 19, 2026)
+  const fresh1 = join(backupDir, "draft-pr.bak-20260817-120000");
+  await Deno.mkdir(fresh1, { recursive: true });
+
+  // 3. File without timestamp format, use mtime (old mtime)
+  const nonFormat = join(backupDir, "unformatted.bak");
+  await Deno.writeTextFile(nonFormat, "test");
+  const oldTime = new Date(2026, 5, 1); // June 1, 2026
+  await Deno.utime(nonFormat, oldTime, oldTime);
+
+  const now = new Date(2026, 7, 19, 12, 0, 0); // Aug 19, 2026
+  const retentionMs = DEFAULT_RETENTION_MS; // 14 days
+
+  const messages = await pruneOldBackups(backupDir, "Claude", retentionMs, now);
+  assertEquals(messages.length, 2);
+  assertStringIncludes(messages[0], "pruned expired backup draft-pr.bak-20260702-120000");
+  assertStringIncludes(messages[1], "pruned expired backup unformatted.bak");
+
+  // Verify fresh backup remains
+  const freshStat = await Deno.stat(fresh1);
+  assertEquals(freshStat.isDirectory, true);
+
+  // Verify stale backups were removed
+  let staleExists = false;
+  try {
+    await Deno.stat(stale1);
+    staleExists = true;
+  } catch {
+    staleExists = false;
+  }
+  assertFalse(staleExists);
+});
+
+Deno.test("pruneFromDest removes dangling symlinks to inside-repo and outside-repo targets", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "wjt-prune-test-" });
   const claudeSkills = join(tempDir, "claude-skills");
   await Deno.mkdir(claudeSkills, { recursive: true });
@@ -165,11 +289,6 @@ Deno.test("pruneFromDest removes dangling symlinks to inside-repo and outside-re
   await Deno.mkdir(realTargetDir, { recursive: true });
   const validLink = join(claudeSkills, "valid-skill");
   await Deno.symlink(realTargetDir, validLink);
-
-  // 4. Backup directory *.bak-*
-  const bakDir = join(claudeSkills, "some-skill.bak-20260819-120000");
-  await Deno.mkdir(bakDir, { recursive: true });
-  await Deno.writeTextFile(join(bakDir, "SKILL.md"), "backup body");
 
   // Run prune
   const messages = await pruneFromDest(claudeSkills, "Claude");
@@ -199,9 +318,6 @@ Deno.test("pruneFromDest removes dangling symlinks to inside-repo and outside-re
 
   const validStat = await Deno.lstat(validLink);
   assertEquals(validStat.isSymlink, true);
-
-  const bakStat = await Deno.stat(bakDir);
-  assertEquals(bakStat.isDirectory, true);
 });
 
 Deno.test("pruneFromDest returns empty when destination is missing or not a directory", async () => {
@@ -216,10 +332,11 @@ Deno.test("pruneFromDest returns empty when destination is missing or not a dire
   assertEquals(msgs2, []);
 });
 
-Deno.test("installToDest creates links, skips existing valid links, and backs up real dirs preserving local files", async () => {
+Deno.test("installToDest creates links, preserves local files, and writes backups OUTSIDE destination directory", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "wjt-install-test-" });
   const repoSkills = join(tempDir, "repo", "skills");
   const destDir = join(tempDir, "dest", "skills");
+  const backupDir = join(tempDir, "dest", "skills-backups");
 
   await Deno.mkdir(join(repoSkills, "skill-a"), { recursive: true });
   await Deno.writeTextFile(join(repoSkills, "skill-a", "SKILL.md"), "# Skill A");
@@ -245,7 +362,7 @@ Deno.test("installToDest creates links, skips existing valid links, and backs up
 
   // 1. Run install
   const stamp = "20260819-150000";
-  const msgs1 = await installToDest(repoSkills, destDir, "Claude", stamp);
+  const msgs1 = await installToDest(repoSkills, destDir, backupDir, "Claude", stamp);
 
   assertEquals(msgs1.length, 3);
   assertStringIncludes(
@@ -258,6 +375,14 @@ Deno.test("installToDest creates links, skips existing valid links, and backs up
     "skill-c: linked (previous version backed up to skill-c.bak-20260819-150000)",
   );
 
+  // Verify NO .bak-* entries were created inside destDir
+  for await (const entry of Deno.readDir(destDir)) {
+    assertFalse(
+      entry.name.includes(".bak-"),
+      `destDir must not contain .bak- entry, found: ${entry.name}`,
+    );
+  }
+
   // Verify local files were preserved into repo source dir
   const preservedRules = await Deno.readTextFile(join(repoSkills, "skill-a", "rules.yaml"));
   assertEquals(preservedRules, "local: true");
@@ -268,8 +393,8 @@ Deno.test("installToDest creates links, skips existing valid links, and backs up
   const preservedExisting = await Deno.readTextFile(join(repoSkills, "skill-a", "existing.txt"));
   assertEquals(preservedExisting, "repo version");
 
-  // Verify backup exists
-  const bakDir = join(destDir, `skill-a.bak-${stamp}`);
+  // Verify backup exists OUTSIDE in backupDir
+  const bakDir = join(backupDir, `skill-a.bak-${stamp}`);
   const bakStat = await Deno.stat(bakDir);
   assertEquals(bakStat.isDirectory, true);
 
@@ -282,27 +407,99 @@ Deno.test("installToDest creates links, skips existing valid links, and backs up
   assertEquals(linkC, join(repoSkills, "skill-c"));
 
   // 2. Second run: already linked skills are reported as ok
-  const msgs2 = await installToDest(repoSkills, destDir, "Claude", "20260819-160000");
+  const msgs2 = await installToDest(repoSkills, destDir, backupDir, "Claude", "20260819-160000");
   assertEquals(msgs2.length, 3);
   assertStringIncludes(msgs2[0], "skill-a: ok (already linked)");
   assertStringIncludes(msgs2[1], "skill-b: ok (already linked)");
   assertStringIncludes(msgs2[2], "skill-c: ok (already linked)");
 });
 
-Deno.test("installSkills installs all skills to Claude and agy destinations end-to-end", async () => {
+Deno.test("installSkills installs all skills, migrates legacy backups, and prunes old backups end-to-end", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "wjt-e2e-test-" });
   const claudeDest = join(tempDir, ".claude", "skills");
   const agyDest = join(tempDir, ".gemini", "config", "plugins", "webjam-tasks", "skills");
+  const claudeBackupDest = join(tempDir, ".claude", "skills-backups");
+  const agyBackupDest = join(
+    tempDir,
+    ".gemini",
+    "config",
+    "plugins",
+    "webjam-tasks",
+    "skills-backups",
+  );
+
+  // Create pre-existing legacy backups in claudeDest to test migration
+  await Deno.mkdir(claudeDest, { recursive: true });
+  const legacyInClaude = join(claudeDest, "old-skill.bak-20260815-100000"); // 4 days old (retained)
+  await Deno.mkdir(legacyInClaude, { recursive: true });
+  await Deno.writeTextFile(join(legacyInClaude, "SKILL.md"), "# Legacy Skill");
+
+  const ancientInClaude = join(claudeDest, "ancient-skill.bak-20260701-100000"); // 49 days old (pruned)
+  await Deno.mkdir(ancientInClaude, { recursive: true });
+  await Deno.writeTextFile(join(ancientInClaude, "SKILL.md"), "# Ancient Skill");
+
+  // Create expired backup in agyBackupDest to test retention pruning
+  await Deno.mkdir(agyBackupDest, { recursive: true });
+  const expiredInAgy = join(agyBackupDest, "ancient.bak-20260701-100000");
+  await Deno.mkdir(expiredInAgy, { recursive: true });
+
+  const now = new Date(2026, 7, 19, 12, 0, 0); // Aug 19, 2026
 
   const result = await installSkills({
     repoDir: REPO_DIR,
     claudeDest,
     agyDest,
+    claudeBackupDest,
+    agyBackupDest,
+    now,
     allowUnsafeForTesting: true,
   });
 
   assertEquals(result.success, true);
   assertEquals(result.skillsCount, 14);
+
+  // Check legacy backups were migrated OUT of claudeDest
+  let legacyExistsInClaude = false;
+  try {
+    await Deno.stat(legacyInClaude);
+    legacyExistsInClaude = true;
+  } catch {
+    legacyExistsInClaude = false;
+  }
+  assertFalse(legacyExistsInClaude, "Legacy backup must be migrated out of claudeDest");
+
+  let ancientExistsInClaude = false;
+  try {
+    await Deno.stat(ancientInClaude);
+    ancientExistsInClaude = true;
+  } catch {
+    ancientExistsInClaude = false;
+  }
+  assertFalse(ancientExistsInClaude, "Ancient backup must be migrated out of claudeDest");
+
+  // Retained migrated backup exists in claudeBackupDest
+  const migratedStat = await Deno.stat(join(claudeBackupDest, "old-skill.bak-20260815-100000"));
+  assertEquals(migratedStat.isDirectory, true);
+
+  // Ancient migrated backup was pruned from claudeBackupDest
+  let ancientInBackup = false;
+  try {
+    await Deno.stat(join(claudeBackupDest, "ancient-skill.bak-20260701-100000"));
+    ancientInBackup = true;
+  } catch {
+    ancientInBackup = false;
+  }
+  assertFalse(ancientInBackup, "Ancient backup must be pruned from claudeBackupDest");
+
+  // Check expired backup in agyBackupDest was pruned
+  let expiredExists = false;
+  try {
+    await Deno.stat(expiredInAgy);
+    expiredExists = true;
+  } catch {
+    expiredExists = false;
+  }
+  assertFalse(expiredExists, "Expired backup must be pruned");
 
   // Verify all 14 skills are symlinked in both destinations
   const expectedSkills = [
@@ -334,6 +531,14 @@ Deno.test("installSkills installs all skills to Claude and agy destinations end-
     assertEquals(agyStat.isSymlink, true, `agy skill ${skill} must be a symlink`);
     const agySkillMd = await Deno.stat(join(agyLink, "SKILL.md"));
     assertEquals(agySkillMd.isFile, true);
+  }
+
+  // Verify NO *.bak-* exists inside claudeDest or agyDest
+  for await (const entry of Deno.readDir(claudeDest)) {
+    assertFalse(entry.name.includes(".bak-"));
+  }
+  for await (const entry of Deno.readDir(agyDest)) {
+    assertFalse(entry.name.includes(".bak-"));
   }
 });
 

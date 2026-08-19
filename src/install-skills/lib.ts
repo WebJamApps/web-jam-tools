@@ -1,18 +1,27 @@
 /**
- * install-skills library (web-jam-tools#669)
+ * install-skills library (web-jam-tools#668, web-jam-tools#669)
  *
- * Safe skill installer and stale symlink pruner for Claude Code and agy.
- * Ensures the primary repository is the single source of truth for all skills,
- * refuses execution from unsafe /tmp or git worktree directories, prunes dangling
- * symlinks across both destinations, and preserves local-only runtime files.
+ * Safe skill installer, legacy backup migrator, backup retention pruner, and stale
+ * symlink pruner for Claude Code and agy.
+ *
+ * Retention Policy:
+ * Backups are saved outside scanned skill directories (e.g. ~/.claude/skills-backups
+ * and ~/.gemini/config/plugins/webjam-tasks/skills-backups) with a retention window of 14 days
+ * (1,209,600,000 ms = 14 * 24 * 60 * 60 * 1000 ms). Backups older than 14 days are automatically pruned.
  */
 
 import { dirname, fromFileUrl, join, relative, resolve } from "@std/path";
+
+export const DEFAULT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 
 export interface InstallSkillsOptions {
   repoDir?: string;
   claudeDest?: string;
   agyDest?: string;
+  claudeBackupDest?: string;
+  agyBackupDest?: string;
+  retentionMs?: number;
+  now?: Date;
   force?: boolean;
   dryRun?: boolean;
   quiet?: boolean;
@@ -60,6 +69,20 @@ export function parseArgs(args: string[]): InstallSkillsOptions {
       options.agyDest = args[++i];
     } else if (arg.startsWith("--agy-dest=")) {
       options.agyDest = arg.slice("--agy-dest=".length);
+    } else if (arg === "--claude-backup-dest" && i + 1 < args.length) {
+      options.claudeBackupDest = args[++i];
+    } else if (arg.startsWith("--claude-backup-dest=")) {
+      options.claudeBackupDest = arg.slice("--claude-backup-dest=".length);
+    } else if (arg === "--agy-backup-dest" && i + 1 < args.length) {
+      options.agyBackupDest = args[++i];
+    } else if (arg.startsWith("--agy-backup-dest=")) {
+      options.agyBackupDest = arg.slice("--agy-backup-dest=".length);
+    } else if (arg === "--retention-days" && i + 1 < args.length) {
+      const days = Number(args[++i]);
+      if (!isNaN(days)) options.retentionMs = days * 24 * 60 * 60 * 1000;
+    } else if (arg.startsWith("--retention-days=")) {
+      const days = Number(arg.slice("--retention-days=".length));
+      if (!isNaN(days)) options.retentionMs = days * 24 * 60 * 60 * 1000;
     } else if (arg === "--force") {
       options.force = true;
     } else if (arg === "--dry-run") {
@@ -72,13 +95,16 @@ export function parseArgs(args: string[]): InstallSkillsOptions {
       console.log(`Usage: deno task install-skills [options]
 
 Options:
-  --repo-dir <path>     Explicit repository root path
-  --claude-dest <path>  Destination directory for Claude skills (~/.claude/skills)
-  --agy-dest <path>     Destination directory for agy skills (~/.gemini/config/plugins/webjam-tasks/skills)
-  --force               Bypass worktree refusal guard
-  --dry-run             Report actions without making filesystem changes
-  --quiet, -q           Suppress non-error output
-  --help, -h            Show this help message`);
+  --repo-dir <path>           Explicit repository root path
+  --claude-dest <path>        Destination directory for Claude skills (~/.claude/skills)
+  --agy-dest <path>           Destination directory for agy skills (~/.gemini/config/plugins/webjam-tasks/skills)
+  --claude-backup-dest <path> Directory for Claude skill backups (~/.claude/skills-backups)
+  --agy-backup-dest <path>    Directory for agy skill backups (~/.gemini/config/plugins/webjam-tasks/skills-backups)
+  --retention-days <num>      Backup retention window in days (default: 14)
+  --force                     Bypass worktree refusal guard
+  --dry-run                   Report actions without making filesystem changes
+  --quiet, -q                 Suppress non-error output
+  --help, -h                  Show this help message`);
       Deno.exit(0);
     }
     i++;
@@ -95,6 +121,22 @@ export function getTimestamp(d: Date = new Date()): string {
   const min = pad(d.getMinutes());
   const ss = pad(d.getSeconds());
   return `${yyyy}${mm}${dd}-${hh}${min}${ss}`;
+}
+
+export function parseBackupTimestamp(name: string): Date | null {
+  const match = name.match(/\.bak-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
+  if (match) {
+    const [_, y, m, d, hh, min, ss] = match;
+    return new Date(
+      Number(y),
+      Number(m) - 1,
+      Number(d),
+      Number(hh),
+      Number(min),
+      Number(ss),
+    );
+  }
+  return null;
 }
 
 export function isUnsafeSourcePath(dirPath: string): boolean {
@@ -182,6 +224,109 @@ async function getAllRegularFiles(dir: string): Promise<string[]> {
   return files;
 }
 
+/**
+ * Migrates pre-existing *.bak-* entries sitting inside the skills directories
+ * out into the designated backup directory.
+ */
+export async function migrateLegacyBackups(
+  targetDest: string,
+  backupDest: string,
+  label: string,
+): Promise<string[]> {
+  const messages: string[] = [];
+  let destStat: Deno.FileInfo | null = null;
+  try {
+    destStat = await Deno.stat(targetDest);
+  } catch {
+    return messages;
+  }
+  if (!destStat.isDirectory) return messages;
+
+  const entries: string[] = [];
+  for await (const entry of Deno.readDir(targetDest)) {
+    entries.push(entry.name);
+  }
+  entries.sort();
+
+  for (const name of entries) {
+    if (!name.includes(".bak-") && !name.endsWith(".bak")) {
+      continue;
+    }
+
+    const legacyPath = join(targetDest, name);
+    const newPath = join(backupDest, name);
+
+    await Deno.mkdir(backupDest, { recursive: true });
+
+    // If destination already exists, remove it first before moving
+    try {
+      await Deno.remove(newPath, { recursive: true });
+    } catch {
+      // ignore
+    }
+
+    await Deno.rename(legacyPath, newPath);
+    messages.push(`${label}: migrated legacy backup ${name} to ${backupDest}`);
+  }
+
+  return messages;
+}
+
+/**
+ * Prunes backups in backupDest older than the retention window (default: 14 days).
+ */
+export async function pruneOldBackups(
+  backupDest: string,
+  label: string,
+  retentionMs: number = DEFAULT_RETENTION_MS,
+  now: Date = new Date(),
+): Promise<string[]> {
+  const messages: string[] = [];
+  let backupStat: Deno.FileInfo | null = null;
+  try {
+    backupStat = await Deno.stat(backupDest);
+  } catch {
+    return messages;
+  }
+  if (!backupStat.isDirectory) return messages;
+
+  const entries: string[] = [];
+  for await (const entry of Deno.readDir(backupDest)) {
+    entries.push(entry.name);
+  }
+  entries.sort();
+
+  const cutoffTime = now.getTime() - retentionMs;
+
+  for (const name of entries) {
+    if (!name.includes(".bak-") && !name.endsWith(".bak")) {
+      continue;
+    }
+
+    const itemPath = join(backupDest, name);
+    let itemDate = parseBackupTimestamp(name);
+    if (!itemDate) {
+      try {
+        const stat = await Deno.stat(itemPath);
+        if (stat.mtime) itemDate = stat.mtime;
+      } catch {
+        continue;
+      }
+    }
+
+    if (itemDate && itemDate.getTime() < cutoffTime) {
+      try {
+        await Deno.remove(itemPath, { recursive: true });
+        messages.push(`${label}: pruned expired backup ${name}`);
+      } catch {
+        // ignore removal error
+      }
+    }
+  }
+
+  return messages;
+}
+
 export async function pruneFromDest(
   targetDest: string,
   label: string,
@@ -202,11 +347,6 @@ export async function pruneFromDest(
   entries.sort();
 
   for (const name of entries) {
-    // Never touch *.bak-* directories/files
-    if (name.includes(".bak-")) {
-      continue;
-    }
-
     const fullPath = join(targetDest, name);
     let lstat: Deno.FileInfo | null = null;
     try {
@@ -236,6 +376,7 @@ export async function pruneFromDest(
 export async function installToDest(
   skillsSrc: string,
   targetDest: string,
+  backupDest: string,
   label: string,
   stamp: string,
 ): Promise<string[]> {
@@ -285,8 +426,9 @@ export async function installToDest(
         continue;
       }
 
-      const backupDest = `${dest}.bak-${stamp}`;
-      await Deno.rename(dest, backupDest);
+      await Deno.mkdir(backupDest, { recursive: true });
+      const backupPath = join(backupDest, `${name}.bak-${stamp}`);
+      await Deno.rename(dest, backupPath);
       await Deno.symlink(src, dest, { type: "dir" });
       messages.push(
         `${label}: ${name}: linked (previous version backed up to ${name}.bak-${stamp})`,
@@ -310,15 +452,17 @@ export async function installToDest(
         }
       }
 
-      const backupDest = `${dest}.bak-${stamp}`;
-      await Deno.rename(dest, backupDest);
+      await Deno.mkdir(backupDest, { recursive: true });
+      const backupPath = join(backupDest, `${name}.bak-${stamp}`);
+      await Deno.rename(dest, backupPath);
       await Deno.symlink(src, dest, { type: "dir" });
       messages.push(
         `${label}: ${name}: linked (previous version backed up to ${name}.bak-${stamp})`,
       );
     } else if (destLstat !== null) {
-      const backupDest = `${dest}.bak-${stamp}`;
-      await Deno.rename(dest, backupDest);
+      await Deno.mkdir(backupDest, { recursive: true });
+      const backupPath = join(backupDest, `${name}.bak-${stamp}`);
+      await Deno.rename(dest, backupPath);
       await Deno.symlink(src, dest, { type: "dir" });
       messages.push(
         `${label}: ${name}: linked (previous version backed up to ${name}.bak-${stamp})`,
@@ -337,10 +481,10 @@ export async function installSkills(
   deps: ExecDeps = defaultExecDeps,
 ): Promise<{ success: boolean; messages: string[]; skillsCount: number }> {
   const home = Deno.env.get("HOME") || "";
-  const defaultClaudeDest = home ? join(home, ".claude", "skills") : "";
-  const defaultAgyDest = home
-    ? join(home, ".gemini", "config", "plugins", "webjam-tasks", "skills")
-    : "";
+  const defaultClaudeDest = Deno.env.get("CLAUDE_SKILLS_DEST") ||
+    (home ? join(home, ".claude", "skills") : "");
+  const defaultAgyDest = Deno.env.get("AGY_SKILLS_DEST") ||
+    (home ? join(home, ".gemini", "config", "plugins", "webjam-tasks", "skills") : "");
 
   const claudeDest = options.claudeDest || defaultClaudeDest;
   const agyDest = options.agyDest || defaultAgyDest;
@@ -348,6 +492,16 @@ export async function installSkills(
   if (!claudeDest || !agyDest) {
     throw new Error("Cannot determine destination directories (HOME is unset)");
   }
+
+  const defaultClaudeBackupDest = Deno.env.get("CLAUDE_SKILLS_BACKUP_DEST") ||
+    (home ? join(home, ".claude", "skills-backups") : join(dirname(claudeDest), "skills-backups"));
+  const defaultAgyBackupDest = Deno.env.get("AGY_SKILLS_BACKUP_DEST") ||
+    (home
+      ? join(home, ".gemini", "config", "plugins", "webjam-tasks", "skills-backups")
+      : join(dirname(agyDest), "skills-backups"));
+
+  const claudeBackupDest = options.claudeBackupDest || defaultClaudeBackupDest;
+  const agyBackupDest = options.agyBackupDest || defaultAgyBackupDest;
 
   const repoDir = await resolveAndValidateRepoDir(options, deps);
   const skillsSrc = join(repoDir, "skills");
@@ -363,17 +517,40 @@ export async function installSkills(
     throw new Error(`Skills source directory not found: ${skillsSrc}`);
   }
 
-  const stamp = getTimestamp();
+  const stamp = getTimestamp(options.now);
+  const retentionMs = options.retentionMs ?? DEFAULT_RETENTION_MS;
+  const now = options.now ?? new Date();
   const messages: string[] = [];
 
-  // 1. Prune dangling symlinks
+  // 1. Migrate legacy backups out of skills directories
+  const claudeMigrationMsgs = await migrateLegacyBackups(claudeDest, claudeBackupDest, "Claude");
+  const agyMigrationMsgs = await migrateLegacyBackups(agyDest, agyBackupDest, "agy");
+  messages.push(...claudeMigrationMsgs, ...agyMigrationMsgs);
+
+  // 2. Prune old backups outside scanned directories
+  const claudePruneBackupsMsgs = await pruneOldBackups(
+    claudeBackupDest,
+    "Claude",
+    retentionMs,
+    now,
+  );
+  const agyPruneBackupsMsgs = await pruneOldBackups(agyBackupDest, "agy", retentionMs, now);
+  messages.push(...claudePruneBackupsMsgs, ...agyPruneBackupsMsgs);
+
+  // 3. Prune dangling symlinks in skills directories
   const claudePruneMsgs = await pruneFromDest(claudeDest, "Claude");
   const agyPruneMsgs = await pruneFromDest(agyDest, "agy");
   messages.push(...claudePruneMsgs, ...agyPruneMsgs);
 
-  // 2. Install skills
-  const claudeInstallMsgs = await installToDest(skillsSrc, claudeDest, "Claude", stamp);
-  const agyInstallMsgs = await installToDest(skillsSrc, agyDest, "agy", stamp);
+  // 4. Install skills
+  const claudeInstallMsgs = await installToDest(
+    skillsSrc,
+    claudeDest,
+    claudeBackupDest,
+    "Claude",
+    stamp,
+  );
+  const agyInstallMsgs = await installToDest(skillsSrc, agyDest, agyBackupDest, "agy", stamp);
   messages.push(...claudeInstallMsgs, ...agyInstallMsgs);
 
   let skillsCount = 0;
