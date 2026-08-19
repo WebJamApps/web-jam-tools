@@ -117,10 +117,13 @@ ok | 42 passed | 0 failed
 Every PR must bump the version once, on its first commit — `deno.json` in this repo (e.g.
 `"version": "1.26.x"`). CI's "Version bump check (PR branches only)" gate blocks PRs whose version
 is unchanged from the merge-base with `dev`. Always bump `deno.json` on the first commit of any new
-PR branch in `web-jam-tools` to prevent CircleCI gate failures. When invoking `create-draft-pr.sh`,
-pass multi-line or rich markdown values using `--summary-file`, `--test-plan-file`, and
-`--test-evidence-file` pointing to temporary files in /tmp/ (e.g. /tmp/pr-summary.md) — never create scratch files or scratch/ directories inside the repo to prevent shell argument escaping or
-flattening issues.
+PR branch in `web-jam-tools` to prevent CircleCI gate failures. When updating or rebasing an open PR
+branch after other PRs have merged to `dev`, verify that `HEAD`'s version remains strictly greater
+than `origin/dev`'s current version (e.g. `git show origin/dev:deno.json`), and bump again on the fix
+commit if `origin/dev` has moved ahead. When invoking `create-draft-pr.sh`, pass multi-line or rich
+markdown values using `--summary-file`, `--test-plan-file`, and `--test-evidence-file` pointing to
+temporary files in /tmp/ (e.g. /tmp/pr-summary.md) — never create scratch files or scratch/
+directories inside the repo to prevent shell argument escaping or flattening issues.
 
 ## CI gate (web-jam-tools)
 
