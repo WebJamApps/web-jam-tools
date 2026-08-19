@@ -165,8 +165,8 @@ Review the PR diff, description, checks, and mergeability against these mandator
      Opus/a top-level Sonnet/Flash session is running it inline): post directly with the command
      above. Nothing below applies.
    - **Running as an Agent-tool-dispatched subagent** (a parent session used the `Agent` tool to
-     hand this whole `/pr-review` run to a subagent — e.g. per `docs/ai-team-playbook.md`'s
-     cross-model pairing): **do NOT attempt to run `gh pr review --comment` yourself.** This is a
+     hand this whole `/pr-review` run to a subagent — per this skill's "Purpose & Model Pairing"
+     section above): **do NOT attempt to run `gh pr review --comment` yourself.** This is a
      known Claude Code harness limitation, not a WebJamApps settings gap and not something
      `scripts/install-hooks.sh` can fix: Agent-tool subagents run in an independent permission
      context and do not inherit the parent session's `~/.claude/settings.json`
@@ -181,12 +181,13 @@ Review the PR diff, description, checks, and mergeability against these mandator
      1. Write the finished review body to the scratch file as in step 3 above.
      2. In your final report back to the orchestrating session, state plainly that the review is
         complete and give the **absolute path** to that scratch file — do not attempt the post and
-        do not report the review as "done" until it is actually on GitHub.
+        report the review as **written and awaiting posting**, never as posted.
      3. The **orchestrating session** (which has its own, already-approved permission context)
         reads that file and runs the `gh pr review --comment --body-file` command itself.
-   - If you cannot tell which of the two cases you're in, assume the dispatched-subagent case — a
-     failed post attempt costs nothing but a retry; a review that silently never landed on GitHub
-     is a dead-ended dispatch that looks like it worked.
+   - If you cannot tell which of the two cases you're in, attempt the post — and if it is denied,
+     fall back to the file handoff above. A denied attempt costs nothing but the fallback you would
+     have taken anyway; a review that silently never landed on GitHub is a dead-ended dispatch that
+     looks like it worked.
 
 ### A found defect is fixed before merge — never deferred
 
