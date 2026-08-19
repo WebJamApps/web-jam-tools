@@ -14,8 +14,11 @@
 # #648 itself: the heredoc for the issue body mentions "git push" in its
 # "How to test locally" section). Heredoc BODIES that are consumed as data
 # (not fed to an interpreter) are stripped first via the shared
-# hooks/lib/normalize_command.ts (same lib the other Bash guards use, e.g.
-# block-dangerous-git-deploy.sh), then quoted-string CONTENTS are stripped,
+# hooks/lib/normalize_command.ts (same lib block-secret-dumps.sh already
+# shells out to — the only other Bash hook that does; everything else that
+# imports the lib is TypeScript already running inside Deno, so it pays no
+# extra process spawn and isn't comparable to what this hook is doing),
+# then quoted-string CONTENTS are stripped,
 # then a real `git push` is matched only at the start of a shell segment
 # (the whole command, or right after a `;`/`&&`/`||`/`|`/newline operator)
 # — never as a bare substring.
@@ -36,6 +39,22 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)
 
 [ -z "$cmd" ] && exit 0
+
+# Fast path (performance; web-jam-tools#649 finding 1): this hook is
+# registered as a PreToolUse Bash hook, so it fires on EVERY Bash tool call
+# in the session — every `ls`, `cat`, `gh ...` — not just pushes. The Deno
+# call below spawns a process to normalize the command (~26ms measured),
+# which is wasteful to pay on every single Bash call. Cheap pre-filter: if
+# the RAW command text does not contain BOTH "git" and "push" as
+# substrings, no amount of normalization can ever turn it into a real
+# `git push` match — every step after the Deno call (heredoc stripping,
+# quote stripping, segment matching) only ever REMOVES text, never adds
+# it, so a command lacking these raw substrings can never end up matching.
+# This is a fast path, not a replacement: any command that survives it
+# still goes through the full normalization + segment matching below.
+if [[ "$cmd" != *git* || "$cmd" != *push* ]]; then
+  exit 0
+fi
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 

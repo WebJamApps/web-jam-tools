@@ -118,7 +118,13 @@ Deno.test("gh pr create passes through silently", async () => {
   assertEquals(res.stdout, "");
 });
 
-Deno.test("an ordinary command passes through silently", async () => {
+// web-jam-tools#649 finding 1: this command lacks the raw "push" substring,
+// so it exits via the cheap pre-filter BEFORE the Deno normalize_command.ts
+// spawn — no Deno process is started for it at all. Left as one shared test
+// (not duplicated) with the existing pass-through cases above, since the
+// expected behavior (empty stdout, exit 0) is identical whether a command
+// is filtered at the fast path or later at segment matching.
+Deno.test("an ordinary command passes through silently (fast path: no git/push substring, no Deno spawn)", async () => {
   const res = await runHook("ls -la src/");
   assertEquals(res.code, 0);
   assertEquals(res.stdout, "");
