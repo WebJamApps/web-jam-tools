@@ -89,18 +89,33 @@ is_push=false
 while IFS= read -r seg; do
   trimmed=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//') || true
   # Strip an optional leading wrapper before the git anchor
-  # (web-jam-tools#649 Must Fix 2): an opening `(` subshell, a `then`/`do`
-  # keyword from an `if`/`while`/`for` construct, and a narrow allowlist of
-  # transparent wrapper commands (sudo/env/command/time). This is
-  # deliberately NOT a loosened bare substring match — item 5 of
-  # web-jam-tools#648 still requires `git push` to sit at a segment
-  # boundary; only these specific, narrow prefixes are peeled off first.
-  candidate=$(printf '%s' "$trimmed" | sed -E '
-    s/^\(+[[:space:]]*//
-    s/^(then|do)[[:space:]]+//
-    s/^(sudo|env|command|time)[[:space:]]+//
-  ') || true
-  if printf '%s' "$candidate" | grep -Eq '^git[[:space:]]+push([[:space:]]|$)'; then
+  # (web-jam-tools#649 Must Fix 2, plus delta-review follow-ups): an opening
+  # `(` subshell or `{` group, a `then`/`do` keyword from an
+  # `if`/`while`/`for` construct, a narrow allowlist of transparent wrapper
+  # commands (sudo/env/command/time), and a leading `VAR=value` assignment
+  # prefix (e.g. `FOO=bar git push`). This is deliberately NOT a loosened
+  # bare substring match — item 5 of web-jam-tools#648 still requires `git
+  # push` to sit at a segment boundary; only these specific, narrow prefixes
+  # are peeled off first. Looped (bounded) so stacked prefixes — e.g. `time
+  # sudo git push` — are peeled one layer per pass rather than just the
+  # outermost one. Known limitation, left alone deliberately (delta review):
+  # a wrapper carrying its own option arguments (`sudo -u joshua git push`,
+  # `timeout 30 git push`) still will not match, because a bounded allowlist
+  # cannot know which tokens are the wrapper's options — closing that would
+  # mean loosening toward a bare substring match, which would undo item 5 of
+  # web-jam-tools#648.
+  candidate="$trimmed"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    stripped=$(printf '%s' "$candidate" | sed -E '
+      s/^[({]+[[:space:]]*//
+      s/^(then|do)[[:space:]]+//
+      s/^(sudo|env|command|time)[[:space:]]+//
+      s/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+//
+    ') || true
+    [ "$stripped" = "$candidate" ] && break
+    candidate="$stripped"
+  done
+  if printf '%s' "$candidate" | grep -Eq '^git[[:space:]]+push([[:space:];)]|$)'; then
     is_push=true
     break
   fi

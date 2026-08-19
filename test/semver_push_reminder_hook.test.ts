@@ -308,6 +308,43 @@ Deno.test("git push inside a subshell still fires (Must Fix 2)", async () => {
   assertStringIncludes(res.stdout, "SEMVER REMINDER");
 });
 
+// --- web-jam-tools#649 delta review Must Fix: argument-less push closing a
+// subshell/group. The anchor demanded whitespace-or-end-of-string after
+// `push`, so `)` landing directly against `push` (no arguments to keep them
+// apart) failed to match even though `(git push origin HEAD)` — which has
+// arguments — already fired. These five all fire on `dev` and were silent
+// at the PR head before this fix. ---
+
+Deno.test("an argument-less git push inside a bare subshell still fires (delta Must Fix)", async () => {
+  const res = await runHook("(git push)");
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
+Deno.test("an argument-less git push after cd inside a subshell still fires (delta Must Fix)", async () => {
+  const res = await runHook("(cd /tmp/wt && git push)");
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
+Deno.test("git push inside a brace group still fires (delta Must Fix 2)", async () => {
+  const res = await runHook("{ git push; }");
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
+Deno.test("a leading VAR=value assignment prefix still fires (delta Must Fix 2)", async () => {
+  const res = await runHook("FOO=bar git push origin HEAD");
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
+Deno.test("stacked wrappers (time sudo) still fire (delta Must Fix 3)", async () => {
+  const res = await runHook("time sudo git push origin HEAD");
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
 // --- must-stay-silent cases, re-confirmed alongside the Must Fix 1/2 fixes ---
 
 Deno.test("git push mentioned inside a heredoc body still does not fire", async () => {
