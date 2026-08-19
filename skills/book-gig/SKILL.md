@@ -1,20 +1,23 @@
 ---
 name: book-gig
-description: Identify eligible venues for target performance weekends, filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, and create Gmail drafts for Josh's review. Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".
+description: Identify eligible venues for target performance weekends, filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, dispatch approved batches (--send), and track venue replies (--replies). Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".
 ---
 
 # book-gig — Target Performance Weekend Booking Outreach
 
-Automate identifying eligible live-music venues, filtering them against Josh & Maria's performance history (+- 2 months gig-spacing), triggering `venue-mining` when target density is low, generating personalized booking pitches that adhere to `docs/cross-ai-rules.md` voice rules, and creating Gmail drafts for Josh's review.
+Automate identifying eligible live-music venues, filtering them against Josh & Maria's performance history (+- 2 months gig-spacing), triggering `venue-mining` when target density is low, generating personalized booking pitches that adhere to `docs/cross-ai-rules.md` voice rules, dispatching approved batches via `POST /outreach/batch` (`--send`), and tracking live venue responses and AI suggestions (`--replies` / `--check-replies`).
 
 ## Invocation
 
-- `/book-gig <weekend> [location]`
+- `/book-gig <weekend> [location]` — Discovery & preview mode (drafts pitches, logs candidate table).
+- `/book-gig --send "<weekend>" [location]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues).
+- `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies` and displays live campaign status table).
 - **Examples:**
-  - `/book-gig Oct 16-18 2026` — sweep all venues across the regional driving radius (~3.5h from Salem, VA).
-  - `/book-gig Oct 16-18 2026 Lynchburg, VA` — focus on Lynchburg, VA and surrounding area.
-  - `/book-gig Oct 16-18 2026 24502` — focus on zipcode 24502.
-  - `/book-gig 2026-10-16` — ISO date format (defaults Friday–Sunday span).
+  - `deno task book-gig "Oct 16-18 2026"` — sweep all venues across the regional driving radius (~3.5h from Salem, VA).
+  - `deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"` — focus on Lynchburg, VA and surrounding area.
+  - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA"` — dispatch outreach batch to eligible Lynchburg venues.
+  - `deno task book-gig --replies "Oct 16-18 2026"` — check replies and campaign status for target weekend.
+  - `deno task book-gig --replies` — check all active outreach campaigns across all target dates.
 - **Interactive Fallback:** If invoked without arguments (`/book-gig`), prompt Josh interactively for the target weekend and optional location.
 
 ## Workflow
@@ -27,9 +30,11 @@ graph TD
     D -- "Sparse (< 3-5 venues)" --> E["Recommend /venue-mining for Metro"]
     E --> B
     D -- "Sufficient Candidates" --> F["Present Candidate Proposal Table"]
-    F --> G["Josh Selects Target Venues"]
-    G --> H["Draft Voice-Compliant Pitches & Create Gmail Drafts"]
-    H --> I["Josh Reviews & Sends in Gmail"]
+    F --> G["Josh Reviews Pitches & Approves Batch"]
+    G --> H["Dispatch Outreach Batch (deno task book-gig --send ...)"]
+    H --> I["Calls POST /outreach/batch, CCs Josh+Maria, Logs Touches"]
+    I --> J["Track Responses (deno task book-gig --replies)"]
+    J --> K["Calls POST /outreach/check-replies & Renders Status Table"]
 ```
 
 ### 1. Resolve Target Weekend & Location
@@ -47,28 +52,37 @@ graph TD
 - If candidate coverage in the target area is sparse (< 3–5 venues), the skill offers to run `/venue-mining metro <slug>` to harvest net-new venues first.
 - New venues are added to MongoDB with verified street addresses and booking emails via `POST /venue`.
 
-### 4. Propose Candidate Table
+### 4. Propose Candidate Table & Pitch Preview
 - Present a phone-readable table to Josh in chat:
   `| # | Venue Name | City, State | Booking Email | Spacing Reason |`
-- Josh approves the target list (e.g. "all", "1, 2, 4", or "skip X").
-
-### 5. Pitch Drafting, Gmail Drafts & Responsive HTML Review Artifact
 - Generates personalized emails strictly conforming to `docs/cross-ai-rules.md` **Voice Rules**:
   - First-person singular ("I", "my wife Maria", "my wife and I play as Josh and Maria, an acoustic duo out of Salem, VA").
   - Salutation: `Hi,` or `Hi [Name],` (never "Dear [Title]").
   - Zero banned marketing hype words (`exciting`, `opportunity`, `passionate`, `thrilled`, `reach out`, `circle back`, `truly admire`, `deep connection`, `great addition`, `perfect fit`, `your spot`).
   - Warm coffee-shop conversational tone.
   - Preserves personal hooks (e.g. "son lives in Rustburg" or past performance note).
-- Creates Gmail drafts in `joshua.v.sherman@gmail.com` for 1-click review and sending.
-- Records outreach campaign metadata in MongoDB.
-- **Responsive Dark Mode HTML Artifact:** Generates both a Markdown summary and a standalone Dark Mode `.html` review artifact in `~/Dropbox/web-jam-llms/gig-outreach/book-gig-run-<weekend>.html` for 1-click visual inspection in Google Chrome, responsive across desktop and cellphone screens with copyable pitch cards and candidate tables.
+
+### 5. Approved Batch Outreach Dispatch (`--send`)
+- Once candidate selection is approved, execute batch outreach dispatch:
+  `deno task book-gig --send "<target-weekend>" [location]`
+- Calls `POST /outreach/batch` on `web-jam-back` with `{ venueIds, targetDates, targetWeekend }`.
+- Dispatches pitch emails to candidate booking contacts, CCs Josh and Maria (`joshua.v.sherman@gmail.com`, `chemmariasherman@gmail.com`), initializes active campaigns in MongoDB (`status: 'sent'`), and logs email touches on venue timelines.
+
+### 6. Live Response Tracking (`--replies` / `--check-replies`)
+- Track replies and campaign progression:
+  `deno task book-gig --replies [target-weekend]`
+- Calls `POST /outreach/check-replies` on `web-jam-back` to perform Gmail IMAP reply detection.
+- Fetches pending replies (`GET /outreach/replies/pending`) and active campaigns (`GET /outreach`), rendering a status table with live lifecycle badges (`sent`, `replied`, `interested`, `booked`, `not-interested`, `no-response`, `target-filled`), sent dates, and response snippets.
+- Highlights pending AI suggestions for review (`intent`, `confidence`, `suggestedAction`).
+- **Responsive Dark Mode HTML Artifact:** Automatically generates and updates standalone Dark Mode `.html` review artifacts in `~/Dropbox/web-jam-llms/gig-outreach/` for 1-click visual inspection in Google Chrome across desktop and mobile screens.
 
 ## What It Refuses to Do
 
 | It refuses to | Because |
 |---|---|
-| Auto-send outreach emails | Standing hard rule: EMAIL is always DRAFT, never send. Josh handles all final sending. |
+| Auto-send outreach without `--send` flag | Standing discovery workflow generates previews and drafts for review first. Batch dispatch is an explicit step. |
 | Pitch venues within +- 2 months of a booked gig | Preserves local audience draw and venue spacing commitments. |
 | Pitch venues with active outreach campaigns for that weekend | Prevents embarrassing duplicate outreach to venue managers. |
 | Use corporate marketing copy or banned hype words | Violates cross-AI voice rules. Tone must remain genuine and personal. |
 | Invent unverified claims or musical genres | Anti-hallucination rule: only state facts given by Josh. |
+
