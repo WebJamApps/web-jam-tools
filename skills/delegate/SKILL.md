@@ -141,6 +141,18 @@ repos (CollegeLutheran, JaMmusic, web-jam-back, AppersonAuto, WebJamSocketCluste
 bump is enforced automatically by a pre-push hook (`~/.claude/hooks/`), not a rule
 the subagent has to self-police.
 
+### PR-review dispatch nudge (parent-side, before dispatching)
+
+> Before dispatching a subagent to run `/pr-review` (e.g. the Flash-reviews-Sonnet /
+> Sonnet-reviews-Flash cross-model pairing), know that the subagent **cannot** post
+> its finished review itself — Agent-tool subagents don't inherit this session's
+> `permissions.allow` list and dead-end on `gh pr review --comment` with no human
+> present to approve it (harness limitation, not a WebJamApps settings gap; see
+> `skills/pr-review/SKILL.md` Step 3 for the citations). The subagent will write
+> the finished review to a scratch file and hand you back its path — **you** (the
+> orchestrating session) post it via `gh pr review --comment --body-file <path>`
+> once it reports back. Don't wait on the subagent in the meantime.
+
 ### Coupling nudge (parent-side, before dispatching)
 
 > Before dispatching an issue with a `FE-couples: <repo>#NNN` line, dispatch

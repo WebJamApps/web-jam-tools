@@ -153,11 +153,41 @@ Review the PR diff, description, checks, and mergeability against these mandator
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List any CircleCI failures, Snyk security failures, merge conflicts, or blocking bugs. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section).
    - **Checklist Verification**: Status of mergeability, CI health, Snyk audits, scope, semver bump, package-lock engine alignment, test evidence, and guardrails. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **CircleCI**: 🛑 ...`).
    - **Actionable Feedback & Suggestions** (`### 🟡 Actionable Feedback & Suggestions`): Specific code references or line numbers where changes or improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Actionable Feedback & Suggestions` with `✅ None`.
-3. Post comment via `gh pr review`:
+3. Write the finished review body to a scratch file (e.g. `/tmp/pr-review-<Repo>-<pr-num>.md` — never inside the repo, per AGENTS.md convention), then post it:
    ```sh
    gh pr review <Repo>#<pr-num> --comment --body-file <scratch_review_file>
    ```
    *(Note: Review comments provide feedback for the PR author and Josh. Final PR merge remains under Josh's approval.)*
+
+   **Who runs this command depends on how this skill is being run — read this before posting:**
+
+   - **Running interactively as the top-level session** (Josh invoked `/pr-review` directly, or
+     Opus/a top-level Sonnet/Flash session is running it inline): post directly with the command
+     above. Nothing below applies.
+   - **Running as an Agent-tool-dispatched subagent** (a parent session used the `Agent` tool to
+     hand this whole `/pr-review` run to a subagent — per this skill's "Purpose & Model Pairing"
+     section above): **do NOT attempt to run `gh pr review --comment` yourself.** This is a
+     known Claude Code harness limitation, not a WebJamApps settings gap and not something
+     `scripts/install-hooks.sh` can fix: Agent-tool subagents run in an independent permission
+     context and do not inherit the parent session's `~/.claude/settings.json`
+     `permissions.allow` list, even for entries like `Bash(gh pr review *)` that are already
+     approved at the top level. A dispatched subagent has no human present to answer the resulting
+     interactive prompt, so the write silently dead-ends. Anthropic has confirmed this is
+     intentional (subagents get independent, stricter-by-default permissions) and closed the
+     inheritance requests as not planned:
+     [anthropics/claude-code#37730](https://github.com/anthropics/claude-code/issues/37730),
+     [anthropics/claude-code#37442](https://github.com/anthropics/claude-code/issues/37442).
+     Instead:
+     1. Write the finished review body to the scratch file as in step 3 above.
+     2. In your final report back to the orchestrating session, state plainly that the review is
+        complete and give the **absolute path** to that scratch file — do not attempt the post and
+        report the review as **written and awaiting posting**, never as posted.
+     3. The **orchestrating session** (which has its own, already-approved permission context)
+        reads that file and runs the `gh pr review --comment --body-file` command itself.
+   - If you cannot tell which of the two cases you're in, attempt the post — and if it is denied,
+     fall back to the file handoff above. A denied attempt costs nothing but the fallback you would
+     have taken anyway; a review that silently never landed on GitHub is a dead-ended dispatch that
+     looks like it worked.
 
 ### A found defect is fixed before merge — never deferred
 
