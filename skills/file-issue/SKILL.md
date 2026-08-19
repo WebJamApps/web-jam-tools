@@ -44,7 +44,7 @@ that's what following this skill prevents.
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
    model label, because the label was going to be "added later."    Decide the label as part of
     deciding what the issue IS — before you write the body — from:
-    - `Flash Med` — mechanical work, documentation cleanup/link updates, single-file edits, and routine execution tasks across all repos (Josh's default choice to save token quota; viable Haiku substitute).
+    - `Flash Med` — genuinely trivial edits only: a one-line change, a single-field data or typo fix, a link update (an exception case; anything larger goes to `Flash High`).
     - `Flash High` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
     - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
     - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; slightly higher capability than Flash High).
