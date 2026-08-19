@@ -1,7 +1,7 @@
 // skills_validation.test.ts — web-jam-tools#133
 //
 // The laptop installs skills by symlinking this repo's skills/*/SKILL.md
-// (scripts/install-skills.sh). A malformed frontmatter or a dir/name mismatch
+// (deno task install-skills). A malformed frontmatter or a dir/name mismatch
 // silently breaks skill loading with no CI signal. This test walks every
 // skills/*/ directory and asserts:
 //   - a SKILL.md exists

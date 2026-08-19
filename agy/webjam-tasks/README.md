@@ -40,7 +40,7 @@ mkdir -p "$INST/hooks"
 ln -sf "$SRC/hooks/block-merge-deploy.sh" "$INST/hooks/block-merge-deploy.sh"
 
 # Symlink all skills under skills/ across ~/.claude/skills and ~/.gemini/config/plugins/webjam-tasks/skills:
-scripts/install-skills.sh
+deno task install-skills
 ```
 
 After that, edit the files here, **restart agy**, and changes are live — no
