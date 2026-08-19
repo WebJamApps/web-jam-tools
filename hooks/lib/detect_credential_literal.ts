@@ -151,6 +151,16 @@ export function looksSynthetic(value: string): boolean {
   return hasPlaceholderWording(value) || hasDegenerateEntropy(value);
 }
 
+/**
+ * Shared with the CircleCI presigned-URL exemption (below): the second
+ * exemption site does not arrive via the SPECIFIC_PATTERNS loop (it matches
+ * on a generic `token=`/`api-key=`/etc. query-param shape), so it has no
+ * `name === "JWT token"` to check. It tests the candidate value against
+ * this same pattern directly instead, so the exemption there stays JWT-only
+ * too, matching the first site.
+ */
+const JWT_TOKEN_PATTERN = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/;
+
 export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["Google/Gemini API key", /AIza[0-9A-Za-z_-]{35}/],
   ["GitHub token", /gh[pousr]_[A-Za-z0-9]{36,}/],
@@ -162,11 +172,37 @@ export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["Dropbox access token", /sl\.[A-Za-z0-9_-]{20,}/],
   ["AWS access key id", /AKIA[0-9A-Z]{16}/],
   ["Google OAuth secret", /GOCSPX-[A-Za-z0-9_-]{20,}/],
-  ["JWT token", /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+  ["JWT token", JWT_TOKEN_PATTERN],
   ["Bearer token", /\bBearer\s+[A-Za-z0-9._~+/-]{15,}=*/i],
   ["MongoDB connection string", /mongodb(?:\+srv)?:\/\/[^\s"']+/i],
   ["Auth header flag", /(?:--header|-H)\s+["']?(?:[A-Za-z0-9_-]+:\s*)?(?:Bearer|token|Basic|Secret|[A-Za-z0-9_-]{15,})/i],
 ];
+
+/**
+ * CIRCLECI PRESIGNED OUTPUT-URL EXEMPTION (web-jam-tools#651)
+ * ---------------------------------------------------------------
+ * CircleCI's build-log API hands back a presigned `output_url` whose
+ * `token=` query parameter is a short-lived JWT the provider mints on
+ * demand to serve one step's log — an ephemeral, read-only URL credential,
+ * not a stored secret. This exemption is keyed ENTIRELY on the surrounding
+ * URL context — host `circleci.com`, path beginning `/api/private/output/`,
+ * value appearing as that URL's own `token=` parameter — and NEVER on the
+ * JWT pattern itself (SPECIFIC_PATTERNS, "JWT token", above). A JWT that is
+ * bare, sits in any other URL, or sits on a different circleci.com path
+ * still fires exactly as before.
+ */
+const CIRCLECI_PRESIGNED_OUTPUT_TOKEN_SOURCE =
+  String.raw`https:\/\/circleci\.com\/api\/private\/output\/[^\s"'<>#]*[?&]token=([^\s"'&<>]+)`;
+
+/** True when `value` is, verbatim, the `token=` value of a CircleCI presigned output-log URL somewhere in `text`. */
+export function isCircleCiPresignedOutputUrlToken(text: string, value: string): boolean {
+  const re = new RegExp(CIRCLECI_PRESIGNED_OUTPUT_TOKEN_SOURCE, "gi");
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    if (match[1] === value) return true;
+  }
+  return false;
+}
 
 export function isPlaceholderValue(val: string): boolean {
   if (!val) return true;
@@ -346,6 +382,7 @@ export function findCredentialLiteral(text: string): string | null {
       }
       if (isPlaceholderValue(match[0])) continue;
       if (looksSynthetic(match[0])) continue;
+      if (name === "JWT token" && isCircleCiPresignedOutputUrlToken(text, match[0])) continue;
       const lineIndex = lineIndexForOffset(text, match.index);
       if (isPragmaSuppressedForLine(lines, lineIndex)) continue;
       return name;
@@ -363,6 +400,7 @@ export function findCredentialLiteral(text: string): string | null {
       continue;
     }
     if (looksSynthetic(val)) continue;
+    if (JWT_TOKEN_PATTERN.test(val) && isCircleCiPresignedOutputUrlToken(text, val)) continue;
     const lineIndex = lineIndexForOffset(text, urlMatch.index);
     if (isPragmaSuppressedForLine(lines, lineIndex)) continue;
     return "URL-embedded token/key/secret parameter with a literal value";

@@ -221,3 +221,67 @@ Deno.test("a high-entropy value is still caught even when everything ABOUT the s
   ].join("\n");
   assertEquals(findCredentialLiteral(text), "GitHub token");
 });
+
+// --- CircleCI presigned output-URL exemption (web-jam-tools#651) ---
+//
+// CircleCI's build-log API hands back a presigned `output_url` carrying a
+// short-lived, provider-minted JWT in its `token=` parameter — an
+// ephemeral, read-only URL credential, not a stored secret. The exemption
+// is keyed ENTIRELY on the surrounding URL context (host `circleci.com`,
+// path beginning `/api/private/output/`, value as that URL's own `token=`
+// parameter). The JWT pattern itself (SPECIFIC_PATTERNS, "JWT token") is
+// unchanged — a JWT that is bare, in a different URL, on a different
+// circleci.com path, or merely near the word "circleci" must still fire.
+
+const CIRCLECI_JWT = `eyJ${variedFakeBody(20, 9)}.${variedFakeBody(20, 10)}.${
+  variedFakeBody(20, 11)
+}`;
+
+Deno.test("a JWT as the token= parameter of a CircleCI presigned output URL is not reported", () => {
+  const text =
+    `OUTPUT_URL=https://circleci.com/api/private/output/presigned/d4dd534a-0000-0000-0000-000000000000/0/108?token=${CIRCLECI_JWT}`;
+  assertEquals(findCredentialLiteral(text), null);
+});
+
+Deno.test("a bare JWT with no surrounding URL is still reported (exemption requires URL context)", () => {
+  assertEquals(findCredentialLiteral(CIRCLECI_JWT), "JWT token");
+});
+
+Deno.test("near miss: a JWT as a token= parameter on a non-circleci.com host is still reported", () => {
+  const text = `https://example.com/api/thing?token=${CIRCLECI_JWT}`;
+  assertEquals(findCredentialLiteral(text), "JWT token");
+});
+
+Deno.test("near miss: a JWT as a token= parameter on circleci.com but outside /api/private/output/ is still reported", () => {
+  const text = `https://circleci.com/api/v1.1/project/gh/org/repo/123?token=${CIRCLECI_JWT}`;
+  assertEquals(findCredentialLiteral(text), "JWT token");
+});
+
+Deno.test("near miss: a JWT merely sitting near the word 'circleci' with no matching URL context is still reported", () => {
+  const text = `circleci build failed, token: ${CIRCLECI_JWT}`;
+  assertEquals(findCredentialLiteral(text), "JWT token");
+});
+
+// --- regressions for web-jam-tools#652 (Must Fix 1 + 2) ---
+
+Deno.test("Must Fix 1: a non-JWT value in the CircleCI presigned URL's token= position is still reported (exemption is JWT-only)", () => {
+  const nonJwt = variedFakeBody(24, 12);
+  const text =
+    `OUTPUT_URL=https://circleci.com/api/private/output/presigned/d4dd534a-0000-0000-0000-000000000000/0/108?token=${nonJwt}`;
+  assertEquals(
+    findCredentialLiteral(text),
+    "URL-embedded token/key/secret parameter with a literal value",
+  );
+});
+
+Deno.test("Must Fix 2: a foreign URL's token= glued onto a CircleCI prefix after a '#' fragment is still reported (span must not cross #)", () => {
+  const text =
+    `https://circleci.com/api/private/output/presigned/x#https://evil.example.com/leak?token=${CIRCLECI_JWT}`;
+  assertEquals(findCredentialLiteral(text), "JWT token");
+});
+
+Deno.test("no regression: the genuine CircleCI presigned JWT URL is still exempt after both Must Fix guards", () => {
+  const text =
+    `https://circleci.com/api/private/output/presigned/d4dd534a-0000-0000-0000-000000000000/0/108?token=${CIRCLECI_JWT}`;
+  assertEquals(findCredentialLiteral(text), null);
+});
