@@ -29,7 +29,7 @@ git clone https://github.com/WebJamApps/web-jam-tools.git
 cd web-jam-tools
 ```
 
-To use the Claude Code skills in `skills/`, run `scripts/install-skills.sh` — it
+To use the Claude Code skills in `skills/`, run `deno task install-skills` — it
 symlinks each skill into `~/.claude/skills/` (existing real dirs are backed up,
 never deleted). Runtime/personal files (e.g. `rules.yaml`, `log/`) stay local and
 gitignored.
