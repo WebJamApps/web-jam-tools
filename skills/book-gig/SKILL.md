@@ -10,12 +10,14 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
 ## Invocation
 
 - `/book-gig <weekend> [location]` — Discovery & preview mode (drafts pitches, logs candidate table).
-- `/book-gig --send "<weekend>" [location]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues).
+- `/book-gig --send "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues).
 - `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies` and displays live campaign status table).
 - **Examples:**
   - `deno task book-gig "Oct 16-18 2026"` — sweep all venues across the regional driving radius (~3.5h from Salem, VA).
   - `deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"` — focus on Lynchburg, VA and surrounding area.
-  - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA"` — dispatch outreach batch to eligible Lynchburg venues.
+  - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA"` — dispatch outreach batch to all eligible Lynchburg venues.
+  - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --venues "id1,id2"` — dispatch only to specific approved candidate venues.
+  - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --skip "id3"` — dispatch batch while excluding specific venues.
   - `deno task book-gig --replies "Oct 16-18 2026"` — check replies and campaign status for target weekend.
   - `deno task book-gig --replies` — check all active outreach campaigns across all target dates.
 - **Interactive Fallback:** If invoked without arguments (`/book-gig`), prompt Josh interactively for the target weekend and optional location.
@@ -64,7 +66,9 @@ graph TD
 
 ### 5. Approved Batch Outreach Dispatch (`--send`)
 - Once candidate selection is approved, execute batch outreach dispatch:
-  `deno task book-gig --send "<target-weekend>" [location]`
+  - **All eligible candidates:** `deno task book-gig --send "<weekend>" [location]`
+  - **Specific approved subset:** `deno task book-gig --send "<weekend>" [location] --venues "id1,id2"` (or `--include`)
+  - **Excluding specific candidates:** `deno task book-gig --send "<weekend>" [location] --skip "id3"` (or `--exclude`)
 - Calls `POST /outreach/batch` on `web-jam-back` with `{ venueIds, targetDates, targetWeekend }`.
 - Dispatches pitch emails to candidate booking contacts, CCs Josh and Maria (`joshua.v.sherman@gmail.com`, `chemmariasherman@gmail.com`), initializes active campaigns in MongoDB (`status: 'sent'`), and logs email touches on venue timelines.
 
@@ -80,7 +84,7 @@ graph TD
 
 | It refuses to | Because |
 |---|---|
-| Auto-send outreach without `--send` flag | Standing discovery workflow generates previews and drafts for review first. Batch dispatch is an explicit step. |
+| Auto-send outreach without explicit `--send` approval or dispatch to unapproved venues | Discovery mode generates previews and drafts for review first. Batch dispatch requires `--send` and supports explicit venue selection (`--venues`, `--skip`) so unapproved candidates are never pitched. |
 | Pitch venues within +- 2 months of a booked gig | Preserves local audience draw and venue spacing commitments. |
 | Pitch venues with active outreach campaigns for that weekend | Prevents embarrassing duplicate outreach to venue managers. |
 | Use corporate marketing copy or banned hype words | Violates cross-AI voice rules. Tone must remain genuine and personal. |

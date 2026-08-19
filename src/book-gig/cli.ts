@@ -1,6 +1,6 @@
 // src/book-gig/cli.ts — CLI entry point for /book-gig skill
 
-import { parseBookGigArgs } from "./parser.ts";
+import { matchesVenueFilter, parseBookGigArgs } from "./parser.ts";
 import { assessDensity, fetchCandidates, filterAndRankCandidates } from "./candidates.ts";
 import { renderPitch } from "./pitch.ts";
 import { writeDropboxRunLog } from "./gmail.ts";
@@ -181,10 +181,14 @@ export async function runBookGigCli(
   // Discovery & Batch Send Modes
   // -------------------------------------------------------------------------
   if (!parsed.weekend) {
-    console.error("Usage: deno task book-gig [--send|--replies] <target-weekend> [location]");
+    console.error(
+      "Usage: deno task book-gig [--send|--replies] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
+    );
     console.error("Examples:");
     console.error('  deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"');
     console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA"');
+    console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --venues "v1,v2"');
+    console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --skip "v3"');
     console.error('  deno task book-gig --replies "Oct 16-18 2026"');
     console.error("  deno task book-gig --replies");
     throw new Error("Missing target weekend argument");
@@ -270,11 +274,27 @@ export async function runBookGigCli(
 
   // 6. If in --send mode, dispatch batch outreach via POST /outreach/batch
   if (isSendMode) {
-    const eligibleVenues = candidates.filter((c) => c._id && c.email);
+    let eligibleVenues = candidates.filter((c) => c._id && c.email);
+
+    if (parsed.includeVenues && parsed.includeVenues.length > 0) {
+      console.log(
+        `Filtering candidate dispatch to approved venues: ${parsed.includeVenues.join(", ")}`,
+      );
+      eligibleVenues = eligibleVenues.filter((c) => matchesVenueFilter(c, parsed.includeVenues!));
+    }
+    if (parsed.excludeVenues && parsed.excludeVenues.length > 0) {
+      console.log(
+        `Excluding skipped venues from dispatch: ${parsed.excludeVenues.join(", ")}`,
+      );
+      eligibleVenues = eligibleVenues.filter((c) => !matchesVenueFilter(c, parsed.excludeVenues!));
+    }
+
     const venueIds = eligibleVenues.map((c) => c._id);
 
     if (venueIds.length === 0) {
-      console.log(`\n⚠️  No eligible venues with valid emails found to dispatch.`);
+      console.log(
+        `\n⚠️  No eligible venues with valid emails found to dispatch matching filter criteria.`,
+      );
       batchDispatch = { requested: 0, sent: 0, skipped: [], records: [] };
     } else {
       console.log(`\nDispatching batch outreach to ${venueIds.length} candidate venue(s)...`);
@@ -315,6 +335,8 @@ export async function runBookGigCli(
     mode: parsed.mode,
     weekend,
     location,
+    includeVenues: parsed.includeVenues,
+    excludeVenues: parsed.excludeVenues,
     candidates,
     density,
     pitches,

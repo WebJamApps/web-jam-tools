@@ -1,7 +1,12 @@
 // test/book_gig.test.ts — Unit tests for /book-gig skill and CLI
 
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
-import { parseBookGigArgs, parseLocation, parseTargetWeekend } from "../src/book-gig/parser.ts";
+import {
+  matchesVenueFilter,
+  parseBookGigArgs,
+  parseLocation,
+  parseTargetWeekend,
+} from "../src/book-gig/parser.ts";
 import {
   assessDensity,
   fetchCandidates,
@@ -658,4 +663,166 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
   assertEquals(resultReplies.repliesTracking?.checkReplies.matched, 1);
   assertEquals(resultReplies.repliesTracking?.campaigns.length, 1);
   assertEquals(resultReplies.repliesTracking?.pendingReplies.length, 1);
+});
+
+Deno.test("matchesVenueFilter: correctly matches venues by _id or name", () => {
+  const v1: CandidateVenue = {
+    _id: "64a123",
+    name: "Olde Salem Brewing",
+    city: "Salem",
+    usState: "VA",
+  };
+  const v2: CandidateVenue = {
+    _id: "v2",
+    name: "Waterman's Grill",
+    city: "Lynchburg",
+    usState: "VA",
+  };
+
+  // Match by ID
+  assertEquals(matchesVenueFilter(v1, ["64a123"]), true);
+  assertEquals(matchesVenueFilter(v2, ["v2"]), true);
+
+  // Match by Name (case-insensitive)
+  assertEquals(matchesVenueFilter(v1, ["olde salem brewing"]), true);
+  assertEquals(matchesVenueFilter(v2, ["Waterman's Grill"]), true);
+  assertEquals(matchesVenueFilter(v2, ["watermans grill"]), true); // punctuation stripped match
+
+  // Non-matching
+  assertEquals(matchesVenueFilter(v1, ["v2", "Another Venue"]), false);
+  assertEquals(matchesVenueFilter(v1, []), false);
+});
+
+Deno.test("parseBookGigArgs: parses --venues, --include, --skip, and --exclude flags", () => {
+  const res1 = parseBookGigArgs([
+    "--send",
+    "Oct 16-18 2026",
+    "Lynchburg, VA",
+    "--venues",
+    "v1,v2",
+  ]);
+  assertEquals(res1.mode, "send");
+  assertEquals(res1.includeVenues, ["v1", "v2"]);
+  assertEquals(res1.excludeVenues, undefined);
+  assertEquals(res1.weekend?.start, "2026-10-16");
+  assertEquals(res1.location?.city, "Lynchburg");
+
+  const res2 = parseBookGigArgs([
+    "--send",
+    "Oct 16-18 2026",
+    "--include=v1,v2",
+    "--skip=v3",
+  ]);
+  assertEquals(res2.mode, "send");
+  assertEquals(res2.includeVenues, ["v1", "v2"]);
+  assertEquals(res2.excludeVenues, ["v3"]);
+
+  const res3 = parseBookGigArgs([
+    "--send",
+    "Oct 16-18 2026",
+    "--skip",
+    "Olde Salem Brewing, Parkway Brewing",
+  ]);
+  assertEquals(res3.mode, "send");
+  assertEquals(res3.excludeVenues, ["Olde Salem Brewing", "Parkway Brewing"]);
+
+  const res4 = parseBookGigArgs([
+    "--send",
+    "Oct 16-18 2026",
+    "--exclude",
+    "v1",
+  ]);
+  assertEquals(res4.excludeVenues, ["v1"]);
+});
+
+Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --skip is provided", async () => {
+  const mockVenues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@oldesalem.com",
+    },
+    {
+      _id: "v2",
+      name: "Parkway Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "info@parkway.com",
+    },
+    {
+      _id: "v3",
+      name: "The Spot on Kirk",
+      city: "Roanoke",
+      usState: "VA",
+      email: "booking@thespotonkirk.org",
+    },
+  ];
+
+  let lastDispatchedIds: string[] = [];
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    if (u.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/outreach/batch")) {
+      const body = JSON.parse(String(init?.body || "{}"));
+      lastDispatchedIds = body.venueIds;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            requested: body.venueIds.length,
+            sent: body.venueIds.length,
+            skipped: [],
+            records: body.venueIds.map((id: string) => ({ _id: `outreach_${id}` })),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  // Test 1: Send all without --venues / --skip
+  const resAll = await runBookGigCli(["--send", "Oct 16-18 2026"], mockFetch);
+  assertEquals(resAll.batchDispatch?.sent, 3);
+  assertEquals(lastDispatchedIds, ["v1", "v2", "v3"]);
+
+  // Test 2: Send with --venues (approved subset by ID)
+  const resSubsetId = await runBookGigCli(
+    ["--send", "Oct 16-18 2026", "--venues", "v1,v3"],
+    mockFetch,
+  );
+  assertEquals(resSubsetId.batchDispatch?.sent, 2);
+  assertEquals(lastDispatchedIds, ["v1", "v3"]);
+
+  // Test 3: Send with --venues (approved subset by Name)
+  const resSubsetName = await runBookGigCli(
+    ["--send", "Oct 16-18 2026", "--venues", "Parkway Brewing"],
+    mockFetch,
+  );
+  assertEquals(resSubsetName.batchDispatch?.sent, 1);
+  assertEquals(lastDispatchedIds, ["v2"]);
+
+  // Test 4: Send with --skip (exclude specific ID)
+  const resSkip = await runBookGigCli(
+    ["--send", "Oct 16-18 2026", "--skip", "v2"],
+    mockFetch,
+  );
+  assertEquals(resSkip.batchDispatch?.sent, 2);
+  assertEquals(lastDispatchedIds, ["v1", "v3"]);
+
+  // Test 5: Send with non-matching --venues
+  const resNone = await runBookGigCli(
+    ["--send", "Oct 16-18 2026", "--venues", "non-existent-id"],
+    mockFetch,
+  );
+  assertEquals(resNone.batchDispatch?.sent, 0);
+  assertEquals(resNone.batchDispatch?.requested, 0);
 });

@@ -109,10 +109,21 @@ export interface RepliesTrackingResult {
   targetWeekend?: TargetWeekend;
 }
 
+export interface ParsedBookGigArgs {
+  mode: BookGigMode;
+  weekend?: TargetWeekend;
+  location?: TargetLocation;
+  includeVenues?: string[];
+  excludeVenues?: string[];
+  rawArgs: string;
+}
+
 export interface BookGigResult {
   mode: BookGigMode;
   weekend?: TargetWeekend;
   location?: TargetLocation;
+  includeVenues?: string[];
+  excludeVenues?: string[];
   candidates: CandidateVenue[];
   density: {
     count: number;

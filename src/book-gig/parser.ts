@@ -1,6 +1,170 @@
 // src/book-gig/parser.ts — Natural date and location parser for /book-gig
 
-import type { BookGigMode, TargetLocation, TargetWeekend } from "./types.ts";
+import type {
+  BookGigMode,
+  CandidateVenue,
+  ParsedBookGigArgs,
+  TargetLocation,
+  TargetWeekend,
+} from "./types.ts";
+
+export type { ParsedBookGigArgs };
+
+/**
+ * Match a candidate venue against a list of filter IDs or names (case-insensitive, normalized).
+ */
+export function matchesVenueFilter(venue: CandidateVenue, filterList: string[]): boolean {
+  if (!filterList || filterList.length === 0) return false;
+  const vId = (venue._id || "").toLowerCase().trim();
+  const vName = (venue.name || "").toLowerCase().trim();
+  const vNameClean = vName.replace(/[^a-z0-9]/g, "");
+
+  return filterList.some((filterItem) => {
+    const item = filterItem.toLowerCase().trim();
+    if (!item) return false;
+    if (vId === item || vName === item) return true;
+    const itemClean = item.replace(/[^a-z0-9]/g, "");
+    if (itemClean && itemClean === vNameClean) return true;
+    return false;
+  });
+}
+
+/**
+ * Split command-line tokens into mode, target weekend, optional location, and venue filters.
+ * Examples:
+ *   ["--send", "Oct 16-18 2026", "Lynchburg, VA", "--venues", "id1,id2"]
+ *   ["--send", "Oct 16-18 2026", "--skip", "id3"]
+ *   ["--replies", "Oct 16-18 2026"]
+ *   ["--check-replies"]
+ *   ["Oct", "16-18", "2026", "Lynchburg,", "VA"]
+ *   ["2026-10-16", "24502"]
+ */
+export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
+  if (!args || args.length === 0) {
+    return { mode: "preview", rawArgs: "" };
+  }
+
+  let mode: BookGigMode = "preview";
+  const includeVenues: string[] = [];
+  const excludeVenues: string[] = [];
+  const positionalArgs: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i].trim();
+    if (!arg) continue;
+    const lower = arg.toLowerCase();
+
+    if (lower === "--send") {
+      mode = "send";
+    } else if (lower === "--replies" || lower === "--check-replies") {
+      mode = "replies";
+    } else if (lower === "--venues" || lower === "--include") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        const vals = args[i].split(",").map((s) => s.trim()).filter(Boolean);
+        includeVenues.push(...vals);
+      }
+    } else if (lower.startsWith("--venues=") || lower.startsWith("--include=")) {
+      const eqIdx = arg.indexOf("=");
+      const valStr = arg.slice(eqIdx + 1);
+      const vals = valStr.split(",").map((s) => s.trim()).filter(Boolean);
+      includeVenues.push(...vals);
+    } else if (lower === "--skip" || lower === "--exclude") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        const vals = args[i].split(",").map((s) => s.trim()).filter(Boolean);
+        excludeVenues.push(...vals);
+      }
+    } else if (lower.startsWith("--skip=") || lower.startsWith("--exclude=")) {
+      const eqIdx = arg.indexOf("=");
+      const valStr = arg.slice(eqIdx + 1);
+      const vals = valStr.split(",").map((s) => s.trim()).filter(Boolean);
+      excludeVenues.push(...vals);
+    } else {
+      positionalArgs.push(arg);
+    }
+  }
+
+  const rawArgs = positionalArgs.join(" ").trim();
+  const resIncludes = includeVenues.length > 0 ? Array.from(new Set(includeVenues)) : undefined;
+  const resExcludes = excludeVenues.length > 0 ? Array.from(new Set(excludeVenues)) : undefined;
+
+  if (!rawArgs) {
+    return {
+      mode,
+      includeVenues: resIncludes,
+      excludeVenues: resExcludes,
+      rawArgs: "",
+    };
+  }
+
+  // Try matching date part first
+  // Check if positionalArgs start with ISO date or natural month
+  let dateTokens: string[] = [];
+  let locTokens: string[] = [];
+
+  const firstToken = positionalArgs[0].toLowerCase();
+  if (firstToken.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    dateTokens = [positionalArgs[0]];
+    locTokens = positionalArgs.slice(1);
+  } else if (MONTH_MAP[firstToken.replace(/[^a-z]/g, "")] || firstToken === "weekend") {
+    // Collect date tokens until we hit a location indicator (e.g. city or zip)
+    let i = 0;
+    while (i < positionalArgs.length) {
+      const t = positionalArgs[i];
+      if (i > 0 && (t.match(/^\d{5}$/) || t.includes(",") || (i >= 3 && isNaN(parseInt(t, 10))))) {
+        break;
+      }
+      dateTokens.push(t);
+      i++;
+    }
+    locTokens = positionalArgs.slice(i);
+  } else {
+    // If first token is not date, check if full rawArgs can parse as date
+    try {
+      const weekend = parseTargetWeekend(rawArgs);
+      return {
+        mode,
+        weekend,
+        includeVenues: resIncludes,
+        excludeVenues: resExcludes,
+        rawArgs,
+      };
+    } catch {
+      // Otherwise treat everything as location or return raw
+      return {
+        mode,
+        location: parseLocation(rawArgs) ?? undefined,
+        includeVenues: resIncludes,
+        excludeVenues: resExcludes,
+        rawArgs,
+      };
+    }
+  }
+
+  let weekend: TargetWeekend | undefined;
+  if (dateTokens.length > 0) {
+    try {
+      weekend = parseTargetWeekend(dateTokens.join(" "));
+    } catch {
+      // Ignore if unparseable, leave undefined for interactive fallback
+    }
+  }
+
+  let location: TargetLocation | undefined;
+  if (locTokens.length > 0) {
+    location = parseLocation(locTokens.join(" ")) ?? undefined;
+  }
+
+  return {
+    mode,
+    weekend,
+    location,
+    includeVenues: resIncludes,
+    excludeVenues: resExcludes,
+    rawArgs,
+  };
+}
 
 const MONTH_MAP: Record<string, number> = {
   jan: 1,
@@ -259,100 +423,5 @@ export function parseLocation(input?: string): TargetLocation | null {
     raw: clean,
     city: clean,
     metroSlug: clean.toLowerCase().replace(/\s+/g, "-"),
-  };
-}
-
-export interface ParsedBookGigArgs {
-  mode: BookGigMode;
-  weekend?: TargetWeekend;
-  location?: TargetLocation;
-  rawArgs: string;
-}
-
-/**
- * Split command-line tokens into mode, target weekend, and optional location.
- * Examples:
- *   ["--send", "Oct 16-18 2026", "Lynchburg, VA"]
- *   ["--replies", "Oct 16-18 2026"]
- *   ["--check-replies"]
- *   ["Oct", "16-18", "2026", "Lynchburg,", "VA"]
- *   ["2026-10-16", "24502"]
- */
-export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
-  if (!args || args.length === 0) {
-    return { mode: "preview", rawArgs: "" };
-  }
-
-  let mode: BookGigMode = "preview";
-  const filteredArgs: string[] = [];
-
-  for (const arg of args) {
-    const trimmed = arg.trim();
-    const lower = trimmed.toLowerCase();
-    if (lower === "--send") {
-      mode = "send";
-    } else if (lower === "--replies" || lower === "--check-replies") {
-      mode = "replies";
-    } else if (trimmed.length > 0) {
-      filteredArgs.push(trimmed);
-    }
-  }
-
-  const rawArgs = filteredArgs.join(" ").trim();
-  if (!rawArgs) {
-    return { mode, rawArgs: "" };
-  }
-
-  // Try matching date part first
-  // Check if args start with ISO date or natural month
-  let dateTokens: string[] = [];
-  let locTokens: string[] = [];
-
-  const firstToken = filteredArgs[0].toLowerCase();
-  if (firstToken.match(/^\d{4}-\d{2}-\d{2}$/)) {
-    dateTokens = [filteredArgs[0]];
-    locTokens = filteredArgs.slice(1);
-  } else if (MONTH_MAP[firstToken.replace(/[^a-z]/g, "")] || firstToken === "weekend") {
-    // Collect date tokens until we hit a location indicator (e.g. city or zip)
-    let i = 0;
-    while (i < filteredArgs.length) {
-      const t = filteredArgs[i];
-      if (i > 0 && (t.match(/^\d{5}$/) || t.includes(",") || (i >= 3 && isNaN(parseInt(t, 10))))) {
-        break;
-      }
-      dateTokens.push(t);
-      i++;
-    }
-    locTokens = filteredArgs.slice(i);
-  } else {
-    // If first token is not date, check if full rawArgs can parse as date
-    try {
-      const weekend = parseTargetWeekend(rawArgs);
-      return { mode, weekend, rawArgs };
-    } catch {
-      // Otherwise treat everything as location or return raw
-      return { mode, location: parseLocation(rawArgs) ?? undefined, rawArgs };
-    }
-  }
-
-  let weekend: TargetWeekend | undefined;
-  if (dateTokens.length > 0) {
-    try {
-      weekend = parseTargetWeekend(dateTokens.join(" "));
-    } catch {
-      // Ignore if unparseable, leave undefined for interactive fallback
-    }
-  }
-
-  let location: TargetLocation | undefined;
-  if (locTokens.length > 0) {
-    location = parseLocation(locTokens.join(" ")) ?? undefined;
-  }
-
-  return {
-    mode,
-    weekend,
-    location,
-    rawArgs,
   };
 }
