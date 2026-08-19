@@ -1,9 +1,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.30.45",
+  "version": "1.30.46",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
+    "flash-issues": "deno run -A src/flash-issues/cli.ts",
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "issue:create": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "book-gig": "deno run --allow-all src/book-gig/cli.ts",

@@ -1,6 +1,6 @@
 ---
 name: flash-issues
-description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, detect in-flight open PR review status and outstanding Must Fix items, and fully regenerate a priority/dependency-ordered `flash-issues.md` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Flash High subagent to do the whole run and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
+description: Scan OPEN issues across all 8 active WebJamApps repos for Flash-lane work, auto-label any issue missing a model label, detect in-flight open PR review status and outstanding Must Fix items, and fully regenerate a priority/dependency-ordered `flash-issues.md` via `deno task flash-issues` so Josh can run agy interactively himself when Claude is out of tokens. Manual only — invoked as `/flash-issues`, never auto-runs. The invoking session never scans/labels/writes itself — it dispatches ONE Flash High subagent to run `deno task flash-issues` and relays its report. Output defaults to `~/Dropbox/web-jam-llms/flash-issues.md`, replaced (never appended) on every run.
 ---
 
 # flash-issues — regenerate the Flash-lane worklist
@@ -12,7 +12,7 @@ with dependency ordering respected — so he can pick the next one and dispatch
 it interactively without Claude in the loop.
 
 This skill only **reads and labels** GitHub issues and **writes** the output
-file. It never dispatches `agy`, never comments on issues, never closes
+file deterministically via `deno task flash-issues`. It never dispatches `agy`, never comments on issues, never closes
 anything, and never touches any repo's code.
 
 ## Invocation
@@ -24,19 +24,16 @@ no schedule) — this is a manual worklist refresh Josh asks for.
 
 `/flash-issues` is almost always invoked in a Fable/Opus session, but the
 work itself (`gh label list` / `gh issue list` scanning, mechanical
-triage-labeling, dependency reading, file writing) is exactly the kind of
-mechanical work the team's standing routing rule says goes to the cheapest
-capable model — Flash High is the chosen tier for this run. **The invoking
+triage-labeling, dependency reading, file writing) is executed deterministically by running
+`deno task flash-issues` in `web-jam-tools` (or `deno run -A ~/WebJamApps/web-jam-tools/src/flash-issues/cli.ts`). Flash High is the chosen tier for this run. **The invoking
 session does not execute Steps 1–9 itself, no matter how quick it looks.**
 
 Instead:
 
 1. Launch exactly **one** subagent via the `Agent` / `invoke_subagent` tool with
    `model: "flash"` (`Gemini Flash (High)`), passing the self-contained prompt in "Dispatch prompt
-   template" below verbatim (it's written to need no context from this
-   conversation — the subagent has none).
-2. Wait for the subagent's report (the Report Back format baked into the
-   template).
+   template" below verbatim.
+2. Wait for the subagent to execute `deno task flash-issues` and return its report.
 3. Relay that report to Josh essentially as-is: counts, what got newly
    labeled, fix-bucket count (changes requested vs. CI failing) vs. numbered-list count vs. In Flight awaiting-review count vs. Blocked count.
 4. **Never block chat on flagged items.** They live in the output file's
@@ -55,10 +52,10 @@ Fill in nothing — this prompt is complete as written. Pass it as the `prompt`
 argument with `subagent_type` omitted/general-purpose and `model: "flash"` (`Gemini Flash (High)`).
 
 ````
-You are doing mechanical GitHub scanning/labeling work — no code changes, no
-repo checkout needed beyond `gh` calls. Task: regenerate the Flash-lane
-worklist file that Josh (the product owner) reads by hand to run agy himself
-when Claude is out of tokens.
+You are running the deterministic Flash worklist regeneration task.
+Execute `deno task flash-issues` in `~/WebJamApps/web-jam-tools` (or `deno run -A ~/WebJamApps/web-jam-tools/src/flash-issues/cli.ts`) to regenerate the Flash-lane worklist file that Josh (the product owner) reads by hand to run agy himself when Claude is out of tokens. Report back the output summary.
+
+If needed for manual reference, the complete deterministic workflow implemented by `deno task flash-issues` is:
 
 ## Implementation approach — REST issue payload, not search qualifiers
 
