@@ -72,9 +72,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   "haiku-only-gmail-gate.sh",
   "memory-cleanup-reminder.sh",
   "notes-sync-reminder.sh",
-  // Stop hook (web-jam-tools#290) — detective-only warning when an Opus
-  // turn racks up edits with zero subagent spawns.
-  "opus-no-delegation-warning.sh",
+  // PreToolUse gate (web-jam-tools#641) — refuses repository code writes
+  // attempted directly by an Opus main session without explicit grant.
+  "opus-delegation-gate.sh",
   // Stop hook (web-jam-tools#531) — BLOCKING: rejects a message with more
   // than one open question, a question that isn't the last thing in the
   // message, or a safety-critical finding buried outside the final section.

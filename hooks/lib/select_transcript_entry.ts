@@ -12,13 +12,13 @@
  *
  * Used by:
  *   - hooks/require-issue-citation-titles.sh (Stop hook, web-jam-tools#565)
- *   - hooks/opus-no-delegation-warning.sh (Stop hook, web-jam-tools#566)
+ *   - hooks/opus-delegation-gate.sh (PreToolUse hook, web-jam-tools#641)
  *   - hooks/haiku-only-gmail-gate.sh (PreToolUse hook, web-jam-tools#566)
  *   - hooks/require-clear-communication.sh (Stop hook, web-jam-tools#596)
  *
  * CLI usage:
- *   deno run --allow-read hooks/lib/select_transcript_entry.ts [--text|--model|--json] [path/to/transcript.jsonl]
- *   printf '%s' "$input" | deno run --allow-read hooks/lib/select_transcript_entry.ts [--text|--model|--json]
+ *   deno run --allow-read hooks/lib/select_transcript_entry.ts [--text|--model|--json|--opus-gate] [path/to/transcript.jsonl]
+ *   printf '%s' "$input" | deno run --allow-read hooks/lib/select_transcript_entry.ts [--text|--model|--json|--opus-gate]
  */
 
 export interface TranscriptContentBlock {
@@ -167,6 +167,67 @@ export function extractEntryModel(entry: TranscriptEntry | null | undefined): st
 }
 
 /**
+ * Selects the most recent genuine user prompt from a transcript.
+ * Traverses entries in reverse chronological order and returns the first entry
+ * where isUserTurnBoundary(entry) is true.
+ */
+export function selectLastUserEntry(
+  entries: readonly TranscriptEntry[],
+): TranscriptEntry | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (isUserTurnBoundary(entries[i])) {
+      return entries[i];
+    }
+  }
+  return null;
+}
+
+/**
+ * Recovers the active session model from a transcript.
+ * Checks the current turn's assistant entry first; if none is present (e.g. before the
+ * assistant entry is flushed), falls back to traversing reverse-chronologically for
+ * the latest genuine (non-sidechain, non-error) assistant entry across the session.
+ */
+export function selectSessionModel(entries: readonly TranscriptEntry[]): string {
+  const currentTurn = selectLastAssistantEntry(entries, { requireText: false });
+  if (currentTurn) {
+    const m = extractEntryModel(currentTurn);
+    if (m) return m;
+  }
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (!entry || typeof entry !== "object") continue;
+    const isAssistant = entry.type === "assistant" || entry.message?.role === "assistant";
+    if (!isAssistant) continue;
+    if (entry.isSidechain === true || entry.isApiErrorMessage === true) continue;
+    const m = extractEntryModel(entry);
+    if (m) return m;
+  }
+  return "";
+}
+
+export interface OpusGateInfo {
+  model: string;
+  hasEscape: boolean;
+  lastUserText: string;
+}
+
+/**
+ * Extracts session model and escape phrase grant information for the Opus delegation gate.
+ */
+export function getOpusGateInfo(entries: readonly TranscriptEntry[]): OpusGateInfo {
+  const model = selectSessionModel(entries);
+  const lastUser = selectLastUserEntry(entries);
+  const lastUserText = extractEntryText(lastUser);
+  const hasEscape = lastUserText.toLowerCase().includes("opus edit ok");
+  return {
+    model,
+    hasEscape,
+    lastUserText,
+  };
+}
+
+/**
  * Parses JSONL transcript string into an array of TranscriptEntry objects.
  * Silently skips empty or invalid JSON lines.
  */
@@ -227,7 +288,7 @@ export async function loadTranscript(pathOrInput: string): Promise<TranscriptEnt
 
 if (import.meta.main) {
   try {
-    let mode: "text" | "model" | "json" = "text";
+    let mode: "text" | "model" | "json" | "opus-gate" = "text";
     let filePath: string | null = null;
 
     for (const arg of Deno.args) {
@@ -237,6 +298,8 @@ if (import.meta.main) {
         mode = "model";
       } else if (arg === "--json" || arg === "-j") {
         mode = "json";
+      } else if (arg === "--opus-gate" || arg === "--delegation-gate") {
+        mode = "opus-gate";
       } else if (!arg.startsWith("-")) {
         filePath = arg;
       }
@@ -285,6 +348,9 @@ if (import.meta.main) {
       if (selected) {
         console.log(JSON.stringify(selected));
       }
+    } else if (mode === "opus-gate") {
+      const info = getOpusGateInfo(entries);
+      console.log(JSON.stringify(info));
     }
   } catch {
     // Fail-open

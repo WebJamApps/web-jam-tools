@@ -8,10 +8,13 @@ import { assertEquals } from "@std/assert";
 import {
   extractEntryModel,
   extractEntryText,
+  getOpusGateInfo,
   isUserTurnBoundary,
   loadTranscript,
   parseTranscriptJsonl,
   selectLastAssistantEntry,
+  selectLastUserEntry,
+  selectSessionModel,
   type TranscriptEntry,
 } from "../hooks/lib/select_transcript_entry.ts";
 
@@ -532,6 +535,101 @@ Deno.test("CLI: --text returns earlier text within current turn when trailing en
     const res = await runCli(["--text", filePath]);
     assertEquals(res.code, 0, res.stderr);
     assertEquals(res.stdout.trim(), "Turn 2 plan of action");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// --- selectLastUserEntry tests ---
+
+Deno.test("selectLastUserEntry: returns null on empty array", () => {
+  assertEquals(selectLastUserEntry([]), null);
+});
+
+Deno.test("selectLastUserEntry: selects the most recent genuine user prompt, skipping trailing tool_result", () => {
+  const user1 = userEntry("First user prompt");
+  const user2 = userEntry("Second user prompt");
+  const toolResultEntry: TranscriptEntry = {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "t1", content: "cmd output" }],
+    },
+  };
+  const entries = [
+    user1,
+    assistantEntry("Reply 1"),
+    user2,
+    assistantEntry([{ type: "tool_use", id: "t1", name: "Bash", input: {} }]),
+    toolResultEntry,
+  ];
+
+  const selected = selectLastUserEntry(entries);
+  assertEquals(selected, user2);
+  assertEquals(extractEntryText(selected), "Second user prompt");
+});
+
+// --- selectSessionModel tests ---
+
+Deno.test("selectSessionModel: returns model from latest genuine assistant entry", () => {
+  const entries = [
+    userEntry("prompt"),
+    assistantEntry("reply", { model: "claude-opus-4-6" }),
+    userEntry("second prompt"),
+  ];
+  assertEquals(selectSessionModel(entries), "claude-opus-4-6");
+});
+
+Deno.test("selectSessionModel: skips sidechain and api error messages across session", () => {
+  const entries = [
+    userEntry("prompt"),
+    assistantEntry("reply", { model: "claude-opus-4-6" }),
+    assistantEntry("subagent chatter", { isSidechain: true, model: "claude-haiku-3-5" }),
+    assistantEntry("error", { isApiErrorMessage: true, model: "claude-haiku-3-5" }),
+  ];
+  assertEquals(selectSessionModel(entries), "claude-opus-4-6");
+});
+
+// --- getOpusGateInfo tests ---
+
+Deno.test("getOpusGateInfo: detects model and escape phrase correctly", () => {
+  const entries = [
+    userEntry("please edit this file — opus edit ok"),
+    assistantEntry("ok", { model: "claude-opus-4-6" }),
+  ];
+  const info = getOpusGateInfo(entries);
+  assertEquals(info.model, "claude-opus-4-6");
+  assertEquals(info.hasEscape, true);
+  assertEquals(info.lastUserText, "please edit this file — opus edit ok");
+});
+
+Deno.test("getOpusGateInfo: reports hasEscape false when escape phrase is absent", () => {
+  const entries = [
+    userEntry("please edit this file directly"),
+    assistantEntry("ok", { model: "claude-opus-4-6" }),
+  ];
+  const info = getOpusGateInfo(entries);
+  assertEquals(info.model, "claude-opus-4-6");
+  assertEquals(info.hasEscape, false);
+});
+
+// --- CLI --opus-gate tests ---
+
+Deno.test("CLI: --opus-gate outputs JSON with model and escape phrase detection", async () => {
+  const dir = await Deno.makeTempDir();
+  const filePath = `${dir}/transcript.jsonl`;
+  try {
+    const lines = [
+      JSON.stringify(userEntry("opus edit ok, update the file")),
+      JSON.stringify(assistantEntry("processing", { model: "claude-opus-4-6" })),
+    ].join("\n");
+    await Deno.writeTextFile(filePath, lines);
+
+    const res = await runCli(["--opus-gate", filePath]);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout.trim());
+    assertEquals(parsed.model, "claude-opus-4-6");
+    assertEquals(parsed.hasEscape, true);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
