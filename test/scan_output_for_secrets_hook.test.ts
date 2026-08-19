@@ -191,6 +191,29 @@ Deno.test("a credentialed LOCAL mongodb URI in tool output is still detected", a
   }
 });
 
+// --- CircleCI presigned output-URL exemption (web-jam-tools#651) ---
+// CircleCI's build-log API returns a presigned `output_url` whose `token=`
+// parameter is a short-lived, provider-minted JWT — an ephemeral,
+// read-only URL credential, not a stored secret. The exemption is keyed on
+// URL context only; a bare JWT with no such context must still block.
+
+Deno.test("a JWT as the token= parameter of a CircleCI presigned output URL is allowed end to end", async () => {
+  const jwt = `eyJ${variedFakeBody(20, 30)}.${variedFakeBody(20, 31)}.${variedFakeBody(20, 32)}`;
+  const res = await runHook(
+    `OUTPUT_URL=https://circleci.com/api/private/output/presigned/d4dd534a-0000-0000-0000-000000000000/0/108?token=${jwt}`,
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a bare JWT with no CircleCI URL context in tool output still blocks", async () => {
+  const jwt = `eyJ${variedFakeBody(20, 30)}.${variedFakeBody(20, 31)}.${variedFakeBody(20, 32)}`;
+  const res = await runHook(jwt);
+  assertEquals(res.code, 2);
+  if (!res.stderr.includes("JWT token")) {
+    throw new Error(`expected JWT token in stderr, got: ${res.stderr}`);
+  }
+});
+
 // --- placeholder exemption tests (web-jam-tools#434) ---
 
 Deno.test("placeholder example in web-jam-tools#304 body does not trigger scanner", async () => {

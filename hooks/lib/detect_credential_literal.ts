@@ -168,6 +168,32 @@ export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["Auth header flag", /(?:--header|-H)\s+["']?(?:[A-Za-z0-9_-]+:\s*)?(?:Bearer|token|Basic|Secret|[A-Za-z0-9_-]{15,})/i],
 ];
 
+/**
+ * CIRCLECI PRESIGNED OUTPUT-URL EXEMPTION (web-jam-tools#651)
+ * ---------------------------------------------------------------
+ * CircleCI's build-log API hands back a presigned `output_url` whose
+ * `token=` query parameter is a short-lived JWT the provider mints on
+ * demand to serve one step's log — an ephemeral, read-only URL credential,
+ * not a stored secret. This exemption is keyed ENTIRELY on the surrounding
+ * URL context — host `circleci.com`, path beginning `/api/private/output/`,
+ * value appearing as that URL's own `token=` parameter — and NEVER on the
+ * JWT pattern itself (SPECIFIC_PATTERNS, "JWT token", above). A JWT that is
+ * bare, sits in any other URL, or sits on a different circleci.com path
+ * still fires exactly as before.
+ */
+const CIRCLECI_PRESIGNED_OUTPUT_TOKEN_SOURCE =
+  String.raw`https:\/\/circleci\.com\/api\/private\/output\/[^\s"'<>]*[?&]token=([^\s"'&<>]+)`;
+
+/** True when `value` is, verbatim, the `token=` value of a CircleCI presigned output-log URL somewhere in `text`. */
+export function isCircleCiPresignedOutputUrlToken(text: string, value: string): boolean {
+  const re = new RegExp(CIRCLECI_PRESIGNED_OUTPUT_TOKEN_SOURCE, "gi");
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    if (match[1] === value) return true;
+  }
+  return false;
+}
+
 export function isPlaceholderValue(val: string): boolean {
   if (!val) return true;
   const trimmed = val.trim();
@@ -346,6 +372,7 @@ export function findCredentialLiteral(text: string): string | null {
       }
       if (isPlaceholderValue(match[0])) continue;
       if (looksSynthetic(match[0])) continue;
+      if (name === "JWT token" && isCircleCiPresignedOutputUrlToken(text, match[0])) continue;
       const lineIndex = lineIndexForOffset(text, match.index);
       if (isPragmaSuppressedForLine(lines, lineIndex)) continue;
       return name;
@@ -363,6 +390,7 @@ export function findCredentialLiteral(text: string): string | null {
       continue;
     }
     if (looksSynthetic(val)) continue;
+    if (isCircleCiPresignedOutputUrlToken(text, val)) continue;
     const lineIndex = lineIndexForOffset(text, urlMatch.index);
     if (isPragmaSuppressedForLine(lines, lineIndex)) continue;
     return "URL-embedded token/key/secret parameter with a literal value";
