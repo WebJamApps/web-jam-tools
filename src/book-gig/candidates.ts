@@ -18,7 +18,10 @@ export async function fetchCandidates(
 ): Promise<CandidateVenue[]> {
   const { baseUrl, token } = await resolveBackendConfig(options);
   const targetDatesParam = encodeURIComponent(`${options.weekend.start} to ${options.weekend.end}`);
-  const url = `${baseUrl}/outreach/candidates?targetDates=${targetDatesParam}`;
+  const startParam = encodeURIComponent(options.weekend.start);
+  const endParam = encodeURIComponent(options.weekend.end);
+  const url =
+    `${baseUrl}/outreach/candidates?targetDates=${targetDatesParam}&targetWeekend[start]=${startParam}&targetWeekend[end]=${endParam}`;
 
   const headers: Record<string, string> = {
     Accept: "application/json",

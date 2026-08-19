@@ -523,8 +523,10 @@ Deno.test("fetchCandidates: fetches candidates with bare array and handles error
     { _id: "1", name: "Macado's", city: "Roanoke", usState: "VA", email: "info@macados.com" },
   ];
 
+  let capturedUrl1 = "";
   // Bare array response
   const mockFetch1: typeof fetch = (_url: string | URL | Request) => {
+    capturedUrl1 = String(_url);
     return Promise.resolve(
       new Response(JSON.stringify(mockVenues), {
         status: 200,
@@ -539,6 +541,30 @@ Deno.test("fetchCandidates: fetches candidates with bare array and handles error
   );
   assertEquals(candidates1.length, 1);
   assertEquals(candidates1[0].name, "Macado's");
+  assertStringIncludes(capturedUrl1, "targetDates=2026-10-16%20to%202026-10-18");
+  assertStringIncludes(capturedUrl1, "targetWeekend[start]=2026-10-16");
+  assertStringIncludes(capturedUrl1, "targetWeekend[end]=2026-10-18");
+
+  // Wrapped candidates object response
+  let capturedUrl2 = "";
+  const mockFetchWrapped: typeof fetch = (_url: string | URL | Request) => {
+    capturedUrl2 = String(_url);
+    return Promise.resolve(
+      new Response(JSON.stringify({ candidates: mockVenues }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  const candidatesWrapped = await fetchCandidates(
+    { weekend, backendUrl: "https://test.local" },
+    mockFetchWrapped,
+  );
+  assertEquals(candidatesWrapped.length, 1);
+  assertEquals(candidatesWrapped[0].name, "Macado's");
+  assertStringIncludes(capturedUrl2, "targetWeekend[start]=2026-10-16");
+  assertStringIncludes(capturedUrl2, "targetWeekend[end]=2026-10-18");
 
   // Error status response
   const mockFetch2: typeof fetch = (_url: string | URL | Request) => {
