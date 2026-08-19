@@ -246,6 +246,15 @@ skill.
     action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and
     responsibility are designated exclusively by the `Josh` label or assignees, never by embedding
     a personal name in the issue or document title.
+  - **One action per step, one surface per step:** A numbered step in a runbook is a single physical
+    action in a single place. Never combine opening a session with asking that session something, and
+    never cover two surfaces in one step — two surfaces asking one question is four steps, not one.
+    State explicitly what happens to a session afterwards (leave it open, close it, move to the next
+    terminal). Where order matters, the numbering IS the instruction. Origin: web-jam-tools#510 "Josh:
+    verify live that agy and Claude Code read the rules through the pointer in a converted repo" —
+    its runbook listed both the `claude` and the `agy` launch commands under one step with the
+    question below them, and Josh opened two terminals, closed them, then reopened them one at a time
+    to work out the intended order. His verdict: "these should have been 4 steps".
 - **THE `Blocked` LABEL IS CANONICAL — NATIVE ISSUE DEPENDENCIES DO NOT REPLACE IT.** Josh wants
   BOTH: native GitHub issue-dependency links (the real relationship between issues) AND the
   `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) as the
