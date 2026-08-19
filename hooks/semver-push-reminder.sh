@@ -68,18 +68,39 @@ no_heredoc=$(CMD_FOR_PY="$cmd" NORMALIZE_MODE=heredoc-only \
 # inside a quoted argument doesn't match either. This is a non-blocking
 # reminder hook, not a deny guard, so a naive quote-stripper is an
 # acceptable heuristic here.
-unquoted=$(printf '%s' "$no_heredoc" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g') || true
+#
+# One alternation pass, not two sequential passes (web-jam-tools#649 Must
+# Fix 1): a sequential single-quote-then-double-quote pass cannot tell an
+# apostrophe inside a double-quoted string from a real single-quote
+# delimiter, so e.g. `git commit -m "don't nag" && git push ... && gh pr
+# comment ... --body "it's pushed"` had its two apostrophes mispaired,
+# deleting the real `git push` between them and suppressing the reminder.
+# A single alternation matches whichever quote opens first, same as a
+# shell would.
+unquoted=$(printf '%s' "$no_heredoc" | sed -E "s/\"[^\"]*\"|'[^']*'//g") || true
 [ -z "$unquoted" ] && unquoted="$no_heredoc"
 
 # A real `git push`: at the start of a shell segment (the whole command,
 # or right after a `;`/`&&`/`||`/`|` operator or a newline) — so a leading
 # `cd foo && git push ...` still fires, but `git push` embedded mid-phrase
 # with no operator boundary does not.
-segments=$(printf '%s' "$unquoted" | sed -E 's/(&&|\|\||[;|])/\n/g')
+segments=$(printf '%s' "$unquoted" | sed -E 's/(&&|\|\||[;|])/\n/g') || true
 is_push=false
 while IFS= read -r seg; do
-  trimmed=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-  if printf '%s' "$trimmed" | grep -Eq '^git[[:space:]]+push([[:space:]]|$)'; then
+  trimmed=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//') || true
+  # Strip an optional leading wrapper before the git anchor
+  # (web-jam-tools#649 Must Fix 2): an opening `(` subshell, a `then`/`do`
+  # keyword from an `if`/`while`/`for` construct, and a narrow allowlist of
+  # transparent wrapper commands (sudo/env/command/time). This is
+  # deliberately NOT a loosened bare substring match — item 5 of
+  # web-jam-tools#648 still requires `git push` to sit at a segment
+  # boundary; only these specific, narrow prefixes are peeled off first.
+  candidate=$(printf '%s' "$trimmed" | sed -E '
+    s/^\(+[[:space:]]*//
+    s/^(then|do)[[:space:]]+//
+    s/^(sudo|env|command|time)[[:space:]]+//
+  ') || true
+  if printf '%s' "$candidate" | grep -Eq '^git[[:space:]]+push([[:space:]]|$)'; then
     is_push=true
     break
   fi

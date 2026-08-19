@@ -273,3 +273,65 @@ Deno.test("a real git push after a semicolon still fires", async () => {
   assertEquals(res.code, 0);
   assertStringIncludes(res.stdout, "SEMVER REMINDER");
 });
+
+// --- web-jam-tools#649 Must Fix 1: quoted string preceding a real push ---
+
+Deno.test("a real git push straddled by two quoted strings still fires (Must Fix 1)", async () => {
+  // Two apostrophes/quotes, one on each side of the push: a naive two-pass
+  // quote stripper (single-quote pass first, double-quote pass second)
+  // mispairs the apostrophes in "don't" and "it's" and deletes the real
+  // `git push` between them.
+  const res = await runHook(
+    `git commit -m "don't nag" && git push origin HEAD && gh pr comment 649 --body "it's pushed"`,
+  );
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
+// --- web-jam-tools#649 Must Fix 2: wrapper text before `git` in the segment ---
+
+Deno.test("sudo git push still fires (Must Fix 2)", async () => {
+  const res = await runHook("sudo git push origin HEAD");
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
+Deno.test("git push inside an if/then still fires (Must Fix 2)", async () => {
+  const res = await runHook("if true; then git push origin HEAD; fi");
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
+Deno.test("git push inside a subshell still fires (Must Fix 2)", async () => {
+  const res = await runHook("(git push origin HEAD)");
+  assertEquals(res.code, 0);
+  assertStringIncludes(res.stdout, "SEMVER REMINDER");
+});
+
+// --- must-stay-silent cases, re-confirmed alongside the Must Fix 1/2 fixes ---
+
+Deno.test("git push mentioned inside a heredoc body still does not fire", async () => {
+  const res = await runHook(
+    "cat > notes.md <<'EOF'\ndoc note: run git push origin HEAD when ready\nEOF\n",
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.stdout, "");
+});
+
+Deno.test("git push mentioned inside a double-quoted argument still does not fire", async () => {
+  const res = await runHook('echo "please run git push later"');
+  assertEquals(res.code, 0);
+  assertEquals(res.stdout, "");
+});
+
+Deno.test("git push mentioned inside a single-quoted argument does not fire", async () => {
+  const res = await runHook("echo 'please run git push later'");
+  assertEquals(res.code, 0);
+  assertEquals(res.stdout, "");
+});
+
+Deno.test('a single-quoted string wrapping a double-quoted "git push" does not fire', async () => {
+  const res = await runHook(`echo 'about "git push" in quotes'`);
+  assertEquals(res.code, 0);
+  assertEquals(res.stdout, "");
+});
