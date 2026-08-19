@@ -283,17 +283,15 @@ export function detectInFlightPr(
     const body = pr.body || "";
     const issueNum = candidate.number;
 
-    const closesRegex = new RegExp(
-      `(?:closes|part of)\\s+#${issueNum}(?:[^0-9]|$)`,
-      "i",
+    const closesMatches = Array.from(
+      body.matchAll(/(?:closes|part of)\s+#(\d+)(?:[^0-9]|$)/gi),
     );
-    const branchRegex = new RegExp(
-      `^(?:agy|gemini|claude)/${issueNum}(?:-[^/]+)?$`,
-      "i",
-    );
+    const matchesBody = closesMatches.some((m) => Number(m[1]) === issueNum);
 
-    const matchesBody = closesRegex.test(body);
-    const matchesBranch = branchRegex.test(pr.headRefName || "");
+    const branchMatch = (pr.headRefName || "").match(
+      /^(?:agy|gemini|claude)\/(\d+)(?:-[^/]+)?$/i,
+    );
+    const matchesBranch = branchMatch ? Number(branchMatch[1]) === issueNum : false;
 
     if (matchesBody || matchesBranch) {
       // Matching PR found!
