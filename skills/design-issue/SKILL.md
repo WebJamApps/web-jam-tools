@@ -60,7 +60,7 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 8. **Split out manual steps as pairs**, grouped by gate position in the dependency chain. Manual documentation / UI inspection (e.g. verifying generated Markdown/HTML in Google Chrome) and live demonstration / procedure walkthroughs (e.g. executing real-world steps with a learner or external party) are distinct verification surfaces and must be split into separate standalone pairs/issues. **Issue & Document Title Rule for Manual Steps:** Never include personal names (e.g. "Josh:") in issue titles or document titles. Issue titles must be professional, action-oriented, and role-agnostic (e.g. "Manual verification: ...", "Verification: ..."), with ownership designated exclusively by the `Josh` label or assignment, never embedded as a name prefix.
 9. **Determine the dependency chain** across the planned issues and record it. Where an issue's deliverable is a pointer — "point X at Y" — the plan **names Y concretely**, because an unnamed target hides an ordering: if Y turns out to be something another planned issue creates, the two issues are not independent, and the implementer picks the target after the chain was already declared.
 10. **List every `Needs Design` label change as its own named item** — each removal carrying its 4-part reason.
-11. **GATE 2 — stop.** Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Approving the plan table does not approve label removals; each is ruled on separately. Nothing is filed to GitHub until Gate 2 passes.
+11. **GATE 2 — stop.** Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Gate 2 approval of the plan authorizes the `Needs Design` label removals listed in the plan. Nothing is filed to GitHub until Gate 2 passes.
 
    **Write the issue-approval token upon Gate 2 approval:** The moment Josh explicitly approves the plan table, write the issue-approval token for the planned repo and exact titles (via `scripts/write_issue_approval_token.ts`) so subsequent `mcp__*__issue_write` and `mcp__*__sub_issue_write` calls pass `hooks/require-approval-token-on-issue-write.sh` without repetitive authorization prompts:
 
@@ -111,7 +111,7 @@ When a run finishes, the skill reads the memory surfaces for rules that fire onl
 | Gate | The skill waits for | It must not, before that gate | When it passes |
 |---|---|---|---|
 | 1 — design | Josh's explicit approval of the design document | write anything to any GitHub issue | record design approval |
-| 2 — plan | Josh's explicit approval of the issue plan table | create, edit or label any issue | write the issue-approval token (`scripts/write_issue_approval_token.ts`) and proceed to Phase 3 filing |
+| 2 — plan | Josh's explicit approval of the issue plan table | create, edit or label any issue | write the issue-approval token (`scripts/write_issue_approval_token.ts`), authorize removing the `Needs Design` labels listed in the approved plan, and proceed to Phase 3 filing |
 
 Nothing is filed to GitHub until GATE 2 passes.
 
@@ -240,14 +240,14 @@ When `/design-issue` resolves an existing issue into paired implementation and J
 
 **Adding — automatic, inside one guard rail.** The skill may add the label to an existing issue too under-specified to plan against, and to a follow-up it knowingly defers to a later design run. It may never add it to anything in the approved plan's executable set. A deferred stub still needs exactly one model label to pass `hooks/require-model-label-on-issue-create.sh`, so it goes out as `Opus` + `Needs Design`.
 
-**Removing — never automatic, and the ask carries its reason.** Only Josh can say that a design is completed or not. A removal ask has four parts, every time:
+**Removing — never automatic, and the ask carries its reason.** Only Josh can say that a design is completed or not. The plan presented at Gate 2 lists every `Needs Design` label to be removed, each with its 4 parts, every time:
 
-1. the issue, as `repo#number "title"`;
+1. the issue, cited as `repo#number "title"`;
 2. **why the design work that label asked for is now done** — naming the design document and the issues filed from it;
 3. anything it did **not** resolve;
 4. an actual question asking Josh to confirm.
 
-The skill never asserts a design is complete. Wording like "design complete, removing the label" is a defect. Silence is not approval — an unruled item means the label stays. If Josh declines, the skill does not re-ask in the same run.
+Gate 2 approval of the plan authorizes those removals, executed in the filing phase alongside the issues. An unlisted label is not approved and stays on. The skill still never asserts a design is complete on its own (wording like "design complete, removing the label" is a defect), still never removes a label that was not listed, and still never adds `Needs Design` to anything in the approved executable set. If Josh declines, the skill does not re-ask in the same run.
 
 ---
 
