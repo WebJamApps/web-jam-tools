@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # require-issue-citation-titles.sh — web-jam-tools#311
 #
-# BLOCKING Stop hook. Contrast with hooks/opus-no-delegation-warning.sh,
-# which is deliberately detective-only (always exits 0). This hook reads
-# the transcript path from stdin (same Stop-hook payload shape), extracts
-# the LAST assistant message's text, and scans it for a bare issue/PR
-# citation — a `#` immediately followed by digits that is NOT part of a
-# full `repo#number "title"` citation. If any are found, it exits 2:
-# Claude Code blocks the turn from ending and feeds stderr back to the
-# model, so the message gets rewritten before it reaches Josh.
+# BLOCKING Stop hook. This hook reads the transcript path from stdin
+# (Stop-hook payload shape), extracts the LAST assistant message's text,
+# and scans it for a bare issue/PR citation — a `#` immediately followed
+# by digits that is NOT part of a full `repo#number "title"` citation.
+# If any are found, it exits 2: Claude Code blocks the turn from ending
+# and feeds stderr back to the model, so the message gets rewritten before
+# it reaches Josh.
 #
 # Origin: web-jam-tools#307 "Add ISSUE CITATIONS hard rule to operational
 # rules" merged the rule into prose docs on 2026-07-29, and it was STILL

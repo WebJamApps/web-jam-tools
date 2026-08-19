@@ -106,11 +106,8 @@ SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh flash-iss
 #
 # require-issue-citation-titles.sh (web-jam-tools#311) and
 # require-clear-communication.sh (web-jam-tools#531) are BLOCKING (exit 2 on
-# a violation), unlike opus-no-delegation-warning.sh which is deliberately
-# detective-only (always exits 0) — all three are wired the same way here
-# since Stop hooks all fire unconditionally regardless of whether an
-# individual hook chooses to block.
-STOP_HOOKS=(opus-no-delegation-warning.sh require-issue-citation-titles.sh require-clear-communication.sh)
+# a violation).
+STOP_HOOKS=(require-issue-citation-titles.sh require-clear-communication.sh)
 
 # PreToolUse hooks this installer keeps registered in settings.json, as
 # "<matcher>::<script>" pairs (web-jam-tools#265 — generalized from a
@@ -134,6 +131,7 @@ PRE_TOOL_USE_HOOKS=(
   "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
   "mcp__.*__issue_write::require-model-label-on-issue-create.sh"
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
+  "Write|Edit|NotebookEdit::opus-delegation-gate.sh"
   "mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
 )
 

@@ -118,14 +118,14 @@ Deno.test("merges a --stop hook into hooks.Stop as a flat, no-matcher entry", as
   await withTempSettings(undefined, async (path) => {
     const res = await runMerge(path, [
       "--stop",
-      "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+      "$HOME/.claude/hooks/require-issue-citation-titles.sh",
     ]);
     assertEquals(res.code, 0, res.stderr);
     const data = await readJson(path);
     assertEquals(data.hooks.Stop, [
       {
         hooks: [
-          { type: "command", command: "$HOME/.claude/hooks/opus-no-delegation-warning.sh" },
+          { type: "command", command: "$HOME/.claude/hooks/require-issue-citation-titles.sh" },
         ],
       },
     ]);
@@ -134,7 +134,7 @@ Deno.test("merges a --stop hook into hooks.Stop as a flat, no-matcher entry", as
 
 Deno.test("re-running with the same --stop hook does not duplicate it", async () => {
   await withTempSettings(undefined, async (path) => {
-    const args = ["--stop", "$HOME/.claude/hooks/opus-no-delegation-warning.sh"];
+    const args = ["--stop", "$HOME/.claude/hooks/require-issue-citation-titles.sh"];
     const first = await runMerge(path, args);
     assertEquals(first.code, 0, first.stderr);
     const second = await runMerge(path, args);
@@ -159,7 +159,7 @@ Deno.test("a pre-existing Stop hook (not installer-managed) is preserved when a 
     async (path) => {
       const res = await runMerge(path, [
         "--stop",
-        "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+        "$HOME/.claude/hooks/require-issue-citation-titles.sh",
       ]);
       assertEquals(res.code, 0, res.stderr);
       const data = await readJson(path);
@@ -167,7 +167,7 @@ Deno.test("a pre-existing Stop hook (not installer-managed) is preserved when a 
       assertEquals(data.hooks.Stop?.[0].hooks[0].command, "some-other-stop-hook.sh");
       assertEquals(
         data.hooks.Stop?.[1].hooks[0].command,
-        "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+        "$HOME/.claude/hooks/require-issue-citation-titles.sh",
       );
     },
   );
@@ -178,7 +178,7 @@ Deno.test("--stop, --pre-tool-use and SessionStart all merge together in one inv
     const res = await runMerge(path, [
       "$HOME/.claude/hooks/notes-sync-reminder.sh",
       "--stop",
-      "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+      "$HOME/.claude/hooks/require-issue-citation-titles.sh",
       "--pre-tool-use",
       "Bash::$HOME/.claude/hooks/block-secret-dumps.sh",
     ]);

@@ -3,14 +3,11 @@
 // Exercises hooks/require-issue-citation-titles.sh end-to-end by actually
 // shelling out to it (Deno.Command) with a mocked Stop-hook payload on
 // stdin (a transcript_path pointing at a fixture JSONL file we write per
-// test), the same shape Claude Code's hook runner feeds it — same pattern
-// as test/opus_no_delegation_warning_hook.test.ts (re-implementing the
-// shell/jq/python logic in TypeScript would test a copy, not the real
-// hook).
+// test), the same shape Claude Code's hook runner feeds it.
 //
-// UNLIKE opus-no-delegation-warning.sh, this hook is BLOCKING: it exits 2
-// (not 0) and writes to stderr when it finds a bare issue/PR citation, so
-// these tests assert on exit code + stderr content, not stdout.
+// This hook is BLOCKING: it exits 2 (not 0) and writes to stderr when it
+// finds a bare issue/PR citation, so these tests assert on exit code +
+// stderr content, not stdout.
 
 import { assert, assertEquals } from "@std/assert";
 
