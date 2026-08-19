@@ -112,8 +112,9 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
 5. **Single Semver Version Bump per PR**:
    - Check `package.json` (or `deno.json` for `web-jam-tools`).
-   - The version must be bumped exactly once per PR on its first commit.
-   - Verify follow-up commits do not re-bump the version, and that the version is not unchanged from the merge-base with `dev`.
+   - The version must be bumped on the PR's first commit and must strictly exceed the current `origin/dev` tip (matching `.circleci/config.yml:120`).
+   - Flag as a **Must Fix** finding any version that fails to strictly exceed the `origin/dev` tip, or any follow-up commit that re-bumps the version when `dev` did not move (a gratuitous double bump).
+   - **Exception — re-bumping when `dev` advances**: If `origin/dev` advances to or past the PR's version after the PR's first commit, re-bumping in a follow-up commit to clear the new `origin/dev` tip is required and explicitly correct — do NOT flag this as a finding.
 
 6. **Package-Lock Engine Alignment**:
    - When bumping Node.js version in `package.json` `engines`, verify `package-lock.json` root engine definition was updated using `npm install --package-lock-only --ignore-scripts` (or `npm install --ignore-scripts`) so both files stay in sync without running unverified postinstall scripts.
