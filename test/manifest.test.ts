@@ -14,9 +14,18 @@
 // guard, not an oversight to work around.
 
 import { assert } from "@std/assert";
+import {
+  extractDirectCommandHookScripts,
+  getGitTrackedModes,
+} from "../hooks/lib/direct_hook_commands.ts";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
 const HOOKS_DIR = new URL("../hooks/", import.meta.url).pathname;
+const INSTALL_HOOKS_PATH = new URL(
+  "../scripts/install-hooks.sh",
+  import.meta.url,
+).pathname;
+const REPO_DIR = new URL("../", import.meta.url).pathname;
 
 // Pinned set of skills/*/ directory names. Update deliberately.
 const EXPECTED_SKILL_DIRS = [
@@ -184,3 +193,37 @@ Deno.test("every hooks/*.sh has a corresponding behaviour test", () => {
       "\n  See test/block_agy_non_flash_model_hook.test.ts for the established pattern.",
   );
 });
+
+// web-jam-tools#683 — a hook script registered as a direct command (in Claude Code
+// settings.json or agy hooks.json) requires the executable bit (100755) in git.
+// When checked out or symlinked into live hook paths (~/.claude/hooks/), a 100644
+// mode causes tool execution to fail with permission denied (exit 126).
+// Scripts invoked via `bash <path>` (e.g. agy targets) or Deno modules (hooks/lib/*.ts)
+// do not require 100755 and remain 100644.
+
+Deno.test(
+  "every hook script registered as a direct command is tracked 100755 in git",
+  async () => {
+    const installerContent = Deno.readTextFileSync(INSTALL_HOOKS_PATH);
+    const directHookScripts = extractDirectCommandHookScripts(installerContent);
+    const trackedModes = await getGitTrackedModes(REPO_DIR);
+
+    const nonExecutable: string[] = [];
+    for (const hookName of directHookScripts) {
+      const mode = trackedModes.get(hookName);
+      if (mode !== "100755") {
+        nonExecutable.push(
+          `  hooks/${hookName} is tracked as ${mode ?? "untracked"} in git (expected 100755)`,
+        );
+      }
+    }
+
+    assert(
+      nonExecutable.length === 0,
+      "Every hook script registered as a direct command (in Claude Code settings.json " +
+        "or agy hooks.json) must be tracked as executable (100755) in git (web-jam-tools#683).\n" +
+        nonExecutable.join("\n") +
+        "\n  Run `git update-index --chmod=+x <file>` to fix.",
+    );
+  },
+);
