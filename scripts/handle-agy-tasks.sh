@@ -102,10 +102,31 @@
 # none) — never a crash, never a blocked dispatch. Format ("How to test
 # locally" as an ordered list of steps a DIFFERENT developer would follow,
 # not a diff restatement) is enforced via the prompt instruction only — the
-# design explicitly rejects a new create-draft-pr.sh guard for this (a
-# brittle "is this ordered human steps?" regex would false-positive-reject).
+# web-jam-tools#686 — repo-conditional landing:
+#   - UI repos (JaMmusic, CollegeLutheran, AppersonAuto, TimShermanMusic,
+#     HenricksonForSalem) offer to check out the branch into the main clone
+#     upon PR creation (interactive Y/n prompt; auto-land under --headless).
+#   - Non-UI repos (web-jam-tools, web-jam-back, WebJamSocketCluster) NEVER land
+#     by default — the worktree is left in place at /tmp/agy-worktrees/<Repo>-<branch>
+#     and its path is printed.
+#   - Use --land to force landing on a non-UI repo; use --no-land to suppress
+#     landing on a UI repo (if both are passed, --no-land wins).
 
 set -euo pipefail
+
+# UI repos that offer to land the branch into the main clone upon PR creation (web-jam-tools#686)
+UI_REPOS=("JaMmusic" "CollegeLutheran" "AppersonAuto" "TimShermanMusic" "HenricksonForSalem")
+
+is_ui_repo() {
+  local repo="$1"
+  local r
+  for r in "${UI_REPOS[@]}"; do
+    if [ "$repo" = "$r" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 # AGY_WEBJAM_ROOT override exists for --dry-run testing against a scratch clone
 # instead of a repo folder you're actively working in (web-jam-tools#154).
@@ -156,10 +177,12 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 #                     composed prompt, and STOP without launching agy. For
 #                     testing prompt composition (comments folded in, BLOCKED
 #                     guard) without spending an agy call (web-jam-tools#154).
-#   --no-land         skip checking the branch out into the main clone after PR creation (web-jam-tools#513)
+#   --land            force checking the branch out into the main clone after PR creation (web-jam-tools#686)
+#   --no-land         skip checking the branch out into the main clone after PR creation (web-jam-tools#513; wins if both passed)
 HEADLESS=0
 SETUP_ONLY=0
 DRY_RUN=0
+FORCE_LAND=0
 NO_LAND=0
 TARGET_REPO_OVERRIDE="${AGY_TARGET_REPO:-}"
 while [ $# -gt 0 ]; do
@@ -167,6 +190,7 @@ while [ $# -gt 0 ]; do
     --headless|-H) HEADLESS=1; shift ;;
     --setup-only)  SETUP_ONLY=1; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
+    --land)        FORCE_LAND=1; shift ;;
     --no-land)     NO_LAND=1; shift ;;
     --repo)
       if [ -z "${2:-}" ]; then
@@ -192,7 +216,7 @@ TASK_ARG="${1:-}"
 # through to a queue-file lookup.
 if [ -z "$TASK_ARG" ]; then
   echo "ERROR: missing required <Repo>#<issue-num> argument." >&2
-  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] [--no-land] [--repo <Name>] <Repo>#<issue-num>" >&2
+  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] [--land] [--no-land] [--repo <Name>] <Repo>#<issue-num>" >&2
   echo "  e.g. $(basename "$0") --headless \"CollegeLutheran#123\"" >&2
   exit 1
 fi
@@ -909,6 +933,14 @@ fi
 if [ "$NO_LAND" -eq 1 ]; then
   echo ""
   echo "(--no-land specified — skipped checkout into main clone $REPO_DIR)."
+  echo "Branch $BRANCH pushed; draft PR #$LAND_PR_NUM open. Worktree left at:"
+  echo "  $WORKTREE_DIR"
+  exit 0
+fi
+
+if ! is_ui_repo "$TARGET_REPO" && [ "$FORCE_LAND" -ne 1 ]; then
+  echo ""
+  echo "(Non-UI repo $TARGET_REPO — skipped checkout into main clone $REPO_DIR; pass --land to force)."
   echo "Branch $BRANCH pushed; draft PR #$LAND_PR_NUM open. Worktree left at:"
   echo "  $WORKTREE_DIR"
   exit 0
