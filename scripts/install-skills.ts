@@ -1,7 +1,12 @@
 #!/usr/bin/env -S deno run --allow-env --allow-run --allow-read --allow-write
 /**
  * install-skills.ts — make this repo the single source of truth for Claude Code & agy skills.
- * (web-jam-tools#669)
+ * (web-jam-tools#668, web-jam-tools#669)
+ *
+ * Retention Policy:
+ * Backups of replaced skills are saved outside scanned skill directories
+ * (~/.claude/skills-backups and ~/.gemini/config/plugins/webjam-tasks/skills-backups).
+ * Stale backups older than the 14-day retention window are automatically pruned on each run.
  */
 import { installSkills, parseArgs } from "../src/install-skills/lib.ts";
 
