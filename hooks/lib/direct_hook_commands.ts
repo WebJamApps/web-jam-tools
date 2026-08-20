@@ -82,6 +82,15 @@ export function extractDirectCommandHookScripts(
     }
   }
 
+  // Deliberately not scanned: AGY_ONLY_PRE_TOOL_USE_HOOKS (agy-model-guard.sh,
+  // block-agy-gmail-send-delete.sh). Both entries are wired only into the agy
+  // surface via agy_shim_arg, which always invokes them as the shim's trailing
+  // "$name" argument — never as a literal direct command — so they land in the
+  // shim's own bash-invoked target list below, not this hook set. That is an
+  // invariant of how agy_shim_arg builds its argument, not something this
+  // parser checks; if a future entry in that array were ever wired as a direct
+  // command instead, it would need to be added here explicitly.
+
   // 5. agy surface direct command: extract the wrapper executable from agy_shim_arg
   const shimMatch = installerContent.match(
     /agy_shim_arg\(\)\s*\{([\s\S]*?)\n\}/,
