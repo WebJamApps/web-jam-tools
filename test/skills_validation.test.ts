@@ -104,3 +104,13 @@ Deno.test("skills/venue-mining/sources.yaml parses with the expected top-level s
     );
   }
 });
+
+Deno.test("skills/file-issue/SKILL.md contains the hook and skill both-surfaces rule", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  assert(
+    text.includes("Hook and Skill Issues Must Target Both Claude Code and agy/Antigravity"),
+    "skills/file-issue/SKILL.md must contain the numbered rule 'Hook and Skill Issues Must Target Both Claude Code and agy/Antigravity' in the Before you file section",
+  );
+});

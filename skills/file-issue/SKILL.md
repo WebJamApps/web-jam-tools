@@ -97,6 +97,11 @@ that's what following this skill prevents.
     - Major upgrades are the exception and are NEVER done inline in a feature PR: each major upgrade must be flagged in the report as belonging in its own follow-on issue so it can be scheduled, labeled, and tested independently.
     - Runtime upgrades must be LTS only, without exception (e.g. Node/Deno LTS releases only).
     - Any vulnerability or upgrade implicated by the issue's own edited files is addressed directly in that work.
+14. **Hook and Skill Issues Must Target Both Claude Code and agy/Antigravity.**
+    - Any issue about a **hook** (a script under `hooks/`) or a **skill** (a directory under `skills/`) must declare it targets **both** agent surfaces — Claude Code and agy/Antigravity — unless Josh has explicitly approved a single-surface exception for that specific issue *in this filing session*, with approval recorded in the issue body.
+    - **Surfaces must be named in `## What this builds`.** The section opening the body must state what is being built for each surface, not just once for both (e.g. not "updates the hook" but "updates the hook in Claude Code and adds the agy variant").
+    - **One acceptance criterion per surface.** The `## Acceptance criteria` section must carry a separate, distinct criterion checking each surface: Claude Code (`scripts/install-hooks.sh` for hooks; `scripts/install-skills.ts` for skills) and agy (`scripts/install-hooks.sh` on agy side; same for skills).
+    - **Both installers named in verification steps.** The `## How to test locally` section must name both `scripts/install-hooks.sh` and `scripts/install-skills.ts` as part of the verification steps, so the implementing agent installs and checks both surfaces rather than one.
 
 ## Citation format (every reference, every time)
 
