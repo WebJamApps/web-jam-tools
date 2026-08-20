@@ -187,9 +187,10 @@ Otherwise, for each issue:
     - Fable — architecture/specs/requirements framing
     - Flash (Med/High if the repo splits it) — full-stack coding across all 8
       active repos. Pick Med vs High AT TRIAGE (agy has no dynamic thinking to
-      pick for itself): Med is the default lane; use High only when the issue
-      reads as a harder/riskier task (non-trivial state, layout, complex logic,
-      or multi-layer API work — not a one-line tweak).
+      pick for itself): High is the default lane; use Med only for genuinely
+      trivial edits (a one-line change, a single-field data or typo fix, a
+      link update) — anything with non-trivial state, layout, complex logic,
+      or multi-layer API work goes to High.
 
   Note: under-specified codework (empty or title-only body) must always be
   triaged as `Opus` so it flags for design discussion rather than being

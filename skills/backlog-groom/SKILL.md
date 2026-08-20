@@ -81,7 +81,7 @@ The audit inspects every open issue across all 8 repositories against six core c
 
 ### Step 2: Analyze & Categorize (Delegated to Subagent)
 1. Evaluate each issue against the 6 audit categories above.
-2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash Med`", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Add `Blocked` label & add blocker statement to body", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
+2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash High`", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Add `Blocked` label & add blocker statement to body", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
 
 ### Step 3: Write Report File (Delegated to Subagent)
@@ -92,7 +92,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
-| 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash Med` label |
+| 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash High` label |
 | 2 | JaMmusic | #1243 | Dependency Drift | Labeled `Blocked` & body says "do not start", but blocker web-jam-back#990 "Add PATCH /venue/:id (the honest verb for our partial-merge update)" is CLOSED | Remove `Blocked` label & reconcile body (note web-jam-back#990 closed; preserve deploy step) |
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |
