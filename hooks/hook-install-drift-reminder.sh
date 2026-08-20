@@ -27,5 +27,5 @@ if [ -z "$DENO_BIN" ]; then
   fi
 fi
 
-"$DENO_BIN" run --allow-read --allow-env --allow-run "$HOOK_DIR/lib/check_hook_install_drift.ts" "$@"
+"$DENO_BIN" run --allow-read --allow-env --allow-run "$HOOK_DIR/lib/check_hook_install_drift.ts" "$@" || exit 0
 exit 0
