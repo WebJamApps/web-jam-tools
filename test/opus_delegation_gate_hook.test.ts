@@ -103,6 +103,84 @@ Deno.test("subagent tool call (agent_id present) is allowed immediately without 
   assertAllowed(res);
 });
 
+Deno.test("subagent tool call (agent_id present) is still allowed under permission_mode 'default'", async () => {
+  const res = await runHook({
+    agent_id: "agent-sonnet-subagent-1",
+    permission_mode: "default",
+    tool_input: { file_path: IN_REPO_FILE },
+    transcript_path: "/nonexistent/transcript.jsonl",
+  });
+  assertAllowed(res);
+});
+
+// --- Regression: web-jam-tools#663 — auto-mode autonomous retry via a spawned
+// subagent must NOT route around this gate. Reproduced live 2026-08-19/20: an Opus
+// main session, denied a direct Edit under permission_mode "auto", autonomously spawned
+// an Agent/Task subagent in the same turn whose own Edit call then hit the old
+// unconditional Step 1 subagent exemption and succeeded. This test would fail (allowed
+// instead of denied) if that exemption regressed to being unconditional again.
+
+Deno.test("subagent tool call (agent_id present) under permission_mode 'auto' is NOT exempted — denied when session model is Opus", async () => {
+  await withTranscript(
+    [userTurn("please edit this file directly"), assistantTurn("claude-opus-4-6")],
+    async (transcript_path) => {
+      const res = await runHook({
+        agent_id: "agent-spawned-mid-turn",
+        permission_mode: "auto",
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout);
+    },
+  );
+});
+
+Deno.test("subagent tool call (agent_id present) under permission_mode 'auto' is allowed when session model is not Opus", async () => {
+  await withTranscript(
+    [userTurn("please edit this file directly"), assistantTurn("claude-sonnet-4-6")],
+    async (transcript_path) => {
+      const res = await runHook({
+        agent_id: "agent-spawned-mid-turn",
+        permission_mode: "auto",
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertAllowed(res);
+    },
+  );
+});
+
+Deno.test("subagent tool call (agent_id present) under permission_mode 'auto' is allowed with escape phrase present", async () => {
+  await withTranscript(
+    [userTurn("opus edit ok — spawn a subagent and edit"), assistantTurn("claude-opus-4-6")],
+    async (transcript_path) => {
+      const res = await runHook({
+        agent_id: "agent-spawned-mid-turn",
+        permission_mode: "auto",
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertAllowed(res);
+    },
+  );
+});
+
+Deno.test("main-thread (no agent_id) Opus call under permission_mode 'auto' is denied without escape phrase (unchanged baseline)", async () => {
+  await withTranscript(
+    [userTurn("please edit this file directly"), assistantTurn("claude-opus-4-6")],
+    async (transcript_path) => {
+      const res = await runHook({
+        permission_mode: "auto",
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout);
+    },
+  );
+});
+
 // --- Step 2: No target path in tool input allowed ---
 
 Deno.test("tool call without file_path or notebook_path or path is allowed", async () => {

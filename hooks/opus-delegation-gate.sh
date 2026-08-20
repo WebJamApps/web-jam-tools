@@ -6,7 +6,7 @@
 # forcing delegation to a cheaper model tier (Sonnet, Haiku, or Flash).
 #
 # Allow/Refuse Sequence (design: Token_Savings/opus-delegation-gate-design-2026-08-18.md):
-#   Step 1: Subagent call? Payload's agent_id present -> allow (exit 0)
+#   Step 1: Subagent call (agent_id present) AND permission_mode != "auto" -> allow (exit 0)
 #   Step 2: No target path in tool input -> allow (exit 0)
 #   Step 3: Not inside a git working tree -> allow (exit 0)
 #   Step 4: Single invocation of select_transcript_entry.ts (--opus-gate)
@@ -18,6 +18,28 @@
 #
 # Fail-CLOSED: If transcript is missing, unreadable, or the model cannot be
 # determined, refuse (deny) — unknown must not silently run on the expensive model.
+#
+# KNOWN LIMITATION — permission_mode "auto" and the subagent exemption (web-jam-tools#663):
+# Step 1's subagent exemption exists because this gate cannot recover which model a
+# SPAWNED subagent is actually running: select_transcript_entry.ts deliberately skips
+# isSidechain transcript entries when resolving "the session model" (that lookup is
+# scoped to the main thread by design, for the Stop-hook use case), so a naive
+# per-subagent check would just re-read the main session's model. Exempting subagent
+# calls outright assumes a human is watching the session and chose to delegate.
+#
+# That assumption breaks under permission_mode "auto": a live reproduction
+# (2026-08-19/20, see PR that introduced this comment) showed an Opus main session,
+# denied a direct Edit by this gate, autonomously spawn an Agent/Task subagent in the
+# SAME turn — no human involved — whose own Edit call then hit Step 1's unconditional
+# subagent exemption and succeeded. The initial deny was honored correctly; auto mode's
+# unattended multi-step retry is what routed around it. Since we still cannot verify a
+# spawned subagent's real model, the safe fix is to withdraw the Step 1 exemption
+# specifically while permission_mode is "auto": ALL Edit/Write/NotebookEdit calls to a
+# git-tracked path from an Opus-flavored session are refused while unattended, main
+# thread or subagent, unless the escape phrase is present. This intentionally also
+# blocks genuinely-cheaper subagent delegation while running unattended in auto mode
+# (the safe direction to fail) — a human-supervised session (default/plan/acceptEdits/
+# bypassPermissions/dontAsk) keeps the original subagent exemption unchanged.
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
@@ -25,9 +47,11 @@ SELECTOR="$HOOK_DIR/lib/select_transcript_entry.ts"
 
 input=$(cat)
 
-# Step 1: Subagent tool call? (agent_id present and non-empty)
+# Step 1: Subagent tool call? (agent_id present and non-empty) — exempt only when a
+# human is presumed to be supervising the session, i.e. NOT permission_mode "auto".
 agent_id="$(printf '%s' "$input" | jq -r '.agent_id // empty' 2>/dev/null || true)"
-if [ -n "$agent_id" ]; then
+permission_mode="$(printf '%s' "$input" | jq -r '.permission_mode // empty' 2>/dev/null || true)"
+if [ -n "$agent_id" ] && [ "$permission_mode" != "auto" ]; then
   exit 0
 fi
 
