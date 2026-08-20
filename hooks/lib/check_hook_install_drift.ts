@@ -129,6 +129,11 @@ export function extractScriptPathFromCommand(command: string): string {
   const trimmed = command.trim();
   if (!trimmed) return "";
   const firstToken = trimmed.split(/\s+/)[0];
+  // Inline multi-statement bash hooks (e.g. `M="$HOME/..."; T=$(date ...); ...`)
+  // have a first token that is a variable assignment or shell keyword, not a
+  // script invocation — only a token that actually names a `.sh` file is a
+  // hook script path worth dead-path checking.
+  if (!firstToken.endsWith(".sh")) return "";
   return firstToken;
 }
 

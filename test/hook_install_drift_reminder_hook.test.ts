@@ -18,6 +18,7 @@ import {
   checkRemoteDiff,
   checkUnregisteredHooks,
   detectDrift,
+  extractScriptPathFromCommand,
   formatDriftMessage,
 } from "../hooks/lib/check_hook_install_drift.ts";
 
@@ -323,6 +324,52 @@ Deno.test("detectDrift reports hook commands in settings.json pointing to dead p
     assert(msg.includes("SessionStart: $HOME/.claude/hooks/hook1.sh"), msg);
     // Ensure permission strings/secrets from settings.json are NEVER leaked
     assert(!msg.includes("echo hello"), msg);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+// --- Test 3b: inline bash SessionStart hooks must never be flagged dead ---
+// web-jam-tools#664: extractScriptPathFromCommand() previously returned the
+// raw first whitespace token of ANY hook command, even for inline
+// multi-statement bash hooks like the real
+// `M="$HOME/.claude/.last-update-reminder"; T=$(date +%Y-%m-%d); ...`
+// SessionStart entry in settings.json. That first token is a variable
+// assignment, not a script path, so it never resolved and was reported as a
+// false-positive dead path on every session — despite the checkout being
+// level and every real registration resolving.
+
+Deno.test("extractScriptPathFromCommand ignores inline bash commands with no .sh token", () => {
+  const inline =
+    'M="$HOME/.claude/.last-update-reminder"; T=$(date +%Y-%m-%d); if [ "$(cat "$M" 2>/dev/null)" != "$T" ]; then echo "$T" > "$M"; fi';
+  assertEquals(extractScriptPathFromCommand(inline), "");
+});
+
+Deno.test("extractScriptPathFromCommand still extracts a real .sh script path", () => {
+  assertEquals(
+    extractScriptPathFromCommand("$HOME/.claude/hooks/hook1.sh"),
+    "$HOME/.claude/hooks/hook1.sh",
+  );
+});
+
+Deno.test("checkDeadHookPaths never flags a legitimate inline bash SessionStart hook", async () => {
+  const sb = await createSandbox();
+  try {
+    const settings = JSON.parse(await Deno.readTextFile(sb.settingsPath));
+    settings.hooks.SessionStart.push({
+      hooks: [{
+        type: "command",
+        command:
+          'M="$HOME/.claude/.last-update-reminder"; T=$(date +%Y-%m-%d); if [ "$(cat "$M" 2>/dev/null)" != "$T" ]; then echo "$T" > "$M"; fi',
+      }],
+    });
+    await Deno.writeTextFile(
+      sb.settingsPath,
+      JSON.stringify(settings, null, 2),
+    );
+
+    const dead = checkDeadHookPaths(sb.settingsPath, sb.homeDir);
+    assertEquals(dead, []);
   } finally {
     await sb.cleanup();
   }
