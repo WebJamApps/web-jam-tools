@@ -12,6 +12,8 @@
 import { assert, assertEquals } from "@std/assert";
 import * as path from "jsr:@std/path@^1.0.0";
 import {
+  checkAgyDeadHookPaths,
+  checkAgyUnregisteredHooks,
   checkDeadHookPaths,
   checkRemoteDiff,
   checkUnregisteredHooks,
@@ -34,8 +36,14 @@ interface Sandbox {
   homeDir: string;
   hooksDir: string;
   settingsPath: string;
+  agyHooksPath: string;
   cleanup: () => Promise<void>;
 }
+
+// Base64 of the literal matcher "Bash" — same encoding
+// scripts/install-hooks.sh's agy_shim_arg() applies to every agy-side
+// PreToolUse/PostToolUse matcher before wrapping it in agy-hook-shim.sh.
+const BASH_MATCHER_B64 = btoa("Bash");
 
 async function createSandbox(): Promise<Sandbox> {
   const dir = await Deno.makeTempDir({ prefix: "drift_test_" });
@@ -43,9 +51,11 @@ async function createSandbox(): Promise<Sandbox> {
   const homeDir = path.join(dir, "home");
   const hooksDir = path.join(homeDir, ".claude/hooks");
   const settingsPath = path.join(homeDir, ".claude/settings.json");
+  const agyHooksPath = path.join(homeDir, ".gemini/config/hooks.json");
 
   await Deno.mkdir(repoDir, { recursive: true });
   await Deno.mkdir(hooksDir, { recursive: true });
+  await Deno.mkdir(path.dirname(agyHooksPath), { recursive: true });
 
   const runGit = async (args: string[], cwd = repoDir) => {
     const cmd = new Deno.Command("git", {
@@ -78,9 +88,16 @@ async function createSandbox(): Promise<Sandbox> {
     path.join(repoDir, "hooks/hook2.sh"),
     "#!/bin/bash\nexit 0\n",
   );
+  // agy-hook-shim.sh: the wrapper every agy-side registration in hooks.json
+  // routes through (web-jam-tools#432) — its content doesn't matter here,
+  // only that the file exists at the path agy hooks.json commands reference.
+  await Deno.writeTextFile(
+    path.join(repoDir, "hooks/agy-hook-shim.sh"),
+    "#!/bin/bash\nexit 0\n",
+  );
   await Deno.writeTextFile(
     path.join(repoDir, "scripts/install-hooks.sh"),
-    `SESSION_START_HOOKS=(hook1.sh)\nSTOP_HOOKS=()\nPRE_TOOL_USE_HOOKS=("Bash::hook2.sh")\nPOST_TOOL_USE_HOOKS=()\n`,
+    `SESSION_START_HOOKS=(hook1.sh)\nSTOP_HOOKS=()\nPRE_TOOL_USE_HOOKS=(\n  "Bash::hook2.sh"\n)\nAGY_ONLY_PRE_TOOL_USE_HOOKS=(\n)\nPOST_TOOL_USE_HOOKS=(\n)\n`,
   );
 
   await runGit(["add", "."]);
@@ -95,6 +112,10 @@ async function createSandbox(): Promise<Sandbox> {
   await Deno.symlink(
     path.join(repoDir, "hooks/hook2.sh"),
     path.join(hooksDir, "hook2.sh"),
+  );
+  await Deno.symlink(
+    path.join(repoDir, "hooks/agy-hook-shim.sh"),
+    path.join(hooksDir, "agy-hook-shim.sh"),
   );
 
   const initialSettings = {
@@ -127,12 +148,38 @@ async function createSandbox(): Promise<Sandbox> {
     JSON.stringify(initialSettings, null, 2),
   );
 
+  // agy's hooks.json: same shape, every command shim-wrapped
+  // ($HOME/.claude/hooks/agy-hook-shim.sh <event> <base64 matcher> <target>)
+  // per scripts/install-hooks.sh's agy_shim_arg(). Starts level with
+  // PRE_TOOL_USE_HOOKS above (hook2.sh) so the baseline sandbox is clean on
+  // BOTH surfaces.
+  const initialAgyHooks = {
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "Bash",
+          hooks: [{
+            type: "command",
+            command:
+              `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${BASH_MATCHER_B64} $HOME/.claude/hooks/hook2.sh`,
+          }],
+        },
+      ],
+    },
+  };
+
+  await Deno.writeTextFile(
+    agyHooksPath,
+    JSON.stringify(initialAgyHooks, null, 2),
+  );
+
   return {
     dir,
     repoDir,
     homeDir,
     hooksDir,
     settingsPath,
+    agyHooksPath,
     cleanup: async () => {
       await Deno.remove(dir, { recursive: true });
     },
@@ -167,6 +214,7 @@ Deno.test("detectDrift returns empty result when checkout is level and all hooks
       repoDir: sb.repoDir,
       homeDir: sb.homeDir,
       settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
       remoteRef: "origin/dev",
     });
 
@@ -175,6 +223,9 @@ Deno.test("detectDrift returns empty result when checkout is level and all hooks
     assertEquals(result.remoteDiff.modified, []);
     assertEquals(result.deadHooks, []);
     assertEquals(result.unregisteredHooks, []);
+    assertEquals(result.agy.configFound, true);
+    assertEquals(result.agy.deadHooks, []);
+    assertEquals(result.agy.unregisteredHooks, []);
 
     const msg = formatDriftMessage(result);
     assertEquals(msg, "");
@@ -233,6 +284,7 @@ Deno.test("detectDrift catches added, deleted, and modified hook files on origin
       repoDir: sb.repoDir,
       homeDir: sb.homeDir,
       settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
       remoteRef: "origin/dev",
     });
 
@@ -262,6 +314,7 @@ Deno.test("detectDrift reports hook commands in settings.json pointing to dead p
       repoDir: sb.repoDir,
       homeDir: sb.homeDir,
       settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
       remoteRef: "origin/dev",
     });
 
@@ -320,6 +373,7 @@ Deno.test("detectDrift reports hooks on origin/dev not registered in settings.js
       repoDir: sb.repoDir,
       homeDir: sb.homeDir,
       settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
       remoteRef: "origin/dev",
     });
 
@@ -329,6 +383,15 @@ Deno.test("detectDrift reports hooks on origin/dev not registered in settings.js
       msg,
     );
     assert(msg.includes("• hook3.sh"), msg);
+    // hook3.sh was only added to SESSION_START_HOOKS (a Claude-only,
+    // SessionStart-fired event agy's hooks.json never registers per
+    // --forbid-lifecycle-hooks / web-jam-tools#432 finding 9) — the agy
+    // surface must stay clean and must NOT demand a SessionStart-only hook.
+    assertEquals(result.agy.unregisteredHooks, []);
+    assert(
+      !msg.includes("Hooks on origin/dev not registered in agy hooks.json:"),
+      msg,
+    );
   } finally {
     await sb.cleanup();
   }
@@ -336,23 +399,27 @@ Deno.test("detectDrift reports hooks on origin/dev not registered in settings.js
 
 // --- Test 5: Read-only immutability ---
 
-Deno.test("detectDrift never writes to repository or settings.json", async () => {
+Deno.test("detectDrift never writes to repository, settings.json, or agy hooks.json", async () => {
   const sb = await createSandbox();
   try {
     const settingsBefore = await Deno.readTextFile(sb.settingsPath);
     const settingsStatBefore = await Deno.stat(sb.settingsPath);
+    const agyBefore = await Deno.readTextFile(sb.agyHooksPath);
+    const agyStatBefore = await Deno.stat(sb.agyHooksPath);
 
     // Run detectDrift multiple times
     await detectDrift({
       repoDir: sb.repoDir,
       homeDir: sb.homeDir,
       settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
       remoteRef: "origin/dev",
     });
     await detectDrift({
       repoDir: sb.repoDir,
       homeDir: sb.homeDir,
       settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
       remoteRef: "origin/dev",
     });
 
@@ -360,6 +427,11 @@ Deno.test("detectDrift never writes to repository or settings.json", async () =>
     const settingsStatAfter = await Deno.stat(sb.settingsPath);
     assertEquals(settingsBefore, settingsAfter);
     assertEquals(settingsStatBefore.mtime, settingsStatAfter.mtime);
+
+    const agyAfter = await Deno.readTextFile(sb.agyHooksPath);
+    const agyStatAfter = await Deno.stat(sb.agyHooksPath);
+    assertEquals(agyBefore, agyAfter);
+    assertEquals(agyStatBefore.mtime, agyStatAfter.mtime);
 
     const cmd = new Deno.Command("git", {
       args: ["status", "--porcelain"],
@@ -384,6 +456,7 @@ Deno.test("hooks/hook-install-drift-reminder.sh executes end-to-end and emits JS
     const quietRes = await runHookScript({
       CLAUDE_HOOKS_REPO_DIR: sb.repoDir,
       CLAUDE_SETTINGS_PATH: sb.settingsPath,
+      AGY_HOOKS_PATH: sb.agyHooksPath,
       HOOKS_REMOTE_REF: "origin/dev",
       CLAUDE_HOME: sb.homeDir,
     });
@@ -395,6 +468,7 @@ Deno.test("hooks/hook-install-drift-reminder.sh executes end-to-end and emits JS
     const driftRes = await runHookScript({
       CLAUDE_HOOKS_REPO_DIR: sb.repoDir,
       CLAUDE_SETTINGS_PATH: sb.settingsPath,
+      AGY_HOOKS_PATH: sb.agyHooksPath,
       HOOKS_REMOTE_REF: "origin/dev",
       CLAUDE_HOME: sb.homeDir,
     });
@@ -404,6 +478,252 @@ Deno.test("hooks/hook-install-drift-reminder.sh executes end-to-end and emits JS
     const parsed = JSON.parse(driftRes.stdout);
     assert(typeof parsed.systemMessage === "string");
     assert(parsed.systemMessage.includes("Dead hook paths in settings.json"));
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+// --- Test 7: agy dead hook paths (web-jam-tools#674) ---
+//
+// Positive/negative pair: introduce a dangling agy registration (delete the
+// TARGET hook's symlink the agy entry ultimately points at), confirm the
+// check reports it, then restore the symlink and confirm it goes quiet
+// again — proving the check actually inspects state rather than always
+// passing or always failing.
+
+Deno.test("checkAgyDeadHookPaths detects a dangling agy target and clears once restored", async () => {
+  const sb = await createSandbox();
+  try {
+    // Baseline: clean.
+    assertEquals(checkAgyDeadHookPaths(sb.agyHooksPath, sb.homeDir), []);
+
+    // Construct the drift: remove the installed symlink hook2.sh, which is
+    // the TARGET the agy hooks.json PreToolUse entry wraps via the shim.
+    const hook2Symlink = path.join(sb.hooksDir, "hook2.sh");
+    await Deno.remove(hook2Symlink);
+
+    const dead = checkAgyDeadHookPaths(sb.agyHooksPath, sb.homeDir);
+    assertEquals(dead.length, 1);
+    assertEquals(dead[0].event, "PreToolUse [agy target]");
+    assert(dead[0].command.includes("hook2.sh"), dead[0].command);
+
+    const driftResult = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    const driftMsg = formatDriftMessage(driftResult);
+    assert(
+      driftMsg.includes("Dead hook paths in agy hooks.json"),
+      driftMsg,
+    );
+    assert(driftMsg.includes("PreToolUse [agy target]"), driftMsg);
+    assert(
+      driftMsg.includes("web-jam-tools#432"),
+      "expected the #432 enforcement caveat when agy drift is reported: " + driftMsg,
+    );
+
+    // Remove the drift: restore the symlink.
+    await Deno.symlink(
+      path.join(sb.repoDir, "hooks/hook2.sh"),
+      hook2Symlink,
+    );
+
+    assertEquals(checkAgyDeadHookPaths(sb.agyHooksPath, sb.homeDir), []);
+
+    const cleanResult = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    assertEquals(formatDriftMessage(cleanResult), "");
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+// --- Test 8: agy unregistered hooks (web-jam-tools#674) ---
+//
+// Positive/negative pair: add a hook to origin/dev's PRE_TOOL_USE_HOOKS
+// that agy hooks.json never learns about, confirm it's reported, then
+// register it (shim-wrapped, matching scripts/install-hooks.sh's
+// agy_shim_arg() shape) and confirm the report goes quiet.
+
+Deno.test("checkAgyUnregisteredHooks detects a hook missing from agy hooks.json and clears once registered", async () => {
+  const sb = await createSandbox();
+  try {
+    const runGit = async (args: string[]) => {
+      const cmd = new Deno.Command("git", {
+        args,
+        cwd: sb.repoDir,
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const out = await cmd.output();
+      if (!out.success) {
+        throw new Error(
+          `git ${args.join(" ")} failed: ${new TextDecoder().decode(out.stderr)}`,
+        );
+      }
+    };
+
+    // Add hook3.sh to origin/dev's PRE_TOOL_USE_HOOKS (the array agy's
+    // hooks.json IS expected to mirror, unlike SESSION_START_HOOKS).
+    await Deno.writeTextFile(
+      path.join(sb.repoDir, "hooks/hook3.sh"),
+      "#!/bin/bash\nexit 0\n",
+    );
+    await Deno.writeTextFile(
+      path.join(sb.repoDir, "scripts/install-hooks.sh"),
+      `SESSION_START_HOOKS=(hook1.sh)\nSTOP_HOOKS=()\nPRE_TOOL_USE_HOOKS=(\n  "Bash::hook2.sh"\n  "Bash::hook3.sh"\n)\nAGY_ONLY_PRE_TOOL_USE_HOOKS=(\n)\nPOST_TOOL_USE_HOOKS=(\n)\n`,
+    );
+    await Deno.symlink(
+      path.join(sb.repoDir, "hooks/hook3.sh"),
+      path.join(sb.hooksDir, "hook3.sh"),
+    );
+
+    await runGit(["add", "."]);
+    await runGit(["commit", "-m", "Add hook3 to PRE_TOOL_USE_HOOKS"]);
+    await runGit(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+
+    const unreg = await checkAgyUnregisteredHooks(
+      sb.repoDir,
+      "origin/dev",
+      sb.agyHooksPath,
+    );
+    assertEquals(unreg, ["hook3.sh"]);
+
+    const driftResult = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    const driftMsg = formatDriftMessage(driftResult);
+    assert(
+      driftMsg.includes("Hooks on origin/dev not registered in agy hooks.json:"),
+      driftMsg,
+    );
+    assert(driftMsg.includes("• hook3.sh"), driftMsg);
+    assert(driftMsg.includes("web-jam-tools#432"), driftMsg);
+
+    // Remove the drift: register hook3.sh in agy hooks.json, shim-wrapped.
+    const agyHooks = JSON.parse(await Deno.readTextFile(sb.agyHooksPath));
+    agyHooks.hooks.PreToolUse.push({
+      matcher: "Bash",
+      hooks: [{
+        type: "command",
+        command:
+          `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${BASH_MATCHER_B64} $HOME/.claude/hooks/hook3.sh`,
+      }],
+    });
+    await Deno.writeTextFile(sb.agyHooksPath, JSON.stringify(agyHooks, null, 2));
+
+    assertEquals(
+      await checkAgyUnregisteredHooks(sb.repoDir, "origin/dev", sb.agyHooksPath),
+      [],
+    );
+
+    const cleanResult = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    // Claude side still drifts (settings.json was never touched) — only
+    // confirm the agy-specific line is gone.
+    assert(
+      !formatDriftMessage(cleanResult).includes(
+        "Hooks on origin/dev not registered in agy hooks.json:",
+      ),
+    );
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+// --- Test 9: agy hooks.json missing entirely is reported, never silently "clean" ---
+
+Deno.test("a missing agy hooks.json is reported explicitly rather than reported as no drift", async () => {
+  const sb = await createSandbox();
+  try {
+    // Construct the drift: agy was never installed on this machine.
+    await Deno.remove(sb.agyHooksPath);
+
+    const result = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    assertEquals(result.agy.configFound, false);
+
+    const msg = formatDriftMessage(result);
+    assert(msg !== "", "a surface that was never inspected must not be reported silent/clean");
+    assert(msg.includes("agy hooks.json not found at"), msg);
+    assert(msg.includes(sb.agyHooksPath), msg);
+    assert(msg.includes("web-jam-tools#432"), msg);
+
+    // Remove the drift: restore the file exactly as the baseline sandbox
+    // created it.
+    const initialAgyHooks = {
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{
+              type: "command",
+              command:
+                `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${BASH_MATCHER_B64} $HOME/.claude/hooks/hook2.sh`,
+            }],
+          },
+        ],
+      },
+    };
+    await Deno.writeTextFile(sb.agyHooksPath, JSON.stringify(initialAgyHooks, null, 2));
+
+    const cleanResult = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    assertEquals(cleanResult.agy.configFound, true);
+    assertEquals(formatDriftMessage(cleanResult), "");
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+// --- Test 10: end-to-end Bash execution surfaces agy drift too ---
+
+Deno.test("hooks/hook-install-drift-reminder.sh reports agy drift end-to-end", async () => {
+  const sb = await createSandbox();
+  try {
+    // Quiet baseline (both surfaces clean) already covered by Test 6.
+    // Introduce agy-only drift: agy hooks.json missing.
+    await Deno.remove(sb.agyHooksPath);
+
+    const res = await runHookScript({
+      CLAUDE_HOOKS_REPO_DIR: sb.repoDir,
+      CLAUDE_SETTINGS_PATH: sb.settingsPath,
+      AGY_HOOKS_PATH: sb.agyHooksPath,
+      HOOKS_REMOTE_REF: "origin/dev",
+      CLAUDE_HOME: sb.homeDir,
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("systemMessage"), res.stdout);
+    const parsed = JSON.parse(res.stdout);
+    assert(parsed.systemMessage.includes("agy hooks.json not found at"));
+    assert(parsed.systemMessage.includes("web-jam-tools#432"));
   } finally {
     await sb.cleanup();
   }
