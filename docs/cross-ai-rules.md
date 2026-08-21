@@ -90,11 +90,15 @@ skill.
   not a completed check: use a definitive fallback (local `git merge-tree`, `statusCheckRollup`) or
   say plainly that you could not verify — never hand Josh a verification step the agent can run
   itself.
-- **ONE REPO, ONE SESSION**: never edit a repo another AI session is actively working (Josh,
-  2026-07-11). Before branching or editing, check `git status -sb` — a non-`dev` branch or dirty
-  tree means another session likely has the repo in flight. Hand the change to that session/lane
-  (route via Josh) or ask Josh first. A separate worktree or non-colliding branch does NOT make
-  concurrent edits OK — parallel semver bumps and surprise PRs still collide.
+- **ONE REPO, MULTIPLE LANES — ISOLATE, DON'T SERIALIZE** (Josh, 2026-08-21, superseding the
+  2026-07-11 ONE REPO, ONE SESSION rule): Two subagents may work the same repo at the same time.
+  Each lane MUST run in its own worktree (`scripts/new-agent-worktree.sh`) on its own branch off
+  `dev` — never in the shared `~/WebJamApps/<repo>` checkout, which has a single HEAD and would
+  branch-switch under a running agent. The MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL cap below
+  still applies. Parallel lanes off the same base will each bump `deno.json`/`package.json` to the
+  same version; that is an expected merge conflict, resolved by rebasing the second PR onto `dev`
+  and re-bumping — it is **not** a reason to refuse or queue a dispatch. State which lanes are live
+  in a repo; never serialize silently.
 - **MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL**: Two live background jobs (e.g. a subagent + a
   headless agy dispatch) is the cap. When a THIRD thread (new discussion, dispatch, or background
   job) starts in the same session, the agent must WARN Josh first and propose a separate terminal —
