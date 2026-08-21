@@ -146,6 +146,13 @@ Review the PR diff, description, checks, and mergeability against these mandator
    - **Setlist API Mongoose Filtering**:
      - `sort` parameter must be stripped from `req.query` before passing the filter object to Mongoose `Schema.find(filter)`.
 
+9. **Draft / Ready State (Never a Finding)**:
+   - A PR's draft or ready-for-review state is Josh's own action on his own PR, not a
+     property of the work under review — he moves PRs in and out of draft himself as part of
+     his workflow. **Never report it as a finding, of any severity — not a Must Fix, not an
+     Actionable Suggestion — whether the PR is currently a draft or was created as a draft and
+     later marked ready.**
+
 ### Step 3: Post Review Feedback
 
 1. Synthesize review findings into a structured review comment using severity icons so merge blockers and check statuses are immediately recognizable without reading full prose.
