@@ -76,6 +76,11 @@ export interface DriftResult {
   deadHooks: DeadHookPath[];
   unregisteredHooks: string[];
   agy: AgyDriftResult;
+  // web-jam-tools#691: the statusLine surface is checked separately from
+  // deadHooks/unregisteredHooks above (it is not a hooks.<Event>[] bucket) —
+  // see checkStatusLineDeadPath/checkStatusLineUnregistered.
+  statusLineDead: DeadHookPath[];
+  statusLineUnregistered: boolean;
 }
 
 export function tryExistsSync(p: string): boolean {
@@ -235,6 +240,77 @@ export function checkDeadHookPaths(
   }
 
   return dead;
+}
+
+// --- Status-line surface (web-jam-tools#688, web-jam-tools#691) ---
+//
+// settings.json's "statusLine" key is a single { type, command } object, not
+// a hooks.<Event>[].hooks[] bucket, so it needs its own dead-path check
+// rather than reusing checkDeadHookPaths — but it reuses the SAME
+// extractScriptPathFromCommand/resolveScriptPath helpers, since the value
+// shape (a bare path ending in .sh) is identical.
+
+export function checkStatusLineDeadPath(
+  settingsPath: string,
+  homeDir: string,
+): DeadHookPath[] {
+  const dead: DeadHookPath[] = [];
+  if (!tryExistsSync(settingsPath)) return dead;
+
+  try {
+    const raw = Deno.readTextFileSync(settingsPath);
+    if (!raw.trim()) return dead;
+    const data = JSON.parse(raw);
+    if (!data.statusLine || typeof data.statusLine !== "object") return dead;
+    const cmd = data.statusLine.command;
+    if (typeof cmd !== "string") return dead;
+
+    const scriptToken = extractScriptPathFromCommand(cmd);
+    if (scriptToken) {
+      const resolved = resolveScriptPath(scriptToken, homeDir);
+      if (!tryExistsSync(resolved)) {
+        dead.push({ event: "statusLine", command: cmd, resolvedPath: resolved });
+      }
+    }
+  } catch {
+    // Malformed JSON or read error: ignore or report as safe
+  }
+
+  return dead;
+}
+
+// Mirrors checkUnregisteredHooks below, but for the single statusLine entry:
+// true when scripts/statusline.sh exists on remoteRef (or locally, as a
+// fallback) but settings.json has no statusLine.command registered at all.
+export async function checkStatusLineUnregistered(
+  repoDir: string,
+  remoteRef: string,
+  settingsPath: string,
+): Promise<boolean> {
+  let statusLineScriptExists = false;
+  const gitShowStatusLine = await runGit(
+    ["cat-file", "-e", `${remoteRef}:scripts/statusline.sh`],
+    repoDir,
+  );
+  if (gitShowStatusLine.success) {
+    statusLineScriptExists = true;
+  } else {
+    statusLineScriptExists = tryExistsSync(
+      path.join(repoDir, "scripts/statusline.sh"),
+    );
+  }
+  if (!statusLineScriptExists) return false;
+
+  if (!tryExistsSync(settingsPath)) return true;
+  try {
+    const raw = Deno.readTextFileSync(settingsPath);
+    if (!raw.trim()) return true;
+    const data = JSON.parse(raw);
+    return !(data.statusLine && typeof data.statusLine.command === "string" &&
+      data.statusLine.command.trim() !== "");
+  } catch {
+    return true;
+  }
 }
 
 export function extractExpectedHooksFromInstaller(
@@ -605,6 +681,12 @@ export async function detectDrift(
     remoteRef,
     settingsPath,
   );
+  const statusLineDead = checkStatusLineDeadPath(settingsPath, homeDir);
+  const statusLineUnregistered = await checkStatusLineUnregistered(
+    repoDir,
+    remoteRef,
+    settingsPath,
+  );
 
   const agyConfigFound = tryExistsSync(agyHooksPath);
   const agyDeadHooks = checkAgyDeadHookPaths(agyHooksPath, homeDir);
@@ -618,6 +700,8 @@ export async function detectDrift(
     remoteDiff,
     deadHooks,
     unregisteredHooks,
+    statusLineDead,
+    statusLineUnregistered,
     agy: {
       configPath: agyHooksPath,
       configFound: agyConfigFound,
@@ -670,6 +754,21 @@ export function formatDriftMessage(result: DriftResult): string {
       unregLines.push(`  • ${h}`);
     }
     sections.push(unregLines.join("\n"));
+  }
+
+  // --- Status-line surface (web-jam-tools#691) ---
+  if (result.statusLineDead.length > 0) {
+    const dead = result.statusLineDead[0];
+    sections.push(
+      `- Dead statusLine path in settings.json (file does not exist): ${dead.command}`,
+    );
+  }
+
+  if (result.statusLineUnregistered) {
+    sections.push(
+      "- scripts/statusline.sh exists on origin/dev but settings.json has no " +
+        "statusLine registered.",
+    );
   }
 
   // --- agy/Antigravity surface (web-jam-tools#674) ---
