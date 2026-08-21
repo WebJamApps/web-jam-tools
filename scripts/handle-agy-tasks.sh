@@ -102,6 +102,9 @@
 # none) — never a crash, never a blocked dispatch. Format ("How to test
 # locally" as an ordered list of steps a DIFFERENT developer would follow,
 # not a diff restatement) is enforced via the prompt instruction only — the
+# design explicitly rejects a new create-draft-pr.sh guard for this (a
+# brittle "is this ordered human steps?" regex would false-positive-reject).
+#
 # web-jam-tools#686 — repo-conditional landing:
 #   - UI repos (JaMmusic, CollegeLutheran, AppersonAuto, TimShermanMusic,
 #     HenricksonForSalem) offer to check out the branch into the main clone
