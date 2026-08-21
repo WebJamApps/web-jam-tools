@@ -14,6 +14,12 @@
 #    settings.json is backed up to settings.json.bak-<date> immediately
 #    before any write, and only if a write is actually happening.
 #
+#    Also idempotently merges the model-aware status-line wrapper
+#    (scripts/statusline.sh, web-jam-tools#688) into the "statusLine" key of
+#    ~/.claude/settings.json only — Claude Code ONLY, never agy's
+#    hooks.json, since agy has no status-line surface for this to install
+#    into.
+#
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
@@ -615,6 +621,16 @@ done
 
 [ -e "$HOOKS_SRC/agy-hook-shim.sh" ] || { echo "error: $HOOKS_SRC/agy-hook-shim.sh not found" >&2; exit 1; }
 
+# --- Status line (web-jam-tools#688) ---
+# Claude Code ONLY — agy has no status-line surface for this to install
+# into, so unlike a hook or a skill this is a single-surface change by
+# nature, not by omission. merge_status_line_args below is passed to the
+# $SETTINGS_PATH invocations exclusively; the $AGY_HOOKS_PATH invocations
+# never receive it and stay byte-identical to before this feature existed.
+[ -e "$REPO_DIR/scripts/statusline.sh" ] || { echo "error: $REPO_DIR/scripts/statusline.sh not found" >&2; exit 1; }
+STATUS_LINE_COMMAND="$REPO_DIR/scripts/statusline.sh"
+merge_status_line_args=("$STATUS_LINE_COMMAND")
+
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432) ---
 #
 # agy ignores its own PreToolUse "matcher" JSON field entirely (finding 2),
@@ -688,7 +704,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     done
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}"; then
     DRIFT=1
   fi
 
@@ -773,7 +789,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 

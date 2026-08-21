@@ -21,6 +21,7 @@ export function merge(settingsPath: string, args: string[]): number {
   const postToolUsePairs: Array<[string, string]> = [];
   let denyPatterns: string[] = [];
   let askPatterns: string[] = [];
+  let statusLineArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
   // web-jam-tools#432 finding 9: a Stop or SessionStart entry in agy's
@@ -57,7 +58,7 @@ export function merge(settingsPath: string, args: string[]): number {
     }
 
     const [head, sections] = section(
-      ["--stop", "--pre-tool-use", "--post-tool-use", "--deny", "--ask"],
+      ["--stop", "--pre-tool-use", "--post-tool-use", "--deny", "--ask", "--status-line"],
       rest,
     );
     sessionStartCmds = head;
@@ -76,6 +77,7 @@ export function merge(settingsPath: string, args: string[]): number {
     }
     denyPatterns = sections["--deny"] || [];
     askPatterns = sections["--ask"] || [];
+    statusLineArgs = sections["--status-line"] || [];
   }
 
   if (forbidLifecycleHooks && (sessionStartCmds.length > 0 || stopCmds.length > 0)) {
@@ -335,6 +337,30 @@ export function merge(settingsPath: string, args: string[]): number {
   const denyOwnedInAsk = findCrossListed(denyPatterns, "ask");
   const askOwnedInDeny = findCrossListed(askPatterns, "deny");
 
+  // statusLine merge (web-jam-tools#688). Unlike every other section above,
+  // this is a single scalar value, not a list — data.statusLine in Claude
+  // Code's settings.json is { type: "command", command: "<cmd>" }. Only
+  // touched when --status-line was actually passed, so a target invoked
+  // without it (agy's hooks.json) is completely unaffected: no key added,
+  // no drift ever reported, byte-identical output.
+  let statusLineAdded = false;
+  let statusLineChanged = false;
+  let statusLinePrevCommand: string | undefined;
+  if (statusLineArgs.length > 0) {
+    const desiredCommand = statusLineArgs[0];
+    const current = data.statusLine;
+    const currentIsWellFormed = current && typeof current === "object" &&
+      current.type === "command" && typeof current.command === "string";
+    if (!current) {
+      statusLineAdded = true;
+      data.statusLine = { type: "command", command: desiredCommand };
+    } else if (!currentIsWellFormed || current.command !== desiredCommand) {
+      statusLineChanged = true;
+      statusLinePrevCommand = currentIsWellFormed ? current.command : undefined;
+      data.statusLine = { type: "command", command: desiredCommand };
+    }
+  }
+
   // Secret-scan gate: check all strings in permissions and hooks for credentials
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
@@ -398,7 +424,9 @@ export function merge(settingsPath: string, args: string[]): number {
     addedDeny.length > 0 ||
     addedAsk.length > 0 ||
     denyOwnedInAsk.length > 0 ||
-    askOwnedInDeny.length > 0;
+    askOwnedInDeny.length > 0 ||
+    statusLineAdded ||
+    statusLineChanged;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -457,6 +485,16 @@ export function merge(settingsPath: string, args: string[]): number {
       for (const pattern of askOwnedInDeny) {
         console.error(
           `${targetFilename}: permissions.deny rule ${pattern} is also in permissions.ask (stale copy)`,
+        );
+      }
+      if (statusLineAdded) {
+        console.error(`${targetFilename}: missing statusLine ${statusLineArgs[0]}`);
+      }
+      if (statusLineChanged) {
+        console.error(
+          `${targetFilename}: statusLine differs from desired (want ${statusLineArgs[0]}${
+            statusLinePrevCommand ? `, has ${statusLinePrevCommand}` : ""
+          })`,
         );
       }
       return 1;
@@ -549,6 +587,12 @@ export function merge(settingsPath: string, args: string[]): number {
     console.log(
       `${targetFilename}: removed permissions.deny rule ${pattern} (now owned by permissions.ask)`,
     );
+  }
+  if (statusLineAdded) {
+    console.log(`${targetFilename}: added statusLine ${statusLineArgs[0]}`);
+  }
+  if (statusLineChanged) {
+    console.log(`${targetFilename}: updated statusLine to ${statusLineArgs[0]}`);
   }
 
   return 0;
