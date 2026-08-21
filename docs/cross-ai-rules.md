@@ -360,6 +360,15 @@ skill.
   restated requirements that its own design section contradicted, an agent followed the issue rather
   than the document, and wrote to a file outside every git repository to satisfy a criterion that
   should never have existed.
+- **A PR FOR A HOOK ISSUE NEVER CLOSES THE ISSUE.** When an issue adds or changes a hook — a git
+  hook, a Claude Code hook, any hook installed onto a machine — the PR body carries no closing
+  keyword (`Closes`, `Fixes`, `Resolves`) for it. Use `Part of <repo>#<number>` instead. After the
+  PR merges, the hook is installed and confirmed to actually fire, and only then is the issue closed
+  by hand.
+
+  Josh, 2026-08-19: _"whenever we create an issue involving hooks, the PR should never close on
+  merge, it should always remain open so we can install the hook and/or confirm the hook is working,
+  then the issue gets closed manually"_.
 
 ## DESIGN CLAIMS MUST CARRY RECEIPTS (wjt#305)
 

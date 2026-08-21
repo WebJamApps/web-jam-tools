@@ -1,6 +1,6 @@
 ---
 name: draft-pr
-description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs and standing run-log/epic issues). Use this to finish ANY coding task in a WebJamApps repo instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
+description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
 metadata:
   version: v1
   publisher: josh
@@ -15,8 +15,9 @@ the full invocation under "How to run it" — `--summary` and `--test-plan` are
 
 It **always** produces a draft PR based on `dev` and an attribution footer — neither
 can be overridden. By default the PR **closes the issue on merge** (`Closes #N`); pass
-`--part-of` only when the issue must stay open (a partial PR, or a standing
-run-log/epic issue like a venue-mining run log).
+`--part-of` only when the issue must stay open (a partial PR, a standing run-log/epic
+issue like a venue-mining run log, or a hook issue that must remain open until installed
+and confirmed firing — see `docs/cross-ai-rules.md`).
 
 Post-merge manual steps are governed by the POST-MERGE MANUAL STEPS rule in
 `docs/cross-ai-rules.md` — read it there rather than relying on a summary here.
@@ -91,11 +92,12 @@ the body sections via flags:
   because both flags write a line naming an issue (`Part of #N`, `Refs #N`) and
   cannot be written without one.
 - Closing is the default: the body reads `Closes #N`, so the issue auto-closes when
-  Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) ONLY when
-  the issue must stay open: a partial PR, or a standing run-log/epic issue. Pass
-  `--no-close` (and optional `--no-close-reason` / `--no-close-reason-file`) when the PR
-  must not close the issue on merge per the rule in `docs/cross-ai-rules.md`.
-  (`--closes` is a deprecated no-op, still accepted.)
+  Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) when the issue
+  must stay open: a partial PR, a standing run-log/epic issue, or a hook issue (hook PRs
+  never close on merge because the hook must be installed and confirmed firing first —
+  see `docs/cross-ai-rules.md`). Pass `--no-close` (and optional `--no-close-reason` /
+  `--no-close-reason-file`) when the PR must not close the issue on merge per the rule
+  in `docs/cross-ai-rules.md`. (`--closes` is a deprecated no-op, still accepted.)
 - `--screenshots` is for UI-visible changes only; omit the flag to omit the section.
 
 ## PR body formatting (do this every time)
