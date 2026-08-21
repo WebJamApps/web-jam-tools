@@ -45,14 +45,21 @@ fi
 
 if [ -n "$cmd" ]; then
   HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-  result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>/dev/null) || true
+  stderr_file=$(mktemp)
+  trap "rm -f '$stderr_file'" EXIT
+
+  result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>"$stderr_file") || true
 
   # Fails CLOSED: this is a destructive-operation guard, unlike the agy
   # cost-control guard which deliberately fails open. If the lib couldn't be
   # evaluated at all (deno missing/crashed, empty output), block rather than
   # let an unparseable command through.
   if [ -z "$result" ]; then
-    block "irreversible operation (guard could not evaluate the command — failing closed)" "$cmd"
+    stderr_output=$(cat "$stderr_file" 2>/dev/null || echo "")
+    if [ -z "$stderr_output" ]; then
+      stderr_output="(no error output available)"
+    fi
+    block "irreversible operation (guard could not evaluate the command — failing closed: $stderr_output)" "$cmd"
   fi
   if [ "$result" != "OK" ]; then
     block "${result#BLOCK:}" "$cmd"
