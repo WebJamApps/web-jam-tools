@@ -56,6 +56,25 @@ default workspace root (`/home/joshua/WebJamApps`).
 > (web-jam-tools#257) — without it, an agent working inside the new
 > worktree can't re-seed these files by hand if it ever needs to.
 
+### `install-git-secret-hook.sh`
+
+Installs the push-time secret scanner (`gitleaks` pre-push hook) and shared `.gitleaks.toml` configuration into a target WebJamApps repository (web-jam-tools#658).
+
+- Auto-detects Node repos (`.husky/pre-push`) vs Deno repos (`.git/hooks/pre-push`).
+- Copies or reconciles the shared `.gitleaks.toml` rules and allowlist.
+- Supports drift checking via `--check`.
+
+```bash
+# Install in current repository
+bash scripts/install-git-secret-hook.sh
+
+# Install into a sibling repository
+bash scripts/install-git-secret-hook.sh --repo ../JaMmusic
+
+# Check for drift
+bash scripts/install-git-secret-hook.sh --check
+```
+
 ### `reaper-update.sh`
 
 Downloads and installs the latest REAPER version to a specified prefix.
