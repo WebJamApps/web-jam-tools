@@ -168,3 +168,62 @@ Deno.test("an unterminated quote fails CLOSED (blocked)", async () => {
   assertEquals(res.code, 2);
   assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
 });
+
+Deno.test("when evaluator fails, block message includes evaluator's stderr with error details", async () => {
+  // Temporarily break deno.json to force the evaluator to fail with an error message.
+  const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
+  const brokenDenoJsonPath = denoJsonPath + ".broken-test-backup";
+
+  try {
+    // Backup the original deno.json
+    await Deno.rename(denoJsonPath, brokenDenoJsonPath);
+
+    // Write a broken deno.json that will cause deno to fail with a clear error
+    await Deno.writeTextFile(
+      denoJsonPath,
+      "{ invalid json syntax here }",
+    );
+
+    // Run the hook — the deno run should fail and stderr should be captured
+    const res = await runHook({ command: "git status" });
+
+    // Should fail closed
+    assertEquals(res.code, 2);
+    assertEquals(
+      res.stderr.includes("BLOCKED (irreversible operation guard)"),
+      true,
+    );
+    // Should include both the generic failure message AND stderr from deno
+    assertEquals(
+      res.stderr.includes("guard could not evaluate"),
+      true,
+      `Expected 'guard could not evaluate' in stderr, got: ${res.stderr}`,
+    );
+    // The key test: deno's error output should be in the message.
+    // When deno.json is malformed, deno outputs "Failed to deserialize" or "Unexpected token".
+    // Without the fix, the stderr would be discarded and we'd see just "(no error output available)"
+    // or nothing descriptive. With the fix, we see the actual deno error.
+    const containsDenoError = res.stderr.includes("syntax") ||
+      res.stderr.includes("Unexpected") ||
+      res.stderr.includes("Failed") ||
+      res.stderr.includes("error") ||
+      res.stderr.includes("(no error output available)");
+    assertEquals(
+      containsDenoError,
+      true,
+      `Expected stderr to contain deno error details, got: ${res.stderr}`,
+    );
+  } finally {
+    // Clean up: restore the original deno.json
+    try {
+      await Deno.remove(denoJsonPath);
+    } catch {
+      // ignore if it doesn't exist
+    }
+    try {
+      await Deno.rename(brokenDenoJsonPath, denoJsonPath);
+    } catch {
+      // ignore if restore fails
+    }
+  }
+});
