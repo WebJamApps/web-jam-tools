@@ -147,6 +147,36 @@ export function extractLabelValues(args: string[]): [string[], boolean] {
   return [labels, true];
 }
 
+export function extractEscalationReason(args: string[]): string | null {
+  let reason: string | null = null;
+  let j = 0;
+  while (j < args.length) {
+    const a = args[j];
+    if (a === "--escalation-reason") {
+      if (j + 1 < args.length) {
+        const val = args[j + 1].trim();
+        if (val && !val.startsWith("--")) {
+          reason = val;
+          j += 2;
+          continue;
+        }
+      }
+      j += 1;
+      continue;
+    }
+    if (a.startsWith("--escalation-reason=")) {
+      const val = a.slice("--escalation-reason=".length).trim();
+      if (val) {
+        reason = val;
+      }
+      j += 1;
+      continue;
+    }
+    j += 1;
+  }
+  return reason;
+}
+
 export function extractBodyValue(args: string[]): string | null {
   const bodyParts: string[] = [];
   let j = 0;
@@ -211,7 +241,11 @@ export function isEpicType(toolInput: Record<string, any>, tokens?: string[]): b
   }
   const labels = toolInput.labels;
   if (Array.isArray(labels)) {
-    if (labels.some((lbl) => typeof lbl === "string" && lbl.replace(/^['"]|['"]$/g, "").toLowerCase() === "epic")) {
+    if (
+      labels.some((lbl) =>
+        typeof lbl === "string" && lbl.replace(/^['"]|['"]$/g, "").toLowerCase() === "epic"
+      )
+    ) {
       return true;
     }
   }
@@ -220,14 +254,19 @@ export function isEpicType(toolInput: Record<string, any>, tokens?: string[]): b
     for (let i = 0; i < tokens.length; i++) {
       const tok = tokens[i];
       if (["--type", "-t", "--label", "-l", "--add-label"].includes(tok)) {
-        if (i + 1 < tokens.length && tokens[i + 1].replace(/^['"]|['"]$/g, "").toLowerCase() === "epic") {
+        if (
+          i + 1 < tokens.length &&
+          tokens[i + 1].replace(/^['"]|['"]$/g, "").toLowerCase() === "epic"
+        ) {
           return true;
         }
       }
       for (const flag of ["--type=", "-t=", "--label=", "-l=", "--add-label="]) {
         if (tok.startsWith(flag)) {
           const val = tok.slice(flag.length).replace(/^['"]|['"]$/g, "");
-          const parts = val.split(",").map((p) => p.replace(/^['"]|['"]$/g, "").trim().toLowerCase());
+          const parts = val.split(",").map((p) =>
+            p.replace(/^['"]|['"]$/g, "").trim().toLowerCase()
+          );
           if (parts.includes("epic")) return true;
         }
       }
@@ -236,7 +275,21 @@ export function isEpicType(toolInput: Record<string, any>, tokens?: string[]): b
   return false;
 }
 
-export function decide(labels: string[], modelLabels: Set<string>): string {
+/**
+ * Model tiers that require an explicit escalation justification (web-jam-tools#709).
+ *
+ * NOTE: The guard checks ONLY presence of non-empty justification text,
+ * NEVER quality or task complexity. Do not add complexity classification here.
+ */
+export const ESCALATION_LABELS = new Set(["Sonnet", "Opus"]);
+
+export function decide(
+  labels: string[],
+  modelLabels: Set<string>,
+  escalationReason?: string | null,
+  cmd?: string,
+  mode: "cli" | "mcp" = "cli",
+): string {
   const validStr = Array.from(modelLabels).sort().join(", ");
   const matched = Array.from(new Set(labels.filter((label) => modelLabels.has(label)))).sort();
 
@@ -251,6 +304,21 @@ export function decide(labels: string[], modelLabels: Set<string>): string {
     const joined = matched.join(", ");
     return `DENY:${matched.length} model labels given (${joined}) — exactly one is required. Valid model labels: ${validStr}.`;
   }
+
+  const matchedTier = matched[0];
+  if (ESCALATION_LABELS.has(matchedTier)) {
+    const reason = escalationReason?.trim();
+    if (!reason) {
+      if (mode === "mcp") {
+        return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nFlash High is the default model tier for implementation work and bills a separate Google budget, whereas ${matchedTier} bills the constrained Anthropic budget.\nTo proceed with ${matchedTier}, supply an 'escalation_reason' property (e.g. escalation_reason: "<why ${matchedTier} is genuinely the right tier>") in the tool input.`;
+      }
+      const commandToRun = cmd?.trim()
+        ? `${cmd.trim()} --escalation-reason "<why ${matchedTier} is genuinely the right tier>"`
+        : `gh issue create ... --label ${matchedTier} --escalation-reason "<why ${matchedTier} is genuinely the right tier>"`;
+      return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nFlash High is the default model tier for implementation work and bills a separate Google budget, whereas ${matchedTier} bills the constrained Anthropic budget.\nTo proceed with ${matchedTier}, re-run with an escalation reason:\n${commandToRun}`;
+    }
+  }
+
   return "PASS";
 }
 
@@ -268,7 +336,10 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
     ? (toolInputRaw as Record<string, any>)
     : {};
 
-  if (toolName === "Bash" || toolName === "bash" || toolName === "" || toolInput.command || toolInput.CommandLine) {
+  if (
+    toolName === "Bash" || toolName === "bash" || toolName === "" || toolInput.command ||
+    toolInput.CommandLine
+  ) {
     const cmd = String(toolInput.command || "").trim();
     if (!cmd) return "PASS";
     let tokens: string[];
@@ -276,7 +347,8 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
       tokens = splitShellTokens(cmd);
     } catch {
       if (
-        (/\bgh\b/.test(cmd) && /\bissue\b/.test(cmd) && (/\bcreate\b/.test(cmd) || /\bedit\b/.test(cmd))) ||
+        (/\bgh\b/.test(cmd) && /\bissue\b/.test(cmd) &&
+          (/\bcreate\b/.test(cmd) || /\bedit\b/.test(cmd))) ||
         /\bcreate-issue\b/.test(cmd)
       ) {
         return "DENY:the command couldn't be parsed (unbalanced quoting) but appears to create/edit a gh issue";
@@ -311,13 +383,16 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
         if (!ok) {
           return "DENY:a --label/-l flag was given with no value";
         }
-        const res = decide(labels, modelLabels);
+        const escalationReason = extractEscalationReason(createArgs);
+        const res = decide(labels, modelLabels, escalationReason, cmd, "cli");
         if (res !== "PASS") return res;
         const body = extractBodyValue(createArgs);
         if (body && !isEpicType(toolInput, createArgs)) {
           const pointers = findUnresolvableIssuePointers(body);
           if (pointers.length) {
-            return `DENY:unresolvable pointer phrase '${pointers[0]}' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+            return `DENY:unresolvable pointer phrase '${
+              pointers[0]
+            }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
           }
         }
         return "PASS";
@@ -332,7 +407,9 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
         if (body) {
           const pointers = findUnresolvableIssuePointers(body);
           if (pointers.length) {
-            return `DENY:unresolvable pointer phrase '${pointers[0]}' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+            return `DENY:unresolvable pointer phrase '${
+              pointers[0]
+            }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
           }
         }
         return "PASS";
@@ -350,13 +427,17 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
       if (typeof body === "string" && body) {
         const pointers = findUnresolvableIssuePointers(body);
         if (pointers.length) {
-          return `DENY:unresolvable pointer phrase '${pointers[0]}' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+          return `DENY:unresolvable pointer phrase '${
+            pointers[0]
+          }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
         }
       }
       return "PASS";
     }
     if (method !== "create") {
-      return `DENY:couldn't determine this issue_write call is a create/update (method=${JSON.stringify(method)})`;
+      return `DENY:couldn't determine this issue_write call is a create/update (method=${
+        JSON.stringify(method)
+      })`;
     }
     const typeVal = typeof toolInput.type === "string" ? toolInput.type.trim() : "";
     if (!typeVal || !VALID_NATIVE_TYPES_LOWER.has(typeVal.toLowerCase())) {
@@ -372,13 +453,25 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
     if (!Array.isArray(rawLabels) || !rawLabels.every((x) => typeof x === "string")) {
       return "DENY:the labels field is missing or not a JSON array of strings";
     }
-    const res = decide(rawLabels as string[], modelLabels);
+    const rawEscalation = typeof toolInput.escalation_reason === "string"
+      ? toolInput.escalation_reason
+      : (typeof toolInput.escalationReason === "string"
+        ? toolInput.escalationReason
+        : (typeof toolInput.escalation_justification === "string"
+          ? toolInput.escalation_justification
+          : (typeof toolInput.justification === "string"
+            ? toolInput.justification
+            : (typeof toolInput.reason === "string" ? toolInput.reason : null))));
+    const escalationReason = rawEscalation ? rawEscalation.trim() : null;
+    const res = decide(rawLabels as string[], modelLabels, escalationReason, undefined, "mcp");
     if (res !== "PASS") return res;
     const body = toolInput.body;
     if (typeof body === "string" && body && !isEpicType(toolInput)) {
       const pointers = findUnresolvableIssuePointers(body);
       if (pointers.length) {
-        return `DENY:unresolvable pointer phrase '${pointers[0]}' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+        return `DENY:unresolvable pointer phrase '${
+          pointers[0]
+        }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
       }
     }
     return "PASS";
@@ -399,5 +492,3 @@ if (import.meta.main) {
   const modelLabelsPath = Deno.env.get("MODEL_LABELS_JSON_PATH") || "";
   console.log(checkModelLabelOnIssueCreate(inputJson, modelLabelsPath));
 }
-
-

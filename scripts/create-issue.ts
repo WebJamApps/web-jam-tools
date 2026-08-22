@@ -8,7 +8,7 @@ import { createIssueAndVerify, parseArgs } from "../src/create-issue/lib.ts";
 async function main() {
   const options = parseArgs(Deno.args);
   if (!options.title || !options.bodyFile) {
-    console.error("Usage: deno task create-issue --title \"...\" --body-file <path> [options]");
+    console.error('Usage: deno task create-issue --title "..." --body-file <path> [options]');
     console.error("Options:");
     console.error("  --repo <repo>          (default: WebJamApps/web-jam-tools)");
     console.error("  --title <title>        (required)");
@@ -18,6 +18,7 @@ async function main() {
     console.error("  --milestone <name>");
     console.error("  --priority <Urgent|High|Medium|Low>");
     console.error("  --parent <issue_num>");
+    console.error("  --escalation-reason <why>");
     Deno.exit(1);
   }
 

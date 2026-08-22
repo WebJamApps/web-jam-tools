@@ -31,6 +31,8 @@ Deno.test("parseArgs parses all supported CLI flags and formats", () => {
     "High",
     "--parent",
     "437",
+    "--escalation-reason",
+    "complex multi-file refactoring",
   ];
 
   const parsed = parseArgs(args);
@@ -42,6 +44,7 @@ Deno.test("parseArgs parses all supported CLI flags and formats", () => {
   assertEquals(parsed.milestone, "v1.2");
   assertEquals(parsed.priority, "High");
   assertEquals(parsed.parent, 437);
+  assertEquals(parsed.escalationReason, "complex multi-file refactoring");
 });
 
 Deno.test("parseArgs handles equals format (--key=val)", () => {
@@ -54,6 +57,7 @@ Deno.test("parseArgs handles equals format (--key=val)", () => {
     "--milestone=v2.0",
     "--priority=Urgent",
     "--parent=100",
+    "--escalation-reason=arch design",
   ];
 
   const parsed = parseArgs(args);
@@ -65,6 +69,7 @@ Deno.test("parseArgs handles equals format (--key=val)", () => {
   assertEquals(parsed.milestone, "v2.0");
   assertEquals(parsed.priority, "Urgent");
   assertEquals(parsed.parent, 100);
+  assertEquals(parsed.escalationReason, "arch design");
 });
 
 Deno.test("normalizeRepo normalizes repo inputs correctly", () => {

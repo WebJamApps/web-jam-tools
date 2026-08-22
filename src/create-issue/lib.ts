@@ -11,6 +11,7 @@ export interface CreateIssueOptions {
   milestone?: string;
   priority?: string;
   parent?: number;
+  escalationReason?: string;
 }
 
 export interface VerificationResult {
@@ -100,6 +101,10 @@ export function parseArgs(args: string[]): CreateIssueOptions {
       options.parent = parseInt(args[++i], 10);
     } else if (arg.startsWith("--parent=")) {
       options.parent = parseInt(arg.slice("--parent=".length), 10);
+    } else if (arg === "--escalation-reason" && i + 1 < args.length) {
+      options.escalationReason = args[++i];
+    } else if (arg.startsWith("--escalation-reason=")) {
+      options.escalationReason = arg.slice("--escalation-reason=".length);
     }
     i++;
   }
