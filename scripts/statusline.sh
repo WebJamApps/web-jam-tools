@@ -62,3 +62,12 @@ printf '%s ' "$badge"
 # Every real invocation uses the default, unchanged.
 downstream_cmd="${STATUSLINE_DOWNSTREAM_CMD:-npx -y ccusage statusline}"
 printf '%s' "$payload" | bash -c "$downstream_cmd"
+
+# The badge above has already been printed to stdout by this point, so the
+# status line is usable regardless of how the downstream command fared. With
+# `set -uo pipefail`, this script's own exit status would otherwise become
+# the downstream command's (e.g. `npx -y ccusage statusline` failing offline
+# or on a resolve failure) — this script must not depend on how Claude Code
+# treats a non-zero status-line command, so it always exits 0 here. Only the
+# exit status is overridden; the downstream's stdout/stderr are untouched.
+exit 0

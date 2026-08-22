@@ -110,11 +110,19 @@ line. The original stdin payload is passed through unmodified to the
 downstream status-line command (`npx -y ccusage statusline` by default) —
 the badge is a prefix, never a replacement.
 
-Installed automatically by `scripts/install-hooks.sh`, which merges a
-`statusLine` entry pointing at this script into `~/.claude/settings.json`
-(Claude Code only — agy has no status-line surface). Not meant to be run
-standalone in normal use, but it can be for manual testing by piping a
-payload to it:
+Installed automatically by `scripts/install-hooks.sh`, which symlinks
+`scripts/statusline.sh` into the same destination the `*.sh` hooks are
+linked into (honoring `--hooks-dir` / `CLAUDE_HOOKS_DIR`), then merges a
+`statusLine` entry pointing at that stable installed path — never
+`$REPO_DIR/scripts/statusline.sh`, which would break if the repo moved or a
+branch lacking the file were checked out — into `~/.claude/settings.json`
+(Claude Code only — agy has no status-line surface). The script is not a
+hook: it stays out of `HOOKS_SRC` and out of every hook-registration loop,
+so it never gains a `PreToolUse`/`PostToolUse`/`SessionStart`/`Stop` entry.
+`hooks/lib/check_hook_install_drift.ts` covers it anyway — a dead or
+unregistered `statusLine` is reported at SessionStart the same way a dead or
+unregistered hook already is. Not meant to be run standalone in normal use,
+but it can be for manual testing by piping a payload to it:
 
 ```bash
 echo '{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | scripts/statusline.sh

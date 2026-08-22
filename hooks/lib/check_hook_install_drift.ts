@@ -306,8 +306,16 @@ export async function checkStatusLineUnregistered(
     const raw = Deno.readTextFileSync(settingsPath);
     if (!raw.trim()) return true;
     const data = JSON.parse(raw);
-    return !(data.statusLine && typeof data.statusLine.command === "string" &&
-      data.statusLine.command.trim() !== "");
+    if (!data.statusLine || typeof data.statusLine.command !== "string") return true;
+    const cmd = data.statusLine.command;
+    if (cmd.trim() === "") return true;
+    // web-jam-tools#691: presence alone isn't enough — a settings.json whose
+    // statusLine points at something else entirely (a hand-pasted
+    // `npx ccusage statusline`, or a stale path to a different script) must
+    // still be reported as unregistered, mirroring how checkUnregisteredHooks
+    // compares basenames rather than trusting any non-empty command.
+    const scriptToken = extractScriptPathFromCommand(cmd);
+    return path.basename(scriptToken) !== "statusline.sh";
   } catch {
     return true;
   }

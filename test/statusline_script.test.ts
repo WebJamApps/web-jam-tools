@@ -159,3 +159,15 @@ Deno.test("the original stdin payload reaches the downstream command unmodified,
   const payloadIdx = res.stdout.indexOf(payload);
   assert(badgeIdx !== -1 && payloadIdx !== -1 && badgeIdx < payloadIdx);
 });
+
+// --- exit status: never inherits the downstream command's exit status ---
+
+Deno.test("the script exits 0 and still prints the badge even when the downstream command fails", async () => {
+  const res = await runStatusline(
+    '{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}',
+    "false",
+  );
+  assertEquals(res.code, 0, res.stderr);
+  assertStringIncludes(res.stdout, OPUS_CODE);
+  assertStringIncludes(res.stdout, "Opus");
+});

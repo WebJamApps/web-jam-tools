@@ -590,6 +590,65 @@ Deno.test("checkStatusLineUnregistered detects scripts/statusline.sh missing fro
   }
 });
 
+Deno.test("checkStatusLineUnregistered reports unregistered when statusLine points at a different script", async () => {
+  const sb = await createSandbox();
+  try {
+    const runGit = async (args: string[]) => {
+      const cmd = new Deno.Command("git", {
+        args,
+        cwd: sb.repoDir,
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const out = await cmd.output();
+      if (!out.success) {
+        throw new Error(
+          `git ${args.join(" ")} failed: ${new TextDecoder().decode(out.stderr)}`,
+        );
+      }
+    };
+
+    // scripts/statusline.sh exists on origin/dev...
+    await Deno.writeTextFile(
+      path.join(sb.repoDir, "scripts/statusline.sh"),
+      "#!/bin/bash\necho ok\n",
+    );
+    await runGit(["add", "."]);
+    await runGit(["commit", "-m", "Add statusline.sh"]);
+    await runGit(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+
+    // ...but settings.json's statusLine is a non-empty command pointing at a
+    // COMPLETELY DIFFERENT script (a hand-pasted command, or a stale path to
+    // some other file) rather than our statusline.sh. Presence of a
+    // non-empty command must not be mistaken for OUR script being
+    // registered — only a matching basename counts.
+    const settings = JSON.parse(await Deno.readTextFile(sb.settingsPath));
+    settings.statusLine = {
+      type: "command",
+      command: "$HOME/.claude/hooks/some-other-script.sh",
+    };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(settings, null, 2));
+
+    const unreg = await checkStatusLineUnregistered(
+      sb.repoDir,
+      "origin/dev",
+      sb.settingsPath,
+    );
+    assertEquals(unreg, true);
+
+    const result = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    assertEquals(result.statusLineUnregistered, true);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
 // --- Test 5: Read-only immutability ---
 
 Deno.test("detectDrift never writes to repository, settings.json, or agy hooks.json", async () => {
