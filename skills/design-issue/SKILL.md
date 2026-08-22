@@ -92,7 +92,7 @@ Filing delegates to a subagent only when delegating moves the work down a tier (
 15. **Set the native Priority field** via GitHub MCP `issue_write` → `issue_fields` (or `scripts/create-issue.ts --priority <Level>`). (`gh` CLI cannot set a native field).
 16. **Apply the `Blocked` label AND the native dependency** to anything not yet startable — both signals, never one.
 17. **If any issue fails to file, stop.** Report which issues exist and which do not, by repo + number + title. No silent retries, no carrying on with the rest.
-18. **Update the design document's status line** to record what was filed.
+18. **Report what was filed to Josh in the conversation.** The design document is never edited to record filing status — the filed issues themselves, cited by repo + number + title, are the record of what happened.
 
 ### Phase 4 — End-of-Run Memory Consume/Delete
 
@@ -116,7 +116,7 @@ When a run finishes, the skill reads the memory surfaces for rules that fire onl
 
 | Gate | The skill waits for | It must not, before that gate | When it passes |
 |---|---|---|---|
-| 1 — design | Josh's explicit approval of the design document | write anything to any GitHub issue | record design approval |
+| 1 — design | Josh's explicit approval of the design document | write anything to any GitHub issue | proceed to Phase 2 planning (the approval itself lives in the conversation, never written into the design document) |
 | 2 — plan | Josh's explicit approval of the issue plan table | create, edit or label any issue | write the issue-approval token (`scripts/write_issue_approval_token.ts`), authorize removing the `Needs Design` labels listed in the approved plan, and proceed to Phase 3 filing |
 
 Nothing is filed to GitHub until GATE 2 passes.
@@ -140,6 +140,8 @@ These are properties of the skill, written as explicit refusals:
 | put a manual step inside an agent's execution issue | manual steps get their own `Josh` issue |
 | combine artifact/doc/UI review and live procedure walkthroughs into a single manual issue | inspecting rendered artifacts in Google Chrome and executing live procedures with learners or external parties are distinct verification surfaces with different gates and acceptance criteria |
 | hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<date>.md` |
+| narrate its own revision history in the body — "what changed", "why this was withdrawn", "an earlier version said", a changelog, before/after framing | the document states the current design as though it had always been the design; superseded reasoning lives only in the decision-record appendix |
+| record the skill's own workflow state in the body — a Status line, a gate/approval state, "nothing filed", "design complete" | that describes where the skill's process has got to, not the system being designed; gate state lives in the conversation and in the issues the run produces |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
 | leave superseded drafts, renamed artifacts, or obsolete intermediate runbook files behind in Dropbox upon deliverable finalization | destination folders must contain only active, canonical deliverables to prevent the accumulation of stale working duplicates |
@@ -281,13 +283,15 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 ### Writing Style
 
 - **The document states what the thing IS.** Present tense, design first. A reader who has never seen the conversation should be able to read it top to bottom and know what is being built.
-- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design.
+- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design. This also binds the document's OWN revision history: where the design changed direction, the body records the CURRENT design as though it had always been the design, and the abandoned alternative goes in the appendix as the rejected option of the decision that rejected it — never as a "what changed", "why this was withdrawn", or "an earlier version said" narrative anywhere in the body.
+- **The document never records the skill's own process state.** No Status line, no Gate 1 / Gate 2 approval state, no "nothing filed", no "design complete" — that describes where the `/design-issue` run has got to, not the system being designed. That state lives in the conversation and in the issues the run produces.
 - **Never a bare label in the body.** No "per D-7" or "R-39"; labels exist so the decision table has stable row names, and nowhere else.
 - **Josh's own words are preserved where they are load-bearing** — his ruling is the authority, and a paraphrase is weaker than his actual sentence.
 - **Consolidation happens BEFORE Gate 1, never after.** During the conversation the document accretes as decisions are made. Before GATE 1 the skill rewrites it into design-first shape. Josh never reviews a working draft.
+- **Pre-Gate-1 test:** a reader who has never seen the conversation must not be able to tell, from the body, that the design ever said anything different, or that any approval workflow exists.
 
 **Standard Document Shape:**
-1. What it is — one section, no preamble.
+1. What it is — one section, opening directly with what the thing is. No status block, no preamble of any kind.
 2. The workflow.
 3. The gates, and what the thing refuses to do.
 4. The rules that shape its output.
