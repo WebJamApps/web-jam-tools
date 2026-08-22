@@ -64,6 +64,7 @@ jobs:
               -o /tmp/gitleaks.tar.gz
             tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
             sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+            sudo chmod +x /usr/local/bin/gitleaks
             rm -f /tmp/gitleaks.tar.gz
       - run:
           name: Tool versions
