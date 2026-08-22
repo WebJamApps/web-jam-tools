@@ -74,6 +74,10 @@ interface PermissionsJson {
   ask?: string[];
   deny?: string[];
 }
+interface StatusLineJson {
+  type: string;
+  command: string;
+}
 interface SettingsJson {
   permissions?: PermissionsJson;
   hooks: {
@@ -82,6 +86,7 @@ interface SettingsJson {
     PostToolUse?: HookEntry[];
     Stop?: HookEntry[];
   };
+  statusLine?: StatusLineJson;
 }
 
 async function readJson(path: string): Promise<SettingsJson> {
@@ -828,6 +833,173 @@ Deno.test(
         assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
         assertEquals(data.permissions?.deny, ["Bash(git push --delete *)"]);
         assertEquals(data.permissions?.ask, ["Bash(rm -rf *)"]);
+      },
+    );
+  },
+);
+
+// --- --status-line (web-jam-tools#688) ---
+
+Deno.test("--status-line adds statusLine when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--status-line",
+      "/home/joshua/WebJamApps/web-jam-tools/scripts/statusline.sh",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      res.stdout.includes(
+        "added statusLine /home/joshua/WebJamApps/web-jam-tools/scripts/statusline.sh",
+      ),
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.statusLine, {
+      type: "command",
+      command: "/home/joshua/WebJamApps/web-jam-tools/scripts/statusline.sh",
+    });
+  });
+});
+
+Deno.test("a second --status-line run with the same command is a no-op", async () => {
+  await withTempSettings({}, async (path) => {
+    const args = ["--status-line", "/repo/scripts/statusline.sh"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.statusLine, { type: "command", command: "/repo/scripts/statusline.sh" });
+
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const backups = [...Deno.readDirSync(dir)].filter((e) => e.name.includes(".bak-"));
+    // One backup from the first (writing) run only; the no-op second run
+    // must not write (and therefore must not back up) again.
+    assertEquals(backups.length, 1);
+  });
+});
+
+Deno.test("--status-line with a different command value updates the existing one", async () => {
+  await withTempSettings(
+    { statusLine: { type: "command", command: "/old/path/statusline.sh" } },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--status-line",
+        "/repo/scripts/statusline.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+      assert(res.stdout.includes("updated statusLine to /repo/scripts/statusline.sh"));
+
+      const data = await readJson(path);
+      assertEquals(data.statusLine, {
+        type: "command",
+        command: "/repo/scripts/statusline.sh",
+      });
+    },
+  );
+});
+
+Deno.test(
+  "--status-line combined with a --pre-tool-use hook in one invocation merges both",
+  async () => {
+    await withTempSettings(undefined, async (path) => {
+      const res = await runMerge(path, [
+        "--pre-tool-use",
+        "Bash::$HOME/.claude/hooks/block-secret-dumps.sh",
+        "--status-line",
+        "/repo/scripts/statusline.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+
+      const data = await readJson(path);
+      assertEquals(data.hooks.PreToolUse.length, 1);
+      assertEquals(data.statusLine, {
+        type: "command",
+        command: "/repo/scripts/statusline.sh",
+      });
+    });
+  },
+);
+
+Deno.test(
+  "existing unrelated settings (permissions, other hook events) survive a --status-line-only merge untouched",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: { allow: ["Bash(ls:*)"], deny: ["Bash(curl *)"] },
+        hooks: {
+          Stop: [
+            { hooks: [{ type: "command", command: "/hand/added/stop.sh" }] },
+          ],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--status-line",
+          "/repo/scripts/statusline.sh",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
+        assertEquals(data.permissions?.deny, ["Bash(curl *)"]);
+        assertEquals(data.hooks?.Stop?.[0]?.hooks?.[0]?.command, "/hand/added/stop.sh");
+        assertEquals(data.statusLine, {
+          type: "command",
+          command: "/repo/scripts/statusline.sh",
+        });
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check with --status-line returns 0 when the stored value already matches",
+  async () => {
+    await withTempSettings(undefined, async (path) => {
+      const args = ["--status-line", "/repo/scripts/statusline.sh"];
+      await runMerge(path, args);
+      const checkRes = await runMerge(path, ["--check", ...args]);
+      assertEquals(checkRes.code, 0, checkRes.stderr);
+      assert(checkRes.stdout.includes("already up to date (no-op)"));
+    });
+  },
+);
+
+Deno.test(
+  "--check with --status-line returns non-zero and mentions statusLine when the stored value is absent",
+  async () => {
+    await withTempSettings({}, async (path) => {
+      const checkRes = await runMerge(path, [
+        "--check",
+        "--status-line",
+        "/repo/scripts/statusline.sh",
+      ]);
+      assertEquals(checkRes.code, 1);
+      assert(checkRes.stderr.includes("missing statusLine /repo/scripts/statusline.sh"));
+    });
+  },
+);
+
+Deno.test(
+  "--check with --status-line returns non-zero and mentions statusLine when the stored value differs",
+  async () => {
+    await withTempSettings(
+      { statusLine: { type: "command", command: "/old/path/statusline.sh" } },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--status-line",
+          "/repo/scripts/statusline.sh",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(checkRes.stderr.includes("statusLine differs from desired"));
+        assert(checkRes.stderr.includes("/repo/scripts/statusline.sh"));
       },
     );
   },

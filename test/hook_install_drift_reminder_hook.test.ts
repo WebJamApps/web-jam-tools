@@ -16,6 +16,8 @@ import {
   checkAgyUnregisteredHooks,
   checkDeadHookPaths,
   checkRemoteDiff,
+  checkStatusLineDeadPath,
+  checkStatusLineUnregistered,
   checkUnregisteredHooks,
   detectDrift,
   extractScriptPathFromCommand,
@@ -439,6 +441,209 @@ Deno.test("detectDrift reports hooks on origin/dev not registered in settings.js
       !msg.includes("Hooks on origin/dev not registered in agy hooks.json:"),
       msg,
     );
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+// --- Test 4b: statusLine drift (web-jam-tools#691) ---
+//
+// scripts/statusline.sh's installed location is NOT a hooks.<Event>[]
+// bucket entry (it lives under the top-level "statusLine" key), so it needs
+// its own dead-path/unregistered coverage rather than reusing
+// checkDeadHookPaths/checkUnregisteredHooks. The baseline sandbox
+// (createSandbox()) never creates scripts/statusline.sh or a statusLine key,
+// so the Test 1 "quiet" case is unaffected by any of this — both new checks
+// report nothing when the script doesn't exist on origin/dev at all.
+
+Deno.test("checkStatusLineDeadPath reports a dead statusLine path", async () => {
+  const sb = await createSandbox();
+  try {
+    const settings = JSON.parse(await Deno.readTextFile(sb.settingsPath));
+    settings.statusLine = {
+      type: "command",
+      command: "$HOME/.claude/hooks/statusline.sh",
+    };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(settings, null, 2));
+
+    // No statusline.sh symlink was ever created in sb.hooksDir, so the
+    // registered path is dead from the start.
+    const dead = checkStatusLineDeadPath(sb.settingsPath, sb.homeDir);
+    assertEquals(dead.length, 1);
+    assertEquals(dead[0].event, "statusLine");
+    assertEquals(dead[0].command, "$HOME/.claude/hooks/statusline.sh");
+
+    const result = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    assertEquals(result.statusLineDead.length, 1);
+
+    const msg = formatDriftMessage(result);
+    assert(msg.includes("Dead statusLine path in settings.json"), msg);
+    assert(msg.includes("$HOME/.claude/hooks/statusline.sh"), msg);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("checkStatusLineDeadPath reports nothing once the installed file exists", async () => {
+  const sb = await createSandbox();
+  try {
+    await Deno.writeTextFile(
+      path.join(sb.repoDir, "scripts/statusline.sh"),
+      "#!/bin/bash\necho ok\n",
+    );
+    await Deno.symlink(
+      path.join(sb.repoDir, "scripts/statusline.sh"),
+      path.join(sb.hooksDir, "statusline.sh"),
+    );
+
+    const settings = JSON.parse(await Deno.readTextFile(sb.settingsPath));
+    settings.statusLine = {
+      type: "command",
+      command: "$HOME/.claude/hooks/statusline.sh",
+    };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(settings, null, 2));
+
+    assertEquals(checkStatusLineDeadPath(sb.settingsPath, sb.homeDir), []);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("checkStatusLineUnregistered detects scripts/statusline.sh missing from settings.json, clears once registered", async () => {
+  const sb = await createSandbox();
+  try {
+    const runGit = async (args: string[]) => {
+      const cmd = new Deno.Command("git", {
+        args,
+        cwd: sb.repoDir,
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const out = await cmd.output();
+      if (!out.success) {
+        throw new Error(
+          `git ${args.join(" ")} failed: ${new TextDecoder().decode(out.stderr)}`,
+        );
+      }
+    };
+
+    // Nothing added to settings.json's statusLine key yet — but
+    // scripts/statusline.sh now exists on origin/dev.
+    await Deno.writeTextFile(
+      path.join(sb.repoDir, "scripts/statusline.sh"),
+      "#!/bin/bash\necho ok\n",
+    );
+    await runGit(["add", "."]);
+    await runGit(["commit", "-m", "Add statusline.sh"]);
+    await runGit(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+
+    const unreg = await checkStatusLineUnregistered(
+      sb.repoDir,
+      "origin/dev",
+      sb.settingsPath,
+    );
+    assertEquals(unreg, true);
+
+    const result = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    assertEquals(result.statusLineUnregistered, true);
+
+    const msg = formatDriftMessage(result);
+    assert(
+      msg.includes(
+        "scripts/statusline.sh exists on origin/dev but settings.json has no statusLine registered.",
+      ),
+      msg,
+    );
+
+    // Now register it — drift must clear.
+    const settings = JSON.parse(await Deno.readTextFile(sb.settingsPath));
+    settings.statusLine = {
+      type: "command",
+      command: "$HOME/.claude/hooks/statusline.sh",
+    };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(settings, null, 2));
+    await Deno.symlink(
+      path.join(sb.repoDir, "scripts/statusline.sh"),
+      path.join(sb.hooksDir, "statusline.sh"),
+    );
+
+    const clearedUnreg = await checkStatusLineUnregistered(
+      sb.repoDir,
+      "origin/dev",
+      sb.settingsPath,
+    );
+    assertEquals(clearedUnreg, false);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("checkStatusLineUnregistered reports unregistered when statusLine points at a different script", async () => {
+  const sb = await createSandbox();
+  try {
+    const runGit = async (args: string[]) => {
+      const cmd = new Deno.Command("git", {
+        args,
+        cwd: sb.repoDir,
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const out = await cmd.output();
+      if (!out.success) {
+        throw new Error(
+          `git ${args.join(" ")} failed: ${new TextDecoder().decode(out.stderr)}`,
+        );
+      }
+    };
+
+    // scripts/statusline.sh exists on origin/dev...
+    await Deno.writeTextFile(
+      path.join(sb.repoDir, "scripts/statusline.sh"),
+      "#!/bin/bash\necho ok\n",
+    );
+    await runGit(["add", "."]);
+    await runGit(["commit", "-m", "Add statusline.sh"]);
+    await runGit(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+
+    // ...but settings.json's statusLine is a non-empty command pointing at a
+    // COMPLETELY DIFFERENT script (a hand-pasted command, or a stale path to
+    // some other file) rather than our statusline.sh. Presence of a
+    // non-empty command must not be mistaken for OUR script being
+    // registered — only a matching basename counts.
+    const settings = JSON.parse(await Deno.readTextFile(sb.settingsPath));
+    settings.statusLine = {
+      type: "command",
+      command: "$HOME/.claude/hooks/some-other-script.sh",
+    };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(settings, null, 2));
+
+    const unreg = await checkStatusLineUnregistered(
+      sb.repoDir,
+      "origin/dev",
+      sb.settingsPath,
+    );
+    assertEquals(unreg, true);
+
+    const result = await detectDrift({
+      repoDir: sb.repoDir,
+      homeDir: sb.homeDir,
+      settingsPath: sb.settingsPath,
+      agyHooksPath: sb.agyHooksPath,
+      remoteRef: "origin/dev",
+    });
+    assertEquals(result.statusLineUnregistered, true);
   } finally {
     await sb.cleanup();
   }

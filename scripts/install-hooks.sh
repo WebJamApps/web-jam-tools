@@ -14,6 +14,13 @@
 #    settings.json is backed up to settings.json.bak-<date> immediately
 #    before any write, and only if a write is actually happening.
 #
+#    Also symlinks scripts/statusline.sh into the same hooks destination
+#    (alongside the *.sh hook symlinks, but not part of the hook-registration
+#    loop — it is not a hook) and idempotently merges that STABLE installed
+#    path into the "statusLine" key of ~/.claude/settings.json only — Claude
+#    Code ONLY, never agy's hooks.json, since agy has no status-line surface
+#    for this to install into (web-jam-tools#688, web-jam-tools#691).
+#
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
@@ -615,6 +622,25 @@ done
 
 [ -e "$HOOKS_SRC/agy-hook-shim.sh" ] || { echo "error: $HOOKS_SRC/agy-hook-shim.sh not found" >&2; exit 1; }
 
+# --- Status line (web-jam-tools#688, web-jam-tools#691) ---
+# Claude Code ONLY — agy has no status-line surface for this to install
+# into, so unlike a hook or a skill this is a single-surface change by
+# nature, not by omission. merge_status_line_args below is passed to the
+# $SETTINGS_PATH invocations exclusively; the $AGY_HOOKS_PATH invocations
+# never receive it and stay byte-identical to before this feature existed.
+#
+# The registered command is the STABLE installed path under $HOOKS_DEST
+# (same destination the *.sh hooks are symlinked into, honoring
+# --hooks-dir/CLAUDE_HOOKS_DIR), never $REPO_DIR — a raw working-tree path
+# breaks if the repo moves or a checked-out branch lacks the file
+# (web-jam-tools#691). The actual symlink is created below, alongside the
+# hook symlinks, but scripts/statusline.sh is NOT added to HOOKS_SRC/the
+# hook-registration loops — it is not a hook.
+[ -e "$REPO_DIR/scripts/statusline.sh" ] || { echo "error: $REPO_DIR/scripts/statusline.sh not found" >&2; exit 1; }
+STATUS_LINE_DEST="$HOOKS_DEST/statusline.sh"
+STATUS_LINE_COMMAND="$STATUS_LINE_DEST"
+merge_status_line_args=("$STATUS_LINE_COMMAND")
+
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432) ---
 #
 # agy ignores its own PreToolUse "matcher" JSON field entirely (finding 2),
@@ -688,7 +714,12 @@ if [ "$CHECK_MODE" = "1" ]; then
     done
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"; then
+  if [ ! -L "$STATUS_LINE_DEST" ] || [ "$(readlink -f "$STATUS_LINE_DEST")" != "$(readlink -f "$REPO_DIR/scripts/statusline.sh")" ]; then
+    echo "drift: status-line script is not linked at $STATUS_LINE_DEST" >&2
+    DRIFT=1
+  fi
+
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}"; then
     DRIFT=1
   fi
 
@@ -766,6 +797,25 @@ if [ -d "$HOOKS_DEST" ]; then
   done
 fi
 
+# --- Status-line script symlink (web-jam-tools#688, web-jam-tools#691) ---
+# scripts/statusline.sh is not a hook — it deliberately stays out of
+# HOOKS_SRC/the hook-registration loops above (PreToolUse/PostToolUse/
+# SessionStart/Stop never see it) — but it gets the same stable,
+# checkout-independent installed location under $HOOKS_DEST so the
+# "statusLine" command merged into settings.json below (STATUS_LINE_COMMAND)
+# survives the repo moving or a branch checkout lacking the file, the same
+# guarantee the *.sh hooks already have.
+if [ -L "$STATUS_LINE_DEST" ] && [ "$(readlink -f "$STATUS_LINE_DEST")" = "$(readlink -f "$REPO_DIR/scripts/statusline.sh")" ]; then
+  echo "statusline.sh: ok (already linked)"
+elif [ -e "$STATUS_LINE_DEST" ] || [ -L "$STATUS_LINE_DEST" ]; then
+  mv "$STATUS_LINE_DEST" "$STATUS_LINE_DEST.bak-$STAMP"
+  ln -s "$REPO_DIR/scripts/statusline.sh" "$STATUS_LINE_DEST"
+  echo "statusline.sh: linked (previous version backed up to statusline.sh.bak-$STAMP)"
+else
+  ln -s "$REPO_DIR/scripts/statusline.sh" "$STATUS_LINE_DEST"
+  echo "statusline.sh: linked (new)"
+fi
+
 # The merge logic itself lives in its own file (web-jam-tools#265) so it can
 # also be unit-tested in isolation against fixture JSON, independent of the
 # symlink step above (see test/install_hooks_merge.test.ts). This installer
@@ -773,7 +823,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 

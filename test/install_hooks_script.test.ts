@@ -31,6 +31,7 @@ const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
 const MERGE_SCRIPT = `${REPO_ROOT}scripts/merge-hooks-into-settings.ts`;
 const MERGE_AGENTS_MD_SCRIPT = `${REPO_ROOT}scripts/merge-agents-md-pointer.ts`;
+const STATUS_LINE_SCRIPT = `${REPO_ROOT}scripts/statusline.sh`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
 
 interface RunResult {
@@ -106,7 +107,11 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     assertEquals(res.code, 0, res.stdout + res.stderr);
 
     const linked = [...Deno.readDirSync(hooksDir)].map((e) => e.name).sort();
-    assertEquals(linked, shHookNames());
+    // web-jam-tools#691: statusline.sh is symlinked into the same hooks
+    // destination as the *.sh hooks (so it gets a stable installed path),
+    // but it is NOT a hook and must never appear in shHookNames() (which
+    // only lists hooks/*.sh) or be picked up by the hook-registration loops.
+    assertEquals(linked, [...shHookNames(), "statusline.sh"].sort());
     for (const name of linked) {
       const info = await Deno.lstat(`${hooksDir}/${name}`);
       assert(info.isSymlink, `${name} should be a symlink`);
@@ -122,11 +127,26 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       "expected the git push --delete deny pattern to be present",
     );
 
+    // web-jam-tools#691: the registered statusLine command is the STABLE
+    // installed path under the (sandboxed) hooks destination, never a
+    // $REPO_DIR-relative working-tree path — and the file actually exists
+    // there after the run.
+    assertEquals(settings.statusLine, {
+      type: "command",
+      command: `${hooksDir}/statusline.sh`,
+    });
+    assert(
+      await pathExists(`${hooksDir}/statusline.sh`),
+      "expected statusline.sh to be installed at the stable hooksDir path",
+    );
+
     // web-jam-tools#345: agy hooks.json is also created and populated
     const agyHooksPath = `${settingsDir}/hooks.json`;
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
     assert(agyHooks.hooks.PreToolUse.length > 0, "expected PreToolUse in agy hooks.json");
     assert(agyHooks.hooks.PostToolUse.length > 0, "expected PostToolUse in agy hooks.json");
+    // web-jam-tools#691: agy never gets a statusLine surface.
+    assertEquals(agyHooks.statusLine, undefined);
   } finally {
     await Deno.remove(hooksDir, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
@@ -285,7 +305,9 @@ Deno.test("default invocation (no --hooks-dir) still targets $HOME/.claude/hooks
     const hooksDir = `${home}/.claude/hooks`;
     assert(await pathExists(hooksDir), "expected hooks dir under $HOME/.claude/hooks");
     const linked = [...Deno.readDirSync(hooksDir)].map((e) => e.name).sort();
-    assertEquals(linked, shHookNames());
+    // web-jam-tools#691: statusline.sh lands alongside the hooks at the
+    // default destination too, but is not itself a hook.
+    assertEquals(linked, [...shHookNames(), "statusline.sh"].sort());
   } finally {
     await Deno.remove(home, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
@@ -312,6 +334,9 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.chmod(`${mainRepo}/scripts/install-hooks.sh`, 0o755);
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
   await Deno.copyFile(MERGE_AGENTS_MD_SCRIPT, `${mainRepo}/scripts/merge-agents-md-pointer.ts`);
+  // install-hooks.sh requires scripts/statusline.sh to exist (web-jam-tools#688).
+  await Deno.copyFile(STATUS_LINE_SCRIPT, `${mainRepo}/scripts/statusline.sh`);
+  await Deno.chmod(`${mainRepo}/scripts/statusline.sh`, 0o755);
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {
