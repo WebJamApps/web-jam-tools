@@ -15,15 +15,15 @@ export async function checkDrift(
   token: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<ProjectSettingStatus[]> {
-  const results: ProjectSettingStatus[] = [];
-  for (const project of projects) {
-    const settings = await fetchProjectSettings(project, token, fetchFn);
-    results.push({
-      project,
-      autocancel_builds: settings.autocancel_builds,
-    });
-  }
-  return results;
+  return await Promise.all(
+    projects.map(async (project) => {
+      const settings = await fetchProjectSettings(project, token, fetchFn);
+      return {
+        project,
+        autocancel_builds: settings.autocancel_builds,
+      };
+    }),
+  );
 }
 
 /**
@@ -35,28 +35,27 @@ export async function applySettings(
   token: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<SyncResult[]> {
-  const results: SyncResult[] = [];
-  for (const project of projects) {
-    const current = await fetchProjectSettings(project, token, fetchFn);
-    if (current.autocancel_builds) {
-      results.push({
-        project,
-        updated: false,
-        autocancel_builds: true,
-      });
-    } else {
+  return await Promise.all(
+    projects.map(async (project) => {
+      const current = await fetchProjectSettings(project, token, fetchFn);
+      if (current.autocancel_builds) {
+        return {
+          project,
+          updated: false,
+          autocancel_builds: true,
+        };
+      }
       await updateProjectSettings(
         project,
         { advanced: { autocancel_builds: true } },
         token,
         fetchFn,
       );
-      results.push({
+      return {
         project,
         updated: true,
         autocancel_builds: true,
-      });
-    }
-  }
-  return results;
+      };
+    }),
+  );
 }
