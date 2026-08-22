@@ -209,7 +209,20 @@ jobs:
             rm -rf "$temp_repo"
       - run:
           name: Git secret scan (Gitleaks)
-          command: deno task gitleaks
+          command: |
+            # 1. Working-tree scan (current checkout)
+            deno task gitleaks
+
+            # 2. Bounded git history scan on PR branches (web-jam-tools#696)
+            # Scans commits from merge-base with origin/dev up to HEAD.
+            # Skipped on dev and main (where history is already audited).
+            BRANCH="${CIRCLE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+            if [ "$BRANCH" != "dev" ] && [ "$BRANCH" != "main" ]; then
+              git fetch --quiet origin dev
+              MERGE_BASE="$(git merge-base origin/dev HEAD)"
+              echo "[gitleaks] Scanning PR branch git history ($MERGE_BASE..HEAD)..."
+              bash scripts/gitleaks.sh --log-opts="${MERGE_BASE}..HEAD"
+            fi
       - run:
           name: Unit tests + coverage (>=90% all-files line, incl. skills/ validation)
           command: deno task coverage:check
