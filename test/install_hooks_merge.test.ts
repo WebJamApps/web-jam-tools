@@ -73,6 +73,7 @@ interface PermissionsJson {
   allow?: string[];
   ask?: string[];
   deny?: string[];
+  defaultMode?: string;
 }
 interface StatusLineJson {
   type: string;
@@ -1000,6 +1001,130 @@ Deno.test(
         assertEquals(checkRes.code, 1);
         assert(checkRes.stderr.includes("statusLine differs from desired"));
         assert(checkRes.stderr.includes("/repo/scripts/statusline.sh"));
+      },
+    );
+  },
+);
+
+// --- --default-mode (web-jam-tools#705) ---
+
+Deno.test("--default-mode adds permissions.defaultMode when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, ["--default-mode", "acceptEdits"]);
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("added permissions.defaultMode acceptEdits"));
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.defaultMode, "acceptEdits");
+  });
+});
+
+Deno.test("a second --default-mode run with the same value is a no-op", async () => {
+  await withTempSettings({}, async (path) => {
+    const args = ["--default-mode", "acceptEdits"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.defaultMode, "acceptEdits");
+
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const backups = [...Deno.readDirSync(dir)].filter((e) => e.name.includes(".bak-"));
+    // One backup from the first (writing) run only; the no-op second run
+    // must not write (and therefore must not back up) again.
+    assertEquals(backups.length, 1);
+  });
+});
+
+Deno.test("--default-mode with a different value corrects the existing one", async () => {
+  await withTempSettings(
+    { permissions: { defaultMode: "auto" } },
+    async (path) => {
+      const res = await runMerge(path, ["--default-mode", "acceptEdits"]);
+      assertEquals(res.code, 0, res.stderr);
+      assert(res.stdout.includes("updated permissions.defaultMode to acceptEdits"));
+
+      const data = await readJson(path);
+      assertEquals(data.permissions?.defaultMode, "acceptEdits");
+    },
+  );
+});
+
+Deno.test(
+  "existing unrelated settings (permissions.allow/deny, hook events) survive a --default-mode-only merge untouched",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: { allow: ["Bash(ls:*)"], deny: ["Bash(curl *)"] },
+        hooks: {
+          Stop: [
+            { hooks: [{ type: "command", command: "/hand/added/stop.sh" }] },
+          ],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, ["--default-mode", "acceptEdits"]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
+        assertEquals(data.permissions?.deny, ["Bash(curl *)"]);
+        assertEquals(data.hooks?.Stop?.[0]?.hooks?.[0]?.command, "/hand/added/stop.sh");
+        assertEquals(data.permissions?.defaultMode, "acceptEdits");
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check with --default-mode returns 0 when the stored value already matches",
+  async () => {
+    await withTempSettings(undefined, async (path) => {
+      const args = ["--default-mode", "acceptEdits"];
+      await runMerge(path, args);
+      const checkRes = await runMerge(path, ["--check", ...args]);
+      assertEquals(checkRes.code, 0, checkRes.stderr);
+      assert(checkRes.stdout.includes("already up to date (no-op)"));
+    });
+  },
+);
+
+Deno.test(
+  "--check with --default-mode returns non-zero and mentions permissions.defaultMode when the stored value is absent",
+  async () => {
+    await withTempSettings({}, async (path) => {
+      const checkRes = await runMerge(path, [
+        "--check",
+        "--default-mode",
+        "acceptEdits",
+      ]);
+      assertEquals(checkRes.code, 1);
+      assert(checkRes.stderr.includes("missing permissions.defaultMode acceptEdits"));
+    });
+  },
+);
+
+Deno.test(
+  "--check with --default-mode returns non-zero and mentions permissions.defaultMode when the stored value differs",
+  async () => {
+    await withTempSettings(
+      { permissions: { defaultMode: "auto" } },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--default-mode",
+          "acceptEdits",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(checkRes.stderr.includes("permissions.defaultMode differs from desired"));
+        assert(checkRes.stderr.includes("acceptEdits"));
+        assert(checkRes.stderr.includes("has auto"));
       },
     );
   },
