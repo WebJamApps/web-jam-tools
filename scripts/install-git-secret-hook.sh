@@ -137,33 +137,29 @@ cat << 'HOOK_EOF' > "$HOOK_PATH"
 set -euo pipefail
 
 ZERO_OID="0000000000000000000000000000000000000000"
-SCAN_REQUIRED=0
-LOG_OPTS=""
+REF_RANGES=()
 
 if [ -t 0 ]; then
-  SCAN_REQUIRED=1
-  LOG_OPTS="--log-opts=@{u}..HEAD"
+  REF_RANGES+=("@{u}..HEAD")
 else
   while read -r local_ref local_oid remote_ref remote_oid; do
     if [ "$local_oid" = "$ZERO_OID" ] || [ -z "$local_oid" ]; then
       continue
     fi
     if [ "$remote_oid" = "$ZERO_OID" ] || [ -z "$remote_oid" ]; then
-      SCAN_REQUIRED=1
       REMOTE_COUNT=$(git for-each-ref --format='%(refname)' refs/remotes/ 2>/dev/null | wc -l || echo 0)
       if [ "$REMOTE_COUNT" -gt 0 ]; then
-        LOG_OPTS="--log-opts=$local_oid --not --remotes"
+        REF_RANGES+=("$local_oid --not --remotes")
       else
-        LOG_OPTS="--log-opts=$local_oid"
+        REF_RANGES+=("$local_oid")
       fi
     else
-      SCAN_REQUIRED=1
-      LOG_OPTS="--log-opts=$remote_oid..$local_oid"
+      REF_RANGES+=("$remote_oid..$local_oid")
     fi
   done
 fi
 
-if [ "$SCAN_REQUIRED" -eq 1 ]; then
+if [ "${#REF_RANGES[@]}" -gt 0 ]; then
   GITLEAKS="$(command -v gitleaks || echo "$HOME/.local/bin/gitleaks")"
   if [ ! -x "$GITLEAKS" ] && ! command -v gitleaks >/dev/null 2>&1; then
     echo "warning: gitleaks binary not found on PATH; skipping pre-push secret scan" >&2
@@ -183,30 +179,38 @@ if [ "$SCAN_REQUIRED" -eq 1 ]; then
   REPORT_FILE="$(mktemp /tmp/gitleaks-report-XXXXXX.json)"
   trap 'rm -f "$REPORT_FILE"' EXIT
 
-  CONFIG_ARG=""
+  CONFIG_ARGS=()
   if [ -f "$CONFIG_PATH" ]; then
-    CONFIG_ARG="--config=$CONFIG_PATH"
+    CONFIG_ARGS=("--config=$CONFIG_PATH")
   fi
 
-  # Run gitleaks detect with redaction
-  if ! "$GITLEAKS" detect $CONFIG_ARG --no-banner --redact=100 -f json -r "$REPORT_FILE" $LOG_OPTS >/dev/null 2>&1; then
-    echo "🛑 PUSH REFUSED: credential-shaped literal detected in commit(s) being pushed." >&2
-    echo "Findings (credential values redacted):" >&2
-    if [ -f "$REPORT_FILE" ] && [ -s "$REPORT_FILE" ]; then
-      if command -v jq >/dev/null 2>&1; then
-        jq -r '.[] | "  - File: \(.File) (line \(.StartLine)) -> Rule: \(.RuleID) (\(.Description))"' "$REPORT_FILE" >&2 2>/dev/null || true
-      else
-        grep -o '"File":"[^"]*"' "$REPORT_FILE" | while read -r f; do
-          echo "  - $f" >&2
-        done
-      fi
+  # Run gitleaks detect with redaction across all pushed ref ranges
+  for log_opt in "${REF_RANGES[@]}"; do
+    CMD=("$GITLEAKS" "detect")
+    if [ "${#CONFIG_ARGS[@]}" -gt 0 ]; then
+      CMD+=("${CONFIG_ARGS[@]}")
     fi
-    echo "" >&2
-    echo "Remove the credential literal from your commit before pushing." >&2
-    echo "For legitimate test fixtures, use the fixture pragma '// webjam-fixture-ok'." >&2
-    echo "(rule: web-jam-tools#658 / JaMmusic#1315)" >&2
-    exit 1
-  fi
+    CMD+=("--no-banner" "--redact=100" "-f" "json" "-r" "$REPORT_FILE" "--log-opts=$log_opt")
+
+    if ! "${CMD[@]}" >/dev/null 2>&1; then
+      echo "🛑 PUSH REFUSED: credential-shaped literal detected in commit(s) being pushed." >&2
+      echo "Findings (credential values redacted):" >&2
+      if [ -f "$REPORT_FILE" ] && [ -s "$REPORT_FILE" ]; then
+        if command -v jq >/dev/null 2>&1; then
+          jq -r '.[] | "  - File: \(.File) (line \(.StartLine)) -> Rule: \(.RuleID) (\(.Description))"' "$REPORT_FILE" >&2 2>/dev/null || true
+        else
+          grep -o '"File":"[^"]*"' "$REPORT_FILE" | while read -r f; do
+            echo "  - $f" >&2
+          done
+        fi
+      fi
+      echo "" >&2
+      echo "Remove the credential literal from your commit before pushing." >&2
+      echo "For legitimate test fixtures, use the fixture pragma '// webjam-fixture-ok'." >&2
+      echo "(rule: web-jam-tools#658 / JaMmusic#1315)" >&2
+      exit 1
+    fi
+  done
 fi
 HOOK_EOF
 

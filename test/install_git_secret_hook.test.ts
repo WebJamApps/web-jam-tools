@@ -282,3 +282,56 @@ Deno.test("scripts/gitleaks.sh executes cleanly against repository", async () =>
   const combined = `${res.stdout}\n${res.stderr}`;
   assertStringIncludes(combined, "no leaks found");
 });
+
+Deno.test("pre-push hook scans all refs in multi-ref push and catches leak in earlier ref", async () => {
+  const remoteDir = await Deno.makeTempDir({ prefix: "multi-ref-remote-" });
+  const localDir = await Deno.makeTempDir({ prefix: "multi-ref-local-" });
+
+  try {
+    await runCmd(["git", "init", "--bare", remoteDir]);
+    await runCmd(["git", "clone", remoteDir, localDir]);
+    await runCmd(["git", "config", "user.email", "tester@webjam.com"], localDir);
+    await runCmd(["git", "config", "user.name", "Tester"], localDir);
+
+    await Deno.writeTextFile(path.join(localDir, "README.md"), "# Init\n");
+    await runCmd(["git", "add", "README.md"], localDir);
+    await runCmd(["git", "commit", "-m", "init"], localDir);
+    await runCmd(["git", "push", "origin", "HEAD:main"], localDir);
+
+    // Install hook
+    await runCmd(["bash", SCRIPT_PATH, "--repo", localDir]);
+
+    // Branch 1: has secret
+    await runCmd(["git", "checkout", "-b", "feat-leak"], localDir);
+    const fakeKey = `AIzaSy${"MULTI_REF_SECRET_TEST_PROBE_DUMMY_X"}`;
+    await Deno.writeTextFile(path.join(localDir, "secret.ts"), `const k = "${fakeKey}";\n`);
+    await runCmd(["git", "add", "secret.ts"], localDir);
+    await runCmd(["git", "commit", "-m", "add secret"], localDir);
+    const leakOid = (await runCmd(["git", "rev-parse", "HEAD"], localDir)).stdout.trim();
+
+    // Branch 2: clean
+    await runCmd(["git", "checkout", "main"], localDir);
+    await runCmd(["git", "checkout", "-b", "feat-clean"], localDir);
+    await Deno.writeTextFile(path.join(localDir, "clean.ts"), "export const ok = true;\n");
+    await runCmd(["git", "add", "clean.ts"], localDir);
+    await runCmd(["git", "commit", "-m", "add clean"], localDir);
+    const cleanOid = (await runCmd(["git", "rev-parse", "HEAD"], localDir)).stdout.trim();
+
+    const remoteMainOid = (await runCmd(["git", "rev-parse", "origin/main"], localDir)).stdout
+      .trim();
+    const hookPath = path.join(localDir, ".git", "hooks", "pre-push");
+
+    // Feed stdin with 2 refs: first ref has leak, second is clean
+    const stdinContent = `refs/heads/feat-leak ${leakOid} refs/heads/feat-leak ${remoteMainOid}\n` +
+      `refs/heads/feat-clean ${cleanOid} refs/heads/feat-clean ${remoteMainOid}\n`;
+
+    const res = await runCmd(["bash", hookPath], localDir, stdinContent);
+    assertEquals(res.code, 1, "Hook should have refused push due to leak in first ref");
+    assertStringIncludes(res.stderr, "PUSH REFUSED");
+    assertStringIncludes(res.stderr, "google-api-key");
+    assert(!res.stderr.includes(fakeKey), "Secret literal was leaked in stderr");
+  } finally {
+    await Deno.remove(remoteDir, { recursive: true }).catch(() => {});
+    await Deno.remove(localDir, { recursive: true }).catch(() => {});
+  }
+});
