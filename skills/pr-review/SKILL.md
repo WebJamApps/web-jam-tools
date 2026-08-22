@@ -153,6 +153,22 @@ Review the PR diff, description, checks, and mergeability against these mandator
      Actionable Suggestion — whether the PR is currently a draft or was created as a draft and
      later marked ready.**
 
+10. **Issue Body & PR Body Prose (Never a Must Fix)**:
+    - Prose in a linked issue's body — including its Non-goals section, its acceptance
+      criteria wording, or its "Files changed" list — and prose in the PR's own description —
+      including its Summary and its "How to test locally" / test-plan narration — is **never**
+      a Must Fix item. Not when it is stale, not when it is incomplete, not when it
+      contradicts what the PR actually built, and not when it describes a superseded design.
+    - Reason: Must Fix means *this cannot merge as it stands* — it is reserved for a failing
+      CircleCI check, a failing Snyk check, a merge conflict with the base branch, and defects
+      in the code being merged. A description that has drifted from its diff does not stop the
+      code from being correct and does not stop the merge.
+    - Such a drift may still be raised, but only under `### 🟡 Actionable Feedback & Suggestions`.
+    - This is a deliberate carve-out from "A found defect is fixed before merge — never
+      deferred" below: that section's "if it is wrong, it is Must Fix or it is not a finding
+      at all" binary governs defects in the artifact being merged (the code/diff itself);
+      issue-body and PR-body description prose is outside that binary's scope.
+
 ### Step 3: Post Review Feedback
 
 1. Synthesize review findings into a structured review comment using severity icons so merge blockers and check statuses are immediately recognizable without reading full prose.
@@ -203,7 +219,7 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
 This binds the reviewing model AND the session relaying the review to Josh:
 
-- **Never recommend merging a PR with a known unfixed defect in it**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all.
+- **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged — it does not apply to issue-body or PR-body description prose, which is never a Must Fix and is instead handled under Step 2's item 10 ("Issue Body & PR Body Prose (Never a Must Fix)").
 - **Never propose a follow-up issue as the answer to a defect found in the PR under review.** A new issue is where NEW work goes, not where this PR's known problems are parked.
 - **A defect in the artifact being merged is fixed in THAT PR**, not in a later one — including when the artifact is a skill, a doc, or a rule rather than code.
 - Size is not a reason to defer. "One line" and "no behavioural effect" are arguments for fixing it now, because it is cheap, not for postponing it.
