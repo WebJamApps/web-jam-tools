@@ -57,13 +57,20 @@ jobs:
               "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
               -o /tmp/shellcheck.tar.xz
             tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-            sudo mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
-            rm -rf /tmp/shellcheck.tar.xz "/tmp/shellcheck-${SHELLCHECK_VERSION}"
+            # gitleaks (pinned)
+            GITLEAKS_VERSION="v8.24.0"
+            curl -fsSL \
+              "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" \
+              -o /tmp/gitleaks.tar.gz
+            tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+            sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+            sudo chmod +x /usr/local/bin/gitleaks
+            rm -f /tmp/gitleaks.tar.gz
       - run:
           name: Tool versions
           command: |
             deno --version && node -v && npm -v && trivy --version && semgrep --version
-            shellcheck --version
+            shellcheck --version && gitleaks version
       - restore_cache:
           keys:
             - deno-deps-v1-{{ checksum "deno.json" }}-{{ checksum "deno.lock" }}
@@ -192,6 +199,17 @@ jobs:
             temp_settings="$(mktemp -d)/settings.json"
             bash scripts/install-hooks.sh --hooks-dir "$temp_hooks" --settings-path "$temp_settings"
             bash scripts/install-hooks.sh --hooks-dir "$temp_hooks" --settings-path "$temp_settings" --check
+      - run:
+          name: Git secret hook drift check (--check)
+          command: |
+            temp_repo="$(mktemp -d)"
+            git init "$temp_repo"
+            bash scripts/install-git-secret-hook.sh --repo "$temp_repo"
+            bash scripts/install-git-secret-hook.sh --repo "$temp_repo" --check
+            rm -rf "$temp_repo"
+      - run:
+          name: Git secret scan (Gitleaks)
+          command: deno task gitleaks
       - run:
           name: Unit tests + coverage (>=90% all-files line, incl. skills/ validation)
           command: deno task coverage:check

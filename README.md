@@ -93,6 +93,26 @@ this machine — and says nothing when it hasn't.
   back to an mtime+size marker instead of erroring. A native
   PowerShell/Windows port is out of scope for v1.
 
+## Push-time secret scanning (Gitleaks)
+
+`scripts/install-git-secret-hook.sh` installs a push-time secret guard and shared `.gitleaks.toml` configuration across WebJamApps repositories (web-jam-tools#658):
+
+```bash
+# Install in the current repository
+bash scripts/install-git-secret-hook.sh
+
+# Install into a target repository
+bash scripts/install-git-secret-hook.sh --repo ../JaMmusic
+
+# Check for drift
+bash scripts/install-git-secret-hook.sh --check
+```
+
+- Node repos are wired via `.husky/pre-push`.
+- Deno repos are wired via `.git/hooks/pre-push`.
+- When a credential literal is detected in commits being pushed, the push is refused with non-zero exit, naming the file and rule ID while redacting the secret value.
+- To allow intentional test fixtures, include `// webjam-fixture-ok` or locate the test under `test/`.
+
 ## Checks (CI gate)
 
 Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`). It
@@ -110,6 +130,7 @@ deno task fmt:check   # formatting (use `deno task fmt` to auto-fix)
 deno task test          # unit tests
 deno task coverage      # unit tests + coverage report (lcov + HTML in cov_profile/)
 deno task coverage:check # unit tests + fail if all-files line coverage < 80% (CI gate)
+deno task gitleaks      # Gitleaks: repository secret scan
 deno task audit         # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
 deno task sast        # Semgrep: static analysis of src/
 ```

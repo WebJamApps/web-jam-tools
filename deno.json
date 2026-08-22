@@ -1,9 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.30.64",
+  "version": "1.30.65",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
+    "install-git-secret-hook": "bash scripts/install-git-secret-hook.sh",
+    "gitleaks": "bash scripts/gitleaks.sh",
     "install-skills": "deno run --allow-env --allow-run --allow-read --allow-write scripts/install-skills.ts",
     "flash-issues": "deno run -A src/flash-issues/cli.ts",
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
