@@ -56,6 +56,20 @@ default workspace root (`/home/joshua/WebJamApps`).
 > (web-jam-tools#257) — without it, an agent working inside the new
 > worktree can't re-seed these files by hand if it ever needs to.
 
+### `circleci-settings.ts`
+
+Manages the CircleCI project settings standard (`autocancel_builds: true`) across all 8 active WebJamApps projects (web-jam-tools#697). Supports drift checking via `--check` and idempotent application.
+
+```bash
+# Check for configuration drift across all 8 projects
+deno task circleci-settings -- --check
+
+# Enforce the standard across all 8 projects
+deno task circleci-settings
+```
+
+See [docs/circleci-project-settings.md](circleci-project-settings.md) for full documentation.
+
 ### `install-git-secret-hook.sh`
 
 Installs the push-time secret scanner (`gitleaks` pre-push hook) and shared `.gitleaks.toml` configuration into a target WebJamApps repository (web-jam-tools#658).
