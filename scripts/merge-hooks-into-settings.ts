@@ -21,6 +21,7 @@ export function merge(settingsPath: string, args: string[]): number {
   const postToolUsePairs: Array<[string, string]> = [];
   let denyPatterns: string[] = [];
   let askPatterns: string[] = [];
+  let allowPatterns: string[] = [];
   let statusLineArgs: string[] = [];
   let defaultModeArgs: string[] = [];
 
@@ -65,6 +66,7 @@ export function merge(settingsPath: string, args: string[]): number {
         "--post-tool-use",
         "--deny",
         "--ask",
+        "--allow",
         "--status-line",
         "--default-mode",
       ],
@@ -86,6 +88,7 @@ export function merge(settingsPath: string, args: string[]): number {
     }
     denyPatterns = sections["--deny"] || [];
     askPatterns = sections["--ask"] || [];
+    allowPatterns = sections["--allow"] || [];
     statusLineArgs = sections["--status-line"] || [];
     defaultModeArgs = sections["--default-mode"] || [];
   }
@@ -306,7 +309,7 @@ export function merge(settingsPath: string, args: string[]): number {
     postToolUsePairs,
   );
 
-  function mergePermissionsList(sectionName: "deny" | "ask", patterns: string[]): string[] {
+  function mergePermissionsList(sectionName: "deny" | "ask" | "allow", patterns: string[]): string[] {
     if (patterns.length === 0) return [];
     if (!data.permissions || typeof data.permissions !== "object") {
       data.permissions = {};
@@ -329,6 +332,12 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const addedDeny = mergePermissionsList("deny", denyPatterns);
   const addedAsk = mergePermissionsList("ask", askPatterns);
+  // permissions.allow (web-jam-tools#685, §3a) — purely additive, same shape
+  // as deny/ask, but with no cross-listing check against the other two: an
+  // allow pattern also present in permissions.deny is not a conflict to
+  // resolve here (deny always wins over a matching allow), so unlike
+  // deny/ask there is nothing to reconcile between allow and its siblings.
+  const addedAllow = mergePermissionsList("allow", allowPatterns);
 
   // A pattern the installer owns via one versioned array (DENY_RULES /
   // ASK_RULES) must not remain in the OTHER permissions list — a stale copy
@@ -460,6 +469,7 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedPostToolUseRetired.length > 0 ||
     addedDeny.length > 0 ||
     addedAsk.length > 0 ||
+    addedAllow.length > 0 ||
     denyOwnedInAsk.length > 0 ||
     askOwnedInDeny.length > 0 ||
     statusLineAdded ||
@@ -516,6 +526,9 @@ export function merge(settingsPath: string, args: string[]): number {
       for (const pattern of addedAsk) {
         console.error(`${targetFilename}: missing permissions.ask rule ${pattern}`);
       }
+      for (const pattern of addedAllow) {
+        console.error(`${targetFilename}: missing permissions.allow rule ${pattern}`);
+      }
       for (const pattern of denyOwnedInAsk) {
         console.error(
           `${targetFilename}: permissions.ask rule ${pattern} is also in permissions.deny (stale copy)`,
@@ -549,7 +562,7 @@ export function merge(settingsPath: string, args: string[]): number {
       return 1;
     }
     console.log(
-      `${targetFilename}: SessionStart, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask already up to date (no-op)`,
+      `${targetFilename}: SessionStart, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)`,
     );
     return 0;
   }
@@ -557,7 +570,7 @@ export function merge(settingsPath: string, args: string[]): number {
   if (!hasDrift) {
     console.log(
       `${targetFilename}: SessionStart, Stop, PreToolUse, PostToolUse hooks ` +
-        "and permissions.deny / permissions.ask already up to date (no-op)",
+        "and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)",
     );
     return 0;
   }
@@ -626,6 +639,9 @@ export function merge(settingsPath: string, args: string[]): number {
   }
   for (const pattern of addedAsk) {
     console.log(`${targetFilename}: added permissions.ask rule ${pattern}`);
+  }
+  for (const pattern of addedAllow) {
+    console.log(`${targetFilename}: added permissions.allow rule ${pattern}`);
   }
   for (const pattern of denyOwnedInAsk) {
     console.log(

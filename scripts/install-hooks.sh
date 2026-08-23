@@ -156,6 +156,7 @@ PRE_TOOL_USE_HOOKS=(
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
   "Write|Edit|NotebookEdit::opus-delegation-gate.sh"
   "mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
+  "Bash::block-raw-gh-write.sh"
 )
 
 # PostToolUse hooks, same "<matcher>::<script>" shape (web-jam-tools#272).
@@ -562,6 +563,24 @@ ASK_RULES=(
   'mcp__claude_ai_GitHub_MCP__run_secret_scanning'
 )
 
+# permissions.allow patterns this installer keeps registered in settings.json
+# (web-jam-tools#685, §3a of
+# ~/Dropbox/web-jam-llms/Token_Savings/pr-review-self-posting-design-2026-08-22.md).
+# Defence in depth on the Claude Code surface ONLY — a second layer nothing
+# depends on, since hooks/block-raw-gh-write.sh is the primary enforcement on
+# BOTH surfaces (decision 8). Names exactly the four guarded `deno task`
+# capabilities this repo now gates the raw gh verbs behind, so approving one
+# of them does not also pre-approve unrelated `deno task`/`npm run` scripts —
+# unlike the blanket `Bash(deno task *)`/`Bash(npm run *)` wildcards these
+# narrow rules are meant to make removable (scripts/prune-local-permission-allows.sh).
+# agy has no allow list to narrow and needs none (§3b) — never mirrored there.
+ALLOW_RULES=(
+  'Bash(deno task post-pr-review *)'
+  'Bash(deno task post-pr-comment *)'
+  'Bash(deno task post-issue-comment *)'
+  'Bash(deno task edit-issue *)'
+)
+
 CHECK_MODE=0
 
 while [ $# -gt 0 ]; do
@@ -757,6 +776,7 @@ done
 
 merge_deny_args=("${DENY_RULES[@]}")
 merge_ask_args=("${ASK_RULES[@]}")
+merge_allow_args=("${ALLOW_RULES[@]}")
 
 if [ "$CHECK_MODE" = "1" ]; then
   DRIFT=0
@@ -788,7 +808,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
     DRIFT=1
   fi
 
@@ -892,7 +912,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 
