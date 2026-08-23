@@ -239,7 +239,7 @@ When `/design-issue` resolves an existing issue into paired implementation and J
 1. **Convert the target designed issue into native type `Epic`** (via GraphQL `updateIssue` with the repo's `Epic` `issueTypeId`).
 2. **File the executable coding work as a child `Task` sub-issue** attached under that Epic.
 3. **File the paired `Josh` manual verification step as a child `Task` sub-issue** attached under that same Epic (natively linked via `blocked_by` dependency to the coding child, without the `Blocked` label).
-4. **Author the parent Epic body with the sub-issue list and closing criteria** ("Closes when all sub-issues close").
+4. **Author the parent Epic body with `## What this builds`, milestone, design document pointer, and `## Acceptance criteria` ("Closes when all child sub-issues close")** without duplicating a manual markdown list or checkboxes of sub-issues (GitHub natively renders and tracks sub-issues).
 
 ---
 
