@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.30.83",
+  "version": "1.30.84",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "circleci-settings": "deno run --allow-net --allow-env scripts/circleci-settings.ts",
@@ -9,6 +9,9 @@
     "gitleaks": "bash scripts/gitleaks.sh",
     "install-skills": "deno run --allow-env --allow-run --allow-read --allow-write scripts/install-skills.ts",
     "flash-issues": "deno run -A src/flash-issues/cli.ts",
+    "design:gate1": "deno run -A src/design-issue/cli.ts",
+    "render_design_doc": "deno run --allow-read --allow-write scripts/render_design_doc.ts",
+    "write_issue_approval_token": "deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts",
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "issue:create": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "book-gig": "deno run --allow-all src/book-gig/cli.ts",
