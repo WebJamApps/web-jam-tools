@@ -169,61 +169,110 @@ Deno.test("an unterminated quote fails CLOSED (blocked)", async () => {
   assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
 });
 
-Deno.test("when evaluator fails, block message includes evaluator's stderr with error details", async () => {
-  // Temporarily break deno.json to force the evaluator to fail with an error message.
+// --- web-jam-tools#714: repo deno.json parse failures must NOT deadlock this guard ---
+//
+// Every PR bumps the `version` line in deno.json, so a rebase conflict on
+// exactly that line is routine, not an edge case. Before the fix, this
+// hook's own `deno run` resolved the nearest deno.json from the working
+// directory; when that file held conflict markers (or any unparseable
+// JSON), deno exited before running the lib at all, the guard's result was
+// empty, and it failed CLOSED — blocking every Bash call, including the
+// shell commands that are the only way to resolve the conflict. The fix
+// passes `--no-config` so this hook's own deno invocation never depends on
+// the repo's deno.json.
+//
+// This test replaces the old "when evaluator fails ... " test above, which
+// asserted the OLD (deadlocking) behavior for exactly this failure mode —
+// that assertion is now wrong on purpose: a repo-config parse error must no
+// longer be fatal to this guard.
+Deno.test("web-jam-tools#714: deno.json holding conflict markers does not deadlock the guard — an ordinary command still evaluates and passes through", async () => {
   const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
-  const brokenDenoJsonPath = denoJsonPath + ".broken-test-backup";
+  const backupPath = denoJsonPath + ".t714-backup";
 
   try {
-    // Backup the original deno.json
-    await Deno.rename(denoJsonPath, brokenDenoJsonPath);
+    await Deno.copyFile(denoJsonPath, backupPath);
+    // Simulate a rebase conflict landing on the version line — the exact
+    // shape described in the issue's "How to test locally" repro.
+    await Deno.writeTextFile(denoJsonPath, "<<<<<<< HEAD\n", { append: true });
 
-    // Write a broken deno.json that will cause deno to fail with a clear error
-    await Deno.writeTextFile(
-      denoJsonPath,
-      "{ invalid json syntax here }",
-    );
-
-    // Run the hook — the deno run should fail and stderr should be captured
     const res = await runHook({ command: "git status" });
 
-    // Should fail closed
-    assertEquals(res.code, 2);
+    // An ordinary, non-irreversible command must pass through cleanly —
+    // NOT be refused with "guard could not evaluate the command".
     assertEquals(
-      res.stderr.includes("BLOCKED (irreversible operation guard)"),
-      true,
+      res.code,
+      0,
+      `expected the guard to still evaluate with a broken deno.json, got exit ${res.code}, stderr: ${res.stderr}`,
     );
-    // Should include both the generic failure message AND stderr from deno
     assertEquals(
       res.stderr.includes("guard could not evaluate"),
-      true,
-      `Expected 'guard could not evaluate' in stderr, got: ${res.stderr}`,
-    );
-    // The key test: deno's error output should be in the message.
-    // When deno.json is malformed, deno outputs "Failed to deserialize" or "Unexpected token".
-    // Without the fix, the stderr would be discarded and we'd see just "(no error output available)"
-    // or nothing descriptive. With the fix, we see the actual deno error.
-    const containsDenoError = res.stderr.includes("syntax") ||
-      res.stderr.includes("Unexpected") ||
-      res.stderr.includes("Failed") ||
-      res.stderr.includes("error") ||
-      res.stderr.includes("(no error output available)");
-    assertEquals(
-      containsDenoError,
-      true,
-      `Expected stderr to contain deno error details, got: ${res.stderr}`,
+      false,
+      `guard must not fail closed on a repo-config parse error, got: ${res.stderr}`,
     );
   } finally {
-    // Clean up: restore the original deno.json
-    try {
-      await Deno.remove(denoJsonPath);
-    } catch {
-      // ignore if it doesn't exist
-    }
-    try {
-      await Deno.rename(brokenDenoJsonPath, denoJsonPath);
-    } catch {
-      // ignore if restore fails
-    }
+    await Deno.copyFile(backupPath, denoJsonPath);
+    await Deno.remove(backupPath);
+  }
+});
+
+Deno.test("web-jam-tools#714: an irreversible command is still blocked while deno.json holds conflict markers", async () => {
+  const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
+  const backupPath = denoJsonPath + ".t714-backup2";
+
+  try {
+    await Deno.copyFile(denoJsonPath, backupPath);
+    await Deno.writeTextFile(denoJsonPath, "<<<<<<< HEAD\n", { append: true });
+
+    const res = await runHook({ command: "gh repo delete owner/repo" });
+
+    assertEquals(
+      res.code,
+      2,
+      `expected the real deny-list match to still block, got: ${res.stderr}`,
+    );
+    assertEquals(res.stderr.includes("BLOCKED (irreversible operation guard)"), true);
+  } finally {
+    await Deno.copyFile(backupPath, denoJsonPath);
+    await Deno.remove(backupPath);
+  }
+});
+
+// --- genuine evaluation failures (NOT a repo-config parse error) must still fail closed ---
+
+Deno.test("when deno itself is unavailable, the guard still fails CLOSED", async () => {
+  // Prepend a directory with a failing dummy `deno` command to PATH so the
+  // guard's `deno run` fails closed even while preserving the rest of PATH
+  // (bash, jq, mktemp, cat) across different OS/CI environments.
+  const shadowDir = await Deno.makeTempDir({ prefix: "shadow-deno-" });
+  try {
+    const fakeDeno = `${shadowDir}/deno`;
+    await Deno.writeTextFile(
+      fakeDeno,
+      '#!/bin/sh\necho "deno: command not found" >&2\nexit 127\n',
+    );
+    await Deno.chmod(fakeDeno, 0o755);
+
+    const input = JSON.stringify({ tool_input: { command: "git status" } });
+    const process = new Deno.Command("bash", {
+      args: [HOOK_PATH],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+      env: {
+        BASH_ENV: "",
+        PATH: `${shadowDir}:${Deno.env.get("PATH") ?? ""}`,
+      },
+    });
+    const child = process.spawn();
+    const writer = child.stdin.getWriter();
+    await writer.write(new TextEncoder().encode(input));
+    await writer.close();
+    const output = await child.output();
+    const stderr = new TextDecoder().decode(output.stderr).trim();
+
+    assertEquals(output.code, 2, `expected fail-closed when deno is missing, stderr: ${stderr}`);
+    assertEquals(stderr.includes("guard could not evaluate"), true, stderr);
+  } finally {
+    await Deno.remove(shadowDir, { recursive: true });
   }
 });

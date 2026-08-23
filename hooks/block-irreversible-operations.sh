@@ -48,7 +48,7 @@ if [ -n "$cmd" ]; then
   stderr_file=$(mktemp)
   trap "rm -f '$stderr_file'" EXIT
 
-  result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>"$stderr_file") || true
+  result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>"$stderr_file") || true
 
   # Fails CLOSED: this is a destructive-operation guard, unlike the agy
   # cost-control guard which deliberately fails open. If the lib couldn't be

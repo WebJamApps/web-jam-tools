@@ -57,6 +57,13 @@ HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 DETECTOR="$HOOK_DIR/lib/detect_clear_communication_violations.ts"
 SELECTOR="$HOOK_DIR/lib/select_transcript_entry.ts"
 CONFIG="$HOOK_DIR/clear-communication.yaml"
+# DETECTOR imports bare "@std/path"/"@std/yaml" specifiers, which only resolve
+# via an import map — but `deno run` auto-discovers the nearest deno.json from
+# cwd, so a repo deno.json with conflict markers (routine mid-rebase — every
+# PR bumps its version line) would deadlock this hook (web-jam-tools#714).
+# Point at a hook-owned config carrying just those two imports instead, so
+# this hook never depends on repo state to evaluate.
+DENO_HOOK_CONFIG="$HOOK_DIR/lib/deno-hook-config.json"
 
 input="$(cat)" || exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
@@ -65,11 +72,11 @@ tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || tr
 # Last genuine assistant transcript entry's text content, selected via
 # hooks/lib/select_transcript_entry.ts (excludes isSidechain and
 # isApiErrorMessage entries, bounds search to current turn — web-jam-tools#596).
-msg="$(deno run --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
+msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
 
 [ -n "$msg" ] || exit 0
 
-report="$(MSG_FOR_PY="$msg" deno run --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>/dev/null || true)"
+report="$(MSG_FOR_PY="$msg" deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>/dev/null || true)"
 [ -n "$report" ] || exit 0
 
 {

@@ -24,4 +24,4 @@
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-exec deno run --allow-read --allow-env "$HOOK_DIR/lib/check_agy_session_model.ts"
+exec deno run --no-config --allow-read --allow-env "$HOOK_DIR/lib/check_agy_session_model.ts"

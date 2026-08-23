@@ -61,11 +61,11 @@ tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || tr
 # Last genuine assistant transcript entry's text content, selected via
 # hooks/lib/select_transcript_entry.ts (excludes isSidechain and
 # isApiErrorMessage entries — web-jam-tools#565).
-msg="$(deno run --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
+msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
 
 [ -n "$msg" ] || exit 0
 
-offenders="$(MSG_FOR_PY="$msg" deno run --allow-env "$DETECTOR" 2>/dev/null || true)"
+offenders="$(MSG_FOR_PY="$msg" deno run --no-config --allow-env "$DETECTOR" 2>/dev/null || true)"
 [ -n "$offenders" ] || exit 0
 
 {

@@ -22,7 +22,7 @@ model=""
 if [ -n "$tp" ] && [ -f "$tp" ]; then
   # newest genuine assistant turn's model = current session model
   # (selected via hooks/lib/select_transcript_entry.ts, excluding isSidechain and isApiErrorMessage entries — web-jam-tools#566)
-  model="$(deno run --allow-read "$SELECTOR" --model "$tp" 2>/dev/null || true)"
+  model="$(deno run --no-config --allow-read "$SELECTOR" --model "$tp" 2>/dev/null || true)"
 fi
 
 case "$model" in

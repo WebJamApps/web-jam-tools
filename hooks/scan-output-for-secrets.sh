@@ -62,7 +62,7 @@ if [ -z "$output" ]; then
   output="$input"
 fi
 
-match=$(CMD_FOR_PY="$output" deno run --allow-env "$HOOK_DIR/lib/detect_credential_literal.ts" 2>/dev/null) || true
+match=$(CMD_FOR_PY="$output" deno run --no-config --allow-env "$HOOK_DIR/lib/detect_credential_literal.ts" 2>/dev/null) || true
 
 if [ -n "$match" ]; then
   echo "🔴 CREDENTIAL-SHAPED LITERAL DETECTED: a $match appeared in what this command printed." >&2

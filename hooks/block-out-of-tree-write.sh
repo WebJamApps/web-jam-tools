@@ -12,4 +12,4 @@ set -euo pipefail
 HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 input=$(cat)
 
-printf '%s' "$input" | deno run --allow-env --allow-read --allow-run "$HOOK_DIR/lib/check_out_of_tree_write.ts"
+printf '%s' "$input" | deno run --no-config --allow-env --allow-read --allow-run "$HOOK_DIR/lib/check_out_of_tree_write.ts"
