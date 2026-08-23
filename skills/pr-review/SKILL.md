@@ -153,14 +153,57 @@ Review the PR diff, description, checks, and mergeability against these mandator
      Actionable Suggestion — whether the PR is currently a draft or was created as a draft and
      later marked ready.**
 
+10. **Issue Body & PR Body Prose (Never a Must Fix)**:
+    - Prose in a linked issue's body — including its Non-goals section, its acceptance
+      criteria wording, or its "Files changed" list — and prose in the PR's own description —
+      including its Summary and its "How to test locally" / test-plan narration — is **never**
+      a Must Fix item. Not when it is stale, not when it is incomplete, not when it
+      contradicts what the PR actually built, and not when it describes a superseded design.
+    - Reason: Must Fix means *this cannot merge as it stands* — it is reserved for a failing
+      CircleCI check, a failing Snyk check, a merge conflict with the base branch, and defects
+      in the code being merged. A description that has drifted from its diff does not stop the
+      code from being correct and does not stop the merge.
+    - Such a drift may still be raised, but only under `### 🟡 Actionable Feedback & Suggestions`.
+    - This is a deliberate carve-out from "A found defect is fixed before merge — never
+      deferred" below: that section's "if it is wrong, it is Must Fix or it is not a finding
+      at all" binary governs defects in the artifact being merged (the code/diff itself);
+      issue-body and PR-body description prose is outside that binary's scope.
+
 ### Step 3: Post Review Feedback
 
 1. Synthesize review findings into a structured review comment using severity icons so merge blockers and check statuses are immediately recognizable without reading full prose.
 2. Format feedback with clear section headers and severity icons:
    - **PR Review Summary**: Overall status (`**✅ Approved**` if clean / `**🛑 Changes Requested**` if any Must Fix item or blocking defect exists).
-   - **Must Fix Items** (`### 🛑 Must Fix Items`): List any CircleCI failures, Snyk security failures, merge conflicts, or blocking bugs. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section).
+   - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
+   - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — CircleCI failures, Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
+   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, CI health, Snyk audits, scope, semver bump, package-lock engine alignment, test evidence, and guardrails. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **CircleCI**: 🛑 ...`).
    - **Actionable Feedback & Suggestions** (`### 🟡 Actionable Feedback & Suggestions`): Specific code references or line numbers where changes or improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Actionable Feedback & Suggestions` with `✅ None`.
+
+   **Example — re-review with one remaining blocker and two now-fixed findings.** Note that the
+   only thing between the verdict line and `### 🛑 Must Fix Items` is the heading itself, and that
+   `### Changes Since Last Review` sits after the Must Fix section, not before it:
+
+   ````md
+   ## PR Review Summary
+   **🛑 Changes Requested**
+
+   ### 🛑 Must Fix Items
+   - 🛑 CircleCI "Version bump check" is failing — `deno.json`'s version does not strictly exceed `origin/dev`'s current tip.
+
+   ### Changes Since Last Review
+   - ✅ Fixed: the missing unit test for `handleHttpReq` — added in `test/uptime.test.ts`.
+   - ✅ Fixed: the stale Non-goals bullet in the linked issue — no longer reportable as a finding of any kind per Step 2 item 10.
+
+   ### Checklist Verification
+   - **Mergeability**: ✅ No conflicts with `dev`.
+   - **CircleCI**: 🛑 Version bump check failing (see Must Fix Items).
+   - **Snyk**: ✅ Clean.
+   - **Scope**: ✅ Matches linked issue.
+
+   ### 🟡 Actionable Feedback & Suggestions
+   ✅ None
+   ````
 3. Write the finished review body to a scratch file (e.g. `/tmp/pr-review-<Repo>-<pr-num>.md` — never inside the repo, per AGENTS.md convention), then post it:
    ```sh
    gh pr review <Repo>#<pr-num> --comment --body-file <scratch_review_file>
@@ -203,7 +246,7 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
 This binds the reviewing model AND the session relaying the review to Josh:
 
-- **Never recommend merging a PR with a known unfixed defect in it**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all.
+- **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged — it does not apply to issue-body or PR-body description prose, which is never a Must Fix and is instead handled under Step 2's item 10 ("Issue Body & PR Body Prose (Never a Must Fix)").
 - **Never propose a follow-up issue as the answer to a defect found in the PR under review.** A new issue is where NEW work goes, not where this PR's known problems are parked.
 - **A defect in the artifact being merged is fixed in THAT PR**, not in a later one — including when the artifact is a skill, a doc, or a rule rather than code.
 - Size is not a reason to defer. "One line" and "no behavioural effect" are arguments for fixing it now, because it is cheap, not for postponing it.
