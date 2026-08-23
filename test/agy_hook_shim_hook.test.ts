@@ -229,6 +229,23 @@ Deno.test("block-irreversible-operations.sh denies an irreversible operation on 
   assertEquals(res.decision, "deny", res.stdout);
 });
 
+// web-jam-tools#716: the same false-positive fix must be exercised through
+// the agy shim, not just Claude Code's own hook wrapper — no separate
+// agy-only matching logic exists, so a quoted mention must NOT deny here
+// either.
+Deno.test(
+  "web-jam-tools#716: block-irreversible-operations.sh allows a quoted mention of 'gh repo delete' on an agy payload",
+  async () => {
+    const res = await runShim(
+      "PreToolUse",
+      "Bash",
+      "block-irreversible-operations.sh",
+      agyRunCommand(`gh issue list --repo owner/repo --search "gh repo delete false positive"`),
+    );
+    assertEquals(res.decision, "allow", res.stdout);
+  },
+);
+
 Deno.test("block-human-only-credentials.sh denies a human-only credential export on an agy payload", async () => {
   const res = await runShim(
     "PreToolUse",
