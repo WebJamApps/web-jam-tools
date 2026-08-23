@@ -27,7 +27,13 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
 3. **Put every decision to Josh one at a time** — applying the Decision-Readiness rule below — and write his answer into the document as he gives it, never batched at the end. An item is decided only when he rules on THAT item by name.
 4. **Verify facts rather than asserting them**, and record what was verified and how. Where a premise turns out to be false, say so in the document so it is not re-derived later.
 5. **Reconcile edits continuously.** Apply the Edit-Reconciliation rule after any passage replacement.
-6. **GATE 1 — stop.** Present the design (rendered to a standalone HTML file via `scripts/render_design_doc.ts` with layout rules and verified via headless screenshot) and wait for Josh's explicit approval. No writes to GitHub before Gate 1.
+6. **GATE 1 — stop.** Render the design to a standalone HTML file via `scripts/render_design_doc.ts` (layout rules applied) and verify it via headless screenshot. The headless screenshot only proves the layout isn't broken to the agent — it does not put the document in front of Josh. Once verified, open it for him with the literal command:
+
+   ```sh
+   google-chrome "file:///home/joshua/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.html" >/dev/null 2>&1 &
+   ```
+
+   Run in the background (trailing `&`, streams redirected) so it does not block the session even when no Chrome process is already running — with a cold Chrome, `google-chrome` becomes the browser process itself and would otherwise hold the inherited stdout/stderr pipes open, stalling the call until timeout even though the tab opened fine. It opens a tab in Josh's existing Chrome session (or starts one) and returns immediately. The path is the same `~/Dropbox/web-jam-llms/<Theme>/…` directory the document was created in at step 1, written out in full — `~` does not expand inside a quoted `file://` URL, so use the expanded absolute form, never a literal `~`. A correct result is Chrome opening or focusing a tab showing the rendered design document. Only then present the design and wait for Josh's explicit approval. No writes to GitHub before Gate 1.
 
 ### Decision-Readiness Rule
 A decision is not ready to put to Josh until two conditions are met:
