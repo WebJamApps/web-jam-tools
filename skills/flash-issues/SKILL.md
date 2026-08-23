@@ -272,7 +272,8 @@ If an open PR matches:
 
 For each Flash-lane candidate, fetch its full REST payload once — this one
 call returns everything else this step needs, no body-text phrase-matching
-and no `blocked` label to read:
+and no `Blocked` label to read (native dependencies are the single source of truth
+for issue-to-issue blocking without expecting `Blocked` labels):
 
   gh api repos/WebJamApps/<repo>/issues/<n>
 
@@ -518,9 +519,10 @@ whatever) just won't re-trigger the flag next time and drops out on its own.
   `state` field is the check. A closed reference is never a blocker no
   matter how the issue text or dependency graph phrases it.
 - Never reads or writes a priority label, topic label, `bug`/`enhancement`
-  label, or a `blocked` label. Priority and Type come from each candidate's
+  label, or a `Blocked` label. Priority and Type come from each candidate's
   REST issue payload (Step 5), topic from Milestone (Step 2), and blocking
-  from native dependencies (Step 5) — model-lane labels
+  from native dependencies (Step 5) — native dependencies are the single source of
+  truth for issue-to-issue blocking without expecting `Blocked` labels. Model-lane labels
   (`Haiku`/`Sonnet`/`Opus`/`Flash Med`/`Flash High`/`Flash Low`) are the
   only labels this skill still touches.
 - Never treats "record and publish", "get <company> to fix their listing",

@@ -25,7 +25,7 @@ written**, and they run for a named issue and an auto-picked one alike:
 
 1. **"## Epics — resolve to a child"** — an epic is a container with no diff of its own; it resolves
    to its startable children for Josh to pick from.
-2. **"## Blocked-drift check"** — an issue carrying the `Blocked` label whose blockers are all closed (or has none) has drifted; stop and report rather than silently proceeding or assuming blocked.
+2. **"## Blocked-drift check"** — an issue carrying the `Blocked` label despite having 0 open native blockers and no external marker has drifted; stop and report rather than silently proceeding or assuming blocked.
 3. **"## Design-sync check"** — an issue that contradicts the requirements document it cites is
    defective, and working it bakes the defect into a PR. Stop and report instead.
 
@@ -57,20 +57,16 @@ An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
    ```
    returns `OPEN`. (Skips anything closed or merged.)
 
-2. **Not blocked (actual blocker state outranks label)**:
+2. **Not blocked (native dependencies are the single source of truth)**:
    - **Native dependencies**: Query `blocked_by` dependencies via API:
      ```bash
      gh api repos/WebJamApps/<Repo>/issues/<num>/dependencies/blocked_by \
        --jq '.[] | select(.state == "OPEN") | "\(.repository.full_name)#\(.number) \(.state) — \(.title)"'
      ```
-     Every native `blocked_by` dependency must be CLOSED (the query above returns no output).
-   - **Body-named prerequisites**: Every prerequisite issue cited in the issue body must be CLOSED:
-     ```bash
-     gh issue view <n> --repo WebJamApps/<Repo> --json state -q .state
-     ```
-     returns `CLOSED`.
-   - **Precedence rule**: The blocker's actual state is the truth and the label is a hint. Where they disagree, the label is what is wrong. The `Blocked` label alone does NOT veto startability if all native and body blockers are CLOSED (or none exist). If an issue carries the `Blocked` label but has zero open blockers, it is startable but triggers the **Blocked-drift check** below before implementation.
-   - If any native blocker or body prerequisite is OPEN, the issue is **blocked by `<repo#number "title">`**.
+     Native dependencies are the canonical and single source of truth for issue-to-issue blocking. Every native `blocked_by` dependency must be CLOSED (the query above returns no output). If any native blocker is OPEN, the task is **blocked by `<repo#number "title">`**.
+   - **External non-issue prerequisites**: Check for external non-issue blocker markers in the body or the `Blocked` label for non-issue prerequisites (e.g. assets, vendor delays, manual credentials). If a prerequisite issue is cited in the body without a native link, verify its state (`gh issue view <n> --repo WebJamApps/<Repo> --json state -q .state`) returns `CLOSED`.
+   - **Precedence & startability rule**: Native dependencies govern issue blocking without expecting or requiring the `Blocked` label. If open native blockers are 0 and no external body marker exists, the issue is startable immediately without checking or demanding the `Blocked` label. If the `Blocked` label is present with 0 open native blockers and no external marker, it is treated as a stale `Blocked` label (blocked drift) — see **Blocked-drift check** below.
+   - If any native blocker or external prerequisite is OPEN / un-met, the issue is **blocked by `<repo#number "title">`** or by the external blocker reason.
 
 3. **Not already in flight (with resume carve-out for fix-bucket PRs)**:
    - Check if an OPEN PR references it:
@@ -164,13 +160,13 @@ epic is a container: it has no diff of its own and closes only when its children
    ```
 
 4. For each OPEN child, work out its status using the **Startability test** above:
-   - Check native `blocked_by` dependencies and body-named prerequisites.
+   - Check native `blocked_by` dependencies and external body markers.
    - Check if an open PR or dispatch branch exists.
    - Check if the child appears already done (via merged PR or concrete mechanically checkable acceptance criteria).
-   - (Remember: the `Blocked` label alone does not veto startability; actual blocker state is the truth.)
+   - (Remember: native dependencies govern issue blocking; the `Blocked` label is not required for issue dependencies and does not veto startability if all native blockers are closed and no external blocker exists.)
 5. Report the children to Josh as a numbered list, marking each:
-   - **startable** (or **startable (blocked drift: carries Blocked label with 0 open blockers)**),
-   - **blocked by `<repo#number "title">`** (if any native blocker or body prerequisite is OPEN),
+   - **startable** (or **startable (blocked drift: carries stale Blocked label with 0 open blockers)**),
+   - **blocked by `<repo#number "title">`** (if any native blocker is OPEN, or external prerequisite is un-met),
    - **already in flight** (if an open PR or dispatch branch exists), or
    - **appears already done: verify and close** (if a merged PR references it or concrete acceptance criteria are already satisfied).
    Cite every issue as `repo#number "title"` — a bare number is unusable.
@@ -183,7 +179,7 @@ If the type is anything other than `Epic`, continue.
 
 ## Blocked-drift check — run BEFORE working the issue
 
-An issue can carry a stale `Blocked` label after all its blockers have closed, or carry the label when no native dependencies or body prerequisites ever existed. Because the blocker's actual state outranks the label (the blocker state is the truth and the label is a hint), the label alone does not prevent the issue from being worked, but the disagreement is drift that must be brought to Josh's attention before proceeding.
+Native dependencies are the single source of truth for issue blockers. The `Blocked` label is reserved exclusively for external non-GitHub prerequisites. An issue can carry a stale `Blocked` label after all its blockers have closed, or carry the label when no native dependencies or external prerequisites ever existed. Because native dependencies govern issue blocking and blocker state outranks the label, a stale label alone does not prevent the issue from being worked, but the disagreement is drift that must be brought to Josh's attention before proceeding.
 
 1. Check if the target issue carries the `Blocked` label:
    ```bash
@@ -195,12 +191,13 @@ An issue can carry a stale `Blocked` label after all its blockers have closed, o
      gh api repos/WebJamApps/<Repo>/issues/<num>/dependencies/blocked_by \
        --jq '.[] | "\(.repository.full_name)#\(.number) \(.state) — \(.title)"'
      ```
-   - Check any prerequisites cited in the issue body.
+   - Check any external prerequisites or markers cited in the issue body.
 3. Evaluate for drift:
-   - If there are **OPEN** native blockers or **OPEN** body prerequisites: The issue is genuinely blocked. Stop and report the blocker(s) (`<repo#number "title">`) to Josh.
-   - If **ALL** native blockers and body prerequisites are **CLOSED** (or **NONE** exist): The issue carries the `Blocked` label despite having zero open blockers. This is **blocked drift**.
+   - If there are **OPEN** native blockers: The issue is genuinely blocked by GitHub issues. Stop and report the blocker(s) (`<repo#number "title">`) to Josh.
+   - If there is an **UNMET** external prerequisite (non-GitHub issue): The issue is genuinely blocked by an external prerequisite (legitimate use of `Blocked` label). Stop and report the blocker to Josh.
+   - If **ALL** native blockers are **CLOSED** (or **NONE** exist) AND no unmet external prerequisite exists: The issue carries the `Blocked` label despite having zero open blockers. This is **blocked drift** (stale `Blocked` label).
 4. If blocked drift is detected:
-   - **Stop and report the drift to Josh**: Report that `<Repo>#<num> "<title>"` carries the `Blocked` label, but all native and body blockers are closed (or none exist).
+   - **Stop and report the drift to Josh**: Report that `<Repo>#<num> "<title>"` carries the `Blocked` label, but all native blockers are closed (or none exist) and no external blocker exists.
    - Show the blocker state receipts.
    - Ask Josh for confirmation before proceeding to create a branch or implement the issue.
    - **Do NOT silently proceed** and do NOT silently ignore the label.
