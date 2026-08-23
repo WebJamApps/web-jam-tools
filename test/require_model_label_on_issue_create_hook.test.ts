@@ -83,52 +83,52 @@ Deno.test("gh issue create with invalid native Type is denied", async () => {
 
 Deno.test("gh issue create with a single --label model label and --type Task is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet --type Task`),
+    bashCall(`gh issue create --title T --body B --label "Flash High" --type Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with valid native types (Bug, Feature, Epic) is allowed", async () => {
   const resBug = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet -t Bug`),
+    bashCall(`gh issue create --title T --body B --label "Flash High" -t Bug`),
   );
   assertEquals(resBug.code, 0, resBug.stderr);
 
   const resFeat = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet --type=Feature`),
+    bashCall(`gh issue create --title T --body B --label "Flash High" --type=Feature`),
   );
   assertEquals(resFeat.code, 0, resFeat.stderr);
 
   const resEpic = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet -t=Epic`),
+    bashCall(`gh issue create --title T --body B --label "Flash High" -t=Epic`),
   );
   assertEquals(resEpic.code, 0, resEpic.stderr);
 });
 
 Deno.test("gh issue create with multiple --label flags (one model label among them) is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet --label bug --type Task`),
+    bashCall(`gh issue create --title T --body B --label "Flash High" --label bug --type Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with -l short flag carrying the model label is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B -l Sonnet -l bug -t Task`),
+    bashCall(`gh issue create --title T --body B -l "Flash High" -l bug -t Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with a comma-separated --label value is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label "Sonnet,bug" --type Task`),
+    bashCall(`gh issue create --title T --body B --label "Flash High,bug" --type Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with --label=value single-token form is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label=Sonnet --type Task`),
+    bashCall(`gh issue create --title T --body B --label="Flash High" --type Task`),
   );
   assertEquals(res.code, 0, res.stderr);
 });
@@ -291,7 +291,7 @@ Deno.test("MCP issue_write create with one model label in the array and valid ty
       repo: "web-jam-tools",
       title: "T",
       type: "Task",
-      labels: ["Sonnet", "bug"],
+      labels: ["Flash High", "bug"],
     }),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -446,7 +446,7 @@ const ISSUE_342_FIXTURE_BODY = `Implement Issue #342 in /home/joshua/WebJamApps/
 Deno.test("gh issue create with forbidden pointer phrase in body is denied", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "Please see the comment for details" --label Sonnet --type Task`,
+      `gh issue create --title T --body "Please see the comment for details" --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 2);
@@ -459,7 +459,7 @@ Deno.test("gh issue create with Issue #342 body fixture (quoted pointer phrases)
     bashCall(
       `gh issue create --title T --body "${
         ISSUE_342_FIXTURE_BODY.replace(/"/g, '\\"')
-      }" --label Sonnet --type Task`,
+      }" --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -468,7 +468,7 @@ Deno.test("gh issue create with Issue #342 body fixture (quoted pointer phrases)
 Deno.test("gh issue create with pointer phrase inside code block/span or quotes is allowed", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "Rule states \`read comment first\` is banned and \\"see the epic\\" is banned." --label Sonnet --type Task`,
+      `gh issue create --title T --body "Rule states \`read comment first\` is banned and \\"see the epic\\" is banned." --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -506,7 +506,7 @@ Deno.test("MCP issue_write create with forbidden pointer phrase in body is denie
       title: "T",
       type: "Task",
       body: "Please read the comment first.",
-      labels: ["Sonnet"],
+      labels: ["Flash High"],
     }),
   );
   assertEquals(res.code, 2);
@@ -599,12 +599,12 @@ Deno.test("deno task create-issue with valid type and model label is allowed", a
   assertEquals(res1.code, 0, res1.stderr);
 
   const res2 = await runHook(
-    bashCall(`deno task create-issue --title T --body-file /tmp/b.md -t Epic --label Opus`),
+    bashCall(`deno task create-issue --title T --body-file /tmp/b.md -t Epic --label "Flash Med"`),
   );
   assertEquals(res2.code, 0, res2.stderr);
 
   const res3 = await runHook(
-    bashCall(`deno task issue:create --title T --body-file /tmp/b.md --type=Bug --label=Sonnet`),
+    bashCall(`deno task issue:create --title T --body-file /tmp/b.md --type=Bug --label=Haiku`),
   );
   assertEquals(res3.code, 0, res3.stderr);
 });
@@ -714,4 +714,248 @@ Deno.test("direct scripts/create-issue.ts with valid type and model label is all
     bashCall(`./scripts/create-issue.ts --title T --body-file /tmp/b.md -t Epic --label Josh`),
   );
   assertEquals(res2.code, 0, res2.stderr);
+});
+
+// --- Escalation Justification Rule (web-jam-tools#709) ---
+
+Deno.test("gh issue create with Sonnet and no escalation reason is denied with helpful escalation prompt", async () => {
+  const res = await runHook(
+    bashCall(`gh issue create --title T --body B --type Task --label Sonnet`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "Creating an issue labeled 'Sonnet' requires an explicit escalation justification.",
+    ),
+    true,
+  );
+  assertEquals(
+    res.stderr.includes(
+      "Flash High is the default model tier for implementation work and bills a separate Google budget, whereas Sonnet bills the constrained Anthropic budget.",
+    ),
+    true,
+  );
+  assertEquals(
+    res.stderr.includes(
+      'gh issue create --title T --body B --type Task --label Sonnet --escalation-reason "<why Sonnet is genuinely the right tier>"',
+    ),
+    true,
+  );
+});
+
+Deno.test("gh issue create with Opus and no escalation reason is denied with helpful escalation prompt", async () => {
+  const res = await runHook(
+    bashCall(`gh issue create --title T --body B --type Task --label Opus`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "Creating an issue labeled 'Opus' requires an explicit escalation justification.",
+    ),
+    true,
+  );
+  assertEquals(
+    res.stderr.includes(
+      "Flash High is the default model tier for implementation work and bills a separate Google budget, whereas Opus bills the constrained Anthropic budget.",
+    ),
+    true,
+  );
+  assertEquals(
+    res.stderr.includes(
+      'gh issue create --title T --body B --type Task --label Opus --escalation-reason "<why Opus is genuinely the right tier>"',
+    ),
+    true,
+  );
+});
+
+Deno.test("gh issue create with Sonnet and non-empty --escalation-reason is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body B --type Task --label Sonnet --escalation-reason "complex multi-file refactoring"`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue create with Opus and non-empty --escalation-reason is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body B --type Task --label Opus --escalation-reason "architectural spec and tech-lead judgment"`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue create with Sonnet and --escalation-reason=value single-token form is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body B --type Task --label Sonnet --escalation-reason="complex backend rewrite"`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("gh issue create with Sonnet and empty --escalation-reason is denied", async () => {
+  const resEmpty = await runHook(
+    bashCall(
+      `gh issue create --title T --body B --type Task --label Sonnet --escalation-reason ""`,
+    ),
+  );
+  assertEquals(resEmpty.code, 2);
+  assertBlocked(resEmpty.stderr);
+
+  const resWhitespace = await runHook(
+    bashCall(
+      `gh issue create --title T --body B --type Task --label Sonnet --escalation-reason "   "`,
+    ),
+  );
+  assertEquals(resWhitespace.code, 2);
+  assertBlocked(resWhitespace.stderr);
+});
+
+Deno.test("gh issue create with Flash High / Flash Med / Haiku requires no escalation reason", async () => {
+  const resFH = await runHook(
+    bashCall(`gh issue create --title T --body B --type Task --label "Flash High"`),
+  );
+  assertEquals(resFH.code, 0, resFH.stderr);
+
+  const resFM = await runHook(
+    bashCall(`gh issue create --title T --body B --type Task --label "Flash Med"`),
+  );
+  assertEquals(resFM.code, 0, resFM.stderr);
+
+  const resHaiku = await runHook(
+    bashCall(`gh issue create --title T --body B --type Task --label Haiku`),
+  );
+  assertEquals(resHaiku.code, 0, resHaiku.stderr);
+});
+
+Deno.test("MCP issue_write create with Sonnet and no escalation reason is denied", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
+      labels: ["Sonnet"],
+    }),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "Creating an issue labeled 'Sonnet' requires an explicit escalation justification.",
+    ),
+    true,
+  );
+  assertEquals(
+    res.stderr.includes("supply an 'escalation_reason' property"),
+    true,
+  );
+});
+
+Deno.test("MCP issue_write create with Opus and no escalation reason is denied", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
+      labels: ["Opus"],
+    }),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes(
+      "Creating an issue labeled 'Opus' requires an explicit escalation justification.",
+    ),
+    true,
+  );
+});
+
+Deno.test("MCP issue_write create with Sonnet and escalation_reason is allowed", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
+      labels: ["Sonnet"],
+      escalation_reason: "major multi-file refactor across repos",
+    }),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("MCP issue_write create with Opus and escalation_reason is allowed", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
+      labels: ["Opus"],
+      escalation_reason: "architectural design and requirements alignment",
+    }),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("MCP issue_write create with Flash High / Haiku requires no escalation reason", async () => {
+  const resFH = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
+      labels: ["Flash High"],
+    }),
+  );
+  assertEquals(resFH.code, 0, resFH.stderr);
+
+  const resHaiku = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "T",
+      type: "Task",
+      labels: ["Haiku"],
+    }),
+  );
+  assertEquals(resHaiku.code, 0, resHaiku.stderr);
+});
+
+Deno.test("deno task create-issue with Sonnet and no escalation reason is denied", async () => {
+  const res = await runHook(
+    bashCall(`deno task create-issue --title T --body-file /tmp/b.md --type Task --label Sonnet`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("deno task create-issue with Sonnet and --escalation-reason is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `deno task create-issue --title T --body-file /tmp/b.md --type Task --label Sonnet --escalation-reason "complex refactor"`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("deno task create-issue with Opus and --escalation-reason is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `deno task create-issue --title T --body-file /tmp/b.md -t Epic --label Opus --escalation-reason "architectural spec"`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
 });
