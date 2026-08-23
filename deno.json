@@ -34,6 +34,7 @@
     "fix-labels:diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/diff.ts",
     "fix-labels:milestone-diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/milestone-diff.ts",
     "fix-labels:generate-model-labels": "deno run --allow-read=skills/fix-labels/labels.yaml --allow-write=skills/fix-labels/model-labels.json src/fix-labels/generate-model-labels.ts",
+    "sweep:redundant-blocked-labels": "deno run --allow-run=gh scripts/sweep_redundant_blocked_labels.ts",
     "memory-index": "deno run --allow-read --allow-write --allow-env src/memory-index/cli.ts",
     "memory:consume": "bash scripts/consume-memory-rules.sh",
     "update:reaper": "bash scripts/reaper-update.sh",
