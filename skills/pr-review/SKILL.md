@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Cross-model PR review pipeline where Flash High reviews Sonnet PRs, and Sonnet reviews Flash PRs. Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open PRs by the opposite model tier). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `gh pr review --comment`.
+description: Cross-model PR review pipeline where reviewer tier is never below author tier (Flash High reviews Flash Medium/Haiku; Sonnet reviews Flash High/Flash Medium/Haiku; Opus reviews Sonnet on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `gh pr review --comment`.
 metadata:
   version: v2
   publisher: josh
@@ -12,26 +12,41 @@ This skill provides a systematic pipeline for automated cross-model pull request
 
 ## Purpose & Model Pairing
 
-Cross-model review pair matrix:
-- **Flash High** (`Gemini Flash (High)`) reviews PRs authored by **Sonnet** (`Claude Code — Sonnet 5`).
-- **Sonnet** (`Claude Code — Sonnet 5`) reviews PRs authored by **Flash** (`agy — Gemini Flash`).
-- **Opus** and **Josh** may invoke `/pr-review` if desired, or review PRs in their own custom/human way without using the skill.
-
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
+
+Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work).
+
+### Cross-Model Review Pairing Matrix
+
+| Reviewer | Reviews |
+|---|---|
+| Flash High | Flash Medium, Haiku |
+| Sonnet | Flash High, Flash Medium, Haiku |
+| Opus | Sonnet |
+
+**Ceiling rule (never a schedule):**
+The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Sonnet PR happens only when Josh deems that specific PR critical enough for an Opus review — his decision, per PR, not automatic. Nothing in this skill or its auto-detect mode may auto-dispatch an Opus review off this matrix.
 
 ## Trigger & Invocation
 
 - **Named mode**: `/pr-review <Repo>#<pr-num>` (e.g. `/pr-review web-jam-tools#363` or `https://github.com/WebJamApps/web-jam-tools/pull/363`).
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list in [`skills/flash-issues/SKILL.md`](../flash-issues/SKILL.md) under "Scope — all eight active repos, exactly these slugs").
-  - Matches candidate Flash-authored PRs across **both** Flash tiers: `Gemini Flash (Medium)` and `Gemini Flash (High)` as spelled in the `ROSTER` array in `scripts/create-draft-pr.sh` (e.g. matching `Gemini Flash (Medium)` and `Gemini Flash (High)` in the PR body trailer `🤖 Work by ...` or `--author` attribution).
+  - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
+    - **Sonnet (`Claude Code — Sonnet 5`)**: matches PRs authored by `Gemini Flash (High)`, `Gemini Flash (Medium)`, or `Claude Haiku 4.5`.
+    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5`.
+    - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
+    - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`:
+      - `Gemini Flash (High)` (e.g. `Antigravity — Gemini Flash (High)` / `agy — Gemini Flash (High)`)
+      - `Gemini Flash (Medium)` (e.g. `Antigravity — Gemini Flash (Medium)` / `agy — Gemini Flash (Medium)`)
+      - `Claude Haiku 4.5` (e.g. `Claude Code — Haiku 4.5` / `Claude Code — Claude Haiku 4.5`)
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
     - Compares the commit SHA of the newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`) against the PR's current head commit SHA (`commits | last | .oid`).
     - If equal (`head_sha == last_review_sha`), mark as `reviewed at current head`. Already-reviewed PRs are included in the pick-list rather than filtered out.
     - If no prior automated review exists or if new commits have been pushed since the last automated review (`head_sha != last_review_sha`), mark as `needs review`.
-  - Builds and displays a numbered pick-list table carrying per row: repo, PR number, PR title, author tier (`Gemini Flash (Medium)` / `Gemini Flash (High)`), age in days, draft/ready state, and review status.
+  - Builds and displays a numbered pick-list table carrying per row: repo, PR number, PR title, author tier, age in days, draft/ready state, and review status.
   - **Stops and waits for Josh**: The skill STOPS and waits for Josh to choose a PR by number from the numbered pick-list before fetching, posting, or beginning any review. It **never** silently auto-selects a PR.
-  - **Empty result handling**: If no open Flash-authored PRs exist across any of the eight active repositories, reports plainly that no open Flash-authored PRs were found (e.g., *"No open Flash-authored (`Gemini Flash (Medium)` or `Gemini Flash (High)`) PRs found across the eight active WebJamApps repositories."*) and stops immediately, without falling through to named mode.
+  - **Empty result handling**: If no open candidate PRs matching the reviewer's eligible author tiers exist across any of the eight active repositories, reports plainly that no candidate PRs were found (e.g., *"No open candidate PRs matching the reviewer tier found across the eight active WebJamApps repositories."*) and stops immediately, without falling through to named mode.
 
 ## Review Pipeline
 
