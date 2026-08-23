@@ -16,17 +16,15 @@
 # now-orphaned labels from GitHub itself is a separate, deliberate step —
 # web-jam-tools#299 — not done here.
 #
-# `blocked` was ALSO pruned by that same commit (7d2523d) as "-> native
-# issue dependencies", but Josh never ratified that one — it rode along in
-# the nine-label batch. web-jam-tools#329 "Restore the Blocked label as
-# canonical in labels.yaml — it was pruned in a batch Josh never ratified,
-# and he wants it alongside native dependencies" restores it (as `Blocked`,
-# capital B, see the `Blocked` entry below). Standing rule: Josh wants BOTH
-# the native GitHub issue-dependency relationship (the real relationship
-# between issues) AND the `Blocked` label (the at-a-glance signal that an
-# issue is currently unworkable, visible in a plain list view without
-# opening each issue). Neither replaces the other — do not prune `Blocked`
-# again on the theory that native dependencies make it redundant.
+# web-jam-tools#725 "Stop using the Blocked label where it is redundant and
+# causes upkeep for no reason" established native GitHub dependencies
+# (`blocked_by`) as the single source of truth for issue-to-issue blockers.
+# Issues blocked by another GitHub issue use native dependencies only and do
+# NOT carry the `Blocked` label (which would cause redundant metadata drift
+# once the upstream issue closes). The `Blocked` label is canonical and
+# reserved exclusively for issues blocked by non-GitHub prerequisites (assets
+# from Josh, vendor delays, credentials, physical actions). See also
+# historical references web-jam-tools#300 and web-jam-tools#329.
 
 # Named repo groups, referenced by the `repos:` field on each label below.
 # `all` is not listed here — it is computed in code as frontend + other.
@@ -131,26 +129,21 @@ labels:
     # findable in GitHub instead of being lost as a footnote in a chat session.
   - name: Blocked
     hex: "B60205"
-    description: "Issue currently unworkable due to an upstream dependency, credential, or vendor delay"
+    description: "Issue unworkable due to an external blocker (credential, vendor, asset, or non-GitHub prerequisite)"
     repos: all
-    # RESTORED, canonical (web-jam-tools#329 "Restore the Blocked label as
-    # canonical in labels.yaml — it was pruned in a batch Josh never
-    # ratified, and he wants it alongside native dependencies"). Capital B
-    # — matches the label already live in web-jam-tools (created ad hoc
-    # 2026-07-30), no rename needed.
+    # Canonical label reserved exclusively for external / non-GitHub blockers
+    # (web-jam-tools#725 "Stop using the Blocked label where it is redundant
+    # and causes upkeep for no reason").
     #
-    # STANDING RULE, do not prune again: Josh wants BOTH native GitHub
-    # issue-dependency links AND this label. Use native dependencies when a
-    # specific issue blocks the work — they render in the Issues list and
-    # clear on close. Use this label whenever work is unworkable for ANY
-    # reason, including cases with no issue to point at (vendor delays,
-    # credentials Josh must generate, physical actions). Native dependencies
-    # cannot express that last case, which is why this label is not
-    # redundant.
+    # STANDING RULE: Native GitHub dependencies (`blocked_by`) are the single
+    # source of truth for issue-to-issue blockers — do NOT apply this label
+    # to issues whose blocker is another GitHub issue, because native dependencies
+    # clear automatically when the blocker closes. Apply this label ONLY when
+    # work is unworkable due to an external prerequisite (vendor delays,
+    # assets from Josh, credentials, physical actions) that cannot be linked
+    # to a GitHub issue.
     #
-    # `repos: all` (not just web-jam-tools) — Josh scans issue lists across
-    # every active repo, and any of them can carry a currently-unworkable
-    # issue.
+    # `repos: all` — any repo can carry an externally blocked issue.
   - name: Needs Design
     hex: "D93F0B"
     description: "Epic or sub-issue requiring design clarification before implementation"

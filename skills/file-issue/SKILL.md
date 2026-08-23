@@ -145,9 +145,8 @@ deno task create-issue \
 - Require native type (`Task`, `Bug`, `Feature`, `Epic`) via `scripts/create-issue.ts --type <Type>` or GitHub MCP `issue_write` (`"type": "<Type>"`).
 - Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
 - Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
-- Add non-model status labels (`Blocked`, `Needs Design`, `Josh`, `parked`, ...)
-  alongside the model label freely; the hook only checks that exactly one *model* label is present,
-  not that it's the only label.
+- Set dependencies natively: When an issue depends on another GitHub issue, set native GitHub `blocked_by` dependencies ONLY and do NOT add the `Blocked` label (native dependencies clear automatically on close).
+- Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model label freely; the hook only checks that exactly one *model* label is present, not that it's the only label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
 - Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
 - Attach parent issue link via `scripts/create-issue.ts --parent <parent_issue_number>`.
 

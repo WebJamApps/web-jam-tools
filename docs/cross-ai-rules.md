@@ -220,8 +220,8 @@ skill.
 - **POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE:** A manual step Josh must perform — an
   installer run, a session restart, a scheduled/cron cycle, a prod deploy, a third-party dashboard
   change — never lives inside an agent's execution issue. It is filed as its own `Josh`-labeled
-  issue, paired with the agent's issue and `Blocked` on it (both the label and the native
-  dependency). The agent's PR then closes the agent's issue normally with `Closes #N`, because that
+  issue, paired with the agent's issue and natively blocked on it (via native GitHub `blocked_by`
+  dependency, without the `Blocked` label). The agent's PR then closes the agent's issue normally with `Closes #N`, because that
   issue no longer contains anything the agent could not do from a branch. The pairing rules live in
   the `/design-issue` skill, which owns how those two issues are written.
   - **PR-open-time test:** Before opening a PR, check: _does any acceptance criterion require
@@ -243,8 +243,8 @@ skill.
     designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic`
     `issueTypeId`), file the executable coding work as a child `Task` sub-issue attached under that
     Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached
-    under that same Epic (marked `Blocked` on the coding child). The parent Epic body carries the
-    sub-issue list and closes when all sub-issues close.
+    under that same Epic (natively linked via `blocked_by` dependency to the coding child, without the
+    `Blocked` label). The parent Epic body carries the sub-issue list and closes when all sub-issues close.
   - **Manual Step Issue & Document Title Rule:** Never prefix issue titles or runbook document
     titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional,
     action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and
@@ -259,23 +259,7 @@ skill.
     its runbook listed both the `claude` and the `agy` launch commands under one step with the
     question below them, and Josh opened two terminals, closed them, then reopened them one at a time
     to work out the intended order. His verdict: "these should have been 4 steps".
-- **THE `Blocked` LABEL IS CANONICAL — NATIVE ISSUE DEPENDENCIES DO NOT REPLACE IT.** Josh wants
-  BOTH: native GitHub issue-dependency links (the real relationship between issues) AND the
-  `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) as the
-  at-a-glance signal that makes an unworkable issue obvious in a plain list view without opening
-  each issue. They do different jobs: use a native dependency whenever a **specific issue** blocks
-  the work — it names which one, renders in the Issues list, and clears itself on close. Use the
-  `Blocked` label whenever the work is unworkable **for any reason**, including the many with no
-  issue to point at (a vendor, a credential Josh must generate, a physical action). Native
-  dependencies cannot express that case at all, which is why the label is not redundant. No agent
-  may prune `Blocked` from `labels.yaml` (or delete it live) on the theory that native dependencies
-  made it redundant — that is exactly what happened once already: `blocked` (lowercase) was removed
-  in commit 7d2523d as part of a nine-label prune shipped for web-jam-tools#300, justified as "->
-  native issue dependencies," and Josh never actually agreed to that one — it rode along in a batch
-  whose headline was about priority labels. web-jam-tools#329 "Restore the Blocked label as
-  canonical in labels.yaml — it was pruned in a batch Josh never ratified, and he wants it alongside
-  native dependencies" restored it. See `skills/fix-labels/labels.yaml`'s `Blocked` entry for the
-  full rationale.
+- **NATIVE GITHUB DEPENDENCIES ARE THE SINGLE SOURCE OF TRUTH FOR ISSUE BLOCKERS — THE `Blocked` LABEL IS RESERVED EXCLUSIVELY FOR NON-GITHUB PREREQUISITES.** Native GitHub issue dependencies (`blocked_by`) are the canonical, single source of truth for all issue-to-issue dependencies across the workspace. An issue whose blocker is another GitHub issue MUST link the dependency natively and MUST NOT carry the `Blocked` label. Because native dependencies unblock and clear automatically in GitHub API and UI views when the upstream issue/PR closes, adding the `Blocked` label to an issue with native dependencies creates redundant metadata and perpetual "Blocked drift" requiring manual cleanup. The `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) is reserved exclusively for issues blocked by non-GitHub-issue prerequisites that cannot be expressed as a native GitHub dependency (e.g. assets or decisions from Josh, third-party vendor delays, manual credential generation, physical actions). Origin: web-jam-tools#725 "Stop using the Blocked label where it is redundant and causes upkeep for no reason" (see also historical references web-jam-tools#300 and web-jam-tools#329).
 - **RESTRICTED LAPTOP DROPBOX SCOPE & SECURITY GUARDRAILS:** Access to `~/Dropbox` on the laptop is
   restricted to three approved top-level folders: `joshandmariamusic`, `web-jam-llms`, and
   `mark_henrickson`. All other top-level `~/Dropbox/*` folders — including `Dropbox/WebJamApps` —
