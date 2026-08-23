@@ -29,7 +29,7 @@ block() {
 }
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_dangerous_git_deploy.ts" 2>/dev/null) || true
+result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check_dangerous_git_deploy.ts" 2>/dev/null) || true
 
 # Fails CLOSED: this is a destructive-operation guard. If the lib couldn't be
 # evaluated at all (deno missing/crashed, empty output), block rather than

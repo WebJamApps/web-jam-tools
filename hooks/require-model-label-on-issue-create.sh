@@ -15,7 +15,7 @@ MODEL_LABELS_JSON="$REPO_DIR/skills/fix-labels/model-labels.json"
 
 input=$(cat)
 
-result=$(printf '%s' "$input" | MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" deno run --allow-env --allow-read "$REPO_DIR/hooks/lib/check_model_label_on_issue_create.ts" 2>/dev/null) || true
+result=$(printf '%s' "$input" | MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" deno run --no-config --allow-env --allow-read "$REPO_DIR/hooks/lib/check_model_label_on_issue_create.ts" 2>/dev/null) || true
 
 
 if [ -z "$result" ]; then

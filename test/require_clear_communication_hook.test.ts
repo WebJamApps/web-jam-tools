@@ -509,3 +509,59 @@ Deno.test("current turn contains entry with text block and trailing tool_use blo
     assert(res.stderr.includes("Rule 1"));
   });
 });
+
+// --- web-jam-tools#714: this hook's DETECTOR imports bare "@std/path" /
+// "@std/yaml" specifiers, which only resolve via an import map. Unlike the
+// other 16 hooks (fixed with a plain --no-config), this one is fixed with
+// --config pointing at a hook-owned hooks/lib/deno-hook-config.json, so it
+// still resolves those imports without ever reading the repo's deno.json.
+// Prove that holds even while the repo deno.json is unparseable.
+
+Deno.test("web-jam-tools#714: still detects a violation while deno.json holds conflict markers", async () => {
+  const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
+  const backupPath = denoJsonPath + ".t714-backup";
+  const entries = [
+    userTurn("what should I do"),
+    assistantText("Should I dispatch the Sonnet agent now? Should I also open the issue?"),
+  ];
+
+  try {
+    await Deno.copyFile(denoJsonPath, backupPath);
+    await Deno.writeTextFile(denoJsonPath, "<<<<<<< HEAD\n", { append: true });
+
+    await withFixtureTranscript(entries, async (path) => {
+      const res = await runHook(path);
+      assertEquals(
+        res.code,
+        2,
+        `expected the detector to still evaluate with a broken deno.json, got exit ${res.code}, stderr: ${res.stderr}`,
+      );
+      assertBlocked(res.stderr);
+    });
+  } finally {
+    await Deno.copyFile(backupPath, denoJsonPath);
+    await Deno.remove(backupPath);
+  }
+});
+
+Deno.test("web-jam-tools#714: a clean reply still passes through while deno.json holds conflict markers", async () => {
+  const denoJsonPath = new URL("../deno.json", import.meta.url).pathname;
+  const backupPath = denoJsonPath + ".t714-backup2";
+  const entries = [
+    userTurn("what should I do"),
+    assistantText("Done — everything is green."),
+  ];
+
+  try {
+    await Deno.copyFile(denoJsonPath, backupPath);
+    await Deno.writeTextFile(denoJsonPath, "<<<<<<< HEAD\n", { append: true });
+
+    await withFixtureTranscript(entries, async (path) => {
+      const res = await runHook(path);
+      assertEquals(res.code, 0, res.stderr);
+    });
+  } finally {
+    await Deno.copyFile(backupPath, denoJsonPath);
+    await Deno.remove(backupPath);
+  }
+});

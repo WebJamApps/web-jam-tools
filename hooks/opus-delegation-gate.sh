@@ -95,7 +95,7 @@ tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || tr
 model=""
 has_escape="false"
 if [ -n "$tp" ] && [ -f "$tp" ]; then
-  gate_info="$(deno run --allow-read "$SELECTOR" --opus-gate "$tp" 2>/dev/null || true)"
+  gate_info="$(deno run --no-config --allow-read "$SELECTOR" --opus-gate "$tp" 2>/dev/null || true)"
   if [ -n "$gate_info" ]; then
     model="$(printf '%s' "$gate_info" | jq -r '.model // empty' 2>/dev/null || true)"
     has_escape="$(printf '%s' "$gate_info" | jq -r '.hasEscape // false' 2>/dev/null || true)"

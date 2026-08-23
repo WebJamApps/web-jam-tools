@@ -40,7 +40,7 @@ HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
-result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_agy_model.ts" 2>/dev/null) || true
+result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check_agy_model.ts" 2>/dev/null) || true
 
 # python3/deno unavailable/crashed, or nothing came back: fail open — this is a
 # cost-control guard, not a secret-leak guard, so an unparseable command is
@@ -48,7 +48,7 @@ result=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/check_agy_model.t
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
-ALLOWED_SLUGS=$(deno run "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.7-flash-high or gemini-3.7-flash-medium")
+ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.7-flash-high or gemini-3.7-flash-medium")
 
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2
