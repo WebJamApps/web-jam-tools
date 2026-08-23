@@ -2,9 +2,12 @@
 // CLI script for deno task design:gate1 <doc.md> (web-jam-tools#741)
 
 import { parseArgs } from "@std/cli/parse-args";
-import { runGate1 } from "./gate1.ts";
+import { type Gate1Options, runGate1 } from "./gate1.ts";
 
-export async function runCli(args: string[]): Promise<number> {
+export async function runCli(
+  args: string[],
+  options?: Partial<Gate1Options>,
+): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["no-open", "help"],
     string: ["doc", "screenshot-path"],
@@ -35,7 +38,8 @@ Options:
     return 0;
   }
 
-  const docPath = flags.doc || (flags._.length > 0 ? String(flags._[0]) : "");
+  const docPath = flags.doc || (flags._.length > 0 ? String(flags._[0]) : "") ||
+    options?.docPath || "";
   if (!docPath) {
     console.error("Error: Missing required design document path.");
     console.error("Usage: deno task design:gate1 <doc.md>");
@@ -45,8 +49,11 @@ Options:
   try {
     const result = await runGate1({
       docPath,
-      screenshotPath: flags["screenshot-path"],
-      noOpen: flags["no-open"],
+      screenshotPath: flags["screenshot-path"] || options?.screenshotPath,
+      noOpen: flags["no-open"] || options?.noOpen,
+      screenshotImpl: options?.screenshotImpl,
+      openBrowserImpl: options?.openBrowserImpl,
+      display: options?.display,
     });
 
     console.log(`[design:gate1] Rendered HTML: ${result.htmlPath}`);

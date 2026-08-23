@@ -48,7 +48,7 @@ export function resolveHtmlPath(markdownPath: string): string {
 }
 
 /**
- * Takes a headless screenshot of the rendered HTML using google-chrome.
+ * Takes a headless screenshot of the rendered HTML using google-chrome / chromium or playwright.
  * Fails loudly if screenshot generation fails or produces an empty file.
  */
 export async function defaultScreenshotImpl(
@@ -56,51 +56,62 @@ export async function defaultScreenshotImpl(
   screenshotPath: string,
 ): Promise<{ sizeBytes: number }> {
   const fileUrl = `file://${path.resolve(htmlPath)}`;
-  const cmd = new Deno.Command("google-chrome", {
-    args: [
-      "--headless=new",
-      `--screenshot=${screenshotPath}`,
-      "--window-size=1400,900",
-      fileUrl,
-    ],
-    stdout: "piped",
-    stderr: "piped",
-  });
 
-  let output: Deno.CommandOutput;
+  // Try CLI browser binaries first
+  for (const bin of ["google-chrome", "chromium", "chromium-browser"]) {
+    let output: Deno.CommandOutput | null = null;
+    try {
+      const cmd = new Deno.Command(bin, {
+        args: [
+          "--headless=new",
+          `--screenshot=${screenshotPath}`,
+          "--window-size=1400,900",
+          fileUrl,
+        ],
+        stdout: "piped",
+        stderr: "piped",
+      });
+      output = await cmd.output();
+    } catch {
+      continue;
+    }
+
+    if (output && output.success) {
+      try {
+        const fileInfo = await Deno.stat(screenshotPath);
+        if (fileInfo.size > 0) {
+          return { sizeBytes: fileInfo.size };
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+
+  // Fallback to Playwright
   try {
-    output = await cmd.output();
+    const { chromium } = await import("playwright");
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+      await page.goto(fileUrl, { waitUntil: "load" });
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      const fileInfo = await Deno.stat(screenshotPath);
+      if (fileInfo.size > 0) {
+        return { sizeBytes: fileInfo.size };
+      }
+    } finally {
+      await browser.close();
+    }
   } catch (err) {
     throw new Error(
-      `Failed to execute google-chrome for headless screenshot: ${
+      `Headless screenshot failed: no working browser executable found (checked google-chrome, chromium, chromium-browser, and playwright): ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
   }
 
-  if (!output.success) {
-    const stderr = new TextDecoder().decode(output.stderr);
-    throw new Error(
-      `Headless screenshot failed with exit code ${output.code}: ${stderr.trim()}`,
-    );
-  }
-
-  let fileInfo: Deno.FileInfo;
-  try {
-    fileInfo = await Deno.stat(screenshotPath);
-  } catch (err) {
-    throw new Error(
-      `Screenshot output file not found at ${screenshotPath}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-
-  if (fileInfo.size === 0) {
-    throw new Error(`Screenshot output file at ${screenshotPath} is empty (0 bytes)`);
-  }
-
-  return { sizeBytes: fileInfo.size };
+  throw new Error(`Screenshot output file at ${screenshotPath} is empty (0 bytes)`);
 }
 
 /**

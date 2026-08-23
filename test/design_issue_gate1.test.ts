@@ -254,8 +254,9 @@ Deno.test("cli.ts runs Gate 1 on valid file with --no-open", async () => {
   await Deno.writeTextFile(docPath, "# CLI Test\n\n## Section\nSome content");
 
   try {
-    // If google-chrome is installed, test with real screenshot
-    const exitCode = await runCli([docPath, "--no-open"]);
+    const exitCode = await runCli([docPath, "--no-open"], {
+      screenshotImpl: () => Promise.resolve({ sizeBytes: 15505 }),
+    });
     assertEquals(exitCode, 0);
 
     const htmlPath = path.join(tempDir, "feature-design.html");
