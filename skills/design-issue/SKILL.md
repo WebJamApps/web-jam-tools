@@ -90,7 +90,7 @@ Filing delegates to a subagent only when delegating moves the work down a tier (
 13. **Each body carries only scope, build mechanics and repo facts**, plus a pointer to the design document and the instruction to STOP if that path cannot be read. No requirement text is restated.
 14. **Set the native issue type on every filing call** — the parent named in the plan table's `Epic / child of` column files as `--type Epic`, and every child files as its own planned type (`Task`, `Bug` or `Feature`) via `scripts/create-issue.ts --type <Type>` or GitHub MCP `issue_write`. (Note: `gh issue create` has no `--type` flag).
 15. **Set the native Priority field** via GitHub MCP `issue_write` → `issue_fields` (or `scripts/create-issue.ts --priority <Level>`). (`gh` CLI cannot set a native field).
-16. **Apply the `Blocked` label AND the native dependency** to anything not yet startable — both signals, never one.
+16. **Apply the native dependency (`blocked_by`) to anything not yet startable** — link native dependencies for issue-to-issue blockers without adding the `Blocked` label. Apply the `Blocked` label ONLY for external, non-GitHub prerequisites (assets, vendor delays, physical actions; web-jam-tools#725).
 17. **If any issue fails to file, stop.** Report which issues exist and which do not, by repo + number + title. No silent retries, no carrying on with the rest.
 18. **Report what was filed to Josh in the conversation.** The design document is never edited to record filing status — the filed issues themselves, cited by repo + number + title, are the record of what happened.
 
@@ -169,7 +169,7 @@ Non-epic issues default to **`Flash High`** as the implementation tier. Sizing i
 - no schema or data migration;
 - acceptance criteria provable by running that repo's own test / lint / build commands.
 
-Anything over the line is split into multiple issues, and **every split carries its dependencies** — the `Blocked` label and the native GitHub dependency both.
+Anything over the line is split into multiple issues, and **every split carries its dependencies** — linked natively via GitHub issue dependencies (`blocked_by`), without adding the redundant `Blocked` label.
 
 ### Closeable, Always
 
@@ -229,7 +229,7 @@ Never prefix issue titles or runbook document titles with a personal name (e.g. 
 | **UI / Doc Review** | `Flash High`. Investigate the live UI or generate documentation/artifacts and write the inspection instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact click path or document inspection steps in Google Chrome. Closes when the doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he inspected them in Google Chrome. |
 | **Live Procedure / Walkthrough** | `Flash High`. Author the procedure walkthrough guide / instructional runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`. Closes when the runbook exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he executed the live demonstration/walkthrough with the learner or external party. |
 
-Artifact/doc review and live procedure walkthroughs are distinct pairs and must NEVER be collapsed into a single composite pair or issue. Issue B is always `Blocked` on issue A, with both the label and the native dependency. A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
+Artifact/doc review and live procedure walkthroughs are distinct pairs and must NEVER be collapsed into a single composite pair or issue. Issue B is always linked via native GitHub dependency (`blocked_by`) on issue A, without the redundant `Blocked` label (the `Blocked` label is reserved exclusively for external non-GitHub blockers; web-jam-tools#725). A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
 
 This replaces the old "Josh's run is an Epic checkbox" rule and `--part-of` convention for post-merge manual steps: a remaining manual step becomes its own issue, so the agent's PR closes the agent's issue normally.
 
@@ -238,7 +238,7 @@ This replaces the old "Josh's run is an Epic checkbox" rule and `--part-of` conv
 When `/design-issue` resolves an existing issue into paired implementation and Josh manual verification tasks:
 1. **Convert the target designed issue into native type `Epic`** (via GraphQL `updateIssue` with the repo's `Epic` `issueTypeId`).
 2. **File the executable coding work as a child `Task` sub-issue** attached under that Epic.
-3. **File the paired `Josh` manual verification step as a child `Task` sub-issue** attached under that same Epic (labeled `Blocked` and natives-linked to the coding child).
+3. **File the paired `Josh` manual verification step as a child `Task` sub-issue** attached under that same Epic (natively linked via `blocked_by` dependency to the coding child, without the `Blocked` label).
 4. **Author the parent Epic body with the sub-issue list and closing criteria** ("Closes when all sub-issues close").
 
 ---

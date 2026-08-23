@@ -71,12 +71,9 @@ Shape, for orientation (see `labels.yaml` for the actual current values):
   repos. `Fable` is retired/dormant and marked `neverDelete` in the schema — the scripted diff never proposes
   removing it, in any repo.
 - **Status** — `parked` / `Josh` / `Blocked`, across all 8 repos. `Blocked` (capital B, `B60205`) is
-  the at-a-glance signal for a currently-unworkable issue, used ALONGSIDE native GitHub
-  issue-dependency links (the real relationship) — never a substitute for them, and never the other
-  way around. Restored canonical by `web-jam-tools#329` "Restore the Blocked label as canonical in
-  labels.yaml — it was pruned in a batch Josh never ratified, and he wants it alongside native
-  dependencies" after the lowercase `blocked` was pruned without his agreement (below); do not prune
-  it again.
+  reserved exclusively for issues unworkable due to external blockers (credentials, vendor delays,
+  assets from Josh, physical prerequisites) — native GitHub dependencies (`blocked_by`) are the single
+  source of truth for issue-to-issue blockers and do NOT carry the `Blocked` label (web-jam-tools#725).
 - **Everything else** — any label not in `labels.yaml`'s `labels:` list is non-canonical, unless
   it's on that repo's `keep:` list (Josh-vetoed keepers, so he never has to re-veto the same label
   forever — currently empty; see `labels.yaml` for the up-to-date list).
