@@ -140,6 +140,12 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       "expected statusline.sh to be installed at the stable hooksDir path",
     );
 
+    // web-jam-tools#705: permissions.defaultMode is pinned to "acceptEdits"
+    // in the Claude Code settings.json so a session never lands in "auto"
+    // mode, where hooks/opus-delegation-gate.sh withdraws its subagent
+    // exemption and refuses every Edit/Write/NotebookEdit.
+    assertEquals(settings.permissions?.defaultMode, "acceptEdits");
+
     // web-jam-tools#345: agy hooks.json is also created and populated
     const agyHooksPath = `${settingsDir}/hooks.json`;
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
@@ -147,6 +153,11 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     assert(agyHooks.hooks.PostToolUse.length > 0, "expected PostToolUse in agy hooks.json");
     // web-jam-tools#691: agy never gets a statusLine surface.
     assertEquals(agyHooks.statusLine, undefined);
+    // web-jam-tools#705: agy has no permission-mode concept at all
+    // (docs/agy-hooks.md), so it never gets a permissions.defaultMode entry
+    // either — this installer never passes --default-mode to the
+    // $AGY_HOOKS_PATH invocation.
+    assertEquals(agyHooks.permissions?.defaultMode, undefined);
   } finally {
     await Deno.remove(hooksDir, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });

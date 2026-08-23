@@ -22,6 +22,7 @@ export function merge(settingsPath: string, args: string[]): number {
   let denyPatterns: string[] = [];
   let askPatterns: string[] = [];
   let statusLineArgs: string[] = [];
+  let defaultModeArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
   // web-jam-tools#432 finding 9: a Stop or SessionStart entry in agy's
@@ -58,7 +59,15 @@ export function merge(settingsPath: string, args: string[]): number {
     }
 
     const [head, sections] = section(
-      ["--stop", "--pre-tool-use", "--post-tool-use", "--deny", "--ask", "--status-line"],
+      [
+        "--stop",
+        "--pre-tool-use",
+        "--post-tool-use",
+        "--deny",
+        "--ask",
+        "--status-line",
+        "--default-mode",
+      ],
       rest,
     );
     sessionStartCmds = head;
@@ -78,6 +87,7 @@ export function merge(settingsPath: string, args: string[]): number {
     denyPatterns = sections["--deny"] || [];
     askPatterns = sections["--ask"] || [];
     statusLineArgs = sections["--status-line"] || [];
+    defaultModeArgs = sections["--default-mode"] || [];
   }
 
   if (forbidLifecycleHooks && (sessionStartCmds.length > 0 || stopCmds.length > 0)) {
@@ -361,6 +371,33 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
+  // permissions.defaultMode merge (web-jam-tools#705). Same single-scalar
+  // shape as statusLine above, but nested under permissions instead of
+  // top-level — Claude Code's settings.json stores it as a plain string
+  // (e.g. "acceptEdits"), not an object. Only touched when --default-mode
+  // was actually passed, so a target invoked without it (agy's hooks.json —
+  // agy has no permission-mode concept at all, docs/agy-hooks.md) is
+  // completely unaffected: no key added, no drift ever reported,
+  // byte-identical output.
+  let defaultModeAdded = false;
+  let defaultModeChanged = false;
+  let defaultModePrevValue: string | undefined;
+  if (defaultModeArgs.length > 0) {
+    const desiredMode = defaultModeArgs[0];
+    if (!data.permissions || typeof data.permissions !== "object") {
+      data.permissions = {};
+    }
+    const current = data.permissions.defaultMode;
+    if (current === undefined) {
+      defaultModeAdded = true;
+      data.permissions.defaultMode = desiredMode;
+    } else if (current !== desiredMode) {
+      defaultModeChanged = true;
+      defaultModePrevValue = typeof current === "string" ? current : undefined;
+      data.permissions.defaultMode = desiredMode;
+    }
+  }
+
   // Secret-scan gate: check all strings in permissions and hooks for credentials
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
@@ -426,7 +463,9 @@ export function merge(settingsPath: string, args: string[]): number {
     denyOwnedInAsk.length > 0 ||
     askOwnedInDeny.length > 0 ||
     statusLineAdded ||
-    statusLineChanged;
+    statusLineChanged ||
+    defaultModeAdded ||
+    defaultModeChanged;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -495,6 +534,16 @@ export function merge(settingsPath: string, args: string[]): number {
           `${targetFilename}: statusLine differs from desired (want ${statusLineArgs[0]}${
             statusLinePrevCommand ? `, has ${statusLinePrevCommand}` : ""
           })`,
+        );
+      }
+      if (defaultModeAdded) {
+        console.error(`${targetFilename}: missing permissions.defaultMode ${defaultModeArgs[0]}`);
+      }
+      if (defaultModeChanged) {
+        console.error(
+          `${targetFilename}: permissions.defaultMode differs from desired (want ${
+            defaultModeArgs[0]
+          }${defaultModePrevValue ? `, has ${defaultModePrevValue}` : ""})`,
         );
       }
       return 1;
@@ -593,6 +642,14 @@ export function merge(settingsPath: string, args: string[]): number {
   }
   if (statusLineChanged) {
     console.log(`${targetFilename}: updated statusLine to ${statusLineArgs[0]}`);
+  }
+  if (defaultModeAdded) {
+    console.log(`${targetFilename}: added permissions.defaultMode ${defaultModeArgs[0]}`);
+  }
+  if (defaultModeChanged) {
+    console.log(
+      `${targetFilename}: updated permissions.defaultMode to ${defaultModeArgs[0]}`,
+    );
   }
 
   return 0;

@@ -167,6 +167,34 @@ echo '{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | scripts/status
   Overriding this is a test-only seam (the real default hits the network,
   which an automated test must not depend on); leave it unset for normal use.
 
+### `permissions.defaultMode` (managed by `install-hooks.sh`)
+
+`~/.claude/settings.json` has no `permissions.defaultMode` key by default, so
+a Claude Code session starts in whatever permission mode was last selected
+rather than a deliberate one. When that mode is `auto`,
+`hooks/opus-delegation-gate.sh` withdraws its subagent exemption and refuses
+EVERY Edit/Write/NotebookEdit to a git-tracked path — main thread and
+subagent alike (measured cost: two dispatched Sonnet subagents refused on
+their first edit, ~93k and ~62k tokens burned for zero output, 2026-08-22 —
+web-jam-tools#705).
+
+`scripts/install-hooks.sh` idempotently sets `permissions.defaultMode` to
+`acceptEdits` (the `DEFAULT_MODE` value near the top of the script) in the
+target settings.json, following the same pattern the `DENY_RULES`/
+`ASK_RULES` arrays already use for `permissions.deny`/`permissions.ask` — the
+actual merge is a single-scalar write in
+`scripts/merge-hooks-into-settings.ts`, modeled on the `statusLine` merge
+above but nested under `permissions` as a plain string rather than
+top-level as an object. `--check` reports drift when the installed value is
+absent or differs; a second run is a no-op.
+
+**Claude Code ONLY** — never merged into agy's `hooks.json`. agy has no
+permission-mode concept at all: `docs/agy-hooks.md` records "without
+touching Claude Code's permissions at all (non-goal)" for the closest
+analogous surface, and there is no agy-side equivalent to gate. This is a
+deliberate, Josh-approved single-surface exception to the usual rule that
+hook/skill changes ship to both surfaces.
+
 ## Example scraping / data utilities
 
 These scripts target a specific Wix-hosted site and were built as one-offs

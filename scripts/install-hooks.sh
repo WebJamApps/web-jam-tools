@@ -21,6 +21,15 @@
 #    Code ONLY, never agy's hooks.json, since agy has no status-line surface
 #    for this to install into (web-jam-tools#688, web-jam-tools#691).
 #
+#    Also idempotently sets "permissions.defaultMode" to DEFAULT_MODE
+#    (currently "acceptEdits") in ~/.claude/settings.json — Claude Code ONLY,
+#    never agy's hooks.json, since agy has no permission-mode concept at all
+#    (docs/agy-hooks.md). This pins the session out of the "auto" mode in
+#    which hooks/opus-delegation-gate.sh withdraws its subagent exemption and
+#    refuses every Edit/Write/NotebookEdit — a defect that burned two
+#    dispatched subagents (~93k and ~62k tokens, zero output) before nothing
+#    pinned the mode (web-jam-tools#705).
+#
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
@@ -160,6 +169,28 @@ AGY_ONLY_PRE_TOOL_USE_HOOKS=(
   "send_email|delete_email|batch_delete_emails::block-agy-gmail-send-delete.sh"
   ".*::agy-model-guard.sh"
 )
+
+# permissions.defaultMode this installer keeps set in settings.json
+# (web-jam-tools#705). When the session's permission mode is "auto" (rather
+# than a deliberate mode), hooks/opus-delegation-gate.sh withdraws its
+# subagent exemption and refuses EVERY Edit/Write/NotebookEdit to a
+# git-tracked path, main thread and subagent alike — measured cost: two
+# dispatched Sonnet subagents refused on their first edit, ~93k and ~62k
+# tokens burned for zero output (2026-08-22). Nothing pinned the session out
+# of the mode that triggers it, so this installer now does: it sets
+# permissions.defaultMode to "acceptEdits", the same versioned/idempotent way
+# it already manages DENY_RULES/ASK_RULES below (single scalar value, not a
+# list — see the permissions.defaultMode merge in
+# scripts/merge-hooks-into-settings.ts, modeled on the statusLine merge from
+# web-jam-tools#688).
+#
+# Claude Code ONLY — deliberately NOT mirrored into agy's hooks.json. agy has
+# no permission-mode concept at all (docs/agy-hooks.md: "without touching
+# Claude Code's permissions at all (non-goal)"), so DEFAULT_MODE is passed
+# only to the $SETTINGS_PATH invocations below, never to the $AGY_HOOKS_PATH
+# ones (Josh-approved single-surface exception to the usual both-surfaces
+# rule for hook/skill changes).
+DEFAULT_MODE="acceptEdits"
 
 # permissions.deny patterns this installer keeps registered in settings.json
 # (web-jam-tools#308). PreToolUse hooks exit with code 2 to hard-block
@@ -641,6 +672,11 @@ STATUS_LINE_DEST="$HOOKS_DEST/statusline.sh"
 STATUS_LINE_COMMAND="$STATUS_LINE_DEST"
 merge_status_line_args=("$STATUS_LINE_COMMAND")
 
+# --- permissions.defaultMode (web-jam-tools#705) ---
+# Same Claude-Code-only scoping as merge_status_line_args above: passed only
+# to the $SETTINGS_PATH invocations below, never to $AGY_HOOKS_PATH.
+merge_default_mode_args=("$DEFAULT_MODE")
+
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432) ---
 #
 # agy ignores its own PreToolUse "matcher" JSON field entirely (finding 2),
@@ -719,7 +755,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
     DRIFT=1
   fi
 
@@ -823,7 +859,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 
