@@ -140,22 +140,104 @@ Deno.test("empty command is not blocked", () => {
   assertEquals(result, { blocked: false });
 });
 
-// --- the other 16 substring rules still fire on real invocations ---
+// --- web-jam-tools#716: all 14 POSITIONAL_RULES match a command's own argv
+// positionally, not the flattened whole-command text — so a real invocation
+// still blocks, and the SAME rule text merely quoted/embedded in another
+// command's argument (a --search query, an echo string, etc.) no longer
+// false-positives. This is the exact reproduction class from the issue:
+// `gh issue list --search "gh repo delete false positive"` used to block. ---
 
-Deno.test("real 'gh repo delete' is blocked", () => {
-  const result = checkIrreversibleOperation("gh repo delete owner/repo");
-  assertEquals(result.blocked, true);
-});
+const POSITIONAL_RULE_CASES: Array<{ rule: string; real: string; quoted: string }> = [
+  {
+    rule: "gh repo delete",
+    real: "gh repo delete owner/repo",
+    quoted: `gh issue list --repo owner/repo --search "gh repo delete false positive"`,
+  },
+  {
+    rule: "gh label delete",
+    real: "gh label delete bug",
+    quoted: `gh issue list --search "gh label delete false positive"`,
+  },
+  {
+    rule: "gh project delete",
+    real: "gh project delete 1",
+    quoted: `echo "gh project delete removes the whole project"`,
+  },
+  {
+    rule: "gh project item-delete",
+    real: "gh project item-delete --id 1",
+    quoted: `echo "gh project item-delete removes one item"`,
+  },
+  {
+    rule: "gh project field-delete",
+    real: "gh project field-delete --id 1",
+    quoted: `echo "gh project field-delete removes a field"`,
+  },
+  {
+    rule: "heroku addons:destroy",
+    real: "heroku addons:destroy my-addon",
+    quoted: `gh issue list --search "heroku addons:destroy false positive"`,
+  },
+  {
+    rule: "gh auth token",
+    real: "gh auth token",
+    quoted: `echo "never run gh auth token in a script"`,
+  },
+  {
+    rule: "gh issue delete",
+    real: "gh issue delete 42",
+    quoted: `echo "gh issue delete removes an issue permanently"`,
+  },
+  {
+    rule: "gh run delete",
+    real: "gh run delete 123",
+    quoted: `echo "gh run delete removes a workflow run"`,
+  },
+  {
+    rule: "gh repo sync --force",
+    real: "gh repo sync owner/repo --force",
+    quoted: `echo "gh repo sync owner/repo --force overwrites history"`,
+  },
+  {
+    rule: "gh issue transfer",
+    real: "gh issue transfer 42 dest/repo",
+    quoted: `echo "gh issue transfer moves an issue to another repo"`,
+  },
+  {
+    rule: "gh repo rename",
+    real: "gh repo rename new-name",
+    quoted: `echo "gh repo rename changes the repo slug"`,
+  },
+  {
+    rule: "gh workflow run",
+    real: "gh workflow run deploy.yml",
+    quoted: `echo "gh workflow run triggers a workflow dispatch"`,
+  },
+  {
+    rule: "gh pr merge",
+    real: "gh pr merge 123",
+    quoted: `echo "gh pr merge finalizes the PR"`,
+  },
+];
 
-Deno.test("real 'gh pr merge' is blocked", () => {
-  const result = checkIrreversibleOperation("gh pr merge 123");
-  assertEquals(result.blocked, true);
-});
+for (const { rule, real, quoted } of POSITIONAL_RULE_CASES) {
+  Deno.test(`web-jam-tools#716: real '${rule}' invocation still blocks`, () => {
+    const result = checkIrreversibleOperation(real);
+    assertEquals(result.blocked, true, `expected '${real}' to block`);
+  });
 
-Deno.test("real 'heroku addons:destroy' is blocked", () => {
-  const result = checkIrreversibleOperation("heroku addons:destroy my-addon");
-  assertEquals(result.blocked, true);
-});
+  Deno.test(
+    `web-jam-tools#716: '${rule}' merely quoted/embedded in another command's argument is NOT blocked`,
+    () => {
+      const result = checkIrreversibleOperation(quoted);
+      assertEquals(
+        result,
+        { blocked: false },
+        `expected '${quoted}' to pass through, got: ${JSON.stringify(result)}`,
+      );
+    },
+  );
+}
 
 // --- wrapper-bypass fix (guard-wrapper-bypass): isGitPushDeletion is a
 // positional check requiring "git" at argv[0]; a wrapper program ahead of
