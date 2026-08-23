@@ -319,6 +319,17 @@ Deno.test("default invocation (no --hooks-dir) still targets $HOME/.claude/hooks
     // web-jam-tools#691: statusline.sh lands alongside the hooks at the
     // default destination too, but is not itself a hook.
     assertEquals(linked, [...shHookNames(), "statusline.sh"].sort());
+
+    // web-jam-tools#721: a normal, unsandboxed-hooks-dir run must still
+    // register statusLine exactly as before — pointed at the default
+    // $HOME/.claude/hooks/statusline.sh destination, unaffected by this
+    // issue's --hooks-dir guard (which never fires here since --hooks-dir
+    // was not passed).
+    const settings = JSON.parse(await Deno.readTextFile(`${settingsDir}/settings.json`));
+    assertEquals(settings.statusLine, {
+      type: "command",
+      command: `${home}/.claude/hooks/statusline.sh`,
+    });
   } finally {
     await Deno.remove(home, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
@@ -457,6 +468,159 @@ Deno.test("--hooks-dir is exempt from the worktree guard (no --force needed)", a
     }
   });
 });
+
+// --- Partial-sandbox guard: --hooks-dir alone must not touch live config
+// (web-jam-tools#721) ---
+//
+// Before the fix, --hooks-dir only redirected where hook *symlinks* were
+// created — it never redirected the settings-merge targets
+// ($HOME/.claude/settings.json, $HOME/.gemini/config/hooks.json). A
+// --hooks-dir-only run still merged into whatever settings.json/hooks.json
+// it found under $HOME, including overwriting statusLine with a path into
+// the temporary hooks directory. These tests redirect HOME to a throwaway
+// dir seeded with realistic pre-existing config (never the real $HOME) and
+// assert the run refuses outright, verifying BOTH surfaces independently
+// rather than inferring one from the other.
+
+const REALISTIC_SETTINGS_JSON = JSON.stringify(
+  {
+    statusLine: { type: "command", command: "/home/fakeuser/.claude/hooks/statusline.sh" },
+    permissions: { deny: ["Bash(git push --force *)"], defaultMode: "acceptEdits" },
+    hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] },
+  },
+  null,
+  2,
+);
+
+const REALISTIC_AGY_HOOKS_JSON = JSON.stringify(
+  {
+    hooks: {
+      PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo pre" }] }],
+      PostToolUse: [],
+    },
+  },
+  null,
+  2,
+);
+
+async function seedFakeHome(home: string): Promise<{ settingsPath: string; agyHooksPath: string }> {
+  await Deno.mkdir(`${home}/.claude`, { recursive: true });
+  await Deno.mkdir(`${home}/.gemini/config`, { recursive: true });
+  const settingsPath = `${home}/.claude/settings.json`;
+  const agyHooksPath = `${home}/.gemini/config/hooks.json`;
+  await Deno.writeTextFile(settingsPath, REALISTIC_SETTINGS_JSON);
+  await Deno.writeTextFile(agyHooksPath, REALISTIC_AGY_HOOKS_JSON);
+  return { settingsPath, agyHooksPath };
+}
+
+Deno.test(
+  "install-hooks.sh --hooks-dir without --settings-path refuses and leaves both live config files byte-identical",
+  async () => {
+    const home = await Deno.makeTempDir();
+    const hooksDir = await Deno.makeTempDir();
+    try {
+      const { settingsPath, agyHooksPath } = await seedFakeHome(home);
+      const settingsBefore = await Deno.readTextFile(settingsPath);
+      const agyHooksBefore = await Deno.readTextFile(agyHooksPath);
+
+      const res = await run(
+        "bash",
+        [INSTALL_SCRIPT, "--hooks-dir", hooksDir],
+        { HOME: home },
+      );
+
+      assert(res.code !== 0, "expected --hooks-dir without --settings-path to be refused");
+      assert(
+        res.stderr.includes("--settings-path"),
+        `expected the refusal to name --settings-path, got: ${res.stderr}`,
+      );
+      assert(res.stderr.includes("web-jam-tools#721"), res.stderr);
+
+      // Claude Code surface: verified independently.
+      const settingsAfter = await Deno.readTextFile(settingsPath);
+      assertEquals(settingsAfter, settingsBefore, "settings.json must be byte-identical");
+
+      // agy/Antigravity surface: verified independently, not inferred from
+      // the Claude Code result above.
+      const agyHooksAfter = await Deno.readTextFile(agyHooksPath);
+      assertEquals(agyHooksAfter, agyHooksBefore, "agy hooks.json must be byte-identical");
+
+      // Nothing should have been written under the (never-reached) hooks-dir
+      // sandbox either — the guard fires before any write.
+      const hooksDirContents = [...Deno.readDirSync(hooksDir)];
+      assertEquals(hooksDirContents.length, 0, "expected --hooks-dir to remain empty");
+    } finally {
+      await Deno.remove(home, { recursive: true });
+      await Deno.remove(hooksDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh CLAUDE_HOOKS_DIR without --settings-path refuses and leaves both live config files byte-identical",
+  async () => {
+    const home = await Deno.makeTempDir();
+    const hooksDir = await Deno.makeTempDir();
+    try {
+      const { settingsPath, agyHooksPath } = await seedFakeHome(home);
+      const settingsBefore = await Deno.readTextFile(settingsPath);
+      const agyHooksBefore = await Deno.readTextFile(agyHooksPath);
+
+      const res = await run(
+        "bash",
+        [INSTALL_SCRIPT],
+        { HOME: home, CLAUDE_HOOKS_DIR: hooksDir },
+      );
+
+      assert(res.code !== 0, "expected CLAUDE_HOOKS_DIR without --settings-path to be refused");
+      assert(
+        res.stderr.includes("--settings-path"),
+        `expected the refusal to name --settings-path, got: ${res.stderr}`,
+      );
+
+      const settingsAfter = await Deno.readTextFile(settingsPath);
+      assertEquals(settingsAfter, settingsBefore, "settings.json must be byte-identical");
+
+      const agyHooksAfter = await Deno.readTextFile(agyHooksPath);
+      assertEquals(agyHooksAfter, agyHooksBefore, "agy hooks.json must be byte-identical");
+    } finally {
+      await Deno.remove(home, { recursive: true });
+      await Deno.remove(hooksDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --hooks-dir with --settings-path (fully sandboxed) is still accepted",
+  async () => {
+    const home = await Deno.makeTempDir();
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    try {
+      const { settingsPath: liveSettingsPath, agyHooksPath: liveAgyHooksPath } = await seedFakeHome(
+        home,
+      );
+      const liveSettingsBefore = await Deno.readTextFile(liveSettingsPath);
+      const liveAgyHooksBefore = await Deno.readTextFile(liveAgyHooksPath);
+      const settingsPath = `${settingsDir}/settings.json`;
+
+      const res = await run(
+        "bash",
+        [INSTALL_SCRIPT, "--hooks-dir", hooksDir, "--settings-path", settingsPath],
+        { HOME: home },
+      );
+
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+      // The fully-sandboxed run must still leave $HOME's live config alone.
+      assertEquals(await Deno.readTextFile(liveSettingsPath), liveSettingsBefore);
+      assertEquals(await Deno.readTextFile(liveAgyHooksPath), liveAgyHooksBefore);
+    } finally {
+      await Deno.remove(home, { recursive: true });
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
 
 // --- --check mode and secret-scan gate (web-jam-tools#339) ---
 

@@ -50,6 +50,13 @@
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
 #                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
 #                           the symlink step without touching the real hooks dir.
+#                           REQUIRES --settings-path (or CLAUDE_SETTINGS_PATH) to
+#                           also be passed — --hooks-dir only redirects where hook
+#                           symlinks are created, never the settings-merge targets,
+#                           so passing it alone would still merge into the REAL
+#                           $HOME/.claude/settings.json and $HOME/.gemini/config/
+#                           hooks.json; the script refuses that combination
+#                           (web-jam-tools#721).
 #   --settings-path PATH   Merge into PATH instead of $HOME/.claude/settings.json
 #                           (also settable via CLAUDE_SETTINGS_PATH). Mainly for
 #                           testing the merge without touching a real settings file.
@@ -593,6 +600,32 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+# --- Partial-sandbox guard (web-jam-tools#721) ---
+# --hooks-dir/CLAUDE_HOOKS_DIR only ever redirected where hook *symlinks* are
+# created (HOOKS_DEST) — it never redirected the settings-merge targets
+# (SETTINGS_PATH, and transitively AGY_HOOKS_PATH/AGENTS_MD_PATH, both
+# derived from SETTINGS_PATH above). A caller who passed --hooks-dir alone,
+# believing that flag sandboxes "the test run," still had this installer
+# merge into the REAL $HOME/.claude/settings.json and $HOME/.gemini/config/
+# hooks.json — in particular overwriting the live statusLine command with a
+# path into the temporary hooks directory. That happened for real during
+# work on a different issue (see #721's reproduction).
+#
+# Refuse the combination instead of silently deriving a second sandboxed
+# path, matching the existing worktree guard below: name the exact flag the
+# caller needs to pass, and fail BEFORE any write, not after.
+if [ "$HOOKS_DEST_IS_DEFAULT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "0" ]; then
+  echo "error: --hooks-dir (or CLAUDE_HOOKS_DIR) was given without --settings-path." >&2
+  echo "--hooks-dir only sandboxes where hook symlinks are created — it does NOT" >&2
+  echo "sandbox the settings-merge targets (\$HOME/.claude/settings.json," >&2
+  echo "\$HOME/.gemini/config/hooks.json), so this combination would still merge" >&2
+  echo "into your REAL live settings, including overwriting the live statusLine" >&2
+  echo "command with a path into the temporary hooks directory (web-jam-tools#721)." >&2
+  echo "Pass --settings-path PATH (or CLAUDE_SETTINGS_PATH) too to fully sandbox" >&2
+  echo "this run." >&2
+  exit 1
+fi
 
 if [ "$AGY_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
   AGY_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/hooks.json"
