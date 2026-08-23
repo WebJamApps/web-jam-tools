@@ -244,7 +244,9 @@ skill.
     `issueTypeId`), file the executable coding work as a child `Task` sub-issue attached under that
     Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached
     under that same Epic (natively linked via `blocked_by` dependency to the coding child, without the
-    `Blocked` label). The parent Epic body carries the sub-issue list and closes when all sub-issues close.
+    `Blocked` label). The parent Epic body specifies
+    `## What this builds`, milestone, design document pointer, and `## Acceptance criteria` ("Closes
+    when all child sub-issues close") without duplicating a manual markdown checklist of sub-issues.
   - **Manual Step Issue & Document Title Rule:** Never prefix issue titles or runbook document
     titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional,
     action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and
