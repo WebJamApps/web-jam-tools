@@ -240,24 +240,36 @@ Deno.test("web-jam-tools#714: an irreversible command is still blocked while den
 // --- genuine evaluation failures (NOT a repo-config parse error) must still fail closed ---
 
 Deno.test("when deno itself is unavailable, the guard still fails CLOSED", async () => {
-  // Hide `deno` from PATH (it normally lives outside /usr/bin on this
-  // laptop) while keeping the other binaries the hook shells out to
-  // (bash, jq, mktemp, cat) available, so only the deno lookup fails.
-  const input = JSON.stringify({ tool_input: { command: "git status" } });
-  const process = new Deno.Command("bash", {
-    args: [HOOK_PATH],
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "piped",
-    env: { PATH: "/usr/bin:/bin" },
-  });
-  const child = process.spawn();
-  const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(input));
-  await writer.close();
-  const output = await child.output();
-  const stderr = new TextDecoder().decode(output.stderr).trim();
+  // Prepend a directory with a failing dummy `deno` command to PATH so the
+  // guard's `deno run` fails closed even while preserving the rest of PATH
+  // (bash, jq, mktemp, cat) across different OS/CI environments.
+  const shadowDir = await Deno.makeTempDir({ prefix: "shadow-deno-" });
+  try {
+    const fakeDeno = `${shadowDir}/deno`;
+    await Deno.writeTextFile(
+      fakeDeno,
+      '#!/bin/sh\necho "deno: command not found" >&2\nexit 127\n',
+    );
+    await Deno.chmod(fakeDeno, 0o755);
 
-  assertEquals(output.code, 2, `expected fail-closed when deno is missing, stderr: ${stderr}`);
-  assertEquals(stderr.includes("guard could not evaluate"), true, stderr);
+    const input = JSON.stringify({ tool_input: { command: "git status" } });
+    const process = new Deno.Command("bash", {
+      args: [HOOK_PATH],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+      env: { PATH: `${shadowDir}:${Deno.env.get("PATH") ?? ""}` },
+    });
+    const child = process.spawn();
+    const writer = child.stdin.getWriter();
+    await writer.write(new TextEncoder().encode(input));
+    await writer.close();
+    const output = await child.output();
+    const stderr = new TextDecoder().decode(output.stderr).trim();
+
+    assertEquals(output.code, 2, `expected fail-closed when deno is missing, stderr: ${stderr}`);
+    assertEquals(stderr.includes("guard could not evaluate"), true, stderr);
+  } finally {
+    await Deno.remove(shadowDir, { recursive: true });
+  }
 });
