@@ -258,7 +258,10 @@ Deno.test("when deno itself is unavailable, the guard still fails CLOSED", async
       stdin: "piped",
       stdout: "piped",
       stderr: "piped",
-      env: { PATH: `${shadowDir}:${Deno.env.get("PATH") ?? ""}` },
+      env: {
+        BASH_ENV: "",
+        PATH: `${shadowDir}:${Deno.env.get("PATH") ?? ""}`,
+      },
     });
     const child = process.spawn();
     const writer = child.stdin.getWriter();
