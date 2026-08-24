@@ -9,6 +9,7 @@ import {
   R11_MCP_ALLOWS,
   R5_BLANKET_WILDCARDS,
   shouldPruneRule,
+  TASK_RUNNER_BLANKET_WILDCARDS,
 } from "../src/prune-local-permission-allows/prune.ts";
 import { runCli } from "../src/prune-local-permission-allows/cli.ts";
 
@@ -18,6 +19,19 @@ Deno.test("shouldPruneRule - R-5 blanket wildcards", () => {
     assertEquals(res.prune, true, `Expected ${wildcard} to be pruned`);
     assertEquals(res.reason, "R-5");
   }
+});
+
+Deno.test("shouldPruneRule - task-runner blanket wildcards (web-jam-tools#685, §3a)", () => {
+  for (const wildcard of TASK_RUNNER_BLANKET_WILDCARDS) {
+    const res = shouldPruneRule(wildcard);
+    assertEquals(res.prune, true, `Expected ${wildcard} to be pruned`);
+    assertEquals(res.reason, "TASK-RUNNER-BLANKET");
+  }
+});
+
+Deno.test("shouldPruneRule - a narrow deno task allow rule (e.g. the new post-pr-review ALLOW_RULES entry) survives", () => {
+  const res = shouldPruneRule("Bash(deno task post-pr-review *)");
+  assertEquals(res.prune, false);
 });
 
 Deno.test("shouldPruneRule - R-11 MCP write allows", () => {

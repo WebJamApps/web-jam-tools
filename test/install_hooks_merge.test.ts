@@ -775,6 +775,103 @@ Deno.test(
   },
 );
 
+// --- permissions.allow (web-jam-tools#685, §3a) ---
+
+Deno.test("--allow adds patterns to permissions.allow when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--allow",
+      "Bash(deno task post-pr-review *)",
+      "Bash(deno task edit-issue *)",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("added permissions.allow rule Bash(deno task post-pr-review *)"));
+    assert(res.stdout.includes("added permissions.allow rule Bash(deno task edit-issue *)"));
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.allow, [
+      "Bash(deno task post-pr-review *)",
+      "Bash(deno task edit-issue *)",
+    ]);
+  });
+});
+
+Deno.test("a second --allow run with the same patterns is a no-op", async () => {
+  await withTempSettings({}, async (path) => {
+    const args = ["--allow", "Bash(deno task post-pr-review *)"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.allow?.length, 1);
+  });
+});
+
+Deno.test(
+  "pre-existing permissions.allow, permissions.ask, and permissions.deny entries survive an --allow merge untouched",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          allow: ["Bash(ls:*)"],
+          ask: ["Bash(rm -rf *)"],
+          deny: ["Bash(curl *)"],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, ["--allow", "Bash(deno task post-pr-review *)"]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.ask, ["Bash(rm -rf *)"]);
+        assertEquals(data.permissions?.deny, ["Bash(curl *)"]);
+        // allow keeps the pre-existing entry (order preserved) and appends
+        // the new one — never reordered, never removed.
+        assertEquals(data.permissions?.allow, [
+          "Bash(ls:*)",
+          "Bash(deno task post-pr-review *)",
+        ]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "install-hooks.sh's real ALLOW_RULES set merges cleanly and is idempotent (sandboxed CLAUDE_SETTINGS_PATH via --settings-path)",
+  async () => {
+    // Mirrors install-hooks.sh's ALLOW_RULES array (web-jam-tools#685, §3a)
+    // rather than parsing it out of the shell script, same convention as the
+    // DENY_RULES test above.
+    const ALLOW_RULES = [
+      "Bash(deno task post-pr-review *)",
+      "Bash(deno task post-pr-comment *)",
+      "Bash(deno task post-issue-comment *)",
+      "Bash(deno task edit-issue *)",
+    ];
+    await withTempSettings(undefined, async (path) => {
+      const first = await runMerge(path, ["--allow", ...ALLOW_RULES]);
+      assertEquals(first.code, 0, first.stderr);
+      const data = await readJson(path);
+      assertEquals(data.permissions?.allow, ALLOW_RULES);
+
+      const second = await runMerge(path, ["--allow", ...ALLOW_RULES]);
+      assertEquals(second.code, 0, second.stderr);
+      assert(
+        second.stdout.includes("already up to date (no-op)"),
+        `expected no-op message, got: ${second.stdout}`,
+      );
+      const data2 = await readJson(path);
+      assertEquals(data2.permissions?.allow?.length, ALLOW_RULES.length);
+    });
+  },
+);
+
 // --- permissions.ask (web-jam-tools#339) ---
 
 Deno.test("--ask adds patterns to permissions.ask when absent", async () => {

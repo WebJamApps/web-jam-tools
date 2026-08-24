@@ -69,6 +69,11 @@ const EXPECTED_HOOK_SCRIPTS = [
   // PreToolUse guard (web-jam-tools#511) — denies Write/Edit/NotebookEdit
   // to paths outside the repository working tree.
   "block-out-of-tree-write.sh",
+  // PreToolUse guard (web-jam-tools#685) — denies the four raw `gh` write
+  // verbs (gh pr review/comment, gh issue comment/edit) so a dispatched
+  // reviewing subagent can only reach them through the guarded
+  // scripts/gh-write/* `deno task` commands.
+  "block-raw-gh-write.sh",
   "block-secret-dumps.sh",
   // PreToolUse guard (web-jam-tools#304) — blocks a Bash command that
   // carries a credential-shaped LITERAL, before it can be approved and

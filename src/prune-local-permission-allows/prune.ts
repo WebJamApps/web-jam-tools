@@ -9,6 +9,19 @@ export const R5_BLANKET_WILDCARDS = [
   "Bash(gh project *)",
 ];
 
+// web-jam-tools#685, §3a of
+// ~/Dropbox/web-jam-llms/Token_Savings/pr-review-self-posting-design-2026-08-22.md:
+// these two pre-approve EVERY task in deno.json and every script in
+// package.json — including the four named ALLOW_RULES entries
+// scripts/install-hooks.sh now registers for the guarded gh-write commands.
+// Narrow rules are inert while a blanket that matches everything is still
+// present, so removing the blanket is a separate act from adding the narrow
+// rules (which install-hooks.sh does).
+export const TASK_RUNNER_BLANKET_WILDCARDS = [
+  "Bash(deno task *)",
+  "Bash(npm run *)",
+];
+
 export const R11_MCP_ALLOWS = [
   "mcp__claude_ai_GitHub_MCP__add_issue_comment",
   "mcp__claude_ai_GitHub_MCP__issue_write",
@@ -24,7 +37,7 @@ export const CANONICAL_CREATE_DRAFT_PR_RULES = [
 
 export interface PruneRuleResult {
   prune: boolean;
-  reason?: "R-5" | "R-11" | "R-20";
+  reason?: "R-5" | "R-11" | "R-20" | "TASK-RUNNER-BLANKET";
 }
 
 export function shouldPruneRule(rule: string): PruneRuleResult {
@@ -39,6 +52,10 @@ export function shouldPruneRule(rule: string): PruneRuleResult {
 
   if (R11_MCP_ALLOWS.includes(trimmed)) {
     return { prune: true, reason: "R-11" };
+  }
+
+  if (TASK_RUNNER_BLANKET_WILDCARDS.includes(trimmed)) {
+    return { prune: true, reason: "TASK-RUNNER-BLANKET" };
   }
 
   if (trimmed.includes("create-draft-pr.sh")) {
@@ -82,7 +99,7 @@ export interface FileProcessResult {
   validJson: boolean;
   beforeCount: number;
   afterCount: number;
-  removedEntries: Array<{ rule: string; reason: "R-5" | "R-11" | "R-20" }>;
+  removedEntries: Array<{ rule: string; reason: "R-5" | "R-11" | "R-20" | "TASK-RUNNER-BLANKET" }>;
   backedUpTo?: string;
 }
 
@@ -119,7 +136,9 @@ export function processTargetFile(
   const beforeCount = allowRules.length;
 
   const remaining: string[] = [];
-  const removedEntries: Array<{ rule: string; reason: "R-5" | "R-11" | "R-20" }> = [];
+  const removedEntries: Array<
+    { rule: string; reason: "R-5" | "R-11" | "R-20" | "TASK-RUNNER-BLANKET" }
+  > = [];
 
   for (const rule of allowRules) {
     const res = shouldPruneRule(rule);

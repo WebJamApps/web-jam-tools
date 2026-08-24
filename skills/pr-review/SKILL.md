@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Cross-model PR review pipeline where reviewer tier is never below author tier (Flash High reviews Flash Medium/Haiku; Sonnet reviews Flash High/Flash Medium/Haiku; Opus reviews Sonnet on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `gh pr review --comment`.
+description: Cross-model PR review pipeline where reviewer tier is never below author tier (Flash High reviews Flash Medium/Haiku; Sonnet reviews Flash High/Flash Medium/Haiku; Opus reviews Sonnet on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
 metadata:
   version: v2
   publisher: josh
@@ -219,41 +219,39 @@ Review the PR diff, description, checks, and mergeability against these mandator
    ### 🟡 Actionable Feedback & Suggestions
    ✅ None
    ````
-3. Write the finished review body to a scratch file (e.g. `/tmp/pr-review-<Repo>-<pr-num>.md` — never inside the repo, per AGENTS.md convention), then post it:
+3. Write the finished review body to a scratch file (e.g. `/tmp/pr-review-<Repo>-<pr-num>.md` — never inside the repo, per AGENTS.md convention), then post it with the guarded command — the only route to `gh pr review` on either agent surface (web-jam-tools#685):
    ```sh
-   gh pr review <Repo>#<pr-num> --comment --body-file <scratch_review_file>
+   deno task post-pr-review --repo <Owner/Repo> --pr <pr-num> --body-file <scratch_review_file>
    ```
    *(Note: Review comments provide feedback for the PR author and Josh. Final PR merge remains under Josh's approval.)*
 
-   **Who runs this command depends on how this skill is being run — read this before posting:**
+   **This works identically whether the skill is running as the top-level session or as an
+   Agent-tool-dispatched subagent — no scratch-file handoff back to the orchestrating session is
+   needed or correct anymore.** The earlier version of this step asked a dispatched subagent to
+   write the file and report its path back, on the theory that subagents run in an independent
+   permission context that never inherits `permissions.allow`. That theory was wrong (verified
+   2026-08-22): `gh pr review` was never in `permissions.allow` at all — it sits under
+   `permissions.ask`, and an `ask` prompt with no human present to answer it is what actually
+   dead-ended, no inheritance question involved. `deno task post-pr-review` sidesteps that dead end
+   two ways: it is itself a named `permissions.allow` capability (`scripts/install-hooks.sh`'s
+   `ALLOW_RULES`), so the Bash tool call that invokes it needs no prompt; and the `gh pr review`
+   subprocess it runs internally never becomes a separate Bash tool call, so the `ask` rule that
+   gates the raw verb never sees it. `hooks/block-raw-gh-write.sh` (`PreToolUse`, both surfaces)
+   denies anyone — human or agent — who tries to run the raw verb directly instead, so this guarded
+   command is the only path left regardless of who is running the skill.
 
-   - **Running interactively as the top-level session** (Josh invoked `/pr-review` directly, or
-     Opus/a top-level Sonnet/Flash session is running it inline): post directly with the command
-     above. Nothing below applies.
-   - **Running as an Agent-tool-dispatched subagent** (a parent session used the `Agent` tool to
-     hand this whole `/pr-review` run to a subagent — per this skill's "Purpose & Model Pairing"
-     section above): **do NOT attempt to run `gh pr review --comment` yourself.** This is a
-     known Claude Code harness limitation, not a WebJamApps settings gap and not something
-     `scripts/install-hooks.sh` can fix: Agent-tool subagents run in an independent permission
-     context and do not inherit the parent session's `~/.claude/settings.json`
-     `permissions.allow` list, even for entries like `Bash(gh pr review *)` that are already
-     approved at the top level. A dispatched subagent has no human present to answer the resulting
-     interactive prompt, so the write silently dead-ends. Anthropic has confirmed this is
-     intentional (subagents get independent, stricter-by-default permissions) and closed the
-     inheritance requests as not planned:
-     [anthropics/claude-code#37730](https://github.com/anthropics/claude-code/issues/37730),
-     [anthropics/claude-code#37442](https://github.com/anthropics/claude-code/issues/37442).
-     Instead:
-     1. Write the finished review body to the scratch file as in step 3 above.
-     2. In your final report back to the orchestrating session, state plainly that the review is
-        complete and give the **absolute path** to that scratch file — do not attempt the post and
-        report the review as **written and awaiting posting**, never as posted.
-     3. The **orchestrating session** (which has its own, already-approved permission context)
-        reads that file and runs the `gh pr review --comment --body-file` command itself.
-   - If you cannot tell which of the two cases you're in, attempt the post — and if it is denied,
-     fall back to the file handoff above. A denied attempt costs nothing but the fallback you would
-     have taken anyway; a review that silently never landed on GitHub is a dead-ended dispatch that
-     looks like it worked.
+   The command itself refuses an empty body, a body carrying a credential-shaped literal, and a
+   review body with no `## PR Review Summary` header, and skips posting outright (no double-post,
+   exit 0) when the PR already carries an automated review at the current head SHA — see
+   `scripts/gh-write/guard.ts`. A transient network failure (e.g. an `i/o timeout` against the
+   GitHub API, the actual failure mode measured posting a review to
+   `WebJamApps/JaMmusic#1324 "Remove the localhost:7000 BackendUrl default and hardcoded credentials
+   from vite.config.ts"` on 2026-08-20) is retried automatically rather than surfaced on the first
+   attempt.
+
+   If the command itself reports a real failure (not the already-reviewed skip, which is success),
+   fix the underlying problem and re-run it — there is no fallback path to hand off to a different
+   session.
 
 ### A found defect is fixed before merge — never deferred
 
