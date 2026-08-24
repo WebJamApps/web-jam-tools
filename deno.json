@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.30.91",
+  "version": "1.30.92",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "circleci-settings": "deno run --allow-net --allow-env scripts/circleci-settings.ts",
@@ -32,6 +32,7 @@
     "fmt": "deno fmt src/ test/",
     "fmt:check": "deno fmt --check src/ test/",
     "lint": "deno lint src/ test/",
+    "jscpd": "deno run -A npm:jscpd src/ test/",
     "audit": "bash scripts/audit.sh",
     "sast": "bash scripts/sast.sh",
     "scrape:gigs": "deno run -A src/gig-scraper/scrape_gigs.ts",
