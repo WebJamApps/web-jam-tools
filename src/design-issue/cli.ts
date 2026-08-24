@@ -3,8 +3,10 @@
 // - deno task design:gate1 <doc.md> (web-jam-tools#741)
 // - deno task design:lint-doc <doc.md> (web-jam-tools#742)
 // - deno task design:lint-runbook <runbook.md> (web-jam-tools#743)
+// - deno task design:candidates (web-jam-tools#745)
 
 import { parseArgs } from "@std/cli/parse-args";
+import { runCandidatesCli } from "./candidates.ts";
 import { type Gate1Options, runGate1 } from "./gate1.ts";
 import { runLintDocCli } from "./lint_doc.ts";
 import { runLintRunbookCli } from "./lint_runbook.ts";
@@ -87,6 +89,10 @@ export async function runCli(
 
   if (firstArg === "lint-runbook" || firstArg === "lint_runbook") {
     return await runLintRunbookCli(args.slice(1));
+  }
+
+  if (firstArg === "candidates") {
+    return await runCandidatesCli(args.slice(1));
   }
 
   if (firstArg === "gate1") {
