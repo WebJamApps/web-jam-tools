@@ -372,14 +372,11 @@ and it disappears when the epic closes.
   actually acts on it — e.g. accretion counts belong on the manual-steps issue that performs the
   reset, not on the epic that describes the problem.
 - Especially when the work is **Josh's own manual steps** — those must be tracked in an issue,
-  never left in a chat or a doc. See [[manual-steps-go-in-issues]].
+  never left in a chat or a doc.
 - The document keeps the reasoning; the issue is the tracking surface. Link them both ways.
 - The related standing rule already in `docs/cross-ai-rules.md` covers "deferred to a follow-up
   requires the follow-up to exist". **This is the wider case it does not cover:** a decision that
   was *made and recorded*, not deferred — and it went untracked anyway.
-
-Related: [[design-record-approve-then-dispatch]], [[github-issues-must-be-closeable]],
-[[artifacts-must-be-traceable-to-decisions]], [[ai-bot-github-account-proposal]].
 
 ### checkbox-means-fully-settled
 
@@ -396,15 +393,16 @@ THREE are true:
 
 **Why:** a box that means only "Josh read it" loses the actionable item. He reads a finding, agrees
 it matters, ticks it — and the work silently evaporates because nothing tracks it. The tick is the
-closing of a loop, not an acknowledgement of reading. This is the same failure class as
-[[artifacts-must-be-traceable-to-decisions]] and [[github-issues-must-be-closeable]].
+closing of a loop, not an acknowledgement of reading. This is the same failure class as leaving
+decisions untracked by actionable, closeable issues.
 
 **How to apply:** never offer to tick a box on the strength of "you've now seen it". Before
 offering, check leg 3 exists — if the decision has not been written into the implementation issue
 yet, say so and offer to record it FIRST, then tick. And never tick a box unprompted: only Josh
 authorizes a specific box, per the standing rule on the issue itself. See
-[[session-checkpoint-claude-misbehaves-milestone]] for the live example (web-jam-tools#324's
-7-finding audit).
+web-jam-tools#324 "No agent connects a new account, credential, or MCP server without Josh's
+explicit authorization — add the rule and audit where it can be mechanically enforced" for the
+live example (7-finding audit).
 
 ### one-decision-at-a-time
 
@@ -416,7 +414,7 @@ During discuss-first / requirements / design conversations, present exactly ONE 
 
 **Reply length in design mode (2026-07-17, gig-venue vetting/design session):** even when each turn ends with one question, a long multi-topic reply is still "too much at one time" — Josh said "we have to slow down… I want to delve into each item so we are sure to get a full design," and a completed action (Stave & Cork fix) got lost inside a long design reply so he asked whether it ever happened. In design mode: SHORT replies, ONE topic per turn, and when an action was executed, state its result in the first line, visually separate from discussion.
 
-**When he says he's confused / needs more info (2026-06-17, CD Baby discussion):** do NOT just re-ask the question. Stop and explain the full end-to-end landscape in plain, non-jargon terms first — give him the mental map (how the whole process works, what depends on what) — then collapse the choice to a clear recommendation rather than another multi-option fork. He often can't pick between options until he understands the terrain they sit in. [[laptop-local-environment]]
+**When he says he's confused / needs more info (2026-06-17, CD Baby discussion):** do NOT just re-ask the question. Stop and explain the full end-to-end landscape in plain, non-jargon terms first — give him the mental map (how the whole process works, what depends on what) — then collapse the choice to a clear recommendation rather than another multi-option fork. He often can't pick between options until he understands the terrain they sit in.
 
 **Applies to investigation/report-back turns too, and a trailing "still outstanding" list is a violation (2026-07-25, JaMmusic#1264 dispatch prep):** I ended several report-back turns with a recommendation PLUS a bulleted tail of 2–3 unresolved threads ("still outstanding: reopen #235 or file fresh… plus your call on the WJSC blocker"), reasoning that they were threads Josh had already opened so re-raising them was just bookkeeping. It isn't — Josh: "one decision at a time please, too many at once and I cannot do a good job discerning the information." Carrying open threads is MY job, not his: park them in the checkpoint memory and surface exactly one when it becomes the next thing in the critical path. Never re-list open questions as a reminder footer. When several are genuinely pending, pick the one that unblocks the most and ask only that.
 
@@ -452,7 +450,5 @@ When a task needs Josh to do something manual — set env/config vars, generate 
 - **ALWAYS hand him the command itself — never just "go run it yourself"** (Josh, 2026-08-01: *"when you prompt Josh to run something be nice to me and give me the command as well please"*). Any time I hand an action back to him — a manual step, a guard that blocks an agent, a "you'll need to do this" — the exact, copy-pasteable command goes in the same message, with real app/branch/file names substituted, not placeholders. This binds MACHINE-GENERATED text too: a hook that denies a command and tells Josh to run it must embed the ready-to-run command in its deny message, not just name the tool.
 - **The `!` prefix does NOT isolate a secret.** Claude Code's `! <command>` runs in THIS session, so the command text and its output land in the transcript exactly as if an agent ran it. For anything touching a credential (`heroku config:get`, `heroku config:set`, `heroku auth:token`), the instruction must say **a separate terminal outside Claude Code** — never `!`. Guard messages must say so explicitly or an agent will helpfully suggest `!` and reintroduce the leak.
 - Include how to verify it worked (a command + expected output).
-- Pair with [[remind-save-secrets-to-keepass]] whenever a step reveals a credential.
-
-Related: [[verify-state-before-suggesting]].
+- Remind Josh to save secrets and passwords to KeePass whenever a step reveals or generates a credential.
 

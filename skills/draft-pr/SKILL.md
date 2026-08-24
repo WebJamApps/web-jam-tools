@@ -186,15 +186,13 @@ worth including (a screenshot, output that exercises the change), it is auto-fen
 script (web-jam-tools#150), so raw `====` coverage banners can no longer render as H1s —
 the original 2026-07-11 failure on web-jam-back PR #935 is fixed at the script level.
 
-Related: [[pr-creation-is-skill-gated]], [[one-semver-bump-per-pr]].
-
 ### pr-attribution-work-by-model
 
 Josh flagged (2026-07-02): web-jam-back PR #892 was built by Sonnet but its footer said the generic "🤖 Generated with [Claude Code](https://claude.com/claude-code)" — wrong per convention.
 
 **Why:** the repo convention (`web-jam-tools/scripts/create-draft-pr.sh`, REQUIRED `--author` flag) puts `🤖 Work by <tool> — <model>` (e.g. "Claude Code — Sonnet 5", "agy — Flash Medium") in the PR footer so Josh can track per-model quality. The generic harness tagline defeats that.
 
-**How to apply:** when Fable/Opus writes a dispatch prompt that ends in a PR, instruct the subagent to either (a) use `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <its real model>"` (it's a SHARED script in web-jam-tools, run from any repo — a Haiku agent once concluded it "doesn't exist" because it looked only inside web-jam-back), or (b) if falling back to `gh pr create`, end the body with `🤖 Work by <tool> — <model>` naming the model actually doing the work — NOT the generic tagline, and NOT Fable's name. Do not retro-edit existing PRs unless Josh asks (he explicitly declined a fix for #892). Bake this into the [[delegate-simple-coding-to-agy]] skill templates when it's next revised.
+**How to apply:** when Fable/Opus writes a dispatch prompt that ends in a PR, instruct the subagent to either (a) use `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <its real model>"` (it's a SHARED script in web-jam-tools, run from any repo — a Haiku agent once concluded it "doesn't exist" because it looked only inside web-jam-back), or (b) if falling back to `gh pr create`, end the body with `🤖 Work by <tool> — <model>` naming the model actually doing the work — NOT the generic tagline, and NOT Fable's name. Do not retro-edit existing PRs unless Josh asks (he explicitly declined a fix for #892). Bake this into the delegate skill templates when it's next revised.
 
 ### one-semver-bump-per-pr
 
@@ -212,4 +210,4 @@ naming a bump target in a dispatch prompt. Two PRs cut from the same base will a
 the same next version — re-read `origin/dev` and take the next free one when CI's version-bump
 gate complains.
 
-**How to apply:** Bump once when the PR's first commit lands. On later pushes to the same branch/PR, leave the version unchanged (the hook reminder is satisfied by the already-bumped version). Only bump again for a genuinely separate PR. If a PR has already over-bumped, reset it to a single bump (correcting an unmerged version is fine — not a published downgrade). Relates to [[never-commit-to-dev]] / the git-feature-branch-and-semver rule.
+**How to apply:** Bump once when the PR's first commit lands. On later pushes to the same branch/PR, leave the version unchanged (the hook reminder is satisfied by the already-bumped version). Only bump again for a genuinely separate PR. If a PR has already over-bumped, reset it to a single bump (correcting an unmerged version is fine — not a published downgrade). Relates to the never-commit-to-dev and git-feature-branch-and-semver rules.
