@@ -220,14 +220,19 @@ Deno.test("runGate1 fails loudly when browser launch fails", async () => {
   }
 });
 
-Deno.test("defaultOpenBrowserImpl launches background command successfully", async () => {
+Deno.test("defaultOpenBrowserImpl formats and executes background command", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-open-browser-" });
   const htmlPath = path.join(tempDir, "test.html");
   await Deno.writeTextFile(htmlPath, "<h1>Test</h1>");
 
   try {
-    // Should run non-blocking shell command cleanly without throwing
-    await defaultOpenBrowserImpl(htmlPath, ":99");
+    let capturedCmd = "";
+    await defaultOpenBrowserImpl(htmlPath, ":99", (cmd) => {
+      capturedCmd = cmd;
+      return Promise.resolve({ success: true, code: 0 });
+    });
+    assertStringIncludes(capturedCmd, 'DISPLAY=":99" google-chrome "file://');
+    assertStringIncludes(capturedCmd, "test.html");
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }

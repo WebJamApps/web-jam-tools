@@ -506,9 +506,8 @@ export function checkScopeContradictions(
       const topic = item.topic.trim();
       if (!topic || topic.length < 5) continue;
 
-      // Check direct phrase match (case-insensitive)
-      const topicRegex = new RegExp(`\\b${escapeRegExp(topic)}\\b`, "i");
-      if (topicRegex.test(trimmed)) {
+      // Check direct phrase match (case-insensitive with word boundary)
+      if (matchesTopicPhrase(trimmed, topic)) {
         violations.push({
           type: "scope-contradiction",
           message:
@@ -574,8 +573,15 @@ const STOP_WORDS = new Set([
   "scope",
 ]);
 
-function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function matchesTopicPhrase(text: string, topic: string): boolean {
+  const lowerText = ` ${text.toLowerCase()} `;
+  const lowerTopic = topic.toLowerCase();
+  const idx = lowerText.indexOf(lowerTopic);
+  if (idx === -1) return false;
+  const beforeChar = lowerText[idx - 1] || " ";
+  const afterChar = lowerText[idx + lowerTopic.length] || " ";
+  const isWordChar = (c: string) => /[a-z0-9_]/.test(c);
+  return !isWordChar(beforeChar) && !isWordChar(afterChar);
 }
 
 /**

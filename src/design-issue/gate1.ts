@@ -120,11 +120,23 @@ export async function defaultScreenshotImpl(
 export async function defaultOpenBrowserImpl(
   htmlPath: string,
   display?: string,
+  execCommand?: (
+    cmd: string,
+    env: Record<string, string>,
+  ) => Promise<{ success: boolean; code: number }>,
 ): Promise<void> {
   const absHtmlPath = path.resolve(htmlPath);
   const activeDisplay = display || Deno.env.get("DISPLAY") || ":0";
   const shellCmd =
     `DISPLAY="${activeDisplay}" google-chrome "file://${absHtmlPath}" >/dev/null 2>&1 &`;
+
+  if (execCommand) {
+    const output = await execCommand(shellCmd, { DISPLAY: activeDisplay });
+    if (!output.success) {
+      throw new Error(`Failed to launch Google Chrome (exit code ${output.code})`);
+    }
+    return;
+  }
 
   const cmd = new Deno.Command("bash", {
     args: ["-c", shellCmd],
