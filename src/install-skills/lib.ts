@@ -23,6 +23,7 @@ export interface InstallSkillsOptions {
   retentionMs?: number;
   now?: Date;
   force?: boolean;
+  allowNonCanonical?: boolean;
   dryRun?: boolean;
   quiet?: boolean;
   allowUnsafeForTesting?: boolean;
@@ -85,6 +86,8 @@ export function parseArgs(args: string[]): InstallSkillsOptions {
       if (!isNaN(days)) options.retentionMs = days * 24 * 60 * 60 * 1000;
     } else if (arg === "--force") {
       options.force = true;
+    } else if (arg === "--allow-non-canonical") {
+      options.allowNonCanonical = true;
     } else if (arg === "--dry-run") {
       options.dryRun = true;
     } else if (arg === "--quiet" || arg === "-q") {
@@ -101,7 +104,8 @@ Options:
   --claude-backup-dest <path> Directory for Claude skill backups (~/.claude/skills-backups)
   --agy-backup-dest <path>    Directory for agy skill backups (~/.gemini/config/plugins/webjam-tasks/skills-backups)
   --retention-days <num>      Backup retention window in days (default: 14)
-  --force                     Bypass worktree refusal guard
+  --force                     Bypass non-canonical clone and worktree refusal guards
+  --allow-non-canonical       Bypass canonical clone directory refusal guard
   --dry-run                   Report actions without making filesystem changes
   --quiet, -q                 Suppress non-error output
   --help, -h                  Show this help message`);
@@ -160,6 +164,13 @@ export function isUnsafeSourcePath(dirPath: string): boolean {
   return false;
 }
 
+export const CANONICAL_REPO_DIR = "/home/joshua/WebJamApps/web-jam-tools";
+
+export function getCanonicalRepoDir(): string {
+  const home = Deno.env.get("HOME") || "/home/joshua";
+  return resolve(join(home, "WebJamApps", "web-jam-tools"));
+}
+
 export async function resolveAndValidateRepoDir(
   options: InstallSkillsOptions,
   deps: ExecDeps = defaultExecDeps,
@@ -168,10 +179,21 @@ export async function resolveAndValidateRepoDir(
     ? resolve(options.repoDir)
     : resolve(fromFileUrl(new URL("../../", import.meta.url)));
 
-  if (!options.allowUnsafeForTesting && isUnsafeSourcePath(baseRepoDir)) {
-    throw new Error(
-      `${baseRepoDir} is an unsafe source directory (/tmp). Skills must be installed from the primary checkout.`,
-    );
+  const canonicalDir = getCanonicalRepoDir();
+  const isOverridden = options.force || options.allowNonCanonical || options.allowUnsafeForTesting;
+
+  if (!isOverridden) {
+    if (isUnsafeSourcePath(baseRepoDir)) {
+      throw new Error(
+        `${baseRepoDir} is an unsafe source directory (/tmp). Skills must be installed from the canonical clone (${canonicalDir}).`,
+      );
+    }
+
+    if (baseRepoDir !== canonicalDir) {
+      throw new Error(
+        `${baseRepoDir} is outside the canonical clone (${canonicalDir}). Skills must be installed from the canonical clone.`,
+      );
+    }
   }
 
   // Check git worktree status
@@ -190,15 +212,19 @@ export async function resolveAndValidateRepoDir(
       const gitCommonDir = gitCommonDirRes.stdout.trim();
 
       if (gitDir && gitCommonDir && gitDir !== gitCommonDir) {
-        if (!options.force && !options.allowUnsafeForTesting) {
+        if (!isOverridden) {
           throw new Error(
-            `${baseRepoDir} is a git worktree, not the primary checkout. Skills must be installed from the primary checkout.`,
+            `${baseRepoDir} is a git worktree, not the primary checkout. Skills must be installed from the canonical clone (${canonicalDir}).`,
           );
         }
       }
     }
   } catch (err: unknown) {
-    if (err instanceof Error && err.message.includes("primary checkout")) {
+    if (
+      err instanceof Error &&
+      (err.message.includes("primary checkout") || err.message.includes("canonical clone") ||
+        err.message.includes("unsafe source directory"))
+    ) {
       throw err;
     }
     // If git command fails (e.g. not a git repo), proceed

@@ -8,6 +8,7 @@ import {
   DEFAULT_RETENTION_MS,
   defaultExecDeps,
   ExecDeps,
+  getCanonicalRepoDir,
   getTimestamp,
   installSkills,
   installToDest,
@@ -38,6 +39,7 @@ Deno.test("parseArgs parses all supported CLI flags", () => {
     "--retention-days",
     "30",
     "--force",
+    "--allow-non-canonical",
     "--dry-run",
     "-q",
     "--allow-unsafe-for-testing",
@@ -51,6 +53,7 @@ Deno.test("parseArgs parses all supported CLI flags", () => {
   assertEquals(parsed.agyBackupDest, "/home/user/.gemini/skills-backups");
   assertEquals(parsed.retentionMs, 30 * 24 * 60 * 60 * 1000);
   assertEquals(parsed.force, true);
+  assertEquals(parsed.allowNonCanonical, true);
   assertEquals(parsed.dryRun, true);
   assertEquals(parsed.quiet, true);
   assertEquals(parsed.allowUnsafeForTesting, true);
@@ -105,34 +108,67 @@ Deno.test("isUnsafeSourcePath identifies temporary and unsafe directories", () =
   assertEquals(isUnsafeSourcePath("/opt/repos/project"), false);
 });
 
-Deno.test("resolveAndValidateRepoDir rejects /tmp directories unless allowUnsafeForTesting", async () => {
+Deno.test("resolveAndValidateRepoDir rejects /tmp directories unless overridden", async () => {
   await assertRejects(
     () => resolveAndValidateRepoDir({ repoDir: "/tmp/fake-repo" }),
     Error,
     "unsafe source directory (/tmp)",
   );
 
-  const safe = await resolveAndValidateRepoDir({
+  const safeTesting = await resolveAndValidateRepoDir({
     repoDir: "/tmp/fake-repo",
     allowUnsafeForTesting: true,
   });
-  assertEquals(safe, "/tmp/fake-repo");
+  assertEquals(safeTesting, "/tmp/fake-repo");
+
+  const safeForce = await resolveAndValidateRepoDir({
+    repoDir: "/tmp/fake-repo",
+    force: true,
+  });
+  assertEquals(safeForce, "/tmp/fake-repo");
+
+  const safeAllowNonCanonical = await resolveAndValidateRepoDir({
+    repoDir: "/tmp/fake-repo",
+    allowNonCanonical: true,
+  });
+  assertEquals(safeAllowNonCanonical, "/tmp/fake-repo");
+});
+
+Deno.test("resolveAndValidateRepoDir rejects non-canonical checkouts unless overridden", async () => {
+  await assertRejects(
+    () => resolveAndValidateRepoDir({ repoDir: "/opt/custom/repo" }),
+    Error,
+    "outside the canonical clone",
+  );
+
+  const safeForce = await resolveAndValidateRepoDir({
+    repoDir: "/opt/custom/repo",
+    force: true,
+  });
+  assertEquals(safeForce, "/opt/custom/repo");
+
+  const safeAllowNonCanonical = await resolveAndValidateRepoDir({
+    repoDir: "/opt/custom/repo",
+    allowNonCanonical: true,
+  });
+  assertEquals(safeAllowNonCanonical, "/opt/custom/repo");
 });
 
 Deno.test("resolveAndValidateRepoDir rejects linked git worktrees without force", async () => {
+  const canonicalDir = getCanonicalRepoDir();
   const mockDeps: ExecDeps = {
     runCmd(cmd: string[], _cwd?: string) {
       if (cmd.includes("--git-dir")) {
         return Promise.resolve({
           code: 0,
-          stdout: "/home/joshua/WebJamApps/web-jam-tools/.git/worktrees/agent-123\n",
+          stdout: `${canonicalDir}/.git/worktrees/agent-123\n`,
           stderr: "",
         });
       }
       if (cmd.includes("--git-common-dir")) {
         return Promise.resolve({
           code: 0,
-          stdout: "/home/joshua/WebJamApps/web-jam-tools/.git\n",
+          stdout: `${canonicalDir}/.git\n`,
           stderr: "",
         });
       }
@@ -143,7 +179,7 @@ Deno.test("resolveAndValidateRepoDir rejects linked git worktrees without force"
   await assertRejects(
     () =>
       resolveAndValidateRepoDir(
-        { repoDir: "/home/joshua/WebJamApps/web-jam-tools-worktree" },
+        { repoDir: canonicalDir },
         mockDeps,
       ),
     Error,
@@ -152,19 +188,20 @@ Deno.test("resolveAndValidateRepoDir rejects linked git worktrees without force"
 
   // With force=true, it allows the worktree
   const resolved = await resolveAndValidateRepoDir(
-    { repoDir: "/home/joshua/WebJamApps/web-jam-tools-worktree", force: true },
+    { repoDir: canonicalDir, force: true },
     mockDeps,
   );
-  assertEquals(resolved, "/home/joshua/WebJamApps/web-jam-tools-worktree");
+  assertEquals(resolved, canonicalDir);
 });
 
-Deno.test("resolveAndValidateRepoDir accepts non-worktree repositories", async () => {
+Deno.test("resolveAndValidateRepoDir accepts canonical clone repository", async () => {
+  const canonicalDir = getCanonicalRepoDir();
   const mockDeps: ExecDeps = {
     runCmd(cmd: string[], _cwd?: string) {
       if (cmd.includes("--git-dir") || cmd.includes("--git-common-dir")) {
         return Promise.resolve({
           code: 0,
-          stdout: "/home/joshua/WebJamApps/web-jam-tools/.git\n",
+          stdout: `${canonicalDir}/.git\n`,
           stderr: "",
         });
       }
@@ -173,10 +210,10 @@ Deno.test("resolveAndValidateRepoDir accepts non-worktree repositories", async (
   };
 
   const resolved = await resolveAndValidateRepoDir(
-    { repoDir: "/home/joshua/WebJamApps/web-jam-tools" },
+    { repoDir: canonicalDir },
     mockDeps,
   );
-  assertEquals(resolved, "/home/joshua/WebJamApps/web-jam-tools");
+  assertEquals(resolved, canonicalDir);
 });
 
 Deno.test("migrateLegacyBackups moves legacy *.bak-* entries out of skills directory", async () => {
@@ -589,16 +626,45 @@ Deno.test("CLI scripts/install-skills.ts refuses /tmp repo source", async () => 
   assertStringIncludes(stderrStr, fakeTmpRepo);
 });
 
-Deno.test("CLI scripts/install-skills.ts runs successfully in dry-run/quiet mode", async () => {
-  const tempDir = await Deno.makeTempDir({ prefix: "cli-success-" });
-  const fakeRepo = join(tempDir, "repo");
-  const skillsDir = join(fakeRepo, "skills", "sample-skill");
+Deno.test("CLI scripts/install-skills.ts allows /tmp repo source when override flag is passed", async () => {
+  const fakeTmpRepo = await Deno.makeTempDir({ prefix: "fake-tmp-repo-" });
+  const skillsDir = join(fakeTmpRepo, "skills", "sample-skill");
   await Deno.mkdir(skillsDir, { recursive: true });
   await Deno.writeTextFile(join(skillsDir, "SKILL.md"), "test");
 
-  const claudeDest = join(tempDir, "claude");
-  const agyDest = join(tempDir, "agy");
+  const claudeDest = join(fakeTmpRepo, "claude");
+  const agyDest = join(fakeTmpRepo, "agy");
 
+  for (const flag of ["--force", "--allow-non-canonical"]) {
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-run",
+        "--allow-read",
+        "--allow-write",
+        SCRIPT_PATH,
+        "--repo-dir",
+        fakeTmpRepo,
+        "--claude-dest",
+        claudeDest,
+        "--agy-dest",
+        agyDest,
+        flag,
+        "--dry-run",
+        "--quiet",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    const { code, stdout } = await cmd.output();
+    assertEquals(code, 0, `Failed for flag ${flag}`);
+    assertEquals(new TextDecoder().decode(stdout), "");
+  }
+});
+
+Deno.test("CLI scripts/install-skills.ts refuses non-canonical checkout without override", async () => {
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
       "run",
@@ -608,20 +674,53 @@ Deno.test("CLI scripts/install-skills.ts runs successfully in dry-run/quiet mode
       "--allow-write",
       SCRIPT_PATH,
       "--repo-dir",
-      fakeRepo,
-      "--claude-dest",
-      claudeDest,
-      "--agy-dest",
-      agyDest,
-      "--allow-unsafe-for-testing",
-      "--quiet",
+      "/opt/some-other-checkout",
     ],
     stdout: "piped",
     stderr: "piped",
   });
 
-  const { code, stdout } = await cmd.output();
-  const stdoutStr = new TextDecoder().decode(stdout);
-  assertEquals(code, 0);
-  assertEquals(stdoutStr, ""); // Quiet mode suppresses output
+  const { code, stderr } = await cmd.output();
+  const stderrStr = new TextDecoder().decode(stderr);
+  assertEquals(code, 1);
+  assertStringIncludes(stderrStr, "outside the canonical clone");
+  assertStringIncludes(stderrStr, "/opt/some-other-checkout");
+});
+
+Deno.test("CLI scripts/install-skills.ts allows non-canonical checkout with override flag", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "non-canonical-override-" });
+  const fakeRepo = join(tempDir, "fake-repo");
+  const skillsDir = join(fakeRepo, "skills", "sample-skill");
+  await Deno.mkdir(skillsDir, { recursive: true });
+  await Deno.writeTextFile(join(skillsDir, "SKILL.md"), "test");
+
+  const claudeDest = join(tempDir, "claude");
+  const agyDest = join(tempDir, "agy");
+
+  for (const flag of ["--force", "--allow-non-canonical"]) {
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--allow-env",
+        "--allow-run",
+        "--allow-read",
+        "--allow-write",
+        SCRIPT_PATH,
+        "--repo-dir",
+        fakeRepo,
+        "--claude-dest",
+        claudeDest,
+        "--agy-dest",
+        agyDest,
+        flag,
+        "--dry-run",
+        "--quiet",
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    const { code } = await cmd.output();
+    assertEquals(code, 0, `Failed for flag ${flag}`);
+  }
 });
