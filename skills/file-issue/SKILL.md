@@ -171,9 +171,9 @@ Every artifact Josh reads — issue **title AND body**, PR **title AND descripti
 **How to apply:**
 - When a design decision changes, **rewrite the issue BODY in the same turn** — not just the title, not just an appended comment. Same for the PR description. An amendment comment is a supplement, never the fix.
 - Never leave a decision recorded only in chat. If Josh decides it, it goes into the issue/PR where the work happens.
-- Don't state a design claim the requirements don't support. If something was never verified, label it unverified — see [[design-lives-in-a-dropbox-doc]] and web-jam-tools#305 "cross-ai-rules.md: design claims must carry receipts, and a UI requirement can never be verified through an API".
-- Cite every issue/PR as `repo#number "title"` so he can trace it — see [[cite-issues-with-title-repo-number]].
+- Don't state a design claim the requirements don't support. If something was never verified, label it unverified — see web-jam-tools#305 "cross-ai-rules.md: design claims must carry receipts, and a UI requirement can never be verified through an API".
+- Cite every issue/PR as `repo#number "title"` so he can trace it — see the issue citation rule in docs/cross-ai-rules.md.
 - Before handing an issue to a subagent, re-read its body and confirm it matches the current decision; if it doesn't, fix the body FIRST, then dispatch.
 
-**Origin (2026-07-29, the milestone migration):** the design moved topics from a native `Area` issue field to Milestones. Opus amended the design via a comment and renamed WebJamApps/web-jam-tools#301, but left the issue BODY still specifying "read the native `Area` field" with `field.Area:` search qualifiers and an acceptance criterion "correctly derives Area from the native Area field". Josh: *"we decided on Milestone this is NOT ACCURATE !"* The body was then rewritten. Same session, same root defect as [[verify-dont-assume]]: relying on a supplement instead of correcting the source.
+**Origin (2026-07-29, the milestone migration):** the design moved topics from a native `Area` issue field to Milestones. Opus amended the design via a comment and renamed WebJamApps/web-jam-tools#301, but left the issue BODY still specifying "read the native `Area` field" with `field.Area:` search qualifiers and an acceptance criterion "correctly derives Area from the native Area field". Josh: *"we decided on Milestone this is NOT ACCURATE !"* The body was then rewritten. Same session, same root defect: relying on a supplement instead of correcting the source.
 
