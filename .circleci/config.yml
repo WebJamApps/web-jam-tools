@@ -3,7 +3,7 @@ version: 2.1
 # CI quality + security gate for web-jam-tools (web-jam-tools#84, extended #133).
 #
 # Runs the same checks you can run locally, so "green locally" == "green in CI":
-#   deno task check · lint · fmt:check · coverage:check · audit · sast
+#   deno task check · lint · fmt:check · jscpd · coverage:check · audit · sast
 # (coverage:check runs the unit tests — including the skills/ + sources.yaml
 # validation test, web-jam-tools#133 — and fails under 90% all-files line
 # coverage)
@@ -192,6 +192,9 @@ jobs:
       - run:
           name: Format check
           command: deno task fmt:check
+      - run:
+          name: Code duplication check (jscpd)
+          command: deno task jscpd
       - run:
           name: Install hooks drift check (--check)
           command: |

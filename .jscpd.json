@@ -1,0 +1,14 @@
+{
+  "threshold": 5,
+  "minTokens": 75,
+  "reporters": ["console"],
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/coverage/**",
+    "test/fixtures/**",
+    "**/*.json",
+    "**/*.md",
+    "**/*.html"
+  ]
+}
