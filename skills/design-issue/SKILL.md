@@ -22,7 +22,7 @@ Design work does not happen in plain chat. The moment a conversation turns into 
 
 With no argument, the skill scans all 8 active repos for open issues labeled `Needs Design` and offers them as candidates. Josh picks; the skill never picks for him.
 
-1. **Establish the theme and milestone.** `<Theme>` matches the GitHub milestone — read the live milestone list, never assume a fixed set. Create the design document at `~/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.md`, creating the theme folder if the milestone has none yet.
+1. **Establish the theme and milestone.** `<Theme>` matches the GitHub milestone — read the live milestone list, never assume a fixed set. **Resume rather than restart:** Before creating a design document, look in the theme folder for an existing `<topic>-design-*.md` and continue from its decision record; a run that wants a fresh document says so. Otherwise create the design document at `~/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.md`, creating the theme folder if the milestone has none yet.
 2. **Record what Josh asked for verbatim**, and the existing ground the work sits on.
 3. **Put every decision to Josh one at a time** — applying the Decision-Readiness rule below — and write his answer into the document as he gives it, never batched at the end. An item is decided only when he rules on THAT item by name.
 4. **Verify facts rather than asserting them**, and record what was verified and how. Where a premise turns out to be false, the body records the corrected fact in present tense and the falsified premise goes in the decision-record appendix — never a "this turned out to be false" note in the body. Recording an unverified load-bearing premise is NOT sufficient to reach Gate 1 — every load-bearing premise must be resolved and proven, not merely logged as an unknown or caveat, before presenting the design for Gate 1 approval.
@@ -36,17 +36,25 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
    Run in the background (trailing `&`, streams redirected) so it does not block the session even when no Chrome process is already running — with a cold Chrome, `google-chrome` becomes the browser process itself and would otherwise hold the inherited stdout/stderr pipes open, stalling the call until timeout even though the tab opened fine. Target the active user desktop display explicitly with `DISPLAY="${DISPLAY:-:0}"` so the browser launch opens the tab in Josh's active session across both Claude Code and agy/Antigravity surfaces, preventing silent failure when invoked from subshells or background tasks where `DISPLAY` is mismatched or unset. It opens a tab in Josh's existing Chrome session (or starts one) and returns immediately. The path is the same `~/Dropbox/web-jam-llms/<Theme>/…` directory the document was created in at step 1, written out in full — `~` does not expand inside a quoted `file://` URL, so use the expanded absolute form, never a literal `~`. A correct result is Chrome opening or focusing a tab showing the rendered design document. Only then present the design and wait for Josh's explicit approval. No writes to GitHub before Gate 1.
 
 ### Decision-Readiness Rule
-A decision is not ready to put to Josh until two conditions are met:
-1. **The mechanism is explained** in Josh's terms before the question — every component the question turns on, described plainly, including machinery discovered mid-session that Josh has never seen.
-2. **Every option carries what it actually costs** — what happens in this session, what work it creates, what it collides with, what it risks, and what it gives up.
-3. **The recommendation comes last** — after both the mechanism and the options' costs, never instead of them and never before them.
+A decision is not ready to put to Josh until these conditions are met:
+1. **Exactly ONE decision per turn** — present one focused question per turn, with enough detail for Josh to decide it on its own. Do not bundle multiple questions into a single message, and do not append a trailing "still outstanding" list or secondary questions (even framed as "separately, and not part of that decision...").
+2. **The mechanism is explained** in Josh's terms before the question — every component the question turns on, described plainly, including machinery discovered mid-session that Josh has never seen.
+3. **Every option carries what it actually costs** — what happens in this session, what work it creates, what it collides with, what it risks, and what it gives up.
+4. **The recommendation comes last** — after both the mechanism and the options' costs, never instead of them and never before them.
 
 #### Failure Shapes Ruled Out:
 - **The bare fork:** Two labeled options and an "I lean 1" with nothing under either.
 - **The incomplete set:** Naming two options while a third and better one goes unwritten.
 - **The unexplained mechanism:** A question resting on machinery Josh has never seen.
 - **The buried premise:** A question whose real subject is a fact discovered mid-answer, presented as an aside rather than the thing being decided.
+- **The bundled question / multi-decision dump:** Asking 2–3 questions at once, appending bonus asks ("…also, want a body note?"), or attaching a backlog dump / trailing list of unresolved threads to a report-back or confirm turn.
 - **The jargon barrier & academic framing:** Using specialized academic, educational, theoretical, or institutional vocabulary (e.g. "pedagogy", "learner diagnostics", "pedagogical assessment", "fine-motor coordination", "chirality", "topological isomorphism") or framing everyday human activities as formal educational/evaluative testing instead of plain, tangible physical terms (e.g. "left-over-right vs. right-over-left", "showing someone", "kids / small hands", "looking at the knots side-by-side"). Every concept and interaction must be described in plain, everyday conversational language anyone can follow without academic pretension.
+
+#### Communication Rules in Design Mode:
+- **Short replies, ONE topic per turn:** When an action was executed, state its result in the first line, visually separate from discussion.
+- **When he says he is confused / needs more info:** Do NOT just re-ask the question. Stop and explain the full end-to-end landscape in plain, non-jargon terms first — give him the mental map (how the whole process works, what depends on what) — then collapse the choice to a clear recommendation.
+- **On resume:** Read the resume doc, verify anything genuinely urgent (a live outage), then surface ONE thing — the next item the doc itself names — and hold everything else.
+- **Report-backs and confirmation turns:** Relay ONE actionable decision with the detail needed to act. Never append secondary questions or multi-topic lists to a confirmation or report-back turn.
 
 The test is Josh's reply: if it comes back as *"I need more details to decide"* or *"I am confused"*, the question was defective, and the repair belongs in the question rather than in a follow-up patching around it.
 
@@ -94,9 +102,11 @@ Filing delegates to a subagent only when delegating moves the work down a tier (
 17. **If any issue fails to file, stop.** Report which issues exist and which do not, by repo + number + title. No silent retries, no carrying on with the rest.
 18. **Report what was filed to Josh in the conversation.** The design document is never edited to record filing status — the filed issues themselves, cited by repo + number + title, are the record of what happened.
 
-### Phase 4 — End-of-Run Memory Consume/Delete
+### Phase 4 — End-of-Run Memory Consume/Delete (Claude Code only; skipped on agy)
 
-When a run finishes, the skill reads the memory surfaces for rules that fire only while it or `/file-issue` is running, and presents them as **one table, all at once**, with a disposition each. Approval is given to the batch rather than item by item.
+**Surface scope:** Phase 4 runs on Claude Code only. It reads Claude Code's private memory directory (`~/.claude/projects/-home-joshua/memory/`) to decide which rules move into a skill body, and agy has no such directory. On agy, Phase 4 is skipped entirely, rather than silently doing nothing.
+
+When a run finishes on Claude Code, the skill reads the memory surfaces for rules that fire only while it or `/file-issue` is running, and presents them as **one table, all at once**, with a disposition each. Approval is given to the batch rather than item by item.
 
 | Disposition | What it means | What has to be true |
 |---|---|---|
@@ -140,12 +150,21 @@ These are properties of the skill, written as explicit refusals:
 | add `Needs Design` to anything in the approved executable set | it must not become a stub factory |
 | put a manual step inside an agent's execution issue | manual steps get their own `Josh` issue |
 | combine artifact/doc/UI review and live procedure walkthroughs into a single manual issue | inspecting rendered artifacts in Google Chrome and executing live procedures with learners or external parties are distinct verification surfaces with different gates and acceptance criteria |
-| hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<date>.md` |
+| hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` |
+| design a mechanism that works on only one agent surface (Claude Code or agy/Antigravity) without stopping for discussion | everything designed must work on both surfaces; surface-neutral paths are deno task, gh CLI, and CI; fails when depending on Claude-only hooks, Claude memory, or mcp__* tools |
 | narrate its own revision history in the body — "what changed", "why this was withdrawn", "an earlier version said", a changelog, before/after framing | the document states the current design as though it had always been the design; superseded reasoning lives only in the decision-record appendix |
 | record the skill's own workflow state in the body — a Status line, a gate/approval state, "nothing filed", "design complete" | that describes where the skill's process has got to, not the system being designed; gate state lives in the conversation and in the issues the run produces |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
 | leave superseded drafts, renamed artifacts, or obsolete intermediate runbook files behind in Dropbox upon deliverable finalization | destination folders must contain only active, canonical deliverables to prevent the accumulation of stale working duplicates |
+
+---
+
+## Both Surfaces Parity Rule
+
+Everything this skill designs works on both Claude Code and agy/Antigravity. A mechanism fails this rule when it depends on something only one surface has: a Claude Code hook, because agy-native hooks do not fire; Claude Code's memory directory, which agy does not have; or an `mcp__*` tool. The surface-neutral paths are this repository's `deno task` entries, the `gh` CLI, and CI. Where a mechanism cannot be made surface-neutral, the skill says so plainly and stops for discussion, rather than designing a one-surface mechanism and calling it done.
+
+**Every design document carries a `## Both surfaces` section**, stating for each mechanism it designs how that mechanism works on each surface. `deno task design:lint-doc` fails a document that omits it.
 
 ---
 
@@ -190,7 +209,7 @@ Regression matters as much as the new feature, and a full-stack test must be run
 Every manual step handed to Josh — whether handed over interactively in chat or filed as a GitHub issue, and whether occurring before or after Gate 1 — **must always have a numbered runbook file** created at:
 
 ```
-~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<date>.md
+~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md
 ```
 
 There are **no carve-outs** for steps handed over in chat rather than filed as issues, and **no carve-outs** for steps that occur before Gate 1.
@@ -207,11 +226,21 @@ Manual artifact / documentation / UI inspection (e.g., verifying generated Markd
 
 Every runbook file must follow this exact format:
 - **Professional, role-agnostic title:** Never include personal names (e.g. do NOT use `# Josh Walkthrough Runbook: ...`). Use action-oriented titles like `# Walkthrough Runbook: ...` or `# Manual Verification Runbook: ...`.
-- **Sequential step numbering:** Steps must be explicitly numbered sequentially (`## STEP 1`, `## STEP 2`, ...).
-- **Literal commands:** Every shell command, script invocation, or path must be written out completely as a literal command snippet (no placeholders or fuzzy instructions).
+- **Runbook naming convention:** Runbooks are named `<topic>-manual-steps-<YYYY-MM-DD>.md`. Ownership of a manual step is designated exclusively by the `Josh` label, never by embedding a personal name in a filename, an issue title, or a document title.
+- **Sequential step numbering:** Steps must be explicitly numbered sequentially (`## STEP 1`, `## STEP 2`, ...), or against a known total ("Step 2 of 6").
+- **Detailed, literal commands:** Every shell command, script invocation, or path must be written out completely as a literal, copy-pasteable command snippet with real values/flags filled in (no placeholders, fuzzy instructions, or "go run it yourself").
 - **What each step proves:** Explain explicitly what each step tests or proves.
 - **What a correct result looks like:** State clearly the exact expected output, exit status, or visible behavior confirming success.
-- **One action per step, one surface per step:** see `docs/cross-ai-rules.md` § POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE.
+- **One action per step, one surface per step:** A step is ONE action/click/command per message/step (even inside a dashboard wizard); wait for completion before the next. Never compress navigation into "→" breadcrumb chains. See `docs/cross-ai-rules.md` § POST-MERGE MANUAL STEPS BECOME THEIR OWN `Josh` ISSUE.
+- **Fully self-contained steps:** Each step must be self-contained — never tell the reader to scroll up or hunt for earlier content. Place text, URLs, and values inline in that step.
+- **No vague verbs:** Never use vague verbs like "paste the block in" / "set that" / "add it there". Spell out literally what to select, keyboard shortcuts (Ctrl+C / ⌘+C, Ctrl+V / ⌘+V), which field, and which button.
+- **No visual rendering styling references:** Do not describe visual styling (e.g. "the gray box"); use plain text markers (dashed lines, START/END markers) and literal text identifiers.
+- **Up-front cost disclosures:** Flag any cost, paid-account, or purchase requirements UP FRONT with exact dollar amounts and free alternatives before setup begins.
+- **Multi-account dashboards:** Step 1 on any multi-account dashboard (Cloudflare, Google, Heroku) is ALWAYS "confirm the account picker shows <account>".
+- **Dashboard drift & walkthrough safety:** When dashboard UIs drift, steer from screen state rather than asserting guessed paths. No side-quest tool calls or unrelated lookups during manual walkthroughs.
+- **No forced-choice popups during walkthroughs:** Do not use AskUserQuestion / forced-choice modals during manual walkthroughs; use plain conversational prose so questions or corrections are straightforward.
+- **Secret isolation outside Claude Code:** The `!` prefix does NOT isolate a secret in Claude Code. Any command touching credentials (`heroku config:get`, `auth:token`, etc.) must specify a separate terminal outside Claude Code.
+- **Save secrets to KeePass:** Remind Josh to save secrets and passwords to KeePass whenever a step reveals or generates a credential.
 - **No conflating internal verification assertions with the human walkthrough script:** A runbook for a human task (e.g. demonstrating a skill, testing a UI, conducting a live walkthrough) must contain ONLY the actual steps of that activity. Never inject automated test assertions, shell commands (e.g. `test -f ... && grep ...`), or repo verification steps into a human walkthrough script. Technical verification of files or artifacts belongs in the PR test plan or issue acceptance criteria, never as a step in a human walkthrough.
 - **Never let a result depend on default tool-output rendering.** When a step's pass/fail turns on what the agent actually read or ran, the runbook must do BOTH: turn the expanded view on explicitly in the launch command (for Claude Code, `claude --verbose`), AND include a separate step that asks the agent directly, e.g. "Which exact file paths did you read to answer that?". Collapsed output renders as a summary line such as `Read 1 file` with no path, which makes the run ungradeable.
 - **Pruning intermediate runbooks upon unification:** When manual verification runbooks are merged into unified deliverables or consolidated into primary reference guides, any standalone intermediate runbook files (`.md` and `.html`) must be deleted from `~/Dropbox/web-jam-llms/<Theme>/` to avoid leaving orphaned verification drafts behind.
@@ -225,9 +254,9 @@ Never prefix issue titles or runbook document titles with a personal name (e.g. 
 
 | | Issue A — the agent's | Issue B — the manual verification pair |
 |---|---|---|
-| **Scriptable** | `Flash High`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
-| **UI / Doc Review** | `Flash High`. Investigate the live UI or generate documentation/artifacts and write the inspection instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md` — exact click path or document inspection steps in Google Chrome. Closes when the doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he inspected them in Google Chrome. |
-| **Live Procedure / Walkthrough** | `Flash High`. Author the procedure walkthrough guide / instructional runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-josh-steps-<YYYY-MM-DD>.md`. Closes when the runbook exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he executed the live demonstration/walkthrough with the learner or external party. |
+| **Scriptable** | `Flash High`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
+| **UI / Doc Review** | `Flash High`. Investigate the live UI or generate documentation/artifacts and write the inspection instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` — exact click path or document inspection steps in Google Chrome. Closes when the doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he inspected them in Google Chrome. |
+| **Live Procedure / Walkthrough** | `Flash High`. Author the procedure walkthrough guide / instructional runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md`. Closes when the runbook exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he executed the live demonstration/walkthrough with the learner or external party. |
 
 Artifact/doc review and live procedure walkthroughs are distinct pairs and must NEVER be collapsed into a single composite pair or issue. Issue B is always linked via native GitHub dependency (`blocked_by`) on issue A, without the redundant `Blocked` label (the `Blocked` label is reserved exclusively for external non-GitHub blockers; web-jam-tools#725). A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
 
@@ -291,14 +320,16 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 - **Explicitly identify and prove load-bearing assumptions BEFORE consolidation.** A load-bearing assumption is one where, if false, the design does not work. The design run must explicitly identify every load-bearing assumption and prove each one before consolidation — not record it as a caveat. Where an assumption cannot be proved, the design must be presented as CONTINGENT and explicitly not approvable — naming the proof that would settle it and what happens to the design under each outcome — never presented as ready for Gate 1 approval. Where the proof requires implementation work to obtain, the skill requires that proof be sequenced FIRST in the plan, never left to a late acceptance criterion whose failure would invalidate everything already built on it.
 - **Consolidation happens BEFORE Gate 1, never after.** During the conversation the document accretes as decisions are made. Before GATE 1 the skill rewrites it into design-first shape. Josh never reviews a working draft.
 - **Pre-Gate-1 test:** a reader who has never seen the conversation must not be able to tell, from the body, that the design ever said anything different, or that any approval workflow exists.
+- **Every design document carries a `## Both surfaces` section**, stating for each mechanism it designs how that mechanism works on each surface (Claude Code and agy/Antigravity). `deno task design:lint-doc` fails a document that omits it.
 
 **Standard Document Shape:**
 1. What it is — one section, opening directly with what the thing is. No status block, no preamble of any kind.
 2. The workflow.
 3. The gates, and what the thing refuses to do.
 4. The rules that shape its output.
-5. Where things live; what stays out of scope.
-6. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
+5. Both surfaces — stating for each mechanism how it works on Claude Code and agy/Antigravity.
+6. Where things live; what stays out of scope.
+7. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
 
 ---
 
@@ -328,127 +359,4 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 - Maintaining dependency or `Blocked` state after filing — `/backlog-groom` is the maintainer of record for that drift.
 - Tracking live priority after filing — native Priority field owns it.
 - Archiving or deleting design documents — Josh alone.
-
----
-
-## Consumed rules
-
-### a-ruling-becomes-an-issue-same-session
-
-**STRICT (Josh, 2026-08-05):** *"things like this need to be filed as actionable work so they do
-not get lost !"*
-
-When Josh makes a decision, **file the GitHub issue in the same session**. Writing it into a
-Dropbox record, a design doc, or a memory file is **not** tracking it.
-
-**Why:** the issue is the unit of work in this system — it carries the model label that routes it
-to a lane, it is the ONLY thing `handle-agy-tasks.sh` can dispatch against (issue number and
-nothing else), and it can be **closed**, which is the completion signal. A decision living only
-in a document has none of that. It surfaces only if someone happens to re-read the document and
-remembers.
-
-Josh's own words when he caught this: *"so how do I know that I need to do something if there is
-nothing asking me or tracking it then?"* — and the honest answer was that he would not.
-
-**The precedent that proves it.** The credentials register, `docs/josh-manual-controls.md`, and
-the credential-classification rule were all marked "deferred to a follow-up" in the permission
-epic — in the issue body, in a comment, and in another sub-issue's non-goals. **No follow-up was
-ever filed.** They were deferred to nowhere and would have vanished when the epic closed. One of
-them existed *precisely because* "a control that lives only in a closed issue disappears." They
-survived only because a staleness sweep happened to catch them, becoming web-jam-tools#344
-"Human-only credentials register, its hard-blocking guard, and the two documentation rules
-deferred out of the permission epic".
-
-**AN EPIC IS NOT ACTIONABLE WORK (Josh, 2026-08-05: *"ugg the epic is not actionable work"*).**
-Never park a to-do on an epic body. Actionable work goes in **a new issue, or an existing
-NON-epic issue** — an epic is a container for sub-issues, not a backlog. Filing it on the epic
-looks like tracking and is not: it carries no routing label of its own, it cannot be dispatched,
-and it disappears when the epic closes.
-
-**How to apply:**
-- Josh rules on something → file the issue that session, with exactly one model label. Do not
-  report the decision as "settled and recorded" when only a document was written.
-- Needs to be tracked but isn't its own piece of work? Attach it to the **non-epic** issue that
-  actually acts on it — e.g. accretion counts belong on the manual-steps issue that performs the
-  reset, not on the epic that describes the problem.
-- Especially when the work is **Josh's own manual steps** — those must be tracked in an issue,
-  never left in a chat or a doc.
-- The document keeps the reasoning; the issue is the tracking surface. Link them both ways.
-- The related standing rule already in `docs/cross-ai-rules.md` covers "deferred to a follow-up
-  requires the follow-up to exist". **This is the wider case it does not cover:** a decision that
-  was *made and recorded*, not deferred — and it went untracked anyway.
-
-### checkbox-means-fully-settled
-
-Josh (2026-07-31): *"i'm not checking boxes until we have both audited, decided, and issue filed
-for implementation (or not if we decided not to)"*.
-
-On any audit/review issue where a checkbox tracks Josh's sign-off on a finding, a tick means ALL
-THREE are true:
-
-1. **Audited** — the finding is investigated and written up.
-2. **Decided** — Josh has made the call on what to do about it.
-3. **Tracked** — an issue exists for the implementation, OR the decision was explicitly "don't
-   implement" / the work is already shipped, and that is recorded.
-
-**Why:** a box that means only "Josh read it" loses the actionable item. He reads a finding, agrees
-it matters, ticks it — and the work silently evaporates because nothing tracks it. The tick is the
-closing of a loop, not an acknowledgement of reading. This is the same failure class as leaving
-decisions untracked by actionable, closeable issues.
-
-**How to apply:** never offer to tick a box on the strength of "you've now seen it". Before
-offering, check leg 3 exists — if the decision has not been written into the implementation issue
-yet, say so and offer to record it FIRST, then tick. And never tick a box unprompted: only Josh
-authorizes a specific box, per the standing rule on the issue itself. See
-web-jam-tools#324 "No agent connects a new account, credential, or MCP server without Josh's
-explicit authorization — add the rule and audit where it can be mechanically enforced" for the
-live example (7-finding audit).
-
-### one-decision-at-a-time
-
-During discuss-first / requirements / design conversations, present exactly ONE decision per turn, with enough detail for Josh to decide it on its own. Do not bundle multiple questions into a single message.
-
-**Why:** In a design discussion about a session-checkpoint skill (2026-06-17), I repeatedly asked 2–3 questions at once and offered finished multi-part drafts. Josh got frustrated ("I need these choices one at a time and with enough detail for me to decide... you are asking me multiple things here and getting both of us confused") and made me back up to the beginning. Batching questions stalls progress and confuses both sides.
-
-**How to apply:** One focused question per turn → give the trade-offs/recommendation → wait for the answer → then the next question. When recapping, it's fine to summarize the whole settled design, but end with a single open question. Pairs with the global CLAUDE.md "discuss first" rule (don't grep his repos to ground a discussion — ask him; he knows his apps). Settled requirements then get filed as a GitHub issue and the source line removed from his task list.
-
-**Reply length in design mode (2026-07-17, gig-venue vetting/design session):** even when each turn ends with one question, a long multi-topic reply is still "too much at one time" — Josh said "we have to slow down… I want to delve into each item so we are sure to get a full design," and a completed action (Stave & Cork fix) got lost inside a long design reply so he asked whether it ever happened. In design mode: SHORT replies, ONE topic per turn, and when an action was executed, state its result in the first line, visually separate from discussion.
-
-**When he says he's confused / needs more info (2026-06-17, CD Baby discussion):** do NOT just re-ask the question. Stop and explain the full end-to-end landscape in plain, non-jargon terms first — give him the mental map (how the whole process works, what depends on what) — then collapse the choice to a clear recommendation rather than another multi-option fork. He often can't pick between options until he understands the terrain they sit in.
-
-**Applies to investigation/report-back turns too, and a trailing "still outstanding" list is a violation (2026-07-25, JaMmusic#1264 dispatch prep):** I ended several report-back turns with a recommendation PLUS a bulleted tail of 2–3 unresolved threads ("still outstanding: reopen #235 or file fresh… plus your call on the WJSC blocker"), reasoning that they were threads Josh had already opened so re-raising them was just bookkeeping. It isn't — Josh: "one decision at a time please, too many at once and I cannot do a good job discerning the information." Carrying open threads is MY job, not his: park them in the checkpoint memory and surface exactly one when it becomes the next thing in the critical path. Never re-list open questions as a reminder footer. When several are genuinely pending, pick the one that unblocks the most and ask only that.
-
-**Applies to SESSION OPENINGS — the backlog dump is the same violation (2026-08-04, first session back after a 3-day token outage):** Josh said hello, I read the resume doc and the live checkpoints and opened with a state-of-play containing a 4-item "waiting on you" list, a 1-item "waiting on me", AND a caveat that ~12 other live checkpoints existed and might have moved. Josh: *"this week we are not going to be working chaotically… we will tackle and focus systematically on problem you will not dump everything on me all once."* Reading every LIVE checkpoint at session start and reporting the union of them is not diligence — it hands him the whole backlog to triage, which is MY job. **On resume: read the resume doc, verify anything genuinely urgent (a live outage), then surface ONE thing — the next item the doc itself names — and hold everything else.** The checkpoints exist so open threads live in a file instead of in his head; quoting them all back at him defeats their purpose.
-
-**A "separately, and not part of that decision…" tail is the SAME violation, no matter how it is framed (2026-08-08, the memory-index/CLAUDE.md design issue):** I asked the one real decision (split the work into two issues or keep it as one), then appended a second ask — "want me to file the backup defect?" — plus three numbered blockers, two half-descriptions and a paragraph of tension-naming. Josh: *"you are giving me TOO much again in a single chat message, i need ONE decision at a time and with enough details for me to decide please."* **Explicitly labelling a second question as separate does not make it free — it is still a second thing to hold.** And "enough detail to decide" means detail about THE ONE CHOICE, not surrounding context: cut the diagnosis, cut the blocker list, cut the discovered-defect report, keep the options and the recommendation. Everything held back goes in the checkpoint memory and gets surfaced when it is next in the critical path.
-
-**It binds in OPS/review turns too, where I had been treating it as a design-mode rule (2026-08-08, the two `/pr-review` dispatches):** relaying two finished PR reviews, I sent multi-part messages — verdict + ranked findings + a cross-PR observation + a merge-order recommendation + an offer to file an issue — and Josh: *"i am totally confused you are giving me way too much all at the same time, give me one thing at a time and with enough details for me to make a decision now (and we really need to work on your communication skills)."* A report-back is not exempt because "he asked for the results": the deliverable is ONE decision he can act on, with the detail needed to act, and everything else held. When two reviews finish, relay the one that is next in the critical path — not both, not a synthesis of both.
-
-**Applies to go/confirm moments too, not just design (2026-07-22, wjt#236 dispatch):** NEVER append a second question to a "say go and I'll dispatch" (or any confirm) turn. I ended a dispatch-confirm with a bonus "…also, want a body note, yes/no?" — Josh's terse "A" then couldn't map cleanly to two questions, so I over-asked for re-confirmation and annoyed him ("you got confused?"). His terse one-word replies ("A", "go") ARE confirmations — read them as such. One ask per turn, full stop: a confirmation turn carries the confirmation and nothing else; hold any secondary question for after.
-
-### detailed-manual-instructions
-
-When a task needs Josh to do something manual — set env/config vars, generate a credential, click through a dashboard, run a CLI command — **give detailed, concrete, numbered instructions**, not a passive hand-wave like "set `GMAIL_IMAP_*` and `ANTHROPIC_API_KEY`".
-
-**Why:** a vague ask dumps the "how" back on Josh and wastes his time; he wants to follow steps, not reverse-engineer them.
-
-**How to apply:**
-- **ONE step at a time** (Josh's explicit ask, 2026-07-01, repeated with "!!" after I bundled a wizard into numbered substeps): a "step" = ONE action/click/command per message, even inside a single dashboard wizard — then wait for his "done"/result before the next. Never a numbered list of actions to execute. Steps may take him a while (e.g. on the Tim-site project he KeePasses each credential AND Slacks it to Tim for his KeePass); be patient, don't nudge or pile on.
-- **Each step MUST be fully self-contained — NEVER tell him to scroll up / go find earlier content** (Josh, 2026-07-05, angry "!!" after I told him to "scroll up in this chat to find the gray box"). If a step needs text/a URL/a value, PUT IT INLINE in that same message. He should never have to hunt for anything.
-- **NEVER use vague verbs like "paste the block in" / "set that" / "add it there"** (same 2026-07-05 session — "what is 'paste the block in' ????"). Every step spells out literally: exactly what to select, exactly what to press to copy/paste (Ctrl+C / ⌘+C, Ctrl+V / ⌘+V), exactly which field, exactly which button. Assume zero prior context about "the block" or "the text" — name and show it in that step.
-- **Number the steps against a known total** ("Step 2 of 6") so he can see where he is, and end each with the single action + "reply done for the next step."
-- **During manual steps, do NOT use AskUserQuestion / forced-choice popups** (Josh, 2026-07-05: "please stop forcing me to make decisions during our manual steps so I can easily ask questions or correct you when you give me the wrong directions"). Keep it plain conversational prose so he can freely reply "done", ask a question, or correct a wrong instruction. Ask any needed clarifier as a normal sentence, not a popup.
-- **Don't describe how the text/UI *looks* on my end** (the "gray box" that didn't exist on his terminal view, 2026-07-05). His renderer differs. Mark boundaries with plain in-band characters (dashed lines, START/END markers) and refer to the literal first/last words, never to visual styling like "the gray box" or "the highlighted part."
-- **Never assume Josh is willing to buy/pay for anything.** Flag any cost / paid-account / purchase requirement UP FRONT, before he starts the setup, and present it as an explicit choice — e.g. "the AI-suggestion piece needs a paid Anthropic account ($5 min); the rest is free." Josh was (rightly) annoyed 2026-06-27 to hit an Anthropic "buy credits" wall mid-setup with no warning. Always state the dollar cost AND whether there's a free alternative path before he begins.
-- Verify the specifics first (which account, app name, exact config var names, which Heroku app) before writing the steps — don't make him guess.
-- **Multi-account dashboards: step 1 is ALWAYS "confirm the account picker shows <account>"** (2026-07-07, Cloudflare: Josh landed on Tim's account and nearly did the HenricksonForSalem Pages setup there — he caught it, not me). Cloudflare/Google/Heroku dashboards remember the last-used account; never assume the login landed on the right one.
-- Dashboard UIs drift (Cloudflare's Create page 2026-07-01: no Pages tab, entry is a bottom-line "Looking to deploy Pages? Get started" link). When a click path might be stale, ASK what's on his screen and steer from his answer instead of asserting a path from docs/memory. New-website runbook lives in a web-jam-tools playbook issue.
-- **NO side-quest tool calls during manual walkthroughs** (Josh, 2026-07-10, Snyk cleanup: I ran gh repo checks + a GitHub-wide search to "verify before delete" — "please stop, i did not ask you to do this and you are confusing me and eating tokens !"): while he's driving a dashboard, my job is steer-from-his-screen ONLY. No verification lookups, no issue filing, no memory-trail polishing mid-flow unless he asks — raw tool output also lands in his chat and confuses the walkthrough. If a check seems genuinely needed before an irreversible step, ASK in one sentence whether he wants it checked.
-- **"One step at a time" includes NAVIGATION** (Josh, 2026-07-10, Cloudflare Account API Tokens: I said "Manage Account → Account API Tokens" and he replied "from here I do not know how to navigate to what you are saying above !?"): a condensed breadcrumb path is NOT a step. Getting to the right screen is its own step (or steps), with the exact starting point (a direct deep-link URL whenever one exists), which sidebar/menu to look in, and where on the screen the item sits. Never compress navigation into "→" chains.
-- **Never present guessed UI labels as fact** (Josh's explicit complaint 2026-07-03, Deno console: I asserted "avatar → Account settings → Access Tokens" and "Settings → Deploy from GitHub" for an EA console I'd never seen; the real dialogs differed and he had to improvise twice). For a UI I cannot see: either ask what's on his screen FIRST, or clearly mark the path as a best guess with a fallback ("if you don't see X, tell me what sections you do see"). Guessed-but-confident beats nothing only when labeled as a guess.
-- Spell out each step: exact URL, exact button/menu path, exact shell command with the real values/flags filled in.
-- **ALWAYS hand him the command itself — never just "go run it yourself"** (Josh, 2026-08-01: *"when you prompt Josh to run something be nice to me and give me the command as well please"*). Any time I hand an action back to him — a manual step, a guard that blocks an agent, a "you'll need to do this" — the exact, copy-pasteable command goes in the same message, with real app/branch/file names substituted, not placeholders. This binds MACHINE-GENERATED text too: a hook that denies a command and tells Josh to run it must embed the ready-to-run command in its deny message, not just name the tool.
-- **The `!` prefix does NOT isolate a secret.** Claude Code's `! <command>` runs in THIS session, so the command text and its output land in the transcript exactly as if an agent ran it. For anything touching a credential (`heroku config:get`, `heroku config:set`, `heroku auth:token`), the instruction must say **a separate terminal outside Claude Code** — never `!`. Guard messages must say so explicitly or an agent will helpfully suggest `!` and reintroduce the leak.
-- Include how to verify it worked (a command + expected output).
-- Remind Josh to save secrets and passwords to KeePass whenever a step reveals or generates a credential.
 

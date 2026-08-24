@@ -15,7 +15,7 @@
 // Runs automatically as a normal Deno test under test/, picked up by the
 // existing `coverage:check` step — no wiring needed beyond adding this file.
 
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals, assertExists, assertFalse, assertStringIncludes } from "@std/assert";
 import { parse as parseYaml } from "@std/yaml";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
@@ -112,5 +112,92 @@ Deno.test("skills/file-issue/SKILL.md contains the hook and skill both-surfaces 
   assert(
     text.includes("Hook and Skill Issues Must Target Both Claude Code and agy/Antigravity"),
     "skills/file-issue/SKILL.md must contain the numbered rule 'Hook and Skill Issues Must Target Both Claude Code and agy/Antigravity' in the Before you file section",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains the both-surfaces rule and refusal table entry", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  // Both surfaces rule in prose
+  assertStringIncludes(
+    text,
+    "Everything this skill designs works on both Claude Code and agy/Antigravity.",
+  );
+  assertStringIncludes(
+    text,
+    "surface-neutral paths are this repository's `deno task` entries, the `gh` CLI, and CI",
+  );
+  assertStringIncludes(
+    text,
+    "fails when depending on Claude-only hooks, Claude memory, or mcp__* tools",
+  );
+
+  // Design doc ## Both surfaces section requirement
+  assertStringIncludes(
+    text,
+    "**Every design document carries a `## Both surfaces` section**",
+  );
+  assertStringIncludes(
+    text,
+    "`deno task design:lint-doc` fails a document that omits it",
+  );
+
+  // Matching row in What It Refuses to Do table
+  assertStringIncludes(
+    text,
+    "| design a mechanism that works on only one agent surface (Claude Code or agy/Antigravity) without stopping for discussion |",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md uses <topic>-manual-steps-<YYYY-MM-DD>.md runbook naming convention with no josh-steps", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(
+    text,
+    "~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md",
+  );
+  assertStringIncludes(
+    text,
+    "Runbooks are named `<topic>-manual-steps-<YYYY-MM-DD>.md`.",
+  );
+  assertFalse(
+    text.includes("josh-steps"),
+    "skills/design-issue/SKILL.md must not contain any occurrences of 'josh-steps'",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains resume rule in Phase 1 step 1", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(
+    text,
+    "**Resume rather than restart:** Before creating a design document, look in the theme folder for an existing `<topic>-design-*.md` and continue from its decision record; a run that wants a fresh document says so.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md specifies Phase 4 runs on Claude Code only and is skipped on agy", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(
+    text,
+    "### Phase 4 — End-of-Run Memory Consume/Delete (Claude Code only; skipped on agy)",
+  );
+  assertStringIncludes(
+    text,
+    "**Surface scope:** Phase 4 runs on Claude Code only. It reads Claude Code's private memory directory (`~/.claude/projects/-home-joshua/memory/`) to decide which rules move into a skill body, and agy has no such directory. On agy, Phase 4 is skipped entirely, rather than silently doing nothing.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md has deleted the Consumed rules appendix", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertFalse(
+    text.includes("## Consumed rules"),
+    "skills/design-issue/SKILL.md must not contain the Consumed rules appendix heading",
   );
 });
