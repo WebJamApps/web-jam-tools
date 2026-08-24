@@ -220,19 +220,114 @@ Deno.test("runGate1 fails loudly when browser launch fails", async () => {
   }
 });
 
-Deno.test("defaultOpenBrowserImpl formats and executes background command", async () => {
+Deno.test("defaultOpenBrowserImpl formats and executes background command with environment propagation", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-open-browser-" });
   const htmlPath = path.join(tempDir, "test.html");
   await Deno.writeTextFile(htmlPath, "<h1>Test</h1>");
 
   try {
     let capturedCmd = "";
-    await defaultOpenBrowserImpl(htmlPath, ":99", (cmd) => {
+    let capturedEnv: Record<string, string> = {};
+    await defaultOpenBrowserImpl(htmlPath, ":99", (cmd, env) => {
       capturedCmd = cmd;
+      capturedEnv = env;
       return Promise.resolve({ success: true, code: 0 });
     });
     assertStringIncludes(capturedCmd, 'DISPLAY=":99" google-chrome "file://');
     assertStringIncludes(capturedCmd, "test.html");
+    assertEquals(capturedEnv["DISPLAY"], ":99");
+    if (Deno.env.get("PATH")) {
+      assertEquals(capturedEnv["PATH"], Deno.env.get("PATH"));
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("defaultScreenshotImpl invokes browser with isolated temporary --user-data-dir and cleans it up", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-profile-" });
+  const htmlPath = path.join(tempDir, "test.html");
+  const screenshotPath = path.join(tempDir, "screenshot.png");
+  await Deno.writeTextFile(htmlPath, "<h1>Test</h1>");
+
+  let capturedBin = "";
+  let capturedArgs: string[] = [];
+  let capturedUserDataDir = "";
+
+  try {
+    const result = await defaultScreenshotImpl(
+      htmlPath,
+      screenshotPath,
+      async (bin, args) => {
+        capturedBin = bin;
+        capturedArgs = args;
+        const dirArg = args.find((a) => a.startsWith("--user-data-dir="));
+        if (dirArg) {
+          capturedUserDataDir = dirArg.slice("--user-data-dir=".length);
+        }
+        // Verify the temporary directory exists while browser command executes
+        const dirStat = await Deno.stat(capturedUserDataDir);
+        assertEquals(dirStat.isDirectory, true);
+
+        // Write a fake screenshot file so stat check succeeds
+        await Deno.writeTextFile(screenshotPath, "fake-screenshot-data");
+        return { success: true };
+      },
+    );
+
+    assertEquals(capturedBin, "google-chrome");
+    assertStringIncludes(capturedUserDataDir, "gate1-chrome-profile-");
+    assertEquals(capturedArgs.includes("--headless=new"), true);
+    assertEquals(capturedArgs.includes(`--user-data-dir=${capturedUserDataDir}`), true);
+    assertEquals(capturedArgs.includes(`--screenshot=${screenshotPath}`), true);
+    assertEquals(result.sizeBytes > 0, true);
+
+    // Verify temp directory was cleaned up in finally block
+    await assertRejects(
+      async () => {
+        await Deno.stat(capturedUserDataDir);
+      },
+      Deno.errors.NotFound,
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("defaultScreenshotImpl cleans up temporary --user-data-dir when command execution fails", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-fail-profile-" });
+  const htmlPath = path.join(tempDir, "test.html");
+  const screenshotPath = path.join(tempDir, "screenshot.png");
+  await Deno.writeTextFile(htmlPath, "<h1>Test</h1>");
+
+  let capturedUserDataDir = "";
+
+  try {
+    await assertRejects(
+      async () => {
+        await defaultScreenshotImpl(
+          htmlPath,
+          screenshotPath,
+          (_bin, args) => {
+            const dirArg = args.find((a) => a.startsWith("--user-data-dir="));
+            if (dirArg) {
+              capturedUserDataDir = dirArg.slice("--user-data-dir=".length);
+            }
+            return Promise.reject(new Error("Command failed"));
+          },
+        );
+      },
+      Error,
+    );
+
+    assertEquals(capturedUserDataDir.includes("gate1-chrome-profile-"), true);
+    // Verify temp directory was cleaned up even when screenshot fails
+    await assertRejects(
+      async () => {
+        await Deno.stat(capturedUserDataDir);
+      },
+      Deno.errors.NotFound,
+    );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
