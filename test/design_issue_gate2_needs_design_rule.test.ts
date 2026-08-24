@@ -62,7 +62,7 @@ Deno.test("skills/design-issue/SKILL.md retains 4-part removal structure and saf
   assertStringIncludes(text, '1. the issue, cited as `repo#number "title"`;');
   assertStringIncludes(
     text,
-    "2. **why the design work that label asked for is now done** — naming the design document and the issues filed from it;",
+    "2. **why the design work that label asked for is now done** — naming the design document, the issues filed from it, and the specific stale body sections being rewritten (striking questions the design document answers, repointing design references, and reconciling scope);",
   );
   assertStringIncludes(text, "3. anything it did **not** resolve;");
   assertStringIncludes(text, "4. an actual question asking Josh to confirm.");

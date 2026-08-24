@@ -201,3 +201,30 @@ Deno.test("skills/design-issue/SKILL.md has deleted the Consumed rules appendix"
     "skills/design-issue/SKILL.md must not contain the Consumed rules appendix heading",
   );
 });
+
+Deno.test("skills/design-issue/SKILL.md requires issue body and Needs Design label to be reconciled together", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  // Numbered step in Phase 2 adjoining Needs Design label-removal step
+  assertStringIncludes(
+    text,
+    "11. **Reconcile stale issue bodies and `Needs Design` label removals together in the same run — never separately.**",
+  );
+  assertStringIncludes(
+    text,
+    "Removing the `Needs Design` label and rewriting the issue's stale body sections happen in the same run — never separately (striking questions the design document answers, repointing design references, and reconciling scope against the approved plan).",
+  );
+
+  // Extended Gate 2 four-part reason naming specific stale body sections
+  assertStringIncludes(
+    text,
+    "2. **why the design work that label asked for is now done** — naming the design document, the issues filed from it, and the specific stale body sections being rewritten (striking questions the design document answers, repointing design references, and reconciling scope);",
+  );
+
+  // Points at deno task design:stale-bodies
+  assertStringIncludes(
+    text,
+    "`deno task design:stale-bodies`",
+  );
+});
