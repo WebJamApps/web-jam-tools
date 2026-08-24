@@ -1,10 +1,13 @@
 // src/design-issue/cli.ts
-// CLI script for deno task design:gate1 <doc.md> (web-jam-tools#741)
+// Multi-command CLI for design-issue tooling:
+// - deno task design:gate1 <doc.md> (web-jam-tools#741)
+// - deno task design:lint-doc <doc.md> (web-jam-tools#742)
 
 import { parseArgs } from "@std/cli/parse-args";
 import { type Gate1Options, runGate1 } from "./gate1.ts";
+import { runLintDocCli } from "./lint_doc.ts";
 
-export async function runCli(
+export async function runGate1Cli(
   args: string[],
   options?: Partial<Gate1Options>,
 ): Promise<number> {
@@ -68,6 +71,24 @@ Options:
     console.error(`[design:gate1] Error: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
+}
+
+export async function runCli(
+  args: string[],
+  options?: Partial<Gate1Options>,
+): Promise<number> {
+  const firstArg = args.length > 0 ? String(args[0]) : "";
+
+  if (firstArg === "lint-doc" || firstArg === "lint_doc") {
+    return await runLintDocCli(args.slice(1));
+  }
+
+  if (firstArg === "gate1") {
+    return await runGate1Cli(args.slice(1), options);
+  }
+
+  // If no subcommand was matched, default to Gate 1 (preserving backwards compatibility)
+  return await runGate1Cli(args, options);
 }
 
 if (import.meta.main) {
