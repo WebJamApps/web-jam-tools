@@ -54,64 +54,90 @@ export function resolveHtmlPath(markdownPath: string): string {
 export async function defaultScreenshotImpl(
   htmlPath: string,
   screenshotPath: string,
+  execCommand?: (
+    bin: string,
+    args: string[],
+  ) => Promise<{ success: boolean; code?: number }>,
 ): Promise<{ sizeBytes: number }> {
   const fileUrl = `file://${path.resolve(htmlPath)}`;
+  const tempUserDataDir = await Deno.makeTempDir({ prefix: "gate1-chrome-profile-" });
 
-  // Try CLI browser binaries first
-  for (const bin of ["google-chrome", "chromium", "chromium-browser"]) {
-    let output: Deno.CommandOutput | null = null;
-    try {
-      const cmd = new Deno.Command(bin, {
-        args: [
-          "--headless=new",
-          `--screenshot=${screenshotPath}`,
-          "--window-size=1400,900",
-          fileUrl,
-        ],
-        stdout: "piped",
-        stderr: "piped",
-      });
-      output = await cmd.output();
-    } catch {
-      continue;
+  try {
+    // Try CLI browser binaries first
+    for (const bin of ["google-chrome", "chromium", "chromium-browser"]) {
+      let outputSuccess = false;
+      const args = [
+        "--headless=new",
+        `--user-data-dir=${tempUserDataDir}`,
+        `--screenshot=${screenshotPath}`,
+        "--window-size=1400,900",
+        fileUrl,
+      ];
+
+      if (execCommand) {
+        try {
+          const res = await execCommand(bin, args);
+          outputSuccess = res.success;
+        } catch {
+          continue;
+        }
+      } else {
+        try {
+          const cmd = new Deno.Command(bin, {
+            args,
+            stdout: "piped",
+            stderr: "piped",
+          });
+          const output = await cmd.output();
+          outputSuccess = output.success;
+        } catch {
+          continue;
+        }
+      }
+
+      if (outputSuccess) {
+        try {
+          const fileInfo = await Deno.stat(screenshotPath);
+          if (fileInfo.size > 0) {
+            return { sizeBytes: fileInfo.size };
+          }
+        } catch {
+          // continue
+        }
+      }
     }
 
-    if (output && output.success) {
+    // Fallback to Playwright
+    try {
+      const { chromium } = await import("playwright");
+      const browser = await chromium.launch();
       try {
+        const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+        await page.goto(fileUrl, { waitUntil: "load" });
+        await page.screenshot({ path: screenshotPath, fullPage: true });
         const fileInfo = await Deno.stat(screenshotPath);
         if (fileInfo.size > 0) {
           return { sizeBytes: fileInfo.size };
         }
-      } catch {
-        // continue
+      } finally {
+        await browser.close();
       }
+    } catch (err) {
+      throw new Error(
+        `Headless screenshot failed: no working browser executable found (checked google-chrome, chromium, chromium-browser, and playwright): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
-  }
 
-  // Fallback to Playwright
-  try {
-    const { chromium } = await import("playwright");
-    const browser = await chromium.launch();
+    throw new Error(`Screenshot output file at ${screenshotPath} is empty (0 bytes)`);
+  } finally {
     try {
-      const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
-      await page.goto(fileUrl, { waitUntil: "load" });
-      await page.screenshot({ path: screenshotPath, fullPage: true });
-      const fileInfo = await Deno.stat(screenshotPath);
-      if (fileInfo.size > 0) {
-        return { sizeBytes: fileInfo.size };
-      }
-    } finally {
-      await browser.close();
+      await Deno.remove(tempUserDataDir, { recursive: true });
+    } catch {
+      // ignore if already removed
     }
-  } catch (err) {
-    throw new Error(
-      `Headless screenshot failed: no working browser executable found (checked google-chrome, chromium, chromium-browser, and playwright): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
   }
-
-  throw new Error(`Screenshot output file at ${screenshotPath} is empty (0 bytes)`);
 }
 
 /**
@@ -129,9 +155,10 @@ export async function defaultOpenBrowserImpl(
   const activeDisplay = display || Deno.env.get("DISPLAY") || ":0";
   const shellCmd =
     `DISPLAY="${activeDisplay}" google-chrome "file://${absHtmlPath}" >/dev/null 2>&1 &`;
+  const env = { ...Deno.env.toObject(), DISPLAY: activeDisplay };
 
   if (execCommand) {
-    const output = await execCommand(shellCmd, { DISPLAY: activeDisplay });
+    const output = await execCommand(shellCmd, env);
     if (!output.success) {
       throw new Error(`Failed to launch Google Chrome (exit code ${output.code})`);
     }
@@ -140,6 +167,7 @@ export async function defaultOpenBrowserImpl(
 
   const cmd = new Deno.Command("bash", {
     args: ["-c", shellCmd],
+    env,
     stdout: "null",
     stderr: "null",
   });
