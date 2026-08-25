@@ -55,7 +55,7 @@ graph TD
 ## Formatting & Printing Rules
 
 - **Portrait Orientation & 2-Page Budget (Hard Requirement)**: Output documents are strictly formatted in portrait mode with compact 0.5-inch margins (720 dxa) to guarantee they never exceed 2 pages.
-- **Two-Line / Couplet Consolidation**: When source lead sheet lyrics are single-column / short lines, combine two lines into a single wide line with chords space-aligned over each phrase. This optimizes page width utilization and significantly reduces vertical height.
+- **Two-Line / Couplet Consolidation**: When source lead sheet lyrics are single-column / short lines, combine two lines into a single wide line with chords space-aligned over each phrase. Keep total line width under ~70–75 characters (compacting excessive whitespace between phrases) to ensure chord lines never wrap onto secondary lines (preventing 4 chord rows above lyrics).
 - **12pt Minimum Font Size (Flex)**: Chords and lyrics use `Consolas` monospace font targeting **12pt minimum size (flex)** so lead sheets are comfortably readable from music stands while strictly respecting the 2-page maximum constraint.
 - **1-Line Space After Lyrics**: Include 1 full line space of vertical padding between the lyric line of a block and the next set of chords for clean visual separation between phrases.
 - **Spacebar / Backspace Editability**: Generated documents use standard paragraph lines so human editors can easily adjust chord positions in Microsoft Word or Google Docs using the Spacebar and Backspace keys.
@@ -65,5 +65,6 @@ graph TD
   - Lyrics: Plain Regular
   - Header Legend: Clear instrument legend explicitly stating `Guitar (Capo <N>): Bold | Bass Guitar (No Capo): Italic`.
   - Clean Header: Header strictly contains only Song Title and Composer/Author placed together on the same line (e.g. `TITLE (Author/Credits)`), followed by the Instrument Legend. Do NOT render "Guitar Shapes" key summary lines or top header `[Note: ...]` lines. Performance markings belong inline on their specific stanza lines.
+- **No Orphaned Chords Across Page Breaks (`keepNext: true`)**: Chord lines are strictly bound to their respective lyric lines using `keepNext: true` and `keepLines: true` so a page break never splits chords away from lyrics.
 
 
