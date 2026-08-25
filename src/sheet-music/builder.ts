@@ -59,7 +59,7 @@ export function buildSongDocument(songInput: SongDefinition): Document {
   children.push(
     new Paragraph({
       children: titleRuns,
-      spacing: { line: 200, before: 0, after: 20 },
+      spacing: { line: 280, before: 60, after: 20 },
     }),
   );
 
@@ -101,7 +101,7 @@ export function buildSongDocument(songInput: SongDefinition): Document {
   children.push(
     new Paragraph({
       children: legendRuns,
-      spacing: { line: 200, before: 0, after: 60 },
+      spacing: { line: 220, before: 0, after: 40 },
     }),
   );
 
@@ -118,7 +118,9 @@ export function buildSongDocument(songInput: SongDefinition): Document {
             font: FONT_FAMILY,
           }),
         ],
-        spacing: { line: 200, before: 40, after: 0 },
+        keepNext: true,
+        keepLines: true,
+        spacing: { line: 220, before: 60, after: 0 },
       }),
     );
 
@@ -186,7 +188,9 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
     paras.push(
       new Paragraph({
         children: guitarRuns,
-        spacing: { line: 200, before: 0, after: 0 },
+        keepNext: true,
+        keepLines: true,
+        spacing: { line: 240, before: 0, after: 0 },
       }),
     );
 
@@ -201,11 +205,13 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
             font: FONT_FAMILY,
           }),
         ],
-        spacing: { line: 200, before: 0, after: 0 },
+        keepNext: true,
+        keepLines: true,
+        spacing: { line: 240, before: 0, after: 0 },
       }),
     );
 
-    // Line 3: Lyrics (Regular) - 1 line space after (200 dxa)
+    // Line 3: Lyrics (Regular) - 1 full line space after (200 dxa)
     paras.push(
       new Paragraph({
         children: [
@@ -215,7 +221,8 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
             font: FONT_FAMILY,
           }),
         ],
-        spacing: { line: 200, before: 0, after: 200 },
+        keepLines: true,
+        spacing: { line: 240, before: 0, after: 200 },
       }),
     );
   } else {
@@ -242,11 +249,13 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
     paras.push(
       new Paragraph({
         children: chordRuns,
-        spacing: { line: 200, before: 0, after: 0 },
+        keepNext: true,
+        keepLines: true,
+        spacing: { line: 240, before: 0, after: 0 },
       }),
     );
 
-    // Line 2: Lyrics (Regular) - 1 line space after (200 dxa)
+    // Line 2: Lyrics (Regular) - 1 full line space after (200 dxa)
     paras.push(
       new Paragraph({
         children: [
@@ -256,7 +265,8 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
             font: FONT_FAMILY,
           }),
         ],
-        spacing: { line: 200, before: 0, after: 200 },
+        keepLines: true,
+        spacing: { line: 240, before: 0, after: 200 },
       }),
     );
   }
