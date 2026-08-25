@@ -9,12 +9,12 @@ import type { ChordLyricLine, SongDefinition } from "./types.ts";
 import { autoTransposeSong } from "./transpose.ts";
 
 export const FONT_FAMILY = "Consolas";
-export const TITLE_SIZE = 24; // 12pt
-export const HEADER_SIZE = 18; // 9pt
-export const SECTION_SIZE = 19; // 9.5pt
-export const CHORD_SIZE = 18; // 9pt
-export const LYRIC_SIZE = 18; // 9pt
-export const ANNOTATION_SIZE = 16; // 8pt
+export const TITLE_SIZE = 32; // 16pt
+export const HEADER_SIZE = 22; // 11pt
+export const SECTION_SIZE = 24; // 12pt
+export const CHORD_SIZE = 24; // 12pt (minimum flex size)
+export const LYRIC_SIZE = 24; // 12pt (minimum flex size)
+export const ANNOTATION_SIZE = 20; // 10pt
 
 // 0.5 inch margins in twentieths of a point (dxa): 0.5 * 1440 = 720 dxa
 export const MARGIN_DXA = 720;
@@ -32,40 +32,36 @@ export function buildSongDocument(songInput: SongDefinition): Document {
 
   const children: Paragraph[] = [];
 
-  // 1. Song Title
-  children.push(
-    new Paragraph({
-      children: [
-        new TextRun({
-          text: song.metadata.title,
-          bold: true,
-          size: TITLE_SIZE,
-          font: FONT_FAMILY,
-        }),
-      ],
-      spacing: { line: 200, before: 0, after: 20 },
+  // 1. Song Title & Composer / Author (on the same line)
+  const titleRuns: TextRun[] = [
+    new TextRun({
+      text: song.metadata.title,
+      bold: true,
+      size: TITLE_SIZE,
+      font: FONT_FAMILY,
     }),
-  );
+  ];
 
-  // 2. Composer / Credits
   if (song.metadata.composer || song.metadata.copyright) {
     const creditText = [song.metadata.composer, song.metadata.copyright]
       .filter(Boolean)
       .join(" | ");
-    children.push(
-      new Paragraph({
-        children: [
-          new TextRun({
-            text: creditText,
-            italics: true,
-            size: HEADER_SIZE,
-            font: FONT_FAMILY,
-          }),
-        ],
-        spacing: { line: 200, before: 0, after: 20 },
+    titleRuns.push(
+      new TextRun({
+        text: `   (${creditText})`,
+        italics: true,
+        size: HEADER_SIZE,
+        font: FONT_FAMILY,
       }),
     );
   }
+
+  children.push(
+    new Paragraph({
+      children: titleRuns,
+      spacing: { line: 200, before: 0, after: 20 },
+    }),
+  );
 
   // 3. Header Instrument Legend
   let legendRuns: TextRun[] = [];
@@ -105,56 +101,11 @@ export function buildSongDocument(songInput: SongDefinition): Document {
   children.push(
     new Paragraph({
       children: legendRuns,
-      spacing: { line: 200, before: 0, after: 40 },
+      spacing: { line: 200, before: 0, after: 60 },
     }),
   );
 
-  // 4. Key Summary / Performance Notes
-  const keyDetails: string[] = [];
-  if (song.metadata.guitarKey) {
-    keyDetails.push(`Guitar Shapes: Key of ${song.metadata.guitarKey}`);
-  }
-  if (isDualTier && song.metadata.bassKey) {
-    keyDetails.push(`Bass Sounding: Key of ${song.metadata.bassKey}`);
-  }
-  if (song.metadata.tempo) {
-    keyDetails.push(`Tempo: ${song.metadata.tempo}`);
-  }
-
-  if (keyDetails.length > 0) {
-    children.push(
-      new Paragraph({
-        children: [
-          new TextRun({
-            text: keyDetails.join("  |  "),
-            size: HEADER_SIZE,
-            font: FONT_FAMILY,
-          }),
-        ],
-        spacing: { line: 200, before: 0, after: 40 },
-      }),
-    );
-  }
-
-  if (song.metadata.performanceNotes && song.metadata.performanceNotes.length > 0) {
-    for (const note of song.metadata.performanceNotes) {
-      children.push(
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: `[Note: ${note}]`,
-              italics: true,
-              size: ANNOTATION_SIZE,
-              font: FONT_FAMILY,
-            }),
-          ],
-          spacing: { line: 200, before: 0, after: 20 },
-        }),
-      );
-    }
-  }
-
-  // 5. Song Sections
+  // 4. Song Sections
   for (const section of song.sections) {
     // Section Header
     children.push(
@@ -254,7 +205,7 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
       }),
     );
 
-    // Line 3: Lyrics (Regular)
+    // Line 3: Lyrics (Regular) - 1 line space after (200 dxa)
     paras.push(
       new Paragraph({
         children: [
@@ -264,7 +215,7 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
             font: FONT_FAMILY,
           }),
         ],
-        spacing: { line: 200, before: 0, after: 20 },
+        spacing: { line: 200, before: 0, after: 200 },
       }),
     );
   } else {
@@ -295,7 +246,7 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
       }),
     );
 
-    // Line 2: Lyrics (Regular)
+    // Line 2: Lyrics (Regular) - 1 line space after (200 dxa)
     paras.push(
       new Paragraph({
         children: [
@@ -305,7 +256,7 @@ function buildLineParagraphs(line: ChordLyricLine, isDualTier: boolean): Paragra
             font: FONT_FAMILY,
           }),
         ],
-        spacing: { line: 200, before: 0, after: 20 },
+        spacing: { line: 200, before: 0, after: 200 },
       }),
     );
   }
