@@ -41,6 +41,7 @@ const EXPECTED_SKILL_DIRS = [
   "handle-gmails",
   "memory-cleanup",
   "pr-review",
+  "sheet-music",
   "venue-mining",
   "work-issue",
 ];

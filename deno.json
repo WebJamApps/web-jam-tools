@@ -1,9 +1,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.30.95",
+  "version": "1.30.96",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
+    "sheet-music:generate": "deno run --allow-read --allow-write src/sheet-music/generate_docx.ts",
     "circleci-settings": "deno run --allow-net --allow-env scripts/circleci-settings.ts",
     "install-git-secret-hook": "bash scripts/install-git-secret-hook.sh",
     "gitleaks": "bash scripts/gitleaks.sh",
@@ -59,6 +60,7 @@
     "@std/cli": "jsr:@std/cli@^1.0.32",
     "@std/path": "jsr:@std/path@^1.1.6",
     "@std/yaml": "jsr:@std/yaml@^1.2.0",
+    "docx": "npm:docx@^9.0.3",
     "cheerio": "npm:cheerio@^1.2.0",
     "playwright": "npm:playwright@^1.62.1"
   },
