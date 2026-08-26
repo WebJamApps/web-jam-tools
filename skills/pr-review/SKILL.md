@@ -99,14 +99,16 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
 
 ### Step 2: Audit Checklist
 
-Review the PR diff, description, checks, and mergeability against these mandatory audit criteria:
+Review the PR diff, description, checks, and mergeability against these mandatory audit criteria.
+
+**Audit Execution Order**: Always perform the code, diff, and architectural audits (scope, semver bump, package-lock, test plan, architectural judgment items, guardrails) first; check the CircleCI status **last**, immediately before rendering the verdict in Step 3 — not fetched-and-then-ignored early and not polled mid-review.
 
 1. **Merge Conflicts (Must Fix)**:
    - Check `mergeable` status and `mergeStateStatus` from Step 1.
    - If the PR has merge conflicts with the base branch (`dev` / `main`), report it as a **Must Fix** item requiring a rebase or conflict resolution before merging.
 
 2. **CircleCI & Automated Build Health (Must Fix — Non-Redundancy Principle)**:
-   - Inspect status checks from `gh pr checks`.
+   - Inspect status checks from `gh pr checks` (evaluated last, after completing all diff and architectural audits).
    - CircleCI natively executes mechanical static analysis gates across repositories (and as per-repo tooling rollouts land):
      - Code duplication (`jscpd` with `threshold: 5`)
      - Code complexity (`eslint-plugin-sonarjs`)
@@ -114,7 +116,12 @@ Review the PR diff, description, checks, and mergeability against these mandator
      - Code formatting & syntax (`deno task fmt:check`, `npm run lint`)
      - Unit test suites & coverage thresholds (`deno task test`, `npm test`)
    - **Non-Redundancy Principle**: Because mechanical static checks are enforced directly in CircleCI (where configured), `pr-review` **never duplicates or re-audits static linter rules, complexity metrics, formatting styles, or duplication percentages in review prose**.
-   - If CircleCI (`ci/circleci: build` or equivalent pipeline) is failing, report the failure details directly as a **Must Fix** item.
+   - **Pending CI Handling (No Polling Loops)**:
+     - If CircleCI status is **`pending`** (or in progress) at this final check, **do NOT render a verdict** (`**✅ Approved**` or `**🛑 Changes Requested**`) and do **NOT** post a review comment.
+     - Report the pending status plainly to Josh in chat/output (e.g. *"CircleCI pipeline is still running (pending) — review verdict withheld until CI completes."*) and stop execution immediately.
+     - **Never loop, sleep, or poll waiting for CI to finish** (`sleep` loops, polling bash iterations, or recursive retries are strictly forbidden). A single check at the end of the audit is sufficient.
+   - **Failing CI Handling**: If CircleCI (`ci/circleci: build` or equivalent pipeline) is failing, report the failure details directly as a **Must Fix** item.
+   - **Passing CI Handling**: If CircleCI is green, proceed with rendering the review verdict and checklist findings in Step 3.
 
 3. **Snyk Security Audits (Must Fix)**:
    - Inspect status checks from `gh pr checks` for Snyk security failures (`security/snyk`, `snyk-code`, etc.).
@@ -200,7 +207,7 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
 ### Step 3: Post Review Feedback
 
-1. Synthesize review findings into a structured review comment using severity icons so merge blockers and check statuses are immediately recognizable without reading full prose.
+1. When CircleCI has completed (passing or failing), synthesize review findings into a structured review comment using severity icons so merge blockers and check statuses are immediately recognizable without reading full prose. (If CircleCI was still pending at the final check of Step 2, withhold Step 3 and do not post a review comment).
 2. Format feedback with clear section headers and severity icons:
    - **PR Review Summary**: Overall status (`**✅ Approved**` if clean / `**🛑 Changes Requested**` if any Must Fix item or blocking defect exists).
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
