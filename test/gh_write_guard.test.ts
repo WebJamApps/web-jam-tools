@@ -127,3 +127,23 @@ Deno.test("isAlreadyReviewedAtHeadSha fails open (does not skip) on unparseable 
       stderr: "",
     })).then((result) => assertEquals(result.skip, false));
 });
+
+Deno.test("isAlreadyReviewedAtHeadSha invokes gh with bare pr id and --repo flag", async () => {
+  let seenArgs: string[] = [];
+  await isAlreadyReviewedAtHeadSha("WebJamApps/JaMmusic", 1324, (cmd) => {
+    seenArgs = cmd;
+    return Promise.resolve({
+      code: 0,
+      stdout: JSON.stringify({ last_review_sha: null, head_sha: "def456" }),
+      stderr: "",
+    });
+  });
+  assertEquals(seenArgs.slice(0, 6), [
+    "gh",
+    "pr",
+    "view",
+    "1324",
+    "--repo",
+    "WebJamApps/JaMmusic",
+  ]);
+});
