@@ -57,3 +57,27 @@ Deno.test("post-issue-comment: a well-formed body posts successfully", async () 
   const code = await run(ARGS, fakeDeps());
   assertEquals(code, 0);
 });
+
+Deno.test("post-issue-comment: builds gh argv with bare issue id and --repo flag (regression web-jam-tools#781)", async () => {
+  let seenCommentArgs: string[] = [];
+  const code = await run(
+    ARGS,
+    fakeDeps({
+      runCmd: (cmd) => {
+        seenCommentArgs = cmd;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(seenCommentArgs, [
+    "gh",
+    "issue",
+    "comment",
+    "685",
+    "--repo",
+    "WebJamApps/web-jam-tools",
+    "--body-file",
+    "/tmp/example.md",
+  ]);
+});
