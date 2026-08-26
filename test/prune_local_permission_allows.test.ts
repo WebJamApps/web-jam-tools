@@ -5,6 +5,7 @@ import {
   CANONICAL_CREATE_DRAFT_PR_RULES,
   checkSettingsBackup,
   getDefaultTargetFiles,
+  isNonTrailingWildcardRule,
   processTargetFile,
   R11_MCP_ALLOWS,
   R5_BLANKET_WILDCARDS,
@@ -295,4 +296,155 @@ Deno.test("getDefaultTargetFiles - returns array of 4 target file paths", () => 
     /WebJamSocketCluster\/\.claude\/settings\.local\.json$/,
   );
   assertMatch(defaultFiles[3], /web-jam-back\/\.claude\/settings\.local\.json$/);
+});
+
+Deno.test("shouldPruneRule & isNonTrailingWildcardRule - detects non-trailing wildcard rules", () => {
+  const nonTrailingRules = [
+    'Bash(find . -maxdepth 1 -name "*.env*")',
+    "Bash(shellcheck hooks/*.sh scripts/install-hooks.sh)",
+    'Bash(xargs -I {} sh -c \'stat -c "%y %n" {} 2>/dev/null | sed "s/ .*\\///" | sed "s/\\..*//"\')',
+    "Bash(awk '/setlist/{f=$0} /^SF:.*setlist/{sf=$0} ...' coverage/lcov.info)",
+    "Bash(awk '/^diff --git.*AGENTS\\.md/{f=1} ...')",
+    "Bash(python3 -c \"...print\\('='*40\\); print\\(d['body']\\)\")",
+  ];
+
+  for (const rule of nonTrailingRules) {
+    assertEquals(
+      isNonTrailingWildcardRule(rule),
+      true,
+      `Expected ${rule} to be detected as non-trailing wildcard`,
+    );
+    const res = shouldPruneRule(rule);
+    assertEquals(res.prune, true, `Expected ${rule} to be pruned`);
+    assertEquals(res.reason, "NON-TRAILING-WILDCARD");
+  }
+});
+
+Deno.test("shouldPruneRule & isNonTrailingWildcardRule - trailing wildcards survive", () => {
+  const trailingRules = [
+    "Bash(git *)",
+    "Bash(curl *)",
+    "Read(//dev/pts/**)",
+    "Bash(node *)",
+    "Bash(deno test *)",
+  ];
+
+  for (const rule of trailingRules) {
+    assertEquals(
+      isNonTrailingWildcardRule(rule),
+      false,
+      `Expected ${rule} to NOT be detected as non-trailing wildcard`,
+    );
+  }
+});
+
+Deno.test("runCli - --check mode reports offending rules and exits 1, exits 0 on clean fixture", () => {
+  const tempDir = Deno.makeTempDirSync();
+  const dirtyFile = `${tempDir}/dirty.json`;
+  const cleanFile = `${tempDir}/clean.json`;
+
+  const dirtyContent = JSON.stringify({
+    permissions: {
+      allow: [
+        'Bash(find . -maxdepth 1 -name "*.env*")',
+        "Bash(git *)",
+        "Read(//dev/pts/**)",
+      ],
+    },
+  });
+
+  const cleanContent = JSON.stringify({
+    permissions: {
+      allow: [
+        "Bash(git *)",
+        "Read(//dev/pts/**)",
+      ],
+    },
+  });
+
+  Deno.writeTextFileSync(dirtyFile, dirtyContent);
+  Deno.writeTextFileSync(cleanFile, cleanContent);
+
+  try {
+    const dirtyExit = runCli(["--check", "--file", dirtyFile]);
+    assertEquals(dirtyExit, 1);
+
+    const cleanExit = runCli(["--check", "--file", cleanFile]);
+    assertEquals(cleanExit, 0);
+  } finally {
+    Deno.removeSync(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runCli - --check mode is strictly read-only", () => {
+  const tempDir = Deno.makeTempDirSync();
+  const testFile = `${tempDir}/settings.local.json`;
+  const content = JSON.stringify({
+    permissions: {
+      allow: [
+        'Bash(find . -maxdepth 1 -name "*.env*")',
+        "Bash(git *)",
+      ],
+    },
+  });
+
+  Deno.writeTextFileSync(testFile, content);
+
+  try {
+    const statBefore = Deno.statSync(testFile);
+    const contentBefore = Deno.readTextFileSync(testFile);
+
+    const code1 = runCli(["--check", "--target-file", testFile]);
+    assertEquals(code1, 1);
+
+    const statMid = Deno.statSync(testFile);
+    const contentMid = Deno.readTextFileSync(testFile);
+    assertEquals(contentBefore, contentMid);
+    assertEquals(statBefore.mtime?.getTime(), statMid.mtime?.getTime());
+
+    const code2 = runCli(["--check", "--target-file", testFile]);
+    assertEquals(code2, 1);
+
+    const statAfter = Deno.statSync(testFile);
+    const contentAfter = Deno.readTextFileSync(testFile);
+    assertEquals(contentBefore, contentAfter);
+    assertEquals(statBefore.mtime?.getTime(), statAfter.mtime?.getTime());
+  } finally {
+    Deno.removeSync(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("processTargetFile & runCli - apply mode prunes non-trailing wildcard rules cleanly", () => {
+  const tempDir = Deno.makeTempDirSync();
+  const testFile = `${tempDir}/settings.local.json`;
+  const initialContent = JSON.stringify(
+    {
+      permissions: {
+        allow: [
+          'Bash(find . -maxdepth 1 -name "*.env*")',
+          "Bash(git *)",
+          "Read(//dev/pts/**)",
+          "Bash(shellcheck hooks/*.sh scripts/install-hooks.sh)",
+        ],
+      },
+    },
+    null,
+    2,
+  );
+
+  Deno.writeTextFileSync(testFile, initialContent);
+
+  try {
+    const code = runCli(["--apply", "--file", testFile, "--backup-dst-dir", tempDir]);
+    assertEquals(code, 0);
+
+    const updatedContent = Deno.readTextFileSync(testFile);
+    const parsed = JSON.parse(updatedContent);
+    assertEquals(parsed.permissions.allow, [
+      "Bash(git *)",
+      "Read(//dev/pts/**)",
+    ]);
+  } finally {
+    Deno.removeSync(tempDir, { recursive: true });
+  }
 });
