@@ -66,7 +66,17 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     return 0;
   }
 
-  const ghArgs = ["gh", "pr", "review", `${opts.repo}#${opts.pr}`, "--comment", "--body-file", opts.bodyFile];
+  const ghArgs = [
+    "gh",
+    "pr",
+    "review",
+    String(opts.pr),
+    "--repo",
+    opts.repo,
+    "--comment",
+    "--body-file",
+    opts.bodyFile,
+  ];
 
   if (opts.dryRun) {
     console.log(`dry run: would post review comment via: ${ghArgs.join(" ")}`);

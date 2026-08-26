@@ -72,7 +72,7 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     return 1;
   }
 
-  const ghArgs = ["gh", "issue", "edit", `${opts.repo}#${opts.issue}`, ...opts.rest];
+  const ghArgs = ["gh", "issue", "edit", String(opts.issue), "--repo", opts.repo, ...opts.rest];
 
   if (opts.dryRun) {
     console.log(`dry run: would edit issue via: ${ghArgs.join(" ")}`);

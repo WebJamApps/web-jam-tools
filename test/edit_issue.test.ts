@@ -34,7 +34,9 @@ Deno.test("edit-issue: a label edit with no body passes through untouched", asyn
     "gh",
     "issue",
     "edit",
-    "WebJamApps/web-jam-tools#685",
+    "685",
+    "--repo",
+    "WebJamApps/web-jam-tools",
     "--remove-label",
     "Blocked",
   ]);
@@ -78,4 +80,28 @@ Deno.test("edit-issue: --dry-run resolves without editing", async () => {
   );
   assertEquals(code, 0);
   assertEquals(called, false);
+});
+
+Deno.test("edit-issue: builds gh argv with bare issue id and --repo flag (regression web-jam-tools#781)", async () => {
+  let seenEditArgs: string[] = [];
+  const code = await run(
+    ["--repo", "WebJamApps/web-jam-tools", "--issue", "685", "--add-label", "Sonnet"],
+    fakeDeps({
+      runCmd: (cmd) => {
+        seenEditArgs = cmd;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(seenEditArgs, [
+    "gh",
+    "issue",
+    "edit",
+    "685",
+    "--repo",
+    "WebJamApps/web-jam-tools",
+    "--add-label",
+    "Sonnet",
+  ]);
 });

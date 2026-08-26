@@ -76,3 +76,27 @@ Deno.test("post-pr-comment: a transient failure is retried and succeeds", async 
   assertEquals(code, 0);
   assertEquals(attempts, 2);
 });
+
+Deno.test("post-pr-comment: builds gh argv with bare pr id and --repo flag (regression web-jam-tools#781)", async () => {
+  let seenCommentArgs: string[] = [];
+  const code = await run(
+    ARGS,
+    fakeDeps({
+      runCmd: (cmd) => {
+        seenCommentArgs = cmd;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(seenCommentArgs, [
+    "gh",
+    "pr",
+    "comment",
+    "1324",
+    "--repo",
+    "WebJamApps/JaMmusic",
+    "--body-file",
+    "/tmp/example-comment.md",
+  ]);
+});

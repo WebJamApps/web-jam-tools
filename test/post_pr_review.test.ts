@@ -156,3 +156,37 @@ Deno.test("post-pr-review: a well-formed, not-yet-reviewed body posts successful
   );
   assertEquals(code, 0);
 });
+
+Deno.test("post-pr-review: builds gh argv with bare pr id and --repo flag (regression web-jam-tools#781)", async () => {
+  let seenReviewArgs: string[] = [];
+  const code = await run(
+    ARGS,
+    fakeDeps({
+      runCmd: (cmd) => {
+        if (cmd[1] === "pr" && cmd[2] === "view") {
+          return Promise.resolve({
+            code: 0,
+            stdout: JSON.stringify({ last_review_sha: null, head_sha: "abc" }),
+            stderr: "",
+          });
+        }
+        if (cmd[1] === "pr" && cmd[2] === "review") {
+          seenReviewArgs = cmd;
+        }
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(seenReviewArgs, [
+    "gh",
+    "pr",
+    "review",
+    "1324",
+    "--repo",
+    "WebJamApps/JaMmusic",
+    "--comment",
+    "--body-file",
+    "/tmp/example-review.md",
+  ]);
+});
