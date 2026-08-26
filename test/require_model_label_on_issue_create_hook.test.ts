@@ -987,6 +987,20 @@ Deno.test("deno task create-issue with Sonnet and --escalation-reason is allowed
   assertEquals(res.code, 0, res.stderr);
 });
 
+// --- web-jam-tools#788 third review: the unterminated-quote fallback must
+// recognise every create form the parseable scan recognises ---
+
+Deno.test("unterminated-quote 'deno task issue:create' is blocked (task name carries no gh token)", async () => {
+  const res = await runHook(
+    bashCall(`deno task issue:create --title 'unterminated`),
+  );
+  // The fallback's first alternative requires a `gh` token, which
+  // `issue:create` does not have — without its own alternative this command
+  // passed silently even though the balanced-quote form is gated.
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 Deno.test("deno task create-issue with Opus and --escalation-reason is allowed", async () => {
   const res = await runHook(
     bashCall(

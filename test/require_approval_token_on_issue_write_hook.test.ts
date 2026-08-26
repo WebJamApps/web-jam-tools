@@ -680,6 +680,36 @@ Deno.test("Bash brace-grouped gh issue create { ...; } is still gated (braces ar
   });
 });
 
+// --- web-jam-tools#788 third review: unterminated-quote path must cover
+// every create form the parseable path covers ---
+
+Deno.test("unterminated-quote 'deno task issue:create' fails closed (task name carries no gh token)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(`deno task issue:create --title 'Nobody approved this`),
+      tokenPath,
+    );
+    // Regression guard: looksLikeIssueCreatingCommand()'s first alternative
+    // requires a `gh` token, and `issue:create` has none — so without its own
+    // alternative this fell through to a silent pass while the SAME command
+    // with balanced quotes was correctly denied. An ambiguous parse must
+    // never be more permissive than a clean one.
+    assertDeny(res);
+  });
+});
+
+Deno.test("balanced-quote 'deno task issue:create' is gated too (the form the check above must match)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(`deno task issue:create --title "Nobody approved this" --body B`),
+      tokenPath,
+    );
+    // Pins the premise of the test above: this form really is one the
+    // parseable path gates, so the unterminated path is obliged to match it.
+    assertDeny(res);
+  });
+});
+
 Deno.test("invalid JSON on stdin passes through (nothing this hook can act on)", async () => {
   await withTokenFile(null, async (tokenPath) => {
     const cmd = new Deno.Command("bash", {

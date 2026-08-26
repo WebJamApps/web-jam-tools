@@ -351,10 +351,15 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
 
     const { segments, unterminated } = splitOnOperators(cmd);
     if (unterminated) {
+      // This shape must cover every form the parseable scan below treats as
+      // issue-creating, or the ambiguous-parse path fails OPEN on the form it
+      // misses. `issue:create` needs its own alternative because that task
+      // name carries no `gh` token (web-jam-tools#788 third review).
       if (
         (/\bgh\b/.test(cmd) && /\bissue\b/.test(cmd) &&
           (/\bcreate\b/.test(cmd) || /\bedit\b/.test(cmd))) ||
-        /\bcreate-issue\b/.test(cmd)
+        /\bcreate-issue\b/.test(cmd) ||
+        /\bissue:create\b/.test(cmd)
       ) {
         return "DENY:the command couldn't be parsed (unbalanced quoting) but appears to create/edit a gh issue";
       }

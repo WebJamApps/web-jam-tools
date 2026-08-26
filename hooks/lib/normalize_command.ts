@@ -248,12 +248,19 @@ export const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * command substitution, ${...} parameter expansion, $((...)) arithmetic,
  * `foo() { ...; }` function definitions, `{a,b}` brace expansion) — this
  * function does not try to distinguish those from real grouping and
- * splits on them too. That is always safe for every caller here: every
- * matcher this file feeds (git-push-deletion, dangerous-deploy,
- * issue-creation) is a POSITIONAL check anchored on a segment's own
- * `tokens[0]`, so an extra split can only ever surface a match that a
- * merged segment would have hidden — never fabricate a false one out of
- * unrelated text.
+ * splits on them too. Every matcher this file feeds (git-push-deletion,
+ * dangerous-deploy, issue-creation) is a POSITIONAL check anchored on a
+ * segment's own `tokens[0]`, so an extra split never invents a match out of
+ * text that contains no gated command at all — it can only surface one a
+ * merged segment would have hidden.
+ *
+ * It CAN, however, surface a gated command that appears in a position where
+ * it would not actually run: `cleanup() { git push origin --delete b; }`
+ * merely DEFINES a function, but splitting on `{` leaves a segment whose
+ * `tokens[0]` is `git`, so the deletion guard blocks it. That is deliberate.
+ * Over-blocking a definition is the safe direction for guards whose whole
+ * purpose is to stop an irreversible operation, and unpicking definition
+ * from invocation would mean parsing shell grammar rather than splitting it.
  *
  * Shared by hooks/lib/check_irreversible_operations.ts,
  * hooks/lib/check_dangerous_git_deploy.ts,

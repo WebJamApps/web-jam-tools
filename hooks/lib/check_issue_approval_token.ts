@@ -256,11 +256,21 @@ function checkTokenValidity(
  * matters on the rare ambiguous-parse path. Deliberately narrower than the
  * sibling's version (no `edit` alternative): this hook's Bash path only
  * ever cares about issue CREATION, never `gh issue edit`.
+ *
+ * Narrower on `edit`, but NEVER narrower on the set of create forms. It must
+ * recognise every form the parseable path below treats as issue-creating, or
+ * the ambiguous-parse path fails OPEN on whichever form it misses. The
+ * `issue:create` alternative exists for exactly that reason
+ * (web-jam-tools#788 third review): that task name carries no `gh` token, so
+ * the first alternative can never match it, and without an alternative of its
+ * own, `deno task issue:create --title 'unterminated` passed silently while
+ * the same command with balanced quotes was correctly denied.
  */
 function looksLikeIssueCreatingCommand(command: string): boolean {
   return (
     (/\bgh\b/.test(command) && /\bissue\b/.test(command) && /\bcreate\b/.test(command)) ||
-    /\bcreate-issue\b/.test(command)
+    /\bcreate-issue\b/.test(command) ||
+    /\bissue:create\b/.test(command)
   );
 }
 
