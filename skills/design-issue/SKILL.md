@@ -153,6 +153,7 @@ These are properties of the skill, written as explicit refusals:
 | combine artifact/doc/UI review and live procedure walkthroughs into a single manual issue | inspecting rendered artifacts in Google Chrome and executing live procedures with learners or external parties are distinct verification surfaces with different gates and acceptance criteria |
 | hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` |
 | design a mechanism that works on only one agent surface (Claude Code or agy/Antigravity) without stopping for discussion | everything designed must work on both surfaces; surface-neutral paths are deno task, gh CLI, and CI; fails when depending on Claude-only hooks, Claude memory, or mcp__* tools |
+| file a `Sonnet`-labeled trigger-list issue without an enumerated closed case list of adversarial inputs | trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized for Sonnet by its case list, not its diff; vague criteria like "handle edge cases" fail in review; issues must enumerate every adversarial input case or be filed as `Opus` |
 | narrate its own revision history in the body — "what changed", "why this was withdrawn", "an earlier version said", a changelog, before/after framing | the document states the current design as though it had always been the design; superseded reasoning lives only in the decision-record appendix |
 | record the skill's own workflow state in the body — a Status line, a gate/approval state, "nothing filed", "design complete" | that describes where the skill's process has got to, not the system being designed; gate state lives in the conversation and in the issues the run produces |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
@@ -190,6 +191,10 @@ Non-epic issues default to **`Flash High`** as the implementation tier. Sizing i
 - acceptance criteria provable by running that repo's own test / lint / build commands.
 
 Anything over the line is split into multiple issues, and **every split carries its dependencies** — linked natively via GitHub issue dependencies (`blocked_by`), without adding the redundant `Blocked` label.
+
+### Sized for Sonnet
+
+**Trigger-list work is sized for Sonnet by its case list, not its diff.** Work matching the guard/hook/regex/matcher/filter/permission-pattern trigger list (`web-jam-tools#427 "Route guard/matcher work to Sonnet, make its review execute rather than read, prove it in CI, enforce citations on GitHub writes, and stop Opus designing other lanes' fixes — A1 through A6"`) defaults to `Sonnet`. It only counts as `Sonnet`-sized once its acceptance criteria enumerate every adversarial input case the fix has to handle — not the phrase "handle edge cases," the actual list. Where that list splits along tested behaviors, file one issue per behavior, each with its own closed case list. Where the fix is a single, non-decomposable change whose case list cannot be pinned down at design time, file it `Opus`-labeled instead, and say why it could not be split.
 
 ### Closeable, Always
 

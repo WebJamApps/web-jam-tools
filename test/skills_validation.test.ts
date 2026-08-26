@@ -228,3 +228,50 @@ Deno.test("skills/design-issue/SKILL.md requires issue body and Needs Design lab
     "`deno task design:stale-bodies`",
   );
 });
+
+Deno.test("skills/design-issue/SKILL.md defines the Sized for Sonnet rule and matching refusal table row", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  // Section heading and order
+  assertStringIncludes(text, "### Sized for Sonnet");
+  const flashHighIndex = text.indexOf("### Sized for Flash High");
+  const sonnetIndex = text.indexOf("### Sized for Sonnet");
+  const closeableIndex = text.indexOf("### Closeable, Always");
+  assert(
+    flashHighIndex < sonnetIndex && sonnetIndex < closeableIndex,
+    "### Sized for Sonnet must appear immediately after ### Sized for Flash High and before ### Closeable, Always",
+  );
+
+  // Key sentences in prose
+  assertStringIncludes(
+    text,
+    "**Trigger-list work is sized for Sonnet by its case list, not its diff.**",
+  );
+  assertStringIncludes(
+    text,
+    'Work matching the guard/hook/regex/matcher/filter/permission-pattern trigger list (`web-jam-tools#427 "Route guard/matcher work to Sonnet, make its review execute rather than read, prove it in CI, enforce citations on GitHub writes, and stop Opus designing other lanes\' fixes — A1 through A6"`) defaults to `Sonnet`.',
+  );
+  assertStringIncludes(
+    text,
+    'It only counts as `Sonnet`-sized once its acceptance criteria enumerate every adversarial input case the fix has to handle — not the phrase "handle edge cases," the actual list.',
+  );
+  assertStringIncludes(
+    text,
+    "Where that list splits along tested behaviors, file one issue per behavior, each with its own closed case list.",
+  );
+  assertStringIncludes(
+    text,
+    "Where the fix is a single, non-decomposable change whose case list cannot be pinned down at design time, file it `Opus`-labeled instead, and say why it could not be split.",
+  );
+
+  // Matching row in What It Refuses to Do table
+  assertStringIncludes(
+    text,
+    "| file a `Sonnet`-labeled trigger-list issue without an enumerated closed case list of adversarial inputs |",
+  );
+  assertStringIncludes(
+    text,
+    'trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized for Sonnet by its case list, not its diff; vague criteria like "handle edge cases" fail in review; issues must enumerate every adversarial input case or be filed as `Opus` |',
+  );
+});
