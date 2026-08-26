@@ -247,6 +247,24 @@ function checkTokenValidity(
 }
 
 /**
+ * Cheap, deliberately approximate "does this raw command plausibly file an
+ * issue" test — same shape check_model_label_on_issue_create.ts already
+ * applies to its own `unterminated`-quote fallback. Used ONLY to decide
+ * whether an unparseable (unterminated-quote) command should fail closed;
+ * a real, parseable command is always evaluated by the full segment scan
+ * in decideBash() below instead, so a false positive/negative here only
+ * matters on the rare ambiguous-parse path. Deliberately narrower than the
+ * sibling's version (no `edit` alternative): this hook's Bash path only
+ * ever cares about issue CREATION, never `gh issue edit`.
+ */
+function looksLikeIssueCreatingCommand(command: string): boolean {
+  return (
+    (/\bgh\b/.test(command) && /\bissue\b/.test(command) && /\bcreate\b/.test(command)) ||
+    /\bcreate-issue\b/.test(command)
+  );
+}
+
+/**
  * Bash-path counterpart of the issue_write "create" branch above
  * (web-jam-tools#747): finds every issue-creating command (`gh issue
  * create`, `deno task create-issue`/`issue:create`, `deno run
@@ -264,10 +282,17 @@ function checkTokenValidity(
  * "<not approved>"`). Only when every issue-creating segment found (there
  * may be zero) checks out does the whole call resolve to PASS.
  *
- * A command with no issue-creating segment at all is PASS, untouched. An
- * unterminated quote (ambiguous parse) fails CLOSED, same contract as
- * hooks/lib/check_irreversible_operations.ts and
- * hooks/lib/check_dangerous_git_deploy.ts.
+ * A command with no issue-creating segment at all is PASS, untouched.
+ *
+ * An unterminated quote (ambiguous parse) fails CLOSED — but ONLY when the
+ * raw command plausibly files an issue in the first place (web-jam-tools#788
+ * re-review, Must Fix #1 of the follow-up commit). `splitOnOperators()`
+ * strips neither `#` comments nor heredoc bodies, so an apostrophe in
+ * either (`# Josh's note`, a `<<EOF ... Josh's change ... EOF` heredoc) opens
+ * a quote state that never closes — for an UNRELATED command, that must
+ * stay silent, not hard-deny. This mirrors the exact narrowing
+ * check_model_label_on_issue_create.ts already applies to its own
+ * `unterminated` branch (see `looksLikeIssueCreatingCommand()` below).
  */
 function decideBash(
   command: string,
@@ -277,10 +302,14 @@ function decideBash(
 ): Decision {
   const { segments, unterminated } = splitOnOperators(command);
   if (unterminated) {
-    return {
-      outcome: "deny",
-      reason: "This command could not be parsed (unterminated quote) — failing closed.",
-    };
+    if (looksLikeIssueCreatingCommand(command)) {
+      return {
+        outcome: "deny",
+        reason:
+          "This command could not be parsed (unterminated quote) but appears to create an issue — failing closed.",
+      };
+    }
+    return { outcome: "pass" };
   }
 
   for (const segment of segments) {

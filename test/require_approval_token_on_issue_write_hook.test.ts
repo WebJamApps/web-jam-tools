@@ -626,6 +626,60 @@ Deno.test("Bash gh issue create with NO --repo is NOT silently treated as web-ja
   );
 });
 
+// --- web-jam-tools#788 re-review regressions in commit 3afdf03 ---
+
+Deno.test("Bash command with an apostrophe in a # comment above an unrelated command passes through silently (not hard-denied)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(`# Josh's note\ngit status`),
+      tokenPath,
+    );
+    // splitOnOperators() does not strip # comments, so the apostrophe
+    // opens an unterminated single-quote state. That must NOT hard-deny
+    // an unrelated command — only an unparseable command that plausibly
+    // files an issue should fail closed.
+    assertPass(res);
+  });
+});
+
+Deno.test("Bash heredoc body containing an apostrophe passes through silently (not hard-denied)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(`echo "note" --body-file - <<EOF\nJosh's change\nEOF`),
+      tokenPath,
+    );
+    // Same as above: splitOnOperators() does not strip heredoc bodies, so
+    // the apostrophe inside the heredoc opens an unterminated quote — an
+    // unrelated command (no gh/create-issue anywhere in it) must stay
+    // silent.
+    assertPass(res);
+  });
+});
+
+Deno.test("Bash subshell-wrapped gh issue create ( ... ) is still gated (parens are segment boundaries)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `( gh issue create --repo WebJamApps/web-jam-tools --title "Nobody approved this" --body B )`,
+      ),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
+Deno.test("Bash brace-grouped gh issue create { ...; } is still gated (braces are segment boundaries)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `{ gh issue create --repo WebJamApps/web-jam-tools --title "Nobody approved this" --body B; }`,
+      ),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
 Deno.test("invalid JSON on stdin passes through (nothing this hook can act on)", async () => {
   await withTokenFile(null, async (tokenPath) => {
     const cmd = new Deno.Command("bash", {

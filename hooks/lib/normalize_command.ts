@@ -240,6 +240,21 @@ export const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * directly follows `>`/`<`) or the bash `&>`/`&>>` stdout+stderr redirect
  * (`&` directly precedes `>`). Those forms stay in the current segment.
  *
+ * Unquoted `(`, `)`, `{` and `}` are also boundaries, same as `;` — they
+ * bound subshell grouping (`( gh issue create ... )`) and brace grouping
+ * (`{ gh issue create ...; }`), and are otherwise discarded (not appended
+ * to either neighboring segment) rather than kept as their own token. A
+ * grouping character can also appear as ordinary command SYNTAX ($(...)
+ * command substitution, ${...} parameter expansion, $((...)) arithmetic,
+ * `foo() { ...; }` function definitions, `{a,b}` brace expansion) — this
+ * function does not try to distinguish those from real grouping and
+ * splits on them too. That is always safe for every caller here: every
+ * matcher this file feeds (git-push-deletion, dangerous-deploy,
+ * issue-creation) is a POSITIONAL check anchored on a segment's own
+ * `tokens[0]`, so an extra split can only ever surface a match that a
+ * merged segment would have hidden — never fabricate a false one out of
+ * unrelated text.
+ *
  * Shared by hooks/lib/check_irreversible_operations.ts,
  * hooks/lib/check_dangerous_git_deploy.ts,
  * hooks/lib/check_issue_approval_token.ts and
@@ -323,6 +338,11 @@ export function splitOnOperators(text: string): { segments: string[]; unterminat
         i++;
         continue;
       }
+      flush();
+      i++;
+      continue;
+    }
+    if (ch === "(" || ch === ")" || ch === "{" || ch === "}") {
       flush();
       i++;
       continue;

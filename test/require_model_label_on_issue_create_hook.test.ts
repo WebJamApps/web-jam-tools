@@ -258,6 +258,24 @@ Deno.test("gh issue create chained after another command with a bare & (not &&) 
   assertBlocked(res.stderr);
 });
 
+// --- web-jam-tools#788 re-review regression in commit 3afdf03 ---
+
+Deno.test("subshell-wrapped gh issue create ( ... ) is still gated (parens are segment boundaries)", async () => {
+  const res = await runHook(
+    bashCall(`( gh issue create --title T --body B --label bug --type Task )`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("brace-grouped gh issue create { ...; } is still gated (braces are segment boundaries)", async () => {
+  const res = await runHook(
+    bashCall(`{ gh issue create --title T --body B --label bug --type Task; }`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 // --- MCP surface: mcp__*__issue_write ---
 
 Deno.test("MCP issue_write create without native Type is denied", async () => {
