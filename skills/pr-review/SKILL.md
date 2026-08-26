@@ -107,13 +107,13 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
 2. **CircleCI & Automated Build Health (Must Fix — Non-Redundancy Principle)**:
    - Inspect status checks from `gh pr checks`.
-   - CircleCI natively executes all mechanical static analysis gates across repositories:
+   - CircleCI natively executes mechanical static analysis gates across repositories (and as per-repo tooling rollouts land):
      - Code duplication (`jscpd` with `threshold: 5`)
      - Code complexity (`eslint-plugin-sonarjs`)
      - Code quality & plugin linters (`unicorn`, `promise`, `security`, `react-hooks`, `jsx-a11y-x`, `import-x`)
      - Code formatting & syntax (`deno task fmt:check`, `npm run lint`)
      - Unit test suites & coverage thresholds (`deno task test`, `npm test`)
-   - **Non-Redundancy Principle**: Because mechanical static checks are enforced directly in CircleCI, `pr-review` **never duplicates or re-audits static linter rules, complexity metrics, formatting styles, or duplication percentages in review prose**.
+   - **Non-Redundancy Principle**: Because mechanical static checks are enforced directly in CircleCI (where configured), `pr-review` **never duplicates or re-audits static linter rules, complexity metrics, formatting styles, or duplication percentages in review prose**.
    - If CircleCI (`ci/circleci: build` or equivalent pipeline) is failing, report the failure details directly as a **Must Fix** item.
 
 3. **Snyk Security Audits (Must Fix)**:
@@ -222,7 +222,7 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
    ### Changes Since Last Review
    - ✅ Fixed: the missing unit test for `handleHttpReq` — added in `test/uptime.test.ts`.
-   - ✅ Fixed: the stale Non-goals bullet in the linked issue — no longer reportable as a finding of any kind per Step 2 item 10.
+   - ✅ Fixed: the stale Non-goals bullet in the linked issue — no longer reportable as a finding of any kind per Step 2 item 11.
 
    ### Checklist Verification
    - **Mergeability**: ✅ No conflicts with `dev`.
@@ -273,7 +273,7 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
 This binds the reviewing model AND the session relaying the review to Josh:
 
-- **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged — it does not apply to issue-body or PR-body description prose, which is never a Must Fix and is instead handled under Step 2's item 10 ("Issue Body & PR Body Prose (Never a Must Fix)").
+- **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged — it does not apply to issue-body or PR-body description prose, which is never a Must Fix and is instead handled under Step 2's item 11 ("Issue Body & PR Body Prose (Never a Must Fix)").
 - **Never propose a follow-up issue as the answer to a defect found in the PR under review.** A new issue is where NEW work goes, not where this PR's known problems are parked.
 - **A defect in the artifact being merged is fixed in THAT PR**, not in a later one — including when the artifact is a skill, a doc, or a rule rather than code.
 - Size is not a reason to defer. "One line" and "no behavioural effect" are arguments for fixing it now, because it is cheap, not for postponing it.
