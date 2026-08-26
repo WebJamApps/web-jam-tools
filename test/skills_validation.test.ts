@@ -228,3 +228,21 @@ Deno.test("skills/design-issue/SKILL.md requires issue body and Needs Design lab
     "`deno task design:stale-bodies`",
   );
 });
+
+Deno.test("skills/pr-review/SKILL.md uses ### 🟡 Suggestions heading and not Actionable Feedback & Suggestions", async () => {
+  const prReviewPath = `${SKILLS_DIR}pr-review/SKILL.md`;
+  const text = await Deno.readTextFile(prReviewPath);
+
+  assertStringIncludes(
+    text,
+    "- **Suggestions** (`### 🟡 Suggestions`):",
+  );
+  assertStringIncludes(
+    text,
+    "### 🟡 Suggestions",
+  );
+  assertFalse(
+    text.includes("Actionable Feedback & Suggestions"),
+    "skills/pr-review/SKILL.md must not contain the superseded 'Actionable Feedback & Suggestions' heading",
+  );
+});
