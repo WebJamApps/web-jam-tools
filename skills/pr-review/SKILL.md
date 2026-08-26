@@ -105,9 +105,16 @@ Review the PR diff, description, checks, and mergeability against these mandator
    - Check `mergeable` status and `mergeStateStatus` from Step 1.
    - If the PR has merge conflicts with the base branch (`dev` / `main`), report it as a **Must Fix** item requiring a rebase or conflict resolution before merging.
 
-2. **CircleCI & Automated Build Health (Must Fix)**:
+2. **CircleCI & Automated Build Health (Must Fix — Non-Redundancy Principle)**:
    - Inspect status checks from `gh pr checks`.
-   - If CircleCI (`ci/circleci: build` or equivalent pipeline) is failing, report the failure details as a **Must Fix** item.
+   - CircleCI natively executes all mechanical static analysis gates across repositories:
+     - Code duplication (`jscpd` with `threshold: 5`)
+     - Code complexity (`eslint-plugin-sonarjs`)
+     - Code quality & plugin linters (`unicorn`, `promise`, `security`, `react-hooks`, `jsx-a11y-x`, `import-x`)
+     - Code formatting & syntax (`deno task fmt:check`, `npm run lint`)
+     - Unit test suites & coverage thresholds (`deno task test`, `npm test`)
+   - **Non-Redundancy Principle**: Because mechanical static checks are enforced directly in CircleCI, `pr-review` **never duplicates or re-audits static linter rules, complexity metrics, formatting styles, or duplication percentages in review prose**.
+   - If CircleCI (`ci/circleci: build` or equivalent pipeline) is failing, report the failure details directly as a **Must Fix** item.
 
 3. **Snyk Security Audits (Must Fix)**:
    - Inspect status checks from `gh pr checks` for Snyk security failures (`security/snyk`, `snyk-code`, etc.).
@@ -145,7 +152,14 @@ Review the PR diff, description, checks, and mergeability against these mandator
      is not a defect and must not be reported as one.
    - Inspect the `--test-plan` section. It must contain concrete steps exercising the change itself (UI manual steps, runnable `curl` commands, or tooling commands), not just suite invocations like `npm test` or `deno task test` (web-jam-tools#152).
 
-8. **AGENTS.md Guardrails Audit**:
+8. **Architectural Judgment Audits (Non-Redundant)**:
+   When CircleCI is green, focus review scrutiny on high-leverage architectural judgment calls:
+   - **Exported API Contract Drift**: Verify that modified public function signatures, route payloads, endpoint handlers, or exported types update all callers across the codebase.
+   - **Backward Compatibility & Expand-Contract**: Ensure database schema updates (Mongoose/MongoDB), GraphQL mutations, and backend API changes remain additive and non-breaking before frontend consumers deploy.
+   - **Secret Literal Safety**: Inspect diffs for hardcoded tokens, API keys, webhook secrets, private URLs, or unscrubbed credentials.
+   - **Playwright E2E Test Suggestions (Suggest-Only)**: When a diff introduces new user-facing UI components, client routes, or interactive forms lacking end-to-end coverage, suggest adding a Playwright test under `### 🟡 Actionable Feedback & Suggestions`. The reviewer **never** creates, adds, or modifies test files itself; suggested tests must provide runnable local (`npm run test:e2e`) and CI verification steps.
+
+9. **AGENTS.md Guardrails Audit**:
    - **TypeScript / Code Standards**:
      - No raw `any` types allowed in new or modified TypeScript code.
    - **Form Required Asterisks (`*`)**:
@@ -161,14 +175,14 @@ Review the PR diff, description, checks, and mergeability against these mandator
    - **Setlist API Mongoose Filtering**:
      - `sort` parameter must be stripped from `req.query` before passing the filter object to Mongoose `Schema.find(filter)`.
 
-9. **Draft / Ready State (Never a Finding)**:
-   - A PR's draft or ready-for-review state is Josh's own action on his own PR, not a
-     property of the work under review — he moves PRs in and out of draft himself as part of
-     his workflow. **Never report it as a finding, of any severity — not a Must Fix, not an
-     Actionable Suggestion — whether the PR is currently a draft or was created as a draft and
-     later marked ready.**
+10. **Draft / Ready State (Never a Finding)**:
+    - A PR's draft or ready-for-review state is Josh's own action on his own PR, not a
+      property of the work under review — he moves PRs in and out of draft himself as part of
+      his workflow. **Never report it as a finding, of any severity — not a Must Fix, not an
+      Actionable Suggestion — whether the PR is currently a draft or was created as a draft and
+      later marked ready.**
 
-10. **Issue Body & PR Body Prose (Never a Must Fix)**:
+11. **Issue Body & PR Body Prose (Never a Must Fix)**:
     - Prose in a linked issue's body — including its Non-goals section, its acceptance
       criteria wording, or its "Files changed" list — and prose in the PR's own description —
       including its Summary and its "How to test locally" / test-plan narration — is **never**
@@ -192,7 +206,7 @@ Review the PR diff, description, checks, and mergeability against these mandator
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — CircleCI failures, Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
-   - **Checklist Verification**: Status of mergeability, CI health, Snyk audits, scope, semver bump, package-lock engine alignment, test evidence, and guardrails. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **CircleCI**: 🛑 ...`).
+   - **Checklist Verification**: Status of mergeability, CI health, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **CircleCI**: 🛑 ...`).
    - **Actionable Feedback & Suggestions** (`### 🟡 Actionable Feedback & Suggestions`): Specific code references or line numbers where changes or improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Actionable Feedback & Suggestions` with `✅ None`.
 
    **Example — re-review with one remaining blocker and two now-fixed findings.** Note that the
