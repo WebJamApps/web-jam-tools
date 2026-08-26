@@ -116,10 +116,11 @@ Review the PR diff, description, checks, and mergeability against these mandator
      - Code formatting & syntax (`deno task fmt:check`, `npm run lint`)
      - Unit test suites & coverage thresholds (`deno task test`, `npm test`)
    - **Non-Redundancy Principle**: Because mechanical static checks are enforced directly in CircleCI (where configured), `pr-review` **never duplicates or re-audits static linter rules, complexity metrics, formatting styles, or duplication percentages in review prose**.
-   - **Pending CI Handling (No Polling Loops)**:
-     - If CircleCI status is **`pending`** (or in progress) at this final check, **do NOT render a verdict** (`**✅ Approved**` or `**🛑 Changes Requested**`) and do **NOT** post a review comment.
-     - Report the pending status plainly to Josh in chat/output (e.g. *"CircleCI pipeline is still running (pending) — review verdict withheld until CI completes."*) and stop execution immediately.
-     - **Never loop, sleep, or poll waiting for CI to finish** (`sleep` loops, polling bash iterations, or recursive retries are strictly forbidden). A single check at the end of the audit is sufficient.
+   - **Pending CI Handling (No Polling Loops — Post Review with Pending Verdict)**:
+     - If CircleCI status is **`pending`** (or in progress) at this final check, the review is **still written and posted** via `deno task post-pr-review` (never withheld).
+     - All findings already established from the diff and architectural audit (Must Fix items, Checklist Verification for non-CI items, and Actionable Feedback) are included in the posted review comment.
+     - The `## PR Review Summary` verdict line uses a distinct third state: `**⏳ CircleCI Still Running — Verdict Pending**` (neither `**✅ Approved**` nor `**🛑 Changes Requested**`).
+     - **Never loop, sleep, or poll waiting for CI to finish** (`sleep` loops, polling bash iterations, or recursive retries are strictly forbidden). A single check at the end of the audit is sufficient; the review is posted immediately with the pending verdict.
    - **Failing CI Handling**: If CircleCI (`ci/circleci: build` or equivalent pipeline) is failing, report the failure details directly as a **Must Fix** item.
    - **Passing CI Handling**: If CircleCI is green, proceed with rendering the review verdict and checklist findings in Step 3.
 
@@ -207,14 +208,18 @@ Review the PR diff, description, checks, and mergeability against these mandator
 
 ### Step 3: Post Review Feedback
 
-1. When CircleCI has completed (passing or failing), synthesize review findings into a structured review comment using severity icons so merge blockers and check statuses are immediately recognizable without reading full prose. (If CircleCI was still pending at the final check of Step 2, withhold Step 3 and do not post a review comment).
+1. Synthesize review findings into a structured review comment using severity icons so merge blockers and check statuses are immediately recognizable without reading full prose.
 2. Format feedback with clear section headers and severity icons:
-   - **PR Review Summary**: Overall status (`**✅ Approved**` if clean / `**🛑 Changes Requested**` if any Must Fix item or blocking defect exists).
+   - **PR Review Summary**: Overall status — one of three distinct verdict states:
+     - `**✅ Approved**` (clean diff, passing CI, no Must Fix items)
+     - `**🛑 Changes Requested**` (any Must Fix item, failing CI, or blocking defect exists)
+     - `**⏳ CircleCI Still Running — Verdict Pending**` (diff audited, but CircleCI is still pending/running at the final check)
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — CircleCI failures, Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, CI health, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **CircleCI**: 🛑 ...`).
-   - **Actionable Feedback & Suggestions** (`### 🟡 Actionable Feedback & Suggestions`): Specific code references or line numbers where changes or improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Actionable Feedback & Suggestions` with `✅ None`.
+   - **Actionable Feedback & Suggestions** (`### 🟡 Actionable Feedback & Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Actionable Feedback & Suggestions` with `✅ None`.
+     - **Exclusion of Process & Git Mechanics Trivia**: This section is strictly for code-relevant improvement suggestions tied directly to the diff under review. It **never** carries process/mechanics trivia, speculative workflow commentary, or git/semver heads-ups that are not defects in the PR itself. Specifically, **never post cross-PR version-bump collision warnings** (e.g. noting that another open PR shares the same semver target and might merge first) or git workflow lectures. If a version collision actually occurs, it will be caught deterministically as a real Must Fix under Step 2 item 5 when the PR's version fails to strictly exceed `origin/dev` at review time.
 
    **Example — re-review with one remaining blocker and two now-fixed findings.** Note that the
    only thing between the verdict line and `### 🛑 Must Fix Items` is the heading itself, and that
