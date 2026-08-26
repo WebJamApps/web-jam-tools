@@ -73,12 +73,12 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
 ### Step 1: Fetch PR Details and Context
 1. Fetch PR details, metadata, mergeability, reviews, and commits:
    ```sh
-   gh pr view <Repo>#<pr-num> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits
+   gh pr view <pr-num> --repo WebJamApps/<Repo> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits
    ```
 2. **Already-Reviewed Check**:
    - Filter `reviews` for automated reviews carrying the `## PR Review Summary` header:
      ```sh
-     gh pr view <Repo>#<pr-num> --json reviews,commits \
+     gh pr view <pr-num> --repo WebJamApps/<Repo> --json reviews,commits \
        --jq '{last_review_sha: (.reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid), head_sha: (.commits | last | .oid)}'
      ```
    - Compare the commit SHA of the newest automated review (`last_review_sha` from `.commit.oid`) against the PR's current head commit SHA (`head_sha` from `.commits | last | .oid`).
@@ -88,16 +88,17 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
    deliberately NOT fetched here** — it stays unread until Step 4, strictly after the initial
    post, so post #1's verdict can never be influenced by it:
    ```sh
-   gh pr checks <Repo>#<pr-num> --json name,state,link \
+   gh pr checks <pr-num> --repo WebJamApps/<Repo> --json name,state,link \
      --jq '.[] | select(.name | test("snyk"; "i"))'
    ```
+   *(Note: A non-zero exit from `gh pr checks`, such as exit code 8 when other checks on the PR are pending, is expected and carries no CircleCI verdict — treat empty output as "no Snyk check" and move on.)*
 4. Fetch the PR diff:
    ```sh
-   gh pr diff <Repo>#<pr-num>
+   gh pr diff <pr-num> --repo WebJamApps/<Repo>
    ```
 5. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
    ```sh
-   gh issue view <Repo>#<issue-num>
+   gh issue view <issue-num> --repo WebJamApps/<Repo>
    ```
 
 ### Step 2: Audit Checklist
@@ -336,10 +337,10 @@ with it. This step produces posts #2 and #3.
 
 1. **Check CircleCI status once**:
    ```sh
-   gh pr checks <Repo>#<pr-num>
+   gh pr checks <pr-num> --repo WebJamApps/<Repo>
    ```
-2. **Already resolved (pass or fail) at this check**: skip polling entirely — go straight to step
-   4 below with whatever this single check returned.
+2. **Already resolved (pass or fail) at this check**: skip polling entirely — proceed to item 4
+   below with whatever this single check returned.
 3. **Still pending**: poll for resolution, per agent surface. **Both surfaces' polls are bounded
    and terminate with the same outcome — "still pending, treat as blocking" — if CircleCI never
    resolves in time; neither surface polls forever:**
@@ -379,9 +380,9 @@ with it. This step produces posts #2 and #3.
       deno task post-pr-comment --repo <Owner/Repo> --pr <pr-num> --body-file <scratch_results_file>
       ```
    b. **Verdict-only (post #3)**: write a second scratch file (e.g.
-      `/tmp/pr-review-<Repo>-<pr-num>-verdict.md`) carrying only the final verdict line:
-      - `**✅ Approved**` — CircleCI resolved passing and no other Must Fix item remains.
-      - `**🛑 Changes Requested**` — CircleCI resolved failing, CircleCI is still unresolved at the
+      `/tmp/pr-review-<Repo>-<pr-num>-verdict.md`) carrying only the `## PR Review Summary` header and final verdict line:
+      - `## PR Review Summary\n**✅ Approved**` — CircleCI resolved passing and no other Must Fix item remains.
+      - `## PR Review Summary\n**🛑 Changes Requested**` — CircleCI resolved failing, CircleCI is still unresolved at the
         poll cap (either surface), or any other Must Fix item is present.
       ```sh
       deno task post-pr-comment --repo <Owner/Repo> --pr <pr-num> --body-file <scratch_verdict_file>
