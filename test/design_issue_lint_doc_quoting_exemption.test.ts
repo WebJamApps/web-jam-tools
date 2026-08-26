@@ -233,10 +233,35 @@ Deno.test("lintDesignDoc: a quote nested inside a backtick span does not leak in
   assertEquals(violationsFor(line, "no-design-complete"), 1);
 });
 
+// Regression guard: a double quote sitting inside a single-quote span must not pair with a later
+// stray double quote and accidentally exempt genuine bare prose in between.
+Deno.test("lintDesignDoc: a double quote nested inside a single-quote span does not leak into double-quote pairing", () => {
+  const line = "Use 'a\"b' then design complete \" ends.";
+  assertEquals(violationsFor(line, "no-design-complete"), 1);
+});
+
+// Regression guard: a single quote sitting inside a double-quote span must not pair with a later
+// stray single quote and accidentally exempt genuine bare prose in between.
+Deno.test("lintDesignDoc: a single quote nested inside a double-quote span does not leak into single-quote pairing", () => {
+  const line = "Use \"a'b\" then design complete ' ends.";
+  assertEquals(violationsFor(line, "no-design-complete"), 1);
+});
+
+// Regression guard: a quote nested inside a typographic (curly) quote span does not leak
+Deno.test("lintDesignDoc: a quote nested inside a curly quote span does not leak into quote pairing", () => {
+  const line = 'Use “a"b” then design complete " ends.';
+  assertEquals(violationsFor(line, "no-design-complete"), 1);
+});
+
 // Regression guard: a banned phrase inside a double- (or longer-) backtick inline code span is a
 // mention, not a use, exactly like a single-backtick span. CommonMark closes a code span only at
 // a run of the SAME backtick count as opened it.
 Deno.test("lintDesignDoc: a banned phrase inside a double-backtick inline code span is exempt", () => {
   const line = "The linter bans ``design complete`` in prose.";
   assertEquals(violationsFor(line, "no-design-complete"), 0);
+});
+
+Deno.test("lintDesignDoc: a single backtick inside a double-backtick code span does not leak into backtick pairing", () => {
+  const line = "Use ``a ` b`` then design complete ` ends.";
+  assertEquals(violationsFor(line, "no-design-complete"), 1);
 });

@@ -28,6 +28,8 @@ export interface LintDocOptions {
 interface ExemptRange {
   start: number;
   end: number;
+  openLen?: number;
+  closeLen?: number;
 }
 
 /**
@@ -44,198 +46,195 @@ function isEscapedAt(line: string, idx: number): boolean {
   return backslashes % 2 === 1;
 }
 
-/**
- * True when character index `idx` falls inside at least one of `ranges` -- used to keep a
- * delimiter that lives inside an already-established exempt range (e.g. a quote character
- * sitting inside a backtick code span) from being fed to a different collector and paired with
- * an unrelated later occurrence of the same character, which would produce a bogus range
- * spanning genuine bare prose in between.
- */
-function isWithinAnyRange(idx: number, ranges: ExemptRange[]): boolean {
-  return ranges.some((r) => idx >= r.start && idx < r.end);
-}
+const CURLY_DOUBLE_OPEN = String.fromCharCode(8220); // “
+const CURLY_DOUBLE_CLOSE = String.fromCharCode(8221); // ”
+const CURLY_SINGLE_OPEN = String.fromCharCode(8216); // ‘
+const CURLY_SINGLE_CLOSE = String.fromCharCode(8217); // ’
+const WORD_CHAR = /[A-Za-z0-9]/;
 
 /**
- * Collects exempt ranges for inline code spans, honoring CommonMark's run-length delimiter
- * rule: a run of N backtick characters opens a code span that closes only at the next run of
- * exactly N backticks; a run of a different length appearing inside is literal content, not a
- * delimiter. Pairing backtick characters positionally instead (1st with 2nd, 3rd with 4th) puts
- * both range boundaries on the delimiters themselves in the two-backtick case, missing the
- * content between them entirely -- this is what makes a double- (or longer-) backtick span
- * correctly exempt a banned phrase inside it. An unclosed run at end of line is discarded --
- * fails closed, never exempting the rest of the line.
+ * Computes every mention-not-a-use range on a single (non-fenced-code-block) line in a single
+ * left-to-right pass: inline code spans (backticks), straight double quotes, straight single
+ * quotes, and typographic (curly) quotes.
+ *
+ * Scanning left-to-right in a single pass ensures that delimiters of different types nested inside
+ * an established span (e.g. a double quote inside a single-quote span, or quotes inside a backtick
+ * span) are consumed as literal span content rather than leaking into separate delimiter pairing
+ * with unrelated trailing quotes on the line.
+ *
+ * Backtick code spans honor CommonMark's run-length delimiter rule: an opening run of N backticks
+ * closes only at the next run of exactly N unescaped backticks.
+ *
+ * Straight single quotes (apostrophes) must be preceded by a non-word character (or line start) to
+ * open and followed by a non-word character (or line end) to close, preventing mid-word apostrophes
+ * (e.g. "it's", "skill's") from opening or closing spurious spans.
+ *
+ * Any unclosed delimiter fails closed, never exempting the rest of the line.
  */
-function collectBacktickRanges(line: string): ExemptRange[] {
+function computeExemptRanges(line: string): ExemptRange[] {
   const ranges: ExemptRange[] = [];
   let i = 0;
-  let pendingOpenStart: number | null = null;
-  let pendingOpenLen = 0;
 
   while (i < line.length) {
-    if (line[i] !== "`" || isEscapedAt(line, i)) {
+    if (isEscapedAt(line, i)) {
       i++;
       continue;
     }
 
-    const runStart = i;
-    let j = i;
-    while (j < line.length && line[j] === "`") j++;
-    const runLen = j - runStart;
-
-    if (pendingOpenStart === null) {
-      pendingOpenStart = runStart;
-      pendingOpenLen = runLen;
-    } else if (runLen === pendingOpenLen) {
-      ranges.push({ start: pendingOpenStart, end: j });
-      pendingOpenStart = null;
-      pendingOpenLen = 0;
-    }
-    // else: a run of a different length than the pending open is literal content inside the
-    // span -- not a delimiter, keep scanning for the matching-length close.
-    i = j;
-  }
-
-  return ranges;
-}
-
-/**
- * Collects exempt ranges for a symmetric delimiter (the same character opens and closes, e.g. a
- * straight double quote). Unescaped occurrences not already inside `excludeRanges` are paired
- * sequentially — 1st with 2nd, 3rd with 4th, etc. A trailing unpaired occurrence produces no
- * range, so it (and everything after it) fails closed rather than being silently exempted.
- */
-function collectSymmetricRanges(
-  line: string,
-  delimiter: string,
-  excludeRanges: ExemptRange[],
-): ExemptRange[] {
-  const positions: number[] = [];
-  for (let i = 0; i < line.length; i++) {
-    if (
-      line[i] === delimiter && !isEscapedAt(line, i) && !isWithinAnyRange(i, excludeRanges)
-    ) {
-      positions.push(i);
-    }
-  }
-
-  const ranges: ExemptRange[] = [];
-  for (let i = 0; i + 1 < positions.length; i += 2) {
-    ranges.push({ start: positions[i], end: positions[i + 1] + 1 });
-  }
-  return ranges;
-}
-
-/**
- * Collects exempt ranges for a straight single quote (an apostrophe character). Unlike
- * backticks or double quotes, an apostrophe also appears inside ordinary words (it's, the
- * skill's rules), so a naive sequential pairing would misfire. A character only counts as a
- * candidate open when it is not immediately preceded by a letter/digit (start of line,
- * whitespace, or opening punctuation), and only counts as a candidate close when it is not
- * immediately followed by a letter/digit. An apostrophe inside a word is preceded and followed
- * by a letter, so it never qualifies as either and is left alone. A quote character already
- * inside `excludeRanges` (e.g. one sitting inside a backtick span) is skipped entirely, never
- * treated as open or close. An unclosed open at end of line is discarded -- fails closed, never
- * exempting the rest of the line.
- */
-function collectSingleQuoteRanges(line: string, excludeRanges: ExemptRange[]): ExemptRange[] {
-  const ranges: ExemptRange[] = [];
-  const wordChar = /[A-Za-z0-9]/;
-  let pendingOpen: number | null = null;
-
-  for (let i = 0; i < line.length; i++) {
-    if (line[i] !== "'" || isEscapedAt(line, i) || isWithinAnyRange(i, excludeRanges)) continue;
-
-    const prev = i > 0 ? line[i - 1] : undefined;
-    const next = i + 1 < line.length ? line[i + 1] : undefined;
-    const isOpenCandidate = prev === undefined || !wordChar.test(prev);
-    const isCloseCandidate = next === undefined || !wordChar.test(next);
-
-    if (pendingOpen === null) {
-      if (isOpenCandidate) {
-        pendingOpen = i;
-      }
-      // else: looks like an apostrophe mid-word — not a delimiter, ignore.
-    } else if (isCloseCandidate) {
-      ranges.push({ start: pendingOpen, end: i + 1 });
-      pendingOpen = null;
-    }
-    // else: ignore (e.g. an apostrophe inside the pending quoted span).
-  }
-
-  return ranges;
-}
-
-/**
- * Collects exempt ranges for a typographic (curly) quote pair where open and close are distinct
- * characters (e.g. U+201C/U+201D or U+2018/U+2019). A quote character already inside
- * `excludeRanges` is skipped entirely, never treated as open or close. A close with no pending
- * open is ignored; an open with no following close by end of line is discarded -- fails closed.
- */
-function collectCurlyQuoteRanges(
-  line: string,
-  open: string,
-  close: string,
-  excludeRanges: ExemptRange[],
-): ExemptRange[] {
-  const ranges: ExemptRange[] = [];
-  let pendingOpen: number | null = null;
-
-  for (let i = 0; i < line.length; i++) {
-    if (isWithinAnyRange(i, excludeRanges)) continue;
     const ch = line[i];
-    if (ch === open && !isEscapedAt(line, i)) {
-      if (pendingOpen === null) {
-        pendingOpen = i;
+
+    // 1. Backtick inline code span (CommonMark run-length rule)
+    if (ch === "`") {
+      let j = i;
+      while (j < line.length && line[j] === "`") j++;
+      const runLen = j - i;
+
+      let closeStart: number | null = null;
+      let k = j;
+      while (k < line.length) {
+        if (line[k] === "`" && !isEscapedAt(line, k)) {
+          const crStart = k;
+          while (k < line.length && line[k] === "`") k++;
+          const crLen = k - crStart;
+          if (crLen === runLen) {
+            closeStart = crStart;
+            break;
+          }
+        } else {
+          k++;
+        }
       }
-    } else if (ch === close && !isEscapedAt(line, i)) {
-      if (pendingOpen !== null) {
-        ranges.push({ start: pendingOpen, end: i + 1 });
-        pendingOpen = null;
+
+      if (closeStart !== null) {
+        ranges.push({
+          start: i,
+          end: closeStart + runLen,
+          openLen: runLen,
+          closeLen: runLen,
+        });
+        i = closeStart + runLen;
+      } else {
+        // Unclosed backtick run fails closed; advance past this run
+        i = j;
       }
+      continue;
     }
+
+    // 2. Straight double quote
+    if (ch === '"') {
+      let closeIdx: number | null = null;
+      for (let k = i + 1; k < line.length; k++) {
+        if (line[k] === '"' && !isEscapedAt(line, k)) {
+          closeIdx = k;
+          break;
+        }
+      }
+
+      if (closeIdx !== null) {
+        ranges.push({
+          start: i,
+          end: closeIdx + 1,
+          openLen: 1,
+          closeLen: 1,
+        });
+        i = closeIdx + 1;
+      } else {
+        // Unclosed double quote fails closed
+        i++;
+      }
+      continue;
+    }
+
+    // 3. Straight single quote
+    if (ch === "'") {
+      const prev = i > 0 ? line[i - 1] : undefined;
+      const isOpenCandidate = prev === undefined || !WORD_CHAR.test(prev);
+
+      if (isOpenCandidate) {
+        let closeIdx: number | null = null;
+        for (let k = i + 1; k < line.length; k++) {
+          if (line[k] === "'" && !isEscapedAt(line, k)) {
+            const next = k + 1 < line.length ? line[k + 1] : undefined;
+            const isCloseCandidate = next === undefined || !WORD_CHAR.test(next);
+            if (isCloseCandidate) {
+              closeIdx = k;
+              break;
+            }
+          }
+        }
+
+        if (closeIdx !== null) {
+          ranges.push({
+            start: i,
+            end: closeIdx + 1,
+            openLen: 1,
+            closeLen: 1,
+          });
+          i = closeIdx + 1;
+        } else {
+          // Unclosed single quote fails closed
+          i++;
+        }
+      } else {
+        // Mid-word apostrophe (e.g. "it's") — not an open delimiter
+        i++;
+      }
+      continue;
+    }
+
+    // 4. Typographic double quotes (“...”)
+    if (ch === CURLY_DOUBLE_OPEN) {
+      let closeIdx: number | null = null;
+      for (let k = i + 1; k < line.length; k++) {
+        if (line[k] === CURLY_DOUBLE_CLOSE && !isEscapedAt(line, k)) {
+          closeIdx = k;
+          break;
+        }
+      }
+
+      if (closeIdx !== null) {
+        ranges.push({
+          start: i,
+          end: closeIdx + 1,
+          openLen: 1,
+          closeLen: 1,
+        });
+        i = closeIdx + 1;
+      } else {
+        i++;
+      }
+      continue;
+    }
+
+    // 5. Typographic single quotes (‘...’)
+    if (ch === CURLY_SINGLE_OPEN) {
+      let closeIdx: number | null = null;
+      for (let k = i + 1; k < line.length; k++) {
+        if (line[k] === CURLY_SINGLE_CLOSE && !isEscapedAt(line, k)) {
+          closeIdx = k;
+          break;
+        }
+      }
+
+      if (closeIdx !== null) {
+        ranges.push({
+          start: i,
+          end: closeIdx + 1,
+          openLen: 1,
+          closeLen: 1,
+        });
+        i = closeIdx + 1;
+      } else {
+        i++;
+      }
+      continue;
+    }
+
+    // Normal character or unmatched close delimiter
+    i++;
   }
 
   return ranges;
-}
-
-/**
- * Computes every mention-not-a-use range on a single (non-fenced-code-block) line: inline code
- * spans (backticks), straight double quotes, straight single quotes, and typographic (curly)
- * quotes. Each collector after the first excludes ranges already claimed by an earlier one, so a
- * quote character sitting inside a backtick span (or a straight quote sitting inside an
- * already-recognized quote span) is never independently paired with an unrelated later
- * occurrence of the same character — see `isWithinAnyRange`. See the per-delimiter helpers above
- * for the fail-closed handling of unclosed and escaped delimiters.
- */
-function computeExemptRanges(line: string): ExemptRange[] {
-  const backtickRanges = collectBacktickRanges(line);
-  const doubleQuoteRanges = collectSymmetricRanges(line, '"', backtickRanges);
-  const singleQuoteRanges = collectSingleQuoteRanges(line, [
-    ...backtickRanges,
-    ...doubleQuoteRanges,
-  ]);
-  const curlyDoubleOpen = String.fromCharCode(8220);
-  const curlyDoubleClose = String.fromCharCode(8221);
-  const curlySingleOpen = String.fromCharCode(8216);
-  const curlySingleClose = String.fromCharCode(8217);
-  const curlyDoubleRanges = collectCurlyQuoteRanges(line, curlyDoubleOpen, curlyDoubleClose, [
-    ...backtickRanges,
-    ...doubleQuoteRanges,
-    ...singleQuoteRanges,
-  ]);
-  const curlySingleRanges = collectCurlyQuoteRanges(line, curlySingleOpen, curlySingleClose, [
-    ...backtickRanges,
-    ...doubleQuoteRanges,
-    ...singleQuoteRanges,
-    ...curlyDoubleRanges,
-  ]);
-  return [
-    ...backtickRanges,
-    ...doubleQuoteRanges,
-    ...singleQuoteRanges,
-    ...curlyDoubleRanges,
-    ...curlySingleRanges,
-  ];
 }
 
 /** True when `[start, end)` is entirely contained in at least one exempt range — i.e. the whole
@@ -263,8 +262,14 @@ function buildStrippedLine(
 ): { text: string; toOriginal: number[] } {
   const stripIndices = new Set<number>();
   for (const r of ranges) {
-    stripIndices.add(r.start);
-    stripIndices.add(r.end - 1);
+    const openLen = r.openLen ?? 1;
+    const closeLen = r.closeLen ?? 1;
+    for (let k = 0; k < openLen; k++) {
+      stripIndices.add(r.start + k);
+    }
+    for (let k = 0; k < closeLen; k++) {
+      stripIndices.add(r.end - 1 - k);
+    }
   }
 
   let text = "";
