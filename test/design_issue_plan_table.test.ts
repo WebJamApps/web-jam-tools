@@ -6,7 +6,7 @@
 // among multiple tables, header-only tables, malformed row reporting, and blank-line/EOF
 // table termination. One test per acceptance-criteria case.
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import * as path from "@std/path";
 import {
   parsePlanTable,
@@ -95,6 +95,27 @@ Deno.test("parsePlanTable ignores a plan table that only appears inside a fenced
     `# Plan\n\nExample:\n\n\`\`\`\n${HEADER_LINE}\n${ALIGNMENT_LINE}\n${DATA_LINE}\n\`\`\`\n`;
   const result = parsePlanTable(doc);
   assertEquals(result, null);
+});
+
+// Regression: a ~~~-style line appearing *inside* a ``` fenced block must not close the
+// block early -- only a matching marker run closes a fence.
+Deno.test("parsePlanTable does not close a ``` fence early on an interior ~~~ line", () => {
+  const doc =
+    `# Plan\n\nExample:\n\n\`\`\`\n~~~\n\`\`\`\n\n${HEADER_LINE}\n${ALIGNMENT_LINE}\n${DATA_LINE}\n`;
+  const result = parsePlanTable(doc);
+  assertEquals(result?.rows.length, 1);
+});
+
+// Regression: once the header row matches PLAN_TABLE_HEADER, a non-matching alignment row
+// is a broken plan table, not an absent one -- it must throw rather than be silently
+// reported as "no plan table found".
+Deno.test("parsePlanTable throws when the plan table header is followed by a malformed alignment row", () => {
+  const doc = `${HEADER_LINE}\n|---|---|---|\n${DATA_LINE}\n`;
+  assertThrows(
+    () => parsePlanTable(doc),
+    Error,
+    "Malformed Gate 2 plan table",
+  );
 });
 
 // Case 8: when the document holds more than one table, the plan table is identified by its

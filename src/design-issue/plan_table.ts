@@ -118,8 +118,13 @@ export function splitTableRowCells(rawLine: string): string[] {
   return trimmed;
 }
 
+function fenceMarker(line: string): string | null {
+  const m = /^\s*(```|~~~)/.exec(line);
+  return m ? m[1] : null;
+}
+
 function isFenceLine(line: string): boolean {
-  return /^\s*(```|~~~)/.test(line);
+  return fenceMarker(line) !== null;
 }
 
 function isAlignmentCell(cell: string): boolean {
@@ -147,21 +152,36 @@ function headerMatchesPlanTable(cells: string[]): boolean {
  * The plan table is identified by its header row content (matching `PLAN_TABLE_HEADER`),
  * never by its position in the document -- so an unrelated table earlier in the document is
  * skipped rather than mistaken for the plan table. A table inside a fenced code block
- * (``` or ~~~) is never treated as the plan table. Line endings are normalized so CRLF and
- * LF source files parse identically. A table ends at a blank line or at end of file.
+ * (``` or ~~~) is never treated as the plan table; a fence only closes on a line with the
+ * same marker that opened it, so a stray ~~~ inside a ``` block (or vice versa) does not
+ * end the block early. Line endings are normalized so CRLF and LF source files parse
+ * identically. A table ends at a blank line or at end of file.
  *
  * Returns `null` when the document contains no table whose header matches
- * `PLAN_TABLE_HEADER`.
+ * `PLAN_TABLE_HEADER`. Throws if a table whose header does match is found but its
+ * alignment row is malformed (wrong cell count, or not a valid `:-:`-style alignment row)
+ * -- a broken plan table is a different failure mode than an absent one and must not be
+ * silently reported as "no plan table found".
  */
 export function parsePlanTable(markdown: string): ParsedPlanTable | null {
   const lines = markdown.split(/\r?\n/);
   let inCodeBlock = false;
+  let openFenceMarker: string | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    if (isFenceLine(line)) {
-      inCodeBlock = !inCodeBlock;
+    const marker = fenceMarker(line);
+    if (marker !== null) {
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        openFenceMarker = marker;
+      } else if (marker === openFenceMarker) {
+        inCodeBlock = false;
+        openFenceMarker = null;
+      }
+      // A fence-looking line of the other marker type while already inside a block --
+      // only a matching marker closes a fence, so this one is content, not a close.
       continue;
     }
     if (inCodeBlock) continue;
@@ -169,16 +189,26 @@ export function parsePlanTable(markdown: string): ParsedPlanTable | null {
     if (!line.includes("|")) continue;
 
     const nextLine = lines[i + 1];
-    if (nextLine === undefined || inCodeBlock || isFenceLine(nextLine)) continue;
+    if (nextLine === undefined || isFenceLine(nextLine)) continue;
 
     const headerCells = splitTableRowCells(line);
+    const isOurHeader = headerMatchesPlanTable(headerCells);
     const alignmentCells = splitTableRowCells(nextLine);
+    const alignmentValid = alignmentCells.length !== 0 &&
+      alignmentCells.length === headerCells.length &&
+      isAlignmentRow(alignmentCells);
 
-    if (
-      alignmentCells.length === 0 ||
-      alignmentCells.length !== headerCells.length ||
-      !isAlignmentRow(alignmentCells)
-    ) {
+    if (!alignmentValid) {
+      if (isOurHeader) {
+        // The plan table's header was identified by content, but its structure is broken.
+        // That is a different failure mode than an absent table and must not be silently
+        // reported as "no plan table found".
+        throw new Error(
+          `Malformed Gate 2 plan table at line ${i + 1}: alignment row at line ${
+            i + 2
+          } has ${alignmentCells.length} cell(s), expected ${headerCells.length} matching the header`,
+        );
+      }
       continue;
     }
 
@@ -192,7 +222,7 @@ export function parsePlanTable(markdown: string): ParsedPlanTable | null {
       dataRows.push({ line: j + 1, cells: splitTableRowCells(dataLine) });
     }
 
-    if (headerMatchesPlanTable(headerCells)) {
+    if (isOurHeader) {
       const rows: PlanTableRow[] = [];
       const malformedRows: MalformedPlanTableRow[] = [];
       for (const row of dataRows) {
