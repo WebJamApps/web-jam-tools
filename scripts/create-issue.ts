@@ -2,6 +2,11 @@
 /**
  * Standardized issue creation script (web-jam-tools#514)
  * Sets labels, milestone, native Priority, and parent link, and verifies all attributes stick.
+ *
+ * Gate 2 approval-token enforcement (web-jam-tools#747) lives inside
+ * src/create-issue/lib.ts's createIssueAndVerify(), not here — it is the
+ * ONLY enforcement point on agy/Antigravity, which runs this exact `deno
+ * task create-issue` path and has no hook mechanism of its own.
  */
 import { createIssueAndVerify, parseArgs } from "../src/create-issue/lib.ts";
 

@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # PreToolUse guard: read the plan-gate approval token (web-jam-tools#497, not
-# written by this change) and decide whether a pending issue_write /
-# sub_issue_write MCP call is one Josh already approved.
+# written by this change) and decide whether a pending issue-creating call is
+# one Josh already approved. Covers TWO surfaces of the same Claude Code
+# session: the `mcp__*__issue_write` / `mcp__*__sub_issue_write` MCP tools,
+# and a Bash `gh issue create` / `deno task create-issue` (and its other
+# invocation forms) call — web-jam-tools#747 widened this from the MCP-only
+# matcher it originally shipped with, because a Bash filing call walked
+# straight past the MCP-only gate. Bash `gh issue edit` is out of scope, same
+# as issue_write's "update"/"edit" method (see hooks/lib/check_issue_approval_token.ts).
 #
 # web-jam-tools#502 — Josh approving a filing plan should not mean the
 # `ask` permission rule on mcp__*__issue_write / mcp__*__sub_issue_write
@@ -34,7 +40,10 @@ if [ -z "$result" ]; then
   # deno run itself failed to produce output (crash, bad Deno install, etc).
   # Fail CLOSED only for the tool calls this guard is actually responsible
   # for; anything else passes through untouched.
-  if printf '%s' "$input" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"mcp__[^"]*__(issue_write|sub_issue_write)"'; then
+  if printf '%s' "$input" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"mcp__[^"]*__(issue_write|sub_issue_write)"' \
+    || (printf '%s' "$input" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"Bash"' \
+        && (printf '%s' "$input" | grep -Eq '\bgh\b.*\bissue\b.*\bcreate\b' \
+            || printf '%s' "$input" | grep -Eq 'create-issue')); then
     jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:"Approval-token guard could not evaluate this call (hook parser failure) — failing closed. See hooks/lib/check_issue_approval_token.ts."}}'
   fi
   exit 0

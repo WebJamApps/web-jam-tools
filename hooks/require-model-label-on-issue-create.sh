@@ -3,8 +3,13 @@
 # model-label, native-type, or executable-issue rules.
 # Design: web-jam-tools#265 (model label on issue creation), web-jam-tools#342 (executable issue rule) & web-jam-tools#415 (native type).
 #
-# Intercepts BOTH surfaces:
-#   - Bash: `gh issue create`, `gh issue edit`
+# Intercepts BOTH surfaces (web-jam-tools#747 fixed the registration gap that
+# had left the Bash half of this unreachable — see scripts/install-hooks.sh's
+# PRE_TOOL_USE_HOOKS matcher for this script, which must include "Bash" for
+# this comment to be true):
+#   - Bash: `gh issue create`, `gh issue edit`, `deno task create-issue`,
+#     `deno task issue:create`, `deno run .../create-issue.ts`, and a direct
+#     `scripts/create-issue.ts` invocation (web-jam-tools#553)
 #   - MCP: any `mcp__*__issue_write` tool call (method: create, update, edit)
 #
 # Fail CLOSED on ambiguity. Exit 2 = block (stderr shown to model).

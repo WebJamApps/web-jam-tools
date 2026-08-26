@@ -233,9 +233,40 @@ export const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * merged argv list — `splitShellTokens` alone treats `\n` as ordinary
  * whitespace, not a command boundary.
  *
- * Shared by hooks/lib/check_irreversible_operations.ts and
- * hooks/lib/check_dangerous_git_deploy.ts — do not duplicate this in either
- * lib; import it from here.
+ * A bare `&` (background/sequencing — `cmd1 & cmd2` runs cmd1 backgrounded
+ * and cmd2 right after, two simple commands) is also a boundary, same as
+ * `;`. This is deliberately NOT applied when the `&` is part of a redirect
+ * rather than an operator: fd-duplication (`2>&1`, `>&2`, `<&3` — `&`
+ * directly follows `>`/`<`) or the bash `&>`/`&>>` stdout+stderr redirect
+ * (`&` directly precedes `>`). Those forms stay in the current segment.
+ *
+ * Unquoted `(`, `)`, `{` and `}` are also boundaries, same as `;` — they
+ * bound subshell grouping (`( gh issue create ... )`) and brace grouping
+ * (`{ gh issue create ...; }`), and are otherwise discarded (not appended
+ * to either neighboring segment) rather than kept as their own token. A
+ * grouping character can also appear as ordinary command SYNTAX ($(...)
+ * command substitution, ${...} parameter expansion, $((...)) arithmetic,
+ * `foo() { ...; }` function definitions, `{a,b}` brace expansion) — this
+ * function does not try to distinguish those from real grouping and
+ * splits on them too. Every matcher this file feeds (git-push-deletion,
+ * dangerous-deploy, issue-creation) is a POSITIONAL check anchored on a
+ * segment's own `tokens[0]`, so an extra split never invents a match out of
+ * text that contains no gated command at all — it can only surface one a
+ * merged segment would have hidden.
+ *
+ * It CAN, however, surface a gated command that appears in a position where
+ * it would not actually run: `cleanup() { git push origin --delete b; }`
+ * merely DEFINES a function, but splitting on `{` leaves a segment whose
+ * `tokens[0]` is `git`, so the deletion guard blocks it. That is deliberate.
+ * Over-blocking a definition is the safe direction for guards whose whole
+ * purpose is to stop an irreversible operation, and unpicking definition
+ * from invocation would mean parsing shell grammar rather than splitting it.
+ *
+ * Shared by hooks/lib/check_irreversible_operations.ts,
+ * hooks/lib/check_dangerous_git_deploy.ts,
+ * hooks/lib/check_issue_approval_token.ts and
+ * hooks/lib/check_model_label_on_issue_create.ts — do not duplicate this in
+ * any of them; import it from here.
  */
 export function splitOnOperators(text: string): { segments: string[]; unterminated: boolean } {
   const segments: string[] = [];
@@ -300,6 +331,25 @@ export function splitOnOperators(text: string): { segments: string[]; unterminat
       continue;
     }
     if (ch === "|") {
+      flush();
+      i++;
+      continue;
+    }
+    if (ch === "&") {
+      const prevCh = i > 0 ? text[i - 1] : "";
+      const nextCh = i + 1 < n ? text[i + 1] : "";
+      if (prevCh === ">" || prevCh === "<" || nextCh === ">") {
+        // Part of a redirect (`2>&1`, `>&2`, `<&3`, `&>file`, `&>>file`),
+        // not the background/sequencing operator — keep it in the segment.
+        current += ch;
+        i++;
+        continue;
+      }
+      flush();
+      i++;
+      continue;
+    }
+    if (ch === "(" || ch === ")" || ch === "{" || ch === "}") {
       flush();
       i++;
       continue;

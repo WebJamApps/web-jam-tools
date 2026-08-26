@@ -4,6 +4,8 @@
 
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import {
+  ApprovalCheckResult,
+  checkApprovalToken,
   createIssueAndVerify,
   defaultExecDeps,
   ExecDeps,
@@ -12,6 +14,15 @@ import {
   parseArgs,
   verifyIssueAttributes,
 } from "../src/create-issue/lib.ts";
+
+// Most tests below exercise createIssueAndVerify's GraphQL/verification flow
+// and are unrelated to the Gate 2 approval-token check (web-jam-tools#747) —
+// they pass this always-approve stub as the third argument so they don't
+// need a real token file on disk. The token check itself is exercised
+// directly against checkApprovalToken() and, for the default (real-disk)
+// path, against createIssueAndVerify() with the argument OMITTED, further
+// down this file.
+const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
 
 Deno.test("parseArgs parses all supported CLI flags and formats", () => {
   const args = [
@@ -332,7 +343,7 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
     parent: 437,
   };
 
-  const result = await createIssueAndVerify(options, mockDeps);
+  const result = await createIssueAndVerify(options, mockDeps, APPROVE_ALL);
   assertEquals(result, 'web-jam-tools#515 "My New Issue"');
 });
 
@@ -397,6 +408,7 @@ Deno.test("createIssueAndVerify setting type to Epic succeeds with mocked GraphQ
       type: "Epic",
     },
     mockDeps,
+    APPROVE_ALL,
   );
   assertEquals(result, 'web-jam-tools#516 "My Epic Issue"');
 });
@@ -458,11 +470,15 @@ Deno.test("createIssueAndVerify fallback GraphQL parent check when parent missin
     },
   };
 
-  const result = await createIssueAndVerify({
-    title: "My New Issue",
-    bodyFile: "/tmp/b.md",
-    parent: 437,
-  }, mockDeps);
+  const result = await createIssueAndVerify(
+    {
+      title: "My New Issue",
+      bodyFile: "/tmp/b.md",
+      parent: 437,
+    },
+    mockDeps,
+    APPROVE_ALL,
+  );
 
   assertEquals(result, 'web-jam-tools#515 "My New Issue"');
 });
@@ -511,6 +527,7 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
       createIssueAndVerify(
         { title: "T", bodyFile: "/b", type: "UnknownType" },
         failInvalidTypeDeps,
+        APPROVE_ALL,
       ),
     Error,
     'Invalid issue type "UnknownType"',
@@ -532,7 +549,12 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("b"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b", type: "Task" }, failTypeQueryDeps),
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", type: "Task" },
+        failTypeQueryDeps,
+        APPROVE_ALL,
+      ),
     Error,
     "Failed to resolve issue type info",
   );
@@ -567,7 +589,12 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("b"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b", type: "Task" }, failTypeMutDeps),
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", type: "Task" },
+        failTypeMutDeps,
+        APPROVE_ALL,
+      ),
     Error,
     "Failed to set issue Type via GraphQL",
   );
@@ -586,6 +613,7 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
             }),
           readFileText: () => Promise.resolve("b"),
         },
+        APPROVE_ALL,
       ),
     Error,
     'Invalid priority level "SuperHigh"',
@@ -597,7 +625,7 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("body"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, failCreateDeps),
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, failCreateDeps, APPROVE_ALL),
     Error,
     "Failed to create issue",
   );
@@ -608,7 +636,7 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("body"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, badUrlDeps),
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, badUrlDeps, APPROVE_ALL),
     Error,
     "Could not parse issue number",
   );
@@ -633,6 +661,7 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
       createIssueAndVerify(
         { title: "T", bodyFile: "/b", priority: "High" },
         failChildNodeQueryDeps,
+        APPROVE_ALL,
       ),
     Error,
     "Failed to resolve child issue node ID for Priority",
@@ -661,7 +690,12 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("body"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b", priority: "High" }, failPrioMutDeps),
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", priority: "High" },
+        failPrioMutDeps,
+        APPROVE_ALL,
+      ),
     Error,
     "Failed to set Priority field via GraphQL",
   );
@@ -682,7 +716,12 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("body"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b", parent: 100 }, failNodeIdQueryDeps),
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", parent: 100 },
+        failNodeIdQueryDeps,
+        APPROVE_ALL,
+      ),
     Error,
     "Failed to resolve node IDs",
   );
@@ -703,7 +742,12 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("body"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b", parent: 100 }, missingNodeIdDeps),
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", parent: 100 },
+        missingNodeIdDeps,
+        APPROVE_ALL,
+      ),
     Error,
     "Could not resolve GraphQL node IDs",
   );
@@ -733,7 +777,12 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("body"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b", parent: 100 }, failSubIssueMutDeps),
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", parent: 100 },
+        failSubIssueMutDeps,
+        APPROVE_ALL,
+      ),
     Error,
     "Failed to attach parent sub-issue",
   );
@@ -754,7 +803,7 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
     readFileText: () => Promise.resolve("body"),
   };
   await assertRejects(
-    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, failReadDeps),
+    () => createIssueAndVerify({ title: "T", bodyFile: "/b" }, failReadDeps, APPROVE_ALL),
     Error,
     "Failed to re-read created issue",
   );
@@ -778,4 +827,200 @@ Deno.test("defaultExecDeps executes real Deno reading and command execution", as
   } finally {
     await Deno.remove(tmpFile);
   }
+});
+
+// --- Gate 2 approval-token check (web-jam-tools#747) ---
+//
+// checkApprovalToken() is the ONLY enforcement point on agy/Antigravity
+// (acceptance criteria 1 & 2): it is exercised directly here with an
+// explicit tokenPath, and separately through createIssueAndVerify() with
+// its approvalCheck argument OMITTED — i.e. exactly how scripts/create-issue.ts
+// calls it in production — using ISSUE_APPROVAL_TOKEN_PATH to point at a
+// temp file (same pattern as test/require_approval_token_on_issue_write_hook.test.ts's
+// withTokenFile helper), so this doesn't touch the real
+// ~/.claude/state/issue-approval-token.json.
+
+function futureIso(hoursFromNow = 4): string {
+  return new Date(Date.now() + hoursFromNow * 3600_000).toISOString();
+}
+
+function pastIso(hoursAgo = 1): string {
+  return new Date(Date.now() - hoursAgo * 3600_000).toISOString();
+}
+
+async function withTokenFile(
+  token: Record<string, unknown> | null,
+  fn: (path: string) => Promise<void> | void,
+): Promise<void> {
+  const dir = await Deno.makeTempDir();
+  const path = `${dir}/issue-approval-token.json`;
+  try {
+    if (token !== null) {
+      await Deno.writeTextFile(path, JSON.stringify(token));
+    }
+    await fn(path);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+}
+
+Deno.test("checkApprovalToken: title covered by a live token for this repo is ok", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor", "Rename the widget"],
+      expires_at: futureIso(),
+    },
+    (tokenPath) => {
+      const res = checkApprovalToken(
+        "WebJamApps/web-jam-tools",
+        "Fix the flux capacitor",
+        tokenPath,
+      );
+      assertEquals(res.ok, true);
+      assertEquals(res.reason, undefined);
+    },
+  );
+});
+
+Deno.test("checkApprovalToken: title NOT covered by the token is refused", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    (tokenPath) => {
+      const res = checkApprovalToken(
+        "WebJamApps/web-jam-tools",
+        "An issue nobody approved",
+        tokenPath,
+      );
+      assertEquals(res.ok, false);
+      assertStringIncludes(res.reason ?? "", "not among the titles approved");
+    },
+  );
+});
+
+Deno.test("checkApprovalToken: no token file at all is refused with a clear error", async () => {
+  await withTokenFile(null, (tokenPath) => {
+    const res = checkApprovalToken("WebJamApps/web-jam-tools", "Any title", tokenPath);
+    assertEquals(res.ok, false);
+    assertStringIncludes(res.reason ?? "", "No approval token found");
+  });
+});
+
+Deno.test("checkApprovalToken: expired token is refused", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: pastIso(),
+    },
+    (tokenPath) => {
+      const res = checkApprovalToken(
+        "WebJamApps/web-jam-tools",
+        "Fix the flux capacitor",
+        tokenPath,
+      );
+      assertEquals(res.ok, false);
+      assertStringIncludes(res.reason ?? "", "expired");
+    },
+  );
+});
+
+Deno.test("checkApprovalToken: token scoped to a different repo is refused", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/JaMmusic",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    (tokenPath) => {
+      const res = checkApprovalToken(
+        "WebJamApps/web-jam-tools",
+        "Fix the flux capacitor",
+        tokenPath,
+      );
+      assertEquals(res.ok, false);
+      assertStringIncludes(res.reason ?? "", "scoped to WebJamApps/JaMmusic");
+    },
+  );
+});
+
+Deno.test("createIssueAndVerify (default approvalCheck, no third arg): refuses to file when no token covers the title", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const prevEnv = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+    Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", tokenPath);
+    try {
+      await assertRejects(
+        () =>
+          createIssueAndVerify(
+            { title: "Untokenized test title", bodyFile: "/tmp/b.md" },
+            {
+              runCmd: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
+              readFileText: () => Promise.resolve("body"),
+            },
+          ),
+        Error,
+        "Refused to file issue — Gate 2 approval required",
+      );
+    } finally {
+      if (prevEnv === undefined) {
+        Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+      } else {
+        Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", prevEnv);
+      }
+    }
+  });
+});
+
+Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds when a live token covers the repo and title", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["My Approved Issue"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const prevEnv = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+      Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", tokenPath);
+      try {
+        const mockDeps: ExecDeps = {
+          runCmd(cmd: string[]) {
+            const cmdStr = cmd.join(" ");
+            if (cmdStr.includes("gh issue create")) {
+              return Promise.resolve({
+                code: 0,
+                stdout: "https://github.com/WebJamApps/web-jam-tools/issues/999\n",
+                stderr: "",
+              });
+            }
+            if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/999")) {
+              const mockIssue: IssueData = { number: 999, title: "My Approved Issue" };
+              return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
+            }
+            return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+          },
+          readFileText: () => Promise.resolve("body"),
+        };
+        const result = await createIssueAndVerify(
+          { title: "My Approved Issue", bodyFile: "/tmp/b.md" },
+          mockDeps,
+        );
+        assertEquals(result, 'web-jam-tools#999 "My Approved Issue"');
+      } finally {
+        if (prevEnv === undefined) {
+          Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+        } else {
+          Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", prevEnv);
+        }
+      }
+    },
+  );
 });

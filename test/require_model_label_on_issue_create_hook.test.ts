@@ -240,6 +240,42 @@ Deno.test("gh issue create chained after another command (&&) is still gated", a
   assertBlocked(res.stderr);
 });
 
+// --- web-jam-tools#788 review Must Fix #1: newline / bare-& segmentation ---
+
+Deno.test("gh issue create chained after another command with a NEWLINE (not &&) is still gated", async () => {
+  const res = await runHook(
+    bashCall(`echo hi\ngh issue create --title T --body B --label bug --type Task`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("gh issue create chained after another command with a bare & (not &&) is still gated", async () => {
+  const res = await runHook(
+    bashCall(`echo hi & gh issue create --title T --body B --label bug --type Task`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+// --- web-jam-tools#788 re-review regression in commit 3afdf03 ---
+
+Deno.test("subshell-wrapped gh issue create ( ... ) is still gated (parens are segment boundaries)", async () => {
+  const res = await runHook(
+    bashCall(`( gh issue create --title T --body B --label bug --type Task )`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("brace-grouped gh issue create { ...; } is still gated (braces are segment boundaries)", async () => {
+  const res = await runHook(
+    bashCall(`{ gh issue create --title T --body B --label bug --type Task; }`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 // --- MCP surface: mcp__*__issue_write ---
 
 Deno.test("MCP issue_write create without native Type is denied", async () => {
@@ -949,6 +985,20 @@ Deno.test("deno task create-issue with Sonnet and --escalation-reason is allowed
     ),
   );
   assertEquals(res.code, 0, res.stderr);
+});
+
+// --- web-jam-tools#788 third review: the unterminated-quote fallback must
+// recognise every create form the parseable scan recognises ---
+
+Deno.test("unterminated-quote 'deno task issue:create' is blocked (task name carries no gh token)", async () => {
+  const res = await runHook(
+    bashCall(`deno task issue:create --title 'unterminated`),
+  );
+  // The fallback's first alternative requires a `gh` token, which
+  // `issue:create` does not have — without its own alternative this command
+  // passed silently even though the balanced-quote form is gated.
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
 });
 
 Deno.test("deno task create-issue with Opus and --escalation-reason is allowed", async () => {

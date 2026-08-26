@@ -2,6 +2,12 @@
  * Helper library for scripts/create-issue.ts (web-jam-tools#514)
  */
 
+import {
+  defaultTokenPath,
+  isExpired,
+  loadToken,
+} from "../../hooks/lib/check_issue_approval_token.ts";
+
 export interface CreateIssueOptions {
   repo?: string;
   title: string;
@@ -110,6 +116,59 @@ export function parseArgs(args: string[]): CreateIssueOptions {
   }
 
   return options;
+}
+
+export interface ApprovalCheckResult {
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * Gate 2 approval-token check (web-jam-tools#747). Refuses to file an issue
+ * unless a live, unexpired token — written by the plan gate via
+ * scripts/write_issue_approval_token.ts once Josh approves a filing plan —
+ * covers this exact repository and title.
+ *
+ * This is the ONLY enforcement point on agy/Antigravity: agy has no hook
+ * mechanism at all, but both surfaces run this same `deno task create-issue`
+ * path, so the check placed here travels to both. On Claude Code it backs up
+ * hooks/require-approval-token-on-issue-write.sh, which denies the same Bash
+ * `gh issue create` / `deno task create-issue` call before it would even
+ * reach this function — this check is the fallback for a session that
+ * somehow bypasses that hook (or for agy, which has none).
+ *
+ * Deliberately does NOT check `session_id` the way
+ * hooks/lib/check_issue_approval_token.ts's `decide()` does for the MCP/Bash
+ * hook path: a bare CLI invocation carries no session context to compare
+ * against, so repo + title + expiry is all there is to verify here.
+ */
+export function checkApprovalToken(
+  repoFull: string,
+  title: string,
+  tokenPath: string = defaultTokenPath(),
+  nowMs: number = Date.now(),
+): ApprovalCheckResult {
+  const token = loadToken(tokenPath);
+  if (!token) {
+    return {
+      ok: false,
+      reason:
+        `No approval token found at ${tokenPath}. Get Josh's explicit approval for this plan first (via /design-issue's plan gate), or ask him directly.`,
+    };
+  }
+  if (isExpired(token, nowMs)) {
+    return { ok: false, reason: `Approval token expired at ${token.expires_at}.` };
+  }
+  if (token.repo !== repoFull) {
+    return { ok: false, reason: `Approval token is scoped to ${token.repo}, not ${repoFull}.` };
+  }
+  if (!token.titles.includes(title)) {
+    return {
+      ok: false,
+      reason: `"${title}" is not among the titles approved in this plan's approval token.`,
+    };
+  }
+  return { ok: true };
 }
 
 export function normalizeRepo(rawRepo?: string): { owner: string; name: string; full: string } {
@@ -227,6 +286,8 @@ export const defaultExecDeps: ExecDeps = {
 export async function createIssueAndVerify(
   options: CreateIssueOptions,
   deps: ExecDeps = defaultExecDeps,
+  approvalCheck: (repoFull: string, title: string) => ApprovalCheckResult = (repoFull, title) =>
+    checkApprovalToken(repoFull, title),
 ): Promise<string> {
   if (!options.title) {
     throw new Error("Missing required argument --title");
@@ -235,8 +296,16 @@ export async function createIssueAndVerify(
     throw new Error("Missing required argument --body-file");
   }
 
-  const bodyText = await deps.readFileText(options.bodyFile);
   const repoInfo = normalizeRepo(options.repo);
+
+  // 0. Gate 2 approval-token check (web-jam-tools#747) — refuses to file
+  // unless Josh's plan gate already approved this exact repo + title.
+  const approval = approvalCheck(repoInfo.full, options.title);
+  if (!approval.ok) {
+    throw new Error(`Refused to file issue — Gate 2 approval required: ${approval.reason}`);
+  }
+
+  const bodyText = await deps.readFileText(options.bodyFile);
 
   // 1. Create base issue via gh issue create
   const ghArgs = [

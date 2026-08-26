@@ -26,6 +26,7 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
+import { matcherMatches } from "../hooks/lib/agy_hook_shim.ts";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
@@ -221,6 +222,67 @@ Deno.test(
         }),
       );
       assertEquals(deployBlockRes.code, 2, deployBlockRes.stdout + deployBlockRes.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+// --- require-model-label-on-issue-create.sh / require-approval-token-on-issue-write.sh
+// register on the Bash matcher too, not just MCP (web-jam-tools#747, ACs 6 & 9) ---
+
+Deno.test(
+  "require-model-label-on-issue-create.sh and require-approval-token-on-issue-write.sh are registered on a matcher that also fires for Bash",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      const preToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> =
+        settings.hooks.PreToolUse;
+
+      const matcherFor = (scriptName: string): string => {
+        const entry = preToolUse.find((e) =>
+          e.hooks.some((h) => h.command.endsWith(`/${scriptName}`))
+        );
+        assert(entry, `expected a PreToolUse entry registering ${scriptName}`);
+        return entry.matcher;
+      };
+
+      const modelLabelMatcher = matcherFor("require-model-label-on-issue-create.sh");
+      assert(
+        matcherMatches(modelLabelMatcher, "Bash"),
+        `expected require-model-label-on-issue-create.sh's matcher (${modelLabelMatcher}) to also fire for Bash`,
+      );
+      assert(
+        matcherMatches(modelLabelMatcher, "mcp__claude_ai_GitHub_MCP__issue_write"),
+        `expected require-model-label-on-issue-create.sh's matcher (${modelLabelMatcher}) to still fire for mcp__*__issue_write`,
+      );
+
+      const approvalTokenMatcher = matcherFor("require-approval-token-on-issue-write.sh");
+      assert(
+        matcherMatches(approvalTokenMatcher, "Bash"),
+        `expected require-approval-token-on-issue-write.sh's matcher (${approvalTokenMatcher}) to also fire for Bash`,
+      );
+      assert(
+        matcherMatches(approvalTokenMatcher, "mcp__claude_ai_GitHub_MCP__issue_write"),
+        `expected require-approval-token-on-issue-write.sh's matcher (${approvalTokenMatcher}) to still fire for mcp__*__issue_write`,
+      );
+      assert(
+        matcherMatches(approvalTokenMatcher, "mcp__claude_ai_GitHub_MCP__sub_issue_write"),
+        `expected require-approval-token-on-issue-write.sh's matcher (${approvalTokenMatcher}) to still fire for mcp__*__sub_issue_write`,
+      );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });

@@ -1,8 +1,11 @@
 /**
- * Helper logic for require-approval-token-on-issue-write.sh (web-jam-tools#502).
+ * Helper logic for require-approval-token-on-issue-write.sh (web-jam-tools#502,
+ * extended to the Bash filing path by web-jam-tools#747).
  *
- * Reads a PreToolUse payload for an `issue_write` or `sub_issue_write` MCP
- * call and decides whether Josh's plan-gate approval already covers it.
+ * Reads a PreToolUse payload and decides whether Josh's plan-gate approval
+ * already covers the issue-filing call it describes — either an
+ * `issue_write` / `sub_issue_write` MCP call, or a Bash `gh issue create` /
+ * `deno task create-issue` (and its other invocation forms) call.
  *
  * The approval token is written by the plan gate (web-jam-tools#497, not
  * this change) once Josh approves a filing plan. Its shape:
@@ -26,13 +29,69 @@
  *     already-created issue, so the token's presence/scope is all there is
  *     to verify).
  *   - sub_issue_write, method other than "add" (remove/reprioritize)     -> PASS.
+ *   - Bash `gh issue create` / `deno task create-issue` / `deno task
+ *     issue:create` / `deno run .../create-issue.ts` / direct
+ *     `scripts/create-issue.ts`, title in the token, same session, same
+ *     repo, not expired -> PASS (silent — see the Bash `allow` note below;
+ *     the settings permission layer still evaluates the whole call).
+ *   - Bash issue-creating command, any of the above false, or no --title
+ *     given at all -> DENY (web-jam-tools#747: this is the Bash-path hole —
+ *     dropping to a shell must not walk around the gate that
+ *     mcp__*__issue_write already enforces).
+ *   - Bash `gh issue edit` or any other Bash command                     -> PASS
+ *     (edits are out of scope, same as issue_write's "update"/"edit"; an
+ *     unrelated command is untouched).
  *   - any other tool                                                    -> PASS.
  *
  * PASS means "this hook has no opinion" — the normal permission flow (the
  * standing `ask` rule) still applies. Only ALLOW silences the prompt, and
  * only for a title Josh already approved.
+ *
+ * Bash NEVER gets `allow` (web-jam-tools#788 review, Must Fix #2): a
+ * PreToolUse `allow` bypasses the whole tool call through the settings
+ * permission system (`permissions.deny`/`ask`), not just the piece this
+ * guard reasoned about. On the MCP path that's safe because an
+ * `issue_write`/`sub_issue_write` call carries no other composed command to
+ * ride along. On Bash, `decideBash()` only ever vets the issue-creating
+ * segment(s) it finds in a whole `&&`/`;`/`\n`/`&`/`|`-separated string — any
+ * OTHER segment chained into the same call is never inspected at all, so
+ * emitting `allow` would let an approved title silence the settings layer
+ * for whatever else rides along (e.g.
+ * `gh issue create --title "<approved>" && git push origin --delete x`).
+ * So a satisfied Bash approval resolves to PASS (silent, exit 0, no
+ * decision) — Josh still gets the standing `ask` prompt (or the settings
+ * rules run as normal) for the rest of the command; only an *unapproved*
+ * issue-creating command is actively DENIED.
+ *
+ * Bash command parsing reuses the shell-tokenizing and issue-creating-command
+ * detection already built for hooks/lib/check_model_label_on_issue_create.ts
+ * (web-jam-tools#382/#553) rather than re-implementing it — same repo, same
+ * question ("is this argv shape an issue-creating call, and what are its
+ * args"), so it lives in one place. Command segmentation (splitting on
+ * `&&`/`||`/`;`/`|`/newline/bare-`&`) reuses splitOnOperators() from
+ * normalize_command.ts for the same reason — a hand-rolled operator set that
+ * doesn't understand newline or bare `&` is exactly the Must Fix #1 bypass
+ * this file used to have.
  */
 
+import {
+  findCreateIssueScriptArgs,
+  findGhIssueCreateArgs,
+  stripLeadingAssignments,
+} from "./check_model_label_on_issue_create.ts";
+import { splitOnOperators, splitShellTokens } from "./normalize_command.ts";
+
+// Dependency direction (web-jam-tools#788 review, Actionable Feedback A):
+// src/create-issue/lib.ts imports defaultTokenPath()/isExpired()/loadToken()
+// FROM this file — the repo's first src/ -> hooks/lib/ dependency. That
+// direction is intentional and the only one allowed: hooks/lib/ stays
+// independently invocable (no deno.json import map, no src/ tree required)
+// by never importing FROM src/, but src/ is free to import FROM hooks/lib/
+// since hooks/lib/ is the lower layer. Consequently the token primitives
+// live here, once, and src/create-issue/lib.ts's own approval-token check
+// (checkApprovalToken(), used as createIssueAndVerify()'s default
+// approvalCheck) reuses them instead of re-implementing token
+// load/expiry logic a second time.
 const ISSUE_WRITE_RE = /^mcp__.*__issue_write$/;
 const SUB_ISSUE_WRITE_RE = /^mcp__.*__sub_issue_write$/;
 
@@ -96,9 +155,59 @@ function repoFullName(toolInput: Record<string, unknown>): string {
   return owner && repo ? `${owner}/${repo}` : "";
 }
 
+/**
+ * `--repo`/`-R` value explicitly present in a Bash gh/create-issue argv,
+ * normalized to "owner/name" — or `null` if no `--repo`/`-R` flag was
+ * given at all. Deliberately does NOT apply any default: the two Bash
+ * invocation families this hook covers resolve a missing `--repo`
+ * differently, so the default has to live with the caller, which knows
+ * which family it's looking at (see decideBash()):
+ *   - `gh issue create` resolves the target repo from the current
+ *     directory's git remote when `--repo` is absent — a fixed constant
+ *     cannot reproduce that, so decideBash() fails closed (denies) instead
+ *     of guessing.
+ *   - `deno task create-issue` / `issue:create` / `deno run
+ *     .../create-issue.ts` / direct `scripts/create-issue.ts` really do
+ *     default to WebJamApps/web-jam-tools — that's normalizeRepo()'s own
+ *     contract in src/create-issue/lib.ts, which decideBash() applies
+ *     directly for this family (the same literal, not imported: hooks/lib/
+ *     never depends on src/ — see the import block above this function for
+ *     why src/ is allowed to depend on hooks/lib/ instead).
+ */
+function extractExplicitBashRepo(args: string[]): string | null {
+  let raw: string | null = null;
+  for (let j = 0; j < args.length; j++) {
+    const a = args[j];
+    if (a === "--repo" || a === "-R") {
+      if (j + 1 < args.length) raw = args[j + 1];
+      break;
+    }
+    if (a.startsWith("--repo=")) {
+      raw = a.slice("--repo=".length);
+      break;
+    }
+  }
+  if (!raw) return null;
+  return raw.includes("/") ? raw : `WebJamApps/${raw}`;
+}
+
+/** `--title` value from a Bash gh/create-issue argv. No `-t` alias: this repo's own convention (see check_model_label_on_issue_create.ts's extractTypeValue and src/create-issue/lib.ts's parseArgs) already reassigns `-t` to mean `--type`. */
+function extractBashTitle(args: string[]): string | null {
+  for (let j = 0; j < args.length; j++) {
+    const a = args[j];
+    if (a === "--title") {
+      return j + 1 < args.length ? args[j + 1] : null;
+    }
+    if (a.startsWith("--title=")) {
+      return a.slice("--title=".length);
+    }
+  }
+  return null;
+}
+
 /** Loads and validates the token against session/expiry/repo. Returns a deny Decision on any failure, or null if the token is good to use. */
 function checkTokenValidity(
-  toolInput: Record<string, unknown>,
+  repoFull: string,
   sessionId: string,
   tokenPath: string,
   nowMs: number,
@@ -126,7 +235,6 @@ function checkTokenValidity(
       deny: { outcome: "deny", reason: `Approval token expired at ${token.expires_at}.` },
     };
   }
-  const repoFull = repoFullName(toolInput);
   if (repoFull && token.repo !== repoFull) {
     return {
       deny: {
@@ -138,6 +246,137 @@ function checkTokenValidity(
   return { token };
 }
 
+/**
+ * Cheap, deliberately approximate "does this raw command plausibly file an
+ * issue" test — same shape check_model_label_on_issue_create.ts already
+ * applies to its own `unterminated`-quote fallback. Used ONLY to decide
+ * whether an unparseable (unterminated-quote) command should fail closed;
+ * a real, parseable command is always evaluated by the full segment scan
+ * in decideBash() below instead, so a false positive/negative here only
+ * matters on the rare ambiguous-parse path. Deliberately narrower than the
+ * sibling's version (no `edit` alternative): this hook's Bash path only
+ * ever cares about issue CREATION, never `gh issue edit`.
+ *
+ * Narrower on `edit`, but NEVER narrower on the set of create forms. It must
+ * recognise every form the parseable path below treats as issue-creating, or
+ * the ambiguous-parse path fails OPEN on whichever form it misses. The
+ * `issue:create` alternative exists for exactly that reason
+ * (web-jam-tools#788 third review): that task name carries no `gh` token, so
+ * the first alternative can never match it, and without an alternative of its
+ * own, `deno task issue:create --title 'unterminated` passed silently while
+ * the same command with balanced quotes was correctly denied.
+ */
+function looksLikeIssueCreatingCommand(command: string): boolean {
+  return (
+    (/\bgh\b/.test(command) && /\bissue\b/.test(command) && /\bcreate\b/.test(command)) ||
+    /\bcreate-issue\b/.test(command) ||
+    /\bissue:create\b/.test(command)
+  );
+}
+
+/**
+ * Bash-path counterpart of the issue_write "create" branch above
+ * (web-jam-tools#747): finds every issue-creating command (`gh issue
+ * create`, `deno task create-issue`/`issue:create`, `deno run
+ * .../create-issue.ts`, or a direct `scripts/create-issue.ts` invocation)
+ * among the command's `&&`/`||`/`;`/`|`/newline/bare-`&`-separated simple
+ * commands (splitOnOperators() — NOT a hand-rolled operator set, see
+ * web-jam-tools#788 review Must Fix #1), and applies the same
+ * session/repo/expiry/title checks as the MCP path to each one.
+ *
+ * Unlike the MCP path, an approved match here never short-circuits to
+ * `allow` (Must Fix #2 — see the file-header comment) — it keeps scanning
+ * the REST of the composed command, because a later segment could be a
+ * second, unapproved issue-creating call riding on the same approved one
+ * (`gh issue create --title "<approved>" && gh issue create --title
+ * "<not approved>"`). Only when every issue-creating segment found (there
+ * may be zero) checks out does the whole call resolve to PASS.
+ *
+ * A command with no issue-creating segment at all is PASS, untouched.
+ *
+ * An unterminated quote (ambiguous parse) fails CLOSED — but ONLY when the
+ * raw command plausibly files an issue in the first place (web-jam-tools#788
+ * re-review, Must Fix #1 of the follow-up commit). `splitOnOperators()`
+ * strips neither `#` comments nor heredoc bodies, so an apostrophe in
+ * either (`# Josh's note`, a `<<EOF ... Josh's change ... EOF` heredoc) opens
+ * a quote state that never closes — for an UNRELATED command, that must
+ * stay silent, not hard-deny. This mirrors the exact narrowing
+ * check_model_label_on_issue_create.ts already applies to its own
+ * `unterminated` branch (see `looksLikeIssueCreatingCommand()` below).
+ */
+function decideBash(
+  command: string,
+  sessionId: string,
+  tokenPath: string,
+  nowMs: number,
+): Decision {
+  const { segments, unterminated } = splitOnOperators(command);
+  if (unterminated) {
+    if (looksLikeIssueCreatingCommand(command)) {
+      return {
+        outcome: "deny",
+        reason:
+          "This command could not be parsed (unterminated quote) but appears to create an issue — failing closed.",
+      };
+    }
+    return { outcome: "pass" };
+  }
+
+  for (const segment of segments) {
+    const scTokens = stripLeadingAssignments(splitShellTokens(segment));
+    const ghCreateArgs = findGhIssueCreateArgs(scTokens);
+    const createArgs = ghCreateArgs ?? findCreateIssueScriptArgs(scTokens);
+    if (createArgs === null) continue;
+
+    const title = extractBashTitle(createArgs)?.trim() ?? "";
+    if (!title) {
+      return {
+        outcome: "deny",
+        reason:
+          "This issue-creating command carries no --title to check against the approved plan.",
+      };
+    }
+
+    const explicitRepo = extractExplicitBashRepo(createArgs);
+    let repoFull: string;
+    if (explicitRepo !== null) {
+      repoFull = explicitRepo;
+    } else if (ghCreateArgs !== null) {
+      // `gh issue create` with no `--repo` resolves the target repo from
+      // the shell's cwd git remote — this hook cannot reliably reproduce
+      // that resolution, so it cannot verify the token's repo scope.
+      // Fail closed (web-jam-tools#788 review Must Fix #3) rather than
+      // assuming WebJamApps/web-jam-tools.
+      return {
+        outcome: "deny",
+        reason: `This "gh issue create" call has no --repo, and gh resolves the target repo ` +
+          `from the shell's current directory rather than a fixed default — the approval ` +
+          `token cannot verify repo scope here, so failing closed.`,
+      };
+    } else {
+      // deno task create-issue / issue:create / deno run .../create-issue.ts
+      // / direct scripts/create-issue.ts really do default to
+      // WebJamApps/web-jam-tools — same convention as normalizeRepo() in
+      // src/create-issue/lib.ts.
+      repoFull = "WebJamApps/web-jam-tools";
+    }
+
+    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
+    if ("deny" in check) return check.deny;
+    if (!check.token.titles.includes(title)) {
+      return {
+        outcome: "deny",
+        reason: `"${title}" is not among the titles Josh approved in this session's plan.`,
+      };
+    }
+    // Approved — but never "allow" on Bash (Must Fix #2). Keep scanning the
+    // rest of the composed command for a further, unapproved issue-creating
+    // segment; otherwise this call resolves to PASS below.
+  }
+
+  return { outcome: "pass" };
+}
+
 export function decide(
   toolName: string,
   toolInput: Record<string, unknown>,
@@ -145,6 +384,12 @@ export function decide(
   tokenPath: string,
   nowMs: number,
 ): Decision {
+  if (toolName === "Bash") {
+    const command = typeof toolInput.command === "string" ? toolInput.command : "";
+    if (!command.trim()) return { outcome: "pass" };
+    return decideBash(command, sessionId, tokenPath, nowMs);
+  }
+
   if (ISSUE_WRITE_RE.test(toolName)) {
     const method = typeof toolInput.method === "string" ? toolInput.method : "";
     if (method !== "create") {
@@ -157,7 +402,7 @@ export function decide(
         reason: "issue_write create call carries no title to check against the approved plan.",
       };
     }
-    const check = checkTokenValidity(toolInput, sessionId, tokenPath, nowMs);
+    const check = checkTokenValidity(repoFullName(toolInput), sessionId, tokenPath, nowMs);
     if ("deny" in check) return check.deny;
     if (!check.token.titles.includes(title)) {
       return {
@@ -173,7 +418,7 @@ export function decide(
     if (method !== "add") {
       return { outcome: "pass" };
     }
-    const check = checkTokenValidity(toolInput, sessionId, tokenPath, nowMs);
+    const check = checkTokenValidity(repoFullName(toolInput), sessionId, tokenPath, nowMs);
     if ("deny" in check) return check.deny;
     return {
       outcome: "allow",
