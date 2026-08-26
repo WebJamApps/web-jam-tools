@@ -107,7 +107,7 @@ Review the PR diff, description, checks, and mergeability against these mandator
    - Check `mergeable` status and `mergeStateStatus` from Step 1.
    - If the PR has merge conflicts with the base branch (`dev` / `main`), report it as a **Must Fix** item requiring a rebase or conflict resolution before merging.
 
-2. **CircleCI & Automated Build Health (Must Fix — Non-Redundancy Principle)**:
+2. **CircleCI & Automated Build Health (Must Fix — Non-Redundancy Principle — Evaluated Last per Audit Execution Order)**:
    - Inspect status checks from `gh pr checks` (evaluated last, after completing all diff and architectural audits).
    - CircleCI natively executes mechanical static analysis gates across repositories (and as per-repo tooling rollouts land):
      - Code duplication (`jscpd` with `threshold: 5`)
@@ -160,7 +160,7 @@ Review the PR diff, description, checks, and mergeability against these mandator
    - Inspect the `--test-plan` section. It must contain concrete steps exercising the change itself (UI manual steps, runnable `curl` commands, or tooling commands), not just suite invocations like `npm test` or `deno task test` (web-jam-tools#152).
 
 8. **Architectural Judgment Audits (Non-Redundant)**:
-   When CircleCI is green, focus review scrutiny on high-leverage architectural judgment calls:
+   Focus review scrutiny on high-leverage architectural judgment calls:
    - **Exported API Contract Drift**: Verify that modified public function signatures, route payloads, endpoint handlers, or exported types update all callers across the codebase.
    - **Backward Compatibility & Expand-Contract**: Ensure database schema updates (Mongoose/MongoDB), GraphQL mutations, and backend API changes remain additive and non-breaking before frontend consumers deploy.
    - **Secret Literal Safety**: Inspect diffs for hardcoded tokens, API keys, webhook secrets, private URLs, or unscrubbed credentials.
