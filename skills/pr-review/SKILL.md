@@ -167,7 +167,7 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
    - **Exported API Contract Drift**: Verify that modified public function signatures, route payloads, endpoint handlers, or exported types update all callers across the codebase.
    - **Backward Compatibility & Expand-Contract**: Ensure database schema updates (Mongoose/MongoDB), GraphQL mutations, and backend API changes remain additive and non-breaking before frontend consumers deploy.
    - **Secret Literal Safety**: Inspect diffs for hardcoded tokens, API keys, webhook secrets, private URLs, or unscrubbed credentials.
-   - **Playwright E2E Test Suggestions (Suggest-Only)**: When a diff introduces new user-facing UI components, client routes, or interactive forms lacking end-to-end coverage, suggest adding a Playwright test under `### 🟡 Actionable Feedback & Suggestions`. The reviewer **never** creates, adds, or modifies test files itself; suggested tests must provide runnable local (`npm run test:e2e`) and CI verification steps.
+   - **Playwright E2E Test Suggestions (Suggest-Only)**: When a diff introduces new user-facing UI components, client routes, or interactive forms lacking end-to-end coverage, suggest adding a Playwright test under `### 🟡 Suggestions`. The reviewer **never** creates, adds, or modifies test files itself; suggested tests must provide runnable local (`npm run test:e2e`) and CI verification steps.
 
 9. **AGENTS.md Guardrails Audit**:
    - **TypeScript / Code Standards**:
@@ -188,8 +188,8 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
 10. **Draft / Ready State (Never a Finding)**:
     - A PR's draft or ready-for-review state is Josh's own action on his own PR, not a
       property of the work under review — he moves PRs in and out of draft himself as part of
-      his workflow. **Never report it as a finding, of any severity — not a Must Fix, not an
-      Actionable Suggestion — whether the PR is currently a draft or was created as a draft and
+      his workflow. **Never report it as a finding, of any severity — not a Must Fix, not a
+      Suggestion — whether the PR is currently a draft or was created as a draft and
       later marked ready.**
 
 11. **Issue Body & PR Body Prose (Never a Must Fix)**:
@@ -202,7 +202,7 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
       CircleCI check, a failing Snyk check, a merge conflict with the base branch, and defects
       in the code being merged. A description that has drifted from its diff does not stop the
       code from being correct and does not stop the merge.
-    - Such a drift may still be raised, but only under `### 🟡 Actionable Feedback & Suggestions`.
+    - Such a drift may still be raised, but only under `### 🟡 Suggestions`.
     - This is a deliberate carve-out from "A found defect is fixed before merge — never
       deferred" below: that section's "if it is wrong, it is Must Fix or it is not a finding
       at all" binary governs defects in the artifact being merged (the code/diff itself);
@@ -238,7 +238,7 @@ afterward.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line added by Step 4a's results-again follow-up, once CircleCI resolves or its poll cap is hit (either surface). Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row — that row is added by Step 4a's results-again follow-up once CircleCI resolves. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
-   - **Actionable Feedback & Suggestions** (`### 🟡 Actionable Feedback & Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Actionable Feedback & Suggestions` with `✅ None`.
+   - **Suggestions** (`### 🟡 Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Suggestions` with `✅ None`.
      - **Exclusion of Process & Git Mechanics Trivia**: This section is strictly for code-relevant improvement suggestions tied directly to the diff under review. It **never** carries process/mechanics trivia, speculative workflow commentary, or git/semver heads-ups that are not defects in the PR itself. Specifically, **never post cross-PR version-bump collision warnings** (e.g. noting that another open PR shares the same semver target and might merge first) or git workflow lectures. If a version collision actually occurs, it will be caught deterministically as a real Must Fix under Step 2 item 5 when the PR's version fails to strictly exceed `origin/dev` at review time.
 
    **Example — initial post (post #1), re-review with one remaining blocker and two now-fixed
@@ -263,7 +263,7 @@ afterward.
    - **Snyk**: ✅ Clean.
    - **Scope**: ✅ Matches linked issue.
 
-   ### 🟡 Actionable Feedback & Suggestions
+   ### 🟡 Suggestions
    ✅ None
    ````
 
@@ -287,7 +287,7 @@ afterward.
    - **Snyk**: ✅ Clean.
    - **Scope**: ✅ Matches linked issue.
 
-   ### 🟡 Actionable Feedback & Suggestions
+   ### 🟡 Suggestions
    ✅ None
    ````
 
