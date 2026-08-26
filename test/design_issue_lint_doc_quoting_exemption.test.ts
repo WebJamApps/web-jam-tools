@@ -224,3 +224,19 @@ Deno.test("lintDesignDoc: an apostrophe in ordinary prose does not create a bogu
   const line = "The linter's own rules still flag Gate 1: Approved in bare prose.";
   assertEquals(violationsFor(line, "no-gate-or-approval-state"), 1);
 });
+
+// Regression guard: a quote character living inside a backtick code span must not be paired by
+// the double-quote collector with an unrelated later quote on the same line — that would create
+// a bogus exempt range spanning genuine bare prose in between.
+Deno.test("lintDesignDoc: a quote nested inside a backtick span does not leak into double-quote pairing", () => {
+  const line = 'Use `"` to quote, then design complete " ends it.';
+  assertEquals(violationsFor(line, "no-design-complete"), 1);
+});
+
+// Regression guard: a banned phrase inside a double- (or longer-) backtick inline code span is a
+// mention, not a use, exactly like a single-backtick span. CommonMark closes a code span only at
+// a run of the SAME backtick count as opened it.
+Deno.test("lintDesignDoc: a banned phrase inside a double-backtick inline code span is exempt", () => {
+  const line = "The linter bans ``design complete`` in prose.";
+  assertEquals(violationsFor(line, "no-design-complete"), 0);
+});
