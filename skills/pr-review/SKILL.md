@@ -84,9 +84,12 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
    - Compare the commit SHA of the newest automated review (`last_review_sha` from `.commit.oid`) against the PR's current head commit SHA (`head_sha` from `.commits | last | .oid`).
    - If equal (and a prior automated review exists at that SHA), stop and report to Josh that the PR was already reviewed at that SHA with no new commits, and post NO review comment.
    - If new commits exist after the newest review (or if the PR has no prior automated reviews), proceed with the review. When re-reviewing after new commits, state that the review evaluates the delta since the previous review.
-3. Fetch PR status checks (CircleCI, Snyk, etc.):
+3. Fetch only the non-CircleCI status checks Step 2 needs (Snyk). **CircleCI's status is
+   deliberately NOT fetched here** — it stays unread until Step 4, strictly after the initial
+   post, so post #1's verdict can never be influenced by it:
    ```sh
-   gh pr checks <Repo>#<pr-num>
+   gh pr checks <Repo>#<pr-num> --json name,state,link \
+     --jq '.[] | select(.name | test("snyk"; "i"))'
    ```
 4. Fetch the PR diff:
    ```sh
@@ -119,10 +122,10 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
      - Code quality & plugin linters (`unicorn`, `promise`, `security`, `react-hooks`, `jsx-a11y-x`, `import-x`)
      - Code formatting & syntax (`deno task fmt:check`, `npm run lint`)
      - Unit test suites & coverage thresholds (`deno task test`, `npm test`)
-   - **Non-Redundancy Principle**: Because mechanical static checks are enforced directly in CircleCI (where configured), `pr-review` **never duplicates or re-audits static linter rules, complexity metrics, formatting styles, or duplication percentages in review prose** — in Step 4's follow-up posts any more than here.
+   - **Non-Redundancy Principle**: Because mechanical static checks are enforced directly in CircleCI (where configured), `pr-review` **never duplicates or re-audits static linter rules, complexity metrics, formatting styles, or duplication percentages in review prose** — this applies no less to Step 4's follow-up posts than it does here.
 
 3. **Snyk Security Audits (Must Fix)**:
-   - Inspect status checks from `gh pr checks` for Snyk security failures (`security/snyk`, `snyk-code`, etc.).
+   - Inspect the Snyk-scoped status checks fetched in Step 1 item 3 for Snyk security failures (`security/snyk`, `snyk-code`, etc.). Do not broaden that fetch to all checks — CircleCI stays unread until Step 4.
    - If Snyk security checks fail, report the failure as a **Must Fix** item. Note: If Snyk reports are inaccessible locally due to API limits or auth, ask the author/Josh for the exact Snyk failure details and vulnerability IDs per AGENTS.md guidelines.
 
 4. **Issue Acceptance Criteria & Scope**:
@@ -212,9 +215,11 @@ and #3, strictly after post #1 is live — this list and Step 4 always agree wit
 1. **Initial review (content only)** — this step, via `deno task post-pr-review`. Posted
    immediately after Step 2 finishes, before CircleCI is checked at all. Its verdict reflects only
    the non-CircleCI findings from Step 2 and never carries a CircleCI row or state.
-2. **Results-again follow-up** — Step 4a, via `deno task post-pr-comment`. Restates the same
-   Checklist Verification from post #1, now with a `**CircleCI**` row filled in (✅ passing, or 🛑
-   failing/still-pending with the detail added as a new Must Fix line).
+2. **Results-again follow-up** — Step 4a, via `deno task post-pr-comment`. Restates post #1's
+   Checklist Verification **as amended** (any row whose status changed, or any finding resolved,
+   between the two posts reflects reality at post-#2 time, not a stale copy of post #1), now with
+   a `**CircleCI**` row filled in (✅ passing, or 🛑 failing/still-pending with the detail added as
+   a new Must Fix line).
 3. **Verdict-only follow-up** — Step 4b, via `deno task post-pr-comment`. Carries only the final
    verdict line, now accounting for CircleCI's result alongside everything from post #1.
 
@@ -229,7 +234,7 @@ afterward.
      - `**✅ Approved**` (clean diff, no Must Fix items found in Step 2)
      - `**🛑 Changes Requested**` (any Must Fix item found in Step 2, or a blocking defect exists)
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
-   - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line added by Step 4a's results-again follow-up, once CircleCI resolves (or the agy cap is hit). Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
+   - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line added by Step 4a's results-again follow-up, once CircleCI resolves or its poll cap is hit (either surface). Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row — that row is added by Step 4a's results-again follow-up once CircleCI resolves. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
    - **Actionable Feedback & Suggestions** (`### 🟡 Actionable Feedback & Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Actionable Feedback & Suggestions` with `✅ None`.
@@ -335,33 +340,41 @@ with it. This step produces posts #2 and #3.
    ```
 2. **Already resolved (pass or fail) at this check**: skip polling entirely — go straight to step
    4 below with whatever this single check returned.
-3. **Still pending**: poll for resolution, per agent surface:
+3. **Still pending**: poll for resolution, per agent surface. **Both surfaces' polls are bounded
+   and terminate with the same outcome — "still pending, treat as blocking" — if CircleCI never
+   resolves in time; neither surface polls forever:**
    - **Claude Code**: use the `ScheduleWakeup` tool to re-check at intervals — never a blocking
      Bash `sleep` loop (a blocking sleep loop is the exact pattern this step replaces — see
      web-jam-tools#782 "pr-review skill has no defined behavior for a pending CircleCI check, so
      review sessions improvise polling loops"). Pick a delay matched to how fast CircleCI state
      actually changes (a full run is minutes, not seconds); re-run `gh pr checks` each time
-     `ScheduleWakeup` fires.
+     `ScheduleWakeup` fires. **Cap total polling at ~30 minutes** (in line with typical CircleCI
+     job run times) — if CircleCI still has not resolved by then, stop scheduling further
+     wakeups, report "CircleCI still pending after N minutes", and proceed to item 4 below with
+     CircleCI unresolved. This cap bounds `ScheduleWakeup` re-checks only; it is not a licence to
+     fall back to a blocking Bash sleep loop.
    - **Antigravity/agy**: agy has no confirmed equivalent to `ScheduleWakeup`. Fall back to a
      bounded check-then-sleep loop: check every ~60 seconds, capped at ~15 minutes total, then
      report "CircleCI still pending after N minutes" and stop rather than looping forever.
      **This fallback is an unverified best guess, not a confirmed agy capability** — flag it for
      correction if agy turns out to have a native scheduling equivalent, and prefer that instead
      once confirmed.
-4. **Once CircleCI resolves (or the agy cap is hit), post exactly two follow-ups**, both via
-   `deno task post-pr-comment` — never `deno task post-pr-review` again for this PR (see item 5
-   below):
+4. **Once CircleCI resolves, or its poll cap is hit (Claude Code's ~30-minute `ScheduleWakeup`
+   cap, or agy's ~15-minute check-then-sleep cap — whichever surface is running), post exactly two
+   follow-ups**, both via `deno task post-pr-comment` — never `deno task post-pr-review` again for
+   this PR (see item 5 below):
    a. **Results-again (post #2)**: write a scratch file (e.g.
       `/tmp/pr-review-<Repo>-<pr-num>-results.md` — never inside the repo, per AGENTS.md
-      convention) restating the same Checklist Verification from post #1, now with a
-      `**CircleCI**` row added:
+      convention) restating post #1's Checklist Verification **as amended** — any row whose status
+      changed, or any finding resolved, between post #1 and now reflects reality at post-#2 time,
+      not a verbatim copy of the stale post #1 — now with a `**CircleCI**` row added:
       - `✅ Passing` if CircleCI resolved green.
       - `🛑 Failing: <failure detail>` if it resolved red — also add a matching `🛑` line under
         `### 🛑 Must Fix Items`.
       - `🛑 Still pending after N minutes — could not confirm passing status, verify manually
-        before merge` if the agy cap was hit with CircleCI still unresolved — also add a matching
-        `🛑` line under `### 🛑 Must Fix Items` (an unresolved CI status is treated as blocking,
-        never as silently passing).
+        before merge` if the poll cap was hit (either surface) with CircleCI still unresolved —
+        also add a matching `🛑` line under `### 🛑 Must Fix Items` (an unresolved CI status is
+        treated as blocking, never as silently passing).
       ```sh
       deno task post-pr-comment --repo <Owner/Repo> --pr <pr-num> --body-file <scratch_results_file>
       ```
@@ -369,7 +382,7 @@ with it. This step produces posts #2 and #3.
       `/tmp/pr-review-<Repo>-<pr-num>-verdict.md`) carrying only the final verdict line:
       - `**✅ Approved**` — CircleCI resolved passing and no other Must Fix item remains.
       - `**🛑 Changes Requested**` — CircleCI resolved failing, CircleCI is still unresolved at the
-        agy cap, or any other Must Fix item is present.
+        poll cap (either surface), or any other Must Fix item is present.
       ```sh
       deno task post-pr-comment --repo <Owner/Repo> --pr <pr-num> --body-file <scratch_verdict_file>
       ```
