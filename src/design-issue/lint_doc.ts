@@ -201,12 +201,11 @@ function firstNonExemptMatch(
   const { text: strippedText, toOriginal } = buildStrippedLine(line, ranges);
 
   for (const regex of regexes) {
-    const flags = regex.flags.includes("g") ? regex.flags : regex.flags + "g";
-    const globalRegex = new RegExp(regex.source, flags);
+    regex.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = globalRegex.exec(strippedText)) !== null) {
+    while ((match = regex.exec(strippedText)) !== null) {
       if (match[0].length === 0) {
-        globalRegex.lastIndex++;
+        regex.lastIndex++;
         continue;
       }
 
@@ -216,9 +215,15 @@ function firstNonExemptMatch(
       const origEnd = toOriginal[strippedEnd - 1] + 1;
 
       if (!isFullyExempt(origStart, origEnd, ranges)) {
+        regex.lastIndex = 0;
         return { text: match[0] };
       }
+
+      if (!regex.global) {
+        break;
+      }
     }
+    regex.lastIndex = 0;
   }
   return null;
 }
@@ -245,21 +250,21 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
   const statusHeadingRegex = /^\s*#{1,6}\s+status\s*[:=-]?\s*$/i;
 
   const gateStateRegexes = [
-    /\bgate\s+[12]\s*(?:[:=-]|—)\s*(?:approved|passed|pending|in\s*progress|open|completed|done|rejected|active)\b/i,
-    /\bgate\s+[12]\s+(?:approval\s+state|approval\s+status|state|status)\b/i,
-    /\b(?:approved|passed|pending)\s+at\s+gate\s+[12]\b/i,
-    /\b(?:pending|awaiting)\s+gate\s+[12]\s+approval\b/i,
-    /\bgate\s+[12]\s+(?:approved|passed|pending)\b/i,
-    /\bapproval\s+state\s*[:=-]\s*\S+/i,
-    /\bapproval\s+status\s*[:=-]\s*\S+/i,
-    /\bapproval\s+state\b/i,
-    /\bnothing\s+filed\b/i,
+    /\bgate\s+[12]\s*(?:[:=-]|—)\s*(?:approved|passed|pending|in\s*progress|open|completed|done|rejected|active)\b/gi,
+    /\bgate\s+[12]\s+(?:approval\s+state|approval\s+status|state|status)\b/gi,
+    /\b(?:approved|passed|pending)\s+at\s+gate\s+[12]\b/gi,
+    /\b(?:pending|awaiting)\s+gate\s+[12]\s+approval\b/gi,
+    /\bgate\s+[12]\s+(?:approved|passed|pending)\b/gi,
+    /\bapproval\s+state\s*[:=-]\s*\S+/gi,
+    /\bapproval\s+status\s*[:=-]\s*\S+/gi,
+    /\bapproval\s+state\b/gi,
+    /\bnothing\s+filed\b/gi,
   ];
 
   const designCompleteRegexes = [
-    /\bdesign\s+complete\b/i,
-    /\bdesign\s+is\s+complete\b/i,
-    /\bdesign\s+completed\b/i,
+    /\bdesign\s+complete\b/gi,
+    /\bdesign\s+is\s+complete\b/gi,
+    /\bdesign\s+completed\b/gi,
   ];
 
   const revisionNarrationRegexes = [
@@ -280,10 +285,12 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
   ];
 
   const bareDecisionLabelRegexes = [
-    /\bper\s+[DR]-\d+\b/i,
-    /\bper\s+[A-Z]-\d+\b/i,
-    /\b(?:as\s+decided\s+in|under|following|see|from)\s+[DR]-\d+\b/i,
+    /\bper\s+[DR]-\d+\b/gi,
+    /\bper\s+[A-Z]-\d+\b/gi,
+    /\b(?:as\s+decided\s+in|under|following|see|from)\s+[DR]-\d+\b/gi,
   ];
+
+  const standaloneDecisionLabelRegexes = [/\b[DR]-\d+\b/gi];
 
   const bothSurfacesHeadingRegex = /^\s*#{1,6}\s+Both surfaces\b/i;
 
@@ -375,7 +382,11 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
       // Check for standalone [DR]-\d+ in prose (not as a decision table definition row `| D-1 |` or `| R-1 |`)
       const isTableDefinitionCell = /^\s*\|\s*[DR]-\d+\s*\|/i.test(line);
       if (!isTableDefinitionCell) {
-        const standaloneMatch = firstNonExemptMatch(line, [/\b[DR]-\d+\b/], exemptRanges);
+        const standaloneMatch = firstNonExemptMatch(
+          line,
+          standaloneDecisionLabelRegexes,
+          exemptRanges,
+        );
         if (standaloneMatch) {
           violations.push({
             rule: "no-bare-decision-labels",
