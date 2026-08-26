@@ -246,3 +246,302 @@ Deno.test("skills/pr-review/SKILL.md uses ### 🟡 Suggestions heading and not A
     "skills/pr-review/SKILL.md must not contain the superseded 'Actionable Feedback & Suggestions' heading",
   );
 });
+
+Deno.test("skills/design-issue/SKILL.md contains absolute standing rule that skill never dispatches", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(
+    text,
+    '**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/work-issue`.',
+  );
+  assertStringIncludes(
+    text,
+    "| **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |",
+  );
+  assertStringIncludes(
+    text,
+    "| offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Sized for Flash High rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Sized for Flash High");
+  assertStringIncludes(
+    text,
+    "Non-epic issues default to **`Flash High`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
+  );
+  assertStringIncludes(text, "- one repo;");
+  assertStringIncludes(text, "- one layer — frontend or backend, not both;");
+  assertStringIncludes(
+    text,
+    "- roughly 600 changed lines or fewer (additions + deletions), excluding lockfiles and generated files;",
+  );
+  assertStringIncludes(text, "- no schema or data migration;");
+  assertStringIncludes(
+    text,
+    "- acceptance criteria provable by running that repo's own test / lint / build commands.",
+  );
+  assertStringIncludes(
+    text,
+    "Anything over the line is split into multiple issues, and **every split carries its dependencies** — linked natively via GitHub issue dependencies (`blocked_by`), without adding the redundant `Blocked` label.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Decision-Readiness rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Decision-Readiness Rule");
+  assertStringIncludes(
+    text,
+    "A decision is not ready to put to Josh until these conditions are met:",
+  );
+  assertStringIncludes(
+    text,
+    "1. **Exactly ONE decision per turn** — present one focused question per turn, with enough detail for Josh to decide it on its own.",
+  );
+  assertStringIncludes(
+    text,
+    "2. **The mechanism is explained** in Josh's terms before the question — every component the question turns on, described plainly, including machinery discovered mid-session that Josh has never seen.",
+  );
+  assertStringIncludes(
+    text,
+    "3. **Every option carries what it actually costs** — what happens in this session, what work it creates, what it collides with, what it risks, and what it gives up.",
+  );
+  assertStringIncludes(
+    text,
+    "4. **The recommendation comes last** — after both the mechanism and the options' costs, never instead of them and never before them.",
+  );
+  assertStringIncludes(
+    text,
+    'The test is Josh\'s reply: if it comes back as *"I need more details to decide"* or *"I am confused"*, the question was defective, and the repair belongs in the question rather than in a follow-up patching around it.',
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Edit-Reconciliation rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Edit-Reconciliation Rule");
+  assertStringIncludes(
+    text,
+    "Replacing a paragraph is not the complete edit. An edit is finished only when the text around it has been re-read and reconciled:",
+  );
+  assertStringIncludes(
+    text,
+    "- After any replacement, read the paragraph before and the paragraph after in full.",
+  );
+  assertStringIncludes(
+    text,
+    "- Confirm the passage makes each point exactly once, contains no duplicate conclusions, and still argues in one consistent direction.",
+  );
+  assertStringIncludes(
+    text,
+    "- A patch applied without reading its neighboring paragraphs is not done.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Epic or Flat rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Epic or Flat");
+  assertStringIncludes(
+    text,
+    "Propose an **epic with children** when the work spans more than one repo, needs more than three issues, or has halves proved by different kinds of evidence. Otherwise propose a **flat set**, or a single issue.",
+  );
+  assertStringIncludes(
+    text,
+    "Never propose an epic that is only a container. The heuristic test is whether there is a shared artifact the children point at (not whether the children share a cause).",
+  );
+  assertStringIncludes(
+    text,
+    "If the only thing an epic would add is a title, the plan is a flat set.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Closeable, Always rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Closeable, Always");
+  assertStringIncludes(
+    text,
+    "Every issue must be closeable. A non-epic closes when its work is done; **an epic closes when its children close.** Epics are not implementable but they are closeable when their sub-issues are done. Perpetual trackers remain banned.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Proved by Something rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Proved by Something");
+  assertStringIncludes(
+    text,
+    "The `Tests` column states what proves each issue — unit tests, a Playwright e2e spec, a full-stack run, or none — and why. The skill proposes; Josh rules per issue at GATE 2. It never silently drops coverage and never forces it.",
+  );
+  assertStringIncludes(
+    text,
+    "Regression matters as much as the new feature, and a full-stack test must be runnable locally, not only in CircleCI.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Manual Steps & Verification Pairs rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "## Manual Steps & Verification Pairs");
+  assertStringIncludes(
+    text,
+    "Every manual step handed to Josh — whether handed over interactively in chat or filed as a GitHub issue, and whether occurring before or after Gate 1 — **must always have a numbered runbook file** created at:",
+  );
+  assertStringIncludes(
+    text,
+    "~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md",
+  );
+  assertStringIncludes(
+    text,
+    "There are **no carve-outs** for steps handed over in chat rather than filed as issues, and **no carve-outs** for steps that occur before Gate 1.",
+  );
+  assertStringIncludes(
+    text,
+    "**Every manual step is a pair:**",
+  );
+  assertStringIncludes(
+    text,
+    "Manual steps never live inside an agent's execution issue.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Separate Verification Surfaces rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(
+    text,
+    "### Separate Verification Surfaces (No Composite Manual Issues)",
+  );
+  assertStringIncludes(
+    text,
+    "Manual artifact / documentation / UI inspection (e.g., verifying generated Markdown/HTML or live web UIs in Google Chrome) and live demonstration / procedure walkthroughs (e.g., executing real-world instructional steps with a learner or external party) are fundamentally distinct verification surfaces with different execution contexts, timelines, and acceptance criteria.",
+  );
+  assertStringIncludes(
+    text,
+    "- **NEVER combine artifact/doc/UI inspection and live procedure walkthroughs into a single composite `Josh` issue.**",
+  );
+  assertStringIncludes(
+    text,
+    "- They must always be planned and filed as separate, standalone `Josh` manual verification issues, each with its own distinct runbook path and close criteria.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Runbook Format Requirements rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Runbook Format Requirements");
+  assertStringIncludes(
+    text,
+    "Every runbook file must follow this exact format:",
+  );
+  assertStringIncludes(
+    text,
+    "- **Professional, role-agnostic title:** Never include personal names",
+  );
+  assertStringIncludes(
+    text,
+    '- **Sequential step numbering:** Steps must be explicitly numbered sequentially (`## STEP 1`, `## STEP 2`, ...), or against a known total ("Step 2 of 6").',
+  );
+  assertStringIncludes(
+    text,
+    "- **Detailed, literal commands:** Every shell command, script invocation, or path must be written out completely as a literal, copy-pasteable command snippet with real values/flags filled in",
+  );
+  assertStringIncludes(
+    text,
+    "- **What each step proves:** Explain explicitly what each step tests or proves.",
+  );
+  assertStringIncludes(
+    text,
+    "- **What a correct result looks like:** State clearly the exact expected output, exit status, or visible behavior confirming success.",
+  );
+  assertStringIncludes(
+    text,
+    "- **One action per step, one surface per step:** A step is ONE action/click/command per message/step",
+  );
+  assertStringIncludes(
+    text,
+    "- **Fully self-contained steps:** Each step must be self-contained — never tell the reader to scroll up or hunt for earlier content.",
+  );
+  assertStringIncludes(
+    text,
+    '- **No vague verbs:** Never use vague verbs like "paste the block in" / "set that" / "add it there".',
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Writing Style rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Writing Style");
+  assertStringIncludes(
+    text,
+    "- **The document states what the thing IS.** Present tense, design first. A reader who has never seen the conversation should be able to read it top to bottom and know what is being built.",
+  );
+  assertStringIncludes(
+    text,
+    "- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design.",
+  );
+  assertStringIncludes(
+    text,
+    "- **The document never records the skill's own process state.**",
+  );
+  assertStringIncludes(
+    text,
+    '- **Never a bare label in the body.** No "per D-7" or "R-39"; labels exist so the decision table has stable row names, and nowhere else.',
+  );
+  assertStringIncludes(
+    text,
+    "- **Josh's own words are preserved where they are load-bearing** — his ruling is the authority, and a paraphrase is weaker than his actual sentence.",
+  );
+  assertStringIncludes(
+    text,
+    "- **Explicitly identify and prove load-bearing assumptions BEFORE consolidation.**",
+  );
+  assertStringIncludes(
+    text,
+    "- **Consolidation happens BEFORE Gate 1, never after.**",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rules for Filing", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "## Which Model Runs What & Design Tiers");
+  assertStringIncludes(text, "### Design Tiers");
+  assertStringIncludes(
+    text,
+    "- **`Flash High` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.",
+  );
+  assertStringIncludes(
+    text,
+    "- **`Opus` keeps everything else:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, and any `Bug` or `Task` whose scope is arguable.",
+  );
+  assertStringIncludes(text, "### Delegation Rules for Filing");
+  assertStringIncludes(
+    text,
+    "- Filing delegates to a subagent **only when delegating moves the work down a tier**.",
+  );
+  assertStringIncludes(
+    text,
+    "- An **Opus** design session hands filing to a **Sonnet** subagent.",
+  );
+  assertStringIncludes(
+    text,
+    "- An **agy** session already running on **Flash High** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.",
+  );
+});
