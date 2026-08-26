@@ -233,9 +233,18 @@ export const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * merged argv list — `splitShellTokens` alone treats `\n` as ordinary
  * whitespace, not a command boundary.
  *
- * Shared by hooks/lib/check_irreversible_operations.ts and
- * hooks/lib/check_dangerous_git_deploy.ts — do not duplicate this in either
- * lib; import it from here.
+ * A bare `&` (background/sequencing — `cmd1 & cmd2` runs cmd1 backgrounded
+ * and cmd2 right after, two simple commands) is also a boundary, same as
+ * `;`. This is deliberately NOT applied when the `&` is part of a redirect
+ * rather than an operator: fd-duplication (`2>&1`, `>&2`, `<&3` — `&`
+ * directly follows `>`/`<`) or the bash `&>`/`&>>` stdout+stderr redirect
+ * (`&` directly precedes `>`). Those forms stay in the current segment.
+ *
+ * Shared by hooks/lib/check_irreversible_operations.ts,
+ * hooks/lib/check_dangerous_git_deploy.ts,
+ * hooks/lib/check_issue_approval_token.ts and
+ * hooks/lib/check_model_label_on_issue_create.ts — do not duplicate this in
+ * any of them; import it from here.
  */
 export function splitOnOperators(text: string): { segments: string[]; unterminated: boolean } {
   const segments: string[] = [];
@@ -300,6 +309,20 @@ export function splitOnOperators(text: string): { segments: string[]; unterminat
       continue;
     }
     if (ch === "|") {
+      flush();
+      i++;
+      continue;
+    }
+    if (ch === "&") {
+      const prevCh = i > 0 ? text[i - 1] : "";
+      const nextCh = i + 1 < n ? text[i + 1] : "";
+      if (prevCh === ">" || prevCh === "<" || nextCh === ">") {
+        // Part of a redirect (`2>&1`, `>&2`, `<&3`, `&>file`, `&>>file`),
+        // not the background/sequencing operator — keep it in the segment.
+        current += ch;
+        i++;
+        continue;
+      }
       flush();
       i++;
       continue;

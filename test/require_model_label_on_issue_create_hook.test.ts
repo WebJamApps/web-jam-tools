@@ -240,6 +240,24 @@ Deno.test("gh issue create chained after another command (&&) is still gated", a
   assertBlocked(res.stderr);
 });
 
+// --- web-jam-tools#788 review Must Fix #1: newline / bare-& segmentation ---
+
+Deno.test("gh issue create chained after another command with a NEWLINE (not &&) is still gated", async () => {
+  const res = await runHook(
+    bashCall(`echo hi\ngh issue create --title T --body B --label bug --type Task`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("gh issue create chained after another command with a bare & (not &&) is still gated", async () => {
+  const res = await runHook(
+    bashCall(`echo hi & gh issue create --title T --body B --label bug --type Task`),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
 // --- MCP surface: mcp__*__issue_write ---
 
 Deno.test("MCP issue_write create without native Type is denied", async () => {

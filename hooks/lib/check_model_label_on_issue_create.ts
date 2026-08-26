@@ -1,10 +1,16 @@
 /**
  * Helper logic for require-model-label-on-issue-create.sh (web-jam-tools#382)
+ *
+ * Command segmentation (splitting a Bash command into `&&`/`||`/`;`/`|`/
+ * newline/bare-`&`-separated simple commands) reuses splitOnOperators() from
+ * normalize_command.ts rather than a hand-rolled operator set — a
+ * hand-rolled set that doesn't understand newline or bare `&` let a
+ * multi-line or `&`-separated `gh issue create` walk straight past this
+ * guard (web-jam-tools#788 review Must Fix #1).
  */
-import { splitShellTokens } from "./normalize_command.ts";
+import { splitOnOperators, splitShellTokens } from "./normalize_command.ts";
 import { findUnresolvableIssuePointers } from "./detect_unresolvable_issue_pointers.ts";
 
-const OPERATORS = new Set(["&&", "||", ";", "|", "(", ")"]);
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 const MCP_ISSUE_WRITE_RE = /^mcp__.*__issue_write$/;
 
@@ -342,10 +348,9 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
   ) {
     const cmd = String(toolInput.command || "").trim();
     if (!cmd) return "PASS";
-    let tokens: string[];
-    try {
-      tokens = splitShellTokens(cmd);
-    } catch {
+
+    const { segments, unterminated } = splitOnOperators(cmd);
+    if (unterminated) {
       if (
         (/\bgh\b/.test(cmd) && /\bissue\b/.test(cmd) &&
           (/\bcreate\b/.test(cmd) || /\bedit\b/.test(cmd))) ||
@@ -356,17 +361,8 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
       return "PASS";
     }
 
-    const simpleCommands: string[][] = [[]];
-    for (const tok of tokens) {
-      if (OPERATORS.has(tok)) {
-        simpleCommands.push([]);
-      } else {
-        simpleCommands[simpleCommands.length - 1].push(tok);
-      }
-    }
-
-    for (const sc of simpleCommands) {
-      const scTokens = stripLeadingAssignments(sc);
+    for (const segment of segments) {
+      const scTokens = stripLeadingAssignments(splitShellTokens(segment));
       const createArgs = findGhIssueCreateArgs(scTokens) ?? findCreateIssueScriptArgs(scTokens);
       if (createArgs !== null) {
         const typeVal = extractTypeValue(createArgs);

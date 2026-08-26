@@ -381,7 +381,7 @@ function bashCall(command: string, sessionId = "session-A"): Record<string, unkn
   return { session_id: sessionId, tool_name: "Bash", tool_input: { command } };
 }
 
-Deno.test("Bash gh issue create with an approved title in this session's token is ALLOWED", async () => {
+Deno.test("Bash gh issue create with an approved title and --repo is silently passed through (never allow on Bash)", async () => {
   await withTokenFile(
     {
       session_id: "session-A",
@@ -391,10 +391,15 @@ Deno.test("Bash gh issue create with an approved title in this session's token i
     },
     async (tokenPath) => {
       const res = await runHook(
-        bashCall(`gh issue create --title "Fix the flux capacitor" --body B --type Task`),
+        bashCall(
+          `gh issue create --repo WebJamApps/web-jam-tools --title "Fix the flux capacitor" --body B --type Task`,
+        ),
         tokenPath,
       );
-      assertAllow(res, "Fix the flux capacitor");
+      // web-jam-tools#788 review Must Fix #2: Bash never gets `allow` — an
+      // approved, correctly-scoped title resolves to silent PASS so the
+      // settings permission layer still evaluates the whole call.
+      assertPass(res);
     },
   );
 });
@@ -454,7 +459,7 @@ Deno.test("Bash gh issue create with no --title at all is DENIED (fail closed)",
   });
 });
 
-Deno.test("Bash deno task create-issue with an approved title is ALLOWED", async () => {
+Deno.test("Bash deno task create-issue with an approved title is silently passed through (never allow on Bash)", async () => {
   await withTokenFile(
     {
       session_id: "session-A",
@@ -469,7 +474,7 @@ Deno.test("Bash deno task create-issue with an approved title is ALLOWED", async
         ),
         tokenPath,
       );
-      assertAllow(res, "Fix the flux capacitor");
+      assertPass(res);
     },
   );
 });
@@ -486,7 +491,7 @@ Deno.test("Bash deno task create-issue with NO token file at all is DENIED (AC4)
   });
 });
 
-Deno.test("Bash direct scripts/create-issue.ts invocation with an approved title is ALLOWED", async () => {
+Deno.test("Bash direct scripts/create-issue.ts invocation with an approved title is silently passed through (never allow on Bash)", async () => {
   await withTokenFile(
     {
       session_id: "session-A",
@@ -501,7 +506,7 @@ Deno.test("Bash direct scripts/create-issue.ts invocation with an approved title
         ),
         tokenPath,
       );
-      assertAllow(res, "Fix the flux capacitor");
+      assertPass(res);
     },
   );
 });
@@ -539,6 +544,86 @@ Deno.test("Bash gh issue create chained after another command (&&) is still gate
     );
     assertDeny(res);
   });
+});
+
+// --- web-jam-tools#788 review Must Fix #1: newline / bare-& segmentation ---
+
+Deno.test("Bash gh issue create chained after another command with a NEWLINE (not &&) is still gated", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(`echo hi\ngh issue create --title "Untokenized test title" --body B --type Task`),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
+Deno.test("Bash gh issue create chained after another command with a bare & (not &&) is still gated", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(`echo hi & gh issue create --title "Untokenized test title" --body B --type Task`),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
+// --- web-jam-tools#788 review Must Fix #2: no `allow` on Bash for a composed call ---
+
+Deno.test("Bash gh issue create with an approved title chained with an unrelated dangerous command does NOT allow", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Approved title"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(
+          `gh issue create --repo WebJamApps/web-jam-tools --title "Approved title" --body B --type Task && git push origin --delete some-branch`,
+        ),
+        tokenPath,
+      );
+      assertEquals(res.code, 0, res.stderr);
+      const stdout = res.stdout.trim();
+      if (stdout) {
+        const parsed = JSON.parse(stdout);
+        assertEquals(
+          parsed.hookSpecificOutput?.permissionDecision === "allow",
+          false,
+        );
+      }
+      // No output at all (silent pass) is the correct, safe outcome here —
+      // it means the settings permission layer still evaluates the
+      // `git push origin --delete` segment untouched.
+    },
+  );
+});
+
+// --- web-jam-tools#788 review Must Fix #3: gh issue create with no --repo ---
+
+Deno.test("Bash gh issue create with NO --repo is NOT silently treated as web-jam-tools (fails closed)", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(`gh issue create --title "Fix the flux capacitor" --body B --type Task`),
+        tokenPath,
+      );
+      // Even though the token covers WebJamApps/web-jam-tools and the
+      // title is approved, `gh issue create` with no --repo resolves the
+      // target repo from the shell's cwd, not a fixed default — this must
+      // never be silently assumed to be web-jam-tools. It must NOT be
+      // "allow", and it should be denied (fail closed) rather than passed.
+      assertDeny(res);
+    },
+  );
 });
 
 Deno.test("invalid JSON on stdin passes through (nothing this hook can act on)", async () => {
