@@ -152,10 +152,10 @@ PRE_TOOL_USE_HOOKS=(
   "Bash|Edit|Write::block-human-only-credentials.sh"
   "Edit|Write::feature-branch-guard.sh"
   "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
-  "mcp__.*__issue_write::require-model-label-on-issue-create.sh"
+  "Bash|mcp__.*__issue_write::require-model-label-on-issue-create.sh"
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
   "Write|Edit|NotebookEdit::opus-delegation-gate.sh"
-  "mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
+  "Bash|mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
   "Bash::block-raw-gh-write.sh"
 )
 

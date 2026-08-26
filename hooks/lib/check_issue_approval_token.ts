@@ -1,8 +1,11 @@
 /**
- * Helper logic for require-approval-token-on-issue-write.sh (web-jam-tools#502).
+ * Helper logic for require-approval-token-on-issue-write.sh (web-jam-tools#502,
+ * extended to the Bash filing path by web-jam-tools#747).
  *
- * Reads a PreToolUse payload for an `issue_write` or `sub_issue_write` MCP
- * call and decides whether Josh's plan-gate approval already covers it.
+ * Reads a PreToolUse payload and decides whether Josh's plan-gate approval
+ * already covers the issue-filing call it describes — either an
+ * `issue_write` / `sub_issue_write` MCP call, or a Bash `gh issue create` /
+ * `deno task create-issue` (and its other invocation forms) call.
  *
  * The approval token is written by the plan gate (web-jam-tools#497, not
  * this change) once Josh approves a filing plan. Its shape:
@@ -26,15 +29,40 @@
  *     already-created issue, so the token's presence/scope is all there is
  *     to verify).
  *   - sub_issue_write, method other than "add" (remove/reprioritize)     -> PASS.
+ *   - Bash `gh issue create` / `deno task create-issue` / `deno task
+ *     issue:create` / `deno run .../create-issue.ts` / direct
+ *     `scripts/create-issue.ts`, title in the token, same session, same
+ *     repo, not expired -> ALLOW.
+ *   - Bash issue-creating command, any of the above false, or no --title
+ *     given at all -> DENY (web-jam-tools#747: this is the Bash-path hole —
+ *     dropping to a shell must not walk around the gate that
+ *     mcp__*__issue_write already enforces).
+ *   - Bash `gh issue edit` or any other Bash command                     -> PASS
+ *     (edits are out of scope, same as issue_write's "update"/"edit"; an
+ *     unrelated command is untouched).
  *   - any other tool                                                    -> PASS.
  *
  * PASS means "this hook has no opinion" — the normal permission flow (the
  * standing `ask` rule) still applies. Only ALLOW silences the prompt, and
  * only for a title Josh already approved.
+ *
+ * Bash command parsing reuses the shell-tokenizing and issue-creating-command
+ * detection already built for hooks/lib/check_model_label_on_issue_create.ts
+ * (web-jam-tools#382/#553) rather than re-implementing it — same repo, same
+ * question ("is this argv shape an issue-creating call, and what are its
+ * args"), so it lives in one place.
  */
+
+import {
+  findCreateIssueScriptArgs,
+  findGhIssueCreateArgs,
+  stripLeadingAssignments,
+} from "./check_model_label_on_issue_create.ts";
+import { splitShellTokens } from "./normalize_command.ts";
 
 const ISSUE_WRITE_RE = /^mcp__.*__issue_write$/;
 const SUB_ISSUE_WRITE_RE = /^mcp__.*__sub_issue_write$/;
+const BASH_OPERATORS = new Set(["&&", "||", ";", "|", "(", ")"]);
 
 export interface ApprovalToken {
   session_id: string;
@@ -96,9 +124,41 @@ function repoFullName(toolInput: Record<string, unknown>): string {
   return owner && repo ? `${owner}/${repo}` : "";
 }
 
+/** `--repo`/`-R` value from a Bash gh/create-issue argv, normalized to "owner/name" (defaults to WebJamApps/<name>, or WebJamApps/web-jam-tools if omitted entirely) — same convention as normalizeRepo() in src/create-issue/lib.ts, duplicated here rather than imported so this hook stays independent of src/. */
+function extractBashRepoFull(args: string[]): string {
+  let raw: string | null = null;
+  for (let j = 0; j < args.length; j++) {
+    const a = args[j];
+    if (a === "--repo" || a === "-R") {
+      if (j + 1 < args.length) raw = args[j + 1];
+      break;
+    }
+    if (a.startsWith("--repo=")) {
+      raw = a.slice("--repo=".length);
+      break;
+    }
+  }
+  if (!raw) return "WebJamApps/web-jam-tools";
+  return raw.includes("/") ? raw : `WebJamApps/${raw}`;
+}
+
+/** `--title` value from a Bash gh/create-issue argv. No `-t` alias: this repo's own convention (see check_model_label_on_issue_create.ts's extractTypeValue and src/create-issue/lib.ts's parseArgs) already reassigns `-t` to mean `--type`. */
+function extractBashTitle(args: string[]): string | null {
+  for (let j = 0; j < args.length; j++) {
+    const a = args[j];
+    if (a === "--title") {
+      return j + 1 < args.length ? args[j + 1] : null;
+    }
+    if (a.startsWith("--title=")) {
+      return a.slice("--title=".length);
+    }
+  }
+  return null;
+}
+
 /** Loads and validates the token against session/expiry/repo. Returns a deny Decision on any failure, or null if the token is good to use. */
 function checkTokenValidity(
-  toolInput: Record<string, unknown>,
+  repoFull: string,
   sessionId: string,
   tokenPath: string,
   nowMs: number,
@@ -126,7 +186,6 @@ function checkTokenValidity(
       deny: { outcome: "deny", reason: `Approval token expired at ${token.expires_at}.` },
     };
   }
-  const repoFull = repoFullName(toolInput);
   if (repoFull && token.repo !== repoFull) {
     return {
       deny: {
@@ -138,6 +197,65 @@ function checkTokenValidity(
   return { token };
 }
 
+/**
+ * Bash-path counterpart of the issue_write "create" branch above
+ * (web-jam-tools#747): finds an issue-creating command (`gh issue create`,
+ * `deno task create-issue`/`issue:create`, `deno run .../create-issue.ts`,
+ * or a direct `scripts/create-issue.ts` invocation) among the command's
+ * `&&`/`||`/`;`/`|`-separated simple commands, and applies the same
+ * session/repo/expiry/title checks as the MCP path. A command with no
+ * issue-creating segment at all is PASS, untouched.
+ */
+function decideBash(
+  command: string,
+  sessionId: string,
+  tokenPath: string,
+  nowMs: number,
+): Decision {
+  let tokens: string[];
+  try {
+    tokens = splitShellTokens(command);
+  } catch {
+    return { outcome: "pass" };
+  }
+
+  const simpleCommands: string[][] = [[]];
+  for (const tok of tokens) {
+    if (BASH_OPERATORS.has(tok)) {
+      simpleCommands.push([]);
+    } else {
+      simpleCommands[simpleCommands.length - 1].push(tok);
+    }
+  }
+
+  for (const sc of simpleCommands) {
+    const scTokens = stripLeadingAssignments(sc);
+    const createArgs = findGhIssueCreateArgs(scTokens) ?? findCreateIssueScriptArgs(scTokens);
+    if (createArgs === null) continue;
+
+    const title = extractBashTitle(createArgs)?.trim() ?? "";
+    if (!title) {
+      return {
+        outcome: "deny",
+        reason:
+          "This issue-creating command carries no --title to check against the approved plan.",
+      };
+    }
+    const repoFull = extractBashRepoFull(createArgs);
+    const check = checkTokenValidity(repoFull, sessionId, tokenPath, nowMs);
+    if ("deny" in check) return check.deny;
+    if (!check.token.titles.includes(title)) {
+      return {
+        outcome: "deny",
+        reason: `"${title}" is not among the titles Josh approved in this session's plan.`,
+      };
+    }
+    return { outcome: "allow", reason: `"${title}" was approved in this session's plan.` };
+  }
+
+  return { outcome: "pass" };
+}
+
 export function decide(
   toolName: string,
   toolInput: Record<string, unknown>,
@@ -145,6 +263,12 @@ export function decide(
   tokenPath: string,
   nowMs: number,
 ): Decision {
+  if (toolName === "Bash") {
+    const command = typeof toolInput.command === "string" ? toolInput.command : "";
+    if (!command.trim()) return { outcome: "pass" };
+    return decideBash(command, sessionId, tokenPath, nowMs);
+  }
+
   if (ISSUE_WRITE_RE.test(toolName)) {
     const method = typeof toolInput.method === "string" ? toolInput.method : "";
     if (method !== "create") {
@@ -157,7 +281,7 @@ export function decide(
         reason: "issue_write create call carries no title to check against the approved plan.",
       };
     }
-    const check = checkTokenValidity(toolInput, sessionId, tokenPath, nowMs);
+    const check = checkTokenValidity(repoFullName(toolInput), sessionId, tokenPath, nowMs);
     if ("deny" in check) return check.deny;
     if (!check.token.titles.includes(title)) {
       return {
@@ -173,7 +297,7 @@ export function decide(
     if (method !== "add") {
       return { outcome: "pass" };
     }
-    const check = checkTokenValidity(toolInput, sessionId, tokenPath, nowMs);
+    const check = checkTokenValidity(repoFullName(toolInput), sessionId, tokenPath, nowMs);
     if ("deny" in check) return check.deny;
     return {
       outcome: "allow",

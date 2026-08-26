@@ -1,4 +1,5 @@
 // require_approval_token_on_issue_write_hook.test.ts — web-jam-tools#502
+// (extended to the Bash filing path by web-jam-tools#747)
 //
 // Exercises hooks/require-approval-token-on-issue-write.sh end-to-end by
 // shelling out to it (Deno.Command) with mocked PreToolUse JSON on stdin —
@@ -8,14 +9,15 @@
 //
 // The hook reads the approval token written by the plan gate (web-jam-tools#497,
 // not this change) at the path named by ISSUE_APPROVAL_TOKEN_PATH, and decides
-// whether a pending mcp__*__issue_write / mcp__*__sub_issue_write call is one
-// Josh already approved:
+// whether a pending mcp__*__issue_write / mcp__*__sub_issue_write call, OR a
+// Bash `gh issue create` / `deno task create-issue` call, is one Josh already
+// approved:
 //   - approved title, same session, same repo, not expired -> ALLOW (no prompt)
 //   - anything else (unapproved title / missing / other-session / expired /
 //     wrong-repo token)                                     -> DENY (never queried)
-//   - issue_write method other than "create", or sub_issue_write method
-//     other than "add", or an unrelated tool                -> PASS (untouched,
-//     the standing `ask` rule still applies)
+//   - issue_write method other than "create", sub_issue_write method other
+//     than "add", Bash `gh issue edit`, or an unrelated command/tool -> PASS
+//     (untouched, the standing `ask` rule still applies)
 
 import { assertEquals } from "@std/assert";
 
@@ -370,6 +372,172 @@ Deno.test("a Bash tool call passes through untouched", async () => {
       tokenPath,
     );
     assertPass(res);
+  });
+});
+
+// --- Bash surface: gh issue create / deno task create-issue (web-jam-tools#747) ---
+
+function bashCall(command: string, sessionId = "session-A"): Record<string, unknown> {
+  return { session_id: sessionId, tool_name: "Bash", tool_input: { command } };
+}
+
+Deno.test("Bash gh issue create with an approved title in this session's token is ALLOWED", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(`gh issue create --title "Fix the flux capacitor" --body B --type Task`),
+        tokenPath,
+      );
+      assertAllow(res, "Fix the flux capacitor");
+    },
+  );
+});
+
+Deno.test("Bash gh issue create with NO token file at all is DENIED (AC3)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(`gh issue create --title "Untokenized test title" --body B --type Task`),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
+Deno.test("Bash gh issue create with a title NOT in the token is DENIED", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(`gh issue create --title "An issue nobody approved" --body B --type Task`),
+        tokenPath,
+      );
+      assertDeny(res);
+    },
+  );
+});
+
+Deno.test("Bash gh issue create with --repo pointing at a different repo than the token is DENIED", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/JaMmusic",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(
+          `gh issue create --repo WebJamApps/web-jam-tools --title "Fix the flux capacitor" --body B --type Task`,
+        ),
+        tokenPath,
+      );
+      assertDeny(res);
+    },
+  );
+});
+
+Deno.test("Bash gh issue create with no --title at all is DENIED (fail closed)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(bashCall(`gh issue create --body B --type Task`), tokenPath);
+    assertDeny(res);
+  });
+});
+
+Deno.test("Bash deno task create-issue with an approved title is ALLOWED", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(
+          `deno task create-issue --title "Fix the flux capacitor" --body-file /tmp/b.md --type Task --label "Flash High"`,
+        ),
+        tokenPath,
+      );
+      assertAllow(res, "Fix the flux capacitor");
+    },
+  );
+});
+
+Deno.test("Bash deno task create-issue with NO token file at all is DENIED (AC4)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `deno task create-issue --title "Untokenized test title" --body-file /tmp/b.md --type Task --label Haiku`,
+      ),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
+Deno.test("Bash direct scripts/create-issue.ts invocation with an approved title is ALLOWED", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(
+          `scripts/create-issue.ts --title "Fix the flux capacitor" --body-file /tmp/b.md --type Task --label Haiku`,
+        ),
+        tokenPath,
+      );
+      assertAllow(res, "Fix the flux capacitor");
+    },
+  );
+});
+
+Deno.test("Bash gh issue edit (not create) passes through untouched even with no token", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(bashCall(`gh issue edit 5 --add-label bug`), tokenPath);
+    assertPass(res);
+  });
+});
+
+Deno.test("Bash gh issue create with a token from ANOTHER session does not apply and is DENIED", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-OTHER",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(`gh issue create --title "Fix the flux capacitor" --body B --type Task`),
+        tokenPath,
+      );
+      assertDeny(res);
+    },
+  );
+});
+
+Deno.test("Bash gh issue create chained after another command (&&) is still gated", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(`echo hi && gh issue create --title "Untokenized test title" --body B --type Task`),
+      tokenPath,
+    );
+    assertDeny(res);
   });
 });
 
