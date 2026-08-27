@@ -22,6 +22,8 @@ Design work does not happen in plain chat. The moment a conversation turns into 
 
 With no argument, the skill scans all 8 active repos for open issues labeled `Needs Design` and offers them as candidates. Josh picks; the skill never picks for him.
 
+**A target issue's body is read before anything else, and what it says is scope.** When the skill is invoked on a named issue, reading that issue's body in full is its first act — before the epic check, before the label checks, before its children are enumerated. Any directive there enters the run's scope and appears as a row in the Gate 2 plan table, where removing it costs Josh one word. Because nothing is written to GitHub before Gate 2, including named scope is free and reversible, so the skill never argues for exclusion and never requires a second ask. The document's verbatim appendix carries the target issue's directive lines, and the checker fails a document that names a target issue while carrying none — a rule to read the body is unfalsifiable, whereas a document that must quote what the body said either quotes it or fails.
+
 1. **Establish the theme and milestone.** `<Theme>` matches the GitHub milestone — read the live milestone list, never assume a fixed set. **Resume rather than restart:** Before creating a design document, look in the theme folder for an existing `<topic>-design-*.md` and continue from its decision record; a run that wants a fresh document says so. Otherwise create the design document at `~/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.md`, creating the theme folder if the milestone has none yet.
 2. **Record what Josh asked for verbatim**, and the existing ground the work sits on.
 3. **Put every decision to Josh one at a time** — applying the Decision-Readiness rule below — and write his answer into the document as he gives it, never batched at the end. An item is decided only when he rules on THAT item by name.
@@ -167,6 +169,10 @@ These are properties of the skill, written as explicit refusals:
 Everything this skill designs works on both Claude Code and agy/Antigravity. A mechanism fails this rule when it depends on something only one surface has: a Claude Code hook, because agy-native hooks do not fire; Claude Code's memory directory, which agy does not have; or an `mcp__*` tool. The surface-neutral paths are this repository's `deno task` entries, the `gh` CLI, and CI. Where a mechanism cannot be made surface-neutral, the skill says so plainly and stops for discussion, rather than designing a one-surface mechanism and calling it done.
 
 **Every design document carries a `## Both surfaces` section**, stating for each mechanism it designs how that mechanism works on each surface. `deno task design:lint-doc` fails a document that omits it.
+
+### Installing is for Structure, Never for Content
+
+**Installing is for structure, never for content.** Skill bodies and hook scripts are symlinked into the canonical clone, and agy invokes those same Claude Code symlinks through `agy-hook-shim.sh` while symlinking the same skill sources into its own plugin directory. One set of files serves both surfaces. A content change to an existing skill or hook is therefore live on both the moment the canonical clone is on the merged commit, and the both-surfaces acceptance criterion for such a change asserts only that those symlinks still resolve into the clone — the failure that has actually occurred, when they were repointed into a temporary directory. The installers exist for the two things a symlink cannot carry: a link that does not exist yet, and a registration entry. A new, renamed or deleted skill runs the skill installer. A new or deleted hook, or an existing hook whose event or matcher changed, runs the hook installer, which re-merges the repository's entries into the two settings files — merge targets holding Josh's own settings beside the repository's, and so not themselves symlinkable. Both run from the canonical clone, never from a worktree, which the installer's own path validation enforces.
 
 ---
 
@@ -323,7 +329,7 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 - **The document never records the skill's own process state.** That describes where the `/design-issue` run has got to, not the system being designed; that state lives in the conversation and in the issues the run produces, per the phrasings ruled out under "What It Refuses to Do" above.
 - **Never a bare label in the body.** No "per D-7" or "R-39"; labels exist so the decision table has stable row names, and nowhere else.
 - **Josh's own words are preserved where they are load-bearing** — his ruling is the authority, and a paraphrase is weaker than his actual sentence.
-- **Explicitly identify and prove load-bearing assumptions BEFORE consolidation.** A load-bearing assumption is one where, if false, the design does not work. The design run must explicitly identify every load-bearing assumption and prove each one before consolidation — not record it as a caveat. Where an assumption cannot be proved, the design must be presented as CONTINGENT and explicitly not approvable — naming the proof that would settle it and what happens to the design under each outcome — never presented as ready for Gate 1 approval. Where the proof requires implementation work to obtain, the skill requires that proof be sequenced FIRST in the plan, never left to a late acceptance criterion whose failure would invalidate everything already built on it.
+- **A design document proves its own premises, and the gate will not open without them.** Every design document carries a `## Load-bearing premises` section: one row per premise the design depends on, naming what was checked and what it showed. The document checker fails a document that omits the section, and fails any row whose proof is empty or hedged. Gate 1's presentation states that every row in that table is proven, so a hedge moved out of the document and into the conversation stands beside a table that contradicts it. The gate task refuses to render or open a document whose checker run does not pass, so the checker cannot be bypassed by invoking the gate directly. A premise that cannot be proved does not become a caveat: either the mechanism resting on it leaves the design, or the work that would settle it is sequenced first and the mechanism is designed after it reports.
 - **Consolidation happens BEFORE Gate 1, never after.** During the conversation the document accretes as decisions are made. Before GATE 1 the skill rewrites it into design-first shape. Josh never reviews a working draft.
 - **Pre-Gate-1 test:** a reader who has never seen the conversation must not be able to tell, from the body, that the design ever said anything different, or that any approval workflow exists.
 - **Every design document carries a `## Both surfaces` section**, stating for each mechanism it designs how that mechanism works on each surface (Claude Code and agy/Antigravity). `deno task design:lint-doc` fails a document that omits it.
@@ -334,8 +340,9 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 3. The gates, and what the thing refuses to do.
 4. The rules that shape its output.
 5. Both surfaces — stating for each mechanism how it works on Claude Code and agy/Antigravity.
-6. Where things live; what stays out of scope.
-7. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
+6. Load-bearing premises — proving every premise the design depends on.
+7. Where things live; what stays out of scope.
+8. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
 
 ---
 
