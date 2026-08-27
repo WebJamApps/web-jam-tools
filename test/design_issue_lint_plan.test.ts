@@ -108,6 +108,33 @@ Deno.test("AC2: a model tier absent from labels.yaml is reported, including case
   }
 });
 
+Deno.test("resolveTierVocabulary: a schema that resolves to zero tiers throws rather than skipping validation", () => {
+  const degradedSchema: Schema = {
+    repoClasses: { frontend: [], other: [] },
+    keep: {},
+    milestoneTopics: [],
+    labels: [{ name: "Needs Design", hex: "000000", repos: "all" }],
+  };
+  const doc = planTableDoc([EPIC_ROW, childRow({ tier: "Sonnet" })]);
+  const parsed = parsePlanTable(doc);
+  if (parsed === null) throw new Error("test fixture has no plan table");
+  let threw = false;
+  try {
+    validatePlanTable(parsed, { schema: degradedSchema, activeRepos: ACTIVE_REPOS });
+  } catch {
+    threw = true;
+  }
+  assertEquals(threw, true, "expected an empty resolved vocabulary to throw, not skip");
+});
+
+Deno.test("validatePlanTable: an omitted schema skips tier validation entirely (no throw)", () => {
+  const doc = planTableDoc([EPIC_ROW, childRow({ tier: "NotARealTier" })]);
+  const parsed = parsePlanTable(doc);
+  if (parsed === null) throw new Error("test fixture has no plan table");
+  const violations = validatePlanTable(parsed, { activeRepos: ACTIVE_REPOS });
+  assertEquals(findRule(violations, "tier-unknown").length, 0);
+});
+
 // --- 3. Markdown-wrapped tier still validates ---
 
 Deno.test("AC3: a tier wrapped in backticks or bold still validates correctly", () => {
@@ -262,8 +289,23 @@ Deno.test('AC10 (properly cited case): a cross-repo child cited as repo#number "
 
 // --- 11. Tests cell with no statement of what proves the issue ---
 
-Deno.test('AC11: a Tests cell saying only "yes" or "tests" is reported', () => {
-  for (const tests of ["yes", "Yes", "tests", "Tests"]) {
+Deno.test("AC11: a Tests cell naming only a testing kind, not what it proves, is reported", () => {
+  for (
+    const tests of [
+      "yes",
+      "Yes",
+      "tests",
+      "Tests",
+      "y",
+      "Y",
+      "test",
+      "unit tests",
+      "Unit Tests",
+      "unit test",
+      "covered",
+      "Covered",
+    ]
+  ) {
     const doc = planTableDoc([EPIC_ROW, childRow({ tests })]);
     const violations = findRule(validate(doc), "tests-insufficient");
     assertEquals(violations.length, 1, `expected tests-insufficient violation for "${tests}"`);

@@ -51,7 +51,11 @@ export interface LintPlanResult {
 }
 
 export interface LintPlanOptions {
-  /** Canonical model-tier vocabulary source. Defaults to loading `labels.yaml`. */
+  /** Canonical model-tier vocabulary source. `lintPlanTableFile` defaults this to loading
+   * `labels.yaml` when omitted; `validatePlanTable` instead treats an omitted schema as an
+   * explicit opt-out that skips tier validation entirely. A schema that IS provided but yields
+   * an empty vocabulary is treated as a degraded `labels.yaml` and throws (see
+   * `resolveTierVocabulary`), rather than silently passing every tier. */
   schema?: Schema;
   /** Canonical active-repo vocabulary. Defaults to `ACTIVE_REPOS`. */
   activeRepos?: readonly string[];
@@ -64,6 +68,7 @@ const COL_TIER = PLAN_TABLE_HEADER.indexOf("Model tier");
 const COL_PRIORITY = PLAN_TABLE_HEADER.indexOf("Priority");
 const COL_REPO = PLAN_TABLE_HEADER.indexOf("Repo");
 const COL_TESTS = PLAN_TABLE_HEADER.indexOf("Tests");
+const COL_CLOSES = PLAN_TABLE_HEADER.indexOf("Closes when");
 
 /** The native GitHub Priority field's four levels (`src/flash-issues/types.ts`'s `Priority` type,
  * `PRIORITY_MAP` in `src/create-issue/lib.ts`). Not read from a config file at runtime -- there is
@@ -87,6 +92,21 @@ function isMissingValue(cell: string): boolean {
 function stripMdMarkers(cell: string): string {
   return cell.replace(/[`*_]/g, "").trim();
 }
+
+/** Exact (post-trim, post-lowercase) `Tests` cell values that name a testing *kind* rather than
+ * saying what proves the issue -- e.g. "unit tests" restates the acceptance criterion's own
+ * wording without saying what those tests assert. Substring matching is deliberately avoided so
+ * a genuine sentence containing one of these words (e.g. "Unit tests assert each validator rule
+ * fires on its fixture") is not falsely flagged. */
+const TESTS_INSUFFICIENT_VALUES = new Set([
+  "yes",
+  "tests",
+  "y",
+  "test",
+  "unit tests",
+  "unit test",
+  "covered",
+]);
 
 const PERSONAL_NAME_PREFIX = /^josh\s*[-:—]\s?/i;
 
@@ -178,7 +198,15 @@ function resolveTierVocabulary(schema: Schema | undefined): string[] {
   if (!schema) return [];
   const tiers = computeModelLabels(schema);
   const joshLabel = schema.labels.find((l) => l.name === "Josh");
-  return joshLabel ? [...tiers, joshLabel.name] : tiers;
+  const vocabulary = joshLabel ? [...tiers, joshLabel.name] : tiers;
+  if (vocabulary.length === 0) {
+    throw new Error(
+      "resolveTierVocabulary: schema was provided but produced an empty model-tier " +
+        'vocabulary -- labels.yaml is degraded (no modelTier entries and no "Josh" label). ' +
+        "Refusing to silently skip tier validation.",
+    );
+  }
+  return vocabulary;
 }
 
 function checkMissingAndTier(
@@ -268,7 +296,7 @@ function checkTests(row: PlanTableRow, violations: PlanTableViolation[]): void {
     return;
   }
   const tests = stripMdMarkers(raw).toLowerCase();
-  if (tests === "yes" || tests === "tests") {
+  if (TESTS_INSUFFICIENT_VALUES.has(tests)) {
     violations.push({
       rule: "tests-insufficient",
       line: row.line,
@@ -318,7 +346,7 @@ function checkJoshPairingAndComposite(
       });
     }
 
-    const combinedText = `${row.cells[COL_TITLE]} ${row.cells[row.cells.length - 1]}`;
+    const combinedText = `${row.cells[COL_TITLE]} ${row.cells[COL_CLOSES]}`;
     const hasReview = REVIEW_KEYWORDS.some((re) => re.test(combinedText));
     const hasWalkthrough = WALKTHROUGH_KEYWORDS.some((re) => re.test(combinedText));
     if (hasReview && hasWalkthrough) {
