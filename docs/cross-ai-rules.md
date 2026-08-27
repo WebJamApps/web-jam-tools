@@ -117,7 +117,31 @@ skill.
   message (the "want me to do X?" offer, written after the careful part), so re-read the finished
   message and check every `#` before sending. Josh has asked for this five times (2026-07-24 →
   2026-07-29); he reads these on a phone with many numbers in flight and a bare number costs him a
-  lookup every time.
+  lookup every time. **This rule has exactly one carve-out — the literal `Closes`/`Fixes`/`Resolves`
+  line in a PR body — see "THE CLOSES/FIXES/RESOLVES LINE IS SYNTAX, NOT PROSE" below.**
+- **THE CLOSES/FIXES/RESOLVES LINE IS SYNTAX, NOT PROSE — NEVER APPLY THE CITATION FORMAT TO IT.**
+  The one line in a PR body that carries a literal `Closes`, `Fixes`, or `Resolves` keyword is
+  read by GitHub's auto-close parser, not by Josh, and that parser recognizes only a bare `#N`
+  (same-repo) or `owner/repo#N` (cross-repo) immediately after the keyword — nothing else attached:
+  no repo-without-owner prefix, no trailing title text.
+
+  Correct: `Closes #784`
+  Incorrect: `Closes web-jam-tools#784 "some title"`
+
+  The incorrect form silently fails: GitHub does not recognize `web-jam-tools#784` (repo name
+  without the `owner/` prefix) or anything trailing the issue reference as part of the closing
+  keyword's target, so the issue never auto-closes even though the PR merges clean and the line
+  reads as if it should have worked. This carve-out is scoped to that one line only — every OTHER
+  issue/PR mention in the same PR body (a "why" section, a "related to" note, a comment) still
+  follows the full `repo#number "title"` citation rule above.
+
+  Origin: web-jam-tools#805 "PR body Closes line silently fails to auto-close when reformatted to
+  citation style" — a Sonnet subagent fixing PR review findings on `web-jam-tools#800 "Stop
+  design:lint-doc flagging a banned phrase that a document is quoting rather than using"` used
+  `gh pr edit` to reformat that PR's `Closes` line to `Closes web-jam-tools#797 "Stop
+  design:lint-doc flagging a banned phrase that a document is quoting rather than using"` in the
+  course of applying the citation rule to the whole body. `web-jam-tools#797` stayed OPEN after
+  PR#800 merged and had to be closed by hand.
 - **NO AGENT CONNECTS A NEW ACCOUNT, CREDENTIAL, OR MCP SERVER WITHOUT AUTHORIZATION:** No agent
   adds a connector, account, credential, or MCP server to any Claude or Flash surface without Josh's
   explicit authorization naming it. Discovering that something _could_ be connected is never
