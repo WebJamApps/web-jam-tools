@@ -51,8 +51,35 @@ that's what following this skill prevents.
     - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
     - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
       delete-protection only, per `skills/fix-labels/labels.yaml`).
+
+   **Tier is not a function of diff size.** The bullets above describe the *kind* of thinking a
+   task needs, not how many files it touches. A one-file, twenty-line change can be `Opus` work,
+   and a ten-file change can be `Flash High` work. Before settling on a tier, ask what the task
+   would **fail** on rather than how big it is. If the hard part is any of these, it is `Opus`
+   work however small the diff:
+    - **Coherence across a long document** — the change must stay consistent with rules stated
+      elsewhere in the same artifact, and a contradiction is the defect.
+    - **Adversarial correctness** — a guard, permission gate, parser, or matcher where a subtle
+      miss fails *silently and open* rather than loudly.
+    - **Alignment against a requirements document** — the artifact must agree with a spec that
+      lives somewhere else.
+
+   Both worked examples started small and grew: web-jam-tools#747 "Enforce the Gate 2 approval
+   token on every filing path, not only the GitHub MCP one" looked like a guard/hook tweak at
+   filing time but took three review rounds, each finding a real bypass; web-jam-tools#789
+   "pr-review posts the content review immediately, then checks/polls CircleCI after, with two
+   follow-up posts" was one markdown file but likewise took three review rounds — seven internal
+   contradictions, then a leaked pre-post CircleCI fetch, then an invalid `gh` selector.
+
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
-   still pick one label, since the hook requires exactly one.
+   still pick one label, since the hook requires exactly one. **`Sonnet` and `Opus` require an
+   explicit escalation reason** — `--escalation-reason` on the CLI, `escalation_reason` in the
+   MCP `issue_write` input — before `hooks/lib/check_model_label_on_issue_create.ts`
+   (`ESCALATION_LABELS`, web-jam-tools#709 "Guard denies issue-create carrying Sonnet/Opus model
+   label without an explicit escalation justification") lets the create through. The hook only
+   checks that the field is non-empty and deliberately never judges what it says, so the reason
+   must do the work the hook can't: say **why the tier above the one you chose is not needed**,
+   not merely why the chosen tier is plausible.
 3. **Draft acceptance criteria that let the issue CLOSE (Epics close when children close).**
    Concrete, checkable conditions — not a standing tracker that never resolves. A non-epic closes
    when its work is done; **an epic closes when its children close** (epics are not implementable
@@ -145,6 +172,12 @@ deno task create-issue \
 - Require native type (`Task`, `Bug`, `Feature`, `Epic`) via `scripts/create-issue.ts --type <Type>` or GitHub MCP `issue_write` (`"type": "<Type>"`).
 - Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
 - Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
+- For `Sonnet` or `Opus`, also supply `--escalation-reason "<why the tier above is not needed>"`
+  (CLI) or `escalation_reason: "<...>"` (MCP `issue_write`) — `deno task create-issue` and the
+  hook both deny the create without it (`ESCALATION_LABELS`,
+  `hooks/lib/check_model_label_on_issue_create.ts`, web-jam-tools#709 "Guard denies issue-create
+  carrying Sonnet/Opus model label without an explicit escalation justification"). The reason
+  must compare against the tier above, not just justify the tier chosen.
 - Set dependencies natively: When an issue depends on another GitHub issue, set native GitHub `blocked_by` dependencies ONLY and do NOT add the `Blocked` label (native dependencies clear automatically on close).
 - Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model label freely; the hook only checks that exactly one *model* label is present, not that it's the only label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
 - Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
