@@ -12,6 +12,7 @@ import { parsePlanTable } from "../src/design-issue/plan_table.ts";
 import {
   lintPlanTableFile,
   type PlanTableViolation,
+  runLintPlanCli,
   validatePlanTable,
 } from "../src/design-issue/lint_plan.ts";
 import type { Schema } from "../src/fix-labels/diff.ts";
@@ -318,4 +319,60 @@ Deno.test("malformed rows from the parser are surfaced as malformed-row violatio
   const doc = planTableDoc([EPIC_ROW, "| 2 | Missing cells | Epic #1 |"]);
   const violations = findRule(validate(doc), "malformed-row");
   assertEquals(violations.length, 1);
+});
+
+// --- CLI Runner (runLintPlanCli) tests ---
+
+Deno.test("runLintPlanCli: --help exits with 0", async () => {
+  const code = await runLintPlanCli(["--help"]);
+  assertEquals(code, 0);
+});
+
+Deno.test("runLintPlanCli: missing path argument exits with 1", async () => {
+  const code = await runLintPlanCli([]);
+  assertEquals(code, 1);
+});
+
+Deno.test("runLintPlanCli: non-existent document file exits with 1", async () => {
+  const code = await runLintPlanCli(["/tmp/non-existent-plan-doc-12345.md"]);
+  assertEquals(code, 1);
+});
+
+Deno.test("runLintPlanCli: valid document passes with exit code 0", async () => {
+  const tmpFile = await Deno.makeTempFile({ suffix: ".md" });
+  try {
+    const doc = planTableDoc([
+      EPIC_ROW,
+      childRow({ epicChild: "Epic #1" }),
+      "| 3 | Manual verification: confirm validator output in Google Chrome | Epic #1 | Josh | Medium | web-jam-tools | none | Josh confirms he reviewed it |",
+    ]);
+    await Deno.writeTextFile(tmpFile, doc);
+
+    const code = await runLintPlanCli([tmpFile]);
+    assertEquals(code, 0);
+
+    const jsonCode = await runLintPlanCli(["--doc", tmpFile, "--json"]);
+    assertEquals(jsonCode, 0);
+  } finally {
+    await Deno.remove(tmpFile);
+  }
+});
+
+Deno.test("runLintPlanCli: document with violations exits with code 1", async () => {
+  const tmpFile = await Deno.makeTempFile({ suffix: ".md" });
+  try {
+    const doc = planTableDoc([
+      EPIC_ROW,
+      childRow({ tier: "Flash-High" }),
+    ]);
+    await Deno.writeTextFile(tmpFile, doc);
+
+    const code = await runLintPlanCli([tmpFile]);
+    assertEquals(code, 1);
+
+    const jsonCode = await runLintPlanCli(["--json", tmpFile]);
+    assertEquals(jsonCode, 1);
+  } finally {
+    await Deno.remove(tmpFile);
+  }
 });
