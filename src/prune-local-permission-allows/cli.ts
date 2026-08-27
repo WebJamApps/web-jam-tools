@@ -9,6 +9,7 @@ import {
 
 export function runCli(args: string[]): number {
   let apply = false;
+  let check = false;
   const customTargetFiles: string[] = [];
   let customBackupDstDir: string | undefined;
 
@@ -16,16 +17,65 @@ export function runCli(args: string[]): number {
     const arg = args[i];
     if (arg === "--apply") {
       apply = true;
-    } else if (arg === "--target-file" && i + 1 < args.length) {
+    } else if (arg === "--check") {
+      check = true;
+    } else if ((arg === "--target-file" || arg === "--file") && i + 1 < args.length) {
       customTargetFiles.push(args[++i]);
     } else if (arg === "--backup-dst-dir" && i + 1 < args.length) {
       customBackupDstDir = args[++i];
+    } else if (arg === "--help" || arg === "-h") {
+      console.log(
+        "Usage: cli.ts [--apply] [--check] [--target-file <path>] [--backup-dst-dir <dir>]",
+      );
+      return 0;
     }
   }
 
   const targetFiles = customTargetFiles.length > 0 ? customTargetFiles : getDefaultTargetFiles();
-  const backupInfo = checkSettingsBackup(customBackupDstDir);
   const stamp = generateTimestamp();
+
+  if (check) {
+    let totalOffenders = 0;
+    const reports: Array<{ filePath: string; offenders: Array<{ rule: string; reason: string }> }> =
+      [];
+
+    for (const filePath of targetFiles) {
+      let result;
+      try {
+        result = processTargetFile(filePath, false, stamp);
+      } catch (err) {
+        console.error(`ERROR processing ${filePath}: ${(err as Error).message}`);
+        return 1;
+      }
+
+      if (!result.exists) {
+        continue;
+      }
+
+      const wildcardOffenders = result.removedEntries.filter(
+        (e) => e.reason === "NON-TRAILING-WILDCARD",
+      );
+
+      if (wildcardOffenders.length > 0) {
+        totalOffenders += wildcardOffenders.length;
+        reports.push({ filePath, offenders: wildcardOffenders });
+      }
+    }
+
+    if (totalOffenders === 0) {
+      return 0;
+    }
+
+    for (const report of reports) {
+      console.log(`File: ${report.filePath}`);
+      for (const entry of report.offenders) {
+        console.log(`  - [${entry.reason}] ${entry.rule}`);
+      }
+    }
+    return 1;
+  }
+
+  const backupInfo = checkSettingsBackup(customBackupDstDir);
 
   console.log("=== Claude Local Permissions Prune Tool ===");
   console.log(

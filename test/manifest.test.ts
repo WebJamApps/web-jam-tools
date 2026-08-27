@@ -93,6 +93,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // PreToolUse gate (web-jam-tools#641) — refuses repository code writes
   // attempted directly by an Opus main session without explicit grant.
   "opus-delegation-gate.sh",
+  // SessionStart reminder (web-jam-tools#784) — reports when settings.local.json
+  // contains over-broad allow rules with non-trailing wildcards.
+  "permission-wildcard-drift-reminder.sh",
   // Stop hook (web-jam-tools#531) — BLOCKING: rejects a message with more
   // than one open question, a question that isn't the last thing in the
   // message, or a safety-critical finding buried outside the final section.
