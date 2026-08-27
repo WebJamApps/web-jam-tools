@@ -55,7 +55,10 @@ graph TD
 ## Formatting & Printing Rules
 
 - **Portrait Orientation & 2-Page Budget (Hard Requirement)**: Output documents are strictly formatted in portrait mode with compact 0.5-inch margins (720 dxa) to guarantee they never exceed 2 pages.
-- **Two-Line / Couplet Consolidation**: When source lead sheet lyrics are single-column / short lines, combine two lines into a single wide line with chords space-aligned over each phrase. Keep total line width under ~70–75 characters (compacting excessive whitespace between phrases) to ensure chord lines never wrap onto secondary lines (preventing 4 chord rows above lyrics).
+- **Measure-by-Measure Harmonic Completeness**: Never abbreviate or drop chords from multi-bar vocal phrases or instrumental holds. Every 2-bar or 4-bar phrase cycle must explicitly carry all its chords (e.g., in a 2-bar 4-chord progression like `C#m G# A E`, every phrase carries all 4 chords).
+- **Safe Phrase Widths & Couplet Splitting (< 65–70 characters)**: Keep total line width under ~65–70 characters so Word never soft-wraps chord rows onto secondary lines. If consolidating two phrases would exceed ~70 characters or cram chord placements, keep each 2-bar phrase as its own distinct line with its full set of chords (e.g., `Oh yeah, alright` on Line 1, `feels good inside` on Line 2).
+- **Exact Syllable & Downbeat Alignment**: Align chords with the exact lyric syllables and measure downbeats from the score (Beat 1 chord over the phrase start, Beat 3 chord over mid-measure lyrics, Beat 1 of next bar over the second measure lyric, Beat 3 over the resolution).
+- **Alternate Tuning & Capo Conventions**: When a song is performed in alternate guitar tunings (e.g. 1/2-step down / Eb standard `Eb Ab Db Gb Bb Eb`), render the played guitar chord shapes and specify the tuning in the header legend (e.g. `Chords: Bold | 1/2 Step Flat Tuning (Eb Ab Db Gb Bb Eb)`).
 - **12pt Minimum Font Size (Flex)**: Chords and lyrics use `Consolas` monospace font targeting **12pt minimum size (flex)** so lead sheets are comfortably readable from music stands while strictly respecting the 2-page maximum constraint.
 - **1-Line Space After Lyrics**: Include 1 full line space of vertical padding between the lyric line of a block and the next set of chords for clean visual separation between phrases.
 - **Spacebar / Backspace Editability**: Generated documents use standard paragraph lines so human editors can easily adjust chord positions in Microsoft Word or Google Docs using the Spacebar and Backspace keys.
@@ -63,7 +66,7 @@ graph TD
   - Guitar Capo Chords (or Shared Chords): **Bold**
   - Bass No-Capo Chords: *Italic* (no parentheses)
   - Lyrics: Plain Regular
-  - Header Legend: Clear instrument legend explicitly stating `Guitar (Capo <N>): Bold | Bass Guitar (No Capo): Italic`.
+  - Header Legend: Clear instrument legend explicitly stating instrument and tuning/capo setup (e.g. `Guitar (Capo <N>): Bold | Bass Guitar (No Capo): Italic` or `Chords: Bold | 1/2 Step Flat Tuning (Eb Ab Db Gb Bb Eb)`).
   - Clean Header: Header strictly contains only Song Title and Composer/Author placed together on the same line (e.g. `TITLE (Author/Credits)`), followed by the Instrument Legend. Do NOT render "Guitar Shapes" key summary lines or top header `[Note: ...]` lines. Performance markings belong inline on their specific stanza lines.
 - **No Orphaned Chords Across Page Breaks (`keepNext: true`)**: Chord lines are strictly bound to their respective lyric lines using `keepNext: true` and `keepLines: true` so a page break never splits chords away from lyrics.
 
