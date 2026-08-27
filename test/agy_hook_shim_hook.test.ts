@@ -16,10 +16,17 @@
 import { assert, assertEquals } from "@std/assert";
 import {
   buildToolInput,
+  DEFAULT_RECORD_PATH,
+  getRecordPath,
   mapAgyToolName,
   matcherMatches,
+  MAX_RECORD_BYTES,
   normalize,
+  recordInvocation,
   recoverPostToolOutput,
+  redactSensitiveText,
+  RETAINED_RECORD_BYTES,
+  runShim as runShimPure,
   translateVerdict,
 } from "../hooks/lib/agy_hook_shim.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
@@ -338,4 +345,241 @@ Deno.test("unparseable stdin JSON is allowed (nothing to match or normalize)", a
   const { code, stdout } = await child.output();
   assertEquals(code, 0);
   assertEquals(JSON.parse(new TextDecoder().decode(stdout).trim()), { decision: "allow" });
+});
+
+// --- Invocation recording (web-jam-tools#816) ---
+
+Deno.test("DEFAULT_RECORD_PATH and getRecordPath: default path, AGY_HOOK_RECORD_PATH override, and disable values", () => {
+  assertEquals(DEFAULT_RECORD_PATH, "/tmp/agy-hook-invocations.jsonl");
+
+  const original = Deno.env.get("AGY_HOOK_RECORD_PATH");
+  try {
+    Deno.env.delete("AGY_HOOK_RECORD_PATH");
+    assertEquals(getRecordPath(), "/tmp/agy-hook-invocations.jsonl");
+
+    Deno.env.set("AGY_HOOK_RECORD_PATH", "/tmp/custom-record-path.jsonl");
+    assertEquals(getRecordPath(), "/tmp/custom-record-path.jsonl");
+
+    for (const offVal of ["off", "false", "0", "none", ""]) {
+      Deno.env.set("AGY_HOOK_RECORD_PATH", offVal);
+      assertEquals(getRecordPath(), undefined);
+    }
+  } finally {
+    if (original !== undefined) {
+      Deno.env.set("AGY_HOOK_RECORD_PATH", original);
+    } else {
+      Deno.env.delete("AGY_HOOK_RECORD_PATH");
+    }
+  }
+});
+
+Deno.test("redactSensitiveText and recordInvocation: redacts live credential literals", async () => {
+  const secretKey = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+  const lineWithSecret = `run_command export GITHUB_TOKEN=${secretKey}`;
+  const redacted = redactSensitiveText(lineWithSecret);
+  assert(!redacted.includes(secretKey));
+  assert(redacted.includes("[REDACTED_CREDENTIAL]"));
+
+  const tempPath = await Deno.makeTempFile({ suffix: ".jsonl" });
+  try {
+    await recordInvocation({ command: lineWithSecret }, tempPath);
+    const content = await Deno.readTextFile(tempPath);
+    assert(!content.includes(secretKey));
+    assert(content.includes("[REDACTED_CREDENTIAL]"));
+  } finally {
+    await Deno.remove(tempPath);
+  }
+});
+
+Deno.test("recordInvocation: skips writing when disabled via AGY_HOOK_RECORD_PATH=off", async () => {
+  const original = Deno.env.get("AGY_HOOK_RECORD_PATH");
+  try {
+    Deno.env.set("AGY_HOOK_RECORD_PATH", "off");
+    // When disabled, recordInvocation with default path is a no-op and does not write
+    await recordInvocation({ event: "PreToolUse" });
+    assertEquals(getRecordPath(), undefined);
+  } finally {
+    if (original !== undefined) {
+      Deno.env.set("AGY_HOOK_RECORD_PATH", original);
+    } else {
+      Deno.env.delete("AGY_HOOK_RECORD_PATH");
+    }
+  }
+});
+
+Deno.test("recordInvocation: bounds file size by rotating older entries on overflow", async () => {
+  const tempPath = await Deno.makeTempFile({ suffix: ".jsonl" });
+  try {
+    // Write data exceeding MAX_RECORD_BYTES
+    const largeLine = "A".repeat(1024) + "\n";
+    const repeatCount = Math.floor(MAX_RECORD_BYTES / 1024) + 10;
+    await Deno.writeTextFile(tempPath, largeLine.repeat(repeatCount));
+
+    const preStat = await Deno.stat(tempPath);
+    assert(preStat.size > MAX_RECORD_BYTES);
+
+    // Recording next line should trigger rotation
+    await recordInvocation({ event: "PreToolUse", step: 999 }, tempPath);
+
+    const postStat = await Deno.stat(tempPath);
+    assert(postStat.size <= RETAINED_RECORD_BYTES + 2048);
+
+    const content = await Deno.readTextFile(tempPath);
+    assert(content.includes('"step":999'));
+  } finally {
+    await Deno.remove(tempPath);
+  }
+});
+
+Deno.test("recordInvocation: appends multiple JSON lines to recordPath", async () => {
+  const tempPath = await Deno.makeTempFile({ suffix: ".jsonl" });
+  try {
+    await recordInvocation({ event: "PreToolUse", step: 1 }, tempPath);
+    await recordInvocation({ event: "PostToolUse", step: 2 }, tempPath);
+
+    const content = await Deno.readTextFile(tempPath);
+    const lines = content.trim().split("\n").map((l) => JSON.parse(l));
+    assertEquals(lines.length, 2);
+    assertEquals(lines[0], { event: "PreToolUse", step: 1 });
+    assertEquals(lines[1], { event: "PostToolUse", step: 2 });
+  } finally {
+    await Deno.remove(tempPath);
+  }
+});
+
+Deno.test("recordInvocation: fails safe on unwritable path without throwing", async () => {
+  // A path that cannot be written to (e.g. directory as file or non-existent nested dir with no permission)
+  const invalidPath = "/proc/invalid-file-path-cannot-write-here.jsonl";
+  // Must not throw
+  await recordInvocation({ test: "data" }, invalidPath);
+});
+
+Deno.test("runShim: records full invocation field set to recordPath without changing verdicts", async () => {
+  const tempPath = await Deno.makeTempFile({ suffix: ".jsonl" });
+  try {
+    const rawInput = JSON.stringify({
+      toolCall: { name: "run_command", args: { CommandLine: "ls", Cwd: "/tmp" } },
+      transcriptPath: "/tmp/fake-transcript.jsonl",
+      conversationId: "conv-xyz-123",
+      stepIdx: 7,
+      artifactDirectoryPath: "/tmp/artifacts-dir",
+      workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
+      modelName: "gemini-3.7-flash-high",
+      error: null,
+    });
+
+    const verdict = await runShimPure(
+      "PreToolUse",
+      "Bash",
+      `${HOOKS_DIR}block-secret-dumps.sh`,
+      rawInput,
+      tempPath,
+    );
+    assertEquals(verdict.decision, "allow");
+
+    const content = await Deno.readTextFile(tempPath);
+    const lines = content.trim().split("\n").map((l) => JSON.parse(l));
+    assertEquals(lines.length, 1);
+    const record = lines[0];
+
+    assertEquals(record.event, "PreToolUse");
+    assertEquals(record.matcher, "Bash");
+    assertEquals(record.targetHookPath, `${HOOKS_DIR}block-secret-dumps.sh`);
+    assertEquals(record.conversationId, "conv-xyz-123");
+    assertEquals(record.stepIdx, 7);
+    assertEquals(record.artifactDirectoryPath, "/tmp/artifacts-dir");
+    assertEquals(record.workspacePaths, ["/home/joshua/WebJamApps/web-jam-tools"]);
+    assertEquals(record.modelName, "gemini-3.7-flash-high");
+    assertEquals(record.error, null);
+    assertEquals(record.toolCall, {
+      name: "run_command",
+      args: { CommandLine: "ls", Cwd: "/tmp" },
+    });
+    assertEquals(record.transcriptPath, "/tmp/fake-transcript.jsonl");
+    assert(typeof record.timestamp === "string" && record.timestamp.length > 0);
+  } finally {
+    await Deno.remove(tempPath);
+  }
+});
+
+Deno.test("runShim: synthetic subagent-shaped payload captures all fields and preserves verdicts", async () => {
+  const tempPath = await Deno.makeTempFile({ suffix: ".jsonl" });
+  try {
+    // Synthetic subagent invocation payload carrying subagent identifiers
+    const subagentPayload = {
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "rclone config show gdrive", Cwd: "/tmp" },
+      },
+      transcriptPath: "/tmp/subagent-transcript.jsonl",
+      conversationId: "subagent-conv-456",
+      stepIdx: 3,
+      artifactDirectoryPath: "/tmp/artifacts-subagent",
+      workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
+      modelName: "gemini-3.7-flash-medium",
+      subagentType: "research",
+      parentConversationId: "main-conv-001",
+      error: undefined,
+    };
+
+    const verdict = await runShimPure(
+      "PreToolUse",
+      "Bash",
+      `${HOOKS_DIR}block-secret-dumps.sh`,
+      JSON.stringify(subagentPayload),
+      tempPath,
+    );
+    // Should still deny because command is dangerous
+    assertEquals(verdict.decision, "deny");
+
+    const content = await Deno.readTextFile(tempPath);
+    const lines = content.trim().split("\n").map((l) => JSON.parse(l));
+    assertEquals(lines.length, 1);
+    const record = lines[0];
+
+    assertEquals(record.conversationId, "subagent-conv-456");
+    assertEquals(record.parentConversationId, "main-conv-001");
+    assertEquals(record.subagentType, "research");
+    assertEquals(record.modelName, "gemini-3.7-flash-medium");
+    assertEquals(record.stepIdx, 3);
+  } finally {
+    await Deno.remove(tempPath);
+  }
+});
+
+Deno.test("end-to-end: agy-hook-shim.sh records invocation payload to AGY_HOOK_RECORD_PATH", async () => {
+  const tempPath = await Deno.makeTempFile({ suffix: ".jsonl" });
+  try {
+    const payload = agyRunCommand("echo test-recording", {
+      conversationId: "conv-e2e-record",
+      stepIdx: 12,
+    });
+    const matcherB64 = btoa("Bash");
+    const cmd = new Deno.Command("bash", {
+      args: [SHIM_PATH, "PreToolUse", matcherB64, `${HOOKS_DIR}block-secret-dumps.sh`],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+      env: {
+        ...Deno.env.toObject(),
+        AGY_HOOK_RECORD_PATH: tempPath,
+      },
+    });
+    const child = cmd.spawn();
+    const writer = child.stdin.getWriter();
+    await writer.write(new TextEncoder().encode(JSON.stringify(payload)));
+    await writer.close();
+    const { code, stdout } = await child.output();
+    assertEquals(code, 0);
+    const verdict = JSON.parse(new TextDecoder().decode(stdout).trim());
+    assertEquals(verdict.decision, "allow");
+
+    const content = await Deno.readTextFile(tempPath);
+    const lines = content.trim().split("\n").map((l) => JSON.parse(l));
+    assertEquals(lines.length, 1);
+    assertEquals(lines[0].conversationId, "conv-e2e-record");
+    assertEquals(lines[0].stepIdx, 12);
+  } finally {
+    await Deno.remove(tempPath);
+  }
 });
