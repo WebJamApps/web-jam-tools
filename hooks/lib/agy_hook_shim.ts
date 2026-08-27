@@ -34,6 +34,12 @@
  * invented.
  */
 
+import {
+  isPlaceholderValue,
+  looksSynthetic,
+  SPECIFIC_PATTERNS,
+} from "./detect_credential_literal.ts";
+
 export interface AgyToolCall {
   name?: string;
   args?: Record<string, unknown>;
@@ -48,6 +54,98 @@ export interface AgyPayload {
   workspacePaths?: string[];
   modelName?: string;
   error?: unknown;
+}
+
+export const DEFAULT_RECORD_PATH = "/tmp/agy-hook-invocations.jsonl";
+export const MAX_RECORD_BYTES = 5 * 1024 * 1024; // 5 MB file size limit
+export const RETAINED_RECORD_BYTES = 2 * 1024 * 1024; // Retain 2 MB on rotation
+
+export function getRecordPath(): string | undefined {
+  try {
+    const custom = Deno.env.get("AGY_HOOK_RECORD_PATH");
+    if (custom !== undefined) {
+      const lower = custom.trim().toLowerCase();
+      if (
+        lower === "off" || lower === "false" || lower === "0" || lower === "none" || lower === ""
+      ) {
+        return undefined;
+      }
+      return custom;
+    }
+    return DEFAULT_RECORD_PATH;
+  } catch {
+    return DEFAULT_RECORD_PATH;
+  }
+}
+
+export interface RecordedInvocation {
+  timestamp: string;
+  event: "PreToolUse" | "PostToolUse";
+  matcher: string;
+  targetHookPath: string;
+  toolCall?: AgyToolCall;
+  transcriptPath?: string;
+  conversationId?: string;
+  stepIdx?: number;
+  artifactDirectoryPath?: string;
+  workspacePaths?: string[];
+  modelName?: string;
+  error?: unknown;
+  rawInput?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Redacts credential-shaped literals from recorded lines to prevent persisting plaintext secrets (web-jam-tools#821 review suggestion).
+ */
+export function redactSensitiveText(text: string): string {
+  let redacted = text;
+  for (const [, pattern] of SPECIFIC_PATTERNS) {
+    const globalPattern = new RegExp(
+      pattern.source,
+      pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g",
+    );
+    redacted = redacted.replace(globalPattern, (match) => {
+      if (isPlaceholderValue(match) || looksSynthetic(match)) return match;
+      return "[REDACTED_CREDENTIAL]";
+    });
+  }
+  return redacted;
+}
+
+/**
+ * Appends a recorded invocation entry to the target JSONL file on disk (web-jam-tools#816).
+ * Automatically redacts credential literals, bounds file size to MAX_RECORD_BYTES with rotation,
+ * applies user-only (0o600) file permissions, and fails safely on any I/O error so hook execution is never interrupted.
+ */
+export async function recordInvocation(
+  entry: Record<string, unknown>,
+  recordPath?: string,
+): Promise<void> {
+  const targetPath = recordPath ?? getRecordPath();
+  if (!targetPath) return;
+
+  try {
+    const rawLine = JSON.stringify(entry) + "\n";
+    const line = redactSensitiveText(rawLine);
+
+    try {
+      const stat = await Deno.stat(targetPath);
+      if (stat.size > MAX_RECORD_BYTES) {
+        const text = await Deno.readTextFile(targetPath);
+        const sliced = text.slice(Math.max(0, text.length - RETAINED_RECORD_BYTES));
+        const firstNewline = sliced.indexOf("\n");
+        const retained = firstNewline !== -1 ? sliced.slice(firstNewline + 1) : sliced;
+        await Deno.writeTextFile(targetPath, retained, { mode: 0o600 });
+      }
+    } catch {
+      // File may not exist yet; proceed to write
+    }
+
+    await Deno.writeTextFile(targetPath, line, { append: true, create: true, mode: 0o600 });
+  } catch {
+    // Fail-safe: recording must never crash or change allow/deny verdicts.
+  }
 }
 
 // VERIFIED (web-jam-tools#432 finding 3, measured 2026-08-07): agy's shell
@@ -241,14 +339,36 @@ export async function runShim(
   matcher: string,
   targetHookPath: string,
   rawInput: string,
+  recordPath?: string,
 ): Promise<AgyVerdict> {
   let payload: AgyPayload = {};
+  let parsedRaw: unknown = undefined;
   try {
-    payload = JSON.parse(rawInput);
+    parsedRaw = JSON.parse(rawInput);
+    if (parsedRaw && typeof parsedRaw === "object" && !Array.isArray(parsedRaw)) {
+      payload = parsedRaw as AgyPayload;
+    }
   } catch {
     // Unparseable payload: nothing to match or normalize. Allow — matches
     // the fail-open convention of the other cost/reminder guards when their
     // input can't be evaluated at all (see hooks/block-agy-non-flash-model.sh).
+  }
+
+  // web-jam-tools#816: Record all invocation fields sent by the surface before evaluating matchers
+  const recordEntry: Record<string, unknown> = {
+    timestamp: new Date().toISOString(),
+    event,
+    matcher,
+    targetHookPath,
+    rawInput,
+    ...(parsedRaw && typeof parsedRaw === "object" && !Array.isArray(parsedRaw)
+      ? (parsedRaw as Record<string, unknown>)
+      : { raw: parsedRaw }),
+  };
+
+  await recordInvocation(recordEntry, recordPath);
+
+  if (!parsedRaw || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
     return { decision: "allow" };
   }
 
