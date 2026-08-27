@@ -265,3 +265,30 @@ Deno.test("lintDesignDoc: a single backtick inside a double-backtick code span d
   const line = "Use ``a ` b`` then design complete ` ends.";
   assertEquals(violationsFor(line, "no-design-complete"), 1);
 });
+
+// Regression guard (web-jam-tools#800 review, Must Fix): the standalone bare-decision-label
+// regex must stay case-SENSITIVE. A lowercase "d-" or "r-" token in ordinary prose (a vitamin,
+// a part number, a version string) is not a decision label and must not violate. An uppercase
+// "D-" or "R-" token must still violate, unchanged.
+Deno.test("lintDesignDoc: a lowercase d-/r- token in ordinary prose is not a bare decision label", () => {
+  assertEquals(
+    violationsFor("Take Vitamin d-3 daily for health.", "no-bare-decision-labels"),
+    0,
+  );
+  assertEquals(
+    violationsFor("The part number is r-2 on the invoice.", "no-bare-decision-labels"),
+    0,
+  );
+  assertEquals(
+    violationsFor("We shipped version d-12 of the tool.", "no-bare-decision-labels"),
+    0,
+  );
+});
+
+Deno.test("lintDesignDoc: an uppercase D-/R- decision label still violates", () => {
+  assertEquals(
+    violationsFor("The label D-7 is defined in the table.", "no-bare-decision-labels"),
+    1,
+  );
+  assertEquals(violationsFor("R-39", "no-bare-decision-labels"), 1);
+});

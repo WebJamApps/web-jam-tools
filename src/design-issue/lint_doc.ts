@@ -388,7 +388,7 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
     /\b(?:as\s+decided\s+in|under|following|see|from)\s+[DR]-\d+\b/gi,
   ];
 
-  const standaloneDecisionLabelRegexes = [/\b[DR]-\d+\b/gi];
+  const standaloneDecisionLabelRegexes = [/\b[DR]-\d+\b/g];
 
   const bothSurfacesHeadingRegex = /^\s*#{1,6}\s+Both surfaces\b/i;
 
