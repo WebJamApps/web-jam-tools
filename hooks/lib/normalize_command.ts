@@ -13,8 +13,18 @@
  *
  *    ⚠️ EXCEPT when the heredoc feeds an interpreter. `bash <<EOF ... EOF`
  *    EXECUTES its body. Stripping that would turn every guard into a one-line
- *    bypass, so an interpreter-fed body is kept in scope. This was a live hole:
- *    before web-jam-tools#272 the secret guard stripped those bodies too.
+ *    bypass, so a body fed to a RECOGNIZED interpreter/source form (see
+ *    INTERPRETER below — bare or path-qualified sh-family/python/node/deno/
+ *    perl/ruby/awk/xargs, or a `source`/`.` command word) is kept in scope.
+ *    This was a live hole: before web-jam-tools#272 the secret guard stripped
+ *    those bodies too, and before web-jam-tools#813's Must Fix #1 fix, a
+ *    path-qualified or `source`/`.` spelling of an interpreter (`/bin/bash`,
+ *    `source /dev/stdin`) was misclassified as data and stripped anyway.
+ *    The mirror-image mistake matters just as much: an interpreter name must
+ *    END its command token, or a data heredoc redirected to a path whose
+ *    filename merely STARTS with one (`/tmp/deno-notes.md`, `tee
+ *    /tmp/perl.md`) gets misread as executed code and the guard denies an
+ *    ordinary file write.
  *
  * 2. dropProse — drops the values of flags that carry free-form authored text
  *    (--body, -m, --title, ...). Deliberately does NOT include -c: sh/bash/
@@ -23,8 +33,33 @@
 
 // Commands that EXECUTE a heredoc body rather than consume it as data. A body
 // fed to one of these must stay in scope for matching.
+//
+// The interpreter-name alternative matches a BARE word (`bash`, `sh`,
+// `python3`, ...) or the same word PATH-QUALIFIED (`/bin/bash`,
+// `/usr/local/bin/python3`, ...) — `(\S*/)?` optionally consumes any
+// non-whitespace run ending in `/` right before the interpreter name, so a
+// path prefix doesn't defeat the match (web-jam-tools#813 Must Fix #1: e.g.
+// `/bin/sh <<EOF` was previously misclassified as data and its body
+// silently dropped from scope).
+//
+// The interpreter name must END the command token: the trailing lookahead
+// `(?=[\s;&|)<]|$)` requires whitespace, a shell operator, or end-of-line
+// right after it. A plain `\b` there is NOT enough, because `(\S*/)?`
+// consumes any run ending in `/` — so with `\b` an interpreter name could
+// run straight into the rest of a FILENAME and a data heredoc redirected to
+// e.g. `/tmp/deno-notes.md`, `tee /tmp/perl.md` or `>> /home/j/bash-x.md`
+// was misclassified as executed code (web-jam-tools#813 Must Fix #2: the
+// Must Fix #1 widening over-corrected). `-` and `.` are not in the class,
+// so `deno-notes.md` and `perl.md` are rejected, while `/bin/sh <<EOF`,
+// `cat <<'EOF' | /bin/bash` and `/usr/bin/python3 <<EOF` still match.
+//
+// The second alternative recognizes `source` and `.` as command WORDS
+// (not interpreter binaries — they're shell builtins) that also execute a
+// heredoc body fed to them (`source /dev/stdin <<EOF`, `. /dev/stdin <<EOF`).
+// The lookahead requires the word be followed by whitespace or end-of-line,
+// so `./script.sh` (no space after the dot) never matches.
 const INTERPRETER =
-  /(^|[\s;&|(])(env\s+)?((ba|z|k|da)?sh|python3?|node|deno|perl|ruby|awk|xargs)\b/;
+  /(^|[\s;&|(])(env\s+)?(\S*\/)?((ba|z|k|da)?sh|python3?|node|deno|perl|ruby|awk|xargs)(?=[\s;&|)<]|$)|(^|[\s;&|(])(source|\.)(?=\s|$)/;
 
 export function findHeredocMarker(line: string): [string, boolean] | null {
   let inSquote = false;

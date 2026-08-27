@@ -8,7 +8,7 @@
  * multi-line or `&`-separated `gh issue create` walk straight past this
  * guard (web-jam-tools#788 review Must Fix #1).
  */
-import { splitOnOperators, splitShellTokens } from "./normalize_command.ts";
+import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
 import { findUnresolvableIssuePointers } from "./detect_unresolvable_issue_pointers.ts";
 
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
@@ -328,6 +328,93 @@ export function decide(
   return "PASS";
 }
 
+/**
+ * Cheap, deliberately approximate "does this raw command plausibly
+ * create/edit a gh issue" test, used only on the ambiguous-parse (unbalanced
+ * quoting) path — a real, parseable command is always evaluated by the full
+ * segment scan in `scanIssueCommandSegments()` instead. Must cover every
+ * form the parseable scan below treats as issue-creating, or the
+ * ambiguous-parse path fails OPEN on the form it misses.
+ */
+function looksLikeIssueCreatingOrEditingCommand(cmd: string): boolean {
+  return (
+    (/\bgh\b/.test(cmd) && /\bissue\b/.test(cmd) &&
+      (/\bcreate\b/.test(cmd) || /\bedit\b/.test(cmd))) ||
+    /\bcreate-issue\b/.test(cmd) ||
+    /\bissue:create\b/.test(cmd)
+  );
+}
+
+/**
+ * Scans already-segmented simple commands for a `gh issue create` /
+ * `create-issue` script call or a `gh issue edit` call, and applies the
+ * model-label / native-type / unresolvable-pointer checks to whichever it
+ * finds. `cmdForMessage` is the raw command text used only to build the
+ * human-facing "re-run with an escalation reason" suggestion — see
+ * `decide()` — and is deliberately independent of what was scanned (it
+ * should reflect what the user actually typed, not a heredoc-stripped
+ * rewrite of it).
+ */
+function scanIssueCommandSegments(
+  segments: string[],
+  toolInput: Record<string, any>,
+  modelLabelsPath: string,
+  cmdForMessage: string,
+): string {
+  for (const segment of segments) {
+    const scTokens = stripLeadingAssignments(splitShellTokens(segment));
+    const createArgs = findGhIssueCreateArgs(scTokens) ?? findCreateIssueScriptArgs(scTokens);
+    if (createArgs !== null) {
+      const typeVal = extractTypeValue(createArgs);
+      if (!typeVal || !VALID_NATIVE_TYPES_LOWER.has(typeVal.toLowerCase())) {
+        return "DENY:missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.";
+      }
+      let modelLabels: Set<string>;
+      try {
+        modelLabels = loadModelLabels(modelLabelsPath);
+      } catch (e) {
+        return `DENY:couldn't load valid model labels from model-labels.json (${e})`;
+      }
+      const [labels, ok] = extractLabelValues(createArgs);
+      if (!ok) {
+        return "DENY:a --label/-l flag was given with no value";
+      }
+      const escalationReason = extractEscalationReason(createArgs);
+      const res = decide(labels, modelLabels, escalationReason, cmdForMessage, "cli");
+      if (res !== "PASS") return res;
+      const body = extractBodyValue(createArgs);
+      if (body && !isEpicType(toolInput, createArgs)) {
+        const pointers = findUnresolvableIssuePointers(body);
+        if (pointers.length) {
+          return `DENY:unresolvable pointer phrase '${
+            pointers[0]
+          }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+        }
+      }
+      return "PASS";
+    }
+
+    const editArgs = findGhIssueEditArgs(scTokens);
+    if (editArgs !== null) {
+      if (isEpicType(toolInput, scTokens)) {
+        return "PASS";
+      }
+      const body = extractBodyValue(editArgs);
+      if (body) {
+        const pointers = findUnresolvableIssuePointers(body);
+        if (pointers.length) {
+          return `DENY:unresolvable pointer phrase '${
+            pointers[0]
+          }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+        }
+      }
+      return "PASS";
+    }
+  }
+
+  return "PASS";
+}
+
 export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath: string): string {
   let payload: Record<string, any>;
   try {
@@ -350,73 +437,42 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
     if (!cmd) return "PASS";
 
     const { segments, unterminated } = splitOnOperators(cmd);
-    if (unterminated) {
-      // This shape must cover every form the parseable scan below treats as
-      // issue-creating, or the ambiguous-parse path fails OPEN on the form it
-      // misses. `issue:create` needs its own alternative because that task
-      // name carries no `gh` token (web-jam-tools#788 third review).
-      if (
-        (/\bgh\b/.test(cmd) && /\bissue\b/.test(cmd) &&
-          (/\bcreate\b/.test(cmd) || /\bedit\b/.test(cmd))) ||
-        /\bcreate-issue\b/.test(cmd) ||
-        /\bissue:create\b/.test(cmd)
-      ) {
-        return "DENY:the command couldn't be parsed (unbalanced quoting) but appears to create/edit a gh issue";
-      }
-      return "PASS";
+    if (!unterminated) {
+      return scanIssueCommandSegments(segments, toolInput, modelLabelsPath, cmd);
     }
 
-    for (const segment of segments) {
-      const scTokens = stripLeadingAssignments(splitShellTokens(segment));
-      const createArgs = findGhIssueCreateArgs(scTokens) ?? findCreateIssueScriptArgs(scTokens);
-      if (createArgs !== null) {
-        const typeVal = extractTypeValue(createArgs);
-        if (!typeVal || !VALID_NATIVE_TYPES_LOWER.has(typeVal.toLowerCase())) {
-          return "DENY:missing native issue type (--type/-t). Valid native types: Task, Bug, Feature, Epic.";
-        }
-        let modelLabels: Set<string>;
-        try {
-          modelLabels = loadModelLabels(modelLabelsPath);
-        } catch (e) {
-          return `DENY:couldn't load valid model labels from model-labels.json (${e})`;
-        }
-        const [labels, ok] = extractLabelValues(createArgs);
-        if (!ok) {
-          return "DENY:a --label/-l flag was given with no value";
-        }
-        const escalationReason = extractEscalationReason(createArgs);
-        const res = decide(labels, modelLabels, escalationReason, cmd, "cli");
-        if (res !== "PASS") return res;
-        const body = extractBodyValue(createArgs);
-        if (body && !isEpicType(toolInput, createArgs)) {
-          const pointers = findUnresolvableIssuePointers(body);
-          if (pointers.length) {
-            return `DENY:unresolvable pointer phrase '${
-              pointers[0]
-            }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
-          }
-        }
-        return "PASS";
-      }
-
-      const editArgs = findGhIssueEditArgs(scTokens);
-      if (editArgs !== null) {
-        if (isEpicType(toolInput, scTokens)) {
-          return "PASS";
-        }
-        const body = extractBodyValue(editArgs);
-        if (body) {
-          const pointers = findUnresolvableIssuePointers(body);
-          if (pointers.length) {
-            return `DENY:unresolvable pointer phrase '${
-              pointers[0]
-            }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
-          }
-        }
-        return "PASS";
-      }
+    // Ambiguous parse (web-jam-tools#813): a heredoc body redirected into a
+    // FILE (`cat > f <<'EOF' ... EOF`, a review body, a design document) is
+    // prose, not code — a stray apostrophe in it is exactly what leaves the
+    // quote state above unbalanced. Retry once with stripHeredocs(), which
+    // drops a data-redirected heredoc body but keeps one fed to a
+    // RECOGNIZED interpreter or source form (`bash <<EOF ... EOF`, `/bin/sh
+    // <<EOF ... EOF`, `source /dev/stdin <<EOF ... EOF` — see the
+    // INTERPRETER matcher in normalize_command.ts) in scope, since that body
+    // genuinely executes. It also already handles every case this fix must cover: all
+    // four delimiter spellings, multiple heredocs in one command, an
+    // unterminated heredoc (kept in scope rather than crashing), and a
+    // delimiter word appearing mid-body rather than as its own line.
+    const stripped = stripHeredocs(cmd);
+    const reparsed = splitOnOperators(stripped);
+    if (!reparsed.unterminated) {
+      // The stripped data body was the sole source of the ambiguity — no
+      // longer ambiguous at all. Fall through to the normal segment scan
+      // over the heredoc-stripped text: an issue-creating mention that
+      // lived only in the removed data body is gone, while a real call
+      // elsewhere (outside any heredoc, or inside an executed one) is still
+      // found and evaluated on its own.
+      return scanIssueCommandSegments(reparsed.segments, toolInput, modelLabelsPath, cmd);
     }
 
+    // Still ambiguous after stripping data heredoc bodies (an executed
+    // heredoc's body itself has unbalanced quoting, or the command is
+    // malformed for an unrelated reason) — fall back to the blunt
+    // whole-string test, scored against the heredoc-stripped text so a
+    // stripped data body can never contribute a false match.
+    if (looksLikeIssueCreatingOrEditingCommand(stripped)) {
+      return "DENY:the command couldn't be parsed (unbalanced quoting) but appears to create/edit a gh issue";
+    }
     return "PASS";
   }
 

@@ -79,7 +79,7 @@ import {
   findGhIssueCreateArgs,
   stripLeadingAssignments,
 } from "./check_model_label_on_issue_create.ts";
-import { splitOnOperators, splitShellTokens } from "./normalize_command.ts";
+import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
 
 // Dependency direction (web-jam-tools#788 review, Actionable Feedback A):
 // src/create-issue/lib.ts imports defaultTokenPath()/isExpired()/loadToken()
@@ -303,6 +303,10 @@ function looksLikeIssueCreatingCommand(command: string): boolean {
  * stay silent, not hard-deny. This mirrors the exact narrowing
  * check_model_label_on_issue_create.ts already applies to its own
  * `unterminated` branch (see `looksLikeIssueCreatingCommand()` below).
+ *
+ * web-jam-tools#813: the ambiguous-parse branch retries once with
+ * `stripHeredocs()` before falling back to the blunt whole-string test —
+ * see the file-level doc on `retryAmbiguousParseWithHeredocsStripped()`.
  */
 function decideBash(
   command: string,
@@ -311,17 +315,101 @@ function decideBash(
   nowMs: number,
 ): Decision {
   const { segments, unterminated } = splitOnOperators(command);
-  if (unterminated) {
-    if (looksLikeIssueCreatingCommand(command)) {
-      return {
-        outcome: "deny",
-        reason:
-          "This command could not be parsed (unterminated quote) but appears to create an issue — failing closed.",
-      };
-    }
-    return { outcome: "pass" };
+  if (!unterminated) {
+    return scanBashSegments(segments, sessionId, tokenPath, nowMs);
+  }
+  return retryAmbiguousParseWithHeredocsStripped(command, sessionId, tokenPath, nowMs);
+}
+
+/**
+ * web-jam-tools#813: a heredoc body redirected into a FILE (`cat > f
+ * <<'EOF' ... EOF`, `tee f`, `>> f`) is prose, not code — a stray apostrophe
+ * in it (a review body, a design document) is exactly what opens the
+ * unterminated-quote state above. Left unhandled, that forces every such
+ * heredoc through the blunt "does the whole raw string look like an
+ * issue-creating call" test below, which denies a file write whenever its
+ * DATA merely mentions `gh issue create` or `create-issue`.
+ *
+ * `stripHeredocs()` (already shared by every other Bash guard's `normalize`
+ * step) draws exactly the line this branch needs: it drops a heredoc body
+ * that's redirected to a file, but KEEPS one fed to a RECOGNIZED interpreter
+ * or source form (`bash <<EOF ... EOF`, `/bin/sh <<EOF ... EOF`, `python3
+ * <<EOF ... EOF`, `source /dev/stdin <<EOF ... EOF` — see the INTERPRETER
+ * matcher in normalize_command.ts for the exact set) in scope, because that
+ * body genuinely executes. It also already handles every case this fix must
+ * cover without new logic: all four delimiter spellings (`<<EOF`,
+ * `<<'EOF'`, `<<"EOF"`, `<<-EOF`), multiple heredocs in one command (each
+ * resolved independently, line by line), an unterminated heredoc (no
+ * crash — the un-terminated body is conservatively kept in scope rather
+ * than discarded), and a delimiter word appearing mid-body rather than as
+ * its own line (the terminator match requires an exact whole-line match).
+ *
+ * So: strip heredocs, then re-run the SAME `splitOnOperators()` parse.
+ *   - If that resolves the ambiguity (the removed data body was the only
+ *     source of the unbalanced quote), the command is no longer ambiguous
+ *     at all — fall through to the normal segment scan, now over the
+ *     heredoc-stripped text. This is the fix: an issue-creating mention
+ *     that lived only in the stripped-out data body is gone before the
+ *     scan ever sees it, while a real issue-creating call elsewhere in the
+ *     same command (outside any heredoc, or inside an executed one) is
+ *     still found and evaluated on its own.
+ *   - If it's STILL unterminated (an executed heredoc's body legitimately
+ *     stayed in scope and itself has unbalanced quoting, or the command is
+ *     malformed for an unrelated reason), fall back to the blunt
+ *     whole-string test — but scored against the heredoc-stripped text, so
+ *     a stripped data body can never contribute a false match to it either.
+ *
+ * This only ever runs once splitOnOperators() has already reported
+ * `unterminated` on the raw command — a normally-parseable command (no
+ * heredoc, or a heredoc with no quoting inside it) never reaches here, so
+ * the parseable-quoting fast path above is untouched.
+ */
+function retryAmbiguousParseWithHeredocsStripped(
+  command: string,
+  sessionId: string,
+  tokenPath: string,
+  nowMs: number,
+): Decision {
+  const stripped = stripHeredocs(command);
+  const reparsed = splitOnOperators(stripped);
+  if (!reparsed.unterminated) {
+    return scanBashSegments(reparsed.segments, sessionId, tokenPath, nowMs);
   }
 
+  if (looksLikeIssueCreatingCommand(stripped)) {
+    return {
+      outcome: "deny",
+      reason:
+        "This command could not be parsed (unterminated quote) but appears to create an issue — failing closed.",
+    };
+  }
+  return { outcome: "pass" };
+}
+
+/**
+ * Bash-path counterpart of the issue_write "create" branch above
+ * (web-jam-tools#747): finds every issue-creating command (`gh issue
+ * create`, `deno task create-issue`/`issue:create`, `deno run
+ * .../create-issue.ts`, or a direct `scripts/create-issue.ts` invocation)
+ * among the command's already-segmented simple commands, and applies the
+ * same session/repo/expiry/title checks as the MCP path to each one.
+ *
+ * Unlike the MCP path, an approved match here never short-circuits to
+ * `allow` (Must Fix #2 — see the file-header comment) — it keeps scanning
+ * the REST of the composed command, because a later segment could be a
+ * second, unapproved issue-creating call riding on the same approved one
+ * (`gh issue create --title "<approved>" && gh issue create --title
+ * "<not approved>"`). Only when every issue-creating segment found (there
+ * may be zero) checks out does the whole call resolve to PASS.
+ *
+ * A command with no issue-creating segment at all is PASS, untouched.
+ */
+function scanBashSegments(
+  segments: string[],
+  sessionId: string,
+  tokenPath: string,
+  nowMs: number,
+): Decision {
   for (const segment of segments) {
     const scTokens = stripLeadingAssignments(splitShellTokens(segment));
     const ghCreateArgs = findGhIssueCreateArgs(scTokens);
@@ -430,7 +518,11 @@ export function decide(
 }
 
 /** Parses the raw PreToolUse JSON and returns the sentinel string printed to stdout: "PASS" | "ALLOW:<reason>" | "DENY:<reason>". */
-export function checkIssueApprovalToken(inputJson: string, tokenPath: string, nowMs: number): string {
+export function checkIssueApprovalToken(
+  inputJson: string,
+  tokenPath: string,
+  nowMs: number,
+): string {
   let data: Record<string, unknown>;
   try {
     data = JSON.parse(inputJson);
