@@ -24,6 +24,7 @@ export interface Options {
   pr?: number;
   bodyFile?: string;
   dryRun: boolean;
+  headSha?: string;
 }
 
 export function parseArgs(args: string[]): Options {
@@ -34,6 +35,7 @@ export function parseArgs(args: string[]): Options {
     else if (arg === "--pr") opts.pr = Number(args[++i]);
     else if (arg === "--body-file") opts.bodyFile = args[++i];
     else if (arg === "--dry-run") opts.dryRun = true;
+    else if (arg === "--head-sha") opts.headSha = args[++i];
   }
   return opts;
 }
@@ -44,7 +46,8 @@ export interface Deps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const USAGE = "usage: post-pr-review --repo <owner/repo> --pr <n> --body-file <path> [--dry-run]";
+const USAGE =
+  "usage: post-pr-review --repo <owner/repo> --pr <n> --body-file <path> [--dry-run] [--head-sha <oid>]";
 
 export async function run(args: string[], deps: Deps): Promise<number> {
   const opts = parseArgs(args);
@@ -60,10 +63,14 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     return 1;
   }
 
-  const already = await isAlreadyReviewedAtHeadSha(opts.repo, opts.pr, deps.runCmd);
+  const already = await isAlreadyReviewedAtHeadSha(opts.repo, opts.pr, deps.runCmd, opts.headSha);
   if (already.skip) {
     console.log(`skipping post: ${already.reason} — not double-posting`);
     return 0;
+  }
+  if (already.stale) {
+    console.error(already.reason);
+    return 1;
   }
 
   const ghArgs = [
