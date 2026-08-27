@@ -509,7 +509,7 @@ Deno.test("skills/design-issue/SKILL.md contains Writing Style rule", async () =
   );
   assertStringIncludes(
     text,
-    "- **Explicitly identify and prove load-bearing assumptions BEFORE consolidation.**",
+    "- **A design document proves its own premises, and the gate will not open without them.**",
   );
   assertStringIncludes(
     text,
@@ -543,5 +543,64 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
   assertStringIncludes(
     text,
     "- An **agy** session already running on **Flash High** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains installer-scope rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(text, "### Installing is for Structure, Never for Content");
+  assertStringIncludes(
+    text,
+    "**Installing is for structure, never for content.**",
+  );
+  assertStringIncludes(
+    text,
+    "Skill bodies and hook scripts are symlinked into the canonical clone, and agy invokes those same Claude Code symlinks through `agy-hook-shim.sh` while symlinking the same skill sources into its own plugin directory.",
+  );
+  assertStringIncludes(
+    text,
+    "The installers exist for the two things a symlink cannot carry: a link that does not exist yet, and a registration entry.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(
+    text,
+    "**A design document proves its own premises, and the gate will not open without them.**",
+  );
+  assertStringIncludes(
+    text,
+    "Every design document carries a `## Load-bearing premises` section: one row per premise the design depends on, naming what was checked and what it showed.",
+  );
+  assertStringIncludes(
+    text,
+    "The document checker fails a document that omits the section, and fails any row whose proof is empty or hedged.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains target-issue-body rule", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  assertStringIncludes(
+    text,
+    "**A target issue's body is read before anything else, and what it says is scope.**",
+  );
+  assertStringIncludes(
+    text,
+    "When the skill is invoked on a named issue, reading that issue's body in full is its first act — before the epic check, before the label checks, before its children are enumerated.",
+  );
+  assertStringIncludes(
+    text,
+    "Any directive there enters the run's scope and appears as a row in the Gate 2 plan table, where removing it costs Josh one word.",
+  );
+  assertStringIncludes(
+    text,
+    "The document's verbatim appendix carries the target issue's directive lines, and the checker fails a document that names a target issue while carrying none",
   );
 });
