@@ -961,6 +961,86 @@ Deno.test("web-jam-tools#813: a heredoc fed to '. /dev/stdin' (dot form of sourc
   });
 });
 
+// --- web-jam-tools#813 Must Fix #2: the Must Fix #1 widening over-corrected.
+// `(\S*/)?` consumes any run ending in `/`, so with only a `\b` after the
+// interpreter name the name could run straight into the rest of a FILENAME
+// and an ordinary DATA heredoc was denied whenever its redirect target had a
+// path component starting with an interpreter name. The tests above cover
+// only the executed direction, which is exactly why that gap shipped — these
+// pin the data direction for the same regex. Same apostrophe convention: each
+// body carries one unescaped apostrophe so the raw command really is
+// unterminated and the ambiguous-parse retry is what's being exercised.
+
+Deno.test("web-jam-tools#813: a data heredoc redirected to a path whose filename starts with an interpreter name then '-' (/tmp/deno-notes.md) passes", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > /tmp/deno-notes.md <<'EOF'\n` +
+          `A note on why gh issue create shouldn't be run from these notes.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a data heredoc teed to a path whose filename starts with an interpreter name then '.' (tee /tmp/perl.md) passes", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `tee /tmp/perl.md <<'EOF'\n` +
+          `A note on why gh issue create shouldn't be run from these notes.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a data heredoc appended via '>>' to a path with an interpreter-prefixed filename (/home/j/bash-x.md) passes", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat >> /home/j/bash-x.md <<'EOF'\n` +
+          `A note on why gh issue create shouldn't be run from these notes.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a data heredoc redirected to a relative path with an interpreter-prefixed component (docs/sh-notes.md) passes", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > docs/sh-notes.md <<'EOF'\n` +
+          `A note on why gh issue create shouldn't be run from these notes.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a data heredoc redirected to a non-.md interpreter-prefixed filename (/tmp/awk-output.txt) passes", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > /tmp/awk-output.txt <<'EOF'\n` +
+          `A note on why gh issue create shouldn't be run from these notes.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
 Deno.test("invalid JSON on stdin passes through (nothing this hook can act on)", async () => {
   await withTokenFile(null, async (tokenPath) => {
     const cmd = new Deno.Command("bash", {
