@@ -710,6 +710,192 @@ Deno.test("balanced-quote 'deno task issue:create' is gated too (the form the ch
   });
 });
 
+// --- web-jam-tools#813: the ambiguous-parse branch retries with heredoc
+// bodies stripped before falling back to the blunt whole-string test, so a
+// heredoc body redirected into a file (data, not code) no longer trips the
+// guard just because its prose mentions issue tooling. Every heredoc body
+// below deliberately carries exactly one unescaped apostrophe so the raw
+// command is genuinely ambiguous (unterminated quote) before the fix even
+// gets a chance to run — a heredoc with no such apostrophe stays on the
+// already-parseable fast path this issue is a Non-goal to touch.
+
+Deno.test("web-jam-tools#813: heredoc body redirected to a file mentioning 'gh issue create' passes (data, not code)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > /tmp/design-notes.md <<'EOF'\n` +
+          `This document explains why gh issue create shouldn't run unless approved.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: heredoc body redirected via 'tee' mentioning 'create-issue' passes (data, not code)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `tee /tmp/design-notes.md <<"EOF"\n` +
+          `This reviews the create-issue script's own doc — nothing here isn't already explained.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: unquoted <<EOF heredoc body mentioning 'gh issue create' passes (data, not code)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > /tmp/design-notes.md <<EOF\n` +
+          `Explains why gh issue create isn't run from this file.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: <<-EOF heredoc body mentioning 'create-issue' passes (data, not code)", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > /tmp/e.md <<-EOF\n` +
+          `A note on why deno task create-issue shouldn't be run here either.\n` +
+          `\tEOF`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: multiple data heredocs in one command are each classified independently", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > /tmp/a.md <<'EOF1'\n` +
+          `First note mentions gh issue create for context.\n` +
+          `EOF1\n` +
+          `cat > /tmp/b.md <<'EOF2'\n` +
+          `Second note explains why it wasn't run.\n` +
+          `EOF2`,
+      ),
+      tokenPath,
+    );
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: an unterminated heredoc (no closing delimiter) fails closed without crashing", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > /tmp/c.md <<'EOF'\n` +
+          `Notes about gh issue create that don't get closed.`,
+      ),
+      tokenPath,
+    );
+    // No matching closing delimiter — stripHeredocs() conservatively keeps
+    // the body in scope rather than discarding it, so the ambiguous parse
+    // remains ambiguous and the blunt fallback still sees the mention. The
+    // defined, tested fallback is "fail closed, don't crash" — not "pass".
+    assertDeny(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a delimiter word appearing mid-body does not end the heredoc early", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat > /tmp/d.md <<'EOF'\n` +
+          `The word EOF appears in this sentence but doesn't end anything here.\n` +
+          `A real gh issue create mention happens down here too, still data.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    // If "EOF" mid-sentence were mistaken for the closing line, everything
+    // after it (including the apostrophe and the gh mention) would spill
+    // out as ordinary command text instead of being dropped as data.
+    assertPass(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a heredoc piped to an interpreter is executed code and stays gated", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `bash <<'EOF'\n` +
+          `gh issue create --title "Nobody's approved title" --body B --type Task\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    // Unlike a file-redirected heredoc, this body genuinely executes — it
+    // must stay in scope for the scan, not be treated as data.
+    assertDeny(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a data heredoc mention and a real, approved gh issue create in the same command are decided independently (approved outer call passes silently)", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Real approved title"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(
+          `cat > /tmp/notes.md <<'EOF1'\n` +
+            `This documents why gh issue create shouldn't be used carelessly.\n` +
+            `EOF1\n` +
+            `gh issue create --repo WebJamApps/web-jam-tools --title "Real approved title" --body B --type Task`,
+        ),
+        tokenPath,
+      );
+      // The data body's mention is excluded; the real, outside-heredoc call
+      // is still scanned and, being approved, resolves to a silent pass
+      // (never "allow" on Bash — see the Must Fix #2 note above).
+      assertPass(res);
+    },
+  );
+});
+
+Deno.test("web-jam-tools#813: a data heredoc mention and a real, unapproved gh issue create in the same command are decided independently (unapproved outer call still denied)", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Some other approved title"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        bashCall(
+          `cat > /tmp/notes.md <<'EOF1'\n` +
+            `This documents why gh issue create shouldn't be used carelessly.\n` +
+            `EOF1\n` +
+            `gh issue create --repo WebJamApps/web-jam-tools --title "Nobody approved this" --body B --type Task`,
+        ),
+        tokenPath,
+      );
+      // Same data body as above, but this time the real outer call's title
+      // is not in the token — it must still be denied on its OWN merits,
+      // proving the fix doesn't just blanket-pass once a data heredoc is
+      // seen.
+      assertDeny(res);
+    },
+  );
+});
+
 Deno.test("invalid JSON on stdin passes through (nothing this hook can act on)", async () => {
   await withTokenFile(null, async (tokenPath) => {
     const cmd = new Deno.Command("bash", {
