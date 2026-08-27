@@ -143,8 +143,9 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
 
 5. **Single Semver Version Bump per PR**:
    - Check `package.json` (or `deno.json` for `web-jam-tools`).
-   - The version must be bumped on the PR's first commit and must strictly exceed the current `origin/dev` tip (matching `.circleci/config.yml:120`).
-   - Flag as a **Must Fix** finding any version that fails to strictly exceed the `origin/dev` tip, or any follow-up commit that re-bumps the version when `dev` did not move (a gratuitous double bump).
+   - The version must be bumped on the PR's first commit and must strictly exceed the current `origin/dev` tip (matching `.circleci/config.yml:127`, "Version bump check (PR branches only)", with the strictly-greater comparison at lines 130-160).
+   - **Must Fix**: a version that fails to strictly exceed the `origin/dev` tip. CircleCI's version-bump gate genuinely fails on this, so the PR cannot merge as it stands.
+   - **Suggestion, not Must Fix**: a follow-up commit that re-bumps the version when `dev` did not move (a gratuitous double bump). The re-bump still strictly exceeds the floor, so CircleCI's gate passes and nothing blocks the merge — it is untidy, not blocking.
    - **Exception — re-bumping when `dev` advances**: If `origin/dev` advances to or past the PR's version after the PR's first commit, re-bumping in a follow-up commit to clear the new `origin/dev` tip is required and explicitly correct — do NOT flag this as a finding.
 
 6. **Package-Lock Engine Alignment**:
@@ -239,7 +240,10 @@ afterward.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row — that row is added by Step 4a's results-again follow-up once CircleCI resolves. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
    - **Suggestions** (`### 🟡 Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Suggestions` with `✅ None`.
-     - **Exclusion of Process & Git Mechanics Trivia**: This section is strictly for code-relevant improvement suggestions tied directly to the diff under review. It **never** carries process/mechanics trivia, speculative workflow commentary, or git/semver heads-ups that are not defects in the PR itself. Specifically, **never post cross-PR version-bump collision warnings** (e.g. noting that another open PR shares the same semver target and might merge first) or git workflow lectures. If a version collision actually occurs, it will be caught deterministically as a real Must Fix under Step 2 item 5 when the PR's version fails to strictly exceed `origin/dev` at review time.
+     - **Exclusion of Process & Git Mechanics Trivia**: This section is strictly for code-relevant improvement suggestions tied directly to the diff under review. It **never** carries process/mechanics trivia, speculative workflow commentary, or git/semver heads-ups that are not defects in the PR itself.
+       - **Never post cross-PR version-bump collision warnings** (e.g. noting that another open PR shares the same semver target and might merge first) or git workflow lectures — those describe another PR's state, not a defect in the diff under review.
+       - A gratuitous double version bump made *within the PR under review* is different: Step 2 item 5 evaluates that PR's own commits and reports such a bump as a Suggestion, so it belongs in this section as a real, permitted finding.
+       - A version that fails to strictly exceed `origin/dev` at review time is the other case Step 2 item 5 covers, and that one is caught deterministically as a Must Fix, not a Suggestion.
 
    **Example — initial post (post #1), re-review with one remaining blocker and two now-fixed
    findings.** Note that the only thing between the verdict line and `### 🛑 Must Fix Items` is the
@@ -399,7 +403,9 @@ with it. This step produces posts #2 and #3.
 
 This binds the reviewing model AND the session relaying the review to Josh:
 
-- **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged — it does not apply to issue-body or PR-body description prose, which is never a Must Fix and is instead handled under Step 2's item 11 ("Issue Body & PR Body Prose (Never a Must Fix)").
+- **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged, with two named exceptions — not a precedence rule, since each is a distinct case the binary was never meant to cover:
+  - Issue-body or PR-body description prose is never a Must Fix, handled instead under Step 2's item 11 ("Issue Body & PR Body Prose (Never a Must Fix)").
+  - A gratuitous double version bump made within the PR under review is a Suggestion, not a Must Fix, per Step 2 item 5 — CircleCI's version-bump gate still passes, so it is untidy rather than merge-blocking.
 - **Never propose a follow-up issue as the answer to a defect found in the PR under review.** A new issue is where NEW work goes, not where this PR's known problems are parked.
 - **A defect in the artifact being merged is fixed in THAT PR**, not in a later one — including when the artifact is a skill, a doc, or a rule rather than code.
 - Size is not a reason to defer. "One line" and "no behavioural effect" are arguments for fixing it now, because it is cheap, not for postponing it.
