@@ -272,9 +272,36 @@ function buildStrippedLine(
     }
   }
 
+  // Boundary-marker insertion points: the original-line index at which a non-word,
+  // non-whitespace sentinel ("\0") is injected so a banned-phrase regex cannot span from the
+  // content of one exempt range, across a purely-whitespace (or empty) gap, into the content of
+  // the very next exempt range (web-jam-tools#800 follow-up). Without this, two adjacent-but-
+  // distinct mentions — e.g. `` `design` `complete` `` or `` "Gate 1" "Approved" `` — get
+  // concatenated by the gap between them into a phrase that neither span individually contains,
+  // producing a false violation. The marker is inserted ONLY when the gap between two
+  // consecutive ranges is whitespace-only (or empty); a gap containing any other bare prose is
+  // left untouched, since acceptance criterion 7 (a partial exempt span still violates) depends
+  // on the regex being able to span from bare prose into, or out of, a single exempt range. Since
+  // ranges are produced by a single left-to-right scan in computeExemptRanges, they are already
+  // sorted ascending and non-overlapping, so only consecutive pairs need checking.
+  const boundaryMarkerAt = new Set<number>();
+  for (let idx = 0; idx + 1 < ranges.length; idx++) {
+    const gap = line.slice(ranges[idx].end, ranges[idx + 1].start);
+    if (/^\s*$/.test(gap)) {
+      boundaryMarkerAt.add(ranges[idx + 1].start);
+    }
+  }
+
   let text = "";
   const toOriginal: number[] = [];
   for (let i = 0; i < line.length; i++) {
+    if (boundaryMarkerAt.has(i)) {
+      // Sentinel has no original-line position of its own (-1): no valid match can ever
+      // include it, since it matches neither \s nor \w nor any literal delimiter used by the
+      // rule regexes below, so it never needs to be mapped back to a real coordinate.
+      text += "\0";
+      toOriginal.push(-1);
+    }
     if (stripIndices.has(i)) continue;
     text += line[i];
     toOriginal.push(i);

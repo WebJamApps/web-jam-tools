@@ -292,3 +292,37 @@ Deno.test("lintDesignDoc: an uppercase D-/R- decision label still violates", () 
   );
   assertEquals(violationsFor("R-39", "no-bare-decision-labels"), 1);
 });
+
+// Regression guard (web-jam-tools#800 review, Suggestion 2): two separate, adjacent exempt spans
+// (e.g. two back-to-back quoted/backticked words) must not be concatenated by the whitespace gap
+// between them into a phrase that neither span individually contains.
+Deno.test("lintDesignDoc: two adjacent backtick-quoted words are not concatenated into a banned phrase", () => {
+  assertEquals(
+    violationsFor("The rules ban `design` `complete` in prose.", "no-design-complete"),
+    0,
+  );
+});
+
+Deno.test("lintDesignDoc: two adjacent double-quoted words are not concatenated into a banned phrase", () => {
+  assertEquals(
+    violationsFor('The rules ban "design" "complete" in prose.', "no-design-complete"),
+    0,
+  );
+});
+
+Deno.test("lintDesignDoc: two adjacent backtick-quoted words are not concatenated into a gate/approval violation", () => {
+  assertEquals(
+    violationsFor("The `Gate 1` `Approved` row.", "no-gate-or-approval-state"),
+    0,
+  );
+});
+
+// The adjacent-span fix must not weaken the guard when real bare prose bridges two ranges (i.e.
+// the gap is not whitespace-only) — this remains a genuine violation via the "design is
+// complete" pattern, since that word bridges the two ranges rather than sitting inside either.
+Deno.test("lintDesignDoc: a bare word bridging two exempt spans still violates", () => {
+  assertEquals(
+    violationsFor("The rules ban `design` is complete in prose.", "no-design-complete"),
+    1,
+  );
+});
