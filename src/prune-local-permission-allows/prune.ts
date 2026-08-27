@@ -47,18 +47,8 @@ export interface PruneRuleResult {
   reason?: PruneReason;
 }
 
-/**
- * Detects whether an allow rule contains an over-broad non-trailing wildcard
- * (i.e. contains `*` but does not end with `*` or `*)`).
- * Leaves `Bash(git *)`, `Bash(curl *)`, `Read(//dev/pts/**)` untouched.
- */
-export function isNonTrailingWildcardRule(rule: string): boolean {
-  if (typeof rule !== "string") {
-    return false;
-  }
-  const trimmed = rule.trim();
-  return trimmed.includes("*") && !/\*\)?$/.test(trimmed);
-}
+import { isNonTrailingWildcardRule } from "../../hooks/lib/check_permission_wildcard_drift.ts";
+export { isNonTrailingWildcardRule };
 
 export function shouldPruneRule(rule: string): PruneRuleResult {
   if (typeof rule !== "string") {

@@ -42,16 +42,24 @@ export function tryExistsSync(p: string): boolean {
 }
 
 /**
- * An entry in `permissions.allow` is an offender when it contains `*` and
- * does not match `/\*\)?$/` — that is, the wildcard is not the final element.
- * Leaves trailing wildcards like `Bash(git *)`, `Bash(curl *)`, and `Read(//dev/pts/**)` alone.
+ * An entry in `permissions.allow` is an offender when it contains a `*`
+ * sitting anywhere other than the trailing wildcard position.
+ * Leaves trailing wildcards like `Bash(git *)`, `Bash(curl *)`, and `Read(//dev/pts/**)` alone,
+ * while catching internal wildcards even when a trailing wildcard is also present
+ * (e.g. `Bash(find . -name "*.env*" *)`).
  */
 export function isNonTrailingWildcardRule(rule: string): boolean {
   if (typeof rule !== "string") {
     return false;
   }
   const trimmed = rule.trim();
-  return trimmed.includes("*") && !/\*\)?$/.test(trimmed);
+  if (!trimmed.includes("*")) {
+    return false;
+  }
+  // Strip optional trailing ')' and any trailing '*' characters
+  const withoutParen = trimmed.endsWith(")") ? trimmed.slice(0, -1).trimEnd() : trimmed;
+  const withoutTrailingStars = withoutParen.replace(/\*+$/, "");
+  return withoutTrailingStars.includes("*");
 }
 
 export function getDefaultTargetFiles(homeDir?: string): string[] {

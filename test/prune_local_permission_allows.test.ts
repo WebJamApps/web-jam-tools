@@ -301,6 +301,7 @@ Deno.test("getDefaultTargetFiles - returns array of 4 target file paths", () => 
 Deno.test("shouldPruneRule & isNonTrailingWildcardRule - detects non-trailing wildcard rules", () => {
   const nonTrailingRules = [
     'Bash(find . -maxdepth 1 -name "*.env*")',
+    'Bash(find . -name "*.env*" *)',
     "Bash(shellcheck hooks/*.sh scripts/install-hooks.sh)",
     'Bash(xargs -I {} sh -c \'stat -c "%y %n" {} 2>/dev/null | sed "s/ .*\\///" | sed "s/\\..*//"\')',
     "Bash(awk '/setlist/{f=$0} /^SF:.*setlist/{sf=$0} ...' coverage/lcov.info)",

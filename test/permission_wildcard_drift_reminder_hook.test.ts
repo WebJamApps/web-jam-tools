@@ -225,6 +225,7 @@ Deno.test("isNonTrailingWildcardRule correctly classifies trailing vs non-traili
   assertEquals(isNonTrailingWildcardRule("Bash(curl *)"), false);
   assertEquals(isNonTrailingWildcardRule("Read(//dev/pts/**)"), false);
   assertEquals(isNonTrailingWildcardRule('Bash(find . -maxdepth 1 -name "*.env*")'), true);
+  assertEquals(isNonTrailingWildcardRule('Bash(find . -name "*.env*" *)'), true);
   assertEquals(
     isNonTrailingWildcardRule("Bash(shellcheck hooks/*.sh scripts/install-hooks.sh)"),
     true,
