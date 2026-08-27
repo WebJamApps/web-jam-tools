@@ -173,11 +173,14 @@ deno task create-issue \
 - Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
 - Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
 - For `Sonnet` or `Opus`, also supply `--escalation-reason "<why the tier above is not needed>"`
-  (CLI) or `escalation_reason: "<...>"` (MCP `issue_write`) — `deno task create-issue` and the
-  hook both deny the create without it (`ESCALATION_LABELS`,
-  `hooks/lib/check_model_label_on_issue_create.ts`, web-jam-tools#709 "Guard denies issue-create
-  carrying Sonnet/Opus model label without an explicit escalation justification"). The reason
-  must compare against the tier above, not just justify the tier chosen.
+  (CLI) or `escalation_reason: "<...>"` (MCP `issue_write`) — on Claude Code,
+  `hooks/lib/check_model_label_on_issue_create.ts` denies the create without it
+  (`ESCALATION_LABELS`, web-jam-tools#709 "Guard denies issue-create carrying Sonnet/Opus model
+  label without an explicit escalation justification"). On agy/Antigravity, `deno task
+  create-issue` has no hook mechanism of its own — `src/create-issue/lib.ts`'s `parseArgs` only
+  reads the flag into `options.escalationReason` and `createIssueAndVerify()` never validates it,
+  so this field is unguarded on that path. Wherever it is checked, the reason must compare against
+  the tier above, not just justify the tier chosen.
 - Set dependencies natively: When an issue depends on another GitHub issue, set native GitHub `blocked_by` dependencies ONLY and do NOT add the `Blocked` label (native dependencies clear automatically on close).
 - Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model label freely; the hook only checks that exactly one *model* label is present, not that it's the only label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
 - Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
