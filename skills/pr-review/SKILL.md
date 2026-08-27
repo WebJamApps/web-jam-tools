@@ -153,8 +153,13 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
 5. **Single Semver Version Bump per PR**:
    - Check `package.json` (or `deno.json` for `web-jam-tools`).
    - The version must be bumped on the PR's first commit and must strictly exceed the current `origin/dev` tip (matching `.circleci/config.yml:127`, "Version bump check (PR branches only)", with the strictly-greater comparison at lines 130-160).
-   - **Must Fix**: a version that fails to strictly exceed the `origin/dev` tip. CircleCI's version-bump gate genuinely fails on this, so the PR cannot merge as it stands.
-   - **Suggestion, not Must Fix**: a follow-up commit that re-bumps the version when `dev` did not move (a gratuitous double bump). The re-bump still strictly exceeds the floor, so CircleCI's gate passes and nothing blocks the merge — it is untidy, not blocking.
+   - **Suggestion, not Must Fix**: any version-bump irregularity within the PR under review — a
+     version that fails to strictly exceed the `origin/dev` tip (mechanical drift from `dev` moving
+     under an open PR, not a defect the author introduced), or a follow-up commit that re-bumps the
+     version when `dev` did not move (a gratuitous double bump). CircleCI's version-bump gate
+     genuinely fails on a stale version and keeps the merge blocked deterministically — that gate,
+     not the review's judgment, is what enforces it, so the review reports it as a Suggestion rather
+     than wearing a 🛑 for something CI already reports and a rebase already clears.
    - **Exception — re-bumping when `dev` advances**: If `origin/dev` advances to or past the PR's version after the PR's first commit, re-bumping in a follow-up commit to clear the new `origin/dev` tip is required and explicitly correct — do NOT flag this as a finding.
 
 6. **Package-Lock Engine Alignment**:
@@ -247,15 +252,17 @@ afterward.
      test plan, architectural judgment, guardrails):
      - `**✅ Approved**` (clean diff, no Must Fix items found in Step 2)
      - `**🛑 Changes Requested**` (any Must Fix item found in Step 2, or a blocking defect exists)
+     - A version-bump finding alone (Step 2 item 5) is a Suggestion, never a Must Fix — it never by
+       itself produces `**🛑 Changes Requested**`, in this post or in Step 4's follow-up.
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, which is posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
+     The **Semver Bump** row is the one exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
    - **Suggestions** (`### 🟡 Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Suggestions` with `✅ None`.
      - **Exclusion of Process & Git Mechanics Trivia**: This section is strictly for code-relevant improvement suggestions tied directly to the diff under review. It **never** carries process/mechanics trivia, speculative workflow commentary, or git/semver heads-ups that are not defects in the PR itself.
        - **Never post cross-PR version-bump collision warnings** (e.g. noting that another open PR shares the same semver target and might merge first) or git workflow lectures — those describe another PR's state, not a defect in the diff under review.
-       - A gratuitous double version bump made *within the PR under review* is different: Step 2 item 5 evaluates that PR's own commits and reports such a bump as a Suggestion, so it belongs in this section as a real, permitted finding.
-       - A version that fails to strictly exceed `origin/dev` at review time is the other case Step 2 item 5 covers, and that one is caught deterministically as a Must Fix, not a Suggestion.
+       - A version-bump irregularity found *within the PR under review* is different: Step 2 item 5 evaluates that PR's own commits and reports both a gratuitous double bump and a version that fails to strictly exceed `origin/dev` as a Suggestion, so either belongs in this section as a real, permitted finding.
 
    **Example — initial post (post #1), re-review with one remaining blocker and two now-fixed
    findings.** Note that the only thing between the verdict line and `### 🛑 Must Fix Items` is the
@@ -267,7 +274,7 @@ afterward.
    **🛑 Changes Requested**
 
    ### 🛑 Must Fix Items
-   - 🛑 Version bump — `deno.json`'s version does not strictly exceed `origin/dev`'s current tip (Step 2 item 5).
+   - 🛑 `handleHttpReq` swallows a rejected promise on network timeout, so a timed-out request never surfaces a failure and the cron job hangs silently (`src/uptime/cron.ts:42`).
 
    ### Changes Since Last Review
    - ✅ Fixed: the missing unit test for `handleHttpReq` — added in `test/uptime.test.ts`.
@@ -275,19 +282,21 @@ afterward.
 
    ### Checklist Verification
    - **Mergeability**: ✅ No conflicts with `dev`.
-   - **Semver Bump**: 🛑 `deno.json` version does not strictly exceed `origin/dev` (see Must Fix Items).
+   - **Semver Bump**: 🟡 `deno.json` version does not strictly exceed `origin/dev` (see Suggestions).
    - **Snyk**: ✅ Clean.
    - **Scope**: ✅ Matches linked issue.
 
    ### 🟡 Suggestions
-   ✅ None
+   - 🟡 Version bump — `deno.json`'s version does not strictly exceed `origin/dev`'s current tip (Step 2 item 5).
    ````
 
    **Example — Step 4's single follow-up for the same PR, once CircleCI resolves failing.** It
    carries the updated verdict and the CircleCI failure, and nothing else: no Checklist
    Verification block, no repeat of post #1's other Must Fix items, no Suggestions section. The
-   version-bump blocker from post #1 is still outstanding and still blocks the merge, which is why
-   the verdict stays red — but it is not restated here, because post #1 already said it:
+   swallowed-rejection blocker from post #1 is still outstanding and still blocks the merge, which
+   is why the verdict stays red — but it is not restated here, because post #1 already said it. The
+   CircleCI job failing here ("Format check") is unrelated to the version bump, so per Step 4 item 5
+   it adds its own Must Fix line rather than going under Suggestions:
 
    ````md
    <!-- post #2 (Step 4, CircleCI failure follow-up) via deno task post-pr-comment -->
@@ -377,21 +386,32 @@ resolves green, the review is already complete and nothing further is posted.
    ~30-minute `ScheduleWakeup` cap, or agy's ~15-minute check-then-sleep cap — whichever surface is
    running) **→ post exactly one follow-up**, via `deno task post-pr-comment` — never
    `deno task post-pr-review` again for this PR (see item 6 below). Write a scratch file (e.g.
-   `/tmp/pr-review-<Repo>-<pr-num>-ci.md` — never inside the repo, per AGENTS.md convention)
-   carrying **only** these three things:
-   - the `## PR Review Summary` header;
-   - the updated verdict line — always `**🛑 Changes Requested**` here, since a failing or
-     unconfirmed CI blocks the merge regardless of what post #1 concluded;
-   - a `### 🛑 Must Fix Items` section holding a single `🛑` line: `Failing: <job name and failure
-     detail>` if it resolved red, or `Still pending after N minutes — could not confirm passing
-     status, verify manually before merge` if the poll cap was hit with CircleCI still unresolved
-     (an unresolved CI status is treated as blocking, never as silently passing).
+   `/tmp/pr-review-<Repo>-<pr-num>-ci.md` — never inside the repo, per AGENTS.md convention).
+
+   - **Version-bump-only carve-out**: `Version bump check (PR branches only)` failing is `dev`
+     moving under an open PR, not a defect the review's judgment adds anything to — CircleCI already
+     reports it deterministically and a rebase clears it (same reasoning as Step 2 item 5). When it
+     is the **only** failing (or still-unresolved) job, the follow-up reports it under
+     `### 🟡 Suggestions`, not Must Fix, and the verdict does not go red on it alone — post
+     `**✅ Approved**` unless post #1 already reported an unrelated Must Fix, in which case leave
+     post #1's verdict as posted.
+   - **Any other failing job — alone or mixed with a failing version-bump job**: keeps today's
+     behavior. The non-version-bump job(s) drive `**🛑 Changes Requested**` and a `### 🛑 Must Fix
+     Items` line each. A concurrently-failing version-bump job does not add a second Must Fix line —
+     fold it into the same follow-up as a `### 🟡 Suggestions` line instead, per the carve-out above.
+
+   Carry only the `## PR Review Summary` header, the verdict line, and the applicable section(s)
+   (`### 🛑 Must Fix Items` and/or `### 🟡 Suggestions`), one line per job:
+   - Must Fix line: `Failing: <job name and failure detail>` if it resolved red, or `Still pending
+     after N minutes — could not confirm passing status, verify manually before merge` if the poll
+     cap was hit with that job still unresolved (an unresolved CI status is treated as blocking,
+     never as silently passing).
+   - Suggestions line (version-bump job only): `🟡 CircleCI "<job name>" is failing — <detail>`.
 
    **It carries nothing else.** No Checklist Verification block, no `**CircleCI**` row, no repeat
-   of post #1's other Must Fix items, no Suggestions section, no narration of what changed. Post #1
-   already carries the review; this post exists solely to add the CircleCI blocker that post #1
-   could not know about. Any finding from post #1 that is still outstanding stays outstanding
-   without being restated here.
+   of post #1's other Must Fix items, no narration of what changed. Post #1 already carries the
+   review; this post exists solely to add the CircleCI result(s) that post #1 could not know about.
+   Any finding from post #1 that is still outstanding stays outstanding without being restated here.
 
    ```sh
    deno task post-pr-comment --repo <Owner/Repo> --pr <pr-num> --body-file <scratch_ci_file>
@@ -410,7 +430,11 @@ This binds the reviewing model AND the session relaying the review to Josh:
 
 - **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged, with two named exceptions — not a precedence rule, since each is a distinct case the binary was never meant to cover:
   - Issue-body or PR-body description prose is never a Must Fix, handled instead under Step 2's item 11 ("Issue Body & PR Body Prose (Never a Must Fix)").
-  - A gratuitous double version bump made within the PR under review is a Suggestion, not a Must Fix, per Step 2 item 5 — CircleCI's version-bump gate still passes, so it is untidy rather than merge-blocking.
+  - A version-bump irregularity within the PR under review — either a version that fails to
+    strictly exceed `origin/dev`, or a gratuitous double bump — is a Suggestion, not a Must Fix, per
+    Step 2 item 5. CircleCI's version-bump gate still deterministically blocks the merge on a stale
+    version regardless of what the review says; the review's severity reflects that a reviewer's
+    judgment adds nothing to what CI already reports and a rebase already clears.
 - **Never propose a follow-up issue as the answer to a defect found in the PR under review.** A new issue is where NEW work goes, not where this PR's known problems are parked.
 - **A defect in the artifact being merged is fixed in THAT PR**, not in a later one — including when the artifact is a skill, a doc, or a rule rather than code.
 - Size is not a reason to defer. "One line" and "no behavioural effect" are arguments for fixing it now, because it is cheap, not for postponing it.
