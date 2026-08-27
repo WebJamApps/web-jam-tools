@@ -896,6 +896,71 @@ Deno.test("web-jam-tools#813: a data heredoc mention and a real, unapproved gh i
   );
 });
 
+// --- web-jam-tools#813 Must Fix #1: INTERPRETER must recognize a
+// path-qualified or `source`/`.` spelling of an interpreter, not just the
+// bare word — otherwise the ambiguous-parse retry's stripHeredocs() call
+// misclassifies these forms as a data (file-redirected) heredoc, strips the
+// body, and a real `gh issue create` inside it never gets scanned. Every
+// body below carries exactly one unescaped apostrophe (matching the
+// convention above) so the raw command is genuinely ambiguous before the
+// fix gets a chance to run.
+
+Deno.test("web-jam-tools#813: a heredoc piped to a path-qualified interpreter (/bin/bash) is executed code and stays gated", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `cat <<'EOF' | /bin/bash\n` +
+          `This heredoc contains a gh issue create call, and it shouldn't slip past.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a heredoc fed directly to a path-qualified interpreter (/bin/sh) is executed code and stays gated", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `/bin/sh <<'EOF'\n` +
+          `This heredoc contains a gh issue create call, and it shouldn't slip past.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a heredoc fed to 'source /dev/stdin' is executed code and stays gated", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `source /dev/stdin <<'EOF'\n` +
+          `This heredoc contains a gh issue create call, and it shouldn't slip past.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
+Deno.test("web-jam-tools#813: a heredoc fed to '. /dev/stdin' (dot form of source) is executed code and stays gated", async () => {
+  await withTokenFile(null, async (tokenPath) => {
+    const res = await runHook(
+      bashCall(
+        `. /dev/stdin <<'EOF'\n` +
+          `This heredoc contains a gh issue create call, and it shouldn't slip past.\n` +
+          `EOF`,
+      ),
+      tokenPath,
+    );
+    assertDeny(res);
+  });
+});
+
 Deno.test("invalid JSON on stdin passes through (nothing this hook can act on)", async () => {
   await withTokenFile(null, async (tokenPath) => {
     const cmd = new Deno.Command("bash", {

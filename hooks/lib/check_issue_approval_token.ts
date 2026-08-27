@@ -332,9 +332,11 @@ function decideBash(
  *
  * `stripHeredocs()` (already shared by every other Bash guard's `normalize`
  * step) draws exactly the line this branch needs: it drops a heredoc body
- * that's redirected to a file, but KEEPS one fed to an interpreter (`bash
- * <<EOF ... EOF`, `python3 <<EOF ... EOF`) in scope, because that body
- * genuinely executes. It also already handles every case this fix must
+ * that's redirected to a file, but KEEPS one fed to a RECOGNIZED interpreter
+ * or source form (`bash <<EOF ... EOF`, `/bin/sh <<EOF ... EOF`, `python3
+ * <<EOF ... EOF`, `source /dev/stdin <<EOF ... EOF` — see the INTERPRETER
+ * matcher in normalize_command.ts for the exact set) in scope, because that
+ * body genuinely executes. It also already handles every case this fix must
  * cover without new logic: all four delimiter spellings (`<<EOF`,
  * `<<'EOF'`, `<<"EOF"`, `<<-EOF`), multiple heredocs in one command (each
  * resolved independently, line by line), an unterminated heredoc (no

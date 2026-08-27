@@ -445,9 +445,11 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
     // FILE (`cat > f <<'EOF' ... EOF`, a review body, a design document) is
     // prose, not code — a stray apostrophe in it is exactly what leaves the
     // quote state above unbalanced. Retry once with stripHeredocs(), which
-    // drops a data-redirected heredoc body but keeps one fed to an
-    // interpreter (`bash <<EOF ... EOF`) in scope, since that body genuinely
-    // executes. It also already handles every case this fix must cover: all
+    // drops a data-redirected heredoc body but keeps one fed to a
+    // RECOGNIZED interpreter or source form (`bash <<EOF ... EOF`, `/bin/sh
+    // <<EOF ... EOF`, `source /dev/stdin <<EOF ... EOF` — see the
+    // INTERPRETER matcher in normalize_command.ts) in scope, since that body
+    // genuinely executes. It also already handles every case this fix must cover: all
     // four delimiter spellings, multiple heredocs in one command, an
     // unterminated heredoc (kept in scope rather than crashing), and a
     // delimiter word appearing mid-body rather than as its own line.
