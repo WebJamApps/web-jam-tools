@@ -35,10 +35,20 @@ export const CANONICAL_CREATE_DRAFT_PR_RULES = [
   "Bash(scripts/create-draft-pr.sh *)",
 ];
 
+export type PruneReason =
+  | "R-5"
+  | "R-11"
+  | "R-20"
+  | "TASK-RUNNER-BLANKET"
+  | "NON-TRAILING-WILDCARD";
+
 export interface PruneRuleResult {
   prune: boolean;
-  reason?: "R-5" | "R-11" | "R-20" | "TASK-RUNNER-BLANKET";
+  reason?: PruneReason;
 }
+
+import { isNonTrailingWildcardRule } from "../../hooks/lib/check_permission_wildcard_drift.ts";
+export { isNonTrailingWildcardRule };
 
 export function shouldPruneRule(rule: string): PruneRuleResult {
   if (typeof rule !== "string") {
@@ -62,6 +72,10 @@ export function shouldPruneRule(rule: string): PruneRuleResult {
     if (!CANONICAL_CREATE_DRAFT_PR_RULES.includes(trimmed)) {
       return { prune: true, reason: "R-20" };
     }
+  }
+
+  if (isNonTrailingWildcardRule(trimmed)) {
+    return { prune: true, reason: "NON-TRAILING-WILDCARD" };
   }
 
   return { prune: false };
@@ -93,13 +107,18 @@ export function checkSettingsBackup(customDstDir?: string): BackupCheckResult {
   return { present: false, path: backupPath };
 }
 
+export interface RemovedEntry {
+  rule: string;
+  reason: PruneReason;
+}
+
 export interface FileProcessResult {
   filePath: string;
   exists: boolean;
   validJson: boolean;
   beforeCount: number;
   afterCount: number;
-  removedEntries: Array<{ rule: string; reason: "R-5" | "R-11" | "R-20" | "TASK-RUNNER-BLANKET" }>;
+  removedEntries: RemovedEntry[];
   backedUpTo?: string;
 }
 
@@ -136,9 +155,7 @@ export function processTargetFile(
   const beforeCount = allowRules.length;
 
   const remaining: string[] = [];
-  const removedEntries: Array<
-    { rule: string; reason: "R-5" | "R-11" | "R-20" | "TASK-RUNNER-BLANKET" }
-  > = [];
+  const removedEntries: RemovedEntry[] = [];
 
   for (const rule of allowRules) {
     const res = shouldPruneRule(rule);
