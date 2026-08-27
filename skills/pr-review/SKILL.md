@@ -84,6 +84,12 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
    - Compare the commit SHA of the newest automated review (`last_review_sha` from `.commit.oid`) against the PR's current head commit SHA (`head_sha` from `.commits | last | .oid`).
    - If equal (and a prior automated review exists at that SHA), stop and report to Josh that the PR was already reviewed at that SHA with no new commits, and post NO review comment.
    - If new commits exist after the newest review (or if the PR has no prior automated reviews), proceed with the review. When re-reviewing after new commits, state that the review evaluates the delta since the previous review.
+   - **Record `head_sha`** from the query above (e.g. as `HEAD_SHA`) — this is the commit the diff
+     fetched in item 4 below reflects, and every finding in this review is composed against it.
+     Step 3 passes this same value back to `deno task post-pr-review --head-sha` (web-jam-tools#825)
+     so that if the branch is force-pushed between now and the post landing, the guard refuses to
+     post a review that no longer matches the head instead of silently stamping stale findings onto
+     the new commit.
 3. Fetch only the non-CircleCI status checks Step 2 needs (Snyk). **CircleCI's status is
    deliberately NOT fetched here** — it stays unread until Step 4, strictly after the initial
    post, so post #1's verdict can never be influenced by it:
@@ -92,7 +98,7 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
      --jq '.[] | select(.name | test("snyk"; "i"))'
    ```
    *(Note: A non-zero exit from `gh pr checks`, such as exit code 8 when other checks on the PR are pending, is expected and carries no CircleCI verdict — treat empty output as "no Snyk check" and move on.)*
-4. Fetch the PR diff:
+4. Fetch the PR diff, at the `HEAD_SHA` recorded in item 2 above:
    ```sh
    gh pr diff <pr-num> --repo WebJamApps/<Repo>
    ```
@@ -291,9 +297,9 @@ afterward.
 
    **Example — the same PR when CircleCI resolves passing.** There is no second post. Post #1 is
    the whole review, and its verdict is final.
-3. Write the finished review body to a scratch file (e.g. `/tmp/pr-review-<Repo>-<pr-num>.md` — never inside the repo, per AGENTS.md convention), then post it with the guarded command — the only route to `gh pr review` on either agent surface (web-jam-tools#685):
+3. Write the finished review body to a scratch file (e.g. `/tmp/pr-review-<Repo>-<pr-num>.md` — never inside the repo, per AGENTS.md convention), then post it with the guarded command — the only route to `gh pr review` on either agent surface (web-jam-tools#685), passing the `HEAD_SHA` recorded in Step 1 item 2 so a force-push landing mid-review is caught rather than silently posted (web-jam-tools#825):
    ```sh
-   deno task post-pr-review --repo <Owner/Repo> --pr <pr-num> --body-file <scratch_review_file>
+   deno task post-pr-review --repo <Owner/Repo> --pr <pr-num> --body-file <scratch_review_file> --head-sha <HEAD_SHA>
    ```
    *(Note: Review comments provide feedback for the PR author and Josh. Final PR merge remains under Josh's approval.)*
 
@@ -315,7 +321,12 @@ afterward.
    The command itself refuses an empty body, a body carrying a credential-shaped literal, and a
    review body with no `## PR Review Summary` header, and skips posting outright (no double-post,
    exit 0) when the PR already carries an automated review at the current head SHA — see
-   `scripts/gh-write/guard.ts`. A transient network failure (e.g. an `i/o timeout` against the
+   `scripts/gh-write/guard.ts`. When `--head-sha` is passed and it no longer matches the PR's live
+   head — a force-push landed between fetching the diff in Step 1 and this post — the command
+   **refuses to post** (exit 1, naming both the supplied and the live head SHA) rather than letting
+   a stale review occupy the already-reviewed slot and block the corrected re-review
+   (web-jam-tools#825). On that refusal, re-run this review's Step 1 against the new head and post
+   again — there is no other recovery path. A transient network failure (e.g. an `i/o timeout` against the
    GitHub API, the actual failure mode measured posting a review to
    `WebJamApps/JaMmusic#1324 "Remove the localhost:7000 BackendUrl default and hardcoded credentials
    from vite.config.ts"` on 2026-08-20) is retried automatically rather than surfaced on the first
