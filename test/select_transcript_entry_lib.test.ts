@@ -4,17 +4,23 @@
 // sidechain/apiErrorMessage exclusion behavior, text/model extraction,
 // and CLI invocation modes.
 
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
+  conversationIdFromTranscriptPath,
   extractEntryModel,
   extractEntryText,
   getOpusGateInfo,
+  isAntigravityEntry,
+  isOwnSessionUserTurnBoundary,
+  isSubagentConversationEntry,
   isUserTurnBoundary,
   loadTranscript,
+  parseAntigravityPayload,
   parseTranscriptJsonl,
   selectLastAssistantEntry,
   selectLastUserEntry,
   selectSessionModel,
+  tagAntigravityEntries,
   type TranscriptEntry,
 } from "../hooks/lib/select_transcript_entry.ts";
 
@@ -630,6 +636,251 @@ Deno.test("CLI: --opus-gate outputs JSON with model and escape phrase detection"
     const parsed = JSON.parse(res.stdout.trim());
     assertEquals(parsed.model, "claude-opus-4-6");
     assertEquals(parsed.hasEscape, true);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// --- Antigravity adapter tests (web-jam-tools#841) ---
+//
+// Fixtures are the real probe transcripts captured by web-jam-tools#817 "Manual verification:
+// run the instrumented probe on Antigravity and capture the result", copied into test/ so the
+// suite never reads ~/Dropbox (CI has no Dropbox mount). The parent conversation launched a
+// subagent via invoke_subagent; the subagent ran in its own conversation, with its own
+// transcript file.
+
+const PARENT_CONVERSATION_ID = "772a5009-1e55-4c10-8527-f753d4e5ce47";
+const SUBAGENT_CONVERSATION_ID = "5241b5eb-8613-4b1a-b8ad-45ee96b2950a";
+const AGY_MODEL_NAME = "gemini-3.7-flash-high";
+
+function fixturePath(name: string): string {
+  return new URL(`./fixtures/antigravity/${name}`, import.meta.url).pathname;
+}
+
+async function loadFixtureEntries(
+  name: string,
+  conversationId: string,
+): Promise<TranscriptEntry[]> {
+  const raw = await Deno.readTextFile(fixturePath(name));
+  return tagAntigravityEntries(parseTranscriptJsonl(raw), {
+    conversationId,
+    modelName: AGY_MODEL_NAME,
+  });
+}
+
+/** Writes a fixture into a brain/<conversationId>/... layout, mirroring the real store. */
+async function stageBrainTranscript(
+  dir: string,
+  conversationId: string,
+  fixture: string,
+): Promise<string> {
+  const logDir = `${dir}/brain/${conversationId}/.system_generated/logs`;
+  await Deno.mkdir(logDir, { recursive: true });
+  const path = `${logDir}/transcript_full.jsonl`;
+  await Deno.writeTextFile(path, await Deno.readTextFile(fixturePath(fixture)));
+  return path;
+}
+
+Deno.test("isAntigravityEntry: recognizes the Antigravity shape and rejects the Claude Code shape", async () => {
+  const entries = await loadFixtureEntries("parent-transcript_full.jsonl", PARENT_CONVERSATION_ID);
+  assertEquals(entries.every(isAntigravityEntry), true);
+  assertEquals(isAntigravityEntry(userEntry("hello")), false);
+  assertEquals(isAntigravityEntry(assistantEntry("working", { model: "claude-opus-4-6" })), false);
+  assertEquals(isAntigravityEntry(null), false);
+});
+
+// AC1 — extractEntryText returns real text for a well-formed Antigravity entry.
+Deno.test("extractEntryText: returns the text of an Antigravity entry (was empty before the adapter)", async () => {
+  const entries = await loadFixtureEntries(
+    "subagent-transcript_full.jsonl",
+    SUBAGENT_CONVERSATION_ID,
+  );
+  const prompt = entries.find((e) => e.step_index === 0);
+  assertStringIncludes(extractEntryText(prompt), "echo subagent-probe-test");
+
+  const finalResponse = entries.find((e) => e.step_index === 5);
+  assertStringIncludes(extractEntryText(finalResponse), "Executed `echo subagent-probe-test`");
+});
+
+Deno.test("extractEntryText: returns empty for an Antigravity entry carrying only tool_calls", async () => {
+  const entries = await loadFixtureEntries("parent-transcript_full.jsonl", PARENT_CONVERSATION_ID);
+  const toolCallEntry = entries.find((e) => Array.isArray(e.tool_calls) && e.content === undefined);
+  assertEquals(extractEntryText(toolCallEntry), "");
+});
+
+// AC2 — extractEntryModel resolves the model from session provenance, and stays fail-closed
+// when there is none. Antigravity entries carry no model field of their own.
+Deno.test("extractEntryModel: returns the payload-provided model for an Antigravity entry", async () => {
+  const entries = await loadFixtureEntries("parent-transcript_full.jsonl", PARENT_CONVERSATION_ID);
+  assertEquals(extractEntryModel(entries[0]), AGY_MODEL_NAME);
+});
+
+Deno.test("extractEntryModel: stays undetermined for an Antigravity entry with no session provenance", async () => {
+  const raw = await Deno.readTextFile(fixturePath("parent-transcript_full.jsonl"));
+  const untagged = parseTranscriptJsonl(raw);
+  assertEquals(extractEntryModel(untagged[0]), "");
+});
+
+Deno.test("conversationIdFromTranscriptPath: reads the id from a brain path, and refuses to guess elsewhere", () => {
+  assertEquals(
+    conversationIdFromTranscriptPath(
+      `/home/joshua/.gemini/antigravity-cli/brain/${PARENT_CONVERSATION_ID}/.system_generated/logs/transcript_full.jsonl`,
+    ),
+    PARENT_CONVERSATION_ID,
+  );
+  assertEquals(conversationIdFromTranscriptPath("/home/joshua/.gemini/tmp/proj/chats/x.jsonl"), "");
+  assertEquals(conversationIdFromTranscriptPath(""), "");
+  assertEquals(conversationIdFromTranscriptPath(null), "");
+});
+
+Deno.test("parseAntigravityPayload: recovers provenance, falling back to the transcript path", () => {
+  const fromFields = parseAntigravityPayload({
+    conversationId: SUBAGENT_CONVERSATION_ID,
+    modelName: AGY_MODEL_NAME,
+    transcriptPath:
+      `/x/brain/${SUBAGENT_CONVERSATION_ID}/.system_generated/logs/transcript_full.jsonl`,
+  });
+  assertEquals(fromFields?.conversationId, SUBAGENT_CONVERSATION_ID);
+  assertEquals(fromFields?.modelName, AGY_MODEL_NAME);
+
+  const fromPathOnly = parseAntigravityPayload({
+    transcriptPath:
+      `/x/brain/${PARENT_CONVERSATION_ID}/.system_generated/logs/transcript_full.jsonl`,
+  });
+  assertEquals(fromPathOnly?.conversationId, PARENT_CONVERSATION_ID);
+  assertEquals(fromPathOnly?.modelName, "");
+
+  assertEquals(parseAntigravityPayload({ transcript_path: "/tmp/claude.jsonl" }), null);
+  assertEquals(parseAntigravityPayload(null), null);
+});
+
+// AC3 — subagent detection by conversation identity, never by type/source.
+Deno.test("isOwnSessionUserTurnBoundary: accepts a prompt from the session's own conversation", async () => {
+  const entries = await loadFixtureEntries("parent-transcript_full.jsonl", PARENT_CONVERSATION_ID);
+  const prompt = entries.find((e) => e.step_index === 0);
+  assertEquals(isOwnSessionUserTurnBoundary(prompt, PARENT_CONVERSATION_ID), true);
+});
+
+Deno.test("isOwnSessionUserTurnBoundary: rejects a model response even in the session's own conversation", async () => {
+  const entries = await loadFixtureEntries("parent-transcript_full.jsonl", PARENT_CONVERSATION_ID);
+  const modelResponse = entries.find((e) => e.type === "PLANNER_RESPONSE");
+  assertEquals(isOwnSessionUserTurnBoundary(modelResponse, PARENT_CONVERSATION_ID), false);
+});
+
+Deno.test("isOwnSessionUserTurnBoundary: fails closed when either conversation identity is unknown", async () => {
+  const raw = await Deno.readTextFile(fixturePath("parent-transcript_full.jsonl"));
+  const untagged = parseTranscriptJsonl(raw);
+  const prompt = untagged.find((e) => e.step_index === 0);
+  assertEquals(isOwnSessionUserTurnBoundary(prompt, PARENT_CONVERSATION_ID), false);
+
+  const tagged = await loadFixtureEntries("parent-transcript_full.jsonl", PARENT_CONVERSATION_ID);
+  assertEquals(isOwnSessionUserTurnBoundary(tagged[0], ""), false);
+  assertEquals(isOwnSessionUserTurnBoundary(tagged[0], null), false);
+});
+
+Deno.test("isSubagentConversationEntry: true only when both identities are known and differ", async () => {
+  const subagent = await loadFixtureEntries(
+    "subagent-transcript_full.jsonl",
+    SUBAGENT_CONVERSATION_ID,
+  );
+  assertEquals(isSubagentConversationEntry(subagent[0], PARENT_CONVERSATION_ID), true);
+  assertEquals(isSubagentConversationEntry(subagent[0], SUBAGENT_CONVERSATION_ID), false);
+  assertEquals(isSubagentConversationEntry(subagent[0], ""), false);
+  assertEquals(isSubagentConversationEntry({ type: "USER_INPUT" }, PARENT_CONVERSATION_ID), false);
+});
+
+// AC4 — the security case: a subagent's opening prompt is filed USER_INPUT/USER_EXPLICIT,
+// byte-for-byte like a person's, and must never read as a human turn on that basis.
+Deno.test("a subagent's USER_INPUT/USER_EXPLICIT prompt is not a human turn in the parent's session", async () => {
+  const subagent = await loadFixtureEntries(
+    "subagent-transcript_full.jsonl",
+    SUBAGENT_CONVERSATION_ID,
+  );
+  const prompt = subagent.find((e) => e.step_index === 0);
+
+  // The entry really does look exactly like a person's own prompt.
+  assertEquals(prompt?.type, "USER_INPUT");
+  assertEquals(prompt?.source, "USER_EXPLICIT");
+  assertStringIncludes(extractEntryText(prompt), "<USER_REQUEST>");
+
+  // ...and is still rejected, because its conversation is not the session's own.
+  assertEquals(isOwnSessionUserTurnBoundary(prompt, PARENT_CONVERSATION_ID), false);
+  // The Claude-Code-shaped test also refuses it: no type/source mapping was added there.
+  assertEquals(isUserTurnBoundary(prompt), false);
+});
+
+Deno.test("loadTranscript: tags entries from an Antigravity hook payload with conversation and model", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const path = await stageBrainTranscript(
+      dir,
+      SUBAGENT_CONVERSATION_ID,
+      "subagent-transcript_full.jsonl",
+    );
+    const payload = JSON.stringify({
+      artifactDirectoryPath: `${dir}/brain/${SUBAGENT_CONVERSATION_ID}`,
+      conversationId: SUBAGENT_CONVERSATION_ID,
+      modelName: AGY_MODEL_NAME,
+      transcriptPath: path,
+      workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
+    });
+
+    const entries = await loadTranscript(payload);
+    assertEquals(entries.length, 6);
+    assertEquals(entries[0].conversationId, SUBAGENT_CONVERSATION_ID);
+    assertEquals(extractEntryModel(entries[0]), AGY_MODEL_NAME);
+    assertEquals(isSubagentConversationEntry(entries[0], PARENT_CONVERSATION_ID), true);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("loadTranscript: derives the conversationId from a brain path when read without a payload", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const path = await stageBrainTranscript(
+      dir,
+      PARENT_CONVERSATION_ID,
+      "parent-transcript_full.jsonl",
+    );
+    const entries = await loadTranscript(path);
+    assertEquals(entries[0].conversationId, PARENT_CONVERSATION_ID);
+    // No payload means no model was reported, so the model stays undetermined.
+    assertEquals(extractEntryModel(entries[0]), "");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// AC5 — no regression on the Claude Code path.
+Deno.test("Claude Code entries are unaffected by the Antigravity adapter", async () => {
+  const dir = await Deno.makeTempDir();
+  const filePath = `${dir}/transcript.jsonl`;
+  try {
+    const sidechainUser: TranscriptEntry = {
+      type: "user",
+      isSidechain: true,
+      message: { role: "user", content: "subagent prompt" },
+    };
+    await Deno.writeTextFile(
+      filePath,
+      [
+        JSON.stringify(userEntry("do the thing")),
+        JSON.stringify(sidechainUser),
+        JSON.stringify(assistantEntry("done", { model: "claude-opus-4-6" })),
+      ].join("\n"),
+    );
+
+    const entries = await loadTranscript(filePath);
+    assertEquals(entries.some(isAntigravityEntry), false);
+    assertEquals(entries.some((e) => "conversationId" in e), false);
+    assertEquals(extractEntryText(entries[0]), "do the thing");
+    assertEquals(selectSessionModel(entries), "claude-opus-4-6");
+    assertEquals(isUserTurnBoundary(entries[0]), true);
+    assertEquals(isUserTurnBoundary(sidechainUser), false);
+    // The surface-aware wrapper delegates for Claude Code entries, sidechain exclusion included.
+    assertEquals(isOwnSessionUserTurnBoundary(entries[0], PARENT_CONVERSATION_ID), true);
+    assertEquals(isOwnSessionUserTurnBoundary(sidechainUser, PARENT_CONVERSATION_ID), false);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
