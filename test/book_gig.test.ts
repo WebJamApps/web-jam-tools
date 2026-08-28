@@ -12,13 +12,20 @@ import {
   fetchCandidates,
   filterAndRankCandidates,
 } from "../src/book-gig/candidates.ts";
-import { BANNED_VOICE_WORDS, renderPitch, validateVoiceRules } from "../src/book-gig/pitch.ts";
+import {
+  BANNED_VOICE_WORDS,
+  DEFAULT_TEMPLATES,
+  htmlToPlainText,
+  renderPitch,
+  validateVoiceRules,
+} from "../src/book-gig/pitch.ts";
 import { formatDraftPayload, writeDropboxRunLog } from "../src/book-gig/gmail.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
   fetchPendingReplies,
+  fetchTemplates,
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
 import { renderDarkHtml, renderStatusBadge } from "../src/book-gig/html.ts";
@@ -26,6 +33,7 @@ import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
 import { runBookGigCli } from "../src/book-gig/cli.ts";
 import type {
   CandidateVenue,
+  EmailTemplate,
   OutreachCampaignRecord,
   TargetWeekend,
 } from "../src/book-gig/types.ts";
@@ -198,7 +206,7 @@ Deno.test("renderPitch: generates warm, compliant pitch emails", () => {
   const pitch = renderPitch(venue, weekend);
   assertEquals(pitch.to, "roanoke@starrhill.com");
   assertEquals(pitch.secondaryTo, "booking@starrhill.com");
-  assertStringIncludes(pitch.subject, "October 16–18, 2026");
+  assertStringIncludes(pitch.subject, "October 2026");
   assertStringIncludes(pitch.subject, "Starr Hill Brewery");
   assertStringIncludes(pitch.body, "Josh and Maria");
   assertStringIncludes(pitch.body, "joshandmariamusic.com");
@@ -236,7 +244,7 @@ Deno.test("renderPitch: generates returning venue pitch with custom contact and 
 
   assertStringIncludes(pitch.body, "Hi Kevin,");
   assertStringIncludes(pitch.body, "We loved playing your anniversary party last year!");
-  assertStringIncludes(pitch.body, "My wife Maria and I play as Josh and Maria");
+  assertStringIncludes(pitch.body, "Josh and Maria");
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
@@ -921,6 +929,14 @@ Deno.test("runBookGigCli: auto-opens HTML review artifact in Chrome unless --no-
         }),
       );
     }
+    if (u.includes("/template")) {
+      return Promise.resolve(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
     return Promise.resolve(new Response("{}", { status: 200 }));
   };
 
@@ -949,4 +965,171 @@ Deno.test("runBookGigCli: auto-opens HTML review artifact in Chrome unless --no-
   );
   assertEquals(resNoOpen.openedBrowser, undefined);
   assertEquals(openedPath, "");
+});
+
+Deno.test("fetchTemplates: returns templates from GET /template", async () => {
+  const mockTemplates: EmailTemplate[] = [
+    {
+      _id: "t1",
+      type: "PubFestivalBrewery",
+      stage: "cold",
+      subject: "Live music inquiry — [Venue Name]",
+      introHtml: "<p>Hi [Contact Name],</p>",
+      bodyHtml: "<p>We'd love to play [Venue Name] on [Target Dates].</p>",
+      active: true,
+    },
+  ];
+
+  const mockFetch: typeof fetch = (input) => {
+    const url = String(input);
+    if (url.includes("/template")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockTemplates), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  const templates = await fetchTemplates({}, mockFetch);
+  assertEquals(templates.length, 1);
+  assertEquals(templates[0].type, "PubFestivalBrewery");
+  assertEquals(templates[0].stage, "cold");
+});
+
+Deno.test("fetchTemplates: handles API error and returns empty array", async () => {
+  const mockFetch: typeof fetch = () => {
+    return Promise.resolve(new Response("Internal Server Error", { status: 500 }));
+  };
+
+  const templates = await fetchTemplates({}, mockFetch);
+  assertEquals(templates, []);
+});
+
+Deno.test("htmlToPlainText: converts HTML formatting, links, and entities cleanly", () => {
+  const html = `
+    <p>Hi Matt,</p>
+    <p>We'd love to play <b>Olde Salem Brewing</b> &amp; bring live music.</p>
+    <ul>
+      <li><a href="https://web-jam.com/song1">Proud Mary (CCR) — live at Olde Salem</a></li>
+      <li><a href="https://joshandmariamusic.com">joshandmariamusic.com</a></li>
+    </ul>
+    <p>Thanks,<br />Josh &amp; Maria</p>
+  `;
+
+  const plain = htmlToPlainText(html);
+  assertStringIncludes(plain, "Hi Matt,");
+  assertStringIncludes(plain, "Olde Salem Brewing & bring live music.");
+  assertStringIncludes(
+    plain,
+    "• Proud Mary (CCR) — live at Olde Salem (https://web-jam.com/song1)",
+  );
+  assertStringIncludes(plain, "• joshandmariamusic.com");
+  assertStringIncludes(plain, "Thanks,\nJosh & Maria");
+  assertEquals(plain.includes("<p>"), false);
+  assertEquals(plain.includes("<ul>"), false);
+  assertEquals(plain.includes("<b>"), false);
+});
+
+Deno.test("renderPitch: substitutes tokens and renders canonical template copy", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v_pub",
+    name: "Parkway Brewing Company",
+    city: "Salem",
+    usState: "VA",
+    email: "booking@parkwaybrewing.com",
+    venueType: "PubFestivalBrewery",
+    contactName: "Mike",
+  };
+
+  const pitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
+
+  // Verify tokens were substituted
+  assertStringIncludes(pitch.subject, "October 2026");
+  assertStringIncludes(pitch.subject, "Parkway Brewing Company");
+  assertStringIncludes(pitch.body, "Hi Mike,");
+  assertStringIncludes(pitch.body, "Parkway Brewing Company");
+  assertStringIncludes(pitch.body, "October 16–18, 2026");
+  assertEquals(pitch.body.includes("[Contact Name]"), false);
+  assertEquals(pitch.body.includes("[Venue Name]"), false);
+  assertEquals(pitch.body.includes("[Target Dates]"), false);
+  assertEquals(pitch.body.includes("[Booking Period]"), false);
+  assertEquals(pitch.body.includes("[Custom Body]"), false);
+
+  // Verify voice rules pass
+  const validation = validateVoiceRules(pitch.body);
+  assertEquals(validation.valid, true);
+});
+
+Deno.test("renderPitch: injects prior contact context into custom body for returning venue with notes", () => {
+  const weekend: TargetWeekend = {
+    start: "2027-01-15",
+    end: "2027-01-17",
+    rawText: "Jan 15-17 2027",
+    label: "January 15–17, 2027",
+    year: 2027,
+    month: 1,
+    days: [15, 16, 17],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v_olde_salem",
+    name: "Olde Salem Brewery",
+    city: "Salem",
+    usState: "VA",
+    email: "matt@oldesalembrewing.com",
+    venueType: "PubFestivalBrewery",
+    contactName: "Matt Kimble",
+    notes:
+      "Spoke with Matt Kimble: booked through 2026, follow up in January 2027 when booking opens.",
+  };
+
+  const pitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
+
+  assertStringIncludes(pitch.body, "Hi Matt Kimble,");
+  assertStringIncludes(pitch.body, "Following up on our earlier conversation");
+  assertStringIncludes(pitch.body, "January 15–17, 2027");
+  assertEquals(pitch.body.includes("[Custom Body]"), false);
+
+  const validation = validateVoiceRules(pitch.body);
+  assertEquals(validation.valid, true);
+});
+
+Deno.test("renderPitch: formats greeting cleanly when contactName is empty", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v_unnamed",
+    name: "The Spot on Kirk",
+    city: "Roanoke",
+    usState: "VA",
+    email: "info@thespotonkirk.org",
+    venueType: "Originals",
+  };
+
+  const pitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
+  assertStringIncludes(pitch.body, "Hi,\n");
+  assertEquals(pitch.body.includes("[Contact Name]"), false);
+  assertEquals(pitch.body.includes("Hi there,"), false);
+  assertEquals(validateVoiceRules(pitch.body).valid, true);
 });

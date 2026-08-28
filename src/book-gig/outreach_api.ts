@@ -3,6 +3,7 @@
 import type {
   BatchDispatchResult,
   CheckRepliesResult,
+  EmailTemplate,
   OutreachCampaignRecord,
   TargetWeekend,
 } from "./types.ts";
@@ -248,4 +249,33 @@ export async function fetchVenueMap(
   }
 
   return map;
+}
+
+/**
+ * Fetch active email templates via GET /template
+ */
+export async function fetchTemplates(
+  options: BackendConfigOptions = {},
+  fetchFn: typeof fetch = fetch,
+): Promise<EmailTemplate[]> {
+  const { baseUrl, token } = await resolveBackendConfig(options);
+  const url = `${baseUrl}/template`;
+
+  try {
+    const res = await fetchFn(url, {
+      method: "GET",
+      headers: buildHeaders(token),
+    });
+
+    if (!res.ok) {
+      console.warn(`[book-gig] template query returned HTTP ${res.status}: ${res.statusText}`);
+      return [];
+    }
+
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.warn(`[book-gig] Error fetching email templates: ${(err as Error).message}`);
+    return [];
+  }
 }
