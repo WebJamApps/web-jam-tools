@@ -239,10 +239,24 @@ is written.
 
 This check is read-only. It never edits the issue or the document on its own.
 
+## External / Dropbox-only deliverables (Skip Git branch & PR setup)
+
+When an issue's deliverables are strictly external documents (such as manual verification runbooks in `~/Dropbox/web-jam-llms/Token_Savings/...` or docs outside tracked git repositories) with **no tracked files created or modified inside the repository**:
+
+1. **Do NOT create a git branch or isolated worktree.**
+2. **Do NOT bump `deno.json` or `package.json`.**
+3. **Do NOT call `create-draft-pr.sh` or open a PR.** Creating a git PR whose only change is an artificial version bump produces a hollow PR and causes merge/rebase confusion.
+4. **Execution steps for external-only deliverables:**
+   - Author and edit the external document directly at its target path (e.g. `~/Dropbox/web-jam-llms/Token_Savings/design-issue-manual-steps-<YYYY-MM-DD>.md`).
+   - Execute all required format or content validators against the document (e.g. `deno task design:lint-runbook <path>` or `deno task design:lint-doc <path>`).
+   - Output the completed deliverable path, validation logs, and verification evidence directly in the chat session for human review and issue closure.
+5. **Mixed deliverables:** If an issue modifies *both* external files (e.g. Dropbox docs) *and* tracked repository files (e.g. code, tests, configs), it continues to follow the standard git worktree branch, test, and PR creation workflow.
+
 ## Steps
 
-1. Run this shell command (with the target issue the user named) and read
-   its stdout:
+1. **Check for external-only deliverable**: If the issue's deliverables are strictly external to the repository (e.g., Dropbox markdown runbooks or documents with zero repository files modified), follow the instructions in **External / Dropbox-only deliverables (Skip Git branch & PR setup)** above and do NOT run `handle-agy-tasks.sh --setup-only` or create a PR.
+
+   Otherwise, for repository code or mixed deliverables, run this shell command (with the target issue the user named) and read its stdout:
 
    ```
    ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only CollegeLutheran#123
