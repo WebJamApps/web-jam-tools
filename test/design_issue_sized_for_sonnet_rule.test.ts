@@ -66,10 +66,44 @@ Deno.test("skills/design-issue/SKILL.md contains matching refusal table entry fo
 
   assertStringIncludes(
     content,
-    "| file a `Sonnet`-labeled trigger-list issue without an enumerated closed case list of adversarial inputs |",
+    '| file a `Sonnet`-labeled trigger-list issue without an enumerated closed case list of literal input strings — including a list that enumerates categories (e.g. "piped to an interpreter") instead of the strings a matcher will see |',
   );
   assertStringIncludes(
     content,
-    'trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized for Sonnet by its case list, not its diff; vague criteria like "handle edge cases" fail in review; issues must enumerate every adversarial input case or be filed as `Opus` |',
+    'trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized for Sonnet by its case list, not its diff; a case list counts as closed only when every entry is a literal input string, never a category; vague criteria like "handle edge cases" and category-named criteria both fail in review — a category is an unclosed list wearing the shape of a closed one; issues must enumerate every adversarial input case as a literal string, or, where a category cannot be reduced to such a finite set at design time, be filed as `Opus`, naming the category that resisted enumeration |',
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md contains the case-list-closedness rule (web-jam-tools#827)", async () => {
+  const content = await Deno.readTextFile(SKILL_MD_PATH);
+
+  // The closedness rule sits immediately after the Sized for Sonnet paragraph it extends.
+  const sonnetRuleIndex = content.indexOf(
+    "**Trigger-list work is sized for Sonnet by its case list, not its diff.**",
+  );
+  const closednessIndex = content.indexOf(
+    "**A case list counts as closed only when it enumerates input strings, never categories.**",
+  );
+  const closeableIndex = content.indexOf("### Closeable, Always");
+
+  assert(sonnetRuleIndex !== -1, "Missing Sized for Sonnet rule paragraph");
+  assert(closednessIndex !== -1, "Missing case-list-closedness rule paragraph");
+  assert(closeableIndex !== -1, "Missing ### Closeable, Always section");
+  assert(
+    sonnetRuleIndex < closednessIndex && closednessIndex < closeableIndex,
+    "case-list-closedness rule must appear immediately after the Sized for Sonnet rule and before ### Closeable, Always",
+  );
+
+  // The rule ties an unenumerable category to the existing rule's escape hatch, requiring
+  // an Opus label naming the category that resisted enumeration.
+  assertStringIncludes(
+    content,
+    'a category cannot be reduced to a finite set of such strings at design time, that is the "cannot be pinned down" condition in the rule above: the issue is filed `Opus`-labeled, naming the category that could not be enumerated.',
+  );
+
+  // A category may still head a group of enumerated strings, but is never itself a case.
+  assertStringIncludes(
+    content,
+    "A category may still be stated, but only as the heading over its enumerated strings — never as a case in its own right.",
   );
 });
