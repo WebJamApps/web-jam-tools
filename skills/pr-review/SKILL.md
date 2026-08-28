@@ -214,8 +214,10 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
       a Must Fix item. Not when it is stale, not when it is incomplete, not when it
       contradicts what the PR actually built, and not when it describes a superseded design.
     - Reason: Must Fix means *this cannot merge as it stands* — it is reserved for a failing
-      CircleCI check, a failing Snyk check, a merge conflict with the base branch, and defects
-      in the code being merged. A description that has drifted from its diff does not stop the
+      CircleCI check (other than `Version bump check (PR branches only)` failing alone, which
+      Step 4 item 5's carve-out reports as a Suggestion instead), a failing Snyk check, a merge
+      conflict with the base branch, and defects in the code being merged. A description that
+      has drifted from its diff does not stop the
       code from being correct and does not stop the merge.
     - Such a drift may still be raised, but only under `### 🟡 Suggestions`.
     - This is a deliberate carve-out from "A found defect is fixed before merge — never
@@ -235,7 +237,9 @@ with each other):
 2. **CircleCI-failure follow-up** — Step 4, via `deno task post-pr-comment`, and **only when
    CircleCI resolves failing, or is still unresolved once its poll cap is hit**. It carries only
    what is new: the `## PR Review Summary` header, the updated verdict line, and the CircleCI
-   result as a single new Must Fix line naming the failing job and its detail. It **never**
+   result — a new Must Fix line naming the failing job and its detail, except when
+   `Version bump check (PR branches only)` is the only failing job, in which case Step 4 item 5's
+   carve-out reports it as a Suggestions line instead. It **never**
    reprints post #1's Checklist Verification, its other Must Fix items, or its Suggestions — post
    #1 already carried all of that, and repeating it is the waste this shape exists to prevent.
 
@@ -255,7 +259,8 @@ afterward.
      - A version-bump finding alone (Step 2 item 5) is a Suggestion, never a Must Fix — it never by
        itself produces `**🛑 Changes Requested**`, in this post or in Step 4's follow-up.
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
-   - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, which is posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
+   - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
+     - Exception: when the only failing (or unresolved) CircleCI job is `Version bump check (PR branches only)`, Step 4 item 5's carve-out reports it under Suggestions instead of here.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
      The **Semver Bump** row is the one exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
@@ -292,7 +297,8 @@ afterward.
 
    **Example — Step 4's single follow-up for the same PR, once CircleCI resolves failing.** It
    carries the updated verdict and the CircleCI failure, and nothing else: no Checklist
-   Verification block, no repeat of post #1's other Must Fix items, no Suggestions section. The
+   Verification block, no repeat of post #1's other Must Fix items, and — in this example, since
+   the only failing job is not the version-bump job — no Suggestions section either. The
    swallowed-rejection blocker from post #1 is still outstanding and still blocks the merge, which
    is why the verdict stays red — but it is not restated here, because post #1 already said it. The
    CircleCI job failing here ("Format check") is unrelated to the version bump, so per Step 4 item 5
@@ -393,8 +399,8 @@ resolves green, the review is already complete and nothing further is posted.
      reports it deterministically and a rebase clears it (same reasoning as Step 2 item 5). When it
      is the **only** failing (or still-unresolved) job, the follow-up reports it under
      `### 🟡 Suggestions`, not Must Fix, and the verdict does not go red on it alone — post
-     `**✅ Approved**` unless post #1 already reported an unrelated Must Fix, in which case leave
-     post #1's verdict as posted.
+     `**✅ Approved**` unless post #1 already reported an unrelated Must Fix, in which case repeat
+     post #1's verdict line verbatim.
    - **Any other failing job — alone or mixed with a failing version-bump job**: keeps today's
      behavior. The non-version-bump job(s) drive `**🛑 Changes Requested**` and a `### 🛑 Must Fix
      Items` line each. A concurrently-failing version-bump job does not add a second Must Fix line —
@@ -402,10 +408,10 @@ resolves green, the review is already complete and nothing further is posted.
 
    Carry only the `## PR Review Summary` header, the verdict line, and the applicable section(s)
    (`### 🛑 Must Fix Items` and/or `### 🟡 Suggestions`), one line per job:
-   - Must Fix line: `Failing: <job name and failure detail>` if it resolved red, or `Still pending
-     after N minutes — could not confirm passing status, verify manually before merge` if the poll
-     cap was hit with that job still unresolved (an unresolved CI status is treated as blocking,
-     never as silently passing).
+   - Must Fix line: `🛑 Failing: <job name and failure detail>` if it resolved red, or `🛑 Still
+     pending after N minutes — could not confirm passing status, verify manually before merge` if
+     the poll cap was hit with that job still unresolved (an unresolved CI status is treated as
+     blocking, never as silently passing).
    - Suggestions line (version-bump job only): `🟡 CircleCI "<job name>" is failing — <detail>`.
 
    **It carries nothing else.** No Checklist Verification block, no `**CircleCI**` row, no repeat
