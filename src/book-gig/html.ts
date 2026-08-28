@@ -44,6 +44,17 @@ function renderPitchCard(p: PitchEmail, idx: number): string {
   const safePitchText = escapeHtml(p.body);
   const cardId = `pitch-body-${idx + 1}`;
 
+  const contactMeta = p.contactName
+    ? `<span class="meta-contact" style="color: var(--text-secondary); margin-right: 0.5rem;">Contact: <strong>${
+      escapeHtml(p.contactName)
+    }</strong></span>`
+    : "";
+  const phoneMeta = p.phone
+    ? `<span class="meta-phone" style="color: var(--text-secondary); margin-right: 0.5rem;">Tel: <a href="tel:${
+      escapeHtml(p.phone)
+    }" class="meta-email">${escapeHtml(p.phone)}</a></span>`
+    : "";
+
   const secondaryMeta = safeSecondary
     ? `<span class="meta-secondary">(${safeSecondary})</span>`
     : "";
@@ -56,6 +67,8 @@ function renderPitchCard(p: PitchEmail, idx: number): string {
     `      <h3 class="pitch-venue">${safeVenue}</h3>`,
     `    </div>`,
     `    <div class="pitch-meta">`,
+    `      ${contactMeta}`,
+    `      ${phoneMeta}`,
     `      <span class="to-label">To:</span>`,
     `      <a href="mailto:${safeTo}" class="meta-email">${safeTo}</a>`,
     `      ${secondaryMeta}`,
@@ -159,22 +172,24 @@ export function renderDarkHtml(result: BookGigResult): string {
     const checked = result.repliesTracking?.checkReplies.checked ??
       result.repliesTracking?.campaigns.length ?? 0;
     const matched = result.repliesTracking?.checkReplies.matched ?? 0;
-    const pendingCount = result.repliesTracking?.pendingReplies.length ?? 0;
+    const pending = result.repliesTracking?.pendingReplies.length ?? 0;
+    const totalCampaigns = result.repliesTracking?.campaigns.length ?? 0;
+
     heroStatsHtml = `
       <div class="stat-item">
-        <span class="stat-label">Active Pitches</span>
-        <span class="stat-val">${checked} tracked</span>
+        <span class="stat-label">Active Campaigns</span>
+        <span class="stat-val">${totalCampaigns} tracked</span>
       </div>
       <div class="stat-item">
         <span class="stat-label">Replies Matched</span>
-        <span class="stat-val">${matched} replies</span>
+        <span class="stat-val" style="color: var(--badge-green-txt);">${matched} of ${checked} checked</span>
       </div>
       <div class="stat-item">
-        <span class="stat-label">Pending Reviews</span>
-        <span class="stat-val">${pendingCount} queue</span>
+        <span class="stat-label">Pending Action</span>
+        <span class="stat-val" style="color: var(--badge-amber-txt);">${pending} replies</span>
       </div>
       <div class="stat-item">
-        <span class="stat-label">Updated</span>
+        <span class="stat-label">Last Checked</span>
         <span class="stat-val" style="font-size: 0.95rem;">${runDate}</span>
       </div>
     `;
@@ -327,7 +342,13 @@ export function renderDarkHtml(result: BookGigResult): string {
   if (result.candidates.length > 0) {
     const candidateRows = result.candidates.map((c: CandidateVenue, idx: number) => {
       const loc = escapeHtml([c.city, c.usState].filter(Boolean).join(", ") || "—");
-      const email = escapeHtml(c.email || "—");
+      const contact = escapeHtml(c.contactName || "—");
+      const phone = c.phone
+        ? `<a href="tel:${escapeHtml(c.phone)}" class="email-link">${escapeHtml(c.phone)}</a>`
+        : "—";
+      const email = c.email
+        ? `<a href="mailto:${escapeHtml(c.email)}" class="email-link">${escapeHtml(c.email)}</a>`
+        : "—";
       const spacing = escapeHtml(
         c.reason?.spacingNote ||
           (c.reason?.lastGigDate ? `Last: ${c.reason.lastGigDate}` : "Eligible (60+ days)"),
@@ -338,7 +359,9 @@ export function renderDarkHtml(result: BookGigResult): string {
           <td class="num-col">${idx + 1}</td>
           <td class="venue-name"><strong>${escapeHtml(c.name)}</strong></td>
           <td>${loc}</td>
-          <td><a href="mailto:${email}" class="email-link">${email}</a></td>
+          <td>${contact}</td>
+          <td>${phone}</td>
+          <td>${email}</td>
           <td><span class="badge ${
         isReturning ? "badge-returning" : "badge-eligible"
       }">${spacing}</span></td>
@@ -355,7 +378,9 @@ export function renderDarkHtml(result: BookGigResult): string {
                 <th>#</th>
                 <th>Venue Name</th>
                 <th>Location</th>
-                <th>Booking Contact</th>
+                <th>Contact Person</th>
+                <th>Phone</th>
+                <th>Booking Email</th>
                 <th>Spacing Status</th>
               </tr>
             </thead>
@@ -387,10 +412,10 @@ export function renderDarkHtml(result: BookGigResult): string {
         <div class="table-wrap">
           <table class="candidate-table">
             <thead>
-              <tr><th>#</th><th>Venue Name</th><th>Location</th><th>Booking Contact</th><th>Spacing Status</th></tr>
+              <tr><th>#</th><th>Venue Name</th><th>Location</th><th>Contact Person</th><th>Phone</th><th>Booking Email</th><th>Spacing Status</th></tr>
             </thead>
             <tbody>
-              <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">No venues found matching criteria</td></tr>
+              <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No venues found matching criteria</td></tr>
             </tbody>
           </table>
         </div>

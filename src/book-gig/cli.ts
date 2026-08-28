@@ -258,24 +258,26 @@ export async function runBookGigCli(
     console.log(`  (No eligible venues found matching criteria)`);
   } else {
     console.log(
-      `┌─────┬──────────────────────────────┬──────────────────────┬──────────────────────────────┬─────────────────────────┐`,
+      `┌─────┬──────────────────────────┬──────────────────┬──────────────────┬────────────────┬──────────────────────────┬──────────────────────┐`,
     );
     console.log(
-      `│ #   │ Venue Name                   │ Location             │ Email                        │ Spacing Note            │`,
+      `│ #   │ Venue Name               │ Location         │ Contact          │ Phone          │ Email                    │ Spacing Note         │`,
     );
     console.log(
-      `├─────┼──────────────────────────────┼──────────────────────┼──────────────────────────────┼─────────────────────────┤`,
+      `├─────┼──────────────────────────┼──────────────────┼──────────────────┼────────────────┼──────────────────────────┼──────────────────────┤`,
     );
     candidates.forEach((c, idx) => {
       const num = String(idx + 1).padEnd(3);
-      const name = c.name.slice(0, 28).padEnd(28);
-      const loc = `${c.city || ""}, ${c.usState || ""}`.slice(0, 20).padEnd(20);
-      const email = (c.email || "—").slice(0, 28).padEnd(28);
-      const note = (c.reason?.spacingNote || "Eligible").slice(0, 23).padEnd(23);
-      console.log(`│ ${num} │ ${name} │ ${loc} │ ${email} │ ${note} │`);
+      const name = c.name.slice(0, 24).padEnd(24);
+      const loc = `${c.city || ""}, ${c.usState || ""}`.slice(0, 16).padEnd(16);
+      const contact = (c.contactName || "—").slice(0, 16).padEnd(16);
+      const phone = (c.phone || "—").slice(0, 14).padEnd(14);
+      const email = (c.email || "—").slice(0, 24).padEnd(24);
+      const note = (c.reason?.spacingNote || "Eligible").slice(0, 20).padEnd(20);
+      console.log(`│ ${num} │ ${name} │ ${loc} │ ${contact} │ ${phone} │ ${email} │ ${note} │`);
     });
     console.log(
-      `└─────┴──────────────────────────────┴──────────────────────┴──────────────────────────────┴─────────────────────────┘`,
+      `└─────┴──────────────────────────┴──────────────────┴──────────────────┴────────────────┴──────────────────────────┴──────────────────────┘`,
     );
   }
 

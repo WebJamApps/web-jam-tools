@@ -54,6 +54,7 @@ export interface CandidateVenue {
   templateOverride?: string;
   relationshipStage?: TemplateStage;
   contactName?: string;
+  phone?: string;
   notes?: string;
   bookingNotes?: string;
   priorContactNotes?: string;
@@ -74,6 +75,8 @@ export interface PitchEmail {
   venueName: string;
   to: string;
   secondaryTo?: string;
+  contactName?: string;
+  phone?: string;
   subject: string;
   body: string;
   htmlBody?: string;
