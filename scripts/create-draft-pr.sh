@@ -373,10 +373,14 @@ else
     exit 1
   fi
 
-  if ! RAW_LABELS="$("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>&1)"; then
-    echo "ERROR: failed to fetch labels for issue $FORMATTED_ISSUE (via gh): $RAW_LABELS" >&2
+  LABELS_ERR=$(mktemp)
+  if ! RAW_LABELS="$("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>"$LABELS_ERR")"; then
+    FETCH_ERR=$(cat "$LABELS_ERR")
+    rm -f "$LABELS_ERR"
+    echo "ERROR: failed to fetch labels for issue $FORMATTED_ISSUE (via gh): $FETCH_ERR" >&2
     exit 1
   fi
+  rm -f "$LABELS_ERR"
   if [ -n "$RAW_LABELS" ]; then
     mapfile -t ISSUE_LABELS <<< "$RAW_LABELS"
   else
