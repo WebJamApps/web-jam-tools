@@ -55,6 +55,10 @@ async function runShim(
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
+    env: {
+      ...Deno.env.toObject(),
+      AGY_HOOK_RECORD_PATH: "off",
+    },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -337,6 +341,10 @@ Deno.test("unparseable stdin JSON is allowed (nothing to match or normalize)", a
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
+    env: {
+      ...Deno.env.toObject(),
+      AGY_HOOK_RECORD_PATH: "off",
+    },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -583,3 +591,48 @@ Deno.test("end-to-end: agy-hook-shim.sh records invocation payload to AGY_HOOK_R
     await Deno.remove(tempPath);
   }
 });
+
+Deno.test(
+  "regression (web-jam-tools#830): runShim helper sets AGY_HOOK_RECORD_PATH=off so production path is untouched",
+  async () => {
+    const prodPath = DEFAULT_RECORD_PATH;
+    let prodExistedBefore = false;
+    let prodContentBefore = "";
+    try {
+      prodContentBefore = await Deno.readTextFile(prodPath);
+      prodExistedBefore = true;
+    } catch {
+      prodExistedBefore = false;
+    }
+
+    const res = await runShim(
+      "PreToolUse",
+      "Bash",
+      "block-secret-dumps.sh",
+      agyRunCommand("echo regression-web-jam-tools-830"),
+    );
+    assertEquals(res.decision, "allow");
+
+    if (prodExistedBefore) {
+      const prodContentAfter = await Deno.readTextFile(prodPath);
+      assertEquals(
+        prodContentAfter,
+        prodContentBefore,
+        "production record file must not be modified by test runs",
+      );
+    } else {
+      let prodExistsAfter = false;
+      try {
+        await Deno.stat(prodPath);
+        prodExistsAfter = true;
+      } catch {
+        prodExistsAfter = false;
+      }
+      assertEquals(
+        prodExistsAfter,
+        false,
+        "production record file must not be created by test runs",
+      );
+    }
+  },
+);

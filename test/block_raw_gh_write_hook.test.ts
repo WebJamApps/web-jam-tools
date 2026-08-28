@@ -49,6 +49,10 @@ async function runAgy(commandLine: string): Promise<RunResult> {
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
+    env: {
+      ...Deno.env.toObject(),
+      AGY_HOOK_RECORD_PATH: "off",
+    },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
