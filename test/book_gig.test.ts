@@ -22,6 +22,7 @@ import {
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
 import { renderDarkHtml, renderStatusBadge } from "../src/book-gig/html.ts";
+import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
 import { runBookGigCli } from "../src/book-gig/cli.ts";
 import type {
   CandidateVenue,
@@ -851,4 +852,101 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
   );
   assertEquals(resNone.batchDispatch?.sent, 0);
   assertEquals(resNone.batchDispatch?.requested, 0);
+});
+
+Deno.test("openHtmlInBrowser: executes shell command with active display", async () => {
+  let capturedCmd = "";
+  let capturedEnv: Record<string, string> = {};
+
+  const mockExec = (cmd: string, env: Record<string, string>) => {
+    capturedCmd = cmd;
+    capturedEnv = env;
+    return Promise.resolve({ success: true, code: 0 });
+  };
+
+  const opened = await openHtmlInBrowser("/tmp/test-artifact.html", {
+    display: ":1.0",
+    execCommand: mockExec,
+  });
+
+  assertEquals(opened, true);
+  assertStringIncludes(
+    capturedCmd,
+    'DISPLAY=":1.0" google-chrome "file:///tmp/test-artifact.html"',
+  );
+  assertEquals(capturedEnv["DISPLAY"], ":1.0");
+
+  // Error handling
+  const failingExec = () => {
+    return Promise.reject(new Error("Command failed"));
+  };
+  const failed = await openHtmlInBrowser("/tmp/test-artifact.html", {
+    execCommand: failingExec,
+  });
+  assertEquals(failed, false);
+});
+
+Deno.test("parseBookGigArgs: parses --no-open flag properly", () => {
+  const res1 = parseBookGigArgs(["Oct 16-18 2026", "--no-open"]);
+  assertEquals(res1.noOpen, true);
+  assertEquals(res1.weekend?.start, "2026-10-16");
+
+  const res2 = parseBookGigArgs(["--send", "Oct 16-18 2026", "--no-open"]);
+  assertEquals(res2.mode, "send");
+  assertEquals(res2.noOpen, true);
+
+  const res3 = parseBookGigArgs(["--replies", "--no-open"]);
+  assertEquals(res3.mode, "replies");
+  assertEquals(res3.noOpen, true);
+});
+
+Deno.test("runBookGigCli: auto-opens HTML review artifact in Chrome unless --no-open is passed", async () => {
+  const mockVenues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@oldesalem.com",
+    },
+  ];
+
+  const mockFetch: typeof fetch = (url) => {
+    const u = String(url);
+    if (u.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  let openedPath = "";
+  const mockBrowserOpener = (htmlPath: string) => {
+    openedPath = htmlPath;
+    return Promise.resolve(true);
+  };
+
+  // Test auto-open on normal run
+  const resOpen = await runBookGigCli(
+    ["Oct 16-18 2026", "Salem, VA"],
+    mockFetch,
+    mockBrowserOpener,
+  );
+  assertEquals(resOpen.openedBrowser, true);
+  assert(resOpen.htmlPath !== undefined);
+  assertStringIncludes(openedPath, "book-gig-run-2026-10-16-to-2026-10-18.html");
+
+  // Test --no-open bypasses browser opening
+  openedPath = "";
+  const resNoOpen = await runBookGigCli(
+    ["Oct 16-18 2026", "Salem, VA", "--no-open"],
+    mockFetch,
+    mockBrowserOpener,
+  );
+  assertEquals(resNoOpen.openedBrowser, undefined);
+  assertEquals(openedPath, "");
 });

@@ -1,9 +1,9 @@
-// src/book-gig/cli.ts — CLI entry point for /book-gig skill
-
+import * as path from "@std/path";
 import { matchesVenueFilter, parseBookGigArgs } from "./parser.ts";
 import { assessDensity, fetchCandidates, filterAndRankCandidates } from "./candidates.ts";
 import { renderPitch } from "./pitch.ts";
 import { writeDropboxRunLog } from "./gmail.ts";
+import { openHtmlInBrowser } from "./browser.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -60,6 +60,7 @@ function printCampaignsTable(campaigns: OutreachCampaignRecord[]): void {
 export async function runBookGigCli(
   args: string[],
   fetchFn: typeof fetch = fetch,
+  openBrowserImpl?: (htmlPath: string) => Promise<boolean>,
 ): Promise<BookGigResult> {
   const parsed = parseBookGigArgs(args);
 
@@ -171,7 +172,21 @@ export async function runBookGigCli(
     if (logPath) {
       console.log(`\n📝 Saved status run log to: ${logPath}`);
       const htmlPath = logPath.replace(/\.md$/, ".html");
-      console.log(`🌐 Saved live campaign Dark Mode HTML artifact to: ${htmlPath}`);
+      const absHtmlPath = path.resolve(htmlPath);
+      console.log(
+        `🌐 Live Review HTML Artifact: [${path.basename(htmlPath)}](file://${absHtmlPath})`,
+      );
+      console.log(`🌐 File URL: file://${absHtmlPath}`);
+      result.htmlPath = htmlPath;
+
+      if (!parsed.noOpen) {
+        const opener = openBrowserImpl || openHtmlInBrowser;
+        const opened = await opener(htmlPath);
+        result.openedBrowser = opened;
+        if (opened) {
+          console.log(`🚀 Automatically opened live campaign artifact in Google Chrome.`);
+        }
+      }
     }
 
     return result;
@@ -348,7 +363,21 @@ export async function runBookGigCli(
   if (logPath) {
     console.log(`📝 Saved run summary log to: ${logPath}`);
     const htmlPath = logPath.replace(/\.md$/, ".html");
-    console.log(`🌐 Saved Dark Mode HTML review artifact to: ${htmlPath}`);
+    const absHtmlPath = path.resolve(htmlPath);
+    console.log(
+      `🌐 Live Review HTML Artifact: [${path.basename(htmlPath)}](file://${absHtmlPath})`,
+    );
+    console.log(`🌐 File URL: file://${absHtmlPath}`);
+    result.htmlPath = htmlPath;
+
+    if (!parsed.noOpen) {
+      const opener = openBrowserImpl || openHtmlInBrowser;
+      const opened = await opener(htmlPath);
+      result.openedBrowser = opened;
+      if (opened) {
+        console.log(`🚀 Automatically opened review artifact in Google Chrome.`);
+      }
+    }
   }
 
   return result;

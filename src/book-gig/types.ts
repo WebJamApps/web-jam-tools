@@ -115,6 +115,7 @@ export interface ParsedBookGigArgs {
   location?: TargetLocation;
   includeVenues?: string[];
   excludeVenues?: string[];
+  noOpen?: boolean;
   rawArgs: string;
 }
 
@@ -133,4 +134,6 @@ export interface BookGigResult {
   pitches: PitchEmail[];
   batchDispatch?: BatchDispatchResult;
   repliesTracking?: RepliesTrackingResult;
+  htmlPath?: string;
+  openedBrowser?: boolean;
 }
