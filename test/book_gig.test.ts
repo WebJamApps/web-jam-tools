@@ -543,6 +543,69 @@ Deno.test("formatDraftPayload and writeDropboxRunLog: formats and writes run log
   }
 });
 
+Deno.test("writeDropboxRunLog & renderDarkHtml: includes Contact Person and Phone in markdown and HTML artifacts (#874)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v1",
+    name: "Parkway Brewing",
+    city: "Salem",
+    usState: "VA",
+    email: "lezlie@parkwaybrewing.com",
+    contactName: "Lezlie Snyder",
+    phone: "540-555-1234",
+  };
+
+  const pitch = renderPitch(venue, weekend);
+  assertEquals(pitch.contactName, "Lezlie Snyder");
+  assertEquals(pitch.phone, "540-555-1234");
+
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const result = {
+      mode: "preview" as const,
+      weekend,
+      candidates: [venue],
+      density: { count: 1, isSparse: false },
+      pitches: [pitch],
+    };
+
+    const logPath = await writeDropboxRunLog(result, tmpDir);
+    assert(logPath !== null);
+
+    const mdContent = await Deno.readTextFile(logPath);
+    assertStringIncludes(
+      mdContent,
+      "| # | Venue Name | Location | Contact Person | Phone | Booking Email | Spacing Note |",
+    );
+    assertStringIncludes(
+      mdContent,
+      "| 1 | Parkway Brewing | Salem, VA | Lezlie Snyder | 540-555-1234 | lezlie@parkwaybrewing.com |",
+    );
+
+    const html = renderDarkHtml(result);
+    assertStringIncludes(html, "<th>Contact Person</th>");
+    assertStringIncludes(html, "<th>Phone</th>");
+    assertStringIncludes(html, "<td>Lezlie Snyder</td>");
+    assertStringIncludes(html, '<a href="tel:540-555-1234" class="email-link">540-555-1234</a>');
+    assertStringIncludes(html, "Contact: <strong>Lezlie Snyder</strong>");
+    assertStringIncludes(
+      html,
+      'Tel: <a href="tel:540-555-1234" class="meta-email">540-555-1234</a>',
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
 Deno.test("renderStatusBadge: returns appropriate CSS classes for all outreach statuses", () => {
   assertStringIncludes(renderStatusBadge("sent"), "badge-sent");
   assertStringIncludes(renderStatusBadge("replied"), "badge-replied");

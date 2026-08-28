@@ -384,6 +384,8 @@ export function renderPitch(
     venueName: venue.name,
     to,
     secondaryTo,
+    contactName: options.contactName || venue.contactName,
+    phone: venue.phone,
     subject,
     body: plainTextBody,
     htmlBody,

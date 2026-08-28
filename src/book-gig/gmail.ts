@@ -46,9 +46,9 @@ export async function writeDropboxRunLog(
     const htmlPath = `${outputDir}/book-gig-run-${dateSlug}.html`;
 
     const candidateRows = result.candidates.map((c, i) =>
-      `| ${i + 1} | ${c.name} | ${c.city || "—"}, ${c.usState || "—"} | ${c.email || "—"} | ${
-        c.reason?.spacingNote || "—"
-      } |`
+      `| ${i + 1} | ${c.name} | ${c.city || "—"}, ${c.usState || "—"} | ${c.contactName || "—"} | ${
+        c.phone || "—"
+      } | ${c.email || "—"} | ${c.reason?.spacingNote || "—"} |`
     ).join("\n");
 
     const pitchBlocks = result.pitches.map((p, i) =>
@@ -95,9 +95,9 @@ ${p.body}
 
 ## 1. Candidate Venues Evaluated
 
-| # | Venue Name | Location | Booking Email | Spacing Note |
-|---|---|---|---|---|
-${candidateRows || "| — | No candidates found | — | — | — |"}
+| # | Venue Name | Location | Contact Person | Phone | Booking Email | Spacing Note |
+|---|---|---|---|---|---|---|
+${candidateRows || "| — | No candidates found | — | — | — | — | — |"}
 
 ---
 
