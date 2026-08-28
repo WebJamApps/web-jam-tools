@@ -172,3 +172,42 @@ Deno.test(
     assertDispatchedNormally(res);
   },
 );
+
+// --- "Blocked by <issue citation>" dependency-reference carve-out (found live
+// on web-jam-tools#815, whose closed-dependency prose refused dispatch) ---
+
+Deno.test(
+  "bold 'Blocked by' with a closed issue citation dispatches normally",
+  async () => {
+    const res = await runGuard(
+      '**Blocked by** `web-jam-tools#814 "Add the installer-scope, load-bearing-premises and target-issue-body rules to the design-issue skill body"`\n— the checker cannot enforce rules the skill body does not yet state.',
+    );
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "bare 'Blocked by #NNN' with no other decoration dispatches normally",
+  async () => {
+    const res = await runGuard("Blocked by #814 — see that issue for the dependency.");
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "'Blocked by <cause>' with no issue citation is still refused",
+  async () => {
+    const res = await runGuard("**Blocked by** missing vendor API credentials — do not start.");
+    assertRefused(res);
+  },
+);
+
+Deno.test(
+  "bare 'BLOCKED' status declaration is still refused even when a later line cites an issue",
+  async () => {
+    const res = await runGuard(
+      "**BLOCKED**\n\nSee web-jam-tools#814 for background once it lands.",
+    );
+    assertRefused(res);
+  },
+);
