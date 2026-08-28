@@ -373,7 +373,15 @@ else
     exit 1
   fi
 
-  mapfile -t ISSUE_LABELS < <("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>/dev/null || true)
+  if ! RAW_LABELS="$("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>&1)"; then
+    echo "ERROR: failed to fetch labels for issue $FORMATTED_ISSUE (via gh): $RAW_LABELS" >&2
+    exit 1
+  fi
+  if [ -n "$RAW_LABELS" ]; then
+    mapfile -t ISSUE_LABELS <<< "$RAW_LABELS"
+  else
+    ISSUE_LABELS=()
+  fi
 
   # --- refuse closing an issue labeled 'Josh' (web-jam-tools#848) ---
   # Issues labeled 'Josh' are manual human steps / verification runs that no

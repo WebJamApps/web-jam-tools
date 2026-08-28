@@ -440,6 +440,7 @@ async function makeMockGh(
     issueState?: string;
     issueTitle?: string;
     issueLabels?: string[];
+    failLabelsFetch?: boolean;
   } = {},
 ) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-" });
@@ -458,10 +459,12 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
       echo "${options.issueTitle ?? "Test Issue Title"}"
       exit 0
     elif [ "$arg" = "labels" ]; then
-      cat <<'LABELS_EOF'
+      ${
+    options.failLabelsFetch ? 'echo "API rate limit exceeded" >&2; exit 1' : `cat <<'LABELS_EOF'
 ${labelsOutput}
 LABELS_EOF
-      exit 0
+      exit 0`
+  }
     fi
   done
 fi
@@ -962,4 +965,28 @@ Deno.test("accepts --no-close when issue is labeled Josh and emits Refs #N (web-
   assertEquals(res.code, 0, res.stderr);
   assertMatch(res.stdout, /Refs #634/);
   assertNotMatch(res.stdout, /Closes #634/);
+});
+
+Deno.test("refuses and fails closed when fetching issue labels fails (via gh error)", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "Manual verification: run book-gig live pilot",
+    failLabelsFetch: true,
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#634",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 1);
+  assertMatch(
+    res.stderr,
+    /ERROR: failed to fetch labels for issue #634 \(via gh\): API rate limit exceeded/,
+  );
 });
