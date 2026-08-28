@@ -107,3 +107,58 @@ Deno.test("skills/design-issue/SKILL.md contains the case-list-closedness rule (
     "A category may still be stated, but only as the heading over its enumerated strings — never as a case in its own right.",
   );
 });
+
+Deno.test("skills/design-issue/SKILL.md contains the resolver key space sizing rule (web-jam-tools#852)", async () => {
+  const content = await Deno.readTextFile(SKILL_MD_PATH);
+
+  // The resolver key space rule sits immediately after the case-list-closedness paragraph.
+  const closednessIndex = content.indexOf(
+    "**A case list counts as closed only when it enumerates input strings, never categories.**",
+  );
+  const resolverKeySpaceIndex = content.indexOf(
+    "**Resolver work is sized by its key space: acceptance criteria must enumerate key sources and every pairwise collision.**",
+  );
+  const closeableIndex = content.indexOf("### Closeable, Always");
+
+  assert(closednessIndex !== -1, "Missing case-list-closedness rule paragraph");
+  assert(resolverKeySpaceIndex !== -1, "Missing resolver key space rule paragraph");
+  assert(closeableIndex !== -1, "Missing ### Closeable, Always section");
+  assert(
+    closednessIndex < resolverKeySpaceIndex && resolverKeySpaceIndex < closeableIndex,
+    "resolver key space rule must appear immediately after the case-list-closedness rule and before ### Closeable, Always",
+  );
+
+  // Key requirement 1: Distinction between matcher inputs and resolver key sources
+  assertStringIncludes(
+    content,
+    "The rules above test whether a list of matcher inputs is finite; this one tests whether a set of resolver key sources is complete.",
+  );
+
+  // Key requirement 2: Complete set of key sources enumeration and concrete example
+  assertStringIncludes(
+    content,
+    "When a deliverable resolves a reference to a target through any lookup keyed by author-supplied values — registry, index, symbol table, alias resolver — the design run must enumerate the complete set of key sources the format admits",
+  );
+  assertStringIncludes(
+    content,
+    "(for example, `web-jam-tools#748` admitted exactly four: 1-based position, explicit `id`, title, external `repo#N` citation)",
+  );
+
+  // Key requirement 3: Every unordered pair plus self-collisions
+  assertStringIncludes(
+    content,
+    "The acceptance criteria must state the collision behaviour for **every unordered pair** of those key sources, plus each source against itself (four sources yield six pairs and four self-collisions).",
+  );
+
+  // Key requirement 4: Sonnet floor for irreversible external writes
+  assertStringIncludes(
+    content,
+    "A tier floor of **`Sonnet`** applies whenever a wrong resolution causes an irreversible external write — a GitHub edge, an email, a payment — rather than a local error",
+  );
+
+  // Key requirement 5: Opus routing via 'cannot be pinned down' condition
+  assertStringIncludes(
+    content,
+    'Where the key-source set cannot be closed at design time, that is the "cannot be pinned down" condition in the trigger-list rule above: the issue is filed **`Opus`**-labeled, naming the open key space that could not be enumerated.',
+  );
+});
