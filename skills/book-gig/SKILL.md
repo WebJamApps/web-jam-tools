@@ -9,11 +9,12 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
 
 ## Invocation
 
-- `/book-gig <weekend> [location]` — Discovery & preview mode (drafts pitches, logs candidate table).
-- `/book-gig --send "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues).
-- `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies` and displays live campaign status table).
+- `/book-gig <weekend> [location]` — Discovery & preview mode (drafts pitches, logs candidate table, outputs clickable HTML artifact link, and automatically opens it in Chrome).
+- `/book-gig --send "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues, outputs HTML artifact link, and opens in Chrome).
+- `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies`, displays live campaign status table, outputs HTML artifact link, and opens in Chrome).
 - **Examples:**
-  - `deno task book-gig "Oct 16-18 2026"` — sweep all venues across the regional driving radius (~3.5h from Salem, VA).
+  - `deno task book-gig "Oct 16-18 2026"` — sweep all venues across the regional driving radius (~3.5h from Salem, VA) and automatically open the Dark Mode HTML artifact in Chrome.
+  - `deno task book-gig "Oct 16-18 2026" --no-open` — generate pitches and logs without automatically opening Chrome.
   - `deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"` — focus on Lynchburg, VA and surrounding area.
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA"` — dispatch outreach batch to all eligible Lynchburg venues.
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --venues "id1,id2"` — dispatch only to specific approved candidate venues.
@@ -78,7 +79,7 @@ graph TD
 - Calls `POST /outreach/check-replies` on `web-jam-back` to perform Gmail IMAP reply detection.
 - Fetches pending replies (`GET /outreach/replies/pending`) and active campaigns (`GET /outreach`), rendering a status table with live lifecycle badges (`sent`, `replied`, `interested`, `booked`, `not-interested`, `no-response`, `target-filled`), sent dates, and response snippets.
 - Highlights pending AI suggestions for review (`intent`, `confidence`, `suggestedAction`).
-- **Responsive Dark Mode HTML Artifact:** Automatically generates and updates standalone Dark Mode `.html` review artifacts in `~/Dropbox/web-jam-llms/gig-outreach/` for 1-click visual inspection in Google Chrome across desktop and mobile screens.
+- **Responsive Dark Mode HTML Artifact:** Automatically generates and updates standalone Dark Mode `.html` review artifacts in `~/Dropbox/web-jam-llms/gig-outreach/`, always outputs the direct clickable markdown `file://` link in chat / terminal logs, and automatically launches Google Chrome in the background to display the artifact immediately on completion (with `--no-open` supported for headless/CI runs).
 
 ## What It Refuses to Do
 
