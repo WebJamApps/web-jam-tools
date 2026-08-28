@@ -9,6 +9,7 @@ import {
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
   fetchPendingReplies,
+  fetchTemplates,
   fetchVenueMap,
 } from "./outreach_api.ts";
 import type {
@@ -270,12 +271,13 @@ export async function runBookGigCli(
     }
   }
 
-  // 5. Render pitches for candidates with valid email
+  // 5. Render pitches for candidates with valid email using template master
+  const templates = await fetchTemplates({}, fetchFn);
   const pitches: PitchEmail[] = [];
   for (const c of candidates) {
     if (c.email) {
       try {
-        const pitch = renderPitch(c, weekend);
+        const pitch = renderPitch(c, weekend, {}, templates);
         pitches.push(pitch);
       } catch (err) {
         console.warn(`[book-gig] Warning: Skipping pitch for ${c.name}: ${(err as Error).message}`);

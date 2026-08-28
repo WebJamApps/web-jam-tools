@@ -20,6 +20,25 @@ export interface TargetLocation {
   metroSlug?: string;
 }
 
+export type TemplateVenueType =
+  | "Originals"
+  | "PubFestivalBrewery"
+  | "MidRangeCafeBar"
+  | "OnlineForm";
+
+export type TemplateStage = "cold" | "returning";
+
+export interface EmailTemplate {
+  _id?: string;
+  type: TemplateVenueType;
+  stage?: TemplateStage;
+  subject?: string;
+  introHtml?: string;
+  bodyHtml?: string;
+  footerPhotoRef?: string;
+  active?: boolean;
+}
+
 export interface CandidateVenue {
   _id: string;
   name: string;
@@ -29,6 +48,12 @@ export interface CandidateVenue {
   email?: string;
   secondaryEmail?: string;
   venueType?: string;
+  templateOverride?: string;
+  relationshipStage?: TemplateStage;
+  contactName?: string;
+  notes?: string;
+  bookingNotes?: string;
+  priorContactNotes?: string;
   outreachEligible?: boolean;
   gigInterval?: number;
   reason?: {
@@ -48,6 +73,9 @@ export interface PitchEmail {
   secondaryTo?: string;
   subject: string;
   body: string;
+  htmlBody?: string;
+  templateType?: string;
+  templateStage?: string;
 }
 
 export interface BatchDispatchSkipped {
