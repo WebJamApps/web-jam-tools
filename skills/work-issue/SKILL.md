@@ -252,16 +252,17 @@ This check is read-only. It never edits the issue or the document on its own.
 
    ```
    === GEMINI-TASK READY ===
-   REPO_DIR: /home/joshua/WebJamApps/<repo>
+   REPO_DIR: /tmp/agy-worktrees/<repo>-<branch>
+   MAIN_CLONE: /home/joshua/WebJamApps/<repo> (untouched)
    BRANCH: gemini/<slug>
    === TASK PROMPT (implement this) ===
    <the task + standing rules>
    === END TASK ===
    ```
 
-   The branch is **already created and checked out** off fresh `dev`. If the script
-   exits non-zero (dirty tree, missing repo, bad/missing issue argument), stop and
-   report its error to the user — do not improvise.
+   The branch is **already created and checked out in the isolated `/tmp` worktree** off fresh `dev`.
+   The main clone (`MAIN_CLONE`) remains untouched. If the script exits non-zero (dirty tree, missing repo,
+   bad/missing issue argument), stop and report its error to the user — do not improvise.
 
 3. **Perform Model Label Check & Model Selection:** Before implementing:
    - Perform the **Model Label Check**:
@@ -294,9 +295,10 @@ This check is read-only. It never edits the issue or the document on its own.
 
    **Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain. Because Claude and Gemini are the only two pools, this effectively means: if a Claude model is walled, cross to Gemini (and vice versa).
 
-4. Work **entirely inside `REPO_DIR`**: cd there first; every file edit, command,
-   and commit happens in that directory. Read and follow that repo's `AGENTS.md`
-   (or `GEMINI.md`) for its conventions.
+4. Work **entirely inside `REPO_DIR`** (the isolated `/tmp` worktree): cd there first; every file edit,
+   command, and commit happens in that directory. Never work in `MAIN_CLONE`, and do not run
+   `git checkout`, `git switch`, or `git reset` in the main clone during the run. Read and follow
+   that repo's `AGENTS.md` (or `GEMINI.md`) for its conventions.
 
 5. Implement the task from the TASK PROMPT. Commit incrementally with clear,
    conventional messages as you go.
