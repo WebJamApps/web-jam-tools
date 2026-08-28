@@ -604,3 +604,37 @@ Deno.test("skills/design-issue/SKILL.md contains target-issue-body rule", async 
     "The document's verbatim appendix carries the target issue's directive lines, and the checker fails a document that names a target issue while carrying none",
   );
 });
+
+Deno.test("skills/work-issue/SKILL.md contains external-only deliverables workflow rules", async () => {
+  const workIssuePath = `${SKILLS_DIR}work-issue/SKILL.md`;
+  const text = await Deno.readTextFile(workIssuePath);
+
+  assertStringIncludes(
+    text,
+    "## External / Dropbox-only deliverables (Skip Git branch & PR setup)",
+  );
+  assertStringIncludes(
+    text,
+    "When an issue's deliverables are strictly external documents (such as manual verification runbooks in `~/Dropbox/web-jam-llms/Token_Savings/...` or docs outside tracked git repositories) with **no tracked files created or modified inside the repository**:",
+  );
+  assertStringIncludes(
+    text,
+    "1. **Do NOT create a git branch or isolated worktree.**",
+  );
+  assertStringIncludes(
+    text,
+    "2. **Do NOT bump `deno.json` or `package.json`.**",
+  );
+  assertStringIncludes(
+    text,
+    "3. **Do NOT call `create-draft-pr.sh` or open a PR.** Creating a git PR whose only change is an artificial version bump produces a hollow PR and causes merge/rebase confusion.",
+  );
+  assertStringIncludes(
+    text,
+    "Output the completed deliverable path, validation logs, and verification evidence directly in the chat session for human review and issue closure.",
+  );
+  assertStringIncludes(
+    text,
+    "**Mixed deliverables:** If an issue modifies *both* external files (e.g. Dropbox docs) *and* tracked repository files (e.g. code, tests, configs), it continues to follow the standard git worktree branch, test, and PR creation workflow.",
+  );
+});
