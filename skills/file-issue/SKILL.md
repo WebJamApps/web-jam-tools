@@ -141,6 +141,10 @@ that's what following this skill prevents.
     - Edits to shared guardrails, rules, or skill instructions in `AGENTS.md`, `docs/cross-ai-rules.md`, or a skill body (`skills/*/SKILL.md`) must be **purely additive** unless the issue explicitly specifies the retirement, replacement, or deletion of existing rules.
     - Pre-existing rule bullets, rationale, and instructions must never be silently removed, truncated, or clobbered when appending new guidelines.
     - The issue's `## Acceptance criteria` and `## How to test locally` sections must include a named check that proves it (e.g. running `git diff origin/dev -- <file>` to verify that the diff contains no removed lines other than explicitly targeted edits).
+17. **Issue Titles for Project Manager Audience with Skill/Feature Prefix and Epic Citation.**
+    - **Written for a Project Manager Audience**: Issue titles must be professional, concise, action-oriented, and immediately clear to project managers, developers, and stakeholder agents reviewing issues in milestone boards or queues. Avoid vague, generic, or overly terse titles (e.g. avoid bare "fix bug" or "clean up"); state clearly what capability, fix, or requirement is delivered.
+    - **Skill or Feature Scope Prefix**: Where applicable, prefix the title with the specific skill, component, module, or feature path being touched followed by a colon (e.g. `skills/file-issue: ...`, `skills/pr-review: ...`, `model/venue: ...`, `src/uptime: ...`, `venue-mining: ...`, `book-gig: ...`).
+    - **Link/Cite Parent Epic**: When an issue is planned or filed as a sub-issue/child of an Epic, cite the parent Epic by `repo#number "title"` in the issue body (e.g. `## Context` / `Parent Epic: <repo#number "title">`) and link it natively via `--parent <epic_num>` (or GraphQL `addSubIssue`).
 
 ## Citation format (every reference, every time)
 
