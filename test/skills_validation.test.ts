@@ -182,6 +182,50 @@ Deno.test("skills/file-issue/SKILL.md item 14 splits both-surfaces acceptance cr
     "skills/file-issue/SKILL.md item 14 must state that a content-only change needs no installer",
   );
 
+  // A new supporting file inside an already-installed skill directory is content-only
+  assert(
+    text.includes(
+      "a new or existing supporting file inside an already-installed skill directory (e.g. adding `skills/fix-labels/labels.yaml` to the already-installed `fix-labels` skill)",
+    ),
+    "skills/file-issue/SKILL.md item 14 must classify a new supporting file in an already-installed skill directory as content-only",
+  );
+
+  // A brand-new hooks/lib/*.ts module consumed by an already-installed hook is content-only, not structural
+  assert(
+    text.includes(
+      "A brand-new `hooks/lib/*.ts` module consumed by an already-installed hook is **not** a new hook under this bullet",
+    ),
+    "skills/file-issue/SKILL.md item 14's structural bullet must disclaim a new hooks/lib/*.ts module as not a new hook",
+  );
+  assert(
+    text.includes(
+      "a new or existing shared `hooks/lib/*.ts` module consumed by an already-installed hook",
+    ),
+    "skills/file-issue/SKILL.md item 14's content-only bullet must classify a new hooks/lib/*.ts module as content-only",
+  );
+
+  // Skill case: two genuinely distinct symlinks, one criterion per surface as before
+  assert(
+    text.includes(
+      "For a **skill**, `~/.claude/skills/<skill>` and `~/.gemini/config/plugins/webjam-tasks/skills/<skill>` are two genuinely distinct symlinks, so the `## Acceptance criteria` section asserts, per surface, that the installed symlink still resolves into the canonical clone.",
+    ),
+    "skills/file-issue/SKILL.md item 14 must keep the skill content-only case as two distinct symlink assertions",
+  );
+
+  // Hook case: only one hook symlink, so the agy criterion asserts the hooks.json shim registration, not a second symlink
+  assert(
+    text.includes(
+      "For a **hook or a `hooks/lib/*.ts` module**, there is only one hook symlink (`~/.claude/hooks/<hook>.sh`)",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state that a hook or hooks/lib/*.ts module has only one hook symlink",
+  );
+  assert(
+    text.includes(
+      "the agy criterion asserts that `~/.gemini/config/hooks.json`'s shim registration still targets that same `$HOME/.claude/hooks/` path",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state the agy criterion for a hook content-only change asserts the hooks.json shim registration",
+  );
+
   // Explicit prohibition on asserting a ~/.claude/hooks/lib/ path
   assert(
     text.includes("Never assert a `~/.claude/hooks/lib/` path."),
