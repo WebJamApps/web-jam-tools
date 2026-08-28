@@ -435,9 +435,16 @@ Deno.test("a short plain inline value is still accepted (no needless friction)",
 // --- cross-repo vs same-repo --issue formatting tests (web-jam-tools#302) ---
 
 async function makeMockGh(
-  options: { ownerRepo?: string; issueState?: string; issueTitle?: string } = {},
+  options: {
+    ownerRepo?: string;
+    issueState?: string;
+    issueTitle?: string;
+    issueLabels?: string[];
+    failLabelsFetch?: boolean;
+  } = {},
 ) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-" });
+  const labelsOutput = (options.issueLabels ?? []).join("\n");
   const scriptContent = `#!/usr/bin/env bash
 if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
   echo "${options.ownerRepo ?? "WebJamApps/web-jam-tools"}"
@@ -452,8 +459,12 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
       echo "${options.issueTitle ?? "Test Issue Title"}"
       exit 0
     elif [ "$arg" = "labels" ]; then
-      echo "[]"
-      exit 0
+      ${
+    options.failLabelsFetch ? 'echo "API rate limit exceeded" >&2; exit 1' : `cat <<'LABELS_EOF'
+${labelsOutput}
+LABELS_EOF
+      exit 0`
+  }
     fi
   done
 fi
@@ -881,4 +892,101 @@ Deno.test("with no issue and --title provided, PR title comes from --title flag"
   );
   assertEquals(res.code, 0, res.stderr);
   assertMatch(res.stdout, /TITLE: Standalone Fix Without Issue/);
+});
+
+// --- web-jam-tools#848 Josh-labeled issue tests ---
+
+Deno.test("refuses Closes #N when issue is labeled Josh without --part-of or --no-close (web-jam-tools#848)", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "Manual verification: run book-gig live pilot",
+    issueLabels: ["Josh", "Flash High"],
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#634",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 1);
+  assertMatch(
+    res.stderr,
+    /carries the 'Josh' label \(manual human task\) and cannot be closed by an agent PR/,
+  );
+  assertMatch(res.stderr, /Pass --part-of to link your work/);
+});
+
+Deno.test("accepts --part-of when issue is labeled Josh and emits Part of #N (web-jam-tools#848)", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "Manual verification: run book-gig live pilot",
+    issueLabels: ["Josh", "Flash High"],
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#634",
+      "--part-of",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Part of #634/);
+  assertNotMatch(res.stdout, /Closes #634/);
+});
+
+Deno.test("accepts --no-close when issue is labeled Josh and emits Refs #N (web-jam-tools#848)", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "Manual verification: run book-gig live pilot",
+    issueLabels: ["Josh", "Flash High"],
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#634",
+      "--no-close",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /Refs #634/);
+  assertNotMatch(res.stdout, /Closes #634/);
+});
+
+Deno.test("refuses and fails closed when fetching issue labels fails (via gh error)", async () => {
+  const mockGhDir = await makeMockGh({
+    ownerRepo: "WebJamApps/web-jam-tools",
+    issueTitle: "Manual verification: run book-gig live pilot",
+    failLabelsFetch: true,
+  });
+  const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
+  const res = await runScript(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--issue",
+      "WebJamApps/web-jam-tools#634",
+    ],
+    env,
+  );
+  await Deno.remove(mockGhDir, { recursive: true });
+  assertEquals(res.code, 1);
+  assertMatch(
+    res.stderr,
+    /ERROR: failed to fetch labels for issue #634 \(via gh\): API rate limit exceeded/,
+  );
 });

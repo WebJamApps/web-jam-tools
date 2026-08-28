@@ -95,7 +95,7 @@ the body sections via flags:
   Josh merges the PR into dev. Pass `--part-of` (body reads `Part of #N`) when the issue
   must stay open: a partial PR, a standing run-log/epic issue, or a hook issue (hook PRs
   never close on merge because the hook must be installed and confirmed firing first —
-  see `docs/cross-ai-rules.md`). Pass `--no-close` (and optional `--no-close-reason` /
+  see `docs/cross-ai-rules.md`). **Issues labeled `Josh` are manual human steps / verification runs and must never be auto-closed by an agent PR (`create-draft-pr.sh` refuses `Closes #N` on `Josh`-labeled issues and requires `--part-of` or `--no-close`, web-jam-tools#848; the label inspection fails closed if `gh` queries fail).** Pass `--no-close` (and optional `--no-close-reason` /
   `--no-close-reason-file`) when the PR must not close the issue on merge per the rule
   in `docs/cross-ai-rules.md`. (`--closes` is a deprecated no-op, still accepted.)
 - `--screenshots` is for UI-visible changes only; omit the flag to omit the section.

@@ -138,7 +138,8 @@
 # *-file flag are given; body text contains raw HTML-like tags outside backticks
 # (GitHub strips them silently — backtick them); current branch is dev/main;
 # working tree dirty; the repo has no `dev` branch; a resolved issue is
-# missing/closed; --part-of is passed without a resolvable issue; or --update is
+# missing/closed; an issue is labeled 'Josh' without --part-of/--no-close
+# (web-jam-tools#848); --part-of is passed without a resolvable issue; or --update is
 # passed but the current branch has no existing open PR to update.
 
 set -euo pipefail
@@ -371,6 +372,39 @@ else
     echo "ERROR: issue $FORMATTED_ISSUE is $ISSUE_STATE, not OPEN." >&2
     exit 1
   fi
+
+  LABELS_ERR=$(mktemp)
+  if ! RAW_LABELS="$("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>"$LABELS_ERR")"; then
+    FETCH_ERR=$(cat "$LABELS_ERR")
+    rm -f "$LABELS_ERR"
+    echo "ERROR: failed to fetch labels for issue $FORMATTED_ISSUE (via gh): $FETCH_ERR" >&2
+    exit 1
+  fi
+  rm -f "$LABELS_ERR"
+  if [ -n "$RAW_LABELS" ]; then
+    mapfile -t ISSUE_LABELS <<< "$RAW_LABELS"
+  else
+    ISSUE_LABELS=()
+  fi
+
+  # --- refuse closing an issue labeled 'Josh' (web-jam-tools#848) ---
+  # Issues labeled 'Josh' are manual human steps / verification runs that no
+  # agent can close. A PR branching off a manual verification task to provide
+  # incidental fixes or tooling improvements must pass --part-of (or --no-close)
+  # to avoid proposing to auto-close the human task on merge.
+  HAS_JOSH_LABEL=0
+  for l in "${ISSUE_LABELS[@]}"; do
+    if [ "$l" = "Josh" ]; then
+      HAS_JOSH_LABEL=1
+      break
+    fi
+  done
+  if [ "$HAS_JOSH_LABEL" -eq 1 ] && [ "$PART_OF" -ne 1 ] && [ "$NO_CLOSE" -ne 1 ]; then
+    echo "ERROR: issue $FORMATTED_ISSUE carries the 'Josh' label (manual human task) and cannot be closed by an agent PR (web-jam-tools#848)." >&2
+    echo "       Pass --part-of to link your work as a contribution without auto-closing the issue." >&2
+    exit 1
+  fi
+
   if [ -n "$TITLE" ]; then
     PR_TITLE="$TITLE"
   elif [ "$PART_OF" -eq 1 ]; then
@@ -390,7 +424,6 @@ case "$BRANCH_LANE" in
   *)      EXPECT_LANES="" ;;
 esac
 if [ -n "$EXPECT_LANES" ] && [ -n "$ISSUE" ]; then
-  mapfile -t ISSUE_LABELS < <("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>/dev/null || true)
   ISSUE_LANES=()
   for l in "${ISSUE_LABELS[@]}"; do
     case "$l" in opus|agy|fable) ISSUE_LANES+=("$l") ;; esac
