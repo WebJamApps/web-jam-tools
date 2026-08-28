@@ -128,6 +128,18 @@ Deno.test("parseLocation: parses City, State and multi-city expressions", () => 
   assert(loc2.surroundingCities.includes("Radford"));
   assert(loc2.surroundingCities.includes("Christiansburg"));
   assertEquals(loc2.surroundingCities.includes("Marion"), false);
+
+  // Dynamic multi-city in NC
+  const loc3 = parseLocation("Charlotte, Gastonia, Belmont");
+  assert(loc3 !== null);
+  assertEquals(loc3.cities, ["Charlotte", "Gastonia", "Belmont"]);
+  assertEquals(loc3.city, "Charlotte");
+
+  // Dynamic multi-city in Shenandoah
+  const loc4 = parseLocation("Harrisonburg, Staunton, Charlottesville");
+  assert(loc4 !== null);
+  assertEquals(loc4.cities, ["Harrisonburg", "Staunton", "Charlottesville"]);
+  assertEquals(loc4.city, "Harrisonburg");
 });
 
 Deno.test("parseTargetWeekend: parses valid weekend formats and throws on invalid", () => {

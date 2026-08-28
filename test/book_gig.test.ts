@@ -221,10 +221,56 @@ Deno.test("filterAndRankCandidates: prioritizes matching location and retains re
   const loc = parseLocation("Lynchburg, VA")!;
   const filtered = filterAndRankCandidates(sampleVenues, loc);
 
-  assertEquals(filtered.length, 3);
+  assertEquals(filtered.length, 2);
   assertEquals(filtered[0].name, "Waterman's Grill"); // Direct city match
-  assertEquals(filtered[1].name, "Apocalypse Ale Works"); // Same state / neighboring
-  assertEquals(filtered[2].name, "Parkway Brewing"); // Same state / neighboring
+  assertEquals(filtered[1].name, "Apocalypse Ale Works"); // Surrounding Forest match
+  assertEquals(filtered.some((v) => v.name === "Parkway Brewing"), false); // Unrelated metro excluded
+});
+
+Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metros", () => {
+  const ncVenues: CandidateVenue[] = [
+    {
+      _id: "nc1",
+      name: "Sugar Creek Brewing",
+      city: "Charlotte",
+      usState: "NC",
+      address: "215 Southside Dr, Charlotte, NC 28217",
+      email: "party@sugarcreekbrewing.com",
+    },
+    {
+      _id: "nc2",
+      name: "Gaston Pour House",
+      city: "Gastonia",
+      usState: "NC",
+      address: "170 S South St, Gastonia, NC 28052",
+      email: "gph@gastonpourhouse.com",
+    },
+    {
+      _id: "nc3",
+      name: "South Point Social",
+      city: "Belmont",
+      usState: "NC",
+      address: "200 N Main St, Belmont, NC 28012",
+      email: "southpointsocial@gmail.com",
+    },
+    {
+      _id: "nc4",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      address: "21 E Main St, Salem, VA 24153",
+      email: "booking@oldesalem.com",
+    },
+  ];
+
+  const loc = parseLocation("Charlotte, Gastonia, Belmont, NC")!;
+  const filtered = filterAndRankCandidates(ncVenues, loc);
+
+  assertEquals(filtered.length, 3);
+  assertEquals(filtered.some((v) => v.city === "Charlotte"), true);
+  assertEquals(filtered.some((v) => v.city === "Gastonia"), true);
+  assertEquals(filtered.some((v) => v.city === "Belmont"), true);
+  assertEquals(filtered.some((v) => v.city === "Salem"), false);
 });
 
 Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and exclusion of non-target metros", () => {

@@ -76,7 +76,6 @@ export function filterAndRankCandidates(
 
   const exactMatches: CandidateVenue[] = [];
   const surroundingMatches: CandidateVenue[] = [];
-  const regionalMatches: CandidateVenue[] = [];
 
   for (const v of candidates) {
     const vCity = (v.city || "").toLowerCase().trim();
@@ -137,21 +136,13 @@ export function filterAndRankCandidates(
 
     if (isSurrounding) {
       surroundingMatches.push(v);
-    } else if (!hasMultiCityOrSurrounding) {
-      // Legacy behavior: retain same-state venues if no multi-city filter was explicitly provided
-      if (locState && vState === locState) {
-        regionalMatches.push(v);
-      } else if (!locState) {
-        regionalMatches.push(v);
-      }
     }
   }
 
-  // Exact matches first, then neighboring surrounding matches, then general regional
+  // Exact matches first, then neighboring surrounding matches
   return [
     ...exactMatches.sort((a, b) => a.name.localeCompare(b.name)),
     ...surroundingMatches.sort((a, b) => a.name.localeCompare(b.name)),
-    ...regionalMatches.sort((a, b) => a.name.localeCompare(b.name)),
   ];
 }
 
