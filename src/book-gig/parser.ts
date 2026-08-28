@@ -46,6 +46,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
 
   let mode: BookGigMode = "preview";
   let noOpen = false;
+  let explicitLocationStr: string | undefined;
   const includeVenues: string[] = [];
   const excludeVenues: string[] = [];
   const positionalArgs: string[] = [];
@@ -61,6 +62,18 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode = "replies";
     } else if (lower === "--no-open") {
       noOpen = true;
+    } else if (lower === "--cities" || lower === "--locations" || lower === "--location") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        explicitLocationStr = args[i];
+      }
+    } else if (
+      lower.startsWith("--cities=") ||
+      lower.startsWith("--locations=") ||
+      lower.startsWith("--location=")
+    ) {
+      const eqIdx = arg.indexOf("=");
+      explicitLocationStr = arg.slice(eqIdx + 1);
     } else if (lower === "--venues" || lower === "--include") {
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         i++;
@@ -93,9 +106,15 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   const resExcludes = excludeVenues.length > 0 ? Array.from(new Set(excludeVenues)) : undefined;
   const resNoOpen = noOpen ? true : undefined;
 
+  let location: TargetLocation | undefined;
+  if (explicitLocationStr) {
+    location = parseLocation(explicitLocationStr) ?? undefined;
+  }
+
   if (!rawArgs) {
     return {
       mode,
+      location,
       includeVenues: resIncludes,
       excludeVenues: resExcludes,
       noOpen: resNoOpen,
@@ -103,44 +122,49 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     };
   }
 
-  // Try matching date part first
-  // Check if positionalArgs start with ISO date or natural month
-  let dateTokens: string[] = [];
-  let locTokens: string[] = [];
-
-  const firstToken = positionalArgs[0].toLowerCase();
-  if (firstToken.match(/^\d{4}-\d{2}-\d{2}$/)) {
-    dateTokens = [positionalArgs[0]];
-    locTokens = positionalArgs.slice(1);
-  } else if (MONTH_MAP[firstToken.replace(/[^a-z]/g, "")] || firstToken === "weekend") {
-    // Collect date tokens until we hit a location indicator (e.g. city or zip)
-    let i = 0;
-    while (i < positionalArgs.length) {
-      const t = positionalArgs[i];
-      if (i > 0 && (t.match(/^\d{5}$/) || t.includes(",") || (i >= 3 && isNaN(parseInt(t, 10))))) {
-        break;
-      }
-      dateTokens.push(t);
-      i++;
-    }
-    locTokens = positionalArgs.slice(i);
-  } else {
-    // If first token is not date, check if full rawArgs can parse as date
+  // If explicit location was given, try parsing rawArgs as weekend
+  if (location) {
+    let weekend: TargetWeekend | undefined;
     try {
-      const weekend = parseTargetWeekend(rawArgs);
+      weekend = parseTargetWeekend(rawArgs);
+    } catch {
+      // ignore
+    }
+    return {
+      mode,
+      weekend,
+      location,
+      includeVenues: resIncludes,
+      excludeVenues: resExcludes,
+      noOpen: resNoOpen,
+      rawArgs,
+    };
+  }
+
+  // Check for compound date expression: "<date> and <location>", "<date>, <location>", or "<date> <location>"
+  // e.g. "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"
+  // e.g. "October 16-18, 2026, Lynchburg, VA"
+  // e.g. "2026-10-16 24502"
+  const compoundMatch = rawArgs.match(
+    /^((?:weekend\s+of\s+)?[a-z]+\.?\s+\d{1,2}(?:\s*[-–]\s*\d{1,2})?(?:[,\s]+\d{4})?|\d{4}-\d{2}-\d{2}(?:\s*(?:to|\/|-)\s*\d{4}-\d{2}-\d{2})?)\s*(?:and\s+|,|\s+)(.+)$/i,
+  );
+
+  if (compoundMatch) {
+    const candidateDateStr = compoundMatch[1].trim();
+    const candidateLocStr = compoundMatch[2].trim();
+    let weekend: TargetWeekend | undefined;
+    try {
+      weekend = parseTargetWeekend(candidateDateStr);
+    } catch {
+      // date parsing failed
+    }
+
+    if (weekend) {
+      location = parseLocation(candidateLocStr) ?? undefined;
       return {
         mode,
         weekend,
-        includeVenues: resIncludes,
-        excludeVenues: resExcludes,
-        noOpen: resNoOpen,
-        rawArgs,
-      };
-    } catch {
-      // Otherwise treat everything as location or return raw
-      return {
-        mode,
-        location: parseLocation(rawArgs) ?? undefined,
+        location,
         includeVenues: resIncludes,
         excludeVenues: resExcludes,
         noOpen: resNoOpen,
@@ -149,29 +173,29 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     }
   }
 
-  let weekend: TargetWeekend | undefined;
-  if (dateTokens.length > 0) {
-    try {
-      weekend = parseTargetWeekend(dateTokens.join(" "));
-    } catch {
-      // Ignore if unparseable, leave undefined for interactive fallback
-    }
+  // Try parsing full rawArgs as date
+  try {
+    const weekend = parseTargetWeekend(rawArgs);
+    return {
+      mode,
+      weekend,
+      includeVenues: resIncludes,
+      excludeVenues: resExcludes,
+      noOpen: resNoOpen,
+      rawArgs,
+    };
+  } catch {
+    // If not date, treat rawArgs as location
+    location = parseLocation(rawArgs) ?? undefined;
+    return {
+      mode,
+      location,
+      includeVenues: resIncludes,
+      excludeVenues: resExcludes,
+      noOpen: resNoOpen,
+      rawArgs,
+    };
   }
-
-  let location: TargetLocation | undefined;
-  if (locTokens.length > 0) {
-    location = parseLocation(locTokens.join(" ")) ?? undefined;
-  }
-
-  return {
-    mode,
-    weekend,
-    location,
-    includeVenues: resIncludes,
-    excludeVenues: resExcludes,
-    noOpen: resNoOpen,
-    rawArgs,
-  };
 }
 
 const MONTH_MAP: Record<string, number> = {
@@ -217,48 +241,214 @@ const MONTH_NAMES = [
   "December",
 ];
 
-const KNOWN_METROS: Record<string, { slug: string; city: string; state: string; zips: string[] }> =
-  {
-    "roanoke": {
-      slug: "roanoke",
-      city: "Roanoke",
-      state: "VA",
-      zips: ["24011", "24012", "24013", "24014", "24015", "24016", "24017", "24018", "24019"],
-    },
-    "salem": { slug: "roanoke", city: "Salem", state: "VA", zips: ["24153"] },
-    "lynchburg": {
-      slug: "lynchburg",
-      city: "Lynchburg",
-      state: "VA",
-      zips: ["24501", "24502", "24503", "24504"],
-    },
-    "forest": { slug: "lynchburg", city: "Forest", state: "VA", zips: ["24551"] },
-    "bedford": { slug: "lynchburg", city: "Bedford", state: "VA", zips: ["24523"] },
-    "blacksburg": {
-      slug: "blacksburg-christiansburg",
-      city: "Blacksburg",
-      state: "VA",
-      zips: ["24060", "24061"],
-    },
-    "christiansburg": {
-      slug: "blacksburg-christiansburg",
-      city: "Christiansburg",
-      state: "VA",
-      zips: ["24073"],
-    },
-    "charlottesville": {
-      slug: "charlottesville",
-      city: "Charlottesville",
-      state: "VA",
-      zips: ["22901", "22902", "22903"],
-    },
-    "greensboro": {
-      slug: "greensboro-high-point",
-      city: "Greensboro",
-      state: "NC",
-      zips: ["27401", "27402", "27403"],
-    },
-  };
+export const METRO_SURROUNDING: Record<string, string[]> = {
+  "lynchburg": [
+    "Forest",
+    "Bedford",
+    "Rustburg",
+    "Madison Heights",
+    "Amherst",
+    "Appomattox",
+  ],
+  "blacksburg-christiansburg": [
+    "Christiansburg",
+    "Radford",
+    "Floyd",
+    "Pulaski",
+    "Marion",
+  ],
+  "martinsville": [
+    "Bassett",
+    "Collinsville",
+    "Spencer",
+    "Stuart",
+    "Stanleytown",
+  ],
+  "roanoke-salem": [
+    "Vinton",
+    "Daleville",
+    "Troutville",
+    "Cave Spring",
+    "Rocky Mount",
+  ],
+  "roanoke": [
+    "Vinton",
+    "Daleville",
+    "Troutville",
+    "Cave Spring",
+    "Rocky Mount",
+  ],
+  "salem": [
+    "Vinton",
+    "Daleville",
+    "Troutville",
+    "Cave Spring",
+    "Rocky Mount",
+  ],
+  "charlottesville": [
+    "Crozet",
+    "Waynesboro",
+    "Keswick",
+    "Scottsville",
+  ],
+  "greensboro-high-point": [
+    "High Point",
+    "Winston-Salem",
+    "Burlington",
+    "Kernersville",
+  ],
+};
+
+export const KNOWN_METROS: Record<
+  string,
+  { slug: string; city: string; state: string; zips: string[] }
+> = {
+  "roanoke": {
+    slug: "roanoke",
+    city: "Roanoke",
+    state: "VA",
+    zips: ["24011", "24012", "24013", "24014", "24015", "24016", "24017", "24018", "24019"],
+  },
+  "salem": { slug: "roanoke", city: "Salem", state: "VA", zips: ["24153"] },
+  "vinton": { slug: "roanoke", city: "Vinton", state: "VA", zips: ["24179"] },
+  "daleville": { slug: "roanoke", city: "Daleville", state: "VA", zips: ["24083"] },
+  "troutville": { slug: "roanoke", city: "Troutville", state: "VA", zips: ["24175"] },
+  "cave spring": { slug: "roanoke", city: "Cave Spring", state: "VA", zips: ["24018"] },
+  "rocky mount": { slug: "roanoke", city: "Rocky Mount", state: "VA", zips: ["24151"] },
+  "roanoke-salem": {
+    slug: "roanoke-salem",
+    city: "Roanoke",
+    state: "VA",
+    zips: [
+      "24011",
+      "24012",
+      "24013",
+      "24014",
+      "24015",
+      "24016",
+      "24017",
+      "24018",
+      "24019",
+      "24153",
+    ],
+  },
+  "lynchburg": {
+    slug: "lynchburg",
+    city: "Lynchburg",
+    state: "VA",
+    zips: ["24501", "24502", "24503", "24504"],
+  },
+  "forest": { slug: "lynchburg", city: "Forest", state: "VA", zips: ["24551"] },
+  "bedford": { slug: "lynchburg", city: "Bedford", state: "VA", zips: ["24523"] },
+  "rustburg": { slug: "lynchburg", city: "Rustburg", state: "VA", zips: ["24588"] },
+  "madison heights": { slug: "lynchburg", city: "Madison Heights", state: "VA", zips: ["24572"] },
+  "amherst": { slug: "lynchburg", city: "Amherst", state: "VA", zips: ["24521"] },
+  "appomattox": { slug: "lynchburg", city: "Appomattox", state: "VA", zips: ["24522"] },
+  "blacksburg": {
+    slug: "blacksburg-christiansburg",
+    city: "Blacksburg",
+    state: "VA",
+    zips: ["24060", "24061"],
+  },
+  "christiansburg": {
+    slug: "blacksburg-christiansburg",
+    city: "Christiansburg",
+    state: "VA",
+    zips: ["24073"],
+  },
+  "radford": {
+    slug: "blacksburg-christiansburg",
+    city: "Radford",
+    state: "VA",
+    zips: ["24141", "24142", "24143"],
+  },
+  "floyd": { slug: "blacksburg-christiansburg", city: "Floyd", state: "VA", zips: ["24091"] },
+  "pulaski": { slug: "blacksburg-christiansburg", city: "Pulaski", state: "VA", zips: ["24301"] },
+  "marion": { slug: "blacksburg-christiansburg", city: "Marion", state: "VA", zips: ["24354"] },
+  "blacksburg-christiansburg": {
+    slug: "blacksburg-christiansburg",
+    city: "Blacksburg",
+    state: "VA",
+    zips: ["24060", "24061", "24073"],
+  },
+  "martinsville": {
+    slug: "martinsville",
+    city: "Martinsville",
+    state: "VA",
+    zips: ["24112", "24113", "24114", "24115"],
+  },
+  "bassett": { slug: "martinsville", city: "Bassett", state: "VA", zips: ["24055"] },
+  "collinsville": { slug: "martinsville", city: "Collinsville", state: "VA", zips: ["24078"] },
+  "spencer": { slug: "martinsville", city: "Spencer", state: "VA", zips: ["24165"] },
+  "stuart": { slug: "martinsville", city: "Stuart", state: "VA", zips: ["24171"] },
+  "stanleytown": { slug: "martinsville", city: "Stanleytown", state: "VA", zips: ["24168"] },
+  "charlottesville": {
+    slug: "charlottesville",
+    city: "Charlottesville",
+    state: "VA",
+    zips: ["22901", "22902", "22903"],
+  },
+  "greensboro": {
+    slug: "greensboro-high-point",
+    city: "Greensboro",
+    state: "NC",
+    zips: ["27401", "27402", "27403"],
+  },
+};
+
+const US_STATES: Set<string> = new Set([
+  "AL",
+  "AK",
+  "AZ",
+  "AR",
+  "CA",
+  "CO",
+  "CT",
+  "DE",
+  "FL",
+  "GA",
+  "HI",
+  "ID",
+  "IL",
+  "IN",
+  "IA",
+  "KS",
+  "KY",
+  "LA",
+  "ME",
+  "MD",
+  "MA",
+  "MI",
+  "MN",
+  "MS",
+  "MO",
+  "MT",
+  "NE",
+  "NV",
+  "NH",
+  "NJ",
+  "NM",
+  "NY",
+  "NC",
+  "ND",
+  "OH",
+  "OK",
+  "OR",
+  "PA",
+  "RI",
+  "SC",
+  "SD",
+  "TN",
+  "TX",
+  "UT",
+  "VT",
+  "VA",
+  "WA",
+  "WV",
+  "WI",
+  "WY",
+  "DC",
+]);
 
 function formatIso(year: number, month: number, day: number): string {
   const m = String(month).padStart(2, "0");
@@ -371,65 +561,162 @@ export function parseTargetWeekend(input: string, referenceYear = 2026): TargetW
 }
 
 /**
- * Parse an optional location string (e.g. "Lynchburg, VA", "24502", "Roanoke", "lynchburg")
+ * Parse an optional location string (e.g. "Lynchburg, VA", "24502", "Roanoke", "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas")
  */
 export function parseLocation(input?: string): TargetLocation | null {
   if (!input || !input.trim()) return null;
-  const clean = input.trim();
+  const raw = input.trim();
+  let working = raw;
 
-  // 5-digit zipcode
-  const zipMatch = clean.match(/^(\d{5})$/);
+  // 1. Detect and extract "and surrounding areas", "surrounding areas", "and surrounding", etc.
+  let includeSurrounding = false;
+  const surroundingRegex =
+    /(?:,\s*)?(?:\band\s+)?(?:the\s+)?surrounding(?:\s+regional)?\s+areas?\b/i;
+  const surroundingShortRegex = /(?:,\s*)?(?:\band\s+)?surrounding\b/i;
+
+  if (surroundingRegex.test(working)) {
+    includeSurrounding = true;
+    working = working.replace(surroundingRegex, "").trim();
+  } else if (surroundingShortRegex.test(working)) {
+    includeSurrounding = true;
+    working = working.replace(surroundingShortRegex, "").trim();
+  }
+
+  // 2. Check 5-digit zipcode
+  const zipMatch = working.match(/^(\d{5})$/);
   if (zipMatch) {
     const zip = zipMatch[1];
-    // Reverse-lookup known metro
     for (const metro of Object.values(KNOWN_METROS)) {
       if (metro.zips.includes(zip)) {
+        const surrounding = METRO_SURROUNDING[metro.slug] || [];
         return {
-          raw: clean,
+          raw,
           city: metro.city,
           state: metro.state,
           zip,
           metroSlug: metro.slug,
+          cities: [metro.city],
+          includeSurrounding: includeSurrounding || undefined,
+          surroundingCities: includeSurrounding
+            ? surrounding.filter((c) => c !== metro.city)
+            : undefined,
         };
       }
     }
     return {
-      raw: clean,
+      raw,
       zip,
+      includeSurrounding: includeSurrounding || undefined,
     };
   }
 
-  // City, State: "Lynchburg, VA" or "Lynchburg VA"
-  const cityStateMatch = clean.match(/^([a-zA-Z\s.-]+),\s*([a-zA-Z]{2})$/);
-  if (cityStateMatch) {
-    const city = cityStateMatch[1].trim();
-    const state = cityStateMatch[2].trim().toUpperCase();
-    const slug = city.toLowerCase().replace(/\s+/g, "-");
-    const matchedMetro = KNOWN_METROS[city.toLowerCase()]?.slug || slug;
+  // 3. Single City, State check (e.g. "Lynchburg, VA" or "Lynchburg VA")
+  const singleCityStateMatch = working.match(/^([a-zA-Z\s.-]+),\s*([a-zA-Z]{2})$/);
+  if (singleCityStateMatch && US_STATES.has(singleCityStateMatch[2].toUpperCase())) {
+    const city = singleCityStateMatch[1].trim();
+    const state = singleCityStateMatch[2].trim().toUpperCase();
+    const cityLower = city.toLowerCase();
+    const metro = KNOWN_METROS[cityLower];
+    const metroSlug = metro?.slug || cityLower.replace(/\s+/g, "-");
+    const surrounding = METRO_SURROUNDING[metroSlug] || METRO_SURROUNDING[cityLower] || [];
 
     return {
-      raw: clean,
+      raw,
       city,
       state,
-      metroSlug: matchedMetro,
+      metroSlug,
+      cities: [city],
+      includeSurrounding: includeSurrounding || undefined,
+      surroundingCities: includeSurrounding
+        ? surrounding.filter((c) => c.toLowerCase() !== cityLower)
+        : (surrounding.length > 0
+          ? surrounding.filter((c) => c.toLowerCase() !== cityLower)
+          : undefined),
     };
   }
 
-  // Bare City name or Metro slug
-  const lower = clean.toLowerCase();
-  if (KNOWN_METROS[lower]) {
-    const metro = KNOWN_METROS[lower];
-    return {
-      raw: clean,
-      city: metro.city,
-      state: metro.state,
-      metroSlug: metro.slug,
-    };
+  // 4. Multi-city / compound list parsing:
+  // Split on commas first, then handle "and"
+  // E.g. "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke"
+  // E.g. "Lynchburg and Roanoke"
+  // E.g. "Lynchburg, Blacksburg, and Roanoke"
+  const commaParts = working.split(",").map((p) => p.trim()).filter(Boolean);
+  const rawCityTokens: string[] = [];
+  let detectedState: string | undefined;
+
+  for (let i = 0; i < commaParts.length; i++) {
+    let part = commaParts[i];
+    // Check if this part is just a 2-letter state code like "VA"
+    if (part.length === 2 && US_STATES.has(part.toUpperCase())) {
+      detectedState = part.toUpperCase();
+      continue;
+    }
+    // Check if part ends with state like "Lynchburg VA"
+    const stateSuffixMatch = part.match(/^(.*?)\s+([a-zA-Z]{2})$/);
+    if (stateSuffixMatch && US_STATES.has(stateSuffixMatch[2].toUpperCase())) {
+      part = stateSuffixMatch[1].trim();
+      detectedState = stateSuffixMatch[2].toUpperCase();
+    }
+
+    // Split part on "and" if it contains "and"
+    const andParts = part.split(/\band\b/i).map((p) => p.trim()).filter(Boolean);
+    for (const ap of andParts) {
+      if (ap.length === 2 && US_STATES.has(ap.toUpperCase())) {
+        detectedState = ap.toUpperCase();
+      } else if (ap) {
+        rawCityTokens.push(ap);
+      }
+    }
   }
+
+  if (rawCityTokens.length === 0) {
+    return null;
+  }
+
+  // Normalize each city token: capitalize nicely or match to KNOWN_METROS
+  const cities: string[] = [];
+  const metroSlugs: string[] = [];
+  const surroundingSet = new Set<string>();
+
+  for (const rawToken of rawCityTokens) {
+    const lowerToken = rawToken.toLowerCase();
+    const known = KNOWN_METROS[lowerToken];
+    const cityName = known ? known.city : rawToken.replace(/\b\w/g, (c) => c.toUpperCase());
+    if (!cities.includes(cityName)) {
+      cities.push(cityName);
+    }
+    const slug = known?.slug || lowerToken.replace(/\s+/g, "-");
+    if (!metroSlugs.includes(slug)) {
+      metroSlugs.push(slug);
+    }
+    if (known?.state && !detectedState) {
+      detectedState = known.state;
+    }
+    // Collect surrounding cities
+    const surroundingList = METRO_SURROUNDING[slug] || METRO_SURROUNDING[lowerToken] || [];
+    for (const sc of surroundingList) {
+      surroundingSet.add(sc);
+    }
+  }
+
+  // Remove target cities from surroundingCities set
+  for (const c of cities) {
+    surroundingSet.delete(c);
+  }
+  const surroundingCities = Array.from(surroundingSet);
+
+  const primaryCity = cities[0];
+  const primarySlug = metroSlugs[0] || primaryCity.toLowerCase().replace(/\s+/g, "-");
 
   return {
-    raw: clean,
-    city: clean,
-    metroSlug: clean.toLowerCase().replace(/\s+/g, "-"),
+    raw,
+    city: primaryCity,
+    state: detectedState,
+    metroSlug: primarySlug,
+    cities,
+    includeSurrounding: includeSurrounding || undefined,
+    surroundingCities: includeSurrounding
+      ? surroundingCities
+      : (surroundingCities.length > 0 ? surroundingCities : undefined),
   };
 }

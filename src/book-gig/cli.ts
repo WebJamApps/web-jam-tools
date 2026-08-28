@@ -17,6 +17,7 @@ import type {
   BookGigResult,
   OutreachCampaignRecord,
   PitchEmail,
+  TargetLocation,
 } from "./types.ts";
 
 function printCampaignsTable(campaigns: OutreachCampaignRecord[]): void {
@@ -56,6 +57,23 @@ function printCampaignsTable(campaigns: OutreachCampaignRecord[]): void {
   console.log(
     `└─────┴──────────────────────────────┴──────────────────────┴────────────────┴────────────┴──────────────────────────────────────┘`,
   );
+}
+
+export function formatLocationDisplay(location?: TargetLocation): string {
+  if (!location) return "All Regional Metros (~3.5h drive)";
+  if (location.cities && location.cities.length > 1) {
+    const list = location.cities.join(", ");
+    return location.includeSurrounding ? `${list} (and surrounding regional areas)` : list;
+  }
+  if (location.city && location.includeSurrounding) {
+    return `${location.city}${
+      location.state ? `, ${location.state}` : ""
+    } (and surrounding regional areas)`;
+  }
+  if (location.city && location.state) {
+    return `${location.city}, ${location.state}`;
+  }
+  return location.raw;
 }
 
 export async function runBookGigCli(
@@ -222,7 +240,7 @@ export async function runBookGigCli(
   }
   console.log(`======================================================`);
   console.log(`Target Weekend:  ${weekend.label} (${weekend.start} to ${weekend.end})`);
-  console.log(`Target Location: ${location ? location.raw : "All Regional Metros (~3.5h drive)"}`);
+  console.log(`Target Location: ${formatLocationDisplay(location)}`);
   console.log(`------------------------------------------------------\n`);
 
   // 1. Fetch eligible candidates from web-jam-back

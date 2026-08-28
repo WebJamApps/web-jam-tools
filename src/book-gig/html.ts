@@ -126,13 +126,22 @@ export function renderDarkHtml(result: BookGigResult): string {
   const weekendLabel = weekend
     ? escapeHtml(weekend.label || `${weekend.start} to ${weekend.end}`)
     : "All Active Campaigns";
-  const locationLabel = result.location
-    ? escapeHtml(
-      result.location.city
-        ? `${result.location.city}, ${result.location.state || ""}`
-        : result.location.raw,
-    )
-    : "All Regional Metros (~3.5h drive)";
+
+  let locText = "All Regional Metros (~3.5h drive)";
+  if (result.location) {
+    if (result.location.cities && result.location.cities.length > 1) {
+      const list = result.location.cities.join(", ");
+      locText = result.location.includeSurrounding ? `${list} (+ surrounding)` : list;
+    } else if (result.location.city) {
+      const stateSuffix = result.location.state ? `, ${result.location.state}` : "";
+      locText = `${result.location.city}${stateSuffix}${
+        result.location.includeSurrounding ? " (+ surrounding)" : ""
+      }`;
+    } else {
+      locText = result.location.raw;
+    }
+  }
+  const locationLabel = escapeHtml(locText);
   const candidateCount = result.candidates.length;
   const pitchCount = result.pitches.length;
   const runDate = new Date().toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" });
