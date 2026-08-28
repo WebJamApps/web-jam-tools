@@ -18,6 +18,9 @@ export interface TargetLocation {
   state?: string;
   zip?: string;
   metroSlug?: string;
+  cities?: string[];
+  includeSurrounding?: boolean;
+  surroundingCities?: string[];
 }
 
 export type TemplateVenueType =

@@ -63,47 +63,82 @@ export function filterAndRankCandidates(
     return [...candidates].sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  const locCity = location.city?.toLowerCase();
+  const targetCities = (location.cities && location.cities.length > 0)
+    ? location.cities.map((c) => c.toLowerCase())
+    : (location.city ? [location.city.toLowerCase()] : []);
+  const surroundingCities = (location.surroundingCities || []).map((c) => c.toLowerCase());
   const locZip = location.zip;
   const locMetro = location.metroSlug?.toLowerCase();
+  const locState = location.state?.toUpperCase();
+  const hasMultiCityOrSurrounding = (location.cities && location.cities.length > 1) ||
+    Boolean(location.includeSurrounding);
 
   const exactMatches: CandidateVenue[] = [];
+  const surroundingMatches: CandidateVenue[] = [];
   const regionalMatches: CandidateVenue[] = [];
 
   for (const v of candidates) {
-    const vCity = (v.city || "").toLowerCase();
+    const vCity = (v.city || "").toLowerCase().trim();
     const vAddr = (v.address || "").toLowerCase();
-    const vState = (v.usState || "").toUpperCase();
+    const vState = (v.usState || "").toUpperCase().trim();
 
     let isExact = false;
 
-    // Check exact zipcode match in address
-    if (locZip && vAddr.includes(locZip)) {
+    // 1. Check exact zipcode match
+    if (locZip && (vAddr.includes(locZip) || vAddr.endsWith(locZip))) {
       isExact = true;
     }
 
-    // Check city equality or substring match
-    if (locCity && (vCity === locCity || vAddr.includes(locCity))) {
-      isExact = true;
+    // 2. Check exact city match across target cities
+    if (!isExact && targetCities.length > 0) {
+      for (const tc of targetCities) {
+        if (vCity === tc || vAddr.includes(tc) || (tc.length >= 4 && vCity.includes(tc))) {
+          isExact = true;
+          break;
+        }
+      }
     }
 
-    // Check metro slug proximity
-    if (locMetro && (vCity.includes(locMetro) || locMetro.includes(vCity))) {
+    // 3. Check metro slug proximity if single city/metro
+    if (
+      !isExact && !hasMultiCityOrSurrounding && locMetro &&
+      (vCity.includes(locMetro) || locMetro.includes(vCity))
+    ) {
       isExact = true;
     }
 
     if (isExact) {
       exactMatches.push(v);
-    } else if (location.state && vState === location.state) {
-      regionalMatches.push(v);
-    } else if (!location.state) {
-      regionalMatches.push(v);
+      continue;
+    }
+
+    // 4. Check surrounding areas match
+    let isSurrounding = false;
+    if (surroundingCities.length > 0) {
+      for (const sc of surroundingCities) {
+        if (vCity === sc || vAddr.includes(sc) || (sc.length >= 4 && vCity.includes(sc))) {
+          isSurrounding = true;
+          break;
+        }
+      }
+    }
+
+    if (isSurrounding) {
+      surroundingMatches.push(v);
+    } else if (!hasMultiCityOrSurrounding) {
+      // Legacy behavior: retain same-state venues if no multi-city filter was explicitly provided
+      if (locState && vState === locState) {
+        regionalMatches.push(v);
+      } else if (!locState) {
+        regionalMatches.push(v);
+      }
     }
   }
 
-  // Exact matches first, then neighboring regional matches
+  // Exact matches first, then neighboring surrounding matches, then general regional
   return [
     ...exactMatches.sort((a, b) => a.name.localeCompare(b.name)),
+    ...surroundingMatches.sort((a, b) => a.name.localeCompare(b.name)),
     ...regionalMatches.sort((a, b) => a.name.localeCompare(b.name)),
   ];
 }

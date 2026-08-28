@@ -30,7 +30,7 @@ import {
 } from "../src/book-gig/outreach_api.ts";
 import { renderDarkHtml, renderStatusBadge } from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
-import { runBookGigCli } from "../src/book-gig/cli.ts";
+import { formatLocationDisplay, runBookGigCli } from "../src/book-gig/cli.ts";
 import type {
   CandidateVenue,
   EmailTemplate,
@@ -88,6 +88,44 @@ Deno.test("parseLocation: parses zipcodes, City/State, and metro slugs", () => {
 
   const loc4 = parseLocation(undefined);
   assertEquals(loc4, null);
+});
+
+Deno.test("parseLocation: parses multi-city comma lists, and conjunctions, and surrounding areas", () => {
+  // Comma-separated list of cities
+  const loc1 = parseLocation("Lynchburg, Blacksburg, Martinsville, Salem, Roanoke");
+  assertEquals(loc1?.cities, ["Lynchburg", "Blacksburg", "Martinsville", "Salem", "Roanoke"]);
+  assertEquals(loc1?.city, "Lynchburg");
+  assertEquals(loc1?.state, "VA");
+  assertEquals(loc1?.includeSurrounding, undefined);
+
+  // Multi-city with 'and' conjunction
+  const loc2 = parseLocation("Lynchburg and Roanoke");
+  assertEquals(loc2?.cities, ["Lynchburg", "Roanoke"]);
+  assertEquals(loc2?.includeSurrounding, undefined);
+
+  // Multi-city with "and surrounding areas"
+  const loc3 = parseLocation(
+    "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas",
+  );
+  assertEquals(loc3?.cities, ["Lynchburg", "Blacksburg", "Martinsville", "Salem", "Roanoke"]);
+  assertEquals(loc3?.includeSurrounding, true);
+  assert(loc3?.surroundingCities !== undefined);
+  // Check surrounding cities populated from regional metros
+  assert(loc3.surroundingCities.includes("Marion"));
+  assert(loc3.surroundingCities.includes("Forest"));
+  assert(loc3.surroundingCities.includes("Bedford"));
+  assert(loc3.surroundingCities.includes("Vinton"));
+  assert(loc3.surroundingCities.includes("Bassett"));
+  // Target cities should not be inside surroundingCities
+  assertEquals(loc3.surroundingCities.includes("Salem"), false);
+  assertEquals(loc3.surroundingCities.includes("Roanoke"), false);
+
+  // Single city with surrounding areas
+  const loc4 = parseLocation("Lynchburg and surrounding areas");
+  assertEquals(loc4?.cities, ["Lynchburg"]);
+  assertEquals(loc4?.includeSurrounding, true);
+  assert(loc4?.surroundingCities?.includes("Forest"));
+  assert(loc4?.surroundingCities?.includes("Bedford"));
 });
 
 Deno.test("parseBookGigArgs: splits CLI arguments and extracts --send / --replies flags", () => {
@@ -156,6 +194,102 @@ Deno.test("filterAndRankCandidates: prioritizes matching location and retains re
   assertEquals(filtered[0].name, "Waterman's Grill"); // Direct city match
   assertEquals(filtered[1].name, "Apocalypse Ale Works"); // Same state / neighboring
   assertEquals(filtered[2].name, "Parkway Brewing"); // Same state / neighboring
+});
+
+Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and exclusion of non-target metros", () => {
+  const venues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "The Milestone Club",
+      city: "Charlotte",
+      usState: "NC",
+      address: "3400 Tuckaseegee Rd, Charlotte, NC 28208",
+      email: "booking@themilestoneclub.com",
+    },
+    {
+      _id: "v2",
+      name: "Clementine Cafe",
+      city: "Harrisonburg",
+      usState: "VA",
+      address: "153 S Main St, Harrisonburg, VA 22801",
+      email: "booking@clementinecafe.com",
+    },
+    {
+      _id: "v3",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      address: "21 E Main St, Salem, VA 24153",
+      email: "booking@oldesalem.com",
+    },
+    {
+      _id: "v4",
+      name: "Rising Silo Brewery",
+      city: "Blacksburg",
+      usState: "VA",
+      address: "2351 Glade Rd, Blacksburg, VA 24060",
+      email: "booking@risingsilo.com",
+    },
+    {
+      _id: "v5",
+      name: "The Wooden Pickle",
+      city: "Marion",
+      usState: "VA",
+      address: "102 E Main St, Marion, VA 24354",
+      email: "info@thewoodenpickle.com",
+    },
+    {
+      _id: "v6",
+      name: "Apocalypse Ale Works",
+      city: "Forest",
+      usState: "VA",
+      address: "1257 Burnbridge Rd, Forest, VA 24551",
+      email: "info@apocalypse.com",
+    },
+  ];
+
+  const loc = parseLocation(
+    "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas",
+  )!;
+  const filtered = filterAndRankCandidates(venues, loc);
+
+  // Exact matches first (Blacksburg, Salem), then surrounding (Forest, Marion)
+  assertEquals(filtered.length, 4);
+  assertEquals(filtered[0].name, "Olde Salem Brewing"); // Exact Salem match
+  assertEquals(filtered[1].name, "Rising Silo Brewery"); // Exact Blacksburg match
+  assertEquals(filtered[2].name, "Apocalypse Ale Works"); // Surrounding Forest match
+  assertEquals(filtered[3].name, "The Wooden Pickle"); // Surrounding Marion match
+
+  // Non-target metros (Charlotte NC, Harrisonburg VA) must be excluded
+  assertEquals(filtered.some((v) => v.city === "Charlotte"), false);
+  assertEquals(filtered.some((v) => v.city === "Harrisonburg"), false);
+});
+
+Deno.test("formatLocationDisplay: formats multi-city and surrounding area descriptions", () => {
+  const loc1 = parseLocation("Lynchburg, Blacksburg, Martinsville, Salem, Roanoke");
+  assertEquals(
+    formatLocationDisplay(loc1 ?? undefined),
+    "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke",
+  );
+
+  const loc2 = parseLocation(
+    "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas",
+  );
+  assertEquals(
+    formatLocationDisplay(loc2 ?? undefined),
+    "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke (and surrounding regional areas)",
+  );
+
+  const loc3 = parseLocation("Salem, VA");
+  assertEquals(formatLocationDisplay(loc3 ?? undefined), "Salem, VA");
+
+  const loc4 = parseLocation("Salem and surrounding areas");
+  assertEquals(
+    formatLocationDisplay(loc4 ?? undefined),
+    "Salem, VA (and surrounding regional areas)",
+  );
+
+  assertEquals(formatLocationDisplay(undefined), "All Regional Metros (~3.5h drive)");
 });
 
 Deno.test("assessDensity: flags sparse density and suggests metro for venue-mining", () => {
@@ -782,6 +916,57 @@ Deno.test("parseBookGigArgs: parses --venues, --include, --skip, and --exclude f
     "v1",
   ]);
   assertEquals(res4.excludeVenues, ["v1"]);
+});
+
+Deno.test("parseBookGigArgs: parses compound date and multi-city expressions and explicit --cities flags", () => {
+  // Single compound expression argument
+  const res1 = parseBookGigArgs([
+    "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas",
+  ]);
+  assertEquals(res1.mode, "preview");
+  assertEquals(res1.weekend?.start, "2026-10-16");
+  assertEquals(res1.weekend?.end, "2026-10-18");
+  assertEquals(res1.location?.cities, [
+    "Lynchburg",
+    "Blacksburg",
+    "Martinsville",
+    "Salem",
+    "Roanoke",
+  ]);
+  assertEquals(res1.location?.includeSurrounding, true);
+
+  // Explicit --cities flag
+  const res2 = parseBookGigArgs([
+    "Oct 16-18 2026",
+    "--cities",
+    "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke",
+  ]);
+  assertEquals(res2.weekend?.start, "2026-10-16");
+  assertEquals(res2.location?.cities, [
+    "Lynchburg",
+    "Blacksburg",
+    "Martinsville",
+    "Salem",
+    "Roanoke",
+  ]);
+
+  // Explicit --locations flag with = syntax
+  const res3 = parseBookGigArgs([
+    "--locations=Lynchburg, Blacksburg",
+    "Oct 16-18 2026",
+  ]);
+  assertEquals(res3.weekend?.start, "2026-10-16");
+  assertEquals(res3.location?.cities, ["Lynchburg", "Blacksburg"]);
+
+  // Explicit --location flag
+  const res4 = parseBookGigArgs([
+    "--location",
+    "Lynchburg, VA",
+    "Oct 16-18 2026",
+  ]);
+  assertEquals(res4.weekend?.start, "2026-10-16");
+  assertEquals(res4.location?.city, "Lynchburg");
+  assertEquals(res4.location?.state, "VA");
 });
 
 Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --skip is provided", async () => {
