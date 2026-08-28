@@ -2,6 +2,7 @@
 
 import type { CandidateVenue, TargetLocation, TargetWeekend } from "./types.ts";
 import { resolveBackendConfig } from "./outreach_api.ts";
+import { US_STATES } from "./parser.ts";
 
 export interface FetchCandidatesOptions {
   backendUrl?: string;
@@ -75,12 +76,22 @@ export function filterAndRankCandidates(
 
   const exactMatches: CandidateVenue[] = [];
   const surroundingMatches: CandidateVenue[] = [];
-  const regionalMatches: CandidateVenue[] = [];
 
   for (const v of candidates) {
     const vCity = (v.city || "").toLowerCase().trim();
     const vAddr = (v.address || "").toLowerCase();
-    const vState = (v.usState || "").toUpperCase().trim();
+    let vState = (v.usState || "").toUpperCase().trim();
+    if (!vState && v.address) {
+      const stateMatch = v.address.match(/\b([A-Z]{2})\b(?:\s+\d{5})?$/i);
+      if (stateMatch && US_STATES.has(stateMatch[1].toUpperCase())) {
+        vState = stateMatch[1].toUpperCase();
+      }
+    }
+
+    // If target location has a specific state and venue is in a different state, exclude it
+    if (locState && vState && vState !== locState) {
+      continue;
+    }
 
     let isExact = false;
 
@@ -125,21 +136,13 @@ export function filterAndRankCandidates(
 
     if (isSurrounding) {
       surroundingMatches.push(v);
-    } else if (!hasMultiCityOrSurrounding) {
-      // Legacy behavior: retain same-state venues if no multi-city filter was explicitly provided
-      if (locState && vState === locState) {
-        regionalMatches.push(v);
-      } else if (!locState) {
-        regionalMatches.push(v);
-      }
     }
   }
 
-  // Exact matches first, then neighboring surrounding matches, then general regional
+  // Exact matches first, then neighboring surrounding matches
   return [
     ...exactMatches.sort((a, b) => a.name.localeCompare(b.name)),
     ...surroundingMatches.sort((a, b) => a.name.localeCompare(b.name)),
-    ...regionalMatches.sort((a, b) => a.name.localeCompare(b.name)),
   ];
 }
 

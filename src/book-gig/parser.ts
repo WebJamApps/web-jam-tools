@@ -141,9 +141,26 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     };
   }
 
-  // Check for compound date expression: "<date> and <location>", "<date>, <location>", or "<date> <location>"
+  // 1. Try parsing full rawArgs as weekend date first
+  // e.g. "Oct 16-18 2026", "2026-10-16", "weekend of Oct 16 2026", "October 16-18, 2026"
+  try {
+    const weekend = parseTargetWeekend(rawArgs);
+    return {
+      mode,
+      weekend,
+      includeVenues: resIncludes,
+      excludeVenues: resExcludes,
+      noOpen: resNoOpen,
+      rawArgs,
+    };
+  } catch {
+    // rawArgs is not purely a target weekend date
+  }
+
+  // 2. Check for compound date expression: "<date> and <location>", "<date>, <location>", or "<date> <location>"
   // e.g. "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"
   // e.g. "October 16-18, 2026, Lynchburg, VA"
+  // e.g. "Oct 16-18 2026 Lynchburg, VA"
   // e.g. "2026-10-16 24502"
   const compoundMatch = rawArgs.match(
     /^((?:weekend\s+of\s+)?[a-z]+\.?\s+\d{1,2}(?:\s*[-–]\s*\d{1,2})?(?:[,\s]+\d{4})?|\d{4}-\d{2}-\d{2}(?:\s*(?:to|\/|-)\s*\d{4}-\d{2}-\d{2})?)\s*(?:and\s+|,|\s+)(.+)$/i,
@@ -173,29 +190,16 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     }
   }
 
-  // Try parsing full rawArgs as date
-  try {
-    const weekend = parseTargetWeekend(rawArgs);
-    return {
-      mode,
-      weekend,
-      includeVenues: resIncludes,
-      excludeVenues: resExcludes,
-      noOpen: resNoOpen,
-      rawArgs,
-    };
-  } catch {
-    // If not date, treat rawArgs as location
-    location = parseLocation(rawArgs) ?? undefined;
-    return {
-      mode,
-      location,
-      includeVenues: resIncludes,
-      excludeVenues: resExcludes,
-      noOpen: resNoOpen,
-      rawArgs,
-    };
-  }
+  // 3. If not date or compound date+location, treat rawArgs as location
+  location = parseLocation(rawArgs) ?? undefined;
+  return {
+    mode,
+    location,
+    includeVenues: resIncludes,
+    excludeVenues: resExcludes,
+    noOpen: resNoOpen,
+    rawArgs,
+  };
 }
 
 const MONTH_MAP: Record<string, number> = {
@@ -249,13 +253,22 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Madison Heights",
     "Amherst",
     "Appomattox",
+    "Moneta",
   ],
   "blacksburg-christiansburg": [
     "Christiansburg",
     "Radford",
     "Floyd",
-    "Pulaski",
-    "Marion",
+  ],
+  "blacksburg": [
+    "Christiansburg",
+    "Radford",
+    "Floyd",
+  ],
+  "christiansburg": [
+    "Blacksburg",
+    "Radford",
+    "Floyd",
   ],
   "martinsville": [
     "Bassett",
@@ -263,6 +276,7 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Spencer",
     "Stuart",
     "Stanleytown",
+    "Rocky Mount",
   ],
   "roanoke-salem": [
     "Vinton",
@@ -270,6 +284,11 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Troutville",
     "Cave Spring",
     "Rocky Mount",
+    "Botetourt",
+    "Blue Ridge",
+    "Catawba",
+    "Natural Bridge",
+    "Moneta",
   ],
   "roanoke": [
     "Vinton",
@@ -277,6 +296,11 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Troutville",
     "Cave Spring",
     "Rocky Mount",
+    "Botetourt",
+    "Blue Ridge",
+    "Catawba",
+    "Natural Bridge",
+    "Moneta",
   ],
   "salem": [
     "Vinton",
@@ -284,6 +308,11 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Troutville",
     "Cave Spring",
     "Rocky Mount",
+    "Botetourt",
+    "Blue Ridge",
+    "Catawba",
+    "Natural Bridge",
+    "Moneta",
   ],
   "charlottesville": [
     "Crozet",
@@ -291,11 +320,65 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Keswick",
     "Scottsville",
   ],
+  "harrisonburg": [
+    "Staunton",
+    "Bridgewater",
+    "Grottoes",
+    "Elkton",
+  ],
+  "staunton": [
+    "Harrisonburg",
+    "Waynesboro",
+    "Verona",
+  ],
   "greensboro-high-point": [
     "High Point",
     "Winston-Salem",
     "Burlington",
     "Kernersville",
+  ],
+  "greensboro": [
+    "High Point",
+    "Winston-Salem",
+    "Burlington",
+    "Kernersville",
+  ],
+  "winston-salem": [
+    "Greensboro",
+    "High Point",
+    "Kernersville",
+    "Clemmons",
+  ],
+  "charlotte": [
+    "Gastonia",
+    "Belmont",
+    "Matthews",
+    "Concord",
+    "Huntersville",
+    "Pineville",
+    "Fort Mill",
+    "Rock Hill",
+  ],
+  "gastonia": [
+    "Belmont",
+    "Charlotte",
+    "Mount Holly",
+    "Bessemer City",
+  ],
+  "belmont": [
+    "Gastonia",
+    "Charlotte",
+    "Mount Holly",
+  ],
+  "rock-hill": [
+    "Fort Mill",
+    "Charlotte",
+    "Tega Cay",
+  ],
+  "fort-mill": [
+    "Rock Hill",
+    "Charlotte",
+    "Tega Cay",
   ],
 };
 
@@ -315,6 +398,17 @@ export const KNOWN_METROS: Record<
   "troutville": { slug: "roanoke", city: "Troutville", state: "VA", zips: ["24175"] },
   "cave spring": { slug: "roanoke", city: "Cave Spring", state: "VA", zips: ["24018"] },
   "rocky mount": { slug: "roanoke", city: "Rocky Mount", state: "VA", zips: ["24151"] },
+  "botetourt": { slug: "roanoke", city: "Botetourt", state: "VA", zips: ["24066"] },
+  "moneta": { slug: "roanoke", city: "Moneta", state: "VA", zips: ["24121"] },
+  "smith mountain lake": {
+    slug: "roanoke",
+    city: "Smith Mountain Lake",
+    state: "VA",
+    zips: ["24121"],
+  },
+  "blue ridge": { slug: "roanoke", city: "Blue Ridge", state: "VA", zips: ["24064"] },
+  "catawba": { slug: "roanoke", city: "Catawba", state: "VA", zips: ["24070"] },
+  "natural bridge": { slug: "roanoke", city: "Natural Bridge", state: "VA", zips: ["24578"] },
   "roanoke-salem": {
     slug: "roanoke-salem",
     city: "Roanoke",
@@ -363,8 +457,6 @@ export const KNOWN_METROS: Record<
     zips: ["24141", "24142", "24143"],
   },
   "floyd": { slug: "blacksburg-christiansburg", city: "Floyd", state: "VA", zips: ["24091"] },
-  "pulaski": { slug: "blacksburg-christiansburg", city: "Pulaski", state: "VA", zips: ["24301"] },
-  "marion": { slug: "blacksburg-christiansburg", city: "Marion", state: "VA", zips: ["24354"] },
   "blacksburg-christiansburg": {
     slug: "blacksburg-christiansburg",
     city: "Blacksburg",
@@ -388,15 +480,72 @@ export const KNOWN_METROS: Record<
     state: "VA",
     zips: ["22901", "22902", "22903"],
   },
+  "crozet": { slug: "charlottesville", city: "Crozet", state: "VA", zips: ["22932"] },
+  "waynesboro": { slug: "charlottesville", city: "Waynesboro", state: "VA", zips: ["22980"] },
+  "harrisonburg": {
+    slug: "harrisonburg",
+    city: "Harrisonburg",
+    state: "VA",
+    zips: ["22801", "22802"],
+  },
+  "staunton": { slug: "staunton", city: "Staunton", state: "VA", zips: ["24401", "24402"] },
   "greensboro": {
     slug: "greensboro-high-point",
     city: "Greensboro",
     state: "NC",
     zips: ["27401", "27402", "27403"],
   },
+  "high point": {
+    slug: "greensboro-high-point",
+    city: "High Point",
+    state: "NC",
+    zips: ["27260", "27262", "27265"],
+  },
+  "winston-salem": {
+    slug: "greensboro-high-point",
+    city: "Winston-Salem",
+    state: "NC",
+    zips: ["27101", "27103", "27105"],
+  },
+  "burlington": {
+    slug: "greensboro-high-point",
+    city: "Burlington",
+    state: "NC",
+    zips: ["27215", "27217"],
+  },
+  "charlotte": {
+    slug: "charlotte",
+    city: "Charlotte",
+    state: "NC",
+    zips: ["28202", "28203", "28204", "28205", "28208"],
+  },
+  "gastonia": {
+    slug: "gastonia",
+    city: "Gastonia",
+    state: "NC",
+    zips: ["28052", "28054", "28056"],
+  },
+  "belmont": {
+    slug: "belmont",
+    city: "Belmont",
+    state: "NC",
+    zips: ["28012"],
+  },
+  "rock hill": {
+    slug: "rock-hill",
+    city: "Rock Hill",
+    state: "SC",
+    zips: ["29730", "29732"],
+  },
+  "fort mill": {
+    slug: "fort-mill",
+    city: "Fort Mill",
+    state: "SC",
+    zips: ["29708", "29715"],
+  },
 };
 
-const US_STATES: Set<string> = new Set([
+export const US_STATES: Set<string> = new Set([
   "AL",
   "AK",
   "AZ",
@@ -525,7 +674,7 @@ export function parseTargetWeekend(input: string, referenceYear = 2026): TargetW
 
   // Check natural date: "Oct 16-18 2026", "October 16-18, 2026", "weekend of Oct 16 2026", "Oct 16, 2026"
   const naturalMatch = clean.match(
-    /(?:weekend\s+of\s+)?([a-z]+)\.?\s+(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?(?:[,\s]+(\d{4}))?/i,
+    /^(?:weekend\s+of\s+)?([a-z]+)\.?\s+(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?(?:[,\s]+(\d{4}))?$/i,
   );
   if (naturalMatch) {
     const monthStr = naturalMatch[1].toLowerCase();
@@ -568,6 +717,11 @@ export function parseLocation(input?: string): TargetLocation | null {
   const raw = input.trim();
   let working = raw;
 
+  // Reject standalone numeric strings that are not valid 5-digit zip codes (e.g. 4-digit years like "2026")
+  if (/^\d+$/.test(working) && working.length !== 5) {
+    return null;
+  }
+
   // 1. Detect and extract "and surrounding areas", "surrounding areas", "and surrounding", etc.
   let includeSurrounding = false;
   const surroundingRegex =
@@ -580,6 +734,11 @@ export function parseLocation(input?: string): TargetLocation | null {
   } else if (surroundingShortRegex.test(working)) {
     includeSurrounding = true;
     working = working.replace(surroundingShortRegex, "").trim();
+  }
+
+  // Reject if remaining working string is purely numeric and not a 5-digit zip code
+  if (/^\d+$/.test(working) && working.length !== 5) {
+    return null;
   }
 
   // 2. Check 5-digit zipcode
@@ -608,6 +767,11 @@ export function parseLocation(input?: string): TargetLocation | null {
       zip,
       includeSurrounding: includeSurrounding || undefined,
     };
+  }
+
+  // Reject strings without any alphabetic characters (e.g. "2026-10-16", symbols/numbers only)
+  if (!/[a-zA-Z]/.test(working)) {
+    return null;
   }
 
   // 3. Single City, State check (e.g. "Lynchburg, VA" or "Lynchburg VA")
@@ -663,7 +827,7 @@ export function parseLocation(input?: string): TargetLocation | null {
     for (const ap of andParts) {
       if (ap.length === 2 && US_STATES.has(ap.toUpperCase())) {
         detectedState = ap.toUpperCase();
-      } else if (ap) {
+      } else if (ap && /[a-zA-Z]/.test(ap) && !/^\d+$/.test(ap)) {
         rawCityTokens.push(ap);
       }
     }
