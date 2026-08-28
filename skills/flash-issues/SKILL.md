@@ -30,9 +30,10 @@ session does not execute Steps 1–9 itself, no matter how quick it looks.**
 
 Instead:
 
-1. Launch exactly **one** subagent via the `Agent` / `invoke_subagent` tool with
-   `model: "flash"` (`Gemini Flash (High)`), passing the self-contained prompt in "Dispatch prompt
-   template" below verbatim.
+1. Launch exactly **one** subagent based on host surface:
+   - **Claude Code surface:** `Agent(subagent_type: "general-purpose", model: "haiku")`
+   - **Antigravity (`agy`) surface:** `invoke_subagent(TypeName: "self", Role: "Flash Issues Runner", Model: "inherit")`
+   passing the self-contained prompt in "Dispatch prompt template" below verbatim.
 2. Wait for the subagent to execute `deno task flash-issues` and return its report.
 3. Relay that report to Josh essentially as-is: counts, what got newly
    labeled, fix-bucket count (changes requested vs. CI failing) vs. numbered-list count vs. In Flight awaiting-review count vs. Blocked count.
@@ -48,8 +49,9 @@ defect fix exists to close off.
 
 ## Dispatch prompt template (pass verbatim to the `Agent` / `invoke_subagent` tool)
 
-Fill in nothing — this prompt is complete as written. Pass it as the `prompt`
-argument with `subagent_type` omitted/general-purpose and `model: "flash"` (`Gemini Flash (High)`).
+Fill in nothing — this prompt is complete as written. Pass it as the `prompt` argument:
+- **Claude Code surface:** `Agent(subagent_type: "general-purpose", model: "haiku", prompt: ...)`
+- **Antigravity (`agy`) surface:** `invoke_subagent(TypeName: "self", Role: "Flash Issues Runner", Model: "inherit", Prompt: ...)`
 
 ````
 You are running the deterministic Flash worklist regeneration task.
