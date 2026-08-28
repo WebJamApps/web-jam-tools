@@ -160,6 +160,41 @@ Deno.test("skills/file-issue/SKILL.md contains the three-outcomes guard rule, po
   );
 });
 
+Deno.test("skills/file-issue/SKILL.md item 14 splits both-surfaces acceptance criteria by change kind and bans the hooks/lib path", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  // Structural change kind still names an installer per surface
+  assert(
+    text.includes("Structural change: one acceptance criterion per surface, naming the installer."),
+    "skills/file-issue/SKILL.md item 14 must keep the structural-change bullet naming an installer per surface",
+  );
+
+  // Content-only change kind names the resolution check instead of an installer
+  assert(
+    text.includes(
+      "Content-only change: one acceptance criterion per surface, naming the resolution check, not an installer.",
+    ),
+    "skills/file-issue/SKILL.md item 14 must add the content-only-change bullet naming the resolution check",
+  );
+  assert(
+    text.includes("needs no installer: `git pull` on `dev` makes it live on both surfaces"),
+    "skills/file-issue/SKILL.md item 14 must state that a content-only change needs no installer",
+  );
+
+  // Explicit prohibition on asserting a ~/.claude/hooks/lib/ path
+  assert(
+    text.includes("Never assert a `~/.claude/hooks/lib/` path."),
+    "skills/file-issue/SKILL.md item 14 must prohibit asserting a ~/.claude/hooks/lib/ path",
+  );
+  assert(
+    text.includes(
+      "`hooks/lib/` is never installed by `scripts/install-hooks.sh`, so that path does not exist",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state that hooks/lib/ is never installed and the path does not exist",
+  );
+});
+
 Deno.test("skills/design-issue/SKILL.md contains the both-surfaces rule and refusal table entry", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);

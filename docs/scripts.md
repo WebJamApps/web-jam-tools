@@ -167,6 +167,21 @@ echo '{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | scripts/status
   Overriding this is a test-only seam (the real default hits the network,
   which an automated test must not depend on); leave it unset for normal use.
 
+### `install-hooks.sh` — what actually gets symlinked
+
+`scripts/install-hooks.sh` symlinks `hooks/*.sh` only — `hooks/lib/` is
+never installed, so there is no `~/.claude/hooks/lib/` path on disk. A hook
+script reaches its shared `hooks/lib/*.ts` modules by resolving its own
+symlink back to the canonical clone (`HOOK_DIR=$(cd "$(dirname
+"$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)`), then reading
+`$HOOK_DIR/lib/<module>.ts` from there — agy reaches the same modules
+through those same Claude Code symlinks via `hooks/agy-hook-shim.sh`. That
+means a content-only change to an already-installed hook script, skill
+body, or `hooks/lib/*.ts` module is live on both surfaces the moment `dev`
+is pulled; no install step is needed unless the change is structural (a
+new/renamed/deleted skill or hook, or a changed event/matcher
+registration).
+
 ### `permissions.defaultMode` (managed by `install-hooks.sh`)
 
 `~/.claude/settings.json` has no `permissions.defaultMode` key by default, so
