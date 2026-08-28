@@ -248,6 +248,30 @@ ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 # a guard, with no status marker present), because grep applies `^` per line
 # and a real sentence/cell never starts the physical line with the bare word.
 #
+# "Blocked by `<repo>#<num> ...`" at line start is a DEPENDENCY REFERENCE, not
+# a status declaration: this repo's convention (documented directly in issue
+# bodies) is to record a native GitHub `blocked_by` dependency as filing-time
+# prose, and that dependency can already be CLOSED by the time dispatch runs —
+# well before anyone thinks to edit the sentence back out (found live on
+# web-jam-tools#815, whose "**Blocked by** `web-jam-tools#814 ...`" line
+# refused dispatch after #814 had already closed). A line the first grep flags
+# is excluded from the refusal only when it ALSO reads "BLOCKED BY" with an
+# issue citation (`#<digits>`) directly adjacent (only markdown/emoji
+# decoration and/or the repo-name prefix may sit between them — see the
+# tightened carve-out regex below). When dispatch is driven by
+# skills/work-issue/SKILL.md or the flash-issues scanner, the skill layer
+# already validates native blockers via the GitHub API before this script
+# ever runs, so this guard's job for that specific case is done there. This
+# script is ALSO invoked directly — this PR's own "How to test locally" does
+# exactly that, and /flash-issues exists so Josh can drive agy himself when
+# Claude is out of tokens — and nothing upstream validates the dependency on
+# that path, so an issue whose blocker is genuinely still OPEN can dispatch
+# here. Closing that gap durably means replacing this text heuristic with a
+# real `gh api .../dependencies/blocked_by` call and refusing only when a
+# returned blocker is still OPEN. A vague "BLOCKED by <cause, no issue
+# number>" is NOT excluded and still refuses, since nothing else checks that
+# kind of claim.
+#
 # Implementation: `grep` (no -z) matches `^`/`$` per line already, so this
 # runs once against the whole (possibly multi-line) body. `^[^A-Za-z0-9]*`
 # consumes any run of leading non-alphanumeric bytes — whitespace, markdown
@@ -256,8 +280,12 @@ ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 # PCRE/Unicode character class (portable across grep implementations). That
 # same leading-strip also keeps "UNBLOCKED"/"unblocking" excluded: stripping
 # stops at the first alphanumeric byte, which is the "U", so the marker
-# alternation is never tried starting there.
-if grep -qiE '^[^A-Za-z0-9]*(BLOCKED|DO[ -]NOT[ -]START)\b' <<< "$ISSUE_BODY"; then
+# alternation is never tried starting there. The dependency-reference carve-out
+# stays in the same portable ERE style (no -P): a second, narrower grep runs
+# only against the lines the first grep already flagged, so it can never widen
+# what the first grep catches — only exclude specific matched lines from it.
+MARKER_LINES=$(grep -iE '^[^A-Za-z0-9]*(BLOCKED|DO[ -]NOT[ -]START)\b' <<< "$ISSUE_BODY" || true)
+if [ -n "$MARKER_LINES" ] && grep -qviE '^[^A-Za-z0-9]*BLOCKED[[:space:]]+BY[^A-Za-z0-9]*[A-Za-z0-9._-]*#[0-9]+' <<< "$MARKER_LINES"; then
   echo "" >&2
   echo "ERROR: issue $REPO#$ISSUE_NUM body still contains a BLOCKED / DO NOT" >&2
   echo "START marker — refusing to dispatch agy against it." >&2
