@@ -110,13 +110,16 @@ Deno.test("parseLocation: parses multi-city comma lists, and conjunctions, and s
   assertEquals(loc3?.cities, ["Lynchburg", "Blacksburg", "Martinsville", "Salem", "Roanoke"]);
   assertEquals(loc3?.includeSurrounding, true);
   assert(loc3?.surroundingCities !== undefined);
-  // Check surrounding cities populated from regional metros
-  assert(loc3.surroundingCities.includes("Marion"));
+  // Check surrounding cities populated from regional metros strictly within perimeter
+  assert(loc3.surroundingCities.includes("Floyd"));
+  assert(loc3.surroundingCities.includes("Radford"));
+  assert(loc3.surroundingCities.includes("Christiansburg"));
   assert(loc3.surroundingCities.includes("Forest"));
   assert(loc3.surroundingCities.includes("Bedford"));
   assert(loc3.surroundingCities.includes("Vinton"));
   assert(loc3.surroundingCities.includes("Bassett"));
-  // Target cities should not be inside surroundingCities
+  // Excluded towns beyond perimeter (Marion) and target cities
+  assertEquals(loc3.surroundingCities.includes("Marion"), false);
   assertEquals(loc3.surroundingCities.includes("Salem"), false);
   assertEquals(loc3.surroundingCities.includes("Roanoke"), false);
 
@@ -128,25 +131,38 @@ Deno.test("parseLocation: parses multi-city comma lists, and conjunctions, and s
   assert(loc4?.surroundingCities?.includes("Bedford"));
 });
 
+Deno.test("parseLocation: rejects numeric year and arbitrary non-zip numbers", () => {
+  assertEquals(parseLocation("2026"), null);
+  assertEquals(parseLocation("2027"), null);
+  assertEquals(parseLocation("123"), null);
+  assertEquals(parseLocation("999999"), null);
+  assertEquals(parseLocation("2026-10-16"), null);
+});
+
 Deno.test("parseBookGigArgs: splits CLI arguments and extracts --send / --replies flags", () => {
   const res1 = parseBookGigArgs(["Oct", "16-18", "2026", "Lynchburg,", "VA"]);
   assertEquals(res1.mode, "preview");
   assertEquals(res1.weekend?.start, "2026-10-16");
+  assertEquals(res1.weekend?.year, 2026);
   assertEquals(res1.location?.city, "Lynchburg");
 
   const res2 = parseBookGigArgs(["2026-10-16", "24502"]);
   assertEquals(res2.mode, "preview");
   assertEquals(res2.weekend?.start, "2026-10-16");
+  assertEquals(res2.weekend?.year, 2026);
   assertEquals(res2.location?.zip, "24502");
 
   const res3 = parseBookGigArgs(["--send", "Oct 16-18 2026", "Lynchburg, VA"]);
   assertEquals(res3.mode, "send");
   assertEquals(res3.weekend?.start, "2026-10-16");
+  assertEquals(res3.weekend?.year, 2026);
   assertEquals(res3.location?.city, "Lynchburg");
 
   const res4 = parseBookGigArgs(["--replies", "Oct 16-18 2026"]);
   assertEquals(res4.mode, "replies");
   assertEquals(res4.weekend?.start, "2026-10-16");
+  assertEquals(res4.weekend?.year, 2026);
+  assertEquals(res4.location, undefined);
 
   const res5 = parseBookGigArgs(["--check-replies"]);
   assertEquals(res5.mode, "replies");
@@ -156,6 +172,21 @@ Deno.test("parseBookGigArgs: splits CLI arguments and extracts --send / --replie
   assertEquals(res6.mode, "preview");
   assertEquals(res6.weekend, undefined);
   assertEquals(res6.location, undefined);
+
+  // Acceptance Criterion 1: parseBookGigArgs(["Oct", "16-18", "2026"]) and parseBookGigArgs(["Oct 16-18 2026"])
+  const res7 = parseBookGigArgs(["Oct", "16-18", "2026"]);
+  assertEquals(res7.mode, "preview");
+  assertEquals(res7.weekend?.year, 2026);
+  assertEquals(res7.weekend?.start, "2026-10-16");
+  assertEquals(res7.weekend?.end, "2026-10-18");
+  assertEquals(res7.location, undefined);
+
+  const res8 = parseBookGigArgs(["Oct 16-18 2026"]);
+  assertEquals(res8.mode, "preview");
+  assertEquals(res8.weekend?.year, 2026);
+  assertEquals(res8.weekend?.start, "2026-10-16");
+  assertEquals(res8.weekend?.end, "2026-10-18");
+  assertEquals(res8.location, undefined);
 });
 
 Deno.test("filterAndRankCandidates: prioritizes matching location and retains regional candidates", () => {
@@ -246,6 +277,30 @@ Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and 
       address: "1257 Burnbridge Rd, Forest, VA 24551",
       email: "info@apocalypse.com",
     },
+    {
+      _id: "v7",
+      name: "Foothills Brewing",
+      city: "Salem",
+      usState: "NC",
+      address: "638 W 4th St, Salem, NC 27101",
+      email: "booking@foothillsbrewing.com",
+    },
+    {
+      _id: "v8",
+      name: "Charleston Music Hall",
+      city: "Charleston",
+      usState: "SC",
+      address: "37 John St, Charleston, SC 29403",
+      email: "booking@charlestonmusichall.com",
+    },
+    {
+      _id: "v9",
+      name: "Dogtown Roadhouse",
+      city: "Floyd",
+      usState: "VA",
+      address: "302 S Locust St, Floyd, VA 24091",
+      email: "booking@dogtownroadhouse.com",
+    },
   ];
 
   const loc = parseLocation(
@@ -253,16 +308,22 @@ Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and 
   )!;
   const filtered = filterAndRankCandidates(venues, loc);
 
-  // Exact matches first (Blacksburg, Salem), then surrounding (Forest, Marion)
+  // Exact matches first (Blacksburg, Salem VA), then surrounding (Forest VA, Floyd VA)
   assertEquals(filtered.length, 4);
-  assertEquals(filtered[0].name, "Olde Salem Brewing"); // Exact Salem match
-  assertEquals(filtered[1].name, "Rising Silo Brewery"); // Exact Blacksburg match
-  assertEquals(filtered[2].name, "Apocalypse Ale Works"); // Surrounding Forest match
-  assertEquals(filtered[3].name, "The Wooden Pickle"); // Surrounding Marion match
+  assertEquals(filtered[0].name, "Olde Salem Brewing"); // Exact Salem VA match
+  assertEquals(filtered[1].name, "Rising Silo Brewery"); // Exact Blacksburg VA match
+  assertEquals(filtered[2].name, "Apocalypse Ale Works"); // Surrounding Forest VA match
+  assertEquals(filtered[3].name, "Dogtown Roadhouse"); // Surrounding Floyd VA match
 
-  // Non-target metros (Charlotte NC, Harrisonburg VA) must be excluded
+  // Non-target metros, far-out towns (Marion, Harrisonburg), and out-of-state venues (Charlotte NC, Salem NC, Charleston SC) must be excluded
   assertEquals(filtered.some((v) => v.city === "Charlotte"), false);
   assertEquals(filtered.some((v) => v.city === "Harrisonburg"), false);
+  assertEquals(filtered.some((v) => v.city === "Marion"), false);
+  assertEquals(filtered.some((v) => v.usState === "NC"), false);
+  assertEquals(filtered.some((v) => v.usState === "SC"), false);
+  assertEquals(filtered.some((v) => v._id === "v5"), false); // Marion VA excluded
+  assertEquals(filtered.some((v) => v._id === "v7"), false); // Salem NC excluded
+  assertEquals(filtered.some((v) => v._id === "v8"), false); // Charleston SC excluded
 });
 
 Deno.test("formatLocationDisplay: formats multi-city and surrounding area descriptions", () => {

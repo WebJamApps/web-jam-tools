@@ -2,6 +2,7 @@
 
 import type { CandidateVenue, TargetLocation, TargetWeekend } from "./types.ts";
 import { resolveBackendConfig } from "./outreach_api.ts";
+import { US_STATES } from "./parser.ts";
 
 export interface FetchCandidatesOptions {
   backendUrl?: string;
@@ -80,7 +81,18 @@ export function filterAndRankCandidates(
   for (const v of candidates) {
     const vCity = (v.city || "").toLowerCase().trim();
     const vAddr = (v.address || "").toLowerCase();
-    const vState = (v.usState || "").toUpperCase().trim();
+    let vState = (v.usState || "").toUpperCase().trim();
+    if (!vState && v.address) {
+      const stateMatch = v.address.match(/\b([A-Z]{2})\b(?:\s+\d{5})?$/i);
+      if (stateMatch && US_STATES.has(stateMatch[1].toUpperCase())) {
+        vState = stateMatch[1].toUpperCase();
+      }
+    }
+
+    // If target location has a specific state and venue is in a different state, exclude it
+    if (locState && vState && vState !== locState) {
+      continue;
+    }
 
     let isExact = false;
 
