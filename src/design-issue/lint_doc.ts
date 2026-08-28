@@ -449,7 +449,7 @@ function validateLoadBearingPremisesTable(
     return violations;
   }
 
-  const proofColIdx = headerRow.cells.findIndex((c) => /^proof$/i.test(c));
+  const proofColIdx = headerRow.cells.findIndex((c) => /^proof$/i.test(stripCellDecoration(c)));
   if (proofColIdx === -1) {
     violations.push({
       rule: "load-bearing-premises-unproven-row",

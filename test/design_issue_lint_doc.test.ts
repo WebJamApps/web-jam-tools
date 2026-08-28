@@ -205,6 +205,29 @@ Parity details.
   assertEquals(result.violations.length, 0);
 });
 
+Deno.test("lintDesignDoc recognizes decorated/bold Proof column headers", () => {
+  const doc = `# Title
+
+## What it is
+Clean description.
+
+## Both surfaces
+Parity details.
+
+## Load-bearing premises
+| **Premise** | **Proof** |
+|---|---|
+| The folder-naming convention is already established | Read the existing Dropbox theme folders |
+
+## Appendix — Decision Record
+| D-1 | Folder naming convention | Milestone name | Repo name |
+`;
+
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
 Deno.test("lintDesignDoc flags missing '## Both surfaces' section", () => {
   const docWithoutBothSurfaces = `# Feature Design
 
