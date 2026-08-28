@@ -27,6 +27,11 @@ How each mechanism behaves on Claude Code and agy/Antigravity:
 |---|---|---|
 | Runner | deno task | identical |
 
+## Load-bearing premises
+| Premise | Proof |
+|---|---|
+| The runner exists as a deno task | Checked deno.json's tasks map |
+
 ## Appendix — Decision Record
 | # | Decision | Outcome | Rejected alternatives |
 |---|---|---|---|
@@ -79,6 +84,11 @@ const status: string = "active";
 
 ## Both surfaces
 Cross-surface parity is preserved.
+
+## Load-bearing premises
+| Premise | Proof |
+|---|---|
+| The status enum has exactly two members | Read the interface definition above |
 `;
 
   const result = lintDesignDoc(docWithCode, "test.md");
@@ -180,9 +190,37 @@ Clean description without bare labels in prose.
 ## Both surfaces
 Parity details.
 
+## Load-bearing premises
+| Premise | Proof |
+|---|---|
+| The folder-naming convention is already established | Read the existing Dropbox theme folders |
+
 ## Appendix — Decision Record
 | D-1 | Folder naming convention | Milestone name | Repo name |
 | D-2 | Cache layer | In-memory | Redis |
+`;
+
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
+Deno.test("lintDesignDoc recognizes decorated/bold Proof column headers", () => {
+  const doc = `# Title
+
+## What it is
+Clean description.
+
+## Both surfaces
+Parity details.
+
+## Load-bearing premises
+| **Premise** | **Proof** |
+|---|---|
+| The folder-naming convention is already established | Read the existing Dropbox theme folders |
+
+## Appendix — Decision Record
+| D-1 | Folder naming convention | Milestone name | Repo name |
 `;
 
   const result = lintDesignDoc(doc, "test.md");
@@ -271,6 +309,8 @@ Deno.test("lintDesignDocFile fails invalid fixture invalid-doc.md with all viola
   assertEquals(rulesViolated.includes("no-revision-narration"), true);
   assertEquals(rulesViolated.includes("no-bare-decision-labels"), true);
   assertEquals(rulesViolated.includes("require-both-surfaces-section"), true);
+  assertEquals(rulesViolated.includes("require-load-bearing-premises-section"), true);
+  assertEquals(rulesViolated.includes("require-target-issue-verbatim-appendix"), true);
 });
 
 Deno.test("lintDesignDocFile correctly flags individual invalid fixtures", async () => {
@@ -281,6 +321,9 @@ Deno.test("lintDesignDocFile correctly flags individual invalid fixtures", async
     "invalid-revision-narration.md": "no-revision-narration",
     "invalid-bare-decision-label.md": "no-bare-decision-labels",
     "invalid-missing-both-surfaces.md": "require-both-surfaces-section",
+    "invalid-missing-load-bearing-premises.md": "require-load-bearing-premises-section",
+    "invalid-hedged-premise-proof.md": "load-bearing-premises-unproven-row",
+    "invalid-target-issue-no-appendix.md": "require-target-issue-verbatim-appendix",
   };
 
   for (const [filename, expectedRule] of Object.entries(fixtures)) {

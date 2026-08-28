@@ -4,6 +4,7 @@
 
 import * as path from "@std/path";
 import { renderDesignDoc } from "../../scripts/render_design_doc.ts";
+import { lintDesignDoc } from "./lint_doc.ts";
 
 export interface Gate1Options {
   docPath: string;
@@ -205,6 +206,20 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
 
   if (markdownContent.trim() === "") {
     throw new Error(`Design document at ${absDocPath} is empty`);
+  }
+
+  // Refuse to render or open a document whose design:lint-doc run does not pass, so the checker
+  // cannot be bypassed by invoking Gate 1 directly instead of running the linter first
+  // (web-jam-tools#815). There is no flag to skip this — the whole point is that it can't be
+  // walked around.
+  const lintResult = lintDesignDoc(markdownContent, absDocPath);
+  if (!lintResult.valid) {
+    const violationLines = lintResult.violations
+      .map((v) => `  - [${v.rule}]${v.line ? ` (line ${v.line})` : ""} ${v.message}`)
+      .join("\n");
+    throw new Error(
+      `Design document at ${absDocPath} failed design:lint-doc with ${lintResult.violations.length} violation(s) — refusing to render or open Gate 1:\n${violationLines}`,
+    );
   }
 
   const htmlPath = resolveHtmlPath(absDocPath);

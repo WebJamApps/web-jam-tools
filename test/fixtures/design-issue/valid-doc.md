@@ -22,6 +22,12 @@ How this mechanism functions across agent surfaces:
 | CLI runner   | `deno task monitor:uptime` | identical       |
 | Verification | Unit tests in CI           | identical       |
 
+## Load-bearing premises
+
+| Premise                                                  | Proof                                                                                       |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| The WebSocket server exposes a subscribable event stream | Read the server's event-emitter API and confirmed it publishes a `message` event per update |
+
 ## Appendix A — Decision Record
 
 | # | Decision                  | Outcome    | Rejected alternatives |

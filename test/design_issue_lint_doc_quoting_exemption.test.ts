@@ -91,6 +91,11 @@ per D-7
 
 ## Both surfaces
 Parity
+
+## Load-bearing premises
+| Premise | Proof |
+|---|---|
+| The fenced block above is not scanned | Read the checker's inCodeBlock toggle logic |
 `;
   const result = lintDesignDoc(doc, "test.md");
   assertEquals(result.valid, true);
