@@ -211,3 +211,33 @@ Deno.test(
     assertRefused(res);
   },
 );
+
+Deno.test(
+  "a carve-out dependency reference alongside a separate real DO NOT START line is still refused",
+  async () => {
+    const res = await runGuard(
+      '**Blocked by** `web-jam-tools#814 "..."`\n\nDO NOT START until Josh approves the design.',
+    );
+    assertRefused(res);
+  },
+);
+
+Deno.test(
+  "two 'Blocked by' dependency-reference lines together dispatch normally",
+  async () => {
+    const res = await runGuard(
+      "Blocked by #814 — see that issue for the dependency.\nBlocked by #820 — and this one too.",
+    );
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "'BLOCKED BY <vague cause>' that happens to cite an issue further along the line is still refused",
+  async () => {
+    const res = await runGuard(
+      "BLOCKED BY the vendor's SSO rollout — context in #12",
+    );
+    assertRefused(res);
+  },
+);
