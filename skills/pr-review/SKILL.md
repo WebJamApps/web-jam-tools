@@ -214,7 +214,7 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
       a Must Fix item. Not when it is stale, not when it is incomplete, not when it
       contradicts what the PR actually built, and not when it describes a superseded design.
     - Reason: Must Fix means *this cannot merge as it stands* — it is reserved for a failing
-      CircleCI check (other than `Version bump check (PR branches only)` failing alone, which
+      CircleCI check (other than `Version bump check (PR branches only)`, which
       Step 4 item 5's carve-out reports as a Suggestion instead), a failing Snyk check, a merge
       conflict with the base branch, and defects in the code being merged. A description that
       has drifted from its diff does not stop the
@@ -237,9 +237,9 @@ with each other):
 2. **CircleCI-failure follow-up** — Step 4, via `deno task post-pr-comment`, and **only when
    CircleCI resolves failing, or is still unresolved once its poll cap is hit**. It carries only
    what is new: the `## PR Review Summary` header, the updated verdict line, and the CircleCI
-   result — a new Must Fix line naming the failing job and its detail, except when
-   `Version bump check (PR branches only)` is the only failing job, in which case Step 4 item 5's
-   carve-out reports it as a Suggestions line instead. It **never**
+   result — a new Must Fix line naming the failing job and its detail, except for
+   `Version bump check (PR branches only)`, which Step 4 item 5's carve-out always reports
+   as a Suggestions line instead. It **never**
    reprints post #1's Checklist Verification, its other Must Fix items, or its Suggestions — post
    #1 already carried all of that, and repeating it is the waste this shape exists to prevent.
 
@@ -256,11 +256,14 @@ afterward.
      test plan, architectural judgment, guardrails):
      - `**✅ Approved**` (clean diff, no Must Fix items found in Step 2)
      - `**🛑 Changes Requested**` (any Must Fix item found in Step 2, or a blocking defect exists)
-     - A version-bump finding alone (Step 2 item 5) is a Suggestion, never a Must Fix — it never by
-       itself produces `**🛑 Changes Requested**`, in this post or in Step 4's follow-up.
+     - A version-bump finding (Step 2 item 5) is always a Suggestion, never a Must Fix — this
+       classification does not depend on whether it is the only finding.
+       The verdict itself is only guaranteed to stay off the red state on the strength of this
+       finding alone when it is the sole finding; it never by itself produces
+       `**🛑 Changes Requested**`, in this post or in Step 4's follow-up.
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
-     - Exception: when the only failing (or unresolved) CircleCI job is `Version bump check (PR branches only)`, Step 4 item 5's carve-out reports it under Suggestions instead of here.
+     - Exception: `Version bump check (PR branches only)` failing (or unresolved) is never listed here — Step 4 item 5's carve-out reports it under Suggestions instead of here, whether it fails alone or alongside another job.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
      The **Semver Bump** row is the one exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
