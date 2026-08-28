@@ -181,11 +181,13 @@ export async function runBookGigCli(
       result.htmlPath = htmlPath;
 
       if (!parsed.noOpen) {
-        const opener = openBrowserImpl || openHtmlInBrowser;
-        const opened = await opener(htmlPath);
-        result.openedBrowser = opened;
-        if (opened) {
-          console.log(`🚀 Automatically opened live campaign artifact in Google Chrome.`);
+        const opener = openBrowserImpl || (import.meta.main ? openHtmlInBrowser : undefined);
+        if (opener) {
+          const opened = await opener(htmlPath);
+          result.openedBrowser = opened;
+          if (opened) {
+            console.log(`🚀 Automatically opened live campaign artifact in Google Chrome.`);
+          }
         }
       }
     }
@@ -373,11 +375,13 @@ export async function runBookGigCli(
     result.htmlPath = htmlPath;
 
     if (!parsed.noOpen) {
-      const opener = openBrowserImpl || openHtmlInBrowser;
-      const opened = await opener(htmlPath);
-      result.openedBrowser = opened;
-      if (opened) {
-        console.log(`🚀 Automatically opened review artifact in Google Chrome.`);
+      const opener = openBrowserImpl || (import.meta.main ? openHtmlInBrowser : undefined);
+      if (opener) {
+        const opened = await opener(htmlPath);
+        result.openedBrowser = opened;
+        if (opened) {
+          console.log(`🚀 Automatically opened review artifact in Google Chrome.`);
+        }
       }
     }
   }

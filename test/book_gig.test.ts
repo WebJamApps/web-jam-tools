@@ -679,21 +679,35 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
     return Promise.resolve(new Response("{}", { status: 200 }));
   };
 
+  const mockOpener = () => Promise.resolve(true);
+
   // Discovery mode (default)
-  const resultDiscovery = await runBookGigCli(["Oct 16-18 2026", "Salem, VA"], mockFetch);
+  const resultDiscovery = await runBookGigCli(
+    ["Oct 16-18 2026", "Salem, VA"],
+    mockFetch,
+    mockOpener,
+  );
   assertEquals(resultDiscovery.mode, "preview");
   assertEquals(resultDiscovery.weekend?.start, "2026-10-16");
   assertEquals(resultDiscovery.candidates.length, 1);
   assertEquals(resultDiscovery.pitches.length, 1);
 
   // Batch send mode (--send)
-  const resultSend = await runBookGigCli(["--send", "Oct 16-18 2026", "Salem, VA"], mockFetch);
+  const resultSend = await runBookGigCli(
+    ["--send", "Oct 16-18 2026", "Salem, VA"],
+    mockFetch,
+    mockOpener,
+  );
   assertEquals(resultSend.mode, "send");
   assertEquals(resultSend.batchDispatch?.sent, 1);
   assertEquals(resultSend.batchDispatch?.requested, 1);
 
   // Replies tracking mode (--replies)
-  const resultReplies = await runBookGigCli(["--replies", "Oct 16-18 2026"], mockFetch);
+  const resultReplies = await runBookGigCli(
+    ["--replies", "Oct 16-18 2026"],
+    mockFetch,
+    mockOpener,
+  );
   assertEquals(resultReplies.mode, "replies");
   assertEquals(resultReplies.repliesTracking?.checkReplies.matched, 1);
   assertEquals(resultReplies.repliesTracking?.campaigns.length, 1);
@@ -824,8 +838,14 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
     return Promise.resolve(new Response("{}", { status: 200 }));
   };
 
+  const mockOpener = () => Promise.resolve(true);
+
   // Test 1: Send all without --venues / --skip
-  const resAll = await runBookGigCli(["--send", "Oct 16-18 2026"], mockFetch);
+  const resAll = await runBookGigCli(
+    ["--send", "Oct 16-18 2026"],
+    mockFetch,
+    mockOpener,
+  );
   assertEquals(resAll.batchDispatch?.sent, 3);
   assertEquals(lastDispatchedIds, ["v1", "v2", "v3"]);
 
@@ -833,6 +853,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
   const resSubsetId = await runBookGigCli(
     ["--send", "Oct 16-18 2026", "--venues", "v1,v3"],
     mockFetch,
+    mockOpener,
   );
   assertEquals(resSubsetId.batchDispatch?.sent, 2);
   assertEquals(lastDispatchedIds, ["v1", "v3"]);
@@ -841,6 +862,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
   const resSubsetName = await runBookGigCli(
     ["--send", "Oct 16-18 2026", "--venues", "Parkway Brewing"],
     mockFetch,
+    mockOpener,
   );
   assertEquals(resSubsetName.batchDispatch?.sent, 1);
   assertEquals(lastDispatchedIds, ["v2"]);
@@ -849,6 +871,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
   const resSkip = await runBookGigCli(
     ["--send", "Oct 16-18 2026", "--skip", "v2"],
     mockFetch,
+    mockOpener,
   );
   assertEquals(resSkip.batchDispatch?.sent, 2);
   assertEquals(lastDispatchedIds, ["v1", "v3"]);
@@ -857,6 +880,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
   const resNone = await runBookGigCli(
     ["--send", "Oct 16-18 2026", "--venues", "non-existent-id"],
     mockFetch,
+    mockOpener,
   );
   assertEquals(resNone.batchDispatch?.sent, 0);
   assertEquals(resNone.batchDispatch?.requested, 0);

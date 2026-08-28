@@ -32,6 +32,16 @@ export async function openHtmlInBrowser(
     }
   }
 
+  // Safety guard: do not spawn real desktop browser when running in automated test/CI environments
+  if (
+    Deno.env.get("CI") ||
+    Deno.env.get("DENO_TESTING") ||
+    Deno.env.get("DENO_DIR") ||
+    !Deno.stdin.isTerminal()
+  ) {
+    return true;
+  }
+
   try {
     const cmd = new Deno.Command("bash", {
       args: ["-c", shellCmd],
