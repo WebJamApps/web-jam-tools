@@ -51,6 +51,7 @@ rules and do not reconstruct them from memory or from this file.
 8. **Non-UI Task Land Opt-Out (`--no-land`):** `scripts/handle-agy-tasks.sh` supports `--no-land` to skip checking the feature branch out into the developer's main repository clone after PR creation, keeping non-UI work (backend, docs, tooling, config) from moving the local checkout away from `dev`.
 9. **Skill Renames & Stale Symlink Pruning:** `skills/issue-design/` is renamed to `skills/design-issue/` and `skills/draft-issue/` is renamed to `skills/file-issue/`. `deno task install-skills` (`scripts/install-skills.ts`) saves skill backups outside the scanned skill directories (in `skills-backups/`, automatically pruning backups older than 14 days), migrates pre-existing in-place `.bak` copies out of skills directories, and prunes dangling symlinks in both `~/.claude/skills` and `~/.gemini/config/plugins/webjam-tasks/skills`.
 10. **Pre-Existing Hook Permission & Git Index Immutability:** Do not stage or commit permission mode changes (`100644` → `100755`) on pre-existing hook files (`hooks/agy-hook-shim.sh`, `hooks/agy-model-guard.sh`, `hooks/block-agy-gmail-send-delete.sh`) unless the issue is explicitly about modifying those hook files. When local work requires executing shell scripts with `chmod +x`, ensure the git index mode matches `origin/dev` before committing by verifying `git diff origin/dev...HEAD --summary` carries no unrelated file mode changes.
+11. **Plan Table Dependency Key Namespacing & Pre-Validation:** In plan filing tools (`deno task design:file-plan` / `src/design-issue/file_plan.ts`), dependency-resolution registries must store 1-based position indices, explicit plan `id`s, issue titles, and external GitHub issue citations in separate lookup namespaces with strict resolution precedence (explicit ID -> 1-based position -> title -> external issue number). Plans must be pre-validated before issue creation to reject ambiguous collisions (such as an explicit `id` conflicting with a different item's position index or duplicate `id`s across items) so incorrect `blocked_by` edges are never created on GitHub.
 
 ## Opening pull requests (all WebJamApps repos)
 
@@ -290,4 +291,9 @@ target list, deployment steps, and verification procedures.
 ## Batch Email & Outreach Dispatch Safety
 
 - **Batch Email & Outreach Dispatch Safety**: When implementing real outbound email or batch outreach commands (like `--send`), always provide explicit recipient filtering/exclusion options (`--venues`, `--skip`) so the user can selectively dispatch only approved candidates, ensuring code strictly supports the human-approval safety guarantees described in skill documentation.
+
+## Plan Table & Issue Automation Guidelines
+
+- **Plan Table Dependency Key Namespacing & Pre-Validation**: In plan filing tools (`deno task design:file-plan` / `src/design-issue/file_plan.ts`), dependency-resolution registries must store 1-based position indices, explicit plan `id`s, issue titles, and external GitHub issue citations in separate lookup namespaces with strict resolution precedence (explicit ID -> 1-based position -> title -> external issue number). Plans must be pre-validated before issue creation to reject ambiguous collisions (such as an explicit `id` conflicting with a different item's position index, duplicate `id`s across items, or duplicate titles across items) so incorrect `blocked_by` edges are never created on GitHub.
+
 

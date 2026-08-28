@@ -1,0 +1,36 @@
+{
+  "repo": "web-jam-tools",
+  "milestone": "token-savings",
+  "epic": {
+    "title": "Fix plan-table validation gaps",
+    "body": "## What this builds\n\nEpic container for plan-table validation and filing enhancements.\n\n## Acceptance criteria\n\n1. Closes when all child sub-issues close.",
+    "type": "Epic",
+    "priority": "High",
+    "tier": "Opus",
+    "repo": "web-jam-tools",
+    "milestone": "token-savings"
+  },
+  "children": [
+    {
+      "id": 1,
+      "title": "Add cell validators for design:lint-plan",
+      "body": "## What this builds\n\nCell validators for Gate 2 plan table linting.\n\n## Acceptance criteria\n\n1. Unit tests pass covering cell validators.",
+      "type": "Task",
+      "priority": "High",
+      "tier": "Flash High",
+      "repo": "web-jam-tools",
+      "milestone": "token-savings"
+    },
+    {
+      "id": 2,
+      "title": "Add Tests-cell validation",
+      "body": "## What this builds\n\nValidation rules for Tests column in plan table.\n\n## Acceptance criteria\n\n1. Unit tests pass covering Tests column validation.",
+      "type": "Task",
+      "priority": "High",
+      "tier": "Flash High",
+      "repo": "web-jam-tools",
+      "milestone": "token-savings",
+      "blocked_by": [1]
+    }
+  ]
+}

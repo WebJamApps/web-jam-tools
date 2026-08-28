@@ -6,16 +6,25 @@
 // - deno task design:candidates (web-jam-tools#745)
 // - deno task design:stale-bodies <doc.md> --issues <list> (web-jam-tools#746)
 // - deno task design:lint-plan <plan.md> (web-jam-tools#796)
+// - deno task design:file-plan <plan.json> (web-jam-tools#748)
 
 import { parseArgs } from "@std/cli/parse-args";
 import { runCandidatesCli } from "./candidates.ts";
+import { runFilePlanCli } from "./file_plan.ts";
 import { type Gate1Options, runGate1 } from "./gate1.ts";
 import { runLintDocCli } from "./lint_doc.ts";
 import { runLintPlanCli } from "./lint_plan.ts";
 import { runLintRunbookCli } from "./lint_runbook.ts";
 import { runStaleBodiesCli } from "./stale_bodies.ts";
 
-export { runCandidatesCli, runLintDocCli, runLintPlanCli, runLintRunbookCli, runStaleBodiesCli };
+export {
+  runCandidatesCli,
+  runFilePlanCli,
+  runLintDocCli,
+  runLintPlanCli,
+  runLintRunbookCli,
+  runStaleBodiesCli,
+};
 
 export async function runGate1Cli(
   args: string[],
@@ -107,6 +116,10 @@ export async function runCli(
 
   if (firstArg === "lint-plan" || firstArg === "lint_plan") {
     return await runLintPlanCli(args.slice(1));
+  }
+
+  if (firstArg === "file-plan" || firstArg === "file_plan") {
+    return await runFilePlanCli(args.slice(1));
   }
 
   if (firstArg === "gate1") {
