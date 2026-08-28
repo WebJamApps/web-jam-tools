@@ -85,6 +85,14 @@ export interface RunCmd {
 export interface AlreadyReviewedResult {
   skip: boolean;
   reason?: string;
+  /**
+   * True when a caller-supplied `--head-sha` was checked against the PR's
+   * live head and the two disagree — the review was composed against a
+   * commit the branch has since moved past (e.g. a force-push mid-review).
+   * `skip` is always false alongside `stale: true`: this is a refusal, not
+   * a silent no-op — the caller must exit non-zero and post nothing.
+   */
+  stale?: boolean;
 }
 
 /**
@@ -94,13 +102,28 @@ export interface AlreadyReviewedResult {
  * Step 1, so the guard and the skill agree on what counts as "already
  * reviewed".
  *
- * Fails OPEN (never skips) when the check itself is inconclusive — an
- * ambiguous state must never silently swallow a real review post.
+ * When `callerHeadSha` is supplied (the head SHA the caller's findings were
+ * actually derived from — web-jam-tools#825), it is checked against the
+ * PR's live head SHA first, ahead of the already-reviewed comparison. GitHub
+ * stamps a posted review with whatever head is current *at post time*, not
+ * the head the findings were composed against — so a force-push landing
+ * between composing the review and posting it can make a stale review look
+ * current, silently occupying the already-reviewed slot and blocking the
+ * corrected re-review. A SHA mismatch here is refused outright rather than
+ * posted: refusing is recoverable (re-run the review against the new head),
+ * posting a review stamped onto the wrong commit is not. Omitting
+ * `callerHeadSha` leaves this check out entirely — behaviour is then
+ * byte-identical to before web-jam-tools#825.
+ *
+ * Fails OPEN (never skips, never refuses) when the check itself is
+ * inconclusive — an ambiguous state must never silently swallow a real
+ * review post.
  */
 export async function isAlreadyReviewedAtHeadSha(
   repo: string,
   prNumber: number,
   runCmd: RunCmd,
+  callerHeadSha?: string,
 ): Promise<AlreadyReviewedResult> {
   const { code, stdout } = await runCmd([
     "gh",
@@ -121,12 +144,24 @@ export async function isAlreadyReviewedAtHeadSha(
 
   try {
     const parsed = JSON.parse(stdout);
+    const headSha = typeof parsed.head_sha === "string" ? parsed.head_sha : undefined;
+
+    if (callerHeadSha && headSha && callerHeadSha !== headSha) {
+      return {
+        skip: false,
+        stale: true,
+        reason: `refusing to post: review was composed against head SHA ${callerHeadSha}, ` +
+          `but the PR's current head is ${headSha} — the branch moved (e.g. a force-push) ` +
+          "since the review was written. Re-run the review against the new head and post again.",
+      };
+    }
+
     if (
       typeof parsed.last_review_sha === "string" &&
-      typeof parsed.head_sha === "string" &&
-      parsed.last_review_sha === parsed.head_sha
+      headSha !== undefined &&
+      parsed.last_review_sha === headSha
     ) {
-      return { skip: true, reason: `already reviewed at head SHA ${parsed.head_sha}` };
+      return { skip: true, reason: `already reviewed at head SHA ${headSha}` };
     }
   } catch {
     // Unparseable — inconclusive, do not block the post.

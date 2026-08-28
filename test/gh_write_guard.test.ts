@@ -128,6 +128,121 @@ Deno.test("isAlreadyReviewedAtHeadSha fails open (does not skip) on unparseable 
     })).then((result) => assertEquals(result.skip, false));
 });
 
+Deno.test("isAlreadyReviewedAtHeadSha refuses (stale) when caller-supplied SHA differs from the live head", async () => {
+  const result = await isAlreadyReviewedAtHeadSha(
+    "WebJamApps/web-jam-tools",
+    825,
+    () =>
+      Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({ last_review_sha: null, head_sha: "b2ff3ef" }),
+        stderr: "",
+      }),
+    "487d3a2",
+  );
+  assertEquals(result.skip, false);
+  assertEquals(result.stale, true);
+  assertEquals(result.reason?.includes("487d3a2"), true);
+  assertEquals(result.reason?.includes("b2ff3ef"), true);
+});
+
+Deno.test("isAlreadyReviewedAtHeadSha proceeds (no skip, no stale) when caller-supplied SHA matches the live head and no prior review exists", async () => {
+  const result = await isAlreadyReviewedAtHeadSha(
+    "WebJamApps/web-jam-tools",
+    825,
+    () =>
+      Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({ last_review_sha: null, head_sha: "b2ff3ef" }),
+        stderr: "",
+      }),
+    "b2ff3ef",
+  );
+  assertEquals(result.skip, false);
+  assertEquals(result.stale, undefined);
+});
+
+Deno.test("isAlreadyReviewedAtHeadSha still skips (already-reviewed) when caller-supplied SHA matches the live head and a review already exists there", async () => {
+  const result = await isAlreadyReviewedAtHeadSha(
+    "WebJamApps/web-jam-tools",
+    825,
+    () =>
+      Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({ last_review_sha: "b2ff3ef", head_sha: "b2ff3ef" }),
+        stderr: "",
+      }),
+    "b2ff3ef",
+  );
+  assertEquals(result.skip, true);
+  assertEquals(result.stale, undefined);
+});
+
+Deno.test("isAlreadyReviewedAtHeadSha with a caller-supplied SHA still fails open (no skip, no stale) on an inconclusive gh call", async () => {
+  const result = await isAlreadyReviewedAtHeadSha(
+    "WebJamApps/web-jam-tools",
+    825,
+    () =>
+      Promise.resolve({
+        code: 1,
+        stdout: "",
+        stderr: "gh: not found",
+      }),
+    "487d3a2",
+  );
+  assertEquals(result.skip, false);
+  assertEquals(result.stale, undefined);
+});
+
+Deno.test("isAlreadyReviewedAtHeadSha omitting the caller-supplied SHA behaves unchanged (byte-identical to before web-jam-tools#825)", async () => {
+  const result = await isAlreadyReviewedAtHeadSha(
+    "WebJamApps/web-jam-tools",
+    825,
+    () =>
+      Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({ last_review_sha: "abc123", head_sha: "def456" }),
+        stderr: "",
+      }),
+  );
+  assertEquals(result.skip, false);
+  assertEquals(result.stale, undefined);
+});
+
+Deno.test("isAlreadyReviewedAtHeadSha refuses (stale) even when a review already exists at the live head — the staleness check runs first (regression: swapping the two arms back to the old order would silently reintroduce web-jam-tools#825)", async () => {
+  const result = await isAlreadyReviewedAtHeadSha(
+    "WebJamApps/web-jam-tools",
+    825,
+    () =>
+      Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({ last_review_sha: "b2ff3ef", head_sha: "b2ff3ef" }),
+        stderr: "",
+      }),
+    "487d3a2",
+  );
+  assertEquals(result.stale, true);
+  assertEquals(result.skip, false);
+});
+
+Deno.test("isAlreadyReviewedAtHeadSha refuses (stale) with full-length 40-char SHAs — the real production shape (Step 1's --jq returns .oid, not a short SHA)", async () => {
+  const fullHead = "b2ff3efabcdef0123456789abcdef0123456789a";
+  const fullCaller = "487d3a2abcdef0123456789abcdef0123456789a";
+  const result = await isAlreadyReviewedAtHeadSha(
+    "WebJamApps/web-jam-tools",
+    825,
+    () =>
+      Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({ last_review_sha: null, head_sha: fullHead }),
+        stderr: "",
+      }),
+    fullCaller,
+  );
+  assertEquals(result.skip, false);
+  assertEquals(result.stale, true);
+});
+
 Deno.test("isAlreadyReviewedAtHeadSha invokes gh with bare pr id and --repo flag", async () => {
   let seenArgs: string[] = [];
   await isAlreadyReviewedAtHeadSha("WebJamApps/JaMmusic", 1324, (cmd) => {

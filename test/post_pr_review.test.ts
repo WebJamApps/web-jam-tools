@@ -157,6 +157,138 @@ Deno.test("post-pr-review: a well-formed, not-yet-reviewed body posts successful
   assertEquals(code, 0);
 });
 
+Deno.test("post-pr-review: --head-sha matching the PR's current head posts exactly as without it", async () => {
+  let ghReviewCalled = false;
+  const code = await run(
+    [...ARGS, "--head-sha", "b2ff3ef"],
+    fakeDeps({
+      runCmd: (cmd) => {
+        if (cmd[1] === "pr" && cmd[2] === "view") {
+          return Promise.resolve({
+            code: 0,
+            stdout: JSON.stringify({ last_review_sha: null, head_sha: "b2ff3ef" }),
+            stderr: "",
+          });
+        }
+        if (cmd.includes("--comment")) ghReviewCalled = true;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(ghReviewCalled, true);
+});
+
+Deno.test("post-pr-review: --head-sha differing from the PR's current head is REFUSED, exits non-zero, posts nothing", async () => {
+  let ghReviewCalled = false;
+  const code = await run(
+    [...ARGS, "--head-sha", "487d3a2"],
+    fakeDeps({
+      runCmd: (cmd) => {
+        if (cmd[1] === "pr" && cmd[2] === "view") {
+          return Promise.resolve({
+            code: 0,
+            stdout: JSON.stringify({ last_review_sha: null, head_sha: "b2ff3ef" }),
+            stderr: "",
+          });
+        }
+        if (cmd.includes("--comment")) ghReviewCalled = true;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 1);
+  assertEquals(ghReviewCalled, false);
+});
+
+Deno.test("post-pr-review: omitting --head-sha leaves behaviour unchanged, including the existing already-reviewed skip", async () => {
+  let ghReviewCalled = false;
+  const code = await run(
+    ARGS,
+    fakeDeps({
+      runCmd: (cmd) => {
+        if (cmd[1] === "pr" && cmd[2] === "view") {
+          return Promise.resolve({
+            code: 0,
+            stdout: JSON.stringify({ last_review_sha: "abc", head_sha: "abc" }),
+            stderr: "",
+          });
+        }
+        if (cmd.includes("--comment")) ghReviewCalled = true;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(ghReviewCalled, false);
+});
+
+Deno.test("post-pr-review: --head-sha matching the PR's current head posts successfully with full-length 40-char SHAs — the real production shape", async () => {
+  const fullSha = "b2ff3efabcdef0123456789abcdef0123456789a";
+  let ghReviewCalled = false;
+  const code = await run(
+    [...ARGS, "--head-sha", fullSha],
+    fakeDeps({
+      runCmd: (cmd) => {
+        if (cmd[1] === "pr" && cmd[2] === "view") {
+          return Promise.resolve({
+            code: 0,
+            stdout: JSON.stringify({ last_review_sha: null, head_sha: fullSha }),
+            stderr: "",
+          });
+        }
+        if (cmd.includes("--comment")) ghReviewCalled = true;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 0);
+  assertEquals(ghReviewCalled, true);
+});
+
+Deno.test("post-pr-review: --head-sha differing from the PR's current head with full-length 40-char SHAs is REFUSED", async () => {
+  const fullCaller = "487d3a2abcdef0123456789abcdef0123456789a";
+  const fullHead = "b2ff3efabcdef0123456789abcdef0123456789a";
+  let ghReviewCalled = false;
+  const code = await run(
+    [...ARGS, "--head-sha", fullCaller],
+    fakeDeps({
+      runCmd: (cmd) => {
+        if (cmd[1] === "pr" && cmd[2] === "view") {
+          return Promise.resolve({
+            code: 0,
+            stdout: JSON.stringify({ last_review_sha: null, head_sha: fullHead }),
+            stderr: "",
+          });
+        }
+        if (cmd.includes("--comment")) ghReviewCalled = true;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 1);
+  assertEquals(ghReviewCalled, false);
+});
+
+Deno.test("post-pr-review: an empty --head-sha value is a usage error, refused, exits non-zero, posts nothing", async () => {
+  let ghReviewCalled = false;
+  const code = await run(
+    [...ARGS, "--head-sha", ""],
+    fakeDeps({
+      runCmd: (cmd) => {
+        if (cmd.includes("--comment")) ghReviewCalled = true;
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ last_review_sha: null, head_sha: "abc" }),
+          stderr: "",
+        });
+      },
+    }),
+  );
+  assertEquals(code, 1);
+  assertEquals(ghReviewCalled, false);
+});
+
 Deno.test("post-pr-review: builds gh argv with bare pr id and --repo flag (regression web-jam-tools#781)", async () => {
   let seenReviewArgs: string[] = [];
   const code = await run(

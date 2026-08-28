@@ -24,16 +24,30 @@ export interface Options {
   pr?: number;
   bodyFile?: string;
   dryRun: boolean;
+  headSha?: string;
+  /**
+   * True when `--head-sha` was supplied on the command line at all, regardless
+   * of its value. Distinguishes "flag omitted" (headSha undefined, a
+   * legitimate opt-out — see web-jam-tools#825) from "flag supplied with an
+   * empty value" (a caller bug: the skill always passes this flag now, so an
+   * empty value means the upstream SHA-capture command failed). `headSha`
+   * alone can't tell those apart, since both leave it falsy.
+   */
+  headShaFlagPresent: boolean;
 }
 
 export function parseArgs(args: string[]): Options {
-  const opts: Options = { dryRun: false };
+  const opts: Options = { dryRun: false, headShaFlagPresent: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--repo") opts.repo = args[++i];
     else if (arg === "--pr") opts.pr = Number(args[++i]);
     else if (arg === "--body-file") opts.bodyFile = args[++i];
     else if (arg === "--dry-run") opts.dryRun = true;
+    else if (arg === "--head-sha") {
+      opts.headShaFlagPresent = true;
+      opts.headSha = args[++i];
+    }
   }
   return opts;
 }
@@ -44,12 +58,21 @@ export interface Deps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const USAGE = "usage: post-pr-review --repo <owner/repo> --pr <n> --body-file <path> [--dry-run]";
+const USAGE =
+  "usage: post-pr-review --repo <owner/repo> --pr <n> --body-file <path> [--dry-run] [--head-sha <oid>]";
 
 export async function run(args: string[], deps: Deps): Promise<number> {
   const opts = parseArgs(args);
   if (!opts.repo || !opts.pr || !opts.bodyFile) {
     console.error(USAGE);
+    return 1;
+  }
+  if (opts.headShaFlagPresent && !opts.headSha) {
+    console.error(
+      "refusing to post: --head-sha was supplied with an empty value — the skill always " +
+        "passes this flag, so an empty value means the upstream SHA-capture command failed; " +
+        "omit the flag entirely to opt out, or fix the caller to supply a real SHA",
+    );
     return 1;
   }
 
@@ -60,10 +83,14 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     return 1;
   }
 
-  const already = await isAlreadyReviewedAtHeadSha(opts.repo, opts.pr, deps.runCmd);
+  const already = await isAlreadyReviewedAtHeadSha(opts.repo, opts.pr, deps.runCmd, opts.headSha);
   if (already.skip) {
     console.log(`skipping post: ${already.reason} — not double-posting`);
     return 0;
+  }
+  if (already.stale) {
+    console.error(already.reason);
+    return 1;
   }
 
   const ghArgs = [
