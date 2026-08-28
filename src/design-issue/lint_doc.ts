@@ -353,6 +353,158 @@ function firstNonExemptMatch(
   return null;
 }
 
+/** Heading for the section every design document must carry proving its own premises
+ * (web-jam-tools#814, enforced here per web-jam-tools#815). Same detection shape as
+ * `bothSurfacesHeadingRegex` below. */
+const loadBearingPremisesHeadingRegex = /^\s*#{1,6}\s+Load-bearing premises\b/i;
+
+/** A line self-identifying a cited issue as the one this design run was invoked on — the one
+ * concrete convention observed in practice (design-issue-enhancements-design-2026-08-23.md:
+ * "The directive carried at the top of the target issue this run was invoked on:"). This is a
+ * deliberately narrow, mechanical proxy for "the document names a target issue": it requires the
+ * document's own prose to say so in those terms, rather than guessing from any bare issue citation
+ * (a design document routinely cites dozens of ordinary issues, and treating every one as "the
+ * target issue" would make this rule fire on nearly every document). */
+const targetIssueInvokedMarkerRegex = /\btarget\s+issue\b/i;
+const invokedMarkerRegex = /\binvoked\b/i;
+
+/** A markdown blockquote line (one or more `>` after leading whitespace). */
+const blockquoteLineRegex = /^\s*>/;
+
+/** Phrases that mark a `## Load-bearing premises` row's Proof cell as hedged rather than proven
+ * (web-jam-tools#815 acceptance criterion 2's own examples — "probably", "should be", "I believe"
+ * — plus the same vocabulary the skill body itself uses for an unproven premise: "unverified",
+ * "unconfirmed"). Deliberately a closed, enumerated list (not a general NLP hedge detector) per
+ * this issue's Sonnet-sizing rationale. Matched through `firstNonExemptMatch` so a proof cell that
+ * *quotes* one of these words (e.g. discussing what NOT to write) is not itself flagged — the same
+ * mention-vs-use distinction web-jam-tools#797 established for the other banned-phrase rules,
+ * carried over here so this rule cannot re-open that bug class (decision 24 of the design
+ * reference explicitly rejects a hedge check that does not preserve it). */
+const hedgedProofRegexes = [
+  /\bprobably\b/gi,
+  /\bshould\s+be\b/gi,
+  /\bshould\s+work\b/gi,
+  /\bi\s+believe\b/gi,
+  /\bi\s+think\b/gi,
+  /\bwe\s+believe\b/gi,
+  /\bwe\s+think\b/gi,
+  /\bmight\s+be\b/gi,
+  /\bmay\s+be\b/gi,
+  /\bpresumably\b/gi,
+  /\blikely\b/gi,
+  /\bpossibly\b/gi,
+  /\bassum(?:e|ed|ing)\b/gi,
+  /\bunconfirmed\b/gi,
+  /\bunverified\b/gi,
+  /\bnot\s+(?:yet\s+)?verified\b/gi,
+  /\bunclear\b/gi,
+  /\bseems?\s+to\b/gi,
+  /\bappears?\s+to\b/gi,
+  /\bhopefully\b/gi,
+];
+
+/** Strips markdown-only decoration (backticks, quotes, bold/italic markers) and surrounding
+ * whitespace from a table cell, for the empty/"N/A" checks — these check the cell's literal
+ * content, not whether it happens to be wrapped in emphasis. */
+function stripCellDecoration(cell: string): string {
+  return cell.replace(/[`*_"'“”‘’]/g, "").trim();
+}
+
+/** A single row of a markdown table, split on unescaped `|`, trimmed, with the leading/trailing
+ * empty cells produced by a `| a | b |`-style line dropped. */
+function splitTableRow(line: string): string[] {
+  const trimmed = line.trim();
+  const cells = trimmed.split("|").map((c) => c.trim());
+  if (cells.length > 0 && cells[0] === "") cells.shift();
+  if (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
+  return cells;
+}
+
+/** True when every cell in a table row is a separator cell (`---`, `:--`, `--:`, `:-:`) — the
+ * row GitHub-Flavored Markdown uses to mark a table's second row and that carries no data. */
+function isTableSeparatorRow(cells: string[]): boolean {
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
+}
+
+/**
+ * Validates the `## Load-bearing premises` table collected by the main scan below: finds the
+ * "Proof" column by its header name (case-insensitive) and fails any data row whose Proof cell is
+ * empty, "N/A", or hedged.
+ */
+function validateLoadBearingPremisesTable(
+  tableLines: Array<{ line: string; lineNum: number }>,
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+  const rows = tableLines
+    .map((entry) => ({ ...entry, cells: splitTableRow(entry.line) }))
+    .filter((entry) => entry.cells.length > 0);
+
+  const headerRow = rows.find((r) => !isTableSeparatorRow(r.cells));
+  if (!headerRow) {
+    violations.push({
+      rule: "load-bearing-premises-unproven-row",
+      message:
+        "Design document's '## Load-bearing premises' section has no table — a section with no premise rows proves nothing.",
+    });
+    return violations;
+  }
+
+  const proofColIdx = headerRow.cells.findIndex((c) => /^proof$/i.test(c));
+  if (proofColIdx === -1) {
+    violations.push({
+      rule: "load-bearing-premises-unproven-row",
+      message:
+        "Design document's '## Load-bearing premises' table has no 'Proof' column — cannot verify any premise is proven.",
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+    return violations;
+  }
+
+  for (const row of rows) {
+    if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
+    const rawCell = row.cells[proofColIdx] ?? "";
+    const stripped = stripCellDecoration(rawCell);
+
+    if (stripped === "") {
+      violations.push({
+        rule: "load-bearing-premises-unproven-row",
+        message: `Load-bearing premises row has an empty Proof cell: "${row.line.trim()}"`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+      continue;
+    }
+
+    if (/^n\/a$/i.test(stripped)) {
+      violations.push({
+        rule: "load-bearing-premises-unproven-row",
+        message: `Load-bearing premises row has an "N/A" Proof cell: "${row.line.trim()}"`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+      continue;
+    }
+
+    const hedgeMatch = firstNonExemptMatch(
+      rawCell,
+      hedgedProofRegexes,
+      computeExemptRanges(rawCell),
+    );
+    if (hedgeMatch) {
+      violations.push({
+        rule: "load-bearing-premises-unproven-row",
+        message:
+          `Load-bearing premises row has a hedged Proof cell ("${hedgeMatch.text}"): "${row.line.trim()}"`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+  }
+
+  return violations;
+}
+
 /**
  * Checks a design document markdown string against the skill body rules:
  * 1. Fails if the document contains a status line (e.g., Status: / status: ...).
@@ -361,6 +513,10 @@ function firstNonExemptMatch(
  * 4. Fails if the document contains revision narration ("what changed", "an earlier version said", before/after framing).
  * 5. Fails if the document contains bare decision labels (e.g., "per D-7", "R-39").
  * 6. Fails if the document lacks a "## Both surfaces" section.
+ * 7. Fails if the document lacks a "## Load-bearing premises" section, or that section's table has
+ *    a Proof cell that is empty, "N/A", or hedged (web-jam-tools#815).
+ * 8. Fails if the document names a target issue it was invoked on but carries no verbatim
+ *    blockquote of that issue's directive anywhere after naming it (web-jam-tools#815).
  */
 export function lintDesignDoc(content: string, docPath: string = ""): LintDocResult {
   const violations: LintViolation[] = [];
@@ -368,6 +524,11 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
 
   let inCodeBlock = false;
   let hasBothSurfacesSection = false;
+  let loadBearingPremisesFound = false;
+  const loadBearingPremisesTableLines: Array<{ line: string; lineNum: number }> = [];
+  let inLoadBearingPremisesSection = false;
+  let sawTargetIssueMarker = false;
+  let sawBlockquoteAfterMarker = false;
 
   // Patterns for rules
   const statusLineRegex =
@@ -418,6 +579,7 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
   const standaloneDecisionLabelRegexes = [/\b[DR]-\d+\b/g];
 
   const bothSurfacesHeadingRegex = /^\s*#{1,6}\s+Both surfaces\b/i;
+  const anyHeadingRegex = /^\s*#{1,6}\s+/;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -436,6 +598,31 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
     // Check for ## Both surfaces section heading
     if (bothSurfacesHeadingRegex.test(line)) {
       hasBothSurfacesSection = true;
+    }
+
+    // Track the '## Load-bearing premises' section: on, from its heading, until the next
+    // heading of any level (or end of document). Table rows collected while inside it are
+    // validated after this loop by validateLoadBearingPremisesTable.
+    if (loadBearingPremisesHeadingRegex.test(line)) {
+      loadBearingPremisesFound = true;
+      inLoadBearingPremisesSection = true;
+    } else if (inLoadBearingPremisesSection && anyHeadingRegex.test(line)) {
+      inLoadBearingPremisesSection = false;
+    } else if (inLoadBearingPremisesSection && line.trim().startsWith("|")) {
+      loadBearingPremisesTableLines.push({ line, lineNum });
+    }
+
+    // A line self-identifying a cited issue as the target this run was invoked on (see
+    // targetIssueInvokedMarkerRegex above) marks that "names a target issue" is true from here
+    // on; any blockquote line from this point forward satisfies the verbatim-appendix rule.
+    if (
+      !sawTargetIssueMarker && targetIssueInvokedMarkerRegex.test(line) &&
+      invokedMarkerRegex.test(line)
+    ) {
+      sawTargetIssueMarker = true;
+    }
+    if (sawTargetIssueMarker && blockquoteLineRegex.test(line)) {
+      sawBlockquoteAfterMarker = true;
     }
 
     // 1. Status line check
@@ -532,6 +719,25 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
     });
   }
 
+  // 7. Check for Load-bearing premises section and validate its Proof column
+  if (!loadBearingPremisesFound) {
+    violations.push({
+      rule: "require-load-bearing-premises-section",
+      message: "Design document lacks required '## Load-bearing premises' section",
+    });
+  } else {
+    violations.push(...validateLoadBearingPremisesTable(loadBearingPremisesTableLines));
+  }
+
+  // 8. Check for a verbatim appendix when the document names a target issue it was invoked on
+  if (sawTargetIssueMarker && !sawBlockquoteAfterMarker) {
+    violations.push({
+      rule: "require-target-issue-verbatim-appendix",
+      message:
+        "Design document names a target issue it was invoked on but carries no verbatim blockquote of that issue's directive lines",
+    });
+  }
+
   return {
     docPath,
     valid: violations.length === 0,
@@ -594,6 +800,10 @@ Checks a design document against the skill's body rules:
   - Fails if the document contains revision narration ("what changed", "an earlier version said").
   - Fails if the document contains bare decision labels ("per D-7", "R-39").
   - Fails if the document lacks a "## Both surfaces" section.
+  - Fails if the document lacks a "## Load-bearing premises" section, or that section's Proof
+    column has a cell that is empty, "N/A", or hedged.
+  - Fails if the document names a target issue it was invoked on but carries no verbatim
+    blockquote of that issue's directive lines.
 
 Arguments:
   <doc.md>        Path to design document markdown file

@@ -14,6 +14,23 @@ import {
 } from "../src/design-issue/gate1.ts";
 import { runCli } from "../src/design-issue/cli.ts";
 
+// A minimal document that still satisfies design:lint-doc's required sections (web-jam-tools#815)
+// — used by tests below that are exercising gate1's render/screenshot/browser mechanics, not the
+// linter itself, so the fixture just needs to pass rather than being representative content.
+const MINIMAL_LINT_CLEAN_DOC = `# Test
+
+## Section
+Content
+
+## Both surfaces
+Identical on both surfaces.
+
+## Load-bearing premises
+| Premise | Proof |
+|---|---|
+| This is a test fixture, not a real design | Read this file |
+`;
+
 Deno.test("expandHome expands leading tilde to home directory", () => {
   const home = Deno.env.get("HOME") || "/home/joshua";
   assertEquals(expandHome("~/Dropbox/test.md"), `${home}/Dropbox/test.md`);
@@ -85,6 +102,78 @@ Deno.test("runGate1 throws when design document is empty", async () => {
   }
 });
 
+Deno.test("runGate1 refuses to render or open a document that fails design:lint-doc", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-lint-fail-" });
+  const docPath = path.join(tempDir, "doc.md");
+  // Missing '## Both surfaces' and '## Load-bearing premises' — fails design:lint-doc.
+  await Deno.writeTextFile(docPath, "# Test\n\n## Section\nContent");
+
+  let screenshotCalled = false;
+  let browserCalled = false;
+
+  try {
+    await assertRejects(
+      async () => {
+        await runGate1({
+          docPath,
+          screenshotImpl: () => {
+            screenshotCalled = true;
+            return Promise.resolve({ sizeBytes: 100 });
+          },
+          openBrowserImpl: () => {
+            browserCalled = true;
+            return Promise.resolve();
+          },
+        });
+      },
+      Error,
+      "failed design:lint-doc",
+    );
+
+    // Refusal happens before rendering — neither the screenshot nor the browser step ever runs,
+    // and no HTML file is written (web-jam-tools#815 acceptance criterion 5: "cannot be bypassed
+    // by invoking design:gate1 directly").
+    assertEquals(screenshotCalled, false);
+    assertEquals(browserCalled, false);
+    const htmlPath = path.join(tempDir, "doc.html");
+    const htmlExists = await Deno.stat(htmlPath).then(() => true).catch(() => false);
+    assertEquals(htmlExists, false);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runGate1's refusal names each design:lint-doc violation", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-lint-fail-detail-" });
+  const docPath = path.join(tempDir, "doc.md");
+  await Deno.writeTextFile(docPath, "# Test\n\nStatus: Draft\n\n## Section\nContent");
+
+  try {
+    await assertRejects(
+      async () => {
+        await runGate1({ docPath });
+      },
+      Error,
+      "no-status-line",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("cli.ts's design:gate1 subcommand also refuses a document that fails design:lint-doc", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-cli-lint-fail-" });
+  const docPath = path.join(tempDir, "doc.md");
+  await Deno.writeTextFile(docPath, "# Test\n\n## Section\nContent");
+
+  try {
+    const exitCode = await runCli([docPath, "--no-open"]);
+    assertEquals(exitCode, 1);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("runGate1 renders HTML, verifies screenshot with stub, and opens browser", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-full-" });
   const docPath = path.join(tempDir, "sample-design-2026-08-23.md");
@@ -102,6 +191,11 @@ This is a sample design document for testing Gate 1 automation.
 
 ## Both surfaces
 Works on Claude Code and Antigravity.
+
+## Load-bearing premises
+| Premise | Proof |
+|---|---|
+| Gate 1 automation renders markdown to HTML | Read render_design_doc.ts's output format |
 `;
 
   await Deno.writeTextFile(docPath, markdownContent);
@@ -155,7 +249,7 @@ Works on Claude Code and Antigravity.
 Deno.test("runGate1 skips browser launch when noOpen is true", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-noopen-" });
   const docPath = path.join(tempDir, "doc.md");
-  await Deno.writeTextFile(docPath, "# Test\n\n## Section\nContent");
+  await Deno.writeTextFile(docPath, MINIMAL_LINT_CLEAN_DOC);
 
   let browserOpened = false;
 
@@ -180,7 +274,7 @@ Deno.test("runGate1 skips browser launch when noOpen is true", async () => {
 Deno.test("runGate1 fails loudly when screenshot verification fails", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-fail-shot-" });
   const docPath = path.join(tempDir, "doc.md");
-  await Deno.writeTextFile(docPath, "# Test\n\n## Section\nContent");
+  await Deno.writeTextFile(docPath, MINIMAL_LINT_CLEAN_DOC);
 
   try {
     await assertRejects(
@@ -201,7 +295,7 @@ Deno.test("runGate1 fails loudly when screenshot verification fails", async () =
 Deno.test("runGate1 fails loudly when browser launch fails", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-fail-browser-" });
   const docPath = path.join(tempDir, "doc.md");
-  await Deno.writeTextFile(docPath, "# Test\n\n## Section\nContent");
+  await Deno.writeTextFile(docPath, MINIMAL_LINT_CLEAN_DOC);
 
   try {
     await assertRejects(
@@ -351,7 +445,7 @@ Deno.test("cli.ts returns error code 1 when doc file does not exist", async () =
 Deno.test("cli.ts runs Gate 1 on valid file with --no-open", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-cli-" });
   const docPath = path.join(tempDir, "feature-design.md");
-  await Deno.writeTextFile(docPath, "# CLI Test\n\n## Section\nSome content");
+  await Deno.writeTextFile(docPath, MINIMAL_LINT_CLEAN_DOC);
 
   try {
     const exitCode = await runCli([docPath, "--no-open"], {
