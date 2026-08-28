@@ -161,11 +161,12 @@ deno task create-issue \
   --label Sonnet \
   --milestone "v1.2" \
   --priority High \
-  --parent 437
+  --parent 437 \
+  --blocked-by 436
 ```
 
 `scripts/create-issue.ts` standardizes issue creation across all repos:
-- Sets labels, milestone, native issue Type (`Task`, `Bug`, `Feature`, `Epic`), native Priority (`Urgent`, `High`, `Medium`, `Low`), and attaches the parent issue link (`--parent <num>`) via GraphQL `addSubIssue`.
+- Sets labels, milestone, native issue Type (`Task`, `Bug`, `Feature`, `Epic`), native Priority (`Urgent`, `High`, `Medium`, `Low`), attaches the parent issue link (`--parent <num>`) via GraphQL `addSubIssue`, and registers native dependencies (`--blocked-by <num>`) via `dependencies/blocked_by`.
 - Re-reads the created issue afterwards and verifies all requested attributes stick (exits non-zero if any attribute failed to stick).
 - Prints the formatted issue on success as `repo#number "title"`.
 
@@ -181,7 +182,7 @@ deno task create-issue \
   reads the flag into `options.escalationReason` and `createIssueAndVerify()` never validates it,
   so this field is unguarded on that path. Wherever it is checked, the reason must compare against
   the tier above, not just justify the tier chosen.
-- Set dependencies natively: When an issue depends on another GitHub issue, set native GitHub `blocked_by` dependencies ONLY and do NOT add the `Blocked` label (native dependencies clear automatically on close).
+- Set dependencies natively: When an issue depends on another GitHub issue, set native GitHub `blocked_by` dependencies via `--blocked-by <issue>` (e.g. `scripts/create-issue.ts --blocked-by <issue_num>`) ONLY and do NOT add the `Blocked` label (native dependencies clear automatically on close). Note: A `--blocked-by` value that matches the issue's parent or ancestor is refused at parse time.
 - Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model label freely; the hook only checks that exactly one *model* label is present, not that it's the only label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
 - Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
 - Attach parent issue link via `scripts/create-issue.ts --parent <parent_issue_number>`.

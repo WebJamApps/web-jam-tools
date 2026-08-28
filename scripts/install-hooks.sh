@@ -579,6 +579,7 @@ ALLOW_RULES=(
   'Bash(deno task post-pr-comment *)'
   'Bash(deno task post-issue-comment *)'
   'Bash(deno task edit-issue *)'
+  'Bash(deno task unblock-issue *)'
 )
 
 CHECK_MODE=0

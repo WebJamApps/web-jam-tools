@@ -17,7 +17,9 @@ export interface CreateIssueOptions {
   milestone?: string;
   priority?: string;
   parent?: number;
+  blockedBy?: string[];
   escalationReason?: string;
+  dryRun?: boolean;
 }
 
 export interface VerificationResult {
@@ -34,6 +36,11 @@ export interface IssueData {
   type?: { name: string };
   parent?: { number: number; id?: string };
   parent_issue_url?: string;
+  blocked_by?: Array<{
+    id?: number;
+    number: number;
+    repository?: { name?: string; full_name?: string; owner?: { login?: string } };
+  }>;
   issue_field_values?: Array<{
     issue_field_id?: number;
     issue_field_name?: string;
@@ -107,10 +114,20 @@ export function parseArgs(args: string[]): CreateIssueOptions {
       options.parent = parseInt(args[++i], 10);
     } else if (arg.startsWith("--parent=")) {
       options.parent = parseInt(arg.slice("--parent=".length), 10);
+    } else if (arg === "--blocked-by" && i + 1 < args.length) {
+      const val = args[++i];
+      const items = val.split(",").map((s) => s.trim()).filter(Boolean);
+      options.blockedBy = [...(options.blockedBy || []), ...items];
+    } else if (arg.startsWith("--blocked-by=")) {
+      const val = arg.slice("--blocked-by=".length);
+      const items = val.split(",").map((s) => s.trim()).filter(Boolean);
+      options.blockedBy = [...(options.blockedBy || []), ...items];
     } else if (arg === "--escalation-reason" && i + 1 < args.length) {
       options.escalationReason = args[++i];
     } else if (arg.startsWith("--escalation-reason=")) {
       options.escalationReason = arg.slice("--escalation-reason=".length);
+    } else if (arg === "--dry-run") {
+      options.dryRun = true;
     }
     i++;
   }
@@ -180,6 +197,124 @@ export function normalizeRepo(rawRepo?: string): { owner: string; name: string; 
     return { owner: parts[0], name: parts[1], full: `${parts[0]}/${parts[1]}` };
   }
   return { owner: "WebJamApps", name: rawRepo, full: `WebJamApps/${rawRepo}` };
+}
+
+export interface ParsedIssueRef {
+  owner: string;
+  repo: string;
+  number: number;
+  raw: string;
+}
+
+export function parseIssueRef(
+  raw: string | number,
+  defaultRepo: { owner: string; name: string } = { owner: "WebJamApps", name: "web-jam-tools" },
+): ParsedIssueRef {
+  const str = String(raw).trim();
+  if (!str) {
+    throw new Error(`Empty issue reference: "${raw}"`);
+  }
+
+  // Case 1: "owner/repo#123"
+  const fullMatch = str.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/);
+  if (fullMatch) {
+    return {
+      owner: fullMatch[1],
+      repo: fullMatch[2],
+      number: parseInt(fullMatch[3], 10),
+      raw: str,
+    };
+  }
+
+  // Case 2: "repo#123"
+  const repoMatch = str.match(/^([A-Za-z0-9_.-]+)#(\d+)$/);
+  if (repoMatch) {
+    return {
+      owner: defaultRepo.owner,
+      repo: repoMatch[1],
+      number: parseInt(repoMatch[2], 10),
+      raw: str,
+    };
+  }
+
+  // Case 3: "#123" or "123"
+  const numMatch = str.match(/^#?(\d+)$/);
+  if (numMatch) {
+    return {
+      owner: defaultRepo.owner,
+      repo: defaultRepo.name,
+      number: parseInt(numMatch[1], 10),
+      raw: str,
+    };
+  }
+
+  throw new Error(
+    `Invalid issue reference format: "${str}". Expected 123, #123, repo#123, or owner/repo#123`,
+  );
+}
+
+export async function getIssueAncestors(
+  repoInfo: { owner: string; name: string; full?: string },
+  startIssueNumber: number,
+  runCmd: ExecDeps["runCmd"] = defaultExecDeps.runCmd,
+): Promise<Array<{ owner: string; name: string; number: number }>> {
+  const ancestors: Array<{ owner: string; name: string; number: number }> = [];
+  const visited = new Set<string>();
+
+  let currOwner = repoInfo.owner;
+  let currName = repoInfo.name;
+  let currNumber = startIssueNumber;
+
+  while (true) {
+    const key = `${currOwner}/${currName}#${currNumber}`.toLowerCase();
+    if (visited.has(key)) break;
+    visited.add(key);
+
+    const query = `
+      query GetParent {
+        repository(owner: "${currOwner}", name: "${currName}") {
+          issue(number: ${currNumber}) {
+            parent {
+              number
+              repository {
+                name
+                owner { login }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const res = await runCmd(["gh", "api", "graphql", "-f", `query=${query}`]);
+    if (res.code !== 0) {
+      break;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(res.stdout);
+    } catch {
+      break;
+    }
+
+    const parent = data?.data?.repository?.issue?.parent;
+    if (!parent || !parent.number) {
+      break;
+    }
+
+    const pOwner = parent.repository?.owner?.login || currOwner;
+    const pName = parent.repository?.name || currName;
+    const pNumber = parent.number;
+
+    ancestors.push({ owner: pOwner, name: pName, number: pNumber });
+
+    currOwner = pOwner;
+    currName = pName;
+    currNumber = pNumber;
+  }
+
+  return ancestors;
 }
 
 export function verifyIssueAttributes(
@@ -254,6 +389,25 @@ export function verifyIssueAttributes(
     }
   }
 
+  if (requested.blockedBy && requested.blockedBy.length > 0) {
+    const actualDeps = actual.blocked_by || [];
+    const defaultRepoInfo = normalizeRepo(requested.repo);
+    for (const reqBlocker of requested.blockedBy) {
+      const parsed = parseIssueRef(reqBlocker, {
+        owner: defaultRepoInfo.owner,
+        name: defaultRepoInfo.name,
+      });
+      const found = actualDeps.some(
+        (d) =>
+          d.number === parsed.number &&
+          (!d.repository?.name || d.repository.name.toLowerCase() === parsed.repo.toLowerCase()),
+      );
+      if (!found) {
+        errors.push(`Blocked-by dependency "${reqBlocker}" did not stick`);
+      }
+    }
+  }
+
   return { ok: errors.length === 0, errors };
 }
 
@@ -297,6 +451,45 @@ export async function createIssueAndVerify(
   }
 
   const repoInfo = normalizeRepo(options.repo);
+
+  // Parse requested blockers (if any)
+  const parsedBlockers = (options.blockedBy || []).map((b) =>
+    parseIssueRef(b, { owner: repoInfo.owner, name: repoInfo.name })
+  );
+
+  // Self-blocking / parent-equals-blocker and ancestor refusal checks
+  if (options.parent !== undefined && parsedBlockers.length > 0) {
+    for (const blocker of parsedBlockers) {
+      if (
+        blocker.owner.toLowerCase() === repoInfo.owner.toLowerCase() &&
+        blocker.repo.toLowerCase() === repoInfo.name.toLowerCase() &&
+        blocker.number === options.parent
+      ) {
+        throw new Error(
+          `Refused: requested blocker #${blocker.number} is the parent #${options.parent} of this issue (an issue cannot be blocked by its parent).`,
+        );
+      }
+    }
+
+    const ancestors = await getIssueAncestors(repoInfo, options.parent, deps.runCmd);
+    for (const blocker of parsedBlockers) {
+      const isAncestor = ancestors.some(
+        (a) =>
+          a.owner.toLowerCase() === blocker.owner.toLowerCase() &&
+          a.name.toLowerCase() === blocker.repo.toLowerCase() &&
+          a.number === blocker.number,
+      );
+      if (isAncestor) {
+        throw new Error(
+          `Refused: requested blocker #${blocker.number} is an ancestor of parent #${options.parent} of this issue.`,
+        );
+      }
+    }
+  }
+
+  if (options.dryRun) {
+    return `dry run: would create issue "${options.title}" in ${repoInfo.full}`;
+  }
 
   // 0. Gate 2 approval-token check (web-jam-tools#747) — refuses to file
   // unless Josh's plan gate already approved this exact repo + title.
@@ -508,6 +701,73 @@ export async function createIssueAndVerify(
     }
   }
 
+  // 4b. Register blocked_by dependencies if requested
+  if (parsedBlockers.length > 0) {
+    for (const blocker of parsedBlockers) {
+      const blockerIdQuery = `
+        query GetBlockerId {
+          repository(owner: "${blocker.owner}", name: "${blocker.repo}") {
+            issue(number: ${blocker.number}) {
+              databaseId
+              id
+            }
+          }
+        }
+      `;
+      const bRes = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${blockerIdQuery}`]);
+      let blockerDbId: number | undefined;
+      if (bRes.code === 0) {
+        try {
+          const bData = JSON.parse(bRes.stdout);
+          blockerDbId = bData?.data?.repository?.issue?.databaseId;
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!blockerDbId) {
+        const rRes = await deps.runCmd([
+          "gh",
+          "api",
+          `repos/${blocker.owner}/${blocker.repo}/issues/${blocker.number}`,
+        ]);
+        if (rRes.code !== 0) {
+          throw new Error(
+            `Failed to resolve database ID for blocker ${blocker.repo}#${blocker.number}: ${
+              rRes.stderr || rRes.stdout
+            }`,
+          );
+        }
+        const rData = JSON.parse(rRes.stdout);
+        blockerDbId = rData.id;
+      }
+
+      if (!blockerDbId) {
+        throw new Error(
+          `Could not resolve database ID for blocker ${blocker.repo}#${blocker.number}`,
+        );
+      }
+
+      const addDepRes = await deps.runCmd([
+        "gh",
+        "api",
+        "-X",
+        "POST",
+        `repos/${repoInfo.full}/issues/${childNumber}/dependencies/blocked_by`,
+        "-F",
+        `issue_id=${blockerDbId}`,
+      ]);
+
+      if (addDepRes.code !== 0) {
+        throw new Error(
+          `Failed to register blocked_by dependency on ${blocker.repo}#${blocker.number}: ${
+            addDepRes.stderr || addDepRes.stdout
+          }`,
+        );
+      }
+    }
+  }
+
   // 5. Re-read issue to verify attributes
   const readRes = await deps.runCmd(["gh", "api", `repos/${repoInfo.full}/issues/${childNumber}`]);
   if (readRes.code !== 0) {
@@ -541,6 +801,22 @@ export async function createIssueAndVerify(
       const pNum = pData?.data?.repository?.issue?.parent?.number;
       if (pNum) {
         actual.parent = { number: pNum };
+      }
+    }
+  }
+
+  // If blockedBy requested, fetch dependencies list
+  if (options.blockedBy && options.blockedBy.length > 0) {
+    const depReadRes = await deps.runCmd([
+      "gh",
+      "api",
+      `repos/${repoInfo.full}/issues/${childNumber}/dependencies/blocked_by`,
+    ]);
+    if (depReadRes.code === 0) {
+      try {
+        actual.blocked_by = JSON.parse(depReadRes.stdout);
+      } catch {
+        // ignore
       }
     }
   }

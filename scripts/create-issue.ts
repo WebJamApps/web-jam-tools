@@ -1,7 +1,7 @@
 #!/usr/bin/env deno run --allow-env --allow-run --allow-read --allow-write
 /**
  * Standardized issue creation script (web-jam-tools#514)
- * Sets labels, milestone, native Priority, and parent link, and verifies all attributes stick.
+ * Sets labels, milestone, native Priority, parent link, and blocked-by dependencies, and verifies all attributes stick.
  *
  * Gate 2 approval-token enforcement (web-jam-tools#747) lives inside
  * src/create-issue/lib.ts's createIssueAndVerify(), not here — it is the
@@ -23,7 +23,9 @@ async function main() {
     console.error("  --milestone <name>");
     console.error("  --priority <Urgent|High|Medium|Low>");
     console.error("  --parent <issue_num>");
+    console.error("  --blocked-by <issue>   (repeatable, e.g. 123, #123, repo#123)");
     console.error("  --escalation-reason <why>");
+    console.error("  --dry-run");
     Deno.exit(1);
   }
 

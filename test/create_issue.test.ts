@@ -1024,3 +1024,304 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
     },
   );
 });
+
+Deno.test("parseArgs parses repeatable --blocked-by flags and formats", () => {
+  const args = [
+    "--title",
+    "Test issue",
+    "-F",
+    "/tmp/body.md",
+    "--parent",
+    "737",
+    "--blocked-by",
+    "748",
+    "--blocked-by",
+    "#750",
+    "--blocked-by=web-jam-back#990",
+    "--blocked-by=OtherOrg/OtherRepo#10",
+    "--dry-run",
+  ];
+  const parsed = parseArgs(args);
+  assertEquals(parsed.parent, 737);
+  assertEquals(parsed.blockedBy, [
+    "748",
+    "#750",
+    "web-jam-back#990",
+    "OtherOrg/OtherRepo#10",
+  ]);
+  assertEquals(parsed.dryRun, true);
+});
+
+Deno.test("verifyIssueAttributes verifies blocked-by dependencies", () => {
+  const actual: IssueData = {
+    number: 100,
+    title: "Test",
+    blocked_by: [
+      { number: 748, repository: { name: "web-jam-tools" } },
+      { number: 990, repository: { name: "web-jam-back" } },
+    ],
+  };
+
+  // Case 1: Matching blockers stick
+  const okResult = verifyIssueAttributes(actual, {
+    title: "Test",
+    bodyFile: "/tmp/b.md",
+    blockedBy: ["748", "web-jam-back#990"],
+  });
+  assertEquals(okResult.ok, true);
+
+  // Case 2: Missing blocker fails verification
+  const failResult = verifyIssueAttributes(actual, {
+    title: "Test",
+    bodyFile: "/tmp/b.md",
+    blockedBy: ["748", "750"],
+  });
+  assertEquals(failResult.ok, false);
+  assertEquals(failResult.errors, ['Blocked-by dependency "750" did not stick']);
+});
+
+Deno.test("createIssueAndVerify: parent-equals-blocker is REFUSED before any create API call", async () => {
+  let createCalled = false;
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      if (cmd.join(" ").includes("issue create")) {
+        createCalled = true;
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+
+  const err = await assertRejects(
+    () =>
+      createIssueAndVerify(
+        {
+          title: "Scratch Task",
+          bodyFile: "/tmp/b.md",
+          parent: 737,
+          blockedBy: ["737"],
+        },
+        mockDeps,
+        APPROVE_ALL,
+      ),
+    Error,
+  );
+
+  assertEquals(createCalled, false);
+  assertStringIncludes(
+    err.message,
+    "Refused: requested blocker #737 is the parent #737 of this issue",
+  );
+});
+
+Deno.test("createIssueAndVerify: ancestor blocker is REFUSED before any create API call", async () => {
+  let createCalled = false;
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      const cmdStr = cmd.join(" ");
+      if (cmdStr.includes("issue create")) {
+        createCalled = true;
+      }
+      // Parent 740 has grandparent 700
+      if (cmdStr.includes("issue(number: 740)")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  parent: {
+                    number: 700,
+                    repository: { name: "web-jam-tools", owner: { login: "WebJamApps" } },
+                  },
+                },
+              },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("issue(number: 700)")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  parent: null,
+                },
+              },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+
+  const err = await assertRejects(
+    () =>
+      createIssueAndVerify(
+        {
+          title: "Child of 740",
+          bodyFile: "/tmp/b.md",
+          parent: 740,
+          blockedBy: ["700"],
+        },
+        mockDeps,
+        APPROVE_ALL,
+      ),
+    Error,
+  );
+
+  assertEquals(createCalled, false);
+  assertStringIncludes(
+    err.message,
+    "Refused: requested blocker #700 is an ancestor of parent #740",
+  );
+});
+
+Deno.test("createIssueAndVerify: accepted sibling dependency is registered and verified", async () => {
+  const executedCommands: string[] = [];
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      const cmdStr = cmd.join(" ");
+      executedCommands.push(cmdStr);
+
+      // Create issue
+      if (cmdStr.includes("gh issue create")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: "https://github.com/WebJamApps/web-jam-tools/issues/850\n",
+          stderr: "",
+        });
+      }
+      // Parent attach
+      if (cmdStr.includes("GetIssueNodeIds")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              parent: { issue: { id: "PARENT_ID" } },
+              child: { issue: { id: "CHILD_ID" } },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      // Ancestor check for parent 737 -> no parent
+      if (cmdStr.includes("GetParent") || cmdStr.includes("issue(number: 737)")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ data: { repository: { issue: { parent: null } } } }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("mutation AddSubIssue")) {
+        return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+      }
+      // Database ID lookup for blocker 748
+      if (cmdStr.includes("GetBlockerId")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: { repository: { issue: { databaseId: 12345678, id: "BLOCKER_NODE_ID" } } },
+          }),
+          stderr: "",
+        });
+      }
+      // POST dependencies/blocked_by
+      if (
+        cmdStr.includes("POST repos/WebJamApps/web-jam-tools/issues/850/dependencies/blocked_by")
+      ) {
+        return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+      }
+      // Re-read issue
+      if (
+        cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/850") &&
+        !cmdStr.includes("dependencies")
+      ) {
+        const issueData: IssueData = {
+          number: 850,
+          title: "Sibling child",
+          parent: { number: 737 },
+        };
+        return Promise.resolve({ code: 0, stdout: JSON.stringify(issueData), stderr: "" });
+      }
+      // Re-read dependencies
+      if (
+        cmdStr.includes("GET repos/WebJamApps/web-jam-tools/issues/850/dependencies/blocked_by") ||
+        cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/850/dependencies/blocked_by")
+      ) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify([{
+            id: 12345678,
+            number: 748,
+            repository: { name: "web-jam-tools" },
+          }]),
+          stderr: "",
+        });
+      }
+
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("body text"),
+  };
+
+  const result = await createIssueAndVerify(
+    {
+      title: "Sibling child",
+      bodyFile: "/tmp/b.md",
+      parent: 737,
+      blockedBy: ["748"],
+    },
+    mockDeps,
+    APPROVE_ALL,
+  );
+
+  assertEquals(result, 'web-jam-tools#850 "Sibling child"');
+  const hasPostDep = executedCommands.some(
+    (c) =>
+      c.includes("POST repos/WebJamApps/web-jam-tools/issues/850/dependencies/blocked_by") &&
+      c.includes("-F issue_id=12345678"),
+  );
+  assertEquals(hasPostDep, true);
+});
+
+Deno.test("createIssueAndVerify: --dry-run returns description without creating issue", async () => {
+  let createCalled = false;
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      if (cmd.join(" ").includes("issue create")) {
+        createCalled = true;
+      }
+      if (cmd.join(" ").includes("issue(number: 737)")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ data: { repository: { issue: { parent: null } } } }),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+
+  const result = await createIssueAndVerify(
+    {
+      title: "Dry run task",
+      bodyFile: "/tmp/b.md",
+      parent: 737,
+      blockedBy: ["748"],
+      dryRun: true,
+    },
+    mockDeps,
+    () => ({ ok: false, reason: "No token needed for dry-run" }),
+  );
+
+  assertEquals(createCalled, false);
+  assertEquals(result, 'dry run: would create issue "Dry run task" in WebJamApps/web-jam-tools');
+});
