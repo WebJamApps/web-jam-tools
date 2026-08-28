@@ -98,7 +98,10 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
      --jq '.[] | select(.name | test("snyk"; "i"))'
    ```
    *(Note: A non-zero exit from `gh pr checks`, such as exit code 8 when other checks on the PR are pending, is expected and carries no CircleCI verdict — treat empty output as "no Snyk check" and move on.)*
-4. Fetch the PR diff, at the `HEAD_SHA` recorded in item 2 above:
+4. Fetch the PR diff — this command always returns the diff against the PR's *live* head, taking
+   no SHA argument, so it reflects `HEAD_SHA` recorded in item 2 above only as long as the branch
+   hasn't moved since; if it has, the Step 3 refusal (via `post-pr-review --head-sha`) catches the
+   mismatch rather than silently posting findings composed against a commit that's no longer current:
    ```sh
    gh pr diff <pr-num> --repo WebJamApps/<Repo>
    ```
