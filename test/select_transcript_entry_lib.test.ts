@@ -657,7 +657,10 @@ function fixturePath(name: string): string {
   return new URL(`./fixtures/antigravity/${name}`, import.meta.url).pathname;
 }
 
-async function loadFixtureEntries(name: string, conversationId: string): Promise<TranscriptEntry[]> {
+async function loadFixtureEntries(
+  name: string,
+  conversationId: string,
+): Promise<TranscriptEntry[]> {
   const raw = await Deno.readTextFile(fixturePath(name));
   return tagAntigravityEntries(parseTranscriptJsonl(raw), {
     conversationId,
@@ -734,13 +737,15 @@ Deno.test("parseAntigravityPayload: recovers provenance, falling back to the tra
   const fromFields = parseAntigravityPayload({
     conversationId: SUBAGENT_CONVERSATION_ID,
     modelName: AGY_MODEL_NAME,
-    transcriptPath: `/x/brain/${SUBAGENT_CONVERSATION_ID}/.system_generated/logs/transcript_full.jsonl`,
+    transcriptPath:
+      `/x/brain/${SUBAGENT_CONVERSATION_ID}/.system_generated/logs/transcript_full.jsonl`,
   });
   assertEquals(fromFields?.conversationId, SUBAGENT_CONVERSATION_ID);
   assertEquals(fromFields?.modelName, AGY_MODEL_NAME);
 
   const fromPathOnly = parseAntigravityPayload({
-    transcriptPath: `/x/brain/${PARENT_CONVERSATION_ID}/.system_generated/logs/transcript_full.jsonl`,
+    transcriptPath:
+      `/x/brain/${PARENT_CONVERSATION_ID}/.system_generated/logs/transcript_full.jsonl`,
   });
   assertEquals(fromPathOnly?.conversationId, PARENT_CONVERSATION_ID);
   assertEquals(fromPathOnly?.modelName, "");
