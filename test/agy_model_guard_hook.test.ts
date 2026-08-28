@@ -46,6 +46,10 @@ async function runViaShim(payload: unknown): Promise<{ decision: string; reason?
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
+    env: {
+      ...Deno.env.toObject(),
+      AGY_HOOK_RECORD_PATH: "off",
+    },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
