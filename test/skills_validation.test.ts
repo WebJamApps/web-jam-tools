@@ -115,6 +115,51 @@ Deno.test("skills/file-issue/SKILL.md contains the hook and skill both-surfaces 
   );
 });
 
+Deno.test("skills/file-issue/SKILL.md contains the three-outcomes guard rule, pointer, and purely additive rule", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  // Item 2 pointer to Item 15
+  assert(
+    text.includes("See item 15 below for the three-outcome specification and model floor"),
+    "skills/file-issue/SKILL.md item 2 must contain a pointer sentence to item 15",
+  );
+
+  // Item 15: A Guard Has Three Outcomes, Not Two
+  assert(
+    text.includes("A Guard Has Three Outcomes, Not Two"),
+    "skills/file-issue/SKILL.md must contain the numbered rule 'A Guard Has Three Outcomes, Not Two' in the Before you file section",
+  );
+  assert(
+    text.includes(
+      "the lookup errors, the API times out, the file is missing, or the field is absent",
+    ),
+    "skills/file-issue/SKILL.md item 15 must name lookup errors, API timeout, missing file, and absent field failure cases",
+  );
+  assert(
+    text.includes("refuses") && text.includes("proceeds"),
+    "skills/file-issue/SKILL.md item 15 must use the vocabulary of whether the system refuses or proceeds",
+  );
+  assert(
+    text.includes("Sonnet"),
+    "skills/file-issue/SKILL.md item 15 must specify the Sonnet floor",
+  );
+
+  // Item 16: Guardrail and Rules Edits Must Be Purely Additive
+  assert(
+    text.includes("Guardrail and Rules Edits Must Be Purely Additive"),
+    "skills/file-issue/SKILL.md must contain the numbered rule 'Guardrail and Rules Edits Must Be Purely Additive' in the Before you file section",
+  );
+  assert(
+    text.includes("purely additive"),
+    "skills/file-issue/SKILL.md item 16 must specify purely additive rule edits",
+  );
+  assert(
+    text.includes("AGENTS.md") && text.includes("docs/cross-ai-rules.md"),
+    "skills/file-issue/SKILL.md item 16 must name AGENTS.md, docs/cross-ai-rules.md, and skill body",
+  );
+});
+
 Deno.test("skills/design-issue/SKILL.md contains the both-surfaces rule and refusal table entry", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);

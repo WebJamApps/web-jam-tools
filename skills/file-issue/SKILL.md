@@ -70,6 +70,7 @@ that's what following this skill prevents.
    "pr-review posts the content review immediately, then checks/polls CircleCI after, with two
    follow-up posts" was one markdown file but likewise took three review rounds — seven internal
    contradictions, then a leaked pre-post CircleCI fetch, then an invalid `gh` selector.
+   See item 15 below for the three-outcome specification and model floor governing any guard, gate, or permission check.
 
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
    still pick one label, since the hook requires exactly one. **`Sonnet` and `Opus` require an
@@ -129,6 +130,17 @@ that's what following this skill prevents.
     - **Surfaces must be named in `## What this builds`.** The section opening the body must state what is being built for each surface, not just once for both (e.g. not "updates the hook" but "updates the hook in Claude Code and adds the agy variant").
     - **One acceptance criterion per surface.** The `## Acceptance criteria` section must carry a separate, distinct criterion checking each surface: Claude Code (`scripts/install-hooks.sh` for hooks; `scripts/install-skills.ts` for skills) and agy (`scripts/install-hooks.sh` on agy side; same for skills).
     - **Both installers named in verification steps.** The `## How to test locally` section must name both `scripts/install-hooks.sh` and `scripts/install-skills.ts` as part of the verification steps, so the implementing agent installs and checks both surfaces rather than one.
+15. **A Guard Has Three Outcomes, Not Two.**
+    - Every issue that designs, modifies, or implements a guard, gate, permission check, or validation rule must explicitly specify all three outcomes:
+      1. When the condition holds (e.g. valid, permitted, or matched).
+      2. When the condition does not hold (e.g. invalid, denied, or unmatched).
+      3. When the deliverable is unable to determine which of the first two applies because the lookup errors, the API times out, the file is missing, or the field is absent.
+    - For that third case, the issue specification and acceptance criteria must explicitly use the vocabulary of whether the system **refuses** (fails closed) or **proceeds** (fails open).
+    - **Model Tier Floor**: Any issue where a guarded condition is sourced from a network call, a filesystem read, or any source that can fail independently of the input being guarded has a `Sonnet` floor. This is a minimum floor, not a ceiling: if the guard requires adversarial correctness against subtle bypasses or complex tech-lead judgment, the `Opus` routing in item 2 continues to apply on its own terms.
+16. **Guardrail and Rules Edits Must Be Purely Additive.**
+    - Edits to shared guardrails, rules, or skill instructions in `AGENTS.md`, `docs/cross-ai-rules.md`, or a skill body (`skills/*/SKILL.md`) must be **purely additive** unless the issue explicitly specifies the retirement, replacement, or deletion of existing rules.
+    - Pre-existing rule bullets, rationale, and instructions must never be silently removed, truncated, or clobbered when appending new guidelines.
+    - The issue's `## Acceptance criteria` and `## How to test locally` sections must include a named check that proves it (e.g. running `git diff origin/dev -- <file>` to verify that the diff contains no removed lines other than explicitly targeted edits).
 
 ## Citation format (every reference, every time)
 
