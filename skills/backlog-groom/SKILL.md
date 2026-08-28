@@ -43,6 +43,7 @@ The audit inspects every open issue across all 8 repositories against six core c
   - **Preserving Unproven Preconditions:** Any precondition the body carries that the blocker's closed state does not prove (such as requiring an endpoint or backend change to be deployed to production rather than merely merged) must be kept as an explicit first step for whoever starts the issue, rather than dropped with the section.
 - **Redundant Blocked Label:** Issue has native `blocked_by` dependencies registered AND carries the `Blocked` label. Because native GitHub dependencies (`blocked_by`) are the single source of truth for issue-to-issue blocking, applying the `Blocked` label to an issue with native dependencies is redundant and creates maintenance overhead. Propose removing the redundant `Blocked` label while keeping the native dependency intact.
 - **Uncited Dependencies:** Issue body mentions dependency conditions (e.g. "depends on #123") that are not registered in native GitHub issue dependencies (`blocked_by` API). Propose linking the dependency natively without adding the `Blocked` label.
+- **Self-Blocking Dependency:** An OPEN issue whose native `blocked_by` dependencies include its own parent or another ancestor (e.g. a child blocked by its parent Epic). Because an Epic closes only when its children close, an issue blocked by its own ancestor can never start and the ancestor can never close. Propose removing the self-blocking link using `deno task unblock-issue --repo <owner/repo> --issue <n> --blocker <m>` (applied only on Josh's per-item approval).
 
 ### 3. Executable Issue Spec Checks (Non-Epic Issues) & Needs Design Awareness
 - For non-`Epic` issues, verify whether the issue body provides a self-contained, executable specification for automated agent implementation.
@@ -81,7 +82,7 @@ The audit inspects every open issue across all 8 repositories against six core c
 
 ### Step 2: Analyze & Categorize (Delegated to Subagent)
 1. Evaluate each issue against the 6 audit categories above.
-2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash High`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
+2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash High`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
 
 ### Step 3: Write Report File (Delegated to Subagent)
@@ -97,6 +98,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |
 | 5 | HenricksonForSalem | #12 | Milestone Drift | Milestone is unset | Set Milestone to "Launch Prep" |
+| 6 | web-jam-tools | #753 | Self-Blocking Dependency | Issue is blocked by its parent #737 | Remove self-blocking dependency via `deno task unblock-issue --repo WebJamApps/web-jam-tools --issue 753 --blocker 737` |
 
 If no drift is found across all repos, report that the backlog is 100% clean.
 

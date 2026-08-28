@@ -853,6 +853,7 @@ Deno.test(
       "Bash(deno task post-pr-comment *)",
       "Bash(deno task post-issue-comment *)",
       "Bash(deno task edit-issue *)",
+      "Bash(deno task unblock-issue *)",
     ];
     await withTempSettings(undefined, async (path) => {
       const first = await runMerge(path, ["--allow", ...ALLOW_RULES]);
