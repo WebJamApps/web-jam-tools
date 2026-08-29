@@ -28,7 +28,7 @@ import {
   fetchTemplates,
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
-import { renderDarkHtml, renderStatusBadge } from "../src/book-gig/html.ts";
+import { renderDarkHtml, renderStatusBadge, SORTING_SCRIPT } from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
 import { formatLocationDisplay, runBookGigCli } from "../src/book-gig/cli.ts";
 import type {
@@ -697,6 +697,67 @@ Deno.test("renderDarkHtml: generates responsive Dark Mode HTML with live campaig
   assertStringIncludes(batchHtml, "Skipped Place");
   assertStringIncludes(batchHtml, "no email");
   assertStringIncludes(batchHtml, "1 dispatched");
+});
+
+Deno.test("renderDarkHtml: embeds interactive client-side column sorting CSS and script (#881)", () => {
+  const result = {
+    mode: "preview" as const,
+    weekend: {
+      start: "2026-10-16",
+      end: "2026-10-18",
+      rawText: "Oct 16-18 2026",
+      label: "October 16–18, 2026",
+      year: 2026,
+      month: 10,
+      days: [16, 17, 18],
+    },
+    candidates: [
+      {
+        _id: "v1",
+        name: "Olde Salem Brewing",
+        city: "Salem",
+        usState: "VA",
+        contactName: "Kevin",
+        phone: "540-555-0101",
+        email: "booking@oldesalem.com",
+        reason: { spacingNote: "Eligible (60+ days)" },
+      },
+      {
+        _id: "v2",
+        name: "The Glass House",
+        city: "Lynchburg",
+        usState: "VA",
+        contactName: "Sarah",
+        phone: "434-555-0102",
+        email: "events@glasshouse.com",
+        reason: { spacingNote: "Eligible (60+ days)" },
+      },
+    ],
+    density: { count: 2, isSparse: false },
+    pitches: [],
+  };
+
+  const html = renderDarkHtml(result);
+
+  // Verify sortable CSS is present
+  assertStringIncludes(html, "table.candidate-table th.sortable-th");
+  assertStringIncludes(html, "cursor: pointer;");
+  assertStringIncludes(html, ".sort-indicator");
+  assertStringIncludes(html, "th[data-sort-dir] .sort-indicator");
+
+  // Verify inline sorting script is embedded
+  assertStringIncludes(html, "<script>");
+  assertStringIncludes(html, "initTableSorting");
+  assertStringIncludes(html, "data-sort-dir");
+  assertStringIncludes(html, "localeCompare");
+  assertStringIncludes(html, "</script>");
+
+  // Verify SORTING_SCRIPT contains column sorting logic and arrow toggles
+  assertStringIncludes(SORTING_SCRIPT, "data-sort-dir");
+  assertStringIncludes(SORTING_SCRIPT, "▲");
+  assertStringIncludes(SORTING_SCRIPT, "▼");
+  assertStringIncludes(SORTING_SCRIPT, "sortable-th");
+  assertStringIncludes(SORTING_SCRIPT, "localeCompare");
 });
 
 Deno.test("dispatchBatchOutreach: sends POST /outreach/batch with correct payload and headers", async () => {
