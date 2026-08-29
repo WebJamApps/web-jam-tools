@@ -169,5 +169,6 @@ export interface BookGigResult {
   batchDispatch?: BatchDispatchResult;
   repliesTracking?: RepliesTrackingResult;
   htmlPath?: string;
+  reportUrl?: string;
   openedBrowser?: boolean;
 }

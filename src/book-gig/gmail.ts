@@ -66,6 +66,11 @@ ${p.body}
       ? `${result.weekend.start} to ${result.weekend.end} (${result.weekend.label})`
       : "All Active Outreach Campaigns";
 
+    let reportUrlSummary = "";
+    if (result.reportUrl) {
+      reportUrlSummary = `\n**Web Report URL:** [${result.reportUrl}](${result.reportUrl})  `;
+    }
+
     let dispatchSummary = "";
     if (result.batchDispatch) {
       dispatchSummary =
@@ -89,7 +94,7 @@ ${p.body}
 **Candidates Found:** ${result.candidates.length} (Sparse: ${
       result.density.isSparse ? "Yes" : "No"
     })  
-**Pitches Drafted:** ${result.pitches.length}  ${dispatchSummary}${repliesSummary}
+**Pitches Drafted:** ${result.pitches.length}  ${reportUrlSummary}${dispatchSummary}${repliesSummary}
 
 ---
 
