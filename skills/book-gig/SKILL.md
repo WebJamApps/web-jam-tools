@@ -84,7 +84,7 @@ graph TD
 - Calls `POST /outreach/check-replies` on `web-jam-back` to perform Gmail IMAP reply detection.
 - Fetches pending replies (`GET /outreach/replies/pending`) and active campaigns (`GET /outreach`), rendering a status table with live lifecycle badges (`sent`, `replied`, `interested`, `booked`, `not-interested`, `no-response`, `target-filled`), sent dates, and response snippets.
 - Highlights pending AI suggestions for review (`intent`, `confidence`, `suggestedAction`).
-- **Responsive Dark Mode HTML Artifact:** Automatically generates and updates standalone Dark Mode `.html` review artifacts in `~/Dropbox/web-jam-llms/gig-outreach/`, always outputs the direct clickable markdown `file://` link in chat / terminal logs, and automatically launches Google Chrome in the background to display the artifact immediately on completion (with `--no-open` supported for headless/CI runs).
+- **Responsive Dark Mode HTML Artifact & First-Party URLs:** Automatically generates and updates standalone Dark Mode `.html` review artifacts in `~/Dropbox/web-jam-llms/gig-outreach/`, publishes to `web-jam-back` via `POST /outreach/report` to serve from first-party `https://www.web-jam.com/outreach/report/<weekend>` URLs, outputs both the live web-jam.com URL and direct clickable `file://` link in chat / terminal logs, and automatically launches Google Chrome in the background to display the artifact immediately on completion (with `--no-open` supported for headless/CI runs).
 
 ## What It Refuses to Do
 

@@ -4,6 +4,8 @@ import { assessDensity, fetchCandidates, filterAndRankCandidates } from "./candi
 import { renderPitch } from "./pitch.ts";
 import { writeDropboxRunLog } from "./gmail.ts";
 import { openHtmlInBrowser } from "./browser.ts";
+import { renderDarkHtml } from "./html.ts";
+import { publishOutreachReport } from "./publish.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -186,16 +188,25 @@ export async function runBookGigCli(
       },
     };
 
-    // 6. Write tracking log & Dark HTML artifact
+    // 6. Publish to web-jam-back and write tracking log & Dark HTML artifact
+    const htmlContent = renderDarkHtml(result);
+    const publishRes = await publishOutreachReport(result, htmlContent, {}, fetchFn);
+    if (publishRes.success && publishRes.url) {
+      result.reportUrl = publishRes.url;
+    }
+
     const logPath = await writeDropboxRunLog(result);
     if (logPath) {
       console.log(`\n📝 Saved status run log to: ${logPath}`);
       const htmlPath = logPath.replace(/\.md$/, ".html");
       const absHtmlPath = path.resolve(htmlPath);
+      if (result.reportUrl) {
+        console.log(`🌐 Live web-jam.com Report URL: ${result.reportUrl}`);
+      }
       console.log(
-        `🌐 Live Review HTML Artifact: [${path.basename(htmlPath)}](file://${absHtmlPath})`,
+        `📁 Local Review HTML Artifact: [${path.basename(htmlPath)}](file://${absHtmlPath})`,
       );
-      console.log(`🌐 File URL: file://${absHtmlPath}`);
+      console.log(`📁 File URL: file://${absHtmlPath}`);
       result.htmlPath = htmlPath;
 
       if (!parsed.noOpen) {
@@ -380,16 +391,25 @@ export async function runBookGigCli(
     batchDispatch,
   };
 
-  // 7. Write run log to Dropbox (Markdown + Responsive Dark Mode HTML)
+  // 7. Publish to web-jam-back and write run log to Dropbox (Markdown + Responsive Dark Mode HTML)
+  const htmlContent = renderDarkHtml(result);
+  const publishRes = await publishOutreachReport(result, htmlContent, {}, fetchFn);
+  if (publishRes.success && publishRes.url) {
+    result.reportUrl = publishRes.url;
+  }
+
   const logPath = await writeDropboxRunLog(result);
   if (logPath) {
     console.log(`📝 Saved run summary log to: ${logPath}`);
     const htmlPath = logPath.replace(/\.md$/, ".html");
     const absHtmlPath = path.resolve(htmlPath);
+    if (result.reportUrl) {
+      console.log(`🌐 Live web-jam.com Report URL: ${result.reportUrl}`);
+    }
     console.log(
-      `🌐 Live Review HTML Artifact: [${path.basename(htmlPath)}](file://${absHtmlPath})`,
+      `📁 Local Review HTML Artifact: [${path.basename(htmlPath)}](file://${absHtmlPath})`,
     );
-    console.log(`🌐 File URL: file://${absHtmlPath}`);
+    console.log(`📁 File URL: file://${absHtmlPath}`);
     result.htmlPath = htmlPath;
 
     if (!parsed.noOpen) {
