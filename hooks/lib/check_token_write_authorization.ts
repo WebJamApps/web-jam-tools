@@ -59,19 +59,61 @@ export function nonFilingSlashCommandInvoked(text: string): string | null {
 }
 
 /**
- * Returns the filing skill a piece of user-turn text invokes as a slash command, or null.
+ * True when `trimmed` (already lowercased) opens with `phrase` as a whole invocation, not a
+ * substring or a prefix of a longer word — `phrase` must be the entire text, or be followed by
+ * whitespace or a sentence-boundary punctuation mark (`, . : ; ! ?`). Shared by the slash-command
+ * check and the natural-language phrase check below, since both need the same "opens the message,
+ * as itself" anchor and the same "don't match 'file an issued complaint'" word-boundary guard.
+ */
+function opensWithPhrase(trimmed: string, phrase: string): boolean {
+  if (trimmed === phrase) return true;
+  if (!trimmed.startsWith(phrase)) return false;
+  const next = trimmed[phrase.length];
+  return next === " " || next === "\n" || next === "," || next === "." || next === ":" ||
+    next === ";" || next === "!" || next === "?";
+}
+
+/**
+ * Natural-language phrases that authorize a file-issue write, verbatim from file-issue/SKILL.md's
+ * own frontmatter `description` ("Triggered when the user says 'file an issue', 'open an issue',
+ * 'draft an issue' ...") — this scan is only allowed to enumerate phrases it can point at a
+ * documented source for (design-issue/SKILL.md's guidance on trigger-list/matcher work: a case
+ * list counts as closed only when every entry is a literal string traceable to something, never an
+ * invented category). design-issue/SKILL.md's own description documents no equivalent
+ * natural-language trigger — only its slash form, `/design-issue`, appears anywhere in that file —
+ * so no phrase is added for it here; inventing one without a documented source would be exactly
+ * the unenumerated-category failure that guidance warns against.
+ */
+const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
+  "file an issue",
+  "open an issue",
+  "draft an issue",
+] as const;
+
+/**
+ * Returns the filing skill a piece of user-turn text invokes, or null. Recognizes two forms:
  *
- * Anchored to the START of the (trimmed) text, not a substring match anywhere in it: a slash
- * command is only recognized by either surface when it opens the message, so prose that merely
- * mentions "/file-issue" mid-sentence (discussing the skill, not invoking it) must not count —
- * the same mention-vs-use distinction this repo's other banned-phrase/invocation checks apply.
+ * 1. A slash command (`/file-issue`, `/design-issue`) opening the (trimmed) text — a slash command
+ *    is only recognized by either surface when it opens the message, so prose that merely mentions
+ *    "/file-issue" mid-sentence (discussing the skill, not invoking it) must not count, the same
+ *    mention-vs-use distinction this repo's other banned-phrase/invocation checks apply.
+ * 2. For file-issue only, one of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS opening the text (same
+ *    start-of-message anchor — web-jam-tools#866 Suggestion: Josh routinely invokes file-issue by
+ *    saying "file an issue" rather than typing the slash form, and a session that started that way
+ *    was being refused a token write despite a genuine authorizing invocation). design-issue has no
+ *    natural-language form recognized here; see FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS's doc comment
+ *    for why none is invented for it.
  */
 export function filingSkillInvoked(text: string): FilingSkill | null {
   const trimmed = text.trim().toLowerCase();
   for (const skill of AUTHORIZING_FILING_SKILLS) {
-    const token = `/${skill}`;
-    if (trimmed === token || trimmed.startsWith(`${token} `) || trimmed.startsWith(`${token}\n`)) {
+    if (opensWithPhrase(trimmed, `/${skill}`)) {
       return skill;
+    }
+  }
+  for (const phrase of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS) {
+    if (opensWithPhrase(trimmed, phrase)) {
+      return "file-issue";
     }
   }
   return null;
@@ -157,7 +199,7 @@ export function checkTokenWriteAuthorization(
   return {
     ok: false,
     reason:
-      `Refused: no /design-issue or /file-issue invocation found within the last ${MAX_AUTHORIZING_USER_TURNS} user turns in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
+      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or "file an issue"/"open an issue"/"draft an issue"), found within the last ${MAX_AUTHORIZING_USER_TURNS} user turns in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
   };
 }
 

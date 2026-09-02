@@ -401,7 +401,7 @@ Deno.test("CLI: refuses when no authorizing skill invocation is found anywhere i
     ], envWith(authEnv));
     assertEquals(res.code, 1);
     assert(res.stderr.includes("Refused to write approval token"));
-    assert(res.stderr.includes("no /design-issue or /file-issue invocation found"));
+    assert(res.stderr.includes("no /design-issue invocation, and no /file-issue invocation"));
     const exists = await Deno.stat(tokenPath).then(() => true).catch(() => false);
     assertEquals(exists, false);
   } finally {
@@ -505,6 +505,33 @@ Deno.test("CLI: succeeds when the most recent authorizing turn invoked /file-iss
   }
 });
 
+Deno.test("CLI: succeeds when the most recent authorizing turn used file-issue's natural-language trigger phrase (web-jam-tools#866)", async () => {
+  const dir = await Deno.makeTempDir();
+  const tokenPath = `${dir}/file-issue-natural-language-authorized.json`;
+  try {
+    const authEnv = await writeAuthorizingTranscriptFixture(
+      dir,
+      "file an issue to add zipCode to the Venue model",
+    );
+    const res = await runCli([
+      "--session-id",
+      "file-issue-natural-language-session",
+      "--repo",
+      "web-jam-tools",
+      "--title",
+      "Some title",
+      "--token-path",
+      tokenPath,
+    ], envWith(authEnv));
+    assertEquals(res.code, 0, res.stderr);
+    const loaded = loadToken(tokenPath);
+    assert(loaded !== null);
+    assertEquals(loaded?.session_id, "file-issue-natural-language-session");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 // --- checkTokenWriteAuthorization / filingSkillInvoked / tailIsCurrentlySidechain unit tests ---
 
 Deno.test("filingSkillInvoked: recognizes /file-issue and /design-issue at the start of the text", () => {
@@ -521,6 +548,27 @@ Deno.test("filingSkillInvoked: does not match a mid-sentence mention, only an in
     null,
   );
   assertEquals(filingSkillInvoked("/file-issueX add a thing"), null);
+});
+
+Deno.test("filingSkillInvoked: recognizes file-issue's documented natural-language triggers at the start of the text (web-jam-tools#866)", () => {
+  assertEquals(filingSkillInvoked("file an issue about the zip code bug"), "file-issue");
+  assertEquals(filingSkillInvoked("open an issue for this"), "file-issue");
+  assertEquals(filingSkillInvoked("draft an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("File an issue, please"), "file-issue");
+  assertEquals(filingSkillInvoked("  open an issue.\nmore text"), "file-issue");
+});
+
+Deno.test("filingSkillInvoked: does not match the natural-language triggers mid-sentence, as a word prefix, or for design-issue", () => {
+  // Mid-sentence: the phrase must open the message, same anchor as the slash form.
+  assertEquals(filingSkillInvoked("let's file an issue about this"), null);
+  assertEquals(filingSkillInvoked("I should open an issue later"), null);
+  // Word-prefix false positive: "file an issued complaint" is not "file an issue".
+  assertEquals(filingSkillInvoked("file an issued complaint"), null);
+  // "filing" is not "file" — no partial-word match.
+  assertEquals(filingSkillInvoked("filing an issue right now"), null);
+  // design-issue has no documented natural-language trigger — only its slash form authorizes it.
+  assertEquals(filingSkillInvoked("design an issue for this"), null);
+  assertEquals(filingSkillInvoked("run design-issue"), null);
 });
 
 Deno.test("nonFilingSlashCommandInvoked: recognizes other slash commands and ignores filing skills or prose", () => {
