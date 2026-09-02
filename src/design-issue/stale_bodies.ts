@@ -796,7 +796,7 @@ export function extractDecisionsFromDoc(docContent: string): DesignDecision[] {
   const decisions: DesignDecision[] = [];
 
   const decisionSectionRegex =
-    /(?:^|\n)#{1,4}\s+(?:Decision\s+[Rr]ecord|Decisions\s+[Rr]ecord|Decisions|Appendix\s+C[^\n]*)\b[^\n]*\n([\s\S]*?)(?=\n#{1,4}\s+[^\n]+|$)/gi;
+    /(?:^|\n)#{1,6}\s+(?:(?:Appendix(?:\s+[A-Z])?|\d+\.?)[\s:—\-]+)?(?:Decisions?\s+[Rr]ecord|Decisions?|Appendix\s+[A-Z]\b[^\n]*)\b[^\n]*\n([\s\S]*?)(?=\n#{1,6}\s+[^\n]+|$)/gi;
 
   let sectionMatch: RegExpExecArray | null;
   while ((sectionMatch = decisionSectionRegex.exec(docContent)) !== null) {
@@ -812,10 +812,16 @@ export function extractDecisionsFromDoc(docContent: string): DesignDecision[] {
 
       const cells = splitTableRowCells(line);
       const lower = cells.map((c) => c.toLowerCase());
-      if (
-        lower.some((c) => c.includes("decision")) &&
-        lower.some((c) => c.includes("outcome") || c.includes("resolution") || c.includes("chosen"))
-      ) {
+      const hasDecision = lower.some((c) => c.includes("decision"));
+      const hasOutcome = lower.some((c) =>
+        c.includes("outcome") || c.includes("resolution") || c.includes("chosen") ||
+        c.includes("ruling")
+      );
+      const hasItemOrTopic = lower.some((c) =>
+        c.includes("item") || c.includes("topic") || c.includes("question")
+      );
+
+      if (hasDecision && (hasOutcome || hasItemOrTopic)) {
         headerIdx = i;
         headerCells = lower;
         break;
@@ -825,10 +831,29 @@ export function extractDecisionsFromDoc(docContent: string): DesignDecision[] {
     if (headerIdx === -1) continue;
 
     const idCol = headerCells.findIndex((c) => c === "#" || c.includes("id"));
-    const decCol = headerCells.findIndex((c) => c.includes("decision"));
-    const outcomeCol = headerCells.findIndex((c) =>
-      c.includes("outcome") || c.includes("resolution") || c.includes("chosen")
+    let decCol = -1;
+    let outcomeCol = -1;
+
+    const hasOutcome = headerCells.some((c) =>
+      c.includes("outcome") || c.includes("resolution") || c.includes("chosen") ||
+      c.includes("ruling")
     );
+    if (hasOutcome) {
+      decCol = headerCells.findIndex((c) =>
+        c.includes("decision") || c.includes("item") || c.includes("topic") ||
+        c.includes("question")
+      );
+      outcomeCol = headerCells.findIndex((c) =>
+        c.includes("outcome") || c.includes("resolution") || c.includes("chosen") ||
+        c.includes("ruling")
+      );
+    } else {
+      // Table where "Item" / "Topic" is the question and "Decision" is the outcome
+      decCol = headerCells.findIndex((c) =>
+        c.includes("item") || c.includes("topic") || c.includes("question")
+      );
+      outcomeCol = headerCells.findIndex((c) => c.includes("decision"));
+    }
 
     for (let i = headerIdx + 2; i < lines.length; i++) {
       const line = lines[i].trim();

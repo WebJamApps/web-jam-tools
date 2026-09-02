@@ -800,3 +800,64 @@ Endpoints: GET and DELETE /outreach/report/:weekend
   assertStringIncludes(logs[0], "Decisions & Verbs: In sync");
   assertStringIncludes(logs[0], "Summary: 1 issue(s) in sync, 0 issue(s) stale.");
 });
+
+Deno.test(
+  "extractDecisionsFromDoc supports varied appendix letters, unlettered appendix, and numbered headings",
+  () => {
+    // 1. Unlettered appendix (e.g. book-gig-skill-design-2026-08-16.md)
+    const docUnlettered = `
+# Feature Design
+
+## Appendix — Decisions Record
+| # | Decision | Chosen Option / Outcome | Rejected alternatives |
+|---|---|---|---|
+| D-17 | Hard Deletion on Takedown | DELETE /outreach/report/:weekend removes record returning 404 | Soft delete |
+`;
+    const decsUnlettered = extractDecisionsFromDoc(docUnlettered);
+    assertEquals(decsUnlettered.length, 1);
+    assertEquals(decsUnlettered[0].id, "D-17");
+    assertEquals(decsUnlettered[0].verbs.includes("DELETE"), true);
+
+    // 2. Numbered section heading (e.g. blocked-label-redundancy-removal-design-2026-08-23.md)
+    const docNumbered = `
+# Feature Design
+
+## 6. Decision Record
+| # | Decision | Outcome | Rejected alternatives |
+|---|---|---|---|
+| 1 | Label description | Use canonical description in labels.yaml | Ad-hoc descriptions |
+`;
+    const decsNumbered = extractDecisionsFromDoc(docNumbered);
+    assertEquals(decsNumbered.length, 1);
+    assertEquals(decsNumbered[0].id, "1");
+    assertEquals(decsNumbered[0].decision, "Label description");
+
+    // 3. Appendix A with Item / Decision columns (e.g. add-picture-form-improvements-design-2026-08-11.md)
+    const docAppendixA = `
+# Feature Design
+
+### Appendix A: Decision Record (Josh's Rulings)
+| ID | Item | Decision | Ruled On |
+|---|---|---|---|
+| D-1 | Category Dropdown Help Text | Display visible FormHelperText directly below Category | Hide text |
+`;
+    const decsAppendixA = extractDecisionsFromDoc(docAppendixA);
+    assertEquals(decsAppendixA.length, 1);
+    assertEquals(decsAppendixA[0].id, "D-1");
+    assertEquals(decsAppendixA[0].decision, "Category Dropdown Help Text");
+    assertStringIncludes(decsAppendixA[0].outcome, "Display visible FormHelperText");
+
+    // 4. Appendix B heading
+    const docAppendixB = `
+# Feature Design
+
+## Appendix B — Decision record
+| # | Decision | Chosen Option / Outcome | Rejected alternatives |
+|---|---|---|---|
+| 5 | Timeout configuration | Set default timeout to 30s | 10s |
+`;
+    const decsAppendixB = extractDecisionsFromDoc(docAppendixB);
+    assertEquals(decsAppendixB.length, 1);
+    assertEquals(decsAppendixB[0].id, "5");
+  },
+);
