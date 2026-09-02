@@ -25,6 +25,51 @@ function escapeHtml(str: string): string {
 }
 
 /**
+ * Sanitizes an SVG markup string by stripping <script> elements, event handler
+ * attributes (e.g. onload, onclick), javascript: URIs, and dangerous embedded
+ * objects (<foreignObject>, <iframe>) to prevent XSS execution while preserving
+ * safe diagram elements and visual styling attributes.
+ */
+export function sanitizeSvg(svgMarkup: string): string {
+  let sanitized = svgMarkup;
+  // 1. Strip <script> elements (both paired tags and self-closing/unclosed)
+  sanitized = sanitized.replace(/<script\b[\s\S]*?<\/script\s*>/gi, "");
+  sanitized = sanitized.replace(/<script\b[^>]*>/gi, "");
+
+  // 2. Strip event handler attributes (onload, onclick, onerror, onmouseover, onbegin, etc.)
+  sanitized = sanitized.replace(
+    /\s+on[a-zA-Z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|`[^`]*`|[^\s>]+)/gi,
+    "",
+  );
+
+  // 3. Strip javascript: URIs in href and xlink:href attributes
+  sanitized = sanitized.replace(
+    /((?:xlink:)?href)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|`\s*javascript:[^`]*`|javascript:[^\s>]+)/gi,
+    "",
+  );
+
+  // 4. Strip <foreignObject> and <iframe> elements for defense in depth
+  sanitized = sanitized.replace(/<foreignObject\b[\s\S]*?<\/foreignObject\s*>/gi, "");
+  sanitized = sanitized.replace(/<foreignObject\b[^>]*>/gi, "");
+  sanitized = sanitized.replace(/<iframe\b[\s\S]*?<\/iframe\s*>/gi, "");
+  sanitized = sanitized.replace(/<iframe\b[^>]*>/gi, "");
+
+  return sanitized;
+}
+
+/**
+ * Checks whether a closing </svg> tag appears in lines at or after startIndex.
+ */
+function hasClosingSvg(lines: string[], startIndex: number): boolean {
+  for (let k = startIndex; k < lines.length; k++) {
+    if (lines[k].includes("</svg>")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Parses inline Markdown elements (code spans, links, bold, italic).
  */
 export function parseInlineMarkdown(text: string): string {
@@ -40,7 +85,7 @@ export function parseInlineMarkdown(text: string): string {
     /<svg[\s\S]*?<\/svg>/gi,
     (match) => {
       const idx = svgBlocks.length;
-      svgBlocks.push(match);
+      svgBlocks.push(sanitizeSvg(match));
       return `%%SVGBLOCK${idx}%%`;
     },
   );
@@ -237,7 +282,7 @@ export function renderDesignDoc(
     }
 
     // Raw SVG block
-    if (line.trim().startsWith("<svg")) {
+    if (line.trim().startsWith("<svg") && hasClosingSvg(lines, i)) {
       const svgLines: string[] = [];
       while (i < lines.length) {
         svgLines.push(lines[i]);
@@ -247,7 +292,7 @@ export function renderDesignDoc(
         }
         i++;
       }
-      bodyHtmlParts.push(svgLines.join("\n"));
+      bodyHtmlParts.push(sanitizeSvg(svgLines.join("\n")));
       continue;
     }
 
@@ -425,7 +470,7 @@ export function renderDesignDoc(
       !lines[i].trim().startsWith(">") &&
       !lines[i].trim().match(/^([-*+])\s+/) &&
       !lines[i].trim().match(/^(\d+)\.\s+/) &&
-      !lines[i].trim().startsWith("<svg")
+      !(lines[i].trim().startsWith("<svg") && hasClosingSvg(lines, i))
     ) {
       paragraphLines.push(lines[i]);
       i++;
