@@ -31,6 +31,34 @@ export const AUTHORIZING_FILING_SKILLS = ["design-issue", "file-issue"] as const
 export type FilingSkill = typeof AUTHORIZING_FILING_SKILLS[number];
 
 /**
+ * Maximum number of own-session user turns to scan backward for an authorizing filing skill.
+ * Prevents a filing skill invocation early in a long session from unboundedly authorizing token
+ * writes hours later during unrelated chat (Must Fix 2 on web-jam-tools#866).
+ */
+export const MAX_AUTHORIZING_USER_TURNS = 20;
+
+/**
+ * Returns the non-filing slash command invoked at the start of user-turn text, or null.
+ *
+ * Any intervening slash command (e.g. /work-issue, /book-gig, /handle-gmails) acts as a
+ * scope-ending event: once the user invokes a different skill, any earlier filing skill
+ * authorization in the session is terminated.
+ */
+export function nonFilingSlashCommandInvoked(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("/")) {
+    const match = trimmed.match(/^\/([a-zA-Z0-9_-]+)/);
+    if (match) {
+      const cmd = match[1].toLowerCase();
+      if (!AUTHORIZING_FILING_SKILLS.includes(cmd as FilingSkill)) {
+        return `/${cmd}`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Returns the filing skill a piece of user-turn text invokes as a slash command, or null.
  *
  * Anchored to the START of the (trimmed) text, not a substring match anywhere in it: a slash
@@ -60,12 +88,10 @@ export interface TokenWriteAuthorizationContext {
    * write must be refused regardless of what an authorizing turn elsewhere in the transcript says
    * (acceptance criterion: "A dispatched subagent is refused a token write even when an
    * authorizing skill invocation is present on the most recent user turn"). Claude Code computes
-   * this mechanically (see tailIsCurrentlySidechain below); Antigravity has no reliable direct
-   * signal for it (see resolveAntigravityWriteContext's doc comment) and passes false, relying on
-   * the scan below instead — a dispatched subagent's own composed prompt is virtually never a
-   * literal "/file-issue"/"/design-issue" invocation, so the scan denies it in practice even
-   * without this flag, though not as an adversarial-proof guarantee. This is a real, acknowledged
-   * asymmetry between surfaces, not a gap silently assumed closed.
+   * this mechanically (see tailIsCurrentlySidechain below); Antigravity subagents run in isolated
+   * conversations with their own conversationId and separate transcript containing only the
+   * dispatched task prompt (which does not start with /file-issue or /design-issue), so
+   * isOwnSessionUserTurnBoundary never matches a parent turn and the scan denies it in practice.
    */
   isSubagentInvocation: boolean;
 }
@@ -82,14 +108,11 @@ export interface TokenWriteAuthorizationResult {
  *
  * Scans the transcript BACKWARD (most recent first) for the first own-session user turn
  * (isOwnSessionUserTurnBoundary — already excludes another conversation's/subagent's entries) that
- * invokes /design-issue or /file-issue, mirroring decision 17's opus-delegation-gate.sh mechanism:
- * that gate explicitly rejected "read the literal last user turn alone" as an alternative, because
- * the grant would die on the user's very next message — the exact failure a single-turn check has
- * here too, since /design-issue's Gate 2 approval routinely lands many turns after the
- * /design-issue invocation itself. Scanning for the most recent occurrence (not just the latest
- * turn) is what keeps that legitimate multi-turn flow working; the resulting token's own bounded
- * expiry (4h TTL, unchanged by this fix) is what keeps a scan-based grant from being unboundedly
- * stale, the same way decision 17's branch-scoping bounds its own grant.
+ * invokes /design-issue or /file-issue, bounded by two constraints:
+ * 1. Scope-ending event: Any intervening non-filing slash command (/work-issue, etc.) terminates
+ *    authorization immediately, preventing cross-skill leaks.
+ * 2. Turn bound: The scan looks at most MAX_AUTHORIZING_USER_TURNS (20) user turns back,
+ *    preventing an early filing skill invocation from authorizing writes in unrelated later chat.
  */
 export function checkTokenWriteAuthorization(
   ctx: TokenWriteAuthorizationContext,
@@ -110,17 +133,31 @@ export function checkTokenWriteAuthorization(
     };
   }
 
+  let userTurnsScanned = 0;
   for (let i = ctx.entries.length - 1; i >= 0; i--) {
     const entry = ctx.entries[i];
     if (!isOwnSessionUserTurnBoundary(entry, ctx.ownConversationId)) continue;
-    const skill = filingSkillInvoked(extractEntryText(entry));
+    userTurnsScanned++;
+    if (userTurnsScanned > MAX_AUTHORIZING_USER_TURNS) {
+      break;
+    }
+    const text = extractEntryText(entry);
+    const otherCmd = nonFilingSlashCommandInvoked(text);
+    if (otherCmd) {
+      return {
+        ok: false,
+        reason:
+          `Refused: a different skill or command (${otherCmd}) was invoked since any filing skill invocation.`,
+      };
+    }
+    const skill = filingSkillInvoked(text);
     if (skill) return { ok: true, skill };
   }
 
   return {
     ok: false,
     reason:
-      "Refused: no /design-issue or /file-issue invocation found in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.",
+      `Refused: no /design-issue or /file-issue invocation found within the last ${MAX_AUTHORIZING_USER_TURNS} user turns in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
   };
 }
 

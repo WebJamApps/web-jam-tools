@@ -192,9 +192,10 @@ export async function resolveClaudeCodeWriteContext(
  * instead, and Antigravity's own transcript shape carries no in-band signal distinguishing a
  * subagent's turn from a person's (web-jam-tools#841 non-goals) — so unlike
  * resolveClaudeCodeWriteContext, this cannot compute isSubagentInvocation directly and always
- * returns false for it, leaning on checkTokenWriteAuthorization's text scan instead (see that
- * function's isSubagentInvocation doc comment for why that still denies a dispatched subagent's
- * own composed prompt in practice, short of an adversarial one).
+ * returns false for it. However, on Antigravity each subagent runs in an isolated conversation with
+ * its own unique conversationId and its own separate transcript containing only the dispatched
+ * prompt, so checkTokenWriteAuthorization's own-conversation filter and bounded scan deny the write
+ * in practice without needing a shared-transcript sidechain flag.
  */
 export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteContext | null> {
   const recordPath = Deno.env.get("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
@@ -282,8 +283,6 @@ if (import.meta.main) {
         "expires-at",
         "ttl-hours",
         "token-path",
-        "transcript-path",
-        "conversation-id",
       ],
       boolean: ["json", "help"],
       collect: ["title"],
@@ -310,10 +309,6 @@ Options:
   --ttl-hours <hours>       Token TTL in hours (default: 4)
   --expires-at <iso>        Explicit expiration ISO 8601 timestamp
   -p, --token-path <path>   Override token output path (defaults to $ISSUE_APPROVAL_TOKEN_PATH or ~/.claude/state/issue-approval-token.json)
-  --transcript-path <path>  Override transcript auto-discovery (web-jam-tools#808) with an explicit
-                            transcript file to scan for the authorizing skill invocation
-  --conversation-id <id>    Own conversation identity to check the transcript against (web-jam-tools#808);
-                            defaults to --session-id when a transcript is given without it
   --json                    Output written token as JSON to stdout
   -h, --help                Show this help message
 `,
@@ -374,10 +369,24 @@ Options:
     // invoked /design-issue or /file-issue, and never for a dispatched subagent's own turn — see
     // hooks/lib/check_token_write_authorization.ts for the decision and this file's
     // resolveWriteContext() for how each surface's transcript is located.
+    //
+    // web-jam-tools#866: transcript/conversation-identity override is a test-only seam, never a
+    // CLI flag — a documented, supported flag that lets the caller hand-pick the exact evidence
+    // Gate 2 judges it against reopens the bypass this file exists to close (the PR's own tests
+    // were a working proof-of-concept of that). These env vars are never read from --help, never
+    // documented for normal use, and a real invocation never sets them — same seam convention as
+    // STATUSLINE_DOWNSTREAM_CMD in docs/scripts.md. Real invocations always go through
+    // resolveClaudeCodeWriteContext/resolveAntigravityWriteContext auto-discovery below.
+    const testTranscriptPath = Deno.env.get(
+      "WRITE_ISSUE_APPROVAL_TOKEN_TEST_TRANSCRIPT_PATH",
+    );
+    const testConversationId = Deno.env.get(
+      "WRITE_ISSUE_APPROVAL_TOKEN_TEST_CONVERSATION_ID",
+    );
     const authorization = await authorizeWrite({
       sessionId,
-      transcriptPath: args["transcript-path"],
-      conversationId: args["conversation-id"],
+      transcriptPath: testTranscriptPath || undefined,
+      conversationId: testConversationId || undefined,
     });
     if (!authorization.ok) {
       console.error(`Refused to write approval token: ${authorization.reason}`);
