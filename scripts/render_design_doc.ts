@@ -107,9 +107,13 @@ export function parseInlineMarkdown(text: string): string {
 /**
  * Converts a Markdown document into a standalone HTML document adhering to design rules.
  */
+function stripCellDecoration(cell: string): string {
+  return cell.replace(/[`*_"'“”‘’]/g, "").trim();
+}
+
 export function renderDesignDoc(
   markdownContent: string,
-  fallbackTitle = "Design Document",
+  fallbackTitle: string = "Design Document",
 ): string {
   const lines = markdownContent.split(/\r?\n/);
 
@@ -119,24 +123,12 @@ export function renderDesignDoc(
   const tocEntries: Array<{ title: string; slug: string }> = [];
   const usedSlugs = new Set<string>();
 
-  // Pass 1: Extract document title, version/revised declarations, and H2 TOC entries
-  let seenFirstH2 = false;
+  // Pass 1: Extract document title, revision history version/date, and H2 TOC entries
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (!seenFirstH2) {
-      const vMatch = line.match(/^\*\*Version:\*\*\s*(.+)$/i);
-      if (vMatch && !version) {
-        version = vMatch[1].trim();
-      }
-      const rMatch = line.match(/^\*\*Revised:\*\*\s*(.+)$/i);
-      if (rMatch && !revised) {
-        revised = rMatch[1].trim();
-      }
-    }
     if (line.startsWith("# ") && documentTitle === fallbackTitle) {
       documentTitle = line.substring(2).trim();
     } else if (line.startsWith("## ")) {
-      seenFirstH2 = true;
       const headingText = line.substring(3).trim();
       const cleanTitle = headingText
         .replace(/[*_`[\]]/g, "")
@@ -150,6 +142,49 @@ export function renderDesignDoc(
       }
       usedSlugs.add(slug);
       tocEntries.push({ title: cleanTitle || headingText, slug });
+
+      if (/^Revision\s+History$/i.test(cleanTitle)) {
+        // Look ahead for the table under ## Revision History
+        let j = i + 1;
+        while (j < lines.length && lines[j].trim() === "") {
+          j++;
+        }
+        if (j < lines.length && lines[j].trim().startsWith("|")) {
+          const tableLines: string[] = [];
+          while (
+            j < lines.length &&
+            lines[j].trim().startsWith("|") &&
+            lines[j].trim().endsWith("|")
+          ) {
+            tableLines.push(lines[j].trim());
+            j++;
+          }
+          if (tableLines.length >= 3) {
+            const parseRow = (rowStr: string) => {
+              return rowStr
+                .substring(1, rowStr.length - 1)
+                .split("|")
+                .map((c) => c.trim());
+            };
+            const headerCells = parseRow(tableLines[0]);
+            const versionIdx = headerCells.findIndex((c) =>
+              /^version$/i.test(stripCellDecoration(c))
+            );
+            const dateIdx = headerCells.findIndex((c) =>
+              /^date$/i.test(stripCellDecoration(c))
+            );
+            if (versionIdx !== -1 && dateIdx !== -1) {
+              const dataRows = tableLines.slice(2).map(parseRow);
+              if (dataRows.length > 0) {
+                // Newest row is the last row (oldest-to-newest order)
+                const lastRow = dataRows[dataRows.length - 1];
+                version = stripCellDecoration(lastRow[versionIdx] ?? "");
+                revised = stripCellDecoration(lastRow[dateIdx] ?? "");
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -392,15 +427,6 @@ export function renderDesignDoc(
       !lines[i].trim().match(/^(\d+)\.\s+/) &&
       !lines[i].trim().startsWith("<svg")
     ) {
-      const trimmed = lines[i].trim();
-      if (
-        h2Count === 0 &&
-        (/^\*\*Version:\*\*\s*/i.test(trimmed) ||
-          /^\*\*Revised:\*\*\s*/i.test(trimmed))
-      ) {
-        i++;
-        continue;
-      }
       paragraphLines.push(lines[i]);
       i++;
     }

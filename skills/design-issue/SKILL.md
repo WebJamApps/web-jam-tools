@@ -29,7 +29,21 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
 3. **Put every decision to Josh one at a time** — applying the Decision-Readiness rule below — and write his answer into the document as he gives it, never batched at the end. An item is decided only when he rules on THAT item by name.
 4. **Verify facts rather than asserting them**, and record what was verified and how. Where a premise turns out to be false, the body records the corrected fact in present tense and the falsified premise goes in the decision-record appendix — never a "this turned out to be false" note in the body. Recording an unverified load-bearing premise is NOT sufficient to reach Gate 1 — every load-bearing premise must be resolved and proven, not merely logged as an unknown or caveat, before presenting the design for Gate 1 approval.
 5. **Reconcile edits continuously.** Apply the Edit-Reconciliation rule after any passage replacement.
-6. **GATE 1 — stop.** Render the design to a standalone HTML file via `scripts/render_design_doc.ts` (layout rules applied) and verify it via headless screenshot. The headless screenshot only proves the layout isn't broken to the agent — it does not put the document in front of Josh. Once verified, open it for him with the literal command:
+6. **Record revision in `## Revision History` table before Gate 1 (web-jam-tools#892):** When revising an existing design document, add the `## Revision History` table if absent, and append exactly one row for that Epic or Issue before Gate 1:
+
+   ```markdown
+   ## Revision History
+
+   | Version | Date | Epic / Issue | Summary |
+   |---|---|---|---|
+   | 1.0.0 | 2026-08-16 | [issue title](url) | One line saying what this revision covers. |
+   | 1.1.0 | 2026-09-02 | [issue title](url) | One line saying what this revision covers. |
+   ```
+
+   - **One row per Epic or standalone Issue:** Exactly one version bump for that whole piece of work no matter how many individual decisions it contained.
+   - **Child issues of an Epic do not get their own row:** Work done under an Epic rolls up into that Epic's existing row: the summary widens by a clause if needed and the date advances to the latest revision, but the version does not bump again. A new row and new version bump happen only when a different Epic, or a standalone Issue outside any Epic, changes the document.
+   - **Required columns:** `Version`, `Date`, and a summary column are required; extra columns may be present. Versions are semantic (`MAJOR.MINOR.PATCH`) and dates are ISO (`YYYY-MM-DD`). Rows run oldest to newest. Issues are linked by title rather than by bare number.
+7. **GATE 1 — stop.** Render the design to a standalone HTML file via `scripts/render_design_doc.ts` (layout rules applied) and verify it via headless screenshot. The headless screenshot only proves the layout isn't broken to the agent — it does not put the document in front of Josh. Once verified, open it for him with the literal command:
 
    ```sh
    DISPLAY="${DISPLAY:-:0}" google-chrome "file:///home/joshua/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.html" >/dev/null 2>&1 &
@@ -158,7 +172,7 @@ These are properties of the skill, written as explicit refusals:
 | hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` |
 | design a mechanism that works on only one agent surface (Claude Code or agy/Antigravity) without stopping for discussion | everything designed must work on both surfaces; surface-neutral paths are deno task, gh CLI, and CI; fails when depending on Claude-only hooks, Claude memory, or mcp__* tools |
 | file a `Sonnet`-labeled trigger-list issue without an enumerated closed case list of literal input strings — including a list that enumerates categories (e.g. "piped to an interpreter") instead of the strings a matcher will see | trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized for Sonnet by its case list, not its diff; a case list counts as closed only when every entry is a literal input string, never a category; vague criteria like "handle edge cases" and category-named criteria both fail in review — a category is an unclosed list wearing the shape of a closed one; issues must enumerate every adversarial input case as a literal string, or, where a category cannot be reduced to such a finite set at design time, be filed as `Opus`, naming the category that resisted enumeration |
-| narrate its own revision history in the body — "what changed", "why this was withdrawn", "an earlier version said", a changelog, before/after framing | the document states the current design as though it had always been the design; superseded reasoning lives only in the decision-record appendix |
+| narrate its own revision history in prose — "what changed", "why this was withdrawn", "an earlier version said", a changelog, before/after framing | the document states the current design as though it had always been the design; superseded reasoning lives only in the decision-record appendix. Metadata about document revisions lives exclusively in the `## Revision History` table (web-jam-tools#892) |
 | record the skill's own workflow state in the body — a Status line, a gate/approval state, "nothing filed", "design complete" | that describes where the skill's process has got to, not the system being designed; gate state lives in the conversation and in the issues the run produces |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
@@ -331,7 +345,7 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 ### Writing Style
 
 - **The document states what the thing IS.** Present tense, design first. A reader who has never seen the conversation should be able to read it top to bottom and know what is being built.
-- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design. This also binds the document's OWN revision history: where the design changed direction, the body records the CURRENT design as though it had always been the design, and the abandoned alternative goes in the appendix as the rejected option of the decision that rejected it — never narrated in the body, in any of the phrasings ruled out under "What It Refuses to Do" above.
+- **The decision history goes in an appendix**, as one row per decision with its outcome — never interleaved with the design. This also binds the document's OWN revision narration: where the design changed direction, the body records the CURRENT design as though it had always been the design, and the abandoned alternative goes in the appendix as the rejected option of the decision that rejected it — never narrated in prose in the body. Revision metadata belongs exclusively in the `## Revision History` table, not in body prose (web-jam-tools#892).
 - **The document never records the skill's own process state.** That describes where the `/design-issue` run has got to, not the system being designed; that state lives in the conversation and in the issues the run produces, per the phrasings ruled out under "What It Refuses to Do" above.
 - **Never a bare label in the body.** No "per D-7" or "R-39"; labels exist so the decision table has stable row names, and nowhere else.
 - **Josh's own words are preserved where they are load-bearing** — his ruling is the authority, and a paraphrase is weaker than his actual sentence.
@@ -342,13 +356,14 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 
 **Standard Document Shape:**
 1. What it is — one section, opening directly with what the thing is. No status block, no preamble of any kind.
-2. The workflow.
-3. The gates, and what the thing refuses to do.
-4. The rules that shape its output.
-5. Both surfaces — stating for each mechanism how it works on Claude Code and agy/Antigravity.
-6. Load-bearing premises — proving every premise the design depends on.
-7. Where things live; what stays out of scope.
-8. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
+2. Revision history — when revising an existing document (`## Revision History` table with Version, Date, Epic / Issue, Summary).
+3. The workflow.
+4. The gates, and what the thing refuses to do.
+5. The rules that shape its output.
+6. Both surfaces — stating for each mechanism how it works on Claude Code and agy/Antigravity.
+7. Load-bearing premises — proving every premise the design depends on.
+8. Where things live; what stays out of scope.
+9. Appendices — rules absorbed, what Josh asked for verbatim, the decision record.
 
 ---
 

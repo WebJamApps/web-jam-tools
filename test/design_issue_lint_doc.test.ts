@@ -146,7 +146,7 @@ Deno.test("lintDesignDoc flags revision narration phrases", () => {
     "Why this was withdrawn from the scope.",
     "Why this was abandoned during design.",
     "## Changelog",
-    "## Revision history",
+    "This document tracks revision history in prose.",
     "Before/after framing of the system.",
     "Before and after comparison.",
     "This turned out to be false when tested.",
@@ -390,4 +390,242 @@ Deno.test("deno.json defines design:lint-doc task", async () => {
 
   assertEquals(typeof config.tasks["design:lint-doc"], "string");
   assertStringIncludes(config.tasks["design:lint-doc"], "src/design-issue/cli.ts lint-doc");
+});
+
+Deno.test("AC7 & AC9: lintDesignDoc passes document with valid ## Revision History table", () => {
+  const doc = `# Title
+
+## What it is
+Design content.
+
+## Revision History
+
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-08-16 | [Issue 1](https://example.com/1) | Initial release |
+| 1.1.0 | 2026-09-02 | [Issue 2](https://example.com/2) | Added new features |
+
+## Both surfaces
+Parity details.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
+Deno.test("AC7: lintDesignDoc passes document without Revision History table", () => {
+  const doc = `# Title
+
+## What it is
+Content.
+
+## Both surfaces
+Parity details.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, true);
+});
+
+Deno.test("AC7: lintDesignDoc fails when Revision History table lacks Version column", () => {
+  const doc = `# Title
+
+## What it is
+Content.
+
+## Revision History
+
+| Date | Epic / Issue | Summary |
+|---|---|---|
+| 2026-08-16 | [Issue 1](https://example.com/1) | Initial |
+
+## Both surfaces
+Parity.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) =>
+    v.rule === "invalid-revision-history-table" && v.message.includes("'Version'")
+  );
+  assertEquals(Boolean(violation), true);
+});
+
+Deno.test("AC7: lintDesignDoc fails when Revision History table lacks Date column", () => {
+  const doc = `# Title
+
+## What it is
+Content.
+
+## Revision History
+
+| Version | Epic / Issue | Summary |
+|---|---|---|
+| 1.0.0 | [Issue 1](https://example.com/1) | Initial |
+
+## Both surfaces
+Parity.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) =>
+    v.rule === "invalid-revision-history-table" && v.message.includes("'Date'")
+  );
+  assertEquals(Boolean(violation), true);
+});
+
+Deno.test("AC7: lintDesignDoc fails when Revision History table has no data rows", () => {
+  const doc = `# Title
+
+## What it is
+Content.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+
+## Both surfaces
+Parity.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) =>
+    v.rule === "invalid-revision-history-table" && v.message.includes("no data rows")
+  );
+  assertEquals(Boolean(violation), true);
+});
+
+Deno.test("AC7: lintDesignDoc fails when Revision History table carries unparseable version", () => {
+  const doc = `# Title
+
+## What it is
+Content.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| not-a-semver | 2026-08-16 | Initial |
+
+## Both surfaces
+Parity.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) =>
+    v.rule === "invalid-revision-history-table" && v.message.includes("unparseable version")
+  );
+  assertEquals(Boolean(violation), true);
+});
+
+Deno.test("AC7: lintDesignDoc fails when Revision History table carries unparseable date", () => {
+  const doc = `# Title
+
+## What it is
+Content.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | August 16 2026 | Initial |
+
+## Both surfaces
+Parity.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) =>
+    v.rule === "invalid-revision-history-table" && v.message.includes("unparseable date")
+  );
+  assertEquals(Boolean(violation), true);
+});
+
+Deno.test("AC7: lintDesignDoc fails when Revision History table lists rows newest-first", () => {
+  const doc = `# Title
+
+## What it is
+Content.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 2.0.0 | 2026-09-02 | Major update |
+| 1.0.0 | 2026-08-16 | Initial |
+
+## Both surfaces
+Parity.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) =>
+    v.rule === "invalid-revision-history-table" && v.message.includes("newest-first")
+  );
+  assertEquals(Boolean(violation), true);
+});
+
+Deno.test("AC9: lintDesignDoc fails when banned prose appears inside Revision History summary cell", () => {
+  const doc = `# Title
+
+## What it is
+Content.
+
+## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | 2026-08-16 | An earlier version said we would use MySQL. |
+
+## Both surfaces
+Parity.
+
+## Load-bearing premises
+| # | Premise | Proof |
+|---|---|---|
+| 1 | P1 | Verified in code |
+`;
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) => v.rule === "no-revision-narration");
+  assertEquals(Boolean(violation), true);
 });

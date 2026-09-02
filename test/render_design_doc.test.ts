@@ -126,64 +126,45 @@ Content 2
   assertStringIncludes(html, 'layout.classList.remove("nav-collapsed")');
 });
 
-Deno.test("AC6: Header renders version and revision date when declared, and omits them when absent", () => {
-  // Case A: Both declared before first ##
-  const docBoth = `# Design Document Title
+Deno.test("AC6: Document with ## Revision History table renders newest version and date in header and renders table in place", () => {
+  // Case A: Document with ## Revision History table
+  const docWithTable = `# Design Document Title
 
-**Version:** 2.1.0
-**Revised:** 2026-09-02
+## Revision History
+
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-08-16 | [Issue 1](https://example.com/1) | Initial release |
+| 2.1.0 | 2026-09-02 | [Issue 2](https://example.com/2) | Major revision |
 
 ## First Section
 Section text.
 `;
-  const htmlBoth = renderDesignDoc(docBoth);
-  const mainBoth = htmlBoth.split("<main>")[1]?.split("</main>")[0] ?? "";
-  assertStringIncludes(mainBoth, '<header class="doc-header">');
-  assertStringIncludes(mainBoth, '<div class="doc-version-line">');
-  assertStringIncludes(mainBoth, '<span class="doc-version">Version: 2.1.0</span>');
-  assertStringIncludes(mainBoth, '<span class="doc-revised">Revised: 2026-09-02</span>');
-  // Neither line should be duplicated in paragraph body
-  assertFalse(mainBoth.includes("<p><strong>Version:</strong>"));
-  assertFalse(mainBoth.includes("<p><strong>Revised:</strong>"));
+  const htmlWithTable = renderDesignDoc(docWithTable);
+  const mainWithTable = htmlWithTable.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertStringIncludes(mainWithTable, '<header class="doc-header">');
+  assertStringIncludes(mainWithTable, '<div class="doc-version-line">');
+  assertStringIncludes(mainWithTable, '<span class="doc-version">Version: 2.1.0</span>');
+  assertStringIncludes(mainWithTable, '<span class="doc-revised">Revised: 2026-09-02</span>');
+  // Table must render in place in the body
+  assertStringIncludes(mainWithTable, '<h2 id="revision-history">Revision History</h2>');
+  assertStringIncludes(mainWithTable, "<th>Version</th>");
+  assertStringIncludes(mainWithTable, "<td>2.1.0</td>");
+  assertStringIncludes(mainWithTable, "<td>Major revision</td>");
 
-  // Case B: Only version declared
-  const docVer = `# Version Only
-
-**Version:** 1.0.0
-
-## First Section
-`;
-  const htmlVer = renderDesignDoc(docVer);
-  const mainVer = htmlVer.split("<main>")[1]?.split("</main>")[0] ?? "";
-  assertStringIncludes(mainVer, '<span class="doc-version">Version: 1.0.0</span>');
-  assertFalse(mainVer.includes('<span class="doc-revised">'));
-  assertFalse(mainVer.includes("Revised:"));
-
-  // Case C: Only revised declared
-  const docRev = `# Revised Only
-
-**Revised:** 2026-08-30
+  // Case B: Document without Revision History table
+  const docWithoutTable = `# Clean Title
 
 ## First Section
+Section text.
 `;
-  const htmlRev = renderDesignDoc(docRev);
-  const mainRev = htmlRev.split("<main>")[1]?.split("</main>")[0] ?? "";
-  assertStringIncludes(mainRev, '<span class="doc-revised">Revised: 2026-08-30</span>');
-  assertFalse(mainRev.includes('<span class="doc-version">'));
-  assertFalse(mainRev.includes("Version:"));
-
-  // Case D: Neither declared
-  const docNeither = `# Clean Title
-
-## First Section
-`;
-  const htmlNeither = renderDesignDoc(docNeither);
-  const mainNeither = htmlNeither.split("<main>")[1]?.split("</main>")[0] ?? "";
-  assertFalse(mainNeither.includes("doc-header"));
-  assertFalse(mainNeither.includes("doc-version-line"));
-  assertFalse(mainNeither.includes("Version:"));
-  assertFalse(mainNeither.includes("Revised:"));
-  assertStringIncludes(mainNeither, "<h1>Clean Title</h1>");
+  const htmlWithoutTable = renderDesignDoc(docWithoutTable);
+  const mainWithoutTable = htmlWithoutTable.split("<main>")[1]?.split("</main>")[0] ?? "";
+  assertFalse(mainWithoutTable.includes("doc-header"));
+  assertFalse(mainWithoutTable.includes("doc-version-line"));
+  assertFalse(mainWithoutTable.includes("Version:"));
+  assertFalse(mainWithoutTable.includes("Revised:"));
+  assertStringIncludes(mainWithoutTable, "<h1>Clean Title</h1>");
 });
 
 Deno.test("renderDesignDocFile reads markdown file and writes HTML", () => {
@@ -193,7 +174,7 @@ Deno.test("renderDesignDocFile reads markdown file and writes HTML", () => {
     const htmlPath = path.join(tempDir, "test.html");
     Deno.writeTextFileSync(
       mdPath,
-      "# File Test\n\n**Version:** 1.0.0\n**Revised:** 2026-09-02\n\n## Section\nText",
+      "# File Test\n\n## Revision History\n\n| Version | Date | Summary |\n|---|---|---|\n| 1.0.0 | 2026-09-02 | Initial |\n\n## Section\nText",
     );
     renderDesignDocFile(mdPath, htmlPath);
 
