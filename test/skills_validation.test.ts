@@ -221,9 +221,37 @@ Deno.test("skills/file-issue/SKILL.md item 14 splits both-surfaces acceptance cr
   );
   assert(
     text.includes(
-      "the agy criterion asserts that `~/.gemini/config/hooks.json`'s shim registration still targets that same `$HOME/.claude/hooks/` path",
+      "for a `PreToolUse` or `PostToolUse` hook, which carries a `~/.gemini/config/hooks.json` shim registration, the agy criterion asserts that registration still targets that same `$HOME/.claude/hooks/` path",
     ),
-    "skills/file-issue/SKILL.md item 14 must state the agy criterion for a hook content-only change asserts the hooks.json shim registration",
+    "skills/file-issue/SKILL.md item 14 must state the agy criterion for a PreToolUse/PostToolUse hook content-only change asserts the hooks.json shim registration",
+  );
+
+  // Hook case: a SessionStart/Stop lifecycle hook carries NO agy registration at all (registering
+  // one there disables agy's entire hooks config), so the agy criterion asserts that absence as a
+  // deliberate fact rather than inventing a path or registration to assert instead.
+  assert(
+    text.includes(
+      "for a `SessionStart` or `Stop` hook, `~/.gemini/config/hooks.json` carries no registration for it at all and never can",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state that a SessionStart/Stop hook carries no agy hooks.json registration at all",
+  );
+  assert(
+    text.includes(
+      "registering either lifecycle event silently disables agy's entire hooks config (`docs/agy-hooks.md` finding 9)",
+    ),
+    "skills/file-issue/SKILL.md item 14 must cite docs/agy-hooks.md finding 9 for why lifecycle hooks are never registered with agy",
+  );
+  assert(
+    text.includes(
+      "so the agy criterion asserts that fact plainly: the hook has no `~/.gemini/config/hooks.json` registration, and the content change has no agy-side effect",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state the no-registration agy criterion wording for a SessionStart/Stop hook",
+  );
+  assert(
+    text.includes(
+      "Never invent an agy-side path or registration for a `SessionStart`/`Stop` hook to satisfy this criterion.",
+    ),
+    "skills/file-issue/SKILL.md item 14 must prohibit inventing an agy-side path or registration for a SessionStart/Stop hook",
   );
 
   // Explicit prohibition on asserting a ~/.claude/hooks/lib/ path
