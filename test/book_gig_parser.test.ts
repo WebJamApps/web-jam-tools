@@ -104,6 +104,23 @@ Deno.test("parseLocation: parses valid 5-digit zipcodes and known metros", () =>
   assertEquals(loc2?.city, "Salem");
   assertEquals(loc2?.state, "VA");
 
+  // Newly mapped towns: Pembroke, Pulaski, Wirtz, Huddleston
+  const locPembroke = parseLocation("24136");
+  assertEquals(locPembroke?.city, "Pembroke");
+  assertEquals(locPembroke?.metroSlug, "blacksburg-christiansburg");
+
+  const locPulaski = parseLocation("24301");
+  assertEquals(locPulaski?.city, "Pulaski");
+  assertEquals(locPulaski?.metroSlug, "blacksburg-christiansburg");
+
+  const locWirtz = parseLocation("24184");
+  assertEquals(locWirtz?.city, "Wirtz");
+  assertEquals(locWirtz?.metroSlug, "roanoke-salem");
+
+  const locHuddleston = parseLocation("24104");
+  assertEquals(locHuddleston?.city, "Huddleston");
+  assertEquals(locHuddleston?.metroSlug, "roanoke-salem");
+
   // Unknown zip returns zip object without metro mapping
   const loc3 = parseLocation("90210");
   assertEquals(loc3?.zip, "90210");
@@ -127,6 +144,14 @@ Deno.test("parseLocation: parses City, State and multi-city expressions", () => 
   assert(loc2.surroundingCities.includes("Floyd"));
   assert(loc2.surroundingCities.includes("Radford"));
   assert(loc2.surroundingCities.includes("Christiansburg"));
+  assert(loc2.surroundingCities.includes("Pembroke"));
+  assert(loc2.surroundingCities.includes("Pulaski"));
+  assert(loc2.surroundingCities.includes("Giles"));
+  assert(loc2.surroundingCities.includes("Wirtz"));
+  assert(loc2.surroundingCities.includes("Huddleston"));
+  assert(loc2.surroundingCities.includes("Axton"));
+  assert(loc2.surroundingCities.includes("Ridgeway"));
+  assert(loc2.surroundingCities.includes("Fieldale"));
   assertEquals(loc2.surroundingCities.includes("Marion"), false);
 
   // Dynamic multi-city in NC
