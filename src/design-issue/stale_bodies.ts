@@ -1,11 +1,12 @@
 // src/design-issue/stale_bodies.ts
-// Helper script for reporting issues whose body is stale against an approved design document (web-jam-tools#746).
+// Helper script for reporting issues whose body is stale against an approved design document (web-jam-tools#746, web-jam-tools#888).
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
 import { expandHome } from "./gate1.ts";
 import { defaultCommandRunner } from "./candidates.ts";
 import type { CommandRunner } from "../flash-issues/types.ts";
+import { parsePlanTable, splitTableRowCells } from "./plan_table.ts";
 
 export interface IssueTarget {
   repo: string;
@@ -25,7 +26,9 @@ export type StalenessReasonType =
   | "design-reference"
   | "open-questions"
   | "scope-contradiction"
-  | "fetch-error";
+  | "fetch-error"
+  | "verb-reconciliation"
+  | "decision-reconciliation";
 
 export interface StalenessReason {
   type: StalenessReasonType;
@@ -55,11 +58,12 @@ export interface StaleBodiesScanResult {
 
 export interface StaleBodiesOptions {
   docPath: string;
-  issues: string[] | IssueTarget[];
+  issues?: string[] | IssueTarget[];
   defaultRepo?: string;
   readFile?: (path: string) => Promise<string> | string;
   fileExists?: (path: string) => Promise<boolean> | boolean;
   fetchIssue?: (repo: string, issueNumber: number) => Promise<IssueData>;
+  fetchSubIssues?: (repo: string, epicNumber: number) => Promise<IssueTarget[]>;
   runner?: CommandRunner;
   log?: (msg: string) => void;
   errorLog?: (msg: string) => void;
@@ -119,6 +123,36 @@ export async function defaultFetchIssue(
     url: parsed.url,
     labels: parsed.labels,
   };
+}
+
+export async function defaultFetchSubIssues(
+  repo: string,
+  epicNumber: number,
+  runner: CommandRunner = defaultCommandRunner,
+): Promise<IssueTarget[]> {
+  const result = await runner([
+    "api",
+    `repos/${repo}/issues/${epicNumber}/sub_issues`,
+  ]);
+
+  if (result.code !== 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(result.stdout) as Array<{
+      number: number;
+      repository?: { full_name?: string };
+    }>;
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.map((item) => ({
+      repo: item.repository?.full_name || repo,
+      number: item.number,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -189,6 +223,161 @@ export function parseIssueList(
   }
 
   return targets;
+}
+
+export interface DocumentIssueExtraction {
+  epics: IssueTarget[];
+  issues: IssueTarget[];
+  all: IssueTarget[];
+}
+
+/**
+ * Extracts child sub-issue references, table issue links, and Epic citations from a design document.
+ */
+export function extractDocumentIssueTargets(
+  docContent: string,
+  defaultRepo = "WebJamApps/web-jam-tools",
+): DocumentIssueExtraction {
+  const epics: IssueTarget[] = [];
+  const issues: IssueTarget[] = [];
+  const seenEpics = new Set<string>();
+  const seenIssues = new Set<string>();
+
+  function addEpic(target: IssueTarget | null) {
+    if (!target) return;
+    const key = `${target.repo}#${target.number}`;
+    if (!seenEpics.has(key)) {
+      seenEpics.add(key);
+      epics.push(target);
+    }
+  }
+
+  function addIssue(target: IssueTarget | null) {
+    if (!target) return;
+    const key = `${target.repo}#${target.number}`;
+    if (!seenIssues.has(key)) {
+      seenIssues.add(key);
+      issues.push(target);
+    }
+  }
+
+  // 1. Check Gate 2 plan table if present
+  try {
+    const planTable = parsePlanTable(docContent);
+    if (planTable) {
+      const headerLower = planTable.headerCells.map((c) => c.toLowerCase());
+      const titleIdx = headerLower.findIndex((c) => c.includes("title"));
+      const epicIdx = headerLower.findIndex((c) => c.includes("epic"));
+
+      for (const row of planTable.rows) {
+        if (epicIdx !== -1 && row.cells[epicIdx]) {
+          const epicCell = row.cells[epicIdx];
+          const epicMatch =
+            epicCell.match(/(?:(?:[A-Za-z0-9_.\-]+(?:\/[A-Za-z0-9_.\-]+)?#)|(?:#))(\d+)/) ||
+            epicCell.match(/github\.com\/([A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+)\/issues\/(\d+)/);
+          if (epicMatch) {
+            const target = parseIssueTarget(epicMatch[0], defaultRepo);
+            addEpic(target);
+          }
+        }
+
+        if (titleIdx !== -1 && row.cells[titleIdx]) {
+          const titleCell = row.cells[titleIdx];
+          const issueMatch =
+            titleCell.match(/github\.com\/([A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+)\/issues\/(\d+)/) ||
+            titleCell.match(/\[#?(\d+)\]/) ||
+            titleCell.match(/(?:[A-Za-z0-9_.\-]+(?:\/[A-Za-z0-9_.\-]+)?#)(\d+)/);
+          if (issueMatch) {
+            const target = parseIssueTarget(issueMatch[0].replace(/[\[\]]/g, ""), defaultRepo);
+            addIssue(target);
+          }
+        }
+      }
+    }
+  } catch {
+    // Non-fatal if plan table has parse issues
+  }
+
+  // 2. Scan all markdown tables for Issue Link / Epic / Proposed title / sub-issue columns
+  const lines = docContent.split(/\r?\n/);
+  let tableHeaderCols: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line.startsWith("|")) {
+      tableHeaderCols = [];
+      continue;
+    }
+
+    const cells = splitTableRowCells(line);
+    // If this is an alignment row, skip
+    if (cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c))) {
+      continue;
+    }
+
+    if (tableHeaderCols.length === 0) {
+      tableHeaderCols = cells.map((c) => c.toLowerCase());
+      continue;
+    }
+
+    for (let colIdx = 0; colIdx < cells.length; colIdx++) {
+      const cell = cells[colIdx];
+      const colHeader = tableHeaderCols[colIdx] || "";
+      const isEpicColumn = colHeader.includes("epic");
+
+      // Search for GitHub issue URLs in table cell
+      const urlMatches = cell.matchAll(
+        /https:\/\/github\.com\/([A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+)\/issues\/(\d+)/gi,
+      );
+      for (const match of urlMatches) {
+        const target: IssueTarget = { repo: match[1], number: parseInt(match[2], 10) };
+        if (isEpicColumn || /epic/i.test(cell)) {
+          addEpic(target);
+        } else {
+          addIssue(target);
+        }
+      }
+
+      // Search for citations like [web-jam-back#1052](...) or [#885](...)
+      const citeMatches = cell.matchAll(/\[(?:([A-Za-z0-9_.\-]+)#)?(\d+)\]/gi);
+      for (const match of citeMatches) {
+        const repoName = match[1];
+        const num = parseInt(match[2], 10);
+        const target = parseIssueTarget(repoName ? `${repoName}#${num}` : `#${num}`, defaultRepo);
+        if (isEpicColumn || /epic/i.test(cell)) {
+          addEpic(target);
+        } else {
+          addIssue(target);
+        }
+      }
+    }
+  }
+
+  // 3. Scan document prose for Epic citations (e.g. "Part of ...#737" or "Epic #737")
+  const epicProseMatches = docContent.matchAll(
+    /(?:(?:Part\s+of|Child\s+of|Epic:?|under\s+Epic)\s+(?:\[[^\]]*\]\()?https:\/\/github\.com\/([A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+)\/issues\/(\d+))/gi,
+  );
+  for (const match of epicProseMatches) {
+    addEpic({ repo: match[1], number: parseInt(match[2], 10) });
+  }
+
+  const epicShorthandMatches = docContent.matchAll(
+    /(?:(?:Part\s+of|Child\s+of|Epic:?|under\s+Epic)\s+([A-Za-z0-9_.\-]+#[0-9]+|#[0-9]+))/gi,
+  );
+  for (const match of epicShorthandMatches) {
+    addEpic(parseIssueTarget(match[1], defaultRepo));
+  }
+
+  // Combine into deduplicated list
+  const all: IssueTarget[] = [...issues];
+  for (const epic of epics) {
+    const key = `${epic.repo}#${epic.number}`;
+    if (!seenIssues.has(key)) {
+      all.push(epic);
+    }
+  }
+
+  return { epics, issues, all };
 }
 
 /**
@@ -266,6 +455,14 @@ export async function checkDesignReference(
   const match = issueBody.match(designRefRegex);
 
   if (!match) {
+    const isChildSubIssue =
+      /(?:^|\n)\s*(?:Child\s+of|Part\s+of)\s+(?:\[[^\]]*\]\([^)]+\)|[^\n]+(?:#|\/issues\/)\d+)/i
+        .test(issueBody);
+    if (isChildSubIssue) {
+      // Child sub-issues cite their parent Epic rather than having a standalone ## Design reference
+      return violations;
+    }
+
     violations.push({
       type: "design-reference",
       message: "Missing required '## Design reference' section in issue body",
@@ -587,6 +784,303 @@ function matchesTopicPhrase(text: string, topic: string): boolean {
 /**
  * Analyzes a single issue data object against the design document.
  */
+export interface DesignDecision {
+  id: string;
+  decision: string;
+  outcome: string;
+  endpoints: string[];
+  verbs: string[];
+}
+
+export function extractDecisionsFromDoc(docContent: string): DesignDecision[] {
+  const decisions: DesignDecision[] = [];
+
+  const decisionSectionRegex =
+    /(?:^|\n)#{1,6}\s+(?:(?:Appendix(?:\s+[A-Z])?|\d+\.?)[\s:—\-]+)?(?:Decisions?\s+[Rr]ecord|Decisions?|Appendix\s+[A-Z]\b[^\n]*)\b[^\n]*\n([\s\S]*?)(?=\n#{1,6}\s+[^\n]+|$)/gi;
+
+  let sectionMatch: RegExpExecArray | null;
+  while ((sectionMatch = decisionSectionRegex.exec(docContent)) !== null) {
+    const sectionText = sectionMatch[1];
+    const lines = sectionText.split(/\r?\n/);
+
+    let headerIdx = -1;
+    let headerCells: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line.startsWith("|")) continue;
+
+      const cells = splitTableRowCells(line);
+      const lower = cells.map((c) => c.toLowerCase());
+      const hasDecision = lower.some((c) => c.includes("decision"));
+      const hasOutcome = lower.some((c) =>
+        c.includes("outcome") || c.includes("resolution") || c.includes("chosen") ||
+        c.includes("ruling")
+      );
+      const hasItemOrTopic = lower.some((c) =>
+        c.includes("item") || c.includes("topic") || c.includes("question")
+      );
+
+      if (hasDecision && (hasOutcome || hasItemOrTopic)) {
+        headerIdx = i;
+        headerCells = lower;
+        break;
+      }
+    }
+
+    if (headerIdx === -1) continue;
+
+    const idCol = headerCells.findIndex((c) => c === "#" || c.includes("id"));
+    let decCol = -1;
+    let outcomeCol = -1;
+
+    const hasOutcome = headerCells.some((c) =>
+      c.includes("outcome") || c.includes("resolution") || c.includes("chosen") ||
+      c.includes("ruling")
+    );
+    if (hasOutcome) {
+      decCol = headerCells.findIndex((c) =>
+        c.includes("decision") || c.includes("item") || c.includes("topic") ||
+        c.includes("question")
+      );
+      outcomeCol = headerCells.findIndex((c) =>
+        c.includes("outcome") || c.includes("resolution") || c.includes("chosen") ||
+        c.includes("ruling")
+      );
+    } else {
+      // Table where "Item" / "Topic" is the question and "Decision" is the outcome
+      decCol = headerCells.findIndex((c) =>
+        c.includes("item") || c.includes("topic") || c.includes("question")
+      );
+      outcomeCol = headerCells.findIndex((c) => c.includes("decision"));
+    }
+
+    for (let i = headerIdx + 2; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line.startsWith("|")) continue;
+
+      const cells = splitTableRowCells(line);
+      if (cells.length < Math.max(idCol, decCol, outcomeCol) + 1) continue;
+
+      const id = idCol !== -1 ? cells[idCol] : "";
+      const dec = decCol !== -1 ? cells[decCol] : "";
+      const outcome = outcomeCol !== -1 ? cells[outcomeCol] : "";
+
+      if (!dec && !outcome) continue;
+
+      const combined = `${dec} ${outcome}`;
+      const endpointMatches = combined.matchAll(/[/][a-zA-Z0-9_.:\-/]+/g);
+      const endpoints = Array.from(
+        new Set(Array.from(endpointMatches).map((m) => m[0].replace(/[.,;:`'"]+$/, ""))),
+      ).filter((ep) => ep.length >= 3 && !ep.endsWith("/"));
+
+      const verbMatches = combined.matchAll(/\b(GET|POST|PUT|DELETE|PATCH)\b/g);
+      const verbs = Array.from(
+        new Set(Array.from(verbMatches).map((m) => m[1].toUpperCase())),
+      );
+
+      decisions.push({
+        id,
+        decision: dec,
+        outcome,
+        endpoints,
+        verbs,
+      });
+    }
+  }
+
+  return decisions;
+}
+
+export interface EndpointSpec {
+  endpoint: string;
+  verbs: Set<string>;
+  sourceDecisions: string[];
+}
+
+export function extractEndpointsFromDoc(
+  docContent: string,
+  decisions: DesignDecision[] = [],
+): Map<string, EndpointSpec> {
+  const map = new Map<string, EndpointSpec>();
+
+  function register(endpoint: string, verb: string, source: string) {
+    const cleanEndpoint = endpoint.replace(/[`'"]/g, "").replace(/[.,;:]+$/, "");
+    if (!cleanEndpoint.startsWith("/") || cleanEndpoint.length < 2) return;
+    if (!map.has(cleanEndpoint)) {
+      map.set(cleanEndpoint, {
+        endpoint: cleanEndpoint,
+        verbs: new Set(),
+        sourceDecisions: [],
+      });
+    }
+    const spec = map.get(cleanEndpoint)!;
+    spec.verbs.add(verb.toUpperCase());
+    if (source && !spec.sourceDecisions.includes(source)) {
+      spec.sourceDecisions.push(source);
+    }
+  }
+
+  // 1. From decisions
+  for (const dec of decisions) {
+    const source = dec.id ? `Decision ${dec.id}` : dec.decision;
+    const combined = `${dec.decision} ${dec.outcome}`;
+    const matches = combined.matchAll(
+      /\b(GET|POST|PUT|DELETE|PATCH)\s+([/][a-zA-Z0-9_.:\-/]+)/gi,
+    );
+    for (const m of matches) {
+      register(m[2], m[1], source);
+    }
+  }
+
+  // 2. From document Architecture / Endpoints sections or body
+  const endpointMatches = docContent.matchAll(
+    /\b(GET|POST|PUT|DELETE|PATCH)\s+([/][a-zA-Z0-9_.:\-/]+)/gi,
+  );
+  for (const m of endpointMatches) {
+    register(m[2], m[1], "Architecture / Specification");
+  }
+
+  return map;
+}
+
+function normalizeRoutePrefix(endpoint: string): string {
+  return endpoint.split("/:")[0].toLowerCase();
+}
+
+/**
+ * Reconciles sub-issue titles and acceptance criteria against the design document's
+ * Decisions Record and Architecture sections (web-jam-tools#888).
+ */
+export function checkDecisionAndVerbReconciliation(
+  issue: IssueData,
+  docDecisions: DesignDecision[],
+  docEndpoints: Map<string, EndpointSpec>,
+): StalenessReason[] {
+  const violations: StalenessReason[] = [];
+  const fullText = `${issue.title} ${issue.body}`;
+  const fullTextLower = fullText.toLowerCase();
+
+  // 1. Check HTTP Endpoints and Verbs
+  for (const [endpoint, spec] of docEndpoints.entries()) {
+    const endpointPrefix = normalizeRoutePrefix(endpoint);
+    const mentionsEndpoint = fullTextLower.includes(endpoint.toLowerCase()) ||
+      (endpointPrefix.length > 3 && fullTextLower.includes(endpointPrefix));
+
+    if (!mentionsEndpoint) continue;
+
+    // Extract verbs present in issue title and body
+    const titleVerbs = new Set(
+      Array.from(issue.title.matchAll(/\b(GET|POST|PUT|DELETE|PATCH)\b/gi)).map((m) =>
+        m[0].toUpperCase()
+      ),
+    );
+    const bodyVerbs = new Set(
+      Array.from(issue.body.matchAll(/\b(GET|POST|PUT|DELETE|PATCH)\b/gi)).map((m) =>
+        m[0].toUpperCase()
+      ),
+    );
+    const allIssueVerbs = new Set([...titleVerbs, ...bodyVerbs]);
+
+    // Only apply verb reconciliation if the issue mentions at least one HTTP verb or is titled as an endpoint task
+    const hasAnyVerb = titleVerbs.size > 0 ||
+      Array.from(spec.verbs).some((v) => allIssueVerbs.has(v));
+
+    if (!hasAnyVerb) continue;
+
+    const missingVerbs: string[] = [];
+    for (const verb of spec.verbs) {
+      if (!allIssueVerbs.has(verb)) {
+        missingVerbs.push(verb);
+      }
+    }
+
+    if (missingVerbs.length > 0) {
+      const sourceDesc = spec.sourceDecisions.length > 0
+        ? spec.sourceDecisions.join(", ")
+        : "Design Architecture";
+      const verbList = missingVerbs.join(", ");
+      violations.push({
+        type: "verb-reconciliation",
+        message:
+          `Sub-issue is missing HTTP method(s) ${verbList} for endpoint '${endpoint}' specified in design document (${sourceDesc})`,
+        detail:
+          `Reconciliation guidance: Update issue title to include ${verbList} and add acceptance criteria covering ${verbList} ${endpoint} (e.g. takedown / error handling).`,
+      });
+    }
+
+    // Check if title specifically specifies verbs but is missing a newly approved verb
+    if (titleVerbs.size > 0) {
+      for (const verb of spec.verbs) {
+        if (!titleVerbs.has(verb)) {
+          const alreadyReported = violations.some(
+            (v) =>
+              v.type === "verb-reconciliation" &&
+              v.message.includes(`title is missing HTTP method '${verb}'`),
+          );
+          if (!alreadyReported) {
+            violations.push({
+              type: "verb-reconciliation",
+              message:
+                `Sub-issue title is missing HTTP method '${verb}' for endpoint '${endpoint}'`,
+              detail:
+                `Reconciliation guidance: Update issue title from "${issue.title}" to include ${verb}.`,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Check Decision Outcomes that specifically mention or relate to this issue
+  for (const dec of docDecisions) {
+    const decId = dec.id ? `Decision ${dec.id}` : `Decision "${dec.decision}"`;
+    // Check if decision specifically targets this issue (e.g. by issue citation "#1052")
+    const citesIssue = dec.outcome.includes(`#${issue.number}`) ||
+      dec.decision.includes(`#${issue.number}`);
+
+    let relatesToIssue = citesIssue;
+    if (!relatesToIssue) {
+      for (const ep of dec.endpoints) {
+        const epPrefix = normalizeRoutePrefix(ep);
+        if (
+          fullTextLower.includes(ep.toLowerCase()) ||
+          (epPrefix.length > 3 && fullTextLower.includes(epPrefix))
+        ) {
+          relatesToIssue = true;
+          break;
+        }
+      }
+    }
+
+    if (relatesToIssue) {
+      const outcomeLower = dec.outcome.toLowerCase();
+      // Check for takedown / deletion / 404 requirement
+      const needsTakedown = outcomeLower.includes("takedown") ||
+        (outcomeLower.includes("delete") && outcomeLower.includes("404"));
+
+      if (needsTakedown) {
+        const bodyLower = issue.body.toLowerCase();
+        const hasTakedownInAc = bodyLower.includes("delete") &&
+          (bodyLower.includes("404") || bodyLower.includes("takedown") ||
+            bodyLower.includes("removes"));
+        if (!hasTakedownInAc) {
+          violations.push({
+            type: "decision-reconciliation",
+            message:
+              `Sub-issue fails to reflect ${decId} ("${dec.decision}"): missing takedown / deletion criteria`,
+            detail: `Reconciliation guidance: Add acceptance criterion covering: "${
+              dec.outcome.slice(0, 140).trim()
+            }..."`,
+          });
+        }
+      }
+    }
+  }
+
+  return violations;
+}
+
 export async function analyzeIssueStaleness(
   issue: IssueData,
   repo: string,
@@ -610,10 +1104,19 @@ export async function analyzeIssueStaleness(
     docFilename,
   );
 
+  const docDecisions = extractDecisionsFromDoc(docContent);
+  const docEndpoints = extractEndpointsFromDoc(docContent, docDecisions);
+  const reconciliationReasons = checkDecisionAndVerbReconciliation(
+    issue,
+    docDecisions,
+    docEndpoints,
+  );
+
   const reasons: StalenessReason[] = [
     ...designRefReasons,
     ...questionReasons,
     ...scopeReasons,
+    ...reconciliationReasons,
   ];
 
   return {
@@ -634,6 +1137,8 @@ export async function scanStaleBodies(
 ): Promise<StaleBodiesScanResult> {
   const readFile = options.readFile ?? defaultReadFile;
   const fetchIssue = options.fetchIssue ?? ((r, n) => defaultFetchIssue(r, n, options.runner));
+  const fetchSubIssues = options.fetchSubIssues ??
+    ((r, n) => defaultFetchSubIssues(r, n, options.runner));
   const defaultRepo = options.defaultRepo ?? "WebJamApps/web-jam-tools";
 
   const resolvedDocPath = path.resolve(expandHome(options.docPath));
@@ -649,10 +1154,45 @@ export async function scanStaleBodies(
     );
   }
 
-  const targets = Array.isArray(options.issues) && options.issues.length > 0 &&
-      typeof options.issues[0] === "object"
-    ? (options.issues as IssueTarget[])
-    : parseIssueList(options.issues as string[] | string, defaultRepo);
+  let targets: IssueTarget[] = [];
+  if (
+    options.issues &&
+    (Array.isArray(options.issues) ? options.issues.length > 0 : Boolean(options.issues))
+  ) {
+    targets = Array.isArray(options.issues) && options.issues.length > 0 &&
+        typeof options.issues[0] === "object"
+      ? (options.issues as IssueTarget[])
+      : parseIssueList(options.issues as string[] | string, defaultRepo);
+  } else {
+    // Auto-extract from design document: tables, plan table, Epics, and their sub-issues
+    const extracted = extractDocumentIssueTargets(docContent, defaultRepo);
+    const subIssueTargets: IssueTarget[] = [];
+
+    for (const epic of extracted.epics) {
+      try {
+        const subs = await fetchSubIssues(epic.repo, epic.number);
+        subIssueTargets.push(...subs);
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    let combined: IssueTarget[] = [];
+    if (extracted.issues.length > 0 || subIssueTargets.length > 0) {
+      combined = [...extracted.issues, ...subIssueTargets];
+    } else {
+      combined = [...extracted.epics];
+    }
+
+    const seen = new Set<string>();
+    for (const t of combined) {
+      const key = `${t.repo}#${t.number}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push(t);
+      }
+    }
+  }
 
   const reports: IssueStalenessReport[] = [];
 
@@ -717,6 +1257,7 @@ export function formatStaleBodiesReport(result: StaleBodiesScanResult): string {
       lines.push("  - Design reference: OK");
       lines.push("  - Open questions / TBD: None");
       lines.push("  - Scope / Non-goals: In sync");
+      lines.push("  - Decisions & Verbs: In sync");
     } else {
       for (const reason of issue.reasons) {
         const detailPart = reason.detail ? ` (${reason.detail})` : "";
@@ -764,9 +1305,10 @@ export async function runStaleBodiesCli(
    or: deno task design:stale-bodies --doc <doc.md> --issues <101,102>
 
 Analyzes issue bodies against a design document to detect staleness:
-  - Verifies ## Design reference cites the target design document.
+  - Verifies ## Design reference cites the target design document or parent Epic.
   - Flags open questions, TBD markers, and unresolved design forks.
   - Flags scope contradictions against design doc non-goals / out-of-scope items.
+  - Reconciles child sub-issue titles, acceptance criteria, and HTTP verbs against design decisions and architecture.
 
 Arguments:
   <doc.md>                  Path to design document markdown file
@@ -821,22 +1363,22 @@ Options:
     flags.repo || options.defaultRepo,
   );
 
-  if (parsedTargets.length === 0) {
-    errorLog(
-      "Error: No issues specified to scan. Provide issue numbers via --issues <list> or positional arguments.",
-    );
-    errorLog("Usage: deno task design:stale-bodies <doc.md> --issues 101,102");
-    return 1;
-  }
-
   try {
     const result = await scanStaleBodies({
       ...options,
       docPath,
-      issues: parsedTargets,
+      issues: parsedTargets.length > 0 ? parsedTargets : undefined,
       defaultRepo: flags.repo || options.defaultRepo,
       json: flags.json || options.json,
     });
+
+    if (result.summary.total === 0) {
+      errorLog(
+        "Error: No issues specified to scan and none found in design document.",
+      );
+      errorLog("Usage: deno task design:stale-bodies <doc.md> --issues 101,102");
+      return 1;
+    }
 
     if (flags.json || options.json) {
       log(JSON.stringify(result, null, 2));
