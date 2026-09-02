@@ -118,6 +118,14 @@ Deno.test("parseLocation: parses multi-city comma lists, and conjunctions, and s
   assert(loc3.surroundingCities.includes("Bedford"));
   assert(loc3.surroundingCities.includes("Vinton"));
   assert(loc3.surroundingCities.includes("Bassett"));
+  assert(loc3.surroundingCities.includes("Pembroke"));
+  assert(loc3.surroundingCities.includes("Pulaski"));
+  assert(loc3.surroundingCities.includes("Giles"));
+  assert(loc3.surroundingCities.includes("Wirtz"));
+  assert(loc3.surroundingCities.includes("Huddleston"));
+  assert(loc3.surroundingCities.includes("Axton"));
+  assert(loc3.surroundingCities.includes("Ridgeway"));
+  assert(loc3.surroundingCities.includes("Fieldale"));
   // Excluded towns beyond perimeter (Marion) and target cities
   assertEquals(loc3.surroundingCities.includes("Marion"), false);
   assertEquals(loc3.surroundingCities.includes("Salem"), false);

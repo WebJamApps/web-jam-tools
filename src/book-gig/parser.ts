@@ -259,16 +259,25 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Christiansburg",
     "Radford",
     "Floyd",
+    "Pembroke",
+    "Pulaski",
+    "Giles",
   ],
   "blacksburg": [
     "Christiansburg",
     "Radford",
     "Floyd",
+    "Pembroke",
+    "Pulaski",
+    "Giles",
   ],
   "christiansburg": [
     "Blacksburg",
     "Radford",
     "Floyd",
+    "Pembroke",
+    "Pulaski",
+    "Giles",
   ],
   "martinsville": [
     "Bassett",
@@ -277,6 +286,9 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Stuart",
     "Stanleytown",
     "Rocky Mount",
+    "Axton",
+    "Ridgeway",
+    "Fieldale",
   ],
   "roanoke-salem": [
     "Vinton",
@@ -289,6 +301,8 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Catawba",
     "Natural Bridge",
     "Moneta",
+    "Wirtz",
+    "Huddleston",
   ],
   "roanoke": [
     "Vinton",
@@ -301,6 +315,8 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Catawba",
     "Natural Bridge",
     "Moneta",
+    "Wirtz",
+    "Huddleston",
   ],
   "salem": [
     "Vinton",
@@ -313,6 +329,8 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Catawba",
     "Natural Bridge",
     "Moneta",
+    "Wirtz",
+    "Huddleston",
   ],
   "charlottesville": [
     "Crozet",
@@ -426,6 +444,8 @@ export const KNOWN_METROS: Record<
       "24153",
     ],
   },
+  "wirtz": { slug: "roanoke-salem", city: "Wirtz", state: "VA", zips: ["24184"] },
+  "huddleston": { slug: "roanoke-salem", city: "Huddleston", state: "VA", zips: ["24104"] },
   "lynchburg": {
     slug: "lynchburg",
     city: "Lynchburg",
@@ -457,6 +477,8 @@ export const KNOWN_METROS: Record<
     zips: ["24141", "24142", "24143"],
   },
   "floyd": { slug: "blacksburg-christiansburg", city: "Floyd", state: "VA", zips: ["24091"] },
+  "pembroke": { slug: "blacksburg-christiansburg", city: "Pembroke", state: "VA", zips: ["24136"] },
+  "pulaski": { slug: "blacksburg-christiansburg", city: "Pulaski", state: "VA", zips: ["24301"] },
   "blacksburg-christiansburg": {
     slug: "blacksburg-christiansburg",
     city: "Blacksburg",
