@@ -292,6 +292,24 @@ Deno.test("skills/pr-review/SKILL.md uses ### 🟡 Suggestions heading and not A
   );
 });
 
+Deno.test("skills/pr-review/SKILL.md clarifies AGENTS.md scope exemption and Antigravity-specific /learn command (#867)", async () => {
+  const prReviewPath = `${SKILLS_DIR}pr-review/SKILL.md`;
+  const text = await Deno.readTextFile(prReviewPath);
+
+  assertStringIncludes(
+    text,
+    "**Exception — `AGENTS.md` and `docs/cross-ai-rules.md` updates are never a scope violation.**",
+  );
+  assertStringIncludes(
+    text,
+    "`/learn` is a Google Antigravity-native command",
+  );
+  assertStringIncludes(
+    text,
+    "never expect or flag a missing `/learn` invocation",
+  );
+});
+
 Deno.test("skills/design-issue/SKILL.md contains absolute standing rule that skill never dispatches", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
