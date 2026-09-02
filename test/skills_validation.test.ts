@@ -160,6 +160,148 @@ Deno.test("skills/file-issue/SKILL.md contains the three-outcomes guard rule, po
   );
 });
 
+Deno.test("skills/file-issue/SKILL.md item 14 splits both-surfaces acceptance criteria by change kind and bans the hooks/lib path", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  // Structural change kind still names an installer per surface
+  assert(
+    text.includes("Structural change: one acceptance criterion per surface, naming the installer."),
+    "skills/file-issue/SKILL.md item 14 must keep the structural-change bullet naming an installer per surface",
+  );
+
+  // Content-only change kind names the resolution check instead of an installer
+  assert(
+    text.includes(
+      "Content-only change: one acceptance criterion per surface, naming the resolution check, not an installer.",
+    ),
+    "skills/file-issue/SKILL.md item 14 must add the content-only-change bullet naming the resolution check",
+  );
+  assert(
+    text.includes("needs no installer: `git pull` on `dev` makes it live on both surfaces"),
+    "skills/file-issue/SKILL.md item 14 must state that a content-only change needs no installer",
+  );
+
+  // A new supporting file inside an already-installed skill directory is content-only
+  assert(
+    text.includes(
+      "a new or existing supporting file inside an already-installed skill directory (e.g. adding `skills/fix-labels/labels.yaml` to the already-installed `fix-labels` skill)",
+    ),
+    "skills/file-issue/SKILL.md item 14 must classify a new supporting file in an already-installed skill directory as content-only",
+  );
+
+  // A brand-new hooks/lib/*.ts module consumed by an already-installed hook is content-only, not structural
+  assert(
+    text.includes(
+      "A brand-new `hooks/lib/*.ts` module consumed by an already-installed hook is **not** a new hook under this bullet",
+    ),
+    "skills/file-issue/SKILL.md item 14's structural bullet must disclaim a new hooks/lib/*.ts module as not a new hook",
+  );
+  assert(
+    text.includes(
+      "a new or existing shared `hooks/lib/*.ts` module consumed by an already-installed hook",
+    ),
+    "skills/file-issue/SKILL.md item 14's content-only bullet must classify a new hooks/lib/*.ts module as content-only",
+  );
+
+  // Skill case: two genuinely distinct symlinks, one criterion per surface as before
+  assert(
+    text.includes(
+      "For a **skill**, `~/.claude/skills/<skill>` and `~/.gemini/config/plugins/webjam-tasks/skills/<skill>` are two genuinely distinct symlinks, so the `## Acceptance criteria` section asserts, per surface, that the installed symlink still resolves into the canonical clone.",
+    ),
+    "skills/file-issue/SKILL.md item 14 must keep the skill content-only case as two distinct symlink assertions",
+  );
+
+  // Hook case: only one hook symlink, so the agy criterion asserts the hooks.json shim registration, not a second symlink
+  assert(
+    text.includes(
+      "For a **hook or a `hooks/lib/*.ts` module**, there is only one hook symlink (`~/.claude/hooks/<hook>.sh`)",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state that a hook or hooks/lib/*.ts module has only one hook symlink",
+  );
+  assert(
+    text.includes(
+      "for a `PreToolUse` or `PostToolUse` hook, which carries a `~/.gemini/config/hooks.json` shim registration, the agy criterion asserts that registration still targets that same `$HOME/.claude/hooks/` path",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state the agy criterion for a PreToolUse/PostToolUse hook content-only change asserts the hooks.json shim registration",
+  );
+
+  // Hook case: a SessionStart/Stop lifecycle hook carries NO agy registration at all (registering
+  // one there disables agy's entire hooks config), so the agy criterion asserts that absence as a
+  // deliberate fact rather than inventing a path or registration to assert instead.
+  assert(
+    text.includes(
+      "for a `SessionStart` or `Stop` hook, `~/.gemini/config/hooks.json` carries no registration for it at all and never can",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state that a SessionStart/Stop hook carries no agy hooks.json registration at all",
+  );
+  assert(
+    text.includes(
+      "registering either lifecycle event silently disables agy's entire hooks config (`docs/agy-hooks.md` finding 9)",
+    ),
+    "skills/file-issue/SKILL.md item 14 must cite docs/agy-hooks.md finding 9 for why lifecycle hooks are never registered with agy",
+  );
+  assert(
+    text.includes(
+      "so the agy criterion asserts that fact plainly: the hook has no `~/.gemini/config/hooks.json` registration, and the content change has no agy-side effect",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state the no-registration agy criterion wording for a SessionStart/Stop hook",
+  );
+  assert(
+    text.includes(
+      "Never invent an agy-side path or registration for a `SessionStart`/`Stop` hook to satisfy this criterion.",
+    ),
+    "skills/file-issue/SKILL.md item 14 must prohibit inventing an agy-side path or registration for a SessionStart/Stop hook",
+  );
+
+  // agy-only hooks: the mirror case on the Claude Code side. These are symlinked into
+  // ~/.claude/hooks/ like every other hook but are never registered in Claude Code's
+  // settings.json, so a bare symlink-resolution criterion would be true while implying a
+  // Claude-Code-side effect that cannot occur.
+  assert(
+    text.includes(
+      "except for a hook listed in `scripts/install-hooks.sh`'s `AGY_ONLY_PRE_TOOL_USE_HOOKS` array (`hooks/agy-model-guard.sh`, `hooks/block-agy-gmail-send-delete.sh`)",
+    ),
+    "skills/file-issue/SKILL.md item 14 must carve out the AGY_ONLY_PRE_TOOL_USE_HOOKS hooks from the Claude Code symlink-resolution criterion",
+  );
+  assert(
+    text.includes(
+      "is deliberately never registered in Claude Code's `settings.json`, because it depends on agy-native payload fields Claude Code's hook payload does not carry",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state why an agy-only hook carries no Claude Code settings.json registration",
+  );
+  assert(
+    text.includes(
+      "asserting only that the symlink resolves would be a true statement implying a Claude-Code-side effect that cannot occur",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state why a bare symlink assertion is hollow for an agy-only hook",
+  );
+  assert(
+    text.includes(
+      "the Claude Code criterion instead asserts that fact plainly: the hook has no Claude Code `settings.json` registration, and the content change has no Claude-Code-side effect",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state the no-registration Claude Code criterion wording for an agy-only hook",
+  );
+  assert(
+    text.includes(
+      "Never invent a Claude Code registration for an agy-only hook to satisfy this criterion.",
+    ),
+    "skills/file-issue/SKILL.md item 14 must prohibit inventing a Claude Code registration for an agy-only hook",
+  );
+
+  // Explicit prohibition on asserting a ~/.claude/hooks/lib/ path
+  assert(
+    text.includes("Never assert a `~/.claude/hooks/lib/` path."),
+    "skills/file-issue/SKILL.md item 14 must prohibit asserting a ~/.claude/hooks/lib/ path",
+  );
+  assert(
+    text.includes(
+      "`hooks/lib/` is never installed by `scripts/install-hooks.sh`, so that path does not exist",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state that hooks/lib/ is never installed and the path does not exist",
+  );
+});
+
 Deno.test("skills/file-issue/SKILL.md contains the issue titles rule for PM audience, skill/feature prefix, and Epic citation (#869)", async () => {
   const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
   const text = await Deno.readTextFile(fileIssuePath);
