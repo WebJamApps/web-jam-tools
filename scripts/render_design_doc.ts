@@ -35,6 +35,16 @@ export function parseInlineMarkdown(text: string): string {
     return `%%CODESPAN${idx}%%`;
   });
 
+  const svgBlocks: string[] = [];
+  placeholderText = placeholderText.replace(
+    /<svg[\s\S]*?<\/svg>/gi,
+    (match) => {
+      const idx = svgBlocks.length;
+      svgBlocks.push(match);
+      return `%%SVGBLOCK${idx}%%`;
+    },
+  );
+
   placeholderText = escapeHtml(placeholderText);
 
   // Links: [text](url)
@@ -83,6 +93,14 @@ export function parseInlineMarkdown(text: string): string {
     },
   );
 
+  // Restore SVG blocks
+  placeholderText = placeholderText.replace(
+    /%%SVGBLOCK(\d+)%%/g,
+    (_match, idxStr) => {
+      return svgBlocks[parseInt(idxStr, 10)];
+    },
+  );
+
   return placeholderText;
 }
 
@@ -96,15 +114,29 @@ export function renderDesignDoc(
   const lines = markdownContent.split(/\r?\n/);
 
   let documentTitle = fallbackTitle;
+  let version = "";
+  let revised = "";
   const tocEntries: Array<{ title: string; slug: string }> = [];
   const usedSlugs = new Set<string>();
 
-  // Pass 1: Extract document title and H2 TOC entries
+  // Pass 1: Extract document title, version/revised declarations, and H2 TOC entries
+  let seenFirstH2 = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
+    if (!seenFirstH2) {
+      const vMatch = line.match(/^\*\*Version:\*\*\s*(.+)$/i);
+      if (vMatch && !version) {
+        version = vMatch[1].trim();
+      }
+      const rMatch = line.match(/^\*\*Revised:\*\*\s*(.+)$/i);
+      if (rMatch && !revised) {
+        revised = rMatch[1].trim();
+      }
+    }
     if (line.startsWith("# ") && documentTitle === fallbackTitle) {
       documentTitle = line.substring(2).trim();
     } else if (line.startsWith("## ")) {
+      seenFirstH2 = true;
       const headingText = line.substring(3).trim();
       const cleanTitle = headingText
         .replace(/[*_`[\]]/g, "")
@@ -124,7 +156,13 @@ export function renderDesignDoc(
   // Generate TOC HTML
   let tocHtml = "";
   if (tocEntries.length > 0) {
-    tocHtml = `<nav class="toc">\n  <h2>Sections</h2>\n  <ul>\n`;
+    tocHtml =
+      `<button type="button" class="nav-restore-btn" id="nav-restore-btn" aria-label="Restore section navigation" title="Restore section navigation">▶ Sections</button>\n` +
+      `<nav class="toc">\n` +
+      `  <div class="toc-header">\n` +
+      `    <h2>Sections</h2>\n` +
+      `    <button type="button" class="nav-collapse-btn" id="nav-collapse-btn" aria-label="Collapse section navigation" title="Collapse section navigation">◀</button>\n` +
+      `  </div>\n  <ul>\n`;
     for (const entry of tocEntries) {
       tocHtml += `    <li><a href="#${entry.slug}">${escapeHtml(entry.title)}</a></li>\n`;
     }
@@ -136,6 +174,7 @@ export function renderDesignDoc(
   let inAppendix = false;
   let inAppendixDetails = false;
   let h2Count = 0;
+  let hasRenderedHeader = false;
 
   let i = 0;
   while (i < lines.length) {
@@ -162,6 +201,21 @@ export function renderDesignDoc(
       continue;
     }
 
+    // Raw SVG block
+    if (line.trim().startsWith("<svg")) {
+      const svgLines: string[] = [];
+      while (i < lines.length) {
+        svgLines.push(lines[i]);
+        if (lines[i].includes("</svg>")) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      bodyHtmlParts.push(svgLines.join("\n"));
+      continue;
+    }
+
     // Headings
     if (line.startsWith("#")) {
       const match = line.match(/^(#{1,6})\s+(.*)$/);
@@ -170,8 +224,37 @@ export function renderDesignDoc(
         const text = match[2].trim();
 
         if (level === 1) {
-          bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text)}</h1>`);
+          hasRenderedHeader = true;
+          if (version || revised) {
+            let metaHtml = `<div class="doc-version-line">\n`;
+            if (version) {
+              metaHtml += `    <span class="doc-version">Version: ${escapeHtml(version)}</span>\n`;
+            }
+            if (revised) {
+              metaHtml += `    <span class="doc-revised">Revised: ${escapeHtml(revised)}</span>\n`;
+            }
+            metaHtml += `  </div>`;
+            bodyHtmlParts.push(
+              `<header class="doc-header">\n  <h1>${parseInlineMarkdown(text)}</h1>\n  ${metaHtml}\n</header>`,
+            );
+          } else {
+            bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text)}</h1>`);
+          }
         } else if (level === 2) {
+          if (!hasRenderedHeader && (version || revised)) {
+            hasRenderedHeader = true;
+            let metaHtml = `<div class="doc-version-line">\n`;
+            if (version) {
+              metaHtml += `    <span class="doc-version">Version: ${escapeHtml(version)}</span>\n`;
+            }
+            if (revised) {
+              metaHtml += `    <span class="doc-revised">Revised: ${escapeHtml(revised)}</span>\n`;
+            }
+            metaHtml += `  </div>`;
+            bodyHtmlParts.push(
+              `<header class="doc-header">\n  <h1>${escapeHtml(documentTitle)}</h1>\n  ${metaHtml}\n</header>`,
+            );
+          }
           if (inAppendixDetails) {
             bodyHtmlParts.push(`</div>\n</details>`);
             inAppendixDetails = false;
@@ -306,8 +389,18 @@ export function renderDesignDoc(
       !(lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) &&
       !lines[i].trim().startsWith(">") &&
       !lines[i].trim().match(/^([-*+])\s+/) &&
-      !lines[i].trim().match(/^(\d+)\.\s+/)
+      !lines[i].trim().match(/^(\d+)\.\s+/) &&
+      !lines[i].trim().startsWith("<svg")
     ) {
+      const trimmed = lines[i].trim();
+      if (
+        h2Count === 0 &&
+        (/^\*\*Version:\*\*\s*/i.test(trimmed) ||
+          /^\*\*Revised:\*\*\s*/i.test(trimmed))
+      ) {
+        i++;
+        continue;
+      }
       paragraphLines.push(lines[i]);
       i++;
     }
@@ -401,6 +494,26 @@ export function renderDesignDoc(
       min-width: 0;
     }
 
+    .doc-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .doc-header h1 {
+      margin: 0;
+    }
+
+    .doc-version-line {
+      display: flex;
+      gap: 16px;
+      font-size: 0.95rem;
+      color: var(--text-color);
+      opacity: 0.8;
+    }
+
     .table-wrapper, pre {
       overflow-x: auto;
       max-width: 100%;
@@ -408,18 +521,22 @@ export function renderDesignDoc(
 
     table {
       border-collapse: collapse;
-      width: 100%;
       margin: 1rem 0;
+      width: max-content;
+      max-width: none;
     }
 
     th, td {
       border: 1px solid var(--border-color);
       padding: 8px 12px;
       text-align: left;
+      max-width: 500px;
+      overflow-wrap: break-word;
     }
 
     th {
       background-color: var(--toc-bg);
+      white-space: nowrap;
     }
 
     pre {
@@ -471,6 +588,43 @@ export function renderDesignDoc(
       display: none;
     }
 
+    .toc-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .toc-header h2 {
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin: 0;
+      color: var(--text-color);
+      opacity: 0.8;
+    }
+
+    .nav-collapse-btn {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-color);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      opacity: 0.7;
+      line-height: 1;
+    }
+
+    .nav-collapse-btn:hover {
+      opacity: 1;
+      background-color: var(--code-bg);
+    }
+
+    .nav-restore-btn {
+      display: none;
+    }
+
     a {
       color: var(--link-color);
       text-decoration: none;
@@ -495,6 +649,33 @@ export function renderDesignDoc(
         gap: 40px;
         align-items: start;
       }
+      .layout.nav-collapsed {
+        display: block;
+      }
+      .layout.nav-collapsed nav.toc {
+        display: none;
+      }
+      .layout.nav-collapsed .nav-restore-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        z-index: 100;
+        background-color: var(--toc-bg);
+        color: var(--text-color);
+        border: 1px solid var(--toc-border);
+        border-radius: 6px;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 500;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      }
+      .layout.nav-collapsed .nav-restore-btn:hover {
+        background-color: var(--code-bg);
+      }
       nav.toc {
         display: block;
         position: sticky;
@@ -505,15 +686,6 @@ export function renderDesignDoc(
         border: 1px solid var(--toc-border);
         border-radius: 6px;
         padding: 20px;
-      }
-      nav.toc h2 {
-        font-size: 1rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-top: 0;
-        margin-bottom: 12px;
-        color: var(--text-color);
-        opacity: 0.8;
       }
       nav.toc ul {
         list-style: none;
@@ -536,6 +708,23 @@ export function renderDesignDoc(
       </main>
     </div>
   </div>
+  <script>
+    (function() {
+      var collapseBtn = document.getElementById("nav-collapse-btn");
+      var restoreBtn = document.getElementById("nav-restore-btn");
+      var layout = document.querySelector(".layout");
+      if (collapseBtn && layout) {
+        collapseBtn.addEventListener("click", function() {
+          layout.classList.add("nav-collapsed");
+        });
+      }
+      if (restoreBtn && layout) {
+        restoreBtn.addEventListener("click", function() {
+          layout.classList.remove("nav-collapsed");
+        });
+      }
+    })();
+  </script>
 </body>
 </html>
 `;
