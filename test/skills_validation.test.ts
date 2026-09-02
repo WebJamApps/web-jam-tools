@@ -254,6 +254,41 @@ Deno.test("skills/file-issue/SKILL.md item 14 splits both-surfaces acceptance cr
     "skills/file-issue/SKILL.md item 14 must prohibit inventing an agy-side path or registration for a SessionStart/Stop hook",
   );
 
+  // agy-only hooks: the mirror case on the Claude Code side. These are symlinked into
+  // ~/.claude/hooks/ like every other hook but are never registered in Claude Code's
+  // settings.json, so a bare symlink-resolution criterion would be true while implying a
+  // Claude-Code-side effect that cannot occur.
+  assert(
+    text.includes(
+      "except for a hook listed in `scripts/install-hooks.sh`'s `AGY_ONLY_PRE_TOOL_USE_HOOKS` array (`hooks/agy-model-guard.sh`, `hooks/block-agy-gmail-send-delete.sh`)",
+    ),
+    "skills/file-issue/SKILL.md item 14 must carve out the AGY_ONLY_PRE_TOOL_USE_HOOKS hooks from the Claude Code symlink-resolution criterion",
+  );
+  assert(
+    text.includes(
+      "is deliberately never registered in Claude Code's `settings.json`, because it depends on agy-native payload fields Claude Code's hook payload does not carry",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state why an agy-only hook carries no Claude Code settings.json registration",
+  );
+  assert(
+    text.includes(
+      "asserting only that the symlink resolves would be a true statement implying a Claude-Code-side effect that cannot occur",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state why a bare symlink assertion is hollow for an agy-only hook",
+  );
+  assert(
+    text.includes(
+      "the Claude Code criterion instead asserts that fact plainly: the hook has no Claude Code `settings.json` registration, and the content change has no Claude-Code-side effect",
+    ),
+    "skills/file-issue/SKILL.md item 14 must state the no-registration Claude Code criterion wording for an agy-only hook",
+  );
+  assert(
+    text.includes(
+      "Never invent a Claude Code registration for an agy-only hook to satisfy this criterion.",
+    ),
+    "skills/file-issue/SKILL.md item 14 must prohibit inventing a Claude Code registration for an agy-only hook",
+  );
+
   // Explicit prohibition on asserting a ~/.claude/hooks/lib/ path
   assert(
     text.includes("Never assert a `~/.claude/hooks/lib/` path."),
