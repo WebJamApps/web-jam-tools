@@ -160,6 +160,30 @@ Deno.test("skills/file-issue/SKILL.md contains the three-outcomes guard rule, po
   );
 });
 
+Deno.test("skills/file-issue/SKILL.md contains the issue titles rule for PM audience, skill/feature prefix, and Epic citation (#869)", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  assert(
+    text.includes(
+      "Issue Titles for Project Manager Audience with Skill/Feature Prefix and Epic Citation",
+    ),
+    "skills/file-issue/SKILL.md must contain the numbered rule 'Issue Titles for Project Manager Audience with Skill/Feature Prefix and Epic Citation' in Before you file",
+  );
+  assert(
+    text.includes("Written for a Project Manager Audience"),
+    "skills/file-issue/SKILL.md must require titles written for a project manager audience",
+  );
+  assert(
+    text.includes("Skill or Feature Scope Prefix"),
+    "skills/file-issue/SKILL.md must require skill or feature prefix where applicable",
+  );
+  assert(
+    text.includes("Link/Cite Parent Epic"),
+    "skills/file-issue/SKILL.md must require linking and citing parent Epic where applicable",
+  );
+});
+
 Deno.test("skills/design-issue/SKILL.md contains the both-surfaces rule and refusal table entry", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
