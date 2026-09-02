@@ -6,9 +6,14 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
   analyzeIssueStaleness,
+  checkDecisionAndVerbReconciliation,
   checkDesignReference,
   checkOpenQuestionsAndTbd,
   checkScopeContradictions,
+  defaultFetchSubIssues,
+  extractDecisionsFromDoc,
+  extractDocumentIssueTargets,
+  extractEndpointsFromDoc,
   extractOutOfScopeItems,
   formatStaleBodiesReport,
   type IssueData,
@@ -495,4 +500,303 @@ Deno.test("runStaleBodiesCli works with positional arguments and custom repo", a
   assertEquals(exitCode, 0);
   assertStringIncludes(logs[0], "Scanned 1 issue(s)");
   assertStringIncludes(logs[0], 'Issue WebJamApps/JaMmusic#50 "JaMmusic task": IN SYNC');
+});
+
+Deno.test("extractDocumentIssueTargets extracts plan table rows, issue tables, and Epic citations", () => {
+  const doc = `
+# Sample Doc
+
+## Revision History
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-09-01 | [Epic #737](https://github.com/WebJamApps/web-jam-tools/issues/737) | Initial |
+
+## Proposed Plan Table
+| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |
+|---|---|---|---|---|---|---|---|
+| 1 | [#888](https://github.com/WebJamApps/web-jam-tools/issues/888) | Epic #737 | Flash High | Medium | web-jam-tools | npm test | PR merges |
+
+### The Filed Issues
+| # | Title | Issue Link | Model Tier |
+|---|---|---|---|
+| **20** | Endpoint task | [web-jam-back#1052](https://github.com/WebJamApps/web-jam-back/issues/1052) | Flash High |
+
+Part of https://github.com/WebJamApps/web-jam-tools/issues/875
+`;
+
+  const extracted = extractDocumentIssueTargets(doc);
+  assertEquals(extracted.epics.some((e) => e.number === 737), true);
+  assertEquals(extracted.epics.some((e) => e.number === 875), true);
+  assertEquals(extracted.issues.some((i) => i.number === 888), true);
+  assertEquals(
+    extracted.issues.some((i) => i.number === 1052 && i.repo === "WebJamApps/web-jam-back"),
+    true,
+  );
+});
+
+Deno.test("defaultFetchSubIssues queries sub_issues API via CommandRunner", async () => {
+  const mockRunner: CommandRunner = (args: string[]) => {
+    assertEquals(args[0], "api");
+    assertEquals(args[1], "repos/WebJamApps/web-jam-tools/issues/737/sub_issues");
+    return Promise.resolve({
+      code: 0,
+      stdout: JSON.stringify([
+        { number: 885, repository: { full_name: "WebJamApps/web-jam-tools" } },
+        { number: 888, repository: { full_name: "WebJamApps/web-jam-tools" } },
+      ]),
+      stderr: "",
+    });
+  };
+
+  const subs = await defaultFetchSubIssues("WebJamApps/web-jam-tools", 737, mockRunner);
+  assertEquals(subs.length, 2);
+  assertEquals(subs[0], { repo: "WebJamApps/web-jam-tools", number: 885 });
+  assertEquals(subs[1], { repo: "WebJamApps/web-jam-tools", number: 888 });
+});
+
+Deno.test("extractDecisionsFromDoc and extractEndpointsFromDoc extract decisions and endpoints with verbs", () => {
+  const doc = `
+# Feature Design
+
+## Appendix C — Decision record
+| # | Decision | Chosen Option / Outcome | Rejected alternatives |
+|---|---|---|---|
+| D-17 | Hard Deletion and HTTP 404 on Stale Report Takedown | When a gig is booked, DELETE /outreach/report/:weekend removes the record from MongoDB, causing subsequent GET /outreach/report/:weekend to return HTTP 404. | Soft delete |
+
+## Architecture
+Adds GET and DELETE /outreach/report/:weekend endpoints, plus POST /outreach/report.
+`;
+
+  const decisions = extractDecisionsFromDoc(doc);
+  assertEquals(decisions.length, 1);
+  assertEquals(decisions[0].id, "D-17");
+  assertEquals(decisions[0].verbs.includes("DELETE"), true);
+  assertEquals(decisions[0].verbs.includes("GET"), true);
+
+  const endpoints = extractEndpointsFromDoc(doc, decisions);
+  assertEquals(endpoints.has("/outreach/report/:weekend"), true);
+  const spec = endpoints.get("/outreach/report/:weekend")!;
+  assertEquals(spec.verbs.has("GET"), true);
+  assertEquals(spec.verbs.has("DELETE"), true);
+});
+
+Deno.test("checkDecisionAndVerbReconciliation flags sub-issue missing newly approved DELETE verb and takedown criteria", () => {
+  const decisions = [
+    {
+      id: "D-17",
+      decision: "Hard Deletion and HTTP 404 on Stale Report Takedown",
+      outcome:
+        "When a gig is booked, DELETE /outreach/report/:weekend removes the record from MongoDB, causing subsequent GET to return HTTP 404.",
+      endpoints: ["/outreach/report/:weekend"],
+      verbs: ["DELETE", "GET"],
+    },
+  ];
+
+  const endpoints = new Map([
+    ["/outreach/report/:weekend", {
+      endpoint: "/outreach/report/:weekend",
+      verbs: new Set(["GET", "DELETE"]),
+      sourceDecisions: ["Decision D-17"],
+    }],
+  ]);
+
+  // Stale issue: titled only with GET, AC only covers GET
+  const staleIssue: IssueData = {
+    number: 1052,
+    title:
+      "model/outreach: serve rendered outreach HTML run reports via GET /outreach/report/:weekend endpoint",
+    body: `Child of [web-jam-tools#875](https://github.com/WebJamApps/web-jam-tools/issues/875)
+
+## What this builds
+1. Adds GET /outreach/report/:weekend endpoint returning HTML report.
+
+## Acceptance criteria
+1. Calling GET /outreach/report/2026-10-16-to-2026-10-18 returns HTTP 200 with HTML.
+`,
+  };
+
+  const violations = checkDecisionAndVerbReconciliation(staleIssue, decisions, endpoints);
+  assertEquals(violations.length >= 2, true);
+
+  const verbViolations = violations.filter((v) => v.type === "verb-reconciliation");
+  assertEquals(verbViolations.length >= 1, true);
+  assertStringIncludes(verbViolations[0].message, "missing HTTP method");
+  assertStringIncludes(verbViolations[0].message, "DELETE");
+
+  const decViolations = violations.filter((v) => v.type === "decision-reconciliation");
+  assertEquals(decViolations.length >= 1, true);
+  assertStringIncludes(decViolations[0].message, "Decision D-17");
+  assertStringIncludes(decViolations[0].detail ?? "", "Reconciliation guidance");
+});
+
+Deno.test("checkDecisionAndVerbReconciliation passes cleanly when verbs and criteria match decisions", () => {
+  const decisions = [
+    {
+      id: "D-17",
+      decision: "Hard Deletion and HTTP 404 on Stale Report Takedown",
+      outcome:
+        "When a gig is booked, DELETE /outreach/report/:weekend removes the record from MongoDB, causing subsequent GET to return HTTP 404.",
+      endpoints: ["/outreach/report/:weekend"],
+      verbs: ["DELETE", "GET"],
+    },
+  ];
+
+  const endpoints = new Map([
+    ["/outreach/report/:weekend", {
+      endpoint: "/outreach/report/:weekend",
+      verbs: new Set(["GET", "DELETE"]),
+      sourceDecisions: ["Decision D-17"],
+    }],
+  ]);
+
+  // Reconciled issue: title includes GET and DELETE, AC covers DELETE and 404 takedown
+  const inSyncIssue: IssueData = {
+    number: 1052,
+    title:
+      "model/outreach: serve and delete rendered outreach HTML run reports via GET and DELETE /outreach/report/:weekend endpoints",
+    body: `Child of [web-jam-tools#875](https://github.com/WebJamApps/web-jam-tools/issues/875)
+
+## What this builds
+1. Adds GET /outreach/report/:weekend endpoint returning HTML report.
+2. Adds DELETE /outreach/report/:weekend endpoint for report takedown.
+
+## Acceptance criteria
+1. Calling GET /outreach/report/2026-10-16-to-2026-10-18 returns HTTP 200 with HTML.
+2. Calling DELETE /outreach/report/2026-10-16-to-2026-10-18 removes the report from MongoDB, subsequent requests return HTTP 404 Not Found.
+`,
+  };
+
+  const violations = checkDecisionAndVerbReconciliation(inSyncIssue, decisions, endpoints);
+  assertEquals(violations.length, 0);
+});
+
+Deno.test("checkDesignReference accepts Child of and Part of parent epic citations for sub-issues", async () => {
+  const childOfBody =
+    `Child of [web-jam-tools#875](https://github.com/WebJamApps/web-jam-tools/issues/875) ("book-gig skill phase 2 enhancements (Epic)").
+
+## What this builds
+1. Build child component.
+`;
+
+  const partOfBody = `Part of https://github.com/WebJamApps/web-jam-tools/issues/737
+
+## What this builds
+1. Build child sub-issue.
+`;
+
+  const reasonsChild = await checkDesignReference(childOfBody, FIXTURE_DESIGN_DOC);
+  assertEquals(reasonsChild.length, 0);
+
+  const reasonsPart = await checkDesignReference(partOfBody, FIXTURE_DESIGN_DOC);
+  assertEquals(reasonsPart.length, 0);
+});
+
+Deno.test("runStaleBodiesCli <doc.md> detects stale child sub-issues without --issues flag", async () => {
+  const docWithEpic = `
+# Feature Design Doc
+
+## Revision History
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-09-01 | [book-gig phase 2](https://github.com/WebJamApps/web-jam-tools/issues/875) | Initial |
+
+## Appendix C — Decision Record
+| # | Decision | Outcome | Rejected alternatives |
+|---|---|---|---|
+| D-17 | Hard Deletion on Takedown | DELETE /outreach/report/:weekend removes report returning 404 | Soft banner |
+
+## Architecture
+Endpoints: GET and DELETE /outreach/report/:weekend
+`;
+
+  const staleSubIssue: IssueData = {
+    number: 1052,
+    title: "model/outreach: serve HTML run reports via GET /outreach/report/:weekend",
+    body: `Child of [web-jam-tools#875](https://github.com/WebJamApps/web-jam-tools/issues/875)
+
+## What this builds
+1. Adds GET /outreach/report/:weekend.
+
+## Acceptance criteria
+1. GET /outreach/report/2026-10-16 returns 200.
+`,
+  };
+
+  const logs: string[] = [];
+  const exitCode = await runStaleBodiesCli(["/path/to/doc.md"], {
+    readFile: () => Promise.resolve(docWithEpic),
+    fileExists: () => Promise.resolve(true),
+    fetchSubIssues: (_repo, epicNum) => {
+      assertEquals(epicNum, 875);
+      return Promise.resolve([{ repo: "WebJamApps/web-jam-back", number: 1052 }]);
+    },
+    fetchIssue: (repo, num) => {
+      assertEquals(repo, "WebJamApps/web-jam-back");
+      assertEquals(num, 1052);
+      return Promise.resolve(staleSubIssue);
+    },
+    log: (msg) => logs.push(msg),
+  });
+
+  assertEquals(exitCode, 0);
+  assertStringIncludes(logs[0], "Issue WebJamApps/web-jam-back#1052");
+  assertStringIncludes(logs[0], "STALE");
+  assertStringIncludes(logs[0], "[verb-reconciliation]");
+  assertStringIncludes(logs[0], "DELETE");
+  assertStringIncludes(logs[0], "Summary: 0 issue(s) in sync, 1 issue(s) stale.");
+});
+
+Deno.test("runStaleBodiesCli <doc.md> reports zero sub-issue violations when all child sub-issues match decisions", async () => {
+  const docWithEpic = `
+# Feature Design Doc
+
+## Revision History
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-09-01 | [book-gig phase 2](https://github.com/WebJamApps/web-jam-tools/issues/875) | Initial |
+
+## Appendix C — Decision Record
+| # | Decision | Outcome | Rejected alternatives |
+|---|---|---|---|
+| D-17 | Hard Deletion on Takedown | DELETE /outreach/report/:weekend removes report returning 404 | Soft banner |
+
+## Architecture
+Endpoints: GET and DELETE /outreach/report/:weekend
+`;
+
+  const reconciledSubIssue: IssueData = {
+    number: 1052,
+    title:
+      "model/outreach: serve and delete HTML run reports via GET and DELETE /outreach/report/:weekend",
+    body: `Child of [web-jam-tools#875](https://github.com/WebJamApps/web-jam-tools/issues/875)
+
+## What this builds
+1. Adds GET and DELETE /outreach/report/:weekend endpoints.
+
+## Acceptance criteria
+1. Calling GET /outreach/report/2026-10-16 returns 200.
+2. Calling DELETE /outreach/report/2026-10-16 removes the record, subsequent GET returns 404.
+`,
+  };
+
+  const logs: string[] = [];
+  const exitCode = await runStaleBodiesCli(["/path/to/doc.md"], {
+    readFile: () => Promise.resolve(docWithEpic),
+    fileExists: () => Promise.resolve(true),
+    fetchSubIssues: (_repo, epicNum) => {
+      assertEquals(epicNum, 875);
+      return Promise.resolve([{ repo: "WebJamApps/web-jam-back", number: 1052 }]);
+    },
+    fetchIssue: (_repo, num) => {
+      assertEquals(num, 1052);
+      return Promise.resolve(reconciledSubIssue);
+    },
+    log: (msg) => logs.push(msg),
+  });
+
+  assertEquals(exitCode, 0);
+  assertStringIncludes(logs[0], "Issue WebJamApps/web-jam-back#1052");
+  assertStringIncludes(logs[0], "IN SYNC");
+  assertStringIncludes(logs[0], "Decisions & Verbs: In sync");
+  assertStringIncludes(logs[0], "Summary: 1 issue(s) in sync, 0 issue(s) stale.");
 });
