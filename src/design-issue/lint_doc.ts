@@ -506,6 +506,174 @@ function validateLoadBearingPremisesTable(
 }
 
 /**
+ * Validates the `## Revision History` table:
+ * - Table must have at least one data row
+ * - Table must have a 'Version' column and a 'Date' column
+ * - Every version must parse as a semantic version (MAJOR.MINOR.PATCH)
+ * - Every date must parse as an ISO date (YYYY-MM-DD)
+ * - Rows must be ordered oldest to newest (not newest-first)
+ */
+function validateRevisionHistoryTable(
+  tableLines: Array<{ line: string; lineNum: number }>,
+  headingLineNum: number,
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+  const rows = tableLines
+    .map((entry) => ({ ...entry, cells: splitTableRow(entry.line) }))
+    .filter((entry) => entry.cells.length > 0);
+
+  const headerRow = rows.find((r) => !isTableSeparatorRow(r.cells));
+  if (!headerRow) {
+    violations.push({
+      rule: "invalid-revision-history-table",
+      message: "Design document's '## Revision History' section has no table or data rows.",
+      line: headingLineNum,
+      lineContent: "",
+    });
+    return violations;
+  }
+
+  const versionColIdx = headerRow.cells.findIndex((c) => /^version$/i.test(stripCellDecoration(c)));
+  if (versionColIdx === -1) {
+    violations.push({
+      rule: "invalid-revision-history-table",
+      message: "Revision History table lacks a 'Version' column.",
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+  }
+
+  const dateColIdx = headerRow.cells.findIndex((c) => /^date$/i.test(stripCellDecoration(c)));
+  if (dateColIdx === -1) {
+    violations.push({
+      rule: "invalid-revision-history-table",
+      message: "Revision History table lacks a 'Date' column.",
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+  }
+
+  const dataRows = rows.filter((r) => r !== headerRow && !isTableSeparatorRow(r.cells));
+  if (dataRows.length === 0) {
+    violations.push({
+      rule: "invalid-revision-history-table",
+      message: "Revision History table has no data rows.",
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+    return violations;
+  }
+
+  if (versionColIdx === -1 || dateColIdx === -1) {
+    return violations;
+  }
+
+  const SEMVER_REGEX =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+  const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+  function parseSemver(v: string): [number, number, number] | null {
+    const m = v.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)/);
+    if (!m) return null;
+    return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+  }
+
+  function compareSemver(
+    a: [number, number, number],
+    b: [number, number, number],
+  ): number {
+    if (a[0] !== b[0]) return a[0] - b[0];
+    if (a[1] !== b[1]) return a[1] - b[1];
+    return a[2] - b[2];
+  }
+
+  const parsedRows: Array<{
+    semver: [number, number, number] | null;
+    rawVersion: string;
+    rawDate: string;
+    validDate: boolean;
+    row: (typeof dataRows)[0];
+  }> = [];
+
+  for (const row of dataRows) {
+    const rawVersion = stripCellDecoration(row.cells[versionColIdx] ?? "");
+    const rawDate = stripCellDecoration(row.cells[dateColIdx] ?? "");
+
+    if (!SEMVER_REGEX.test(rawVersion)) {
+      violations.push({
+        rule: "invalid-revision-history-table",
+        message:
+          `Revision History table carries an unparseable version: "${rawVersion}" (expected semantic version MAJOR.MINOR.PATCH).`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+
+    const isValidDate = ISO_DATE_REGEX.test(rawDate) && !isNaN(Date.parse(rawDate));
+    if (!isValidDate) {
+      violations.push({
+        rule: "invalid-revision-history-table",
+        message:
+          `Revision History table carries an unparseable date: "${rawDate}" (expected ISO date YYYY-MM-DD).`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+
+    parsedRows.push({
+      semver: parseSemver(rawVersion),
+      rawVersion,
+      rawDate,
+      validDate: isValidDate,
+      row,
+    });
+  }
+
+  // Check ordering: rows must run oldest to newest (not newest-first)
+  let orderViolationReported = false;
+  for (let k = 0; k < parsedRows.length - 1; k++) {
+    const current = parsedRows[k];
+    const next = parsedRows[k + 1];
+
+    if (current.semver && next.semver) {
+      const cmp = compareSemver(current.semver, next.semver);
+      if (cmp > 0) {
+        violations.push({
+          rule: "invalid-revision-history-table",
+          message: `Revision History table lists rows newest-first: row ${
+            k + 1
+          } (${current.rawVersion}) is newer than row ${
+            k + 2
+          } (${next.rawVersion}); rows must run oldest to newest.`,
+          line: next.row.lineNum,
+          lineContent: next.row.line,
+        });
+        orderViolationReported = true;
+        break;
+      }
+    }
+
+    if (!orderViolationReported && current.validDate && next.validDate) {
+      if (current.rawDate > next.rawDate) {
+        violations.push({
+          rule: "invalid-revision-history-table",
+          message: `Revision History table lists rows newest-first: date in row ${
+            k + 1
+          } (${current.rawDate}) is newer than row ${
+            k + 2
+          } (${next.rawDate}); rows must run oldest to newest.`,
+          line: next.row.lineNum,
+          lineContent: next.row.line,
+        });
+        break;
+      }
+    }
+  }
+
+  return violations;
+}
+
+/**
  * Checks a design document markdown string against the skill body rules:
  * 1. Fails if the document contains a status line (e.g., Status: / status: ...).
  * 2. Fails if the document contains a gate or approval state (e.g., Gate 1, Gate 2 approval state).
@@ -517,6 +685,8 @@ function validateLoadBearingPremisesTable(
  *    a Proof cell that is empty, "N/A", or hedged (web-jam-tools#815).
  * 8. Fails if the document names a target issue it was invoked on but carries no verbatim
  *    blockquote of that issue's directive anywhere after naming it (web-jam-tools#815).
+ * 9. Fails if a '## Revision History' table is present and lacks a 'Version' or 'Date' column, has
+ *    no data rows, carries an unparseable version or date, or lists rows newest-first (web-jam-tools#892).
  */
 export function lintDesignDoc(content: string, docPath: string = ""): LintDocResult {
   const violations: LintViolation[] = [];
@@ -529,6 +699,10 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
   let inLoadBearingPremisesSection = false;
   let sawTargetIssueMarker = false;
   let sawBlockquoteAfterMarker = false;
+  let inRevisionHistorySection = false;
+  let revisionHistoryHeadingFound = false;
+  let revisionHistoryHeadingLineNum = 0;
+  const revisionHistoryTableLines: Array<{ line: string; lineNum: number }> = [];
 
   // Patterns for rules
   const statusLineRegex =
@@ -579,6 +753,7 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
   const standaloneDecisionLabelRegexes = [/\b[DR]-\d+\b/g];
 
   const bothSurfacesHeadingRegex = /^\s*#{1,6}\s+Both surfaces\b/i;
+  const revisionHistoryHeadingRegex = /^\s*#{1,6}\s+Revision\s+History\s*$/i;
   const anyHeadingRegex = /^\s*#{1,6}\s+/;
 
   for (let i = 0; i < lines.length; i++) {
@@ -610,6 +785,19 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
       inLoadBearingPremisesSection = false;
     } else if (inLoadBearingPremisesSection && line.trim().startsWith("|")) {
       loadBearingPremisesTableLines.push({ line, lineNum });
+    }
+
+    // Track the '## Revision History' section (web-jam-tools#892): on, from its heading, until the
+    // next heading of any level (or end of document). Table rows collected while inside it are
+    // validated after this loop by validateRevisionHistoryTable.
+    if (revisionHistoryHeadingRegex.test(line)) {
+      revisionHistoryHeadingFound = true;
+      revisionHistoryHeadingLineNum = lineNum;
+      inRevisionHistorySection = true;
+    } else if (inRevisionHistorySection && anyHeadingRegex.test(line)) {
+      inRevisionHistorySection = false;
+    } else if (inRevisionHistorySection && line.trim().startsWith("|")) {
+      revisionHistoryTableLines.push({ line, lineNum });
     }
 
     // A line self-identifying a cited issue as the target this run was invoked on (see
@@ -664,7 +852,15 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
     }
 
     // 4. Revision narration check
+    const isRevHistoryHeading = revisionHistoryHeadingRegex.test(line);
+    const isRevHistoryTableLine = inRevisionHistorySection && line.trim().startsWith("|");
     for (const regex of revisionNarrationRegexes) {
+      if (regex.source.includes("revision\\s+history")) {
+        // Narrowed: ## Revision History heading and its table are permitted (web-jam-tools#892)
+        if (isRevHistoryHeading || isRevHistoryTableLine) {
+          continue;
+        }
+      }
       const match = line.match(regex);
       if (match) {
         violations.push({
@@ -736,6 +932,16 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
       message:
         "Design document names a target issue it was invoked on but carries no verbatim blockquote of that issue's directive lines",
     });
+  }
+
+  // 9. Check Revision History table if section is present (web-jam-tools#892)
+  if (revisionHistoryHeadingFound) {
+    violations.push(
+      ...validateRevisionHistoryTable(
+        revisionHistoryTableLines,
+        revisionHistoryHeadingLineNum,
+      ),
+    );
   }
 
   return {
