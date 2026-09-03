@@ -61,7 +61,7 @@ An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
    - **Native dependencies**: Query `blocked_by` dependencies via API:
      ```bash
      gh api repos/WebJamApps/<Repo>/issues/<num>/dependencies/blocked_by \
-       --jq '.[] | select(.state == "OPEN") | "\(.repository.full_name)#\(.number) \(.state) — \(.title)"'
+       --jq '.[] | select(.state == "open") | "\(.repository.full_name)#\(.number) \(.state) — \(.title)"'
      ```
      Native dependencies are the canonical and single source of truth for issue-to-issue blocking. Every native `blocked_by` dependency must be CLOSED (the query above returns no output). If any native blocker is OPEN, the task is **blocked by `<repo#number "title">`**.
    - **External non-issue prerequisites**: Check for external non-issue blocker markers in the body or the `Blocked` label for non-issue prerequisites (e.g. assets, vendor delays, manual credentials). If a prerequisite issue is cited in the body without a native link, verify its state (`gh issue view <n> --repo WebJamApps/<Repo> --json state -q .state`) returns `CLOSED`.
