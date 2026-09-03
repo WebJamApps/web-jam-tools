@@ -255,18 +255,27 @@ ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 # object payload by raising an error, which exits non-zero and lands in the
 # same refusal branch as malformed JSON — so no separate parse check is
 # needed. An array with no open entries produces no output and exits 0.
+# `--paginate` on the `gh api` call is required for the fail-closed property
+# to hold regardless of blocker count: GitHub's default page size is 30, and
+# without it an issue with more than 30 native blockers would silently drop
+# the remainder.
+# The state comparison downcases via `ascii_downcase` before comparing, and
+# treats anything OTHER than "closed" (missing/null, differently-cased, or an
+# unrecognized value) as blocking rather than passing it through — this
+# guard's whole design premise is failing closed on ambiguity, so an
+# unrecognized state must never be silently treated as "not blocking".
 echo "Checking native blocked_by dependencies for $REPO#$ISSUE_NUM ..."
 DEP_FAILURE=""
 DEP_JSON=""
 OPEN_BLOCKERS=""
-if ! DEP_JSON=$(gh api "repos/WebJamApps/$REPO/issues/$ISSUE_NUM/dependencies/blocked_by" 2>/dev/null); then
+if ! DEP_JSON=$(gh api --paginate "repos/WebJamApps/$REPO/issues/$ISSUE_NUM/dependencies/blocked_by" 2>/dev/null); then
   DEP_FAILURE="the dependency query failed (network, auth, or API error)"
 elif [ -z "${DEP_JSON//[[:space:]]/}" ]; then
   DEP_FAILURE="the dependency query returned an empty response"
 elif ! OPEN_BLOCKERS=$(jq -r '
       if type == "array" then
         .[]
-        | select((.state // "") == "open")
+        | select(((.state // "") | ascii_downcase) != "closed")
         | "  \(.repository.name // .repository.full_name // "unknown")#\(.number) \"\(.title // "")\""
       else
         error("dependency payload is not a JSON array")
