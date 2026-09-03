@@ -133,6 +133,24 @@ function assertRefusedByDependency(res: RunResult) {
   }
 }
 
+// A refusal from the dependency guard's SEARCH-FAILURE path (the query
+// itself failed or returned something unparseable) is wordier and distinct
+// from a BLOCKER-FOUND refusal ("has an OPEN native blocked_by dependency").
+// A bug that misreported a failed query as a found blocker (or vice versa)
+// would still pass assertRefusedByDependency's loose "dependency" substring
+// check, so cases 7 and 8 — which are specifically about the search-failure
+// path — assert this more specific wording instead.
+function assertRefusedBySearchFailure(res: RunResult) {
+  assertEquals(res.code, 1, res.stderr);
+  assertStringIncludes(res.stderr, "cannot confirm");
+  assertStringIncludes(res.stderr, "is unblocked");
+  if (res.stderr.includes("OPEN native blocked_by dependency")) {
+    throw new Error(
+      `expected a search-failure refusal, not a blocker-found refusal: ${res.stderr}`,
+    );
+  }
+}
+
 // --- must REFUSE: status declaration at line start ---
 
 Deno.test("bold marker alone on a line is refused", async () => {
@@ -393,18 +411,53 @@ Deno.test(
 );
 
 Deno.test(
-  "dependency API case 7: a failed dependency query (non-zero exit, empty stdout) refuses",
+  "dependency API case 7: a failed dependency query (non-zero exit, empty stdout) refuses via the search-failure path, not a blocker-found refusal",
   async () => {
     const res = await runGuard("An ordinary issue body with no markers.", { depExit: "1" });
-    assertRefusedByDependency(res);
+    assertRefusedBySearchFailure(res);
+    assertStringIncludes(res.stderr, "the dependency query failed");
   },
 );
 
 Deno.test(
-  "dependency API case 8: a 'null' payload refuses rather than being treated as no blockers",
+  "dependency API case 8: a 'null' payload refuses via the search-failure path, not a blocker-found refusal",
   async () => {
     const res = await runGuard("An ordinary issue body with no markers.", { depJson: "null" });
+    assertRefusedBySearchFailure(res);
+    assertStringIncludes(res.stderr, "not a JSON array");
+  },
+);
+
+Deno.test(
+  "dependency API case 8b: an unrecognized-case state ('OPEN') is still treated as blocking",
+  async () => {
+    const depJson = JSON.stringify([
+      {
+        number: 814,
+        state: "OPEN",
+        title: "Uppercase-state blocker",
+        repository: { name: "web-jam-tools" },
+      },
+    ]);
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson });
     assertRefusedByDependency(res);
+    assertStringIncludes(res.stderr, "web-jam-tools#814");
+  },
+);
+
+Deno.test(
+  "dependency API case 8c: a blocker with a missing/null state fails closed (treated as blocking)",
+  async () => {
+    const depJson = JSON.stringify([
+      {
+        number: 814,
+        title: "Blocker with no state field at all",
+        repository: { name: "web-jam-tools" },
+      },
+    ]);
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson });
+    assertRefusedByDependency(res);
+    assertStringIncludes(res.stderr, "web-jam-tools#814");
   },
 );
 
