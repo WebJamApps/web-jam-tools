@@ -511,17 +511,19 @@ Deno.test("defaultScreenshotImpl takes a real screenshot when google-chrome is a
   }
 });
 
-Deno.test("deno.json defines design:gate1, render_design_doc, and write_issue_approval_token tasks", async () => {
+Deno.test("deno.json defines design:gate1, design:match-design, render_design_doc, and write_issue_approval_token tasks", async () => {
   const denoJsonContent = await Deno.readTextFile(
     new URL("../deno.json", import.meta.url).pathname,
   );
   const config = JSON.parse(denoJsonContent);
 
   assertEquals(typeof config.tasks["design:gate1"], "string");
+  assertEquals(typeof config.tasks["design:match-design"], "string");
   assertEquals(typeof config.tasks["render_design_doc"], "string");
   assertEquals(typeof config.tasks["write_issue_approval_token"], "string");
 
   assertStringIncludes(config.tasks["design:gate1"], "src/design-issue/cli.ts");
+  assertStringIncludes(config.tasks["design:match-design"], "src/design-issue/cli.ts match-design");
   assertStringIncludes(config.tasks["render_design_doc"], "scripts/render_design_doc.ts");
   assertStringIncludes(
     config.tasks["write_issue_approval_token"],
