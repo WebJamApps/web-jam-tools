@@ -42,6 +42,13 @@ if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "list" ]; then
   echo "[]"
   exit 0
 fi
+if [ "\${1:-}" = "api" ]; then
+  if [ -n "\${TEST_DEP_EXIT:-}" ] && [ "\${TEST_DEP_EXIT}" != "0" ]; then
+    exit "\${TEST_DEP_EXIT}"
+  fi
+  printf '%s' "\${TEST_DEP_JSON-[]}"
+  exit 0
+fi
 echo "unstubbed gh invocation: $*" >&2
 exit 1
 `;
@@ -51,7 +58,19 @@ interface RunResult {
   stderr: string;
 }
 
-async function runGuard(issueBody: string): Promise<RunResult> {
+interface GuardOptions {
+  // Verbatim stdout for the stubbed `gh api .../dependencies/blocked_by`
+  // call. Omitted -> the stub's own default ("[]"), which is what all 20
+  // pre-existing tests rely on implicitly. An explicitly empty string is
+  // preserved (not coerced to "[]") so the "empty response" failure mode is
+  // reachable too.
+  depJson?: string;
+  // Non-zero exit code for the stubbed `gh api` call, simulating a failed
+  // dependency query (network/auth/API error). Omitted -> the stub exits 0.
+  depExit?: string;
+}
+
+async function runGuard(issueBody: string, opts: GuardOptions = {}): Promise<RunResult> {
   const binDir = await Deno.makeTempDir({ prefix: "wjt395-bin-" });
   const fakeGhPath = `${binDir}/gh`;
   await Deno.writeTextFile(fakeGhPath, FAKE_GH_SCRIPT);
@@ -62,14 +81,18 @@ async function runGuard(issueBody: string): Promise<RunResult> {
   // before any git fetch / worktree / agy call.
   const webjamRoot = await Deno.makeTempDir({ prefix: "wjt395-webjam-" });
 
+  const env: Record<string, string> = {
+    ...Deno.env.toObject(),
+    PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
+    AGY_WEBJAM_ROOT: webjamRoot,
+    TEST_ISSUE_BODY: issueBody,
+  };
+  if (opts.depJson !== undefined) env.TEST_DEP_JSON = opts.depJson;
+  if (opts.depExit !== undefined) env.TEST_DEP_EXIT = opts.depExit;
+
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, TASK_ARG],
-    env: {
-      ...Deno.env.toObject(),
-      PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
-      AGY_WEBJAM_ROOT: webjamRoot,
-      TEST_ISSUE_BODY: issueBody,
-    },
+    env,
     stdout: "piped",
     stderr: "piped",
   });
@@ -92,6 +115,19 @@ function assertDispatchedNormally(res: RunResult) {
   assertStringIncludes(res.stderr, REPO_NOT_FOUND_SNIPPET);
   if (res.stderr.includes(GUARD_REFUSAL_SNIPPET)) {
     throw new Error(`expected no guard refusal, got: ${res.stderr}`);
+  }
+}
+
+// A REFUSE case from the native blocked_by dependency guard (web-jam-tools#847)
+// is distinguished from the body-text guard's refusal by wording: both
+// mention the dependency query/blocker explicitly (the word "dependency"),
+// while the body-text guard's message never does — it only ever says "still
+// contains a BLOCKED / DO NOT START marker".
+function assertRefusedByDependency(res: RunResult) {
+  assertEquals(res.code, 1, res.stderr);
+  assertStringIncludes(res.stderr, "dependency");
+  if (res.stderr.includes(GUARD_REFUSAL_SNIPPET)) {
+    throw new Error(`expected a dependency-guard refusal, not the body-text guard's: ${res.stderr}`);
   }
 }
 
@@ -238,6 +274,160 @@ Deno.test(
     const res = await runGuard(
       "BLOCKED BY the vendor's SSO rollout — context in #12",
     );
+    assertRefused(res);
+  },
+);
+
+// --- native blocked_by dependency guard (web-jam-tools#847) ---
+//
+// The guard runs BEFORE the body-text guard and asks GitHub's own dependency
+// graph, not prose, whether the issue is blocked. Cases 1-8 below are the
+// dependency-API enumerated cases from the issue body; the ordinary issue
+// body text used throughout carries no marker, so a refusal always comes
+// from the dependency guard, never the text guard.
+
+Deno.test(
+  "dependency API case 1: empty array dispatches normally",
+  async () => {
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson: "[]" });
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "dependency API case 2: single closed blocker dispatches normally",
+  async () => {
+    const depJson = JSON.stringify([
+      { number: 814, state: "closed", title: "A now-closed blocker", repository: { name: "web-jam-tools" } },
+    ]);
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson });
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "dependency API case 3: single open blocker refuses and names it by repo, number and title",
+  async () => {
+    const depJson = JSON.stringify([
+      {
+        number: 814,
+        state: "open",
+        title: "Add the installer-scope rule",
+        repository: { name: "web-jam-tools" },
+      },
+    ]);
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson });
+    assertRefusedByDependency(res);
+    assertStringIncludes(res.stderr, "web-jam-tools#814");
+    assertStringIncludes(res.stderr, "Add the installer-scope rule");
+  },
+);
+
+Deno.test(
+  "dependency API case 4: mixed open+closed blockers names only the open one",
+  async () => {
+    const depJson = JSON.stringify([
+      { number: 814, state: "open", title: "Open blocker", repository: { name: "web-jam-tools" } },
+      { number: 820, state: "closed", title: "Closed blocker", repository: { name: "web-jam-tools" } },
+    ]);
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson });
+    assertRefusedByDependency(res);
+    assertStringIncludes(res.stderr, "web-jam-tools#814");
+    if (res.stderr.includes("#820")) {
+      throw new Error(`expected the closed blocker #820 not to be named: ${res.stderr}`);
+    }
+  },
+);
+
+Deno.test(
+  "dependency API case 5: two open blockers names both",
+  async () => {
+    const depJson = JSON.stringify([
+      { number: 814, state: "open", title: "First open blocker", repository: { name: "web-jam-tools" } },
+      { number: 820, state: "open", title: "Second open blocker", repository: { name: "web-jam-tools" } },
+    ]);
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson });
+    assertRefusedByDependency(res);
+    assertStringIncludes(res.stderr, "web-jam-tools#814");
+    assertStringIncludes(res.stderr, "web-jam-tools#820");
+  },
+);
+
+Deno.test(
+  "dependency API case 6: cross-repo open blocker names its own repository, not this one",
+  async () => {
+    const depJson = JSON.stringify([
+      { number: 99, state: "open", title: "Cross-repo blocker", repository: { name: "JaMmusic" } },
+    ]);
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson });
+    assertRefusedByDependency(res);
+    assertStringIncludes(res.stderr, "JaMmusic#99");
+    if (res.stderr.includes("web-jam-tools#99")) {
+      throw new Error(`expected the cross-repo blocker not to be mislabeled with this repo: ${res.stderr}`);
+    }
+  },
+);
+
+Deno.test(
+  "dependency API case 7: a failed dependency query (non-zero exit, empty stdout) refuses",
+  async () => {
+    const res = await runGuard("An ordinary issue body with no markers.", { depExit: "1" });
+    assertRefusedByDependency(res);
+  },
+);
+
+Deno.test(
+  "dependency API case 8: a 'null' payload refuses rather than being treated as no blockers",
+  async () => {
+    const res = await runGuard("An ordinary issue body with no markers.", { depJson: "null" });
+    assertRefusedByDependency(res);
+  },
+);
+
+// --- body text case 13 (the one genuinely missing from the pre-existing 20:
+// a body with no marker at all, dependency API returning [] explicitly to
+// prove the two checks are independent) ---
+
+Deno.test(
+  "body text case 13: no marker at all dispatches normally with the dependency API returning []",
+  async () => {
+    const res = await runGuard(
+      "Implement the feature as described here. Nothing here is blocking anything.",
+      { depJson: "[]" },
+    );
+    assertDispatchedNormally(res);
+  },
+);
+
+// --- combination cases 14-15: proving the dependency guard and the body-text
+// guard are ANDed and neither masks the other ---
+
+Deno.test(
+  "combination case 14: text carve-out plus an open API blocker refuses with the dependency reason",
+  async () => {
+    const depJson = JSON.stringify([
+      {
+        number: 814,
+        state: "open",
+        title: "Still-open dependency",
+        repository: { name: "web-jam-tools" },
+      },
+    ]);
+    const res = await runGuard(
+      '**Blocked by** `web-jam-tools#814 "..."`',
+      { depJson },
+    );
+    // Refuses via the dependency guard (which runs first) — not the
+    // body-text guard, even though the body's carve-out line would have let
+    // the text guard dispatch on its own.
+    assertRefusedByDependency(res);
+  },
+);
+
+Deno.test(
+  "combination case 15: bare BLOCKED text guard still fires when the dependency API returns no blockers",
+  async () => {
+    const res = await runGuard("**BLOCKED**", { depJson: "[]" });
     assertRefused(res);
   },
 );
