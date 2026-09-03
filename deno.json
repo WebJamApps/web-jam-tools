@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.33.0",
+  "version": "1.33.1",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "sheet-music:generate": "deno run --allow-read --allow-write src/sheet-music/generate_docx.ts",
@@ -17,6 +17,8 @@
     "unblock-issue": "deno run --allow-read --allow-run --allow-env scripts/unblock-issue.ts",
     "flash-issues": "deno run -A src/flash-issues/cli.ts",
     "design:gate1": "deno run -A src/design-issue/cli.ts",
+    "design:match-design": "deno run -A src/design-issue/cli.ts match-design",
+    "design:cli": "deno run -A src/design-issue/cli.ts",
     "design:lint-doc": "deno run -A src/design-issue/cli.ts lint-doc",
     "design:lint-runbook": "deno run -A src/design-issue/cli.ts lint-runbook",
     "design:candidates": "deno run -A src/design-issue/cli.ts candidates",
