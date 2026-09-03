@@ -241,6 +241,10 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
       executedCmds.push(cmd);
       const cmdStr = cmd.join(" ");
 
+      // web-jam-tools#901: duplicate search runs before the create call.
+      if (cmdStr.includes("gh issue list")) {
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      }
       if (cmdStr.includes("gh issue create")) {
         return Promise.resolve({
           code: 0,
@@ -352,6 +356,9 @@ Deno.test("createIssueAndVerify setting type to Epic succeeds with mocked GraphQ
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
 
+      if (cmdStr.includes("gh issue list")) {
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      }
       if (cmdStr.includes("gh issue create")) {
         return Promise.resolve({
           code: 0,
@@ -418,6 +425,9 @@ Deno.test("createIssueAndVerify fallback GraphQL parent check when parent missin
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
 
+      if (cmdStr.includes("gh issue list")) {
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      }
       if (cmdStr.includes("gh issue create")) {
         return Promise.resolve({
           code: 0,
@@ -994,6 +1004,9 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
         const mockDeps: ExecDeps = {
           runCmd(cmd: string[]) {
             const cmdStr = cmd.join(" ");
+            if (cmdStr.includes("gh issue list")) {
+              return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+            }
             if (cmdStr.includes("gh issue create")) {
               return Promise.resolve({
                 code: 0,
@@ -1324,4 +1337,180 @@ Deno.test("createIssueAndVerify: --dry-run returns description without creating 
 
   assertEquals(createCalled, false);
   assertEquals(result, 'dry run: would create issue "Dry run task" in WebJamApps/web-jam-tools');
+});
+
+// --- Duplicate-search enforcement (web-jam-tools#901) ---
+
+Deno.test("parseArgs parses --dedup-override and --dedup-override-reason (both formats)", () => {
+  const spaced = parseArgs([
+    "--title",
+    "T",
+    "--body-file",
+    "/tmp/b.md",
+    "--dedup-override",
+    "web-jam-tools#885",
+    "--dedup-override-reason",
+    "narrower scope, docs only",
+  ]);
+  assertEquals(spaced.dedupOverride, "web-jam-tools#885");
+  assertEquals(spaced.dedupOverrideReason, "narrower scope, docs only");
+
+  const equals = parseArgs([
+    "--title=T",
+    "--body-file=/tmp/b.md",
+    "--dedup-override=web-jam-tools#885",
+    "--dedup-override-reason=narrower scope, docs only",
+  ]);
+  assertEquals(equals.dedupOverride, "web-jam-tools#885");
+  assertEquals(equals.dedupOverrideReason, "narrower scope, docs only");
+});
+
+const EXISTING_DUP_TITLE =
+  "skills/design-issue: support and validate structured Revision History tables for multi-phase design document updates";
+
+Deno.test("createIssueAndVerify: refuses to file when a similar OPEN issue is found, naming the candidate", async () => {
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      const cmdStr = cmd.join(" ");
+      if (cmdStr.includes("gh issue list")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify([{ number: 885, title: EXISTING_DUP_TITLE }]),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+
+  const err = await assertRejects(
+    () =>
+      createIssueAndVerify(
+        {
+          title: "skills/design-issue: support and validate structured Revision History tables",
+          bodyFile: "/tmp/b.md",
+        },
+        mockDeps,
+        APPROVE_ALL,
+      ),
+    Error,
+  );
+  assertStringIncludes(err.message, "Refused to file issue — possible duplicate");
+  assertStringIncludes(err.message, 'web-jam-tools#885 "');
+});
+
+Deno.test("createIssueAndVerify: no similar OPEN issue proceeds unchanged", async () => {
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      const cmdStr = cmd.join(" ");
+      if (cmdStr.includes("gh issue list")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify([{ number: 885, title: EXISTING_DUP_TITLE }]),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("gh issue create")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: "https://github.com/WebJamApps/web-jam-tools/issues/902\n",
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/902")) {
+        const mockIssue: IssueData = {
+          number: 902,
+          title: "docs: fix a broken link in the README",
+        };
+        return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+
+  const result = await createIssueAndVerify(
+    { title: "docs: fix a broken link in the README", bodyFile: "/tmp/b.md" },
+    mockDeps,
+    APPROVE_ALL,
+  );
+  assertEquals(result, 'web-jam-tools#902 "docs: fix a broken link in the README"');
+});
+
+Deno.test("createIssueAndVerify: refuses to file when the duplicate search itself fails (fails closed)", async () => {
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      const cmdStr = cmd.join(" ");
+      if (cmdStr.includes("gh issue list")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "gh: auth error" });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("body"),
+  };
+
+  const err = await assertRejects(
+    () =>
+      createIssueAndVerify(
+        {
+          title: "skills/design-issue: support and validate structured Revision History tables",
+          bodyFile: "/tmp/b.md",
+        },
+        mockDeps,
+        APPROVE_ALL,
+      ),
+    Error,
+  );
+  assertStringIncludes(err.message, "could not search");
+  assertStringIncludes(err.message, "the search failed");
+});
+
+Deno.test("createIssueAndVerify: --dedup-override clears a duplicate deny and records the reason in the created body", async () => {
+  let createdBody = "";
+  const mockDeps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      const cmdStr = cmd.join(" ");
+      if (cmdStr.includes("gh issue list")) {
+        throw new Error("dedup search should have been skipped once an override reason is given");
+      }
+      if (cmdStr.includes("gh issue create")) {
+        const bodyIdx = cmd.indexOf("--body");
+        createdBody = bodyIdx >= 0 ? cmd[bodyIdx + 1] : "";
+        return Promise.resolve({
+          code: 0,
+          stdout: "https://github.com/WebJamApps/web-jam-tools/issues/903\n",
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/903")) {
+        const mockIssue: IssueData = {
+          number: 903,
+          title: "skills/design-issue: support and validate structured Revision History tables",
+        };
+        return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("## What this builds\nOriginal body text"),
+  };
+
+  const result = await createIssueAndVerify(
+    {
+      title: "skills/design-issue: support and validate structured Revision History tables",
+      bodyFile: "/tmp/b.md",
+      dedupOverride: "web-jam-tools#885",
+      dedupOverrideReason: "narrower scope, docs only",
+    },
+    mockDeps,
+    APPROVE_ALL,
+  );
+  assertEquals(
+    result,
+    'web-jam-tools#903 "skills/design-issue: support and validate structured Revision History tables"',
+  );
+  assertStringIncludes(createdBody, "Original body text");
+  assertStringIncludes(createdBody, "## Duplicate check");
+  assertStringIncludes(createdBody, "considered web-jam-tools#885");
+  assertStringIncludes(createdBody, "narrower scope, docs only");
 });

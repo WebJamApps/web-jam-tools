@@ -25,6 +25,10 @@ async function main() {
     console.error("  --parent <issue_num>");
     console.error("  --blocked-by <issue>   (repeatable, e.g. 123, #123, repo#123)");
     console.error("  --escalation-reason <why>");
+    console.error("  --dedup-override <repo#number>       (candidate considered, for the record)");
+    console.error(
+      "  --dedup-override-reason <why>        (required to clear a duplicate-search deny)",
+    );
     console.error("  --dry-run");
     Deno.exit(1);
   }

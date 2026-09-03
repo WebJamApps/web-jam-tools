@@ -37,9 +37,35 @@ that's what following this skill prevents.
 
 ## Before you file
 
-1. **Search for a duplicate first.** Run `gh issue list --repo WebJamApps/<repo> --state all --search
-   "<keywords>"` (or `mcp__*__search_issues`) with a couple of keyword variants before creating
-   anything. If an OPEN issue matches, use or update that open issue. However, if a matching issue is CLOSED, do NOT modify, comment on, or attempt to reuse it — see the Closed Issues Are Immutable rule below.
+1. **Search for a duplicate first — this is now enforced, not just prose (web-jam-tools#901).**
+   `hooks/lib/check_model_label_on_issue_create.ts` (via `hooks/require-model-label-on-issue-create.sh`)
+   and `src/create-issue/lib.ts`'s `createIssueAndVerify()` both run a title-similarity search
+   against the target repo's OPEN issues — sharing the logic in
+   `hooks/lib/detect_duplicate_issue.ts` — on every `gh issue create`, `deno task create-issue`, and
+   MCP `issue_write` create call that carries both a repo and a title. Three outcomes:
+   1. **No similar OPEN issue found** — the create proceeds untouched.
+   2. **A similar OPEN issue found** — the create is **denied**, naming each candidate as
+      `repo#number "title"`. Reuse the existing issue, or clear the deny with an override (below).
+   3. **The search itself can't run** (network, auth, rate limit, or an unparseable response) — the
+      create is **refused** (fails closed), not silently allowed. Clear it the same way as outcome 2.
+
+   **Override** — when the candidate genuinely isn't a duplicate, or the search failed for a
+   transient reason Josh has accepted: pass `--dedup-override <repo#number> --dedup-override-reason
+   "<why>"` (CLI) or `dedup_override` / `dedup_override_reason` (MCP `issue_write`). The reason is
+   what actually clears the gate — it is required and recorded verbatim in the created issue's `##
+   Duplicate check` section (`deno task create-issue` path only; a raw `gh issue create` call is not
+   rewritten and must include its own record if the filer wants one). `--dedup-override` names the
+   candidate considered, for the human record — it is not itself verified against the search
+   results.
+
+   This enforced check is a title-similarity heuristic (`skills/design-issue/SKILL.md`-adjacent
+   wording still gets flagged, unrelated wording does not) — it is not a substitute for actually
+   reading the candidate. Also run `gh issue list --repo WebJamApps/<repo> --state all --search
+   "<keywords>"` (or `mcp__*__search_issues`) with a couple of keyword variants yourself before
+   creating anything, since the enforced check only searches OPEN issues by title and a CLOSED
+   near-duplicate or a same-topic issue with very different wording won't trip it. If an OPEN issue
+   matches, use or update that open issue. However, if a matching issue is CLOSED, do NOT modify,
+   comment on, or attempt to reuse it — see the Closed Issues Are Immutable rule below.
 2. **Choose the model label deliberately, not as an afterthought.** This is the thing
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
    model label, because the label was going to be "added later."    Decide the label as part of

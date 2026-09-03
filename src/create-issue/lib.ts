@@ -7,6 +7,11 @@ import {
   isExpired,
   loadToken,
 } from "../../hooks/lib/check_issue_approval_token.ts";
+import {
+  checkDuplicateTitle,
+  type CommandRunner as DedupCommandRunner,
+  formatCandidates,
+} from "../../hooks/lib/detect_duplicate_issue.ts";
 
 export interface CreateIssueOptions {
   repo?: string;
@@ -20,6 +25,10 @@ export interface CreateIssueOptions {
   blockedBy?: string[];
   escalationReason?: string;
   dryRun?: boolean;
+  /** The candidate issue considered for the duplicate-search override (e.g. "web-jam-tools#885"), recorded for the record — not verified against search results. */
+  dedupOverride?: string;
+  /** Why the filer judges this is not a duplicate. Non-empty text is what actually clears the dedup gate (web-jam-tools#901). */
+  dedupOverrideReason?: string;
 }
 
 export interface VerificationResult {
@@ -126,6 +135,14 @@ export function parseArgs(args: string[]): CreateIssueOptions {
       options.escalationReason = args[++i];
     } else if (arg.startsWith("--escalation-reason=")) {
       options.escalationReason = arg.slice("--escalation-reason=".length);
+    } else if (arg === "--dedup-override" && i + 1 < args.length) {
+      options.dedupOverride = args[++i];
+    } else if (arg.startsWith("--dedup-override=")) {
+      options.dedupOverride = arg.slice("--dedup-override=".length);
+    } else if (arg === "--dedup-override-reason" && i + 1 < args.length) {
+      options.dedupOverrideReason = args[++i];
+    } else if (arg.startsWith("--dedup-override-reason=")) {
+      options.dedupOverrideReason = arg.slice("--dedup-override-reason=".length);
     } else if (arg === "--dry-run") {
       options.dryRun = true;
     }
@@ -498,7 +515,37 @@ export async function createIssueAndVerify(
     throw new Error(`Refused to file issue — Gate 2 approval required: ${approval.reason}`);
   }
 
-  const bodyText = await deps.readFileText(options.bodyFile);
+  // 0b. Duplicate search (web-jam-tools#901) — this is the enforcement point
+  // for agy/Antigravity, which has no hook mechanism of its own; on Claude
+  // Code the same search already ran inside
+  // hooks/lib/check_model_label_on_issue_create.ts before this Bash call was
+  // even allowed to run, mirroring the Gate 2 approval-token split above.
+  const dedupGhRunner: DedupCommandRunner = (args) => deps.runCmd(["gh", ...args]);
+  const dedup = await checkDuplicateTitle(
+    options.title,
+    repoInfo.full,
+    { candidate: options.dedupOverride, reason: options.dedupOverrideReason },
+    dedupGhRunner,
+  );
+  if (dedup.outcome === "deny_duplicate") {
+    throw new Error(
+      `Refused to file issue — possible duplicate(s) found in ${dedup.repoFull}: ${
+        formatCandidates(dedup.repoFull, dedup.candidates)
+      }. Reuse the existing issue, or re-run with --dedup-override <repo#number> --dedup-override-reason "<why this is not a duplicate>".`,
+    );
+  }
+  if (dedup.outcome === "deny_search_failed") {
+    throw new Error(
+      `Refused to file issue — could not search ${dedup.repoFull} for duplicate open issues (the search failed, not a duplicate finding). Re-run with --dedup-override-reason "<why it's safe to proceed>" to override.`,
+    );
+  }
+
+  let bodyText = await deps.readFileText(options.bodyFile);
+  if (options.dedupOverrideReason && options.dedupOverrideReason.trim()) {
+    const candidateNote = options.dedupOverride ? ` (considered ${options.dedupOverride})` : "";
+    bodyText +=
+      `\n\n## Duplicate check\n\nDuplicate search overridden${candidateNote}: ${options.dedupOverrideReason.trim()}\n`;
+  }
 
   // 1. Create base issue via gh issue create
   const ghArgs = [
