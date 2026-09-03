@@ -46,6 +46,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
 
   let mode: BookGigMode = "preview";
   let noOpen = false;
+  let linkVenueName: string | undefined;
   let explicitLocationStr: string | undefined;
   const includeVenues: string[] = [];
   const excludeVenues: string[] = [];
@@ -60,6 +61,16 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode = "send";
     } else if (lower === "--replies" || lower === "--check-replies") {
       mode = "replies";
+    } else if (lower === "--link-gig" || lower === "--link") {
+      mode = "link-gig";
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        linkVenueName = args[i].trim();
+      }
+    } else if (lower.startsWith("--link-gig=") || lower.startsWith("--link=")) {
+      mode = "link-gig";
+      const eqIdx = arg.indexOf("=");
+      linkVenueName = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--no-open") {
       noOpen = true;
     } else if (lower === "--cities" || lower === "--locations" || lower === "--location") {
@@ -105,6 +116,18 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   const resIncludes = includeVenues.length > 0 ? Array.from(new Set(includeVenues)) : undefined;
   const resExcludes = excludeVenues.length > 0 ? Array.from(new Set(excludeVenues)) : undefined;
   const resNoOpen = noOpen ? true : undefined;
+
+  if (mode === "link-gig") {
+    if (!linkVenueName && positionalArgs.length > 0) {
+      linkVenueName = positionalArgs.join(" ").trim();
+    }
+    return {
+      mode: "link-gig",
+      linkVenueName,
+      noOpen: resNoOpen,
+      rawArgs,
+    };
+  }
 
   let location: TargetLocation | undefined;
   if (explicitLocationStr) {

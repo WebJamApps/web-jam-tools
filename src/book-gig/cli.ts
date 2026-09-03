@@ -6,6 +6,7 @@ import { writeDropboxRunLog } from "./gmail.ts";
 import { openHtmlInBrowser } from "./browser.ts";
 import { renderDarkHtml } from "./html.ts";
 import { publishOutreachReport } from "./publish.ts";
+import { executeLinkGig } from "./venue_link.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -223,11 +224,39 @@ export async function runBookGigCli(
   }
 
   // -------------------------------------------------------------------------
+  // Mode: Link Gig to Venue (--link-gig <venue-name>)
+  // -------------------------------------------------------------------------
+  if (parsed.mode === "link-gig") {
+    console.log(`\n======================================================`);
+    console.log(`  🔗 book-gig: Link Gig to Venue`);
+    console.log(`======================================================`);
+    const venueName = parsed.linkVenueName;
+    if (!venueName) {
+      console.error("Error: Missing required venue name for --link-gig.");
+      console.error("Usage: deno task book-gig --link-gig <venue-name>");
+      throw new Error("Missing venue name for --link-gig");
+    }
+    console.log(`Target Venue: "${venueName}"`);
+    console.log(`------------------------------------------------------\n`);
+
+    const linkResult = await executeLinkGig(venueName, {}, fetchFn);
+    console.log(`[book-gig] ${linkResult.message}`);
+
+    return {
+      mode: "link-gig",
+      linkGig: linkResult,
+      candidates: [],
+      density: { count: 0, isSparse: false },
+      pitches: [],
+    };
+  }
+
+  // -------------------------------------------------------------------------
   // Discovery & Batch Send Modes
   // -------------------------------------------------------------------------
   if (!parsed.weekend) {
     console.error(
-      "Usage: deno task book-gig [--send|--replies] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
+      "Usage: deno task book-gig [--send|--replies|--link-gig <venue>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
     );
     console.error("Examples:");
     console.error('  deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"');
@@ -236,6 +265,7 @@ export async function runBookGigCli(
     console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --skip "v3"');
     console.error('  deno task book-gig --replies "Oct 16-18 2026"');
     console.error("  deno task book-gig --replies");
+    console.error('  deno task book-gig --link-gig "Olde Salem Brewing"');
     throw new Error("Missing target weekend argument");
   }
 
