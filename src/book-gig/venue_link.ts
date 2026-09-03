@@ -25,7 +25,7 @@ export interface LinkGigResult {
   venueName: string;
   venueId?: string;
   matchedGigId?: string;
-  status: "linked" | "already-linked" | "no-match" | "ambiguous" | "venue-not-found";
+  status: "linked" | "already-linked" | "conflict" | "no-match" | "ambiguous" | "venue-not-found";
   message: string;
 }
 
@@ -123,33 +123,33 @@ export async function executeLinkGig(
   const headers = buildHeaders(token);
   const targetNorm = normalizeVenueName(venueName);
 
-  // 1. Fetch all venues to find the target venue record
+  // 1. Fetch all venues and build unambiguous venue name index
   const venueRes = await fetchFn(`${baseUrl}/venue`, { headers });
   if (!venueRes.ok) {
     throw new Error(`Failed to fetch venues: HTTP ${venueRes.status} ${venueRes.statusText}`);
   }
   const rawVenues = (await venueRes.json()) as LinkableVenue[];
-  const matchingVenues = rawVenues.filter((v) => normalizeVenueName(v.name) === targetNorm);
+  const nameIndex = buildUnambiguousNameIndex(rawVenues);
+  const targetVenueId = nameIndex.get(targetNorm);
 
-  if (matchingVenues.length === 0) {
-    return {
-      venueName,
-      status: "venue-not-found",
-      message: `Venue "${venueName}" not found in venue database.`,
-    };
-  }
-
-  if (matchingVenues.length > 1) {
+  if (!targetVenueId) {
+    const candidateVenues = rawVenues.filter((v) => normalizeVenueName(v.name) === targetNorm);
+    if (candidateVenues.length === 0) {
+      return {
+        venueName,
+        status: "venue-not-found",
+        message: `Venue "${venueName}" not found in venue database.`,
+      };
+    }
     return {
       venueName,
       status: "ambiguous",
       message:
-        `Venue name "${venueName}" is ambiguous (${matchingVenues.length} venues found). Refusing to guess.`,
+        `Venue name "${venueName}" is ambiguous (${candidateVenues.length} venues found). Refusing to guess.`,
     };
   }
 
-  const targetVenue = matchingVenues[0];
-  const targetVenueId = String(targetVenue._id);
+  const targetVenue = rawVenues.find((v) => String(v._id) === targetVenueId)!;
 
   // 2. Fetch gigs (prefer artist=josh scope, fall back to unscoped /gig)
   let gigRes = await fetchFn(`${baseUrl}/gig?artist=josh`, { headers });
@@ -161,8 +161,11 @@ export async function executeLinkGig(
   }
   const rawGigs = (await gigRes.json()) as LinkableGig[];
 
-  // 3. Find matching gigs for targetVenue
-  const matchingGigs = rawGigs.filter((g) => normalizeVenueName(g.venue) === targetNorm);
+  // 3. Find matching gigs for targetVenue by matching normalized venue text or resolved venue ID
+  const matchingGigs = rawGigs.filter((g) => {
+    if (normalizeVenueName(g.venue) === targetNorm) return true;
+    return resolveGigVenueId(g, nameIndex) === targetVenueId;
+  });
 
   if (matchingGigs.length === 0) {
     return {
@@ -204,17 +207,28 @@ export async function executeLinkGig(
   const targetGig = matchingGigs[0];
   const targetGigId = String(targetGig._id);
 
-  if (
-    targetGig.venueId && (String(targetGig.venueId) === targetVenueId || Boolean(targetGig.venueId))
-  ) {
+  if (targetGig.venueId) {
+    if (String(targetGig.venueId) === targetVenueId) {
+      return {
+        venueName: targetVenue.name || venueName,
+        venueId: targetVenueId,
+        matchedGigId: targetGigId,
+        status: "already-linked",
+        message: `Gig for venue "${
+          targetVenue.name || venueName
+        }" is already linked (venueId: ${targetVenueId}). No write performed.`,
+      };
+    }
     return {
       venueName: targetVenue.name || venueName,
       venueId: targetVenueId,
       matchedGigId: targetGigId,
-      status: "already-linked",
+      status: "conflict",
       message: `Gig for venue "${
         targetVenue.name || venueName
-      }" is already linked (venueId: ${targetGig.venueId}). No write performed.`,
+      }" is already linked to a different venue (venueId: ${
+        String(targetGig.venueId)
+      }). Refusing to overwrite conflicting link. No write performed.`,
     };
   }
 

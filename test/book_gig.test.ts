@@ -1754,6 +1754,44 @@ Deno.test("executeLinkGig: already-linked gig reports status and makes no write"
   assertEquals(calls.some((c) => c.method === "PATCH" || c.method === "PUT"), false);
 });
 
+Deno.test("executeLinkGig: gig linked to a different venue reports conflict and makes no write", async () => {
+  const mockVenues = [{ _id: "v1", name: "The Spot on Kirk" }];
+  const mockGigs = [{ _id: "g1", venue: "The Spot on Kirk", venueId: "v2" }];
+  const calls: Array<{ url: string; method?: string }> = [];
+
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    calls.push({ url: u, method });
+
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockGigs), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const result = await executeLinkGig("The Spot on Kirk", {}, mockFetch);
+  assertEquals(result.status, "conflict");
+  assertEquals(result.venueId, "v1");
+  assertEquals(result.matchedGigId, "g1");
+  assertStringIncludes(result.message, "already linked to a different venue (venueId: v2)");
+  assertStringIncludes(result.message, "Refusing to overwrite conflicting link");
+  assertEquals(calls.some((c) => c.method === "PATCH" || c.method === "PUT"), false);
+});
+
 Deno.test("executeLinkGig: ambiguous matching gigs reports ambiguity and makes no write", async () => {
   const mockVenues = [{ _id: "v1", name: "The Spot on Kirk" }];
   const mockGigs = [
