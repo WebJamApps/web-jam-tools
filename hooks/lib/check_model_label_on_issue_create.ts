@@ -10,6 +10,12 @@
  */
 import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
 import { findUnresolvableIssuePointers } from "./detect_unresolvable_issue_pointers.ts";
+import {
+  checkDuplicateTitle,
+  type CommandRunner,
+  formatCandidates,
+  runGhCommand,
+} from "./detect_duplicate_issue.ts";
 
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 const MCP_ISSUE_WRITE_RE = /^mcp__.*__issue_write$/;
@@ -183,6 +189,110 @@ export function extractEscalationReason(args: string[]): string | null {
   return reason;
 }
 
+/**
+ * `--title`/`--title=` only — deliberately no `-t` alias, since `-t` is
+ * already claimed by `extractTypeValue` above for this codebase's create
+ * paths (raw `gh issue create -t` has no native-type support at all per
+ * `skills/file-issue/SKILL.md`, so that path is always denied before this
+ * would matter; `deno task create-issue` never gave `--title` a `-t` alias).
+ */
+export function extractTitleValue(args: string[]): string | null {
+  let j = 0;
+  while (j < args.length) {
+    const a = args[j];
+    if (a === "--title") {
+      if (j + 1 < args.length) {
+        const val = args[j + 1];
+        if (val && !val.startsWith("--")) return val;
+      }
+      return null;
+    }
+    if (a.startsWith("--title=")) {
+      const val = a.slice("--title=".length);
+      return val || null;
+    }
+    j += 1;
+  }
+  return null;
+}
+
+/** `--repo`/`--repo=` only, matching `src/create-issue/lib.ts`'s parseArgs (no `-R` alias). */
+export function extractRepoValue(args: string[]): string | null {
+  let j = 0;
+  while (j < args.length) {
+    const a = args[j];
+    if (a === "--repo") {
+      if (j + 1 < args.length) {
+        const val = args[j + 1];
+        if (val && !val.startsWith("--")) return val;
+      }
+      return null;
+    }
+    if (a.startsWith("--repo=")) {
+      const val = a.slice("--repo=".length);
+      return val || null;
+    }
+    j += 1;
+  }
+  return null;
+}
+
+/**
+ * `--dedup-override <repo#number>` (the candidate considered, recorded for
+ * the human record — not verified against the actual search results) and
+ * `--dedup-override-reason "<why not a duplicate>"` (the only field that
+ * actually clears a duplicate-search deny — see
+ * `hooks/lib/detect_duplicate_issue.ts`'s `hasOverrideReason`).
+ */
+export function extractDedupOverride(
+  args: string[],
+): { candidate: string | null; reason: string | null } {
+  let candidate: string | null = null;
+  let reason: string | null = null;
+  let j = 0;
+  while (j < args.length) {
+    const a = args[j];
+    if (a === "--dedup-override") {
+      if (j + 1 < args.length) {
+        const val = args[j + 1].trim();
+        if (val && !val.startsWith("--")) {
+          candidate = val;
+          j += 2;
+          continue;
+        }
+      }
+      j += 1;
+      continue;
+    }
+    if (a.startsWith("--dedup-override=")) {
+      const val = a.slice("--dedup-override=".length).trim();
+      if (val) candidate = val;
+      j += 1;
+      continue;
+    }
+    if (a === "--dedup-override-reason") {
+      if (j + 1 < args.length) {
+        const val = args[j + 1].trim();
+        if (val && !val.startsWith("--")) {
+          reason = val;
+          j += 2;
+          continue;
+        }
+      }
+      j += 1;
+      continue;
+    }
+    if (a.startsWith("--dedup-override-reason=")) {
+      const val = a.slice("--dedup-override-reason=".length).trim();
+      if (val) reason = val;
+      j += 1;
+      continue;
+    }
+    j += 1;
+  }
+  return { candidate, reason };
+}
+
 export function extractBodyValue(args: string[]): string | null {
   const bodyParts: string[] = [];
   let j = 0;
@@ -346,6 +456,31 @@ function looksLikeIssueCreatingOrEditingCommand(cmd: string): boolean {
 }
 
 /**
+ * Duplicate-search enforcement (web-jam-tools#901) shared by both the CLI
+ * (`gh issue create` / `deno task create-issue`) and MCP `issue_write`
+ * create paths. Only runs when both `--repo` and `--title` are present —
+ * see `hooks/lib/detect_duplicate_issue.ts`'s `checkDuplicateTitle` for why
+ * a short/generic title or a missing repo short-circuits to "skip" rather
+ * than searching.
+ */
+async function runDuplicateCheck(createArgs: string[], runner: CommandRunner): Promise<string> {
+  const title = extractTitleValue(createArgs);
+  const repo = extractRepoValue(createArgs);
+  if (!title || !repo) return "PASS";
+  const override = extractDedupOverride(createArgs);
+  const res = await checkDuplicateTitle(title, repo, override, runner);
+  if (res.outcome === "deny_duplicate") {
+    return `DENY:possible duplicate issue(s) found in ${res.repoFull}: ${
+      formatCandidates(res.repoFull, res.candidates)
+    }. Reuse the existing issue, or re-run with --dedup-override <repo#number> --dedup-override-reason "<why this is not a duplicate>".`;
+  }
+  if (res.outcome === "deny_search_failed") {
+    return `DENY:couldn't search ${res.repoFull} for duplicate open issues (the search failed — not a duplicate finding). Re-run with --dedup-override-reason "<why it's safe to proceed>" to override.`;
+  }
+  return "PASS";
+}
+
+/**
  * Scans already-segmented simple commands for a `gh issue create` /
  * `create-issue` script call or a `gh issue edit` call, and applies the
  * model-label / native-type / unresolvable-pointer checks to whichever it
@@ -355,12 +490,13 @@ function looksLikeIssueCreatingOrEditingCommand(cmd: string): boolean {
  * should reflect what the user actually typed, not a heredoc-stripped
  * rewrite of it).
  */
-function scanIssueCommandSegments(
+async function scanIssueCommandSegments(
   segments: string[],
   toolInput: Record<string, any>,
   modelLabelsPath: string,
   cmdForMessage: string,
-): string {
+  runner: CommandRunner,
+): Promise<string> {
   for (const segment of segments) {
     const scTokens = stripLeadingAssignments(splitShellTokens(segment));
     const createArgs = findGhIssueCreateArgs(scTokens) ?? findCreateIssueScriptArgs(scTokens);
@@ -391,6 +527,8 @@ function scanIssueCommandSegments(
           }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
         }
       }
+      const dedupRes = await runDuplicateCheck(createArgs, runner);
+      if (dedupRes !== "PASS") return dedupRes;
       return "PASS";
     }
 
@@ -415,7 +553,11 @@ function scanIssueCommandSegments(
   return "PASS";
 }
 
-export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath: string): string {
+export async function checkModelLabelOnIssueCreate(
+  inputJson: string,
+  modelLabelsPath: string,
+  runner: CommandRunner = runGhCommand,
+): Promise<string> {
   let payload: Record<string, any>;
   try {
     payload = JSON.parse(inputJson);
@@ -438,7 +580,7 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
 
     const { segments, unterminated } = splitOnOperators(cmd);
     if (!unterminated) {
-      return scanIssueCommandSegments(segments, toolInput, modelLabelsPath, cmd);
+      return await scanIssueCommandSegments(segments, toolInput, modelLabelsPath, cmd, runner);
     }
 
     // Ambiguous parse (web-jam-tools#813): a heredoc body redirected into a
@@ -462,7 +604,13 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
       // lived only in the removed data body is gone, while a real call
       // elsewhere (outside any heredoc, or inside an executed one) is still
       // found and evaluated on its own.
-      return scanIssueCommandSegments(reparsed.segments, toolInput, modelLabelsPath, cmd);
+      return await scanIssueCommandSegments(
+        reparsed.segments,
+        toolInput,
+        modelLabelsPath,
+        cmd,
+        runner,
+      );
     }
 
     // Still ambiguous after stripping data heredoc bodies (an executed
@@ -531,6 +679,31 @@ export function checkModelLabelOnIssueCreate(inputJson: string, modelLabelsPath:
         }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
       }
     }
+    const mcpTitle = typeof toolInput.title === "string" ? toolInput.title : null;
+    const mcpOwner = typeof toolInput.owner === "string" ? toolInput.owner : null;
+    const mcpRepoField = typeof toolInput.repo === "string" ? toolInput.repo : null;
+    const mcpRepoFull = mcpRepoField
+      ? (mcpRepoField.includes("/")
+        ? mcpRepoField
+        : (mcpOwner ? `${mcpOwner}/${mcpRepoField}` : null))
+      : null;
+    if (mcpTitle && mcpRepoFull) {
+      const mcpOverride = {
+        candidate: typeof toolInput.dedup_override === "string" ? toolInput.dedup_override : null,
+        reason: typeof toolInput.dedup_override_reason === "string"
+          ? toolInput.dedup_override_reason
+          : null,
+      };
+      const dedupRes = await checkDuplicateTitle(mcpTitle, mcpRepoFull, mcpOverride, runner);
+      if (dedupRes.outcome === "deny_duplicate") {
+        return `DENY:possible duplicate issue(s) found in ${dedupRes.repoFull}: ${
+          formatCandidates(dedupRes.repoFull, dedupRes.candidates)
+        }. Reuse the existing issue, or re-run with a 'dedup_override' property naming the candidate and a non-empty 'dedup_override_reason' saying why it is not a duplicate.`;
+      }
+      if (dedupRes.outcome === "deny_search_failed") {
+        return `DENY:couldn't search ${dedupRes.repoFull} for duplicate open issues (the search failed — not a duplicate finding). Supply a non-empty 'dedup_override_reason' property to override.`;
+      }
+    }
     return "PASS";
   }
 
@@ -547,5 +720,5 @@ if (import.meta.main) {
     }
   }
   const modelLabelsPath = Deno.env.get("MODEL_LABELS_JSON_PATH") || "";
-  console.log(checkModelLabelOnIssueCreate(inputJson, modelLabelsPath));
+  console.log(await checkModelLabelOnIssueCreate(inputJson, modelLabelsPath));
 }
