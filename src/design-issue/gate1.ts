@@ -13,6 +13,8 @@ export interface Gate1Options {
   screenshotImpl?: (htmlPath: string, screenshotPath: string) => Promise<{ sizeBytes: number }>;
   openBrowserImpl?: (htmlPath: string, display?: string) => Promise<void>;
   display?: string;
+  dropboxDir?: string;
+  findExistingDesignDocsImpl?: typeof findExistingDesignDocs;
 }
 
 export interface Gate1Result {
@@ -220,6 +222,26 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     throw new Error(
       `Design document at ${absDocPath} failed design:lint-doc with ${lintResult.violations.length} violation(s) — refusing to render or open Gate 1:\n${violationLines}`,
     );
+  }
+
+  // Refuse to render or open a redundant parallel design document when a pre-existing
+  // canonical design document already exists for the same topic (web-jam-tools#886).
+  const docFilename = path.basename(absDocPath);
+  const docTopic = extractTopicFromText(docFilename);
+  if (docTopic) {
+    const finder = options.findExistingDesignDocsImpl || findExistingDesignDocs;
+    const existing = await finder({
+      topic: docTopic,
+      dropboxDir: options.dropboxDir,
+    });
+    const olderCanonical = existing.find(
+      (doc) => path.resolve(doc.path) !== absDocPath && doc.isMatch,
+    );
+    if (olderCanonical) {
+      throw new Error(
+        `Refusing to process redundant parallel design document for "${docTopic}": pre-existing canonical design document already exists at ${olderCanonical.path}. Perform a Major Revision to the existing document in-place instead.`,
+      );
+    }
   }
 
   const htmlPath = resolveHtmlPath(absDocPath);

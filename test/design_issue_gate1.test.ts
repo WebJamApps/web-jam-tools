@@ -832,3 +832,72 @@ Deno.test("runCandidatesCli resolves Epic argument to existing canonical design 
     await Deno.remove(tempDir, { recursive: true });
   }
 });
+
+Deno.test("runGate1 refuses to process redundant parallel design document when pre-existing canonical doc exists", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-redundant-refusal-" });
+  const themeDir = path.join(tempDir, "Gig_Outreach");
+  await Deno.mkdir(themeDir, { recursive: true });
+
+  // Pre-existing canonical doc
+  const canonicalDocPath = path.join(themeDir, "book-gig-skill-design-2026-08-16.md");
+  await Deno.writeTextFile(canonicalDocPath, MINIMAL_LINT_CLEAN_DOC);
+
+  // Redundant parallel doc
+  const redundantDocPath = path.join(themeDir, "book-gig-skill-phase-2-design-2026-09-03.md");
+  await Deno.writeTextFile(redundantDocPath, MINIMAL_LINT_CLEAN_DOC);
+
+  try {
+    await assertRejects(
+      async () => {
+        await runGate1({
+          docPath: redundantDocPath,
+          dropboxDir: tempDir,
+          noOpen: true,
+          screenshotImpl: () => Promise.resolve({ sizeBytes: 100 }),
+        });
+      },
+      Error,
+      'Refusing to process redundant parallel design document for "book-gig"',
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runGate1 succeeds when performing Major Revision in-place on existing canonical doc", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-inplace-revision-" });
+  const themeDir = path.join(tempDir, "Gig_Outreach");
+  await Deno.mkdir(themeDir, { recursive: true });
+
+  const canonicalDocPath = path.join(themeDir, "book-gig-skill-design-2026-08-16.md");
+  await Deno.writeTextFile(canonicalDocPath, MINIMAL_LINT_CLEAN_DOC);
+
+  try {
+    const result = await runGate1({
+      docPath: canonicalDocPath,
+      dropboxDir: tempDir,
+      noOpen: true,
+      screenshotImpl: () => Promise.resolve({ sizeBytes: 120 }),
+    });
+
+    assertEquals(result.docPath, path.resolve(canonicalDocPath));
+    assertEquals(result.opened, false);
+    assertEquals(result.screenshotSizeBytes, 120);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runCandidatesCli: explicitly parses boolean --find-existing flag without errors", async () => {
+  const logs: string[] = [];
+  const exitCode = await runCandidatesCli(
+    ["--find-existing"],
+    {
+      runner: () => Promise.resolve({ code: 0, stdout: "[]", stderr: "" }),
+      log: (msg) => logs.push(msg),
+    },
+  );
+
+  assertEquals(exitCode, 0);
+  assertStringIncludes(logs.join("\n"), "No open 'Needs Design' candidate issues found");
+});

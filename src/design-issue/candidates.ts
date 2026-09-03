@@ -171,13 +171,14 @@ export async function runCandidatesCli(
   const finder = options.findDesignDocImpl ?? findExistingDesignDoc;
 
   const flags = parseArgs(args, {
-    boolean: ["help"],
+    boolean: ["help", "find-existing"],
     string: ["epic", "issue", "topic", "theme", "dropbox-dir"],
     alias: {
       h: "help",
     },
     default: {
       help: false,
+      "find-existing": false,
     },
   });
 
