@@ -234,6 +234,66 @@ ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title,body,
 ISSUE_TITLE=$(jq -r '.title' <<< "$ISSUE_JSON")
 ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 
+# --- native blocked_by dependency guard (web-jam-tools#847) ---
+# The authoritative answer to "is this issue blocked by another GitHub issue?"
+# is GitHub's own native dependency graph, not prose in the body, so ask it
+# directly before dispatch and refuse while any returned blocker is still
+# OPEN — naming that blocker by repository, number and title so the operator
+# can go straight to it. Cross-repository blockers name their own repository,
+# never this one.
+#
+# This check FAILS CLOSED, which is the whole point of moving off the prose
+# heuristic. A non-zero exit from `gh api` (network down, auth expired, the
+# endpoint erroring), an empty response, or a payload that is not a JSON array
+# (a literal `null`, an object) all refuse rather than dispatch: treating an
+# unanswered question as "no blockers" would fail open on exactly the
+# unattended headless run this guard exists to protect.
+#
+# Implementation notes: `if ! VAR=$(...)` keeps `set -e` from killing the
+# script before the refusal can be printed, since the assignment's exit status
+# is the command substitution's. jq's `if type == "array"` rejects a `null` or
+# object payload by raising an error, which exits non-zero and lands in the
+# same refusal branch as malformed JSON — so no separate parse check is
+# needed. An array with no open entries produces no output and exits 0.
+echo "Checking native blocked_by dependencies for $REPO#$ISSUE_NUM ..."
+DEP_FAILURE=""
+DEP_JSON=""
+OPEN_BLOCKERS=""
+if ! DEP_JSON=$(gh api "repos/WebJamApps/$REPO/issues/$ISSUE_NUM/dependencies/blocked_by" 2>/dev/null); then
+  DEP_FAILURE="the dependency query failed (network, auth, or API error)"
+elif [ -z "${DEP_JSON//[[:space:]]/}" ]; then
+  DEP_FAILURE="the dependency query returned an empty response"
+elif ! OPEN_BLOCKERS=$(jq -r '
+      if type == "array" then
+        .[]
+        | select((.state // "") == "open")
+        | "  \(.repository.name // .repository.full_name // "unknown")#\(.number) \"\(.title // "")\""
+      else
+        error("dependency payload is not a JSON array")
+      end' <<< "$DEP_JSON" 2>/dev/null); then
+  DEP_FAILURE="the dependency query returned a payload that is not a JSON array"
+fi
+
+if [ -n "$DEP_FAILURE" ]; then
+  echo "" >&2
+  echo "ERROR: cannot confirm issue $REPO#$ISSUE_NUM is unblocked — $DEP_FAILURE." >&2
+  echo "Refusing to dispatch agy rather than assume it has no blockers." >&2
+  echo "Retry once 'gh api repos/WebJamApps/$REPO/issues/$ISSUE_NUM/dependencies/blocked_by'" >&2
+  echo "answers cleanly." >&2
+  echo "" >&2
+  exit 1
+fi
+
+if [ -n "$OPEN_BLOCKERS" ]; then
+  echo "" >&2
+  echo "ERROR: issue $REPO#$ISSUE_NUM has an OPEN native blocked_by dependency —" >&2
+  echo "refusing to dispatch agy against it. Still open:" >&2
+  echo "$OPEN_BLOCKERS" >&2
+  echo "Close the blocker(s) above, then retry." >&2
+  echo "" >&2
+  exit 1
+fi
+
 # --- BLOCKED guard (web-jam-tools#154, scoped to status declarations in #395) ---
 # Refuse to dispatch when the issue BODY still carries a blocked marker AS A
 # STATUS DECLARATION, not as ordinary prose. A status declaration is the
@@ -264,13 +324,18 @@ ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 # ever runs, so this guard's job for that specific case is done there. This
 # script is ALSO invoked directly — this PR's own "How to test locally" does
 # exactly that, and /flash-issues exists so Josh can drive agy himself when
-# Claude is out of tokens — and nothing upstream validates the dependency on
-# that path, so an issue whose blocker is genuinely still OPEN can dispatch
-# here. Closing that gap durably means replacing this text heuristic with a
-# real `gh api .../dependencies/blocked_by` call and refusing only when a
-# returned blocker is still OPEN. A vague "BLOCKED by <cause, no issue
-# number>" is NOT excluded and still refuses, since nothing else checks that
-# kind of claim.
+# Claude is out of tokens — and previously nothing upstream validated the
+# dependency on that path, so an issue whose blocker was genuinely still OPEN
+# could dispatch here. That gap is now closed, durably, by the native
+# `blocked_by` dependency guard above (web-jam-tools#847), which runs before
+# this text guard and refuses on any real GitHub blocker regardless of which
+# path invoked the script. With that authoritative check in place, this text
+# guard's remaining job is narrower: catching a bare BLOCKED / DO NOT START
+# STATUS DECLARATION, which is how a non-GitHub prerequisite (an asset from
+# Josh, a decision still pending) is expressed — something no `gh api` call
+# can see, because it was never a GitHub dependency to begin with. A vague
+# "BLOCKED by <cause, no issue number>" is NOT excluded and still refuses,
+# since nothing else checks that kind of claim.
 #
 # Implementation: `grep` (no -z) matches `^`/`$` per line already, so this
 # runs once against the whole (possibly multi-line) body. `^[^A-Za-z0-9]*`
