@@ -70,6 +70,13 @@ export const DUPLICATE_MIN_SHARED_TOKENS = 3;
 /** Jaccard similarity (token-set intersection / union) threshold to flag a candidate. */
 export const DUPLICATE_SIMILARITY_THRESHOLD = 0.3;
 
+/**
+ * `gh issue list --limit` cap for the OPEN-issue fetch. A result exactly at this cap is
+ * indistinguishable from a truncated one, so `fetchOpenIssueTitles` treats hitting it as a failed
+ * search rather than risking a false "no candidates" on a repo that has grown past it.
+ */
+export const FETCH_LIMIT = 300;
+
 /** Lowercase, alphanumeric-token, stopword-filtered, deduplicated tokenization of a title. */
 export function tokenizeTitle(title: string): string[] {
   const raw = (title.toLowerCase().match(/[a-z0-9]+/g) || []).filter(
@@ -133,6 +140,25 @@ function hasOverrideReason(override: DedupOverride | null | undefined): boolean 
 }
 
 /**
+ * The skip/override preamble shared by `classifyDuplicate` and
+ * `checkDuplicateTitle` (web-jam-tools#904 review — this used to be
+ * duplicated line-for-line in both). Returns a definitive result when no
+ * search is needed at all (missing repo/title, an override reason, or a
+ * title too short to ever reach the similarity floor), or `null` when the
+ * caller must actually consult a fetched/searched issue list.
+ */
+function shortCircuitDuplicateCheck(
+  newTitle: string,
+  repoFull: string | null | undefined,
+  override: DedupOverride | null | undefined,
+): DuplicateCheckResult | null {
+  if (!repoFull || !newTitle.trim()) return { outcome: "skip" };
+  if (hasOverrideReason(override)) return { outcome: "pass" };
+  if (tokenizeTitle(newTitle).length < DUPLICATE_MIN_SHARED_TOKENS) return { outcome: "skip" };
+  return null;
+}
+
+/**
  * Pure decision function: given a (possibly null / already-fetched) open
  * issue list, decide the outcome. No network — the network fetch is a
  * separate, thin step (`fetchOpenIssueTitles`) so this stays unit-testable
@@ -148,12 +174,15 @@ export function classifyDuplicate(
   openIssues: OpenIssueSummary[] | null,
   override: DedupOverride | null = null,
 ): DuplicateCheckResult {
-  if (!repoFull || !newTitle.trim()) return { outcome: "skip" };
-  if (hasOverrideReason(override)) return { outcome: "pass" };
-  if (tokenizeTitle(newTitle).length < DUPLICATE_MIN_SHARED_TOKENS) return { outcome: "skip" };
-  if (openIssues === null) return { outcome: "deny_search_failed", repoFull };
+  const shortCircuited = shortCircuitDuplicateCheck(newTitle, repoFull, override);
+  if (shortCircuited) return shortCircuited;
+  // repoFull is guaranteed truthy here — shortCircuitDuplicateCheck only
+  // returns null once it has already confirmed that.
+  if (openIssues === null) return { outcome: "deny_search_failed", repoFull: repoFull! };
   const candidates = findSimilarOpenIssues(newTitle, openIssues);
-  if (candidates.length > 0) return { outcome: "deny_duplicate", repoFull, candidates };
+  if (candidates.length > 0) {
+    return { outcome: "deny_duplicate", repoFull: repoFull!, candidates };
+  }
   return { outcome: "pass" };
 }
 
@@ -195,12 +224,17 @@ export async function fetchOpenIssueTitles(
     "--json",
     "number,title",
     "--limit",
-    "300",
+    String(FETCH_LIMIT),
   ]);
   if (res.code !== 0) return null;
   try {
     const parsed = JSON.parse(res.stdout);
     if (!Array.isArray(parsed)) return null;
+    // A result exactly at the limit can't be told apart from a truncated one
+    // — searching a partial issue list and reporting "no candidates" would
+    // silently defeat the whole point of failing closed (web-jam-tools#904
+    // review), so treat it the same as a failed search rather than guessing.
+    if (parsed.length >= FETCH_LIMIT) return null;
     return parsed
       .filter((x) => x && typeof x.number === "number" && typeof x.title === "string")
       .map((x) => ({ number: x.number, title: x.title }));
@@ -219,10 +253,9 @@ export async function checkDuplicateTitle(
   override: DedupOverride | null = null,
   runner: CommandRunner = runGhCommand,
 ): Promise<DuplicateCheckResult> {
-  if (!repoFull || !newTitle.trim()) return { outcome: "skip" };
-  if (hasOverrideReason(override)) return { outcome: "pass" };
-  if (tokenizeTitle(newTitle).length < DUPLICATE_MIN_SHARED_TOKENS) return { outcome: "skip" };
-  const openIssues = await fetchOpenIssueTitles(repoFull, runner);
+  const shortCircuited = shortCircuitDuplicateCheck(newTitle, repoFull, override);
+  if (shortCircuited) return shortCircuited;
+  const openIssues = await fetchOpenIssueTitles(repoFull!, runner);
   return classifyDuplicate(newTitle, repoFull, openIssues, override);
 }
 

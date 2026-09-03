@@ -5,6 +5,7 @@ import {
   decide,
   ESCALATION_LABELS,
   extractEscalationReason,
+  extractRepoValue,
   loadModelLabels,
 } from "../hooks/lib/check_model_label_on_issue_create.ts";
 
@@ -71,6 +72,17 @@ Deno.test("extractEscalationReason: returns null on empty or missing values", ()
     ]),
     null,
   );
+});
+
+Deno.test("extractRepoValue: parses --repo, --repo=, -R, and -R= (web-jam-tools#904 review)", () => {
+  assertEquals(
+    extractRepoValue(["--repo", "WebJamApps/web-jam-tools"]),
+    "WebJamApps/web-jam-tools",
+  );
+  assertEquals(extractRepoValue(["--repo=WebJamApps/web-jam-tools"]), "WebJamApps/web-jam-tools");
+  assertEquals(extractRepoValue(["-R", "WebJamApps/web-jam-tools"]), "WebJamApps/web-jam-tools");
+  assertEquals(extractRepoValue(["-R=WebJamApps/web-jam-tools"]), "WebJamApps/web-jam-tools");
+  assertEquals(extractRepoValue(["--title", "T"]), null);
 });
 
 Deno.test("decide: Sonnet and Opus require escalation justification", () => {
@@ -240,6 +252,22 @@ Deno.test("checkModelLabelOnIssueCreate: CLI create with a similar OPEN issue is
   );
   assertEquals(res.startsWith("DENY:possible duplicate issue(s) found"), true);
   assertEquals(res.includes('web-jam-tools#885 "'), true);
+});
+
+Deno.test("checkModelLabelOnIssueCreate: CLI create using -R (gh's repo shorthand) is still searched, not silently skipped (web-jam-tools#904 review)", async () => {
+  const payload = JSON.stringify({
+    tool_name: "Bash",
+    tool_input: {
+      command:
+        'gh issue create -R WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body "B" --type Task --label "Flash High"',
+    },
+  });
+  const res = await checkModelLabelOnIssueCreate(
+    payload,
+    MODEL_LABELS_PATH,
+    fakeRunnerReturning([{ number: 885, title: EXISTING_TITLE }]),
+  );
+  assertEquals(res.startsWith("DENY:possible duplicate issue(s) found"), true);
 });
 
 Deno.test("checkModelLabelOnIssueCreate: CLI create with no similar OPEN issue proceeds unchanged", async () => {

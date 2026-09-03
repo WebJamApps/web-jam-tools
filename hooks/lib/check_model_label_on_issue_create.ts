@@ -216,12 +216,17 @@ export function extractTitleValue(args: string[]): string | null {
   return null;
 }
 
-/** `--repo`/`--repo=` only, matching `src/create-issue/lib.ts`'s parseArgs (no `-R` alias). */
+/**
+ * `--repo`/`--repo=` (matching `src/create-issue/lib.ts`'s parseArgs) plus `-R`/`-R=` — real `gh`
+ * CLI accepts `-R` as a repo shorthand on `gh issue create`, and without it a raw `gh issue create
+ * -R WebJamApps/<repo> --title "..."` call resolved to no repo, silently skipping the dedup search
+ * (web-jam-tools#904 review).
+ */
 export function extractRepoValue(args: string[]): string | null {
   let j = 0;
   while (j < args.length) {
     const a = args[j];
-    if (a === "--repo") {
+    if (a === "--repo" || a === "-R") {
       if (j + 1 < args.length) {
         const val = args[j + 1];
         if (val && !val.startsWith("--")) return val;
@@ -230,6 +235,10 @@ export function extractRepoValue(args: string[]): string | null {
     }
     if (a.startsWith("--repo=")) {
       const val = a.slice("--repo=".length);
+      return val || null;
+    }
+    if (a.startsWith("-R=")) {
+      const val = a.slice("-R=".length);
       return val || null;
     }
     j += 1;

@@ -5,6 +5,7 @@ import {
   classifyDuplicate,
   DUPLICATE_MIN_SHARED_TOKENS,
   DUPLICATE_SIMILARITY_THRESHOLD,
+  FETCH_LIMIT,
   fetchOpenIssueTitles,
   findSimilarOpenIssues,
   formatCandidates,
@@ -207,6 +208,30 @@ Deno.test("fetchOpenIssueTitles: non-array JSON returns null (search failed)", a
     () => Promise.resolve({ code: 0, stdout: "{}", stderr: "" }),
   );
   assertEquals(issues, null);
+});
+
+Deno.test("fetchOpenIssueTitles: a result exactly at FETCH_LIMIT is treated as truncated, not exhaustive (web-jam-tools#904 review)", async () => {
+  const fullPage = Array.from(
+    { length: FETCH_LIMIT },
+    (_, i) => ({ number: i + 1, title: `Issue ${i + 1}` }),
+  );
+  const issues = await fetchOpenIssueTitles(
+    "WebJamApps/web-jam-tools",
+    () => Promise.resolve({ code: 0, stdout: JSON.stringify(fullPage), stderr: "" }),
+  );
+  assertEquals(issues, null);
+});
+
+Deno.test("fetchOpenIssueTitles: a result one short of FETCH_LIMIT is treated as exhaustive", async () => {
+  const almostFullPage = Array.from(
+    { length: FETCH_LIMIT - 1 },
+    (_, i) => ({ number: i + 1, title: `Issue ${i + 1}` }),
+  );
+  const issues = await fetchOpenIssueTitles(
+    "WebJamApps/web-jam-tools",
+    () => Promise.resolve({ code: 0, stdout: JSON.stringify(almostFullPage), stderr: "" }),
+  );
+  assertEquals(issues?.length, FETCH_LIMIT - 1);
 });
 
 Deno.test("checkDuplicateTitle: end-to-end deny_duplicate via an injected runner", async () => {
