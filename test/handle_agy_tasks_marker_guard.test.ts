@@ -127,7 +127,9 @@ function assertRefusedByDependency(res: RunResult) {
   assertEquals(res.code, 1, res.stderr);
   assertStringIncludes(res.stderr, "dependency");
   if (res.stderr.includes(GUARD_REFUSAL_SNIPPET)) {
-    throw new Error(`expected a dependency-guard refusal, not the body-text guard's: ${res.stderr}`);
+    throw new Error(
+      `expected a dependency-guard refusal, not the body-text guard's: ${res.stderr}`,
+    );
   }
 }
 
@@ -298,7 +300,12 @@ Deno.test(
   "dependency API case 2: single closed blocker dispatches normally",
   async () => {
     const depJson = JSON.stringify([
-      { number: 814, state: "closed", title: "A now-closed blocker", repository: { name: "web-jam-tools" } },
+      {
+        number: 814,
+        state: "closed",
+        title: "A now-closed blocker",
+        repository: { name: "web-jam-tools" },
+      },
     ]);
     const res = await runGuard("An ordinary issue body with no markers.", { depJson });
     assertDispatchedNormally(res);
@@ -328,7 +335,12 @@ Deno.test(
   async () => {
     const depJson = JSON.stringify([
       { number: 814, state: "open", title: "Open blocker", repository: { name: "web-jam-tools" } },
-      { number: 820, state: "closed", title: "Closed blocker", repository: { name: "web-jam-tools" } },
+      {
+        number: 820,
+        state: "closed",
+        title: "Closed blocker",
+        repository: { name: "web-jam-tools" },
+      },
     ]);
     const res = await runGuard("An ordinary issue body with no markers.", { depJson });
     assertRefusedByDependency(res);
@@ -343,8 +355,18 @@ Deno.test(
   "dependency API case 5: two open blockers names both",
   async () => {
     const depJson = JSON.stringify([
-      { number: 814, state: "open", title: "First open blocker", repository: { name: "web-jam-tools" } },
-      { number: 820, state: "open", title: "Second open blocker", repository: { name: "web-jam-tools" } },
+      {
+        number: 814,
+        state: "open",
+        title: "First open blocker",
+        repository: { name: "web-jam-tools" },
+      },
+      {
+        number: 820,
+        state: "open",
+        title: "Second open blocker",
+        repository: { name: "web-jam-tools" },
+      },
     ]);
     const res = await runGuard("An ordinary issue body with no markers.", { depJson });
     assertRefusedByDependency(res);
@@ -363,7 +385,9 @@ Deno.test(
     assertRefusedByDependency(res);
     assertStringIncludes(res.stderr, "JaMmusic#99");
     if (res.stderr.includes("web-jam-tools#99")) {
-      throw new Error(`expected the cross-repo blocker not to be mislabeled with this repo: ${res.stderr}`);
+      throw new Error(
+        `expected the cross-repo blocker not to be mislabeled with this repo: ${res.stderr}`,
+      );
     }
   },
 );

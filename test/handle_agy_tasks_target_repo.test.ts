@@ -15,6 +15,10 @@ fi
 if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "list" ]; then
   exit 0
 fi
+if [ "\${1:-}" = "api" ]; then
+  printf '%s' "[]"
+  exit 0
+fi
 echo "unstubbed gh invocation: $*" >&2
 exit 1
 `;
