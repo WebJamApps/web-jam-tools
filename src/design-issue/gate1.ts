@@ -258,3 +258,288 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     opened,
   };
 }
+
+export interface ExistingDesignDocMatch {
+  path: string;
+  theme: string;
+  filename: string;
+  topic: string;
+  date?: string;
+  isMatch: boolean;
+  suggestion: string;
+}
+
+export interface FindDesignDocOptions {
+  theme?: string;
+  topic?: string;
+  title?: string;
+  dropboxDir?: string;
+}
+
+/**
+ * Normalizes a topic string into a clean lowercase slug (e.g. "design-issue").
+ */
+export function normalizeTopicSlug(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+/**
+ * Extracts a topic slug from free-form text such as an issue title, epic title, or scope prefix.
+ * e.g. "skills/design-issue: automatically match..." -> "design-issue"
+ *      "[Epic] book-gig skill enhancements" -> "book-gig"
+ */
+export function extractTopicFromText(text: string): string {
+  if (!text || typeof text !== "string") return "";
+
+  let cleaned = text.trim();
+
+  // Strip wrapping quotes or parens e.g. ("...")
+  cleaned = cleaned.replace(/^\(+/, "").replace(/\)+$/, "").trim();
+  cleaned = cleaned.replace(/^["']+|["']+$/g, "").trim();
+
+  // Strip repo#issue citations e.g. web-jam-tools#737 or #737
+  cleaned = cleaned.replace(/^[a-zA-Z0-9_-]+#\d+\s*/, "");
+  cleaned = cleaned.replace(/^#\d+\s*/, "");
+
+  // Strip [Epic] or Epic: prefixes
+  cleaned = cleaned.replace(/^\[epic\]\s*/i, "");
+  cleaned = cleaned.replace(/^epic:\s*/i, "");
+
+  // Check prefix before colon if present
+  const colonIndex = cleaned.indexOf(":");
+  if (colonIndex !== -1) {
+    const prefix = cleaned.slice(0, colonIndex).trim();
+    let candidate = prefix
+      .replace(/^(skills|src|tools|scripts)\//i, "")
+      .replace(/\[.*?\]/g, "")
+      .trim();
+    if (candidate.includes("/")) {
+      candidate = candidate.split("/")[0].trim();
+    }
+    if (candidate && !/^(feat|fix|test|chore|docs|refactor)$/i.test(candidate)) {
+      return normalizeTopicSlug(candidate);
+    }
+    cleaned = cleaned.slice(colonIndex + 1).trim();
+  }
+
+  // Strip path prefixes
+  cleaned = cleaned.replace(/^(skills|src|tools|scripts)\//i, "");
+
+  // Check for "<word>-skill"
+  const skillMatch = cleaned.match(/\b([a-z0-9]+(?:-[a-z0-9]+)*)-skill\b/i);
+  if (skillMatch) {
+    return normalizeTopicSlug(skillMatch[1]);
+  }
+
+  // Check for "<word> skill"
+  const skillWordMatch = cleaned.match(/\b([a-z0-9]+(?:-[a-z0-9]+)*)\s+skill\b/i);
+  if (skillWordMatch) {
+    return normalizeTopicSlug(skillWordMatch[1]);
+  }
+
+  // Check for hyphenated words like "design-issue" or "book-gig"
+  const hyphenatedMatch = cleaned.match(/\b([a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*)\b/i);
+  if (hyphenatedMatch) {
+    return normalizeTopicSlug(hyphenatedMatch[1]);
+  }
+
+  // Fallback to first non-trivial token
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length > 0) {
+    return normalizeTopicSlug(words[0]);
+  }
+
+  return "";
+}
+
+/**
+ * Checks if a filename is a candidate design document markdown file.
+ * Excludes runbooks, walkthroughs, test logs, backups, and non-markdown files.
+ */
+export function isDesignDocFilename(filename: string): boolean {
+  if (!filename) return false;
+  const lower = filename.toLowerCase();
+  if (!lower.endsWith(".md")) return false;
+  if (lower.includes(".bak") || lower.includes(".bak-")) return false;
+  if (
+    lower.includes("-manual-steps-") ||
+    lower.includes("-josh-steps-") ||
+    lower.includes("-steps-") ||
+    lower.includes("-run-") ||
+    lower.includes("manual-steps")
+  ) {
+    return false;
+  }
+  return lower.includes("-design-") || lower.endsWith("-design.md");
+}
+
+/**
+ * Extracts date (YYYY-MM-DD) from filename if present.
+ */
+export function extractDateFromFilename(filename: string): string | undefined {
+  const match = filename.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  return match ? match[1] : undefined;
+}
+
+/**
+ * Checks whether a design document filename matches a given topic slug.
+ * Avoids dynamic RegExp construction for ReDoS safety.
+ */
+export function matchesTopic(filename: string, topic: string): boolean {
+  if (!filename || !topic) return false;
+  if (!isDesignDocFilename(filename)) return false;
+
+  const base = path.basename(filename).toLowerCase();
+  const normTopic = normalizeTopicSlug(topic);
+  if (!normTopic) return false;
+
+  // Direct prefix match: <topic>-*
+  if (base.startsWith(`${normTopic}-`) || base.startsWith(`${normTopic}.`)) {
+    return true;
+  }
+
+  // Topic with underscores
+  const topicUnderscore = normTopic.replace(/-/g, "_");
+  if (base.startsWith(`${topicUnderscore}-`) || base.startsWith(`${topicUnderscore}.`)) {
+    return true;
+  }
+
+  // Check prefix before the final "-design"
+  const designIndex = base.lastIndexOf("-design");
+  if (designIndex !== -1) {
+    const prefix = base.slice(0, designIndex);
+    if (prefix === normTopic || prefix.startsWith(`${normTopic}-`)) {
+      return true;
+    }
+    const tokens = normTopic.split("-").filter(Boolean);
+    if (tokens.length > 1 && tokens.every((tok) => prefix.includes(tok))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Formats a clear, actionable prompt proposing a Major Revision to an existing design document.
+ */
+export function formatMajorRevisionPrompt(docPath: string, topic: string): string {
+  return (
+    `Found existing canonical design document for "${topic}":\n` +
+    `  ${docPath}\n` +
+    `Proposing a Major Revision to the existing document rather than spawning a new standalone file.\n` +
+    `Protocol:\n` +
+    `  1. Record a new entry in ## Revision History (increment version, record date, Epic / Issue link, summary).\n` +
+    `  2. Update architecture, ERD, decisions, and both-surfaces sections in-place.\n` +
+    `  3. Preserve the document as the single source of truth for the feature.\n` +
+    `  4. Strictly refuse creating redundant parallel design documents (e.g. *-phase-2-design-*.md).`
+  );
+}
+
+/**
+ * Scans ~/Dropbox/web-jam-llms/<Theme>/ for existing topic design documents.
+ * Returns matches sorted newest-first by revision date.
+ */
+export async function findExistingDesignDocs(
+  options: FindDesignDocOptions,
+): Promise<ExistingDesignDocMatch[]> {
+  const topic = options.topic || (options.title ? extractTopicFromText(options.title) : "");
+  if (!topic) return [];
+
+  const baseDir = options.dropboxDir
+    ? path.resolve(expandHome(options.dropboxDir))
+    : (Deno.env.get("DROPBOX_BASE_DIR")
+      ? path.resolve(expandHome(Deno.env.get("DROPBOX_BASE_DIR")!))
+      : path.resolve(expandHome("~/Dropbox/web-jam-llms")));
+
+  const themesToScan: string[] = [];
+
+  if (options.theme) {
+    themesToScan.push(options.theme);
+  } else {
+    try {
+      for await (const entry of Deno.readDir(baseDir)) {
+        if (entry.isDirectory && !entry.name.startsWith(".")) {
+          themesToScan.push(entry.name);
+        }
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  const matches: ExistingDesignDocMatch[] = [];
+
+  for (const theme of themesToScan) {
+    const themeDir = path.join(baseDir, theme);
+    try {
+      for await (const entry of Deno.readDir(themeDir)) {
+        if (entry.isFile && matchesTopic(entry.name, topic)) {
+          const fullPath = path.join(themeDir, entry.name);
+          const docDate = extractDateFromFilename(entry.name);
+          matches.push({
+            path: fullPath,
+            theme,
+            filename: entry.name,
+            topic,
+            date: docDate,
+            isMatch: true,
+            suggestion: formatMajorRevisionPrompt(fullPath, topic),
+          });
+        }
+      }
+    } catch {
+      // directory unreadable or doesn't exist, continue
+    }
+  }
+
+  // Sort newest-first (date descending, then filename descending)
+  matches.sort((a, b) => {
+    if (a.date && b.date) {
+      if (a.date !== b.date) return b.date.localeCompare(a.date);
+    } else if (a.date) {
+      return -1;
+    } else if (b.date) {
+      return 1;
+    }
+    return b.filename.localeCompare(a.filename);
+  });
+
+  return matches;
+}
+
+/**
+ * Finds the canonical existing design document for a feature/topic, returning the newest match or null.
+ */
+export async function findExistingDesignDoc(
+  options: FindDesignDocOptions,
+): Promise<ExistingDesignDocMatch | null> {
+  const docs = await findExistingDesignDocs(options);
+  return docs.length > 0 ? docs[0] : null;
+}
+
+/**
+ * Refuses creation of redundant parallel design documents when a canonical design document
+ * already exists for the given feature/topic. Throws an Error on collision.
+ */
+export async function refuseRedundantDesignDoc(
+  topicOrOptions: string | FindDesignDocOptions,
+  options?: FindDesignDocOptions,
+): Promise<ExistingDesignDocMatch | null> {
+  const opts: FindDesignDocOptions = typeof topicOrOptions === "string"
+    ? { topic: topicOrOptions, ...options }
+    : topicOrOptions;
+
+  const match = await findExistingDesignDoc(opts);
+  if (match) {
+    throw new Error(
+      `Refusing to create redundant parallel design document for "${match.topic}": pre-existing canonical design document already exists at ${match.path}. Perform a Major Revision to the existing document in-place instead.`,
+    );
+  }
+  return null;
+}

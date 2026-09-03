@@ -9,10 +9,20 @@ import {
   defaultOpenBrowserImpl,
   defaultScreenshotImpl,
   expandHome,
+  extractDateFromFilename,
+  extractTopicFromText,
+  findExistingDesignDoc,
+  findExistingDesignDocs,
+  formatMajorRevisionPrompt,
+  isDesignDocFilename,
+  matchesTopic,
+  normalizeTopicSlug,
+  refuseRedundantDesignDoc,
   resolveHtmlPath,
   runGate1,
 } from "../src/design-issue/gate1.ts";
-import { runCli } from "../src/design-issue/cli.ts";
+import { runCandidatesCli } from "../src/design-issue/candidates.ts";
+import { runCli, runMatchDesignCli } from "../src/design-issue/cli.ts";
 
 // A minimal document that still satisfies design:lint-doc's required sections (web-jam-tools#815)
 // — used by tests below that are exercising gate1's render/screenshot/browser mechanics, not the
@@ -517,4 +527,308 @@ Deno.test("deno.json defines design:gate1, render_design_doc, and write_issue_ap
     config.tasks["write_issue_approval_token"],
     "scripts/write_issue_approval_token.ts",
   );
+});
+
+// Tests for automatic feature matching and Major Revision resolution (web-jam-tools#886)
+
+Deno.test("normalizeTopicSlug produces clean lowercase kebab-case slug", () => {
+  assertEquals(normalizeTopicSlug("Design-Issue"), "design-issue");
+  assertEquals(normalizeTopicSlug("book_gig"), "book-gig");
+  assertEquals(normalizeTopicSlug("  skills/design-issue  "), "skills-design-issue");
+  assertEquals(normalizeTopicSlug("---multiple---hyphens---"), "multiple-hyphens");
+});
+
+Deno.test("extractTopicFromText extracts canonical topic slug from diverse titles and formats", () => {
+  assertEquals(
+    extractTopicFromText(
+      "skills/design-issue: automatically match existing feature design documents on Epics for Major Revisions",
+    ),
+    "design-issue",
+  );
+  assertEquals(
+    extractTopicFromText("skills/book-gig: automated venue followups"),
+    "book-gig",
+  );
+  assertEquals(
+    extractTopicFromText("[Epic] design-issue skill enhancements and fixes"),
+    "design-issue",
+  );
+  assertEquals(
+    extractTopicFromText('web-jam-tools#737 ("design-issue skill enhancements and fixes")'),
+    "design-issue",
+  );
+  assertEquals(
+    extractTopicFromText("src/design-issue/gate1.ts: candidate resolution"),
+    "design-issue",
+  );
+  assertEquals(
+    extractTopicFromText("CollegeLutheran bulletin archive browser"),
+    "collegelutheran",
+  );
+  assertEquals(extractTopicFromText("design-issue"), "design-issue");
+  assertEquals(extractTopicFromText(""), "");
+});
+
+Deno.test("isDesignDocFilename correctly identifies design documents and filters non-design artifacts", () => {
+  // Valid design documents
+  assertEquals(
+    isDesignDocFilename("design-issue-enhancements-design-2026-08-23.md"),
+    true,
+  );
+  assertEquals(isDesignDocFilename("book-gig-skill-design-2026-08-16.md"), true);
+  assertEquals(isDesignDocFilename("simple-feature-design.md"), true);
+
+  // Non-design artifacts (must be filtered out)
+  assertEquals(
+    isDesignDocFilename("design-issue-manual-steps-2026-08-23.md"),
+    false,
+  );
+  assertEquals(
+    isDesignDocFilename("pr-review-josh-steps-2026-08-22.md"),
+    false,
+  );
+  assertEquals(
+    isDesignDocFilename("book-gig-run-2026-10-16-to-2026-10-18.md"),
+    false,
+  );
+  assertEquals(
+    isDesignDocFilename("design-issue-enhancements-design-2026-08-23.md.bak-20260827"),
+    false,
+  );
+  assertEquals(
+    isDesignDocFilename("design-issue-enhancements-design-2026-08-23.html"),
+    false,
+  );
+  assertEquals(isDesignDocFilename("venue-zipcodes.json"), false);
+});
+
+Deno.test("extractDateFromFilename extracts ISO date from filename when present", () => {
+  assertEquals(
+    extractDateFromFilename("design-issue-enhancements-design-2026-08-23.md"),
+    "2026-08-23",
+  );
+  assertEquals(
+    extractDateFromFilename("book-gig-skill-design-2026-08-16.md"),
+    "2026-08-16",
+  );
+  assertEquals(extractDateFromFilename("undated-feature-design.md"), undefined);
+});
+
+Deno.test("matchesTopic accurately matches document filenames to topic slugs", () => {
+  assertEquals(
+    matchesTopic("design-issue-enhancements-design-2026-08-23.md", "design-issue"),
+    true,
+  );
+  assertEquals(
+    matchesTopic("book-gig-skill-design-2026-08-16.md", "book-gig"),
+    true,
+  );
+  assertEquals(
+    matchesTopic("issue-design-skill-design-2026-08-08.md", "design-issue"),
+    true,
+  );
+  assertEquals(
+    matchesTopic("pr-review-self-posting-design-2026-08-22.md", "pr-review"),
+    true,
+  );
+
+  // Non-matching topics
+  assertEquals(
+    matchesTopic("agents-md-duplication-design-2026-08-12.md", "design-issue"),
+    false,
+  );
+  assertEquals(
+    matchesTopic("book-gig-skill-design-2026-08-16.md", "pr-review"),
+    false,
+  );
+  assertEquals(
+    matchesTopic("design-issue-manual-steps-2026-08-23.md", "design-issue"),
+    false,
+  );
+});
+
+Deno.test("findExistingDesignDocs and findExistingDesignDoc discover canonical files and order newest-first", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "design-doc-disc-" });
+  const themeDir1 = path.join(tempDir, "Token_Savings");
+  const themeDir2 = path.join(tempDir, "gig-outreach");
+  await Deno.mkdir(themeDir1, { recursive: true });
+  await Deno.mkdir(themeDir2, { recursive: true });
+
+  // Older and newer design docs for design-issue
+  const docOlder = path.join(themeDir1, "issue-design-skill-design-2026-08-08.md");
+  const docNewer = path.join(themeDir1, "design-issue-enhancements-design-2026-08-23.md");
+  const docRunbook = path.join(themeDir1, "design-issue-manual-steps-2026-08-23.md");
+  const docBak = path.join(themeDir1, "design-issue-enhancements-design-2026-08-23.md.bak-1");
+
+  // Gig outreach doc
+  const docGig = path.join(themeDir2, "book-gig-skill-design-2026-08-16.md");
+
+  await Deno.writeTextFile(docOlder, "# Older Design");
+  await Deno.writeTextFile(docNewer, "# Newer Design");
+  await Deno.writeTextFile(docRunbook, "# Runbook");
+  await Deno.writeTextFile(docBak, "# Backup");
+  await Deno.writeTextFile(docGig, "# Book Gig");
+
+  try {
+    // Discovery across all themes
+    const matches = await findExistingDesignDocs({
+      topic: "design-issue",
+      dropboxDir: tempDir,
+    });
+    assertEquals(matches.length, 2);
+    // Newest first
+    assertEquals(matches[0].filename, "design-issue-enhancements-design-2026-08-23.md");
+    assertEquals(matches[0].date, "2026-08-23");
+    assertEquals(matches[1].filename, "issue-design-skill-design-2026-08-08.md");
+    assertEquals(matches[1].date, "2026-08-08");
+
+    // findExistingDesignDoc returns newest canonical document
+    const canonical = await findExistingDesignDoc({
+      title: "skills/design-issue: automatically match existing feature design documents",
+      dropboxDir: tempDir,
+    });
+    assertEquals(canonical !== null, true);
+    assertEquals(canonical?.filename, "design-issue-enhancements-design-2026-08-23.md");
+    assertEquals(canonical?.theme, "Token_Savings");
+    assertStringIncludes(canonical?.suggestion || "", "Proposing a Major Revision");
+
+    // Scoped theme search
+    const gigDoc = await findExistingDesignDoc({
+      topic: "book-gig",
+      theme: "gig-outreach",
+      dropboxDir: tempDir,
+    });
+    assertEquals(gigDoc !== null, true);
+    assertEquals(gigDoc?.filename, "book-gig-skill-design-2026-08-16.md");
+
+    // Unmatched topic returns null
+    const notFound = await findExistingDesignDoc({
+      topic: "unknown-feature",
+      dropboxDir: tempDir,
+    });
+    assertEquals(notFound, null);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("formatMajorRevisionPrompt articulates the Major Revision protocol", () => {
+  const prompt = formatMajorRevisionPrompt(
+    "/home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-enhancements-design-2026-08-23.md",
+    "design-issue",
+  );
+  assertStringIncludes(prompt, 'Found existing canonical design document for "design-issue"');
+  assertStringIncludes(prompt, "Proposing a Major Revision");
+  assertStringIncludes(prompt, "Record a new entry in ## Revision History");
+  assertStringIncludes(
+    prompt,
+    "Update architecture, ERD, decisions, and both-surfaces sections in-place",
+  );
+  assertStringIncludes(prompt, "Preserve the document as the single source of truth");
+  assertStringIncludes(prompt, "Strictly refuse creating redundant parallel design documents");
+});
+
+Deno.test("refuseRedundantDesignDoc throws on pre-existing document and passes when none exists", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "refuse-redun-" });
+  const themeDir = path.join(tempDir, "Token_Savings");
+  await Deno.mkdir(themeDir, { recursive: true });
+  const docPath = path.join(themeDir, "design-issue-enhancements-design-2026-08-23.md");
+  await Deno.writeTextFile(docPath, "# Existing Design");
+
+  try {
+    // Should throw Error refusing parallel document creation when document exists
+    await assertRejects(
+      async () => {
+        await refuseRedundantDesignDoc({
+          topic: "design-issue",
+          dropboxDir: tempDir,
+        });
+      },
+      Error,
+      'Refusing to create redundant parallel design document for "design-issue"',
+    );
+
+    // Should return null and not throw when no document exists
+    const result = await refuseRedundantDesignDoc({
+      topic: "non-existent-topic",
+      dropboxDir: tempDir,
+    });
+    assertEquals(result, null);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runMatchDesignCli CLI prints match and returns 0 or 1 appropriately", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "cli-match-" });
+  const themeDir = path.join(tempDir, "Token_Savings");
+  await Deno.mkdir(themeDir, { recursive: true });
+  const docPath = path.join(themeDir, "design-issue-enhancements-design-2026-08-23.md");
+  await Deno.writeTextFile(docPath, "# Existing Design");
+
+  try {
+    // Matching query returns 0
+    const exitCode0 = await runMatchDesignCli(
+      ["design-issue", "--dropbox-dir", tempDir],
+    );
+    assertEquals(exitCode0, 0);
+
+    // Unmatched query returns 1
+    const exitCode1 = await runMatchDesignCli(
+      ["unknown-feature", "--dropbox-dir", tempDir],
+    );
+    assertEquals(exitCode1, 1);
+
+    // Missing query returns 1
+    const exitCodeMissing = await runMatchDesignCli([]);
+    assertEquals(exitCodeMissing, 1);
+
+    // Help returns 0
+    const exitCodeHelp = await runMatchDesignCli(["--help"]);
+    assertEquals(exitCodeHelp, 0);
+
+    // Routed through runCli
+    const exitCodeRouted = await runCli([
+      "match-design",
+      "design-issue",
+      "--dropbox-dir",
+      tempDir,
+    ]);
+    assertEquals(exitCodeRouted, 0);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runCandidatesCli resolves Epic argument to existing canonical design doc and prompts Major Revision", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "candidates-epic-" });
+  const themeDir = path.join(tempDir, "Token_Savings");
+  await Deno.mkdir(themeDir, { recursive: true });
+  const docPath = path.join(themeDir, "design-issue-enhancements-design-2026-08-23.md");
+  await Deno.writeTextFile(docPath, "# Existing Design");
+
+  const logs: string[] = [];
+
+  try {
+    const exitCode = await runCandidatesCli(
+      [
+        "--epic",
+        "skills/design-issue: automatically match existing feature design documents on Epics for Major Revisions",
+        "--dropbox-dir",
+        tempDir,
+      ],
+      {
+        log: (msg) => logs.push(msg),
+      },
+    );
+
+    assertEquals(exitCode, 0);
+    const joined = logs.join("\n");
+    assertStringIncludes(joined, 'Resolved existing canonical design document for "design-issue"');
+    assertStringIncludes(joined, docPath);
+    assertStringIncludes(joined, "Suggested action: Major Revision to existing design document");
+    assertStringIncludes(joined, "Record a new entry in ## Revision History");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
 });
