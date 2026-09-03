@@ -35,7 +35,14 @@ const REPO_NOT_FOUND_SNIPPET = "repo folder not found";
 const FAKE_GH_SCRIPT = `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "issue" ] && [ "\${2:-}" = "view" ]; then
-  jq -n --arg title "Test issue" --arg body "\${TEST_ISSUE_BODY:-}" '{title: $title, body: $body, comments: []}'
+  if [ -n "\${TEST_VIEW_EXIT:-}" ] && [ "\${TEST_VIEW_EXIT}" != "0" ]; then
+    exit "\${TEST_VIEW_EXIT}"
+  fi
+  if [ "\${TEST_BODY_NULL:-}" = "1" ]; then
+    jq -n --arg title "Test issue" '{title: $title, body: null, comments: []}'
+  else
+    jq -n --arg title "Test issue" --arg body "\${TEST_ISSUE_BODY:-}" '{title: $title, body: $body, comments: []}'
+  fi
   exit 0
 fi
 if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "list" ]; then
@@ -68,6 +75,12 @@ interface GuardOptions {
   // Non-zero exit code for the stubbed `gh api` call, simulating a failed
   // dependency query (network/auth/API error). Omitted -> the stub exits 0.
   depExit?: string;
+  // Non-zero exit code for the stubbed `gh issue view` call itself, simulating
+  // a failed issue fetch (network/auth/API error). Omitted -> the stub exits 0.
+  viewExit?: string;
+  // When true, the stubbed `gh issue view` returns a literal JSON `null` body
+  // (distinct from an empty string) — jq -r renders that as the text "null".
+  bodyNull?: boolean;
 }
 
 async function runGuard(issueBody: string, opts: GuardOptions = {}): Promise<RunResult> {
@@ -89,6 +102,8 @@ async function runGuard(issueBody: string, opts: GuardOptions = {}): Promise<Run
   };
   if (opts.depJson !== undefined) env.TEST_DEP_JSON = opts.depJson;
   if (opts.depExit !== undefined) env.TEST_DEP_EXIT = opts.depExit;
+  if (opts.viewExit !== undefined) env.TEST_VIEW_EXIT = opts.viewExit;
+  if (opts.bodyNull) env.TEST_BODY_NULL = "1";
 
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, TASK_ARG],
@@ -506,5 +521,100 @@ Deno.test(
   async () => {
     const res = await runGuard("**BLOCKED**", { depJson: "[]" });
     assertRefused(res);
+  },
+);
+
+// --- mention vs. use: a quoted marker (inline code / fenced code) is not a
+// status declaration (web-jam-tools#903, enumerated cases 7-12) ---
+
+function assertRefusedByUnreadableBody(res: RunResult) {
+  assertEquals(res.code, 1, res.stderr);
+  assertStringIncludes(res.stderr, "body could not be read");
+}
+
+Deno.test(
+  "body text case 7: a backtick-quoted marker followed by ordinary prose dispatches normally",
+  async () => {
+    const res = await runGuard(
+      "`DO NOT START` status declaration, which is how a non-GitHub prerequisite is expressed",
+    );
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "body text case 8: a line consisting only of a backtick-quoted marker dispatches normally",
+  async () => {
+    const res = await runGuard("`BLOCKED`");
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "body text case 9: a bare marker line inside a closed ``` fence dispatches normally",
+  async () => {
+    const res = await runGuard("```\nBLOCKED\n```");
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "body text case 10: a bare marker line inside a closed ~~~ fence dispatches normally",
+  async () => {
+    const res = await runGuard("~~~\nBLOCKED\n~~~");
+    assertDispatchedNormally(res);
+  },
+);
+
+Deno.test(
+  "body text case 11: an opening ``` fence with no closing fence does not suppress a bare marker's refusal",
+  async () => {
+    const res = await runGuard("```\nBLOCKED");
+    assertRefused(res);
+  },
+);
+
+Deno.test(
+  "body text case 12: a bare marker line appearing after a properly closed fence is still refused",
+  async () => {
+    const res = await runGuard("```\nsome quoted example text\n```\nBLOCKED");
+    assertRefused(res);
+  },
+);
+
+Deno.test(
+  "a backtick-quoted marker inside a longer document with unrelated fenced examples still dispatches normally",
+  async () => {
+    const res = await runGuard(
+      "Some spec text.\n\n`BLOCKED` is the marker this guard looks for.\n\n```\nexample: BLOCKED\n```\n\nMore prose.",
+    );
+    assertDispatchedNormally(res);
+  },
+);
+
+// --- body-read failure: "cannot determine" refuses rather than proceeds
+// (web-jam-tools#903, enumerated cases 16-17) ---
+
+Deno.test(
+  "body text case 16: a failed gh issue view exits non-zero rather than dispatching",
+  async () => {
+    const res = await runGuard("irrelevant — gh issue view never returns", { viewExit: "1" });
+    assertEquals(res.code, 1, res.stderr);
+  },
+);
+
+Deno.test(
+  "body text case 17a: an empty issue body refuses rather than dispatching",
+  async () => {
+    const res = await runGuard("");
+    assertRefusedByUnreadableBody(res);
+  },
+);
+
+Deno.test(
+  "body text case 17b: a literal null issue body refuses rather than dispatching",
+  async () => {
+    const res = await runGuard("", { bodyNull: true });
+    assertRefusedByUnreadableBody(res);
   },
 );

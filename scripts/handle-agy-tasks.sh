@@ -234,6 +234,22 @@ ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title,body,
 ISSUE_TITLE=$(jq -r '.title' <<< "$ISSUE_JSON")
 ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 
+# A non-zero `gh issue view` exit is already caught by `set -euo pipefail`
+# above — this catches the other half of "cannot determine": the call
+# succeeding but returning a body that is empty or the literal string "null"
+# (jq's `-r` renders a JSON null as that literal). Refusing here, rather than
+# letting an unreadable body fall through as "no marker found", is what keeps
+# this guard from ever dispatching an issue whose spec it never actually saw
+# (web-jam-tools#903).
+if [ -z "$ISSUE_BODY" ] || [ "$ISSUE_BODY" = "null" ]; then
+  echo "" >&2
+  echo "ERROR: issue $REPO#$ISSUE_NUM body could not be read (empty or null) —" >&2
+  echo "refusing to dispatch agy against it rather than assume it carries no" >&2
+  echo "BLOCKED / DO NOT START marker." >&2
+  echo "" >&2
+  exit 1
+fi
+
 # --- native blocked_by dependency guard (web-jam-tools#847) ---
 # The authoritative answer to "is this issue blocked by another GitHub issue?"
 # is GitHub's own native dependency graph, not prose in the body, so ask it
@@ -346,19 +362,74 @@ fi
 # "BLOCKED by <cause, no issue number>" is NOT excluded and still refuses,
 # since nothing else checks that kind of claim.
 #
+# Mention vs. use (web-jam-tools#903): quoting the marker to document or
+# discuss the guard is not the same as declaring the issue's own status, so
+# neither form counts as a declaration:
+#   - Inline code: the marker sits immediately behind a backtick, e.g.
+#     "`DO NOT START` is how a non-GitHub prerequisite is expressed" or a
+#     line that is nothing but "`BLOCKED`". Handled by excluding the
+#     backtick from the leading-decoration character class below, so a
+#     backtick anywhere in the run before the marker stops the anchored
+#     match from ever reaching it — the line simply never enters
+#     MARKER_LINES, same as if no marker were present.
+#   - Fenced code blocks (``` or ~~~): every line strictly between a
+#     validly PAIRED opening and closing fence is quoted content, checked
+#     via MARKER_CHECK_BODY below rather than the raw body. An opening
+#     fence with no matching close is NOT a valid pair — it grants no
+#     mention status, so a bare marker after an unterminated fence still
+#     refuses exactly as if the fence had never been written.
+# Accepted tradeoff: a genuine non-GitHub prerequisite written with the
+# marker in backticks now dispatches instead of refusing. That's accepted —
+# the convention for a real status declaration is the bare form, every bare
+# form still refuses, and the alternative (quoted markers still refusing)
+# is what made it impossible to write an issue *about* this guard at all.
+#
+# MARKER_CHECK_BODY buffers lines while inside an OPEN fence and only
+# discards the buffer once a matching close is actually seen; if the body
+# ends while still "in fence", the buffered lines are flushed back in
+# (END block) so an unterminated fence never suppresses a real refusal.
+# Fence-delimiter lines themselves are never emitted either way, since they
+# are decoration, not marker-bearing content.
+MARKER_CHECK_BODY=$(awk '
+  function fence_delim(line,    trimmed) {
+    trimmed = line
+    sub(/^[ \t]+/, "", trimmed)
+    if (trimmed ~ /^```/) return "`"
+    if (trimmed ~ /^~~~/) return "~"
+    return ""
+  }
+  BEGIN { in_fence = 0; fence_char = ""; n = 0 }
+  {
+    delim = fence_delim($0)
+    if (in_fence == 0) {
+      if (delim != "") { in_fence = 1; fence_char = delim; n = 0; next }
+      print $0
+    } else {
+      if (delim == fence_char) { in_fence = 0; n = 0; next }
+      n++; buf[n] = $0
+    }
+  }
+  END { if (in_fence == 1) { for (i = 1; i <= n; i++) print buf[i] } }
+' <<< "$ISSUE_BODY")
+
 # Implementation: `grep` (no -z) matches `^`/`$` per line already, so this
-# runs once against the whole (possibly multi-line) body. `^[^A-Za-z0-9]*`
-# consumes any run of leading non-alphanumeric bytes — whitespace, markdown
-# punctuation, and multi-byte emoji sequences all fall outside [A-Za-z0-9] —
-# so "any combination" of decoration/emoji is handled without needing a
-# PCRE/Unicode character class (portable across grep implementations). That
-# same leading-strip also keeps "UNBLOCKED"/"unblocking" excluded: stripping
-# stops at the first alphanumeric byte, which is the "U", so the marker
-# alternation is never tried starting there. The dependency-reference carve-out
-# stays in the same portable ERE style (no -P): a second, narrower grep runs
-# only against the lines the first grep already flagged, so it can never widen
+# runs once against the whole (possibly multi-line) MARKER_CHECK_BODY.
+# `^[^A-Za-z0-9`]*` consumes any run of leading non-alphanumeric,
+# non-backtick bytes — whitespace, markdown punctuation, and multi-byte
+# emoji sequences all fall outside [A-Za-z0-9] — so "any combination" of
+# decoration/emoji is handled without needing a PCRE/Unicode character class
+# (portable across grep implementations), while a backtick specifically
+# stops the strip (see "Mention vs. use" above). That same leading-strip
+# also keeps "UNBLOCKED"/"unblocking" excluded: stripping stops at the first
+# alphanumeric byte, which is the "U", so the marker alternation is never
+# tried starting there. The dependency-reference carve-out stays in the same
+# portable ERE style (no -P) and keeps the backtick-inclusive class it
+# always had — the citation itself is normally backtick-wrapped
+# ("`repo#N ...`"), so excluding backtick there would break the carve-out
+# rather than fix a mention/use ambiguity: a second, narrower grep runs only
+# against the lines the first grep already flagged, so it can never widen
 # what the first grep catches — only exclude specific matched lines from it.
-MARKER_LINES=$(grep -iE '^[^A-Za-z0-9]*(BLOCKED|DO[ -]NOT[ -]START)\b' <<< "$ISSUE_BODY" || true)
+MARKER_LINES=$(grep -iE '^[^A-Za-z0-9`]*(BLOCKED|DO[ -]NOT[ -]START)\b' <<< "$MARKER_CHECK_BODY" || true)
 if [ -n "$MARKER_LINES" ] && grep -qviE '^[^A-Za-z0-9]*BLOCKED[[:space:]]+BY[^A-Za-z0-9]*[A-Za-z0-9._-]*#[0-9]+' <<< "$MARKER_LINES"; then
   echo "" >&2
   echo "ERROR: issue $REPO#$ISSUE_NUM body still contains a BLOCKED / DO NOT" >&2
