@@ -54,6 +54,7 @@ export interface CandidateVenue {
   secondaryEmail?: string;
   venueType?: string;
   templateOverride?: string;
+  /** @deprecated Dropped in web-jam-tools#897 / web-jam-back#1053; returning status is derived from gig history */
   relationshipStage?: TemplateStage;
   contactName?: string;
   phone?: string;

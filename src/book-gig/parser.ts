@@ -423,6 +423,59 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
   ],
 };
 
+/**
+ * The 7 family anchor cities from design decision D-36 / D-37.
+ */
+export const FAMILY_CITIES: readonly string[] = [
+  "Salem",
+  "Roanoke",
+  "Martinsville",
+  "Lynchburg",
+  "Gastonia",
+  "Rock Hill",
+  "Harrisonburg",
+];
+
+/**
+ * Default search cities including the 7 family cities and core regional metros.
+ */
+export const DEFAULT_SEARCH_CITIES: readonly string[] = [
+  "Salem",
+  "Roanoke",
+  "Martinsville",
+  "Lynchburg",
+  "Blacksburg",
+  "Christiansburg",
+  "Gastonia",
+  "Rock Hill",
+  "Harrisonburg",
+];
+
+/**
+ * Construct default TargetLocation covering regional metros and family cities (~3.5h drive).
+ */
+export function getDefaultLocation(): TargetLocation {
+  const surroundingSet = new Set<string>();
+  const defaultKeys = [
+    ...DEFAULT_SEARCH_CITIES.map((c) => c.toLowerCase().replace(/\s+/g, "-")),
+    "roanoke-salem",
+    "blacksburg-christiansburg",
+  ];
+  for (const key of defaultKeys) {
+    const list = METRO_SURROUNDING[key] || [];
+    for (const city of list) {
+      surroundingSet.add(city);
+    }
+  }
+
+  return {
+    raw: "All Regional Metros (~3.5h drive)",
+    cities: Array.from(DEFAULT_SEARCH_CITIES),
+    includeSurrounding: true,
+    surroundingCities: Array.from(surroundingSet),
+  };
+}
+
 export const KNOWN_METROS: Record<
   string,
   { slug: string; city: string; state: string; zips: string[] }

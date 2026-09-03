@@ -2,7 +2,7 @@
 
 import type { CandidateVenue, TargetLocation, TargetWeekend } from "./types.ts";
 import { resolveBackendConfig } from "./outreach_api.ts";
-import { US_STATES } from "./parser.ts";
+import { getDefaultLocation, US_STATES } from "./parser.ts";
 
 export interface FetchCandidatesOptions {
   backendUrl?: string;
@@ -51,6 +51,30 @@ export async function fetchCandidates(
   }
 }
 
+function isAlphaNum(char: string | undefined): boolean {
+  if (!char) return false;
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) || // 0-9
+    (code >= 65 && code <= 90) || // A-Z
+    (code >= 97 && code <= 122) // a-z
+  );
+}
+
+function matchesWordBoundary(text: string, target: string): boolean {
+  if (!text || !target) return false;
+  let idx = text.indexOf(target);
+  while (idx !== -1) {
+    const beforeOk = idx === 0 || !isAlphaNum(text[idx - 1]);
+    const afterOk = (idx + target.length === text.length) || !isAlphaNum(text[idx + target.length]);
+    if (beforeOk && afterOk) {
+      return true;
+    }
+    idx = text.indexOf(target, idx + 1);
+  }
+  return false;
+}
+
 /**
  * Filter and rank candidate venues based on target location (City, State, Zip, or Metro)
  */
@@ -59,20 +83,17 @@ export function filterAndRankCandidates(
   location?: TargetLocation,
 ): CandidateVenue[] {
   if (!candidates || candidates.length === 0) return [];
-  if (!location) {
-    // If no location filter, return all eligible candidates sorted by name
-    return [...candidates].sort((a, b) => a.name.localeCompare(b.name));
-  }
+  const targetLoc = location || getDefaultLocation();
 
-  const targetCities = (location.cities && location.cities.length > 0)
-    ? location.cities.map((c) => c.toLowerCase())
-    : (location.city ? [location.city.toLowerCase()] : []);
-  const surroundingCities = (location.surroundingCities || []).map((c) => c.toLowerCase());
-  const locZip = location.zip;
-  const locMetro = location.metroSlug?.toLowerCase();
-  const locState = location.state?.toUpperCase();
-  const hasMultiCityOrSurrounding = (location.cities && location.cities.length > 1) ||
-    Boolean(location.includeSurrounding);
+  const targetCities = (targetLoc.cities && targetLoc.cities.length > 0)
+    ? targetLoc.cities.map((c) => c.toLowerCase())
+    : (targetLoc.city ? [targetLoc.city.toLowerCase()] : []);
+  const surroundingCities = (targetLoc.surroundingCities || []).map((c) => c.toLowerCase());
+  const locZip = targetLoc.zip;
+  const locMetro = targetLoc.metroSlug?.toLowerCase();
+  const locState = targetLoc.state?.toUpperCase();
+  const hasMultiCityOrSurrounding = (targetLoc.cities && targetLoc.cities.length > 1) ||
+    Boolean(targetLoc.includeSurrounding);
 
   const exactMatches: CandidateVenue[] = [];
   const surroundingMatches: CandidateVenue[] = [];
@@ -103,7 +124,7 @@ export function filterAndRankCandidates(
     // 2. Check exact city match across target cities
     if (!isExact && targetCities.length > 0) {
       for (const tc of targetCities) {
-        if (vCity === tc || vAddr.includes(tc) || (tc.length >= 4 && vCity.includes(tc))) {
+        if (vCity === tc || matchesWordBoundary(vCity, tc) || matchesWordBoundary(vAddr, tc)) {
           isExact = true;
           break;
         }
@@ -127,7 +148,7 @@ export function filterAndRankCandidates(
     let isSurrounding = false;
     if (surroundingCities.length > 0) {
       for (const sc of surroundingCities) {
-        if (vCity === sc || vAddr.includes(sc) || (sc.length >= 4 && vCity.includes(sc))) {
+        if (vCity === sc || matchesWordBoundary(vCity, sc) || matchesWordBoundary(vAddr, sc)) {
           isSurrounding = true;
           break;
         }
