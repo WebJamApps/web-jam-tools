@@ -149,6 +149,11 @@ Deno.test("filePlan files epic first, then children attached to epic, then links
       executedCmds.push(cmd);
       const cmdStr = cmd.join(" ");
 
+      // web-jam-tools#901: duplicate search runs before each create call.
+      if (cmdStr.includes("gh issue list")) {
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      }
+
       // gh issue create
       if (cmdStr.includes("gh issue create")) {
         const titleIdx = cmd.indexOf("--title");
@@ -765,6 +770,9 @@ Deno.test("filePlan: resolves position and explicit id dependencies accurately w
   const mockDeps: ExecDeps = {
     runCmd(cmd) {
       const cmdStr = cmd.join(" ");
+      if (cmdStr.includes("gh issue list")) {
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      }
       if (cmdStr.includes("gh issue create")) {
         const titleIdx = cmd.indexOf("--title");
         const title = titleIdx !== -1 ? cmd[titleIdx + 1] : "Task";
