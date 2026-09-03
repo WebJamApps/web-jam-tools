@@ -47,7 +47,7 @@ export async function resolveBackendConfig(
   return { baseUrl, token };
 }
 
-function buildHeaders(token?: string): Record<string, string> {
+export function buildHeaders(token?: string): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",

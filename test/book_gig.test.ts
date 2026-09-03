@@ -1,6 +1,12 @@
 // test/book_gig.test.ts — Unit tests for /book-gig skill and CLI
 
-import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import {
   matchesVenueFilter,
   parseBookGigArgs,
@@ -31,6 +37,13 @@ import {
 import { renderDarkHtml, renderStatusBadge, SORTING_SCRIPT } from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
 import { formatLocationDisplay, runBookGigCli } from "../src/book-gig/cli.ts";
+import {
+  buildUnambiguousNameIndex,
+  decodeHtmlEntities,
+  executeLinkGig,
+  normalizeVenueName,
+  resolveGigVenueId,
+} from "../src/book-gig/venue_link.ts";
 import type {
   CandidateVenue,
   EmailTemplate,
@@ -1580,4 +1593,343 @@ Deno.test("renderPitch: formats greeting cleanly when contactName is empty", () 
   assertEquals(pitch.body.includes("[Contact Name]"), false);
   assertEquals(pitch.body.includes("Hi there,"), false);
   assertEquals(validateVoiceRules(pitch.body).valid, true);
+});
+
+// Tests for --link-gig mode (web-jam-tools#898, Decision D-26)
+
+Deno.test("decodeHtmlEntities and normalizeVenueName accurately normalize HTML & punctuation", () => {
+  assertEquals(
+    decodeHtmlEntities("&quot;Rock &amp; Roll&#39;s &lt;Best&gt;&quot;"),
+    '"Rock & Roll\'s <Best>"',
+  );
+  assertEquals(
+    normalizeVenueName('<p><a href="https://example.com">Slow Play &amp; Brewing!</a></p>'),
+    "slow play brewing",
+  );
+  assertEquals(
+    normalizeVenueName("The Spot on Kirk (Roanoke, VA)!"),
+    "the spot on kirk roanoke va",
+  );
+  assertEquals(normalizeVenueName(""), "");
+  assertEquals(normalizeVenueName(undefined), "");
+  assertEquals(normalizeVenueName(null), "");
+});
+
+Deno.test("buildUnambiguousNameIndex and resolveGigVenueId index unique venues and resolve gigs", () => {
+  const venues = [
+    { _id: "v1", name: "The Spot on Kirk" },
+    { _id: "v2", name: "Twin Creeks" },
+    { _id: "v3", name: "Twin Creeks" }, // duplicate / ambiguous
+  ];
+
+  const index = buildUnambiguousNameIndex(venues);
+  assertEquals(index.get("the spot on kirk"), "v1");
+  assertEquals(index.has("twin creeks"), false); // excluded because ambiguous
+
+  // Gig with venueId already set wins immediately
+  assertEquals(resolveGigVenueId({ venueId: "v99", venue: "Any" }, index), "v99");
+
+  // Gig with matching venue name resolves
+  assertEquals(
+    resolveGigVenueId({ venue: "<p>The Spot on Kirk</p>" }, index),
+    "v1",
+  );
+
+  // Ambiguous venue name resolves to null
+  assertEquals(
+    resolveGigVenueId({ venue: "Twin Creeks" }, index),
+    null,
+  );
+
+  // Unlisted venue resolves to null
+  assertEquals(
+    resolveGigVenueId({ venue: "Non Existent Place" }, index),
+    null,
+  );
+});
+
+Deno.test("parseBookGigArgs: parses --link-gig mode with various argument patterns", () => {
+  const p1 = parseBookGigArgs(["--link-gig", "The Spot on Kirk"]);
+  assertEquals(p1.mode, "link-gig");
+  assertEquals(p1.linkVenueName, "The Spot on Kirk");
+
+  const p2 = parseBookGigArgs(["--link-gig=Olde Salem Brewing"]);
+  assertEquals(p2.mode, "link-gig");
+  assertEquals(p2.linkVenueName, "Olde Salem Brewing");
+
+  const p3 = parseBookGigArgs(["--link", "Hamlet Vineyards"]);
+  assertEquals(p3.mode, "link-gig");
+  assertEquals(p3.linkVenueName, "Hamlet Vineyards");
+
+  const p4 = parseBookGigArgs(["Village Grill", "--link-gig"]);
+  assertEquals(p4.mode, "link-gig");
+  assertEquals(p4.linkVenueName, "Village Grill");
+
+  const p5 = parseBookGigArgs(["--link-gig"]);
+  assertEquals(p5.mode, "link-gig");
+  assertEquals(p5.linkVenueName, undefined);
+});
+
+Deno.test("executeLinkGig: clean match links gig and issues PATCH /gig/:id", async () => {
+  const mockVenues = [{ _id: "v1", name: "The Spot on Kirk" }];
+  const mockGigs = [{ _id: "g1", venue: "<p>The Spot on Kirk</p>", venueId: null }];
+  const calls: Array<{ url: string; method?: string; body?: string }> = [];
+
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    calls.push({ url: u, method, body: init?.body ? String(init.body) : undefined });
+
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig/") && method === "PATCH") {
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockGigs), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const result = await executeLinkGig("The Spot on Kirk", {}, mockFetch);
+  assertEquals(result.status, "linked");
+  assertEquals(result.venueId, "v1");
+  assertEquals(result.matchedGigId, "g1");
+  assertStringIncludes(result.message, "Linked gig");
+
+  const patchCall = calls.find((c) => c.method === "PATCH");
+  assertEquals(patchCall !== undefined, true);
+  assertStringIncludes(patchCall?.url || "", "/gig/g1");
+  assertStringIncludes(patchCall?.body || "", '"venueId":"v1"');
+});
+
+Deno.test("executeLinkGig: already-linked gig reports status and makes no write", async () => {
+  const mockVenues = [{ _id: "v1", name: "The Spot on Kirk" }];
+  const mockGigs = [{ _id: "g1", venue: "The Spot on Kirk", venueId: "v1" }];
+  const calls: Array<{ url: string; method?: string }> = [];
+
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    calls.push({ url: u, method });
+
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockGigs), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const result = await executeLinkGig("The Spot on Kirk", {}, mockFetch);
+  assertEquals(result.status, "already-linked");
+  assertStringIncludes(result.message, "already linked");
+  assertEquals(calls.some((c) => c.method === "PATCH" || c.method === "PUT"), false);
+});
+
+Deno.test("executeLinkGig: gig linked to a different venue reports conflict and makes no write", async () => {
+  const mockVenues = [{ _id: "v1", name: "The Spot on Kirk" }];
+  const mockGigs = [{ _id: "g1", venue: "The Spot on Kirk", venueId: "v2" }];
+  const calls: Array<{ url: string; method?: string }> = [];
+
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    calls.push({ url: u, method });
+
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockGigs), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const result = await executeLinkGig("The Spot on Kirk", {}, mockFetch);
+  assertEquals(result.status, "conflict");
+  assertEquals(result.venueId, "v1");
+  assertEquals(result.matchedGigId, "g1");
+  assertStringIncludes(result.message, "already linked to a different venue (venueId: v2)");
+  assertStringIncludes(result.message, "Refusing to overwrite conflicting link");
+  assertEquals(calls.some((c) => c.method === "PATCH" || c.method === "PUT"), false);
+});
+
+Deno.test("executeLinkGig: ambiguous matching gigs reports ambiguity and makes no write", async () => {
+  const mockVenues = [{ _id: "v1", name: "The Spot on Kirk" }];
+  const mockGigs = [
+    { _id: "g1", venue: "The Spot on Kirk", venueId: null },
+    { _id: "g2", venue: "The Spot on Kirk", venueId: null },
+  ];
+  const calls: Array<{ url: string; method?: string }> = [];
+
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    calls.push({ url: u, method });
+
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockGigs), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const result = await executeLinkGig("The Spot on Kirk", {}, mockFetch);
+  assertEquals(result.status, "ambiguous");
+  assertStringIncludes(result.message, "Ambiguous match");
+  assertEquals(calls.some((c) => c.method === "PATCH" || c.method === "PUT"), false);
+});
+
+Deno.test("executeLinkGig: no matching gig reports no-match and makes no write", async () => {
+  const mockVenues = [{ _id: "v1", name: "The Spot on Kirk" }];
+  const mockGigs = [{ _id: "g1", venue: "Different Venue", venueId: null }];
+  const calls: Array<{ url: string; method?: string }> = [];
+
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    calls.push({ url: u, method });
+
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockGigs), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const result = await executeLinkGig("The Spot on Kirk", {}, mockFetch);
+  assertEquals(result.status, "no-match");
+  assertStringIncludes(result.message, "No matching gig found");
+  assertEquals(calls.some((c) => c.method === "PATCH" || c.method === "PUT"), false);
+});
+
+Deno.test("executeLinkGig: unknown venue reports venue-not-found", async () => {
+  const mockVenues = [{ _id: "v1", name: "The Spot on Kirk" }];
+  const mockFetch: typeof fetch = (url) => {
+    if (String(url).includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("[]", { status: 200 }));
+  };
+
+  const result = await executeLinkGig("Non Existent Venue", {}, mockFetch);
+  assertEquals(result.status, "venue-not-found");
+  assertStringIncludes(result.message, "not found in venue database");
+});
+
+Deno.test("runBookGigCli: executes --link-gig mode cleanly and handles missing venue name", async () => {
+  const mockVenues = [{ _id: "v1", name: "Olde Salem Brewing" }];
+  const mockGigs = [{ _id: "g1", venue: "Olde Salem Brewing", venueId: null }];
+
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig/") && method === "PATCH") {
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/gig")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockGigs), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  // Successful run
+  const res = await runBookGigCli(["--link-gig", "Olde Salem Brewing"], mockFetch);
+  assertEquals(res.mode, "link-gig");
+  assertEquals(res.linkGig?.status, "linked");
+  assertEquals(res.linkGig?.venueId, "v1");
+
+  // Missing venue name throws error
+  await assertRejects(
+    async () => {
+      await runBookGigCli(["--link-gig"], mockFetch);
+    },
+    Error,
+    "Missing venue name for --link-gig",
+  );
 });

@@ -1,6 +1,8 @@
 // src/book-gig/types.ts — Type definitions for /book-gig skill & CLI
 
-export type BookGigMode = "preview" | "send" | "replies";
+import type { LinkGigResult } from "./venue_link.ts";
+
+export type BookGigMode = "preview" | "send" | "replies" | "link-gig";
 
 export interface TargetWeekend {
   start: string; // ISO date string (YYYY-MM-DD), usually Friday
@@ -150,6 +152,7 @@ export interface ParsedBookGigArgs {
   includeVenues?: string[];
   excludeVenues?: string[];
   noOpen?: boolean;
+  linkVenueName?: string;
   rawArgs: string;
 }
 
@@ -168,6 +171,7 @@ export interface BookGigResult {
   pitches: PitchEmail[];
   batchDispatch?: BatchDispatchResult;
   repliesTracking?: RepliesTrackingResult;
+  linkGig?: LinkGigResult;
   htmlPath?: string;
   reportUrl?: string;
   openedBrowser?: boolean;
