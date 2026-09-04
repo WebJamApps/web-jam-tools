@@ -51,14 +51,10 @@ export async function fetchCandidates(
   }
 }
 
+// Word boundary matching via string indexing and static regex character testing.
+// Avoids dynamic new RegExp (detect-non-literal-regexp / ReDoS rule — AGENTS.md).
 function isAlphaNum(char: string | undefined): boolean {
-  if (!char) return false;
-  const code = char.charCodeAt(0);
-  return (
-    (code >= 48 && code <= 57) || // 0-9
-    (code >= 65 && code <= 90) || // A-Z
-    (code >= 97 && code <= 122) // a-z
-  );
+  return Boolean(char && /[a-z0-9]/i.test(char));
 }
 
 function matchesWordBoundary(text: string, target: string): boolean {
