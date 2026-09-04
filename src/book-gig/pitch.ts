@@ -226,7 +226,6 @@ export function resolveVenueStage(
   options?: RenderPitchOptions,
 ): TemplateStage {
   if (options?.isReturningVenue) return "returning";
-  if (venue.relationshipStage) return venue.relationshipStage;
   if (venue.reason?.lastGigDate && venue.reason.lastGigDate !== "never") return "returning";
   return "cold";
 }
