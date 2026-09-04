@@ -532,8 +532,34 @@ function assertRefusedByUnreadableBody(res: RunResult) {
   assertStringIncludes(res.stderr, "body could not be read");
 }
 
+// A refusal from `set -euo pipefail` tripping on the `gh issue view` call
+// itself (scripts/handle-agy-tasks.sh:118) exits 1 before any guard's own
+// message can print — distinct from every downstream refusal path, which all
+// also exit 1. Asserting only res.code === 1 would still pass if the fetch
+// failure were swallowed and the run died at a later guard instead, so pin
+// the exit to the fetch path by asserting none of the downstream guards'
+// refusal text appears.
+function assertRefusedByFetchFailure(res: RunResult) {
+  assertEquals(res.code, 1, res.stderr);
+  if (res.stderr.includes(GUARD_REFUSAL_SNIPPET)) {
+    throw new Error(
+      `expected a fetch-failure exit, not the body-text guard's refusal: ${res.stderr}`,
+    );
+  }
+  if (res.stderr.includes("body could not be read")) {
+    throw new Error(
+      `expected a fetch-failure exit, not the unreadable-body guard's refusal: ${res.stderr}`,
+    );
+  }
+  if (res.stderr.includes("dependency")) {
+    throw new Error(
+      `expected a fetch-failure exit, not the dependency guard's refusal: ${res.stderr}`,
+    );
+  }
+}
+
 Deno.test(
-  "body text case 7: a backtick-quoted marker followed by ordinary prose dispatches normally",
+  "#903 case 7: a backtick-quoted marker followed by ordinary prose dispatches normally",
   async () => {
     const res = await runGuard(
       "`DO NOT START` status declaration, which is how a non-GitHub prerequisite is expressed",
@@ -543,7 +569,7 @@ Deno.test(
 );
 
 Deno.test(
-  "body text case 8: a line consisting only of a backtick-quoted marker dispatches normally",
+  "#903 case 8: a line consisting only of a backtick-quoted marker dispatches normally",
   async () => {
     const res = await runGuard("`BLOCKED`");
     assertDispatchedNormally(res);
@@ -551,7 +577,7 @@ Deno.test(
 );
 
 Deno.test(
-  "body text case 9: a bare marker line inside a closed ``` fence dispatches normally",
+  "#903 case 9: a bare marker line inside a closed ``` fence dispatches normally",
   async () => {
     const res = await runGuard("```\nBLOCKED\n```");
     assertDispatchedNormally(res);
@@ -559,7 +585,7 @@ Deno.test(
 );
 
 Deno.test(
-  "body text case 10: a bare marker line inside a closed ~~~ fence dispatches normally",
+  "#903 case 10: a bare marker line inside a closed ~~~ fence dispatches normally",
   async () => {
     const res = await runGuard("~~~\nBLOCKED\n~~~");
     assertDispatchedNormally(res);
@@ -567,7 +593,7 @@ Deno.test(
 );
 
 Deno.test(
-  "body text case 11: an opening ``` fence with no closing fence does not suppress a bare marker's refusal",
+  "#903 case 11: an opening ``` fence with no closing fence does not suppress a bare marker's refusal",
   async () => {
     const res = await runGuard("```\nBLOCKED");
     assertRefused(res);
@@ -575,7 +601,7 @@ Deno.test(
 );
 
 Deno.test(
-  "body text case 12: a bare marker line appearing after a properly closed fence is still refused",
+  "#903 case 12: a bare marker line appearing after a properly closed fence is still refused",
   async () => {
     const res = await runGuard("```\nsome quoted example text\n```\nBLOCKED");
     assertRefused(res);
@@ -596,15 +622,15 @@ Deno.test(
 // (web-jam-tools#903, enumerated cases 16-17) ---
 
 Deno.test(
-  "body text case 16: a failed gh issue view exits non-zero rather than dispatching",
+  "#903 case 16: a failed gh issue view exits non-zero rather than dispatching",
   async () => {
     const res = await runGuard("irrelevant — gh issue view never returns", { viewExit: "1" });
-    assertEquals(res.code, 1, res.stderr);
+    assertRefusedByFetchFailure(res);
   },
 );
 
 Deno.test(
-  "body text case 17a: an empty issue body refuses rather than dispatching",
+  "#903 case 17a: an empty issue body refuses rather than dispatching",
   async () => {
     const res = await runGuard("");
     assertRefusedByUnreadableBody(res);
@@ -612,7 +638,7 @@ Deno.test(
 );
 
 Deno.test(
-  "body text case 17b: a literal null issue body refuses rather than dispatching",
+  "#903 case 17b: a literal null issue body refuses rather than dispatching",
   async () => {
     const res = await runGuard("", { bodyNull: true });
     assertRefusedByUnreadableBody(res);
