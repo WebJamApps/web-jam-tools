@@ -291,7 +291,7 @@ afterward.
        - A version-bump irregularity found *within the PR under review* is different: Step 2 item 5 evaluates that PR's own commits and reports both a gratuitous double bump and a version that fails to strictly exceed `origin/dev` as a Suggestion, so either belongs in this section as a real, permitted finding.
    - **Nits** (`### 🔵 Nits`): Cosmetic, non-blocking findings about the PR's own description or a linked issue's body — the Step 2 item 11 class ("Issue Body & PR Body Prose (Never a Must Fix)"): stale, incomplete, or drifted Summary, Non-goals, acceptance-criteria wording, "Files changed" lists, and "How to test locally" / test-plan narration. **Placed directly beneath `### 🟡 Suggestions`** in the post body, as the last section. Prefix each nit line with 🔵. If none, render `### Nits` with `✅ None`.
      - **Scope, exactly**: this section holds the Step 2 item 11 body-prose class and nothing else. A finding about the code, the tests, or the version field is a Suggestion (or a Must Fix), not a Nit.
-     - **Never a merge blocker**: like a Suggestion, a Nit never produces `**🛑 Changes Requested**` on its own, and it is never restated in a later post.
+     - **Never a merge blocker**: like a Suggestion, a Nit never produces `**🛑 Changes Requested**` on its own, and it is never restated in Step 4's follow-up post. On a re-review, a Nit that has since been edited away is reported once with ✅ under `### Changes Since Last Review`, exactly like any other fixed finding.
      - **Fixed by editing text, not by pushing code**: a Nit is cleared with `gh pr edit --body` or an issue-body edit, which is precisely why it does not share a section with findings that require a commit.
 
    **Example — initial post (post #1), re-review with one remaining blocker and two now-fixed
@@ -330,8 +330,7 @@ afterward.
    the only failing job is not the version-bump job — no Suggestions section either. **There is no
    `### 🔵 Nits` section here, and there never is in a Step 4 follow-up**: post #1 already carried
    the body-prose nit shown above, a CircleCI result is never body prose, and nothing from post #1
-   is restated. The
-   swallowed-rejection blocker from post #1 is still outstanding and still blocks the merge, which
+   is restated. The swallowed-rejection blocker from post #1 is still outstanding and still blocks the merge, which
    is why the verdict stays red — but it is not restated here, because post #1 already said it. The
    CircleCI job failing here ("Format check") is unrelated to the version bump, so per Step 4 item 5
    it adds its own Must Fix line rather than going under Suggestions:
@@ -449,8 +448,8 @@ resolves green, the review is already complete and nothing further is posted.
 
    **It carries nothing else.** No Checklist Verification block, no `**CircleCI**` row, no
    `### 🔵 Nits` section, no repeat of post #1's other Must Fix items or Nits, no narration of what
-   changed. Post #1 already carries the
-   review; this post exists solely to add the CircleCI result(s) that post #1 could not know about.
+   changed. Post #1 already carries the review; this post exists solely to add the CircleCI
+   result(s) that post #1 could not know about.
    Any finding from post #1 that is still outstanding stays outstanding without being restated here.
 
    ```sh
