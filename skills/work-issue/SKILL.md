@@ -288,9 +288,16 @@ When an issue's deliverables are strictly external documents (such as manual ver
 
    **Model Chain (Most to least capable):**
    1. `Claude Opus 4.6 (Thinking)`
-   2. `Claude Sonnet 4.6 (Thinking)`
-   3. `Gemini 3.1 Pro (High)`
-   4. `Gemini Flash (High)`
+   2. `Gemini 3.8 Flash (High)`
+   3. `Claude Sonnet 4.6 (Thinking)`
+   4. `Gemini 3.1 Pro (High)`
+
+   `Gemini 3.8 Flash (High)` sits above `Claude Sonnet 4.6 (Thinking)` on this ladder: on
+   contamination-resistant long-horizon coding (DeepSWE v1.1) it scores 73.7% against Sonnet 5's
+   54%, effectively matching Opus 5's 74%, and it bills a separate Google budget rather than the
+   constrained Anthropic one. Opus keeps the top slot because that parity does not extend to
+   abstract, multi-step unguided agent work (Terminal-Bench 4.0). Model names here are the exact
+   in-session picker `displayName` values and carry their version token — never version-scrub them.
 
    There are only **two independent quota pools** (verified — web-jam-tools#79):
    `{Claude Opus/Sonnet}` and `{Gemini Pro/Flash}`. `GPT-OSS 120B` shares Claude's
@@ -302,8 +309,8 @@ When an issue's deliverables are strictly external documents (such as manual ver
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:
-     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini Flash (High)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
-     * *Ordinary Coding*: → `Claude Sonnet 4.6 (Thinking)`.
+     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini 3.8 Flash (Medium)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
+     * *Ordinary Coding*: → `Gemini 3.8 Flash (High)`. This is the tier that moved: ordinary contained coding used to route to `Claude Sonnet 4.6 (Thinking)`, which is now both weaker on this work and billed to the constrained budget. Route to Sonnet only when the task needs a Claude-side capability Flash lacks, and say which one.
      * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
    * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
 
