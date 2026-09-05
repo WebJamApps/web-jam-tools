@@ -84,7 +84,7 @@ function agyRunCommand(command: string, extra: Record<string, unknown> = {}) {
     toolCall: { name: "run_command", args: { CommandLine: command, Cwd: "/home/joshua" } },
     conversationId: "conv-1",
     stepIdx: 1,
-    modelName: "gemini-3.7-flash-high",
+    modelName: "gemini-3.8-flash-high",
     artifactDirectoryPath: "/tmp/artifacts",
     workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
     ...extra,
@@ -153,7 +153,7 @@ Deno.test("normalize: PreToolUse builds tool_name/tool_input/transcript_path, no
     {
       toolCall: { name: "run_command", args: { CommandLine: "ls" } },
       transcriptPath: "/tmp/t.jsonl",
-      modelName: "gemini-3.7-flash-high",
+      modelName: "gemini-3.8-flash-high",
     },
     "PreToolUse",
   );
@@ -161,7 +161,7 @@ Deno.test("normalize: PreToolUse builds tool_name/tool_input/transcript_path, no
   assertEquals(normalized.tool_name, "Bash");
   assertEquals(normalized.tool_input.command, "ls");
   assertEquals(normalized.transcript_path, "/tmp/t.jsonl");
-  assertEquals(normalized.modelName, "gemini-3.7-flash-high");
+  assertEquals(normalized.modelName, "gemini-3.8-flash-high");
   assertEquals(normalized.tool_response, undefined);
 });
 
@@ -472,7 +472,7 @@ Deno.test("runShim: records full invocation field set to recordPath without chan
       stepIdx: 7,
       artifactDirectoryPath: "/tmp/artifacts-dir",
       workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
-      modelName: "gemini-3.7-flash-high",
+      modelName: "gemini-3.8-flash-high",
       error: null,
     });
 
@@ -497,7 +497,7 @@ Deno.test("runShim: records full invocation field set to recordPath without chan
     assertEquals(record.stepIdx, 7);
     assertEquals(record.artifactDirectoryPath, "/tmp/artifacts-dir");
     assertEquals(record.workspacePaths, ["/home/joshua/WebJamApps/web-jam-tools"]);
-    assertEquals(record.modelName, "gemini-3.7-flash-high");
+    assertEquals(record.modelName, "gemini-3.8-flash-high");
     assertEquals(record.error, null);
     assertEquals(record.toolCall, {
       name: "run_command",
@@ -524,7 +524,7 @@ Deno.test("runShim: synthetic subagent-shaped payload captures all fields and pr
       stepIdx: 3,
       artifactDirectoryPath: "/tmp/artifacts-subagent",
       workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
-      modelName: "gemini-3.7-flash-medium",
+      modelName: "gemini-3.8-flash-medium",
       subagentType: "research",
       parentConversationId: "main-conv-001",
       error: undefined,
@@ -548,7 +548,7 @@ Deno.test("runShim: synthetic subagent-shaped payload captures all fields and pr
     assertEquals(record.conversationId, "subagent-conv-456");
     assertEquals(record.parentConversationId, "main-conv-001");
     assertEquals(record.subagentType, "research");
-    assertEquals(record.modelName, "gemini-3.7-flash-medium");
+    assertEquals(record.modelName, "gemini-3.8-flash-medium");
     assertEquals(record.stepIdx, 3);
   } finally {
     await Deno.remove(tempPath);

@@ -167,7 +167,7 @@ agy_env_args() {
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.7 Flash (High)|Gemini 3.7 Flash (Medium)')
+DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)')
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- PR author spelling for the running model (web-jam-tools#912) ----------

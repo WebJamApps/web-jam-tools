@@ -104,7 +104,7 @@ depend on agy-native payload fields Claude Code's hook payload doesn't carry):
 
 - **`hooks/agy-model-guard.sh`** — matcher `.*` (every tool call). Denies a non-Flash model chosen
   **in-session**, using the `modelName` field agy's own payload carries (finding 7). Shares its
-  allowed-slug floor (`gemini-3.7-flash-*` or newer) with `hooks/block-agy-non-flash-model.sh`
+  allowed-slug 3.7 floor (`gemini-3.7-flash-*` or newer) with `hooks/block-agy-non-flash-model.sh`
   (which only sees a literal `agy --model ...` Bash invocation from Claude Code, not a running
   agy session's live model) via `hooks/lib/check_agy_model.ts`, so the two can't drift apart.
   Fails OPEN when `modelName` is missing (cost guard, not a leak guard).

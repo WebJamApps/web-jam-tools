@@ -31,8 +31,8 @@ import { ALLOWED_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
 const SCRIPT_PATH = new URL("../scripts/handle-agy-tasks.sh", import.meta.url).pathname;
 const CREATE_PR_PATH = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
 
-const VERSIONED_HIGH = "Gemini 3.7 Flash (High)";
-const VERSIONED_MEDIUM = "Gemini 3.7 Flash (Medium)";
+const VERSIONED_HIGH = "Gemini 3.8 Flash (High)";
+const VERSIONED_MEDIUM = "Gemini 3.8 Flash (Medium)";
 const ROSTER_HIGH_AUTHOR = "agy — Gemini Flash (High)";
 const ROSTER_HIGH_FOOTER = `🤖 Work by ${ROSTER_HIGH_AUTHOR}`;
 

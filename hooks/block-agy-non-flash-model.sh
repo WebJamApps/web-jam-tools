@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse guard (Bash): restrict `agy` (Antigravity CLI) invocations to
-# Flash models only (Gemini 3.7+ floor). Design: web-jam-tools#267 ("agy flash
+# Flash models only (3.7 floor or newer). Design: web-jam-tools#267 ("agy flash
 # default model fix", approved by Josh 2026-07-25; web-jam-tools#549).
 #
 # Rationale: agy's own configured default has drifted before (Flash High
@@ -16,8 +16,8 @@
 #     configured default — separately pinned to Flash High in
 #     ~/.gemini/antigravity-cli/settings.json, a laptop-local step outside
 #     this hook's / this repo's reach, web-jam-tools#267 item 2, web-jam-tools#549).
-#   - `--model` (or `--model=`) equal to a Flash model at 3.7 or newer
-#     (e.g. gemini-3.7-flash-high, gemini-3.7-flash-medium).
+#   - `--model` (or `--model=`) equal to a Flash model (3.7 floor or newer)
+#     (e.g. gemini-3.8-flash-high, gemini-3.8-flash-medium).
 #
 # BLOCKED:
 #   - any other --model value (notably claude-sonnet-4-6,
@@ -48,7 +48,7 @@ result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
-ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.7-flash-high or gemini-3.7-flash-medium")
+ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-medium")
 
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2
