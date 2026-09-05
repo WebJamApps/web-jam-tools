@@ -85,6 +85,12 @@ Deno.test("parseBookGigArgs: parses explicit flags and options", () => {
   assertEquals(res3.excludeVenues, ["v3"]);
 });
 
+Deno.test("parseBookGigArgs: parses --venue as single target alias in --send mode", () => {
+  const res = parseBookGigArgs(["--send", "Oct 16-18 2026", "--venue", "Twin Creeks"]);
+  assertEquals(res.mode, "send");
+  assertEquals(res.includeVenues, ["Twin Creeks"]);
+});
+
 Deno.test("parseLocation: rejects numeric year and arbitrary non-zip numbers (Acceptance Criterion 2)", () => {
   assertEquals(parseLocation("2026"), null);
   assertEquals(parseLocation("2027"), null);

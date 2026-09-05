@@ -10,9 +10,11 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
 ## Invocation
 
 - `/book-gig <weekend> [location]` — Discovery & preview mode (drafts pitches, logs candidate table, outputs clickable HTML artifact link, and automatically opens it in Chrome).
-- `/book-gig --send "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues, outputs HTML artifact link, and opens in Chrome).
+- `/book-gig --send "<weekend>" [location] [--venues "id1,id2" | --venue "id1"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues, outputs HTML artifact link, and opens in Chrome; `--venue <name|id>` acts as an alias for a single target venue in `--send` mode).
 - `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies`, displays live campaign status table, outputs HTML artifact link, and opens in Chrome).
 - `/book-gig --link-gig <venue-name>` — Gig linking mode (resolves single venue by exact normalized name, matches unlinked gig, and writes `venueId` via `PATCH /gig/:id` to correct a wrong new-versus-returning badge per D-26).
+- `/book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>` — Contact hold mode (sets `resumeBooking` to resume date at UTC midnight via `PATCH /venue/:id`; also accepts `--resume`).
+- `/book-gig --booked-through <YYYY-MM-DD> --venue "<venueId|venueName>"` — Booked-through availability mode (sets `bookedThrough` to target date at UTC 23:59:59.999Z via `PATCH /venue/:id`; accepts `--venue` or `--hold`).
 - **Location Syntax & Flags:**
   - Multi-city compound list: `deno task book-gig "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"`
   - Explicit flag: `deno task book-gig "Oct 16-18 2026" --cities "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke"`
@@ -24,10 +26,14 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
   - `deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"` — focus on Lynchburg, VA and surrounding area.
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA"` — dispatch outreach batch to all eligible Lynchburg venues.
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --venues "id1,id2"` — dispatch only to specific approved candidate venues.
+  - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --venue "Twin Creeks"` — dispatch outreach to a single candidate venue (convenient alias for `--venues`).
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --skip "id3"` — dispatch batch while excluding specific venues.
   - `deno task book-gig --replies "Oct 16-18 2026"` — check replies and campaign status for target weekend.
   - `deno task book-gig --replies` — check all active outreach campaigns across all target dates.
   - `deno task book-gig --link-gig "Olde Salem Brewing"` — link matching gig to venue by exact normalized name.
+  - `deno task book-gig --hold "Tequila's" --until 2027-01-01` — place contact hold on venue until Jan 1, 2027 (`resumeBooking`).
+  - `deno task book-gig --venue "Olde Salem Brewing" --booked-through 2026-12-31` — record calendar booked solid through Dec 31, 2026 (`bookedThrough`).
+  - `deno task book-gig --hold "Olde Salem Brewing" --until 2027-01-01 --booked-through 2026-12-31` — record both contact hold and booked-through date simultaneously.
 - **Interactive Fallback:** If invoked without arguments (`/book-gig`), prompt Josh interactively for the target weekend and optional location.
 
 ## Workflow
@@ -76,6 +82,7 @@ graph TD
 - Once candidate selection is approved, execute batch outreach dispatch:
   - **All eligible candidates:** `deno task book-gig --send "<weekend>" [location]`
   - **Specific approved subset:** `deno task book-gig --send "<weekend>" [location] --venues "id1,id2"` (or `--include`)
+  - **Single approved target venue alias:** `deno task book-gig --send "<weekend>" [location] --venue "<name|id>"` (populates `includeVenues` for a single target, e.g. `--venue "Twin Creeks"`)
   - **Excluding specific candidates:** `deno task book-gig --send "<weekend>" [location] --skip "id3"` (or `--exclude`)
 - Calls `POST /outreach/batch` on `web-jam-back` with `{ venueIds, targetDates, targetWeekend }`.
 - Dispatches pitch emails to candidate booking contacts, CCs Josh and Maria (`joshua.v.sherman@gmail.com`, `chemmariasherman@gmail.com`), initializes active campaigns in MongoDB (`status: 'sent'`), and logs email touches on venue timelines.
