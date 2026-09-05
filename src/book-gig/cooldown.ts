@@ -14,6 +14,11 @@ export interface HoldVenueRecord {
   [key: string]: unknown;
 }
 
+export interface VenueHoldDates {
+  untilDate?: string;
+  bookedThroughDate?: string;
+}
+
 export interface ParsedHoldDate {
   resumeBooking: string;
   bookedThrough: string;
@@ -36,12 +41,9 @@ export function normalizeHoldName(text: string | undefined | null): string {
 
 /**
  * Parse and validate a resume date string (YYYY-MM-DD or YYYY-M-D).
- * Computes:
- * - resumeBooking: ISO string at UTC midnight (e.g. "2027-01-01T00:00:00.000Z")
- * - bookedThrough: ISO string at the end of the previous day (e.g. "2026-12-31T23:59:59.999Z")
- * - eligibleDate: formatted YYYY-MM-DD string
+ * Sets resumeBooking: ISO string at UTC midnight (e.g. "2027-01-01T00:00:00.000Z").
  */
-export function parseHoldDate(dateStr: string): ParsedHoldDate {
+export function parseResumeBookingDate(dateStr: string): string {
   if (!dateStr || !dateStr.trim()) {
     throw new Error("Missing required resume date for --hold. Expected YYYY-MM-DD.");
   }
@@ -70,10 +72,55 @@ export function parseHoldDate(dateStr: string): ParsedHoldDate {
     throw new Error(`Invalid calendar date "${dateStr}".`);
   }
 
-  const resumeBooking = resumeDate.toISOString();
-  const bookedThrough = new Date(resumeUtc - 1).toISOString();
-  const eligibleDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return resumeDate.toISOString();
+}
 
+/**
+ * Parse and validate a booked-through date string (YYYY-MM-DD or YYYY-M-D).
+ * Sets bookedThrough: ISO string at the end of the specified day (e.g. "2026-12-31T23:59:59.999Z").
+ */
+export function parseBookedThroughDate(dateStr: string): string {
+  if (!dateStr || !dateStr.trim()) {
+    throw new Error("Missing required date for --booked-through. Expected YYYY-MM-DD.");
+  }
+  const trimmed = dateStr.trim();
+  const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (!match) {
+    throw new Error(`Invalid date format "${dateStr}". Expected YYYY-MM-DD.`);
+  }
+
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    throw new Error(`Invalid calendar date "${dateStr}". Month must be 1-12 and day 1-31.`);
+  }
+
+  const bookedUtc = Date.UTC(year, month - 1, day, 23, 59, 59, 999);
+  const bookedDate = new Date(bookedUtc);
+
+  if (
+    bookedDate.getUTCFullYear() !== year ||
+    bookedDate.getUTCMonth() !== month - 1 ||
+    bookedDate.getUTCDate() !== day
+  ) {
+    throw new Error(`Invalid calendar date "${dateStr}".`);
+  }
+
+  return bookedDate.toISOString();
+}
+
+/**
+ * Legacy combined date parser retained for backward compatibility.
+ */
+export function parseHoldDate(dateStr: string): ParsedHoldDate {
+  const resumeBooking = parseResumeBookingDate(dateStr);
+  const d = new Date(resumeBooking);
+  const eligibleDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${
+    String(d.getUTCDate()).padStart(2, "0")
+  }`;
+  const bookedThrough = new Date(d.getTime() - 1).toISOString();
   return { resumeBooking, bookedThrough, eligibleDate };
 }
 
@@ -82,8 +129,9 @@ export type VenueResolution =
   | { success: false; error: string; candidates?: HoldVenueRecord[] };
 
 /**
- * Resolves target venue by exact ID, exact name, normalized name, or fuzzy substring.
+ * Resolves target venue by exact ID, exact name, normalized name, or forward substring.
  * In case of ambiguity or non-existence, returns descriptive error and candidates.
+ * Note: Never uses reverse string containment (normQuery.includes(normV)) to prevent false matches on write paths.
  */
 export function resolveHoldVenue(
   query: string,
@@ -140,21 +188,22 @@ export function resolveHoldVenue(
     }
   }
 
-  // 4. Fuzzy / substring match
-  if (normQuery && normQuery.length >= 2) {
-    const fuzzyMatches = venues.filter((v) => {
+  // 4. Forward substring match (venue name contains query) with >= 3 character floor.
+  // Never match reverse containment (query contains venue name) to protect write-path mutation safety.
+  if (normQuery && normQuery.length >= 3) {
+    const forwardMatches = venues.filter((v) => {
       const normV = normalizeHoldName(v.name);
       if (!normV) return false;
-      return normV.includes(normQuery) || normQuery.includes(normV);
+      return normV.includes(normQuery);
     });
-    if (fuzzyMatches.length === 1) {
-      return { success: true, venue: fuzzyMatches[0] };
+    if (forwardMatches.length === 1) {
+      return { success: true, venue: forwardMatches[0] };
     }
-    if (fuzzyMatches.length > 1) {
+    if (forwardMatches.length > 1) {
       return {
         success: false,
         error: `Ambiguous venue query "${trimmed}". Multiple matches found:`,
-        candidates: fuzzyMatches,
+        candidates: forwardMatches,
       };
     }
   }
@@ -179,24 +228,44 @@ export function formatCandidatesList(candidates: HoldVenueRecord[]): string {
 }
 
 /**
- * Sets seasonal cooldown hold dates on a target venue via PATCH /venue/:id.
+ * Sets seasonal cooldown hold or booked-through dates on a target venue via PATCH /venue/:id.
+ * If only untilDate is provided, writes ONLY resumeBooking (at UTC 00:00:00.000Z).
+ * If only bookedThroughDate is provided, writes ONLY bookedThrough (at UTC 23:59:59.999Z).
+ * If both are explicitly provided, writes both. Neither implies or defaults the other!
  */
 export async function executeVenueHold(
   venueQuery: string,
-  untilDateStr: string,
+  dates: string | VenueHoldDates,
   options: BackendConfigOptions = {},
   fetchFn: typeof fetch = fetch,
 ): Promise<VenueHoldResult> {
   if (!venueQuery || !venueQuery.trim()) {
     throw new Error("Missing required venue identifier for --hold.");
   }
-  if (!untilDateStr || !untilDateStr.trim()) {
+
+  const untilDateStr = typeof dates === "string" ? dates : dates?.untilDate;
+  const bookedThroughDateStr = typeof dates === "object" ? dates?.bookedThroughDate : undefined;
+
+  if (!untilDateStr && !bookedThroughDateStr) {
     throw new Error(
-      "Missing required resume date for --hold. Specify --until <YYYY-MM-DD> or --resume <YYYY-MM-DD>.",
+      "Missing required date for venue hold. Specify --until <YYYY-MM-DD> (for resumeBooking) or --booked-through <YYYY-MM-DD> (for bookedThrough).",
     );
   }
 
-  const { resumeBooking, bookedThrough, eligibleDate } = parseHoldDate(untilDateStr);
+  let resumeBooking: string | undefined;
+  let eligibleDate: string | undefined;
+  if (untilDateStr) {
+    resumeBooking = parseResumeBookingDate(untilDateStr);
+    const d = new Date(resumeBooking);
+    eligibleDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${
+      String(d.getUTCDate()).padStart(2, "0")
+    }`;
+  }
+
+  let bookedThrough: string | undefined;
+  if (bookedThroughDateStr) {
+    bookedThrough = parseBookedThroughDate(bookedThroughDateStr);
+  }
 
   const { baseUrl, token } = await resolveBackendConfig(options);
   const headers = buildHeaders(token);
@@ -233,10 +302,13 @@ export async function executeVenueHold(
 
   // 3. Update venue via PATCH /venue/:id
   const patchUrl = `${baseUrl}/venue/${targetVenueId}`;
-  const payload = {
-    resumeBooking,
-    bookedThrough,
-  };
+  const payload: Record<string, string> = {};
+  if (resumeBooking) {
+    payload.resumeBooking = resumeBooking;
+  }
+  if (bookedThrough) {
+    payload.bookedThrough = bookedThrough;
+  }
 
   const patchRes = await fetchFn(patchUrl, {
     method: "PATCH",
@@ -250,12 +322,23 @@ export async function executeVenueHold(
   }
 
   const venueName = targetVenue.name || venueQuery;
+  let message = "";
+  if (resumeBooking && bookedThrough) {
+    message =
+      `Recorded contact hold (until ${eligibleDate}) and booked-through date (through ${bookedThroughDateStr}) on "${venueName}".`;
+  } else if (resumeBooking) {
+    message = `Placed contact hold on "${venueName}" until ${eligibleDate} (resumeBooking).`;
+  } else {
+    message =
+      `Recorded booked-through date on "${venueName}" through ${bookedThroughDateStr} (bookedThrough).`;
+  }
+
   return {
     venueId: targetVenueId,
     venueName,
     resumeBooking,
     bookedThrough,
     eligibleDate,
-    message: `Placed seasonal cooldown hold on "${venueName}" until ${eligibleDate}.`,
+    message,
   };
 }

@@ -253,34 +253,60 @@ export async function runBookGigCli(
   }
 
   // -------------------------------------------------------------------------
-  // Mode: Seasonal Cooldown Hold (--hold <venue> --until <date>)
+  // Mode: Seasonal Cooldown Hold & Availability Dates
   // -------------------------------------------------------------------------
   if (parsed.mode === "hold") {
     console.log(`\n======================================================`);
-    console.log(`  🛑 book-gig: Seasonal Cooldown Hold`);
+    console.log(`  🛑 book-gig: Venue Hold & Availability Configuration`);
     console.log(`======================================================`);
     const venueQuery = parsed.holdVenue;
     if (!venueQuery) {
       console.error("Error: Missing required venue identifier for --hold.");
-      console.error('Usage: deno task book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>');
+      console.error(
+        'Usage: deno task book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD> [--booked-through <YYYY-MM-DD>]',
+      );
+      console.error(
+        '       deno task book-gig --venue "<venueId|venueName>" --booked-through <YYYY-MM-DD>',
+      );
       throw new Error("Missing venue identifier for --hold");
     }
     const untilDate = parsed.holdUntil;
-    if (!untilDate) {
-      console.error("Error: Missing required resume date for --hold.");
-      console.error('Usage: deno task book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>');
-      throw new Error("Missing resume date for --hold");
+    const bookedThrough = parsed.bookedThrough;
+    if (!untilDate && !bookedThrough) {
+      console.error("Error: Missing required date for --hold.");
+      console.error(
+        "Specify --until <YYYY-MM-DD> (for resumeBooking) and/or --booked-through <YYYY-MM-DD> (for bookedThrough).",
+      );
+      throw new Error(
+        "Missing resume date for --hold. Specify --until <YYYY-MM-DD> or --booked-through <YYYY-MM-DD>.",
+      );
     }
     console.log(`Target Venue: "${venueQuery}"`);
-    console.log(`Resume Date:  "${untilDate}"`);
+    if (untilDate) {
+      console.log(`Resume Date:  "${untilDate}" (resumeBooking)`);
+    }
+    if (bookedThrough) {
+      console.log(`Booked Date:  "${bookedThrough}" (bookedThrough)`);
+    }
     console.log(`------------------------------------------------------\n`);
 
-    const holdResult = await executeVenueHold(venueQuery, untilDate, {}, fetchFn);
-    console.log(`[book-gig] Seasonal cooldown hold confirmed for "${holdResult.venueName}":`);
+    const holdResult = await executeVenueHold(
+      venueQuery,
+      { untilDate, bookedThroughDate: bookedThrough },
+      {},
+      fetchFn,
+    );
+    console.log(`[book-gig] Confirmed venue hold update for "${holdResult.venueName}":`);
     console.log(`  • Venue ID:         ${holdResult.venueId}`);
-    console.log(`  • resumeBooking:    ${holdResult.resumeBooking}`);
-    console.log(`  • bookedThrough:    ${holdResult.bookedThrough}`);
-    console.log(`  • Next Eligible:    ${holdResult.eligibleDate}`);
+    if (holdResult.resumeBooking) {
+      console.log(`  • resumeBooking:    ${holdResult.resumeBooking}`);
+    }
+    if (holdResult.bookedThrough) {
+      console.log(`  • bookedThrough:    ${holdResult.bookedThrough}`);
+    }
+    if (holdResult.eligibleDate) {
+      console.log(`  • Next Eligible:    ${holdResult.eligibleDate}`);
+    }
 
     return {
       mode: "hold",
@@ -296,7 +322,7 @@ export async function runBookGigCli(
   // -------------------------------------------------------------------------
   if (!parsed.weekend) {
     console.error(
-      "Usage: deno task book-gig [--send|--replies|--link-gig <venue>|--hold <venue> --until <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
+      "Usage: deno task book-gig [--send|--replies|--link-gig <venue>|--hold <venue> --until <date>|--booked-through <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
     );
     console.error("Examples:");
     console.error('  deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"');
@@ -307,6 +333,7 @@ export async function runBookGigCli(
     console.error("  deno task book-gig --replies");
     console.error('  deno task book-gig --link-gig "Olde Salem Brewing"');
     console.error('  deno task book-gig --hold "Tequila\'s" --until 2027-01-01');
+    console.error('  deno task book-gig --venue "Olde Salem Brewing" --booked-through 2026-12-31');
     throw new Error("Missing target weekend argument");
   }
 

@@ -154,9 +154,9 @@ export interface RepliesTrackingResult {
 export interface VenueHoldResult {
   venueId: string;
   venueName: string;
-  resumeBooking: string;
-  bookedThrough: string;
-  eligibleDate: string;
+  resumeBooking?: string;
+  bookedThrough?: string;
+  eligibleDate?: string;
   message: string;
 }
 
@@ -170,6 +170,7 @@ export interface ParsedBookGigArgs {
   linkVenueName?: string;
   holdVenue?: string;
   holdUntil?: string;
+  bookedThrough?: string;
   rawArgs: string;
 }
 

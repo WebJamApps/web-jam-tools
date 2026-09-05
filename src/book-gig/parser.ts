@@ -48,7 +48,9 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   let noOpen = false;
   let linkVenueName: string | undefined;
   let holdVenue: string | undefined;
+  let explicitVenue: string | undefined;
   let holdUntil: string | undefined;
+  let bookedThroughDate: string | undefined;
   let explicitLocationStr: string | undefined;
   const includeVenues: string[] = [];
   const excludeVenues: string[] = [];
@@ -83,6 +85,14 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode = "hold";
       const eqIdx = arg.indexOf("=");
       holdVenue = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--venue") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        explicitVenue = args[i].trim();
+      }
+    } else if (lower.startsWith("--venue=")) {
+      const eqIdx = arg.indexOf("=");
+      explicitVenue = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--until" || lower === "--resume") {
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         i++;
@@ -91,6 +101,14 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     } else if (lower.startsWith("--until=") || lower.startsWith("--resume=")) {
       const eqIdx = arg.indexOf("=");
       holdUntil = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--booked-through") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        bookedThroughDate = args[i].trim();
+      }
+    } else if (lower.startsWith("--booked-through=")) {
+      const eqIdx = arg.indexOf("=");
+      bookedThroughDate = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--no-open") {
       noOpen = true;
     } else if (lower === "--cities" || lower === "--locations" || lower === "--location") {
@@ -133,6 +151,9 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   }
 
   const rawArgs = positionalArgs.join(" ").trim();
+  if (explicitVenue && mode === "send") {
+    includeVenues.push(explicitVenue);
+  }
   const resIncludes = includeVenues.length > 0 ? Array.from(new Set(includeVenues)) : undefined;
   const resExcludes = excludeVenues.length > 0 ? Array.from(new Set(excludeVenues)) : undefined;
   const resNoOpen = noOpen ? true : undefined;
@@ -149,11 +170,12 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     };
   }
 
-  if (mode === "preview" && holdUntil) {
+  if (mode === "preview" && (holdUntil || bookedThroughDate)) {
     mode = "hold";
   }
 
   if (mode === "hold") {
+    holdVenue = holdVenue || explicitVenue;
     if (!holdVenue && positionalArgs.length > 0) {
       holdVenue = positionalArgs.join(" ").trim();
     }
@@ -161,6 +183,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode: "hold",
       holdVenue,
       holdUntil,
+      bookedThrough: bookedThroughDate,
       noOpen: resNoOpen,
       rawArgs,
     };
