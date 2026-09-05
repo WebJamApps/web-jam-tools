@@ -7,7 +7,7 @@
 // out of load-bearing AGY_MODELS command examples, which breaks dispatch when
 // passed to scripts/handle-agy-tasks.sh.
 
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertThrows } from "@std/assert";
 import { ALLOWED_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
 
 const DELEGATE_SKILL_PATH = new URL("../skills/delegate/SKILL.md", import.meta.url).pathname;
@@ -17,7 +17,8 @@ const FLASH_ISSUES_SKILL_PATH =
 const ALLOWED_DISPLAY_NAMES = new Set(ALLOWED_AGY_MODELS.map((m) => m.displayName));
 
 /**
- * Extracts literal AGY_MODELS='...' (or "...") values from a file's content.
+ * Extracts literal AGY_MODELS='...' (or "...") values as well as backticked
+ * pipe-separated Flash fallback chains from a file's content.
  */
 export function extractAgyModelsDeclarations(content: string): string[] {
   const matches: string[] = [];
@@ -25,6 +26,12 @@ export function extractAgyModelsDeclarations(content: string): string[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(content)) !== null) {
     matches.push(match[1]);
+  }
+  const codeSpanRe = /`([^`]*Gemini [^`]*Flash[^`]*)`/g;
+  while ((match = codeSpanRe.exec(content)) !== null) {
+    if (match[1].includes("|")) {
+      matches.push(match[1]);
+    }
   }
   return matches;
 }
@@ -58,10 +65,9 @@ export function validateAgyModelsDeclarations(
 Deno.test("skills/delegate/SKILL.md documents only valid AGY_MODELS matching ALLOWED_AGY_MODELS", async () => {
   const content = await Deno.readTextFile(DELEGATE_SKILL_PATH);
   const declarations = extractAgyModelsDeclarations(content);
-  assertEquals(
-    declarations.length >= 2,
-    true,
-    `Expected at least 2 AGY_MODELS declarations in skills/delegate/SKILL.md, found ${declarations.length}`,
+  assert(
+    declarations.length >= 3,
+    `Expected at least 3 AGY_MODELS declarations in skills/delegate/SKILL.md, found ${declarations.length}`,
   );
   validateAgyModelsDeclarations(declarations, "skills/delegate/SKILL.md");
 });
@@ -69,9 +75,8 @@ Deno.test("skills/delegate/SKILL.md documents only valid AGY_MODELS matching ALL
 Deno.test("skills/flash-issues/SKILL.md documents only valid AGY_MODELS matching ALLOWED_AGY_MODELS", async () => {
   const content = await Deno.readTextFile(FLASH_ISSUES_SKILL_PATH);
   const declarations = extractAgyModelsDeclarations(content);
-  assertEquals(
+  assert(
     declarations.length >= 1,
-    true,
     `Expected at least 1 AGY_MODELS declaration in skills/flash-issues/SKILL.md, found ${declarations.length}`,
   );
   validateAgyModelsDeclarations(declarations, "skills/flash-issues/SKILL.md");
