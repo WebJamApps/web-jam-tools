@@ -60,7 +60,9 @@ export interface CandidateVenue {
   phone?: string;
   notes?: string;
   bookingNotes?: string;
+  contactNotes?: string;
   priorContactNotes?: string;
+  priorGigs?: unknown[];
   outreachEligible?: boolean;
   gigInterval?: number;
   reason?: {
