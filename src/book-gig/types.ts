@@ -65,6 +65,7 @@ export interface CandidateVenue {
   priorGigs?: unknown[];
   outreachEligible?: boolean;
   gigInterval?: number;
+  payAmount?: number;
   reason?: {
     lastGigDate?: string | null;
     gigIntervalMonths?: number;

@@ -34,7 +34,12 @@ import {
   fetchTemplates,
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
-import { renderDarkHtml, renderStatusBadge, SORTING_SCRIPT } from "../src/book-gig/html.ts";
+import {
+  formatPay,
+  renderDarkHtml,
+  renderStatusBadge,
+  SORTING_SCRIPT,
+} from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
 import { formatLocationDisplay, runBookGigCli } from "../src/book-gig/cli.ts";
 import {
@@ -779,6 +784,145 @@ Deno.test("renderDarkHtml: embeds interactive client-side column sorting CSS and
   assertStringIncludes(SORTING_SCRIPT, "▼");
   assertStringIncludes(SORTING_SCRIPT, "sortable-th");
   assertStringIncludes(SORTING_SCRIPT, "localeCompare");
+});
+
+Deno.test("renderDarkHtml: includes Pay column, states New vs Returning outright, and provides full width with tablet breakpoint (#896)", () => {
+  const result = {
+    mode: "preview" as const,
+    weekend: {
+      start: "2026-10-16",
+      end: "2026-10-18",
+      rawText: "Oct 16-18 2026",
+      label: "October 16–18, 2026",
+      year: 2026,
+      month: 10,
+      days: [16, 17, 18],
+    },
+    candidates: [
+      {
+        _id: "v1",
+        name: "Parkway Brewing",
+        city: "Salem",
+        usState: "VA",
+        contactName: "Lezlie",
+        phone: "540-555-0101",
+        email: "lezlie@parkwaybrewing.com",
+        payAmount: 150,
+        reason: { lastGigDate: "2026-06-15" },
+      },
+      {
+        _id: "v2",
+        name: "Olde Salem Brewing",
+        city: "Salem",
+        usState: "VA",
+        contactName: "Kevin",
+        phone: "540-555-0102",
+        email: "booking@oldesalem.com",
+        payAmount: 0.01,
+        reason: { lastGigDate: null },
+      },
+      {
+        _id: "v3",
+        name: "The Glass House",
+        city: "Lynchburg",
+        usState: "VA",
+        contactName: "Sarah",
+        phone: "434-555-0103",
+        email: "events@glasshouse.com",
+        reason: {},
+      },
+      {
+        _id: "v4",
+        name: "Community Hall",
+        city: "Roanoke",
+        usState: "VA",
+        payAmount: 0,
+        reason: {},
+      },
+      {
+        _id: "v5",
+        name: "Negative Int Venue",
+        city: "Roanoke",
+        usState: "VA",
+        payAmount: -5,
+        reason: {},
+      },
+      {
+        _id: "v6",
+        name: "Negative Dec Venue",
+        city: "Roanoke",
+        usState: "VA",
+        payAmount: -5.5,
+        reason: {},
+      },
+      {
+        _id: "v7",
+        name: "Non-finite Venue",
+        city: "Roanoke",
+        usState: "VA",
+        payAmount: NaN,
+        reason: {},
+      },
+    ],
+    density: { count: 7, isSparse: false },
+    pitches: [],
+  };
+
+  const html = renderDarkHtml(result);
+
+  // 1. Pay column in table header and cells
+  assertStringIncludes(html, "<th>Pay</th>");
+  assertStringIncludes(html, "<td>$150</td>");
+  assertStringIncludes(html, "<td>$0.01</td>");
+  assertStringIncludes(html, "<td>$0</td>");
+  assertStringIncludes(html, "<td>-$5</td>");
+  assertStringIncludes(html, "<td>-$5.50</td>");
+  assertStringIncludes(html, "<td>—</td>");
+
+  // 2. Reworded Spacing Status badge stating Returning / New outright
+  assertStringIncludes(html, "Returning · Last: 2026-06-15");
+  assertStringIncludes(html, "badge-returning");
+  assertStringIncludes(html, "Returning");
+  assertStringIncludes(html, ">New</span>");
+  assertStringIncludes(html, "badge-eligible");
+
+  // 3. Fallback table when candidates are empty
+  const emptyResult = {
+    ...result,
+    candidates: [],
+  };
+  const emptyHtml = renderDarkHtml(emptyResult);
+  assertStringIncludes(emptyHtml, "<th>Pay</th>");
+  assertStringIncludes(emptyHtml, '<td colspan="8"');
+
+  // 4. Responsive styling: full width container & tablet breakpoint
+  assertStringIncludes(html, "width: 100%;");
+  assert(!html.includes("max-width: 960px;"));
+  assertStringIncludes(html, "@media (max-width: 1024px)");
+  assertStringIncludes(html, "min-width: 850px;");
+  assertStringIncludes(html, "@media (max-width: 600px)");
+});
+
+Deno.test("formatPay: handles positive, negative, zero, non-finite, and nullish amounts", () => {
+  // Positive integers and decimals
+  assertEquals(formatPay(150), "$150");
+  assertEquals(formatPay(0.01), "$0.01");
+
+  // Zero
+  assertEquals(formatPay(0), "$0");
+
+  // Negative integers and decimals
+  assertEquals(formatPay(-5), "-$5");
+  assertEquals(formatPay(-5.5), "-$5.50");
+
+  // Non-finite values
+  assertEquals(formatPay(NaN), "—");
+  assertEquals(formatPay(Infinity), "—");
+  assertEquals(formatPay(-Infinity), "—");
+
+  // Undefined and null
+  assertEquals(formatPay(undefined), "—");
+  assertEquals(formatPay(null), "—");
 });
 
 Deno.test("dispatchBatchOutreach: sends POST /outreach/batch with correct payload and headers", async () => {
