@@ -38,7 +38,41 @@ export type FilingSkill = typeof AUTHORIZING_FILING_SKILLS[number];
 export const MAX_AUTHORIZING_USER_TURNS = 20;
 
 /**
- * Returns the non-filing slash command invoked at the start of user-turn text, or null.
+ * Claude Code's stored form of a slash-command invocation (web-jam-tools#920). The surface does not
+ * record the user's keystrokes as the bare text `/file-issue`; it records a user turn whose whole
+ * content is an invocation wrapper:
+ *
+ *     <command-message>file-issue</command-message>
+ *     <command-name>/file-issue</command-name>
+ *
+ * (the `<command-message>` element is optional, and trailing elements such as `<command-args>` may
+ * follow). Verified live on 2026-09-05 in session 26d83a7a-6a81-41c8-8729-45ec0e75348b, where a
+ * genuine `/file-issue` was refused a token because that text opens with `<` rather than `/`.
+ *
+ * Anchored at the START of the trimmed text on purpose, exactly like the bare slash form: this is
+ * the same mention-vs-use distinction. Prose that quotes a `<command-name>` element mid-sentence
+ * (this doc comment included, were it ever a user turn) is discussing the wrapper, not invoking
+ * anything, and must not authorize — nor terminate — anything.
+ */
+const CLAUDE_CODE_INVOCATION_WRAPPER =
+  /^(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\s*\/([a-zA-Z0-9_-]+)\s*<\/command-name>/;
+
+/**
+ * Returns the slash command name (lowercased, without its leading `/`) when `text` IS a Claude Code
+ * slash invocation stored in wrapper form, or null. Used by both the filing check and the
+ * scope-ending check below, so the wrapper form is recognized in both directions: recognizing only
+ * the filing half would let an intervening `/work-issue` stay invisible and so widen the gate
+ * instead of fixing it (web-jam-tools#920).
+ */
+export function slashCommandFromInvocationWrapper(text: string): string | null {
+  const match = text.trim().match(CLAUDE_CODE_INVOCATION_WRAPPER);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/**
+ * Returns the non-filing slash command invoked at the start of user-turn text, or null. Recognizes
+ * both the bare leading form (`/work-issue …`) and Claude Code's `<command-name>` wrapper form
+ * (web-jam-tools#920).
  *
  * Any intervening slash command (e.g. /work-issue, /book-gig, /handle-gmails) acts as a
  * scope-ending event: once the user invokes a different skill, any earlier filing skill
@@ -46,6 +80,10 @@ export const MAX_AUTHORIZING_USER_TURNS = 20;
  */
 export function nonFilingSlashCommandInvoked(text: string): string | null {
   const trimmed = text.trim();
+  const wrapped = slashCommandFromInvocationWrapper(trimmed);
+  if (wrapped && !AUTHORIZING_FILING_SKILLS.includes(wrapped as FilingSkill)) {
+    return `/${wrapped}`;
+  }
   if (trimmed.startsWith("/")) {
     const match = trimmed.match(/^\/([a-zA-Z0-9_-]+)/);
     if (match) {
@@ -91,12 +129,17 @@ const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
 ] as const;
 
 /**
- * Returns the filing skill a piece of user-turn text invokes, or null. Recognizes two forms:
+ * Returns the filing skill a piece of user-turn text invokes, or null. Recognizes three forms:
  *
  * 1. A slash command (`/file-issue`, `/design-issue`) opening the (trimmed) text — a slash command
  *    is only recognized by either surface when it opens the message, so prose that merely mentions
  *    "/file-issue" mid-sentence (discussing the skill, not invoking it) must not count, the same
  *    mention-vs-use distinction this repo's other banned-phrase/invocation checks apply.
+ * 1a. The same slash command in Claude Code's `<command-name>` invocation wrapper, which is what
+ *    that surface actually stores for a typed `/file-issue` — see CLAUDE_CODE_INVOCATION_WRAPPER.
+ *    Same start-of-turn anchor, so the mention-vs-use distinction is unchanged: a `<command-name>`
+ *    element quoted inside prose is not the turn's own invocation and does not count
+ *    (web-jam-tools#920).
  * 2. For file-issue only, one of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS opening the text (same
  *    start-of-message anchor — web-jam-tools#866 Suggestion: Josh routinely invokes file-issue by
  *    saying "file an issue" rather than typing the slash form, and a session that started that way
@@ -106,6 +149,10 @@ const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
  */
 export function filingSkillInvoked(text: string): FilingSkill | null {
   const trimmed = text.trim().toLowerCase();
+  const wrapped = slashCommandFromInvocationWrapper(trimmed);
+  if (wrapped && AUTHORIZING_FILING_SKILLS.includes(wrapped as FilingSkill)) {
+    return wrapped as FilingSkill;
+  }
   for (const skill of AUTHORIZING_FILING_SKILLS) {
     if (opensWithPhrase(trimmed, `/${skill}`)) {
       return skill;
