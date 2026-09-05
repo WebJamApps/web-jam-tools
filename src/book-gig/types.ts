@@ -2,7 +2,7 @@
 
 import type { LinkGigResult } from "./venue_link.ts";
 
-export type BookGigMode = "preview" | "send" | "replies" | "link-gig";
+export type BookGigMode = "preview" | "send" | "replies" | "link-gig" | "hold";
 
 export interface TargetWeekend {
   start: string; // ISO date string (YYYY-MM-DD), usually Friday
@@ -66,6 +66,8 @@ export interface CandidateVenue {
   outreachEligible?: boolean;
   gigInterval?: number;
   payAmount?: number;
+  resumeBooking?: string;
+  bookedThrough?: string;
   reason?: {
     lastGigDate?: string | null;
     gigIntervalMonths?: number;
@@ -149,6 +151,15 @@ export interface RepliesTrackingResult {
   targetWeekend?: TargetWeekend;
 }
 
+export interface VenueHoldResult {
+  venueId: string;
+  venueName: string;
+  resumeBooking: string;
+  bookedThrough: string;
+  eligibleDate: string;
+  message: string;
+}
+
 export interface ParsedBookGigArgs {
   mode: BookGigMode;
   weekend?: TargetWeekend;
@@ -157,6 +168,8 @@ export interface ParsedBookGigArgs {
   excludeVenues?: string[];
   noOpen?: boolean;
   linkVenueName?: string;
+  holdVenue?: string;
+  holdUntil?: string;
   rawArgs: string;
 }
 
@@ -176,6 +189,7 @@ export interface BookGigResult {
   batchDispatch?: BatchDispatchResult;
   repliesTracking?: RepliesTrackingResult;
   linkGig?: LinkGigResult;
+  holdResult?: VenueHoldResult;
   htmlPath?: string;
   reportUrl?: string;
   openedBrowser?: boolean;

@@ -7,6 +7,7 @@ import { openHtmlInBrowser } from "./browser.ts";
 import { renderDarkHtml } from "./html.ts";
 import { publishOutreachReport } from "./publish.ts";
 import { executeLinkGig } from "./venue_link.ts";
+import { executeVenueHold } from "./cooldown.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -252,11 +253,50 @@ export async function runBookGigCli(
   }
 
   // -------------------------------------------------------------------------
+  // Mode: Seasonal Cooldown Hold (--hold <venue> --until <date>)
+  // -------------------------------------------------------------------------
+  if (parsed.mode === "hold") {
+    console.log(`\n======================================================`);
+    console.log(`  🛑 book-gig: Seasonal Cooldown Hold`);
+    console.log(`======================================================`);
+    const venueQuery = parsed.holdVenue;
+    if (!venueQuery) {
+      console.error("Error: Missing required venue identifier for --hold.");
+      console.error('Usage: deno task book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>');
+      throw new Error("Missing venue identifier for --hold");
+    }
+    const untilDate = parsed.holdUntil;
+    if (!untilDate) {
+      console.error("Error: Missing required resume date for --hold.");
+      console.error('Usage: deno task book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>');
+      throw new Error("Missing resume date for --hold");
+    }
+    console.log(`Target Venue: "${venueQuery}"`);
+    console.log(`Resume Date:  "${untilDate}"`);
+    console.log(`------------------------------------------------------\n`);
+
+    const holdResult = await executeVenueHold(venueQuery, untilDate, {}, fetchFn);
+    console.log(`[book-gig] Seasonal cooldown hold confirmed for "${holdResult.venueName}":`);
+    console.log(`  • Venue ID:         ${holdResult.venueId}`);
+    console.log(`  • resumeBooking:    ${holdResult.resumeBooking}`);
+    console.log(`  • bookedThrough:    ${holdResult.bookedThrough}`);
+    console.log(`  • Next Eligible:    ${holdResult.eligibleDate}`);
+
+    return {
+      mode: "hold",
+      holdResult,
+      candidates: [],
+      density: { count: 0, isSparse: false },
+      pitches: [],
+    };
+  }
+
+  // -------------------------------------------------------------------------
   // Discovery & Batch Send Modes
   // -------------------------------------------------------------------------
   if (!parsed.weekend) {
     console.error(
-      "Usage: deno task book-gig [--send|--replies|--link-gig <venue>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
+      "Usage: deno task book-gig [--send|--replies|--link-gig <venue>|--hold <venue> --until <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
     );
     console.error("Examples:");
     console.error('  deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"');
@@ -266,6 +306,7 @@ export async function runBookGigCli(
     console.error('  deno task book-gig --replies "Oct 16-18 2026"');
     console.error("  deno task book-gig --replies");
     console.error('  deno task book-gig --link-gig "Olde Salem Brewing"');
+    console.error('  deno task book-gig --hold "Tequila\'s" --until 2027-01-01');
     throw new Error("Missing target weekend argument");
   }
 

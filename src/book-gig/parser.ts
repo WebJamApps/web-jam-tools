@@ -47,6 +47,8 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   let mode: BookGigMode = "preview";
   let noOpen = false;
   let linkVenueName: string | undefined;
+  let holdVenue: string | undefined;
+  let holdUntil: string | undefined;
   let explicitLocationStr: string | undefined;
   const includeVenues: string[] = [];
   const excludeVenues: string[] = [];
@@ -71,6 +73,24 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode = "link-gig";
       const eqIdx = arg.indexOf("=");
       linkVenueName = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--hold") {
+      mode = "hold";
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        holdVenue = args[i].trim();
+      }
+    } else if (lower.startsWith("--hold=")) {
+      mode = "hold";
+      const eqIdx = arg.indexOf("=");
+      holdVenue = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--until" || lower === "--resume") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        holdUntil = args[i].trim();
+      }
+    } else if (lower.startsWith("--until=") || lower.startsWith("--resume=")) {
+      const eqIdx = arg.indexOf("=");
+      holdUntil = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--no-open") {
       noOpen = true;
     } else if (lower === "--cities" || lower === "--locations" || lower === "--location") {
@@ -124,6 +144,23 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     return {
       mode: "link-gig",
       linkVenueName,
+      noOpen: resNoOpen,
+      rawArgs,
+    };
+  }
+
+  if (mode === "preview" && holdUntil) {
+    mode = "hold";
+  }
+
+  if (mode === "hold") {
+    if (!holdVenue && positionalArgs.length > 0) {
+      holdVenue = positionalArgs.join(" ").trim();
+    }
+    return {
+      mode: "hold",
+      holdVenue,
+      holdUntil,
       noOpen: resNoOpen,
       rawArgs,
     };

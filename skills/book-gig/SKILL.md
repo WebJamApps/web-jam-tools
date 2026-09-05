@@ -13,6 +13,7 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
 - `/book-gig --send "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues, outputs HTML artifact link, and opens in Chrome).
 - `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies`, displays live campaign status table, outputs HTML artifact link, and opens in Chrome).
 - `/book-gig --link-gig <venue-name>` — Gig linking mode (resolves single venue by exact normalized name, matches unlinked gig, and writes `venueId` via `PATCH /gig/:id` to correct a wrong new-versus-returning badge per D-26).
+- `/book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>` — Seasonal cooldown hold mode (sets `bookedThrough` to previous day and `resumeBooking` to resume date via `PATCH /venue/:id`; also accepts `--resume`).
 - **Location Syntax & Flags:**
   - Multi-city compound list: `deno task book-gig "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"`
   - Explicit flag: `deno task book-gig "Oct 16-18 2026" --cities "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke"`
@@ -28,6 +29,7 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
   - `deno task book-gig --replies "Oct 16-18 2026"` — check replies and campaign status for target weekend.
   - `deno task book-gig --replies` — check all active outreach campaigns across all target dates.
   - `deno task book-gig --link-gig "Olde Salem Brewing"` — link matching gig to venue by exact normalized name.
+  - `deno task book-gig --hold "Tequila's" --until 2027-01-01` — place seasonal cooldown hold on venue until Jan 1, 2027.
 - **Interactive Fallback:** If invoked without arguments (`/book-gig`), prompt Josh interactively for the target weekend and optional location.
 
 ## Workflow
