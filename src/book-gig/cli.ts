@@ -1,6 +1,12 @@
 import * as path from "@std/path";
 import { matchesVenueFilter, parseBookGigArgs } from "./parser.ts";
-import { assessDensity, fetchCandidates, filterAndRankCandidates } from "./candidates.ts";
+import {
+  assessDensity,
+  fetchCandidates,
+  filterAndRankCandidates,
+  renderCandidateTable,
+} from "./candidates.ts";
+export { renderCandidateTable };
 import { renderPitch } from "./pitch.ts";
 import { writeDropboxRunLog } from "./gmail.ts";
 import { openHtmlInBrowser } from "./browser.ts";
@@ -295,32 +301,7 @@ export async function runBookGigCli(
 
   // 3. Output candidate table
   console.log(`\nCandidate Venues for ${weekend.label}:`);
-  if (candidates.length === 0) {
-    console.log(`  (No eligible venues found matching criteria)`);
-  } else {
-    console.log(
-      `┌─────┬──────────────────────────┬──────────────────┬──────────────────┬────────────────┬──────────────────────────┬──────────────────────┐`,
-    );
-    console.log(
-      `│ #   │ Venue Name               │ Location         │ Contact          │ Phone          │ Email                    │ Spacing Note         │`,
-    );
-    console.log(
-      `├─────┼──────────────────────────┼──────────────────┼──────────────────┼────────────────┼──────────────────────────┼──────────────────────┤`,
-    );
-    candidates.forEach((c, idx) => {
-      const num = String(idx + 1).padEnd(3);
-      const name = c.name.slice(0, 24).padEnd(24);
-      const loc = `${c.city || ""}, ${c.usState || ""}`.slice(0, 16).padEnd(16);
-      const contact = (c.contactName || "—").slice(0, 16).padEnd(16);
-      const phone = (c.phone || "—").slice(0, 14).padEnd(14);
-      const email = (c.email || "—").slice(0, 24).padEnd(24);
-      const note = (c.reason?.spacingNote || "Eligible").slice(0, 20).padEnd(20);
-      console.log(`│ ${num} │ ${name} │ ${loc} │ ${contact} │ ${phone} │ ${email} │ ${note} │`);
-    });
-    console.log(
-      `└─────┴──────────────────────────┴──────────────────┴──────────────────┴────────────────┴──────────────────────────┴──────────────────────┘`,
-    );
-  }
+  console.log(renderCandidateTable(candidates));
 
   // 4. Check density and offer venue-mining recommendation
   if (density.isSparse) {

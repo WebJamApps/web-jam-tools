@@ -44,6 +44,12 @@ export interface EmailTemplate {
   active?: boolean;
 }
 
+export interface CandidateBadgeInfo {
+  badge: string;
+  cssClass: string;
+  isExcluded: boolean;
+}
+
 export interface CandidateVenue {
   _id: string;
   name: string;
@@ -66,12 +72,33 @@ export interface CandidateVenue {
   outreachEligible?: boolean;
   gigInterval?: number;
   payAmount?: number;
+  resumeBooking?: string | Date | null;
+  bookedThrough?: string | Date | null;
+  cooldownSentDate?: string | Date | null;
+  activeDirectChat?: boolean;
+  conflictingGigDate?: string | Date | null;
+  gigDate?: string | Date | null;
+  lastSentDate?: string | Date | null;
+  sentAt?: string | Date | null;
+  statusBadge?: string;
+  isExcluded?: boolean;
+  exclusionReason?: string;
   reason?: {
     lastGigDate?: string | null;
     gigIntervalMonths?: number;
     nearestGigMonthsAway?: number | null;
     spacingNote?: string;
     resumeBookingExpired?: boolean;
+    resumeBooking?: string | Date | null;
+    bookedThrough?: string | Date | null;
+    conflictingGigDate?: string | Date | null;
+    gigDate?: string | Date | null;
+    cooldownSentDate?: string | Date | null;
+    lastSentDate?: string | Date | null;
+    sentAt?: string | Date | null;
+    activeDirectChat?: boolean;
+    statusBadge?: string;
+    exclusionReason?: string;
   };
   distanceMiles?: number;
 }
