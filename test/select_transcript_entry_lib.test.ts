@@ -651,7 +651,7 @@ Deno.test("CLI: --opus-gate outputs JSON with model and escape phrase detection"
 
 const PARENT_CONVERSATION_ID = "772a5009-1e55-4c10-8527-f753d4e5ce47";
 const SUBAGENT_CONVERSATION_ID = "5241b5eb-8613-4b1a-b8ad-45ee96b2950a";
-const AGY_MODEL_NAME = "gemini-3.7-flash-high";
+const AGY_MODEL_NAME = "gemini-3.8-flash-high";
 
 function fixturePath(name: string): string {
   return new URL(`./fixtures/antigravity/${name}`, import.meta.url).pathname;

@@ -87,15 +87,15 @@ Josh defaults to **`Flash High`** (`Gemini Flash (High)`) as the primary interac
 - **Delegating up (`Flash Med` → `Flash High` / `Sonnet` / `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High`, `Sonnet`, or `Opus`.
 
 **Setting explicit model chains via `AGY_MODELS`:**
-The default fallback chain runs `Gemini 3.7 Flash (High)|Gemini 3.7 Flash (Medium)`. To target a specific tier directly, set `AGY_MODELS`:
+The default fallback chain runs `Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)`. To target a specific tier directly, set `AGY_MODELS`:
 
 ```sh
 # Force Flash High default:
-AGY_MODELS='Gemini 3.7 Flash (High)' \
+AGY_MODELS='Gemini 3.8 Flash (High)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 
 # Force Flash Med delegation:
-AGY_MODELS='Gemini 3.7 Flash (Medium)' \
+AGY_MODELS='Gemini 3.8 Flash (Medium)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 ```
 

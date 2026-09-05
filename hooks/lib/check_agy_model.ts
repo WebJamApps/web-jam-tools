@@ -9,8 +9,8 @@ export interface AgyModelSpec {
 }
 
 export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
-  { slug: "gemini-3.7-flash-high", displayName: "Gemini 3.7 Flash (High)" },
-  { slug: "gemini-3.7-flash-medium", displayName: "Gemini 3.7 Flash (Medium)" },
+  { slug: "gemini-3.8-flash-high", displayName: "Gemini 3.8 Flash (High)" },
+  { slug: "gemini-3.8-flash-medium", displayName: "Gemini 3.8 Flash (Medium)" },
 ];
 
 export const ALLOWED = new Set(ALLOWED_AGY_MODELS.map((m) => m.slug));

@@ -62,9 +62,10 @@ async function runViaShim(payload: unknown): Promise<{ decision: string; reason?
 // --- Unit tests: checkSessionModel() ---
 
 Deno.test("checkSessionModel: allowed Flash slugs pass", () => {
-  assert(checkSessionModel("gemini-3.7-flash-high").allowed);
-  assert(checkSessionModel("gemini-3.7-flash-medium").allowed);
   assert(checkSessionModel("gemini-3.8-flash-high").allowed);
+  assert(checkSessionModel("gemini-3.8-flash-medium").allowed);
+  assert(checkSessionModel("gemini-3.7-flash-high").allowed); // 3.7 floor
+  assert(checkSessionModel("gemini-3.7-flash-medium").allowed); // 3.7 floor
 });
 
 Deno.test("checkSessionModel: below-floor and non-Flash slugs are denied", () => {
@@ -88,7 +89,7 @@ Deno.test("agy-model-guard.sh denies a non-Flash modelName with exit 2", async (
 });
 
 Deno.test("agy-model-guard.sh allows an allowed Flash modelName", async () => {
-  const res = await runDirect({ modelName: "gemini-3.7-flash-high" });
+  const res = await runDirect({ modelName: "gemini-3.8-flash-high" });
   assertEquals(res.code, 0, res.stderr);
 });
 
@@ -116,7 +117,7 @@ Deno.test(
   async () => {
     const verdict = await runViaShim({
       toolCall: { name: "run_command", args: { CommandLine: "ls" } },
-      modelName: "gemini-3.7-flash-medium",
+      modelName: "gemini-3.8-flash-medium",
     });
     assertEquals(verdict.decision, "allow");
   },
