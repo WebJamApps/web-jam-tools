@@ -6,7 +6,6 @@ import {
   executeVenueHold,
   type HoldVenueRecord,
   parseBookedThroughDate,
-  parseHoldDate,
   parseResumeBookingDate,
   resolveHoldVenue,
 } from "../src/book-gig/cooldown.ts";
@@ -129,13 +128,6 @@ Deno.test("parseResumeBookingDate & parseBookedThroughDate: throws on invalid ca
   assertThrows(() => parseBookedThroughDate("2027-04-31"), Error, "Invalid calendar date");
 });
 
-Deno.test("parseHoldDate: legacy helper still computes both fields", () => {
-  const res = parseHoldDate("2027-01-01");
-  assertEquals(res.resumeBooking, "2027-01-01T00:00:00.000Z");
-  assertEquals(res.bookedThrough, "2026-12-31T23:59:59.999Z");
-  assertEquals(res.eligibleDate, "2027-01-01");
-});
-
 // -----------------------------------------------------------------------------
 // 3. resolveHoldVenue Tests
 // -----------------------------------------------------------------------------
@@ -173,24 +165,28 @@ Deno.test("resolveHoldVenue: resolves normalized name match (accents / punctuati
   }
 });
 
-Deno.test("resolveHoldVenue: resolves fuzzy forward substring match (min >= 3 chars)", () => {
-  // "Tequila" (7 chars) -> matches "Tequila's Mexican Grill"
-  const res1 = resolveHoldVenue("Tequila", mockVenues);
-  assertEquals(res1.success, true);
-  if (res1.success) {
-    assertEquals(res1.venue._id, "v-tequila-grill");
+Deno.test("resolveHoldVenue: rejects substring matches like 'Spot' or 'Tequila' and reports available candidates", () => {
+  // "Spot" is a substring of "The Spot on Kirk" but not exact match -> must reject and report candidate
+  const res1 = resolveHoldVenue("Spot", mockVenues);
+  assertEquals(res1.success, false);
+  if (!res1.success) {
+    assertStringIncludes(res1.error, 'Venue "Spot" not found by exact ID or name');
+    assertEquals(res1.candidates?.length, 1);
+    assertEquals(res1.candidates?.[0]._id, "v-spot");
   }
 
-  // "Spot" (4 chars) -> matches "The Spot on Kirk"
-  const res2 = resolveHoldVenue("Spot", mockVenues);
-  assertEquals(res2.success, true);
-  if (res2.success) {
-    assertEquals(res2.venue._id, "v-spot");
+  // "Tequila" is a substring of "Tequila's Mexican Grill" but not exact match -> must reject and report candidate
+  const res2 = resolveHoldVenue("Tequila", mockVenues);
+  assertEquals(res2.success, false);
+  if (!res2.success) {
+    assertStringIncludes(res2.error, 'Venue "Tequila" not found by exact ID or name');
+    assertEquals(res2.candidates?.length, 1);
+    assertEquals(res2.candidates?.[0]._id, "v-tequila-grill");
   }
 });
 
 Deno.test("resolveHoldVenue: rejects reverse string containment (query contains venue name)", () => {
-  // If query is longer and contains venue name, forward match fails: "The Spot on Kirk with extra words" does NOT match
+  // If query is longer and contains venue name: "The Spot on Kirk with extra words" does NOT match
   const res = resolveHoldVenue("The Spot on Kirk with extra words", mockVenues);
   assertEquals(res.success, false);
   if (!res.success) {
@@ -198,21 +194,12 @@ Deno.test("resolveHoldVenue: rejects reverse string containment (query contains 
   }
 });
 
-Deno.test("resolveHoldVenue: rejects queries below 3 characters for fuzzy matching", () => {
-  // "Sp" is 2 chars, should not fuzzy match "The Spot on Kirk"
-  const res = resolveHoldVenue("Sp", mockVenues);
-  assertEquals(res.success, false);
-  if (!res.success) {
-    assertStringIncludes(res.error, "not found in venue database");
-  }
-});
-
-Deno.test("resolveHoldVenue: reports ambiguous match with candidate list", () => {
+Deno.test("resolveHoldVenue: reports ambiguous match when multiple venues have the same exact normalized name", () => {
   const ambiguousVenues: HoldVenueRecord[] = [
     { _id: "v1", name: "Tequila's Mexican Grill", city: "Roanoke", usState: "VA" },
-    { _id: "v2", name: "Tequila's Cantina & Bar", city: "Lynchburg", usState: "VA" },
+    { _id: "v2", name: "Tequila's Mexican Grill", city: "Lynchburg", usState: "VA" },
   ];
-  const res = resolveHoldVenue("Tequila's", ambiguousVenues);
+  const res = resolveHoldVenue("Tequila's Mexican Grill", ambiguousVenues);
   assertEquals(res.success, false);
   if (!res.success) {
     assertStringIncludes(res.error, "Ambiguous venue query");
@@ -220,11 +207,12 @@ Deno.test("resolveHoldVenue: reports ambiguous match with candidate list", () =>
   }
 });
 
-Deno.test("resolveHoldVenue: reports error on unknown venue", () => {
+Deno.test("resolveHoldVenue: reports error on unknown venue without candidates", () => {
   const res = resolveHoldVenue("Nonexistent Music Hall", mockVenues);
   assertEquals(res.success, false);
   if (!res.success) {
-    assertStringIncludes(res.error, 'Venue "Nonexistent Music Hall" not found');
+    assertStringIncludes(res.error, 'Venue "Nonexistent Music Hall" not found in venue database.');
+    assertEquals(res.candidates, undefined);
   }
 });
 
@@ -271,8 +259,8 @@ Deno.test("executeVenueHold: dispatches PATCH with only resumeBooking when until
   };
 
   const result = await executeVenueHold(
-    "Tequila's",
-    "2027-01-01",
+    "Tequila's Mexican Grill",
+    { untilDate: "2027-01-01" },
     { backendUrl: "https://mock.api", token: "test-token" },
     mockFetch,
   );
@@ -330,7 +318,7 @@ Deno.test("executeVenueHold: dispatches PATCH with only bookedThrough when booke
   };
 
   const result = await executeVenueHold(
-    "Olde Salem",
+    "Olde Salem Brewing Company",
     { bookedThroughDate: "2026-12-31" },
     { backendUrl: "https://mock.api", token: "test-token" },
     mockFetch,
@@ -389,7 +377,7 @@ Deno.test("executeVenueHold: dispatches PATCH with both fields when both dates a
   };
 
   const result = await executeVenueHold(
-    "Olde Salem",
+    "Olde Salem Brewing Company",
     { untilDate: "2027-01-01", bookedThroughDate: "2026-12-31" },
     { backendUrl: "https://mock.api", token: "test-token" },
     mockFetch,
@@ -407,6 +395,40 @@ Deno.test("executeVenueHold: dispatches PATCH with both fields when both dates a
   });
 });
 
+Deno.test("executeVenueHold: throws error on substring query, preventing unconfirmed silent mutation", async () => {
+  const calls: { url: string; method: string }[] = [];
+  const mockFetch: typeof fetch = (url, init) => {
+    const u = String(url);
+    const method = init?.method || "GET";
+    calls.push({ url: u, method });
+    if (u.includes("/venue") && method === "GET") {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  await assertRejects(
+    async () => {
+      await executeVenueHold(
+        "Spot",
+        { untilDate: "2027-01-01" },
+        { backendUrl: "https://mock.api", token: "test-token" },
+        mockFetch,
+      );
+    },
+    Error,
+    "The Spot on Kirk",
+  );
+
+  const patchCalls = calls.filter((c) => c.method === "PATCH");
+  assertEquals(patchCalls.length, 0);
+});
+
 Deno.test("executeVenueHold: throws error when no dates are provided", async () => {
   await assertRejects(
     async () => {
@@ -419,8 +441,8 @@ Deno.test("executeVenueHold: throws error when no dates are provided", async () 
 
 Deno.test("executeVenueHold: throws error on ambiguous venue", async () => {
   const ambiguousVenues: HoldVenueRecord[] = [
-    { _id: "v1", name: "Tequila's Bar", city: "Roanoke", usState: "VA" },
-    { _id: "v2", name: "Tequila's Grill", city: "Salem", usState: "VA" },
+    { _id: "v1", name: "Tequila's Mexican Grill", city: "Roanoke", usState: "VA" },
+    { _id: "v2", name: "Tequila's Mexican Grill", city: "Salem", usState: "VA" },
   ];
 
   const mockFetch: typeof fetch = (url, init) => {
@@ -440,8 +462,8 @@ Deno.test("executeVenueHold: throws error on ambiguous venue", async () => {
   await assertRejects(
     async () => {
       await executeVenueHold(
-        "Tequila's",
-        "2027-01-01",
+        "Tequila's Mexican Grill",
+        { untilDate: "2027-01-01" },
         { backendUrl: "https://mock.api", token: "test-token" },
         mockFetch,
       );
@@ -470,7 +492,7 @@ Deno.test("executeVenueHold: throws error on unknown venue", async () => {
     async () => {
       await executeVenueHold(
         "Unknown Venue",
-        "2027-01-01",
+        { untilDate: "2027-01-01" },
         { backendUrl: "https://mock.api", token: "test-token" },
         mockFetch,
       );
@@ -507,7 +529,7 @@ Deno.test("executeVenueHold: throws error when PATCH fails", async () => {
     async () => {
       await executeVenueHold(
         "v-spot",
-        "2027-01-01",
+        { untilDate: "2027-01-01" },
         { backendUrl: "https://mock.api", token: "test-token" },
         mockFetch,
       );
@@ -549,7 +571,7 @@ Deno.test("runBookGigCli: executes --hold mode with --until successfully", async
   };
 
   const res = await runBookGigCli(
-    ["--hold", "Tequila's", "--until", "2027-01-01"],
+    ["--hold", "Tequila's Mexican Grill", "--until", "2027-01-01"],
     mockFetch,
   );
   assertEquals(res.mode, "hold");
@@ -588,7 +610,7 @@ Deno.test("runBookGigCli: executes --venue with --booked-through successfully", 
   };
 
   const res = await runBookGigCli(
-    ["--venue", "Olde Salem", "--booked-through", "2026-12-31"],
+    ["--venue", "Olde Salem Brewing Company", "--booked-through", "2026-12-31"],
     mockFetch,
   );
   assertEquals(res.mode, "hold");
@@ -629,7 +651,7 @@ Deno.test("runBookGigCli: executes with both --until and --booked-through", asyn
   const res = await runBookGigCli(
     [
       "--hold",
-      "Olde Salem",
+      "Olde Salem Brewing Company",
       "--until",
       "2027-01-01",
       "--booked-through",

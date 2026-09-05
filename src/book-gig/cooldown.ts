@@ -19,12 +19,6 @@ export interface VenueHoldDates {
   bookedThroughDate?: string;
 }
 
-export interface ParsedHoldDate {
-  resumeBooking: string;
-  bookedThrough: string;
-  eligibleDate: string;
-}
-
 /**
  * Strips diacritics and accents for robust fuzzy matching (e.g. Château -> Chateau).
  */
@@ -111,27 +105,14 @@ export function parseBookedThroughDate(dateStr: string): string {
   return bookedDate.toISOString();
 }
 
-/**
- * Legacy combined date parser retained for backward compatibility.
- */
-export function parseHoldDate(dateStr: string): ParsedHoldDate {
-  const resumeBooking = parseResumeBookingDate(dateStr);
-  const d = new Date(resumeBooking);
-  const eligibleDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${
-    String(d.getUTCDate()).padStart(2, "0")
-  }`;
-  const bookedThrough = new Date(d.getTime() - 1).toISOString();
-  return { resumeBooking, bookedThrough, eligibleDate };
-}
-
 export type VenueResolution =
   | { success: true; venue: HoldVenueRecord }
   | { success: false; error: string; candidates?: HoldVenueRecord[] };
 
 /**
- * Resolves target venue by exact ID, exact name, normalized name, or forward substring.
- * In case of ambiguity or non-existence, returns descriptive error and candidates.
- * Note: Never uses reverse string containment (normQuery.includes(normV)) to prevent false matches on write paths.
+ * Resolves target venue by exact ID, exact name, or exact normalized name.
+ * Aligns with --link-gig exact resolution; refuses unconfirmed fuzzy/substring matches to prevent silent mutations on write paths.
+ * If exact match fails, returns available candidate matches (if any) or not found error.
  */
 export function resolveHoldVenue(
   query: string,
@@ -188,24 +169,21 @@ export function resolveHoldVenue(
     }
   }
 
-  // 4. Forward substring match (venue name contains query) with >= 3 character floor.
-  // Never match reverse containment (query contains venue name) to protect write-path mutation safety.
-  if (normQuery && normQuery.length >= 3) {
-    const forwardMatches = venues.filter((v) => {
+  // Exact resolution failed. Look for candidate matches (forward substring >= 3 chars) to aid error reporting,
+  // but NEVER auto-select them on write paths to prevent unconfirmed silent mutations (e.g. "Spot" mutating "The Spot on Kirk").
+  const partialMatches = normQuery && normQuery.length >= 3
+    ? venues.filter((v) => {
       const normV = normalizeHoldName(v.name);
-      if (!normV) return false;
-      return normV.includes(normQuery);
-    });
-    if (forwardMatches.length === 1) {
-      return { success: true, venue: forwardMatches[0] };
-    }
-    if (forwardMatches.length > 1) {
-      return {
-        success: false,
-        error: `Ambiguous venue query "${trimmed}". Multiple matches found:`,
-        candidates: forwardMatches,
-      };
-    }
+      return normV ? normV.includes(normQuery) : false;
+    })
+    : [];
+
+  if (partialMatches.length > 0) {
+    return {
+      success: false,
+      error: `Venue "${trimmed}" not found by exact ID or name. Available candidates:`,
+      candidates: partialMatches,
+    };
   }
 
   return {
@@ -235,7 +213,7 @@ export function formatCandidatesList(candidates: HoldVenueRecord[]): string {
  */
 export async function executeVenueHold(
   venueQuery: string,
-  dates: string | VenueHoldDates,
+  dates: VenueHoldDates,
   options: BackendConfigOptions = {},
   fetchFn: typeof fetch = fetch,
 ): Promise<VenueHoldResult> {
@@ -243,8 +221,8 @@ export async function executeVenueHold(
     throw new Error("Missing required venue identifier for --hold.");
   }
 
-  const untilDateStr = typeof dates === "string" ? dates : dates?.untilDate;
-  const bookedThroughDateStr = typeof dates === "object" ? dates?.bookedThroughDate : undefined;
+  const untilDateStr = dates?.untilDate;
+  const bookedThroughDateStr = dates?.bookedThroughDate;
 
   if (!untilDateStr && !bookedThroughDateStr) {
     throw new Error(
