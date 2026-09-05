@@ -121,7 +121,18 @@
 # string, not a bypass of the roster check. handle-agy-tasks.sh sets this to
 # the exact "agy — <model>" string for the model it actually invoked, so a
 # headless or interactive agy run's PR footer can never depend on the model
-# correctly naming itself (web-jam-tools#190).
+# correctly naming itself (web-jam-tools#190). Because the roster is
+# deliberately UNVERSIONED while the agy model chain's display names carry a
+# version token, handle-agy-tasks.sh strips that token before setting this —
+# an unstripped name can never clear the substring roster match, which left
+# agy no way to open a PR through this script at all (web-jam-tools#912).
+#
+# --check-author "<name>"
+#                   READ-ONLY roster probe: exits 0 if <name> would clear the
+#                   roster check, non-zero (with the usual refusal message) if
+#                   not. Touches no git state and opens nothing. Lets a caller
+#                   (handle-agy-tasks.sh) verify an author up front instead of
+#                   maintaining its own copy of the roster (web-jam-tools#912).
 #
 # --summary and --test-plan are REQUIRED (web-jam-tools#77), each either inline or via
 # its *-file counterpart: the script refuses to open a PR whose description is empty or
@@ -218,6 +229,17 @@ while [ $# -gt 0 ]; do
     --update)
       UPDATE=1
       shift 1 ;;
+    --check-author)
+      # web-jam-tools#912 — read-only roster probe: exits 0 if the given
+      # author would clear author_roster_check, non-zero (printing the usual
+      # refusal) if not. No git access, no push, no PR. Exists so
+      # handle-agy-tasks.sh can verify the author it is about to force is one
+      # this script will accept, WITHOUT copying the ROSTER into a second
+      # place where the two could drift apart.
+      [ $# -ge 2 ] || { echo "ERROR: --check-author requires a value." >&2; exit 1; }
+      author_roster_check "$2"
+      echo "OK: '$2' names a model on the roster."
+      exit 0 ;;
     --closes)
       if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
         ISSUE="$2"
