@@ -409,11 +409,15 @@ export function renderDarkHtml(result: BookGigResult): string {
       const email = c.email
         ? `<a href="mailto:${escapeHtml(c.email)}" class="email-link">${escapeHtml(c.email)}</a>`
         : "—";
-      const spacing = escapeHtml(
-        c.reason?.spacingNote ||
-          (c.reason?.lastGigDate ? `Last: ${c.reason.lastGigDate}` : "Eligible (60+ days)"),
+      const pay = escapeHtml(
+        typeof c.payAmount === "number"
+          ? (Number.isInteger(c.payAmount) ? `$${c.payAmount}` : `$${c.payAmount.toFixed(2)}`)
+          : "—",
       );
-      const isReturning = c.reason?.lastGigDate ? true : false;
+      const isReturning = Boolean(c.reason?.lastGigDate);
+      const spacing = escapeHtml(
+        isReturning ? `Returning · Last: ${c.reason?.lastGigDate}` : "New",
+      );
       return `
         <tr>
           <td class="num-col">${idx + 1}</td>
@@ -422,6 +426,7 @@ export function renderDarkHtml(result: BookGigResult): string {
           <td>${contact}</td>
           <td>${phone}</td>
           <td>${email}</td>
+          <td>${pay}</td>
           <td><span class="badge ${
         isReturning ? "badge-returning" : "badge-eligible"
       }">${spacing}</span></td>
@@ -441,6 +446,7 @@ export function renderDarkHtml(result: BookGigResult): string {
                 <th>Contact Person</th>
                 <th>Phone</th>
                 <th>Booking Email</th>
+                <th>Pay</th>
                 <th>Spacing Status</th>
               </tr>
             </thead>
@@ -472,10 +478,10 @@ export function renderDarkHtml(result: BookGigResult): string {
         <div class="table-wrap">
           <table class="candidate-table">
             <thead>
-              <tr><th>#</th><th>Venue Name</th><th>Location</th><th>Contact Person</th><th>Phone</th><th>Booking Email</th><th>Spacing Status</th></tr>
+              <tr><th>#</th><th>Venue Name</th><th>Location</th><th>Contact Person</th><th>Phone</th><th>Booking Email</th><th>Pay</th><th>Spacing Status</th></tr>
             </thead>
             <tbody>
-              <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No venues found matching criteria</td></tr>
+              <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No venues found matching criteria</td></tr>
             </tbody>
           </table>
         </div>
@@ -543,7 +549,7 @@ export function renderDarkHtml(result: BookGigResult): string {
     }
 
     .container {
-      max-width: 960px;
+      width: 100%;
       margin: 0 auto;
     }
 
@@ -921,6 +927,17 @@ export function renderDarkHtml(result: BookGigResult): string {
       margin-top: 3rem;
       padding-top: 1.5rem;
       border-top: 1px solid var(--border);
+    }
+
+    @media (max-width: 1024px) {
+      .table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      table.candidate-table {
+        min-width: 850px;
+      }
     }
 
     @media (max-width: 600px) {
