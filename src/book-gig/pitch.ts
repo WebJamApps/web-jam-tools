@@ -56,7 +56,7 @@ export const DEFAULT_TEMPLATES: EmailTemplate[] = [
     stage: "returning",
     subject: "Back at [Venue Name] this [Booking Period]? — Josh & Maria",
     introHtml:
-      `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — it's always great playing for you guys at [Venue Name] — we had a blast playing [Venue Name] last time and would love to return on [Target Dates].</p>`,
+      `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — we had a blast playing [Venue Name] last time and would love to get back on your calendar.</p>`,
     bodyHtml:
       `[Custom Body]\n<p>We're booking [Booking Period] now and wanted to check with the spots we love first. Any chance [Target Dates] is open? We'd bring the same energetic 2-3 hour acoustic set — originals plus crowd-pleasing covers — and our own PA, as always.</p>\n<p>A couple of live samples:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=69fdcd7a586f5175c6db44a9">I'm Yours (Jason Mraz) — live at Salem Farmers Market</a></li>\n</ul>\n<p>Thanks again for having us — hope we can make [Booking Period] work.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
   },
@@ -67,14 +67,14 @@ export const DEFAULT_TEMPLATES: EmailTemplate[] = [
     introHtml:
       `<p>Hi [Contact Name],</p>\n<p>My name is Josh Sherman, and I perform with my wife Maria as the acoustic duo \"Josh and Maria.\" We are a regional act based in Salem, VA, and we are currently booking our [Booking Period] run and would love to be considered for a slot at [Venue Name].</p>`,
     bodyHtml:
-      `[Custom Body]\n<p>We have open availability for [Target Dates]. Our sound comes from a shared kitchen table — balancing our own songwriting with a careful selection of covers. We've built a steady regional following with regular shows at Stave &amp; Cork in Salem; two summers running at the Pete Dye River Course clubhouse in Blacksburg; the Salem farmers market summer after summer; and repeat appearances at Music in the Park in Marion. We take care of our audience and the room.</p>\n<p>A few live samples from our repertoire:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e">Country Roads (John Denver) — live at Gusto's Pizza</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=69fdcc4b586f5175c6db44a9">Dark Light (Original) — live at Salem Farmers Market</a></li>\n</ul>\n<p>Full music links and performance history available at <a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a>.</p>\n<p>Let me know if any of those dates work — happy to talk through details.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
+      `[Custom Body]\n<p>We have open availability for [Target Dates]. Our sound comes from a shared kitchen table — balancing our own songwriting with a careful selection of covers. We've built a steady regional following with regular shows at Stave &amp; Cork in Salem; two summers running at the Pete Dye River Course clubhouse in Blacksburg; the Salem farmers market summer after summer; and repeat appearances at Music in the Park in Marion. We take care of our audience and the room.</p>\n<p>A few live samples from our repertoire:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e">Country Roads (John Denver) — live at Gusto's Pizza</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=69fdcc4b586f5175c6db44a9">Dark Light (Original) — live at Salem Farmers Market</a></li>\n</ul>\n<p>Full music links and performance history available at <a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a>.</p>\n<p>Let me know if any of those dates work — happy to talk through details.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
   },
   {
     type: "Originals",
     stage: "returning",
     subject: "Love to play [Venue Name] again — Josh & Maria",
     introHtml:
-      `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — it's always great playing for you guys at [Venue Name] — we had a blast playing [Venue Name] last time and would love to return on [Target Dates].</p>`,
+      `<p>Hi [Contact Name],</p>\n<p>It's Josh — my wife Maria and I (the husband-wife acoustic duo \"Josh and Maria\") had such a good time the last time we played [Venue Name], and we'd love to come back.</p>`,
     bodyHtml:
       `[Custom Body]\n<p>We're booking our [Booking Period] run now and wanted to check in first with the listening rooms that have been good to us. Could we grab a slot on [Target Dates]? We'd bring fresh originals alongside the close-harmony Americana set you already know.</p>\n<p>A couple of recent live recordings, in case it's helpful:</p>\n<ul>\n  <li><a href="https://web-jam.com/music/songs?id=69fdcc4b586f5175c6db44a7">Dark Light (Original) — live at Salem Farmers Market</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=5f5e6b7d13772f0004a091ad">Misty Rainy Morning (Original)</a></li>\n</ul>\n<p>Thanks again for having us before — hope we can make something work for [Booking Period].</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
   },
@@ -93,7 +93,7 @@ export const DEFAULT_TEMPLATES: EmailTemplate[] = [
     stage: "returning",
     subject: "Back at [Venue Name]? — Josh & Maria",
     introHtml:
-      `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — it's always great playing for you guys at [Venue Name] — we had a blast playing [Venue Name] last time and would love to return on [Target Dates].</p>`,
+      `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — Maria and I really enjoyed our last show at [Venue Name], and we'd love to come back.</p>`,
     bodyHtml:
       `[Custom Body]\n<p>We're lining up our [Booking Period] dates and wanted to check in with our favorite rooms first. Would [Target Dates] work for another evening of harmony-driven Americana — the mix of originals and select covers your crowd seemed to enjoy?</p>\n<p>A couple of live samples as a refresher:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e">Country Roads (John Denver) — live at Gusto's Pizza</a></li>\n</ul>\n<p>Thanks again for having us — hope we can find a date that works.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
   },
@@ -225,7 +225,7 @@ export function resolveVenueTemplateType(
 export type ConversationContext = "phone" | "in-person" | "general" | null;
 
 const IN_PERSON_CONVERSATION_RE =
-  /\b(in[- ]person|face[- ]to[- ]face|stopped by|visited|met in person|connecting in person)\b/i;
+  /\b(in[- ]person|face[- ]to[- ]face|stopped by|visited (?:in person|the venue|them)|met in person|connecting in person)\b/i;
 const PHONE_CONVERSATION_RE = /\b(phone|call|called|telephoned)\b/i;
 const GENERAL_CONVERSATION_RE =
   /\b(conversation|spoke|spoken|talked|chat|chatted|discussed|contacted|follow(?:ed)?[- ]?up)\b/i;
@@ -407,17 +407,21 @@ export function renderPitch(
   let introHtml = template.introHtml || "";
 
   if (conversationContext === "phone") {
-    introHtml =
-      `<p>Hi [Contact Name],</p>\n<p>Following up on our recent phone conversation — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
+    introHtml = stage === "returning"
+      ? `<p>Hi [Contact Name],</p>\n<p>Following up on our recent phone conversation — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
+      : `<p>Hi [Contact Name],</p>\n<p>Following up on our recent phone conversation — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
   } else if (conversationContext === "in-person") {
-    introHtml =
-      `<p>Hi [Contact Name],</p>\n<p>Following up on connecting in person — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
+    introHtml = stage === "returning"
+      ? `<p>Hi [Contact Name],</p>\n<p>Following up on connecting in person — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
+      : `<p>Hi [Contact Name],</p>\n<p>Following up on connecting in person — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
   } else if (conversationContext === "general") {
-    introHtml =
-      `<p>Hi [Contact Name],</p>\n<p>Following up on our earlier conversation — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
+    introHtml = stage === "returning"
+      ? `<p>Hi [Contact Name],</p>\n<p>Following up on our earlier conversation — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
+      : `<p>Hi [Contact Name],</p>\n<p>Following up on our earlier conversation — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
   } else if (stage === "returning") {
-    introHtml =
-      `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — it's always great playing for you guys at [Venue Name] — we had a blast playing [Venue Name] last time and would love to return on [Target Dates].</p>`;
+    introHtml = template.introHtml?.trim()
+      ? template.introHtml
+      : `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — we had a blast playing [Venue Name] last time and would love to get back on your calendar.</p>`;
   }
 
   const hasConversationIntro = Boolean(conversationContext);
