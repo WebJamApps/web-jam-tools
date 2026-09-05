@@ -3,6 +3,7 @@
 import {
   assert,
   assertEquals,
+  assertNotEquals,
   assertRejects,
   assertStringIncludes,
   assertThrows,
@@ -2726,7 +2727,7 @@ Deno.test("identifyCandidateBadge: identifies Direct Chat Active for outreachEli
     _id: "v1",
     name: "The Glass House",
     outreachEligible: false,
-    contactNotes: "Direct phone conversation with booking manager on Monday",
+    notes: "Direct phone conversation with booking manager on Monday",
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
@@ -2738,12 +2739,60 @@ Deno.test("identifyCandidateBadge: identifies Direct Chat Active for outreachEli
     _id: "v2",
     name: "Riverviews Artspace",
     outreachEligible: false,
-    priorContactNotes: "Chatting directly about holiday showcase",
+    notes: "Chatting directly about holiday showcase",
   };
   const badgePrior = identifyCandidateBadge(venuePrior, refDate);
   assertEquals(badgePrior.badge, "[Direct Chat Active]");
   assertEquals(badgePrior.cssClass, "badge-direct-chat");
   assertEquals(badgePrior.isExcluded, true);
+});
+
+Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligible: false and no direct chat notes is NOT badged [Direct Chat Active] (#879)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+
+  const unvettedVenue: CandidateVenue = {
+    _id: "v-unvetted",
+    name: "Unvetted Bar & Grill",
+    outreachEligible: false,
+    notes: "Needs liquor license verification before booking",
+  };
+  const badgeUnvetted = identifyCandidateBadge(unvettedVenue, refDate);
+  assertNotEquals(badgeUnvetted.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeUnvetted.cssClass, "badge-direct-chat");
+
+  const declinedVenue: CandidateVenue = {
+    _id: "v-declined",
+    name: "Declined Lounge",
+    outreachEligible: false,
+    notes: "Permanently declined live music events",
+  };
+  const badgeDeclined = identifyCandidateBadge(declinedVenue, refDate);
+  assertNotEquals(badgeDeclined.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeDeclined.cssClass, "badge-direct-chat");
+
+  const emptyNotesVenue: CandidateVenue = {
+    _id: "v-empty",
+    name: "Blank Notes Pub",
+    outreachEligible: false,
+  };
+  const badgeEmpty = identifyCandidateBadge(emptyNotesVenue, refDate);
+  assertNotEquals(badgeEmpty.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeEmpty.cssClass, "badge-direct-chat");
+});
+
+Deno.test("identifyCandidateBadge: identifies Cooldown Active for replied pitches within 7 days (#879)", () => {
+  const refDate = new Date("2026-10-15T00:00:00.000Z");
+
+  const venue: CandidateVenue = {
+    _id: "v-replied",
+    name: "Harvester Performance Center",
+    cooldownRepliedDate: "2026-10-12",
+  };
+
+  const badge = identifyCandidateBadge(venue, refDate);
+  assertEquals(badge.badge, "[Cooldown Active: Replied Oct 12]");
+  assertEquals(badge.cssClass, "badge-cooldown");
+  assertEquals(badge.isExcluded, true);
 });
 
 Deno.test("identifyCandidateBadge: identifies Cooldown Active for pitches sent within 7 days (#879)", () => {
@@ -2858,7 +2907,7 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
       city: "Salem",
       usState: "VA",
       outreachEligible: false,
-      contactNotes: "Spoke with owner directly",
+      notes: "Spoke with owner directly",
     },
     {
       _id: "v4",
@@ -2979,7 +3028,7 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
       usState: "VA",
       email: "chat@taphouse.com",
       outreachEligible: false,
-      contactNotes: "Spoke with owner directly",
+      notes: "Spoke with owner directly",
     },
     {
       _id: "v4",
@@ -3141,7 +3190,16 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
       usState: "VA",
       email: "direct@lounge.com",
       outreachEligible: false,
-      contactNotes: "Spoke directly with booking manager",
+      notes: "Spoke directly with booking manager",
+    },
+    {
+      _id: "venue-unvetted",
+      name: "Unvetted Dive Bar",
+      city: "Salem",
+      usState: "VA",
+      email: "dive@bar.com",
+      outreachEligible: false,
+      notes: "Pending review of booking guidelines",
     },
     {
       _id: "venue-gig-spacing",
@@ -3165,10 +3223,18 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
       email: "tap@cooldown.com",
       outreachEligible: true,
     },
+    {
+      _id: "venue-cooldown-replied",
+      name: "Replied Brewery",
+      city: "Salem",
+      usState: "VA",
+      email: "replied@brewery.com",
+      outreachEligible: true,
+    },
   ];
 
-  // Active outreach campaigns returned by GET /outreach?status=sent
-  const activeCampaignsResponse = [
+  // Active outreach campaigns returned by GET /outreach?status=sent and GET /outreach?status=replied
+  const activeSentCampaignsResponse = [
     {
       _id: "camp-1",
       venueId: "venue-cooldown",
@@ -3179,6 +3245,21 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
         end: "2026-10-18",
       },
       status: "sent",
+    },
+  ];
+
+  const activeRepliedCampaignsResponse = [
+    {
+      _id: "camp-replied-1",
+      venueId: "venue-cooldown-replied",
+      sentAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+      repliedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(), // 1 day ago
+      targetDates: "2026-10-16 to 2026-10-18",
+      targetWeekend: {
+        start: "2026-10-16",
+        end: "2026-10-18",
+      },
+      status: "replied",
     },
   ];
 
@@ -3194,7 +3275,12 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
     }
     if (urlStr.includes("/outreach?status=sent")) {
       return Promise.resolve(
-        new Response(JSON.stringify(activeCampaignsResponse), { status: 200 }),
+        new Response(JSON.stringify(activeSentCampaignsResponse), { status: 200 }),
+      );
+    }
+    if (urlStr.includes("/outreach?status=replied")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(activeRepliedCampaignsResponse), { status: 200 }),
       );
     }
     return Promise.resolve(new Response("Not Found", { status: 404 }));
@@ -3205,8 +3291,9 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
     mockFetch,
   );
 
-  // Verify all candidates are returned
-  assertEquals(candidates.length, 6);
+  // Verify all candidates are returned (unvetted venue with no direct chat notes is excluded from pool)
+  assertEquals(candidates.length, 7);
+  assertEquals(candidates.find((c) => c._id === "venue-unvetted"), undefined);
 
   // 1. Returning eligible venue
   const returning = candidates.find((c) => c._id === "venue-eligible-returning");
@@ -3253,7 +3340,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assertEquals(gigSpacingBadge.cssClass, "badge-gig-spacing");
   assertEquals(gigSpacingBadge.isExcluded, true);
 
-  // 6. Cooldown Active venue
+  // 6. Cooldown Active venue (status=sent)
   const cooldown = candidates.find((c) => c._id === "venue-cooldown");
   assert(cooldown !== undefined);
   assertEquals(cooldown.isExcluded, true);
@@ -3261,6 +3348,15 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assertStringIncludes(cooldownBadge.badge, "[Cooldown Active: Sent");
   assertEquals(cooldownBadge.cssClass, "badge-cooldown");
   assertEquals(cooldownBadge.isExcluded, true);
+
+  // 7. Cooldown Active venue (status=replied)
+  const cooldownReplied = candidates.find((c) => c._id === "venue-cooldown-replied");
+  assert(cooldownReplied !== undefined);
+  assertEquals(cooldownReplied.isExcluded, true);
+  const cooldownRepliedBadge = identifyCandidateBadge(cooldownReplied);
+  assertStringIncludes(cooldownRepliedBadge.badge, "[Cooldown Active: Replied");
+  assertEquals(cooldownRepliedBadge.cssClass, "badge-cooldown");
+  assertEquals(cooldownRepliedBadge.isExcluded, true);
 
   // Verify renderCandidateTable displays all 4 badge states
   const renderedTable = renderCandidateTable(candidates, { color: false });
@@ -3270,9 +3366,82 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assertStringIncludes(renderedTable, "[Direct Chat Active]");
   assertStringIncludes(renderedTable, "[Gig Spacing: Nov 20 Show]");
   assertStringIncludes(renderedTable, "[Cooldown Active: Sent");
+  assertStringIncludes(renderedTable, "[Cooldown Active: Replied");
 
   // Verify assessDensity counts ONLY the 2 eligible candidates
   const density = assessDensity(candidates);
   assertEquals(density.count, 2);
   assertEquals(density.isSparse, true); // threshold is 3
+});
+
+Deno.test("fetchCandidates: gig spacing uses calendar-month arithmetic matching backend isTooCloseToWindow (#879)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  // Weekend start: 2026-10-16. With 2 months spacing:
+  // Lower bound: setMonth(9 - 2) = August 16, 2026.
+  // Upper bound: setMonth(9 + 2) = December 16, 2026.
+  // Conflicting rule: gTime > lower && gTime < upper.
+  const venuesResponse = [
+    {
+      _id: "venue-spacing-exact-boundary",
+      name: "Boundary Venue",
+      city: "Salem",
+      usState: "VA",
+      email: "boundary@venue.com",
+      outreachEligible: true,
+      gigInterval: 2,
+      lastGig: {
+        datetime: "2026-08-16T00:00:00.000Z",
+      },
+    },
+    {
+      _id: "venue-spacing-conflict",
+      name: "Conflict Venue",
+      city: "Salem",
+      usState: "VA",
+      email: "conflict@venue.com",
+      outreachEligible: true,
+      gigInterval: 2,
+      lastGig: {
+        datetime: "2026-08-20T00:00:00.000Z",
+      },
+    },
+  ];
+
+  const mockFetch: typeof fetch = (url: string | URL | Request) => {
+    const urlStr = String(url);
+    if (urlStr.includes("/outreach/candidates")) {
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    }
+    if (urlStr.includes("/venue")) {
+      return Promise.resolve(new Response(JSON.stringify(venuesResponse), { status: 200 }));
+    }
+    if (urlStr.includes("/outreach")) {
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not Found", { status: 404 }));
+  };
+
+  const candidates = await fetchCandidates(
+    { weekend, backendUrl: "https://test.local", token: "test-token" },
+    mockFetch,
+  );
+
+  // Aug 20 is strictly within 2 months -> conflicting
+  const conflict = candidates.find((c) => c._id === "venue-spacing-conflict");
+  assert(conflict !== undefined);
+  assertEquals(conflict.isExcluded, true);
+  assertEquals(conflict.exclusionReason, "gig-spacing");
+
+  // Aug 16 is on the boundary (not strictly greater than lower bound) -> not conflicting
+  const boundary = candidates.find((c) => c._id === "venue-spacing-exact-boundary");
+  assertEquals(boundary, undefined);
 });
