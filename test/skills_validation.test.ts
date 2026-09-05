@@ -141,8 +141,8 @@ Deno.test("skills/file-issue/SKILL.md contains the three-outcomes guard rule, po
     "skills/file-issue/SKILL.md item 15 must use the vocabulary of whether the system refuses or proceeds",
   );
   assert(
-    text.includes("Sonnet"),
-    "skills/file-issue/SKILL.md item 15 must specify the Sonnet floor",
+    text.includes("`Flash High` floor"),
+    "skills/file-issue/SKILL.md item 15 must specify the Flash High floor",
   );
 
   // Item 16: Guardrail and Rules Edits Must Be Purely Additive
@@ -767,7 +767,7 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
   );
   assertStringIncludes(
     text,
-    "- An **Opus** design session hands filing to a **Sonnet** subagent.",
+    "- An **Opus** design session hands filing to a **Flash High** subagent.",
   );
   assertStringIncludes(
     text,
