@@ -426,7 +426,7 @@ Every entry — in the Fix your open PRs first section, the numbered runnable li
 Blocked section — MUST end with its Flash tier in parentheses, exactly as that
 repo spells it (`Flash`, `Flash Med`, or `Flash High`). Josh uses this to know
 whether to run agy with the plain default chain or override it with
-AGY_MODELS='Gemini 3.7 Flash (High)'. If the issue carries a Milestone
+AGY_MODELS='Gemini 3.7 Flash (High)' (these model names are load-bearing, must match `ALLOWED_AGY_MODELS`'s `displayName` values exactly, version token included, and must never be version-scrubbed). If the issue carries a Milestone
 (Step 2), add `, milestone: <name>` inside the same parentheses — omit the
 clause entirely when there's no Milestone, don't write "milestone: none".
 

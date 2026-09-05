@@ -102,6 +102,8 @@ AGY_MODELS='Gemini 3.7 Flash (Medium)' \
 The value is pipe-separated (model names contain spaces, so pipes — not spaces —
 separate them; a single name needs no pipe). HFS#26 was labeled Flash High but ran on Medium when `AGY_MODELS` was omitted, 2026-07-09.
 
+These model names are **load-bearing, not decorative**: they must match `ALLOWED_AGY_MODELS`'s `displayName` values (defined in `hooks/lib/check_agy_model.ts`) exactly, version token included, and must never be version-scrubbed.
+
 **Headless completion is driven, not one-shot.** agy's `-p` mode can end its
 turn before a long multi-step task is actually finished — it exits 0 with work
 uncommitted, no tests run, no PR opened (this bit us three times in a row on
