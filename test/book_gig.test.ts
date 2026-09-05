@@ -1394,7 +1394,7 @@ Deno.test("renderDarkHtml: includes Pay column, states New vs Returning outright
   assertStringIncludes(html, "<td>—</td>");
 
   // 2. Reworded Spacing Status badge stating Returning / New outright
-  assertStringIncludes(html, "Returning · Last: 2026-06-15");
+  assertStringIncludes(html, "Returning · Last: Jun 15");
   assertStringIncludes(html, "badge-returning");
   assertStringIncludes(html, "Returning");
   assertStringIncludes(html, ">New</span>");
@@ -2721,7 +2721,7 @@ Deno.test("identifyCandidateBadge: handles eligible returning and new venues (#8
     reason: { lastGigDate: "2026-06-15" },
   };
   const badgeReturning = identifyCandidateBadge(returningVenue, refDate);
-  assertEquals(badgeReturning.badge, "Returning · Last: 2026-06-15");
+  assertEquals(badgeReturning.badge, "Returning · Last: Jun 15");
   assertEquals(badgeReturning.cssClass, "badge-returning");
   assertEquals(badgeReturning.isExcluded, false);
 
@@ -2734,6 +2734,44 @@ Deno.test("identifyCandidateBadge: handles eligible returning and new venues (#8
   assertEquals(badgeNew.badge, "New");
   assertEquals(badgeNew.cssClass, "badge-eligible");
   assertEquals(badgeNew.isExcluded, false);
+
+  // Real backend candidate with resumeBookingExpired: false must NOT be marked as on hold
+  const realCandidate: CandidateVenue = {
+    _id: "v3",
+    name: "Normal Active Venue",
+    city: "Roanoke",
+    usState: "VA",
+    reason: {
+      lastGigDate: null,
+      gigIntervalMonths: 2,
+      nearestGigMonthsAway: null,
+      spacingNote: "no gigs yet",
+      resumeBookingExpired: false,
+    },
+  };
+  const realBadge = identifyCandidateBadge(realCandidate, refDate);
+  assertEquals(realBadge.badge, "no gigs yet");
+  assertEquals(realBadge.cssClass, "badge-eligible");
+  assertEquals(realBadge.isExcluded, false);
+
+  // Venue where past hold has expired is eligible
+  const expiredHoldCandidate: CandidateVenue = {
+    _id: "v4",
+    name: "Past Hold Venue",
+    city: "Roanoke",
+    usState: "VA",
+    reason: {
+      lastGigDate: null,
+      gigIntervalMonths: 2,
+      nearestGigMonthsAway: null,
+      spacingNote: "clear — nearest gig ~3.5 mo away",
+      resumeBookingExpired: true,
+    },
+  };
+  const expiredBadge = identifyCandidateBadge(expiredHoldCandidate, refDate);
+  assertEquals(expiredBadge.badge, "clear — nearest gig ~3.5 mo away");
+  assertEquals(expiredBadge.cssClass, "badge-eligible");
+  assertEquals(expiredBadge.isExcluded, false);
 });
 
 Deno.test("filterAndRankCandidates: populates granular status badges and reasoning on candidate venues (#879)", () => {
@@ -2809,12 +2847,49 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   assertEquals(cooldown.isExcluded, true);
 
   const returning = filtered.find((v) => v._id === "v5")!;
-  assertEquals(returning.statusBadge, "Returning · Last: 2026-06-15");
+  assertEquals(returning.statusBadge, "Returning · Last: Jun 15");
   assertEquals(returning.isExcluded, false);
 
   const fresh = filtered.find((v) => v._id === "v6")!;
   assertEquals(fresh.statusBadge, "New");
   assertEquals(fresh.isExcluded, false);
+});
+
+Deno.test("filterAndRankCandidates: does not mutate input candidate objects and preserves spacingNote (#879)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+  const originalCandidate: CandidateVenue = {
+    _id: "v100",
+    name: "Unmutated Venue",
+    city: "Salem",
+    usState: "VA",
+    reason: {
+      lastGigDate: null,
+      gigIntervalMonths: 2,
+      nearestGigMonthsAway: null,
+      spacingNote: "no gigs yet",
+      resumeBookingExpired: false,
+    },
+  };
+
+  const loc = parseLocation("Salem, VA")!;
+  const candidates = [originalCandidate];
+  const filtered = filterAndRankCandidates(candidates, loc, { referenceDate: refDate });
+
+  // Input candidate object was not mutated
+  assertEquals(originalCandidate.statusBadge, undefined);
+  assertEquals(originalCandidate.isExcluded, undefined);
+  assertEquals(originalCandidate.reason?.spacingNote, "no gigs yet");
+  assertEquals(originalCandidate.reason?.statusBadge, undefined);
+
+  // Filtered candidate receives statusBadge and preserves spacingNote
+  assertEquals(filtered[0].statusBadge, "no gigs yet");
+  assertEquals(filtered[0].isExcluded, false);
+  assertEquals(filtered[0].reason?.spacingNote, "no gigs yet");
+
+  // Re-running is idempotent
+  const secondPass = filterAndRankCandidates(candidates, loc, { referenceDate: refDate });
+  assertEquals(secondPass[0].statusBadge, "no gigs yet");
+  assertEquals(secondPass[0].isExcluded, false);
 });
 
 Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in terminal and HTML artifacts (#879)", async () => {

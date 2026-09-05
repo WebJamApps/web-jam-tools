@@ -185,12 +185,6 @@ export function identifyCandidateBadge(
         isExcluded: true,
       };
     }
-  } else if (v.reason?.resumeBookingExpired === false) {
-    return {
-      badge: "[Seasonal Hold]",
-      cssClass: "badge-seasonal-hold",
-      isExcluded: true,
-    };
   }
 
   const bookedThroughVal = v.bookedThrough ?? v.reason?.bookedThrough;
@@ -316,7 +310,7 @@ export function identifyCandidateBadge(
   // 5. Eligible: Returning or New
   if (v.reason?.lastGigDate) {
     return {
-      badge: `Returning · Last: ${v.reason.lastGigDate}`,
+      badge: `Returning · Last: ${formatMonthDay(v.reason.lastGigDate)}`,
       cssClass: "badge-returning",
       isExcluded: false,
     };
@@ -355,29 +349,31 @@ export function filterAndRankCandidates(
   const surroundingMatches: CandidateVenue[] = [];
 
   for (const v of candidates) {
-    // Populate granular status badge and reasoning on candidate venue
+    // Populate granular status badge and reasoning on shallow-cloned venue (immutability)
     const badgeInfo = identifyCandidateBadge(v, refDate);
-    v.statusBadge = v.statusBadge || badgeInfo.badge;
-    v.isExcluded = v.isExcluded ?? badgeInfo.isExcluded;
-    if (!v.reason) {
-      v.reason = {};
-    }
-    v.reason.statusBadge = badgeInfo.badge;
-    if (badgeInfo.isExcluded) {
-      v.reason.exclusionReason = v.reason.exclusionReason || badgeInfo.badge;
-      if (
-        !v.reason.spacingNote || v.reason.spacingNote === "Eligible" ||
-        v.reason.spacingNote === "no gigs yet"
-      ) {
-        v.reason.spacingNote = badgeInfo.badge;
-      }
-    }
+    const vCopy: CandidateVenue = {
+      ...v,
+      statusBadge: v.statusBadge || badgeInfo.badge,
+      isExcluded: v.isExcluded ?? badgeInfo.isExcluded,
+      reason: v.reason
+        ? {
+          ...v.reason,
+          statusBadge: v.reason.statusBadge || badgeInfo.badge,
+          ...(badgeInfo.isExcluded
+            ? { exclusionReason: v.reason.exclusionReason || badgeInfo.badge }
+            : {}),
+        }
+        : {
+          statusBadge: badgeInfo.badge,
+          ...(badgeInfo.isExcluded ? { exclusionReason: badgeInfo.badge } : {}),
+        },
+    };
 
-    const vCity = (v.city || "").toLowerCase().trim();
-    const vAddr = (v.address || "").toLowerCase();
-    let vState = (v.usState || "").toUpperCase().trim();
-    if (!vState && v.address) {
-      const stateMatch = v.address.match(/\b([A-Z]{2})\b(?:\s+\d{5})?$/i);
+    const vCity = (vCopy.city || "").toLowerCase().trim();
+    const vAddr = (vCopy.address || "").toLowerCase();
+    let vState = (vCopy.usState || "").toUpperCase().trim();
+    if (!vState && vCopy.address) {
+      const stateMatch = vCopy.address.match(/\b([A-Z]{2})\b(?:\s+\d{5})?$/i);
       if (stateMatch && US_STATES.has(stateMatch[1].toUpperCase())) {
         vState = stateMatch[1].toUpperCase();
       }
@@ -414,7 +410,7 @@ export function filterAndRankCandidates(
     }
 
     if (isExact) {
-      exactMatches.push(v);
+      exactMatches.push(vCopy);
       continue;
     }
 
@@ -430,7 +426,7 @@ export function filterAndRankCandidates(
     }
 
     if (isSurrounding) {
-      surroundingMatches.push(v);
+      surroundingMatches.push(vCopy);
     }
   }
 
