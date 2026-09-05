@@ -23,7 +23,11 @@ if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "list" ]; then
   exit 0
 fi
 if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "view" ]; then
-  echo "Closes #686\\n\\n🤖 Work by agy — Gemini 3.7 Flash (High)"
+  # web-jam-tools#912 — the footer create-draft-pr.sh is actually able to
+  # write: its ROSTER is unversioned, so it refuses a version-qualified author
+  # outright. This fixture previously carried the version-qualified spelling,
+  # which no real PR body can ever have.
+  echo "Closes #686\\n\\n🤖 Work by agy — Gemini Flash (High)"
   exit 0
 fi
 if [ "\${1:-}" = "api" ]; then

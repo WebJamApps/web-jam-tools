@@ -170,6 +170,55 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.7 Flash (High)|Gemini 3.7 Flash (Medium)')
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
+# --- PR author spelling for the running model (web-jam-tools#912) ----------
+# The model chain's display names are VERSION-QUALIFIED — they come from
+# hooks/lib/check_agy_model.ts's ALLOWED_AGY_MODELS, whose entries also have to
+# produce the `--model` slug, so each display name carries a version token
+# ("Gemini <N.N> Flash (High)"). create-draft-pr.sh's ROSTER, by contrast, is
+# deliberately UNVERSIONED ("Gemini Flash (High)" — Josh, 2026-07-26: pinning a
+# version only produced a stale roster), and author_roster_check() SUBSTRING-
+# matches the author against it. A version token sitting between "Gemini" and
+# "Flash" breaks that substring, so "agy — <versioned name>" can NEVER clear
+# the roster check.
+#
+# That made every dispatch on the DEFAULT chain structurally unable to finish
+# through create-draft-pr.sh: the forced author was refused on every attempt,
+# so agy either produced no PR at all or got around the forced author, and the
+# bypass check below then fired — correctly. Dispatches launched with the
+# UNVERSIONED AGY_MODELS override spelling cleared the roster and looked clean.
+# Both spellings are in circulation, which is exactly why the alarm looked
+# "inconsistent" across otherwise-identical runs (web-jam-tools#912).
+#
+# Fix: strip the version token when composing the author, and use the SAME
+# derived string for FORCED_PR_AUTHOR and for the footer the bypass check
+# expects — so what create-draft-pr.sh is told to write and what this script
+# looks for can never disagree again. This does not weaken the bypass check:
+# the body must still end with the exact footer for the model of THIS round, so
+# a PR opened with `gh pr create` (no footer, or any other author) still fails.
+pr_author_for_model() {
+  local model="$1"
+  printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /')"
+}
+
+# Fail fast when a model in the chain cannot produce a roster-valid author:
+# such a run is structurally unable to open a PR through create-draft-pr.sh,
+# which is the precise condition that produced web-jam-tools#912's alarm. The
+# check is delegated to create-draft-pr.sh's own --check-author mode so the
+# roster is read from its single source of truth, never copied here.
+for _m in "${MODELS[@]}"; do
+  _candidate="$(pr_author_for_model "$_m")"
+  if ! "$SCRIPT_DIR/create-draft-pr.sh" --check-author "$_candidate" >/dev/null 2>&1; then
+    echo "ERROR: model '$_m' yields PR author '$_candidate', which create-draft-pr.sh's" >&2
+    echo "       roster will refuse — this run could not open a PR through that script," >&2
+    echo "       so agy would be pushed into bypassing it (web-jam-tools#912)." >&2
+    echo "       Fix the model chain (AGY_MODELS / hooks/lib/check_agy_model.ts) or the" >&2
+    echo "       roster in scripts/create-draft-pr.sh so the two agree. Roster refusal:" >&2
+    "$SCRIPT_DIR/create-draft-pr.sh" --check-author "$_candidate" >&2 || true
+    exit 1
+  fi
+done
+unset _m _candidate
+
 # --- parse args ---
 # Interactive is the default. Leading flags (any order, before the optional task):
 #   --headless / -H   run unattended (auto-approves tools)
@@ -823,20 +872,38 @@ if [ "$HEADLESS" -eq 1 ]; then
   # bulleted summary, real test-runner evidence, test-plan substance, raw-tag
   # check) is silently skipped. create-draft-pr.sh always composes the body's
   # LAST line as the attribution footer "🤖 Work by $AUTHOR" — and this script
-  # forces AUTHOR to "agy — $m" via FORCED_PR_AUTHOR for the model that round
-  # is actually running as (web-jam-tools#190) — so a body that doesn't end
-  # with that exact footer proves the script was bypassed. This can't be
-  # exercised against real GitHub in the test suite; verified by inspection +
-  # `bash -n` (see the PR that introduced it).
+  # forces AUTHOR to pr_author_for_model "$m" via FORCED_PR_AUTHOR for the
+  # model that round is actually running as (web-jam-tools#190) — so a body
+  # that doesn't end with that exact footer proves the script was bypassed.
+  # The full `gh pr view` path can't be exercised against real GitHub in the
+  # test suite; test/handle_agy_tasks_footer_check.test.ts covers the two
+  # functions themselves (extracted from this file and run under a stubbed
+  # `gh`), which is where web-jam-tools#912's defect actually lived.
   footer_present_for_model() {
-    local pr_num="$1" model="$2" body expected
+    local pr_num="$1" model="$2" body expected trimmed actual
     body="$(gh pr view "$pr_num" -R "WebJamApps/$TARGET_REPO" --json body -q .body 2>/dev/null || true)"
-    expected="🤖 Work by agy — $model"
+    # web-jam-tools#912 — the expectation is built from the SAME derivation
+    # that produced FORCED_PR_AUTHOR for this round, not from the raw --model
+    # string, so the footer this looks for is always the footer
+    # create-draft-pr.sh was told to write.
+    expected="🤖 Work by $(pr_author_for_model "$model")"
     # Trim trailing whitespace/newlines before the suffix check — gh's JSON
     # decode can leave a trailing newline that would otherwise false-negative.
-    case "$(printf '%s' "$body" | sed -e 's/[[:space:]]*$//')" in
-      *"$expected") return 0 ;;
-      *) return 1 ;;
+    trimmed="$(printf '%s' "$body" | sed -e 's/[[:space:]]*$//')"
+    # web-jam-tools#912 — log EVERY check, pass or fail. The alarm that opened
+    # that issue had to be reconstructed after the fact from `ps aux` output
+    # because nothing recorded what was actually compared.
+    actual="$(printf '%s' "$trimmed" | tail -n 1)"
+    echo ">>> footer check (web-jam-tools#912): pr=#$pr_num model='$model' forced_author='${FORCED_PR_AUTHOR:-<unset>}' expected='$expected' actual_last_line='$actual'" >&2
+    case "$trimmed" in
+      *"$expected")
+        echo ">>> footer check: PASS" >&2
+        return 0
+        ;;
+      *)
+        echo ">>> footer check: FAIL" >&2
+        return 1
+        ;;
     esac
   }
 
@@ -875,7 +942,10 @@ if [ "$HEADLESS" -eq 1 ]; then
     # regardless of what --author the model passes (or forgets). $m is the
     # model this round is ACTUALLY running as, so this stays correct across
     # fallback rounds — unlike the model's own self-report.
-    export FORCED_PR_AUTHOR="agy — $m"
+    # web-jam-tools#912 — derived via pr_author_for_model so the forced author
+    # is one create-draft-pr.sh's roster actually accepts; the raw display name
+    # carries a version token the roster's substring match can never clear.
+    export FORCED_PR_AUTHOR="$(pr_author_for_model "$m")"
     while [ "$ROUNDS" -lt "$AGY_MAX_ROUNDS" ]; do
       ROUNDS=$((ROUNDS + 1))
       echo ">>> round $ROUNDS/$AGY_MAX_ROUNDS — model: $m"
@@ -927,7 +997,7 @@ if [ "$HEADLESS" -eq 1 ]; then
           echo "" >&2
           echo "================ handle-agy-tasks BYPASS DETECTED (web-jam-tools#152) ================" >&2
           echo "Draft PR #$PR_NUM exists for branch $BRANCH but its body does NOT end with the" >&2
-          echo "script-composed footer '🤖 Work by agy — $m'." >&2
+          echo "script-composed footer '🤖 Work by $(pr_author_for_model "$m")'." >&2
           echo "This means agy opened the PR with \`gh pr create\` directly instead of" >&2
           echo "scripts/create-draft-pr.sh, which skips EVERY guard in that script (author" >&2
           echo "roster, real summary/test-plan/test-evidence, bulleted summary, real" >&2
