@@ -7,12 +7,13 @@
 // out of load-bearing AGY_MODELS command examples, which breaks dispatch when
 // passed to scripts/handle-agy-tasks.sh.
 
-import { assert, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { ALLOWED_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
 
 const DELEGATE_SKILL_PATH = new URL("../skills/delegate/SKILL.md", import.meta.url).pathname;
 const FLASH_ISSUES_SKILL_PATH =
   new URL("../skills/flash-issues/SKILL.md", import.meta.url).pathname;
+const HANDLE_AGY_TASKS_PATH = new URL("../scripts/handle-agy-tasks.sh", import.meta.url).pathname;
 
 const ALLOWED_DISPLAY_NAMES = new Set(ALLOWED_AGY_MODELS.map((m) => m.displayName));
 
@@ -34,6 +35,18 @@ export function extractAgyModelsDeclarations(content: string): string[] {
     }
   }
   return matches;
+}
+
+/**
+ * Extracts the hardcoded DEFAULT_MODELS echo fallback literal from scripts/handle-agy-tasks.sh.
+ */
+export function extractHandleAgyTasksFallbackLiteral(content: string): string {
+  const match = content.match(/DEFAULT_MODELS=.*?\|\|\s*echo\s*['"]([^'"]+)['"]/);
+  assert(
+    match !== null,
+    "Expected to find DEFAULT_MODELS fallback echo literal in scripts/handle-agy-tasks.sh",
+  );
+  return match[1];
 }
 
 /**
@@ -82,6 +95,17 @@ Deno.test("skills/flash-issues/SKILL.md documents only valid AGY_MODELS matching
   validateAgyModelsDeclarations(declarations, "skills/flash-issues/SKILL.md");
 });
 
+Deno.test("scripts/handle-agy-tasks.sh fallback literal matches ALLOWED_AGY_MODELS", async () => {
+  const content = await Deno.readTextFile(HANDLE_AGY_TASKS_PATH);
+  const fallbackLiteral = extractHandleAgyTasksFallbackLiteral(content);
+  validateAgyModelsDeclarations([fallbackLiteral], "scripts/handle-agy-tasks.sh");
+  assertEquals(
+    fallbackLiteral,
+    ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"),
+    "scripts/handle-agy-tasks.sh fallback literal must match ALLOWED_AGY_MODELS default chain exactly",
+  );
+});
+
 Deno.test("validateAgyModelsDeclarations fails and names offending string when version-scrubbed", () => {
   const offending = "Gemini Flash (High)";
   assertThrows(
@@ -92,7 +116,7 @@ Deno.test("validateAgyModelsDeclarations fails and names offending string when v
     `'${offending}'`,
   );
 
-  const pipeOffending = "Gemini 3.7 Flash (High)|Gemini Flash (Medium)";
+  const pipeOffending = "Gemini 3.8 Flash (High)|Gemini Flash (Medium)";
   assertThrows(
     () => {
       validateAgyModelsDeclarations([pipeOffending], "test/dummy.md");
