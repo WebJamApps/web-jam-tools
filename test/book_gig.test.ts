@@ -1579,7 +1579,10 @@ Deno.test("fetchCandidates: fetches candidates with bare array and handles error
   let capturedUrl1 = "";
   // Bare array response
   const mockFetch1: typeof fetch = (_url: string | URL | Request) => {
-    capturedUrl1 = String(_url);
+    const u = String(_url);
+    if (u.includes("/outreach/candidates")) {
+      capturedUrl1 = u;
+    }
     return Promise.resolve(
       new Response(JSON.stringify(mockVenues), {
         status: 200,
@@ -1601,7 +1604,10 @@ Deno.test("fetchCandidates: fetches candidates with bare array and handles error
   // Wrapped candidates object response
   let capturedUrl2 = "";
   const mockFetchWrapped: typeof fetch = (_url: string | URL | Request) => {
-    capturedUrl2 = String(_url);
+    const u = String(_url);
+    if (u.includes("/outreach/candidates")) {
+      capturedUrl2 = u;
+    }
     return Promise.resolve(
       new Response(JSON.stringify({ candidates: mockVenues }), {
         status: 200,
@@ -1979,6 +1985,61 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
   );
   assertEquals(resNone.batchDispatch?.sent, 0);
   assertEquals(resNone.batchDispatch?.requested, 0);
+
+  // Test 6: Send mode automatically filters out venues with isExcluded: true
+  const mockVenuesWithExcluded: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@oldesalem.com",
+      isExcluded: false,
+    },
+    {
+      _id: "v-hold",
+      name: "Hold Brewery",
+      city: "Salem",
+      usState: "VA",
+      email: "hold@brewery.com",
+      isExcluded: true,
+      statusBadge: "[Seasonal Hold: Jan 2027]",
+    },
+  ];
+  const mockFetchWithExcluded: typeof fetch = (url, init) => {
+    const u = String(url);
+    if (u.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenuesWithExcluded), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/outreach/batch")) {
+      const body = JSON.parse(String(init?.body || "{}"));
+      lastDispatchedIds = body.venueIds;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            requested: body.venueIds.length,
+            sent: body.venueIds.length,
+            skipped: [],
+            records: body.venueIds.map((id: string) => ({ _id: `outreach_${id}` })),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+  const resExcluded = await runBookGigCli(
+    ["--send", "Oct 16-18 2026"],
+    mockFetchWithExcluded,
+    mockOpener,
+  );
+  assertEquals(resExcluded.batchDispatch?.sent, 1);
+  assertEquals(lastDispatchedIds, ["v1"]);
 });
 
 Deno.test("openHtmlInBrowser: executes shell command with active display", async () => {
@@ -2995,4 +3056,223 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
+});
+
+Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and cooldown venues alongside genuine /outreach/candidates response", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  // Genuine shape of /outreach/candidates response from web-jam-back buildCandidateReason
+  const genuineCandidatesResponse = {
+    candidates: [
+      {
+        _id: "venue-eligible-returning",
+        name: "Twin Creeks Brewing",
+        city: "Salem",
+        usState: "VA",
+        email: "booking@twincreeks.com",
+        outreachEligible: true,
+        reason: {
+          lastGigDate: "2026-06-15T22:00:00.000Z",
+          gigIntervalMonths: 2,
+          nearestGigMonthsAway: 4.1,
+          spacingNote: "clear — nearest gig ~4.1 mo away",
+          resumeBookingExpired: false,
+        },
+      },
+      {
+        _id: "venue-eligible-new",
+        name: "Big Lick Brewing Company",
+        city: "Salem",
+        usState: "VA",
+        email: "info@biglick.com",
+        outreachEligible: true,
+        reason: {
+          lastGigDate: null,
+          gigIntervalMonths: 2,
+          nearestGigMonthsAway: null,
+          spacingNote: "no gigs yet",
+          resumeBookingExpired: false,
+        },
+      },
+    ],
+    weekendGigs: [],
+  };
+
+  // Venues returned by GET /venue, including venues in seasonal hold, direct-chat, and gig-spacing conflict
+  const allVenuesResponse = [
+    {
+      _id: "venue-eligible-returning",
+      name: "Twin Creeks Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@twincreeks.com",
+      outreachEligible: true,
+    },
+    {
+      _id: "venue-eligible-new",
+      name: "Big Lick Brewing Company",
+      city: "Salem",
+      usState: "VA",
+      email: "info@biglick.com",
+      outreachEligible: true,
+    },
+    {
+      _id: "venue-seasonal-hold",
+      name: "Olde Salem Brewery",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@oldesalem.com",
+      outreachEligible: true,
+      resumeBooking: "2027-01-01T00:00:00.000Z",
+      bookedThrough: "2026-12-31T23:59:59.999Z",
+    },
+    {
+      _id: "venue-direct-chat",
+      name: "Direct Chat Lounge",
+      city: "Salem",
+      usState: "VA",
+      email: "direct@lounge.com",
+      outreachEligible: false,
+      contactNotes: "Spoke directly with booking manager",
+    },
+    {
+      _id: "venue-gig-spacing",
+      name: "Parkway Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "info@parkway.com",
+      outreachEligible: true,
+      gigInterval: 2,
+      lastGig: {
+        datetime: "2026-11-20T20:00:00.000Z",
+        city: "Salem",
+        usState: "VA",
+      },
+    },
+    {
+      _id: "venue-cooldown",
+      name: "Cooldown Taphouse",
+      city: "Salem",
+      usState: "VA",
+      email: "tap@cooldown.com",
+      outreachEligible: true,
+    },
+  ];
+
+  // Active outreach campaigns returned by GET /outreach?status=sent
+  const activeCampaignsResponse = [
+    {
+      _id: "camp-1",
+      venueId: "venue-cooldown",
+      sentAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 days ago
+      targetDates: "2026-10-16 to 2026-10-18",
+      targetWeekend: {
+        start: "2026-10-16",
+        end: "2026-10-18",
+      },
+      status: "sent",
+    },
+  ];
+
+  const mockFetch: typeof fetch = (url: string | URL | Request) => {
+    const urlStr = String(url);
+    if (urlStr.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(genuineCandidatesResponse), { status: 200 }),
+      );
+    }
+    if (urlStr.includes("/venue")) {
+      return Promise.resolve(new Response(JSON.stringify(allVenuesResponse), { status: 200 }));
+    }
+    if (urlStr.includes("/outreach?status=sent")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(activeCampaignsResponse), { status: 200 }),
+      );
+    }
+    return Promise.resolve(new Response("Not Found", { status: 404 }));
+  };
+
+  const candidates = await fetchCandidates(
+    { weekend, backendUrl: "https://test.local", token: "test-token" },
+    mockFetch,
+  );
+
+  // Verify all candidates are returned
+  assertEquals(candidates.length, 6);
+
+  // 1. Returning eligible venue
+  const returning = candidates.find((c) => c._id === "venue-eligible-returning");
+  assert(returning !== undefined);
+  assertEquals(returning.isExcluded, false);
+  const returningBadge = identifyCandidateBadge(returning);
+  assertEquals(returningBadge.badge, "Returning · Last: Jun 15");
+  assertEquals(returningBadge.cssClass, "badge-returning");
+  assertEquals(returningBadge.isExcluded, false);
+
+  // 2. New eligible venue
+  const newVenue = candidates.find((c) => c._id === "venue-eligible-new");
+  assert(newVenue !== undefined);
+  assertEquals(newVenue.isExcluded, false);
+  const newBadge = identifyCandidateBadge(newVenue);
+  assertEquals(newBadge.badge, "no gigs yet");
+  assertEquals(newBadge.cssClass, "badge-eligible");
+  assertEquals(newBadge.isExcluded, false);
+
+  // 3. Seasonal Hold venue
+  const seasonalHold = candidates.find((c) => c._id === "venue-seasonal-hold");
+  assert(seasonalHold !== undefined);
+  assertEquals(seasonalHold.isExcluded, true);
+  const seasonalBadge = identifyCandidateBadge(seasonalHold);
+  assertStringIncludes(seasonalBadge.badge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(seasonalBadge.cssClass, "badge-seasonal-hold");
+  assertEquals(seasonalBadge.isExcluded, true);
+
+  // 4. Direct Chat Active venue
+  const directChat = candidates.find((c) => c._id === "venue-direct-chat");
+  assert(directChat !== undefined);
+  assertEquals(directChat.isExcluded, true);
+  const directChatBadge = identifyCandidateBadge(directChat);
+  assertEquals(directChatBadge.badge, "[Direct Chat Active]");
+  assertEquals(directChatBadge.cssClass, "badge-direct-chat");
+  assertEquals(directChatBadge.isExcluded, true);
+
+  // 5. Gig Spacing Conflict venue
+  const gigSpacing = candidates.find((c) => c._id === "venue-gig-spacing");
+  assert(gigSpacing !== undefined);
+  assertEquals(gigSpacing.isExcluded, true);
+  const gigSpacingBadge = identifyCandidateBadge(gigSpacing);
+  assertEquals(gigSpacingBadge.badge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(gigSpacingBadge.cssClass, "badge-gig-spacing");
+  assertEquals(gigSpacingBadge.isExcluded, true);
+
+  // 6. Cooldown Active venue
+  const cooldown = candidates.find((c) => c._id === "venue-cooldown");
+  assert(cooldown !== undefined);
+  assertEquals(cooldown.isExcluded, true);
+  const cooldownBadge = identifyCandidateBadge(cooldown);
+  assertStringIncludes(cooldownBadge.badge, "[Cooldown Active: Sent");
+  assertEquals(cooldownBadge.cssClass, "badge-cooldown");
+  assertEquals(cooldownBadge.isExcluded, true);
+
+  // Verify renderCandidateTable displays all 4 badge states
+  const renderedTable = renderCandidateTable(candidates, { color: false });
+  assertStringIncludes(renderedTable, "Returning · Last: Jun 15");
+  assertStringIncludes(renderedTable, "no gigs yet");
+  assertStringIncludes(renderedTable, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(renderedTable, "[Direct Chat Active]");
+  assertStringIncludes(renderedTable, "[Gig Spacing: Nov 20 Show]");
+  assertStringIncludes(renderedTable, "[Cooldown Active: Sent");
+
+  // Verify assessDensity counts ONLY the 2 eligible candidates
+  const density = assessDensity(candidates);
+  assertEquals(density.count, 2);
+  assertEquals(density.isSparse, true); // threshold is 3
 });

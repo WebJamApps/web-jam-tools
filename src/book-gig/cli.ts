@@ -385,7 +385,7 @@ export async function runBookGigCli(
   const templates = await fetchTemplates({}, fetchFn);
   const pitches: PitchEmail[] = [];
   for (const c of candidates) {
-    if (c.email) {
+    if (c.email && !c.isExcluded) {
       try {
         const pitch = renderPitch(c, weekend, {}, templates);
         pitches.push(pitch);
@@ -401,7 +401,7 @@ export async function runBookGigCli(
 
   // 6. If in --send mode, dispatch batch outreach via POST /outreach/batch
   if (isSendMode) {
-    let eligibleVenues = candidates.filter((c) => c._id && c.email);
+    let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
 
     if (parsed.includeVenues && parsed.includeVenues.length > 0) {
       console.log(

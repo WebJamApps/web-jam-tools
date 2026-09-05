@@ -31,24 +31,219 @@ export async function fetchCandidates(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
+  let candidates: CandidateVenue[] = [];
   try {
     const res = await fetchFn(url, { headers });
-    if (!res.ok) {
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        candidates = (data as CandidateVenue[]).map((c) => ({
+          ...c,
+          isExcluded: c.isExcluded ?? false,
+        }));
+      } else if (data && Array.isArray(data.candidates)) {
+        candidates = (data.candidates as CandidateVenue[]).map((c) => ({
+          ...c,
+          isExcluded: c.isExcluded ?? false,
+        }));
+      }
+      if (data && Array.isArray(data.held)) {
+        candidates.push(
+          ...(data.held as CandidateVenue[]).map((c) => ({ ...c, isExcluded: true })),
+        );
+      } else if (data && Array.isArray(data.excluded)) {
+        candidates.push(
+          ...(data.excluded as CandidateVenue[]).map((c) => ({ ...c, isExcluded: true })),
+        );
+      }
+    } else {
       console.warn(`[book-gig] Candidates query returned HTTP ${res.status}: ${res.statusText}`);
-      return [];
     }
-
-    const data = await res.json();
-    if (Array.isArray(data)) {
-      return data as CandidateVenue[];
-    } else if (data && Array.isArray(data.candidates)) {
-      return data.candidates as CandidateVenue[];
-    }
-    return [];
   } catch (err) {
     console.warn(`[book-gig] Error fetching candidates from ${url}: ${(err as Error).message}`);
-    return [];
   }
+
+  // Enrich candidate pool with venues carrying active holds, spacing constraints, direct-chat, or cooldowns
+  // so the terminal candidate table and HTML review artifact display granular reason badges.
+  const allVenuesMap = new Map<string, CandidateVenue>();
+  try {
+    const venueUrl = `${baseUrl}/venue`;
+    const venueRes = await fetchFn(venueUrl, { headers });
+    if (venueRes.ok) {
+      const venues = await venueRes.json();
+      if (Array.isArray(venues)) {
+        for (const v of venues) {
+          if (v && v._id) allVenuesMap.set(String(v._id), v as CandidateVenue);
+        }
+        const candidateIds = new Set(candidates.map((c) => String(c._id)));
+        const nowMs = Date.now();
+        const weekendStartMs = new Date(options.weekend.start).getTime();
+
+        for (const v of venues) {
+          if (!v || !v._id || candidateIds.has(String(v._id))) continue;
+          if (v.status === "archived") continue;
+
+          // 1. Seasonal Hold: active resumeBooking in the future
+          if (v.resumeBooking) {
+            const rbDate = new Date(v.resumeBooking);
+            if (!Number.isNaN(rbDate.getTime()) && rbDate.getTime() > nowMs) {
+              candidates.push({
+                ...v,
+                isExcluded: true,
+                statusBadge: `[Seasonal Hold: ${formatMonthYear(rbDate)}]`,
+                exclusionReason: "seasonal-hold",
+                reason: {
+                  resumeBooking: v.resumeBooking,
+                  statusBadge: `[Seasonal Hold: ${formatMonthYear(rbDate)}]`,
+                  exclusionReason: "seasonal-hold",
+                },
+              });
+              candidateIds.add(String(v._id));
+              continue;
+            }
+          }
+
+          // 1b. Seasonal Hold: bookedThrough on or after weekend start
+          if (v.bookedThrough) {
+            const btDate = new Date(v.bookedThrough);
+            if (!Number.isNaN(btDate.getTime()) && btDate.getTime() >= weekendStartMs) {
+              candidates.push({
+                ...v,
+                isExcluded: true,
+                statusBadge: `[Seasonal Hold: ${formatMonthYear(btDate)}]`,
+                exclusionReason: "seasonal-hold",
+                reason: {
+                  bookedThrough: v.bookedThrough,
+                  statusBadge: `[Seasonal Hold: ${formatMonthYear(btDate)}]`,
+                  exclusionReason: "seasonal-hold",
+                },
+              });
+              candidateIds.add(String(v._id));
+              continue;
+            }
+          }
+
+          // 2. Direct Chat Active: outreachEligible === false
+          if (v.outreachEligible === false) {
+            candidates.push({
+              ...v,
+              isExcluded: true,
+              statusBadge: "[Direct Chat Active]",
+              exclusionReason: "direct-chat",
+              reason: {
+                activeDirectChat: true,
+                statusBadge: "[Direct Chat Active]",
+                exclusionReason: "direct-chat",
+              },
+            });
+            candidateIds.add(String(v._id));
+            continue;
+          }
+
+          // 3. Gig Spacing: conflicting gig within gigInterval (default 2 months / 60 days)
+          const gigIntervalMonths = (typeof v.gigInterval === "number" && v.gigInterval > 0)
+            ? v.gigInterval
+            : 2;
+          const gigIntervalMs = gigIntervalMonths * 30 * 24 * 60 * 60 * 1000;
+          const conflictingGig = [v.lastGig, v.nextGig].find((g) => {
+            if (!g || !g.datetime) return false;
+            const gTime = new Date(g.datetime).getTime();
+            return !Number.isNaN(gTime) && Math.abs(gTime - weekendStartMs) < gigIntervalMs;
+          });
+          if (conflictingGig) {
+            const gFormatted = formatMonthDay(conflictingGig.datetime);
+            candidates.push({
+              ...v,
+              isExcluded: true,
+              statusBadge: `[Gig Spacing: ${gFormatted} Show]`,
+              exclusionReason: "gig-spacing",
+              conflictingGigDate: conflictingGig.datetime,
+              reason: {
+                conflictingGigDate: conflictingGig.datetime,
+                lastGigDate: conflictingGig.datetime,
+                gigIntervalMonths,
+                statusBadge: `[Gig Spacing: ${gFormatted} Show]`,
+                exclusionReason: "gig-spacing",
+              },
+            });
+            candidateIds.add(String(v._id));
+            continue;
+          }
+        }
+      }
+    }
+  } catch {
+    // Best-effort venue enrichment
+  }
+
+  // 4. Cooldown Active: venues pitched within 7-day cooldown window for this weekend
+  try {
+    const campaignsUrl = `${baseUrl}/outreach?status=sent`;
+    const campRes = await fetchFn(campaignsUrl, { headers });
+    if (campRes.ok) {
+      const campaigns = await campRes.json();
+      if (Array.isArray(campaigns)) {
+        const nowMs = Date.now();
+        const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+        const wStartMs = new Date(options.weekend.start).getTime();
+        const wEndMs = new Date(options.weekend.end).getTime();
+
+        for (const camp of campaigns) {
+          if (!camp || !camp.venueId || !camp.sentAt) continue;
+          const sentDate = new Date(camp.sentAt);
+          if (Number.isNaN(sentDate.getTime())) continue;
+          const diffMs = nowMs - sentDate.getTime();
+          if (diffMs < 0 || diffMs > sevenDaysMs) continue;
+
+          const twStart = camp.targetWeekend?.start
+            ? new Date(camp.targetWeekend.start).getTime()
+            : null;
+          const twEnd = camp.targetWeekend?.end ? new Date(camp.targetWeekend.end).getTime() : null;
+          const matchesWeekend =
+            (twStart !== null && twEnd !== null && twStart <= wEndMs && twEnd >= wStartMs) ||
+            Boolean(
+              camp.targetDates &&
+                (camp.targetDates.includes(options.weekend.start) ||
+                  camp.targetDates.includes(options.weekend.label)),
+            );
+
+          if (matchesWeekend) {
+            const existing = candidates.find((c) => String(c._id) === String(camp.venueId));
+            const formatted = formatMonthDay(sentDate);
+            if (existing) {
+              existing.isExcluded = true;
+              existing.statusBadge = `[Cooldown Active: Sent ${formatted}]`;
+              existing.exclusionReason = "cooldown";
+              if (existing.reason) {
+                existing.reason.cooldownSentDate = camp.sentAt;
+                existing.reason.statusBadge = `[Cooldown Active: Sent ${formatted}]`;
+                existing.reason.exclusionReason = "cooldown";
+              }
+            } else {
+              const v = allVenuesMap.get(String(camp.venueId));
+              if (v) {
+                candidates.push({
+                  ...v,
+                  isExcluded: true,
+                  statusBadge: `[Cooldown Active: Sent ${formatted}]`,
+                  exclusionReason: "cooldown",
+                  reason: {
+                    cooldownSentDate: camp.sentAt,
+                    statusBadge: `[Cooldown Active: Sent ${formatted}]`,
+                    exclusionReason: "cooldown",
+                  },
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // Best-effort cooldown enrichment
+  }
+
+  return candidates;
 }
 
 // Word boundary matching via string indexing and static regex character testing.
@@ -512,7 +707,7 @@ export function assessDensity(
   isSparse: boolean;
   suggestedMetro?: string;
 } {
-  const count = candidates.length;
+  const count = candidates.filter((c) => !c.isExcluded).length;
   const isSparse = count < threshold;
 
   let suggestedMetro = location?.metroSlug;
