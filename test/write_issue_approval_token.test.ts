@@ -12,6 +12,9 @@
 // scripts/write_issue_approval_token.ts) pointing at a fixture transcript carrying an authorizing
 // /file-issue or /design-issue turn (see writeAuthorizingTranscriptFixture below) — a plain CLI
 // invocation with nothing authorizing it is exactly what "CLI: refuses ..." further down exercises.
+// web-jam-tools#920: some fixtures below carry Claude Code's `<command-name>` slash-invocation
+// wrapper instead of bare `/file-issue` text, because that is what the surface actually stores for a
+// typed slash command — see the "Claude Code's <command-name> slash-invocation wrapper" block.
 // buildApprovalToken/writeApprovalToken/
 // writeApprovalTokenSync stay unauthorized on purpose (see file header on scripts/
 // write_issue_approval_token.ts) so the pre-existing unit tests of those three functions are
@@ -532,6 +535,77 @@ Deno.test("CLI: succeeds when the most recent authorizing turn used file-issue's
   }
 });
 
+Deno.test("CLI: writes the token when the authorizing turn is a real Claude Code /file-issue slash invocation, stored in <command-name> wrapper form (web-jam-tools#920)", async () => {
+  const dir = await Deno.makeTempDir();
+  const tokenPath = `${dir}/wrapper-form-authorized.json`;
+  try {
+    const authEnv = await writeAuthorizingTranscriptFixture(
+      dir,
+      "<command-message>file-issue</command-message>\n<command-name>/file-issue</command-name>",
+    );
+    const res = await runCli([
+      "--session-id",
+      "wrapper-form-session",
+      "--repo",
+      "web-jam-tools",
+      "--title",
+      "Some title",
+      "--token-path",
+      tokenPath,
+    ], envWith(authEnv));
+    assertEquals(res.code, 0, res.stderr);
+    const loaded = loadToken(tokenPath);
+    assert(loaded !== null);
+    assertEquals(loaded?.session_id, "wrapper-form-session");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: refuses when a wrapper-form /work-issue invocation follows the filing invocation (web-jam-tools#920 scope-ending half)", async () => {
+  const dir = await Deno.makeTempDir();
+  const tokenPath = `${dir}/should-not-exist.json`;
+  try {
+    const path = `${dir}/transcript.jsonl`;
+    const lines = [
+      { type: "user", message: { role: "user", content: "/file-issue add zipCode to the Venue" } },
+      { type: "assistant", message: { role: "assistant", content: "filed it" } },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content:
+            "<command-message>work-issue</command-message>\n<command-name>/work-issue</command-name>",
+        },
+      },
+    ];
+    await Deno.writeTextFile(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+
+    const res = await runCli(
+      [
+        "--session-id",
+        "wrapper-scope-end-session",
+        "--repo",
+        "web-jam-tools",
+        "--title",
+        "Some title",
+        "--token-path",
+        tokenPath,
+      ],
+      envWith({
+        WRITE_ISSUE_APPROVAL_TOKEN_TEST_TRANSCRIPT_PATH: path,
+        WRITE_ISSUE_APPROVAL_TOKEN_TEST_CONVERSATION_ID: "test-conv",
+      }),
+    );
+    assertEquals(res.code, 1);
+    assert(res.stderr.includes("different skill or command (/work-issue) was invoked"));
+    const exists = await Deno.stat(tokenPath).then(() => true).catch(() => false);
+    assertEquals(exists, false);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 // --- checkTokenWriteAuthorization / filingSkillInvoked / tailIsCurrentlySidechain unit tests ---
 
 Deno.test("filingSkillInvoked: recognizes /file-issue and /design-issue at the start of the text", () => {
@@ -569,6 +643,111 @@ Deno.test("filingSkillInvoked: does not match the natural-language triggers mid-
   // design-issue has no documented natural-language trigger — only its slash form authorizes it.
   assertEquals(filingSkillInvoked("design an issue for this"), null);
   assertEquals(filingSkillInvoked("run design-issue"), null);
+});
+
+// --- web-jam-tools#920: Claude Code's <command-name> slash-invocation wrapper ---
+//
+// Claude Code does not store a typed `/file-issue` as the bare text `/file-issue`; it stores a user
+// turn whose whole content is the wrapper below. Every test in this block fails against the pre-#920
+// code, where such a turn was invisible to BOTH halves of the check — so a real /file-issue could
+// not authorize (fails closed, visibly) and a real /work-issue could not end the authorization scope
+// (fails open, silently).
+
+const FILE_ISSUE_WRAPPER =
+  "<command-message>file-issue</command-message>\n<command-name>/file-issue</command-name>";
+const DESIGN_ISSUE_WRAPPER =
+  "<command-message>design-issue</command-message>\n<command-name>/design-issue</command-name>";
+const WORK_ISSUE_WRAPPER =
+  "<command-message>work-issue</command-message>\n<command-name>/work-issue</command-name>";
+
+Deno.test("filingSkillInvoked: recognizes Claude Code's <command-name> invocation wrapper (web-jam-tools#920)", () => {
+  assertEquals(filingSkillInvoked(FILE_ISSUE_WRAPPER), "file-issue");
+  assertEquals(filingSkillInvoked(DESIGN_ISSUE_WRAPPER), "design-issue");
+  // The <command-message> element is optional, leading/trailing whitespace is tolerated, and
+  // trailing elements (e.g. <command-args>) may follow the wrapper.
+  assertEquals(filingSkillInvoked("<command-name>/file-issue</command-name>"), "file-issue");
+  assertEquals(filingSkillInvoked(`  ${DESIGN_ISSUE_WRAPPER}\n`), "design-issue");
+  assertEquals(
+    filingSkillInvoked(
+      `${FILE_ISSUE_WRAPPER}\n<command-args>add zipCode to the Venue model</command-args>`,
+    ),
+    "file-issue",
+  );
+});
+
+Deno.test("filingSkillInvoked: a <command-name> element that is not the turn's own invocation wrapper is still a mention, not a use (web-jam-tools#920)", () => {
+  // Prose quoting the wrapper while discussing it — the mention-vs-use distinction the bare slash
+  // form already draws, applied identically to the wrapper form.
+  assertEquals(
+    filingSkillInvoked(
+      `Claude Code stores the invocation as ${FILE_ISSUE_WRAPPER} rather than as bare text`,
+    ),
+    null,
+  );
+  assertEquals(
+    filingSkillInvoked("see <command-name>/design-issue</command-name> in the transcript"),
+    null,
+  );
+  // A non-filing skill's wrapper is not a filing invocation.
+  assertEquals(filingSkillInvoked(WORK_ISSUE_WRAPPER), null);
+  // Not the wrapper element at all.
+  assertEquals(filingSkillInvoked("<command-message>file-issue</command-message>"), null);
+  assertEquals(filingSkillInvoked("<command-name>file-issue</command-name>"), null);
+});
+
+Deno.test("nonFilingSlashCommandInvoked: recognizes the wrapper form so a wrapped non-filing skill still ends the authorization scope (web-jam-tools#920)", () => {
+  assertEquals(nonFilingSlashCommandInvoked(WORK_ISSUE_WRAPPER), "/work-issue");
+  assertEquals(
+    nonFilingSlashCommandInvoked(
+      "<command-message>book-gig</command-message>\n<command-name>/book-gig</command-name>",
+    ),
+    "/book-gig",
+  );
+  assertEquals(
+    nonFilingSlashCommandInvoked("<command-name>/pr-review</command-name>"),
+    "/pr-review",
+  );
+  // Filing wrappers are not scope-ending — they are the authorization itself.
+  assertEquals(nonFilingSlashCommandInvoked(FILE_ISSUE_WRAPPER), null);
+  assertEquals(nonFilingSlashCommandInvoked(DESIGN_ISSUE_WRAPPER), null);
+  // A quoted wrapper mid-prose is a mention, so it must not silently terminate an authorization.
+  assertEquals(
+    nonFilingSlashCommandInvoked(`the ${WORK_ISSUE_WRAPPER} form is what Claude Code writes`),
+    null,
+  );
+});
+
+Deno.test("checkTokenWriteAuthorization: a wrapper-form /file-issue turn authorizes the write (web-jam-tools#920)", () => {
+  const entries: TranscriptEntry[] = [
+    { type: "user", message: { role: "user", content: FILE_ISSUE_WRAPPER } },
+    { type: "assistant", message: { role: "assistant", content: "researching duplicates..." } },
+    { type: "user", message: { role: "user", content: "yes that plan looks right" } },
+  ];
+  const result = checkTokenWriteAuthorization({
+    entries,
+    ownConversationId: "sess-1",
+    isSubagentInvocation: false,
+  });
+  assertEquals(result.ok, true);
+  assertEquals(result.skill, "file-issue");
+});
+
+Deno.test("checkTokenWriteAuthorization: a wrapper-form /work-issue turn ends the scope of an earlier filing invocation (web-jam-tools#920 fail-open half)", () => {
+  // Pre-#920 this returned ok:true — the wrapped /work-issue was invisible, so the earlier
+  // /file-issue kept authorizing writes across an intervening non-filing skill.
+  const entries: TranscriptEntry[] = [
+    { type: "user", message: { role: "user", content: "/file-issue add zipCode to the Venue" } },
+    { type: "assistant", message: { role: "assistant", content: "filed" } },
+    { type: "user", message: { role: "user", content: WORK_ISSUE_WRAPPER } },
+    { type: "assistant", message: { role: "assistant", content: "working the issue" } },
+  ];
+  const result = checkTokenWriteAuthorization({
+    entries,
+    ownConversationId: "sess-1",
+    isSubagentInvocation: false,
+  });
+  assertEquals(result.ok, false);
+  assert(result.reason?.includes("different skill or command (/work-issue) was invoked"));
 });
 
 Deno.test("nonFilingSlashCommandInvoked: recognizes other slash commands and ignores filing skills or prose", () => {
@@ -763,6 +942,25 @@ Deno.test("authorizeWrite: end-to-end via an explicit in-process transcriptPath 
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
+});
+
+Deno.test("authorizeWrite: refuses (fails closed) when the transcript cannot be read and the own conversation identity cannot be established — outcome 3", async () => {
+  const result = await authorizeWrite({
+    sessionId: "",
+    transcriptPath: "/nonexistent/web-jam-tools-920/transcript.jsonl",
+  });
+  assertEquals(result.ok, false);
+  assert(result.reason?.includes("could not determine"));
+});
+
+Deno.test("authorizeWrite: refuses (fails closed) when the transcript cannot be read even though the conversation identity is known — outcome 3", async () => {
+  const result = await authorizeWrite({
+    sessionId: "known-session",
+    transcriptPath: "/nonexistent/web-jam-tools-920/transcript.jsonl",
+    conversationId: "known-conv",
+  });
+  assertEquals(result.ok, false);
+  assert(result.reason?.includes("no /design-issue invocation, and no /file-issue invocation"));
 });
 
 // --- Round-trip integration tests with hook and reader (web-jam-tools#595) ---
