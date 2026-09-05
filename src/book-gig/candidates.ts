@@ -1,8 +1,17 @@
 // src/book-gig/candidates.ts — Candidate venue query and geographic filtering for /book-gig
 
-import type { CandidateBadgeInfo, CandidateVenue, TargetLocation, TargetWeekend } from "./types.ts";
+import type {
+  CandidateBadgeInfo,
+  CandidateVenue,
+  OutreachCampaignRecord,
+  TargetLocation,
+  TargetWeekend,
+} from "./types.ts";
 import { resolveBackendConfig } from "./outreach_api.ts";
 import { getDefaultLocation, US_STATES } from "./parser.ts";
+
+export const DIRECT_CHAT_REGEX =
+  /direct|chat|phone|spoke|talk(ed|ing)?|conversation|call(ed)?|text(ed)?|in\s*person/i;
 
 export interface FetchCandidatesOptions {
   backendUrl?: string;
@@ -51,7 +60,8 @@ export async function fetchCandidates(
         candidates.push(
           ...(data.held as CandidateVenue[]).map((c) => ({ ...c, isExcluded: true })),
         );
-      } else if (data && Array.isArray(data.excluded)) {
+      }
+      if (data && Array.isArray(data.excluded)) {
         candidates.push(
           ...(data.excluded as CandidateVenue[]).map((c) => ({ ...c, isExcluded: true })),
         );
@@ -67,7 +77,7 @@ export async function fetchCandidates(
   // so the terminal candidate table and HTML review artifact display granular reason badges.
   const allVenuesMap = new Map<string, CandidateVenue>();
   try {
-    const venueUrl = `${baseUrl}/venue`;
+    const venueUrl = `${baseUrl}/venue?status=active`;
     const venueRes = await fetchFn(venueUrl, { headers });
     if (venueRes.ok) {
       const venues = await venueRes.json();
@@ -123,8 +133,10 @@ export async function fetchCandidates(
             }
           }
 
-          // 2. Direct Chat Active: outreachEligible === false
-          if (v.outreachEligible === false) {
+          // 2. Direct Chat Active: outreachEligible === false AND positive evidence of active direct chat in notes
+          const hasDirectChatInNotes = typeof v.notes === "string" &&
+            DIRECT_CHAT_REGEX.test(v.notes);
+          if (v.outreachEligible === false && hasDirectChatInNotes) {
             candidates.push({
               ...v,
               isExcluded: true,
@@ -140,15 +152,19 @@ export async function fetchCandidates(
             continue;
           }
 
-          // 3. Gig Spacing: conflicting gig within gigInterval (default 2 months / 60 days)
+          // 3. Gig Spacing: conflicting gig within gigInterval (default 2 months)
           const gigIntervalMonths = (typeof v.gigInterval === "number" && v.gigInterval > 0)
             ? v.gigInterval
             : 2;
-          const gigIntervalMs = gigIntervalMonths * 30 * 24 * 60 * 60 * 1000;
+          const lower = new Date(weekendStartMs);
+          lower.setMonth(lower.getMonth() - gigIntervalMonths);
+          const upper = new Date(weekendStartMs);
+          upper.setMonth(upper.getMonth() + gigIntervalMonths);
+
           const conflictingGig = [v.lastGig, v.nextGig].find((g) => {
             if (!g || !g.datetime) return false;
             const gTime = new Date(g.datetime).getTime();
-            return !Number.isNaN(gTime) && Math.abs(gTime - weekendStartMs) < gigIntervalMs;
+            return !Number.isNaN(gTime) && gTime > lower.getTime() && gTime < upper.getTime();
           });
           if (conflictingGig) {
             const gFormatted = formatMonthDay(conflictingGig.datetime);
@@ -178,62 +194,88 @@ export async function fetchCandidates(
 
   // 4. Cooldown Active: venues pitched within 7-day cooldown window for this weekend
   try {
-    const campaignsUrl = `${baseUrl}/outreach?status=sent`;
-    const campRes = await fetchFn(campaignsUrl, { headers });
-    if (campRes.ok) {
-      const campaigns = await campRes.json();
-      if (Array.isArray(campaigns)) {
-        const nowMs = Date.now();
-        const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-        const wStartMs = new Date(options.weekend.start).getTime();
-        const wEndMs = new Date(options.weekend.end).getTime();
+    const [sentRes, repliedRes] = await Promise.all([
+      fetchFn(`${baseUrl}/outreach?status=sent`, { headers }),
+      fetchFn(`${baseUrl}/outreach?status=replied`, { headers }),
+    ]);
+    const campaigns: OutreachCampaignRecord[] = [];
+    if (sentRes.ok) {
+      const sentData = await sentRes.json();
+      if (Array.isArray(sentData)) campaigns.push(...sentData);
+    }
+    if (repliedRes.ok) {
+      const repliedData = await repliedRes.json();
+      if (Array.isArray(repliedData)) campaigns.push(...repliedData);
+    }
 
-        for (const camp of campaigns) {
-          if (!camp || !camp.venueId || !camp.sentAt) continue;
-          const sentDate = new Date(camp.sentAt);
-          if (Number.isNaN(sentDate.getTime())) continue;
-          const diffMs = nowMs - sentDate.getTime();
-          if (diffMs < 0 || diffMs > sevenDaysMs) continue;
+    if (campaigns.length > 0) {
+      const nowMs = Date.now();
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+      const wStartMs = new Date(options.weekend.start).getTime();
+      const wEndMs = new Date(options.weekend.end).getTime();
 
-          const twStart = camp.targetWeekend?.start
-            ? new Date(camp.targetWeekend.start).getTime()
-            : null;
-          const twEnd = camp.targetWeekend?.end ? new Date(camp.targetWeekend.end).getTime() : null;
-          const matchesWeekend =
-            (twStart !== null && twEnd !== null && twStart <= wEndMs && twEnd >= wStartMs) ||
-            Boolean(
-              camp.targetDates &&
-                (camp.targetDates.includes(options.weekend.start) ||
-                  camp.targetDates.includes(options.weekend.label)),
-            );
+      for (const camp of campaigns) {
+        if (!camp || !camp.venueId) continue;
+        const sentDate = camp.sentAt ? new Date(camp.sentAt) : null;
+        const repliedDate = camp.repliedAt ? new Date(camp.repliedAt) : null;
+        const isReplied = camp.status === "replied";
+        const actionDate = (isReplied && repliedDate && !Number.isNaN(repliedDate.getTime()))
+          ? repliedDate
+          : (sentDate && !Number.isNaN(sentDate.getTime()) ? sentDate : null);
 
-          if (matchesWeekend) {
-            const existing = candidates.find((c) => String(c._id) === String(camp.venueId));
-            const formatted = formatMonthDay(sentDate);
-            if (existing) {
-              existing.isExcluded = true;
-              existing.statusBadge = `[Cooldown Active: Sent ${formatted}]`;
-              existing.exclusionReason = "cooldown";
-              if (existing.reason) {
-                existing.reason.cooldownSentDate = camp.sentAt;
-                existing.reason.statusBadge = `[Cooldown Active: Sent ${formatted}]`;
-                existing.reason.exclusionReason = "cooldown";
-              }
+        if (!actionDate) continue;
+        const diffMs = nowMs - actionDate.getTime();
+        if (diffMs < 0 || diffMs > sevenDaysMs) continue;
+
+        const twStart = camp.targetWeekend?.start
+          ? new Date(camp.targetWeekend.start).getTime()
+          : null;
+        const twEnd = camp.targetWeekend?.end ? new Date(camp.targetWeekend.end).getTime() : null;
+        const matchesWeekend =
+          (twStart !== null && twEnd !== null && twStart <= wEndMs && twEnd >= wStartMs) ||
+          Boolean(
+            camp.targetDates &&
+              (camp.targetDates.includes(options.weekend.start) ||
+                camp.targetDates.includes(options.weekend.label)),
+          );
+
+        if (matchesWeekend) {
+          const formatted = formatMonthDay(actionDate);
+          const badgeAction = isReplied ? "Replied" : "Sent";
+          const badgeText = `[Cooldown Active: ${badgeAction} ${formatted}]`;
+          const isoDate = actionDate.toISOString();
+
+          const existing = candidates.find((c) => String(c._id) === String(camp.venueId));
+          if (existing) {
+            existing.isExcluded = true;
+            existing.statusBadge = badgeText;
+            existing.exclusionReason = "cooldown";
+            if (isReplied) {
+              existing.cooldownRepliedDate = isoDate;
             } else {
-              const v = allVenuesMap.get(String(camp.venueId));
-              if (v) {
-                candidates.push({
-                  ...v,
-                  isExcluded: true,
-                  statusBadge: `[Cooldown Active: Sent ${formatted}]`,
+              existing.cooldownSentDate = isoDate;
+            }
+            existing.reason = {
+              ...existing.reason,
+              ...(isReplied ? { cooldownRepliedDate: isoDate } : { cooldownSentDate: isoDate }),
+              statusBadge: badgeText,
+              exclusionReason: "cooldown",
+            };
+          } else {
+            const v = allVenuesMap.get(String(camp.venueId));
+            if (v) {
+              candidates.push({
+                ...v,
+                isExcluded: true,
+                statusBadge: badgeText,
+                exclusionReason: "cooldown",
+                ...(isReplied ? { cooldownRepliedDate: isoDate } : { cooldownSentDate: isoDate }),
+                reason: {
+                  ...(isReplied ? { cooldownRepliedDate: isoDate } : { cooldownSentDate: isoDate }),
+                  statusBadge: badgeText,
                   exclusionReason: "cooldown",
-                  reason: {
-                    cooldownSentDate: camp.sentAt,
-                    statusBadge: `[Cooldown Active: Sent ${formatted}]`,
-                    exclusionReason: "cooldown",
-                  },
-                });
-              }
+                },
+              });
             }
           }
         }
@@ -397,10 +439,7 @@ export function identifyCandidateBadge(
   }
 
   // 2. Gig Spacing: venues excluded by the ±2 month gig window
-  const conflictingGigDate = v.conflictingGigDate ??
-    v.reason?.conflictingGigDate ??
-    v.gigDate ??
-    v.reason?.gigDate;
+  const conflictingGigDate = v.conflictingGigDate ?? v.reason?.conflictingGigDate;
   if (conflictingGigDate) {
     const formatted = formatMonthDay(conflictingGigDate);
     return {
@@ -447,11 +486,8 @@ export function identifyCandidateBadge(
 
   // 3. Direct Chat Active: outreachEligible: false with active direct conversation notes
   const hasDirectChatNotes = Boolean(
-    (v.contactNotes && v.contactNotes.trim()) ||
-      (v.priorContactNotes && v.priorContactNotes.trim()) ||
-      (v.bookingNotes &&
-        /chat|conversation|talk|direct|call|phone|discuss/i.test(v.bookingNotes)) ||
-      (v.notes && /chat|conversation|talk|direct|call|phone|discuss/i.test(v.notes)),
+    (typeof v.notes === "string" && DIRECT_CHAT_REGEX.test(v.notes)) ||
+      (typeof v.bookingNotes === "string" && DIRECT_CHAT_REGEX.test(v.bookingNotes)),
   );
   if (
     v.activeDirectChat ||
@@ -466,6 +502,15 @@ export function identifyCandidateBadge(
   }
 
   // 4. Cooldown Active: venues pitched within the 7-day cooldown window
+  const cooldownRepliedVal = v.cooldownRepliedDate ?? v.reason?.cooldownRepliedDate;
+  if (cooldownRepliedVal) {
+    const formatted = formatMonthDay(cooldownRepliedVal);
+    return {
+      badge: `[Cooldown Active: Replied ${formatted}]`,
+      cssClass: "badge-cooldown",
+      isExcluded: true,
+    };
+  }
   const cooldownSentVal = v.cooldownSentDate ??
     v.reason?.cooldownSentDate ??
     v.lastSentDate ??

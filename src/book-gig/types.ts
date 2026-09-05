@@ -75,9 +75,9 @@ export interface CandidateVenue {
   resumeBooking?: string | Date | null;
   bookedThrough?: string | Date | null;
   cooldownSentDate?: string | Date | null;
+  cooldownRepliedDate?: string | Date | null;
   activeDirectChat?: boolean;
   conflictingGigDate?: string | Date | null;
-  gigDate?: string | Date | null;
   lastSentDate?: string | Date | null;
   sentAt?: string | Date | null;
   statusBadge?: string;
@@ -92,8 +92,8 @@ export interface CandidateVenue {
     resumeBooking?: string | Date | null;
     bookedThrough?: string | Date | null;
     conflictingGigDate?: string | Date | null;
-    gigDate?: string | Date | null;
     cooldownSentDate?: string | Date | null;
+    cooldownRepliedDate?: string | Date | null;
     lastSentDate?: string | Date | null;
     sentAt?: string | Date | null;
     activeDirectChat?: boolean;
