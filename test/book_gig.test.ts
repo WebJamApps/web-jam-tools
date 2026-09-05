@@ -25,7 +25,12 @@ import {
   renderPitch,
   validateVoiceRules,
 } from "../src/book-gig/pitch.ts";
-import { formatDraftPayload, writeDropboxRunLog } from "../src/book-gig/gmail.ts";
+import {
+  extractRunDataFromMarkdown,
+  formatDraftPayload,
+  mergeWeekendRuns,
+  writeDropboxRunLog,
+} from "../src/book-gig/gmail.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -35,6 +40,7 @@ import {
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
 import {
+  extractRunDataFromHtml,
   formatPay,
   renderDarkHtml,
   renderStatusBadge,
@@ -50,6 +56,7 @@ import {
   resolveGigVenueId,
 } from "../src/book-gig/venue_link.ts";
 import type {
+  BookGigResult,
   CandidateVenue,
   EmailTemplate,
   OutreachCampaignRecord,
@@ -630,6 +637,509 @@ Deno.test("writeDropboxRunLog & renderDarkHtml: includes Contact Person and Phon
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
+});
+
+Deno.test("writeDropboxRunLog: accumulates multiple batches for the same weekend into a single consolidated report (#876)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue1: CandidateVenue = {
+    _id: "v1",
+    name: "Parkway Brewing",
+    city: "Salem",
+    usState: "VA",
+    email: "info@parkway.com",
+    contactName: "Lezlie",
+    phone: "540-111-1111",
+  };
+  const venue2: CandidateVenue = {
+    _id: "v2",
+    name: "Olde Salem Brewery",
+    city: "Salem",
+    usState: "VA",
+    email: "booking@oldesalem.com",
+    contactName: "Mark",
+    phone: "540-222-2222",
+  };
+
+  const pitch1 = renderPitch(venue1, weekend);
+  const pitch2 = renderPitch(venue2, weekend);
+
+  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_accum_" });
+  try {
+    // Batch 1: 2 candidates, both sent
+    const batch1: BookGigResult = {
+      mode: "send",
+      weekend,
+      candidates: [venue1, venue2],
+      density: { count: 2, isSparse: true, suggestedMetro: "roanoke" },
+      pitches: [pitch1, pitch2],
+      batchDispatch: {
+        requested: 2,
+        sent: 2,
+        skipped: [],
+        records: [{ venueId: "v1" }, { venueId: "v2" }],
+      },
+    };
+
+    const logPath1 = await writeDropboxRunLog(batch1, tmpDir);
+    assert(logPath1 !== null);
+
+    const md1 = await Deno.readTextFile(logPath1);
+    assertStringIncludes(md1, "Parkway Brewing");
+    assertStringIncludes(md1, "Olde Salem Brewery");
+    assertStringIncludes(md1, "**Batch Dispatch:** 2 sent / 2 requested (0 skipped)");
+
+    // Batch 2: 2 different candidates for same weekend, 1 sent, 1 skipped
+    const venue3: CandidateVenue = {
+      _id: "v3",
+      name: "The Glass House",
+      city: "Lynchburg",
+      usState: "VA",
+      email: "booking@glasshouse.com",
+    };
+    const venue4: CandidateVenue = {
+      _id: "v4",
+      name: "Riverviews Artspace",
+      city: "Lynchburg",
+      usState: "VA",
+      email: "info@riverviews.net",
+    };
+
+    const pitch3 = renderPitch(venue3, weekend);
+    const pitch4 = renderPitch(venue4, weekend);
+
+    const batch2: BookGigResult = {
+      mode: "send",
+      weekend,
+      candidates: [venue3, venue4],
+      density: { count: 2, isSparse: true, suggestedMetro: "lynchburg" },
+      pitches: [pitch3, pitch4],
+      batchDispatch: {
+        requested: 2,
+        sent: 1,
+        skipped: [{
+          venueId: "v4",
+          venueName: "Riverviews Artspace",
+          reason: "Invalid booking email",
+        }],
+        records: [{ venueId: "v3" }],
+      },
+    };
+
+    const logPath2 = await writeDropboxRunLog(batch2, tmpDir);
+    assertEquals(logPath2, logPath1);
+
+    // Verify consolidated Markdown log
+    const consolidatedMd = await Deno.readTextFile(logPath2!);
+    assertStringIncludes(consolidatedMd, "Parkway Brewing");
+    assertStringIncludes(consolidatedMd, "Olde Salem Brewery");
+    assertStringIncludes(consolidatedMd, "The Glass House");
+    assertStringIncludes(consolidatedMd, "Riverviews Artspace");
+    assertStringIncludes(consolidatedMd, "**Candidates Found:** 4");
+    assertStringIncludes(consolidatedMd, "**Pitches Drafted:** 4");
+    assertStringIncludes(consolidatedMd, "**Batch Dispatch:** 3 sent / 4 requested (1 skipped)");
+
+    // Verify consolidated Dark Mode HTML artifact
+    const htmlPath = logPath2!.replace(/\.md$/, ".html");
+    const consolidatedHtml = await Deno.readTextFile(htmlPath);
+    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v1">');
+    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v2">');
+    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v3">');
+    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v4">');
+    assertStringIncludes(
+      consolidatedHtml,
+      '<section class="pitch-card" id="pitch-1" data-venue-id="v1">',
+    );
+    assertStringIncludes(
+      consolidatedHtml,
+      '<section class="pitch-card" id="pitch-2" data-venue-id="v2">',
+    );
+    assertStringIncludes(
+      consolidatedHtml,
+      '<section class="pitch-card" id="pitch-3" data-venue-id="v3">',
+    );
+    assertStringIncludes(
+      consolidatedHtml,
+      '<section class="pitch-card" id="pitch-4" data-venue-id="v4">',
+    );
+    assertStringIncludes(consolidatedHtml, "3 dispatched");
+    assertStringIncludes(consolidatedHtml, "1 venues");
+    assertStringIncludes(consolidatedHtml, "3 of 4 venue pitch emails sent");
+    assertStringIncludes(consolidatedHtml, "Invalid booking email");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("writeDropboxRunLog: deduplicates candidate rows and pitch cards by venueId across batches (#876)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venueA_old: CandidateVenue = {
+    _id: "vA",
+    name: "Venue A",
+    city: "Salem",
+    usState: "VA",
+    email: "old@venuea.com",
+    contactName: "Old Contact",
+    phone: "111-111-1111",
+  };
+  const venueB: CandidateVenue = {
+    _id: "vB",
+    name: "Venue B",
+    city: "Salem",
+    usState: "VA",
+    email: "booking@venueb.com",
+  };
+
+  const venueA_new: CandidateVenue = {
+    _id: "vA",
+    name: "Venue A",
+    city: "Salem",
+    usState: "VA",
+    email: "new@venuea.com",
+    contactName: "Alice Updated",
+    phone: "999-999-9999",
+  };
+  const venueC: CandidateVenue = {
+    _id: "vC",
+    name: "Venue C",
+    city: "Roanoke",
+    usState: "VA",
+    email: "contact@venuec.com",
+  };
+
+  const pitchA_old = renderPitch(venueA_old, weekend);
+  const pitchB = renderPitch(venueB, weekend);
+  const pitchA_new = renderPitch(venueA_new, weekend);
+  const pitchC = renderPitch(venueC, weekend);
+
+  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_dedup_" });
+  try {
+    const batch1: BookGigResult = {
+      mode: "send",
+      weekend,
+      candidates: [venueA_old, venueB],
+      density: { count: 2, isSparse: true },
+      pitches: [pitchA_old, pitchB],
+      batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
+    };
+    await writeDropboxRunLog(batch1, tmpDir);
+
+    const batch2: BookGigResult = {
+      mode: "send",
+      weekend,
+      candidates: [venueA_new, venueC],
+      density: { count: 2, isSparse: true },
+      pitches: [pitchA_new, pitchC],
+      batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
+    };
+    const logPath = await writeDropboxRunLog(batch2, tmpDir);
+    assert(logPath !== null);
+
+    const md = await Deno.readTextFile(logPath);
+    // Should have 3 candidates total (Venue A, Venue B, Venue C) - not 4
+    assertStringIncludes(md, "**Candidates Found:** 3");
+    assertStringIncludes(md, "**Pitches Drafted:** 3");
+    assertStringIncludes(md, "**Batch Dispatch:** 4 sent / 4 requested (0 skipped)");
+
+    // Venue A details should be updated to new contact and email
+    assertStringIncludes(md, "new@venuea.com");
+    assertStringIncludes(md, "Alice Updated");
+    assertStringIncludes(md, "999-999-9999");
+
+    const htmlPath = logPath.replace(/\.md$/, ".html");
+    const html = await Deno.readTextFile(htmlPath);
+    // Verify only one data-venue-id="vA" in candidate rows
+    const matchesA = html.match(/<tr data-venue-id="vA">/g);
+    assertEquals(matchesA?.length, 1);
+
+    // Verify only one pitch card for vA
+    const pitchCardsA = html.match(/data-venue-id="vA"/g);
+    // 1 in candidate table row + 1 in pitch card = 2 total occurrences
+    assertEquals(pitchCardsA?.length, 2);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("writeDropboxRunLog: deduplicates skipped venues by venueId across batches (#876)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue1: CandidateVenue = { _id: "v1", name: "Venue 1" };
+  const venue2: CandidateVenue = { _id: "v2", name: "Venue 2" };
+  const pitch1 = renderPitch(venue1, weekend);
+  const pitch2 = renderPitch(venue2, weekend);
+
+  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_skip_dedup_" });
+  try {
+    const batch1: BookGigResult = {
+      mode: "send",
+      weekend,
+      candidates: [venue1],
+      density: { count: 1, isSparse: true },
+      pitches: [pitch1],
+      batchDispatch: {
+        requested: 1,
+        sent: 0,
+        skipped: [{ venueId: "v1", venueName: "Venue 1", reason: "Initial error" }],
+        records: [],
+      },
+    };
+    await writeDropboxRunLog(batch1, tmpDir);
+
+    const batch2: BookGigResult = {
+      mode: "send",
+      weekend,
+      candidates: [venue2],
+      density: { count: 1, isSparse: true },
+      pitches: [pitch2],
+      batchDispatch: {
+        requested: 2,
+        sent: 1,
+        skipped: [
+          { venueId: "v1", venueName: "Venue 1", reason: "Updated skip reason" },
+          { venueId: "v2", venueName: "Venue 2", reason: "Bounced" },
+        ],
+        records: [],
+      },
+    };
+    const logPath = await writeDropboxRunLog(batch2, tmpDir);
+    assert(logPath !== null);
+
+    const htmlPath = logPath.replace(/\.md$/, ".html");
+    const html = await Deno.readTextFile(htmlPath);
+
+    // Skipped table should have exactly 2 distinct rows: v1 and v2
+    assertStringIncludes(html, "Skipped Venues (2)");
+    assertStringIncludes(html, "Updated skip reason");
+    assertStringIncludes(html, "Bounced");
+
+    const md = await Deno.readTextFile(logPath);
+    // Cumulative: requested = 1 + 2 = 3, sent = 0 + 1 = 1, skipped = 2 deduplicated
+    assertStringIncludes(md, "**Batch Dispatch:** 1 sent / 3 requested (2 skipped)");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("writeDropboxRunLog: consolidates with legacy run logs lacking embedded JSON (#876)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_legacy_" });
+  try {
+    const legacyMd = `# \`book-gig\` Run Record: October 16–18, 2026
+
+**Run Timestamp:** 2026-08-20T10:00:00.000Z  
+**Mode:** send  
+**Target Weekend:** 2026-10-16 to 2026-10-18 (October 16–18, 2026)  
+**Target Location Filter:** Roanoke, VA  
+**Candidates Found:** 1 (Sparse: Yes)  
+**Pitches Drafted:** 1  
+**Batch Dispatch:** 1 sent / 1 requested (0 skipped)  
+
+---
+
+## 1. Candidate Venues Evaluated
+
+| # | Venue Name | Location | Contact Person | Phone | Booking Email | Spacing Note |
+|---|---|---|---|---|---|---|
+| 1 | Legacy Taproom | Roanoke, VA | Bob | 540-000-0000 | bob@legacy.com | Eligible |
+
+---
+
+## 2. Generated Gmail Pitches
+
+### Pitch 1: Legacy Taproom
+- **To:** \`bob@legacy.com\`
+- **Subject:** Booking Inquiry - Legacy Taproom
+
+\`\`\`text
+Hi Bob, we would love to perform at Legacy Taproom on Oct 16-18.
+\`\`\`
+
+---
+
+*Note: Generated by WebJamApps \`book-gig\` outreach pipeline.*
+`;
+    await Deno.writeTextFile(`${tmpDir}/book-gig-run-2026-10-16-to-2026-10-18.md`, legacyMd);
+
+    const newVenue: CandidateVenue = {
+      _id: "vNew",
+      name: "New Taproom",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@newtaproom.com",
+    };
+    const newPitch = renderPitch(newVenue, weekend);
+
+    const batch2: BookGigResult = {
+      mode: "send",
+      weekend,
+      candidates: [newVenue],
+      density: { count: 1, isSparse: true },
+      pitches: [newPitch],
+      batchDispatch: { requested: 1, sent: 1, skipped: [], records: [] },
+    };
+
+    const logPath = await writeDropboxRunLog(batch2, tmpDir);
+    assert(logPath !== null);
+
+    const md = await Deno.readTextFile(logPath);
+    assertStringIncludes(md, "Legacy Taproom");
+    assertStringIncludes(md, "New Taproom");
+    assertStringIncludes(md, "**Candidates Found:** 2");
+    assertStringIncludes(md, "**Batch Dispatch:** 2 sent / 2 requested (0 skipped)");
+
+    const htmlPath = logPath.replace(/\.md$/, ".html");
+    const html = await Deno.readTextFile(htmlPath);
+    assertStringIncludes(html, "Legacy Taproom");
+    assertStringIncludes(html, "New Taproom");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("extractRunDataFromMarkdown & extractRunDataFromHtml: extracts and parses run data", () => {
+  const sampleMd = `
+# Run Record
+<!-- BOOK_GIG_RUN_DATA:
+{
+  "candidates": [{"_id": "v1", "name": "Venue 1"}],
+  "pitches": [{"venueId": "v1", "venueName": "Venue 1", "to": "a@b.com", "subject": "Sub", "body": "Body"}],
+  "batchDispatch": {"requested": 1, "sent": 1, "skipped": [], "records": []}
+}
+-->
+`;
+  const parsedMd = extractRunDataFromMarkdown(sampleMd);
+  assert(parsedMd);
+  assertEquals(parsedMd.candidates.length, 1);
+  assertEquals(parsedMd.candidates[0].name, "Venue 1");
+  assertEquals(parsedMd.batchDispatch?.sent, 1);
+
+  const sampleHtml = `
+<html>
+<body>
+  <script id="book-gig-run-data" type="application/json">
+  {"candidates": [{"_id": "v2", "name": "Venue 2"}], "pitches": [], "batchDispatch": {"requested": 2, "sent": 2, "skipped": [], "records": []}}
+  </script>
+</body>
+</html>
+`;
+  const parsedHtml = extractRunDataFromHtml(sampleHtml);
+  assert(parsedHtml);
+  assert(parsedHtml.candidates);
+  assertEquals(parsedHtml.candidates.length, 1);
+  assertEquals(parsedHtml.candidates[0].name, "Venue 2");
+  assertEquals(parsedHtml.batchDispatch?.requested, 2);
+});
+
+Deno.test("mergeWeekendRuns: merges candidates, pitches, tallies and density cleanly", () => {
+  const existing = {
+    candidates: [
+      { _id: "v1", name: "Venue 1", city: "Roanoke", usState: "VA" },
+      { _id: "v2", name: "Venue 2", city: "Salem", usState: "VA", payAmount: 150 },
+    ],
+    pitches: [
+      { venueId: "v1", venueName: "Venue 1", to: "v1@a.com", subject: "S1", body: "B1" },
+      { venueId: "v2", venueName: "Venue 2", to: "v2@a.com", subject: "S2", body: "B2" },
+    ],
+    batchDispatch: {
+      requested: 2,
+      sent: 2,
+      skipped: [],
+      records: [{ venueId: "v1" }, { venueId: "v2" }],
+    },
+    reportUrl: "https://www.web-jam.com/outreach/report/2026-10-16-to-2026-10-18",
+  };
+
+  const current: BookGigResult = {
+    mode: "send",
+    weekend: {
+      start: "2026-10-16",
+      end: "2026-10-18",
+      rawText: "Oct 16-18 2026",
+      label: "October 16–18, 2026",
+      year: 2026,
+      month: 10,
+      days: [16, 17, 18],
+    },
+    candidates: [
+      {
+        _id: "v2",
+        name: "Venue 2",
+        city: "Salem",
+        usState: "VA",
+        payAmount: 200,
+        contactName: "Bob",
+      },
+      { _id: "v3", name: "Venue 3", city: "Lynchburg", usState: "VA" },
+    ],
+    density: { count: 2, isSparse: true },
+    pitches: [
+      {
+        venueId: "v2",
+        venueName: "Venue 2",
+        to: "v2@a.com",
+        subject: "S2-Updated",
+        body: "B2-Updated",
+      },
+      { venueId: "v3", venueName: "Venue 3", to: "v3@a.com", subject: "S3", body: "B3" },
+    ],
+    batchDispatch: {
+      requested: 2,
+      sent: 1,
+      skipped: [{ venueId: "v3", venueName: "Venue 3", reason: "Skip" }],
+      records: [{ venueId: "v2" }],
+    },
+  };
+
+  const merged = mergeWeekendRuns(existing, current);
+  assertEquals(merged.candidates.length, 3);
+  assertEquals(merged.candidates[1].payAmount, 200);
+  assertEquals(merged.candidates[1].contactName, "Bob");
+  assertEquals(merged.pitches.length, 3);
+  assertEquals(merged.pitches[1].subject, "S2-Updated");
+  assertEquals(merged.batchDispatch?.requested, 4);
+  assertEquals(merged.batchDispatch?.sent, 3);
+  assertEquals(merged.batchDispatch?.skipped.length, 1);
+  assertEquals(merged.density.count, 3);
+  assertEquals(merged.density.isSparse, false);
+  assertEquals(
+    merged.reportUrl,
+    "https://www.web-jam.com/outreach/report/2026-10-16-to-2026-10-18",
+  );
 });
 
 Deno.test("renderStatusBadge: returns appropriate CSS classes for all outreach statuses", () => {
