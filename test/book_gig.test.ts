@@ -17,6 +17,10 @@ import {
   assessDensity,
   fetchCandidates,
   filterAndRankCandidates,
+  formatMonthDay,
+  formatMonthYear,
+  identifyCandidateBadge,
+  renderCandidateTable,
 } from "../src/book-gig/candidates.ts";
 import {
   BANNED_VOICE_WORDS,
@@ -2586,4 +2590,334 @@ Deno.test("runBookGigCli: executes --link-gig mode cleanly and handles missing v
     Error,
     "Missing venue name for --link-gig",
   );
+});
+
+Deno.test("formatMonthYear & formatMonthDay: correctly formats dates for badges", () => {
+  assertEquals(formatMonthYear("2027-01-01"), "Jan 2027");
+  assertEquals(formatMonthYear("2027-01-15T00:00:00.000Z"), "Jan 2027");
+  assertEquals(formatMonthYear(new Date("2027-01-01T00:00:00.000Z")), "Jan 2027");
+  assertEquals(formatMonthYear("Jan 2027"), "Jan 2027");
+
+  assertEquals(formatMonthDay("2026-11-20"), "Nov 20");
+  assertEquals(formatMonthDay("2026-11-20T00:00:00.000Z"), "Nov 20");
+  assertEquals(formatMonthDay(new Date("2026-11-20T00:00:00.000Z")), "Nov 20");
+  assertEquals(formatMonthDay("Nov 20"), "Nov 20");
+  assertEquals(formatMonthDay("Sent Oct 10"), "Oct 10");
+  assertEquals(formatMonthDay("2026-10-10"), "Oct 10");
+});
+
+Deno.test("identifyCandidateBadge: identifies Seasonal Hold for future resumeBooking (#879)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+
+  const venue: CandidateVenue = {
+    _id: "v1",
+    name: "Olde Salem Brewery",
+    resumeBooking: "2027-01-01",
+  };
+
+  const badge = identifyCandidateBadge(venue, refDate);
+  assertEquals(badge.badge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(badge.cssClass, "badge-seasonal-hold");
+  assertEquals(badge.isExcluded, true);
+
+  // Fallback to bookedThrough
+  const venueBt: CandidateVenue = {
+    _id: "v2",
+    name: "Wintergreen Resort",
+    bookedThrough: "2027-02-15",
+  };
+  const badgeBt = identifyCandidateBadge(venueBt, refDate);
+  assertEquals(badgeBt.badge, "[Seasonal Hold: Feb 2027]");
+  assertEquals(badgeBt.cssClass, "badge-seasonal-hold");
+  assertEquals(badgeBt.isExcluded, true);
+});
+
+Deno.test("identifyCandidateBadge: identifies Gig Spacing exclusion for ±2 month window (#879)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+
+  const venue: CandidateVenue = {
+    _id: "v1",
+    name: "Parkway Brewing",
+    conflictingGigDate: "2026-11-20",
+  };
+
+  const badge = identifyCandidateBadge(venue, refDate);
+  assertEquals(badge.badge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(badge.cssClass, "badge-gig-spacing");
+  assertEquals(badge.isExcluded, true);
+
+  // Via reason spacingNote
+  const venueNote: CandidateVenue = {
+    _id: "v2",
+    name: "Starr Hill Brewery",
+    reason: { spacingNote: "Gig on 2026-09-15 Show" },
+  };
+  const badgeNote = identifyCandidateBadge(venueNote, refDate);
+  assertEquals(badgeNote.badge, "[Gig Spacing: Sep 15 Show]");
+  assertEquals(badgeNote.cssClass, "badge-gig-spacing");
+  assertEquals(badgeNote.isExcluded, true);
+});
+
+Deno.test("identifyCandidateBadge: identifies Direct Chat Active for outreachEligible: false with notes (#879)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+
+  const venue: CandidateVenue = {
+    _id: "v1",
+    name: "The Glass House",
+    outreachEligible: false,
+    contactNotes: "Direct phone conversation with booking manager on Monday",
+  };
+
+  const badge = identifyCandidateBadge(venue, refDate);
+  assertEquals(badge.badge, "[Direct Chat Active]");
+  assertEquals(badge.cssClass, "badge-direct-chat");
+  assertEquals(badge.isExcluded, true);
+
+  const venuePrior: CandidateVenue = {
+    _id: "v2",
+    name: "Riverviews Artspace",
+    outreachEligible: false,
+    priorContactNotes: "Chatting directly about holiday showcase",
+  };
+  const badgePrior = identifyCandidateBadge(venuePrior, refDate);
+  assertEquals(badgePrior.badge, "[Direct Chat Active]");
+  assertEquals(badgePrior.cssClass, "badge-direct-chat");
+  assertEquals(badgePrior.isExcluded, true);
+});
+
+Deno.test("identifyCandidateBadge: identifies Cooldown Active for pitches sent within 7 days (#879)", () => {
+  const refDate = new Date("2026-10-15T00:00:00.000Z");
+
+  // Pitched on Oct 10 (5 days ago, within 7-day cooldown)
+  const venue: CandidateVenue = {
+    _id: "v1",
+    name: "Harvester Performance Center",
+    cooldownSentDate: "2026-10-10",
+  };
+
+  const badge = identifyCandidateBadge(venue, refDate);
+  assertEquals(badge.badge, "[Cooldown Active: Sent Oct 10]");
+  assertEquals(badge.cssClass, "badge-cooldown");
+  assertEquals(badge.isExcluded, true);
+
+  // Via sentAt
+  const venueSentAt: CandidateVenue = {
+    _id: "v2",
+    name: "5 Points Music Sanctuary",
+    sentAt: "2026-10-12T10:00:00.000Z",
+  };
+  const badgeSentAt = identifyCandidateBadge(venueSentAt, refDate);
+  assertEquals(badgeSentAt.badge, "[Cooldown Active: Sent Oct 12]");
+  assertEquals(badgeSentAt.cssClass, "badge-cooldown");
+  assertEquals(badgeSentAt.isExcluded, true);
+});
+
+Deno.test("identifyCandidateBadge: handles eligible returning and new venues (#879)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+
+  const returningVenue: CandidateVenue = {
+    _id: "v1",
+    name: "Olde Salem Brewing",
+    reason: { lastGigDate: "2026-06-15" },
+  };
+  const badgeReturning = identifyCandidateBadge(returningVenue, refDate);
+  assertEquals(badgeReturning.badge, "Returning · Last: 2026-06-15");
+  assertEquals(badgeReturning.cssClass, "badge-returning");
+  assertEquals(badgeReturning.isExcluded, false);
+
+  const newVenue: CandidateVenue = {
+    _id: "v2",
+    name: "Brand New Brewery",
+    reason: {},
+  };
+  const badgeNew = identifyCandidateBadge(newVenue, refDate);
+  assertEquals(badgeNew.badge, "New");
+  assertEquals(badgeNew.cssClass, "badge-eligible");
+  assertEquals(badgeNew.isExcluded, false);
+});
+
+Deno.test("filterAndRankCandidates: populates granular status badges and reasoning on candidate venues (#879)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+  const candidates: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewery",
+      city: "Salem",
+      usState: "VA",
+      resumeBooking: "2027-01-01",
+    },
+    {
+      _id: "v2",
+      name: "Parkway Brewing",
+      city: "Salem",
+      usState: "VA",
+      conflictingGigDate: "2026-11-20",
+    },
+    {
+      _id: "v3",
+      name: "Direct Chat Taphouse",
+      city: "Salem",
+      usState: "VA",
+      outreachEligible: false,
+      contactNotes: "Spoke with owner directly",
+    },
+    {
+      _id: "v4",
+      name: "Cooldown Tavern",
+      city: "Salem",
+      usState: "VA",
+      cooldownSentDate: "2026-09-28",
+    },
+    {
+      _id: "v5",
+      name: "Eligible Returning Spot",
+      city: "Salem",
+      usState: "VA",
+      reason: { lastGigDate: "2026-06-15" },
+    },
+    {
+      _id: "v6",
+      name: "Fresh New Venue",
+      city: "Salem",
+      usState: "VA",
+      reason: {},
+    },
+  ];
+
+  const loc = parseLocation("Salem, VA")!;
+  const filtered = filterAndRankCandidates(candidates, loc, { referenceDate: refDate });
+
+  assertEquals(filtered.length, 6);
+
+  const hold = filtered.find((v) => v._id === "v1")!;
+  assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.isExcluded, true);
+  assertEquals(hold.reason?.exclusionReason, "[Seasonal Hold: Jan 2027]");
+
+  const spacing = filtered.find((v) => v._id === "v2")!;
+  assertEquals(spacing.statusBadge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(spacing.isExcluded, true);
+  assertEquals(spacing.reason?.exclusionReason, "[Gig Spacing: Nov 20 Show]");
+
+  const chat = filtered.find((v) => v._id === "v3")!;
+  assertEquals(chat.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.isExcluded, true);
+  assertEquals(chat.reason?.exclusionReason, "[Direct Chat Active]");
+
+  const cooldown = filtered.find((v) => v._id === "v4")!;
+  assertEquals(cooldown.statusBadge, "[Cooldown Active: Sent Sep 28]");
+  assertEquals(cooldown.isExcluded, true);
+
+  const returning = filtered.find((v) => v._id === "v5")!;
+  assertEquals(returning.statusBadge, "Returning · Last: 2026-06-15");
+  assertEquals(returning.isExcluded, false);
+
+  const fresh = filtered.find((v) => v._id === "v6")!;
+  assertEquals(fresh.statusBadge, "New");
+  assertEquals(fresh.isExcluded, false);
+});
+
+Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in terminal and HTML artifacts (#879)", async () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+  const candidates: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewery",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@oldesalem.com",
+      resumeBooking: "2027-01-01",
+    },
+    {
+      _id: "v2",
+      name: "Parkway Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "info@parkway.com",
+      conflictingGigDate: "2026-11-20",
+    },
+    {
+      _id: "v3",
+      name: "Direct Chat Taphouse",
+      city: "Salem",
+      usState: "VA",
+      email: "chat@taphouse.com",
+      outreachEligible: false,
+      contactNotes: "Spoke with owner directly",
+    },
+    {
+      _id: "v4",
+      name: "Cooldown Tavern",
+      city: "Salem",
+      usState: "VA",
+      email: "info@cooldown.com",
+      cooldownSentDate: "2026-09-28",
+    },
+  ];
+
+  // 1. Terminal candidate table (uncolored check)
+  const terminalPlain = renderCandidateTable(candidates, { color: false, referenceDate: refDate });
+  assertStringIncludes(terminalPlain, "Spacing Status");
+  assertStringIncludes(terminalPlain, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(terminalPlain, "[Gig Spacing: Nov 20 Show]");
+  assertStringIncludes(terminalPlain, "[Direct Chat Active]");
+  assertStringIncludes(terminalPlain, "[Cooldown Active: Sent Sep 28]");
+
+  // 2. Terminal candidate table (colored check)
+  const terminalColored = renderCandidateTable(candidates, { color: true, referenceDate: refDate });
+  assertStringIncludes(terminalColored, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(terminalColored, "\x1b[36m"); // Cyan
+  assertStringIncludes(terminalColored, "[Gig Spacing: Nov 20 Show]");
+  assertStringIncludes(terminalColored, "\x1b[31m"); // Red
+  assertStringIncludes(terminalColored, "[Direct Chat Active]");
+  assertStringIncludes(terminalColored, "\x1b[35m"); // Magenta
+  assertStringIncludes(terminalColored, "[Cooldown Active: Sent Sep 28]");
+  assertStringIncludes(terminalColored, "\x1b[34m"); // Blue
+
+  // Empty table check
+  const emptyTable = renderCandidateTable([]);
+  assertEquals(emptyTable, "  (No eligible venues found matching criteria)");
+
+  // 3. HTML artifact
+  const result: BookGigResult = {
+    mode: "preview",
+    weekend: {
+      start: "2026-10-16",
+      end: "2026-10-18",
+      rawText: "Oct 16-18 2026",
+      label: "October 16–18, 2026",
+      year: 2026,
+      month: 10,
+      days: [16, 17, 18],
+    },
+    candidates,
+    density: { count: 4, isSparse: false },
+    pitches: [],
+  };
+
+  const html = renderDarkHtml(result);
+
+  // Status badges and CSS classes in HTML
+  assertStringIncludes(html, "badge-seasonal-hold");
+  assertStringIncludes(html, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(html, "badge-gig-spacing");
+  assertStringIncludes(html, "[Gig Spacing: Nov 20 Show]");
+  assertStringIncludes(html, "badge-direct-chat");
+  assertStringIncludes(html, "[Direct Chat Active]");
+  assertStringIncludes(html, "badge-cooldown");
+  assertStringIncludes(html, "[Cooldown Active: Sent Sep 28]");
+
+  // 4. Markdown run log
+  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_badges_" });
+  try {
+    const logPath = await writeDropboxRunLog(result, tmpDir);
+    assert(logPath !== null);
+    const mdContent = await Deno.readTextFile(logPath);
+    assertStringIncludes(mdContent, "[Seasonal Hold: Jan 2027]");
+    assertStringIncludes(mdContent, "[Gig Spacing: Nov 20 Show]");
+    assertStringIncludes(mdContent, "[Direct Chat Active]");
+    assertStringIncludes(mdContent, "[Cooldown Active: Sent Sep 28]");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
 });
