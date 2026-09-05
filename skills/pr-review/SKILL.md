@@ -208,7 +208,7 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
     - A PR's draft or ready-for-review state is Josh's own action on his own PR, not a
       property of the work under review — he moves PRs in and out of draft himself as part of
       his workflow. **Never report it as a finding, of any severity — not a Must Fix, not a
-      Suggestion — whether the PR is currently a draft or was created as a draft and
+      Suggestion, not a Nit — whether the PR is currently a draft or was created as a draft and
       later marked ready.**
 
 11. **Issue Body & PR Body Prose (Never a Must Fix)**:
@@ -223,7 +223,9 @@ Review the PR diff, description, mergeability, and non-CircleCI status checks (S
       conflict with the base branch, and defects in the code being merged. A description that
       has drifted from its diff does not stop the
       code from being correct and does not stop the merge.
-    - Such a drift may still be raised, but only under `### 🟡 Suggestions`.
+    - Such a drift may still be raised, but only under `### 🔵 Nits`. It never belongs under
+      `### 🟡 Suggestions`, which is reserved for findings about the code in the diff — see
+      Step 3 item 2's `### 🔵 Nits` definition.
     - This is a deliberate carve-out from "A found defect is fixed before merge — never
       deferred" below: that section's "if it is wrong, it is Must Fix or it is not a finding
       at all" binary governs defects in the artifact being merged (the code/diff itself);
@@ -243,9 +245,15 @@ with each other):
    what is new: the `## PR Review Summary` header, the updated verdict line, and the CircleCI
    result — a new Must Fix line naming the failing job and its detail, except for
    `Version bump check (PR branches only)`, which Step 4 item 5's carve-out always reports
-   as a Suggestions line instead. It **never**
-   reprints post #1's Checklist Verification, its other Must Fix items, or its Suggestions — post
-   #1 already carried all of that, and repeating it is the waste this shape exists to prevent.
+   as a Suggestions line instead. It **never** reprints post #1's Checklist Verification, its
+   other Must Fix items, its Suggestions, or its Nits — post #1 already carried all of that, and
+   repeating it is the waste this shape exists to prevent.
+
+**`### 🔵 Nits` never appears in a Step 4 follow-up post.** Nits hold PR/issue-body prose findings,
+which are found in Step 2 and carried entirely by post #1. Step 4's follow-up carries only the
+CircleCI result, and a CircleCI job result is never body prose, so Step 4 has no Nit of its own to
+report and never restates post #1's. That is why the two-item list above, and Step 4 item 5's
+"carry only" list, name Must Fix and Suggestions and stop there.
 
 **When CircleCI passes there is no second post at all.** The review is complete at one comment, and
 post #1's verdict stands as the final verdict.
@@ -265,21 +273,32 @@ afterward.
        The verdict is a separate question: it stays green on the strength of this finding alone
        only when the version-bump finding is the sole finding; it never by itself produces
        `**🛑 Changes Requested**`, in this post or in Step 4's follow-up.
-   - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem.
+     - A PR/issue-body prose finding (Step 2 item 11) is always a Nit — never a Must Fix and never
+       a Suggestion. Like a version-bump finding it never by itself produces
+       `**🛑 Changes Requested**`, and a post whose only findings are Nits carries
+       `**✅ Approved**`.
+   - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem. A 🟡 icon marks a non-blocking finding about the artifact being merged; a 🔵 icon marks a cosmetic PR/issue-body prose nit, which never blocks merge either.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
      - Exception: `Version bump check (PR branches only)` failing (or unresolved) is never listed here — Step 4 item 5's carve-out reports it under Suggestions instead of under `### 🛑 Must Fix Items`, whether it fails alone or alongside another job.
    - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
      The **Semver Bump** row is the one exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
-   - **Suggestions** (`### 🟡 Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested. Prefix each suggestion line with 🟡. If none, render `### Suggestions` with `✅ None`.
+   - **Suggestions** (`### 🟡 Suggestions`): Specific code references or line numbers where concrete code-quality or design improvements are suggested — findings about the artifact being merged (the diff itself, including its version field). Prefix each suggestion line with 🟡. If none, render `### Suggestions` with `✅ None`.
+     - **Exclusion of PR/Issue-Body Prose**: A finding about the wording of the PR's own description or a linked issue's body — the Step 2 item 11 class — is **never** a Suggestion. It goes under `### 🔵 Nits` below, so a reader can tell at a glance that fixing it means editing a description, not pushing a commit. Everything the Step 2 item 5 version-bump carve-out and the Step 2 item 8 Playwright E2E coverage suggestion produce stays here under Suggestions: both are findings about the artifact being merged, not about prose.
      - **Exclusion of Process & Git Mechanics Trivia**: This section is strictly for code-relevant improvement suggestions tied directly to the diff under review. It **never** carries process/mechanics trivia, speculative workflow commentary, or git/semver heads-ups that are not defects in the PR itself.
        - **Never post cross-PR version-bump collision warnings** (e.g. noting that another open PR shares the same semver target and might merge first) or git workflow lectures — those describe another PR's state, not a defect in the diff under review.
+       - These trivia items are **dropped, not redirected** — they go unreported everywhere, under Suggestions and under Nits alike. Nits is not an overflow bin for what this exclusion removes; it holds the Step 2 item 11 body-prose class and nothing else.
        - A version-bump irregularity found *within the PR under review* is different: Step 2 item 5 evaluates that PR's own commits and reports both a gratuitous double bump and a version that fails to strictly exceed `origin/dev` as a Suggestion, so either belongs in this section as a real, permitted finding.
+   - **Nits** (`### 🔵 Nits`): Cosmetic, non-blocking findings about the PR's own description or a linked issue's body — the Step 2 item 11 class ("Issue Body & PR Body Prose (Never a Must Fix)"): stale, incomplete, or drifted Summary, Non-goals, acceptance-criteria wording, "Files changed" lists, and "How to test locally" / test-plan narration. **Placed directly beneath `### 🟡 Suggestions`** in the post body, as the last section. Prefix each nit line with 🔵. If none, render `### Nits` with `✅ None`.
+     - **Scope, exactly**: this section holds the Step 2 item 11 body-prose class and nothing else. A finding about the code, the tests, or the version field is a Suggestion (or a Must Fix), not a Nit.
+     - **Never a merge blocker**: like a Suggestion, a Nit never produces `**🛑 Changes Requested**` on its own, and it is never restated in Step 4's follow-up post. On a re-review, a Nit that has since been edited away is reported once with ✅ under `### Changes Since Last Review`, exactly like any other fixed finding.
+     - **Fixed by editing text, not by pushing code**: a Nit is cleared with `gh pr edit --body` or an issue-body edit, which is precisely why it does not share a section with findings that require a commit.
 
    **Example — initial post (post #1), re-review with one remaining blocker and two now-fixed
    findings.** Note that the only thing between the verdict line and `### 🛑 Must Fix Items` is the
    heading itself, that `### Changes Since Last Review` sits after the Must Fix section, not before
-   it, and that no row here mentions CircleCI — this post is content-only:
+   it, that `### 🔵 Nits` sits last, directly beneath `### 🟡 Suggestions`, and that no row here
+   mentions CircleCI — this post is content-only:
 
    ````md
    ## PR Review Summary
@@ -290,7 +309,7 @@ afterward.
 
    ### Changes Since Last Review
    - ✅ Fixed: the missing unit test for `handleHttpReq` — added in `test/uptime.test.ts`.
-   - ✅ Fixed: the stale Non-goals bullet in the linked issue — no longer reportable as a finding of any kind per Step 2 item 11.
+   - ✅ Fixed: the stale Non-goals bullet in the linked issue — raised as a Nit last review, since edited away.
 
    ### Checklist Verification
    - **Mergeability**: ✅ No conflicts with `dev`.
@@ -300,13 +319,18 @@ afterward.
 
    ### 🟡 Suggestions
    - 🟡 Version bump — `deno.json`'s version does not strictly exceed `origin/dev`'s current tip (Step 2 item 5).
+
+   ### 🔵 Nits
+   - 🔵 The PR body's "How to test locally" block names a worktree path that no longer exists — fix with `gh pr edit --body`; no commit needed.
    ````
 
    **Example — Step 4's single follow-up for the same PR, once CircleCI resolves failing.** It
    carries the updated verdict and the CircleCI failure, and nothing else: no Checklist
    Verification block, no repeat of post #1's other Must Fix items, and — in this example, since
-   the only failing job is not the version-bump job — no Suggestions section either. The
-   swallowed-rejection blocker from post #1 is still outstanding and still blocks the merge, which
+   the only failing job is not the version-bump job — no Suggestions section either. **There is no
+   `### 🔵 Nits` section here, and there never is in a Step 4 follow-up**: post #1 already carried
+   the body-prose nit shown above, a CircleCI result is never body prose, and nothing from post #1
+   is restated. The swallowed-rejection blocker from post #1 is still outstanding and still blocks the merge, which
    is why the verdict stays red — but it is not restated here, because post #1 already said it. The
    CircleCI job failing here ("Format check") is unrelated to the version bump, so per Step 4 item 5
    it adds its own Must Fix line rather than going under Suggestions:
@@ -414,16 +438,18 @@ resolves green, the review is already complete and nothing further is posted.
      fold it into the same follow-up as a `### 🟡 Suggestions` line instead, per the carve-out above.
 
    Carry only the `## PR Review Summary` header, the verdict line, and the applicable section(s)
-   (`### 🛑 Must Fix Items` and/or `### 🟡 Suggestions`), one line per job:
+   (`### 🛑 Must Fix Items` and/or `### 🟡 Suggestions`), one line per job. `### 🔵 Nits` is not on
+   that list and never is — see Step 3's ruling on why a follow-up has no Nit to report:
    - Must Fix line: `🛑 Failing: <job name and failure detail>` if it resolved red, or `🛑 Still
      pending after N minutes — could not confirm passing status, verify manually before merge` if
      the poll cap was hit with that job still unresolved (an unresolved CI status is treated as
      blocking, never as silently passing).
    - Suggestions line (version-bump job only): `🟡 CircleCI "<job name>" is failing — <detail>`.
 
-   **It carries nothing else.** No Checklist Verification block, no `**CircleCI**` row, no repeat
-   of post #1's other Must Fix items, no narration of what changed. Post #1 already carries the
-   review; this post exists solely to add the CircleCI result(s) that post #1 could not know about.
+   **It carries nothing else.** No Checklist Verification block, no `**CircleCI**` row, no
+   `### 🔵 Nits` section, no repeat of post #1's other Must Fix items or Nits, no narration of what
+   changed. Post #1 already carries the review; this post exists solely to add the CircleCI
+   result(s) that post #1 could not know about.
    Any finding from post #1 that is still outstanding stays outstanding without being restated here.
 
    ```sh
@@ -442,7 +468,7 @@ resolves green, the review is already complete and nothing further is posted.
 This binds the reviewing model AND the session relaying the review to Josh:
 
 - **Never recommend merging a PR with a known unfixed defect in the code or artifact being merged**, however small, and never soften a real finding into a "nice to have" so that it can be waved through. If it is wrong, it is Must Fix or it is not a finding at all. This binary applies to defects in the code/artifact being merged, with two named exceptions — not a precedence rule, since each is a distinct case the binary was never meant to cover:
-  - Issue-body or PR-body description prose is never a Must Fix, handled instead under Step 2's item 11 ("Issue Body & PR Body Prose (Never a Must Fix)").
+  - Issue-body or PR-body description prose is never a Must Fix, handled instead under Step 2's item 11 ("Issue Body & PR Body Prose (Never a Must Fix)") and reported under `### 🔵 Nits` — never under `### 🟡 Suggestions`.
   - A version-bump irregularity within the PR under review — either a version that fails to
     strictly exceed `origin/dev`, or a gratuitous double bump — is a Suggestion, not a Must Fix, per
     Step 2 item 5. CircleCI's version-bump gate still deterministically blocks the merge on a stale
