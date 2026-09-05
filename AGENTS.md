@@ -154,6 +154,16 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
 
 ## Quota & Token Hygiene
 
+- **Model Tier Order (weakest to strongest): `Haiku` → `Flash Med` → `Sonnet` → `Flash High` →
+  `Opus`.** As of 2026-09-05 `Flash High` ranks **above** `Sonnet`: on contamination-resistant
+  long-horizon coding (DeepSWE v1.1) Gemini 3.8 Flash at high effort scores 73.7% against Sonnet 5's
+  54%, effectively matching Opus 5's 74%, at under $2.40 a task against Opus's $11-plus — and it
+  bills a separate Google budget rather than the constrained Anthropic one. `Opus` keeps the top slot
+  because that parity does **not** extend to abstract, multi-step unguided agent work
+  (Terminal-Bench 4.0). Consequences: contained *and* multi-file implementation work defaults to
+  `Flash High`, not `Sonnet`; escalating from `Flash High` to `Sonnet` moves work down a tier and
+  onto the constrained budget, so do it only for a named Claude-side capability Flash lacks; and
+  reviewer-tier pairing follows the same order (`skills/pr-review/SKILL.md`).
 - **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a
   rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or
   multi-repo tasks:
