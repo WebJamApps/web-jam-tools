@@ -96,6 +96,22 @@ export function renderStatusBadge(status: string, replyKind?: string): string {
   }
 }
 
+/**
+ * Format venue pay amount for display in reports and tables.
+ * Returns "—" for missing or non-finite values (null, undefined, NaN, Infinity).
+ * Formats negative values with leading minus before the dollar sign (e.g. `-$5`, `-$5.50`).
+ * Formats integers without decimal places (e.g. `$150`) and floats with 2 decimals (e.g. `$0.01`).
+ */
+export function formatPay(amount?: number | null): string {
+  if (typeof amount !== "number" || !Number.isFinite(amount)) {
+    return "—";
+  }
+  const sign = amount < 0 ? "-" : "";
+  const abs = Math.abs(amount);
+  const formatted = Number.isInteger(abs) ? `${abs}` : abs.toFixed(2);
+  return `${sign}$${formatted}`;
+}
+
 function renderPitchCard(p: PitchEmail, idx: number): string {
   const safeVenue = escapeHtml(p.venueName);
   const safeTo = escapeHtml(p.to);
@@ -409,11 +425,7 @@ export function renderDarkHtml(result: BookGigResult): string {
       const email = c.email
         ? `<a href="mailto:${escapeHtml(c.email)}" class="email-link">${escapeHtml(c.email)}</a>`
         : "—";
-      const pay = escapeHtml(
-        typeof c.payAmount === "number"
-          ? (Number.isInteger(c.payAmount) ? `$${c.payAmount}` : `$${c.payAmount.toFixed(2)}`)
-          : "—",
-      );
+      const pay = escapeHtml(formatPay(c.payAmount));
       const isReturning = Boolean(c.reason?.lastGigDate);
       const spacing = escapeHtml(
         isReturning ? `Returning · Last: ${c.reason?.lastGigDate}` : "New",

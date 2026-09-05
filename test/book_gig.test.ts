@@ -34,7 +34,12 @@ import {
   fetchTemplates,
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
-import { renderDarkHtml, renderStatusBadge, SORTING_SCRIPT } from "../src/book-gig/html.ts";
+import {
+  formatPay,
+  renderDarkHtml,
+  renderStatusBadge,
+  SORTING_SCRIPT,
+} from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
 import { formatLocationDisplay, runBookGigCli } from "../src/book-gig/cli.ts";
 import {
@@ -826,8 +831,40 @@ Deno.test("renderDarkHtml: includes Pay column, states New vs Returning outright
         email: "events@glasshouse.com",
         reason: {},
       },
+      {
+        _id: "v4",
+        name: "Community Hall",
+        city: "Roanoke",
+        usState: "VA",
+        payAmount: 0,
+        reason: {},
+      },
+      {
+        _id: "v5",
+        name: "Negative Int Venue",
+        city: "Roanoke",
+        usState: "VA",
+        payAmount: -5,
+        reason: {},
+      },
+      {
+        _id: "v6",
+        name: "Negative Dec Venue",
+        city: "Roanoke",
+        usState: "VA",
+        payAmount: -5.5,
+        reason: {},
+      },
+      {
+        _id: "v7",
+        name: "Non-finite Venue",
+        city: "Roanoke",
+        usState: "VA",
+        payAmount: NaN,
+        reason: {},
+      },
     ],
-    density: { count: 3, isSparse: false },
+    density: { count: 7, isSparse: false },
     pitches: [],
   };
 
@@ -837,6 +874,9 @@ Deno.test("renderDarkHtml: includes Pay column, states New vs Returning outright
   assertStringIncludes(html, "<th>Pay</th>");
   assertStringIncludes(html, "<td>$150</td>");
   assertStringIncludes(html, "<td>$0.01</td>");
+  assertStringIncludes(html, "<td>$0</td>");
+  assertStringIncludes(html, "<td>-$5</td>");
+  assertStringIncludes(html, "<td>-$5.50</td>");
   assertStringIncludes(html, "<td>—</td>");
 
   // 2. Reworded Spacing Status badge stating Returning / New outright
@@ -861,6 +901,28 @@ Deno.test("renderDarkHtml: includes Pay column, states New vs Returning outright
   assertStringIncludes(html, "@media (max-width: 1024px)");
   assertStringIncludes(html, "min-width: 850px;");
   assertStringIncludes(html, "@media (max-width: 600px)");
+});
+
+Deno.test("formatPay: handles positive, negative, zero, non-finite, and nullish amounts", () => {
+  // Positive integers and decimals
+  assertEquals(formatPay(150), "$150");
+  assertEquals(formatPay(0.01), "$0.01");
+
+  // Zero
+  assertEquals(formatPay(0), "$0");
+
+  // Negative integers and decimals
+  assertEquals(formatPay(-5), "-$5");
+  assertEquals(formatPay(-5.5), "-$5.50");
+
+  // Non-finite values
+  assertEquals(formatPay(NaN), "—");
+  assertEquals(formatPay(Infinity), "—");
+  assertEquals(formatPay(-Infinity), "—");
+
+  // Undefined and null
+  assertEquals(formatPay(undefined), "—");
+  assertEquals(formatPay(null), "—");
 });
 
 Deno.test("dispatchBatchOutreach: sends POST /outreach/batch with correct payload and headers", async () => {
