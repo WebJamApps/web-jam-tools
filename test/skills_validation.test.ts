@@ -867,3 +867,82 @@ Deno.test("skills/work-issue/SKILL.md contains external-only deliverables workfl
     "**Mixed deliverables:** If an issue modifies *both* external files (e.g. Dropbox docs) *and* tracked repository files (e.g. code, tests, configs), it continues to follow the standard git worktree branch, test, and PR creation workflow.",
   );
 });
+
+// --- Tier-order pin (web-jam-tools#922) ---
+//
+// Flash High ranks ABOVE Sonnet as of 2026-09-05. This ordering is load-bearing
+// in three separate places — the pr-review pairing matrix, the work-issue model
+// chain, and the delegate skill's escalation direction — and a routine doc sweep
+// that "tidies" any one of them back to the old Sonnet-over-Flash ordering would
+// silently re-route work onto the constrained Anthropic budget with no CI signal.
+// Pinned here, in the one existing home for skill-rule pins, rather than in three
+// separate files (AGENTS.md: "Duplicate Pin-Test Locations for the Same Rule").
+
+Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Flash High above Sonnet", async () => {
+  const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
+
+  assertStringIncludes(
+    text,
+    "**Tier order (weakest to strongest): Haiku → Flash Med → Sonnet → Flash High → Opus.**",
+  );
+
+  // The matrix rows themselves, in order: Sonnet reviews strictly below it,
+  // Flash High may review Sonnet, Opus may review both.
+  assertStringIncludes(text, "| Sonnet | Flash Medium, Haiku |");
+  assertStringIncludes(text, "| Flash High | Sonnet, Flash Medium, Haiku |");
+  assertStringIncludes(text, "| Opus | Flash High, Sonnet |");
+
+  const sonnetRow = text.indexOf("| Sonnet | Flash Medium, Haiku |");
+  const flashHighRow = text.indexOf("| Flash High | Sonnet, Flash Medium, Haiku |");
+  const opusRow = text.indexOf("| Opus | Flash High, Sonnet |");
+  assert(
+    sonnetRow < flashHighRow && flashHighRow < opusRow,
+    "matrix rows must run weakest reviewer to strongest: Sonnet, then Flash High, then Opus",
+  );
+
+  // The old ordering must not survive anywhere in the file.
+  assertFalse(
+    text.includes("| Sonnet | Flash High, Flash Medium, Haiku |"),
+    "the superseded row granting Sonnet review of Flash High work must be gone",
+  );
+});
+
+Deno.test("skills/work-issue/SKILL.md model chain ranks Gemini 3.8 Flash (High) above Sonnet", async () => {
+  const text = await Deno.readTextFile("skills/work-issue/SKILL.md");
+
+  assertStringIncludes(text, "2. `Gemini 3.8 Flash (High)`");
+  assertStringIncludes(text, "3. `Claude Sonnet 4.6 (Thinking)`");
+
+  const flashRung = text.indexOf("2. `Gemini 3.8 Flash (High)`");
+  const sonnetRung = text.indexOf("3. `Claude Sonnet 4.6 (Thinking)`");
+  assert(
+    flashRung !== -1 && sonnetRung !== -1 && flashRung < sonnetRung,
+    "Gemini 3.8 Flash (High) must sit above Claude Sonnet 4.6 (Thinking) on the model chain",
+  );
+
+  // Ordinary coding routes to Flash High, not Sonnet.
+  assertStringIncludes(text, "* *Ordinary Coding*: → `Gemini 3.8 Flash (High)`.");
+
+  // Version tokens are load-bearing in this picker list and must not be scrubbed.
+  assertFalse(
+    /`Gemini Flash \((?:High|Medium)\)`/.test(text),
+    "work-issue's model chain must carry versioned Gemini display names, never version-scrubbed ones",
+  );
+});
+
+Deno.test("skills/delegate/SKILL.md no longer escalates Flash High up to Sonnet", async () => {
+  const text = await Deno.readTextFile("skills/delegate/SKILL.md");
+
+  assertStringIncludes(
+    text,
+    "- **Delegating up (`Flash Med` → `Flash High` → `Opus`)**:",
+  );
+  assertStringIncludes(
+    text,
+    "Haiku → Flash Med → Sonnet → Flash High → Opus",
+  );
+  assertFalse(
+    text.includes("**Delegating up (`Flash Med` → `Flash High` / `Sonnet` / `Opus`)**"),
+    "the superseded escalation ladder placing Sonnet above Flash High must be gone",
+  );
+});
