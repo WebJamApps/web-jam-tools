@@ -9,6 +9,7 @@ import type {
   TargetLocation,
 } from "./types.ts";
 import { extractRunDataFromHtml, renderDarkHtml } from "./html.ts";
+import { identifyCandidateBadge } from "./candidates.ts";
 
 export interface CreateDraftResult {
   venueId: string;
@@ -425,11 +426,14 @@ export async function writeDropboxRunLog(
       }
     }
 
-    const candidateRows = consolidated.candidates.map((c, i) =>
-      `| ${i + 1} | ${c.name} | ${c.city || "—"}, ${c.usState || "—"} | ${c.contactName || "—"} | ${
-        c.phone || "—"
-      } | ${c.email || "—"} | ${c.reason?.spacingNote || "—"} |`
-    ).join("\n");
+    const candidateRows = consolidated.candidates.map((c, i) => {
+      const badgeInfo = identifyCandidateBadge(c);
+      const note = c.statusBadge ||
+        (badgeInfo.isExcluded ? badgeInfo.badge : c.reason?.spacingNote || "—");
+      return `| ${i + 1} | ${c.name} | ${c.city || "—"}, ${c.usState || "—"} | ${
+        c.contactName || "—"
+      } | ${c.phone || "—"} | ${c.email || "—"} | ${note} |`;
+    }).join("\n");
 
     const pitchBlocks = consolidated.pitches.map((p, i) =>
       `### Pitch ${i + 1}: ${p.venueName}

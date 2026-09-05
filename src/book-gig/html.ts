@@ -7,6 +7,7 @@ import type {
   OutreachCampaignRecord,
   PitchEmail,
 } from "./types.ts";
+import { identifyCandidateBadge } from "./candidates.ts";
 
 function escapeHtml(str: string): string {
   return str
@@ -81,6 +82,18 @@ export function renderStatusBadge(status: string, replyKind?: string): string {
   const s = (status || "sent").toLowerCase();
   if (replyKind === "bounce" || s === "bounced") {
     return `<span class="badge badge-bounced">bounced</span>`;
+  }
+  if (s.includes("seasonal hold") || s.includes("hold:")) {
+    return `<span class="badge badge-seasonal-hold">${escapeHtml(status)}</span>`;
+  }
+  if (s.includes("gig spacing") || s.includes("spacing:")) {
+    return `<span class="badge badge-gig-spacing">${escapeHtml(status)}</span>`;
+  }
+  if (s.includes("direct chat")) {
+    return `<span class="badge badge-direct-chat">${escapeHtml(status)}</span>`;
+  }
+  if (s.includes("cooldown active") || s.includes("cooldown:")) {
+    return `<span class="badge badge-cooldown">${escapeHtml(status)}</span>`;
   }
   switch (s) {
     case "sent":
@@ -432,10 +445,8 @@ export function renderDarkHtml(result: BookGigResult): string {
         ? `<a href="mailto:${escapeHtml(c.email)}" class="email-link">${escapeHtml(c.email)}</a>`
         : "—";
       const pay = escapeHtml(formatPay(c.payAmount));
-      const isReturning = Boolean(c.reason?.lastGigDate);
-      const spacing = escapeHtml(
-        isReturning ? `Returning · Last: ${c.reason?.lastGigDate}` : "New",
-      );
+      const badgeInfo = identifyCandidateBadge(c);
+      const badgeText = escapeHtml(c.statusBadge || badgeInfo.badge);
       return `
         <tr data-venue-id="${escapeHtml(c._id)}">
           <td class="num-col">${idx + 1}</td>
@@ -445,9 +456,7 @@ export function renderDarkHtml(result: BookGigResult): string {
           <td>${phone}</td>
           <td>${email}</td>
           <td>${pay}</td>
-          <td><span class="badge ${
-        isReturning ? "badge-returning" : "badge-eligible"
-      }">${spacing}</span></td>
+          <td><span class="badge ${badgeInfo.cssClass}">${badgeText}</span></td>
         </tr>`;
     }).join("\n");
 
@@ -746,6 +755,26 @@ export function renderDarkHtml(result: BookGigResult): string {
     .badge-returning {
       background-color: var(--badge-amber-bg);
       color: var(--badge-amber-txt);
+    }
+
+    .badge-seasonal-hold, .badge-hold {
+      background-color: #1e293b;
+      color: #93c5fd;
+    }
+
+    .badge-gig-spacing, .badge-spacing {
+      background-color: #3e2723;
+      color: #ffab91;
+    }
+
+    .badge-direct-chat {
+      background-color: #3b1b61;
+      color: #ce93d8;
+    }
+
+    .badge-cooldown {
+      background-color: #0d3c61;
+      color: #4fc3f7;
     }
 
     .badge-sent {
