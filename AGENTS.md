@@ -57,7 +57,7 @@ rules and do not reconstruct them from memory or from this file.
 14. **Phased Data Migrations & Expand-Contract Discipline:** In multi-phase database migrations and field transitions (e.g. retiring legacy artist slugs, renaming columns, changing MongoDB schema filters):
     - **Phase 1: Widening (Expand):** Readers, query filters, and API consumers must first be widened to accept both legacy and new values, landing before any data is migrated.
     - **Phase 2: Operational Data Migration:** The data migration script (e.g. `heroku run "npm run migrate:..."`) is executed against production. This is an operational runbook step typically performed by Josh after the widening PR merges.
-    - **Phase 3: Narrowing (Contract):** Only AFTER the operational data migration has verifiably run and completed against production (with verification evidence confirmed in the tracking issue or live production queries), agents may open, implement, or merge the narrowing PR that retires legacy values and removes fallback filters.
+    - **Phase 3: Narrowing (Contract):** Only AFTER the operational data migration has verifiably run and completed against production (with verification evidence confirmed in the tracking issue or live production queries), agents may open or implement the narrowing PR that retires legacy values and removes fallback filters.
     - **Never Preemptively Implement Narrowing:** Agents must NEVER open, implement, or merge PRs for the narrowing phase while the production data migration remains unexecuted or unverified. Doing so breaks production consumers (e.g. emptying query results) the moment the PR deploys. If an assigned issue contains both widening and narrowing phases, the narrowing phase must remain held/blocked until operational execution is confirmed.
 
 ## Opening pull requests (all WebJamApps repos)
@@ -313,14 +313,3 @@ target list, deployment steps, and verification procedures.
 ## Plan Table & Issue Automation Guidelines
 
 - **Plan Table Dependency Key Namespacing & Pre-Validation**: In plan filing tools (`deno task design:file-plan` / `src/design-issue/file_plan.ts`), dependency-resolution registries must store 1-based position indices, explicit plan `id`s, issue titles, and external GitHub issue citations in separate lookup namespaces with strict resolution precedence (explicit ID -> 1-based position -> title -> external issue number). Plans must be pre-validated before issue creation to reject ambiguous collisions (such as an explicit `id` conflicting with a different item's position index, duplicate `id`s across items, or duplicate titles across items) so incorrect `blocked_by` edges are never created on GitHub.
-
-## Phased Data Migrations & Expand-Contract Discipline
-
-- **Phased Migration Discipline**: In multi-phase database migrations and field transitions (e.g. retiring legacy artist slugs, renaming columns, changing MongoDB schema filters):
-  - **Widening Phase (Expand)**: Readers, query filters, and API consumers must first be widened to accept both legacy and new values, landing before any data is migrated.
-  - **Operational Data Migration**: The data migration script (e.g. `heroku run "npm run migrate:..."`) is executed against production. This is an operational runbook step typically performed by Josh after the widening PR merges.
-  - **Narrowing Phase (Contract)**: Only AFTER the operational data migration has verifiably run and completed against production (with verification evidence confirmed in the tracking issue or live production queries), agents may open, implement, or merge the narrowing PR that retires legacy values and removes fallback filters.
-  - **Never Preemptively Implement Narrowing**: Agents must NEVER open, implement, or merge PRs for the narrowing phase while the production data migration remains unexecuted or unverified. Doing so breaks production consumers (e.g. emptying query results) the moment the PR deploys. If an assigned issue contains both widening and narrowing phases, the narrowing phase must remain held/blocked until operational execution is confirmed.
-
-
-
