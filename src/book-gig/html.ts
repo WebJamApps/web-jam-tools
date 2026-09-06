@@ -1056,7 +1056,7 @@ ${
     })
   }
   </script>
-  <script src="/outreach/table-sort.js"></script>
+  <script src="/outreach/table-sort.js?v=2"></script>
   <script>
 ${SORTING_SCRIPT}
   </script>

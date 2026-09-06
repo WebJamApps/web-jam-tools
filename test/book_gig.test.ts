@@ -1340,7 +1340,7 @@ Deno.test("renderDarkHtml: loads /outreach/table-sort.js for CSP compliance and 
   const html = renderDarkHtml(result);
 
   // Assert external script is included for CSP compliance
-  assertStringIncludes(html, '<script src="/outreach/table-sort.js"></script>');
+  assertStringIncludes(html, '<script src="/outreach/table-sort.js?v=2"></script>');
 
   // Assert SORTING_SCRIPT contains offline guard / fallback
   assertStringIncludes(SORTING_SCRIPT, 'typeof initTableSorting === "function"');
