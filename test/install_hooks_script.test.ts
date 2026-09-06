@@ -25,10 +25,14 @@
 //     from a worktree itself.
 
 import { assert, assertEquals } from "@std/assert";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
+import { matcherMatches } from "../hooks/lib/agy_hook_shim.ts";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
 const MERGE_SCRIPT = `${REPO_ROOT}scripts/merge-hooks-into-settings.ts`;
+const MERGE_AGENTS_MD_SCRIPT = `${REPO_ROOT}scripts/merge-agents-md-pointer.ts`;
+const STATUS_LINE_SCRIPT = `${REPO_ROOT}scripts/statusline.sh`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
 
 interface RunResult {
@@ -104,7 +108,11 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     assertEquals(res.code, 0, res.stdout + res.stderr);
 
     const linked = [...Deno.readDirSync(hooksDir)].map((e) => e.name).sort();
-    assertEquals(linked, shHookNames());
+    // web-jam-tools#691: statusline.sh is symlinked into the same hooks
+    // destination as the *.sh hooks (so it gets a stable installed path),
+    // but it is NOT a hook and must never appear in shHookNames() (which
+    // only lists hooks/*.sh) or be picked up by the hook-registration loops.
+    assertEquals(linked, [...shHookNames(), "statusline.sh"].sort());
     for (const name of linked) {
       const info = await Deno.lstat(`${hooksDir}/${name}`);
       assert(info.isSymlink, `${name} should be a symlink`);
@@ -112,6 +120,11 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
 
     const settings = JSON.parse(await Deno.readTextFile(settingsPath));
     assert(settings.hooks.SessionStart.length > 0);
+    assert(settings.hooks.SessionEnd.length > 0);
+    assertEquals(
+      settings.hooks.SessionEnd[0].hooks[0].command,
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+    );
     assert(settings.hooks.PreToolUse.length > 0);
     // web-jam-tools#308: DENY_RULES land in permissions.deny too.
     assert(Array.isArray(settings.permissions?.deny) && settings.permissions.deny.length > 0);
@@ -120,11 +133,37 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       "expected the git push --delete deny pattern to be present",
     );
 
+    // web-jam-tools#691: the registered statusLine command is the STABLE
+    // installed path under the (sandboxed) hooks destination, never a
+    // $REPO_DIR-relative working-tree path — and the file actually exists
+    // there after the run.
+    assertEquals(settings.statusLine, {
+      type: "command",
+      command: `${hooksDir}/statusline.sh`,
+    });
+    assert(
+      await pathExists(`${hooksDir}/statusline.sh`),
+      "expected statusline.sh to be installed at the stable hooksDir path",
+    );
+
+    // web-jam-tools#705: permissions.defaultMode is pinned to "acceptEdits"
+    // in the Claude Code settings.json so a session never lands in "auto"
+    // mode, where hooks/opus-delegation-gate.sh withdraws its subagent
+    // exemption and refuses every Edit/Write/NotebookEdit.
+    assertEquals(settings.permissions?.defaultMode, "acceptEdits");
+
     // web-jam-tools#345: agy hooks.json is also created and populated
     const agyHooksPath = `${settingsDir}/hooks.json`;
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
     assert(agyHooks.hooks.PreToolUse.length > 0, "expected PreToolUse in agy hooks.json");
     assert(agyHooks.hooks.PostToolUse.length > 0, "expected PostToolUse in agy hooks.json");
+    // web-jam-tools#691: agy never gets a statusLine surface.
+    assertEquals(agyHooks.statusLine, undefined);
+    // web-jam-tools#705: agy has no permission-mode concept at all
+    // (docs/agy-hooks.md), so it never gets a permissions.defaultMode entry
+    // either — this installer never passes --default-mode to the
+    // $AGY_HOOKS_PATH invocation.
+    assertEquals(agyHooks.permissions?.defaultMode, undefined);
   } finally {
     await Deno.remove(hooksDir, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
@@ -156,7 +195,7 @@ Deno.test(
         JSON.stringify({
           tool_input: {
             command:
-              'gh issue create --repo WebJamApps/web-jam-tools --title "test" --body "standalone body text" --type Task --label Sonnet',
+              'gh issue create --repo WebJamApps/web-jam-tools --title "test" --body "standalone body text" --type Task --label "Flash High"',
           },
         }),
       );
@@ -188,6 +227,67 @@ Deno.test(
         }),
       );
       assertEquals(deployBlockRes.code, 2, deployBlockRes.stdout + deployBlockRes.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+// --- require-model-label-on-issue-create.sh / require-approval-token-on-issue-write.sh
+// register on the Bash matcher too, not just MCP (web-jam-tools#747, ACs 6 & 9) ---
+
+Deno.test(
+  "require-model-label-on-issue-create.sh and require-approval-token-on-issue-write.sh are registered on a matcher that also fires for Bash",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      const preToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> =
+        settings.hooks.PreToolUse;
+
+      const matcherFor = (scriptName: string): string => {
+        const entry = preToolUse.find((e) =>
+          e.hooks.some((h) => h.command.endsWith(`/${scriptName}`))
+        );
+        assert(entry, `expected a PreToolUse entry registering ${scriptName}`);
+        return entry.matcher;
+      };
+
+      const modelLabelMatcher = matcherFor("require-model-label-on-issue-create.sh");
+      assert(
+        matcherMatches(modelLabelMatcher, "Bash"),
+        `expected require-model-label-on-issue-create.sh's matcher (${modelLabelMatcher}) to also fire for Bash`,
+      );
+      assert(
+        matcherMatches(modelLabelMatcher, "mcp__claude_ai_GitHub_MCP__issue_write"),
+        `expected require-model-label-on-issue-create.sh's matcher (${modelLabelMatcher}) to still fire for mcp__*__issue_write`,
+      );
+
+      const approvalTokenMatcher = matcherFor("require-approval-token-on-issue-write.sh");
+      assert(
+        matcherMatches(approvalTokenMatcher, "Bash"),
+        `expected require-approval-token-on-issue-write.sh's matcher (${approvalTokenMatcher}) to also fire for Bash`,
+      );
+      assert(
+        matcherMatches(approvalTokenMatcher, "mcp__claude_ai_GitHub_MCP__issue_write"),
+        `expected require-approval-token-on-issue-write.sh's matcher (${approvalTokenMatcher}) to still fire for mcp__*__issue_write`,
+      );
+      assert(
+        matcherMatches(approvalTokenMatcher, "mcp__claude_ai_GitHub_MCP__sub_issue_write"),
+        `expected require-approval-token-on-issue-write.sh's matcher (${approvalTokenMatcher}) to still fire for mcp__*__sub_issue_write`,
+      );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });
@@ -283,7 +383,20 @@ Deno.test("default invocation (no --hooks-dir) still targets $HOME/.claude/hooks
     const hooksDir = `${home}/.claude/hooks`;
     assert(await pathExists(hooksDir), "expected hooks dir under $HOME/.claude/hooks");
     const linked = [...Deno.readDirSync(hooksDir)].map((e) => e.name).sort();
-    assertEquals(linked, shHookNames());
+    // web-jam-tools#691: statusline.sh lands alongside the hooks at the
+    // default destination too, but is not itself a hook.
+    assertEquals(linked, [...shHookNames(), "statusline.sh"].sort());
+
+    // web-jam-tools#721: a normal, unsandboxed-hooks-dir run must still
+    // register statusLine exactly as before — pointed at the default
+    // $HOME/.claude/hooks/statusline.sh destination, unaffected by this
+    // issue's --hooks-dir guard (which never fires here since --hooks-dir
+    // was not passed).
+    const settings = JSON.parse(await Deno.readTextFile(`${settingsDir}/settings.json`));
+    assertEquals(settings.statusLine, {
+      type: "command",
+      command: `${home}/.claude/hooks/statusline.sh`,
+    });
   } finally {
     await Deno.remove(home, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
@@ -309,6 +422,10 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
   await Deno.chmod(`${mainRepo}/scripts/install-hooks.sh`, 0o755);
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
+  await Deno.copyFile(MERGE_AGENTS_MD_SCRIPT, `${mainRepo}/scripts/merge-agents-md-pointer.ts`);
+  // install-hooks.sh requires scripts/statusline.sh to exist (web-jam-tools#688).
+  await Deno.copyFile(STATUS_LINE_SCRIPT, `${mainRepo}/scripts/statusline.sh`);
+  await Deno.chmod(`${mainRepo}/scripts/statusline.sh`, 0o755);
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {
@@ -419,6 +536,159 @@ Deno.test("--hooks-dir is exempt from the worktree guard (no --force needed)", a
   });
 });
 
+// --- Partial-sandbox guard: --hooks-dir alone must not touch live config
+// (web-jam-tools#721) ---
+//
+// Before the fix, --hooks-dir only redirected where hook *symlinks* were
+// created — it never redirected the settings-merge targets
+// ($HOME/.claude/settings.json, $HOME/.gemini/config/hooks.json). A
+// --hooks-dir-only run still merged into whatever settings.json/hooks.json
+// it found under $HOME, including overwriting statusLine with a path into
+// the temporary hooks directory. These tests redirect HOME to a throwaway
+// dir seeded with realistic pre-existing config (never the real $HOME) and
+// assert the run refuses outright, verifying BOTH surfaces independently
+// rather than inferring one from the other.
+
+const REALISTIC_SETTINGS_JSON = JSON.stringify(
+  {
+    statusLine: { type: "command", command: "/home/fakeuser/.claude/hooks/statusline.sh" },
+    permissions: { deny: ["Bash(git push --force *)"], defaultMode: "acceptEdits" },
+    hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] },
+  },
+  null,
+  2,
+);
+
+const REALISTIC_AGY_HOOKS_JSON = JSON.stringify(
+  {
+    hooks: {
+      PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo pre" }] }],
+      PostToolUse: [],
+    },
+  },
+  null,
+  2,
+);
+
+async function seedFakeHome(home: string): Promise<{ settingsPath: string; agyHooksPath: string }> {
+  await Deno.mkdir(`${home}/.claude`, { recursive: true });
+  await Deno.mkdir(`${home}/.gemini/config`, { recursive: true });
+  const settingsPath = `${home}/.claude/settings.json`;
+  const agyHooksPath = `${home}/.gemini/config/hooks.json`;
+  await Deno.writeTextFile(settingsPath, REALISTIC_SETTINGS_JSON);
+  await Deno.writeTextFile(agyHooksPath, REALISTIC_AGY_HOOKS_JSON);
+  return { settingsPath, agyHooksPath };
+}
+
+Deno.test(
+  "install-hooks.sh --hooks-dir without --settings-path refuses and leaves both live config files byte-identical",
+  async () => {
+    const home = await Deno.makeTempDir();
+    const hooksDir = await Deno.makeTempDir();
+    try {
+      const { settingsPath, agyHooksPath } = await seedFakeHome(home);
+      const settingsBefore = await Deno.readTextFile(settingsPath);
+      const agyHooksBefore = await Deno.readTextFile(agyHooksPath);
+
+      const res = await run(
+        "bash",
+        [INSTALL_SCRIPT, "--hooks-dir", hooksDir],
+        { HOME: home },
+      );
+
+      assert(res.code !== 0, "expected --hooks-dir without --settings-path to be refused");
+      assert(
+        res.stderr.includes("--settings-path"),
+        `expected the refusal to name --settings-path, got: ${res.stderr}`,
+      );
+      assert(res.stderr.includes("web-jam-tools#721"), res.stderr);
+
+      // Claude Code surface: verified independently.
+      const settingsAfter = await Deno.readTextFile(settingsPath);
+      assertEquals(settingsAfter, settingsBefore, "settings.json must be byte-identical");
+
+      // agy/Antigravity surface: verified independently, not inferred from
+      // the Claude Code result above.
+      const agyHooksAfter = await Deno.readTextFile(agyHooksPath);
+      assertEquals(agyHooksAfter, agyHooksBefore, "agy hooks.json must be byte-identical");
+
+      // Nothing should have been written under the (never-reached) hooks-dir
+      // sandbox either — the guard fires before any write.
+      const hooksDirContents = [...Deno.readDirSync(hooksDir)];
+      assertEquals(hooksDirContents.length, 0, "expected --hooks-dir to remain empty");
+    } finally {
+      await Deno.remove(home, { recursive: true });
+      await Deno.remove(hooksDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh CLAUDE_HOOKS_DIR without --settings-path refuses and leaves both live config files byte-identical",
+  async () => {
+    const home = await Deno.makeTempDir();
+    const hooksDir = await Deno.makeTempDir();
+    try {
+      const { settingsPath, agyHooksPath } = await seedFakeHome(home);
+      const settingsBefore = await Deno.readTextFile(settingsPath);
+      const agyHooksBefore = await Deno.readTextFile(agyHooksPath);
+
+      const res = await run(
+        "bash",
+        [INSTALL_SCRIPT],
+        { HOME: home, CLAUDE_HOOKS_DIR: hooksDir },
+      );
+
+      assert(res.code !== 0, "expected CLAUDE_HOOKS_DIR without --settings-path to be refused");
+      assert(
+        res.stderr.includes("--settings-path"),
+        `expected the refusal to name --settings-path, got: ${res.stderr}`,
+      );
+
+      const settingsAfter = await Deno.readTextFile(settingsPath);
+      assertEquals(settingsAfter, settingsBefore, "settings.json must be byte-identical");
+
+      const agyHooksAfter = await Deno.readTextFile(agyHooksPath);
+      assertEquals(agyHooksAfter, agyHooksBefore, "agy hooks.json must be byte-identical");
+    } finally {
+      await Deno.remove(home, { recursive: true });
+      await Deno.remove(hooksDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --hooks-dir with --settings-path (fully sandboxed) is still accepted",
+  async () => {
+    const home = await Deno.makeTempDir();
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    try {
+      const { settingsPath: liveSettingsPath, agyHooksPath: liveAgyHooksPath } = await seedFakeHome(
+        home,
+      );
+      const liveSettingsBefore = await Deno.readTextFile(liveSettingsPath);
+      const liveAgyHooksBefore = await Deno.readTextFile(liveAgyHooksPath);
+      const settingsPath = `${settingsDir}/settings.json`;
+
+      const res = await run(
+        "bash",
+        [INSTALL_SCRIPT, "--hooks-dir", hooksDir, "--settings-path", settingsPath],
+        { HOME: home },
+      );
+
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+      // The fully-sandboxed run must still leave $HOME's live config alone.
+      assertEquals(await Deno.readTextFile(liveSettingsPath), liveSettingsBefore);
+      assertEquals(await Deno.readTextFile(liveAgyHooksPath), liveAgyHooksBefore);
+    } finally {
+      await Deno.remove(home, { recursive: true });
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
 // --- --check mode and secret-scan gate (web-jam-tools#339) ---
 
 Deno.test("install-hooks.sh --check passes on a clean sandboxed installation", async () => {
@@ -524,7 +794,11 @@ Deno.test("install-hooks.sh secret-scan gate fails closed with synthetic JWT fix
   const hooksDir = await Deno.makeTempDir();
   const settingsDir = await Deno.makeTempDir();
   const settingsPath = `${settingsDir}/settings.json`;
-  const jwtSecret = "eyJ" + "X".repeat(20) + "." + "Y".repeat(20) + "." + "Z".repeat(20);
+  // Varied per-segment, not repeated — the credential detector's
+  // synthetic-value heuristic would otherwise auto-suppress an 8+ run of
+  // the same character, defeating this "must fail closed" fixture.
+  const jwtSecret = "eyJ" + variedFakeBody(20, 70) + "." + variedFakeBody(20, 71) + "." +
+    variedFakeBody(20, 72);
   try {
     await Deno.writeTextFile(
       settingsPath,
@@ -645,6 +919,320 @@ Deno.test(
       assert(checkRes.code !== 0, "expected --check to fail when drift is present");
       assert(checkRes.stderr.includes("drift: orphaned symlink dangling-check.sh"));
       assert(checkRes.stderr.includes("has retired SessionStart hook"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift when SessionEnd entry is removed from settings.json",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Verify SessionEnd is present and check passes initially
+      const checkInitial = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkInitial.code, 0, checkInitial.stdout + checkInitial.stderr);
+
+      // Remove SessionEnd entry from settings.json
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      delete settings.hooks.SessionEnd;
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings, null, 2));
+
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assert(checkRes.code !== 0, "expected --check to fail when SessionEnd is removed");
+      assert(checkRes.stderr.includes("missing SessionEnd hook"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh merges rules pointer into AGENTS.md, preserves pre-existing content, and is idempotent",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agentsMdPath = `${settingsDir}/AGENTS.md`;
+
+    try {
+      const initialContent =
+        `# Pre-existing Header\n\nPre-existing intro text.\n\n## Pre-existing Section\nItem A\nItem B\n`;
+      await Deno.writeTextFile(agentsMdPath, initialContent);
+
+      const firstRun = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+      ]);
+      assertEquals(firstRun.code, 0, firstRun.stdout + firstRun.stderr);
+
+      const contentAfterFirst = await Deno.readTextFile(agentsMdPath);
+      assert(contentAfterFirst.includes("## Cross-AI hard rules"), "expected rules pointer header");
+      assert(contentAfterFirst.includes("docs/cross-ai-rules.md"), "expected pointer target file");
+      assert(contentAfterFirst.includes("# Pre-existing Header"), "pre-existing header preserved");
+      assert(contentAfterFirst.includes("Item A"), "pre-existing body text preserved");
+
+      // Idempotency: run a second time
+      const secondRun = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+      ]);
+      assertEquals(secondRun.code, 0, secondRun.stdout + secondRun.stderr);
+
+      const contentAfterSecond = await Deno.readTextFile(agentsMdPath);
+      const pointerOccurrences = contentAfterSecond.split("## Cross-AI hard rules").length - 1;
+      assertEquals(pointerOccurrences, 1, "rules pointer must not be duplicated on second run");
+
+      // Check mode passes
+      const checkRun = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+        "--check",
+      ]);
+      assertEquals(checkRun.code, 0, checkRun.stdout + checkRun.stderr);
+      assert(checkRun.stdout.includes("check passed"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift when AGENTS.md rules pointer is missing or out-of-date",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agentsMdPath = `${settingsDir}/AGENTS.md`;
+
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Strip out the pointer from AGENTS.md to simulate drift
+      await Deno.writeTextFile(agentsMdPath, "# Just Some Content\n\nNo rules pointer here.\n");
+
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agents-md-path",
+        agentsMdPath,
+        "--check",
+      ]);
+      assert(
+        checkRes.code !== 0,
+        "expected --check to fail when AGENTS.md rules pointer is missing",
+      );
+      assert(checkRes.stderr.includes("out-of-date rules pointer"));
+      assert(checkRes.stderr.includes("error: drift detected"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+// --- Retracting a rule that moved between deny and ask (web-jam-tools#525) ---
+//
+// Reproduces the exact live scenario recorded on the issue: --force-with-lease
+// moved from DENY_RULES to ASK_RULES (web-jam-tools#523), but a settings.json
+// still carries it in permissions.deny from before that move — which silently
+// overrode the new ASK_RULES classification, since deny wins when a pattern is
+// in both arrays.
+
+Deno.test(
+  "installing over a settings.json with a stale deny copy of an ASK_RULES pattern removes the stale copy",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Seed exactly the pre-#525 broken state: the pattern present in BOTH
+      // arrays, as install-hooks.sh actually left it on Josh's laptop.
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({
+          permissions: {
+            deny: [
+              "Bash(git push --force-with-lease*)",
+              "Bash(git push * --force-with-lease*)",
+            ],
+            ask: [
+              "Bash(git push --force-with-lease*)",
+              "Bash(git push * --force-with-lease*)",
+            ],
+          },
+        }),
+      );
+
+      const res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+      assert(
+        res.stdout.includes(
+          "removed permissions.deny rule Bash(git push --force-with-lease*) (now owned by permissions.ask)",
+        ),
+        res.stdout,
+      );
+      assert(
+        res.stdout.includes(
+          "removed permissions.deny rule Bash(git push * --force-with-lease*) (now owned by permissions.ask)",
+        ),
+        res.stdout,
+      );
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assert(
+        !settings.permissions.deny.includes("Bash(git push --force-with-lease*)"),
+        "stale deny copy should have been removed",
+      );
+      assert(
+        !settings.permissions.deny.includes("Bash(git push * --force-with-lease*)"),
+        "stale deny copy should have been removed",
+      );
+      assert(
+        settings.permissions.ask.includes("Bash(git push --force-with-lease*)"),
+        "the ask copy should remain",
+      );
+      // Plain --force and every other remote-deleting shape stay denied —
+      // this fix only retracts a pattern the OTHER array now owns.
+      assert(
+        settings.permissions.deny.includes("Bash(git push --force *)"),
+        "plain --force must remain denied",
+      );
+
+      // Re-run: idempotent, reports no further changes.
+      const second = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(second.code, 0, second.stdout + second.stderr);
+      assert(
+        second.stdout.includes("already up to date (no-op)"),
+        `expected no-op on second run, got: ${second.stdout}`,
+      );
+      assert(
+        !second.stdout.includes("removed permissions.deny rule"),
+        `expected no further removals on second run, got: ${second.stdout}`,
+      );
+
+      // --check now passes clean (the both-arrays drift is gone).
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "--check reports drift when a DENY_RULES/ASK_RULES pattern is present in both permissions lists",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Hand-add a stale deny copy of an ASK_RULES-owned pattern to simulate
+      // drift accumulating after a clean install.
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      settings.permissions.deny.push("Bash(git push --force-with-lease*)");
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings));
+
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assert(checkRes.code !== 0, "expected --check to fail on a both-arrays pattern");
+      assert(
+        checkRes.stderr.includes(
+          "permissions.deny rule Bash(git push --force-with-lease*) is also in permissions.ask (stale copy)",
+        ),
+        checkRes.stderr,
+      );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });

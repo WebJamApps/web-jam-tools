@@ -3,14 +3,11 @@
 // Exercises hooks/require-issue-citation-titles.sh end-to-end by actually
 // shelling out to it (Deno.Command) with a mocked Stop-hook payload on
 // stdin (a transcript_path pointing at a fixture JSONL file we write per
-// test), the same shape Claude Code's hook runner feeds it — same pattern
-// as test/opus_no_delegation_warning_hook.test.ts (re-implementing the
-// shell/jq/python logic in TypeScript would test a copy, not the real
-// hook).
+// test), the same shape Claude Code's hook runner feeds it.
 //
-// UNLIKE opus-no-delegation-warning.sh, this hook is BLOCKING: it exits 2
-// (not 0) and writes to stderr when it finds a bare issue/PR citation, so
-// these tests assert on exit code + stderr content, not stdout.
+// This hook is BLOCKING: it exits 2 (not 0) and writes to stderr when it
+// finds a bare issue/PR citation, so these tests assert on exit code +
+// stderr content, not stdout.
 
 import { assert, assertEquals } from "@std/assert";
 
@@ -52,9 +49,14 @@ function userTurn(text: string): TranscriptEntry {
   return { type: "user", message: { role: "user", content: text } };
 }
 
-function assistantText(text: string): TranscriptEntry {
+function assistantText(
+  text: string,
+  opts: { isSidechain?: boolean; isApiErrorMessage?: boolean } = {},
+): TranscriptEntry {
   return {
     type: "assistant",
+    isSidechain: opts.isSidechain ?? false,
+    ...(opts.isApiErrorMessage ? { isApiErrorMessage: true } : {}),
     message: {
       role: "assistant",
       model: "claude-sonnet-4-6",
@@ -282,5 +284,119 @@ Deno.test("a clean message with no # tokens at all is allowed", async () => {
   await withFixtureTranscript(entries, async (path) => {
     const res = await runHook(path);
     assertEquals(res.code, 0, res.stderr);
+  });
+});
+
+// --- transcript entry selection: must judge the CURRENT turn's real final message ---
+
+Deno.test("an earlier violating assistant entry is ignored when the last entry is clean", async () => {
+  const entries = [
+    userTurn("do the thing"),
+    assistantText("See #299 for details."), // would block if selected
+    userTurn("ok, got it"),
+    assistantText("All done."), // the actual last reply — clean
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stderr.trim(), "");
+  });
+});
+
+Deno.test("a sidechain (subagent) assistant entry containing bare citations after the real reply is not judged", async () => {
+  const entries = [
+    userTurn("do the thing"),
+    assistantText("Everything completed cleanly."), // the real final reply to Josh — clean
+    assistantText("Subagent report on #550 and #552.", { isSidechain: true }), // subagent chatter
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stderr.trim(), "");
+  });
+});
+
+Deno.test("an isApiErrorMessage entry containing bare citations after the real reply is not judged", async () => {
+  const entries = [
+    userTurn("do the thing"),
+    assistantText("Everything completed cleanly."), // the real final reply to Josh — clean
+    assistantText("Synthetic error referencing #550 · resets in 5m", {
+      isApiErrorMessage: true,
+    }),
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stderr.trim(), "");
+  });
+});
+
+Deno.test("a sidechain entry is skipped even when it is the only assistant entry present", async () => {
+  const entries = [
+    userTurn("do the thing"),
+    assistantText("Subagent bare #299 citation", { isSidechain: true }),
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+  });
+});
+
+Deno.test("a real reply with a bare citation is blocked even when followed by clean sidechain/apiError entries", async () => {
+  const entries = [
+    userTurn("do the thing"),
+    assistantText("See #299 for details."), // real violating reply
+    assistantText("Subagent clean chatter", { isSidechain: true }),
+    assistantText("Clean synthetic error", { isApiErrorMessage: true }),
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 2);
+    assertBlocked(res.stderr, "#299");
+  });
+});
+
+// --- turn boundary tests (web-jam-tools#596) ---
+
+Deno.test("reproduces issue #596: previous turn contains bare citation, current turn contains only tool-use -> allowed (exit 0)", async () => {
+  const entries = [
+    userTurn("first request"),
+    assistantText("See #299 for details."), // violating text in previous turn
+    userTurn("second request — current turn"),
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "t1", name: "Edit", input: {} }],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stderr.trim(), "");
+  });
+});
+
+Deno.test("current turn contains bare citation followed by tool-use -> blocked (exit 2)", async () => {
+  const entries = [
+    userTurn("first request"),
+    assistantText("Clean first reply."),
+    userTurn("second request — current turn"),
+    assistantText("Working on #299 now."),
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }],
+      },
+    },
+  ];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 2);
+    assertBlocked(res.stderr, "#299");
   });
 });

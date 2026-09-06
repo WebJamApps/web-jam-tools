@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # require-issue-citation-titles.sh — web-jam-tools#311
 #
-# BLOCKING Stop hook. Contrast with hooks/opus-no-delegation-warning.sh,
-# which is deliberately detective-only (always exits 0). This hook reads
-# the transcript path from stdin (same Stop-hook payload shape), extracts
-# the LAST assistant message's text, and scans it for a bare issue/PR
-# citation — a `#` immediately followed by digits that is NOT part of a
-# full `repo#number "title"` citation. If any are found, it exits 2:
-# Claude Code blocks the turn from ending and feeds stderr back to the
-# model, so the message gets rewritten before it reaches Josh.
+# BLOCKING Stop hook. This hook reads the transcript path from stdin
+# (Stop-hook payload shape), extracts the LAST assistant message's text,
+# and scans it for a bare issue/PR citation — a `#` immediately followed
+# by digits that is NOT part of a full `repo#number "title"` citation.
+# If any are found, it exits 2: Claude Code blocks the turn from ending
+# and feeds stderr back to the model, so the message gets rewritten before
+# it reaches Josh.
 #
 # Origin: web-jam-tools#307 "Add ISSUE CITATIONS hard rule to operational
 # rules" merged the rule into prose docs on 2026-07-29, and it was STILL
@@ -53,28 +52,20 @@ set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 DETECTOR="$HOOK_DIR/lib/detect_bare_issue_refs.ts"
+SELECTOR="$HOOK_DIR/lib/select_transcript_entry.ts"
 
 input="$(cat)" || exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
 [ -n "$tp" ] && [ -f "$tp" ] || exit 0
 
-# Last assistant transcript entry's text content, concatenated across any
-# text blocks it carries (an assistant entry can interleave text and
-# tool_use blocks). Reverse the file first (tac) so slurping into an array
-# and taking the first element that matches gives the ORIGINAL last
-# assistant entry — same technique opus-no-delegation-warning.sh uses to
-# recover "the current turn's model" from the same transcript shape.
-msg="$(tac "$tp" 2>/dev/null | jq -rs '
-  [ .[] | select(.type == "assistant" and ((.message.content? // null) != null)) ]
-  | first
-  | (.message.content // [])
-  | map(select(.type == "text") | .text)
-  | join("\n")
-' 2>/dev/null || true)"
+# Last genuine assistant transcript entry's text content, selected via
+# hooks/lib/select_transcript_entry.ts (excludes isSidechain and
+# isApiErrorMessage entries — web-jam-tools#565).
+msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
 
 [ -n "$msg" ] || exit 0
 
-offenders="$(MSG_FOR_PY="$msg" deno run --allow-env "$DETECTOR" 2>/dev/null || true)"
+offenders="$(MSG_FOR_PY="$msg" deno run --no-config --allow-env "$DETECTOR" 2>/dev/null || true)"
 [ -n "$offenders" ] || exit 0
 
 {

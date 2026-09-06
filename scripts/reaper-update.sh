@@ -115,7 +115,7 @@ fi
 
 # Run the installer script with the prefix
 log "Installing REAPER to $REAPER_PREFIX..."
-install_script="$reaper_dir/install-reaper.sh"
+install_script="$(dirname "$reaper_dir")/install-reaper.sh"
 
 if [ ! -f "$install_script" ]; then
 	error "Could not find install-reaper.sh in tarball"

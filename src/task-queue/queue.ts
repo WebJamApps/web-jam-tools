@@ -8,7 +8,7 @@
  *
  * Loss historically happened because a header typo ("talk 5") wasn't recognized
  * as a task, so the line got folded into the previous task's block and deleted
- * on the next /next. So header recognition is typo-tolerant: any leading word
+ * on the next /work-issue. So header recognition is typo-tolerant: any leading word
  * that starts with "ta" and is within Levenshtein distance 1 of "task" counts.
  */
 

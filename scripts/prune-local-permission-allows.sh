@@ -17,9 +17,9 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 for arg in "$@"; do
   if [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
-    echo "Usage: scripts/prune-local-permission-allows.sh [--apply] [--help]"
+    echo "Usage: scripts/prune-local-permission-allows.sh [--apply] [--check] [--help]"
     echo ""
-    echo "Prunes R-5, R-11, and R-20 allow rules from settings.local.json files."
+    echo "Prunes R-5, R-11, R-20, and non-trailing wildcard allow rules from settings.local.json files."
     echo ""
     echo "ORDERING CONSTRAINT:"
     echo "Run this script ONLY AFTER web-jam-tools#340 (\"Apply the agreed permission rule set: gh, gh api, MCP writes, Heroku, and the draft-PR carve-out\") has landed and been installed (via scripts/install-hooks.sh). With the primary deny/ask rules in place first, any later \"don't ask again\" approval in settings.local.json loses to the primary ask rule. If pruned before primary rules land, settings.local.json rebuilds without protection."
@@ -27,6 +27,7 @@ for arg in "$@"; do
     echo "Options:"
     echo "  --apply   Apply changes to target files (backs up each file before writing)."
     echo "            Default is dry-run mode (modifies no files)."
+    echo "  --check   Check for offending non-trailing wildcard rules and exit non-zero if found."
     echo "  --help    Show this help message."
     echo ""
     echo "Target Files:"
@@ -39,6 +40,7 @@ for arg in "$@"; do
     echo "  - R-5: Blanket wildcards (gh pr *, gh issue *, gh api *, gh repo *, gh label *, gh project *)"
     echo "  - R-11: GitHub MCP write allows (add_issue_comment, issue_write, sub_issue_write)"
     echo "  - R-20: create-draft-pr.sh rules (removes frozen strings & worktree path wildcards; keeps the 4 canonical path spellings)"
+    echo "  - Non-trailing wildcards: Over-broad rules where * is not in the final position (e.g. *.env*)"
     exit 0
   fi
 done

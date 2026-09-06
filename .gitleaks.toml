@@ -1,0 +1,95 @@
+# .gitleaks.toml — WebJamApps push-time secret scanning configuration (web-jam-tools#658)
+title = "WebJamApps Gitleaks Configuration"
+
+[[rules]]
+id = "google-api-key"
+description = "Google/Gemini API key"
+regex = '''AIza[0-9A-Za-z_-]{35}'''
+keywords = ["AIza"]
+
+[[rules]]
+id = "github-pat"
+description = "GitHub token"
+regex = '''gh[pousr]_[A-Za-z0-9]{36,}'''
+keywords = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"]
+
+[[rules]]
+id = "github-fine-grained-pat"
+description = "GitHub fine-grained PAT"
+regex = '''github_pat_[A-Za-z0-9_]{20,}'''
+keywords = ["github_pat_"]
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9_-]{20,}'''
+keywords = ["sk-ant-"]
+
+[[rules]]
+id = "openai-api-key"
+description = "OpenAI API key"
+regex = '''sk-[A-Za-z0-9]{32,}'''
+keywords = ["sk-"]
+
+[[rules]]
+id = "slack-token"
+description = "Slack token"
+regex = '''xox[baprs]-[A-Za-z0-9-]{10,}'''
+keywords = ["xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-"]
+
+[[rules]]
+id = "deno-deploy-token"
+description = "Deno Deploy token"
+regex = '''\bdd[p]?_[A-Za-z0-9_-]{16,}'''
+keywords = ["ddp_", "dd_"]
+
+[[rules]]
+id = "dropbox-access-token"
+description = "Dropbox access token"
+regex = '''sl\.[A-Za-z0-9_-]{20,}'''
+keywords = ["sl."]
+
+[[rules]]
+id = "aws-access-key-id"
+description = "AWS access key id"
+regex = '''AKIA[0-9A-Z]{16}'''
+keywords = ["AKIA"]
+
+[[rules]]
+id = "google-oauth-secret"
+description = "Google OAuth secret"
+regex = '''GOCSPX-[A-Za-z0-9_-]{20,}'''
+keywords = ["GOCSPX-"]
+
+[[rules]]
+id = "jwt-token"
+description = "JWT token"
+regex = '''\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'''
+keywords = ["eyJ"]
+
+[[rules]]
+id = "mongodb-connection-string"
+description = "MongoDB connection string"
+regex = '''mongodb(?:\+srv)?:\/\/[^\s"']+'''
+keywords = ["mongodb://", "mongodb+srv://"]
+
+[allowlist]
+description = "Global allowlist for WebJamApps repositories"
+regexTarget = "line"
+paths = [
+  '''test/.*''',
+  '''tests/.*''',
+  '''cov_profile/.*''',
+  '''coverage/.*''',
+  '''hooks/.*''',
+  '''node_modules/.*''',
+  '''dist/.*''',
+  '''build/.*''',
+  '''\.husky/.*''',
+  '''package-lock\.json''',
+  '''deno\.lock''',
+  '''\.gitleaks\.toml''',
+]
+regexes = [
+  '''webjam-fixture-ok''',
+]

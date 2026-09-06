@@ -29,7 +29,7 @@ git clone https://github.com/WebJamApps/web-jam-tools.git
 cd web-jam-tools
 ```
 
-To use the Claude Code skills in `skills/`, run `scripts/install-skills.sh` — it
+To use the Claude Code skills in `skills/`, run `deno task install-skills` — it
 symlinks each skill into `~/.claude/skills/` (existing real dirs are backed up,
 never deleted). Runtime/personal files (e.g. `rules.yaml`, `log/`) stay local and
 gitignored.
@@ -93,6 +93,26 @@ this machine — and says nothing when it hasn't.
   back to an mtime+size marker instead of erroring. A native
   PowerShell/Windows port is out of scope for v1.
 
+## Push-time secret scanning (Gitleaks)
+
+`scripts/install-git-secret-hook.sh` installs a push-time secret guard and shared `.gitleaks.toml` configuration across WebJamApps repositories (web-jam-tools#658):
+
+```bash
+# Install in the current repository
+bash scripts/install-git-secret-hook.sh
+
+# Install into a target repository
+bash scripts/install-git-secret-hook.sh --repo ../JaMmusic
+
+# Check for drift
+bash scripts/install-git-secret-hook.sh --check
+```
+
+- Node repos are wired via `.husky/pre-push`.
+- Deno repos are wired via `.git/hooks/pre-push`.
+- When a credential literal is detected in commits being pushed, the push is refused with non-zero exit, naming the file and rule ID while redacting the secret value.
+- To allow intentional test fixtures, include `// webjam-fixture-ok` or locate the test under `test/`.
+
 ## Checks (CI gate)
 
 Every PR runs a CircleCI **quality + security gate** (`.circleci/config.yml`). It
@@ -110,6 +130,7 @@ deno task fmt:check   # formatting (use `deno task fmt` to auto-fix)
 deno task test          # unit tests
 deno task coverage      # unit tests + coverage report (lcov + HTML in cov_profile/)
 deno task coverage:check # unit tests + fail if all-files line coverage < 80% (CI gate)
+deno task gitleaks      # Gitleaks: repository secret scan
 deno task audit         # Trivy: dependency CVEs (HIGH/CRITICAL fail) + secret scan
 deno task sast        # Semgrep: static analysis of src/
 ```
@@ -146,7 +167,7 @@ merge to `main`, the CircleCI `deploy` job (which `requires` the `gate` job, so
 it runs only after the gate is green) runs:
 
 ```bash
-deno deploy --org webjamapps --app web-jam-devotional --prod --token "$DENO_DEPLOY_TOKEN"
+deno deploy . --config deno.devotional.json --prod --token "$DENO_DEPLOY_TOKEN" --non-interactive --json
 ```
 
 `DENO_DEPLOY_TOKEN` is a CircleCI env var — create the token in Deno Deploy →
@@ -174,12 +195,12 @@ filesystem).
 
 **Manual / local deploy (escape hatch).** To push an ad-hoc deployment without
 going through CI (e.g. a hotfix), deploy from your machine with the same CLI. Run
-it from the repo root (the app already knows its entrypoint); it prompts for
+it from the repo root with the target service config; it prompts for
 browser auth on first use and caches the credential in your system keyring, so
 you can omit `--token`:
 
 ```bash
-deno deploy --org webjamapps --app web-jam-devotional --prod
+deno deploy . --config deno.devotional.json --prod
 ```
 
 **Test a single send locally** (no deploy): set the three `GMAIL_*` env vars and

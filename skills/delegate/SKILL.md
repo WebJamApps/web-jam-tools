@@ -52,27 +52,57 @@ one watching a REPL. Drop `--headless` only if Josh himself wants to drive the
 agy REPL interactively. The issue argument is required — a no-arg invocation
 fails with a usage message instead of running anything.
 
+**Non-UI tasks and `--no-land` (web-jam-tools#513):**
+By default, `handle-agy-tasks.sh` checks out the created feature branch into the developer's main repository clone (`~/WebJamApps/<repo>`) after PR creation so UI changes are immediately ready for local inspection and browser testing. For non-UI work (backend, tooling, documentation, and config tasks), pass `--no-land` before the issue argument to skip checking out the branch into the main clone, preventing the local checkout from switching away from `dev`:
+
+```sh
+~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless --no-land "<Repo>#<issue-num>"
+# e.g.
+~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless --no-land "web-jam-tools#567"
+```
+
+**Dispatching `agy` via a thin Haiku subagent (Claude Code):**
+In Claude Code sessions, rather than running `handle-agy-tasks.sh` directly in a blocking Bash tool call in the main session, dispatch the script via a thin Haiku subagent (`Agent` tool with `model: "haiku"`). This offloads the long-running command execution and allows Josh to see status and progress in the session UI.
+
+- **Strict constraint — dispatch-and-report only:** The Haiku subagent wrapper exists strictly to run the dispatch command, wait for it to exit, and report the result (exit status, stdout summary, and PR URL) back to the parent session. It is **forbidden** from reading or analyzing the issue, modifying code files, running tests/linters, or reviewing the resulting PR. `handle-agy-tasks.sh` and the child `agy` instance handle the entire task lifecycle; performing task work in the wrapper duplicates effort and pays twice for the same tokens.
+
+Example subagent prompt for Haiku agy dispatch:
+
+```
+You are a thin dispatch runner.
+
+Task: Run the following command in Bash, wait for completion, and report back the resulting PR URL and status:
+  ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless [--no-land] "<Repo>#<issue-num>"
+
+Strict rules:
+- Dispatch-and-report ONLY.
+- Do NOT read the issue, do NOT edit files, do NOT run tests or linters, and do NOT review the PR.
+- Report back the exact script output, exit status, and created PR URL.
+```
+
 **Default Tier & Bidirectional Delegation Flexibility:**
-Josh defaults to **`Flash High`** (`Gemini 3.6 Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
-- **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session is **forbidden** from executing file edits or running test suites directly for tasks/issues labeled `Flash Med` or `Haiku`. It MUST automatically delegate contained coding tasks down to a `Flash Med` subagent (`invoke_subagent` model `flash` or `handle-agy-tasks.sh`) as its very first tool call. Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
+Josh defaults to **`Flash High`** (`Gemini Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
+- **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session is **forbidden** from executing file edits or running test suites directly for tasks/issues labeled `Flash Med` or `Haiku`. It MUST automatically delegate contained coding tasks down to a `Flash Med` subagent (`handle-agy-tasks.sh` or `invoke_subagent` with `Model: "inherit"`) as its very first tool call. Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
 - **Exception — trivial edits**: the primary session may make the edit directly, without `invoke_subagent`, only when **all** of these hold: it touches **one file**; it changes **no behaviour** (documentation, comment, or a single config value); and it is **under ~20 changed lines**. The session must say, in the same turn, that it is taking the exception and why. "I already have the context", "it would be faster", and "writing the brief costs as much as the work" are **not** exceptions — the three conditions above are the whole test. Rationale: delegation pays when the work is bigger than the brief; below that line the session pays to write a self-contained specification, waits for a round trip, then reviews the result, for an edit smaller than the specification. The three conditions are a mechanical proxy for that, chosen because they are auditable from the outside and a cost estimate is not.
-- **Delegating up (`Flash Med` → `Flash High` / `Sonnet` / `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High`, `Sonnet`, or `Opus`.
+- **Delegating up (`Flash Med` → `Flash High` → `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High` first, and to `Opus` when the work is open-ended design rather than implementation. `Sonnet` is **not** a rung above `Flash High` any more (tier order: Haiku → Flash Med → Sonnet → Flash High → Opus; see `docs/ai-team-playbook.md`) — escalating from `Flash High` to `Sonnet` moves the work *down* a tier and onto the constrained Anthropic budget, so route there only for a named Claude-side capability Flash lacks.
 
 **Setting explicit model chains via `AGY_MODELS`:**
-The default fallback chain runs `Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)`. To target a specific tier directly, set `AGY_MODELS`:
+The default fallback chain runs `Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)`. To target a specific tier directly, set `AGY_MODELS`:
 
 ```sh
 # Force Flash High default:
-AGY_MODELS='Gemini 3.6 Flash (High)' \
+AGY_MODELS='Gemini 3.8 Flash (High)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 
 # Force Flash Med delegation:
-AGY_MODELS='Gemini 3.6 Flash (Medium)' \
+AGY_MODELS='Gemini 3.8 Flash (Medium)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 ```
 
 The value is pipe-separated (model names contain spaces, so pipes — not spaces —
 separate them; a single name needs no pipe). HFS#26 was labeled Flash High but ran on Medium when `AGY_MODELS` was omitted, 2026-07-09.
+
+These model names are **load-bearing, not decorative**: they must match `ALLOWED_AGY_MODELS`'s `displayName` values (defined in `hooks/lib/check_agy_model.ts`) exactly, version token included, and must never be version-scrubbed.
 
 **Headless completion is driven, not one-shot.** agy's `-p` mode can end its
 turn before a long multi-step task is actually finished — it exits 0 with work
@@ -112,6 +142,18 @@ repos (CollegeLutheran, JaMmusic, web-jam-back, AppersonAuto, WebJamSocketCluste
 `web-jam-tools` itself is Deno: swap in `deno.json` "version" and note that its
 bump is enforced automatically by a pre-push hook (`~/.claude/hooks/`), not a rule
 the subagent has to self-police.
+
+### PR-review dispatch nudge (parent-side, before dispatching)
+
+> Before dispatching a subagent to run `/pr-review` (e.g. the Flash-reviews-Sonnet /
+> Sonnet-reviews-Flash cross-model pairing), know that the subagent **cannot** post
+> its finished review itself — Agent-tool subagents don't inherit this session's
+> `permissions.allow` list and dead-end on `gh pr review --comment` with no human
+> present to approve it (harness limitation, not a WebJamApps settings gap; see
+> `skills/pr-review/SKILL.md` Step 3 for the citations). The subagent will write
+> the finished review to a scratch file and hand you back its path — **you** (the
+> orchestrating session) post it via `gh pr review --comment --body-file <path>`
+> once it reports back. Don't wait on the subagent in the meantime.
 
 ### Coupling nudge (parent-side, before dispatching)
 

@@ -40,7 +40,7 @@ not actioned.
 
 Spawn the scan as a cheap subagent based on the host surface:
 - **Claude Code surface:** Spawn via `Agent(subagent_type: "Explore", model: "haiku")`.
-- **Antigravity (`agy`) surface:** Spawn via `invoke_subagent(TypeName: "self", Role: "Memory Cleanup Scanner", Model: "flash")` (or `"flash_lite"`).
+- **Antigravity (`agy`) surface:** Spawn via `invoke_subagent(TypeName: "self", Role: "Memory Cleanup Scanner", Model: "inherit")`.
 
 The subagent does read-only work only: it reads files, checks issue/PR status (`gh issue view <n>`, `gh pr view <n>`), verifies git commit dates (`git log -1 --format=%ad --date=short -- <file>`), performs dangling-link slug diffs, and returns findings. **It must not write, edit, or delete anything.**
 
@@ -120,7 +120,7 @@ Only after approval, and only for approved rows:
 
 1. **Execution surface:** The scan subagent NEVER writes. Phase 3 edits may be applied directly in the parent session OR by dispatching a dedicated **Writer Subagent**:
    - **Claude Code surface:** Dispatch writer subagent via `Agent(model: "sonnet")` or `Agent(model: "haiku")`.
-   - **Antigravity (`agy`) surface:** Dispatch writer subagent via `invoke_subagent(TypeName: "self", Role: "Memory Cleanup Writer", Model: "flash_med")` (or `"flash"`).
+   - **Antigravity (`agy`) surface:** Dispatch writer subagent via `invoke_subagent(TypeName: "self", Role: "Memory Cleanup Writer", Model: "inherit")`.
    The parent session provides the writer subagent with a fully specified list of approved edits (exact file paths, target lines/files to delete or modify, and preservation text).
 
 2. **Repo files are special (surfaces #3/#4/#5 — per-repo `CLAUDE.md`/`AGENTS.md` and `/home/joshua/WebJamApps/web-jam-tools/docs/cross-ai-rules.md`):** never leave these edits dirty in a working tree. For each affected repo: check `git status -sb` first, create a feature branch off `dev` (stash/restore if the checkout is on an unrelated branch), bump the repo's semver, commit, push, and open a **draft PR** to `dev` — Josh reviews and merges. All other surfaces (memory dirs, Dropbox task queues) are edited in place.
@@ -144,7 +144,7 @@ Only after approval, and only for approved rows:
 - **`user` / `feedback` memories never age out and are NEVER merge candidates**, regardless of index file count. Touch them only on a clear contradiction Josh confirms.
 - **Inbound Link Protection.** Mandatory grep for inbound `[[link]]` references before proposing any `delete` or `merge`. Pair with preservation edits folding surviving facts into a linked memory.
 - **Empirical Evidence Required.** Staleness or closure claims must cite empirical command/SHA evidence (`git log`, `gh issue/pr view`). Statements lacking evidence are omitted. Clean verdicts must report the exact verification command.
-- **Dual Surface Compatibility.** Fully compatible with Claude Code (`Agent` with `haiku`/`sonnet`) and Antigravity (`invoke_subagent` with `flash`/`flash_med`). All paths specified as explicit home paths.
+- **Dual Surface Compatibility.** Fully compatible with Claude Code (`Agent` with `haiku`/`sonnet`) and Antigravity (`invoke_subagent` with `Model: "inherit"`). All paths specified as explicit home paths.
 - **Stamp on every approved run**, even a zero-action one, so the daily reminder clears.
 
 ## Triggering

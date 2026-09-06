@@ -44,7 +44,7 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 # Resolve this hook's REAL directory (it is installed as a symlink into
 # ~/.claude/hooks, so readlink -f is required) to find the shared normalizer.
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-c=$(CMD_FOR_PY="$cmd" deno run --allow-env "$HOOK_DIR/lib/normalize_command.ts" 2>/dev/null) || true
+c=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/normalize_command.ts" 2>/dev/null) || true
 if [ -z "$c" ]; then
   # Deno unavailable or crashed: fall back to the old collapse so the
   # guard still fires on unambiguous cases rather than silently no-op'ing.

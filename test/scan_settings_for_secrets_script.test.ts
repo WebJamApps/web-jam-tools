@@ -12,6 +12,7 @@
 // rest.
 
 import { assertEquals } from "@std/assert";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 const SCRIPT_PATH = new URL("../scripts/scan-settings-for-secrets.sh", import.meta.url).pathname;
 
@@ -42,7 +43,10 @@ async function writeFixture(name: string, contents: unknown): Promise<string> {
   return path;
 }
 
-const FAKE_GOOGLE_KEY = "AIza" + "B".repeat(35);
+// Varied, not repeated — hooks/lib/detect_credential_literal.ts's
+// synthetic-value heuristic would otherwise auto-suppress an 8+ run of the
+// same character, defeating these "must be detected" fixtures.
+const FAKE_GOOGLE_KEY = "AIza" + variedFakeBody(35, 30);
 
 Deno.test("a clean settings.json (no secrets) passes", async () => {
   const path = await writeFixture("settings.json", {

@@ -18,15 +18,15 @@
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
-#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--part-of] [--no-close] [--dry-run] \
+#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--title TEXT] [--part-of] [--no-close] [--dry-run] \
 #       [--update] \
 #       [--no-close-reason TEXT | --no-close-reason-file PATH] \
 #       [--summary TEXT | --summary-file PATH] \
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
-#   --author        REQUIRED. e.g. "Claude Code — Opus", "agy — Gemini 3.6 Flash
-#                   (Medium)". Lands in the footer so Josh can track per-model
+#   --author        REQUIRED. e.g. "Claude Code — Opus", "agy — Gemini Flash
+#                   (Medium)", "Claude Code — Sonnet 5". Lands in the footer so Josh can track per-model
 #                   quality. MUST name a model on the ROSTER list maintained near
 #                   the top of this script (web-jam-tools#190) — models routinely
 #                   confabulate their own checkpoint name (JaMmusic#1212: a Gemini
@@ -46,6 +46,8 @@
 #   --part-of       Opt-in flag: DON'T close the issue on merge (emits `Part of #N`).
 #                   Use only for a partial PR or a standing run-log/epic issue.
 #   --closes        Deprecated no-op (closing is now the default); still accepted.
+#   --title TEXT    Optional PR title. Sets the title verbatim and overrides every other
+#                   source (issue title or commit subject).
 #   --issue N       Issue number. Normally parsed from the branch name
 #                   (<lane>/<issue#>-<slug>); use this only as a fallback.
 #                   OPTIONAL: no issue anywhere ⇒ PR opens without a Closes line
@@ -119,7 +121,18 @@
 # string, not a bypass of the roster check. handle-agy-tasks.sh sets this to
 # the exact "agy — <model>" string for the model it actually invoked, so a
 # headless or interactive agy run's PR footer can never depend on the model
-# correctly naming itself (web-jam-tools#190).
+# correctly naming itself (web-jam-tools#190). Because the roster is
+# deliberately UNVERSIONED while the agy model chain's display names carry a
+# version token, handle-agy-tasks.sh strips that token before setting this —
+# an unstripped name can never clear the substring roster match, which left
+# agy no way to open a PR through this script at all (web-jam-tools#912).
+#
+# --check-author "<name>"
+#                   READ-ONLY roster probe: exits 0 if <name> would clear the
+#                   roster check, non-zero (with the usual refusal message) if
+#                   not. Touches no git state and opens nothing. Lets a caller
+#                   (handle-agy-tasks.sh) verify an author up front instead of
+#                   maintaining its own copy of the roster (web-jam-tools#912).
 #
 # --summary and --test-plan are REQUIRED (web-jam-tools#77), each either inline or via
 # its *-file counterpart: the script refuses to open a PR whose description is empty or
@@ -136,7 +149,8 @@
 # *-file flag are given; body text contains raw HTML-like tags outside backticks
 # (GitHub strips them silently — backtick them); current branch is dev/main;
 # working tree dirty; the repo has no `dev` branch; a resolved issue is
-# missing/closed; --part-of is passed without a resolvable issue; or --update is
+# missing/closed; an issue is labeled 'Josh' without --part-of/--no-close
+# (web-jam-tools#848); --part-of is passed without a resolvable issue; or --update is
 # passed but the current branch has no existing open PR to update.
 
 set -euo pipefail
@@ -152,8 +166,8 @@ usage() {
 # format is "<tool> — <model>" (e.g. "Claude Code — Sonnet 5" — the tool name
 # already says "Claude", so the model half doesn't repeat it).
 ROSTER=(
-  "Gemini 3.6 Flash (Medium)"
-  "Gemini 3.6 Flash (High)"
+  "Gemini Flash (Medium)"
+  "Gemini Flash (High)"
   "Claude Sonnet 5"
   "Claude Haiku 4.5"
   # Unversioned on purpose (Josh, 2026-07-26): the roster exists to stop a
@@ -181,6 +195,7 @@ author_roster_check() {
 
 AUTHOR=""
 ISSUE=""
+TITLE=""
 SUMMARY=""
 TEST_PLAN=""
 TEST_EVIDENCE=""
@@ -214,6 +229,17 @@ while [ $# -gt 0 ]; do
     --update)
       UPDATE=1
       shift 1 ;;
+    --check-author)
+      # web-jam-tools#912 — read-only roster probe: exits 0 if the given
+      # author would clear author_roster_check, non-zero (printing the usual
+      # refusal) if not. No git access, no push, no PR. Exists so
+      # handle-agy-tasks.sh can verify the author it is about to force is one
+      # this script will accept, WITHOUT copying the ROSTER into a second
+      # place where the two could drift apart.
+      [ $# -ge 2 ] || { echo "ERROR: --check-author requires a value." >&2; exit 1; }
+      author_roster_check "$2"
+      echo "OK: '$2' names a model on the roster."
+      exit 0 ;;
     --closes)
       if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
         ISSUE="$2"
@@ -222,11 +248,12 @@ while [ $# -gt 0 ]; do
         shift 1
       fi
       ;;
-    --author|--issue|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file|--no-close-reason|--no-close-reason-file)
+    --author|--issue|--title|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file|--no-close-reason|--no-close-reason-file)
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
       case "$1" in
         --author)              AUTHOR="$2" ;;
         --issue)               ISSUE="$2" ;;
+        --title)               TITLE="$2" ;;
         --summary)             SUMMARY="$2"; HAS_SUMMARY=1 ;;
         --test-plan)           TEST_PLAN="$2"; HAS_TEST_PLAN=1 ;;
         --test-evidence)       TEST_EVIDENCE="$2"; HAS_TEST_EVIDENCE=1 ;;
@@ -315,7 +342,11 @@ if [ -z "$ISSUE" ]; then
     exit 1
   fi
   echo "No issue resolved — opening the PR without a Closes line."
-  PR_TITLE="$(git log -1 --format=%s)"
+  if [ -n "$TITLE" ]; then
+    PR_TITLE="$TITLE"
+  else
+    PR_TITLE="$(git log -1 --format=%s)"
+  fi
 else
   TARGET_OWNER_REPO=""
   ISSUE_NUM=""
@@ -363,7 +394,46 @@ else
     echo "ERROR: issue $FORMATTED_ISSUE is $ISSUE_STATE, not OPEN." >&2
     exit 1
   fi
-  PR_TITLE="$("${GH_ISSUE_CMD[@]}" --json title --jq .title)"
+
+  LABELS_ERR=$(mktemp)
+  if ! RAW_LABELS="$("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>"$LABELS_ERR")"; then
+    FETCH_ERR=$(cat "$LABELS_ERR")
+    rm -f "$LABELS_ERR"
+    echo "ERROR: failed to fetch labels for issue $FORMATTED_ISSUE (via gh): $FETCH_ERR" >&2
+    exit 1
+  fi
+  rm -f "$LABELS_ERR"
+  if [ -n "$RAW_LABELS" ]; then
+    mapfile -t ISSUE_LABELS <<< "$RAW_LABELS"
+  else
+    ISSUE_LABELS=()
+  fi
+
+  # --- refuse closing an issue labeled 'Josh' (web-jam-tools#848) ---
+  # Issues labeled 'Josh' are manual human steps / verification runs that no
+  # agent can close. A PR branching off a manual verification task to provide
+  # incidental fixes or tooling improvements must pass --part-of (or --no-close)
+  # to avoid proposing to auto-close the human task on merge.
+  HAS_JOSH_LABEL=0
+  for l in "${ISSUE_LABELS[@]}"; do
+    if [ "$l" = "Josh" ]; then
+      HAS_JOSH_LABEL=1
+      break
+    fi
+  done
+  if [ "$HAS_JOSH_LABEL" -eq 1 ] && [ "$PART_OF" -ne 1 ] && [ "$NO_CLOSE" -ne 1 ]; then
+    echo "ERROR: issue $FORMATTED_ISSUE carries the 'Josh' label (manual human task) and cannot be closed by an agent PR (web-jam-tools#848)." >&2
+    echo "       Pass --part-of to link your work as a contribution without auto-closing the issue." >&2
+    exit 1
+  fi
+
+  if [ -n "$TITLE" ]; then
+    PR_TITLE="$TITLE"
+  elif [ "$PART_OF" -eq 1 ]; then
+    PR_TITLE="$(git log -1 --format=%s)"
+  else
+    PR_TITLE="$("${GH_ISSUE_CMD[@]}" --json title --jq .title)"
+  fi
 fi
 
 # --- WARN (don't fail) on a lane mismatch between branch prefix and issue label ---
@@ -376,7 +446,6 @@ case "$BRANCH_LANE" in
   *)      EXPECT_LANES="" ;;
 esac
 if [ -n "$EXPECT_LANES" ] && [ -n "$ISSUE" ]; then
-  mapfile -t ISSUE_LABELS < <("${GH_ISSUE_CMD[@]}" --json labels --jq '.labels[].name' 2>/dev/null || true)
   ISSUE_LANES=()
   for l in "${ISSUE_LABELS[@]}"; do
     case "$l" in opus|agy|fable) ISSUE_LANES+=("$l") ;; esac

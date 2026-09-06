@@ -11,6 +11,11 @@ import {
   findUnresolvableIssuePointers,
   stripCodeAndQuotes,
 } from "../hooks/lib/detect_unresolvable_issue_pointers.ts";
+import {
+  extractEntryText,
+  selectLastAssistantEntry,
+} from "../hooks/lib/select_transcript_entry.ts";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 Deno.test("normalize_command helper", () => {
   const raw = "git commit -m 'feat: add feature' --body 'some body text'";
@@ -34,10 +39,14 @@ Deno.test("detect_bare_issue_refs helper", () => {
 });
 
 Deno.test("detect_credential_literal helper", () => {
-  const matchKey = findCredentialLiteral("AIzaSyA123456789012345678901234567890123");
+  // Varied, not sequential/repeated — the credential detector's
+  // synthetic-value heuristic would otherwise auto-suppress a run of 8+
+  // sequential digits (the original literal here was "123456789012345...",
+  // itself exactly such a run), defeating this "must be detected" case.
+  const matchKey = findCredentialLiteral("AIza" + variedFakeBody(35, 90)); // webjam-fixture-ok
   assertEquals(matchKey, "Google/Gemini API key");
 
-  const matchExport = findCredentialLiteral('export MY_API_KEY="secret_value_123"');
+  const matchExport = findCredentialLiteral('export MY_API_KEY="secret_value_123"'); // webjam-fixture-ok
   assertEquals(matchExport, "generic KEY/TOKEN/SECRET/PASSWORD export with a literal value");
 
   const matchVar = findCredentialLiteral('export MY_API_KEY="$MY_VAR"');
@@ -50,7 +59,7 @@ Deno.test("detect_credential_literal helper", () => {
   assertEquals(matchPlaceholder2, null);
 
   const matchUrlToken = findCredentialLiteral(
-    'curl "https://circleci.com/api/output?token=5e47bc7616f91ca5398fad774a186ae3957102a6"',
+    'curl "https://circleci.com/api/output?token=5e47bc7616f91ca5398fad774a186ae3957102a6"', // webjam-fixture-ok
   );
   assertEquals(matchUrlToken, "URL-embedded token/key/secret parameter with a literal value");
 
@@ -60,27 +69,37 @@ Deno.test("detect_credential_literal helper", () => {
   assertEquals(matchUrlPlaceholder, null);
 
   // --- MongoDB connection string tests ---
-  // Must NOT flag (no userinfo, local host):
+  // A mongo URI is only a credential LITERAL when it carries userinfo
+  // (`user[:pass]@`). A bare host — local OR remote — names infrastructure,
+  // not a secret, and must NOT flag regardless of where it points.
   assertEquals(findCredentialLiteral("mongodb://localhost:27018/test_db"), null);
   assertEquals(findCredentialLiteral("mongodb://localhost:27019/another_db?replicaSet=rs0"), null);
   assertEquals(findCredentialLiteral("mongodb://127.0.0.1:27017"), null);
   assertEquals(findCredentialLiteral("mongodb://localhost"), null);
+  assertEquals(findCredentialLiteral("mongodb://cluster.example.invalid:27017/my_db"), null);
 
-  // Must STILL flag:
+  // A userinfo-bearing URI must STILL flag, whether the host is remote OR
+  // local. Realistic (non-reserved-host, non-generic-standin-userinfo)
+  // values, not "user:password@...example.invalid" — those specific shapes
+  // are now independently caught by the synthetic-value heuristic itself
+  // (proven in test/detect_credential_literal.test.ts), so a "must still
+  // flag" case here needs a value the heuristic does NOT cover.
   assertEquals(
-    findCredentialLiteral("mongodb+srv://user:password@cluster.example.invalid/my_db"),
+    findCredentialLiteral(
+      "mongodb+srv://svcAcct7x:" + variedFakeBody(20, 91) + "@prodcluster1.realdomain.org/my_db",
+    ), // webjam-fixture-ok
     "MongoDB connection string",
   );
   assertEquals(
-    findCredentialLiteral("mongodb://user:password@localhost:27017/my_db"),
+    findCredentialLiteral(
+      "mongodb://svcAcct7x:" + variedFakeBody(20, 92) + "@localhost:27017/my_db",
+    ), // webjam-fixture-ok
     "MongoDB connection string",
   );
   assertEquals(
-    findCredentialLiteral("mongodb+srv://user:password@localhost.attacker.example.invalid/my_db"),
-    "MongoDB connection string",
-  );
-  assertEquals(
-    findCredentialLiteral("mongodb://cluster.example.invalid:27017/my_db"),
+    findCredentialLiteral(
+      "mongodb+srv://svcAcct7x:" + variedFakeBody(20, 93) + "@localhost.attacker-corp.net/my_db",
+    ), // webjam-fixture-ok
     "MongoDB connection string",
   );
 });
@@ -104,4 +123,28 @@ Deno.test("detect_unresolvable_issue_pointers helper", () => {
   const cleanText = "This issue stands alone without pointer phrases.";
   assertEquals(findUnresolvableIssuePointers(cleanText), []);
   assertEquals(stripCodeAndQuotes('"quote" `code`').trim(), "");
+});
+
+Deno.test("select_transcript_entry helper", () => {
+  const entries = [
+    { type: "user", message: { role: "user", content: "hello" } },
+    {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+      },
+    },
+    {
+      type: "assistant",
+      isSidechain: true,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "subagent message" }],
+      },
+    },
+  ];
+  const selected = selectLastAssistantEntry(entries);
+  assertNotEquals(selected, null);
+  assertEquals(extractEntryText(selected), "real reply");
 });

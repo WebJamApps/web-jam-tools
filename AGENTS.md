@@ -3,172 +3,15 @@
 This file contains instructions and context for every AI agent (Claude Code, agy/Antigravity, and
 any other assistant) working in this workspace.
 
-<!-- CROSS-AI-HARD-RULES-START -->
-## OPERATIONAL HARD RULES (apply to any AI taking action on Josh's behalf)
+## Cross-AI hard rules
 
-- CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
-- EMAIL: always DRAFT, never send. Save as Gmail draft for Josh's review.
-- FILES: never create a version-suffixed copy. Edit the master.
-- Never contact venues, churches, or other third parties directly — Josh handles all outreach.
-- **STATE VERIFICATION**: Before any suggestion, to-do item, or "ready for you" claim about a
-  PR/issue/CI/deploy, run a fresh liveness check in that same turn (e.g.
-  `gh pr view --json state,mergedAt` / `gh issue view --json state`). If state ≠ OPEN, it is done:
-  drop it silently. `mergeable: UNKNOWN/null` on a PR usually means merged/closed — never read it as
-  "the API is slow" and never advise merging without confirming state=OPEN. An inconclusive check is
-  not a completed check: use a definitive fallback (local `git merge-tree`, `statusCheckRollup`) or
-  say plainly that you could not verify — never hand Josh a verification step the agent can run
-  itself.
-- **ONE REPO, ONE SESSION**: never edit a repo another AI session is actively working (Josh,
-  2026-07-11). Before branching or editing, check `git status -sb` — a non-`dev` branch or dirty
-  tree means another session likely has the repo in flight. Hand the change to that session/lane
-  (route via Josh) or ask Josh first. A separate worktree or non-colliding branch does NOT make
-  concurrent edits OK — parallel semver bumps and surprise PRs still collide.
-- **MAX 2 CONCURRENT WORKSTREAMS PER TERMINAL**: Two live background jobs (e.g. a subagent + a
-  headless agy dispatch) is the cap. When a THIRD thread (new discussion, dispatch, or background
-  job) starts in the same session, the agent must WARN Josh first and propose a separate terminal —
-  never comply silently. Origin: 2026-07-16, Claude A froze mid-permission-prompt while running a
-  Sonnet subagent + a headless agy dispatch plus a new discussion; recovery required keystroke
-  injection from another session.
-- **ISSUE CITATIONS ALWAYS CARRY REPO + NUMBER + TITLE**: Every mention of a GitHub issue or PR — in
-  chat, in a commit message, in an issue/PR body, in a memory or queue file — must be written as
-  `repo#number "title"`, e.g.
-  `web-jam-back#998 "email subject or title still not easy for  me to see its target venue"`. **`#`
-  followed by digits is an ILLEGAL token in anything Josh reads.** There is no exception for a
-  repeat mention, a list item, a parenthetical, "the one I just named", or a closing one-line offer.
-  If you don't know the title, look it up (`gh issue view N --repo R --json title`) before writing
-  the sentence — never emit a bare number as a placeholder. If the full citation is too verbose,
-  shorten to the TITLE, never to the number. The violation is almost always the LAST sentence of a
-  message (the "want me to do X?" offer, written after the careful part), so re-read the finished
-  message and check every `#` before sending. Josh has asked for this five times (2026-07-24 →
-  2026-07-29); he reads these on a phone with many numbers in flight and a bare number costs him a
-  lookup every time.
-- **NO AGENT CONNECTS A NEW ACCOUNT, CREDENTIAL, OR MCP SERVER WITHOUT AUTHORIZATION:** No agent
-  adds a connector, account, credential, or MCP server to any Claude or Flash surface without Josh's
-  explicit authorization naming it. Discovering that something _could_ be connected is never
-  permission to connect it. This applies to new OAuth grants, new MCP servers, new API tokens, and
-  widening the scope of an existing connection. Origin (2026-07-30, Josh): _"it should NEVER have
-  something else that I have not authorized."_ See web-jam-tools#324 "No agent connects a new
-  account, credential, or MCP server without Josh's explicit authorization — add the rule and audit
-  where it can be mechanically enforced" for the enforcement-surface audit.
-- **NO AI CLOSES OR REOPENS A GITHUB ISSUE AUTONOMOUSLY:** No agent may close (`gh issue close`) or
-  reopen (`gh issue reopen`) any GitHub issue without Josh's explicit authorization in chat naming
-  that specific issue. Always ask Josh for permission first before executing any issue close or reopen
-  command.
-- **STANDING AGENT CREDENTIAL CLASSIFICATION RULE (MACHINE-CONSUMED VS HUMAN-CONSUMED):** Whenever
-  an agent encounters or generates a new credential, account identifier, or token, the agent must
-  **STOP and prompt Josh to classify it** as either machine-consumed (e.g. `GITHUB_TOKEN`,
-  `GEMINI_API_KEY`, `HEROKU_API_KEY`, `CIRCLECI_TOKEN`, `DENO_DEPLOY_TOKEN` stored in shell rc or
-  secret store) or human-consumed (e.g. `webjam.claude@gmail.com` stored in KeePass only) BEFORE
-  storing, exporting, or configuring it in any shell profile, `.env` file, or configuration file.
-  Human-consumed credentials belong in KeePass only and must never be exported to shell profiles or
-  stored in application configuration files (web-jam-tools#344 "Human-only credentials register and
-  guard hook").
-- **NO AI DELETES OR FORCE-PUSHES A REMOTE BRANCH, EVER, WITHOUT AN EXPLICIT IMPERATIVE FROM JOSH
-  NAMING THAT BRANCH.** "The PR is merged" is NOT such an instruction — it states a fact, it does
-  not authorize deleting anything. Local branch cleanup after a merge (deleting a LOCAL branch with
-  `git branch -d`/`-D`, `git fetch --prune` to prune stale local remote-tracking refs) remains
-  permitted and unchanged — this rule narrows that standing post-merge cleanup habit to local
-  branches only, it does not remove it or require re-approval for it. Enforced by three independent
-  layers: a harness `permissions.deny` block on the ways `git push`/`git branch` can delete or
-  clobber a remote ref (`--delete`/`-d`, empty-source colon refspecs,
-  `--force`/`-f`/`--force-with-lease`, `--mirror`, `--prune`, and `git branch -D`/`--delete --force`
-  against a `remotes/` ref — installed via `scripts/install-hooks.sh` in this repo), a GitHub
-  ruleset restricting deletions on the branches agents create (`claude/**`, `agy/**`, `dev`, `main`
-  — Josh-only UI work, see web-jam-tools#308 "Remote branches can be deleted by an agent with no
-  authorization — advisory guard does not block (3 layers: deny rules, GitHub ruleset, HARD
-  RULES)"), and this HARD RULE. Origin: 2026-07-29, an agent deleted
-  `claude/cross-ai-rules-issue-citation-hard-rule` from `web-jam-tools` immediately after Josh
-  merged web-jam-tools#307 "Add ISSUE CITATIONS hard rule to operational rules" — Josh had only said
-  the PR was merged, never authorized a deletion, and the `PreToolUse` guard that fired was advisory
-  text an agent could rationalize past.
-- **REAPER RECORDING SESSIONS & RATE LIMIT SAFETY:** When running REAPER music recording sessions
-  via Reaper MCP:
-  1. REAPER DAW, audio interfaces, recorded WAV audio stems, and `.RPP` project files live locally
-     on the user's computer and are 100% safe from rate limit interruptions.
-  2. Google does NOT broadcast an advance warning gauge prior to hitting temporary hourly rate
-     limits (`429 Rate Limit Exceeded`).
-  3. Use **`Flash Med`** for routine, high-volume REAPER operations (`transport_play`,
-     `transport_stop`, `track_create`, volume/pan tweaks, clip splits) to preserve hourly token
-     headroom.
-  4. Reserve **`Flash High`** for complex multi-track creative mixing, sidechain routing, and
-     intricate composition passes.
-  5. Always execute a project save (`project_save`) before running large multi-step automated
-     sequences.
-- **MAIN BRANCH PRs MUST ORIGINATE FROM DEV:** Across all 8 active WebJamApps repos, any PR
-  targeting `main` must originate from `dev` as its head branch (`dev` → `main`). Feature branches
-  (`gemini/*`, `claude/*`, `feat/*`, `fix/*`) must target `dev` as their base branch. Direct PRs
-  from feature branches to `main` are strictly forbidden and blocked by CI and script guardrails
-  (web-jam-tools#351 "all 8 active github repos - their main branch only accepts PR requests from
-  their dev branch").
-- **MULTI-REPO ISSUES STAY OPEN UNTIL ALL REPOS ARE COMPLETE:** When an issue explicitly covers
-  multiple repositories (e.g. "all 8 active github repos"), no single PR in one repository may pass
-  `--closes` or claim the issue is completed. PRs in individual repos must use `--part-of` so the
-  tracking issue remains OPEN until the final repository's PR is merged.
-- **POST-MERGE MANUAL STEPS AND THE `--no-close` FLAG:** When an issue has any acceptance criterion
-  requiring a manual step after the merge — an installer run, a session restart, a scheduled/cron
-  cycle, a prod deploy, a third-party dashboard change — the PR must use `--no-close` (with an
-  optional reason via `--no-close-reason "<text>"` or `--no-close-reason-file PATH`) when opening or
-  updating the PR using `scripts/create-draft-pr.sh`. The issue is closed by hand once those
-  post-merge steps are verified.
-  - **PR-open-time test:** Before opening a PR, check: _does any acceptance criterion require
-    something an implementing agent cannot do from a branch?_ If yes, pass `--no-close`.
-  - **Verification command:** To verify that a PR does not close its linked issue, run:
-    ```bash
-    gh pr view <N> --repo WebJamApps/<repo> --json closingIssuesReferences
-    ```
-    An **empty array** (`[]`) in `closingIssuesReferences` is the only valid proof that GitHub will
-    not auto-close the issue on merge. Body text prose alone is NOT proof, because GitHub parses the
-    keyword rather than prose.
-- **THE `Blocked` LABEL IS CANONICAL — NATIVE ISSUE DEPENDENCIES DO NOT REPLACE IT.** Josh wants
-  BOTH: native GitHub issue-dependency links (the real relationship between issues) AND the
-  `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) as the
-  at-a-glance signal that makes an unworkable issue obvious in a plain list view without opening
-  each issue. They do different jobs: use a native dependency whenever a **specific issue** blocks
-  the work — it names which one, renders in the Issues list, and clears itself on close. Use the
-  `Blocked` label whenever the work is unworkable **for any reason**, including the many with no
-  issue to point at (a vendor, a credential Josh must generate, a physical action). Native
-  dependencies cannot express that case at all, which is why the label is not redundant. No agent
-  may prune `Blocked` from `labels.yaml` (or delete it live) on the theory that native dependencies
-  made it redundant — that is exactly what happened once already: `blocked` (lowercase) was removed
-  in commit 7d2523d as part of a nine-label prune shipped for web-jam-tools#300, justified as "->
-  native issue dependencies," and Josh never actually agreed to that one — it rode along in a batch
-  whose headline was about priority labels. web-jam-tools#329 "Restore the Blocked label as
-  canonical in labels.yaml — it was pruned in a batch Josh never ratified, and he wants it alongside
-  native dependencies" restored it. See `skills/fix-labels/labels.yaml`'s `Blocked` entry for the
-  full rationale.
-- **RESTRICTED LAPTOP DROPBOX SCOPE & SECURITY GUARDRAILS:** Access to `~/Dropbox` on the laptop is
-  restricted to three approved top-level folders: `joshandmariamusic`, `web-jam-llms`, and
-  `mark_henrickson`. All other top-level `~/Dropbox/*` folders — including `Dropbox/WebJamApps` —
-  are explicitly denied in `permissions.deny` via `install-hooks.sh` for file tools (`Read`, `Edit`,
-  `Write`) and Dropbox MCP mutation tools (`delete`, `move`). Note: Deny rules on file tools do not
-  constrain raw Bash commands (which use string-pattern matching for Bash permission rules), serving
-  as an operational guardrail rather than an absolute security boundary (web-jam-tools#321 "Add the
-  laptop Dropbox deny list, verify Flash confinement, and document the restricted scope").
-- **APPROVAL IS PER GATE.** Approval of a design is not approval to file the tracking issue.
-  Approval of an issue is not approval to dispatch. Each gate needs its own imperative from Josh
-  naming that step. An agent writes the issue body to a file (or shows it in chat) and waits; the
-  `gh issue create` call (or MCP `issue_write` create) follows only the words "file it" (or
-  equivalent). A dispatch (spawning a subagent, an agy/Flash handoff) follows only an explicit
-  instruction to dispatch. A single "go" is ambiguous across gates and must never be read as
-  covering more than one — the expensive, hard-to-reverse half (issue noise, spawned tokens) is
-  always the later gate, so collapsing gates fails in the direction that costs the most. Origin:
-  2026-08-07, during web-jam-tools#426 "/handle-gmails: add recognizers that propose the follow-up
-  work an email implies, plus a per-session PR that teaches the skill what it learned" design, an
-  agent treated Josh's single approval of a three-item plan as covering the design, the issue
-  filing, AND the dispatch — announcing "filing the tracking issue, then dispatching to Sonnet"
-  before either gate had its own go-ahead. Josh stopped it at the draft stage. See web-jam-tools#433
-  "gate issue creation and dispatch mechanically, and write the approval-is-per-gate rule" for the
-  mechanical half of this fix (ask-rules on `gh issue create` and MCP `issue_write` create,
-  installed via `scripts/install-hooks.sh`).
-- **ACCURATE TEST ASSERTIONS FOR NEWLY IMPLEMENTED FEATURES:** When writing unit tests for new
-  features or CLI flags (such as mode-modifying flags like `--update` or `--no-close`), test
-  assertions must explicitly verify the specific mode indicator or feature-specific output (e.g.
-  asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than
-  relying only on assertions shared with default paths.
-- **DESIGN WORK RUNS THROUGH `/issue-design`:** Design work — options, trade-offs, decisions worth
-  recording — does not happen in plain chat. The moment a conversation turns into design, invoke
-  `/issue-design` and work inside it.
-<!-- CROSS-AI-HARD-RULES-END -->
+The cross-AI hard rules that bind every agent on every surface are NOT duplicated here. They live
+in exactly one file: `docs/cross-ai-rules.md` in the **`web-jam-tools` repository**, which normally
+sits alongside this repository — `../web-jam-tools/docs/cross-ai-rules.md`, and on Josh's laptop
+`/home/joshua/WebJamApps/web-jam-tools/docs/cross-ai-rules.md`.
+
+Read that file before acting. If you cannot find it, STOP and say so — do not proceed without the
+rules and do not reconstruct them from memory or from this file.
 
 ## Read also
 
@@ -181,6 +24,9 @@ any other assistant) working in this workspace.
   front-end half of coupled work.
 - [docs/playwright-mcp.md](docs/playwright-mcp.md) — setup and operational guidelines for using
   Playwright MCP server (`@playwright/mcp`) to debug production websites.
+- [docs/agy-hooks.md](docs/agy-hooks.md) — the agy (Antigravity/Flash) PreToolUse/PostToolUse hook
+  contract as measured, the translation shim that makes hooks actually enforce there, and the
+  Antigravity Gmail MCP setup + send/delete fence built on top of it.
 
 ## Workspace Overview
 
@@ -199,11 +45,33 @@ any other assistant) working in this workspace.
 4. **No Merging to DEV:** AI agents are **NOT** allowed to merge PR changes to the `dev` or `main`
    branches. The user acts as the mandatory human-in-the-loop reviewer and is responsible for all
    merges.
+5. **Mandatory Isolated Worktrees & Clean Local Dev Discipline:** In `web-jam-tools`, all task work, bug fixes, investigation repros, and file edits MUST be performed strictly inside an isolated git worktree (e.g. `/tmp/agy-worktrees/...` or `.claude/worktrees/...`). Agents are STRICTLY FORBIDDEN from editing files, staging changes, creating branches, committing, or leaving uncommitted edits directly in the main clone (`/home/joshua/WebJamApps/web-jam-tools`). The main local clone for `web-jam-tools` MUST always remain checked out on `dev` with a clean working tree (note: this rule is specific to `web-jam-tools` and differs from UI projects).
+6. **PreToolUse Hook Path Fencing:** When implementing PreToolUse path/repo fencing hooks, do not treat a non-git working directory as an implicit trusted repository root. Fail closed on non-git directories so writes to sensitive paths (such as `~/.claude/CLAUDE.md`) remain blocked even when a session is opened at home or outside a git repository.
+7. **Multi-Repo Dispatch Target Repo Override:** `scripts/handle-agy-tasks.sh` supports `--repo <Name>` and `AGY_TARGET_REPO=<Name>` to dispatch an issue filed in one repository (e.g. `web-jam-tools#505`) against a different target working repository (e.g. `JaMmusic`), setting `REPO_DIR` and worktree paths to that target repo while keeping the branch name derived from the issue.
+8. **Non-UI Task Land Opt-Out (`--no-land`):** `scripts/handle-agy-tasks.sh` supports `--no-land` to skip checking the feature branch out into the developer's main repository clone after PR creation, keeping non-UI work (backend, docs, tooling, config) from moving the local checkout away from `dev`.
+9. **Skill Renames & Stale Symlink Pruning:** `skills/issue-design/` is renamed to `skills/design-issue/` and `skills/draft-issue/` is renamed to `skills/file-issue/`. `deno task install-skills` (`scripts/install-skills.ts`) saves skill backups outside the scanned skill directories (in `skills-backups/`, automatically pruning backups older than 14 days), migrates pre-existing in-place `.bak` copies out of skills directories, and prunes dangling symlinks in both `~/.claude/skills` and `~/.gemini/config/plugins/webjam-tasks/skills`.
+10. **Pre-Existing Hook Permission & Git Index Immutability:** Do not stage or commit permission mode changes (`100644` → `100755`) on pre-existing hook files (`hooks/agy-hook-shim.sh`, `hooks/agy-model-guard.sh`, `hooks/block-agy-gmail-send-delete.sh`) unless the issue is explicitly about modifying those hook files. When local work requires executing shell scripts with `chmod +x`, ensure the git index mode matches `origin/dev` before committing by verifying `git diff origin/dev...HEAD --summary` carries no unrelated file mode changes.
+11. **Plan Table Dependency Key Namespacing & Pre-Validation:** In plan filing tools (`deno task design:file-plan` / `src/design-issue/file_plan.ts`), dependency-resolution registries must store 1-based position indices, explicit plan `id`s, issue titles, and external GitHub issue citations in separate lookup namespaces with strict resolution precedence (explicit ID -> 1-based position -> title -> external issue number). Plans must be pre-validated before issue creation to reject ambiguous collisions (such as an explicit `id` conflicting with a different item's position index, duplicate `id`s across items, or duplicate titles across items) so incorrect `blocked_by` edges are never created on GitHub.
+12. **Task Command Verification in Documentation & CLIs:** Whenever documenting or printing runnable commands as `deno task <task-name> ...` or `npm run <script> ...` (in `SKILL.md`, CLI `--help` text, usage strings, or error messages), verify that the task/script name is actually registered in `deno.json`'s `"tasks"` (or `package.json`'s `"scripts"`). Never document or print non-existent task commands that fail with `Task not found` when an agent or developer follows them.
+13. **Strict Foreign-Key Equality & Conflict Handling:** When validating whether an entity is already linked to a target record (e.g., `gig.venueId === targetVenueId`), never combine the equality check with a truthiness fallback (such as `id === target || Boolean(id)`), which collapses the condition into a bare existence check and treats mismatched links as matches. Always require strict equality, and handle the mismatched case (`id && id !== target`) explicitly as a conflict rather than misreporting it as already linked.
+14. **Phased Data Migrations & Expand-Contract Discipline:** In multi-phase database migrations and field transitions (e.g. retiring legacy artist slugs, renaming columns, changing MongoDB schema filters):
+    - **Phase 1: Widening (Expand):** Readers, query filters, and API consumers must first be widened to accept both legacy and new values, landing before any data is migrated.
+    - **Phase 2: Operational Data Migration:** The data migration script (e.g. `heroku run "npm run migrate:..."`) is executed against production. This is an operational runbook step typically performed by Josh after the widening PR merges.
+    - **Phase 3: Narrowing (Contract):** Only AFTER the operational data migration has verifiably run and completed against production (with verification evidence confirmed in the tracking issue or live production queries), agents may open or implement the narrowing PR that retires legacy values and removes fallback filters.
+    - **Never Preemptively Implement Narrowing:** Agents must NEVER open, implement, or merge PRs for the narrowing phase while the production data migration remains unexecuted or unverified. Doing so breaks production consumers (e.g. emptying query results) the moment the PR deploys. If an assigned issue contains both widening and narrowing phases, the narrowing phase must remain held/blocked until operational execution is confirmed.
+15. **Venue Hold Field Separation & Write-Path Mutation Safety:**
+    - **Never Conflate Contact Holds with Calendar Limits:** Never conflate "do not contact until" (`resumeBooking`) with "calendar dates booked through" (`bookedThrough`). `resumeBooking` represents a contact hold (the venue asked for space, compared against TODAY — e.g. "try again in 4 months"), whereas `bookedThrough` means dates are booked solid while outreach remains eligible today (compared against the TARGET WINDOW being pitched — e.g. Olde Salem Brewing booked through 2026 but pitchable today for January 2027). CLI and skill write tools must keep their arguments separate (`--until`/`--resume` for `resumeBooking` at UTC `00:00:00.000Z`; `--booked-through` for `bookedThrough` at UTC `23:59:59.999Z`), never deriving or defaulting one from the other.
+    - **Mutation Safety on Venue Resolution:** On mutation/write paths that modify database records (such as holds or gig-linking), never use reverse string containment (`query.includes(venue)`), which risks a longer query matching a short venue name it merely contains and silently mutating the wrong record. Require exact ID, exact name, exact normalized name, or strict forward containment (`venue.includes(query)`) with a minimum length floor (>= 3 characters) and strict ambiguity detection.
+16. **Never Invert Negative/Unset Flag Semantics & Never Overwrite Qualifying Context:** When consuming backend reason or eligibility flags (such as `resumeBookingExpired`), never assume `false` means the opposite state is active (`false` indicates no hold was set/expired, not an active hold). Client badge logic must inspect explicit positive signals (e.g., future `resumeBooking`) and must never overwrite server-authoritative qualifying fields (`reason.spacingNote`). Candidate filter/rank pipelines must shallow-clone items rather than mutating caller objects in place.
+17. **Client-Side Candidate Enrichment & Safety Fencing:** When a client-side reporting tool is required to display granular status badges for records that a single backend endpoint (e.g. `GET /outreach/candidates`) filters out by design, do not introduce phantom fields that the endpoint cannot return. The client must either consume backend-provided held/excluded candidate structures or enrich candidate pools by cross-referencing related endpoints (e.g. `GET /venue`, `GET /outreach`), while strictly setting safety exclusion flags (`isExcluded: true`) so held, conflicting, or direct-chat venues are excluded from drafting, pitch generation, and batch dispatch.
+18. **Positive Signal Verification for Compound Inferred States & Date Math Fidelity:**
+    - **Positive Signal Verification for Compound Inferred States:** Never infer state from a default or ambiguous negative flag alone (e.g. `outreachEligible: false`). Always verify the positive qualifying signal (e.g. active conversation evidence in `notes`) required by the specification. On systems like `web-jam-back`, negative flags are often unvetted defaults or permanent opt-outs rather than active alternative workflows.
+    - **Endpoint Query Alignment & Date Math Fidelity:** Client-side enrichment helpers must mirror backend filtering sets (e.g. querying both `sent` and `replied` for cooldowns) and calendar-month arithmetic (`setMonth` instead of 30-day fixed duration approximations) to prevent boundary records from falling through without badges.
 
 ## Opening pull requests (all WebJamApps repos)
 
 Finish a coding task by running the shared script — never `gh pr create` directly. This applies
-**however the task was started** (via `/work-issue` / `/next` or just told to work an issue ad-hoc).
+**however the task was started** (via `/work-issue` or just told to work an issue ad-hoc).
 Put your summary and the **real test output** IN THE PR via the flags — not only in the chat reply:
 
 ```
@@ -211,23 +79,24 @@ Put your summary and the **real test output** IN THE PR via the flags — not on
   --author "<tool> — <model>" \
   --summary "<what changed and why>" \
   --test-plan "<exact commands to verify + expected result>" \
-  --closes   # include ONLY if this PR fully completes the issue; omit for a partial PR
+  --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
 ```
 
 `--summary` and `--test-plan` are **required** — the script **refuses to open a PR with an empty or
 placeholder description** (web-jam-tools#77).
 
 `--test-evidence` is **OPTIONAL and normally omitted.** Always run the suites and confirm they pass
-before opening the PR, but do **not** paste unit-test runner output into the body — the numbers are
-noise to the reviewer, and CI already reports pass/fail. Reserve the flag for evidence CI cannot
-show: a manual reproduction, a `curl` response, or a described screenshot. A PR with no "Test
+before opening the PR. If included, test evidence must accurately reflect a complete run on the current
+commit — never stale or partial runs. Reserve the flag for evidence CI cannot show: a manual
+reproduction, a `curl` response, or a described screenshot. A PR with no "Test
 evidence" section is correct, and a reviewer must never raise a finding about its absence. It always
 opens a **draft** PR based on **`dev`**, with the issue number derived from the
 `<lane>/<issue#>-<slug>` branch name (or explicit `--issue` flag, which supports full URLs,
 `OWNER/REPO#N`, or bare `#N`/`N` and formats cross-repo closing lines as `Closes OWNER/REPO#N`) and
-a footer naming the tool + model (hard invariants — no flag overrides them). By default it
-references the issue (`Part of #N` or `Part of OWNER/REPO#N`); pass `--closes` to make it the
-completing PR (`Closes #N` or `Closes OWNER/REPO#N`). Josh alone reviews and flips draft → ready.
+a footer naming the tool + model (hard invariants — no flag overrides them). By default the PR
+closes the issue on merge (`Closes #N` or `Closes OWNER/REPO#N`); pass `--part-of` only when the
+issue must stay open (`Part of #N` or `Part of OWNER/REPO#N` for a partial PR, or a standing
+run-log/epic issue). (`--closes` is a deprecated no-op, still accepted.) Josh alone reviews and flips draft → ready.
 See `skills/draft-pr/SKILL.md`.
 
 ### PR body formatting (do this every time)
@@ -257,8 +126,7 @@ npm test
 Expect: lint + unit green." \
   --test-evidence "```
 ok | 42 passed | 0 failed
-```" \
-  --closes
+```"
 ````
 
 ### PR version-bump convention
@@ -266,10 +134,13 @@ ok | 42 passed | 0 failed
 Every PR must bump the version once, on its first commit — `deno.json` in this repo (e.g.
 `"version": "1.26.x"`). CI's "Version bump check (PR branches only)" gate blocks PRs whose version
 is unchanged from the merge-base with `dev`. Always bump `deno.json` on the first commit of any new
-PR branch in `web-jam-tools` to prevent CircleCI gate failures. When invoking `create-draft-pr.sh`,
-pass multi-line or rich markdown values using `--summary-file`, `--test-plan-file`, and
-`--test-evidence-file` pointing to files (e.g. in scratch/) to prevent shell argument escaping or
-flattening issues.
+PR branch in `web-jam-tools` to prevent CircleCI gate failures. When updating or rebasing an open PR
+branch after other PRs have merged to `dev`, verify that `HEAD`'s version remains strictly greater
+than `origin/dev`'s current version (e.g. `git show origin/dev:deno.json`), and bump again on the fix
+commit if `origin/dev` has moved ahead. When invoking `create-draft-pr.sh`, pass multi-line or rich
+markdown values using `--summary-file`, `--test-plan-file`, and `--test-evidence-file` pointing to
+temporary files in /tmp/ (e.g. /tmp/pr-summary.md) — never create scratch files or scratch/
+directories inside the repo to prevent shell argument escaping or flattening issues.
 
 ## CI gate (web-jam-tools)
 
@@ -296,12 +167,22 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
 
 ## Quota & Token Hygiene
 
+- **Model Tier Order (weakest to strongest): `Haiku` → `Flash Med` → `Sonnet` → `Flash High` →
+  `Opus`.** As of 2026-09-05 `Flash High` ranks **above** `Sonnet`: on contamination-resistant
+  long-horizon coding (DeepSWE v1.1) Gemini 3.8 Flash at high effort scores 73.7% against Sonnet 5's
+  54%, effectively matching Opus 5's 74%, at under $2.40 a task against Opus's $11-plus — and it
+  bills a separate Google budget rather than the constrained Anthropic one. `Opus` keeps the top slot
+  because that parity does **not** extend to abstract, multi-step unguided agent work
+  (Terminal-Bench 4.0). Consequences: contained *and* multi-file implementation work defaults to
+  `Flash High`, not `Sonnet`; escalating from `Flash High` to `Sonnet` moves work down a tier and
+  onto the constrained budget, so do it only for a named Claude-side capability Flash lacks; and
+  reviewer-tier pairing follows the same order (`skills/pr-review/SKILL.md`).
 - **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a
   rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or
   multi-repo tasks:
   - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into
     main turn outputs.
-  - Redirect large multi-line summaries, test plans, and evidence to scratch files
+  - Redirect large multi-line summaries, test plans, and evidence to temporary files in /tmp/
     (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling
     `create-draft-pr.sh`.
   - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`)
@@ -324,7 +205,7 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
     chosen because they are auditable from the outside and a cost estimate is not.
   - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct
     the subagent to pass `--author` matching its actual model tier (e.g.
-    `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents) when calling
+    `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents) when calling
     `create-draft-pr.sh`.
 
 ## System Setup
@@ -371,15 +252,16 @@ target list, deployment steps, and verification procedures.
 ## Deno Deploy CLI & Runtime Rules
 
 - **Root Directory Positional Argument**: Always pass `.` (workspace root) as the positional root
-  argument to `deno deploy` (e.g. `deno deploy . --org webjamapps --app web-jam-uptime --prod`).
+  argument to `deno deploy` (e.g. `deno deploy . --config deno.uptime.json --prod`).
   NEVER pass an individual file path like `src/uptime/cron.ts` as the positional root argument
   because Deno Deploy will set `/tmp/build/src` as the working directory, isolating it from root
   project files (`deno.json`, `./monitor.ts`) and causing builds to hang or fail looking for
   dependencies.
-- **Entrypoint Configuration in `deno.json`**: Entrypoint must be configured inside `deno.json`
-  under `"deploy": { "entrypoint": "src/uptime/cron.ts" }`. Do NOT pass `--entrypoint` to
-  `deno deploy` (without `create`), as `--entrypoint` is only a subcommand flag for
-  `deno deploy create`.
+- **Entrypoint Configuration in Isolated Configs**: Entrypoint and app metadata must be configured inside
+  isolated `deno.<service>.json` config files (e.g. `deno.uptime.json`, `deno.devotional.json`)
+  under `"deploy": { "org": "webjamapps", "app": "...", "entrypoint": "...", "exclude": [...] }`
+  and passed via `--config deno.<service>.json`. Do NOT pass `--entrypoint` to `deno deploy`
+  (without `create`), as `--entrypoint` is only a subcommand flag for `deno deploy create`.
 - **Deno Deploy Dynamic Containers Require `Deno.serve`**: In dynamic mode
   (`--runtime-mode dynamic`), entrypoint scripts must include a `Deno.serve` listener guarded by
   `import.meta.main` (e.g.
@@ -408,3 +290,30 @@ target list, deployment steps, and verification procedures.
 - **Language & Runtime Standardization**: All helper scripts, hooks, tools, and utilities in
   `web-jam-tools` (and TypeScript repos) must be written in Deno/TypeScript. Do NOT introduce Python
   scripts; prefer Deno/TypeScript for all workspace helpers and hook parsers.
+- **Path Traversal & Identifier Validation in Automation Scripts**: Any script constructing
+  filesystem paths from input plan identifiers, slugs, or keys (e.g., in memory/rule migrations or CLI
+  utilities) MUST validate each identifier against a strict safe alphanumeric pattern (e.g.,
+  `/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/`) to prevent directory traversal and accidental reads/writes/trashes
+  outside the target directory.
+- **Native Issue Field Updates & Issue Creation**: When updating native issue fields or relationships in GitHub:
+  - **Priority Field**: Set via GraphQL mutation `updateIssueFieldValue(input: { issueId, issueField: { fieldId: "IFSS_kgDOADumRA", singleSelectOptionId } })`. Option global node IDs for `WebJamApps`: Urgent (`IFSSO_kgDOAGhNuA`), High (`IFSSO_kgDOAGhNuQ`), Medium (`IFSSO_kgDOAGhNug`), Low (`IFSSO_kgDOAGhNuw`).
+  - **Type Field**: Set via GraphQL mutation `updateIssue(input: { id: issueId, issueTypeId })` with `issueTypeId` resolved from `repository.issueTypes`.
+  - **Parent Issue Link**: Set via GraphQL mutation `addSubIssue(input: { issueId: parentNodeId, subIssueId: childNodeId })`.
+  - **Helper Script**: Always use `scripts/create-issue.ts` (or `deno task create-issue`), which automates creation, labels, milestone, native Type, Priority, parent link, and attribute verification in one place.
+  - **Designed Issues with Paired Manual Steps Become Parent Epics**: When `/design-issue` resolves an existing issue into paired implementation and Josh manual verification tasks, convert the target designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic` `issueTypeId`), file the executable coding work as a child `Task` sub-issue attached under that Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached under that same Epic (marked `Blocked` on the coding child).
+  - **Manual Step Issue & Document Title Rule**: Never prefix issue titles or runbook document titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional, action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and responsibility are designated exclusively by the `Josh` label or assignees, never by embedding a personal name in the issue or document title.
+- **Version Scrubbing & Generic Comment Descriptions**: When executing version-migration tasks with explicit grep-to-zero requirements (such as removing retired model version strings), ensure all decorative occurrences—including header comments, rejection bullet lists, and example command strings—describe requirements generically (e.g., "every Flash slug below the 3.7 floor") rather than retaining or reintroducing retired version literals in comments.
+- **GitHub CLI `gh pr view --json reviews` Schema**: In GitHub CLI (`gh`), review commit SHAs are located at `.commit.oid` (e.g. `.reviews[].commit.oid`), NOT at a top-level `.commit_id`. When querying reviews via `gh pr view --json reviews`, always extract `.commit.oid` to obtain the commit SHA.
+- **Distinguishing Automated vs. Manual PR Reviews**: When inspecting PR reviews to determine whether an automated review (e.g. `/pr-review`) has already evaluated a PR, do not treat any review at the head SHA as an automated review. Because both human and bot reviews may post under the developer's identity, always filter reviews by their signature header (e.g., `## PR Review Summary`) to avoid incorrectly skipping automated reviews due to ad-hoc human review comments.
+- **Agent PRs Must Never Auto-Close `Josh`-Labeled Issues**: Issues labeled `Josh` represent manual human steps, verification runs, and runbook tasks that no agent can perform or close. Automated agent pull requests must never generate `Closes #N` targeting an issue labeled `Josh`. When branching from or contributing fixes/tooling discovered during a manual verification task, always pass `--part-of` (or `--no-close`) to `create-draft-pr.sh` so the issue remains open for human verification. Furthermore, safety-critical guards inspecting issue metadata must fail closed: if fetching issue labels or attributes fails (due to API error, rate limit, or network blip), the script must treat the query failure as a blocking error rather than swallowing stderr with `|| true` and falling open.
+- **Config & Skill Reconciliation in Symlink Installers**: When installer scripts symlink live environment paths (e.g. `~/.gemini/config/mcp_config.json` or `~/.claude/skills/*`) to repo-mastered files, they must preserve pre-existing real files not just by backing them up to `.bak-*`, but by actively reconciling and copying any local-only entries/keys into the repo master before replacing the destination with the symlink, regardless of whether the repo master already exists. Furthermore, candidate reconciled configurations must be validated for secrets/credentials in-memory before modifying the repository master file on disk, ensuring secrets never touch tracked files on refusal.
+- **Header & Inline Comment Integrity**: When updating or appending feature documentation, usage notes, or issue references in file headers or comments, never truncate or clobber adjacent pre-existing sentences or design rationale. Always preserve surrounding sentences and explanations intact, adding net-new feature documentation as distinctly separated paragraphs with clean comment block formatting.
+- **Checklist Renumbering & Cross-Reference Integrity**: When inserting, deleting, or reordering numbered checklist items, sections, or workflow steps in skills and documentation (e.g. `skills/pr-review/SKILL.md`), perform a full document search for internal cross-references (such as citations in worked examples, exception clauses, or references like "per Step 2 item X"). Ensure all shifted rule numbers and parenthetical titles are updated consistently across the file so references never point to the wrong rule.
+- **Audit Execution Order & Conditional Phrasing Alignment**: When updating workflow execution order or precedence (such as deferring status check evaluation to the end of an audit pipeline), audit all downstream checklist items and rules to remove or reconcile stale conditional pre-requisite phrasing (e.g. "When CI is green...") that assumed the earlier evaluation order.
+- **PR Review Findings Scope & Exclusion of Git Mechanics Trivia**: In PR reviews, the `### 🟡 Suggestions` section is strictly reserved for actionable code-quality, design, or test improvements directly tied to the modified code in the diff. Never include process lectures, git mechanics commentary, or speculative workflow heads-ups (such as predicting cross-PR version collisions against other open PR branches). If an actual version collision occurs, it is evaluated deterministically as a real Must Fix when the PR's own version fails to strictly exceed `origin/dev`.
+- **Static Analysis & SAST (Semgrep) ReDoS Safety**: In Deno/TypeScript tools, validators, and analyzers, avoid dynamic `new RegExp(...)` with runtime variable inputs (e.g. `new RegExp(`\\b${escapeRegExp(pattern)}\\b`, "i")`), which triggers Semgrep `detect-non-literal-regexp` blocking failures in CI's SAST gate (`deno task sast`). Instead, use string indexing / word boundary helpers (`indexOf`, lowercase token matching) or static RegExp patterns.
+- **Duplicate Pin-Test Locations for the Same Rule**: When a design/issue spec offers a choice between "a new test file... or an addition to an existing test file" for a pin test, treat it as exclusive-or, not both. Adding the identical `assertStringIncludes` assertions in both a standalone file and an existing suite (as happened on `web-jam-tools#793 "Add a Sized for Sonnet rule to the design-issue skill body"`) doubles maintenance cost for the same coverage with no added protection. Pick exactly one location before writing the test.
+
+## Batch Email & Outreach Dispatch Safety
+
+- **Batch Email & Outreach Dispatch Safety**: When implementing real outbound email or batch outreach commands (like `--send`), always provide explicit recipient filtering/exclusion options (`--venues`, `--skip`) so the user can selectively dispatch only approved candidates, ensuring code strictly supports the human-approval safety guarantees described in skill documentation.

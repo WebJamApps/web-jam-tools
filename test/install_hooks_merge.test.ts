@@ -9,6 +9,7 @@
 // Josh's LIVE ~/.claude/hooks symlinks).
 
 import { assert, assertEquals } from "@std/assert";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 const SCRIPT_PATH = new URL(
   "../scripts/merge-hooks-into-settings.ts",
@@ -72,6 +73,11 @@ interface PermissionsJson {
   allow?: string[];
   ask?: string[];
   deny?: string[];
+  defaultMode?: string;
+}
+interface StatusLineJson {
+  type: string;
+  command: string;
 }
 interface SettingsJson {
   permissions?: PermissionsJson;
@@ -80,7 +86,9 @@ interface SettingsJson {
     PreToolUse: HookEntry[];
     PostToolUse?: HookEntry[];
     Stop?: HookEntry[];
+    SessionEnd?: HookEntry[];
   };
+  statusLine?: StatusLineJson;
 }
 
 async function readJson(path: string): Promise<SettingsJson> {
@@ -117,14 +125,14 @@ Deno.test("merges a --stop hook into hooks.Stop as a flat, no-matcher entry", as
   await withTempSettings(undefined, async (path) => {
     const res = await runMerge(path, [
       "--stop",
-      "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+      "$HOME/.claude/hooks/require-issue-citation-titles.sh",
     ]);
     assertEquals(res.code, 0, res.stderr);
     const data = await readJson(path);
     assertEquals(data.hooks.Stop, [
       {
         hooks: [
-          { type: "command", command: "$HOME/.claude/hooks/opus-no-delegation-warning.sh" },
+          { type: "command", command: "$HOME/.claude/hooks/require-issue-citation-titles.sh" },
         ],
       },
     ]);
@@ -133,7 +141,7 @@ Deno.test("merges a --stop hook into hooks.Stop as a flat, no-matcher entry", as
 
 Deno.test("re-running with the same --stop hook does not duplicate it", async () => {
   await withTempSettings(undefined, async (path) => {
-    const args = ["--stop", "$HOME/.claude/hooks/opus-no-delegation-warning.sh"];
+    const args = ["--stop", "$HOME/.claude/hooks/require-issue-citation-titles.sh"];
     const first = await runMerge(path, args);
     assertEquals(first.code, 0, first.stderr);
     const second = await runMerge(path, args);
@@ -158,7 +166,7 @@ Deno.test("a pre-existing Stop hook (not installer-managed) is preserved when a 
     async (path) => {
       const res = await runMerge(path, [
         "--stop",
-        "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+        "$HOME/.claude/hooks/require-issue-citation-titles.sh",
       ]);
       assertEquals(res.code, 0, res.stderr);
       const data = await readJson(path);
@@ -166,18 +174,85 @@ Deno.test("a pre-existing Stop hook (not installer-managed) is preserved when a 
       assertEquals(data.hooks.Stop?.[0].hooks[0].command, "some-other-stop-hook.sh");
       assertEquals(
         data.hooks.Stop?.[1].hooks[0].command,
-        "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+        "$HOME/.claude/hooks/require-issue-citation-titles.sh",
       );
     },
   );
 });
 
-Deno.test("--stop, --pre-tool-use and SessionStart all merge together in one invocation", async () => {
+Deno.test("merges a --session-end hook into hooks.SessionEnd as a flat, no-matcher entry", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--session-end",
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    const data = await readJson(path);
+    assertEquals(data.hooks.SessionEnd, [
+      {
+        hooks: [
+          {
+            type: "command",
+            command: "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+          },
+        ],
+      },
+    ]);
+  });
+});
+
+Deno.test("re-running with the same --session-end hook does not duplicate it", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const args = [
+      "--session-end",
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+    ];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+    const data = await readJson(path);
+    assertEquals(data.hooks.SessionEnd?.length, 1);
+    assertEquals(data.hooks.SessionEnd?.[0].hooks.length, 1);
+  });
+});
+
+Deno.test("a pre-existing SessionEnd hook (not installer-managed) is preserved when a new --session-end hook is added", async () => {
+  await withTempSettings(
+    {
+      hooks: {
+        SessionEnd: [{ hooks: [{ type: "command", command: "some-other-session-end-hook.sh" }] }],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--session-end",
+        "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+      const data = await readJson(path);
+      assertEquals(data.hooks.SessionEnd?.length, 2);
+      assertEquals(data.hooks.SessionEnd?.[0].hooks[0].command, "some-other-session-end-hook.sh");
+      assertEquals(
+        data.hooks.SessionEnd?.[1].hooks[0].command,
+        "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+      );
+    },
+  );
+});
+
+Deno.test("--stop, --session-end, --pre-tool-use and SessionStart all merge together in one invocation", async () => {
   await withTempSettings(undefined, async (path) => {
     const res = await runMerge(path, [
       "$HOME/.claude/hooks/notes-sync-reminder.sh",
       "--stop",
-      "$HOME/.claude/hooks/opus-no-delegation-warning.sh",
+      "$HOME/.claude/hooks/require-issue-citation-titles.sh",
+      "--session-end",
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
       "--pre-tool-use",
       "Bash::$HOME/.claude/hooks/block-secret-dumps.sh",
     ]);
@@ -185,6 +260,7 @@ Deno.test("--stop, --pre-tool-use and SessionStart all merge together in one inv
     const data = await readJson(path);
     assertEquals(data.hooks.SessionStart.length, 1);
     assertEquals(data.hooks.Stop?.length, 1);
+    assertEquals(data.hooks.SessionEnd?.length, 1);
     assertEquals(data.hooks.PreToolUse.length, 1);
   });
 });
@@ -768,6 +844,104 @@ Deno.test(
   },
 );
 
+// --- permissions.allow (web-jam-tools#685, §3a) ---
+
+Deno.test("--allow adds patterns to permissions.allow when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--allow",
+      "Bash(deno task post-pr-review *)",
+      "Bash(deno task edit-issue *)",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("added permissions.allow rule Bash(deno task post-pr-review *)"));
+    assert(res.stdout.includes("added permissions.allow rule Bash(deno task edit-issue *)"));
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.allow, [
+      "Bash(deno task post-pr-review *)",
+      "Bash(deno task edit-issue *)",
+    ]);
+  });
+});
+
+Deno.test("a second --allow run with the same patterns is a no-op", async () => {
+  await withTempSettings({}, async (path) => {
+    const args = ["--allow", "Bash(deno task post-pr-review *)"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.allow?.length, 1);
+  });
+});
+
+Deno.test(
+  "pre-existing permissions.allow, permissions.ask, and permissions.deny entries survive an --allow merge untouched",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          allow: ["Bash(ls:*)"],
+          ask: ["Bash(rm -rf *)"],
+          deny: ["Bash(curl *)"],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, ["--allow", "Bash(deno task post-pr-review *)"]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.ask, ["Bash(rm -rf *)"]);
+        assertEquals(data.permissions?.deny, ["Bash(curl *)"]);
+        // allow keeps the pre-existing entry (order preserved) and appends
+        // the new one — never reordered, never removed.
+        assertEquals(data.permissions?.allow, [
+          "Bash(ls:*)",
+          "Bash(deno task post-pr-review *)",
+        ]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "install-hooks.sh's real ALLOW_RULES set merges cleanly and is idempotent (sandboxed CLAUDE_SETTINGS_PATH via --settings-path)",
+  async () => {
+    // Mirrors install-hooks.sh's ALLOW_RULES array (web-jam-tools#685, §3a)
+    // rather than parsing it out of the shell script, same convention as the
+    // DENY_RULES test above.
+    const ALLOW_RULES = [
+      "Bash(deno task post-pr-review *)",
+      "Bash(deno task post-pr-comment *)",
+      "Bash(deno task post-issue-comment *)",
+      "Bash(deno task edit-issue *)",
+      "Bash(deno task unblock-issue *)",
+    ];
+    await withTempSettings(undefined, async (path) => {
+      const first = await runMerge(path, ["--allow", ...ALLOW_RULES]);
+      assertEquals(first.code, 0, first.stderr);
+      const data = await readJson(path);
+      assertEquals(data.permissions?.allow, ALLOW_RULES);
+
+      const second = await runMerge(path, ["--allow", ...ALLOW_RULES]);
+      assertEquals(second.code, 0, second.stderr);
+      assert(
+        second.stdout.includes("already up to date (no-op)"),
+        `expected no-op message, got: ${second.stdout}`,
+      );
+      const data2 = await readJson(path);
+      assertEquals(data2.permissions?.allow?.length, ALLOW_RULES.length);
+    });
+  },
+);
+
 // --- permissions.ask (web-jam-tools#339) ---
 
 Deno.test("--ask adds patterns to permissions.ask when absent", async () => {
@@ -832,6 +1006,297 @@ Deno.test(
   },
 );
 
+// --- --status-line (web-jam-tools#688) ---
+
+Deno.test("--status-line adds statusLine when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--status-line",
+      "/home/joshua/WebJamApps/web-jam-tools/scripts/statusline.sh",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      res.stdout.includes(
+        "added statusLine /home/joshua/WebJamApps/web-jam-tools/scripts/statusline.sh",
+      ),
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.statusLine, {
+      type: "command",
+      command: "/home/joshua/WebJamApps/web-jam-tools/scripts/statusline.sh",
+    });
+  });
+});
+
+Deno.test("a second --status-line run with the same command is a no-op", async () => {
+  await withTempSettings({}, async (path) => {
+    const args = ["--status-line", "/repo/scripts/statusline.sh"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.statusLine, { type: "command", command: "/repo/scripts/statusline.sh" });
+
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const backups = [...Deno.readDirSync(dir)].filter((e) => e.name.includes(".bak-"));
+    // One backup from the first (writing) run only; the no-op second run
+    // must not write (and therefore must not back up) again.
+    assertEquals(backups.length, 1);
+  });
+});
+
+Deno.test("--status-line with a different command value updates the existing one", async () => {
+  await withTempSettings(
+    { statusLine: { type: "command", command: "/old/path/statusline.sh" } },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--status-line",
+        "/repo/scripts/statusline.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+      assert(res.stdout.includes("updated statusLine to /repo/scripts/statusline.sh"));
+
+      const data = await readJson(path);
+      assertEquals(data.statusLine, {
+        type: "command",
+        command: "/repo/scripts/statusline.sh",
+      });
+    },
+  );
+});
+
+Deno.test(
+  "--status-line combined with a --pre-tool-use hook in one invocation merges both",
+  async () => {
+    await withTempSettings(undefined, async (path) => {
+      const res = await runMerge(path, [
+        "--pre-tool-use",
+        "Bash::$HOME/.claude/hooks/block-secret-dumps.sh",
+        "--status-line",
+        "/repo/scripts/statusline.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+
+      const data = await readJson(path);
+      assertEquals(data.hooks.PreToolUse.length, 1);
+      assertEquals(data.statusLine, {
+        type: "command",
+        command: "/repo/scripts/statusline.sh",
+      });
+    });
+  },
+);
+
+Deno.test(
+  "existing unrelated settings (permissions, other hook events) survive a --status-line-only merge untouched",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: { allow: ["Bash(ls:*)"], deny: ["Bash(curl *)"] },
+        hooks: {
+          Stop: [
+            { hooks: [{ type: "command", command: "/hand/added/stop.sh" }] },
+          ],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--status-line",
+          "/repo/scripts/statusline.sh",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
+        assertEquals(data.permissions?.deny, ["Bash(curl *)"]);
+        assertEquals(data.hooks?.Stop?.[0]?.hooks?.[0]?.command, "/hand/added/stop.sh");
+        assertEquals(data.statusLine, {
+          type: "command",
+          command: "/repo/scripts/statusline.sh",
+        });
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check with --status-line returns 0 when the stored value already matches",
+  async () => {
+    await withTempSettings(undefined, async (path) => {
+      const args = ["--status-line", "/repo/scripts/statusline.sh"];
+      await runMerge(path, args);
+      const checkRes = await runMerge(path, ["--check", ...args]);
+      assertEquals(checkRes.code, 0, checkRes.stderr);
+      assert(checkRes.stdout.includes("already up to date (no-op)"));
+    });
+  },
+);
+
+Deno.test(
+  "--check with --status-line returns non-zero and mentions statusLine when the stored value is absent",
+  async () => {
+    await withTempSettings({}, async (path) => {
+      const checkRes = await runMerge(path, [
+        "--check",
+        "--status-line",
+        "/repo/scripts/statusline.sh",
+      ]);
+      assertEquals(checkRes.code, 1);
+      assert(checkRes.stderr.includes("missing statusLine /repo/scripts/statusline.sh"));
+    });
+  },
+);
+
+Deno.test(
+  "--check with --status-line returns non-zero and mentions statusLine when the stored value differs",
+  async () => {
+    await withTempSettings(
+      { statusLine: { type: "command", command: "/old/path/statusline.sh" } },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--status-line",
+          "/repo/scripts/statusline.sh",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(checkRes.stderr.includes("statusLine differs from desired"));
+        assert(checkRes.stderr.includes("/repo/scripts/statusline.sh"));
+      },
+    );
+  },
+);
+
+// --- --default-mode (web-jam-tools#705) ---
+
+Deno.test("--default-mode adds permissions.defaultMode when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, ["--default-mode", "acceptEdits"]);
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("added permissions.defaultMode acceptEdits"));
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.defaultMode, "acceptEdits");
+  });
+});
+
+Deno.test("a second --default-mode run with the same value is a no-op", async () => {
+  await withTempSettings({}, async (path) => {
+    const args = ["--default-mode", "acceptEdits"];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+
+    const data = await readJson(path);
+    assertEquals(data.permissions?.defaultMode, "acceptEdits");
+
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const backups = [...Deno.readDirSync(dir)].filter((e) => e.name.includes(".bak-"));
+    // One backup from the first (writing) run only; the no-op second run
+    // must not write (and therefore must not back up) again.
+    assertEquals(backups.length, 1);
+  });
+});
+
+Deno.test("--default-mode with a different value corrects the existing one", async () => {
+  await withTempSettings(
+    { permissions: { defaultMode: "auto" } },
+    async (path) => {
+      const res = await runMerge(path, ["--default-mode", "acceptEdits"]);
+      assertEquals(res.code, 0, res.stderr);
+      assert(res.stdout.includes("updated permissions.defaultMode to acceptEdits"));
+
+      const data = await readJson(path);
+      assertEquals(data.permissions?.defaultMode, "acceptEdits");
+    },
+  );
+});
+
+Deno.test(
+  "existing unrelated settings (permissions.allow/deny, hook events) survive a --default-mode-only merge untouched",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: { allow: ["Bash(ls:*)"], deny: ["Bash(curl *)"] },
+        hooks: {
+          Stop: [
+            { hooks: [{ type: "command", command: "/hand/added/stop.sh" }] },
+          ],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, ["--default-mode", "acceptEdits"]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
+        assertEquals(data.permissions?.deny, ["Bash(curl *)"]);
+        assertEquals(data.hooks?.Stop?.[0]?.hooks?.[0]?.command, "/hand/added/stop.sh");
+        assertEquals(data.permissions?.defaultMode, "acceptEdits");
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check with --default-mode returns 0 when the stored value already matches",
+  async () => {
+    await withTempSettings(undefined, async (path) => {
+      const args = ["--default-mode", "acceptEdits"];
+      await runMerge(path, args);
+      const checkRes = await runMerge(path, ["--check", ...args]);
+      assertEquals(checkRes.code, 0, checkRes.stderr);
+      assert(checkRes.stdout.includes("already up to date (no-op)"));
+    });
+  },
+);
+
+Deno.test(
+  "--check with --default-mode returns non-zero and mentions permissions.defaultMode when the stored value is absent",
+  async () => {
+    await withTempSettings({}, async (path) => {
+      const checkRes = await runMerge(path, [
+        "--check",
+        "--default-mode",
+        "acceptEdits",
+      ]);
+      assertEquals(checkRes.code, 1);
+      assert(checkRes.stderr.includes("missing permissions.defaultMode acceptEdits"));
+    });
+  },
+);
+
+Deno.test(
+  "--check with --default-mode returns non-zero and mentions permissions.defaultMode when the stored value differs",
+  async () => {
+    await withTempSettings(
+      { permissions: { defaultMode: "auto" } },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--default-mode",
+          "acceptEdits",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(checkRes.stderr.includes("permissions.defaultMode differs from desired"));
+        assert(checkRes.stderr.includes("acceptEdits"));
+        assert(checkRes.stderr.includes("has auto"));
+      },
+    );
+  },
+);
+
 // --- --check mode in merge-hooks-into-settings.ts (web-jam-tools#339) ---
 
 Deno.test("--check returns 0 on an up-to-date settings file", async () => {
@@ -855,7 +1320,11 @@ Deno.test("--check returns non-zero and reports missing rules when drift exists"
 // --- Secret-scan gate in merge-hooks-into-settings.ts (web-jam-tools#339) ---
 
 Deno.test("secret-scan gate refuses to merge when synthetic JWT secret fixture is in permissions", async () => {
-  const jwtSecret = "eyJ" + "A".repeat(20) + "." + "B".repeat(20) + "." + "C".repeat(20);
+  // Varied per-segment, not repeated — the credential detector's
+  // synthetic-value heuristic would otherwise auto-suppress an 8+ run of
+  // the same character, defeating this "must fail closed" fixture.
+  const jwtSecret = "eyJ" + variedFakeBody(20, 60) + "." + variedFakeBody(20, 61) + "." +
+    variedFakeBody(20, 62);
   await withTempSettings(
     {
       permissions: {
@@ -875,7 +1344,7 @@ Deno.test("secret-scan gate refuses to merge when synthetic JWT secret fixture i
 // --- Pruning retired/orphaned hook entries (web-jam-tools#430) ---
 
 Deno.test(
-  "prunes orphaned hook entries from SessionStart, Stop, PreToolUse, and PostToolUse",
+  "prunes orphaned hook entries from SessionStart, SessionEnd, Stop, PreToolUse, and PostToolUse",
   async () => {
     await withTempSettings(
       {
@@ -887,6 +1356,10 @@ Deno.test(
           Stop: [
             { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-stop.sh" }] },
             { hooks: [{ type: "command", command: "$HOME/.claude/hooks/active-stop.sh" }] },
+          ],
+          SessionEnd: [
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-end.sh" }] },
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/active-end.sh" }] },
           ],
           PreToolUse: [
             {
@@ -913,6 +1386,8 @@ Deno.test(
           "$HOME/.claude/hooks/active-start.sh",
           "--stop",
           "$HOME/.claude/hooks/active-stop.sh",
+          "--session-end",
+          "$HOME/.claude/hooks/active-end.sh",
           "--pre-tool-use",
           "Bash::$HOME/.claude/hooks/active-pre.sh",
           "--post-tool-use",
@@ -927,6 +1402,11 @@ Deno.test(
         assert(
           res.stdout.includes("removed retired Stop hook $HOME/.claude/hooks/retired-stop.sh"),
         );
+        assert(
+          res.stdout.includes(
+            "removed retired SessionEnd hook $HOME/.claude/hooks/retired-end.sh",
+          ),
+        );
         assert(res.stdout.includes("removed retired hook (Bash)"));
 
         const data = await readJson(path);
@@ -939,6 +1419,11 @@ Deno.test(
         assertEquals(
           data.hooks.Stop?.[0].hooks[0].command,
           "$HOME/.claude/hooks/active-stop.sh",
+        );
+        assertEquals(data.hooks.SessionEnd?.length, 1);
+        assertEquals(
+          data.hooks.SessionEnd?.[0].hooks[0].command,
+          "$HOME/.claude/hooks/active-end.sh",
         );
         assertEquals(data.hooks.PreToolUse.length, 1);
         assertEquals(data.hooks.PreToolUse[0].hooks.map((h: HookCmd) => h.command), [
@@ -986,6 +1471,160 @@ Deno.test(
   },
 );
 
+// --- Cross-list retraction: a rule that moved between DENY_RULES and
+// ASK_RULES must not survive as a stale copy in the array it left
+// (web-jam-tools#525) ---
+
+Deno.test(
+  "a pattern moved from --deny to --ask is removed from permissions.deny on install",
+  async () => {
+    await withTempSettings(
+      { permissions: { deny: ["Bash(git push --force-with-lease*)"] } },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--ask",
+          "Bash(git push --force-with-lease*)",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed permissions.deny rule Bash(git push --force-with-lease*) (now owned by permissions.ask)",
+          ),
+          res.stdout,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.deny, []);
+        assertEquals(data.permissions?.ask, ["Bash(git push --force-with-lease*)"]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "a pattern moved from --ask to --deny is removed from permissions.ask on install",
+  async () => {
+    await withTempSettings(
+      { permissions: { ask: ["Bash(rm -rf *)"] } },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--deny",
+          "Bash(rm -rf *)",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed permissions.ask rule Bash(rm -rf *) (now owned by permissions.deny)",
+          ),
+          res.stdout,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.ask, []);
+        assertEquals(data.permissions?.deny, ["Bash(rm -rf *)"]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "a pattern present in neither versioned array is never removed from permissions.ask or permissions.deny",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          deny: ["Bash(some-unowned-deny-rule *)"],
+          ask: ["Bash(some-unowned-ask-rule *)"],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--deny",
+          "Bash(git push --force *)",
+          "--ask",
+          "Bash(rm -rf *)",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.deny, [
+          "Bash(some-unowned-deny-rule *)",
+          "Bash(git push --force *)",
+        ]);
+        assertEquals(data.permissions?.ask, [
+          "Bash(some-unowned-ask-rule *)",
+          "Bash(rm -rf *)",
+        ]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check reports a pattern present in both permissions.deny and permissions.ask as drift",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          deny: ["Bash(git push --force-with-lease*)"],
+          ask: ["Bash(git push --force-with-lease*)"],
+        },
+      },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--ask",
+          "Bash(git push --force-with-lease*)",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(
+          checkRes.stderr.includes(
+            "permissions.deny rule Bash(git push --force-with-lease*) is also in permissions.ask (stale copy)",
+          ),
+          checkRes.stderr,
+        );
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check still passes (exit 0) on a settings file with no cross-listed patterns",
+  async () => {
+    await withTempSettings(
+      { permissions: { deny: [], ask: ["Bash(rm -rf *)"] } },
+      async (path) => {
+        const checkRes = await runMerge(path, ["--check", "--ask", "Bash(rm -rf *)"]);
+        assertEquals(checkRes.code, 0, checkRes.stderr);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "re-running the installer after a cross-list retraction is idempotent and reports no changes",
+  async () => {
+    await withTempSettings(
+      { permissions: { deny: ["Bash(git push --force-with-lease*)"] } },
+      async (path) => {
+        const args = ["--ask", "Bash(git push --force-with-lease*)"];
+        const first = await runMerge(path, args);
+        assertEquals(first.code, 0, first.stderr);
+        const second = await runMerge(path, args);
+        assertEquals(second.code, 0, second.stderr);
+        assert(
+          second.stdout.includes("already up to date (no-op)"),
+          `expected no-op message, got: ${second.stdout}`,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.deny, []);
+        assertEquals(data.permissions?.ask, ["Bash(git push --force-with-lease*)"]);
+      },
+    );
+  },
+);
+
 Deno.test(
   "--check mode in merge-hooks-into-settings.ts reports drift on stale/retired hook entries",
   async () => {
@@ -994,6 +1633,9 @@ Deno.test(
         hooks: {
           SessionStart: [
             { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-start.sh" }] },
+          ],
+          SessionEnd: [
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-end.sh" }] },
           ],
           PreToolUse: [
             {
@@ -1007,12 +1649,41 @@ Deno.test(
         const checkRes = await runMerge(path, [
           "--check",
           "$HOME/.claude/hooks/active-start.sh",
+          "--session-end",
+          "$HOME/.claude/hooks/active-end.sh",
           "--pre-tool-use",
           "Bash::$HOME/.claude/hooks/active-pre.sh",
         ]);
         assertEquals(checkRes.code, 1);
         assert(checkRes.stderr.includes("has retired SessionStart hook"));
+        assert(checkRes.stderr.includes("has retired SessionEnd hook"));
         assert(checkRes.stderr.includes("has retired hook (Bash)"));
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check mode in merge-hooks-into-settings.ts reports drift when SessionEnd hook is missing",
+  async () => {
+    await withTempSettings(
+      {
+        hooks: {
+          SessionEnd: [],
+        },
+      },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--session-end",
+          "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(
+          checkRes.stderr.includes(
+            "missing SessionEnd hook $HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+          ),
+        );
       },
     );
   },

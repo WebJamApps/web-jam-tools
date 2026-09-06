@@ -1,31 +1,37 @@
 ---
 name: work-issue
-description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (or alias /next <Repo>#<issue-num>) (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
-  version: v1
+  version: v3
   publisher: josh
 aliases:
-  - /next
   - next
 ---
 
 # /work-issue — run a model-labeled coding task (Claude Code & Antigravity)
-
-> **Alias**: `/next` (and phrases like `next`, `next task`, `start the next task`) is preserved as an active alias for `/work-issue`.
 
 This skill is installed across all agent surfaces (Claude Code, Antigravity/agy) and model tiers (Haiku, Flash, Sonnet, Opus). It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (or `/next Repo#123`, named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then go straight to "## Steps" below.
-- **`/work-issue`** (or `/next`, no argument, auto-pick mode) — read-only resolve the next
+- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the pre-checks below before "## Steps".
+- **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
-  to the same "## Steps" flow below. See "## No-argument mode" first.
+  to the same flow below. See "## No-argument mode" first.
+
+**Whichever route got you here, three pre-checks run before any branch is created or any code is
+written**, and they run for a named issue and an auto-picked one alike:
+
+1. **"## Epics — resolve to a child"** — an epic is a container with no diff of its own; it resolves
+   to its startable children for Josh to pick from.
+2. **"## Blocked-drift check"** — an issue carrying the `Blocked` label despite having 0 open native blockers and no external marker has drifted; stop and report rather than silently proceeding or assuming blocked.
+3. **"## Design-sync check"** — an issue that contradicts the requirements document it cites is
+   defective, and working it bakes the defect into a PR. Stop and report instead.
 
 ## Triggers & Aliases
 - Primary Command: `/work-issue`
-- Preserved Aliases: `/next`, `next`, `next task`, `start the next task`, `work-issue`
+- Preserved Aliases: `next`, `next task`, `start the next task`, `work-issue`
 
 ## Model Label Check & Approval
 
@@ -39,11 +45,64 @@ When `work-issue` begins an issue (`<Repo>#<num>`):
    ```bash
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
-4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini 3.6 Flash (Medium)"` for Flash Med subagents, or `--author "Claude Code — Haiku 3.5"` for Haiku subagents).
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents, or `--author "Claude Code — Haiku 3.5"` for Haiku subagents).
+
+## Startability test
+
+An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
+
+1. **Still open**:
+   ```bash
+   gh issue view <num> --repo WebJamApps/<Repo> --json state -q .state
+   ```
+   returns `OPEN`. (Skips anything closed or merged.)
+
+2. **Not blocked (native dependencies are the single source of truth)**:
+   - **Native dependencies**: Query `blocked_by` dependencies via API:
+     ```bash
+     gh api repos/WebJamApps/<Repo>/issues/<num>/dependencies/blocked_by \
+       --jq '.[] | select(.state == "open") | "\(.repository.full_name)#\(.number) \(.state) — \(.title)"'
+     ```
+     Native dependencies are the canonical and single source of truth for issue-to-issue blocking. Every native `blocked_by` dependency must be CLOSED (the query above returns no output). If any native blocker is OPEN, the task is **blocked by `<repo#number "title">`**.
+   - **External non-issue prerequisites**: Check for external non-issue blocker markers in the body or the `Blocked` label for non-issue prerequisites (e.g. assets, vendor delays, manual credentials). If a prerequisite issue is cited in the body without a native link, verify its state (`gh issue view <n> --repo WebJamApps/<Repo> --json state -q .state`) returns `CLOSED`.
+   - **Precedence & startability rule**: Native dependencies govern issue blocking without expecting or requiring the `Blocked` label. If open native blockers are 0 and no external body marker exists, the issue is startable immediately without checking or demanding the `Blocked` label. If the `Blocked` label is present with 0 open native blockers and no external marker, it is treated as a stale `Blocked` label (blocked drift) — see **Blocked-drift check** below.
+   - If any native blocker or external prerequisite is OPEN / un-met, the issue is **blocked by `<repo#number "title">`** or by the external blocker reason.
+
+3. **Not already in flight (with resume carve-out for fix-bucket PRs)**:
+   - Check if an OPEN PR references it:
+     ```bash
+     gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body,reviews,commits,statusCheckRollup \
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)"))'
+     ```
+   - **Fix-bucket resume carve-out**: If an OPEN PR exists for this issue, check whether it belongs to the **fix bucket** — having changes requested (one or more Must Fix items in its current automated review) or failing CI checks (`statusCheckRollup` has failures/errors). If so, the skill proceeds in **resume mode** rather than stopping:
+     - No new branch is cut off `dev`.
+     - It relies on the resume mechanism in `scripts/handle-agy-tasks.sh` (which auto-detects an existing branch or open PR for the issue and resumes the PR's head branch).
+   - **Awaiting review (non-startable)**: If the OPEN PR is merely awaiting review (green CI with no review, or a clean approved review), the issue remains **non-startable** ("already in flight"). Stop and report that PR review or merge is pending.
+   - For net-new issues with no open PR, verify no dispatch branch exists for it locally or on remote (`agy/<num>-*` from headless dispatch, `gemini/<num>-*` from interactive agy):
+     ```bash
+     git -C ~/WebJamApps/<Repo> for-each-ref --format='%(refname:short)' \
+       "refs/heads/agy/<num>-*" "refs/heads/gemini/<num>-*"
+     git -C ~/WebJamApps/<Repo> ls-remote --heads origin \
+       "agy/<num>-*" "gemini/<num>-*"
+     ```
+     returns nothing (unless in resume mode for an existing branch).
+
+4. **Not already done (completion detection)**:
+   - **Signal 1 (Merged or closed PR)**: Query for merged or closed PRs whose body references the issue with `Closes` or `Part of`:
+     ```bash
+     gh pr list --repo WebJamApps/<Repo> --state merged --json headRefName,body \
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
+     ```
+     If a merged or closed PR already addressed the issue, the issue is **appears already done: verify and close** (not startable).
+   - **Signal 2 (Concrete mechanically checkable end state)**: When the issue's acceptance criteria name a concrete, mechanically checkable end state — a filesystem path that must exist or must not exist (e.g. `test -d /path` or `test -f /path`), or a deterministic command whose exit status decides the matter — verify that state directly.
+     - *Priority for `Josh`-labeled manual steps*: `Josh`-labeled manual steps never produce a PR, so Signal 1 can never detect them. Prioritize checking their concrete end states directly (e.g. verifying an obsolete backup directory was deleted).
+     - *Bounded scope*: Only mechanically checkable criteria are verified directly. Do not attempt open-ended verification of arbitrary prose criteria, keeping check costs flat.
+   - If either signal indicates completion, the issue is classified as **appears already done: verify and close**.
+   - **Read-only rule**: This check is strictly read-only. It never closes an issue, comments on an issue, or edits a label on its own. It reports the completion evidence and lets Josh verify and close it.
 
 ## No-argument mode — auto-pick worklist based on agent surface
 
-Use this when the user types `/work-issue` (or `/next`) with no argument, or says "work-issue" / "next" /
+Use this when the user types `/work-issue` with no argument, or says "work-issue" / "next" /
 "next task" / "start the next task" without naming an issue.
 
 Determine which worklist file to read based on your agent surface:
@@ -66,46 +125,138 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
    `## Blocked` heading. Ignore the `## Blocked` and `## Needs Josh's review`
    sections (and anything else) entirely. Extract, in file order, each line's
    `Repo` and issue `num`.
-3. Walk the extracted list top-to-bottom. For each `Repo#num`, test it in order
-   and pick the **first** one that passes BOTH checks:
-   - **Still open**:
-     `gh issue view <num> --repo WebJamApps/<Repo> --json state -q .state`
-     returns `OPEN`. (Skips anything closed/merged even if the file is stale.)
-   - **Not already started** — neither of these is true:
-     - an OPEN PR already references it:
-       ```
-       gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body \
-         --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
-       ```
-       returns something (this mirrors the same PR-matching pattern
-       `handle-agy-tasks.sh` uses for its own resume detection); OR
-     - a dispatch branch already exists for it — check both the naming
-       prefixes `handle-agy-tasks.sh` actually creates/resumes
-       (`agy/<num>-*` from headless dispatch, `gemini/<num>-*` from an
-       interactive agy run):
-       ```
-       git -C ~/WebJamApps/<Repo> for-each-ref --format='%(refname:short)' \
-         "refs/heads/agy/<num>-*" "refs/heads/gemini/<num>-*"
-       git -C ~/WebJamApps/<Repo> ls-remote --heads origin \
-         "agy/<num>-*" "gemini/<num>-*"
-       ```
-       (the second command catches a branch that only exists on the remote,
-       not yet fetched locally) returns something.
+3. Walk the extracted list top-to-bottom. For each `Repo#num`, evaluate it using the **Startability test** above and pick the **first** one that is startable (still open, not blocked by any open native or body prerequisite, not already in flight, and not already done).
 
-   Skip any item failing either check and move to the next line.
-4. If a candidate passes both checks, that's the pick. Resolve it to
-   `Repo#num` and continue at **step 1 of "## Steps" below** — i.e. run
-   `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>`
-   and follow steps 2 onward exactly as written for the named-issue flow.
-5. If you reach the end of the list with no candidate passing (every item is
-   closed or already in flight), stop and tell Josh: "every item in <filename>'s runnable list is closed or already in flight — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
+   Skip any item that is closed, blocked by an open dependency, already in flight, or appears already done, and move to the next line.
+4. If a candidate passes, that is the pick. Resolve it to `Repo#num` and continue to the pre-checks (Blocked-drift check and Design-sync check) and step 1 of "## Steps" below — i.e. run `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>` and follow steps 2 onward exactly as written for the named-issue flow.
+5. If you reach the end of the list with no candidate passing (every item is closed, blocked, already in flight, or appears already done), stop and tell Josh: "every item in <filename>'s runnable list is closed, blocked, already in flight, or appears already done — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
 
 Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in this mode — they are read-only input.
 
+## Epics — resolve to a child, never implement the epic itself
+
+Run this **before** anything else, as soon as an issue is named.
+
+```bash
+gh issue view <num> --repo WebJamApps/<Repo> --json title,body --jq .title
+gh api repos/WebJamApps/<Repo>/issues/<num> --jq '.type.name // "none"'
+```
+
+If the native issue type is **`Epic`**, do NOT set up a branch and do NOT try to implement it. An
+epic is a container: it has no diff of its own and closes only when its children close. Instead:
+
+1. **Run the design-sync check below against the EPIC ITSELF, first.** An epic drifts from its
+   requirements document exactly as a child does, and it drifts worse: it is long-lived, it is where
+   people read for context, and nothing forces anyone back to it once the children are filed. This
+   is not hypothetical — on 2026-08-13 an epic was found still describing its mechanism as
+   undecided and its key measurement as unperformed, a day after both were settled in the document,
+   while every one of its children was in sync. Checking only children would have missed it.
+   If the epic is out of sync, stop and report before listing anything.
+3. List its children and their state:
+
+   ```bash
+   gh api repos/WebJamApps/<Repo>/issues/<num>/sub_issues \
+     --jq '.[] | "\(.number)\t\(.state)\t[\(.labels | map(.name) | join(","))]\t\(.title)"'
+   ```
+
+4. For each OPEN child, work out its status using the **Startability test** above:
+   - Check native `blocked_by` dependencies and external body markers.
+   - Check if an open PR or dispatch branch exists.
+   - Check if the child appears already done (via merged PR or concrete mechanically checkable acceptance criteria).
+   - (Remember: native dependencies govern issue blocking; the `Blocked` label is not required for issue dependencies and does not veto startability if all native blockers are closed and no external blocker exists.)
+5. Report the children to Josh as a numbered list, marking each:
+   - **startable** (or **startable (blocked drift: carries stale Blocked label with 0 open blockers)**),
+   - **blocked by `<repo#number "title">`** (if any native blocker is OPEN, or external prerequisite is un-met),
+   - **already in flight** (if an open PR or dispatch branch exists), or
+   - **appears already done: verify and close** (if a merged PR references it or concrete acceptance criteria are already satisfied).
+   Cite every issue as `repo#number "title"` — a bare number is unusable.
+6. **Stop and let Josh choose which child to work.** Do not auto-pick, and never pick more than one:
+   sibling children of one epic frequently touch the same repo, and two agents in one repo collide.
+7. Once he names a child, restart this skill from the top with that child as the target. The
+   pre-checks (Blocked-drift check and Design-sync check) run again, this time against the child — the epic passing does not vouch for its children, and a child passing does not vouch for the epic. Both are checked, always.
+
+If the type is anything other than `Epic`, continue.
+
+## Blocked-drift check — run BEFORE working the issue
+
+Native dependencies are the single source of truth for issue blockers. The `Blocked` label is reserved exclusively for external non-GitHub prerequisites. An issue can carry a stale `Blocked` label after all its blockers have closed, or carry the label when no native dependencies or external prerequisites ever existed. Because native dependencies govern issue blocking and blocker state outranks the label, a stale label alone does not prevent the issue from being worked, but the disagreement is drift that must be brought to Josh's attention before proceeding.
+
+1. Check if the target issue carries the `Blocked` label:
+   ```bash
+   gh issue view <num> --repo WebJamApps/<Repo> --json labels --jq '.labels[].name'
+   ```
+2. If `Blocked` is present:
+   - Query native `blocked_by` dependencies:
+     ```bash
+     gh api repos/WebJamApps/<Repo>/issues/<num>/dependencies/blocked_by \
+       --jq '.[] | "\(.repository.full_name)#\(.number) \(.state) — \(.title)"'
+     ```
+   - Check any external prerequisites or markers cited in the issue body.
+3. Evaluate for drift:
+   - If there are **OPEN** native blockers: The issue is genuinely blocked by GitHub issues. Stop and report the blocker(s) (`<repo#number "title">`) to Josh.
+   - If there is an **UNMET** external prerequisite (non-GitHub issue): The issue is genuinely blocked by an external prerequisite (legitimate use of `Blocked` label). Stop and report the blocker to Josh.
+   - If **ALL** native blockers are **CLOSED** (or **NONE** exist) AND no unmet external prerequisite exists: The issue carries the `Blocked` label despite having zero open blockers. This is **blocked drift** (stale `Blocked` label).
+4. If blocked drift is detected:
+   - **Stop and report the drift to Josh**: Report that `<Repo>#<num> "<title>"` carries the `Blocked` label, but all native blockers are closed (or none exist) and no external blocker exists.
+   - Show the blocker state receipts.
+   - Ask Josh for confirmation before proceeding to create a branch or implement the issue.
+   - **Do NOT silently proceed** and do NOT silently ignore the label.
+   - **Once Josh confirms the drift**, remove the stale `Blocked` label from the target issue (the child, if `/work-issue` was invoked against an Epic and resolved to a child — never the Epic, never any sibling) before continuing to the Design-sync check and Steps:
+     ```bash
+     gh issue edit <num> --repo WebJamApps/<Repo> --remove-label Blocked
+     ```
+     Only remove the label after Josh's confirmation — never before, never silently.
+5. If no `Blocked` label is present (and no open blockers exist):
+   - Continue to the Design-sync check.
+
+This check is read-only up to the point of Josh's confirmation of blocked drift. The only write it may ever perform is removing that one stale `Blocked` label from the target issue after he confirms — it never edits dependencies, issue bodies, any other label, or any issue other than the target. Bulk/sweep drift repair across the backlog remains the job of `/backlog-groom`; it is not the only path for the single issue in front of you.
+
+## Design-sync check — run BEFORE working the issue
+
+An issue can go stale when the requirements document it was written from changes and the issue is
+never updated. That has happened: an issue's acceptance criteria contradicted its own cited design
+section, an agent followed the issue rather than the document, and it wrote to a file outside every
+git repository to satisfy a criterion that should not have existed. Catch it here, before any code
+is written.
+
+1. Read the target issue body and look for a `## Design reference` block naming a requirements
+   document and section(s).
+   - **No such block** — say so plainly ("this issue cites no design document, so it cannot be
+     checked for drift") and continue. Do not invent a document to check against.
+2. Read the cited document at the cited sections. **If the path cannot be read, STOP and say so.**
+   Do not proceed on the issue body alone — the whole point of the pointer is that the document, not
+   the issue, carries the requirements.
+3. Compare the issue's `## What this builds` items and its acceptance criteria against those
+   sections. You are looking for one thing: **does the issue assert something the document
+   contradicts, or require something the document says is out of scope?**
+4. Report the result before doing any work:
+   - **In sync** — one line saying so, then continue to Steps.
+   - **Out of sync** — stop. Report each conflict as a table: what the issue says, what the document
+     says, and which section. Then ask Josh whether to fix the issue first. **Do not pick a side and
+     do not proceed** — if the two disagree, that is a defect in the issue, and working it either way
+     bakes the defect into a PR.
+5. Only after Josh says the issue is correct (or has had it corrected) do you continue to Steps.
+
+This check is read-only. It never edits the issue or the document on its own.
+
+## External / Dropbox-only deliverables (Skip Git branch & PR setup)
+
+When an issue's deliverables are strictly external documents (such as manual verification runbooks in `~/Dropbox/web-jam-llms/Token_Savings/...` or docs outside tracked git repositories) with **no tracked files created or modified inside the repository**:
+
+1. **Do NOT create a git branch or isolated worktree.**
+2. **Do NOT bump `deno.json` or `package.json`.**
+3. **Do NOT call `create-draft-pr.sh` or open a PR.** Creating a git PR whose only change is an artificial version bump produces a hollow PR and causes merge/rebase confusion.
+4. **Execution steps for external-only deliverables:**
+   - Author and edit the external document directly at its target path (e.g. `~/Dropbox/web-jam-llms/Token_Savings/design-issue-manual-steps-<YYYY-MM-DD>.md`).
+   - Execute all required format or content validators against the document (e.g. `deno task design:lint-runbook <path>` or `deno task design:lint-doc <path>`).
+   - Output the completed deliverable path, validation logs, and verification evidence directly in the chat session for human review and issue closure.
+5. **Mixed deliverables:** If an issue modifies *both* external files (e.g. Dropbox docs) *and* tracked repository files (e.g. code, tests, configs), it continues to follow the standard git worktree branch, test, and PR creation workflow.
+
 ## Steps
 
-1. Run this shell command (with the target issue the user named) and read
-   its stdout:
+1. **Check for external-only deliverable**: If the issue's deliverables are strictly external to the repository (e.g., Dropbox markdown runbooks or documents with zero repository files modified), follow the instructions in **External / Dropbox-only deliverables (Skip Git branch & PR setup)** above and do NOT run `handle-agy-tasks.sh --setup-only` or create a PR.
+
+   Otherwise, for repository code or mixed deliverables, run this shell command (with the target issue the user named) and read its stdout:
 
    ```
    ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only CollegeLutheran#123
@@ -115,16 +266,17 @@ Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in th
 
    ```
    === GEMINI-TASK READY ===
-   REPO_DIR: /home/joshua/WebJamApps/<repo>
+   REPO_DIR: /tmp/agy-worktrees/<repo>-<branch>
+   MAIN_CLONE: /home/joshua/WebJamApps/<repo> (untouched)
    BRANCH: gemini/<slug>
    === TASK PROMPT (implement this) ===
    <the task + standing rules>
    === END TASK ===
    ```
 
-   The branch is **already created and checked out** off fresh `dev`. If the script
-   exits non-zero (dirty tree, missing repo, bad/missing issue argument), stop and
-   report its error to the user — do not improvise.
+   The branch is **already created and checked out in the isolated `/tmp` worktree** off fresh `dev`.
+   The main clone (`MAIN_CLONE`) remains untouched. If the script exits non-zero (dirty tree, missing repo,
+   bad/missing issue argument), stop and report its error to the user — do not improvise.
 
 3. **Perform Model Label Check & Model Selection:** Before implementing:
    - Perform the **Model Label Check**:
@@ -136,9 +288,16 @@ Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in th
 
    **Model Chain (Most to least capable):**
    1. `Claude Opus 4.6 (Thinking)`
-   2. `Claude Sonnet 4.6 (Thinking)`
-   3. `Gemini 3.1 Pro (High)`
-   4. `Gemini 3.6 Flash (High)`
+   2. `Gemini 3.8 Flash (High)`
+   3. `Claude Sonnet 4.6 (Thinking)`
+   4. `Gemini 3.1 Pro (High)`
+
+   `Gemini 3.8 Flash (High)` sits above `Claude Sonnet 4.6 (Thinking)` on this ladder: on
+   contamination-resistant long-horizon coding (DeepSWE v1.1) it scores 73.7% against Sonnet 5's
+   54%, effectively matching Opus 5's 74%, and it bills a separate Google budget rather than the
+   constrained Anthropic one. Opus keeps the top slot because that parity does not extend to
+   abstract, multi-step unguided agent work (Terminal-Bench 4.0). Model names here are the exact
+   in-session picker `displayName` values and carry their version token — never version-scrub them.
 
    There are only **two independent quota pools** (verified — web-jam-tools#79):
    `{Claude Opus/Sonnet}` and `{Gemini Pro/Flash}`. `GPT-OSS 120B` shares Claude's
@@ -146,20 +305,21 @@ Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in th
    excluded from the chain. Failover only ever crosses Claude ↔ Gemini.
 
    **Classification Rules (in priority order):**
-   * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue` (or `/next`), use it and skip classification.
+   * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue`, use it and skip classification.
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:
-     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini 3.6 Flash (High)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
-     * *Ordinary Coding*: → `Claude Sonnet 4.6 (Thinking)`.
+     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini 3.8 Flash (Medium)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
+     * *Ordinary Coding*: → `Gemini 3.8 Flash (High)`. This is the tier that moved: ordinary contained coding used to route to `Claude Sonnet 4.6 (Thinking)`, which is now both weaker on this work and billed to the constrained budget. Route to Sonnet only when the task needs a Claude-side capability Flash lacks, and say which one.
      * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
    * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
 
    **Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain. Because Claude and Gemini are the only two pools, this effectively means: if a Claude model is walled, cross to Gemini (and vice versa).
 
-4. Work **entirely inside `REPO_DIR`**: cd there first; every file edit, command,
-   and commit happens in that directory. Read and follow that repo's `AGENTS.md`
-   (or `GEMINI.md`) for its conventions.
+4. Work **entirely inside `REPO_DIR`** (the isolated `/tmp` worktree): cd there first; every file edit,
+   command, and commit happens in that directory. Never work in `MAIN_CLONE`, and do not run
+   `git checkout`, `git switch`, or `git reset` in the main clone during the run. Read and follow
+   that repo's `AGENTS.md` (or `GEMINI.md`) for its conventions.
 
 5. Implement the task from the TASK PROMPT. Commit incrementally with clear,
    conventional messages as you go.
@@ -180,14 +340,15 @@ Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in th
      --summary "<what changed and why>" \
      --test-plan "<exact commands to verify + expected result>" \
      --test-evidence "<the actual lint + test output you saw, confirming both ran green>" \
-     --closes   # include ONLY if this PR fully completes the issue; omit for a partial PR
+     --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
    ```
 
    The script is the single source of truth (web-jam-tools#49) and **refuses to open a
    PR with an empty or placeholder description** (web-jam-tools#77) — so `--summary`,
-   `--test-plan`, and `--test-evidence` are required. By default it references the issue
-   (`Part of #N`); `--closes` makes it the completing PR (`Closes #N`). Never run
-   `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub.
+   `--test-plan`, and `--test-evidence` are required. By default the PR closes the issue
+   on merge (`Closes #N`); pass `--part-of` ONLY when the issue must stay open (`Part of #N`
+   for a partial PR, or a standing run-log/epic issue). (`--closes` is a deprecated no-op,
+   still accepted.) Never run `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub.
 
 ## PR body formatting (do this every time)
 
@@ -217,6 +378,5 @@ npm test
 Expect: lint + unit green." \
   --test-evidence "```
 ok | 42 passed | 0 failed
-```" \
-  --closes
+```"
 `````

@@ -14,57 +14,103 @@
 // guard, not an oversight to work around.
 
 import { assert } from "@std/assert";
+import {
+  extractDirectCommandHookScripts,
+  getGitTrackedModes,
+} from "../hooks/lib/direct_hook_commands.ts";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
 const HOOKS_DIR = new URL("../hooks/", import.meta.url).pathname;
+const INSTALL_HOOKS_PATH = new URL(
+  "../scripts/install-hooks.sh",
+  import.meta.url,
+).pathname;
+const REPO_DIR = new URL("../", import.meta.url).pathname;
 
 // Pinned set of skills/*/ directory names. Update deliberately.
 const EXPECTED_SKILL_DIRS = [
   "backlog-groom",
+  "book-gig",
   "delegate",
-  "draft-issue",
+  "design-issue",
   "draft-pr",
   "drive-cleanup",
+  "file-issue",
   "fix-labels",
   "flash-issues",
   "handle-gmails",
-  "issue-design",
   "memory-cleanup",
   "pr-review",
+  "sheet-music",
   "venue-mining",
   "work-issue",
 ];
 
 // Pinned set of hooks/*.sh filenames. Update deliberately.
 const EXPECTED_HOOK_SCRIPTS = [
+  // The translation shim (web-jam-tools#432) — registered by
+  // scripts/install-hooks.sh once per (matcher, hook) pair on the agy
+  // surface only. Normalizes agy's payload, enforces the matcher itself,
+  // runs the target hook unmodified, and translates its verdict into agy's
+  // own decision:"deny" veto form.
+  "agy-hook-shim.sh",
+  // agy-native in-session model guard (web-jam-tools#432 scope item 7) —
+  // denies a non-Flash model chosen mid-session via agy's `modelName`
+  // payload field, agy-only (Claude Code carries no such field).
+  "agy-model-guard.sh",
   "backlog-groom-reminder.sh",
   "backup-refusal-reminder.sh",
+  // Unconditional send/delete fence for Gmail on the agy surface
+  // (web-jam-tools#432 scope item 3) — agy-only.
+  "block-agy-gmail-send-delete.sh",
   "block-agy-non-flash-model.sh",
   "block-dangerous-git-deploy.sh",
   "block-human-only-credentials.sh",
   "block-irreversible-operations.sh",
+  // PreToolUse guard (web-jam-tools#511) — denies Write/Edit/NotebookEdit
+  // to paths outside the repository working tree.
+  "block-out-of-tree-write.sh",
+  // PreToolUse guard (web-jam-tools#685) — denies the four raw `gh` write
+  // verbs (gh pr review/comment, gh issue comment/edit) so a dispatched
+  // reviewing subagent can only reach them through the guarded
+  // scripts/gh-write/* `deno task` commands.
+  "block-raw-gh-write.sh",
   "block-secret-dumps.sh",
   // PreToolUse guard (web-jam-tools#304) — blocks a Bash command that
   // carries a credential-shaped LITERAL, before it can be approved and
   // persisted verbatim into permissions.allow.
   "block-secret-literals.sh",
-  // SessionStart hook (web-jam-tools#339) — read-only drift check that
-  // verifies symlinks and settings rules are up to date.
-  "check-install-hooks-drift.sh",
   "feature-branch-guard.sh",
   "flash-issues-reminder.sh",
   "fmt-push-guard.sh",
   "gh-api-guard.sh",
   "haiku-only-gmail-gate.sh",
+  // SessionStart reminder (web-jam-tools#664) — reports when installed hooks
+  // are behind origin/dev, registered at a dead path, or unregistered.
+  "hook-install-drift-reminder.sh",
   "memory-cleanup-reminder.sh",
   "notes-sync-reminder.sh",
-  // Stop hook (web-jam-tools#290) — detective-only warning when an Opus
-  // turn racks up edits with zero subagent spawns.
-  "opus-no-delegation-warning.sh",
+  // PreToolUse gate (web-jam-tools#641) — refuses repository code writes
+  // attempted directly by an Opus main session without explicit grant.
+  "opus-delegation-gate.sh",
+  // SessionStart reminder (web-jam-tools#784) — reports when settings.local.json
+  // contains over-broad allow rules with non-trailing wildcards.
+  "permission-wildcard-drift-reminder.sh",
+  // SessionEnd hook (web-jam-tools#818) — prunes offending permission allow rules
+  // on session end so a live session's flush cannot re-clobber them.
+  "prune-permission-allows-on-session-end.sh",
+  // Stop hook (web-jam-tools#531) — BLOCKING: rejects a message with more
+  // than one open question, a question that isn't the last thing in the
+  // message, or a safety-critical finding buried outside the final section.
+  "require-clear-communication.sh",
   // Stop hook (web-jam-tools#311) — BLOCKING: rejects a message that cites
   // an issue/PR without its title (repo#number "title").
   "require-issue-citation-titles.sh",
   "require-model-label-on-issue-create.sh",
+  // PreToolUse guard (web-jam-tools#502) — reads the plan-gate approval
+  // token and ALLOWs an issue_write/sub_issue_write call Josh already
+  // approved, or DENYs one he did not, instead of prompting either way.
+  "require-approval-token-on-issue-write.sh",
   // PostToolUse output scanner (web-jam-tools#272) — the first non-PreToolUse
   // guard here, and the only one that inspects output rather than commands.
   "scan-output-for-secrets.sh",
@@ -159,3 +205,37 @@ Deno.test("every hooks/*.sh has a corresponding behaviour test", () => {
       "\n  See test/block_agy_non_flash_model_hook.test.ts for the established pattern.",
   );
 });
+
+// web-jam-tools#683 — a hook script registered as a direct command (in Claude Code
+// settings.json or agy hooks.json) requires the executable bit (100755) in git.
+// When checked out or symlinked into live hook paths (~/.claude/hooks/), a 100644
+// mode causes tool execution to fail with permission denied (exit 126).
+// Scripts invoked via `bash <path>` (e.g. agy targets) or Deno modules (hooks/lib/*.ts)
+// do not require 100755 and remain 100644.
+
+Deno.test(
+  "every hook script registered as a direct command is tracked 100755 in git",
+  async () => {
+    const installerContent = Deno.readTextFileSync(INSTALL_HOOKS_PATH);
+    const directHookScripts = extractDirectCommandHookScripts(installerContent);
+    const trackedModes = await getGitTrackedModes(REPO_DIR);
+
+    const nonExecutable: string[] = [];
+    for (const hookName of directHookScripts) {
+      const mode = trackedModes.get(hookName);
+      if (mode !== "100755") {
+        nonExecutable.push(
+          `  hooks/${hookName} is tracked as ${mode ?? "untracked"} in git (expected 100755)`,
+        );
+      }
+    }
+
+    assert(
+      nonExecutable.length === 0,
+      "Every hook script registered as a direct command (in Claude Code settings.json " +
+        "or agy hooks.json) must be tracked as executable (100755) in git (web-jam-tools#683).\n" +
+        nonExecutable.join("\n") +
+        "\n  Run `git update-index --chmod=+x <file>` to fix.",
+    );
+  },
+);

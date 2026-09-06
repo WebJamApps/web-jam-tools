@@ -6,23 +6,42 @@
 #    file is backed up (never deleted) to ~/.claude/hooks/<name>.bak-<date>.
 #
 # 2. Idempotently merges the SessionStart hook(s) listed in
-#    SESSION_START_HOOKS, the PreToolUse hook(s) (any matcher) listed in
-#    PRE_TOOL_USE_HOOKS, and the permissions.deny patterns listed in
-#    DENY_RULES, below into ~/.claude/settings.json (only adding entries
-#    that aren't already there; every other key — permissions.allow,
-#    permissions.ask, other hook events, etc. — is left untouched).
+#    SESSION_START_HOOKS, the SessionEnd hook(s) listed in
+#    SESSION_END_HOOKS, the Stop hook(s) listed in STOP_HOOKS, the PreToolUse
+#    hook(s) (any matcher) listed in PRE_TOOL_USE_HOOKS, and the
+#    permissions.deny patterns listed in DENY_RULES, below into
+#    ~/.claude/settings.json (only adding entries that aren't already there;
+#    every other key — permissions.allow, permissions.ask, other hook events,
+#    etc. — is left untouched).
 #    settings.json is backed up to settings.json.bak-<date> immediately
 #    before any write, and only if a write is actually happening.
+#
+#    Also symlinks scripts/statusline.sh into the same hooks destination
+#    (alongside the *.sh hook symlinks, but not part of the hook-registration
+#    loop — it is not a hook) and idempotently merges that STABLE installed
+#    path into the "statusLine" key of ~/.claude/settings.json only — Claude
+#    Code ONLY, never agy's hooks.json, since agy has no status-line surface
+#    for this to install into (web-jam-tools#688, web-jam-tools#691).
+#
+#    Also idempotently sets "permissions.defaultMode" to DEFAULT_MODE
+#    (currently "acceptEdits") in ~/.claude/settings.json — Claude Code ONLY,
+#    never agy's hooks.json, since agy has no permission-mode concept at all
+#    (docs/agy-hooks.md). This pins the session out of the "auto" mode in
+#    which hooks/opus-delegation-gate.sh withdraws its subagent exemption and
+#    refuses every Edit/Write/NotebookEdit — a defect that burned two
+#    dispatched subagents (~93k and ~62k tokens, zero output) before nothing
+#    pinned the mode (web-jam-tools#705).
 #
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
-# scripts/backup-claude-memory.sh). SESSION_START_HOOKS / PRE_TOOL_USE_HOOKS /
-# DENY_RULES below are the hooks and deny patterns THIS script keeps
-# registered automatically; add a new hook's script name (+ matcher, for
-# PreToolUse) or a new deny pattern there and re-run to wire it up with no
-# manual settings edit (web-jam-tools#163; PreToolUse matcher generalization
-# web-jam-tools#265; DENY_RULES web-jam-tools#308).
+# scripts/backup-claude-memory.sh). SESSION_START_HOOKS / SESSION_END_HOOKS /
+# PRE_TOOL_USE_HOOKS / DENY_RULES below are the hooks and deny patterns THIS
+# script keeps registered automatically; add a new hook's script name (+
+# matcher, for PreToolUse) or a new deny pattern there and re-run to wire it
+# up with no manual settings edit (web-jam-tools#163; PreToolUse matcher
+# generalization web-jam-tools#265; DENY_RULES web-jam-tools#308;
+# SESSION_END_HOOKS web-jam-tools#818).
 #
 # DENY_RULES is purely additive and versioned here so the same deny patterns
 # are both checked into the repo AND live on this laptop's real
@@ -34,6 +53,13 @@
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
 #                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
 #                           the symlink step without touching the real hooks dir.
+#                           REQUIRES --settings-path (or CLAUDE_SETTINGS_PATH) to
+#                           also be passed — --hooks-dir only redirects where hook
+#                           symlinks are created, never the settings-merge targets,
+#                           so passing it alone would still merge into the REAL
+#                           $HOME/.claude/settings.json and $HOME/.gemini/config/
+#                           hooks.json; the script refuses that combination
+#                           (web-jam-tools#721).
 #   --settings-path PATH   Merge into PATH instead of $HOME/.claude/settings.json
 #                           (also settable via CLAUDE_SETTINGS_PATH). Mainly for
 #                           testing the merge without touching a real settings file.
@@ -43,6 +69,8 @@
 #                           unless --hooks-dir is ALSO passed (web-jam-tools#273).
 #   --agy-hooks-path PATH  Merge agy hooks into PATH instead of $HOME/.gemini/config/hooks.json
 #                           (also settable via AGY_HOOKS_PATH).
+#   --agents-md-path PATH  Merge rules pointer into PATH instead of $HOME/.agents/AGENTS.md
+#                           (also settable via AGENTS_MD_PATH).
 #   --force                 Required to link into the default hooks destination when
 #                           this script is running from inside a git worktree (see
 #                           the worktree guard below). Not needed with --hooks-dir.
@@ -68,6 +96,14 @@ else
   AGY_HOOKS_PATH="$HOME/.gemini/config/hooks.json"
 fi
 
+AGENTS_MD_PATH_EXPLICIT=0
+if [ -n "${AGENTS_MD_PATH:-}" ]; then
+  AGENTS_MD_PATH="$AGENTS_MD_PATH"
+  AGENTS_MD_PATH_EXPLICIT=1
+else
+  AGENTS_MD_PATH="$HOME/.agents/AGENTS.md"
+fi
+
 # HOOKS_DEST_IS_DEFAULT tracks whether HOOKS_DEST is still the real, live
 # destination (as opposed to a caller-supplied override via --hooks-dir or
 # CLAUDE_HOOKS_DIR). The worktree guard below only fires when it's still "1" —
@@ -87,19 +123,22 @@ FORCE=0
 # each into the literal command string "$HOME/.claude/hooks/<name>" (expanded
 # by the shell that runs the hook, not by this installer — matches the style
 # of the hooks already wired into settings.json).
-SESSION_START_HOOKS=(notes-sync-reminder.sh check-install-hooks-drift.sh memory-cleanup-reminder.sh flash-issues-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh)
+SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh flash-issues-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh)
+
+# SessionEnd hooks this installer keeps registered in settings.json (web-jam-tools#818).
+# Same flat, no-matcher shape as SESSION_START_HOOKS and STOP_HOOKS — SessionEnd
+# fires unconditionally at session termination.
+SESSION_END_HOOKS=(prune-permission-allows-on-session-end.sh)
 
 # Stop hooks this installer keeps registered in settings.json (web-jam-tools#290).
 # Same flat, no-matcher shape as SESSION_START_HOOKS — Stop fires
 # unconditionally at the end of a turn, same as SessionStart fires
 # unconditionally at the start of a session.
 #
-# require-issue-citation-titles.sh (web-jam-tools#311) is BLOCKING (exits 2
-# on a bare issue/PR citation), unlike opus-no-delegation-warning.sh which
-# is deliberately detective-only (always exits 0) — both are wired the same
-# way here since Stop hooks all fire unconditionally regardless of whether
-# an individual hook chooses to block.
-STOP_HOOKS=(opus-no-delegation-warning.sh require-issue-citation-titles.sh)
+# require-issue-citation-titles.sh (web-jam-tools#311) and
+# require-clear-communication.sh (web-jam-tools#531) are BLOCKING (exit 2 on
+# a violation).
+STOP_HOOKS=(require-issue-citation-titles.sh require-clear-communication.sh)
 
 # PreToolUse hooks this installer keeps registered in settings.json, as
 # "<matcher>::<script>" pairs (web-jam-tools#265 — generalized from a
@@ -121,7 +160,11 @@ PRE_TOOL_USE_HOOKS=(
   "Bash|Edit|Write::block-human-only-credentials.sh"
   "Edit|Write::feature-branch-guard.sh"
   "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
-  "mcp__.*__issue_write::require-model-label-on-issue-create.sh"
+  "Bash|mcp__.*__issue_write::require-model-label-on-issue-create.sh"
+  "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
+  "Write|Edit|NotebookEdit::opus-delegation-gate.sh"
+  "Bash|mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
+  "Bash::block-raw-gh-write.sh"
 )
 
 # PostToolUse hooks, same "<matcher>::<script>" shape (web-jam-tools#272).
@@ -132,6 +175,38 @@ PRE_TOOL_USE_HOOKS=(
 POST_TOOL_USE_HOOKS=(
   "Bash::scan-output-for-secrets.sh"
 )
+
+# agy-ONLY PreToolUse hooks (web-jam-tools#432) — never wired into Claude
+# Code's settings.json, only into AGY_HOOKS_PATH (via the shim below). Both
+# depend on agy-native payload fields (raw, unprefixed MCP tool names;
+# `modelName`) that Claude Code's hook payload doesn't carry, so they would
+# either misfire or never fire there.
+AGY_ONLY_PRE_TOOL_USE_HOOKS=(
+  "send_email|delete_email|batch_delete_emails::block-agy-gmail-send-delete.sh"
+  ".*::agy-model-guard.sh"
+)
+
+# permissions.defaultMode this installer keeps set in settings.json
+# (web-jam-tools#705). When the session's permission mode is "auto" (rather
+# than a deliberate mode), hooks/opus-delegation-gate.sh withdraws its
+# subagent exemption and refuses EVERY Edit/Write/NotebookEdit to a
+# git-tracked path, main thread and subagent alike — measured cost: two
+# dispatched Sonnet subagents refused on their first edit, ~93k and ~62k
+# tokens burned for zero output (2026-08-22). Nothing pinned the session out
+# of the mode that triggers it, so this installer now does: it sets
+# permissions.defaultMode to "acceptEdits", the same versioned/idempotent way
+# it already manages DENY_RULES/ASK_RULES below (single scalar value, not a
+# list — see the permissions.defaultMode merge in
+# scripts/merge-hooks-into-settings.ts, modeled on the statusLine merge from
+# web-jam-tools#688).
+#
+# Claude Code ONLY — deliberately NOT mirrored into agy's hooks.json. agy has
+# no permission-mode concept at all (docs/agy-hooks.md: "without touching
+# Claude Code's permissions at all (non-goal)"), so DEFAULT_MODE is passed
+# only to the $SETTINGS_PATH invocations below, never to the $AGY_HOOKS_PATH
+# ones (Josh-approved single-surface exception to the usual both-surfaces
+# rule for hook/skill changes).
+DEFAULT_MODE="acceptEdits"
 
 # permissions.deny patterns this installer keeps registered in settings.json
 # (web-jam-tools#308). PreToolUse hooks exit with code 2 to hard-block
@@ -167,7 +242,10 @@ DENY_RULES=(
   # git push <remote> :<branch>  (empty-source colon refspec — also deletes)
   'Bash(git push * :*)'
 
-  # git push --force / -f / --force-with-lease
+  # git push --force / -f  — plain force stays DENIED, always. It overwrites
+  # whatever arrived on the remote since your last fetch, with no check.
+  # NOTE: --force-with-lease is deliberately NOT here — it moved to ASK_RULES
+  # below. See the comment there for why.
   'Bash(git push --force *)'
   'Bash(git push --force)'
   'Bash(git push * --force *)'
@@ -176,8 +254,6 @@ DENY_RULES=(
   'Bash(git push -f)'
   'Bash(git push * -f *)'
   'Bash(git push * -f)'
-  'Bash(git push --force-with-lease*)'
-  'Bash(git push * --force-with-lease*)'
 
   # git branch -D / --delete --force against a remotes/ ref (local ref
   # deletion of a REMOTE-tracking branch is out of scope of the local
@@ -300,6 +376,31 @@ DENY_RULES=(
 # (web-jam-tools#339). Patterns in permissions.ask force Claude Code to prompt
 # for confirmation before executing matching commands.
 ASK_RULES=(
+  # git push --force-with-lease — ASK, not DENY (Josh, 2026-08-13:
+  # "force with lease should be allowed if I give permission").
+  #
+  # This is NOT a loosening of the remote-branch HARD RULE, which requires an
+  # explicit imperative from Josh naming the branch before any force-push. A
+  # deny rule cannot represent that: it is static string matching with no view
+  # of the conversation, so it refused the authorized case and the unauthorized
+  # one identically. An ask prompt IS the mechanism that represents it — it
+  # shows Josh the literal command including the branch name and takes his
+  # answer, per invocation, before anything runs. The check is not removed; it
+  # is moved to the only layer that can actually evaluate the condition the
+  # hard rule states.
+  #
+  # Scoped to --force-with-lease alone, which git itself refuses to run when
+  # the remote moved after your last fetch — the case where a force push
+  # destroys someone else's work is structurally prevented. Plain --force
+  # remains in DENY_RULES above with no prompt and no exception, as do branch
+  # deletion, empty-source refspecs, --mirror and --prune.
+  #
+  # Origin: 2026-08-13, a rebase of a feature branch behind an open PR could
+  # not be published at all — the deny rule blocked the push and no
+  # authorization from Josh could lift it, so the rebase was unlandable.
+  'Bash(git push --force-with-lease*)'
+  'Bash(git push * --force-with-lease*)'
+
   # gh pr (11 write verbs)
   'Bash(gh pr create *)'
   'Bash(gh pr create)'
@@ -470,6 +571,25 @@ ASK_RULES=(
   'mcp__claude_ai_GitHub_MCP__run_secret_scanning'
 )
 
+# permissions.allow patterns this installer keeps registered in settings.json
+# (web-jam-tools#685, §3a of
+# ~/Dropbox/web-jam-llms/Token_Savings/pr-review-self-posting-design-2026-08-22.md).
+# Defence in depth on the Claude Code surface ONLY — a second layer nothing
+# depends on, since hooks/block-raw-gh-write.sh is the primary enforcement on
+# BOTH surfaces (decision 8). Names exactly the four guarded `deno task`
+# capabilities this repo now gates the raw gh verbs behind, so approving one
+# of them does not also pre-approve unrelated `deno task`/`npm run` scripts —
+# unlike the blanket `Bash(deno task *)`/`Bash(npm run *)` wildcards these
+# narrow rules are meant to make removable (scripts/prune-local-permission-allows.sh).
+# agy has no allow list to narrow and needs none (§3b) — never mirrored there.
+ALLOW_RULES=(
+  'Bash(deno task post-pr-review *)'
+  'Bash(deno task post-pr-comment *)'
+  'Bash(deno task post-issue-comment *)'
+  'Bash(deno task edit-issue *)'
+  'Bash(deno task unblock-issue *)'
+)
+
 CHECK_MODE=0
 
 while [ $# -gt 0 ]; do
@@ -493,6 +613,11 @@ while [ $# -gt 0 ]; do
       AGY_HOOKS_PATH_EXPLICIT=1
       shift 2
       ;;
+    --agents-md-path)
+      AGENTS_MD_PATH="$2"
+      AGENTS_MD_PATH_EXPLICIT=1
+      shift 2
+      ;;
     --force)
       FORCE=1
       shift
@@ -504,8 +629,38 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# --- Partial-sandbox guard (web-jam-tools#721) ---
+# --hooks-dir/CLAUDE_HOOKS_DIR only ever redirected where hook *symlinks* are
+# created (HOOKS_DEST) — it never redirected the settings-merge targets
+# (SETTINGS_PATH, and transitively AGY_HOOKS_PATH/AGENTS_MD_PATH, both
+# derived from SETTINGS_PATH above). A caller who passed --hooks-dir alone,
+# believing that flag sandboxes "the test run," still had this installer
+# merge into the REAL $HOME/.claude/settings.json and $HOME/.gemini/config/
+# hooks.json — in particular overwriting the live statusLine command with a
+# path into the temporary hooks directory. That happened for real during
+# work on a different issue (see #721's reproduction).
+#
+# Refuse the combination instead of silently deriving a second sandboxed
+# path, matching the existing worktree guard below: name the exact flag the
+# caller needs to pass, and fail BEFORE any write, not after.
+if [ "$HOOKS_DEST_IS_DEFAULT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "0" ]; then
+  echo "error: --hooks-dir (or CLAUDE_HOOKS_DIR) was given without --settings-path." >&2
+  echo "--hooks-dir only sandboxes where hook symlinks are created — it does NOT" >&2
+  echo "sandbox the settings-merge targets (\$HOME/.claude/settings.json," >&2
+  echo "\$HOME/.gemini/config/hooks.json), so this combination would still merge" >&2
+  echo "into your REAL live settings, including overwriting the live statusLine" >&2
+  echo "command with a path into the temporary hooks directory (web-jam-tools#721)." >&2
+  echo "Pass --settings-path PATH (or CLAUDE_SETTINGS_PATH) too to fully sandbox" >&2
+  echo "this run." >&2
+  exit 1
+fi
+
 if [ "$AGY_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
   AGY_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/hooks.json"
+fi
+
+if [ "$AGENTS_MD_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  AGENTS_MD_PATH="$(dirname "$SETTINGS_PATH")/AGENTS.md"
 fi
 
 [ -d "$HOOKS_SRC" ] || { echo "error: $HOOKS_SRC not found" >&2; exit 1; }
@@ -537,6 +692,14 @@ for name in "${STOP_HOOKS[@]}"; do
   merge_stop_args+=('$HOME/.claude/hooks/'"$name")
 done
 
+merge_session_end_args=()
+for name in "${SESSION_END_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in SESSION_END_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_session_end_args+=('$HOME/.claude/hooks/'"$name")
+done
+
 merge_pre_tool_use_args=()
 for entry in "${PRE_TOOL_USE_HOOKS[@]}"; do
   matcher="${entry%%::*}"
@@ -557,8 +720,80 @@ for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
   merge_post_tool_use_args+=("$matcher"'::$HOME/.claude/hooks/'"$name")
 done
 
+[ -e "$HOOKS_SRC/agy-hook-shim.sh" ] || { echo "error: $HOOKS_SRC/agy-hook-shim.sh not found" >&2; exit 1; }
+
+# --- Status line (web-jam-tools#688, web-jam-tools#691) ---
+# Claude Code ONLY — agy has no status-line surface for this to install
+# into, so unlike a hook or a skill this is a single-surface change by
+# nature, not by omission. merge_status_line_args below is passed to the
+# $SETTINGS_PATH invocations exclusively; the $AGY_HOOKS_PATH invocations
+# never receive it and stay byte-identical to before this feature existed.
+#
+# The registered command is the STABLE installed path under $HOOKS_DEST
+# (same destination the *.sh hooks are symlinked into, honoring
+# --hooks-dir/CLAUDE_HOOKS_DIR), never $REPO_DIR — a raw working-tree path
+# breaks if the repo moves or a checked-out branch lacks the file
+# (web-jam-tools#691). The actual symlink is created below, alongside the
+# hook symlinks, but scripts/statusline.sh is NOT added to HOOKS_SRC/the
+# hook-registration loops — it is not a hook.
+[ -e "$REPO_DIR/scripts/statusline.sh" ] || { echo "error: $REPO_DIR/scripts/statusline.sh not found" >&2; exit 1; }
+STATUS_LINE_DEST="$HOOKS_DEST/statusline.sh"
+STATUS_LINE_COMMAND="$STATUS_LINE_DEST"
+merge_status_line_args=("$STATUS_LINE_COMMAND")
+
+# --- permissions.defaultMode (web-jam-tools#705) ---
+# Same Claude-Code-only scoping as merge_status_line_args above: passed only
+# to the $SETTINGS_PATH invocations below, never to $AGY_HOOKS_PATH.
+merge_default_mode_args=("$DEFAULT_MODE")
+
+# --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432) ---
+#
+# agy ignores its own PreToolUse "matcher" JSON field entirely (finding 2),
+# and neither Claude veto mechanism (exit 2 /
+# hookSpecificOutput.permissionDecision) is honoured there (finding 5) — so
+# every hook registered directly is a no-op on that surface. Instead of
+# registering each hook script directly (as the Claude settings.json args
+# above do), every agy-side entry is wrapped in
+# hooks/agy-hook-shim.sh <event> <base64-matcher> <target-hook-path>, which
+# normalizes the payload, enforces the matcher itself, runs the target hook
+# UNMODIFIED, and translates its verdict into agy's own
+# {"decision":"deny","reason":"..."} form (verified working — finding 6).
+#
+# The matcher is base64-encoded rather than embedded as literal shell text:
+# agy's exact command-string invocation mechanism (full shell parse, vs. a
+# naive whitespace split) is not independently verifiable (agy is
+# closed-source), and several matchers below contain shell metacharacters
+# ("mcp__(gmail|claude_ai_Gmail)__.*", "Bash|mcp__.*") that would be
+# misparsed or trigger glob expansion under a naive/unquoted split. Base64
+# text is safe under either invocation mechanism.
+agy_shim_arg() {
+  local event="$1" matcher="$2" name="$3"
+  local matcher_b64
+  matcher_b64="$(printf '%s' "$matcher" | base64 | tr -d '\n')"
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  printf '%s' "$matcher"'::$HOME/.claude/hooks/agy-hook-shim.sh '"$event"' '"$matcher_b64"' $HOME/.claude/hooks/'"$name"
+}
+
+merge_agy_pre_tool_use_args=()
+for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
+  matcher="${entry%%::*}"
+  name="${entry#*::}"
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS/AGY_ONLY_PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
+  merge_agy_pre_tool_use_args+=("$(agy_shim_arg PreToolUse "$matcher" "$name")")
+done
+
+merge_agy_post_tool_use_args=()
+for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
+  matcher="${entry%%::*}"
+  name="${entry#*::}"
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in POST_TOOL_USE_HOOKS)" >&2; exit 1; }
+  merge_agy_post_tool_use_args+=("$(agy_shim_arg PostToolUse "$matcher" "$name")")
+done
+
 merge_deny_args=("${DENY_RULES[@]}")
 merge_ask_args=("${ASK_RULES[@]}")
+merge_allow_args=("${ALLOW_RULES[@]}")
 
 if [ "$CHECK_MODE" = "1" ]; then
   DRIFT=0
@@ -585,17 +820,23 @@ if [ "$CHECK_MODE" = "1" ]; then
     done
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"; then
+  if [ ! -L "$STATUS_LINE_DEST" ] || [ "$(readlink -f "$STATUS_LINE_DEST")" != "$(readlink -f "$REPO_DIR/scripts/statusline.sh")" ]; then
+    echo "drift: status-line script is not linked at $STATUS_LINE_DEST" >&2
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/sync-cross-ai-rules.ts" --check; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
     DRIFT=1
   fi
+
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH" "--check"; then
+    DRIFT=1
+  fi
+
 
   if [ "$DRIFT" -ne 0 ]; then
     echo "error: drift detected" >&2
@@ -662,6 +903,25 @@ if [ -d "$HOOKS_DEST" ]; then
   done
 fi
 
+# --- Status-line script symlink (web-jam-tools#688, web-jam-tools#691) ---
+# scripts/statusline.sh is not a hook — it deliberately stays out of
+# HOOKS_SRC/the hook-registration loops above (PreToolUse/PostToolUse/
+# SessionStart/Stop never see it) — but it gets the same stable,
+# checkout-independent installed location under $HOOKS_DEST so the
+# "statusLine" command merged into settings.json below (STATUS_LINE_COMMAND)
+# survives the repo moving or a branch checkout lacking the file, the same
+# guarantee the *.sh hooks already have.
+if [ -L "$STATUS_LINE_DEST" ] && [ "$(readlink -f "$STATUS_LINE_DEST")" = "$(readlink -f "$REPO_DIR/scripts/statusline.sh")" ]; then
+  echo "statusline.sh: ok (already linked)"
+elif [ -e "$STATUS_LINE_DEST" ] || [ -L "$STATUS_LINE_DEST" ]; then
+  mv "$STATUS_LINE_DEST" "$STATUS_LINE_DEST.bak-$STAMP"
+  ln -s "$REPO_DIR/scripts/statusline.sh" "$STATUS_LINE_DEST"
+  echo "statusline.sh: linked (previous version backed up to statusline.sh.bak-$STAMP)"
+else
+  ln -s "$REPO_DIR/scripts/statusline.sh" "$STATUS_LINE_DEST"
+  echo "statusline.sh: linked (new)"
+fi
+
 # The merge logic itself lives in its own file (web-jam-tools#265) so it can
 # also be unit-tested in isolation against fixture JSON, independent of the
 # symlink step above (see test/install_hooks_merge.test.ts). This installer
@@ -669,6 +929,8 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
+
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH"

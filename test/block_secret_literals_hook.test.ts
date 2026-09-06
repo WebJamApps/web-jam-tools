@@ -18,6 +18,7 @@
 // PostToolUse output scanner or any secret-scanning CI step.
 
 import { assertEquals } from "@std/assert";
+import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 const SCRIPT_PATH = new URL("../hooks/block-secret-literals.sh", import.meta.url).pathname;
 
@@ -52,14 +53,17 @@ function assertBlocked(stderr: string) {
 }
 
 // Fake values assembled at runtime so no complete credential-shaped literal
-// sits in the repo.
+// sits in the repo. Bodies are VARIED (test/support/varied_fake_value.ts),
+// not repeated characters — hooks/lib/detect_credential_literal.ts's
+// synthetic-value heuristic would otherwise auto-suppress an 8+ run of the
+// same character, defeating these "must be blocked" fixtures.
 const FAKE = {
-  google: "AIza" + "B".repeat(35),
-  github: "ghp_" + "C".repeat(36),
-  githubPat: "github_pat_" + "H".repeat(22),
-  openai: "sk-" + "D".repeat(32),
-  slack: "xoxb-" + "1".repeat(12),
-  anthropic: "sk-ant-" + "G".repeat(24),
+  google: "AIza" + variedFakeBody(35, 20),
+  github: "ghp_" + variedFakeBody(36, 21),
+  githubPat: "github_pat_" + variedFakeBody(22, 22),
+  openai: "sk-" + variedFakeBody(32, 23),
+  slack: "xoxb-" + variedFakeBody(12, 24),
+  anthropic: "sk-ant-" + variedFakeBody(24, 25),
 };
 
 // --- the actual 2026-07-29 incident: export of a literal API key ---
@@ -79,7 +83,7 @@ Deno.test("export of an unquoted Google API key literal is blocked", async () =>
 // --- vendor-specific credential shapes, anywhere in the command ---
 
 Deno.test("a GitHub token literal anywhere in the command is blocked", async () => {
-  const res = await runHook(`curl -H "Authorization: token ${FAKE.github}" https://api.github.com`);
+  const res = await runHook(`curl -H "Authorization: token ${FAKE.github}" https://api.github.com`); // webjam-fixture-ok
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
@@ -111,13 +115,13 @@ Deno.test("a Slack token literal is blocked", async () => {
 // --- generic shape: export of a credential-named var with ANY literal RHS ---
 
 Deno.test("export of a *_SECRET var with a plain-word literal is blocked (generic shape)", async () => {
-  const res = await runHook(`export DB_PASSWORD=hunter2`);
+  const res = await runHook(`export DB_PASSWORD=hunter2`); // webjam-fixture-ok
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
 
 Deno.test("export of a *_TOKEN var with a quoted plain literal is blocked (generic shape)", async () => {
-  const res = await runHook(`export SOME_TOKEN="not-a-real-shape-but-still-a-literal"`);
+  const res = await runHook(`export SOME_TOKEN="not-a-real-shape-but-still-a-literal"`); // webjam-fixture-ok
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });

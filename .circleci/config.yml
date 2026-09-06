@@ -3,7 +3,7 @@ version: 2.1
 # CI quality + security gate for web-jam-tools (web-jam-tools#84, extended #133).
 #
 # Runs the same checks you can run locally, so "green locally" == "green in CI":
-#   deno task check · lint · fmt:check · coverage:check · audit · sast
+#   deno task check · lint · fmt:check · jscpd · coverage:check · audit · sast
 # (coverage:check runs the unit tests — including the skills/ + sources.yaml
 # validation test, web-jam-tools#133 — and fails under 90% all-files line
 # coverage)
@@ -11,7 +11,7 @@ version: 2.1
 #   deno.json "version" bump check (PR branches only — diffs against the
 #   merge-base with origin/dev; skipped on dev/main)
 #
-# Uses a `docker` executor (Node 24.18.1 LTS base) with Deno, Trivy, Semgrep, and
+# Uses a `docker` executor (Node 24.19.0 LTS base) with Deno, Trivy, Semgrep, and
 # shellcheck installed as binaries — so the whole gate can be reproduced
 # locally with `circleci local execute gate` (great for debugging CI). The
 # audit/sast scripts auto-detect: they use these binaries here, and fall back
@@ -25,7 +25,7 @@ version: 2.1
 executors:
   ci:
     docker:
-      - image: cimg/node:24.18.1
+      - image: cimg/node:24.19.0
 
 jobs:
   gate:
@@ -42,7 +42,7 @@ jobs:
           name: Install Deno + Trivy + Semgrep + shellcheck
           command: |
             # Deno (pinned)
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.4
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.5
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
             # Trivy (pinned)
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
@@ -57,13 +57,20 @@ jobs:
               "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
               -o /tmp/shellcheck.tar.xz
             tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-            sudo mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
-            rm -rf /tmp/shellcheck.tar.xz "/tmp/shellcheck-${SHELLCHECK_VERSION}"
+            # gitleaks (pinned)
+            GITLEAKS_VERSION="v8.24.0"
+            curl -fsSL \
+              "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" \
+              -o /tmp/gitleaks.tar.gz
+            tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+            sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+            sudo chmod +x /usr/local/bin/gitleaks
+            rm -f /tmp/gitleaks.tar.gz
       - run:
           name: Tool versions
           command: |
             deno --version && node -v && npm -v && trivy --version && semgrep --version
-            shellcheck --version
+            shellcheck --version && gitleaks version
       - restore_cache:
           keys:
             - deno-deps-v1-{{ checksum "deno.json" }}-{{ checksum "deno.lock" }}
@@ -119,8 +126,9 @@ jobs:
       - run:
           name: Version bump check (PR branches only)
           command: |
-            # web-jam-tools#133: replaces relying on the local pre-push hook
-            # alone. Skipped on dev/main (nothing to diff against itself).
+            # web-jam-tools#133 / web-jam-tools#582:
+            # Enforces that PR branches have a version strictly greater than origin/dev.
+            # Skipped on dev/main (nothing to diff against itself).
             # Falls back to the actual git branch when CIRCLE_BRANCH is unset
             # (e.g. `circleci local execute gate`) so local reproduction works.
             BRANCH="${CIRCLE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
@@ -129,20 +137,42 @@ jobs:
               exit 0
             fi
             git fetch --quiet origin dev
-            MERGE_BASE="$(git merge-base HEAD origin/dev)"
             HEAD_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('deno.json')).version)")"
-            git show "${MERGE_BASE}:deno.json" > /tmp/base-deno.json
-            BASE_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('/tmp/base-deno.json')).version)")"
+            git show "origin/dev:deno.json" > /tmp/dev-deno.json
+            DEV_VERSION="$(deno eval "console.log(JSON.parse(Deno.readTextFileSync('/tmp/dev-deno.json')).version)")"
             echo "Branch: $BRANCH"
-            echo "Merge-base with origin/dev: $MERGE_BASE"
-            echo "Base version:  $BASE_VERSION"
-            echo "HEAD version:  $HEAD_VERSION"
-            if [ "$BASE_VERSION" = "$HEAD_VERSION" ]; then
-              echo 'FAIL: deno.json "version" is unchanged since the merge-base with origin/dev.' >&2
-              echo "Bump the version in deno.json (once per PR, on the first commit) before merging." >&2
-              exit 1
-            fi
-            echo "OK: version bumped from $BASE_VERSION to $HEAD_VERSION"
+            echo "origin/dev version: $DEV_VERSION"
+            echo "HEAD version:       $HEAD_VERSION"
+            deno eval '
+              function parseSemver(v) {
+                const parts = v.split(".").map(Number);
+                if (parts.length < 3 || parts.some(isNaN)) {
+                  console.error(`FAIL: invalid semver format: ${v}`);
+                  Deno.exit(1);
+                }
+                return parts;
+              }
+              function compare(a, b) {
+                const pa = parseSemver(a);
+                const pb = parseSemver(b);
+                for (let i = 0; i < 3; i++) {
+                  if (pa[i] !== pb[i]) return pa[i] - pb[i];
+                }
+                return 0;
+              }
+              const dev = Deno.args[0];
+              const head = Deno.args[1];
+              const cmp = compare(head, dev);
+              const [dMaj, dMin, dPatch] = parseSemver(dev);
+              const nextPatch = `${dMaj}.${dMin}.${dPatch + 1}`;
+              if (cmp <= 0) {
+                console.error(`FAIL: deno.json "version" (${head}) must be strictly greater than origin/dev (${dev}).`);
+                console.error(`Next available patch version on origin/dev is ${nextPatch}.`);
+                console.error("Bump the version in deno.json (once per PR, on the first commit) before merging.");
+                Deno.exit(1);
+              }
+              console.log(`OK: version bumped from ${dev} on origin/dev to ${head}`);
+            ' "$DEV_VERSION" "$HEAD_VERSION"
       - run:
           name: PR base branch verification (main requires dev head)
           command: |
@@ -163,8 +193,8 @@ jobs:
           name: Format check
           command: deno task fmt:check
       - run:
-          name: Cross-AI rules sync check (--check)
-          command: deno task sync-cross-ai-rules:check
+          name: Code duplication check (jscpd)
+          command: deno task jscpd
       - run:
           name: Install hooks drift check (--check)
           command: |
@@ -172,6 +202,30 @@ jobs:
             temp_settings="$(mktemp -d)/settings.json"
             bash scripts/install-hooks.sh --hooks-dir "$temp_hooks" --settings-path "$temp_settings"
             bash scripts/install-hooks.sh --hooks-dir "$temp_hooks" --settings-path "$temp_settings" --check
+      - run:
+          name: Git secret hook drift check (--check)
+          command: |
+            temp_repo="$(mktemp -d)"
+            git init "$temp_repo"
+            bash scripts/install-git-secret-hook.sh --repo "$temp_repo"
+            bash scripts/install-git-secret-hook.sh --repo "$temp_repo" --check
+            rm -rf "$temp_repo"
+      - run:
+          name: Git secret scan (Gitleaks)
+          command: |
+            # 1. Working-tree scan (current checkout)
+            deno task gitleaks
+
+            # 2. Bounded git history scan on PR branches (web-jam-tools#696)
+            # Scans commits from merge-base with origin/dev up to HEAD.
+            # Skipped on dev and main (where history is already audited).
+            BRANCH="${CIRCLE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+            if [ "$BRANCH" != "dev" ] && [ "$BRANCH" != "main" ]; then
+              git fetch --quiet origin dev
+              MERGE_BASE="$(git merge-base origin/dev HEAD)"
+              echo "[gitleaks] Scanning PR branch git history ($MERGE_BASE..HEAD)..."
+              bash scripts/gitleaks.sh --log-opts="${MERGE_BASE}..HEAD"
+            fi
       - run:
           name: Unit tests + coverage (>=90% all-files line, incl. skills/ validation)
           command: deno task coverage:check
@@ -199,16 +253,17 @@ jobs:
       - run:
           name: Install Deno
           command: |
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.4
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.5
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
       - run:
           name: Deploy web-jam-devotional (production)
           command: |
-            deno deploy \
-              --org webjamapps \
-              --app web-jam-devotional \
+            deno deploy . \
+              --config deno.devotional.json \
               --prod \
-              --token "$DENO_DEPLOY_TOKEN"
+              --token "$DENO_DEPLOY_TOKEN" \
+              --non-interactive \
+              --json
 
   deploy-uptime:
     executor: ci
@@ -217,16 +272,17 @@ jobs:
       - run:
           name: Install Deno
           command: |
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.4
+            curl -fsSL https://deno.land/install.sh | sh -s v2.9.5
             echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
       - run:
           name: Deploy web-jam-uptime (production)
           command: |
-            deno deploy \
-              --org webjamapps \
-              --app web-jam-uptime \
+            deno deploy . \
+              --config deno.uptime.json \
               --prod \
-              --token "$DENO_DEPLOY_TOKEN"
+              --token "$DENO_DEPLOY_TOKEN" \
+              --non-interactive \
+              --json
 
 workflows:
   ci:

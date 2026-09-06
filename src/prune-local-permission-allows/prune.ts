@@ -9,6 +9,19 @@ export const R5_BLANKET_WILDCARDS = [
   "Bash(gh project *)",
 ];
 
+// web-jam-tools#685, §3a of
+// ~/Dropbox/web-jam-llms/Token_Savings/pr-review-self-posting-design-2026-08-22.md:
+// these two pre-approve EVERY task in deno.json and every script in
+// package.json — including the four named ALLOW_RULES entries
+// scripts/install-hooks.sh now registers for the guarded gh-write commands.
+// Narrow rules are inert while a blanket that matches everything is still
+// present, so removing the blanket is a separate act from adding the narrow
+// rules (which install-hooks.sh does).
+export const TASK_RUNNER_BLANKET_WILDCARDS = [
+  "Bash(deno task *)",
+  "Bash(npm run *)",
+];
+
 export const R11_MCP_ALLOWS = [
   "mcp__claude_ai_GitHub_MCP__add_issue_comment",
   "mcp__claude_ai_GitHub_MCP__issue_write",
@@ -22,10 +35,20 @@ export const CANONICAL_CREATE_DRAFT_PR_RULES = [
   "Bash(scripts/create-draft-pr.sh *)",
 ];
 
+export type PruneReason =
+  | "R-5"
+  | "R-11"
+  | "R-20"
+  | "TASK-RUNNER-BLANKET"
+  | "NON-TRAILING-WILDCARD";
+
 export interface PruneRuleResult {
   prune: boolean;
-  reason?: "R-5" | "R-11" | "R-20";
+  reason?: PruneReason;
 }
+
+import { isNonTrailingWildcardRule } from "../../hooks/lib/check_permission_wildcard_drift.ts";
+export { isNonTrailingWildcardRule };
 
 export function shouldPruneRule(rule: string): PruneRuleResult {
   if (typeof rule !== "string") {
@@ -41,10 +64,18 @@ export function shouldPruneRule(rule: string): PruneRuleResult {
     return { prune: true, reason: "R-11" };
   }
 
+  if (TASK_RUNNER_BLANKET_WILDCARDS.includes(trimmed)) {
+    return { prune: true, reason: "TASK-RUNNER-BLANKET" };
+  }
+
   if (trimmed.includes("create-draft-pr.sh")) {
     if (!CANONICAL_CREATE_DRAFT_PR_RULES.includes(trimmed)) {
       return { prune: true, reason: "R-20" };
     }
+  }
+
+  if (isNonTrailingWildcardRule(trimmed)) {
+    return { prune: true, reason: "NON-TRAILING-WILDCARD" };
   }
 
   return { prune: false };
@@ -76,13 +107,18 @@ export function checkSettingsBackup(customDstDir?: string): BackupCheckResult {
   return { present: false, path: backupPath };
 }
 
+export interface RemovedEntry {
+  rule: string;
+  reason: PruneReason;
+}
+
 export interface FileProcessResult {
   filePath: string;
   exists: boolean;
   validJson: boolean;
   beforeCount: number;
   afterCount: number;
-  removedEntries: Array<{ rule: string; reason: "R-5" | "R-11" | "R-20" }>;
+  removedEntries: RemovedEntry[];
   backedUpTo?: string;
 }
 
@@ -119,7 +155,7 @@ export function processTargetFile(
   const beforeCount = allowRules.length;
 
   const remaining: string[] = [];
-  const removedEntries: Array<{ rule: string; reason: "R-5" | "R-11" | "R-20" }> = [];
+  const removedEntries: RemovedEntry[] = [];
 
   for (const rule of allowRules) {
     const res = shouldPruneRule(rule);

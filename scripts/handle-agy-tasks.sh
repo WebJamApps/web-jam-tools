@@ -18,6 +18,11 @@
 #
 # Usage (interactive by default — you drive/watch agy in the REPL):
 #   handle-agy-tasks.sh CollegeLutheran#123    # run an agy-labeled issue
+#   handle-agy-tasks.sh --repo JaMmusic web-jam-tools#505
+#                                               # run an issue against a target
+#                                               # repo other than the issue's
+#                                               # own repo (web-jam-tools#517;
+#                                               # also via AGY_TARGET_REPO=...)
 #   handle-agy-tasks.sh --headless [...]       # unattended; auto-approves tools
 #   handle-agy-tasks.sh --dry-run CollegeLutheran#123
 #                                               # print the composed prompt and
@@ -99,8 +104,32 @@
 # not a diff restatement) is enforced via the prompt instruction only — the
 # design explicitly rejects a new create-draft-pr.sh guard for this (a
 # brittle "is this ordered human steps?" regex would false-positive-reject).
+#
+# web-jam-tools#686 — repo-conditional landing:
+#   - UI repos (JaMmusic, CollegeLutheran, AppersonAuto, TimShermanMusic,
+#     HenricksonForSalem) offer to check out the branch into the main clone
+#     upon PR creation (interactive Y/n prompt; auto-land under --headless).
+#   - Non-UI repos (web-jam-tools, web-jam-back, WebJamSocketCluster) NEVER land
+#     by default — the worktree is left in place at /tmp/agy-worktrees/<Repo>-<branch>
+#     and its path is printed.
+#   - Use --land to force landing on a non-UI repo; use --no-land to suppress
+#     landing on a UI repo (if both are passed, --no-land wins).
 
 set -euo pipefail
+
+# UI repos that offer to land the branch into the main clone upon PR creation (web-jam-tools#686)
+UI_REPOS=("JaMmusic" "CollegeLutheran" "AppersonAuto" "TimShermanMusic" "HenricksonForSalem")
+
+is_ui_repo() {
+  local repo="$1"
+  local r
+  for r in "${UI_REPOS[@]}"; do
+    if [ "$repo" = "$r" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 # AGY_WEBJAM_ROOT override exists for --dry-run testing against a scratch clone
 # instead of a repo folder you're actively working in (web-jam-tools#154).
@@ -130,34 +159,103 @@ agy_env_args() {
   done
 }
 
-# Cost-ordered model chain (Antigravity PAID account — Josh's prepaid Google
-# credit), CHEAPEST FIRST: Gemini Flash medium is the default lane; Flash (High)
-# is the only rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
+# Model chain (Antigravity PAID account — Josh's prepaid Google
+# credit): Gemini Flash High is the default lane; Flash (Medium)
+# is the rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
 # NOT in the default chain (they drain the credit fastest — the old
 # most-capable-first order was a free-tier assumption). Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
-DEFAULT_MODELS='Gemini 3.6 Flash (Medium)|Gemini 3.6 Flash (High)'
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)')
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
+
+# --- PR author spelling for the running model (web-jam-tools#912) ----------
+# The model chain's display names are VERSION-QUALIFIED — they come from
+# hooks/lib/check_agy_model.ts's ALLOWED_AGY_MODELS, whose entries also have to
+# produce the `--model` slug, so each display name carries a version token
+# ("Gemini <N.N> Flash (High)"). create-draft-pr.sh's ROSTER, by contrast, is
+# deliberately UNVERSIONED ("Gemini Flash (High)" — Josh, 2026-07-26: pinning a
+# version only produced a stale roster), and author_roster_check() SUBSTRING-
+# matches the author against it. A version token sitting between "Gemini" and
+# "Flash" breaks that substring, so "agy — <versioned name>" can NEVER clear
+# the roster check.
+#
+# That made every dispatch on the DEFAULT chain structurally unable to finish
+# through create-draft-pr.sh: the forced author was refused on every attempt,
+# so agy either produced no PR at all or got around the forced author, and the
+# bypass check below then fired — correctly. Dispatches launched with the
+# UNVERSIONED AGY_MODELS override spelling cleared the roster and looked clean.
+# Both spellings are in circulation, which is exactly why the alarm looked
+# "inconsistent" across otherwise-identical runs (web-jam-tools#912).
+#
+# Fix: strip the version token when composing the author, and use the SAME
+# derived string for FORCED_PR_AUTHOR and for the footer the bypass check
+# expects — so what create-draft-pr.sh is told to write and what this script
+# looks for can never disagree again. This does not weaken the bypass check:
+# the body must still end with the exact footer for the model of THIS round, so
+# a PR opened with `gh pr create` (no footer, or any other author) still fails.
+pr_author_for_model() {
+  local model="$1"
+  printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /')"
+}
+
+# Fail fast when a model in the chain cannot produce a roster-valid author:
+# such a run is structurally unable to open a PR through create-draft-pr.sh,
+# which is the precise condition that produced web-jam-tools#912's alarm. The
+# check is delegated to create-draft-pr.sh's own --check-author mode so the
+# roster is read from its single source of truth, never copied here.
+for _m in "${MODELS[@]}"; do
+  _candidate="$(pr_author_for_model "$_m")"
+  if ! "$SCRIPT_DIR/create-draft-pr.sh" --check-author "$_candidate" >/dev/null 2>&1; then
+    echo "ERROR: model '$_m' yields PR author '$_candidate', which create-draft-pr.sh's" >&2
+    echo "       roster will refuse — this run could not open a PR through that script," >&2
+    echo "       so agy would be pushed into bypassing it (web-jam-tools#912)." >&2
+    echo "       Fix the model chain (AGY_MODELS / hooks/lib/check_agy_model.ts) or the" >&2
+    echo "       roster in scripts/create-draft-pr.sh so the two agree. Roster refusal:" >&2
+    "$SCRIPT_DIR/create-draft-pr.sh" --check-author "$_candidate" >&2 || true
+    exit 1
+  fi
+done
+unset _m _candidate
 
 # --- parse args ---
 # Interactive is the default. Leading flags (any order, before the optional task):
 #   --headless / -H   run unattended (auto-approves tools)
 #   --setup-only      do the issue + git-branch setup, print the task, and
-#                     STOP without launching agy. Used by the `/work-issue` (or `/next`) agy skill:
+#                     STOP without launching agy. Used by the `/work-issue` agy skill:
 #                     you're already inside agy, so agy itself does the coding.
 #   --dry-run         do the issue fetch + git-branch setup, print the
 #                     composed prompt, and STOP without launching agy. For
 #                     testing prompt composition (comments folded in, BLOCKED
 #                     guard) without spending an agy call (web-jam-tools#154).
+#   --land            force checking the branch out into the main clone after PR creation (web-jam-tools#686)
+#   --no-land         skip checking the branch out into the main clone after PR creation (web-jam-tools#513; wins if both passed)
 HEADLESS=0
 SETUP_ONLY=0
 DRY_RUN=0
+FORCE_LAND=0
+NO_LAND=0
+TARGET_REPO_OVERRIDE="${AGY_TARGET_REPO:-}"
 while [ $# -gt 0 ]; do
   case "${1:-}" in
     --headless|-H) HEADLESS=1; shift ;;
     --setup-only)  SETUP_ONLY=1; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
+    --land)        FORCE_LAND=1; shift ;;
+    --no-land)     NO_LAND=1; shift ;;
+    --repo)
+      if [ -z "${2:-}" ]; then
+        echo "ERROR: --repo requires a repository name argument." >&2
+        exit 1
+      fi
+      TARGET_REPO_OVERRIDE="$2"
+      shift 2
+      ;;
+    --repo=*)
+      TARGET_REPO_OVERRIDE="${1#*=}"
+      shift
+      ;;
     *) break ;;
   esac
 done
@@ -170,7 +268,7 @@ TASK_ARG="${1:-}"
 # through to a queue-file lookup.
 if [ -z "$TASK_ARG" ]; then
   echo "ERROR: missing required <Repo>#<issue-num> argument." >&2
-  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] <Repo>#<issue-num>" >&2
+  echo "Usage: $(basename "$0") [--headless|-H] [--setup-only|--dry-run] [--land] [--no-land] [--repo <Name>] <Repo>#<issue-num>" >&2
   echo "  e.g. $(basename "$0") --headless \"CollegeLutheran#123\"" >&2
   exit 1
 fi
@@ -184,6 +282,91 @@ echo "Fetching issue $REPO#$ISSUE_NUM (title + body + comments) ..."
 ISSUE_JSON=$(gh issue view "$ISSUE_NUM" -R "WebJamApps/$REPO" --json title,body,comments)
 ISSUE_TITLE=$(jq -r '.title' <<< "$ISSUE_JSON")
 ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
+
+# A non-zero `gh issue view` exit is already caught by `set -euo pipefail`
+# above — this catches the other half of "cannot determine": the call
+# succeeding but returning a body that is empty or the literal string "null"
+# (jq's `-r` renders a JSON null as that literal). Refusing here, rather than
+# letting an unreadable body fall through as "no marker found", is what keeps
+# this guard from ever dispatching an issue whose spec it never actually saw
+# (web-jam-tools#903).
+if [ -z "$ISSUE_BODY" ] || [ "$ISSUE_BODY" = "null" ]; then
+  echo "" >&2
+  echo "ERROR: issue $REPO#$ISSUE_NUM body could not be read (empty or null) —" >&2
+  echo "refusing to dispatch agy against it rather than assume it carries no" >&2
+  echo "BLOCKED / DO NOT START marker." >&2
+  echo "" >&2
+  exit 1
+fi
+
+# --- native blocked_by dependency guard (web-jam-tools#847) ---
+# The authoritative answer to "is this issue blocked by another GitHub issue?"
+# is GitHub's own native dependency graph, not prose in the body, so ask it
+# directly before dispatch and refuse while any returned blocker is still
+# OPEN — naming that blocker by repository, number and title so the operator
+# can go straight to it. Cross-repository blockers name their own repository,
+# never this one.
+#
+# This check FAILS CLOSED, which is the whole point of moving off the prose
+# heuristic. A non-zero exit from `gh api` (network down, auth expired, the
+# endpoint erroring), an empty response, or a payload that is not a JSON array
+# (a literal `null`, an object) all refuse rather than dispatch: treating an
+# unanswered question as "no blockers" would fail open on exactly the
+# unattended headless run this guard exists to protect.
+#
+# Implementation notes: `if ! VAR=$(...)` keeps `set -e` from killing the
+# script before the refusal can be printed, since the assignment's exit status
+# is the command substitution's. jq's `if type == "array"` rejects a `null` or
+# object payload by raising an error, which exits non-zero and lands in the
+# same refusal branch as malformed JSON — so no separate parse check is
+# needed. An array with no open entries produces no output and exits 0.
+# `--paginate` on the `gh api` call is required for the fail-closed property
+# to hold regardless of blocker count: GitHub's default page size is 30, and
+# without it an issue with more than 30 native blockers would silently drop
+# the remainder.
+# The state comparison downcases via `ascii_downcase` before comparing, and
+# treats anything OTHER than "closed" (missing/null, differently-cased, or an
+# unrecognized value) as blocking rather than passing it through — this
+# guard's whole design premise is failing closed on ambiguity, so an
+# unrecognized state must never be silently treated as "not blocking".
+echo "Checking native blocked_by dependencies for $REPO#$ISSUE_NUM ..."
+DEP_FAILURE=""
+DEP_JSON=""
+OPEN_BLOCKERS=""
+if ! DEP_JSON=$(gh api --paginate "repos/WebJamApps/$REPO/issues/$ISSUE_NUM/dependencies/blocked_by" 2>/dev/null); then
+  DEP_FAILURE="the dependency query failed (network, auth, or API error)"
+elif [ -z "${DEP_JSON//[[:space:]]/}" ]; then
+  DEP_FAILURE="the dependency query returned an empty response"
+elif ! OPEN_BLOCKERS=$(jq -r '
+      if type == "array" then
+        .[]
+        | select(((.state // "") | ascii_downcase) != "closed")
+        | "  \(.repository.name // .repository.full_name // "unknown")#\(.number) \"\(.title // "")\""
+      else
+        error("dependency payload is not a JSON array")
+      end' <<< "$DEP_JSON" 2>/dev/null); then
+  DEP_FAILURE="the dependency query returned a payload that is not a JSON array"
+fi
+
+if [ -n "$DEP_FAILURE" ]; then
+  echo "" >&2
+  echo "ERROR: cannot confirm issue $REPO#$ISSUE_NUM is unblocked — $DEP_FAILURE." >&2
+  echo "Refusing to dispatch agy rather than assume it has no blockers." >&2
+  echo "Retry once 'gh api repos/WebJamApps/$REPO/issues/$ISSUE_NUM/dependencies/blocked_by'" >&2
+  echo "answers cleanly." >&2
+  echo "" >&2
+  exit 1
+fi
+
+if [ -n "$OPEN_BLOCKERS" ]; then
+  echo "" >&2
+  echo "ERROR: issue $REPO#$ISSUE_NUM has an OPEN native blocked_by dependency —" >&2
+  echo "refusing to dispatch agy against it. Still open:" >&2
+  echo "$OPEN_BLOCKERS" >&2
+  echo "Close the blocker(s) above, then retry." >&2
+  echo "" >&2
+  exit 1
+fi
 
 # --- BLOCKED guard (web-jam-tools#154, scoped to status declarations in #395) ---
 # Refuse to dispatch when the issue BODY still carries a blocked marker AS A
@@ -199,16 +382,104 @@ ISSUE_BODY=$(jq -r '.body' <<< "$ISSUE_JSON")
 # a guard, with no status marker present), because grep applies `^` per line
 # and a real sentence/cell never starts the physical line with the bare word.
 #
+# "Blocked by `<repo>#<num> ...`" at line start is a DEPENDENCY REFERENCE, not
+# a status declaration: this repo's convention (documented directly in issue
+# bodies) is to record a native GitHub `blocked_by` dependency as filing-time
+# prose, and that dependency can already be CLOSED by the time dispatch runs —
+# well before anyone thinks to edit the sentence back out (found live on
+# web-jam-tools#815, whose "**Blocked by** `web-jam-tools#814 ...`" line
+# refused dispatch after #814 had already closed). A line the first grep flags
+# is excluded from the refusal only when it ALSO reads "BLOCKED BY" with an
+# issue citation (`#<digits>`) directly adjacent (only markdown/emoji
+# decoration and/or the repo-name prefix may sit between them — see the
+# tightened carve-out regex below). When dispatch is driven by
+# skills/work-issue/SKILL.md or the flash-issues scanner, the skill layer
+# already validates native blockers via the GitHub API before this script
+# ever runs, so this guard's job for that specific case is done there. This
+# script is ALSO invoked directly — this PR's own "How to test locally" does
+# exactly that, and /flash-issues exists so Josh can drive agy himself when
+# Claude is out of tokens — and previously nothing upstream validated the
+# dependency on that path, so an issue whose blocker was genuinely still OPEN
+# could dispatch here. That gap is now closed, durably, by the native
+# `blocked_by` dependency guard above (web-jam-tools#847), which runs before
+# this text guard and refuses on any real GitHub blocker regardless of which
+# path invoked the script. With that authoritative check in place, this text
+# guard's remaining job is narrower: catching a bare BLOCKED / DO NOT START
+# STATUS DECLARATION, which is how a non-GitHub prerequisite (an asset from
+# Josh, a decision still pending) is expressed — something no `gh api` call
+# can see, because it was never a GitHub dependency to begin with. A vague
+# "BLOCKED by <cause, no issue number>" is NOT excluded and still refuses,
+# since nothing else checks that kind of claim.
+#
+# Mention vs. use (web-jam-tools#903): quoting the marker to document or
+# discuss the guard is not the same as declaring the issue's own status, so
+# neither form counts as a declaration:
+#   - Inline code: the marker sits immediately behind a backtick, e.g.
+#     "`DO NOT START` is how a non-GitHub prerequisite is expressed" or a
+#     line that is nothing but "`BLOCKED`". Handled by excluding the
+#     backtick from the leading-decoration character class below, so a
+#     backtick anywhere in the run before the marker stops the anchored
+#     match from ever reaching it — the line simply never enters
+#     MARKER_LINES, same as if no marker were present.
+#   - Fenced code blocks (``` or ~~~): every line strictly between a
+#     validly PAIRED opening and closing fence is quoted content, checked
+#     via MARKER_CHECK_BODY below rather than the raw body. An opening
+#     fence with no matching close is NOT a valid pair — it grants no
+#     mention status, so a bare marker after an unterminated fence still
+#     refuses exactly as if the fence had never been written.
+# Accepted tradeoff: a genuine non-GitHub prerequisite written with the
+# marker in backticks now dispatches instead of refusing. That's accepted —
+# the convention for a real status declaration is the bare form, every bare
+# form still refuses, and the alternative (quoted markers still refusing)
+# is what made it impossible to write an issue *about* this guard at all.
+#
+# MARKER_CHECK_BODY buffers lines while inside an OPEN fence and only
+# discards the buffer once a matching close is actually seen; if the body
+# ends while still "in fence", the buffered lines are flushed back in
+# (END block) so an unterminated fence never suppresses a real refusal.
+# Fence-delimiter lines themselves are never emitted either way, since they
+# are decoration, not marker-bearing content.
+MARKER_CHECK_BODY=$(awk '
+  function fence_delim(line,    trimmed) {
+    trimmed = line
+    sub(/^[ \t]+/, "", trimmed)
+    if (trimmed ~ /^```/) return "`"
+    if (trimmed ~ /^~~~/) return "~"
+    return ""
+  }
+  BEGIN { in_fence = 0; fence_char = ""; n = 0 }
+  {
+    delim = fence_delim($0)
+    if (in_fence == 0) {
+      if (delim != "") { in_fence = 1; fence_char = delim; n = 0; next }
+      print $0
+    } else {
+      if (delim == fence_char) { in_fence = 0; n = 0; next }
+      n++; buf[n] = $0
+    }
+  }
+  END { if (in_fence == 1) { for (i = 1; i <= n; i++) print buf[i] } }
+' <<< "$ISSUE_BODY")
+
 # Implementation: `grep` (no -z) matches `^`/`$` per line already, so this
-# runs once against the whole (possibly multi-line) body. `^[^A-Za-z0-9]*`
-# consumes any run of leading non-alphanumeric bytes — whitespace, markdown
-# punctuation, and multi-byte emoji sequences all fall outside [A-Za-z0-9] —
-# so "any combination" of decoration/emoji is handled without needing a
-# PCRE/Unicode character class (portable across grep implementations). That
-# same leading-strip also keeps "UNBLOCKED"/"unblocking" excluded: stripping
-# stops at the first alphanumeric byte, which is the "U", so the marker
-# alternation is never tried starting there.
-if grep -qiE '^[^A-Za-z0-9]*(BLOCKED|DO[ -]NOT[ -]START)\b' <<< "$ISSUE_BODY"; then
+# runs once against the whole (possibly multi-line) MARKER_CHECK_BODY.
+# `^[^A-Za-z0-9`]*` consumes any run of leading non-alphanumeric,
+# non-backtick bytes — whitespace, markdown punctuation, and multi-byte
+# emoji sequences all fall outside [A-Za-z0-9] — so "any combination" of
+# decoration/emoji is handled without needing a PCRE/Unicode character class
+# (portable across grep implementations), while a backtick specifically
+# stops the strip (see "Mention vs. use" above). That same leading-strip
+# also keeps "UNBLOCKED"/"unblocking" excluded: stripping stops at the first
+# alphanumeric byte, which is the "U", so the marker alternation is never
+# tried starting there. The dependency-reference carve-out stays in the same
+# portable ERE style (no -P) and keeps the backtick-inclusive class it
+# always had — the citation itself is normally backtick-wrapped
+# ("`repo#N ...`"), so excluding backtick there would break the carve-out
+# rather than fix a mention/use ambiguity: a second, narrower grep runs only
+# against the lines the first grep already flagged, so it can never widen
+# what the first grep catches — only exclude specific matched lines from it.
+MARKER_LINES=$(grep -iE '^[^A-Za-z0-9`]*(BLOCKED|DO[ -]NOT[ -]START)\b' <<< "$MARKER_CHECK_BODY" || true)
+if [ -n "$MARKER_LINES" ] && grep -qviE '^[^A-Za-z0-9]*BLOCKED[[:space:]]+BY[^A-Za-z0-9]*[A-Za-z0-9._-]*#[0-9]+' <<< "$MARKER_LINES"; then
   echo "" >&2
   echo "ERROR: issue $REPO#$ISSUE_NUM body still contains a BLOCKED / DO NOT" >&2
   echo "START marker — refusing to dispatch agy against it." >&2
@@ -240,7 +511,8 @@ else
 fi
 SLUG_SOURCE="$ISSUE_TITLE"
 
-REPO_DIR="$WEBJAM/$REPO"
+TARGET_REPO="${TARGET_REPO_OVERRIDE:-$REPO}"
+REPO_DIR="$WEBJAM/$TARGET_REPO"
 if [ ! -d "$REPO_DIR" ]; then
   echo "ERROR: repo folder not found: $REPO_DIR" >&2
   exit 1
@@ -257,7 +529,7 @@ git worktree prune
 mkdir -p /tmp/agy-worktrees
 worktree_path_for() {
   local branch="$1"
-  local path="/tmp/agy-worktrees/${REPO}-${branch//\//-}"
+  local path="/tmp/agy-worktrees/${TARGET_REPO}-${branch//\//-}"
   if [ -e "$path" ]; then
     path="$(mktemp -u "${path}.XXXXXX")"
   fi
@@ -296,7 +568,7 @@ worktree_path_for() {
 RESUME_MODE=0
 EXISTING_BRANCH=""
 PR_JQ_FILTER='.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#'"$ISSUE_NUM"'([^0-9]|$)")) | .headRefName'
-PR_HEAD_BRANCH="$(gh pr list -R "WebJamApps/$REPO" --state open --json headRefName,body \
+PR_HEAD_BRANCH="$(gh pr list -R "WebJamApps/$TARGET_REPO" --state open --json headRefName,body \
   --jq "$PR_JQ_FILTER" 2>/dev/null | head -1 || true)"
 if [ -n "$PR_HEAD_BRANCH" ]; then
   echo "Found existing open PR head branch $PR_HEAD_BRANCH for issue #$ISSUE_NUM (via gh pr list) — resuming instead of starting fresh."
@@ -369,7 +641,7 @@ else
   # checked-out branch (that's the whole point of worktree isolation) — no
   # local `dev` checkout/pull here; the new branch is created straight off
   # origin/dev when the worktree is added, below.
-  echo "Fetching dev in $REPO ..."
+  echo "Fetching dev in $TARGET_REPO ..."
   git fetch origin dev
 
   # --- slug + unique branch name off dev (ref-only; no checkout yet) ---
@@ -422,7 +694,7 @@ SHARED_RECIPES_DOC="$WEBJAM/web-jam-tools/docs/local-testing-recipes.md"
 LOCAL_TESTING_MATERIAL=""
 if [ -f "$PER_REPO_TESTING_DOC" ]; then
   PER_REPO_TESTING_CONTENT="$(cat "$PER_REPO_TESTING_DOC")"
-  LOCAL_TESTING_MATERIAL="--- Per-repo local-testing doc ($REPO/$PER_REPO_TESTING_DOC) ---"$'\n\n'"$PER_REPO_TESTING_CONTENT"
+  LOCAL_TESTING_MATERIAL="--- Per-repo local-testing doc ($TARGET_REPO/$PER_REPO_TESTING_DOC) ---"$'\n\n'"$PER_REPO_TESTING_CONTENT"
   # Resolve a reference to the shared doc: a plain filename mention is enough
   # (repos sit at different relative depths, so matching the exact link path
   # would be fragile). "Resolvable" also requires the shared file to actually
@@ -458,7 +730,7 @@ fi
 
 # --- composed prompt: standing rules wrapped around the task ---
 read -r -d '' PROMPT <<EOF || true
-You are working in the $REPO repo on branch $BRANCH, already created off the latest dev.
+You are working in the $TARGET_REPO repo on branch $BRANCH, already created off the latest dev.
 
 Task:
 $TASK_TEXT
@@ -476,11 +748,11 @@ Rules:
   repos use "npm run test:lint" / "npm run test:unit").
 - Do not switch branches and do not add new dependencies.
 - $LOCAL_TESTING_INSTRUCTIONS
-- Before opening the PR (web-jam-tools#239): run the \`/learn\` slash command in
-  this session, then commit whatever changes it makes to AGENTS.md onto THIS
-  SAME branch as its own commit (e.g. "chore: fold /learn updates into
-  AGENTS.md") — do not open a separate PR or defer it to a follow-up step. If
-  \`/learn\` makes no changes, that's fine; just don't skip running it.
+- Before opening the PR (web-jam-tools#239, web-jam-tools#867): on Antigravity (agy) sessions, run
+  the \`/learn\` slash command in this session if available, then commit whatever changes it makes
+  to AGENTS.md onto THIS SAME branch as its own commit (e.g. "chore: fold /learn updates into
+  AGENTS.md") — do not open a separate PR or defer it to a follow-up step. If \`/learn\` makes no
+  changes or is running on a non-Antigravity surface (e.g. Claude Code), that's fine; just continue.
 - When lint and tests are green, finish by opening a draft PR — run:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "agy — <the model you are running as>" \\
       --summary-file /tmp/pr-summary.md --test-plan-file /tmp/pr-test-plan.md --test-evidence-file /tmp/pr-test-evidence.md
@@ -590,7 +862,7 @@ if [ "$HEADLESS" -eq 1 ]; then
   AGY_MAX_ROUNDS="${AGY_MAX_ROUNDS:-4}"
 
   pr_exists_for_branch() {
-    gh pr list -R "WebJamApps/$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null
+    gh pr list -R "WebJamApps/$TARGET_REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null
   }
 
   # web-jam-tools#152 — bypass check: "a draft PR exists" is not proof agy
@@ -600,20 +872,38 @@ if [ "$HEADLESS" -eq 1 ]; then
   # bulleted summary, real test-runner evidence, test-plan substance, raw-tag
   # check) is silently skipped. create-draft-pr.sh always composes the body's
   # LAST line as the attribution footer "🤖 Work by $AUTHOR" — and this script
-  # forces AUTHOR to "agy — $m" via FORCED_PR_AUTHOR for the model that round
-  # is actually running as (web-jam-tools#190) — so a body that doesn't end
-  # with that exact footer proves the script was bypassed. This can't be
-  # exercised against real GitHub in the test suite; verified by inspection +
-  # `bash -n` (see the PR that introduced it).
+  # forces AUTHOR to pr_author_for_model "$m" via FORCED_PR_AUTHOR for the
+  # model that round is actually running as (web-jam-tools#190) — so a body
+  # that doesn't end with that exact footer proves the script was bypassed.
+  # The full `gh pr view` path can't be exercised against real GitHub in the
+  # test suite; test/handle_agy_tasks_footer_check.test.ts covers the two
+  # functions themselves (extracted from this file and run under a stubbed
+  # `gh`), which is where web-jam-tools#912's defect actually lived.
   footer_present_for_model() {
-    local pr_num="$1" model="$2" body expected
-    body="$(gh pr view "$pr_num" -R "WebJamApps/$REPO" --json body -q .body 2>/dev/null || true)"
-    expected="🤖 Work by agy — $model"
+    local pr_num="$1" model="$2" body expected trimmed actual
+    body="$(gh pr view "$pr_num" -R "WebJamApps/$TARGET_REPO" --json body -q .body 2>/dev/null || true)"
+    # web-jam-tools#912 — the expectation is built from the SAME derivation
+    # that produced FORCED_PR_AUTHOR for this round, not from the raw --model
+    # string, so the footer this looks for is always the footer
+    # create-draft-pr.sh was told to write.
+    expected="🤖 Work by $(pr_author_for_model "$model")"
     # Trim trailing whitespace/newlines before the suffix check — gh's JSON
     # decode can leave a trailing newline that would otherwise false-negative.
-    case "$(printf '%s' "$body" | sed -e 's/[[:space:]]*$//')" in
-      *"$expected") return 0 ;;
-      *) return 1 ;;
+    trimmed="$(printf '%s' "$body" | sed -e 's/[[:space:]]*$//')"
+    # web-jam-tools#912 — log EVERY check, pass or fail. The alarm that opened
+    # that issue had to be reconstructed after the fact from `ps aux` output
+    # because nothing recorded what was actually compared.
+    actual="$(printf '%s' "$trimmed" | tail -n 1)"
+    echo ">>> footer check (web-jam-tools#912): pr=#$pr_num model='$model' forced_author='${FORCED_PR_AUTHOR:-<unset>}' expected='$expected' actual_last_line='$actual'" >&2
+    case "$trimmed" in
+      *"$expected")
+        echo ">>> footer check: PASS" >&2
+        return 0
+        ;;
+      *)
+        echo ">>> footer check: FAIL" >&2
+        return 1
+        ;;
     esac
   }
 
@@ -629,9 +919,9 @@ if [ "$HEADLESS" -eq 1 ]; then
     git diff origin/dev..HEAD -- package.json | grep -q '^[+-].*"version"'
   }
 
-  CONTINUE_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. Previous turns did partial work (check \`git status\` and \`git log origin/dev..HEAD\`). Task acceptance is NOT met until: lint and tests pass, work is committed, and a draft PR is opened via ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh. Continue from where things stand and finish. Original task follows:"
+  CONTINUE_PROMPT_PREFIX="You are resuming an interrupted task in the $TARGET_REPO repo on branch $BRANCH. Previous turns did partial work (check \`git status\` and \`git log origin/dev..HEAD\`). Task acceptance is NOT met until: lint and tests pass, work is committed, and a draft PR is opened via ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh. Continue from where things stand and finish. Original task follows:"
 
-  VERSION_BUMP_PROMPT_PREFIX="You are resuming an interrupted task in the $REPO repo on branch $BRANCH. A draft PR already exists, but \`git diff origin/dev..HEAD -- package.json\` shows no \"version\" change — the one-bump-per-PR rule (bump package.json's \"version\" exactly once, on the PR's first commit; patch for a fix, minor for a feature) was not followed. Add a commit that bumps package.json's \"version\" field appropriately and push it — do NOT open a second PR. Original task follows:"
+  VERSION_BUMP_PROMPT_PREFIX="You are resuming an interrupted task in the $TARGET_REPO repo on branch $BRANCH. A draft PR already exists, but \`git diff origin/dev..HEAD -- package.json\` shows no \"version\" change — the one-bump-per-PR rule (bump package.json's \"version\" exactly once, on the PR's first commit; patch for a fix, minor for a feature) was not followed. Add a commit that bumps package.json's \"version\" field appropriately and push it — do NOT open a second PR. Original task follows:"
 
   # web-jam-tools#187 — resume mode (an existing agy branch was found for this
   # issue) starts the driven loop with the CONTINUE prompt instead of the
@@ -652,7 +942,10 @@ if [ "$HEADLESS" -eq 1 ]; then
     # regardless of what --author the model passes (or forgets). $m is the
     # model this round is ACTUALLY running as, so this stays correct across
     # fallback rounds — unlike the model's own self-report.
-    export FORCED_PR_AUTHOR="agy — $m"
+    # web-jam-tools#912 — derived via pr_author_for_model so the forced author
+    # is one create-draft-pr.sh's roster actually accepts; the raw display name
+    # carries a version token the roster's substring match can never clear.
+    export FORCED_PR_AUTHOR="$(pr_author_for_model "$m")"
     while [ "$ROUNDS" -lt "$AGY_MAX_ROUNDS" ]; do
       ROUNDS=$((ROUNDS + 1))
       echo ">>> round $ROUNDS/$AGY_MAX_ROUNDS — model: $m"
@@ -704,7 +997,7 @@ if [ "$HEADLESS" -eq 1 ]; then
           echo "" >&2
           echo "================ handle-agy-tasks BYPASS DETECTED (web-jam-tools#152) ================" >&2
           echo "Draft PR #$PR_NUM exists for branch $BRANCH but its body does NOT end with the" >&2
-          echo "script-composed footer '🤖 Work by agy — $m'." >&2
+          echo "script-composed footer '🤖 Work by $(pr_author_for_model "$m")'." >&2
           echo "This means agy opened the PR with \`gh pr create\` directly instead of" >&2
           echo "scripts/create-draft-pr.sh, which skips EVERY guard in that script (author" >&2
           echo "roster, real summary/test-plan/test-evidence, bulleted summary, real" >&2
@@ -850,7 +1143,7 @@ echo "agy should have opened a draft PR via create-draft-pr.sh — review it on 
 # REPL early), there is nothing to land yet — the worktree is simply left in
 # place; Josh can resume/test there, and /tmp reaps it after 30 days untouched
 # (nothing is lost, since a landable branch is always pushed).
-LAND_PR_NUM="$(gh pr list -R "WebJamApps/$REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || true)"
+LAND_PR_NUM="$(gh pr list -R "WebJamApps/$TARGET_REPO" --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null || true)"
 if [ -z "$LAND_PR_NUM" ]; then
   echo ""
   echo "No draft PR found yet for branch $BRANCH — nothing to land. Worktree left at:"
@@ -883,6 +1176,22 @@ elif [ -n "$(git log "origin/$BRANCH..HEAD" --oneline)" ]; then
 fi
 
 # --- safety check on the MAIN clone --------------------------------------
+if [ "$NO_LAND" -eq 1 ]; then
+  echo ""
+  echo "(--no-land specified — skipped checkout into main clone $REPO_DIR)."
+  echo "Branch $BRANCH pushed; draft PR #$LAND_PR_NUM open. Worktree left at:"
+  echo "  $WORKTREE_DIR"
+  exit 0
+fi
+
+if ! is_ui_repo "$TARGET_REPO" && [ "$FORCE_LAND" -ne 1 ]; then
+  echo ""
+  echo "(Non-UI repo $TARGET_REPO — skipped checkout into main clone $REPO_DIR; pass --land to force)."
+  echo "Branch $BRANCH pushed; draft PR #$LAND_PR_NUM open. Worktree left at:"
+  echo "  $WORKTREE_DIR"
+  exit 0
+fi
+
 cd "$REPO_DIR"
 OLD_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 MAIN_DIRTY="$(git status --porcelain)"

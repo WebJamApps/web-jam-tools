@@ -3,7 +3,31 @@
  */
 import { splitShellTokens } from "./normalize_command.ts";
 
-const ALLOWED = new Set(["gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"]);
+export interface AgyModelSpec {
+  slug: string;
+  displayName: string;
+}
+
+export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
+  { slug: "gemini-3.8-flash-high", displayName: "Gemini 3.8 Flash (High)" },
+  { slug: "gemini-3.8-flash-medium", displayName: "Gemini 3.8 Flash (Medium)" },
+];
+
+export const ALLOWED = new Set(ALLOWED_AGY_MODELS.map((m) => m.slug));
+
+export function isAllowedModelSlug(slug: string): boolean {
+  const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(medium|high)$/);
+  if (!match) return false;
+  const versionStr = match[1];
+  const parts = versionStr.split(".").map((p) => parseInt(p, 10));
+  if (parts.some((p) => isNaN(p))) return false;
+  const major = parts[0] ?? 0;
+  const minor = parts[1] ?? 0;
+  if (major > 3) return true;
+  if (major === 3 && minor >= 7) return true;
+  return false;
+}
+
 const OPERATORS = new Set(["&&", "||", ";", "|", "(", ")"]);
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 
@@ -46,7 +70,7 @@ export function checkAgyModel(cmd: string): string {
 
     if (envAgyModels !== null) {
       const values = envAgyModels.split("|").filter(Boolean);
-      const bad = values.filter((v) => !ALLOWED.has(v));
+      const bad = values.filter((v) => !isAllowedModelSlug(v));
       if (values.length === 0 || bad.length > 0) {
         return "BLOCK_ENV:" + envAgyModels;
       }
@@ -60,7 +84,7 @@ export function checkAgyModel(cmd: string): string {
           return "BLOCK_MODEL:(missing value)";
         }
         const val = args[j + 1];
-        if (!ALLOWED.has(val)) {
+        if (!isAllowedModelSlug(val)) {
           return "BLOCK_MODEL:" + val;
         }
         j += 2;
@@ -68,7 +92,7 @@ export function checkAgyModel(cmd: string): string {
       }
       if (a.startsWith("--model=")) {
         const val = a.slice("--model=".length);
-        if (!ALLOWED.has(val)) {
+        if (!isAllowedModelSlug(val)) {
           return "BLOCK_MODEL:" + val;
         }
         j += 1;
@@ -82,6 +106,13 @@ export function checkAgyModel(cmd: string): string {
 }
 
 if (import.meta.main) {
-  const cmd = Deno.env.get("CMD_FOR_PY") || Deno.args[0] || "";
-  console.log(checkAgyModel(cmd));
+  const arg = Deno.args[0] || "";
+  if (arg === "--default-models") {
+    console.log(ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"));
+  } else if (arg === "--allowed-slugs") {
+    console.log(ALLOWED_AGY_MODELS.map((m) => m.slug).join(" or "));
+  } else {
+    const cmd = Deno.env.get("CMD_FOR_PY") || arg;
+    console.log(checkAgyModel(cmd));
+  }
 }

@@ -2,7 +2,7 @@
 /**
  * merge-hooks-into-settings.ts — web-jam-tools#382
  *
- * Idempotently merges SessionStart, Stop, and PreToolUse/PostToolUse (any
+ * Idempotently merges SessionStart, SessionEnd, Stop, and PreToolUse/PostToolUse (any
  * matcher) hook commands, plus a flat list of `permissions.deny` patterns,
  * into a Claude Code settings.json.
  */
@@ -17,13 +17,25 @@ export function extractScriptPath(cmd: string): string {
 export function merge(settingsPath: string, args: string[]): number {
   let sessionStartCmds: string[] = [];
   let stopCmds: string[] = [];
+  let sessionEndCmds: string[] = [];
   const preToolUsePairs: Array<[string, string]> = [];
   const postToolUsePairs: Array<[string, string]> = [];
   let denyPatterns: string[] = [];
   let askPatterns: string[] = [];
+  let allowPatterns: string[] = [];
+  let statusLineArgs: string[] = [];
+  let defaultModeArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
-  const filteredArgs = args.filter((a) => a !== "--check");
+  // web-jam-tools#432 finding 9: a Stop, SessionEnd, or SessionStart entry in agy's
+  // hooks.json silently disables the ENTIRE hooks config on that surface —
+  // not just that event, every PreToolUse guard included. install-hooks.sh
+  // passes --forbid-lifecycle-hooks on every invocation targeting agy's
+  // hooks file, so a future change that accidentally adds a --stop, --session-end, or
+  // head/SessionStart argument to that call is refused here rather than
+  // silently landing and disarming every guard on the Flash surface.
+  const forbidLifecycleHooks = args.includes("--forbid-lifecycle-hooks");
+  const filteredArgs = args.filter((a) => a !== "--check" && a !== "--forbid-lifecycle-hooks");
 
   if (filteredArgs.includes("--")) {
     const sepIdx = filteredArgs.indexOf("--");
@@ -49,11 +61,22 @@ export function merge(settingsPath: string, args: string[]): number {
     }
 
     const [head, sections] = section(
-      ["--stop", "--pre-tool-use", "--post-tool-use", "--deny", "--ask"],
+      [
+        "--stop",
+        "--session-end",
+        "--pre-tool-use",
+        "--post-tool-use",
+        "--deny",
+        "--ask",
+        "--allow",
+        "--status-line",
+        "--default-mode",
+      ],
       rest,
     );
     sessionStartCmds = head;
     stopCmds = sections["--stop"] || [];
+    sessionEndCmds = sections["--session-end"] || [];
     for (const pair of sections["--pre-tool-use"] || []) {
       const sep = pair.indexOf("::");
       if (sep !== -1) {
@@ -68,6 +91,26 @@ export function merge(settingsPath: string, args: string[]): number {
     }
     denyPatterns = sections["--deny"] || [];
     askPatterns = sections["--ask"] || [];
+    allowPatterns = sections["--allow"] || [];
+    statusLineArgs = sections["--status-line"] || [];
+    defaultModeArgs = sections["--default-mode"] || [];
+  }
+
+  const passedLifecycle = [
+    sessionStartCmds.length > 0 ? "SessionStart" : "",
+    stopCmds.length > 0 ? "Stop" : "",
+    sessionEndCmds.length > 0 ? "SessionEnd" : "",
+  ].filter(Boolean).join(" or ");
+
+  if (forbidLifecycleHooks && passedLifecycle) {
+    console.error(
+      `error: refusing to write ${path.basename(settingsPath)} — a ${passedLifecycle} ` +
+        "entry was passed for a target invoked with --forbid-lifecycle-hooks. On agy, " +
+        "registering ANY lifecycle event silently disables the entire hooks config — not just " +
+        "that event, every PreToolUse guard included (web-jam-tools#432 finding 9, " +
+        "verified 2026-08-07). Remove the --stop/--session-end/head SessionStart args from this call.",
+    );
+    return 1;
   }
 
   const fileExists = tryExistsSync(settingsPath);
@@ -100,7 +143,7 @@ export function merge(settingsPath: string, args: string[]): number {
     managedDirs.add(path.join(homeEnv, ".claude/hooks"));
   }
 
-  for (const cmd of [...sessionStartCmds, ...stopCmds]) {
+  for (const cmd of [...sessionStartCmds, ...stopCmds, ...sessionEndCmds]) {
     const sp = extractScriptPath(cmd);
     const dir = path.dirname(sp);
     if (dir && dir !== ".") managedDirs.add(dir);
@@ -185,6 +228,7 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const [addedSession, prunedSession] = mergeFlatHooks("SessionStart", sessionStartCmds);
   const [addedStop, prunedStop] = mergeFlatHooks("Stop", stopCmds);
+  const [addedSessionEnd, prunedSessionEnd] = mergeFlatHooks("SessionEnd", sessionEndCmds);
 
   function mergeMatcherHooks(
     kind: string,
@@ -196,14 +240,18 @@ export function merge(settingsPath: string, args: string[]): number {
     const bucket: Array<{ matcher?: string; hooks: Array<{ type: string; command: string }> }> =
       hooks[kind];
 
-    const desiredScriptMatchers = new Map<string, Set<string>>();
-    for (const [matcher, cmd] of pairs) {
-      const sp = extractScriptPath(cmd);
-      if (!desiredScriptMatchers.has(sp)) {
-        desiredScriptMatchers.set(sp, new Set());
-      }
-      desiredScriptMatchers.get(sp)!.add(matcher);
-    }
+    // Identity for prune-vs-keep is the EXACT (matcher, full command) pair,
+    // not (scriptPath, matcher) — web-jam-tools#432. A shim-wrapped agy
+    // command (hooks/agy-hook-shim.sh <event> <matcher> <target-hook>) makes
+    // extractScriptPath's first-whitespace-token identity collide across
+    // every hook sharing that shim, so a stale (scriptPath, matcher) check
+    // would treat a retired hook's shim-wrapped entry as still wanted
+    // forever, as long as ANY other hook still used that matcher. Comparing
+    // the full command instead keeps each wrapped hook's identity as
+    // distinct as an unwrapped one's always was.
+    const desiredFullCmds = new Set(pairs.map(([, cmd]) => cmd));
+    const desiredPairKey = (matcher: string, cmd: string) => `${matcher} ${cmd}`;
+    const desiredPairs = new Set(pairs.map(([matcher, cmd]) => desiredPairKey(matcher, cmd)));
 
     const added: Array<[string, string]> = [];
     const prunedStaleMatcher: Array<[string, string]> = [];
@@ -219,10 +267,9 @@ export function merge(settingsPath: string, args: string[]): number {
         if (!h || !h.command) continue;
         const sp = extractScriptPath(h.command);
         if (isManagedHook(h.command)) {
-          const matchersForScript = desiredScriptMatchers.get(sp);
-          if (matchersForScript && matchersForScript.has(entryMatcher)) {
+          if (desiredPairs.has(desiredPairKey(entryMatcher, h.command))) {
             remainingHooks.push(h);
-          } else if (matchersForScript && matchersForScript.size > 0) {
+          } else if (desiredFullCmds.has(h.command)) {
             prunedStaleMatcher.push([sp, entryMatcher]);
           } else {
             prunedRetired.push([sp, entryMatcher]);
@@ -263,12 +310,16 @@ export function merge(settingsPath: string, args: string[]): number {
     return [added, prunedStaleMatcher, prunedRetired];
   }
 
-  const [addedPreToolUse, prunedPreToolUseStale, prunedPreToolUseRetired] =
-    mergeMatcherHooks("PreToolUse", preToolUsePairs);
-  const [addedPostToolUse, prunedPostToolUseStale, prunedPostToolUseRetired] =
-    mergeMatcherHooks("PostToolUse", postToolUsePairs);
+  const [addedPreToolUse, prunedPreToolUseStale, prunedPreToolUseRetired] = mergeMatcherHooks(
+    "PreToolUse",
+    preToolUsePairs,
+  );
+  const [addedPostToolUse, prunedPostToolUseStale, prunedPostToolUseRetired] = mergeMatcherHooks(
+    "PostToolUse",
+    postToolUsePairs,
+  );
 
-  function mergePermissionsList(sectionName: "deny" | "ask", patterns: string[]): string[] {
+  function mergePermissionsList(sectionName: "deny" | "ask" | "allow", patterns: string[]): string[] {
     if (patterns.length === 0) return [];
     if (!data.permissions || typeof data.permissions !== "object") {
       data.permissions = {};
@@ -291,6 +342,80 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const addedDeny = mergePermissionsList("deny", denyPatterns);
   const addedAsk = mergePermissionsList("ask", askPatterns);
+  // permissions.allow (web-jam-tools#685, §3a) — purely additive, same shape
+  // as deny/ask, but with no cross-listing check against the other two: an
+  // allow pattern also present in permissions.deny is not a conflict to
+  // resolve here (deny always wins over a matching allow), so unlike
+  // deny/ask there is nothing to reconcile between allow and its siblings.
+  const addedAllow = mergePermissionsList("allow", allowPatterns);
+
+  // A pattern the installer owns via one versioned array (DENY_RULES /
+  // ASK_RULES) must not remain in the OTHER permissions list — a stale copy
+  // there silently overrides the owning array's classification, since a
+  // pattern present in both permissions.deny and permissions.ask has deny
+  // win (web-jam-tools#525). ownedPatterns is this run's version of the
+  // owning array; otherSection is the list to scan for a stale copy.
+  function findCrossListed(ownedPatterns: string[], otherSection: "deny" | "ask"): string[] {
+    if (ownedPatterns.length === 0) return [];
+    if (!data.permissions || typeof data.permissions !== "object") return [];
+    if (!Array.isArray(data.permissions[otherSection])) return [];
+    const ownedSet = new Set(ownedPatterns);
+    return (data.permissions[otherSection] as string[]).filter((p) => ownedSet.has(p));
+  }
+
+  const denyOwnedInAsk = findCrossListed(denyPatterns, "ask");
+  const askOwnedInDeny = findCrossListed(askPatterns, "deny");
+
+  // statusLine merge (web-jam-tools#688). Unlike every other section above,
+  // this is a single scalar value, not a list — data.statusLine in Claude
+  // Code's settings.json is { type: "command", command: "<cmd>" }. Only
+  // touched when --status-line was actually passed, so a target invoked
+  // without it (agy's hooks.json) is completely unaffected: no key added,
+  // no drift ever reported, byte-identical output.
+  let statusLineAdded = false;
+  let statusLineChanged = false;
+  let statusLinePrevCommand: string | undefined;
+  if (statusLineArgs.length > 0) {
+    const desiredCommand = statusLineArgs[0];
+    const current = data.statusLine;
+    const currentIsWellFormed = current && typeof current === "object" &&
+      current.type === "command" && typeof current.command === "string";
+    if (!current) {
+      statusLineAdded = true;
+      data.statusLine = { type: "command", command: desiredCommand };
+    } else if (!currentIsWellFormed || current.command !== desiredCommand) {
+      statusLineChanged = true;
+      statusLinePrevCommand = currentIsWellFormed ? current.command : undefined;
+      data.statusLine = { type: "command", command: desiredCommand };
+    }
+  }
+
+  // permissions.defaultMode merge (web-jam-tools#705). Same single-scalar
+  // shape as statusLine above, but nested under permissions instead of
+  // top-level — Claude Code's settings.json stores it as a plain string
+  // (e.g. "acceptEdits"), not an object. Only touched when --default-mode
+  // was actually passed, so a target invoked without it (agy's hooks.json —
+  // agy has no permission-mode concept at all, docs/agy-hooks.md) is
+  // completely unaffected: no key added, no drift ever reported,
+  // byte-identical output.
+  let defaultModeAdded = false;
+  let defaultModeChanged = false;
+  let defaultModePrevValue: string | undefined;
+  if (defaultModeArgs.length > 0) {
+    const desiredMode = defaultModeArgs[0];
+    if (!data.permissions || typeof data.permissions !== "object") {
+      data.permissions = {};
+    }
+    const current = data.permissions.defaultMode;
+    if (current === undefined) {
+      defaultModeAdded = true;
+      data.permissions.defaultMode = desiredMode;
+    } else if (current !== desiredMode) {
+      defaultModeChanged = true;
+      defaultModePrevValue = typeof current === "string" ? current : undefined;
+      data.permissions.defaultMode = desiredMode;
+    }
+  }
 
   // Secret-scan gate: check all strings in permissions and hooks for credentials
   const secretFindings: string[] = [];
@@ -346,6 +471,8 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedSession.length > 0 ||
     addedStop.length > 0 ||
     prunedStop.length > 0 ||
+    addedSessionEnd.length > 0 ||
+    prunedSessionEnd.length > 0 ||
     addedPreToolUse.length > 0 ||
     prunedPreToolUseStale.length > 0 ||
     prunedPreToolUseRetired.length > 0 ||
@@ -353,7 +480,14 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedPostToolUseStale.length > 0 ||
     prunedPostToolUseRetired.length > 0 ||
     addedDeny.length > 0 ||
-    addedAsk.length > 0;
+    addedAsk.length > 0 ||
+    addedAllow.length > 0 ||
+    denyOwnedInAsk.length > 0 ||
+    askOwnedInDeny.length > 0 ||
+    statusLineAdded ||
+    statusLineChanged ||
+    defaultModeAdded ||
+    defaultModeChanged;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -371,6 +505,12 @@ export function merge(settingsPath: string, args: string[]): number {
       }
       for (const cmd of prunedStop) {
         console.error(`${targetFilename}: has retired Stop hook ${cmd}`);
+      }
+      for (const cmd of addedSessionEnd) {
+        console.error(`${targetFilename}: missing SessionEnd hook ${cmd}`);
+      }
+      for (const cmd of prunedSessionEnd) {
+        console.error(`${targetFilename}: has retired SessionEnd hook ${cmd}`);
       }
       for (const [matcher, cmd] of addedPreToolUse) {
         console.error(`${targetFilename}: missing PreToolUse hook (${matcher}) ${cmd}`);
@@ -404,20 +544,62 @@ export function merge(settingsPath: string, args: string[]): number {
       for (const pattern of addedAsk) {
         console.error(`${targetFilename}: missing permissions.ask rule ${pattern}`);
       }
+      for (const pattern of addedAllow) {
+        console.error(`${targetFilename}: missing permissions.allow rule ${pattern}`);
+      }
+      for (const pattern of denyOwnedInAsk) {
+        console.error(
+          `${targetFilename}: permissions.ask rule ${pattern} is also in permissions.deny (stale copy)`,
+        );
+      }
+      for (const pattern of askOwnedInDeny) {
+        console.error(
+          `${targetFilename}: permissions.deny rule ${pattern} is also in permissions.ask (stale copy)`,
+        );
+      }
+      if (statusLineAdded) {
+        console.error(`${targetFilename}: missing statusLine ${statusLineArgs[0]}`);
+      }
+      if (statusLineChanged) {
+        console.error(
+          `${targetFilename}: statusLine differs from desired (want ${statusLineArgs[0]}${
+            statusLinePrevCommand ? `, has ${statusLinePrevCommand}` : ""
+          })`,
+        );
+      }
+      if (defaultModeAdded) {
+        console.error(`${targetFilename}: missing permissions.defaultMode ${defaultModeArgs[0]}`);
+      }
+      if (defaultModeChanged) {
+        console.error(
+          `${targetFilename}: permissions.defaultMode differs from desired (want ${
+            defaultModeArgs[0]
+          }${defaultModePrevValue ? `, has ${defaultModePrevValue}` : ""})`,
+        );
+      }
       return 1;
     }
     console.log(
-      `${targetFilename}: SessionStart, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask already up to date (no-op)`,
+      `${targetFilename}: SessionStart, SessionEnd, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)`,
     );
     return 0;
   }
 
   if (!hasDrift) {
     console.log(
-      `${targetFilename}: SessionStart, Stop, PreToolUse, PostToolUse hooks ` +
-        "and permissions.deny / permissions.ask already up to date (no-op)",
+      `${targetFilename}: SessionStart, SessionEnd, Stop, PreToolUse, PostToolUse hooks ` +
+        "and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)",
     );
     return 0;
+  }
+
+  if (denyOwnedInAsk.length > 0) {
+    const removeSet = new Set(denyOwnedInAsk);
+    data.permissions.ask = (data.permissions.ask as string[]).filter((p) => !removeSet.has(p));
+  }
+  if (askOwnedInDeny.length > 0) {
+    const removeSet = new Set(askOwnedInDeny);
+    data.permissions.deny = (data.permissions.deny as string[]).filter((p) => !removeSet.has(p));
   }
 
   if (tryExistsSync(settingsPath)) {
@@ -443,6 +625,10 @@ export function merge(settingsPath: string, args: string[]): number {
   for (const cmd of addedStop) console.log(`${targetFilename}: added Stop hook ${cmd}`);
   for (const cmd of prunedStop) {
     console.log(`${targetFilename}: removed retired Stop hook ${cmd}`);
+  }
+  for (const cmd of addedSessionEnd) console.log(`${targetFilename}: added SessionEnd hook ${cmd}`);
+  for (const cmd of prunedSessionEnd) {
+    console.log(`${targetFilename}: removed retired SessionEnd hook ${cmd}`);
   }
   for (const [matcher, cmd] of addedPreToolUse) {
     console.log(`${targetFilename}: added PreToolUse hook (${matcher}) ${cmd}`);
@@ -475,6 +661,33 @@ export function merge(settingsPath: string, args: string[]): number {
   }
   for (const pattern of addedAsk) {
     console.log(`${targetFilename}: added permissions.ask rule ${pattern}`);
+  }
+  for (const pattern of addedAllow) {
+    console.log(`${targetFilename}: added permissions.allow rule ${pattern}`);
+  }
+  for (const pattern of denyOwnedInAsk) {
+    console.log(
+      `${targetFilename}: removed permissions.ask rule ${pattern} (now owned by permissions.deny)`,
+    );
+  }
+  for (const pattern of askOwnedInDeny) {
+    console.log(
+      `${targetFilename}: removed permissions.deny rule ${pattern} (now owned by permissions.ask)`,
+    );
+  }
+  if (statusLineAdded) {
+    console.log(`${targetFilename}: added statusLine ${statusLineArgs[0]}`);
+  }
+  if (statusLineChanged) {
+    console.log(`${targetFilename}: updated statusLine to ${statusLineArgs[0]}`);
+  }
+  if (defaultModeAdded) {
+    console.log(`${targetFilename}: added permissions.defaultMode ${defaultModeArgs[0]}`);
+  }
+  if (defaultModeChanged) {
+    console.log(
+      `${targetFilename}: updated permissions.defaultMode to ${defaultModeArgs[0]}`,
+    );
   }
 
   return 0;
