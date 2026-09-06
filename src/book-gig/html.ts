@@ -19,62 +19,73 @@ function escapeHtml(str: string): string {
 }
 
 export const SORTING_SCRIPT = `
-  function initTableSorting() {
-    document.querySelectorAll("table.candidate-table").forEach(function(table) {
-      var headers = table.querySelectorAll("thead th");
-      headers.forEach(function(th, colIdx) {
-        th.classList.add("sortable-th");
-        var indicator = document.createElement("span");
-        indicator.className = "sort-indicator";
-        indicator.textContent = " ⇅";
-        th.appendChild(indicator);
+  if (typeof initTableSorting === "function" || (typeof window !== "undefined" && typeof window.initTableSorting === "function")) {
+    // Already initialized via /outreach/table-sort.js
+  } else {
+    function initTableSorting() {
+      document.querySelectorAll("table.candidate-table").forEach(function(table) {
+        var headers = table.querySelectorAll("thead th");
+        headers.forEach(function(th, colIdx) {
+          th.classList.add("sortable-th");
+          var indicator = document.createElement("span");
+          indicator.className = "sort-indicator";
+          indicator.textContent = " ⇅";
+          th.appendChild(indicator);
 
-        th.addEventListener("click", function() {
-          var currentDir = th.getAttribute("data-sort-dir");
-          var newDir = currentDir === "asc" ? "desc" : "asc";
+          th.addEventListener("click", function() {
+            var currentDir = th.getAttribute("data-sort-dir");
+            var newDir = currentDir === "asc" ? "desc" : "asc";
 
-          headers.forEach(function(h) {
-            h.removeAttribute("data-sort-dir");
-            var ind = h.querySelector(".sort-indicator");
-            if (ind) ind.textContent = " ⇅";
+            headers.forEach(function(h) {
+              h.removeAttribute("data-sort-dir");
+              var ind = h.querySelector(".sort-indicator");
+              if (ind) ind.textContent = " ⇅";
+            });
+
+            th.setAttribute("data-sort-dir", newDir);
+            indicator.textContent = newDir === "asc" ? " ▲" : " ▼";
+
+            var tbody = table.querySelector("tbody");
+            if (!tbody) return;
+            var rows = Array.from(tbody.querySelectorAll("tr"));
+            if (rows.length <= 1) return;
+
+            if (rows.length === 1 && rows[0].querySelector("td[colspan]")) return;
+
+            rows.sort(function(rowA, rowB) {
+              var cellA = rowA.children[colIdx] ? (rowA.children[colIdx].innerText || rowA.children[colIdx].textContent || "").trim() : "";
+              var cellB = rowB.children[colIdx] ? (rowB.children[colIdx].innerText || rowB.children[colIdx].textContent || "").trim() : "";
+
+              var numA = parseFloat(cellA.replace(/[^0-9.-]/g, ""));
+              var numB = parseFloat(cellB.replace(/[^0-9.-]/g, ""));
+              var isNumeric = !isNaN(numA) && !isNaN(numB) && /^#?[0-9.-]+$/.test(cellA) && /^#?[0-9.-]+$/.test(cellB);
+
+              var cmp = 0;
+              if (isNumeric) {
+                cmp = numA - numB;
+              } else {
+                cmp = cellA.localeCompare(cellB, undefined, { numeric: true, sensitivity: "base" });
+              }
+              return newDir === "asc" ? cmp : -cmp;
+            });
+
+            rows.forEach(function(r, idx) {
+              tbody.appendChild(r);
+              var numCell = r.querySelector(".num-col") || r.children[0];
+              if (numCell) numCell.textContent = (idx + 1).toString();
+            });
           });
-
-          th.setAttribute("data-sort-dir", newDir);
-          indicator.textContent = newDir === "asc" ? " ▲" : " ▼";
-
-          var tbody = table.querySelector("tbody");
-          if (!tbody) return;
-          var rows = Array.from(tbody.querySelectorAll("tr"));
-          if (rows.length <= 1) return;
-
-          if (rows.length === 1 && rows[0].querySelector("td[colspan]")) return;
-
-          rows.sort(function(rowA, rowB) {
-            var cellA = rowA.children[colIdx] ? (rowA.children[colIdx].innerText || rowA.children[colIdx].textContent || "").trim() : "";
-            var cellB = rowB.children[colIdx] ? (rowB.children[colIdx].innerText || rowB.children[colIdx].textContent || "").trim() : "";
-
-            var numA = parseFloat(cellA.replace(/[^0-9.-]/g, ""));
-            var numB = parseFloat(cellB.replace(/[^0-9.-]/g, ""));
-            var isNumeric = !isNaN(numA) && !isNaN(numB) && /^#?[0-9.-]+$/.test(cellA) && /^#?[0-9.-]+$/.test(cellB);
-
-            var cmp = 0;
-            if (isNumeric) {
-              cmp = numA - numB;
-            } else {
-              cmp = cellA.localeCompare(cellB, undefined, { numeric: true, sensitivity: "base" });
-            }
-            return newDir === "asc" ? cmp : -cmp;
-          });
-
-          rows.forEach(function(r) { tbody.appendChild(r); });
         });
       });
-    });
-  }
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initTableSorting);
-  } else {
-    initTableSorting();
+    }
+    if (typeof window !== "undefined") {
+      window.initTableSorting = initTableSorting;
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", initTableSorting);
+    } else {
+      initTableSorting();
+    }
   }
 `;
 
@@ -1045,6 +1056,7 @@ ${
     })
   }
   </script>
+  <script src="/outreach/table-sort.js"></script>
   <script>
 ${SORTING_SCRIPT}
   </script>

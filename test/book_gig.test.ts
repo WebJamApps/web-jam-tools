@@ -1301,6 +1301,215 @@ Deno.test("renderDarkHtml: embeds interactive client-side column sorting CSS and
   assertStringIncludes(SORTING_SCRIPT, "localeCompare");
 });
 
+Deno.test("renderDarkHtml: loads /outreach/table-sort.js for CSP compliance and re-indexes row numbers on sort (#938)", () => {
+  const result: BookGigResult = {
+    mode: "preview",
+    weekend: {
+      start: "2026-10-16",
+      end: "2026-10-18",
+      rawText: "Oct 16-18 2026",
+      label: "October 16–18, 2026",
+      year: 2026,
+      month: 10,
+      days: [16, 17, 18],
+    },
+    candidates: [
+      {
+        _id: "v1",
+        name: "Olde Salem Brewing",
+        city: "Salem",
+        usState: "VA",
+        contactName: "Kevin",
+        phone: "540-555-0101",
+        email: "booking@oldesalem.com",
+      },
+      {
+        _id: "v2",
+        name: "The Glass House",
+        city: "Lynchburg",
+        usState: "VA",
+        contactName: "Sarah",
+        phone: "434-555-0102",
+        email: "events@glasshouse.com",
+      },
+    ],
+    density: { count: 2, isSparse: false },
+    pitches: [],
+  };
+
+  const html = renderDarkHtml(result);
+
+  // Assert external script is included for CSP compliance
+  assertStringIncludes(html, '<script src="/outreach/table-sort.js"></script>');
+
+  // Assert SORTING_SCRIPT contains offline guard / fallback
+  assertStringIncludes(SORTING_SCRIPT, 'typeof initTableSorting === "function"');
+  assertStringIncludes(SORTING_SCRIPT, "window.initTableSorting");
+
+  // Assert SORTING_SCRIPT contains row re-indexing logic
+  assertStringIncludes(SORTING_SCRIPT, ".num-col");
+  assertStringIncludes(SORTING_SCRIPT, "idx + 1");
+
+  // Verify SORTING_SCRIPT offline fallback guards against double-initialization
+  const mockWindowWithScript: { initTableSorting: () => string } = {
+    initTableSorting: () => "preloaded",
+  };
+  const fnA = new Function("window", "document", "initTableSorting", SORTING_SCRIPT);
+  fnA(
+    mockWindowWithScript,
+    { readyState: "complete", querySelectorAll: () => [] },
+    mockWindowWithScript.initTableSorting,
+  );
+  assertEquals(mockWindowWithScript.initTableSorting(), "preloaded");
+
+  const mockWindowOffline: { initTableSorting?: unknown } = {};
+  const fnB = new Function("window", "document", "initTableSorting", SORTING_SCRIPT);
+  fnB(mockWindowOffline, { readyState: "complete", querySelectorAll: () => [] }, undefined);
+  assertEquals(typeof mockWindowOffline.initTableSorting, "function");
+
+  // Verify sort re-indexes row numbers 1..N
+  type Listener = (e?: unknown) => void;
+  interface MockEl {
+    tagName: string;
+    className: string;
+    classList: { add: (c: string) => void };
+    textContent: string;
+    innerText: string;
+    children: MockEl[];
+    getAttribute: (name: string) => string | null;
+    setAttribute: (name: string, val: string) => void;
+    removeAttribute: (name: string) => void;
+    addEventListener: (evt: string, cb: Listener) => void;
+    trigger: (evt: string) => void;
+    appendChild: (child: MockEl) => void;
+    querySelector: (sel: string) => MockEl | null;
+    querySelectorAll: (sel: string) => MockEl[];
+  }
+
+  function createMockElement(tagName: string, className = ""): MockEl {
+    const listeners: Record<string, Listener[]> = {};
+    const attrs: Record<string, string> = {};
+    const children: MockEl[] = [];
+    const el: MockEl = {
+      tagName,
+      className,
+      classList: {
+        add: (c: string) => {
+          el.className += " " + c;
+        },
+      },
+      textContent: "",
+      innerText: "",
+      children,
+      getAttribute: (name: string) => attrs[name] || null,
+      setAttribute: (name: string, val: string) => {
+        attrs[name] = val;
+      },
+      removeAttribute: (name: string) => {
+        delete attrs[name];
+      },
+      addEventListener: (evt: string, cb: Listener) => {
+        listeners[evt] = listeners[evt] || [];
+        listeners[evt].push(cb);
+      },
+      trigger: (evt: string) => {
+        (listeners[evt] || []).forEach((cb) => cb());
+      },
+      appendChild: (child: MockEl) => {
+        const idx = children.indexOf(child);
+        if (idx !== -1) children.splice(idx, 1);
+        children.push(child);
+      },
+      querySelector: (sel: string): MockEl | null => {
+        if (sel === ".sort-indicator") {
+          return children.find((c) => c.className === "sort-indicator") || null;
+        }
+        if (sel === ".num-col") {
+          return children.find((c) => c.className === "num-col") || null;
+        }
+        if (sel === "td[colspan]") {
+          return children.find((c) => Boolean(c.getAttribute("colspan"))) || null;
+        }
+        if (sel === "tbody") return children.find((c) => c.tagName === "tbody") || null;
+        return null;
+      },
+      querySelectorAll: (sel: string): MockEl[] => {
+        if (sel === "thead th") {
+          return children.filter((c) => c.tagName === "thead").flatMap((th) =>
+            th.children.filter((c) => c.tagName === "th")
+          );
+        }
+        if (sel === "tr") return children.filter((c) => c.tagName === "tr");
+        return [];
+      },
+    };
+    return el;
+  }
+
+  const table = createMockElement("table", "candidate-table");
+  const thead = createMockElement("thead");
+  const thNum = createMockElement("th");
+  thNum.textContent = "#";
+  const thName = createMockElement("th");
+  thName.textContent = "Venue Name";
+  thead.appendChild(thNum);
+  thead.appendChild(thName);
+  table.appendChild(thead);
+
+  const tbody = createMockElement("tbody");
+
+  // Row 1: # 1, Name Z
+  const r1 = createMockElement("tr");
+  const c1_0 = createMockElement("td", "num-col");
+  c1_0.textContent = "1";
+  c1_0.innerText = "1";
+  const c1_1 = createMockElement("td");
+  c1_1.textContent = "Zoo";
+  c1_1.innerText = "Zoo";
+  r1.appendChild(c1_0);
+  r1.appendChild(c1_1);
+  tbody.appendChild(r1);
+
+  // Row 2: # 2, Name A
+  const r2 = createMockElement("tr");
+  const c2_0 = createMockElement("td", "num-col");
+  c2_0.textContent = "2";
+  c2_0.innerText = "2";
+  const c2_1 = createMockElement("td");
+  c2_1.textContent = "Apex";
+  c2_1.innerText = "Apex";
+  r2.appendChild(c2_0);
+  r2.appendChild(c2_1);
+  tbody.appendChild(r2);
+
+  table.appendChild(tbody);
+
+  const mockDoc = {
+    readyState: "complete",
+    createElement: (tag: string) => createMockElement(tag),
+    querySelectorAll: (sel: string) => sel === "table.candidate-table" ? [table] : [],
+    addEventListener: () => {},
+  };
+
+  const mockWin = {};
+  const fn = new Function("window", "document", "initTableSorting", SORTING_SCRIPT);
+  fn(mockWin, mockDoc, undefined);
+
+  // Click Name header to sort ascending: Apex first (#1), Zoo second (#2)
+  thName.trigger("click");
+  assertEquals(tbody.children[0].children[1].textContent, "Apex");
+  assertEquals(tbody.children[0].children[0].textContent, "1");
+  assertEquals(tbody.children[1].children[1].textContent, "Zoo");
+  assertEquals(tbody.children[1].children[0].textContent, "2");
+
+  // Click Name header again to sort descending: Zoo first (#1), Apex second (#2)
+  thName.trigger("click");
+  assertEquals(tbody.children[0].children[1].textContent, "Zoo");
+  assertEquals(tbody.children[0].children[0].textContent, "1");
+  assertEquals(tbody.children[1].children[1].textContent, "Apex");
+  assertEquals(tbody.children[1].children[0].textContent, "2");
+});
+
 Deno.test("renderDarkHtml: includes Pay column, states New vs Returning outright, and provides full width with tablet breakpoint (#896)", () => {
   const result = {
     mode: "preview" as const,
