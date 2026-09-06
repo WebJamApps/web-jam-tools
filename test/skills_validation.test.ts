@@ -385,8 +385,63 @@ Deno.test("skills/design-issue/SKILL.md contains resume rule in Phase 1 step 1",
 
   assertStringIncludes(
     text,
-    "**Resume rather than restart:** Before creating a design document, look in the theme folder for an existing `<topic>-design-*.md` and continue from its decision record; a run that wants a fresh document says so.",
+    "**Resume rather than restart:** Resolving the canonical design document is a precondition of the run itself rather than of creating one, so every run — including one that creates no document at all — looks in the theme folder for an existing `<topic>-design-*.md` and continues from its decision record; a run that wants a fresh document says so.",
   );
+});
+
+Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as a precondition of the run, in every place the check is described (web-jam-tools#942)", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  // Phase 1 step zero: the check is reached before any decision is put to Josh.
+  assertStringIncludes(
+    text,
+    "0. **STEP ZERO — resolve the canonical design document, and read it, before any decision is put to Josh.**",
+  );
+  assertStringIncludes(
+    text,
+    "it happens at the start of every design run, including a run that will never write a document",
+  );
+
+  // The step-zero read requirement, and its three outcomes.
+  assertStringIncludes(text, "Read it end to end — decisions-record appendix included");
+  assertStringIncludes(text, "**No canonical document exists (exit 1).**");
+  assertStringIncludes(text, "**The check cannot tell which of the two applies (exit 2).**");
+  assertStringIncludes(text, "**The run REFUSES and stops**");
+
+  // The refusals table carries both new refusals beside the pre-existing duplicate-file one.
+  assertStringIncludes(
+    text,
+    "| put any decision to Josh before resolving the topic's canonical design document and reading it end to end, decisions-record appendix included |",
+  );
+  assertStringIncludes(
+    text,
+    "| continue a design run when the canonical-document check cannot tell whether a document exists",
+  );
+  assertStringIncludes(
+    text,
+    "| create a redundant parallel design document (e.g. `*-phase-2-design-*.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` |",
+  );
+
+  // The Major Revision protocol section agrees with step zero rather than contradicting it: no
+  // copy of the old "before creating a document/file" trigger survives anywhere in the body.
+  assertStringIncludes(
+    text,
+    "5. **Fail Closed When Discovery Cannot Answer:**",
+  );
+  for (
+    const staleTrigger of [
+      "Before creating a design document, look in the theme folder",
+      "Before creating a new file, run `deno task design:candidates",
+      "for pre-existing canonical design documents (`<topic>-design-*.md` or `<topic>-skill-design-*.md`) before creating a new document",
+    ]
+  ) {
+    assertEquals(
+      text.includes(staleTrigger),
+      false,
+      `skills/design-issue/SKILL.md still triggers the canonical-document check on creating a document: "${staleTrigger}"`,
+    );
+  }
 });
 
 Deno.test("skills/design-issue/SKILL.md specifies Phase 4 runs on Claude Code only and is skipped on agy", async () => {

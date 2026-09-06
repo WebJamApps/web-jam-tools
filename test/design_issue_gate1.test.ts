@@ -8,6 +8,7 @@ import * as path from "@std/path";
 import {
   defaultOpenBrowserImpl,
   defaultScreenshotImpl,
+  DesignDocResolutionRefusal,
   expandHome,
   extractDateFromFilename,
   extractTopicFromText,
@@ -17,7 +18,10 @@ import {
   isDesignDocFilename,
   matchesTopic,
   normalizeTopicSlug,
+  parseDecisionsRecord,
   refuseRedundantDesignDoc,
+  resolveCanonicalDesignDoc,
+  resolveDesignDocsRoot,
   resolveHtmlPath,
   runGate1,
 } from "../src/design-issue/gate1.ts";
@@ -902,4 +906,321 @@ Deno.test("runCandidatesCli: explicitly parses boolean --find-existing flag with
 
   assertEquals(exitCode, 0);
   assertStringIncludes(logs.join("\n"), "No open 'Needs Design' candidate issues found");
+});
+
+// --- web-jam-tools#942: the canonical-document precondition and its three guard outcomes ---
+//
+// The pre-existing refusal above guards *writing a duplicate file*, at the end of Phase 1. A design
+// run that creates no document never trips it, so these cover the precondition that fires up front
+// instead — including the outcome that must never silently look like "no document found".
+
+const DOC_WITH_DECISIONS_RECORD = `# Book Gig Skill Design
+
+## Appendix — Decisions Record
+
+| ID | Topic | Options Considered | Decision / Outcome |
+|---|---|---|---|
+| D-1 | Invocation | 1. Flexible CLI (Rec)<br>2. Strict flags | **Option 1 approved by Josh on 2026-08-16**: accepts natural or ISO weekend dates. |
+| D-4 | Pitch Delivery | 1. Gmail drafts (Rec)<br>2. Direct send | **Option 1 approved on 2026-08-16**: generates Gmail drafts for review; Josh sends. |
+`;
+
+Deno.test("web-jam-tools#942 outcome 1: a topic with an existing canonical document resolves it and reports its decisions record", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "precondition-outcome-1-" });
+  const themeDir = path.join(tempDir, "gig-outreach");
+  await Deno.mkdir(themeDir, { recursive: true });
+  const docPath = path.join(themeDir, "book-gig-skill-design-2026-08-16.md");
+  await Deno.writeTextFile(docPath, DOC_WITH_DECISIONS_RECORD);
+
+  try {
+    const resolution = await resolveCanonicalDesignDoc({
+      topic: "book-gig",
+      dropboxDir: tempDir,
+    });
+
+    assertEquals(resolution.outcome, "existing-document");
+    assertEquals(resolution.match?.path, docPath);
+    assertEquals(resolution.decisions.length, 2);
+    assertEquals(resolution.decisions[0].id, "D-1");
+    assertStringIncludes(
+      resolution.decisions[0].outcome,
+      "Option 1 approved by Josh on 2026-08-16",
+    );
+    assertEquals(resolution.decisions[1].id, "D-4");
+    assertStringIncludes(resolution.decisions[1].outcome, "generates Gmail drafts for review");
+
+    // The CLI surfaces the decisions record alongside the path, and exits 0.
+    const logs: string[] = [];
+    const exitCode = await runMatchDesignCli(
+      ["book-gig", "--dropbox-dir", tempDir],
+      { log: (msg) => logs.push(msg) },
+    );
+    assertEquals(exitCode, 0);
+    const joined = logs.join("\n");
+    assertStringIncludes(joined, 'Resolved existing canonical design document for "book-gig"');
+    assertStringIncludes(joined, docPath);
+    assertStringIncludes(joined, "Decisions record — 2 entries already settled");
+    assertStringIncludes(joined, "D-1:");
+    assertStringIncludes(joined, "D-4:");
+    assertStringIncludes(joined, "Suggested action: Major Revision to existing design document");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("web-jam-tools#942 outcome 2: a topic with no existing document proceeds unchanged", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "precondition-outcome-2-" });
+  const themeDir = path.join(tempDir, "gig-outreach");
+  await Deno.mkdir(themeDir, { recursive: true });
+  await Deno.writeTextFile(
+    path.join(themeDir, "book-gig-skill-design-2026-08-16.md"),
+    DOC_WITH_DECISIONS_RECORD,
+  );
+
+  try {
+    const resolution = await resolveCanonicalDesignDoc({
+      topic: "brand-new-feature",
+      dropboxDir: tempDir,
+    });
+
+    assertEquals(resolution.outcome, "no-document");
+    assertEquals(resolution.match, null);
+    assertEquals(resolution.decisions.length, 0);
+
+    const logs: string[] = [];
+    const exitCode = await runMatchDesignCli(
+      ["brand-new-feature", "--dropbox-dir", tempDir],
+      { log: (msg) => logs.push(msg) },
+    );
+    assertEquals(exitCode, 1);
+    assertStringIncludes(
+      logs.join("\n"),
+      'No existing design document found for "brand-new-feature"',
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("web-jam-tools#942 outcome 3: an unreadable or missing theme folder REFUSES, naming the path, and never reports 'no document found'", async () => {
+  const missingRoot = path.join(
+    await Deno.makeTempDir({ prefix: "precondition-outcome-3-" }),
+    "nonexistent-theme-root",
+  );
+
+  // The resolver refuses rather than returning an empty result.
+  const refusal = await assertRejects(
+    () => resolveCanonicalDesignDoc({ topic: "book-gig", dropboxDir: missingRoot }),
+    DesignDocResolutionRefusal,
+  );
+  assertStringIncludes(refusal.message, missingRoot);
+  assertEquals(refusal.resolutionPath, missingRoot);
+
+  // The CLI exits non-zero, names the path, and — the distinction this issue exists for — does
+  // NOT print the "no existing design document" wording that outcome 2 prints.
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runMatchDesignCli(
+    ["book-gig", "--dropbox-dir", missingRoot],
+    { log: (msg) => logs.push(msg), errorLog: (msg) => errors.push(msg) },
+  );
+  assertEquals(exitCode, 2);
+  const allOutput = [...logs, ...errors].join("\n");
+  assertStringIncludes(allOutput, missingRoot);
+  assertStringIncludes(allOutput, "Refusing to proceed with the design run");
+  assertEquals(
+    allOutput.includes("No existing design document found"),
+    false,
+    "an indeterminate check must never report a genuine no-document result",
+  );
+
+  // A theme folder that exists but cannot be listed refuses the same way, naming that folder.
+  const unreadableRoot = await Deno.makeTempDir({ prefix: "precondition-unreadable-" });
+  const unreadableTheme = path.join(unreadableRoot, "gig-outreach");
+  await Deno.mkdir(unreadableTheme, { recursive: true });
+  await Deno.chmod(unreadableTheme, 0o000);
+
+  try {
+    const themeRefusal = await assertRejects(
+      () => resolveCanonicalDesignDoc({ topic: "book-gig", dropboxDir: unreadableRoot }),
+      DesignDocResolutionRefusal,
+    );
+    assertStringIncludes(themeRefusal.message, unreadableTheme);
+
+    const themeErrors: string[] = [];
+    const themeExit = await runMatchDesignCli(
+      ["book-gig", "--dropbox-dir", unreadableRoot],
+      { log: () => {}, errorLog: (msg) => themeErrors.push(msg) },
+    );
+    assertEquals(themeExit, 2);
+    assertStringIncludes(themeErrors.join("\n"), unreadableTheme);
+  } finally {
+    await Deno.chmod(unreadableTheme, 0o700);
+    await Deno.remove(unreadableRoot, { recursive: true });
+  }
+
+  // A topic that cannot be resolved is equally indeterminate, and equally refuses.
+  const emptyTopicRoot = await Deno.makeTempDir({ prefix: "precondition-empty-topic-" });
+  try {
+    await assertRejects(
+      () => resolveCanonicalDesignDoc({ title: "", dropboxDir: emptyTopicRoot }),
+      DesignDocResolutionRefusal,
+      "no topic slug could be resolved",
+    );
+  } finally {
+    await Deno.remove(emptyTopicRoot, { recursive: true });
+  }
+});
+
+Deno.test("web-jam-tools#942: a resolved canonical document that cannot be read refuses rather than resolving", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "precondition-unreadable-doc-" });
+  const themeDir = path.join(tempDir, "gig-outreach");
+  await Deno.mkdir(themeDir, { recursive: true });
+  const docPath = path.join(themeDir, "book-gig-skill-design-2026-08-16.md");
+  await Deno.writeTextFile(docPath, DOC_WITH_DECISIONS_RECORD);
+
+  try {
+    const refusal = await assertRejects(
+      () =>
+        resolveCanonicalDesignDoc({
+          topic: "book-gig",
+          dropboxDir: tempDir,
+          readTextFileImpl: () => Promise.reject(new Error("EACCES: permission denied")),
+        }),
+      DesignDocResolutionRefusal,
+    );
+    assertStringIncludes(refusal.message, docPath);
+    assertStringIncludes(refusal.message, "found but could not be read");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("web-jam-tools#942: resolveDesignDocsRoot honours DESIGN_DOCS_ROOT above DROPBOX_BASE_DIR, and an explicit path above both", () => {
+  const priorDesignRoot = Deno.env.get("DESIGN_DOCS_ROOT");
+  const priorDropboxBase = Deno.env.get("DROPBOX_BASE_DIR");
+
+  try {
+    Deno.env.delete("DESIGN_DOCS_ROOT");
+    Deno.env.delete("DROPBOX_BASE_DIR");
+    assertEquals(
+      resolveDesignDocsRoot(),
+      path.resolve(expandHome("~/Dropbox/web-jam-llms")),
+    );
+
+    Deno.env.set("DROPBOX_BASE_DIR", "/tmp/dropbox-base");
+    assertEquals(resolveDesignDocsRoot(), "/tmp/dropbox-base");
+
+    Deno.env.set("DESIGN_DOCS_ROOT", "/nonexistent-theme-root");
+    assertEquals(resolveDesignDocsRoot(), "/nonexistent-theme-root");
+    assertEquals(resolveDesignDocsRoot("/tmp/explicit-root"), "/tmp/explicit-root");
+  } finally {
+    if (priorDesignRoot === undefined) Deno.env.delete("DESIGN_DOCS_ROOT");
+    else Deno.env.set("DESIGN_DOCS_ROOT", priorDesignRoot);
+    if (priorDropboxBase === undefined) Deno.env.delete("DROPBOX_BASE_DIR");
+    else Deno.env.set("DROPBOX_BASE_DIR", priorDropboxBase);
+  }
+});
+
+Deno.test("web-jam-tools#942: DESIGN_DOCS_ROOT pointed at a nonexistent theme root makes design:match-design refuse", async () => {
+  const priorDesignRoot = Deno.env.get("DESIGN_DOCS_ROOT");
+  Deno.env.set("DESIGN_DOCS_ROOT", "/nonexistent-theme-root");
+
+  const errors: string[] = [];
+  const logs: string[] = [];
+  try {
+    const exitCode = await runMatchDesignCli(
+      ["book-gig"],
+      { log: (msg) => logs.push(msg), errorLog: (msg) => errors.push(msg) },
+    );
+    assertEquals(exitCode, 2);
+    assertStringIncludes(errors.join("\n"), "/nonexistent-theme-root");
+    assertEquals(
+      [...logs, ...errors].join("\n").includes("No existing design document found"),
+      false,
+    );
+  } finally {
+    if (priorDesignRoot === undefined) Deno.env.delete("DESIGN_DOCS_ROOT");
+    else Deno.env.set("DESIGN_DOCS_ROOT", priorDesignRoot);
+  }
+});
+
+Deno.test("web-jam-tools#942: the Gate 1 refusal on a redundant parallel document is unchanged and still fires beside the precondition", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-refusal-still-there-" });
+  const themeDir = path.join(tempDir, "gig-outreach");
+  await Deno.mkdir(themeDir, { recursive: true });
+  await Deno.writeTextFile(
+    path.join(themeDir, "book-gig-skill-design-2026-08-16.md"),
+    MINIMAL_LINT_CLEAN_DOC,
+  );
+  const redundantDocPath = path.join(themeDir, "book-gig-skill-phase-2-design-2026-09-06.md");
+  await Deno.writeTextFile(redundantDocPath, MINIMAL_LINT_CLEAN_DOC);
+
+  try {
+    // The precondition resolves the canonical document up front...
+    const resolution = await resolveCanonicalDesignDoc({
+      topic: "book-gig",
+      dropboxDir: tempDir,
+    });
+    assertEquals(resolution.outcome, "existing-document");
+
+    // ...and the late refusal still refuses the duplicate file independently.
+    await assertRejects(
+      () =>
+        runGate1({
+          docPath: redundantDocPath,
+          dropboxDir: tempDir,
+          noOpen: true,
+          screenshotImpl: () => Promise.resolve({ sizeBytes: 100 }),
+        }),
+      Error,
+      'Refusing to process redundant parallel design document for "book-gig"',
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("web-jam-tools#942: parseDecisionsRecord reads both decisions-record table shapes and ignores other appendices", () => {
+  const fourColumn = parseDecisionsRecord(DOC_WITH_DECISIONS_RECORD);
+  assertEquals(fourColumn.map((entry) => entry.id), ["D-1", "D-4"]);
+
+  const threeColumn = parseDecisionsRecord(`# Doc
+
+## Appendix A — ground facts
+
+| Fact | Proof |
+|---|---|
+| Not a decision | Checked |
+
+## Appendix B — decision record
+
+| # | Decision | Outcome |
+|---|---|---|
+| 1 | Milestone / theme | **AI Misbehaves** — Josh picked option 1 |
+| 2 | Fate of the alias | **Officially retired.** Josh picked option 2 |
+
+## Appendix C — what Josh asked for, verbatim
+
+| Quote | Date |
+|---|---|
+| "not a decision either" | 2026-09-06 |
+`);
+  assertEquals(threeColumn.length, 2);
+  assertEquals(threeColumn[0].id, "1");
+  assertStringIncludes(threeColumn[0].outcome, "AI Misbehaves");
+  assertEquals(threeColumn[1].id, "2");
+  assertStringIncludes(threeColumn[1].outcome, "Officially retired.");
+
+  // A document with no decisions record yields no entries rather than throwing.
+  assertEquals(parseDecisionsRecord("# Doc\n\nNo appendix here.\n"), []);
+  assertEquals(parseDecisionsRecord(""), []);
+
+  // Long outcomes are truncated for the CLI line, never dropped.
+  const long = parseDecisionsRecord(
+    `## Appendix — Decisions Record\n\n| ID | Outcome |\n|---|---|\n| D-9 | ${"x".repeat(400)} |\n`,
+    50,
+  );
+  assertEquals(long.length, 1);
+  assertEquals(long[0].outcome.length, 51);
+  assertStringIncludes(long[0].outcome, "…");
 });
