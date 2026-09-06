@@ -6,6 +6,7 @@
  *
  * 1. Claude Code surface (settings.json):
  *    - SESSION_START_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
+ *    - SESSION_END_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *    - STOP_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *    - PRE_TOOL_USE_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *    - POST_TOOL_USE_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
@@ -41,7 +42,18 @@ export function extractDirectCommandHookScripts(
     }
   }
 
-  // 2. Claude Code Stop hooks
+  // 2. Claude Code SessionEnd hooks
+  const sessionEndMatch = installerContent.match(
+    /SESSION_END_HOOKS=\(([\s\S]*?)\)/,
+  );
+  if (sessionEndMatch) {
+    for (const token of sessionEndMatch[1].trim().split(/\s+/)) {
+      const clean = token.replace(/#.*$/, "").trim().replace(/^["']|["']$/g, "");
+      if (clean.endsWith(".sh")) directHooks.add(clean);
+    }
+  }
+
+  // 3. Claude Code Stop hooks
   const stopMatch = installerContent.match(/STOP_HOOKS=\(([\s\S]*?)\)/);
   if (stopMatch) {
     for (const token of stopMatch[1].trim().split(/\s+/)) {

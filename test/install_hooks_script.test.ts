@@ -120,6 +120,11 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
 
     const settings = JSON.parse(await Deno.readTextFile(settingsPath));
     assert(settings.hooks.SessionStart.length > 0);
+    assert(settings.hooks.SessionEnd.length > 0);
+    assertEquals(
+      settings.hooks.SessionEnd[0].hooks[0].command,
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+    );
     assert(settings.hooks.PreToolUse.length > 0);
     // web-jam-tools#308: DENY_RULES land in permissions.deny too.
     assert(Array.isArray(settings.permissions?.deny) && settings.permissions.deny.length > 0);
@@ -914,6 +919,55 @@ Deno.test(
       assert(checkRes.code !== 0, "expected --check to fail when drift is present");
       assert(checkRes.stderr.includes("drift: orphaned symlink dangling-check.sh"));
       assert(checkRes.stderr.includes("has retired SessionStart hook"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift when SessionEnd entry is removed from settings.json",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Verify SessionEnd is present and check passes initially
+      const checkInitial = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkInitial.code, 0, checkInitial.stdout + checkInitial.stderr);
+
+      // Remove SessionEnd entry from settings.json
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      delete settings.hooks.SessionEnd;
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings, null, 2));
+
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assert(checkRes.code !== 0, "expected --check to fail when SessionEnd is removed");
+      assert(checkRes.stderr.includes("missing SessionEnd hook"));
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });

@@ -6,11 +6,13 @@
 #    file is backed up (never deleted) to ~/.claude/hooks/<name>.bak-<date>.
 #
 # 2. Idempotently merges the SessionStart hook(s) listed in
-#    SESSION_START_HOOKS, the PreToolUse hook(s) (any matcher) listed in
-#    PRE_TOOL_USE_HOOKS, and the permissions.deny patterns listed in
-#    DENY_RULES, below into ~/.claude/settings.json (only adding entries
-#    that aren't already there; every other key — permissions.allow,
-#    permissions.ask, other hook events, etc. — is left untouched).
+#    SESSION_START_HOOKS, the SessionEnd hook(s) listed in
+#    SESSION_END_HOOKS, the Stop hook(s) listed in STOP_HOOKS, the PreToolUse
+#    hook(s) (any matcher) listed in PRE_TOOL_USE_HOOKS, and the
+#    permissions.deny patterns listed in DENY_RULES, below into
+#    ~/.claude/settings.json (only adding entries that aren't already there;
+#    every other key — permissions.allow, permissions.ask, other hook events,
+#    etc. — is left untouched).
 #    settings.json is backed up to settings.json.bak-<date> immediately
 #    before any write, and only if a write is actually happening.
 #
@@ -33,12 +35,13 @@
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
-# scripts/backup-claude-memory.sh). SESSION_START_HOOKS / PRE_TOOL_USE_HOOKS /
-# DENY_RULES below are the hooks and deny patterns THIS script keeps
-# registered automatically; add a new hook's script name (+ matcher, for
-# PreToolUse) or a new deny pattern there and re-run to wire it up with no
-# manual settings edit (web-jam-tools#163; PreToolUse matcher generalization
-# web-jam-tools#265; DENY_RULES web-jam-tools#308).
+# scripts/backup-claude-memory.sh). SESSION_START_HOOKS / SESSION_END_HOOKS /
+# PRE_TOOL_USE_HOOKS / DENY_RULES below are the hooks and deny patterns THIS
+# script keeps registered automatically; add a new hook's script name (+
+# matcher, for PreToolUse) or a new deny pattern there and re-run to wire it
+# up with no manual settings edit (web-jam-tools#163; PreToolUse matcher
+# generalization web-jam-tools#265; DENY_RULES web-jam-tools#308;
+# SESSION_END_HOOKS web-jam-tools#818).
 #
 # DENY_RULES is purely additive and versioned here so the same deny patterns
 # are both checked into the repo AND live on this laptop's real
@@ -121,6 +124,11 @@ FORCE=0
 # by the shell that runs the hook, not by this installer — matches the style
 # of the hooks already wired into settings.json).
 SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh flash-issues-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh)
+
+# SessionEnd hooks this installer keeps registered in settings.json (web-jam-tools#818).
+# Same flat, no-matcher shape as SESSION_START_HOOKS and STOP_HOOKS — SessionEnd
+# fires unconditionally at session termination.
+SESSION_END_HOOKS=(prune-permission-allows-on-session-end.sh)
 
 # Stop hooks this installer keeps registered in settings.json (web-jam-tools#290).
 # Same flat, no-matcher shape as SESSION_START_HOOKS — Stop fires
@@ -684,6 +692,14 @@ for name in "${STOP_HOOKS[@]}"; do
   merge_stop_args+=('$HOME/.claude/hooks/'"$name")
 done
 
+merge_session_end_args=()
+for name in "${SESSION_END_HOOKS[@]}"; do
+  [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in SESSION_END_HOOKS)" >&2; exit 1; }
+  # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
+  # shell that runs the hook later, not by this installer (see header note).
+  merge_session_end_args+=('$HOME/.claude/hooks/'"$name")
+done
+
 merge_pre_tool_use_args=()
 for entry in "${PRE_TOOL_USE_HOOKS[@]}"; do
   matcher="${entry%%::*}"
@@ -809,7 +825,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
     DRIFT=1
   fi
 
@@ -913,7 +929,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 

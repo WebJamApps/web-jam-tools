@@ -86,6 +86,7 @@ interface SettingsJson {
     PreToolUse: HookEntry[];
     PostToolUse?: HookEntry[];
     Stop?: HookEntry[];
+    SessionEnd?: HookEntry[];
   };
   statusLine?: StatusLineJson;
 }
@@ -179,12 +180,79 @@ Deno.test("a pre-existing Stop hook (not installer-managed) is preserved when a 
   );
 });
 
-Deno.test("--stop, --pre-tool-use and SessionStart all merge together in one invocation", async () => {
+Deno.test("merges a --session-end hook into hooks.SessionEnd as a flat, no-matcher entry", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, [
+      "--session-end",
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+    ]);
+    assertEquals(res.code, 0, res.stderr);
+    const data = await readJson(path);
+    assertEquals(data.hooks.SessionEnd, [
+      {
+        hooks: [
+          {
+            type: "command",
+            command: "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+          },
+        ],
+      },
+    ]);
+  });
+});
+
+Deno.test("re-running with the same --session-end hook does not duplicate it", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const args = [
+      "--session-end",
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+    ];
+    const first = await runMerge(path, args);
+    assertEquals(first.code, 0, first.stderr);
+    const second = await runMerge(path, args);
+    assertEquals(second.code, 0, second.stderr);
+    assert(
+      second.stdout.includes("already up to date (no-op)"),
+      `expected no-op message, got: ${second.stdout}`,
+    );
+    const data = await readJson(path);
+    assertEquals(data.hooks.SessionEnd?.length, 1);
+    assertEquals(data.hooks.SessionEnd?.[0].hooks.length, 1);
+  });
+});
+
+Deno.test("a pre-existing SessionEnd hook (not installer-managed) is preserved when a new --session-end hook is added", async () => {
+  await withTempSettings(
+    {
+      hooks: {
+        SessionEnd: [{ hooks: [{ type: "command", command: "some-other-session-end-hook.sh" }] }],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, [
+        "--session-end",
+        "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+      ]);
+      assertEquals(res.code, 0, res.stderr);
+      const data = await readJson(path);
+      assertEquals(data.hooks.SessionEnd?.length, 2);
+      assertEquals(data.hooks.SessionEnd?.[0].hooks[0].command, "some-other-session-end-hook.sh");
+      assertEquals(
+        data.hooks.SessionEnd?.[1].hooks[0].command,
+        "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+      );
+    },
+  );
+});
+
+Deno.test("--stop, --session-end, --pre-tool-use and SessionStart all merge together in one invocation", async () => {
   await withTempSettings(undefined, async (path) => {
     const res = await runMerge(path, [
       "$HOME/.claude/hooks/notes-sync-reminder.sh",
       "--stop",
       "$HOME/.claude/hooks/require-issue-citation-titles.sh",
+      "--session-end",
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
       "--pre-tool-use",
       "Bash::$HOME/.claude/hooks/block-secret-dumps.sh",
     ]);
@@ -192,6 +260,7 @@ Deno.test("--stop, --pre-tool-use and SessionStart all merge together in one inv
     const data = await readJson(path);
     assertEquals(data.hooks.SessionStart.length, 1);
     assertEquals(data.hooks.Stop?.length, 1);
+    assertEquals(data.hooks.SessionEnd?.length, 1);
     assertEquals(data.hooks.PreToolUse.length, 1);
   });
 });
@@ -1275,7 +1344,7 @@ Deno.test("secret-scan gate refuses to merge when synthetic JWT secret fixture i
 // --- Pruning retired/orphaned hook entries (web-jam-tools#430) ---
 
 Deno.test(
-  "prunes orphaned hook entries from SessionStart, Stop, PreToolUse, and PostToolUse",
+  "prunes orphaned hook entries from SessionStart, SessionEnd, Stop, PreToolUse, and PostToolUse",
   async () => {
     await withTempSettings(
       {
@@ -1287,6 +1356,10 @@ Deno.test(
           Stop: [
             { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-stop.sh" }] },
             { hooks: [{ type: "command", command: "$HOME/.claude/hooks/active-stop.sh" }] },
+          ],
+          SessionEnd: [
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-end.sh" }] },
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/active-end.sh" }] },
           ],
           PreToolUse: [
             {
@@ -1313,6 +1386,8 @@ Deno.test(
           "$HOME/.claude/hooks/active-start.sh",
           "--stop",
           "$HOME/.claude/hooks/active-stop.sh",
+          "--session-end",
+          "$HOME/.claude/hooks/active-end.sh",
           "--pre-tool-use",
           "Bash::$HOME/.claude/hooks/active-pre.sh",
           "--post-tool-use",
@@ -1327,6 +1402,11 @@ Deno.test(
         assert(
           res.stdout.includes("removed retired Stop hook $HOME/.claude/hooks/retired-stop.sh"),
         );
+        assert(
+          res.stdout.includes(
+            "removed retired SessionEnd hook $HOME/.claude/hooks/retired-end.sh",
+          ),
+        );
         assert(res.stdout.includes("removed retired hook (Bash)"));
 
         const data = await readJson(path);
@@ -1339,6 +1419,11 @@ Deno.test(
         assertEquals(
           data.hooks.Stop?.[0].hooks[0].command,
           "$HOME/.claude/hooks/active-stop.sh",
+        );
+        assertEquals(data.hooks.SessionEnd?.length, 1);
+        assertEquals(
+          data.hooks.SessionEnd?.[0].hooks[0].command,
+          "$HOME/.claude/hooks/active-end.sh",
         );
         assertEquals(data.hooks.PreToolUse.length, 1);
         assertEquals(data.hooks.PreToolUse[0].hooks.map((h: HookCmd) => h.command), [
@@ -1549,6 +1634,9 @@ Deno.test(
           SessionStart: [
             { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-start.sh" }] },
           ],
+          SessionEnd: [
+            { hooks: [{ type: "command", command: "$HOME/.claude/hooks/retired-end.sh" }] },
+          ],
           PreToolUse: [
             {
               matcher: "Bash",
@@ -1561,12 +1649,41 @@ Deno.test(
         const checkRes = await runMerge(path, [
           "--check",
           "$HOME/.claude/hooks/active-start.sh",
+          "--session-end",
+          "$HOME/.claude/hooks/active-end.sh",
           "--pre-tool-use",
           "Bash::$HOME/.claude/hooks/active-pre.sh",
         ]);
         assertEquals(checkRes.code, 1);
         assert(checkRes.stderr.includes("has retired SessionStart hook"));
+        assert(checkRes.stderr.includes("has retired SessionEnd hook"));
         assert(checkRes.stderr.includes("has retired hook (Bash)"));
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check mode in merge-hooks-into-settings.ts reports drift when SessionEnd hook is missing",
+  async () => {
+    await withTempSettings(
+      {
+        hooks: {
+          SessionEnd: [],
+        },
+      },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--session-end",
+          "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(
+          checkRes.stderr.includes(
+            "missing SessionEnd hook $HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+          ),
+        );
       },
     );
   },
