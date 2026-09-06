@@ -299,6 +299,26 @@ export interface FindDesignDocOptions {
 }
 
 /**
+ * Resolves the root directory that holds `<Theme>/<topic>-design-*.md` documents.
+ *
+ * Precedence: an explicit `dropboxDir` argument, then `DESIGN_DOCS_ROOT`, then `DROPBOX_BASE_DIR`,
+ * then the default `~/Dropbox/web-jam-llms`. `DESIGN_DOCS_ROOT` names this resolver's own subject
+ * (design documents) rather than Dropbox as a whole, so pointing a run at a scratch or nonexistent
+ * root does not require repointing every other Dropbox-backed task.
+ */
+export function resolveDesignDocsRoot(dropboxDir?: string): string {
+  if (dropboxDir) return path.resolve(expandHome(dropboxDir));
+
+  const designDocsRoot = Deno.env.get("DESIGN_DOCS_ROOT");
+  if (designDocsRoot) return path.resolve(expandHome(designDocsRoot));
+
+  const dropboxBaseDir = Deno.env.get("DROPBOX_BASE_DIR");
+  if (dropboxBaseDir) return path.resolve(expandHome(dropboxBaseDir));
+
+  return path.resolve(expandHome("~/Dropbox/web-jam-llms"));
+}
+
+/**
  * Normalizes a topic string into a clean lowercase slug (e.g. "design-issue").
  */
 export function normalizeTopicSlug(raw: string): string {
@@ -473,11 +493,7 @@ export async function findExistingDesignDocs(
   const topic = options.topic || (options.title ? extractTopicFromText(options.title) : "");
   if (!topic) return [];
 
-  const baseDir = options.dropboxDir
-    ? path.resolve(expandHome(options.dropboxDir))
-    : (Deno.env.get("DROPBOX_BASE_DIR")
-      ? path.resolve(expandHome(Deno.env.get("DROPBOX_BASE_DIR")!))
-      : path.resolve(expandHome("~/Dropbox/web-jam-llms")));
+  const baseDir = resolveDesignDocsRoot(options.dropboxDir);
 
   const themesToScan: string[] = [];
 
@@ -543,6 +559,259 @@ export async function findExistingDesignDoc(
 ): Promise<ExistingDesignDocMatch | null> {
   const docs = await findExistingDesignDocs(options);
   return docs.length > 0 ? docs[0] : null;
+}
+
+/** One row of a design document's decisions-record appendix: its ID and its recorded outcome. */
+export interface DecisionRecordEntry {
+  id: string;
+  outcome: string;
+}
+
+/**
+ * Which of the two determinate states the canonical-document precondition found.
+ * The third state — "cannot tell" — is never a return value; it throws
+ * `DesignDocResolutionRefusal`, so it cannot be mistaken for "no document".
+ */
+export type CanonicalDesignDocOutcome = "existing-document" | "no-document";
+
+export interface CanonicalDesignDocResolution {
+  outcome: CanonicalDesignDocOutcome;
+  topic: string;
+  root: string;
+  match: ExistingDesignDocMatch | null;
+  decisions: DecisionRecordEntry[];
+}
+
+/**
+ * Thrown when the canonical-document precondition cannot determine whether a design document
+ * exists — a missing design-documents root, an unmounted Dropbox, an unreadable theme directory,
+ * an unresolvable topic, or a canonical document that cannot be read.
+ *
+ * This is the fail-closed outcome. A silent "no document found" and a silent "could not look" are
+ * indistinguishable to an agent, and both let a design run proceed against an already-designed
+ * feature, so the indeterminate case refuses rather than returning an empty result
+ * (web-jam-tools#942).
+ */
+export class DesignDocResolutionRefusal extends Error {
+  readonly resolutionPath: string;
+  readonly reason: string;
+
+  constructor(resolutionPath: string, reason: string) {
+    super(
+      `Refusing to proceed with the design run: cannot determine whether a canonical design ` +
+        `document already exists, because ${reason} at ${resolutionPath}. Fix or mount that path ` +
+        `and re-run. The run must not continue as though no design document existed.`,
+    );
+    this.name = "DesignDocResolutionRefusal";
+    this.resolutionPath = resolutionPath;
+    this.reason = reason;
+  }
+}
+
+const DECISIONS_RECORD_HEADING = /^#{2,4}\s+.*\bdecisions?\b[\s\S]{0,40}?\brecord\b/i;
+const ANY_HEADING = /^#{1,6}\s+/;
+const TABLE_SEPARATOR_ROW = /^\|[\s:|-]+\|?\s*$/;
+const NON_ID_HEADER_CELLS = new Set(["", "#", "id", "no", "no.", "num", "decision", "topic"]);
+
+/** Collapses a markdown table cell to a single readable line. */
+function flattenDecisionCell(cell: string): string {
+  return cell
+    .replace(/<br\s*\/?>/gi, "; ")
+    .replace(/\*\*/g, "")
+    .replace(/`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Extracts the ID and outcome of every row in a design document's decisions-record appendix.
+ *
+ * Tolerates the heading and column shapes actually in use across the design documents
+ * (`## Appendix — Decisions Record` with an `| ID | Topic | Options | Decision / Outcome |` table,
+ * and `## Appendix B — decision record` with a `| # | Decision | Outcome |` table): the first cell
+ * is the ID and the last cell is the outcome in both.
+ */
+export function parseDecisionsRecord(
+  markdown: string,
+  maxOutcomeLength = 240,
+): DecisionRecordEntry[] {
+  if (!markdown) return [];
+
+  const lines = markdown.split(/\r?\n/);
+  const entries: DecisionRecordEntry[] = [];
+  let inSection = false;
+
+  for (const line of lines) {
+    if (ANY_HEADING.test(line)) {
+      inSection = DECISIONS_RECORD_HEADING.test(line);
+      continue;
+    }
+    if (!inSection) continue;
+
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|")) continue;
+    if (TABLE_SEPARATOR_ROW.test(trimmed)) continue;
+
+    const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|");
+    if (cells.length < 2) continue;
+
+    const id = flattenDecisionCell(cells[0]);
+    if (NON_ID_HEADER_CELLS.has(id.toLowerCase())) continue;
+
+    let outcome = flattenDecisionCell(cells[cells.length - 1]);
+    if (outcome.length > maxOutcomeLength) {
+      outcome = `${outcome.slice(0, maxOutcomeLength).trimEnd()}…`;
+    }
+
+    entries.push({ id, outcome });
+  }
+
+  return entries;
+}
+
+export interface ResolveCanonicalDesignDocOptions extends FindDesignDocOptions {
+  findExistingDesignDocsImpl?: typeof findExistingDesignDocs;
+  readTextFileImpl?: (filePath: string) => Promise<string>;
+}
+
+/** Reads a directory purely to prove it is readable, refusing (never returning empty) if it is not. */
+async function assertDirectoryReadable(dirPath: string, describe: string): Promise<void> {
+  try {
+    const info = await Deno.stat(dirPath);
+    if (!info.isDirectory) {
+      throw new DesignDocResolutionRefusal(dirPath, `${describe} is not a directory`);
+    }
+  } catch (err) {
+    if (err instanceof DesignDocResolutionRefusal) throw err;
+    throw new DesignDocResolutionRefusal(
+      dirPath,
+      `${describe} is missing or unreadable (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+
+  try {
+    for await (const _entry of Deno.readDir(dirPath)) {
+      // Enumerating is the probe; the entries themselves are matched by findExistingDesignDocs.
+    }
+  } catch (err) {
+    throw new DesignDocResolutionRefusal(
+      dirPath,
+      `${describe} could not be listed (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+}
+
+/**
+ * The canonical-document precondition for a design run (web-jam-tools#942).
+ *
+ * Unlike the Gate 1 refusal below — which fires late, on the act of rendering a duplicate file, and
+ * so never fires at all for a run that writes no file — this resolves the topic's canonical design
+ * document up front, so a run cannot put a decision to Josh without having read what the existing
+ * document already settles.
+ *
+ * Three outcomes, all of them specified:
+ *   1. a canonical document exists — returns `existing-document` with the match and its
+ *      decisions-record entries, which the caller reads in full and reports;
+ *   2. none exists — returns `no-document`, and the run creates a new document as before;
+ *   3. it cannot tell — throws `DesignDocResolutionRefusal`, naming the path. It never
+ *      degrades to outcome 2.
+ */
+export async function resolveCanonicalDesignDoc(
+  options: ResolveCanonicalDesignDocOptions,
+): Promise<CanonicalDesignDocResolution> {
+  const topic = options.topic || (options.title ? extractTopicFromText(options.title) : "");
+  const root = resolveDesignDocsRoot(options.dropboxDir);
+
+  if (!topic) {
+    throw new DesignDocResolutionRefusal(
+      root,
+      `no topic slug could be resolved from ${
+        JSON.stringify(options.topic ?? options.title ?? "")
+      }, so no canonical design document could be searched for`,
+    );
+  }
+
+  await assertDirectoryReadable(root, "the design-documents root");
+
+  const themes: string[] = [];
+  if (options.theme) {
+    themes.push(options.theme);
+  } else {
+    for await (const entry of Deno.readDir(root)) {
+      if (entry.isDirectory && !entry.name.startsWith(".")) {
+        themes.push(entry.name);
+      }
+    }
+  }
+
+  for (const theme of themes) {
+    await assertDirectoryReadable(path.join(root, theme), `the theme folder "${theme}"`);
+  }
+
+  const finder = options.findExistingDesignDocsImpl ?? findExistingDesignDocs;
+  const matches = await finder({ topic, theme: options.theme, dropboxDir: root });
+
+  if (matches.length === 0) {
+    return { outcome: "no-document", topic, root, match: null, decisions: [] };
+  }
+
+  const match = matches[0];
+  const readTextFile = options.readTextFileImpl ?? Deno.readTextFile;
+
+  let contents: string;
+  try {
+    contents = await readTextFile(match.path);
+  } catch (err) {
+    throw new DesignDocResolutionRefusal(
+      match.path,
+      `the canonical design document was found but could not be read (${
+        err instanceof Error ? err.message : String(err)
+      })`,
+    );
+  }
+
+  return {
+    outcome: "existing-document",
+    topic,
+    root,
+    match,
+    decisions: parseDecisionsRecord(contents),
+  };
+}
+
+/**
+ * Formats the resolution for a CLI, as the lines a design run must see before it puts any
+ * decision to Josh.
+ */
+export function formatCanonicalDesignDocResolution(
+  resolution: CanonicalDesignDocResolution,
+  prefix: string,
+): string[] {
+  if (resolution.outcome === "no-document" || !resolution.match) {
+    return [`${prefix} No existing design document found for "${resolution.topic}".`];
+  }
+
+  const lines = [
+    `${prefix} Resolved existing canonical design document for "${resolution.match.topic}":`,
+    `  ${resolution.match.path}`,
+  ];
+
+  if (resolution.decisions.length === 0) {
+    lines.push(
+      `${prefix} Decisions record: no decisions-record appendix found in that document — read it end to end before putting any decision to Josh.`,
+    );
+  } else {
+    lines.push(
+      `${prefix} Decisions record — ${resolution.decisions.length} entr${
+        resolution.decisions.length === 1 ? "y" : "ies"
+      } already settled. Read the document end to end before putting any decision to Josh:`,
+    );
+    for (const entry of resolution.decisions) {
+      lines.push(`  ${entry.id}: ${entry.outcome}`);
+    }
+  }
+
+  return lines;
 }
 
 /**

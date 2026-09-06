@@ -219,3 +219,62 @@ Deno.test("deno.json defines design:candidates task", async () => {
   assertEquals(typeof config.tasks["design:candidates"], "string");
   assertStringIncludes(config.tasks["design:candidates"], "src/design-issue/cli.ts candidates");
 });
+
+// --- web-jam-tools#942: the canonical-document precondition, as reached through design:candidates ---
+
+Deno.test("runCandidatesCli resolving a topic prints the matched document's decisions record alongside its path", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "candidates-decisions-" });
+  const themeDir = `${tempDir}/gig-outreach`;
+  await Deno.mkdir(themeDir, { recursive: true });
+  await Deno.writeTextFile(
+    `${themeDir}/book-gig-skill-design-2026-08-16.md`,
+    `# Book Gig Skill Design
+
+## Appendix — Decisions Record
+
+| ID | Topic | Options Considered | Decision / Outcome |
+|---|---|---|---|
+| D-4 | Pitch Delivery | 1. Gmail drafts (Rec)<br>2. Direct send | **Option 1 approved on 2026-08-16**: Josh reviews and sends from Gmail. |
+`,
+  );
+
+  const logs: string[] = [];
+  try {
+    const exitCode = await runCandidatesCli(
+      ["--topic", "book-gig", "--dropbox-dir", tempDir],
+      { log: (msg) => logs.push(msg) },
+    );
+
+    assertEquals(exitCode, 0);
+    const joined = logs.join("\n");
+    assertStringIncludes(joined, 'Resolved existing canonical design document for "book-gig"');
+    assertStringIncludes(joined, "Decisions record — 1 entry already settled");
+    assertStringIncludes(joined, "D-4: Option 1 approved on 2026-08-16: Josh reviews and sends");
+    assertStringIncludes(joined, "Suggested action: Major Revision to existing design document");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runCandidatesCli resolving a topic under an unreadable design-documents root REFUSES rather than reporting no document", async () => {
+  const missingRoot = `${await Deno.makeTempDir({
+    prefix: "candidates-refusal-",
+  })}/nonexistent-theme-root`;
+
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runCandidatesCli(
+    ["--topic", "book-gig", "--dropbox-dir", missingRoot],
+    { log: (msg) => logs.push(msg), errorLog: (msg) => errors.push(msg) },
+  );
+
+  assertEquals(exitCode, 2);
+  const allOutput = [...logs, ...errors].join("\n");
+  assertStringIncludes(allOutput, missingRoot);
+  assertStringIncludes(allOutput, "Refusing to proceed with the design run");
+  assertEquals(
+    allOutput.includes("No existing design document found"),
+    false,
+    "an indeterminate check must never report a genuine no-document result",
+  );
+});

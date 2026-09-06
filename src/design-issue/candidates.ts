@@ -9,10 +9,13 @@ import {
   REPO_OWNER,
 } from "../flash-issues/types.ts";
 import {
+  DesignDocResolutionRefusal,
   type ExistingDesignDocMatch,
   extractTopicFromText,
   type FindDesignDocOptions,
   findExistingDesignDoc,
+  formatCanonicalDesignDocResolution,
+  resolveCanonicalDesignDoc,
 } from "./gate1.ts";
 
 export interface NeedsDesignIssue {
@@ -166,6 +169,7 @@ export async function runCandidatesCli(
   options: ScanCandidatesOptions = {},
 ): Promise<number> {
   const log = options.log ?? console.log;
+  const errorLog = options.errorLog ?? console.error;
   const runner = options.runner ?? defaultCommandRunner;
   const owner = options.owner ?? REPO_OWNER;
   const finder = options.findDesignDocImpl ?? findExistingDesignDoc;
@@ -192,8 +196,12 @@ Options:
   --epic <citation>     Resolve canonical design document for an Epic and prompt for Major Revision
   --topic <topic>       Match existing design document by topic slug
   --theme <theme>       Scope design document search to a specific theme directory
-  --dropbox-dir <path>  Override base Dropbox directory
-  -h, --help            Show this help message`);
+  --dropbox-dir <path>  Override the design-documents root (also DESIGN_DOCS_ROOT)
+  -h, --help            Show this help message
+
+When resolving a topic or Epic, this is the canonical-document precondition of a design run:
+it runs before any decision is put to Josh, and exits 2 (REFUSED, naming the path) rather than
+reporting "no existing design document" when it cannot tell whether one exists.`);
     return 0;
   }
 
@@ -203,26 +211,40 @@ Options:
 
   if (targetQuery) {
     const topic = await resolveTopicFromCitation(targetQuery, runner, owner) || targetQuery;
-    const match = await finder({
-      topic,
-      title: targetQuery,
-      theme: flags.theme,
-      dropboxDir: flags["dropbox-dir"] || options.dropboxDir,
-    });
 
-    if (match) {
-      log(`[design:candidates] Resolved existing canonical design document for "${match.topic}":`);
-      log(`  ${match.path}`);
+    // The canonical-document precondition (web-jam-tools#942): this resolution runs before any
+    // decision is put to Josh, and fails closed rather than reporting "no document found" when it
+    // cannot tell whether one exists.
+    let resolution;
+    try {
+      resolution = await resolveCanonicalDesignDoc({
+        topic,
+        title: targetQuery,
+        theme: flags.theme,
+        dropboxDir: flags["dropbox-dir"] || options.dropboxDir,
+      });
+    } catch (err) {
+      if (err instanceof DesignDocResolutionRefusal) {
+        errorLog(`[design:candidates] ${err.message}`);
+        return 2;
+      }
+      throw err;
+    }
+
+    for (const line of formatCanonicalDesignDocResolution(resolution, "[design:candidates]")) {
+      log(line);
+    }
+
+    if (resolution.outcome === "existing-document" && resolution.match) {
       log(`[design:candidates] Suggested action: Major Revision to existing design document.`);
-      log(match.suggestion);
-      return 0;
-    } else {
-      log(`[design:candidates] No existing design document found for "${topic}".`);
-      log(
-        `A new design document may be created at ~/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.md`,
-      );
+      log(resolution.match.suggestion);
       return 0;
     }
+
+    log(
+      `A new design document may be created at ~/Dropbox/web-jam-llms/<Theme>/<topic>-design-<YYYY-MM-DD>.md`,
+    );
+    return 0;
   }
 
   const { issues } = await scanNeedsDesignCandidates(options);

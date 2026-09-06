@@ -12,9 +12,11 @@ import { parseArgs } from "@std/cli/parse-args";
 import { runCandidatesCli } from "./candidates.ts";
 import { runFilePlanCli } from "./file_plan.ts";
 import {
+  DesignDocResolutionRefusal,
   type FindDesignDocOptions,
-  findExistingDesignDoc,
+  formatCanonicalDesignDocResolution,
   type Gate1Options,
+  resolveCanonicalDesignDoc,
   runGate1,
 } from "./gate1.ts";
 import { runLintDocCli } from "./lint_doc.ts";
@@ -97,10 +99,18 @@ Options:
   }
 }
 
+export interface MatchDesignCliOptions extends FindDesignDocOptions {
+  log?: (msg: string) => void;
+  errorLog?: (msg: string) => void;
+}
+
 export async function runMatchDesignCli(
   args: string[],
-  options?: FindDesignDocOptions,
+  options?: MatchDesignCliOptions,
 ): Promise<number> {
+  const log = options?.log ?? console.log;
+  const errorLog = options?.errorLog ?? console.error;
+
   const flags = parseArgs(args, {
     boolean: ["help"],
     string: ["topic", "theme", "dropbox-dir"],
@@ -113,47 +123,61 @@ export async function runMatchDesignCli(
   });
 
   if (flags.help) {
-    console.log(`Usage: deno task design:match-design <topic|epic|title> [options]
+    log(`Usage: deno task design:match-design <topic|epic|title> [options]
 
 Matches pre-existing canonical design document for a feature or Epic
 and prompts for a Major Revision.
 
+This is the canonical-document precondition of a design run: it runs before any decision is
+put to Josh, whether or not the run will ever create a document.
+
 Options:
   --topic <topic>       Match existing design document by topic slug
   --theme <theme>       Scope search to specific theme directory
-  --dropbox-dir <path>  Override base Dropbox directory
-  -h, --help            Show this help message`);
+  --dropbox-dir <path>  Override the design-documents root (also DESIGN_DOCS_ROOT)
+  -h, --help            Show this help message
+
+Exit codes:
+  0  A canonical design document was resolved; its path and decisions record are printed
+  1  No canonical design document exists for the topic (or no topic was given)
+  2  REFUSED — the check could not tell which of the two applies (missing/unreadable path)`);
     return 0;
   }
 
   const query = flags.topic || (flags._.length > 0 ? String(flags._[0]) : "");
   if (!query) {
-    console.error("Error: Missing required topic, epic, or title argument.");
-    console.error("Usage: deno task design:match-design <topic|epic|title>");
+    errorLog("Error: Missing required topic, epic, or title argument.");
+    errorLog("Usage: deno task design:match-design <topic|epic|title>");
     return 1;
   }
 
-  const match = await findExistingDesignDoc({
-    topic: flags.topic,
-    title: query,
-    theme: flags.theme || options?.theme,
-    dropboxDir: flags["dropbox-dir"] || options?.dropboxDir,
-  });
+  let resolution;
+  try {
+    resolution = await resolveCanonicalDesignDoc({
+      topic: flags.topic,
+      title: query,
+      theme: flags.theme || options?.theme,
+      dropboxDir: flags["dropbox-dir"] || options?.dropboxDir,
+    });
+  } catch (err) {
+    if (err instanceof DesignDocResolutionRefusal) {
+      errorLog(`[design:match-design] ${err.message}`);
+      return 2;
+    }
+    throw err;
+  }
 
-  if (match) {
-    console.log(
-      `[design:match-design] Resolved existing canonical design document for "${match.topic}":`,
-    );
-    console.log(`  ${match.path}`);
-    console.log(
-      `[design:match-design] Suggested action: Major Revision to existing design document.`,
-    );
-    console.log(match.suggestion);
-    return 0;
-  } else {
-    console.log(`[design:match-design] No existing design document found for "${query}".`);
+  for (const line of formatCanonicalDesignDocResolution(resolution, "[design:match-design]")) {
+    log(line);
+  }
+
+  if (resolution.outcome === "no-document" || !resolution.match) {
     return 1;
   }
+
+  log(`[design:match-design] Suggested action: Major Revision to existing design document.`);
+  log(resolution.match.suggestion);
+  return 0;
 }
 
 export async function runCli(
