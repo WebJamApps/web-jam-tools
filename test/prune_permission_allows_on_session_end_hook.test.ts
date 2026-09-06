@@ -7,6 +7,10 @@
 // 4. Invalid JSON resilience: exits 0 safely without failing session exit.
 // 5. Stdin safety: handles piped stdin payload safely without error.
 // 6. Direct execution / CLI arguments: passes through custom --target-file args.
+// 7. Backup rotation (web-jam-tools#934): keeps only the newest PRUNE_BACKUP_RETAIN
+//    (default 10) ".bak-*" siblings per target, deletes older ones, leaves
+//    non-".bak-" siblings and the target itself untouched, and honors a
+//    smaller PRUNE_BACKUP_RETAIN override.
 
 import { assert, assertEquals } from "@std/assert";
 import * as path from "jsr:@std/path@^1.0.0";
@@ -155,6 +159,151 @@ Deno.test("SessionEnd hook exits 0 safely when payload is piped on stdin", async
   try {
     const res = await runHookScript([], { HOME: sb.homeDir }, '{"event":"SessionEnd"}');
     assertEquals(res.code, 0, res.stderr);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+// Creates `count` fake ".bak-<stamp>" siblings for `targetPath`, each with a
+// distinct mtime strictly before "now" (index 0 is oldest). The stamp itself
+// is a fixed placeholder — only the mtime governs rotation order — so the
+// stamps never collide with the real hook run's own generateTimestamp() output.
+async function createDummyBackups(
+  targetPath: string,
+  count: number,
+): Promise<string[]> {
+  const created: string[] = [];
+  const now = Date.now();
+  for (let i = 0; i < count; i++) {
+    const stamp = `19990101-${String(i).padStart(6, "0")}`;
+    const p = `${targetPath}.bak-${stamp}`;
+    await Deno.writeTextFile(p, `dummy-backup-${i}`);
+    // 1 minute apart, oldest (i=0) furthest in the past.
+    const mtime = new Date(now - (count - i) * 60_000);
+    await Deno.utime(p, mtime, mtime);
+    created.push(p);
+  }
+  return created;
+}
+
+function listBakSiblings(settingsPath: string): string[] {
+  const parent = path.dirname(settingsPath);
+  const base = path.basename(settingsPath);
+  return [...Deno.readDirSync(parent)]
+    .map((e) => e.name)
+    .filter((f) => f.startsWith(`${base}.bak-`))
+    .sort();
+}
+
+Deno.test("SessionEnd hook rotation: keeps only the newest 10 backups by default, deletes the rest, keeps the run's own new backup, and leaves non-.bak- siblings untouched", async () => {
+  const sb = await createSandbox();
+  try {
+    const dummies = await createDummyBackups(sb.settingsPath, 13);
+
+    const decoyPath = `${sb.settingsPath}.other`;
+    await Deno.writeTextFile(decoyPath, "not a backup, leave me alone");
+
+    const offendingRule = "Bash(deno task --config * test)";
+    const initial = { permissions: { allow: [offendingRule, "Bash(git *)"] } };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(initial, null, 2) + "\n");
+
+    const res = await runHookScript([], { HOME: sb.homeDir });
+    assertEquals(res.code, 0, res.stderr);
+
+    const survivors = listBakSiblings(sb.settingsPath);
+    assertEquals(survivors.length, 10, `expected 10 survivors, got: ${survivors.join(", ")}`);
+
+    // Oldest 4 dummies (13 dummies + 1 fresh backup = 14, minus 10 kept = 4 deleted).
+    for (let i = 0; i < 4; i++) {
+      const name = path.basename(dummies[i]);
+      assert(!survivors.includes(name), `oldest dummy backup should be deleted: ${name}`);
+    }
+    // Newest 9 dummies survive.
+    for (let i = 4; i < 13; i++) {
+      const name = path.basename(dummies[i]);
+      assert(survivors.includes(name), `newer dummy backup should survive: ${name}`);
+    }
+
+    // The backup this run itself created is among the survivors.
+    const freshBackups = survivors.filter((f) => !f.includes("19990101-"));
+    assertEquals(freshBackups.length, 1, "exactly one fresh backup from this run");
+
+    // Non-.bak- sibling is untouched.
+    const decoyStillPresent = await Deno.readTextFile(decoyPath);
+    assertEquals(decoyStillPresent, "not a backup, leave me alone");
+
+    // Target file itself is untouched by rotation.
+    assert((await Deno.stat(sb.settingsPath)).isFile);
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("SessionEnd hook rotation: honors a smaller PRUNE_BACKUP_RETAIN override", async () => {
+  const sb = await createSandbox();
+  try {
+    const dummies = await createDummyBackups(sb.settingsPath, 5);
+
+    // Clean target file: this run creates no new backup, isolating the
+    // override's effect on the pre-existing backups.
+    const clean = { permissions: { allow: ["Bash(git *)"] } };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(clean, null, 2) + "\n");
+
+    const res = await runHookScript([], { HOME: sb.homeDir, PRUNE_BACKUP_RETAIN: "3" });
+    assertEquals(res.code, 0, res.stderr);
+
+    const survivors = listBakSiblings(sb.settingsPath);
+    assertEquals(survivors.length, 3, `expected 3 survivors, got: ${survivors.join(", ")}`);
+
+    for (let i = 0; i < 2; i++) {
+      assert(!survivors.includes(path.basename(dummies[i])), "oldest backups should be deleted");
+    }
+    for (let i = 2; i < 5; i++) {
+      assert(survivors.includes(path.basename(dummies[i])), "newest backups should survive");
+    }
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("SessionEnd hook rotation: an invalid PRUNE_BACKUP_RETAIN falls back to the default of 10", async () => {
+  const sb = await createSandbox();
+  try {
+    await createDummyBackups(sb.settingsPath, 12);
+
+    const clean = { permissions: { allow: ["Bash(git *)"] } };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(clean, null, 2) + "\n");
+
+    const res = await runHookScript([], { HOME: sb.homeDir, PRUNE_BACKUP_RETAIN: "not-a-number" });
+    assertEquals(res.code, 0, res.stderr);
+
+    const survivors = listBakSiblings(sb.settingsPath);
+    assertEquals(
+      survivors.length,
+      10,
+      `expected fallback to default 10, got: ${survivors.join(", ")}`,
+    );
+  } finally {
+    await sb.cleanup();
+  }
+});
+
+Deno.test("SessionEnd hook rotation: fewer than the retain count leaves every backup untouched", async () => {
+  const sb = await createSandbox();
+  try {
+    const dummies = await createDummyBackups(sb.settingsPath, 2);
+
+    const clean = { permissions: { allow: ["Bash(git *)"] } };
+    await Deno.writeTextFile(sb.settingsPath, JSON.stringify(clean, null, 2) + "\n");
+
+    const res = await runHookScript([], { HOME: sb.homeDir });
+    assertEquals(res.code, 0, res.stderr);
+
+    const survivors = listBakSiblings(sb.settingsPath);
+    assertEquals(survivors.length, 2);
+    for (const d of dummies) {
+      assert(survivors.includes(path.basename(d)), `backup should survive untouched: ${d}`);
+    }
   } finally {
     await sb.cleanup();
   }
