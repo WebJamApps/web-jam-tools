@@ -2,7 +2,7 @@
 /**
  * merge-hooks-into-settings.ts — web-jam-tools#382
  *
- * Idempotently merges SessionStart, Stop, and PreToolUse/PostToolUse (any
+ * Idempotently merges SessionStart, SessionEnd, Stop, and PreToolUse/PostToolUse (any
  * matcher) hook commands, plus a flat list of `permissions.deny` patterns,
  * into a Claude Code settings.json.
  */
@@ -17,6 +17,7 @@ export function extractScriptPath(cmd: string): string {
 export function merge(settingsPath: string, args: string[]): number {
   let sessionStartCmds: string[] = [];
   let stopCmds: string[] = [];
+  let sessionEndCmds: string[] = [];
   const preToolUsePairs: Array<[string, string]> = [];
   const postToolUsePairs: Array<[string, string]> = [];
   let denyPatterns: string[] = [];
@@ -26,11 +27,11 @@ export function merge(settingsPath: string, args: string[]): number {
   let defaultModeArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
-  // web-jam-tools#432 finding 9: a Stop or SessionStart entry in agy's
+  // web-jam-tools#432 finding 9: a Stop, SessionEnd, or SessionStart entry in agy's
   // hooks.json silently disables the ENTIRE hooks config on that surface —
   // not just that event, every PreToolUse guard included. install-hooks.sh
   // passes --forbid-lifecycle-hooks on every invocation targeting agy's
-  // hooks file, so a future change that accidentally adds a --stop or
+  // hooks file, so a future change that accidentally adds a --stop, --session-end, or
   // head/SessionStart argument to that call is refused here rather than
   // silently landing and disarming every guard on the Flash surface.
   const forbidLifecycleHooks = args.includes("--forbid-lifecycle-hooks");
@@ -62,6 +63,7 @@ export function merge(settingsPath: string, args: string[]): number {
     const [head, sections] = section(
       [
         "--stop",
+        "--session-end",
         "--pre-tool-use",
         "--post-tool-use",
         "--deny",
@@ -74,6 +76,7 @@ export function merge(settingsPath: string, args: string[]): number {
     );
     sessionStartCmds = head;
     stopCmds = sections["--stop"] || [];
+    sessionEndCmds = sections["--session-end"] || [];
     for (const pair of sections["--pre-tool-use"] || []) {
       const sep = pair.indexOf("::");
       if (sep !== -1) {
@@ -93,13 +96,19 @@ export function merge(settingsPath: string, args: string[]): number {
     defaultModeArgs = sections["--default-mode"] || [];
   }
 
-  if (forbidLifecycleHooks && (sessionStartCmds.length > 0 || stopCmds.length > 0)) {
+  const passedLifecycle = [
+    sessionStartCmds.length > 0 ? "SessionStart" : "",
+    stopCmds.length > 0 ? "Stop" : "",
+    sessionEndCmds.length > 0 ? "SessionEnd" : "",
+  ].filter(Boolean).join(" or ");
+
+  if (forbidLifecycleHooks && passedLifecycle) {
     console.error(
-      `error: refusing to write ${path.basename(settingsPath)} — a SessionStart or Stop ` +
+      `error: refusing to write ${path.basename(settingsPath)} — a ${passedLifecycle} ` +
         "entry was passed for a target invoked with --forbid-lifecycle-hooks. On agy, " +
-        "registering EITHER event silently disables the entire hooks config — not just " +
+        "registering ANY lifecycle event silently disables the entire hooks config — not just " +
         "that event, every PreToolUse guard included (web-jam-tools#432 finding 9, " +
-        "verified 2026-08-07). Remove the --stop/head SessionStart args from this call.",
+        "verified 2026-08-07). Remove the --stop/--session-end/head SessionStart args from this call.",
     );
     return 1;
   }
@@ -134,7 +143,7 @@ export function merge(settingsPath: string, args: string[]): number {
     managedDirs.add(path.join(homeEnv, ".claude/hooks"));
   }
 
-  for (const cmd of [...sessionStartCmds, ...stopCmds]) {
+  for (const cmd of [...sessionStartCmds, ...stopCmds, ...sessionEndCmds]) {
     const sp = extractScriptPath(cmd);
     const dir = path.dirname(sp);
     if (dir && dir !== ".") managedDirs.add(dir);
@@ -219,6 +228,7 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const [addedSession, prunedSession] = mergeFlatHooks("SessionStart", sessionStartCmds);
   const [addedStop, prunedStop] = mergeFlatHooks("Stop", stopCmds);
+  const [addedSessionEnd, prunedSessionEnd] = mergeFlatHooks("SessionEnd", sessionEndCmds);
 
   function mergeMatcherHooks(
     kind: string,
@@ -461,6 +471,8 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedSession.length > 0 ||
     addedStop.length > 0 ||
     prunedStop.length > 0 ||
+    addedSessionEnd.length > 0 ||
+    prunedSessionEnd.length > 0 ||
     addedPreToolUse.length > 0 ||
     prunedPreToolUseStale.length > 0 ||
     prunedPreToolUseRetired.length > 0 ||
@@ -493,6 +505,12 @@ export function merge(settingsPath: string, args: string[]): number {
       }
       for (const cmd of prunedStop) {
         console.error(`${targetFilename}: has retired Stop hook ${cmd}`);
+      }
+      for (const cmd of addedSessionEnd) {
+        console.error(`${targetFilename}: missing SessionEnd hook ${cmd}`);
+      }
+      for (const cmd of prunedSessionEnd) {
+        console.error(`${targetFilename}: has retired SessionEnd hook ${cmd}`);
       }
       for (const [matcher, cmd] of addedPreToolUse) {
         console.error(`${targetFilename}: missing PreToolUse hook (${matcher}) ${cmd}`);
@@ -562,14 +580,14 @@ export function merge(settingsPath: string, args: string[]): number {
       return 1;
     }
     console.log(
-      `${targetFilename}: SessionStart, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)`,
+      `${targetFilename}: SessionStart, SessionEnd, Stop, PreToolUse, PostToolUse hooks and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)`,
     );
     return 0;
   }
 
   if (!hasDrift) {
     console.log(
-      `${targetFilename}: SessionStart, Stop, PreToolUse, PostToolUse hooks ` +
+      `${targetFilename}: SessionStart, SessionEnd, Stop, PreToolUse, PostToolUse hooks ` +
         "and permissions.deny / permissions.ask / permissions.allow already up to date (no-op)",
     );
     return 0;
@@ -607,6 +625,10 @@ export function merge(settingsPath: string, args: string[]): number {
   for (const cmd of addedStop) console.log(`${targetFilename}: added Stop hook ${cmd}`);
   for (const cmd of prunedStop) {
     console.log(`${targetFilename}: removed retired Stop hook ${cmd}`);
+  }
+  for (const cmd of addedSessionEnd) console.log(`${targetFilename}: added SessionEnd hook ${cmd}`);
+  for (const cmd of prunedSessionEnd) {
+    console.log(`${targetFilename}: removed retired SessionEnd hook ${cmd}`);
   }
   for (const [matcher, cmd] of addedPreToolUse) {
     console.log(`${targetFilename}: added PreToolUse hook (${matcher}) ${cmd}`);

@@ -97,6 +97,38 @@ Deno.test("merge-hooks-into-settings.ts refuses to write when --forbid-lifecycle
   }
 });
 
+Deno.test("merge-hooks-into-settings.ts refuses to write when --forbid-lifecycle-hooks is combined with --session-end", async () => {
+  const dir = await Deno.makeTempDir();
+  const path = `${dir}/agy_hooks.json`;
+  try {
+    const res = await run(Deno.execPath(), [
+      "run",
+      "--allow-read",
+      "--allow-write",
+      "--allow-env",
+      MERGE_SCRIPT,
+      path,
+      "--forbid-lifecycle-hooks",
+      "--",
+      "--session-end",
+      "$HOME/.claude/hooks/prune-permission-allows-on-session-end.sh",
+    ]);
+    assertEquals(res.code, 1);
+    assert(res.stderr.includes("refusing to write"), res.stderr);
+    assert(res.stderr.includes("SessionEnd"), res.stderr);
+    assert(res.stderr.includes("finding 9"), res.stderr);
+    let exists = true;
+    try {
+      await Deno.stat(path);
+    } catch {
+      exists = false;
+    }
+    assert(!exists, "the target file must not be created when the refusal fires");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("merge-hooks-into-settings.ts with --forbid-lifecycle-hooks still merges normally when no lifecycle args are present", async () => {
   const dir = await Deno.makeTempDir();
   const path = `${dir}/agy_hooks.json`;
@@ -121,6 +153,7 @@ Deno.test("merge-hooks-into-settings.ts with --forbid-lifecycle-hooks still merg
     // SessionStart hook was ever registered" looks like here.
     assertEquals(data.hooks.Stop ?? [], []);
     assertEquals(data.hooks.SessionStart ?? [], []);
+    assertEquals(data.hooks.SessionEnd ?? [], []);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -147,7 +180,7 @@ Deno.test("install-hooks.sh passes --forbid-lifecycle-hooks on both agy hooks.js
   }
 });
 
-Deno.test("install-hooks.sh never passes --stop or SessionStart args to the agy hooks.json invocations", async () => {
+Deno.test("install-hooks.sh never passes --stop, --session-end, or SessionStart args to the agy hooks.json invocations", async () => {
   const src = await Deno.readTextFile(INSTALL_SCRIPT);
   const agyInvocations = src
     .split("\n")
@@ -157,17 +190,25 @@ Deno.test("install-hooks.sh never passes --stop or SessionStart args to the agy 
   for (const line of agyInvocations) {
     assert(!line.includes("--stop"), `agy invocation must never pass --stop: ${line}`);
     assert(
+      !line.includes("--session-end"),
+      `agy invocation must never pass --session-end: ${line}`,
+    );
+    assert(
       !line.includes("merge_session_start_args"),
       `agy invocation must never pass SessionStart args: ${line}`,
+    );
+    assert(
+      !line.includes("merge_session_end_args"),
+      `agy invocation must never pass SessionEnd args: ${line}`,
     );
   }
 });
 
 // --- 3. Behavioural proof: a full sandboxed install-hooks.sh run never
-// writes Stop/SessionStart into the agy hooks file, and does wrap
+// writes Stop/SessionStart/SessionEnd into the agy hooks file, and does wrap
 // PreToolUse/PostToolUse commands with the shim ---
 
-Deno.test("a full sandboxed install-hooks.sh run writes no Stop/SessionStart into agy hooks.json, and wraps entries with the shim", async () => {
+Deno.test("a full sandboxed install-hooks.sh run writes no Stop/SessionStart/SessionEnd into agy hooks.json, and wraps entries with the shim", async () => {
   const hooksDir = await Deno.makeTempDir();
   const settingsDir = await Deno.makeTempDir();
   const settingsPath = `${settingsDir}/settings.json`;
@@ -187,6 +228,7 @@ Deno.test("a full sandboxed install-hooks.sh run writes no Stop/SessionStart int
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
     assertEquals(agyHooks.hooks.Stop ?? [], []);
     assertEquals(agyHooks.hooks.SessionStart ?? [], []);
+    assertEquals(agyHooks.hooks.SessionEnd ?? [], []);
     assert(agyHooks.hooks.PreToolUse.length > 0);
     assert(agyHooks.hooks.PostToolUse.length > 0);
 

@@ -6,6 +6,7 @@
  *
  * 1. Claude Code surface (settings.json):
  *    - SESSION_START_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
+ *    - SESSION_END_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *    - STOP_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *    - PRE_TOOL_USE_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
  *    - POST_TOOL_USE_HOOKS (direct invocation: $HOME/.claude/hooks/<name>)
@@ -41,7 +42,18 @@ export function extractDirectCommandHookScripts(
     }
   }
 
-  // 2. Claude Code Stop hooks
+  // 2. Claude Code SessionEnd hooks
+  const sessionEndMatch = installerContent.match(
+    /SESSION_END_HOOKS=\(([\s\S]*?)\)/,
+  );
+  if (sessionEndMatch) {
+    for (const token of sessionEndMatch[1].trim().split(/\s+/)) {
+      const clean = token.replace(/#.*$/, "").trim().replace(/^["']|["']$/g, "");
+      if (clean.endsWith(".sh")) directHooks.add(clean);
+    }
+  }
+
+  // 3. Claude Code Stop hooks
   const stopMatch = installerContent.match(/STOP_HOOKS=\(([\s\S]*?)\)/);
   if (stopMatch) {
     for (const token of stopMatch[1].trim().split(/\s+/)) {
@@ -50,7 +62,7 @@ export function extractDirectCommandHookScripts(
     }
   }
 
-  // 3. Claude Code PreToolUse hooks
+  // 4. Claude Code PreToolUse hooks
   const preMatch = installerContent.match(
     /PRE_TOOL_USE_HOOKS=\(([\s\S]*?)\n\)/,
   );
@@ -66,7 +78,7 @@ export function extractDirectCommandHookScripts(
     }
   }
 
-  // 4. Claude Code PostToolUse hooks
+  // 5. Claude Code PostToolUse hooks
   const postMatch = installerContent.match(
     /POST_TOOL_USE_HOOKS=\(([\s\S]*?)\n\)/,
   );
@@ -91,7 +103,7 @@ export function extractDirectCommandHookScripts(
   // parser checks; if a future entry in that array were ever wired as a direct
   // command instead, it would need to be added here explicitly.
 
-  // 5. agy surface direct command: extract the wrapper executable from agy_shim_arg
+  // 6. agy surface direct command: extract the wrapper executable from agy_shim_arg
   const shimMatch = installerContent.match(
     /agy_shim_arg\(\)\s*\{([\s\S]*?)\n\}/,
   );

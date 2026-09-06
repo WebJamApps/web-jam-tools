@@ -96,6 +96,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // SessionStart reminder (web-jam-tools#784) — reports when settings.local.json
   // contains over-broad allow rules with non-trailing wildcards.
   "permission-wildcard-drift-reminder.sh",
+  // SessionEnd hook (web-jam-tools#818) — prunes offending permission allow rules
+  // on session end so a live session's flush cannot re-clobber them.
+  "prune-permission-allows-on-session-end.sh",
   // Stop hook (web-jam-tools#531) — BLOCKING: rejects a message with more
   // than one open question, a question that isn't the last thing in the
   // message, or a safety-critical finding buried outside the final section.
