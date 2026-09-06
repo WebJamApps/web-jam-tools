@@ -2,8 +2,10 @@
 # SessionEnd: prune offending local permission allow rules on session end (web-jam-tools#818).
 #
 # Behavior:
-#   - Target files absent or clean -> silent no-op (exits 0).
+#   - Target files absent or clean -> left unmodified, exits 0.
 #   - Offending rules detected -> pruned in-place, backed up, exits 0.
+#   - The prune tool's report is always printed to stdout (not silent), in
+#     both cases above.
 #   - Never blocks, hangs, or fails session teardown (always exits 0).
 set -euo pipefail
 

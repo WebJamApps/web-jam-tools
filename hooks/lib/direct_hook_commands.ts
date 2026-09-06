@@ -62,7 +62,7 @@ export function extractDirectCommandHookScripts(
     }
   }
 
-  // 3. Claude Code PreToolUse hooks
+  // 4. Claude Code PreToolUse hooks
   const preMatch = installerContent.match(
     /PRE_TOOL_USE_HOOKS=\(([\s\S]*?)\n\)/,
   );
@@ -78,7 +78,7 @@ export function extractDirectCommandHookScripts(
     }
   }
 
-  // 4. Claude Code PostToolUse hooks
+  // 5. Claude Code PostToolUse hooks
   const postMatch = installerContent.match(
     /POST_TOOL_USE_HOOKS=\(([\s\S]*?)\n\)/,
   );
@@ -103,7 +103,7 @@ export function extractDirectCommandHookScripts(
   // parser checks; if a future entry in that array were ever wired as a direct
   // command instead, it would need to be added here explicitly.
 
-  // 5. agy surface direct command: extract the wrapper executable from agy_shim_arg
+  // 6. agy surface direct command: extract the wrapper executable from agy_shim_arg
   const shimMatch = installerContent.match(
     /agy_shim_arg\(\)\s*\{([\s\S]*?)\n\}/,
   );
