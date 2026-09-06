@@ -328,13 +328,17 @@ export async function runBookGigCli(
   // -------------------------------------------------------------------------
   if (!parsed.weekend) {
     console.error(
-      "Usage: deno task book-gig [--send|--replies|--link-gig <venue>|--hold <venue> --until <date>|--booked-through <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
+      "Usage: deno task book-gig [--send [--confirm-drafts]|--replies|--link-gig <venue>|--hold <venue> --until <date>|--booked-through <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
     );
     console.error("Examples:");
     console.error('  deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"');
-    console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA"');
-    console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --venues "v1,v2"');
-    console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --skip "v3"');
+    console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts');
+    console.error(
+      '  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --venues "v1,v2"',
+    );
+    console.error(
+      '  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --skip "v3"',
+    );
     console.error('  deno task book-gig --replies "Oct 16-18 2026"');
     console.error("  deno task book-gig --replies");
     console.error('  deno task book-gig --link-gig "Olde Salem Brewing"');
@@ -401,6 +405,21 @@ export async function runBookGigCli(
 
   // 6. If in --send mode, dispatch batch outreach via POST /outreach/batch
   if (isSendMode) {
+    if (!parsed.confirmDrafts) {
+      console.error(
+        "Error: Batch outreach dispatch requires explicit draft confirmation via --confirm-drafts.",
+      );
+      console.error(
+        "Please review the rendered pitch drafts and Dark Mode HTML artifact first.",
+      );
+      console.error(
+        'Usage: deno task book-gig --send "<weekend>" [location] --confirm-drafts [--venues <ids>]',
+      );
+      throw new Error(
+        "Batch outreach dispatch requires explicit draft confirmation via --confirm-drafts.",
+      );
+    }
+
     let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
 
     if (parsed.includeVenues && parsed.includeVenues.length > 0) {
@@ -464,6 +483,7 @@ export async function runBookGigCli(
     location,
     includeVenues: parsed.includeVenues,
     excludeVenues: parsed.excludeVenues,
+    confirmDrafts: parsed.confirmDrafts,
     candidates,
     density,
     pitches,
