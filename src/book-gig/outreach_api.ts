@@ -311,15 +311,10 @@ export async function recordGate1Approval(
   let targetWeekend = options.targetWeekend;
 
   if (typeof options.weekend === "string") {
-    weekendStr = options.weekend.trim();
+    const parsed = parseTargetWeekend(options.weekend.trim());
+    weekendStr = `${parsed.start}-to-${parsed.end}`;
     if (!targetWeekend) {
-      try {
-        const parsed = parseTargetWeekend(weekendStr);
-        weekendStr = `${parsed.start}-to-${parsed.end}`;
-        targetWeekend = { start: parsed.start, end: parsed.end };
-      } catch {
-        // preserve original string if unparseable
-      }
+      targetWeekend = { start: parsed.start, end: parsed.end };
     }
   } else {
     weekendStr = `${options.weekend.start}-to-${options.weekend.end}`;

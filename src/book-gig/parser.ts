@@ -833,9 +833,9 @@ export function parseTargetWeekend(input: string, referenceYear = 2026): TargetW
     throw new Error("Target weekend cannot be empty");
   }
 
-  // Check ISO range: "2026-10-16 to 2026-10-18" or "2026-10-16/2026-10-18"
+  // Check ISO range: "2026-10-16 to 2026-10-18", "2026-10-16-to-2026-10-18", or "2026-10-16/2026-10-18"
   const isoRangeMatch = clean.match(
-    /^(\d{4})-(\d{2})-(\d{2})\s*(?:to|\/|-)\s*(\d{4})-(\d{2})-(\d{2})$/i,
+    /^(\d{4})-(\d{2})-(\d{2})\s*(?:-to-|to|\/|-)\s*(\d{4})-(\d{2})-(\d{2})$/i,
   );
   if (isoRangeMatch) {
     const y1 = parseInt(isoRangeMatch[1], 10);

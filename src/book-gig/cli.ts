@@ -26,7 +26,6 @@ import {
 import type {
   BatchDispatchResult,
   BookGigResult,
-  CandidateVenue,
   OutreachCampaignRecord,
   PitchEmail,
   TargetLocation,
@@ -356,23 +355,21 @@ export async function runBookGigCli(
     const density = assessDensity(candidates, location);
 
     // 2. Resolve approved venue IDs
-    let eligibleVenues = candidates.filter((c) => c._id && !c.isExcluded);
+    let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
 
     if (parsed.includeVenues && parsed.includeVenues.length > 0) {
-      const filterMatches = eligibleVenues.filter((c) =>
-        matchesVenueFilter(c, parsed.includeVenues!)
-      );
-      if (filterMatches.length > 0) {
-        eligibleVenues = filterMatches;
-      } else {
-        // Fallback: If includeVenues contains explicit ObjectIds, use them directly
-        const validOids = parsed.includeVenues.filter((id) => /^[0-9a-fA-F]{24}$/.test(id));
-        if (validOids.length > 0) {
-          eligibleVenues = validOids.map((id) => ({
-            _id: id,
-            name: id,
-          } as CandidateVenue));
-        }
+      eligibleVenues = eligibleVenues.filter((c) => matchesVenueFilter(c, parsed.includeVenues!));
+      if (eligibleVenues.length === 0) {
+        console.error(
+          `\n⚠️  No eligible candidate venues matched --venues filter: ${
+            parsed.includeVenues.join(", ")
+          }`,
+        );
+        throw new Error(
+          `No eligible candidate venues matched --venues filter: ${
+            parsed.includeVenues.join(", ")
+          }`,
+        );
       }
     }
 

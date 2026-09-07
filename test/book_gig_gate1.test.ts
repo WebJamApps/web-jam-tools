@@ -40,6 +40,19 @@ Deno.test("recordGate1Approval: throws if venueIds is empty or not an array", as
   );
 });
 
+Deno.test("recordGate1Approval: throws on unparseable weekend string", async () => {
+  await assertRejects(
+    async () => {
+      await recordGate1Approval({
+        weekend: "invalid-weekend-xyz",
+        venueIds: ["64a111111111111111111111"],
+      });
+    },
+    Error,
+    'Unable to parse target weekend from: "invalid-weekend-xyz"',
+  );
+});
+
 Deno.test("recordGate1Approval: posts payload to /outreach/approval/venue-set and returns record", async () => {
   let capturedUrl = "";
   let capturedMethod = "";
@@ -399,6 +412,201 @@ Deno.test("runBookGigCli: Gate 1 mode fails closed when no weekend provided", as
       },
       Error,
       "Missing target weekend argument for Gate 1 approval",
+    );
+  });
+});
+
+Deno.test("runBookGigCli: Gate 1 mode fails closed when --venues matches no eligible candidate by name", async () => {
+  await withIsolatedHome(async () => {
+    let gate1Recorded = false;
+    const mockFetch: typeof fetch = (input: string | URL | Request) => {
+      const urlStr = typeof input === "string"
+        ? input
+        : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+      if (urlStr.includes("/outreach/candidates")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+              {
+                _id: "64a111111111111111111111",
+                name: "Olde Salem Brewing",
+                city: "Salem",
+                usState: "VA",
+                email: "booking@oldesalembrewing.com",
+                outreachEligible: true,
+                isExcluded: false,
+              },
+            ]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      if (urlStr.includes("/outreach/approval/venue-set")) {
+        gate1Recorded = true;
+        return Promise.resolve(
+          new Response(JSON.stringify({ _id: "gate1-doc" }), { status: 201 }),
+        );
+      }
+
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+
+    await assertRejects(
+      async () => {
+        await runBookGigCli(
+          [
+            "--record-gate1",
+            "Oct 16-18 2026",
+            "Salem, VA",
+            "--venues",
+            "Nonexistent Venue",
+          ],
+          mockFetch,
+        );
+      },
+      Error,
+      "No eligible candidate venues matched --venues filter: Nonexistent Venue",
+    );
+
+    assertEquals(
+      gate1Recorded,
+      false,
+      "recordGate1Approval must not be called when --venues filter matches zero candidates",
+    );
+  });
+});
+
+Deno.test("runBookGigCli: Gate 1 mode fails closed when --venues contains unmatched 24-hex ObjectId not in candidate set", async () => {
+  await withIsolatedHome(async () => {
+    let gate1Recorded = false;
+    const mockFetch: typeof fetch = (input: string | URL | Request) => {
+      const urlStr = typeof input === "string"
+        ? input
+        : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+      if (urlStr.includes("/outreach/candidates")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+              {
+                _id: "64a111111111111111111111",
+                name: "Olde Salem Brewing",
+                city: "Salem",
+                usState: "VA",
+                email: "booking@oldesalembrewing.com",
+                outreachEligible: true,
+                isExcluded: false,
+              },
+            ]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      if (urlStr.includes("/outreach/approval/venue-set")) {
+        gate1Recorded = true;
+        return Promise.resolve(
+          new Response(JSON.stringify({ _id: "gate1-doc" }), { status: 201 }),
+        );
+      }
+
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+
+    await assertRejects(
+      async () => {
+        await runBookGigCli(
+          [
+            "--record-gate1",
+            "Oct 16-18 2026",
+            "Salem, VA",
+            "--venues",
+            "507f1f77bcf86cd799439011",
+          ],
+          mockFetch,
+        );
+      },
+      Error,
+      "No eligible candidate venues matched --venues filter: 507f1f77bcf86cd799439011",
+    );
+
+    assertEquals(
+      gate1Recorded,
+      false,
+      "recordGate1Approval must not be called when --venues contains unmatched ObjectId",
+    );
+  });
+});
+
+Deno.test("runBookGigCli: Gate 1 mode excludes candidate venues without email address", async () => {
+  await withIsolatedHome(async () => {
+    let capturedVenueIds: string[] = [];
+
+    const mockFetch: typeof fetch = (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const urlStr = typeof input === "string"
+        ? input
+        : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+      if (urlStr.includes("/outreach/candidates")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+              {
+                _id: "64a111111111111111111111",
+                name: "Has Email",
+                city: "Salem",
+                usState: "VA",
+                email: "booking@hasemail.com",
+                outreachEligible: true,
+                isExcluded: false,
+              },
+              {
+                _id: "64a222222222222222222222",
+                name: "No Email",
+                city: "Salem",
+                usState: "VA",
+                email: "",
+                outreachEligible: true,
+                isExcluded: false,
+              },
+            ]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      if (urlStr.includes("/outreach/approval/venue-set")) {
+        const body = JSON.parse((init?.body as string) || "{}");
+        capturedVenueIds = body.venueIds || [];
+        return Promise.resolve(
+          new Response(JSON.stringify({ _id: "doc-1", ...body }), { status: 201 }),
+        );
+      }
+
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+
+    const result = await runBookGigCli(
+      ["--record-gate1", "Oct 16-18 2026", "Salem, VA"],
+      mockFetch,
+    );
+
+    assertEquals(result.mode, "gate1");
+    assertEquals(
+      capturedVenueIds,
+      ["64a111111111111111111111"],
+      "Venue without email must be excluded from Gate 1 approval",
     );
   });
 });
