@@ -326,6 +326,32 @@ export async function recordGate1Approval(
   const batchId = (options.batchId || weekendStr).trim();
   const approver = (options.approver || "Josh").trim();
 
+  // The backend upserts Gate 1 approval records on batchId/weekend (web-jam-back#1078
+  // "model/outreach: record the venue-set approval and the per-email draft fingerprints
+  // as two independent batch approvals"), so a second --record-gate1 run for the same
+  // weekend would otherwise silently replace a prior, narrower approval with a new venue
+  // set — exactly what web-jam-back#1079 "model/outreach: refuse batch dispatch unless
+  // both approvals exist and match this batch" checks dispatch against. Refuse outright
+  // when an existing record's venue set differs; allow a same-set re-run through as a
+  // harmless no-op (idempotent re-recording, e.g. notes/approver touch-ups).
+  const existing = await fetchGate1Approval(batchId, options, fetchFn);
+  if (existing) {
+    const existingSet = new Set((existing.venueIds || []).map(String));
+    const newSet = new Set(options.venueIds.map(String));
+    const sameSet = existingSet.size === newSet.size &&
+      [...existingSet].every((id) => newSet.has(id));
+    if (!sameSet) {
+      throw new Error(
+        `Gate 1 venue-set approval already exists for batch '${batchId}' with a different ` +
+          `venue set (existing: ${[...existingSet].join(", ") || "none"}; requested: ${
+            [...newSet].join(", ")
+          }). Refusing to silently overwrite a prior approval — recording a genuinely revised ` +
+          `venue set for this batch is a decision Josh must make explicitly, not something this ` +
+          `command does automatically.`,
+      );
+    }
+  }
+
   const payload: Record<string, unknown> = {
     batchId,
     weekend: weekendStr,

@@ -63,8 +63,13 @@ Deno.test("recordGate1Approval: posts payload to /outreach/approval/venue-set an
     input: string | URL | Request,
     init?: RequestInit,
   ) => {
+    const method = init?.method || "GET";
+    if (method === "GET") {
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    }
+
     capturedUrl = typeof input === "string" ? input : input.toString();
-    capturedMethod = init?.method || "GET";
+    capturedMethod = method;
     capturedHeaders = (init?.headers || {}) as Record<string, string>;
     capturedBody = JSON.parse((init?.body as string) || "{}");
 
@@ -130,6 +135,9 @@ Deno.test("recordGate1Approval: handles string weekend and defaults approver to 
     _input: string | URL | Request,
     init?: RequestInit,
   ) => {
+    if (!init?.method || init.method === "GET") {
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    }
     capturedBody = JSON.parse((init?.body as string) || "{}");
     return Promise.resolve(
       new Response(JSON.stringify(capturedBody), {
@@ -154,7 +162,10 @@ Deno.test("recordGate1Approval: handles string weekend and defaults approver to 
 });
 
 Deno.test("recordGate1Approval: throws when backend returns HTTP error status", async () => {
-  const mockFetch: typeof fetch = () => {
+  const mockFetch: typeof fetch = (_input: string | URL | Request, init?: RequestInit) => {
+    if (!init?.method || init.method === "GET") {
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    }
     return Promise.resolve(
       new Response("Unauthorized", { status: 401 }),
     );
@@ -284,6 +295,9 @@ Deno.test("runBookGigCli: records Gate 1 approval and strictly never calls batch
       }
 
       if (urlStr.includes("/outreach/approval/venue-set")) {
+        if (!init?.method || init.method === "GET") {
+          return Promise.resolve(new Response("Not found", { status: 404 }));
+        }
         gate1Recorded = true;
         capturedApprovalBody = JSON.parse((init?.body as string) || "{}");
         return Promise.resolve(
@@ -375,6 +389,9 @@ Deno.test("runBookGigCli: filters candidates by --venues in Gate 1 mode (isolate
       }
 
       if (urlStr.includes("/outreach/approval/venue-set")) {
+        if (!init?.method || init.method === "GET") {
+          return Promise.resolve(new Response("Not found", { status: 404 }));
+        }
         const body = JSON.parse((init?.body as string) || "{}");
         capturedVenueIds = body.venueIds || [];
         return Promise.resolve(
@@ -587,6 +604,9 @@ Deno.test("runBookGigCli: Gate 1 mode excludes candidate venues without email ad
       }
 
       if (urlStr.includes("/outreach/approval/venue-set")) {
+        if (!init?.method || init.method === "GET") {
+          return Promise.resolve(new Response("Not found", { status: 404 }));
+        }
         const body = JSON.parse((init?.body as string) || "{}");
         capturedVenueIds = body.venueIds || [];
         return Promise.resolve(
@@ -608,5 +628,328 @@ Deno.test("runBookGigCli: Gate 1 mode excludes candidate venues without email ad
       ["64a111111111111111111111"],
       "Venue without email must be excluded from Gate 1 approval",
     );
+  });
+});
+
+Deno.test("recordGate1Approval: throws when an existing approval for the batch has a different venue set", async () => {
+  let postCalled = false;
+
+  const mockFetch: typeof fetch = (_input: string | URL | Request, init?: RequestInit) => {
+    if (!init?.method || init.method === "GET") {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            _id: "existing-approval-1",
+            batchId: "2026-10-16-to-2026-10-18",
+            venueIds: ["64a111111111111111111111"],
+            approver: "Josh",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    postCalled = true;
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  await assertRejects(
+    async () => {
+      await recordGate1Approval(
+        {
+          backendUrl: "https://test.example.com",
+          weekend: "2026-10-16-to-2026-10-18",
+          venueIds: ["64a111111111111111111111", "64a222222222222222222222"],
+        },
+        mockFetch,
+      );
+    },
+    Error,
+    "Gate 1 venue-set approval already exists for batch '2026-10-16-to-2026-10-18' with a different venue set",
+  );
+
+  assertEquals(
+    postCalled,
+    false,
+    "POST /outreach/approval/venue-set must not be called when an existing approval's venue set differs",
+  );
+});
+
+Deno.test("recordGate1Approval: succeeds as a no-op when re-recording the identical venue set", async () => {
+  let capturedBody: Record<string, unknown> = {};
+
+  const mockFetch: typeof fetch = (
+    _input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    if (!init?.method || init.method === "GET") {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            _id: "existing-approval-1",
+            batchId: "2026-10-16-to-2026-10-18",
+            venueIds: ["64a222222222222222222222", "64a111111111111111111111"],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    capturedBody = JSON.parse((init?.body as string) || "{}");
+    return Promise.resolve(
+      new Response(JSON.stringify({ _id: "updated-doc", ...capturedBody }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  const record = await recordGate1Approval(
+    {
+      backendUrl: "https://test.example.com",
+      weekend: "2026-10-16-to-2026-10-18",
+      // Same set as the existing approval, different order — must still be treated as identical.
+      venueIds: ["64a111111111111111111111", "64a222222222222222222222"],
+    },
+    mockFetch,
+  );
+
+  assertEquals(record._id, "updated-doc");
+  assertEquals(capturedBody.venueIds, [
+    "64a111111111111111111111",
+    "64a222222222222222222222",
+  ]);
+});
+
+Deno.test("runBookGigCli: Gate 1 mode fails closed on partially unmatched --venues filter with specific unmatched names", async () => {
+  await withIsolatedHome(async () => {
+    let gate1Recorded = false;
+
+    const mockFetch: typeof fetch = (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const urlStr = typeof input === "string"
+        ? input
+        : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+      if (urlStr.includes("/outreach/candidates")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+              {
+                _id: "64a111111111111111111111",
+                name: "Olde Salem Brewing",
+                city: "Salem",
+                usState: "VA",
+                email: "booking@oldesalembrewing.com",
+                outreachEligible: true,
+                isExcluded: false,
+              },
+            ]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      if (urlStr.includes("/outreach/approval/venue-set")) {
+        if (!init?.method || init.method === "GET") {
+          return Promise.resolve(new Response("Not found", { status: 404 }));
+        }
+        gate1Recorded = true;
+        return Promise.resolve(
+          new Response(JSON.stringify({ _id: "gate1-doc" }), { status: 201 }),
+        );
+      }
+
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+
+    await assertRejects(
+      async () => {
+        await runBookGigCli(
+          [
+            "--record-gate1",
+            "Oct 16-18 2026",
+            "Salem, VA",
+            "--venues",
+            "Olde Salem Brewing, Typo Venue",
+          ],
+          mockFetch,
+        );
+      },
+      Error,
+      "No eligible candidate venues matched --venues filter: Typo Venue",
+    );
+
+    assertEquals(
+      gate1Recorded,
+      false,
+      "recordGate1Approval must not be called when --venues contains partially unmatched venue",
+    );
+  });
+});
+
+Deno.test("runBookGigCli: Gate 1 mode refuses to silently overwrite an existing approval with a different venue set", async () => {
+  await withIsolatedHome(async () => {
+    let gate1Recorded = false;
+
+    const mockFetch: typeof fetch = (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const urlStr = typeof input === "string"
+        ? input
+        : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+      if (urlStr.includes("/outreach/candidates")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+              {
+                _id: "64a111111111111111111111",
+                name: "Olde Salem Brewing",
+                city: "Salem",
+                usState: "VA",
+                email: "booking@oldesalembrewing.com",
+                outreachEligible: true,
+                isExcluded: false,
+              },
+              {
+                _id: "64a222222222222222222222",
+                name: "Second Venue",
+                city: "Salem",
+                usState: "VA",
+                email: "booking@secondvenue.com",
+                outreachEligible: true,
+                isExcluded: false,
+              },
+            ]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      if (urlStr.includes("/outreach/approval/venue-set")) {
+        if (!init?.method || init.method === "GET") {
+          // A prior run already approved only the first venue.
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                _id: "existing-gate1-doc",
+                batchId: "2026-10-16-to-2026-10-18",
+                venueIds: ["64a111111111111111111111"],
+                approver: "Josh",
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        gate1Recorded = true;
+        return Promise.resolve(
+          new Response(JSON.stringify({ _id: "gate1-doc" }), { status: 201 }),
+        );
+      }
+
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+
+    // This run approves BOTH venues — a wider set than the existing approval.
+    await assertRejects(
+      async () => {
+        await runBookGigCli(
+          ["--record-gate1", "Oct 16-18 2026", "Salem, VA"],
+          mockFetch,
+        );
+      },
+      Error,
+      "Gate 1 venue-set approval already exists for batch '2026-10-16-to-2026-10-18' with a different venue set",
+    );
+
+    assertEquals(
+      gate1Recorded,
+      false,
+      "recordGate1Approval POST must not be called when an existing approval's venue set differs from the requested one",
+    );
+  });
+});
+
+Deno.test("runBookGigCli: Gate 1 mode allows a no-op re-run when the existing approval already covers the identical venue set", async () => {
+  await withIsolatedHome(async () => {
+    let gate1Recorded = false;
+    let capturedBody: Record<string, unknown> = {};
+
+    const mockFetch: typeof fetch = (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const urlStr = typeof input === "string"
+        ? input
+        : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+      if (urlStr.includes("/outreach/candidates")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+              {
+                _id: "64a111111111111111111111",
+                name: "Olde Salem Brewing",
+                city: "Salem",
+                usState: "VA",
+                email: "booking@oldesalembrewing.com",
+                outreachEligible: true,
+                isExcluded: false,
+              },
+            ]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      if (urlStr.includes("/outreach/approval/venue-set")) {
+        if (!init?.method || init.method === "GET") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                _id: "existing-gate1-doc",
+                batchId: "2026-10-16-to-2026-10-18",
+                venueIds: ["64a111111111111111111111"],
+                approver: "Josh",
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+        gate1Recorded = true;
+        capturedBody = JSON.parse((init?.body as string) || "{}");
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              _id: "existing-gate1-doc",
+              batchId: capturedBody.batchId,
+              venueIds: capturedBody.venueIds,
+              approver: capturedBody.approver,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+
+    // Same single venue as the existing approval — must succeed as a harmless no-op.
+    const result = await runBookGigCli(
+      ["--record-gate1", "Oct 16-18 2026", "Salem, VA"],
+      mockFetch,
+    );
+
+    assertEquals(result.mode, "gate1");
+    assertEquals(gate1Recorded, true);
+    assertEquals(capturedBody.venueIds, ["64a111111111111111111111"]);
   });
 });

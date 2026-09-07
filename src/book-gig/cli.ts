@@ -358,19 +358,18 @@ export async function runBookGigCli(
     let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
 
     if (parsed.includeVenues && parsed.includeVenues.length > 0) {
-      eligibleVenues = eligibleVenues.filter((c) => matchesVenueFilter(c, parsed.includeVenues!));
-      if (eligibleVenues.length === 0) {
+      const unmatched = parsed.includeVenues.filter(
+        (filterEntry) => !eligibleVenues.some((c) => matchesVenueFilter(c, [filterEntry])),
+      );
+      if (unmatched.length > 0) {
         console.error(
-          `\n⚠️  No eligible candidate venues matched --venues filter: ${
-            parsed.includeVenues.join(", ")
-          }`,
+          `\n⚠️  No eligible candidate venues matched --venues filter: ${unmatched.join(", ")}`,
         );
         throw new Error(
-          `No eligible candidate venues matched --venues filter: ${
-            parsed.includeVenues.join(", ")
-          }`,
+          `No eligible candidate venues matched --venues filter: ${unmatched.join(", ")}`,
         );
       }
+      eligibleVenues = eligibleVenues.filter((c) => matchesVenueFilter(c, parsed.includeVenues!));
     }
 
     if (parsed.excludeVenues && parsed.excludeVenues.length > 0) {

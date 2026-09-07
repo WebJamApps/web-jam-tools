@@ -90,6 +90,7 @@ Batch outreach dispatch is protected by two mandatory, independent hard gates (D
   - **Gate 1 authorizes ONLY the target venue set and NOTHING else.**
   - Recording Gate 1 approval does **NOT** authorize draft pitch copy and does **NOT** authorize email dispatch.
   - Approval of draft copy or permission to send must **NEVER** be inferred from candidate list approval or Gate 1 recording.
+  - **No Silent Re-Recording:** The backend upserts Gate 1 approval records on batchId/weekend, so recording Gate 1 approval refuses outright when an approval already exists for the same batch with a *different* venue set — it never silently replaces a prior approval with a new one. A re-run with the identical venue set is a harmless no-op.
   - **FORBIDDEN ACTION:** AI assistants are **STRICTLY FORBIDDEN** from executing `deno task book-gig --send` when the user approves target candidates or when Gate 1 is recorded. Gate 1 satisfies only the venue-set check; dispatch requires both Gate 1 and an independent Gate 2 draft copy approval record.
 
 #### Phase 2B: Draft Content Review & Approval (GATE 2)
