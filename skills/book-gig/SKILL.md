@@ -1,15 +1,16 @@
 ---
 name: book-gig
-description: Identify eligible venues for target performance weekends, filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, dispatch approved batches (--send --confirm-drafts), and track venue replies (--replies). Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".
+description: Identify eligible venues for target performance weekends, filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, record Gate 1 venue-set approval, dispatch approved batches (--send --confirm-drafts), and track venue replies (--replies). Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".
 ---
 
 # book-gig — Target Performance Weekend Booking Outreach
 
-Automate identifying eligible live-music venues, filtering them against Josh & Maria's performance history (+- 2 months gig-spacing), triggering `venue-mining` when target density is low, generating personalized booking pitches that adhere to `docs/cross-ai-rules.md` voice rules, dispatching approved batches via `POST /outreach/batch` (`--send --confirm-drafts`), and tracking live venue responses and AI suggestions (`--replies` / `--check-replies`).
+Automate identifying eligible live-music venues, filtering them against Josh & Maria's performance history (+- 2 months gig-spacing), triggering `venue-mining` when target density is low, generating personalized booking pitches that adhere to `docs/cross-ai-rules.md` voice rules, recording Gate 1 venue-set approval (`POST /outreach/approval/venue-set` via `--record-gate1`), dispatching approved batches via `POST /outreach/batch` (`--send --confirm-drafts`), and tracking live venue responses and AI suggestions (`--replies` / `--check-replies`).
 
 ## Invocation
 
 - `/book-gig <weekend> [location]` — Discovery & preview mode (drafts pitches, logs candidate table, outputs clickable HTML artifact link, and automatically opens it in Chrome).
+- `/book-gig --record-gate1 "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"] [--approver "Josh"]` — Gate 1 venue-set approval mode (records server-side approval of the target venue set via `POST /outreach/approval/venue-set` once Josh approves the candidate table; authorizes ONLY the venue set and nothing else).
 - `/book-gig --send "<weekend>" [location] --confirm-drafts [--venues "id1,id2" | --venue "id1"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues, outputs HTML artifact link, and opens in Chrome; requires `--confirm-drafts` after explicit draft review; `--venue <name|id>` acts as an alias for a single target venue in `--send` mode).
 - `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies`, displays live campaign status table, outputs HTML artifact link, and opens in Chrome).
 - `/book-gig --link-gig <venue-name>` — Gig linking mode (resolves single venue by exact normalized name, matches unlinked gig, and writes `venueId` via `PATCH /gig/:id` to correct a wrong new-versus-returning badge per D-26).
@@ -24,6 +25,8 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
   - `deno task book-gig "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"` — focus on target cities and their surrounding regional communities, excluding non-target metros.
   - `deno task book-gig "Oct 16-18 2026" --no-open` — generate pitches and logs without automatically opening Chrome.
   - `deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"` — focus on Lynchburg, VA and surrounding area.
+  - `deno task book-gig --record-gate1 "Oct 16-18 2026" "Lynchburg, VA" --venues "id1,id2"` — record Gate 1 target venue-set approval for specific approved candidate venues.
+  - `deno task book-gig --record-gate1 "Oct 16-18 2026"` — record Gate 1 target venue-set approval for all eligible candidate venues.
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts` — dispatch outreach batch to all eligible Lynchburg venues after reviewing and confirming drafts.
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --venues "id1,id2"` — dispatch only to specific approved candidate venues after reviewing and confirming drafts.
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --venue "Twin Creeks"` — dispatch outreach to a single candidate venue (convenient alias for `--venues`).
@@ -47,8 +50,9 @@ graph TD
     E --> B
     D -- "Sufficient Candidates" --> F["Phase 2A: Propose Candidate Table & Target Selection"]
     F --> G["Josh Reviews & Approves Target Candidates"]
-    G --> H["Phase 2B: Pitch Draft Preview & Dark HTML Artifact Review"]
-    H --> I["Josh Explicitly Reviews & Approves Draft Content"]
+    G --> G1["GATE 1: Record Target Venue Set Server-Side (POST /outreach/approval/venue-set)"]
+    G1 --> H["Phase 2B: Pitch Draft Preview & Dark HTML Artifact Review"]
+    H --> I["Josh Explicitly Reviews & Approves Draft Content (GATE 2)"]
     I --> J["Dispatch Outreach Batch (deno task book-gig --send ... --confirm-drafts)"]
     J --> K["Calls POST /outreach/batch, CCs Josh+Maria, Logs Touches"]
     K --> L["Track Responses (deno task book-gig --replies)"]
@@ -70,17 +74,26 @@ graph TD
 - If candidate coverage in the target area is sparse (< 3–5 venues), the skill offers to run `/venue-mining metro <slug>` to harvest net-new venues first.
 - New venues are added to MongoDB with verified street addresses and booking emails via `POST /venue`.
 
-### 4. Two-Stage Approval Gate: Candidate Targets (Phase 2A) & Pitch Drafts (Phase 2B)
+### 4. Two-Stage Approval Gate: Candidate Targets (Phase 2A / GATE 1) & Pitch Drafts (Phase 2B / GATE 2)
 
-Batch outreach dispatch is protected by a mandatory two-stage approval gate. AI assistants must strictly distinguish between target venue selection and draft content approval:
+Batch outreach dispatch is protected by two mandatory, independent hard gates (D-39, D-40, D-41). AI assistants must strictly distinguish between target venue selection and draft content approval:
 
-#### Phase 2A: Target Venue Approval
+#### Phase 2A: Target Venue Approval & GATE 1 Recording
 - Present candidate proposal table to Josh in chat:
   `| # | Venue Name | City, State | Booking Email | Spacing Reason |`
-- Josh reviews candidate eligibility and approves or refines the target venue list (e.g. approving specific IDs with `--venues` or skipping with `--skip`).
-- **FORBIDDEN ACTION:** AI assistants are **STRICTLY FORBIDDEN** from executing `deno task book-gig --send` when the user approves target candidates or venue lists alone. Approval of candidate targets or venue names does NOT authorize outreach dispatch.
+- Josh reviews candidate eligibility and approves or refines the target venue list (e.g. approving specific IDs with `--venues` or skipping with `--skip`, or approving all proposed candidates).
+- **GATE 1 RECORDING:** Immediately upon receiving Josh's approval of the target candidate list, the AI assistant MUST record Gate 1 approval server-side:
+  - CLI: `deno task book-gig --record-gate1 "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"] [--approver "Josh"]`
+  - Client API: `recordGate1Approval({ weekend, venueIds, approver: "Josh" })` calling `POST /outreach/approval/venue-set` on `web-jam-back`.
+  - Payload: `{ batchId, weekend, targetWeekend, venueIds, approver, notes, metadata }`.
+- **STRICT HARD GATE INVARIANTS (D-39 / D-41):**
+  - **Gate 1 authorizes ONLY the target venue set and NOTHING else.**
+  - Recording Gate 1 approval does **NOT** authorize draft pitch copy and does **NOT** authorize email dispatch.
+  - Approval of draft copy or permission to send must **NEVER** be inferred from candidate list approval or Gate 1 recording.
+  - **No Silent Re-Recording:** The backend upserts Gate 1 approval records on batchId/weekend, so recording Gate 1 approval refuses outright when an approval already exists for the same batch with a *different* venue set — it never silently replaces a prior approval with a new one. A re-run with the identical venue set is a harmless no-op.
+  - **FORBIDDEN ACTION:** AI assistants are **STRICTLY FORBIDDEN** from executing `deno task book-gig --send` when the user approves target candidates or when Gate 1 is recorded. Gate 1 satisfies only the venue-set check; dispatch requires both Gate 1 and an independent Gate 2 draft copy approval record.
 
-#### Phase 2B: Draft Content Review & Approval
+#### Phase 2B: Draft Content Review & Approval (GATE 2)
 - Provide the generated pitch previews and clickable Dark Mode HTML review artifact link (automatically opened in Chrome) so Josh can inspect the exact rendered pitch emails:
   - Subject lines, salutations, body copy, and venue contact details.
   - Verification that email drafts strictly conform to `docs/cross-ai-rules.md` **Voice Rules**:
@@ -93,7 +106,7 @@ Batch outreach dispatch is protected by a mandatory two-stage approval gate. AI 
 - Batch dispatch may ONLY proceed when Josh provides distinct, explicit approval of the drafts (e.g. "Drafts look good, send them", "Approved to send", or signoff on the rendered email content).
 
 ### 5. Approved Batch Outreach Dispatch (`--send --confirm-drafts`)
-- Once BOTH Phase 2A (Target Selection) and Phase 2B (Draft Content Review & Approval) have been explicitly approved by Josh, execute batch outreach dispatch:
+- Once BOTH Phase 2A (Target Selection / Gate 1) and Phase 2B (Draft Content Review & Approval / Gate 2) have been explicitly approved by Josh, execute batch outreach dispatch:
   - **All eligible candidates:** `deno task book-gig --send "<weekend>" [location] --confirm-drafts`
   - **Specific approved subset:** `deno task book-gig --send "<weekend>" [location] --confirm-drafts --venues "id1,id2"` (or `--include`)
   - **Single approved target venue alias:** `deno task book-gig --send "<weekend>" [location] --confirm-drafts --venue "<name|id>"` (populates `includeVenues` for a single target, e.g. `--venue "Twin Creeks"`)
@@ -114,7 +127,7 @@ Batch outreach dispatch is protected by a mandatory two-stage approval gate. AI 
 
 | It refuses to | Because |
 |---|---|
-| Auto-send outreach without explicit draft approval and `--confirm-drafts`, or dispatch based on venue target approval alone | Two-stage approval gate requires distinct signoff: Phase 2A approves target venues, while Phase 2B approves rendered pitch content. Dispatch requires `--send --confirm-drafts` and fails closed if `--confirm-drafts` is missing. AI assistants are strictly forbidden from executing `--send` when candidates or venue lists alone are approved. |
+| Auto-send outreach without explicit draft approval and `--confirm-drafts`, or dispatch based on venue target approval alone (Gate 1) | Two-stage approval gate requires distinct signoff (D-39): Gate 1 authorizes ONLY the target venue set (recorded server-side via `POST /outreach/approval/venue-set`), while Gate 2 authorizes rendered draft copy. Dispatch requires `--send --confirm-drafts` and fails closed if either gate or `--confirm-drafts` is missing. AI assistants are strictly forbidden from executing `--send` when candidates or venue lists alone are approved. |
 | Pitch venues within +- 2 months of a booked gig | Preserves local audience draw and venue spacing commitments. |
 | Pitch venues with active outreach campaigns for that weekend | Prevents embarrassing duplicate outreach to venue managers. |
 | Use corporate marketing copy or banned hype words | Violates cross-AI voice rules. Tone must remain genuine and personal. |

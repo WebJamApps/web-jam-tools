@@ -52,6 +52,9 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   let explicitVenue: string | undefined;
   let holdUntil: string | undefined;
   let bookedThroughDate: string | undefined;
+  let approver: string | undefined;
+  let notes: string | undefined;
+  let batchId: string | undefined;
   let explicitLocationStr: string | undefined;
   const includeVenues: string[] = [];
   const excludeVenues: string[] = [];
@@ -64,12 +67,38 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
 
     if (lower === "--send") {
       mode = "send";
+    } else if (lower === "--record-gate1" || lower === "--gate1") {
+      mode = "gate1";
     } else if (lower === "--confirm-drafts") {
       confirmDrafts = true;
     } else if (lower.startsWith("--confirm-drafts=")) {
       const eqIdx = arg.indexOf("=");
       const val = arg.slice(eqIdx + 1).trim().toLowerCase();
       confirmDrafts = val === "true" || val === "yes" || val === "1";
+    } else if (lower === "--approver") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        approver = args[i].trim();
+      }
+    } else if (lower.startsWith("--approver=")) {
+      const eqIdx = arg.indexOf("=");
+      approver = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--notes") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        notes = args[i].trim();
+      }
+    } else if (lower.startsWith("--notes=")) {
+      const eqIdx = arg.indexOf("=");
+      notes = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--batch-id" || lower === "--batchid") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        batchId = args[i].trim();
+      }
+    } else if (lower.startsWith("--batch-id=") || lower.startsWith("--batchid=")) {
+      const eqIdx = arg.indexOf("=");
+      batchId = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--replies" || lower === "--check-replies") {
       mode = "replies";
     } else if (lower === "--link-gig" || lower === "--link") {
@@ -158,13 +187,16 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   }
 
   const rawArgs = positionalArgs.join(" ").trim();
-  if (explicitVenue && mode === "send") {
+  if (explicitVenue && (mode === "send" || mode === "gate1")) {
     includeVenues.push(explicitVenue);
   }
   const resIncludes = includeVenues.length > 0 ? Array.from(new Set(includeVenues)) : undefined;
   const resExcludes = excludeVenues.length > 0 ? Array.from(new Set(excludeVenues)) : undefined;
   const resNoOpen = noOpen ? true : undefined;
   const resConfirmDrafts = confirmDrafts ? true : undefined;
+  const resApprover = approver ? approver.trim() : undefined;
+  const resNotes = notes ? notes.trim() : undefined;
+  const resBatchId = batchId ? batchId.trim() : undefined;
 
   if (mode === "link-gig") {
     if (!linkVenueName && positionalArgs.length > 0) {
@@ -210,6 +242,9 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       excludeVenues: resExcludes,
       confirmDrafts: resConfirmDrafts,
       noOpen: resNoOpen,
+      approver: resApprover,
+      notes: resNotes,
+      batchId: resBatchId,
       rawArgs: "",
     };
   }
@@ -230,6 +265,9 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       excludeVenues: resExcludes,
       confirmDrafts: resConfirmDrafts,
       noOpen: resNoOpen,
+      approver: resApprover,
+      notes: resNotes,
+      batchId: resBatchId,
       rawArgs,
     };
   }
@@ -245,6 +283,9 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       excludeVenues: resExcludes,
       confirmDrafts: resConfirmDrafts,
       noOpen: resNoOpen,
+      approver: resApprover,
+      notes: resNotes,
+      batchId: resBatchId,
       rawArgs,
     };
   } catch {
@@ -280,6 +321,9 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
         excludeVenues: resExcludes,
         confirmDrafts: resConfirmDrafts,
         noOpen: resNoOpen,
+        approver: resApprover,
+        notes: resNotes,
+        batchId: resBatchId,
         rawArgs,
       };
     }
@@ -294,6 +338,9 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     excludeVenues: resExcludes,
     confirmDrafts: resConfirmDrafts,
     noOpen: resNoOpen,
+    approver: resApprover,
+    notes: resNotes,
+    batchId: resBatchId,
     rawArgs,
   };
 }
@@ -786,9 +833,9 @@ export function parseTargetWeekend(input: string, referenceYear = 2026): TargetW
     throw new Error("Target weekend cannot be empty");
   }
 
-  // Check ISO range: "2026-10-16 to 2026-10-18" or "2026-10-16/2026-10-18"
+  // Check ISO range: "2026-10-16 to 2026-10-18", "2026-10-16-to-2026-10-18", or "2026-10-16/2026-10-18"
   const isoRangeMatch = clean.match(
-    /^(\d{4})-(\d{2})-(\d{2})\s*(?:to|\/|-)\s*(\d{4})-(\d{2})-(\d{2})$/i,
+    /^(\d{4})-(\d{2})-(\d{2})\s*(?:-to-|to|\/|-)\s*(\d{4})-(\d{2})-(\d{2})$/i,
   );
   if (isoRangeMatch) {
     const y1 = parseInt(isoRangeMatch[1], 10);

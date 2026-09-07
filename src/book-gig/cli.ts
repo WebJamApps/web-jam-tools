@@ -21,6 +21,7 @@ import {
   fetchPendingReplies,
   fetchTemplates,
   fetchVenueMap,
+  recordGate1Approval,
 } from "./outreach_api.ts";
 import type {
   BatchDispatchResult,
@@ -324,14 +325,122 @@ export async function runBookGigCli(
   }
 
   // -------------------------------------------------------------------------
+  // Mode: Record Gate 1 Venue-Set Approval (--record-gate1 / --gate1)
+  // -------------------------------------------------------------------------
+  if (parsed.mode === "gate1") {
+    console.log(`\n======================================================`);
+    console.log(`  🛡️ book-gig: Record Gate 1 Venue-Set Approval`);
+    console.log(`======================================================`);
+    if (!parsed.weekend) {
+      console.error("Error: Missing required target weekend for Gate 1 approval.");
+      console.error(
+        'Usage: deno task book-gig --record-gate1 "<weekend>" [location] [--venues <ids>] [--skip <ids>] [--approver <name>] [--notes <notes>]',
+      );
+      throw new Error("Missing target weekend argument for Gate 1 approval");
+    }
+
+    const weekend = parsed.weekend;
+    const location = parsed.location;
+    const approver = parsed.approver || "Josh";
+
+    console.log(`Target Weekend:  ${weekend.label} (${weekend.start} to ${weekend.end})`);
+    console.log(`Target Location: ${formatLocationDisplay(location)}`);
+    console.log(`Approver:        ${approver}`);
+    console.log(`------------------------------------------------------\n`);
+
+    // 1. Fetch eligible candidates from web-jam-back
+    console.log(`Fetching candidate venues from backend...`);
+    const rawCandidates = await fetchCandidates({ weekend }, fetchFn);
+    const candidates = filterAndRankCandidates(rawCandidates, location);
+    const density = assessDensity(candidates, location);
+
+    // 2. Resolve approved venue IDs
+    let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
+
+    if (parsed.includeVenues && parsed.includeVenues.length > 0) {
+      const unmatched = parsed.includeVenues.filter(
+        (filterEntry) => !eligibleVenues.some((c) => matchesVenueFilter(c, [filterEntry])),
+      );
+      if (unmatched.length > 0) {
+        console.error(
+          `\n⚠️  No eligible candidate venues matched --venues filter: ${unmatched.join(", ")}`,
+        );
+        throw new Error(
+          `No eligible candidate venues matched --venues filter: ${unmatched.join(", ")}`,
+        );
+      }
+      eligibleVenues = eligibleVenues.filter((c) => matchesVenueFilter(c, parsed.includeVenues!));
+    }
+
+    if (parsed.excludeVenues && parsed.excludeVenues.length > 0) {
+      eligibleVenues = eligibleVenues.filter((c) => !matchesVenueFilter(c, parsed.excludeVenues!));
+    }
+
+    const venueIds = eligibleVenues.map((c) => c._id);
+
+    if (venueIds.length === 0) {
+      console.error(`\n⚠️  No eligible candidate venues found to approve for ${weekend.label}.`);
+      throw new Error("No eligible candidate venues found to approve for Gate 1");
+    }
+
+    console.log(`Recording Gate 1 approval for ${venueIds.length} candidate venue(s)...`);
+
+    const gate1Record = await recordGate1Approval(
+      {
+        batchId: parsed.batchId,
+        weekend,
+        venueIds,
+        approver,
+        notes: parsed.notes || `Gate 1 venue-set approval (${venueIds.length} venues approved)`,
+      },
+      fetchFn,
+    );
+
+    console.log(`\n✅ Gate 1 venue-set approval recorded successfully!`);
+    console.log(`  • Batch ID:     ${gate1Record.batchId}`);
+    if (gate1Record._id) {
+      console.log(`  • Approval ID:  ${gate1Record._id}`);
+    }
+    console.log(`  • Approved At:  ${gate1Record.approvedAt || new Date().toISOString()}`);
+    console.log(`  • Approver:     ${gate1Record.approver}`);
+    console.log(`  • Venue Count:  ${venueIds.length}`);
+
+    console.log(`\n🛑 IMPORTANT INVARIANT (D-39 / D-41):`);
+    console.log(`   Gate 1 authorizes ONLY the target venue set and NOTHING else.`);
+    console.log(`   It does NOT authorize pitch copy and does NOT authorize email dispatch.`);
+    console.log(
+      `   Next step: Review rendered draft emails in the Dark Mode HTML artifact (Gate 2).`,
+    );
+    console.log(
+      `   Outreach dispatch (--send --confirm-drafts) may ONLY be invoked after explicit Gate 2 copy approval.\n`,
+    );
+
+    return {
+      mode: "gate1",
+      weekend,
+      location,
+      includeVenues: parsed.includeVenues,
+      excludeVenues: parsed.excludeVenues,
+      candidates,
+      density,
+      pitches: [],
+      gate1Record,
+    };
+  }
+
+  // -------------------------------------------------------------------------
   // Discovery & Batch Send Modes
   // -------------------------------------------------------------------------
   if (!parsed.weekend) {
     console.error(
-      "Usage: deno task book-gig [--send [--confirm-drafts]|--replies|--link-gig <venue>|--hold <venue> --until <date>|--booked-through <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
+      "Usage: deno task book-gig [--send [--confirm-drafts]|--record-gate1|--replies|--link-gig <venue>|--hold <venue> --until <date>|--booked-through <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
     );
     console.error("Examples:");
     console.error('  deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"');
+    console.error(
+      '  deno task book-gig --record-gate1 "Oct 16-18 2026" "Lynchburg, VA" --venues "v1,v2"',
+    );
+    console.error('  deno task book-gig --record-gate1 "Oct 16-18 2026"');
     console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts');
     console.error(
       '  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --venues "v1,v2"',
