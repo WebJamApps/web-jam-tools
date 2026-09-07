@@ -351,6 +351,21 @@ export async function runBookGigCli(
   const location = parsed.location;
   const isSendMode = parsed.mode === "send";
 
+  if (isSendMode && !parsed.confirmDrafts) {
+    console.error(
+      "Error: Batch outreach dispatch requires explicit draft confirmation via --confirm-drafts.",
+    );
+    console.error(
+      "Please review the rendered pitch drafts and Dark Mode HTML artifact first.",
+    );
+    console.error(
+      'Usage: deno task book-gig --send "<weekend>" [location] --confirm-drafts [--venues <ids>]',
+    );
+    throw new Error(
+      "Batch outreach dispatch requires explicit draft confirmation via --confirm-drafts.",
+    );
+  }
+
   console.log(`\n======================================================`);
   if (isSendMode) {
     console.log(`  🚀 book-gig: Batch Outreach Dispatch`);
@@ -405,21 +420,6 @@ export async function runBookGigCli(
 
   // 6. If in --send mode, dispatch batch outreach via POST /outreach/batch
   if (isSendMode) {
-    if (!parsed.confirmDrafts) {
-      console.error(
-        "Error: Batch outreach dispatch requires explicit draft confirmation via --confirm-drafts.",
-      );
-      console.error(
-        "Please review the rendered pitch drafts and Dark Mode HTML artifact first.",
-      );
-      console.error(
-        'Usage: deno task book-gig --send "<weekend>" [location] --confirm-drafts [--venues <ids>]',
-      );
-      throw new Error(
-        "Batch outreach dispatch requires explicit draft confirmation via --confirm-drafts.",
-      );
-    }
-
     let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
 
     if (parsed.includeVenues && parsed.includeVenues.length > 0) {

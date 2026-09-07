@@ -64,11 +64,12 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
 
     if (lower === "--send") {
       mode = "send";
-    } else if (lower === "--confirm-drafts" || lower === "--confirm") {
+    } else if (lower === "--confirm-drafts") {
       confirmDrafts = true;
-    } else if (lower.startsWith("--confirm-drafts=") || lower.startsWith("--confirm=")) {
+    } else if (lower.startsWith("--confirm-drafts=")) {
       const eqIdx = arg.indexOf("=");
-      confirmDrafts = arg.slice(eqIdx + 1).toLowerCase() !== "false";
+      const val = arg.slice(eqIdx + 1).trim().toLowerCase();
+      confirmDrafts = val === "true" || val === "yes" || val === "1";
     } else if (lower === "--replies" || lower === "--check-replies") {
       mode = "replies";
     } else if (lower === "--link-gig" || lower === "--link") {
