@@ -9,7 +9,7 @@ This content used to live in Dropbox `SHARED.md` (mirrored to Google Drive so Ma
 Sonnet could read it). It is now maintained here in `web-jam-tools` as the single source of truth.
 AI-specific rules live in CLAUDE.md / AGENTS.md.
 
-Last updated: 2026-07-11.
+Last updated: 2026-08-27.
 
 ## VOICE RULES (for any email/pitch drafting task)
 
