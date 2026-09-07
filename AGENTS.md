@@ -67,6 +67,11 @@ rules and do not reconstruct them from memory or from this file.
 18. **Positive Signal Verification for Compound Inferred States & Date Math Fidelity:**
     - **Positive Signal Verification for Compound Inferred States:** Never infer state from a default or ambiguous negative flag alone (e.g. `outreachEligible: false`). Always verify the positive qualifying signal (e.g. active conversation evidence in `notes`) required by the specification. On systems like `web-jam-back`, negative flags are often unvetted defaults or permanent opt-outs rather than active alternative workflows.
     - **Endpoint Query Alignment & Date Math Fidelity:** Client-side enrichment helpers must mirror backend filtering sets (e.g. querying both `sent` and `replied` for cooldowns) and calendar-month arithmetic (`setMonth` instead of 30-day fixed duration approximations) to prevent boundary records from falling through without badges.
+19. **Fail-Closed Confirmation Guards, Design Fidelity & CLI Test Isolation:**
+    - **Fail-Closed Confirmation Guards:** Any confirmation flag (e.g. `--confirm-drafts`) must default-deny and fail closed on all non-affirmative, negative, empty, or malformed `=<value>` inputs. Only exact affirmative values (bare flag, or `=true`/`=yes`/`=1`) evaluate to confirmed. Tests must cover negative and malformed variations.
+    - **Design Alignment over Generic Aliases:** Never introduce generic or unapproved aliases (such as `--confirm`) that contradict governing design documents or re-open the conflation the explicit naming prevents.
+    - **CLI Test Filesystem Isolation:** CLI test suites running commands that produce persistent run logs, reports, or artifacts must never write to live production or user directories (`${HOME}/Dropbox/...`). Tests must isolate filesystem writes by setting `HOME` or target paths to a scoped temporary directory (`Deno.makeTempDir()`).
+    - **Zero-Cost Early Refusal:** Place prerequisite validation guards as early as possible before initiating expensive or network-bound operations.
 
 ## Opening pull requests (all WebJamApps repos)
 

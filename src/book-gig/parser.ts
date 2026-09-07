@@ -46,6 +46,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
 
   let mode: BookGigMode = "preview";
   let noOpen = false;
+  let confirmDrafts = false;
   let linkVenueName: string | undefined;
   let holdVenue: string | undefined;
   let explicitVenue: string | undefined;
@@ -63,6 +64,12 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
 
     if (lower === "--send") {
       mode = "send";
+    } else if (lower === "--confirm-drafts") {
+      confirmDrafts = true;
+    } else if (lower.startsWith("--confirm-drafts=")) {
+      const eqIdx = arg.indexOf("=");
+      const val = arg.slice(eqIdx + 1).trim().toLowerCase();
+      confirmDrafts = val === "true" || val === "yes" || val === "1";
     } else if (lower === "--replies" || lower === "--check-replies") {
       mode = "replies";
     } else if (lower === "--link-gig" || lower === "--link") {
@@ -157,6 +164,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   const resIncludes = includeVenues.length > 0 ? Array.from(new Set(includeVenues)) : undefined;
   const resExcludes = excludeVenues.length > 0 ? Array.from(new Set(excludeVenues)) : undefined;
   const resNoOpen = noOpen ? true : undefined;
+  const resConfirmDrafts = confirmDrafts ? true : undefined;
 
   if (mode === "link-gig") {
     if (!linkVenueName && positionalArgs.length > 0) {
@@ -200,6 +208,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       location,
       includeVenues: resIncludes,
       excludeVenues: resExcludes,
+      confirmDrafts: resConfirmDrafts,
       noOpen: resNoOpen,
       rawArgs: "",
     };
@@ -219,6 +228,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       location,
       includeVenues: resIncludes,
       excludeVenues: resExcludes,
+      confirmDrafts: resConfirmDrafts,
       noOpen: resNoOpen,
       rawArgs,
     };
@@ -233,6 +243,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       weekend,
       includeVenues: resIncludes,
       excludeVenues: resExcludes,
+      confirmDrafts: resConfirmDrafts,
       noOpen: resNoOpen,
       rawArgs,
     };
@@ -267,6 +278,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
         location,
         includeVenues: resIncludes,
         excludeVenues: resExcludes,
+        confirmDrafts: resConfirmDrafts,
         noOpen: resNoOpen,
         rawArgs,
       };
@@ -280,6 +292,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     location,
     includeVenues: resIncludes,
     excludeVenues: resExcludes,
+    confirmDrafts: resConfirmDrafts,
     noOpen: resNoOpen,
     rawArgs,
   };

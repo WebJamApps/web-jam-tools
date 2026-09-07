@@ -191,6 +191,7 @@ export interface ParsedBookGigArgs {
   location?: TargetLocation;
   includeVenues?: string[];
   excludeVenues?: string[];
+  confirmDrafts?: boolean;
   noOpen?: boolean;
   linkVenueName?: string;
   holdVenue?: string;
@@ -205,6 +206,7 @@ export interface BookGigResult {
   location?: TargetLocation;
   includeVenues?: string[];
   excludeVenues?: string[];
+  confirmDrafts?: boolean;
   candidates: CandidateVenue[];
   density: {
     count: number;

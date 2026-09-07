@@ -1954,7 +1954,7 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
 
   // Batch send mode (--send)
   const resultSend = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "Salem, VA"],
+    ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts"],
     mockFetch,
     mockOpener,
   );
@@ -2153,7 +2153,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 1: Send all without --venues / --skip
   const resAll = await runBookGigCli(
-    ["--send", "Oct 16-18 2026"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts"],
     mockFetch,
     mockOpener,
   );
@@ -2162,7 +2162,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 2: Send with --venues (approved subset by ID)
   const resSubsetId = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "--venues", "v1,v3"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts", "--venues", "v1,v3"],
     mockFetch,
     mockOpener,
   );
@@ -2171,7 +2171,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 3: Send with --venues (approved subset by Name)
   const resSubsetName = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "--venues", "Parkway Brewing"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts", "--venues", "Parkway Brewing"],
     mockFetch,
     mockOpener,
   );
@@ -2180,7 +2180,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 4: Send with --skip (exclude specific ID)
   const resSkip = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "--skip", "v2"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts", "--skip", "v2"],
     mockFetch,
     mockOpener,
   );
@@ -2189,7 +2189,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 5: Send with non-matching --venues
   const resNone = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "--venues", "non-existent-id"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts", "--venues", "non-existent-id"],
     mockFetch,
     mockOpener,
   );
@@ -2244,7 +2244,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
     return Promise.resolve(new Response("{}", { status: 200 }));
   };
   const resExcluded = await runBookGigCli(
-    ["--send", "Oct 16-18 2026"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts"],
     mockFetchWithExcluded,
     mockOpener,
   );
