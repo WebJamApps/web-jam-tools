@@ -2,7 +2,7 @@
 
 import type { LinkGigResult } from "./venue_link.ts";
 
-export type BookGigMode = "preview" | "send" | "replies" | "link-gig" | "hold";
+export type BookGigMode = "preview" | "send" | "replies" | "link-gig" | "hold" | "gate1";
 
 export interface TargetWeekend {
   start: string; // ISO date string (YYYY-MM-DD), usually Friday
@@ -185,6 +185,23 @@ export interface VenueHoldResult {
   message: string;
 }
 
+export interface Gate1ApprovalRecord {
+  _id?: string;
+  batchId: string;
+  weekend?: string;
+  targetWeekend?: {
+    start: string | Date;
+    end: string | Date;
+  };
+  venueIds: string[];
+  approver: string;
+  approvedAt?: string | Date;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
 export interface ParsedBookGigArgs {
   mode: BookGigMode;
   weekend?: TargetWeekend;
@@ -197,6 +214,9 @@ export interface ParsedBookGigArgs {
   holdVenue?: string;
   holdUntil?: string;
   bookedThrough?: string;
+  approver?: string;
+  notes?: string;
+  batchId?: string;
   rawArgs: string;
 }
 
@@ -218,6 +238,7 @@ export interface BookGigResult {
   repliesTracking?: RepliesTrackingResult;
   linkGig?: LinkGigResult;
   holdResult?: VenueHoldResult;
+  gate1Record?: Gate1ApprovalRecord;
   htmlPath?: string;
   reportUrl?: string;
   openedBrowser?: boolean;

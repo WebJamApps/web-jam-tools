@@ -4,9 +4,11 @@ import type {
   BatchDispatchResult,
   CheckRepliesResult,
   EmailTemplate,
+  Gate1ApprovalRecord,
   OutreachCampaignRecord,
   TargetWeekend,
 } from "./types.ts";
+import { parseTargetWeekend } from "./parser.ts";
 
 export const DEFAULT_BACKEND_URL = "https://webjamsalem.herokuapp.com";
 
@@ -277,5 +279,137 @@ export async function fetchTemplates(
   } catch (err) {
     console.warn(`[book-gig] Error fetching email templates: ${(err as Error).message}`);
     return [];
+  }
+}
+
+export interface RecordGate1ApprovalOptions extends BackendConfigOptions {
+  batchId?: string;
+  weekend: TargetWeekend | string;
+  targetWeekend?: {
+    start: string | Date;
+    end: string | Date;
+  };
+  venueIds: string[];
+  approver?: string;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Record Gate 1 target venue-set approval via POST /outreach/approval/venue-set
+ * (Authorizes ONLY the target venue set and nothing else; independent of Gate 2 copy approval).
+ */
+export async function recordGate1Approval(
+  options: RecordGate1ApprovalOptions,
+  fetchFn: typeof fetch = fetch,
+): Promise<Gate1ApprovalRecord> {
+  if (!Array.isArray(options.venueIds) || options.venueIds.length === 0) {
+    throw new Error("venueIds must be a non-empty array of venue IDs");
+  }
+
+  let weekendStr: string;
+  let targetWeekend = options.targetWeekend;
+
+  if (typeof options.weekend === "string") {
+    weekendStr = options.weekend.trim();
+    if (!targetWeekend) {
+      try {
+        const parsed = parseTargetWeekend(weekendStr);
+        weekendStr = `${parsed.start}-to-${parsed.end}`;
+        targetWeekend = { start: parsed.start, end: parsed.end };
+      } catch {
+        // preserve original string if unparseable
+      }
+    }
+  } else {
+    weekendStr = `${options.weekend.start}-to-${options.weekend.end}`;
+    if (!targetWeekend) {
+      targetWeekend = { start: options.weekend.start, end: options.weekend.end };
+    }
+  }
+
+  const batchId = (options.batchId || weekendStr).trim();
+  const approver = (options.approver || "Josh").trim();
+
+  const payload: Record<string, unknown> = {
+    batchId,
+    weekend: weekendStr,
+    venueIds: options.venueIds,
+    approver,
+  };
+
+  if (targetWeekend) {
+    payload.targetWeekend = {
+      start: targetWeekend.start instanceof Date
+        ? targetWeekend.start.toISOString()
+        : targetWeekend.start,
+      end: targetWeekend.end instanceof Date ? targetWeekend.end.toISOString() : targetWeekend.end,
+    };
+  }
+
+  if (options.notes !== undefined) {
+    payload.notes = options.notes;
+  }
+
+  if (options.metadata !== undefined) {
+    payload.metadata = options.metadata;
+  }
+
+  const { baseUrl, token } = await resolveBackendConfig(options);
+  const url = `${baseUrl}/outreach/approval/venue-set`;
+
+  try {
+    const res = await fetchFn(url, {
+      method: "POST",
+      headers: buildHeaders(token),
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Gate 1 venue-set approval returned HTTP ${res.status}: ${errText}`);
+    }
+
+    const data = await res.json();
+    return data as Gate1ApprovalRecord;
+  } catch (err) {
+    console.error(`[book-gig] Error recording Gate 1 approval: ${(err as Error).message}`);
+    throw err;
+  }
+}
+
+/**
+ * Fetch Gate 1 target venue-set approval record via GET /outreach/approval/venue-set/:batchId
+ */
+export async function fetchGate1Approval(
+  batchIdOrWeekend: string,
+  options: BackendConfigOptions = {},
+  fetchFn: typeof fetch = fetch,
+): Promise<Gate1ApprovalRecord | null> {
+  const { baseUrl, token } = await resolveBackendConfig(options);
+  const cleanId = encodeURIComponent(batchIdOrWeekend.trim());
+  const url = `${baseUrl}/outreach/approval/venue-set/${cleanId}`;
+
+  try {
+    const res = await fetchFn(url, {
+      method: "GET",
+      headers: buildHeaders(token),
+    });
+
+    if (res.status === 404) {
+      return null;
+    }
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`[book-gig] fetchGate1Approval returned HTTP ${res.status}: ${errText}`);
+      return null;
+    }
+
+    const data = await res.json();
+    return data as Gate1ApprovalRecord;
+  } catch (err) {
+    console.warn(`[book-gig] Error fetching Gate 1 approval: ${(err as Error).message}`);
+    return null;
   }
 }
