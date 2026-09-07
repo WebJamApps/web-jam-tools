@@ -353,9 +353,6 @@ export async function runBookGigCli(
 
   if (isSendMode && !parsed.confirmDrafts) {
     console.error(
-      "Error: Batch outreach dispatch requires explicit draft confirmation via --confirm-drafts.",
-    );
-    console.error(
       "Please review the rendered pitch drafts and Dark Mode HTML artifact first.",
     );
     console.error(
