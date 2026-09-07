@@ -72,6 +72,10 @@ rules and do not reconstruct them from memory or from this file.
     - **Design Alignment over Generic Aliases:** Never introduce generic or unapproved aliases (such as `--confirm`) that contradict governing design documents or re-open the conflation the explicit naming prevents.
     - **CLI Test Filesystem Isolation:** CLI test suites running commands that produce persistent run logs, reports, or artifacts must never write to live production or user directories (`${HOME}/Dropbox/...`). Tests must isolate filesystem writes by setting `HOME` or target paths to a scoped temporary directory (`Deno.makeTempDir()`).
     - **Zero-Cost Early Refusal:** Place prerequisite validation guards as early as possible before initiating expensive or network-bound operations.
+20. **Gate 1 Candidate Filtering & Approval Set Integrity:**
+    - **Fail-Closed on Unmatched Venue Filters:** When filtering candidates by explicit venue names or IDs (e.g. `--venues`), if the filter matches zero eligible candidates, the process must immediately fail closed and abort without writing an approval record. It must never silently fall back to approving the entire candidate pool.
+    - **Never Synthesize or Fabricate Approved Entities:** Never fabricate or synthesize candidate records (e.g. `{ _id, name: _id }`) from unmatched command-line arguments to bypass candidate-set membership. Every approved entity in an authoritative gate must verifiably originate from the vetted candidate set and satisfy all eligibility criteria (valid ID, active booking email, and no spacing/hold exclusions).
+    - **Align Eligibility Predicates Across Approval Gates:** The candidate eligibility predicate used at Gate 1 (`c._id && c.email && !c.isExcluded`) must strictly match the predicate enforced at Gate 2 and dispatch, so that recorded approvals never diverge from dispatchable sets.
 
 ## Opening pull requests (all WebJamApps repos)
 
