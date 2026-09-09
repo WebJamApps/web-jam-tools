@@ -111,7 +111,7 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 8. **Split out manual steps as pairs**, grouped by gate position in the dependency chain. Manual documentation / UI inspection (e.g. verifying generated Markdown/HTML in Google Chrome) and live demonstration / procedure walkthroughs (e.g. executing real-world steps with a learner or external party) are distinct verification surfaces and must be split into separate standalone pairs/issues. **Issue & Document Title Rule for Manual Steps:** Never include personal names (e.g. "Josh:") in issue titles or document titles. Issue titles must be professional, action-oriented, and role-agnostic (e.g. "Manual verification: ...", "Verification: ..."), with ownership designated exclusively by the `Josh` label or assignment, never embedded as a name prefix.
 9. **Determine the dependency chain** across the planned issues and record it. Where an issue's deliverable is a pointer — "point X at Y" — the plan **names Y concretely**, because an unnamed target hides an ordering: if Y turns out to be something another planned issue creates, the two issues are not independent, and the implementer picks the target after the chain was already declared. Where a load-bearing proof requires implementation work to obtain, sequence that proof FIRST in the dependency chain — never leave it as a late acceptance criterion whose failure would invalidate everything already built on it.
 10. **List every `Needs Design` label change as its own named item** — each removal carrying its 4-part reason.
-11. **Reconcile stale issue bodies and `Needs Design` label removals together in the same run — never separately.** Removing the `Needs Design` label and rewriting the issue's stale body sections happen in the same run — never separately (striking questions the design document answers, repointing design references, and reconciling scope against the approved plan). An issue is not done being designed while its own body still asks questions the design document has answered or points at the wrong document. Use `deno task design:stale-bodies` (`web-jam-tools#746`) to find stale sections.
+11. **Reconcile stale issue bodies and `Needs Design` label removals together in the same run — never separately.** Removing the `Needs Design` label and rewriting the issue's stale body sections happen in the same run — never separately (striking questions the design document answers, repointing design references, and reconciling scope against the approved plan). An issue is not done being designed while its own body still asks questions the design document has answered or points at the wrong document. Use `deno task design:stale-bodies` (`web-jam-tools#746`) to find stale sections, then apply both the body rewrite and the label removal via `deno task edit-issue` — never a raw `gh issue edit` (see the token-scope note under Gate 2 below).
 12. **GATE 2 — stop.** Present the plan and wait for Josh's explicit issue plan approval. No creating, editing, or labeling issues before Gate 2. Gate 2 approval of the plan authorizes the `Needs Design` label removals listed in the plan. Nothing is filed to GitHub until Gate 2 passes.
 
    **Write the issue-approval token upon Gate 2 approval:** The moment Josh explicitly approves the plan table, write the issue-approval token for the planned repo and exact titles (via `scripts/write_issue_approval_token.ts`) so subsequent `mcp__*__issue_write` and `mcp__*__sub_issue_write` calls pass `hooks/require-approval-token-on-issue-write.sh` without repetitive authorization prompts:
@@ -125,6 +125,8 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
    ```
 
    The token records the approving session's id, the target `owner/repo`, the exact approved titles, and a bounded expiry (default 4 hours) at `$HOME/.claude/state/issue-approval-token.json` (honoring `ISSUE_APPROVAL_TOKEN_PATH`).
+
+   **This token gates issue *creation* only — it does not cover editing an existing issue** (`hooks/require-approval-token-on-issue-write.sh` explicitly excludes `issue_write`'s update/edit method and a Bash `gh issue edit` call; see that hook's own header comment). Editing an existing issue — the stale-body rewrite in rule 11, or a `Needs Design` label removal — goes through `deno task edit-issue`, never a raw `gh issue edit`: a *separate* hook, `hooks/block-raw-gh-write.sh`, blocks the raw command outright and redirects to that task, independent of whether an approval token is present.
 
 ### Phase 3 — Filing (Sonnet subagent / Flash High session)
 
@@ -407,7 +409,7 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 
 ### Delegation Rules for Filing
 - Filing delegates to a subagent **only when delegating moves the work down a tier**.
-- An **Opus** design session hands filing to a **Flash High** subagent.
+- An **Opus** design session hands filing to a **Sonnet** subagent.
 - An **agy** session already running on **Flash High** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.
 
 ---

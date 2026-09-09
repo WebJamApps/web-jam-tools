@@ -822,7 +822,7 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
   );
   assertStringIncludes(
     text,
-    "- An **Opus** design session hands filing to a **Flash High** subagent.",
+    "- An **Opus** design session hands filing to a **Sonnet** subagent.",
   );
   assertStringIncludes(
     text,
