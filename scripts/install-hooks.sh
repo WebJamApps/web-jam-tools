@@ -27,8 +27,9 @@
 #    (currently "acceptEdits") in ~/.claude/settings.json — Claude Code ONLY,
 #    never agy's hooks.json, since agy has no permission-mode concept at all
 #    (docs/agy-hooks.md). This pins the session out of the "auto" mode in
-#    which hooks/opus-delegation-gate.sh withdraws its subagent exemption and
-#    refuses every Edit/Write/NotebookEdit — a defect that burned two
+#    which hooks/opus-delegation-gate.sh used to refuse every
+#    Edit/Write/NotebookEdit (web-jam-tools#965 now decides a subagent's edit
+#    by its real model instead) — a defect that burned two
 #    dispatched subagents (~93k and ~62k tokens, zero output) before nothing
 #    pinned the mode (web-jam-tools#705).
 #
@@ -187,10 +188,11 @@ AGY_ONLY_PRE_TOOL_USE_HOOKS=(
 )
 
 # permissions.defaultMode this installer keeps set in settings.json
-# (web-jam-tools#705). When the session's permission mode is "auto" (rather
-# than a deliberate mode), hooks/opus-delegation-gate.sh withdraws its
-# subagent exemption and refuses EVERY Edit/Write/NotebookEdit to a
-# git-tracked path, main thread and subagent alike — measured cost: two
+# (web-jam-tools#705). When the session's permission mode was "auto" (rather
+# than a deliberate mode), hooks/opus-delegation-gate.sh refused EVERY
+# Edit/Write/NotebookEdit to a git-tracked path, main thread and subagent
+# alike, until web-jam-tools#965 made it decide a subagent's edit by that
+# subagent's real model — measured cost before that fix: two
 # dispatched Sonnet subagents refused on their first edit, ~93k and ~62k
 # tokens burned for zero output (2026-08-22). Nothing pinned the session out
 # of the mode that triggers it, so this installer now does: it sets

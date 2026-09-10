@@ -148,8 +148,8 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
 
     // web-jam-tools#705: permissions.defaultMode is pinned to "acceptEdits"
     // in the Claude Code settings.json so a session never lands in "auto"
-    // mode, where hooks/opus-delegation-gate.sh withdraws its subagent
-    // exemption and refuses every Edit/Write/NotebookEdit.
+    // mode, where hooks/opus-delegation-gate.sh refused every
+    // Edit/Write/NotebookEdit until web-jam-tools#965.
     assertEquals(settings.permissions?.defaultMode, "acceptEdits");
 
     // web-jam-tools#345: agy hooks.json is also created and populated
