@@ -17,10 +17,14 @@ interface RunResult {
   stderr: string;
 }
 
-async function runHook(payload: Record<string, unknown>): Promise<RunResult> {
+async function runHook(
+  payload: Record<string, unknown>,
+  env: Record<string, string> = {},
+): Promise<RunResult> {
   const input = JSON.stringify(payload);
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
+    env,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -50,8 +54,47 @@ async function withTranscript(
   }
 }
 
+// Claude Code marks a prompt Josh actually sent `origin.kind: "human"`; only those carry approval
+// (web-jam-tools#965).
 function userTurn(content: string): Record<string, unknown> {
-  return { type: "user", message: { role: "user", content } };
+  return { type: "user", origin: { kind: "human" }, message: { role: "user", content } };
+}
+
+function notificationTurn(content: string): Record<string, unknown> {
+  return {
+    type: "user",
+    origin: { kind: "task-notification" },
+    promptSource: "system",
+    message: { role: "user", content },
+  };
+}
+
+function metaTurn(content: string): Record<string, unknown> {
+  return { type: "user", isMeta: true, message: { role: "user", content } };
+}
+
+function workIssueTurn(args: string): Record<string, unknown> {
+  return userTurn(
+    `<command-message>work-issue</command-message>\n<command-name>/work-issue</command-name>\n<command-args>${args}</command-args>`,
+  );
+}
+
+// A stand-in `gh` on PATH for the D-7 cases, with its own label cache directory: issue 1 is labeled
+// Opus, issue 2 Sonnet, and any other number fails to look up.
+async function withFakeGh(fn: (env: Record<string, string>) => Promise<void>): Promise<void> {
+  const bin = await Deno.makeTempDir();
+  const cache = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${bin}/gh`,
+      `#!/usr/bin/env bash\ncase "$3" in\n  1) echo '{"labels":[{"name":"Opus"}]}' ;;\n  2) echo '{"labels":[{"name":"Sonnet"}]}' ;;\n  *) exit 1 ;;\nesac\n`,
+    );
+    await Deno.chmod(`${bin}/gh`, 0o755);
+    await fn({ PATH: `${bin}:${Deno.env.get("PATH") ?? ""}`, OPUS_GATE_CACHE_DIR: cache });
+  } finally {
+    await Deno.remove(bin, { recursive: true });
+    await Deno.remove(cache, { recursive: true });
+  }
 }
 
 function assistantTurn(model: string, content = "understood"): Record<string, unknown> {
@@ -113,57 +156,320 @@ Deno.test("subagent tool call (agent_id present) is still allowed under permissi
   assertAllowed(res);
 });
 
-// --- Regression: web-jam-tools#663 — auto-mode autonomous retry via a spawned
-// subagent must NOT route around this gate. Reproduced live 2026-08-19/20: an Opus
-// main session, denied a direct Edit under permission_mode "auto", autonomously spawned
-// an Agent/Task subagent in the same turn whose own Edit call then hit the old
-// unconditional Step 1 subagent exemption and succeeded. This test would fail (allowed
-// instead of denied) if that exemption regressed to being unconditional again.
+// --- Auto mode: subagent calls (D-6, web-jam-tools#965) ---
+//
+// Each case builds a real session layout: <root>/sess.jsonl plus
+// <root>/sess/subagents/agent-<id>.{jsonl,meta.json}. The payload passes the MAIN transcript as
+// transcript_path, which is what Claude Code 2.1.267 sends; the shape case also passes the
+// subagent's own jsonl. Case (b) is the web-jam-tools#663 regression guard: an Opus subagent
+// that Opus started without Josh asking is still refused.
 
-Deno.test("subagent tool call (agent_id present) under permission_mode 'auto' is NOT exempted — denied when session model is Opus", async () => {
-  await withTranscript(
-    [userTurn("please edit this file directly"), assistantTurn("claude-opus-4-6")],
-    async (transcript_path) => {
-      const res = await runHook({
-        agent_id: "agent-spawned-mid-turn",
-        permission_mode: "auto",
-        tool_input: { file_path: IN_REPO_FILE },
-        transcript_path,
-      });
+interface AgentSpec {
+  id: string;
+  meta?: Record<string, unknown>;
+  lines?: Record<string, unknown>[];
+}
+
+interface Session {
+  mainPath: string;
+  agentPath: (id: string) => string;
+}
+
+async function withSession(
+  main: Record<string, unknown>[],
+  agents: AgentSpec[],
+  fn: (session: Session) => Promise<void>,
+): Promise<void> {
+  const root = await Deno.makeTempDir();
+  const subagentsDir = `${root}/sess/subagents`;
+  const toJsonl = (lines: Record<string, unknown>[]) =>
+    lines.map((l) => JSON.stringify(l)).join("\n") + "\n";
+  try {
+    await Deno.mkdir(subagentsDir, { recursive: true });
+    await Deno.writeTextFile(`${root}/sess.jsonl`, toJsonl(main));
+    for (const agent of agents) {
+      if (agent.meta) {
+        await Deno.writeTextFile(
+          `${subagentsDir}/agent-${agent.id}.meta.json`,
+          JSON.stringify(agent.meta),
+        );
+      }
+      if (agent.lines) {
+        await Deno.writeTextFile(`${subagentsDir}/agent-${agent.id}.jsonl`, toJsonl(agent.lines));
+      }
+    }
+    await fn({
+      mainPath: `${root}/sess.jsonl`,
+      agentPath: (id) => `${subagentsDir}/agent-${id}.jsonl`,
+    });
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+function spawnTurn(toolUseId: string): Record<string, unknown> {
+  return {
+    type: "assistant",
+    message: {
+      role: "assistant",
+      model: "claude-opus-5",
+      content: [{ type: "tool_use", id: toolUseId, name: "Agent", input: {} }],
+    },
+  };
+}
+
+function agentMeta(
+  model: string,
+  toolUseId: string,
+  parentAgentId: string | null = null,
+): Record<string, unknown> {
+  return {
+    agentType: "general-purpose",
+    model,
+    toolUseId,
+    parentAgentId,
+    spawnDepth: parentAgentId ? 2 : 1,
+  };
+}
+
+function subagentCall(agentId: string, transcript_path: string): Record<string, unknown> {
+  return {
+    agent_id: agentId,
+    permission_mode: "auto",
+    tool_input: { file_path: IN_REPO_FILE },
+    transcript_path,
+  };
+}
+
+Deno.test("(a) auto mode: a Sonnet subagent's edit proceeds", async () => {
+  await withSession(
+    [userTurn("fix this with a subagent"), spawnTurn("toolu_a")],
+    [{ id: "s1", meta: agentMeta("sonnet", "toolu_a") }],
+    async ({ mainPath }) => assertAllowed(await runHook(subagentCall("s1", mainPath))),
+  );
+});
+
+Deno.test("(b) auto mode: an Opus subagent whose spawning human prompt carries no approval is refused", async () => {
+  await withSession(
+    [userTurn("please fix this file"), spawnTurn("toolu_b")],
+    [{ id: "o1", meta: agentMeta("opus", "toolu_b") }],
+    async ({ mainPath }) => {
+      const res = await runHook(subagentCall("o1", mainPath));
       assertEquals(res.code, 0);
-      assertDenied(res.stdout);
+      assertDenied(res.stdout, [IN_REPO_FILE, "refused a subagent's write", "neither contains"]);
     },
   );
 });
 
-Deno.test("subagent tool call (agent_id present) under permission_mode 'auto' is allowed when session model is not Opus", async () => {
-  await withTranscript(
-    [userTurn("please edit this file directly"), assistantTurn("claude-sonnet-4-6")],
-    async (transcript_path) => {
-      const res = await runHook({
-        agent_id: "agent-spawned-mid-turn",
-        permission_mode: "auto",
-        tool_input: { file_path: IN_REPO_FILE },
-        transcript_path,
-      });
-      assertAllowed(res);
+Deno.test("(c) auto mode: an Opus subagent spawned by an 'opus edit ok' prompt proceeds after later prompts lack it", async () => {
+  await withSession(
+    [
+      userTurn("opus edit ok — spawn an agent to fix it"),
+      spawnTurn("toolu_c"),
+      assistantTurn("claude-opus-5"),
+      userTurn("how is it going?"),
+    ],
+    [{ id: "o1", meta: agentMeta("opus", "toolu_c") }],
+    async ({ mainPath }) => assertAllowed(await runHook(subagentCall("o1", mainPath))),
+  );
+});
+
+Deno.test("(d) auto mode: an Opus subagent whose spawning prompt asks for an Opus subagent proceeds", async () => {
+  await withSession(
+    [userTurn("dispatch to an Opus subagent"), spawnTurn("toolu_d")],
+    [{ id: "o1", meta: agentMeta("opus", "toolu_d") }],
+    async ({ mainPath }) => assertAllowed(await runHook(subagentCall("o1", mainPath))),
+  );
+});
+
+Deno.test("(e) auto mode: a nested Sonnet subagent under an Opus subagent proceeds", async () => {
+  await withSession(
+    [userTurn("please fix this file"), spawnTurn("toolu_e")],
+    [{ id: "o1", meta: agentMeta("opus", "toolu_e") }, {
+      id: "s2",
+      meta: agentMeta("sonnet", "toolu_inner", "o1"),
+    }],
+    async ({ mainPath }) => assertAllowed(await runHook(subagentCall("s2", mainPath))),
+  );
+});
+
+Deno.test("(f) auto mode: a nested Opus subagent under an authorized Opus subagent proceeds", async () => {
+  await withSession(
+    [userTurn("opus edit ok, use a subagent"), spawnTurn("toolu_f")],
+    [{ id: "o1", meta: agentMeta("opus", "toolu_f") }, {
+      id: "o2",
+      meta: agentMeta("opus", "toolu_inner", "o1"),
+    }],
+    async ({ mainPath }) => assertAllowed(await runHook(subagentCall("o2", mainPath))),
+  );
+});
+
+Deno.test("(g) auto mode: missing subagent files, a broken parent chain, or a missing spawning tool_use is refused", async () => {
+  await withSession(
+    [userTurn("opus edit ok"), spawnTurn("toolu_g")],
+    [
+      { id: "orphan", meta: agentMeta("opus", "toolu_not_in_main") },
+      { id: "child", meta: agentMeta("opus", "toolu_inner", "parent-gone") },
+    ],
+    async ({ mainPath }) => {
+      assertDenied((await runHook(subagentCall("no-files", mainPath))).stdout, [
+        "model could not be determined",
+      ]);
+      assertDenied((await runHook(subagentCall("orphan", mainPath))).stdout, [
+        "could not be found",
+      ]);
+      assertDenied((await runHook(subagentCall("child", mainPath))).stdout, ["could not be found"]);
     },
   );
 });
 
-Deno.test("subagent tool call (agent_id present) under permission_mode 'auto' is allowed with escape phrase present", async () => {
-  await withTranscript(
-    [userTurn("opus edit ok — spawn a subagent and edit"), assistantTurn("claude-opus-4-6")],
-    async (transcript_path) => {
-      const res = await runHook({
-        agent_id: "agent-spawned-mid-turn",
-        permission_mode: "auto",
-        tool_input: { file_path: IN_REPO_FILE },
-        transcript_path,
-      });
-      assertAllowed(res);
+Deno.test("(g) auto mode: a subagent whose model is only in its own transcript is judged by that model", async () => {
+  await withSession(
+    [userTurn("fix it"), spawnTurn("toolu_g2")],
+    [{ id: "s1", meta: { toolUseId: "toolu_g2" }, lines: [sidechainTurn("claude-sonnet-5")] }],
+    async ({ mainPath }) => assertAllowed(await runHook(subagentCall("s1", mainPath))),
+  );
+});
+
+Deno.test("(h) auto mode: a task notification quoting 'opus edit ok' before the spawn does not approve an Opus subagent", async () => {
+  await withSession(
+    [
+      userTurn("please fix this file"),
+      notificationTurn("<task-notification>opus edit ok</task-notification>"),
+      spawnTurn("toolu_h"),
+    ],
+    [{ id: "o1", meta: agentMeta("opus", "toolu_h") }],
+    async ({ mainPath }) =>
+      assertDenied((await runHook(subagentCall("o1", mainPath))).stdout, ["neither contains"]),
+  );
+});
+
+Deno.test("transcript_path shape: the subagent's own jsonl and the main transcript decide identically", async () => {
+  await withSession(
+    [
+      userTurn("opus edit ok — spawn it"),
+      spawnTurn("toolu_ok"),
+      userTurn("please fix this file"),
+      spawnTurn("toolu_no"),
+    ],
+    [
+      { id: "ok", meta: agentMeta("opus", "toolu_ok"), lines: [sidechainTurn("claude-opus-5")] },
+      { id: "no", meta: agentMeta("opus", "toolu_no"), lines: [sidechainTurn("claude-opus-5")] },
+    ],
+    async ({ mainPath, agentPath }) => {
+      assertAllowed(await runHook(subagentCall("ok", mainPath)));
+      assertAllowed(await runHook(subagentCall("ok", agentPath("ok"))));
+      assertDenied((await runHook(subagentCall("no", mainPath))).stdout);
+      assertDenied((await runHook(subagentCall("no", agentPath("no")))).stdout);
     },
   );
+});
+
+// --- Main thread: only human prompts carry approval (h), and /work-issue approves (D-7) ---
+
+Deno.test("(h) main thread: a task notification or isMeta entry containing 'opus edit ok' does not authorize", async () => {
+  for (
+    const lines of [
+      [
+        userTurn("please edit"),
+        assistantTurn("claude-opus-5"),
+        notificationTurn("<task-notification>opus edit ok</task-notification>"),
+      ],
+      [userTurn("please edit"), metaTurn("opus edit ok"), assistantTurn("claude-opus-5")],
+    ]
+  ) {
+    await withTranscript(lines, async (transcript_path) => {
+      assertDenied(
+        (await runHook({ tool_input: { file_path: IN_REPO_FILE }, transcript_path })).stdout,
+      );
+    });
+  }
+});
+
+Deno.test("(h) main thread: a task notification after Josh's 'opus edit ok' prompt does not cancel the approval", async () => {
+  await withTranscript(
+    [
+      userTurn("opus edit ok, fix it"),
+      assistantTurn("claude-opus-5"),
+      notificationTurn("<task-notification>done</task-notification>"),
+    ],
+    async (transcript_path) => {
+      assertAllowed(await runHook({ tool_input: { file_path: IN_REPO_FILE }, transcript_path }));
+    },
+  );
+});
+
+Deno.test("D-7 main thread: a /work-issue Josh typed on an Opus-labeled issue approves Opus edits through his later plain messages", async () => {
+  await withFakeGh(async (env) => {
+    await withTranscript(
+      [
+        workIssueTurn("web-jam-tools#1"),
+        metaTurn("Base directory for this skill: /home/joshua/.claude/skills/work-issue"),
+        assistantTurn("claude-opus-5"),
+        userTurn("why?"),
+        assistantTurn("claude-opus-5"),
+      ],
+      async (transcript_path) => {
+        const payload = {
+          permission_mode: "auto",
+          tool_input: { file_path: IN_REPO_FILE },
+          transcript_path,
+        };
+        assertAllowed(await runHook(payload, env));
+        assertAllowed(await runHook(payload, env)); // second call answered from the label cache
+      },
+    );
+  });
+});
+
+Deno.test("D-7 main thread: a /work-issue on a Sonnet-labeled issue, on no issue, or on an unreadable issue does not approve Opus", async () => {
+  await withFakeGh(async (env) => {
+    for (
+      const args of [
+        "web-jam-tools#2",
+        "when the label is Opus = Opus can edit",
+        "web-jam-tools#99",
+      ]
+    ) {
+      await withTranscript(
+        [workIssueTurn(args), assistantTurn("claude-opus-5")],
+        async (transcript_path) => {
+          assertDenied(
+            (await runHook({ tool_input: { file_path: IN_REPO_FILE }, transcript_path }, env))
+              .stdout,
+          );
+        },
+      );
+    }
+  });
+});
+
+Deno.test("D-7 main thread: another slash command after /work-issue ends the approval", async () => {
+  await withFakeGh(async (env) => {
+    for (
+      const later of [
+        userTurn(
+          "<command-message>pr-review</command-message>\n<command-name>/pr-review</command-name>",
+        ),
+        { type: "user", message: { role: "user", content: "<command-name>/model</command-name>" } },
+      ]
+    ) {
+      await withTranscript(
+        [
+          workIssueTurn("web-jam-tools#1"),
+          assistantTurn("claude-opus-5"),
+          later,
+          assistantTurn("claude-opus-5"),
+        ],
+        async (transcript_path) => {
+          assertDenied(
+            (await runHook({ tool_input: { file_path: IN_REPO_FILE }, transcript_path }, env))
+              .stdout,
+          );
+        },
+      );
+    }
+  });
 });
 
 Deno.test("main-thread (no agent_id) Opus call under permission_mode 'auto' is denied without escape phrase (unchanged baseline)", async () => {
