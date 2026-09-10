@@ -32,7 +32,6 @@ import { checkIssueApprovalToken, loadToken } from "../hooks/lib/check_issue_app
 import {
   checkTokenWriteAuthorization,
   filingSkillInvoked,
-  MAX_AUTHORIZING_USER_TURNS,
   nonFilingSlashCommandInvoked,
   tailIsCurrentlySidechain,
 } from "../hooks/lib/check_token_write_authorization.ts";
@@ -690,9 +689,52 @@ Deno.test("filingSkillInvoked: a <command-name> element that is not the turn's o
   );
   // A non-filing skill's wrapper is not a filing invocation.
   assertEquals(filingSkillInvoked(WORK_ISSUE_WRAPPER), null);
-  // Not the wrapper element at all.
-  assertEquals(filingSkillInvoked("<command-message>file-issue</command-message>"), null);
-  assertEquals(filingSkillInvoked("<command-name>file-issue</command-name>"), null);
+});
+
+Deno.test("filingSkillInvoked: recognizes a <command-name> element with no leading slash, and a lone <command-message> with no <command-name> at all (web-jam-tools#956)", () => {
+  // A live transcript has carried the invoked skill's name in <command-name> without its leading
+  // `/`, and separately in a <command-message> with no <command-name> element present at all — both
+  // are the surface's own stored form of a real invocation, not prose.
+  assertEquals(filingSkillInvoked("<command-name>/design-issue</command-name>"), "design-issue");
+  assertEquals(filingSkillInvoked("<command-name>design-issue</command-name>"), "design-issue");
+  assertEquals(
+    filingSkillInvoked("<command-message>design-issue</command-message>"),
+    "design-issue",
+  );
+  assertEquals(filingSkillInvoked("<command-name>/file-issue</command-name>"), "file-issue");
+  assertEquals(filingSkillInvoked("<command-name>file-issue</command-name>"), "file-issue");
+  assertEquals(filingSkillInvoked("<command-message>file-issue</command-message>"), "file-issue");
+});
+
+Deno.test("filingSkillInvoked: one case per literal acceptance-criterion string, recognized (web-jam-tools#956)", () => {
+  assertEquals(filingSkillInvoked("<command-name>/design-issue</command-name>"), "design-issue");
+  assertEquals(filingSkillInvoked("<command-name>design-issue</command-name>"), "design-issue");
+  assertEquals(
+    filingSkillInvoked("<command-message>design-issue</command-message>"),
+    "design-issue",
+  );
+  assertEquals(filingSkillInvoked("<command-name>/file-issue</command-name>"), "file-issue");
+  assertEquals(filingSkillInvoked("<command-name>file-issue</command-name>"), "file-issue");
+  assertEquals(filingSkillInvoked("/design-issue"), "design-issue");
+  assertEquals(
+    filingSkillInvoked("/design-issue https://github.com/WebJamApps/web-jam-tools/issues/939"),
+    "design-issue",
+  );
+  assertEquals(filingSkillInvoked("/file-issue"), "file-issue");
+  assertEquals(
+    filingSkillInvoked("file an issue for the D-51 run report change we just agreed"),
+    "file-issue",
+  );
+  assertEquals(filingSkillInvoked("open an issue for this"), "file-issue");
+  assertEquals(filingSkillInvoked("draft an issue for the parker bug"), "file-issue");
+});
+
+Deno.test("filingSkillInvoked: one case per literal acceptance-criterion string, NOT recognized (web-jam-tools#956)", () => {
+  assertEquals(filingSkillInvoked("can you file an issue later"), null);
+  assertEquals(filingSkillInvoked("we should open an issue about this someday"), null);
+  assertEquals(filingSkillInvoked("what does /design-issue do"), null);
+  assertEquals(filingSkillInvoked("the design-issue skill is confusing"), null);
+  assertEquals(filingSkillInvoked(""), null);
 });
 
 Deno.test("nonFilingSlashCommandInvoked: recognizes the wrapper form so a wrapped non-filing skill still ends the authorization scope (web-jam-tools#920)", () => {
@@ -777,13 +819,14 @@ Deno.test("checkTokenWriteAuthorization: refuses when an intervening non-filing 
   assert(result.reason?.includes("different skill or command (/work-issue) was invoked"));
 });
 
-Deno.test("checkTokenWriteAuthorization: refuses when filing skill invocation is older than MAX_AUTHORIZING_USER_TURNS turns", () => {
+Deno.test("checkTokenWriteAuthorization: an invocation more than 20 user turns earlier in the same session still mints the token (web-jam-tools#956)", () => {
   const entries: TranscriptEntry[] = [
     { type: "user", message: { role: "user", content: "/file-issue old filing" } },
     { type: "assistant", message: { role: "assistant", content: "filed old issue" } },
   ];
-  // Add MAX_AUTHORIZING_USER_TURNS (20) subsequent user turns with ordinary chat
-  for (let i = 0; i < MAX_AUTHORIZING_USER_TURNS; i++) {
+  // Add well over 20 subsequent user turns of ordinary chat — a long /design-issue run settling
+  // decisions before filing at the end routinely does this, and none of it is a scope-ending event.
+  for (let i = 0; i < 30; i++) {
     entries.push({
       type: "user",
       message: { role: "user", content: `unrelated chat message ${i + 1}` },
@@ -799,11 +842,11 @@ Deno.test("checkTokenWriteAuthorization: refuses when filing skill invocation is
     ownConversationId: "sess-1",
     isSubagentInvocation: false,
   });
-  assertEquals(result.ok, false);
-  assert(result.reason?.includes(`within the last ${MAX_AUTHORIZING_USER_TURNS} user turns`));
+  assertEquals(result.ok, true);
+  assertEquals(result.skill, "file-issue");
 });
 
-Deno.test("checkTokenWriteAuthorization: succeeds when filing skill invocation is within MAX_AUTHORIZING_USER_TURNS turns", () => {
+Deno.test("checkTokenWriteAuthorization: succeeds when filing skill invocation is within 20 turns (unchanged short-session case)", () => {
   const entries: TranscriptEntry[] = [
     { type: "user", message: { role: "user", content: "/design-issue plan the thing" } },
     { type: "assistant", message: { role: "assistant", content: "here is research" } },
