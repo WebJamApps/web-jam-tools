@@ -126,7 +126,7 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 
    The token records the approving session's id, the target `owner/repo`, the exact approved titles, and a bounded expiry (default 4 hours) at `$HOME/.claude/state/issue-approval-token.json` (honoring `ISSUE_APPROVAL_TOKEN_PATH`).
 
-   **This token gates issue *creation* only — it does not cover editing an existing issue** (`hooks/require-approval-token-on-issue-write.sh` explicitly excludes `issue_write`'s update/edit method and a Bash `gh issue edit` call; see that hook's own header comment). Editing an existing issue — the stale-body rewrite in rule 11, or a `Needs Design` label removal — goes through `deno task edit-issue`, never a raw `gh issue edit`: a *separate* hook, `hooks/block-raw-gh-write.sh`, blocks the raw command outright and redirects to that task, independent of whether an approval token is present.
+   **This token gates issue *creation* and sub-issue *linking* (`sub_issue_write`'s `add` method) only — it does not cover editing an existing issue** (`hooks/require-approval-token-on-issue-write.sh` explicitly excludes `issue_write`'s update/edit method and a Bash `gh issue edit` call; see that hook's own header comment). Editing an existing issue — the stale-body rewrite in rule 11, or a `Needs Design` label removal — goes through `deno task edit-issue`, never a raw `gh issue edit`: a *separate* hook, `hooks/block-raw-gh-write.sh`, blocks the raw command outright and redirects to that task, independent of whether an approval token is present.
 
 ### Phase 3 — Filing (Sonnet subagent / Flash High session)
 
