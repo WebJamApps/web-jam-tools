@@ -134,9 +134,13 @@ that's what following this skill prevents.
 9. **Deliverable-First Body Shape (What this builds).** Open the issue body directly with a section
    titled `## What this builds` carrying a 1-2 sentence description of what is being built, immediately
    followed by a numbered list of what it does — no history preamble, conversation background, or past context.
-10. **Set Native Priority Field via MCP, Never via `gh`.** Set the native `Priority` field (`Urgent`,
+10. **Set Native Priority Field via MCP, Never via `gh` — Then Verify It by Reading It Back.** Set the native `Priority` field (`Urgent`,
     `High`, `Medium`, `Low`) via GitHub MCP `issue_write` → `issue_fields` (or `set_issue_field`, or `scripts/create-issue.ts --priority <Level>`). `gh`
-    CLI cannot set native GitHub project fields; never attempt to set native Priority via bare `gh`.
+    CLI cannot set native GitHub project fields; never attempt to set native Priority via bare `gh` — and `gh api graphql` cannot even read one under the pinned PAT (`INSUFFICIENT_SCOPES ... requires ... read:project`); that error means the wrong tool was used, not that Priority is unverifiable. The GitHub MCP server authenticates separately and reads/writes the field without difficulty.
+    - **A write response is never confirmation.** After the `issue_write` call, read back the filed issue's Priority — `mcp__claude_ai_GitHub_MCP__issue_read` for the one issue this run filed, or `mcp__claude_ai_GitHub_MCP__list_issues` (`fields: ["number","title","field_values"]`) — and compare it against the value set. Only that read confirms the field landed.
+    - **Missing or mismatched → set, then re-read.** If the read-back shows Priority missing or different from what was intended, set it again and re-read to confirm before reporting.
+    - **Report it, don't report success over it.** A missing or mismatched Priority is reported to Josh explicitly — citing the issue as `repo#number "title"` with the expected and actual values — and the run does not report the filing as complete while it is unverified.
+    - **A failed read-back is reported, not silently dropped or turned into a question.** If the read-back itself cannot be performed (the MCP call errors, times out, or returns unparseable data), say so plainly, name what could not be checked, and do not report success.
 11. **Require a `## How to test locally` Section.** Every issue body filed must include a `## How to test locally` section sitting between `## What this builds` and `## Acceptance criteria`:
     - Carries the exact commands with their working directory and expected result, plus the one check that exercises the change itself rather than merely running the suite.
     - Pure documentation issues are exempt (a pure documentation issue changes prose and nothing else: `docs/`, a README, or a comment block; note that a `SKILL.md` change does NOT qualify as pure documentation because skill bodies are behaviour and tested in CI).
