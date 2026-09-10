@@ -31,13 +31,6 @@ export const AUTHORIZING_FILING_SKILLS = ["design-issue", "file-issue"] as const
 export type FilingSkill = typeof AUTHORIZING_FILING_SKILLS[number];
 
 /**
- * Maximum number of own-session user turns to scan backward for an authorizing filing skill.
- * Prevents a filing skill invocation early in a long session from unboundedly authorizing token
- * writes hours later during unrelated chat (Must Fix 2 on web-jam-tools#866).
- */
-export const MAX_AUTHORIZING_USER_TURNS = 20;
-
-/**
  * Claude Code's stored form of a slash-command invocation (web-jam-tools#920). The surface does not
  * record the user's keystrokes as the bare text `/file-issue`; it records a user turn whose whole
  * content is an invocation wrapper:
@@ -49,13 +42,30 @@ export const MAX_AUTHORIZING_USER_TURNS = 20;
  * follow). Verified live on 2026-09-05 in session 26d83a7a-6a81-41c8-8729-45ec0e75348b, where a
  * genuine `/file-issue` was refused a token because that text opens with `<` rather than `/`.
  *
+ * The leading `/` inside `<command-name>` is optional (web-jam-tools#956): a live transcript can
+ * carry either `<command-name>/file-issue</command-name>` or `<command-name>file-issue</command-name>`
+ * for the same real invocation, and only recognizing the slashed form left the bare-name form
+ * invisible the same way the pre-#920 code left the whole wrapper invisible.
+ *
  * Anchored at the START of the trimmed text on purpose, exactly like the bare slash form: this is
  * the same mention-vs-use distinction. Prose that quotes a `<command-name>` element mid-sentence
  * (this doc comment included, were it ever a user turn) is discussing the wrapper, not invoking
  * anything, and must not authorize — nor terminate — anything.
  */
-const CLAUDE_CODE_INVOCATION_WRAPPER =
-  /^(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\s*\/([a-zA-Z0-9_-]+)\s*<\/command-name>/;
+const CLAUDE_CODE_COMMAND_NAME_WRAPPER =
+  /^(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\s*\/?([a-zA-Z0-9_-]+)\s*<\/command-name>/;
+
+/**
+ * Fallback form of the wrapper above, for a transcript entry whose `<command-name>` element is
+ * missing and only `<command-message>` carries the invoked skill's name (web-jam-tools#956). Kept as
+ * a separate regex rather than folding into CLAUDE_CODE_COMMAND_NAME_WRAPPER above. This regex has
+ * no end anchor, so on its own it also matches a `<command-message>` followed by anything —
+ * including a `<command-name>` element the pattern above rejected. What keeps a well-formed wrapper
+ * on its `<command-name>` element is the ORDER of the checks in slashCommandFromInvocationWrapper:
+ * CLAUDE_CODE_COMMAND_NAME_WRAPPER is tried first, and this fallback runs only when it does not match.
+ */
+const CLAUDE_CODE_COMMAND_MESSAGE_ONLY_WRAPPER =
+  /^<command-message>\s*\/?([a-zA-Z0-9_-]+)\s*<\/command-message>/;
 
 /**
  * Returns the slash command name (lowercased, without its leading `/`) when `text` IS a Claude Code
@@ -65,8 +75,12 @@ const CLAUDE_CODE_INVOCATION_WRAPPER =
  * instead of fixing it (web-jam-tools#920).
  */
 export function slashCommandFromInvocationWrapper(text: string): string | null {
-  const match = text.trim().match(CLAUDE_CODE_INVOCATION_WRAPPER);
-  return match ? match[1].toLowerCase() : null;
+  const trimmed = text.trim();
+  const nameMatch = trimmed.match(CLAUDE_CODE_COMMAND_NAME_WRAPPER);
+  if (nameMatch) return nameMatch[1].toLowerCase();
+  const messageMatch = trimmed.match(CLAUDE_CODE_COMMAND_MESSAGE_ONLY_WRAPPER);
+  if (messageMatch) return messageMatch[1].toLowerCase();
+  return null;
 }
 
 /**
@@ -197,11 +211,13 @@ export interface TokenWriteAuthorizationResult {
  *
  * Scans the transcript BACKWARD (most recent first) for the first own-session user turn
  * (isOwnSessionUserTurnBoundary — already excludes another conversation's/subagent's entries) that
- * invokes /design-issue or /file-issue, bounded by two constraints:
- * 1. Scope-ending event: Any intervening non-filing slash command (/work-issue, etc.) terminates
- *    authorization immediately, preventing cross-skill leaks.
- * 2. Turn bound: The scan looks at most MAX_AUTHORIZING_USER_TURNS (20) user turns back,
- *    preventing an early filing skill invocation from authorizing writes in unrelated later chat.
+ * invokes /design-issue or /file-issue. The scan is bounded only by one thing — a scope-ending
+ * event: any intervening non-filing slash command (/work-issue, etc.) terminates authorization
+ * immediately, preventing cross-skill leaks. There is no separate turn-count cap (web-jam-tools#956
+ * removed the earlier 20-turn window): the search covers this session's own transcript in full,
+ * since a long `/design-issue` run can settle decisions over many turns before filing at the end,
+ * and the token this check gates is already bound to this session id and carries its own bounded
+ * TTL — a second, shorter expiry here only broke the runs it exists to serve.
  */
 export function checkTokenWriteAuthorization(
   ctx: TokenWriteAuthorizationContext,
@@ -222,14 +238,9 @@ export function checkTokenWriteAuthorization(
     };
   }
 
-  let userTurnsScanned = 0;
   for (let i = ctx.entries.length - 1; i >= 0; i--) {
     const entry = ctx.entries[i];
     if (!isOwnSessionUserTurnBoundary(entry, ctx.ownConversationId)) continue;
-    userTurnsScanned++;
-    if (userTurnsScanned > MAX_AUTHORIZING_USER_TURNS) {
-      break;
-    }
     const text = extractEntryText(entry);
     const otherCmd = nonFilingSlashCommandInvoked(text);
     if (otherCmd) {
@@ -246,7 +257,7 @@ export function checkTokenWriteAuthorization(
   return {
     ok: false,
     reason:
-      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or "file an issue"/"open an issue"/"draft an issue"), found within the last ${MAX_AUTHORIZING_USER_TURNS} user turns in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
+      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or "file an issue"/"open an issue"/"draft an issue"), found anywhere in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
   };
 }
 
