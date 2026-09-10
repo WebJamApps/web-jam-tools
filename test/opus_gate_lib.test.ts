@@ -1,34 +1,53 @@
 // opus_gate_lib.test.ts — web-jam-tools#965
 //
 // Unit tests for hooks/lib/opus_gate.ts (design decisions D-6 and D-7). Files are supplied through
-// an in-memory ReadText so every path the gate reads is explicit; the CLI cases at the end run the
-// module for real. End-to-end cases through the shell hook live in opus_delegation_gate_hook.test.ts.
+// an in-memory ReadText and labels through an in-memory LabelLookup, so every input the gate reads
+// is explicit; the gh and CLI cases at the end run the real code. End-to-end cases through the shell
+// hook live in opus_delegation_gate_hook.test.ts.
 
 import { assert, assertEquals } from "@std/assert";
 import {
   approvesOpusSubagent,
   asksForOpusSubagent,
+  createLabelLookup,
   decide,
   decideMainThreadEdit,
   decideSubagentEdit,
   findSpawningHumanPrompt,
   isOpusModel,
+  type IssueRef,
+  LABEL_CACHE_TTL_MS,
+  type LabelLookup,
+  parseIssueRef,
+  parseLabelsJson,
   type ReadText,
   readTextOrNull,
   resolveSessionFiles,
   resolveSubagentModel,
+  runGhLabels,
   slashCommandOf,
   workIssueApprovalActive,
+  workIssueArgs,
 } from "../hooks/lib/opus_gate.ts";
 import { extractEntryText, type TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
 
 const MAIN = "/p/sess.jsonl";
 const SUBAGENTS = "/p/sess/subagents";
 const FILES = { mainTranscriptPath: MAIN, subagentsDir: SUBAGENTS };
-const WORK_ISSUE =
-  "<command-message>work-issue</command-message>\n<command-name>/work-issue</command-name>\n<command-args>web-jam-tools#965</command-args>";
+
+function workIssue(args: string): string {
+  return `<command-message>work-issue</command-message>\n<command-name>/work-issue</command-name>\n<command-args>${args}</command-args>`;
+}
+
+// Issue 1 is Opus-labeled, 2 Sonnet-labeled, 3 Fable-labeled; anything else fails to look up.
+const OPUS_ISSUE = workIssue("web-jam-tools#1");
+const SONNET_ISSUE = workIssue("web-jam-tools#2");
 const PR_REVIEW =
   "<command-message>pr-review</command-message>\n<command-name>/pr-review</command-name>";
+
+const labels: LabelLookup = (ref) =>
+  ({ 1: ["Opus", "Bug"], 2: ["Sonnet"], 3: ["Fable"] } as Record<number, string[]>)[ref.number] ??
+    null;
 
 function human(text: string): TranscriptEntry {
   return { type: "user", origin: { kind: "human" }, message: { role: "user", content: text } };
@@ -178,58 +197,180 @@ Deno.test("findSpawningHumanPrompt: depth-1 agent, nested agent, and every broke
   );
 });
 
-// --- slash commands and D-7 ---
+// --- slash commands, /work-issue arguments and issue references ---
 
 Deno.test("slashCommandOf: wrapper form, bare form, and prose", () => {
-  assertEquals(slashCommandOf(WORK_ISSUE), "work-issue");
+  assertEquals(slashCommandOf(OPUS_ISSUE), "work-issue");
   assertEquals(slashCommandOf("/work-issue web-jam-tools#965"), "work-issue");
   assertEquals(slashCommandOf("please run work-issue"), null);
 });
 
-Deno.test("workIssueApprovalActive: a human /work-issue stays active through plain messages until another slash command", () => {
+Deno.test("workIssueArgs: wrapper <command-args>, bare /work-issue text, and none", () => {
+  assertEquals(workIssueArgs(workIssue(" JaMmusic#12 ")), "JaMmusic#12");
+  assertEquals(workIssueArgs("/work-issue web-jam-back#7 please"), "web-jam-back#7 please");
+  assertEquals(workIssueArgs("<command-name>/work-issue</command-name>"), "");
+});
+
+Deno.test("parseIssueRef: URL, Owner/Repo#N, Repo#N, and prose with no issue", () => {
+  assertEquals(parseIssueRef("https://github.com/WebJamApps/web-jam-tools/issues/965"), {
+    repo: "WebJamApps/web-jam-tools",
+    number: 965,
+  });
+  assertEquals(parseIssueRef("WebJamApps/JaMmusic#1352"), {
+    repo: "WebJamApps/JaMmusic",
+    number: 1352,
+  });
+  assertEquals(parseIssueRef("web-jam-back#1086 now"), {
+    repo: "WebJamApps/web-jam-back",
+    number: 1086,
+  });
+  assertEquals(parseIssueRef("when the label is Opus = Opus can edit"), null);
+  assertEquals(parseIssueRef(""), null);
+});
+
+// --- labels: gh output, cache, live gh ---
+
+Deno.test("parseLabelsJson: gh --json labels output, and anything else", () => {
+  assertEquals(parseLabelsJson('{"labels":[{"name":"Opus"},{"name":"Bug"},{}]}'), ["Opus", "Bug"]);
+  assertEquals(parseLabelsJson('{"labels":null}'), null);
+  assertEquals(parseLabelsJson("not json"), null);
+});
+
+Deno.test("createLabelLookup: reuses a fresh result, refetches a stale or unreadable one, never caches a failure", () => {
+  const store: Record<string, string> = {};
+  let clock = 1_000;
+  const calls: IssueRef[] = [];
+  let answer: string[] | null = ["Opus"];
+  const lookup = createLabelLookup({
+    cacheDir: "/cache",
+    now: () => clock,
+    run: (ref) => {
+      calls.push(ref);
+      return answer;
+    },
+    read: (path) => store[path] ?? null,
+    write: (path, text) => {
+      store[path] = text;
+    },
+  });
+  const ref = { repo: "WebJamApps/web-jam-tools", number: 965 };
+
+  assertEquals(lookup(ref), ["Opus"]);
+  assertEquals(Object.keys(store), ["/cache/WebJamApps__web-jam-tools__965.json"]);
+  assertEquals(lookup(ref), ["Opus"]);
+  assertEquals(calls.length, 1);
+
+  clock += LABEL_CACHE_TTL_MS;
+  answer = ["Sonnet"];
+  assertEquals(lookup(ref), ["Sonnet"]);
+  assertEquals(calls.length, 2);
+
+  store["/cache/WebJamApps__web-jam-tools__965.json"] = "garbage";
+  answer = null;
+  assertEquals(lookup(ref), null);
+  assertEquals(store["/cache/WebJamApps__web-jam-tools__965.json"], "garbage");
+  assertEquals(calls.length, 3);
+
+  const throwingWrite = createLabelLookup({
+    cacheDir: "/cache",
+    now: () => clock,
+    run: () => ["Opus"],
+    read: () => null,
+    write: () => {
+      throw new Error("read-only");
+    },
+  });
+  assertEquals(throwingWrite(ref), ["Opus"]);
+});
+
+Deno.test("runGhLabels: reads labels from gh, and returns null when gh fails", async () => {
+  const bin = await Deno.makeTempDir();
+  const originalPath = Deno.env.get("PATH") ?? "";
+  try {
+    await Deno.writeTextFile(
+      `${bin}/gh`,
+      '#!/usr/bin/env bash\nif [ "$3" = "1" ]; then echo \'{"labels":[{"name":"Opus"}]}\'; else exit 1; fi\n',
+    );
+    await Deno.chmod(`${bin}/gh`, 0o755);
+    Deno.env.set("PATH", `${bin}:${originalPath}`);
+    assertEquals(runGhLabels({ repo: "WebJamApps/web-jam-tools", number: 1 }), ["Opus"]);
+    assertEquals(runGhLabels({ repo: "WebJamApps/web-jam-tools", number: 2 }), null);
+  } finally {
+    Deno.env.set("PATH", originalPath);
+    await Deno.remove(bin, { recursive: true });
+  }
+});
+
+// --- D-7 ---
+
+Deno.test("workIssueApprovalActive: only a human /work-issue on an Opus- or Fable-labeled issue approves, until another slash command", () => {
   assert(
     workIssueApprovalActive([
-      human(WORK_ISSUE),
+      human(OPUS_ISSUE),
       metaEntry("Base directory for this skill"),
       human("why?"),
-    ]),
+    ], labels),
   );
-  assert(!workIssueApprovalActive([human(WORK_ISSUE), human(PR_REVIEW)]));
+  assert(workIssueApprovalActive([human(workIssue("web-jam-tools#3"))], labels));
+  assert(!workIssueApprovalActive([human(SONNET_ISSUE)], labels));
+  assert(!workIssueApprovalActive([human(workIssue("web-jam-tools#99"))], labels));
   assert(
-    !workIssueApprovalActive([human(WORK_ISSUE), {
-      type: "user",
-      message: { role: "user", content: "<command-name>/model</command-name>" },
-    }]),
+    !workIssueApprovalActive([human(workIssue("when the label is Opus = Opus can edit"))], labels),
   );
-  assert(!workIssueApprovalActive([metaEntry(WORK_ISSUE)]));
+  assert(!workIssueApprovalActive([human(OPUS_ISSUE), human(PR_REVIEW)], labels));
+  assert(
+    !workIssueApprovalActive(
+      [human(OPUS_ISSUE), {
+        type: "user",
+        message: { role: "user", content: "<command-name>/model</command-name>" },
+      }],
+      labels,
+    ),
+  );
+  assert(!workIssueApprovalActive([metaEntry(OPUS_ISSUE)], labels));
   assert(
     !workIssueApprovalActive([
       notification("<task-notification>done</task-notification>"),
       human("hello"),
-    ]),
+    ], labels),
   );
-  assert(!workIssueApprovalActive([]));
+  assert(!workIssueApprovalActive([], labels));
 });
 
 // --- decisions ---
 
 Deno.test("decideMainThreadEdit: every outcome", () => {
   const at = (entries: TranscriptEntry[]) => reader({ [MAIN]: jsonl(entries) });
+  const noLookup: LabelLookup = () => {
+    throw new Error("the label lookup must not run");
+  };
 
-  assertEquals(decideMainThreadEdit("", reader({})).decision, "deny");
-  assert(decideMainThreadEdit(MAIN, reader({})).why.includes("could not be read"));
-  assert(decideMainThreadEdit(MAIN, at([human("hi")])).why.includes("could not be determined"));
+  assertEquals(decideMainThreadEdit("", reader({}), noLookup).decision, "deny");
+  assert(decideMainThreadEdit(MAIN, reader({}), noLookup).why.includes("could not be read"));
+  assert(
+    decideMainThreadEdit(MAIN, at([human("hi")]), noLookup).why.includes("could not be determined"),
+  );
   assertEquals(
-    decideMainThreadEdit(MAIN, at([human("hi"), assistant("claude-sonnet-5")])).decision,
+    decideMainThreadEdit(MAIN, at([human("hi"), assistant("claude-sonnet-5")]), noLookup).decision,
     "allow",
   );
   assertEquals(
-    decideMainThreadEdit(MAIN, at([human("opus edit ok"), assistant("claude-opus-5")])).decision,
+    decideMainThreadEdit(
+      MAIN,
+      at([human(OPUS_ISSUE), human("opus edit ok"), assistant("claude-opus-5")]),
+      noLookup,
+    )
+      .decision,
     "allow",
   );
   assertEquals(
-    decideMainThreadEdit(MAIN, at([human(WORK_ISSUE), assistant("claude-opus-5")])).decision,
+    decideMainThreadEdit(MAIN, at([human(OPUS_ISSUE), assistant("claude-opus-5")]), labels)
+      .decision,
     "allow",
+  );
+  assertEquals(
+    decideMainThreadEdit(MAIN, at([human(SONNET_ISSUE), assistant("claude-opus-5")]), labels),
+    { decision: "deny", kind: "main", why: "" },
   );
   assertEquals(
     decideMainThreadEdit(
@@ -239,13 +380,14 @@ Deno.test("decideMainThreadEdit: every outcome", () => {
         assistant("claude-opus-5"),
         notification("<task-notification>x</task-notification>"),
       ]),
-    )
-      .decision,
+      noLookup,
+    ).decision,
     "allow",
   );
   const plain = decideMainThreadEdit(
     MAIN,
     at([human("fix it"), assistant("claude-opus-5"), notification("opus edit ok")]),
+    labels,
   );
   assertEquals(plain, { decision: "deny", kind: "main", why: "" });
 });
@@ -276,22 +418,25 @@ Deno.test("decideSubagentEdit: every outcome", () => {
 });
 
 Deno.test("decide: routes auto-mode subagent calls, exempts other subagent calls, and decides main-thread calls", () => {
-  const read = reader({ [MAIN]: jsonl([human("fix it"), assistant("claude-opus-5")]) });
+  const read = reader({ [MAIN]: jsonl([human(OPUS_ISSUE), assistant("claude-opus-5")]) });
   assertEquals(
-    decide({ agent_id: "x", permission_mode: "auto", transcript_path: MAIN }, read).kind,
+    decide({ agent_id: "x", permission_mode: "auto", transcript_path: MAIN }, read, labels).kind,
     "subagent",
   );
-  assertEquals(decide({ agent_id: "x", permission_mode: "default", transcript_path: MAIN }, read), {
+  assertEquals(
+    decide({ agent_id: "x", permission_mode: "default", transcript_path: MAIN }, read, labels),
+    {
+      decision: "allow",
+      kind: "subagent",
+      why: "",
+    },
+  );
+  assertEquals(decide({ transcript_path: MAIN }, read, labels), {
     decision: "allow",
-    kind: "subagent",
-    why: "",
-  });
-  assertEquals(decide({ transcript_path: MAIN }, read), {
-    decision: "deny",
     kind: "main",
     why: "",
   });
-  assertEquals(decide({}, read).decision, "deny");
+  assertEquals(decide({}, read, labels).decision, "deny");
 });
 
 // --- CLI ---
@@ -319,7 +464,10 @@ Deno.test("CLI: prints a decision for a payload and fails closed on unreadable s
   const dir = await Deno.makeTempDir();
   try {
     const transcript = `${dir}/sess.jsonl`;
-    await Deno.writeTextFile(transcript, jsonl([human(WORK_ISSUE), assistant("claude-opus-5")]));
+    await Deno.writeTextFile(
+      transcript,
+      jsonl([human("opus edit ok"), assistant("claude-opus-5")]),
+    );
     assertEquals((await runCli(JSON.stringify({ transcript_path: transcript }))).decision, "allow");
     assertEquals(await runCli("not json"), {
       decision: "deny",

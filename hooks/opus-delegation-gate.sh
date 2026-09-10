@@ -17,7 +17,9 @@
 #       Opus and the human prompt that spawned it contains "opus edit ok" or asks for an Opus
 #       subagent. An undeterminable model or spawning prompt refuses.
 #     - Main-thread call: allow when the session model is not Opus, when Josh's latest HUMAN prompt
-#       contains "opus edit ok", or when the most recent slash command he typed is /work-issue (D-7).
+#       contains "opus edit ok", or when the most recent slash command he typed is /work-issue on an
+#       issue labeled Opus (D-7; the label is read with gh and reused for ten minutes). Any other
+#       label, no issue named, or a failed lookup gives no approval, so Opus must delegate.
 #     Only prompts Josh actually sent (origin.kind "human", not isMeta) count, so a task
 #     notification neither grants approval nor cancels it.
 #   Step 5: Otherwise refuse (deny) with JSON naming the target file and the reason. A main-thread
@@ -91,7 +93,7 @@ if [ "$in_tree" != "true" ]; then
 fi
 
 # Step 4: One invocation of opus_gate.ts decides the rest.
-gate_json="$(printf '%s' "$input" | deno run --no-config --allow-read "$GATE_LIB" 2>/dev/null || true)"
+gate_json="$(printf '%s' "$input" | deno run --no-config --allow-read --allow-run=timeout --allow-env=OPUS_GATE_CACHE_DIR --allow-write=/tmp "$GATE_LIB" 2>/dev/null || true)"
 decision="$(printf '%s' "$gate_json" | jq -r '.decision // empty' 2>/dev/null || true)"
 kind="$(printf '%s' "$gate_json" | jq -r '.kind // empty' 2>/dev/null || true)"
 why="$(printf '%s' "$gate_json" | jq -r '.why // empty' 2>/dev/null || true)"

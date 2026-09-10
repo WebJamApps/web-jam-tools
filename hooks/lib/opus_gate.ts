@@ -2,8 +2,8 @@
  * Opus delegation gate decisions (web-jam-tools#965).
  *
  * Requirements: ~/Dropbox/web-jam-llms/Token_Savings/opus-delegation-gate-design-2026-08-18.md,
- * Appendix C, decisions D-6 (subagent edits in auto mode) and D-7 (a `/work-issue` run approves the
- * Opus session's own edits).
+ * Appendix C, decisions D-6 (subagent edits in auto mode) and D-7 (a `/work-issue` run on an
+ * Opus-labeled issue approves the Opus session's own edits).
  *
  * hooks/opus-delegation-gate.sh makes the cheap exits itself (a subagent call outside auto mode, no
  * target path, a path outside any git working tree) and pipes every remaining PreToolUse payload to
@@ -12,7 +12,9 @@
  * Main-thread call — allowed when:
  *   - the session model is not Opus, or
  *   - Josh's latest HUMAN prompt contains "opus edit ok", or
- *   - the most recent slash command in the transcript is a `/work-issue` Josh typed (D-7).
+ *   - the most recent slash command in the transcript is a `/work-issue` Josh typed, naming an issue
+ *     whose model label is Opus (D-7). Any other label, no issue named, or a failed label lookup gives
+ *     no approval — the skill then has to delegate to the labeled tier.
  *
  * Subagent call in auto mode (D-6) — allowed when the subagent's own model is not Opus, or when it is
  * Opus and the human prompt that spawned it contains "opus edit ok" or asks for an Opus subagent.
@@ -47,8 +49,29 @@ export const ESCAPE_PHRASE = "opus edit ok";
 /** A parent chain longer than this is treated as broken rather than walked forever. */
 export const MAX_SPAWN_DEPTH = 32;
 
+/** Owner assumed for a `Repo#N` reference with no owner, matching `/work-issue Repo#123`. */
+export const DEFAULT_OWNER = "WebJamApps";
+
+/**
+ * Labels that put an issue in the Opus lane. "Fable" is the retired name for the same lane (global
+ * rules: "Any existing `Fable` label now means Opus").
+ */
+export const OPUS_LANE_LABELS = ["opus", "fable"];
+
+/** How long a looked-up label set is reused before `gh` is asked again. */
+export const LABEL_CACHE_TTL_MS = 10 * 60 * 1000;
+
 /** Reads a file as text, returning null when it is missing or unreadable. */
 export type ReadText = (path: string) => string | null;
+
+export interface IssueRef {
+  /** `Owner/Name` */
+  repo: string;
+  number: number;
+}
+
+/** Returns an issue's label names, or null when they could not be looked up. */
+export type LabelLookup = (ref: IssueRef) => string[] | null;
 
 export function readTextOrNull(path: string): string | null {
   try {
@@ -209,26 +232,161 @@ export function slashCommandOf(text: string): string | null {
   return bare ? bare[1].toLowerCase() : null;
 }
 
+/** The arguments of a `/work-issue` invocation: the `<command-args>` element, or the text after a bare `/work-issue`. */
+export function workIssueArgs(text: string): string {
+  const wrapped = text.match(/<command-args>([\s\S]*?)<\/command-args>/);
+  if (wrapped) return wrapped[1].trim();
+  const bare = text.trim().match(/^\/work-issue\b([\s\S]*)$/i);
+  return bare ? bare[1].trim() : "";
+}
+
 /**
- * D-7: true when the most recent slash command in the transcript is a `/work-issue` that Josh typed.
+ * The first issue named in `/work-issue` arguments: a GitHub issue URL, `Owner/Repo#N`, or `Repo#N`
+ * (owner WebJamApps). Returns null when none is named.
+ */
+export function parseIssueRef(args: string): IssueRef | null {
+  const url = args.match(/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/issues\/(\d+)/);
+  if (url) return { repo: `${url[1]}/${url[2]}`, number: Number(url[3]) };
+  const ref = args.match(/(?:^|\s)(?:([A-Za-z0-9_.-]+)\/)?([A-Za-z0-9_.-]+)#(\d+)\b/);
+  if (ref) return { repo: `${ref[1] ?? DEFAULT_OWNER}/${ref[2]}`, number: Number(ref[3]) };
+  return null;
+}
+
+/** Parses `gh issue view --json labels` output into label names, or null when it is not that shape. */
+export function parseLabelsJson(raw: string): string[] | null {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed?.labels)) return null;
+    return parsed.labels
+      .map((label: { name?: unknown }) => label?.name)
+      .filter((name: unknown): name is string => typeof name === "string");
+  } catch {
+    return null;
+  }
+}
+
+/** Asks `gh` for an issue's labels, giving up after 10 seconds. Null on any failure. */
+export function runGhLabels(ref: IssueRef): string[] | null {
+  try {
+    const output = new Deno.Command("timeout", {
+      args: [
+        "10",
+        "gh",
+        "issue",
+        "view",
+        String(ref.number),
+        "--repo",
+        ref.repo,
+        "--json",
+        "labels",
+      ],
+      stdout: "piped",
+      stderr: "null",
+    }).outputSync();
+    if (!output.success) return null;
+    return parseLabelsJson(new TextDecoder().decode(output.stdout));
+  } catch {
+    return null;
+  }
+}
+
+export interface LabelLookupDeps {
+  cacheDir: string;
+  now: () => number;
+  run: LabelLookup;
+  read: ReadText;
+  write: (path: string, text: string) => void;
+}
+
+/**
+ * A label lookup that reuses a result for LABEL_CACHE_TTL_MS, so a `/work-issue` build does not pay
+ * a `gh` round trip on every edit. Failed lookups are never cached.
+ */
+export function createLabelLookup(deps: LabelLookupDeps): LabelLookup {
+  return (ref) => {
+    const path = `${deps.cacheDir}/${ref.repo.replace("/", "__")}__${ref.number}.json`;
+    const cached = deps.read(path);
+    if (cached !== null) {
+      try {
+        const entry = JSON.parse(cached);
+        if (
+          typeof entry?.fetchedAt === "number" &&
+          deps.now() - entry.fetchedAt < LABEL_CACHE_TTL_MS &&
+          Array.isArray(entry.labels)
+        ) {
+          return entry.labels.filter((name: unknown): name is string => typeof name === "string");
+        }
+      } catch {
+        // Unreadable cache entry: look the labels up again.
+      }
+    }
+    const labels = deps.run(ref);
+    if (labels !== null) {
+      try {
+        deps.write(path, JSON.stringify({ fetchedAt: deps.now(), labels }));
+      } catch {
+        // The cache is best-effort.
+      }
+    }
+    return labels;
+  };
+}
+
+/** The live lookup: `gh`, cached under $OPUS_GATE_CACHE_DIR (default /tmp/opus-gate-labels). */
+export function defaultLabelLookup(): LabelLookup {
+  let cacheDir = "/tmp/opus-gate-labels";
+  try {
+    cacheDir = Deno.env.get("OPUS_GATE_CACHE_DIR") || cacheDir;
+  } catch {
+    // No env permission: keep the default.
+  }
+  return createLabelLookup({
+    cacheDir,
+    now: Date.now,
+    run: runGhLabels,
+    read: readTextOrNull,
+    write: (path, text) => {
+      Deno.mkdirSync(cacheDir, { recursive: true });
+      Deno.writeTextFileSync(path, text);
+    },
+  });
+}
+
+/**
+ * D-7: true when the most recent slash command in the transcript is a `/work-issue` Josh typed that
+ * names an issue labeled for the Opus lane.
  *
  * Josh's later plain messages do not end the approval; any other slash command does — the same
  * scope-ending rule hooks/lib/check_token_write_authorization.ts applies to the issue-approval token.
  * Local-command echoes (e.g. `/model`, which carry no origin) still count as that other command, so
- * the scope only ever ends early, never extends.
+ * the scope only ever ends early, never extends. A `/work-issue` naming no issue, an issue with any
+ * other label, or a failed lookup gives no approval.
  */
-export function workIssueApprovalActive(entries: readonly TranscriptEntry[]): boolean {
+export function workIssueApprovalActive(
+  entries: readonly TranscriptEntry[],
+  lookupLabels: LabelLookup,
+): boolean {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (!isUserTurnBoundary(entry) || entry.isMeta === true) continue;
-    const command = slashCommandOf(extractEntryText(entry));
+    const text = extractEntryText(entry);
+    const command = slashCommandOf(text);
     if (command === null) continue;
-    return command === "work-issue" && isHumanPrompt(entry);
+    if (command !== "work-issue" || !isHumanPrompt(entry)) return false;
+    const ref = parseIssueRef(workIssueArgs(text));
+    if (!ref) return false;
+    const labels = lookupLabels(ref);
+    return labels !== null &&
+      labels.some((label) => OPUS_LANE_LABELS.includes(label.toLowerCase()));
   }
   return false;
 }
 
-export function decideMainThreadEdit(transcriptPath: string, read: ReadText): GateDecision {
+export function decideMainThreadEdit(
+  transcriptPath: string,
+  read: ReadText,
+  lookupLabels: LabelLookup,
+): GateDecision {
   const raw = transcriptPath ? read(transcriptPath) : null;
   if (raw === null) {
     return deny(
@@ -242,7 +400,7 @@ export function decideMainThreadEdit(transcriptPath: string, read: ReadText): Ga
     return deny("main", "The session model could not be determined from the transcript.");
   }
   if (!isOpusModel(info.model)) return allow("main");
-  if (info.hasEscape || workIssueApprovalActive(entries)) return allow("main");
+  if (info.hasEscape || workIssueApprovalActive(entries, lookupLabels)) return allow("main");
   return deny("main", "");
 }
 
@@ -277,7 +435,11 @@ export function decideSubagentEdit(
   );
 }
 
-export function decide(payload: GatePayload, read: ReadText = readTextOrNull): GateDecision {
+export function decide(
+  payload: GatePayload,
+  read: ReadText = readTextOrNull,
+  lookupLabels: LabelLookup = defaultLabelLookup(),
+): GateDecision {
   const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "";
   const transcriptPath = typeof payload.transcript_path === "string" ? payload.transcript_path : "";
   if (agentId && payload.permission_mode === "auto") {
@@ -286,7 +448,7 @@ export function decide(payload: GatePayload, read: ReadText = readTextOrNull): G
   // A subagent call outside auto mode keeps its exemption. The shell hook exits before calling this
   // module in that case; the branch keeps decide() total.
   if (agentId) return allow("subagent");
-  return decideMainThreadEdit(transcriptPath, read);
+  return decideMainThreadEdit(transcriptPath, read, lookupLabels);
 }
 
 if (import.meta.main) {

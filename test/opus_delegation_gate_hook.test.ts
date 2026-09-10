@@ -17,10 +17,14 @@ interface RunResult {
   stderr: string;
 }
 
-async function runHook(payload: Record<string, unknown>): Promise<RunResult> {
+async function runHook(
+  payload: Record<string, unknown>,
+  env: Record<string, string> = {},
+): Promise<RunResult> {
   const input = JSON.stringify(payload);
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
+    env,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -69,8 +73,29 @@ function metaTurn(content: string): Record<string, unknown> {
   return { type: "user", isMeta: true, message: { role: "user", content } };
 }
 
-const WORK_ISSUE_INVOCATION =
-  "<command-message>work-issue</command-message>\n<command-name>/work-issue</command-name>\n<command-args>web-jam-tools#965</command-args>";
+function workIssueTurn(args: string): Record<string, unknown> {
+  return userTurn(
+    `<command-message>work-issue</command-message>\n<command-name>/work-issue</command-name>\n<command-args>${args}</command-args>`,
+  );
+}
+
+// A stand-in `gh` on PATH for the D-7 cases, with its own label cache directory: issue 1 is labeled
+// Opus, issue 2 Sonnet, and any other number fails to look up.
+async function withFakeGh(fn: (env: Record<string, string>) => Promise<void>): Promise<void> {
+  const bin = await Deno.makeTempDir();
+  const cache = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      `${bin}/gh`,
+      `#!/usr/bin/env bash\ncase "$3" in\n  1) echo '{"labels":[{"name":"Opus"}]}' ;;\n  2) echo '{"labels":[{"name":"Sonnet"}]}' ;;\n  *) exit 1 ;;\nesac\n`,
+    );
+    await Deno.chmod(`${bin}/gh`, 0o755);
+    await fn({ PATH: `${bin}:${Deno.env.get("PATH") ?? ""}`, OPUS_GATE_CACHE_DIR: cache });
+  } finally {
+    await Deno.remove(bin, { recursive: true });
+    await Deno.remove(cache, { recursive: true });
+  }
+}
 
 function assistantTurn(model: string, content = "understood"): Record<string, unknown> {
   return { type: "assistant", message: { role: "assistant", model, content } };
@@ -374,50 +399,77 @@ Deno.test("(h) main thread: a task notification after Josh's 'opus edit ok' prom
   );
 });
 
-Deno.test("D-7 main thread: a /work-issue Josh typed approves Opus edits through his later plain messages", async () => {
-  await withTranscript(
-    [
-      userTurn(WORK_ISSUE_INVOCATION),
-      metaTurn("Base directory for this skill: /home/joshua/.claude/skills/work-issue"),
-      assistantTurn("claude-opus-5"),
-      userTurn("why?"),
-      assistantTurn("claude-opus-5"),
-    ],
-    async (transcript_path) => {
-      assertAllowed(
-        await runHook({
-          permission_mode: "auto",
-          tool_input: { file_path: IN_REPO_FILE },
-          transcript_path,
-        }),
-      );
-    },
-  );
-});
-
-Deno.test("D-7 main thread: another slash command after /work-issue ends the approval", async () => {
-  for (
-    const later of [
-      userTurn(
-        "<command-message>pr-review</command-message>\n<command-name>/pr-review</command-name>",
-      ),
-      { type: "user", message: { role: "user", content: "<command-name>/model</command-name>" } },
-    ]
-  ) {
+Deno.test("D-7 main thread: a /work-issue Josh typed on an Opus-labeled issue approves Opus edits through his later plain messages", async () => {
+  await withFakeGh(async (env) => {
     await withTranscript(
       [
-        userTurn(WORK_ISSUE_INVOCATION),
+        workIssueTurn("web-jam-tools#1"),
+        metaTurn("Base directory for this skill: /home/joshua/.claude/skills/work-issue"),
         assistantTurn("claude-opus-5"),
-        later,
+        userTurn("why?"),
         assistantTurn("claude-opus-5"),
       ],
       async (transcript_path) => {
-        assertDenied(
-          (await runHook({ tool_input: { file_path: IN_REPO_FILE }, transcript_path })).stdout,
-        );
+        const payload = {
+          permission_mode: "auto",
+          tool_input: { file_path: IN_REPO_FILE },
+          transcript_path,
+        };
+        assertAllowed(await runHook(payload, env));
+        assertAllowed(await runHook(payload, env)); // second call answered from the label cache
       },
     );
-  }
+  });
+});
+
+Deno.test("D-7 main thread: a /work-issue on a Sonnet-labeled issue, on no issue, or on an unreadable issue does not approve Opus", async () => {
+  await withFakeGh(async (env) => {
+    for (
+      const args of [
+        "web-jam-tools#2",
+        "when the label is Opus = Opus can edit",
+        "web-jam-tools#99",
+      ]
+    ) {
+      await withTranscript(
+        [workIssueTurn(args), assistantTurn("claude-opus-5")],
+        async (transcript_path) => {
+          assertDenied(
+            (await runHook({ tool_input: { file_path: IN_REPO_FILE }, transcript_path }, env))
+              .stdout,
+          );
+        },
+      );
+    }
+  });
+});
+
+Deno.test("D-7 main thread: another slash command after /work-issue ends the approval", async () => {
+  await withFakeGh(async (env) => {
+    for (
+      const later of [
+        userTurn(
+          "<command-message>pr-review</command-message>\n<command-name>/pr-review</command-name>",
+        ),
+        { type: "user", message: { role: "user", content: "<command-name>/model</command-name>" } },
+      ]
+    ) {
+      await withTranscript(
+        [
+          workIssueTurn("web-jam-tools#1"),
+          assistantTurn("claude-opus-5"),
+          later,
+          assistantTurn("claude-opus-5"),
+        ],
+        async (transcript_path) => {
+          assertDenied(
+            (await runHook({ tool_input: { file_path: IN_REPO_FILE }, transcript_path }, env))
+              .stdout,
+          );
+        },
+      );
+    }
+  });
 });
 
 Deno.test("main-thread (no agent_id) Opus call under permission_mode 'auto' is denied without escape phrase (unchanged baseline)", async () => {
