@@ -58,10 +58,11 @@ const CLAUDE_CODE_COMMAND_NAME_WRAPPER =
 /**
  * Fallback form of the wrapper above, for a transcript entry whose `<command-name>` element is
  * missing and only `<command-message>` carries the invoked skill's name (web-jam-tools#956). Kept as
- * a separate, narrower regex rather than folding into CLAUDE_CODE_COMMAND_NAME_WRAPPER above: this
- * one requires `<command-message>` to be the WHOLE match (no trailing `<command-name>`), so a
- * well-formed wrapper is always read via its `<command-name>` element first and this is only reached
- * when that element is genuinely absent.
+ * a separate regex rather than folding into CLAUDE_CODE_COMMAND_NAME_WRAPPER above. This regex has
+ * no end anchor, so on its own it also matches a `<command-message>` followed by anything —
+ * including a `<command-name>` element the pattern above rejected. What keeps a well-formed wrapper
+ * on its `<command-name>` element is the ORDER of the checks in slashCommandFromInvocationWrapper:
+ * CLAUDE_CODE_COMMAND_NAME_WRAPPER is tried first, and this fallback runs only when it does not match.
  */
 const CLAUDE_CODE_COMMAND_MESSAGE_ONLY_WRAPPER =
   /^<command-message>\s*\/?([a-zA-Z0-9_-]+)\s*<\/command-message>/;

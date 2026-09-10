@@ -726,7 +726,7 @@ Deno.test("filingSkillInvoked: one case per literal acceptance-criterion string,
     "file-issue",
   );
   assertEquals(filingSkillInvoked("open an issue for this"), "file-issue");
-  assertEquals(filingSkillInvoked("draft an issue for the parker bug"), "file-issue");
+  assertEquals(filingSkillInvoked("draft an issue for the parser bug"), "file-issue");
 });
 
 Deno.test("filingSkillInvoked: one case per literal acceptance-criterion string, NOT recognized (web-jam-tools#956)", () => {
