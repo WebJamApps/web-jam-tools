@@ -117,23 +117,40 @@ Deno.test("isOpusModel / asksForOpusSubagent / approvesOpusSubagent", () => {
 
 // --- D-8 ---
 
-Deno.test("asksOpusToDoTheWork: a verb naming Opus as the one to do the work, negated by a preceding not/don't/never/no", () => {
-  assert(
-    asksOpusToDoTheWork(
-      "please use OPUS to fix https://github.com/WebJamApps/web-jam-tools/pull/968",
-    ),
-  );
-  assert(asksOpusToDoTheWork("have Opus fix it"));
-  assert(asksOpusToDoTheWork("using opus for this"));
-  assert(asksOpusToDoTheWork("let an Opus agent do it"));
-  assert(asksOpusToDoTheWork("fix it with Opus"));
+Deno.test("asksOpusToDoTheWork: only an instruction naming Opus approves; complaints and bare mentions fail closed", () => {
+  const approves = [
+    "please use OPUS to fix https://github.com/WebJamApps/web-jam-tools/pull/968 and also post a comment on it from OPUS when done",
+    "use Opus to fix it",
+    "have Opus fix it",
+    "let an Opus agent do it",
+    "Please, use Opus",
+    "fix it now. use Opus",
+    "don't use Sonnet, use Opus",
+    "ok and have Opus do it",
+  ];
+  for (const text of approves) assert(asksOpusToDoTheWork(text), text);
 
-  assert(!asksOpusToDoTheWork("don't use Opus"));
-  assert(!asksOpusToDoTheWork("do not use opus"));
-  assert(!asksOpusToDoTheWork("never have Opus edit"));
-  assert(!asksOpusToDoTheWork("Opus ate my tokens, did not delegate to Sonnet"));
-  assert(!asksOpusToDoTheWork("use Sonnet not Opus"));
-  assert(!asksOpusToDoTheWork("opus is fine here"));
+  const refuses = [
+    "don't use Opus",
+    "don’t use Opus",
+    "don't  use Opus",
+    "do not use opus",
+    "please don't use opus",
+    "never have Opus edit",
+    "I told you not to use Opus",
+    "no need to use Opus here",
+    "why did you use Opus for this? delegate to Sonnet",
+    "you shouldn't use Opus for mechanical work",
+    "stop using Opus",
+    "the problem with Opus is cost",
+    "fix it with Opus",
+    "using opus for this",
+    "Opus ate my tokens, did not delegate to Sonnet",
+    "use Sonnet not Opus",
+    "opus is fine here",
+    "for OPUS please https://github.com/WebJamApps/web-jam-tools/pull/972",
+  ];
+  for (const text of refuses) assert(!asksOpusToDoTheWork(text), text);
 
   assert(approvesOpusSubagent("please use OPUS to fix it"));
 });

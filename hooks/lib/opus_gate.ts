@@ -114,13 +114,14 @@ export function asksForOpusSubagent(text: string): boolean {
 }
 
 /**
- * True when the text asks Opus to do the work, e.g. "please use OPUS to fix this" or "have Opus fix
- * it" (D-8). A verb (use/using/have/let/make/get/ask/with/via), an optional article, then "opus" —
- * negated by a preceding not/don't/dont/never/no, which stops it matching "don't use Opus". A bare
- * mention like "Opus ate my tokens" does not match, since no verb precedes "opus" there.
+ * True when the text instructs Opus to do the work, e.g. "please use OPUS to fix this" or "have Opus
+ * fix it" (D-8). Only an instruction counts: use/have/let/make/get/ask must open the text, a line or a
+ * clause (after punctuation, "please", "and" or "then"), then an optional article, then "opus". A
+ * complaint ("why did you use Opus", "don't use Opus") or a bare mention ("the problem with Opus")
+ * does not match, so anything that is not plainly a request fails closed.
  */
 export function asksOpusToDoTheWork(text: string): boolean {
-  return /(?<!\b(?:not|don't|dont|never|no)\s)\b(?:use|using|have|let|make|get|ask|with|via)\s+(?:(?:a|an|the)\s+)?opus\b/i
+  return /(?:^\s*|[.!?,;:]\s*|\b(?:please|and|then)\s+)(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?opus\b/im
     .test(text);
 }
 
