@@ -30,12 +30,7 @@ import {
   renderPitch,
   validateVoiceRules,
 } from "../src/book-gig/pitch.ts";
-import {
-  extractRunDataFromMarkdown,
-  formatDraftPayload,
-  mergeWeekendRuns,
-  writeDropboxRunLog,
-} from "../src/book-gig/gmail.ts";
+import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -527,7 +522,7 @@ Deno.test("renderPitch: generates returning venue pitch with custom contact and 
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
-Deno.test("formatDraftPayload and writeDropboxRunLog: formats and writes run log", async () => {
+Deno.test("formatDraftPayload: formats a pitch as a Gmail draft payload", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -552,36 +547,9 @@ Deno.test("formatDraftPayload and writeDropboxRunLog: formats and writes run log
   assertEquals(payload.to, "info@parkway.com");
   assertEquals(payload.subject, pitch.subject);
   assertEquals(payload.body, pitch.body);
-
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const result = {
-      mode: "preview" as const,
-      weekend,
-      candidates: [venue],
-      density: { count: 1, isSparse: true, suggestedMetro: "roanoke" },
-      pitches: [pitch],
-    };
-    const logPath = await writeDropboxRunLog(result, tmpDir);
-    assert(logPath !== null);
-    const mdContent = await Deno.readTextFile(logPath);
-    assertStringIncludes(mdContent, "Parkway Brewing");
-    assertStringIncludes(mdContent, "October 16–18, 2026");
-
-    // Verify corresponding HTML artifact was created
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const htmlContent = await Deno.readTextFile(htmlPath);
-    assertStringIncludes(htmlContent, "<!DOCTYPE html>");
-    assertStringIncludes(htmlContent, "Parkway Brewing");
-    assertStringIncludes(htmlContent, "--bg-primary: #121212");
-    assertStringIncludes(htmlContent, 'name="viewport"');
-    assertStringIncludes(htmlContent, "Copy Email");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
 });
 
-Deno.test("writeDropboxRunLog & renderDarkHtml: includes Contact Person and Phone in markdown and HTML artifacts (#874)", async () => {
+Deno.test("renderDarkHtml: includes Contact Person and Phone in the rendered report (#874)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -606,45 +574,32 @@ Deno.test("writeDropboxRunLog & renderDarkHtml: includes Contact Person and Phon
   assertEquals(pitch.contactName, "Lezlie Snyder");
   assertEquals(pitch.phone, "540-555-1234");
 
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const result = {
-      mode: "preview" as const,
-      weekend,
-      candidates: [venue],
-      density: { count: 1, isSparse: false },
-      pitches: [pitch],
-    };
+  const result = {
+    mode: "preview" as const,
+    weekend,
+    candidates: [venue],
+    density: { count: 1, isSparse: false },
+    pitches: [pitch],
+  };
 
-    const logPath = await writeDropboxRunLog(result, tmpDir);
-    assert(logPath !== null);
-
-    const mdContent = await Deno.readTextFile(logPath);
-    assertStringIncludes(
-      mdContent,
-      "| # | Venue Name | Location | Contact Person | Phone | Booking Email | Spacing Note |",
-    );
-    assertStringIncludes(
-      mdContent,
-      "| 1 | Parkway Brewing | Salem, VA | Lezlie Snyder | 540-555-1234 | lezlie@parkwaybrewing.com |",
-    );
-
-    const html = renderDarkHtml(result);
-    assertStringIncludes(html, "<th>Contact Person</th>");
-    assertStringIncludes(html, "<th>Phone</th>");
-    assertStringIncludes(html, "<td>Lezlie Snyder</td>");
-    assertStringIncludes(html, '<a href="tel:540-555-1234" class="email-link">540-555-1234</a>');
-    assertStringIncludes(html, "Contact: <strong>Lezlie Snyder</strong>");
-    assertStringIncludes(
-      html,
-      'Tel: <a href="tel:540-555-1234" class="meta-email">540-555-1234</a>',
-    );
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+  const html = renderDarkHtml(result);
+  assertStringIncludes(html, "<!DOCTYPE html>");
+  assertStringIncludes(html, "Parkway Brewing");
+  assertStringIncludes(html, "--bg-primary: #121212");
+  assertStringIncludes(html, 'name="viewport"');
+  assertStringIncludes(html, "Copy Email");
+  assertStringIncludes(html, "<th>Contact Person</th>");
+  assertStringIncludes(html, "<th>Phone</th>");
+  assertStringIncludes(html, "<td>Lezlie Snyder</td>");
+  assertStringIncludes(html, '<a href="tel:540-555-1234" class="email-link">540-555-1234</a>');
+  assertStringIncludes(html, "Contact: <strong>Lezlie Snyder</strong>");
+  assertStringIncludes(
+    html,
+    'Tel: <a href="tel:540-555-1234" class="meta-email">540-555-1234</a>',
+  );
 });
 
-Deno.test("writeDropboxRunLog: accumulates multiple batches for the same weekend into a single consolidated report (#876)", async () => {
+Deno.test("mergeWeekendRuns: accumulates multiple batches for the same weekend into a single consolidated result (#876, #955)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -677,114 +632,81 @@ Deno.test("writeDropboxRunLog: accumulates multiple batches for the same weekend
   const pitch1 = renderPitch(venue1, weekend);
   const pitch2 = renderPitch(venue2, weekend);
 
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_accum_" });
-  try {
-    // Batch 1: 2 candidates, both sent
-    const batch1: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venue1, venue2],
-      density: { count: 2, isSparse: true, suggestedMetro: "roanoke" },
-      pitches: [pitch1, pitch2],
-      batchDispatch: {
-        requested: 2,
-        sent: 2,
-        skipped: [],
-        records: [{ venueId: "v1" }, { venueId: "v2" }],
-      },
-    };
+  // Batch 1: 2 candidates, both sent
+  const batch1: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venue1, venue2],
+    density: { count: 2, isSparse: true, suggestedMetro: "roanoke" },
+    pitches: [pitch1, pitch2],
+    batchDispatch: {
+      requested: 2,
+      sent: 2,
+      skipped: [],
+      records: [{ venueId: "v1" }, { venueId: "v2" }],
+    },
+  };
 
-    const logPath1 = await writeDropboxRunLog(batch1, tmpDir);
-    assert(logPath1 !== null);
+  // Batch 2: 2 different candidates for the same weekend, 1 sent, 1 skipped
+  const venue3: CandidateVenue = {
+    _id: "v3",
+    name: "The Glass House",
+    city: "Lynchburg",
+    usState: "VA",
+    email: "booking@glasshouse.com",
+  };
+  const venue4: CandidateVenue = {
+    _id: "v4",
+    name: "Riverviews Artspace",
+    city: "Lynchburg",
+    usState: "VA",
+    email: "info@riverviews.net",
+  };
 
-    const md1 = await Deno.readTextFile(logPath1);
-    assertStringIncludes(md1, "Parkway Brewing");
-    assertStringIncludes(md1, "Olde Salem Brewery");
-    assertStringIncludes(md1, "**Batch Dispatch:** 2 sent / 2 requested (0 skipped)");
+  const pitch3 = renderPitch(venue3, weekend);
+  const pitch4 = renderPitch(venue4, weekend);
 
-    // Batch 2: 2 different candidates for same weekend, 1 sent, 1 skipped
-    const venue3: CandidateVenue = {
-      _id: "v3",
-      name: "The Glass House",
-      city: "Lynchburg",
-      usState: "VA",
-      email: "booking@glasshouse.com",
-    };
-    const venue4: CandidateVenue = {
-      _id: "v4",
-      name: "Riverviews Artspace",
-      city: "Lynchburg",
-      usState: "VA",
-      email: "info@riverviews.net",
-    };
+  const batch2: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venue3, venue4],
+    density: { count: 2, isSparse: true, suggestedMetro: "lynchburg" },
+    pitches: [pitch3, pitch4],
+    batchDispatch: {
+      requested: 2,
+      sent: 1,
+      skipped: [{
+        venueId: "v4",
+        venueName: "Riverviews Artspace",
+        reason: "Invalid booking email",
+      }],
+      records: [{ venueId: "v3" }],
+    },
+  };
 
-    const pitch3 = renderPitch(venue3, weekend);
-    const pitch4 = renderPitch(venue4, weekend);
+  const merged = mergeWeekendRuns(
+    { candidates: batch1.candidates, pitches: batch1.pitches, batchDispatch: batch1.batchDispatch },
+    batch2,
+  );
 
-    const batch2: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venue3, venue4],
-      density: { count: 2, isSparse: true, suggestedMetro: "lynchburg" },
-      pitches: [pitch3, pitch4],
-      batchDispatch: {
-        requested: 2,
-        sent: 1,
-        skipped: [{
-          venueId: "v4",
-          venueName: "Riverviews Artspace",
-          reason: "Invalid booking email",
-        }],
-        records: [{ venueId: "v3" }],
-      },
-    };
+  assertEquals(merged.candidates.length, 4);
+  assertEquals(merged.pitches.length, 4);
+  assertEquals(merged.batchDispatch?.requested, 4);
+  assertEquals(merged.batchDispatch?.sent, 3);
+  assertEquals(merged.batchDispatch?.skipped.length, 1);
 
-    const logPath2 = await writeDropboxRunLog(batch2, tmpDir);
-    assertEquals(logPath2, logPath1);
-
-    // Verify consolidated Markdown log
-    const consolidatedMd = await Deno.readTextFile(logPath2!);
-    assertStringIncludes(consolidatedMd, "Parkway Brewing");
-    assertStringIncludes(consolidatedMd, "Olde Salem Brewery");
-    assertStringIncludes(consolidatedMd, "The Glass House");
-    assertStringIncludes(consolidatedMd, "Riverviews Artspace");
-    assertStringIncludes(consolidatedMd, "**Candidates Found:** 4");
-    assertStringIncludes(consolidatedMd, "**Pitches Drafted:** 4");
-    assertStringIncludes(consolidatedMd, "**Batch Dispatch:** 3 sent / 4 requested (1 skipped)");
-
-    // Verify consolidated Dark Mode HTML artifact
-    const htmlPath = logPath2!.replace(/\.md$/, ".html");
-    const consolidatedHtml = await Deno.readTextFile(htmlPath);
-    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v1">');
-    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v2">');
-    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v3">');
-    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v4">');
-    assertStringIncludes(
-      consolidatedHtml,
-      '<section class="pitch-card" id="pitch-1" data-venue-id="v1">',
-    );
-    assertStringIncludes(
-      consolidatedHtml,
-      '<section class="pitch-card" id="pitch-2" data-venue-id="v2">',
-    );
-    assertStringIncludes(
-      consolidatedHtml,
-      '<section class="pitch-card" id="pitch-3" data-venue-id="v3">',
-    );
-    assertStringIncludes(
-      consolidatedHtml,
-      '<section class="pitch-card" id="pitch-4" data-venue-id="v4">',
-    );
-    assertStringIncludes(consolidatedHtml, "3 dispatched");
-    assertStringIncludes(consolidatedHtml, "1 venues");
-    assertStringIncludes(consolidatedHtml, "3 of 4 venue pitch emails sent");
-    assertStringIncludes(consolidatedHtml, "Invalid booking email");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+  const consolidatedHtml = renderDarkHtml(merged);
+  assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v1">');
+  assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v2">');
+  assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v3">');
+  assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v4">');
+  assertStringIncludes(consolidatedHtml, "3 dispatched");
+  assertStringIncludes(consolidatedHtml, "1 venues");
+  assertStringIncludes(consolidatedHtml, "3 of 4 venue pitch emails sent");
+  assertStringIncludes(consolidatedHtml, "Invalid booking email");
 });
 
-Deno.test("writeDropboxRunLog: deduplicates candidate rows and pitch cards by venueId across batches (#876)", async () => {
+Deno.test("mergeWeekendRuns: deduplicates candidate rows and pitch cards by venueId across batches (#876)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -834,56 +756,52 @@ Deno.test("writeDropboxRunLog: deduplicates candidate rows and pitch cards by ve
   const pitchA_new = renderPitch(venueA_new, weekend);
   const pitchC = renderPitch(venueC, weekend);
 
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_dedup_" });
-  try {
-    const batch1: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venueA_old, venueB],
-      density: { count: 2, isSparse: true },
-      pitches: [pitchA_old, pitchB],
-      batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
-    };
-    await writeDropboxRunLog(batch1, tmpDir);
+  const batch1: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venueA_old, venueB],
+    density: { count: 2, isSparse: true },
+    pitches: [pitchA_old, pitchB],
+    batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
+  };
+  const batch2: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venueA_new, venueC],
+    density: { count: 2, isSparse: true },
+    pitches: [pitchA_new, pitchC],
+    batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
+  };
 
-    const batch2: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venueA_new, venueC],
-      density: { count: 2, isSparse: true },
-      pitches: [pitchA_new, pitchC],
-      batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
-    };
-    const logPath = await writeDropboxRunLog(batch2, tmpDir);
-    assert(logPath !== null);
+  const merged = mergeWeekendRuns(
+    { candidates: batch1.candidates, pitches: batch1.pitches, batchDispatch: batch1.batchDispatch },
+    batch2,
+  );
 
-    const md = await Deno.readTextFile(logPath);
-    // Should have 3 candidates total (Venue A, Venue B, Venue C) - not 4
-    assertStringIncludes(md, "**Candidates Found:** 3");
-    assertStringIncludes(md, "**Pitches Drafted:** 3");
-    assertStringIncludes(md, "**Batch Dispatch:** 4 sent / 4 requested (0 skipped)");
+  // Should have 3 candidates total (Venue A, Venue B, Venue C) - not 4
+  assertEquals(merged.candidates.length, 3);
+  assertEquals(merged.pitches.length, 3);
+  assertEquals(merged.batchDispatch?.requested, 4);
+  assertEquals(merged.batchDispatch?.sent, 4);
 
-    // Venue A details should be updated to new contact and email
-    assertStringIncludes(md, "new@venuea.com");
-    assertStringIncludes(md, "Alice Updated");
-    assertStringIncludes(md, "999-999-9999");
+  // Venue A details should be updated to new contact and email
+  const mergedVenueA = merged.candidates.find((c) => c._id === "vA");
+  assertEquals(mergedVenueA?.email, "new@venuea.com");
+  assertEquals(mergedVenueA?.contactName, "Alice Updated");
+  assertEquals(mergedVenueA?.phone, "999-999-9999");
 
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const html = await Deno.readTextFile(htmlPath);
-    // Verify only one data-venue-id="vA" in candidate rows
-    const matchesA = html.match(/<tr data-venue-id="vA">/g);
-    assertEquals(matchesA?.length, 1);
+  const html = renderDarkHtml(merged);
+  // Verify only one data-venue-id="vA" in candidate rows
+  const matchesA = html.match(/<tr data-venue-id="vA">/g);
+  assertEquals(matchesA?.length, 1);
 
-    // Verify only one pitch card for vA
-    const pitchCardsA = html.match(/data-venue-id="vA"/g);
-    // 1 in candidate table row + 1 in pitch card = 2 total occurrences
-    assertEquals(pitchCardsA?.length, 2);
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+  // Verify only one pitch card for vA
+  const pitchCardsA = html.match(/data-venue-id="vA"/g);
+  // 1 in candidate table row + 1 in pitch card = 2 total occurrences
+  assertEquals(pitchCardsA?.length, 2);
 });
 
-Deno.test("writeDropboxRunLog: deduplicates skipped venues by venueId across batches (#876)", async () => {
+Deno.test("mergeWeekendRuns: deduplicates skipped venues by venueId across batches (#876)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -899,160 +817,54 @@ Deno.test("writeDropboxRunLog: deduplicates skipped venues by venueId across bat
   const pitch1 = renderPitch(venue1, weekend);
   const pitch2 = renderPitch(venue2, weekend);
 
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_skip_dedup_" });
-  try {
-    const batch1: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venue1],
-      density: { count: 1, isSparse: true },
-      pitches: [pitch1],
-      batchDispatch: {
-        requested: 1,
-        sent: 0,
-        skipped: [{ venueId: "v1", venueName: "Venue 1", reason: "Initial error" }],
-        records: [],
-      },
-    };
-    await writeDropboxRunLog(batch1, tmpDir);
-
-    const batch2: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venue2],
-      density: { count: 1, isSparse: true },
-      pitches: [pitch2],
-      batchDispatch: {
-        requested: 2,
-        sent: 1,
-        skipped: [
-          { venueId: "v1", venueName: "Venue 1", reason: "Updated skip reason" },
-          { venueId: "v2", venueName: "Venue 2", reason: "Bounced" },
-        ],
-        records: [],
-      },
-    };
-    const logPath = await writeDropboxRunLog(batch2, tmpDir);
-    assert(logPath !== null);
-
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const html = await Deno.readTextFile(htmlPath);
-
-    // Skipped table should have exactly 2 distinct rows: v1 and v2
-    assertStringIncludes(html, "Skipped Venues (2)");
-    assertStringIncludes(html, "Updated skip reason");
-    assertStringIncludes(html, "Bounced");
-
-    const md = await Deno.readTextFile(logPath);
-    // Cumulative: requested = 1 + 2 = 3, sent = 0 + 1 = 1, skipped = 2 deduplicated
-    assertStringIncludes(md, "**Batch Dispatch:** 1 sent / 3 requested (2 skipped)");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-Deno.test("writeDropboxRunLog: consolidates with legacy run logs lacking embedded JSON (#876)", async () => {
-  const weekend: TargetWeekend = {
-    start: "2026-10-16",
-    end: "2026-10-18",
-    rawText: "Oct 16-18 2026",
-    label: "October 16–18, 2026",
-    year: 2026,
-    month: 10,
-    days: [16, 17, 18],
+  const batch1: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venue1],
+    density: { count: 1, isSparse: true },
+    pitches: [pitch1],
+    batchDispatch: {
+      requested: 1,
+      sent: 0,
+      skipped: [{ venueId: "v1", venueName: "Venue 1", reason: "Initial error" }],
+      records: [],
+    },
   };
 
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_legacy_" });
-  try {
-    const legacyMd = `# \`book-gig\` Run Record: October 16–18, 2026
+  const batch2: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venue2],
+    density: { count: 1, isSparse: true },
+    pitches: [pitch2],
+    batchDispatch: {
+      requested: 2,
+      sent: 1,
+      skipped: [
+        { venueId: "v1", venueName: "Venue 1", reason: "Updated skip reason" },
+        { venueId: "v2", venueName: "Venue 2", reason: "Bounced" },
+      ],
+      records: [],
+    },
+  };
 
-**Run Timestamp:** 2026-08-20T10:00:00.000Z  
-**Mode:** send  
-**Target Weekend:** 2026-10-16 to 2026-10-18 (October 16–18, 2026)  
-**Target Location Filter:** Roanoke, VA  
-**Candidates Found:** 1 (Sparse: Yes)  
-**Pitches Drafted:** 1  
-**Batch Dispatch:** 1 sent / 1 requested (0 skipped)  
+  const merged = mergeWeekendRuns(
+    { candidates: batch1.candidates, pitches: batch1.pitches, batchDispatch: batch1.batchDispatch },
+    batch2,
+  );
 
----
+  // Cumulative: requested = 1 + 2 = 3, sent = 0 + 1 = 1, skipped = 2 deduplicated
+  assertEquals(merged.batchDispatch?.requested, 3);
+  assertEquals(merged.batchDispatch?.sent, 1);
+  assertEquals(merged.batchDispatch?.skipped.length, 2);
 
-## 1. Candidate Venues Evaluated
-
-| # | Venue Name | Location | Contact Person | Phone | Booking Email | Spacing Note |
-|---|---|---|---|---|---|---|
-| 1 | Legacy Taproom | Roanoke, VA | Bob | 540-000-0000 | bob@legacy.com | Eligible |
-
----
-
-## 2. Generated Gmail Pitches
-
-### Pitch 1: Legacy Taproom
-- **To:** \`bob@legacy.com\`
-- **Subject:** Booking Inquiry - Legacy Taproom
-
-\`\`\`text
-Hi Bob, we would love to perform at Legacy Taproom on Oct 16-18.
-\`\`\`
-
----
-
-*Note: Generated by WebJamApps \`book-gig\` outreach pipeline.*
-`;
-    await Deno.writeTextFile(`${tmpDir}/book-gig-run-2026-10-16-to-2026-10-18.md`, legacyMd);
-
-    const newVenue: CandidateVenue = {
-      _id: "vNew",
-      name: "New Taproom",
-      city: "Salem",
-      usState: "VA",
-      email: "booking@newtaproom.com",
-    };
-    const newPitch = renderPitch(newVenue, weekend);
-
-    const batch2: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [newVenue],
-      density: { count: 1, isSparse: true },
-      pitches: [newPitch],
-      batchDispatch: { requested: 1, sent: 1, skipped: [], records: [] },
-    };
-
-    const logPath = await writeDropboxRunLog(batch2, tmpDir);
-    assert(logPath !== null);
-
-    const md = await Deno.readTextFile(logPath);
-    assertStringIncludes(md, "Legacy Taproom");
-    assertStringIncludes(md, "New Taproom");
-    assertStringIncludes(md, "**Candidates Found:** 2");
-    assertStringIncludes(md, "**Batch Dispatch:** 2 sent / 2 requested (0 skipped)");
-
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const html = await Deno.readTextFile(htmlPath);
-    assertStringIncludes(html, "Legacy Taproom");
-    assertStringIncludes(html, "New Taproom");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+  const html = renderDarkHtml(merged);
+  assertStringIncludes(html, "Skipped Venues (2)");
+  assertStringIncludes(html, "Updated skip reason");
+  assertStringIncludes(html, "Bounced");
 });
 
-Deno.test("extractRunDataFromMarkdown & extractRunDataFromHtml: extracts and parses run data", () => {
-  const sampleMd = `
-# Run Record
-<!-- BOOK_GIG_RUN_DATA:
-{
-  "candidates": [{"_id": "v1", "name": "Venue 1"}],
-  "pitches": [{"venueId": "v1", "venueName": "Venue 1", "to": "a@b.com", "subject": "Sub", "body": "Body"}],
-  "batchDispatch": {"requested": 1, "sent": 1, "skipped": [], "records": []}
-}
--->
-`;
-  const parsedMd = extractRunDataFromMarkdown(sampleMd);
-  assert(parsedMd);
-  assertEquals(parsedMd.candidates.length, 1);
-  assertEquals(parsedMd.candidates[0].name, "Venue 1");
-  assertEquals(parsedMd.batchDispatch?.sent, 1);
-
+Deno.test("extractRunDataFromHtml: extracts and parses run data embedded in a published report", () => {
   const sampleHtml = `
 <html>
 <body>
@@ -3211,7 +3023,7 @@ Deno.test("filterAndRankCandidates: does not mutate input candidate objects and 
   assertEquals(secondPass[0].isExcluded, false);
 });
 
-Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in terminal and HTML artifacts (#879)", async () => {
+Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in terminal and HTML artifacts (#879)", () => {
   const refDate = new Date("2026-10-01T00:00:00.000Z");
   const candidates: CandidateVenue[] = [
     {
@@ -3300,20 +3112,6 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
   assertStringIncludes(html, "[Direct Chat Active]");
   assertStringIncludes(html, "badge-cooldown");
   assertStringIncludes(html, "[Cooldown Active: Sent Sep 28]");
-
-  // 4. Markdown run log
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_badges_" });
-  try {
-    const logPath = await writeDropboxRunLog(result, tmpDir);
-    assert(logPath !== null);
-    const mdContent = await Deno.readTextFile(logPath);
-    assertStringIncludes(mdContent, "[Seasonal Hold: Jan 2027]");
-    assertStringIncludes(mdContent, "[Gig Spacing: Nov 20 Show]");
-    assertStringIncludes(mdContent, "[Direct Chat Active]");
-    assertStringIncludes(mdContent, "[Cooldown Active: Sent Sep 28]");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
 });
 
 Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and cooldown venues alongside genuine /outreach/candidates response", async () => {

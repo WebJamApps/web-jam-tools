@@ -8,10 +8,7 @@ import {
 } from "./candidates.ts";
 export { renderCandidateTable };
 import { renderPitch } from "./pitch.ts";
-import { writeDropboxRunLog } from "./gmail.ts";
-import { openHtmlInBrowser } from "./browser.ts";
-import { renderDarkHtml } from "./html.ts";
-import { publishOutreachReport } from "./publish.ts";
+import { publishAndOpenReport } from "./publish.ts";
 import { executeLinkGig } from "./venue_link.ts";
 import { executeVenueHold } from "./cooldown.ts";
 import {
@@ -197,38 +194,31 @@ export async function runBookGigCli(
       },
     };
 
-    // 6. Publish to web-jam-back and write tracking log & Dark HTML artifact
-    const htmlContent = renderDarkHtml(result);
-    const publishRes = await publishOutreachReport(result, htmlContent, {}, fetchFn);
-    if (publishRes.success && publishRes.url) {
-      result.reportUrl = publishRes.url;
+    // 6. Publish the merged report to web-jam-back (the sole durable copy) and open the
+    // disposable scratch HTML in Chrome for immediate review.
+    const published = await publishAndOpenReport(
+      result,
+      { noOpen: parsed.noOpen, openBrowser: openBrowserImpl },
+      fetchFn,
+    );
+    const finalResult = published.result;
+    if (finalResult.reportUrl) {
+      console.log(`\n🌐 Live web-jam.com Report URL: ${finalResult.reportUrl}`);
     }
-
-    const logPath = await writeDropboxRunLog(result);
-    if (logPath) {
-      console.log(`\n📝 Saved status run log to: ${logPath}`);
-      const htmlPath = logPath.replace(/\.md$/, ".html");
-      const absHtmlPath = path.resolve(htmlPath);
-      if (result.reportUrl) {
-        console.log(`🌐 Live web-jam.com Report URL: ${result.reportUrl}`);
-      }
+    if (published.htmlPath) {
+      const absHtmlPath = path.resolve(published.htmlPath);
       console.log(
-        `📁 Local Review HTML Artifact: [${path.basename(htmlPath)}](file://${absHtmlPath})`,
+        `📁 Local Review HTML Artifact: [${
+          path.basename(published.htmlPath)
+        }](file://${absHtmlPath})`,
       );
       console.log(`📁 File URL: file://${absHtmlPath}`);
-      result.htmlPath = htmlPath;
-
-      if (!parsed.noOpen) {
-        const opener = openBrowserImpl || openHtmlInBrowser;
-        const opened = await opener(htmlPath);
-        result.openedBrowser = opened;
-        if (opened) {
-          console.log(`🚀 Automatically opened live campaign artifact in Google Chrome.`);
-        }
+      if (published.opened) {
+        console.log(`🚀 Automatically opened live campaign artifact in Google Chrome.`);
       }
     }
 
-    return result;
+    return finalResult;
   }
 
   // -------------------------------------------------------------------------
@@ -596,38 +586,31 @@ export async function runBookGigCli(
     batchDispatch,
   };
 
-  // 7. Publish to web-jam-back and write run log to Dropbox (Markdown + Responsive Dark Mode HTML)
-  const htmlContent = renderDarkHtml(result);
-  const publishRes = await publishOutreachReport(result, htmlContent, {}, fetchFn);
-  if (publishRes.success && publishRes.url) {
-    result.reportUrl = publishRes.url;
+  // 7. Publish the merged report to web-jam-back (the sole durable copy) and open the
+  // disposable scratch HTML in Chrome for immediate review.
+  const published = await publishAndOpenReport(
+    result,
+    { noOpen: parsed.noOpen, openBrowser: openBrowserImpl },
+    fetchFn,
+  );
+  const finalResult = published.result;
+  if (finalResult.reportUrl) {
+    console.log(`🌐 Live web-jam.com Report URL: ${finalResult.reportUrl}`);
   }
-
-  const logPath = await writeDropboxRunLog(result);
-  if (logPath) {
-    console.log(`📝 Saved run summary log to: ${logPath}`);
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const absHtmlPath = path.resolve(htmlPath);
-    if (result.reportUrl) {
-      console.log(`🌐 Live web-jam.com Report URL: ${result.reportUrl}`);
-    }
+  if (published.htmlPath) {
+    const absHtmlPath = path.resolve(published.htmlPath);
     console.log(
-      `📁 Local Review HTML Artifact: [${path.basename(htmlPath)}](file://${absHtmlPath})`,
+      `📁 Local Review HTML Artifact: [${
+        path.basename(published.htmlPath)
+      }](file://${absHtmlPath})`,
     );
     console.log(`📁 File URL: file://${absHtmlPath}`);
-    result.htmlPath = htmlPath;
-
-    if (!parsed.noOpen) {
-      const opener = openBrowserImpl || openHtmlInBrowser;
-      const opened = await opener(htmlPath);
-      result.openedBrowser = opened;
-      if (opened) {
-        console.log(`🚀 Automatically opened review artifact in Google Chrome.`);
-      }
+    if (published.opened) {
+      console.log(`🚀 Automatically opened review artifact in Google Chrome.`);
     }
   }
 
-  return result;
+  return finalResult;
 }
 
 if (import.meta.main) {
