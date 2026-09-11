@@ -185,6 +185,19 @@ export interface VenueHoldResult {
   message: string;
 }
 
+export interface PitchPreview {
+  venueId: string;
+  venueName: string;
+  subject: string;
+  /**
+   * The rendered email HTML, exactly as returned by the backend's
+   * `buildPitchEmail()` via `GET /outreach/preview` (web-jam-tools#948) — the
+   * same function `POST /outreach/batch` mails through, so this is
+   * byte-identical to what is dispatched rather than a second rendering.
+   */
+  body: string;
+}
+
 export interface Gate1ApprovalRecord {
   _id?: string;
   batchId: string;
