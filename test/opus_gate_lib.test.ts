@@ -9,6 +9,7 @@ import { assert, assertEquals } from "@std/assert";
 import {
   approvesOpusSubagent,
   asksForOpusSubagent,
+  asksOpusToDoTheWork,
   createLabelLookup,
   decide,
   decideMainThreadEdit,
@@ -112,6 +113,29 @@ Deno.test("isOpusModel / asksForOpusSubagent / approvesOpusSubagent", () => {
   assert(approvesOpusSubagent("OK, opus edit ok, go"));
   assert(approvesOpusSubagent("spawn an Opus subagent"));
   assert(!approvesOpusSubagent("please fix it"));
+});
+
+// --- D-8 ---
+
+Deno.test("asksOpusToDoTheWork: a verb naming Opus as the one to do the work, negated by a preceding not/don't/never/no", () => {
+  assert(
+    asksOpusToDoTheWork(
+      "please use OPUS to fix https://github.com/WebJamApps/web-jam-tools/pull/968",
+    ),
+  );
+  assert(asksOpusToDoTheWork("have Opus fix it"));
+  assert(asksOpusToDoTheWork("using opus for this"));
+  assert(asksOpusToDoTheWork("let an Opus agent do it"));
+  assert(asksOpusToDoTheWork("fix it with Opus"));
+
+  assert(!asksOpusToDoTheWork("don't use Opus"));
+  assert(!asksOpusToDoTheWork("do not use opus"));
+  assert(!asksOpusToDoTheWork("never have Opus edit"));
+  assert(!asksOpusToDoTheWork("Opus ate my tokens, did not delegate to Sonnet"));
+  assert(!asksOpusToDoTheWork("use Sonnet not Opus"));
+  assert(!asksOpusToDoTheWork("opus is fine here"));
+
+  assert(approvesOpusSubagent("please use OPUS to fix it"));
 });
 
 Deno.test("resolveSessionFiles: main transcript and subagent transcript resolve to the same files", () => {
@@ -390,6 +414,36 @@ Deno.test("decideMainThreadEdit: every outcome", () => {
     labels,
   );
   assertEquals(plain, { decision: "deny", kind: "main", why: "" });
+
+  // D-8: a message asking Opus to do the work approves like "opus edit ok" does.
+  assertEquals(
+    decideMainThreadEdit(
+      MAIN,
+      at([human("please use OPUS to fix PR 968"), assistant("claude-opus-5")]),
+      noLookup,
+    ).decision,
+    "allow",
+  );
+  assertEquals(
+    decideMainThreadEdit(
+      MAIN,
+      at([human("don't use Opus, fix it"), assistant("claude-opus-5")]),
+      noLookup,
+    ),
+    { decision: "deny", kind: "main", why: "" },
+  );
+  assertEquals(
+    decideMainThreadEdit(
+      MAIN,
+      at([
+        human("fix it"),
+        assistant("claude-opus-5"),
+        notification("<task-notification>use Opus</task-notification>"),
+      ]),
+      noLookup,
+    ),
+    { decision: "deny", kind: "main", why: "" },
+  );
 });
 
 Deno.test("decideSubagentEdit: every outcome", () => {
@@ -398,12 +452,15 @@ Deno.test("decideSubagentEdit: every outcome", () => {
     spawn("toolu_plain"),
     human("dispatch to an Opus subagent"),
     spawn("toolu_ok"),
+    human("use Opus to fix it"),
+    spawn("toolu_ask"),
   ]);
   const files = {
     [MAIN]: main,
     ...meta("s1", { model: "sonnet", toolUseId: "toolu_plain" }),
     ...meta("plain", { model: "opus", toolUseId: "toolu_plain" }),
     ...meta("ok", { model: "opus", toolUseId: "toolu_ok" }),
+    ...meta("ask", { model: "opus", toolUseId: "toolu_ask" }),
     ...meta("orphan", { model: "opus", toolUseId: "toolu_missing" }),
   };
   const read = reader(files);
@@ -413,6 +470,8 @@ Deno.test("decideSubagentEdit: every outcome", () => {
   assertEquals(decideSubagentEdit("s1", MAIN, read).decision, "allow");
   assertEquals(decideSubagentEdit("ok", MAIN, read).decision, "allow");
   assertEquals(decideSubagentEdit("ok", `${SUBAGENTS}/agent-ok.jsonl`, read).decision, "allow");
+  // D-8: an Opus subagent spawned by "use Opus to fix it" proceeds.
+  assertEquals(decideSubagentEdit("ask", MAIN, read).decision, "allow");
   assert(decideSubagentEdit("plain", MAIN, read).why.includes("neither contains"));
   assert(decideSubagentEdit("orphan", MAIN, read).why.includes("could not be found"));
 });
