@@ -123,39 +123,38 @@ export async function publishOutreachReport(
   }
 }
 
+/** Outcome of reading a weekend's stored report. Only "none" (HTTP 404) means start fresh. */
+export type PriorReportRead =
+  | { status: "found"; html: string }
+  | { status: "none" }
+  | { status: "failed"; error: string };
+
 /**
  * Fetch the previously stored report HTML for a weekend from GET /outreach/report/:weekend,
- * so a new batch can accumulate into it. Returns null if none exists yet (HTTP 404) or the
- * fetch fails — a missing/unreadable previous report is treated as "start fresh", never an error.
+ * so a new batch can accumulate into it. Never throws. Only an HTTP 404 means no report exists
+ * yet; any other HTTP error or a network error is "failed", because posting over a report that
+ * could not be read would erase every earlier batch stored for that weekend.
  */
 export async function fetchOutreachReport(
   weekendSlug: string,
   options: BackendConfigOptions = {},
   fetchFn: typeof fetch = fetch,
-): Promise<string | null> {
+): Promise<PriorReportRead> {
   try {
     const { baseUrl } = await resolveBackendConfig(options);
     const url = `${baseUrl}/outreach/report/${encodeURIComponent(weekendSlug)}`;
     const res = await fetchFn(url, { method: "GET", headers: { Accept: "text/html" } });
 
     if (res.status === 404) {
-      return null;
+      return { status: "none" };
     }
     if (!res.ok) {
-      console.warn(
-        `[book-gig] Note: fetching prior report for '${weekendSlug}' returned HTTP ${res.status}`,
-      );
-      return null;
+      return { status: "failed", error: `HTTP ${res.status}` };
     }
 
-    return await res.text();
+    return { status: "found", html: await res.text() };
   } catch (err) {
-    console.warn(
-      `[book-gig] Note: could not fetch prior report for '${weekendSlug}': ${
-        (err as Error).message
-      }`,
-    );
-    return null;
+    return { status: "failed", error: (err as Error).message };
   }
 }
 
@@ -163,13 +162,16 @@ export async function fetchOutreachReport(
  * Write the rendered report HTML to a disposable local scratch file purely so it can be
  * opened in Chrome immediately. This file is never read back — the database copy posted via
  * POST /outreach/report is the sole durable record (web-jam-tools#955, decision D-51).
+ * It always goes in one fixed directory under the system temp dir, so each run overwrites
+ * the weekend's file instead of leaving a new directory behind.
  */
 export async function writeScratchReportHtml(
   htmlContent: string,
   weekendSlug: string,
   scratchDir?: string,
 ): Promise<string> {
-  const dir = scratchDir ?? `${await Deno.makeTempDir({ prefix: "book-gig-review-" })}`;
+  const dir = scratchDir ??
+    `${(Deno.env.get("TMPDIR") || "/tmp").replace(/\/+$/, "")}/book-gig-review`;
   await Deno.mkdir(dir, { recursive: true });
   const htmlPath = `${dir}/book-gig-run-${weekendSlug}.html`;
   await Deno.writeTextFile(htmlPath, htmlContent);
@@ -206,12 +208,15 @@ export async function publishAndOpenReport(
   const weekendSlug = weekendReportSlug(result);
 
   let merged = result;
+  let priorReportReadError: string | null = null;
   const alreadyConsolidated = (result as unknown as { _alreadyConsolidated?: boolean })
     ._alreadyConsolidated;
   if (result.weekend && !alreadyConsolidated) {
-    const existingHtml = await fetchOutreachReport(weekendSlug, options, fetchFn);
-    if (existingHtml) {
-      const existingData = extractRunDataFromHtml(existingHtml);
+    const prior = await fetchOutreachReport(weekendSlug, options, fetchFn);
+    if (prior.status === "failed") {
+      priorReportReadError = prior.error;
+    } else if (prior.status === "found") {
+      const existingData = extractRunDataFromHtml(prior.html);
       if (existingData) {
         merged = mergeWeekendRuns(
           {
@@ -219,17 +224,28 @@ export async function publishAndOpenReport(
             pitches: existingData.pitches ?? [],
             batchDispatch: existingData.batchDispatch,
             reportUrl: existingData.reportUrl,
+            batches: existingData.batches,
           },
           result,
         );
+      } else {
+        priorReportReadError = "the stored report has no run data to merge into";
       }
     }
   }
 
   const finalHtml = renderDarkHtml(merged);
-  const publishRes = await publishOutreachReport(merged, finalHtml, options, fetchFn);
-  if (publishRes.success && publishRes.url) {
-    merged = { ...merged, reportUrl: publishRes.url };
+  if (priorReportReadError === null) {
+    const publishRes = await publishOutreachReport(merged, finalHtml, options, fetchFn);
+    if (publishRes.success && publishRes.url) {
+      merged = { ...merged, reportUrl: publishRes.url };
+    }
+  } else {
+    console.warn(
+      `[book-gig] Warning: the stored report for '${weekendSlug}' was NOT updated. ` +
+        `Reading it failed (${priorReportReadError}), and posting this batch would erase the ` +
+        `earlier batches stored for that weekend. This batch is only in the local scratch file.`,
+    );
   }
 
   let htmlPath: string | null = null;

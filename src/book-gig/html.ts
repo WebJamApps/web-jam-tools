@@ -8,6 +8,7 @@ import type {
   PitchEmail,
 } from "./types.ts";
 import { identifyCandidateBadge } from "./candidates.ts";
+import type { WeekendRunData } from "./gmail.ts";
 
 function escapeHtml(str: string): string {
   return str
@@ -1053,6 +1054,8 @@ ${
       weekend: result.weekend,
       location: result.location,
       reportUrl: result.reportUrl,
+      batches: (result as unknown as { _runDataBatches?: WeekendRunData["batches"] })
+        ._runDataBatches,
     })
   }
   </script>
@@ -1073,6 +1076,7 @@ export function extractRunDataFromHtml(htmlContent: string): {
   pitches?: PitchEmail[];
   batchDispatch?: BatchDispatchResult;
   reportUrl?: string;
+  batches?: WeekendRunData["batches"];
 } | null {
   const scriptMatch = htmlContent.match(
     /<script\s+id=["']book-gig-run-data["']\s+type=["']application\/json["']>([\s\S]*?)<\/script>/i,
@@ -1085,6 +1089,7 @@ export function extractRunDataFromHtml(htmlContent: string): {
         pitches: Array.isArray(parsed.pitches) ? parsed.pitches : [],
         batchDispatch: parsed.batchDispatch,
         reportUrl: parsed.reportUrl,
+        batches: Array.isArray(parsed.batches) ? parsed.batches : undefined,
       };
     } catch {
       // Fall through to DOM parsing
