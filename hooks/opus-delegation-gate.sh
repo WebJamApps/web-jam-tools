@@ -14,12 +14,14 @@
 #   Step 3: Not inside a git working tree -> allow (exit 0)
 #   Step 4: hooks/lib/opus_gate.ts decides everything else from the payload:
 #     - Subagent call in auto mode (D-6): allow when the subagent's own model is not Opus, or it is
-#       Opus and the human prompt that spawned it contains "opus edit ok" or asks for an Opus
-#       subagent. An undeterminable model or spawning prompt refuses.
+#       Opus and the human prompt that spawned it contains "opus edit ok", asks for an Opus
+#       subagent, or asks Opus to do the work (D-8, e.g. "use Opus to fix it"). An undeterminable
+#       model or spawning prompt refuses.
 #     - Main-thread call: allow when the session model is not Opus, when Josh's latest HUMAN prompt
-#       contains "opus edit ok", or when the most recent slash command he typed is /work-issue on an
-#       issue labeled Opus (D-7; the label is read with gh and reused for ten minutes). Any other
-#       label, no issue named, or a failed lookup gives no approval, so Opus must delegate.
+#       contains "opus edit ok" or asks Opus to do the work (D-8), or when the most recent slash
+#       command he typed is /work-issue on an issue labeled Opus (D-7; the label is read with gh and
+#       reused for ten minutes). Any other label, no issue named, or a failed lookup gives no
+#       approval, so Opus must delegate.
 #     Only prompts Josh actually sent (origin.kind "human", not isMeta) count, so a task
 #     notification neither grants approval nor cancels it.
 #   Step 5: Otherwise refuse (deny) with JSON naming the target file and the reason. A main-thread
@@ -108,7 +110,7 @@ if [ "$kind" = "subagent" ]; then
     why="The subagent's model or spawning message could not be determined."
   fi
   reason="⛔ Opus delegation gate: refused a subagent's write to '$target_path'.
-In auto mode a Sonnet or Haiku subagent may edit. An Opus subagent may edit only when the message Josh typed to ask for it contains \"opus edit ok\" or asks for an Opus subagent.
+In auto mode a Sonnet or Haiku subagent may edit. An Opus subagent may edit only when the message Josh typed to ask for it contains \"opus edit ok\", asks for an Opus subagent, or asks Opus to do the work.
 $why"
 else
   reason="⛔ Opus delegation gate: refused write to '$target_path'.

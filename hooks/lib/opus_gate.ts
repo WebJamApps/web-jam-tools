@@ -2,8 +2,9 @@
  * Opus delegation gate decisions (web-jam-tools#965).
  *
  * Requirements: ~/Dropbox/web-jam-llms/Token_Savings/opus-delegation-gate-design-2026-08-18.md,
- * Appendix C, decisions D-6 (subagent edits in auto mode) and D-7 (a `/work-issue` run on an
- * Opus-labeled issue approves the Opus session's own edits).
+ * Appendix C, decisions D-6 (subagent edits in auto mode), D-7 (a `/work-issue` run on an
+ * Opus-labeled issue approves the Opus session's own edits), and D-8 (a message asking Opus to do
+ * the work approves like "opus edit ok" does).
  *
  * hooks/opus-delegation-gate.sh makes the cheap exits itself (a subagent call outside auto mode, no
  * target path, a path outside any git working tree) and pipes every remaining PreToolUse payload to
@@ -11,14 +12,14 @@
  *
  * Main-thread call — allowed when:
  *   - the session model is not Opus, or
- *   - Josh's latest HUMAN prompt contains "opus edit ok", or
+ *   - Josh's latest HUMAN prompt contains "opus edit ok" or asks Opus to do the work, or
  *   - the most recent slash command in the transcript is a `/work-issue` Josh typed, naming an issue
  *     whose model label is Opus (D-7). Any other label, no issue named, or a failed label lookup gives
  *     no approval — the skill then has to delegate to the labeled tier.
  *
  * Subagent call in auto mode (D-6) — allowed when the subagent's own model is not Opus, or when it is
- * Opus and the human prompt that spawned it contains "opus edit ok" or asks for an Opus subagent.
- * An undeterminable model or spawning prompt is refused.
+ * Opus and the human prompt that spawned it contains "opus edit ok", asks for an Opus subagent, or
+ * asks Opus to do the work. An undeterminable model or spawning prompt is refused.
  *
  * Only prompts a person actually sent count (isHumanPrompt), on every path: a task notification or
  * an isMeta injection can neither grant approval nor displace Josh's last real prompt.
@@ -112,8 +113,21 @@ export function asksForOpusSubagent(text: string): boolean {
   return /\bopus\s+sub-?agents?\b/i.test(text);
 }
 
+/**
+ * True when the text instructs Opus to do the work, e.g. "please use OPUS to fix this" or "have Opus
+ * fix it" (D-8). Only an instruction counts: use/have/let/make/get/ask must open the text, a line or a
+ * clause (after punctuation, "please", "and" or "then"), then an optional article, then "opus". A
+ * complaint ("why did you use Opus", "don't use Opus") or a bare mention ("the problem with Opus")
+ * does not match, so anything that is not plainly a request fails closed.
+ */
+export function asksOpusToDoTheWork(text: string): boolean {
+  return /(?:^\s*|[.!?,;:]\s*|\b(?:please|and|then)\s+)(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?opus\b/im
+    .test(text);
+}
+
 export function approvesOpusSubagent(text: string): boolean {
-  return text.toLowerCase().includes(ESCAPE_PHRASE) || asksForOpusSubagent(text);
+  return text.toLowerCase().includes(ESCAPE_PHRASE) || asksForOpusSubagent(text) ||
+    asksOpusToDoTheWork(text);
 }
 
 export interface SessionFiles {
@@ -400,7 +414,12 @@ export function decideMainThreadEdit(
     return deny("main", "The session model could not be determined from the transcript.");
   }
   if (!isOpusModel(info.model)) return allow("main");
-  if (info.hasEscape || workIssueApprovalActive(entries, lookupLabels)) return allow("main");
+  if (
+    info.hasEscape || asksOpusToDoTheWork(info.lastUserText) ||
+    workIssueApprovalActive(entries, lookupLabels)
+  ) {
+    return allow("main");
+  }
   return deny("main", "");
 }
 
@@ -431,7 +450,8 @@ export function decideSubagentEdit(
   if (approvesOpusSubagent(extractEntryText(prompt))) return allow("subagent");
   return deny(
     "subagent",
-    'This is an Opus subagent, and the message that spawned it neither contains "opus edit ok" nor asks for an Opus subagent.',
+    'This is an Opus subagent, and the message that spawned it neither contains "opus edit ok", ' +
+      "asks for an Opus subagent, nor asks Opus to do the work.",
   );
 }
 
