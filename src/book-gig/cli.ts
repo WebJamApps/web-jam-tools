@@ -600,7 +600,9 @@ export async function runBookGigCli(
   if (published.htmlPath) {
     const absHtmlPath = path.resolve(published.htmlPath);
     console.log(
-      `📁 Local Review HTML Artifact: [${path.basename(published.htmlPath)}](file://${absHtmlPath})`,
+      `📁 Local Review HTML Artifact: [${
+        path.basename(published.htmlPath)
+      }](file://${absHtmlPath})`,
     );
     console.log(`📁 File URL: file://${absHtmlPath}`);
     if (published.opened) {
