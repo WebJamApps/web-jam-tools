@@ -1024,27 +1024,33 @@ export function parseLocation(input?: string): TargetLocation | null {
   // E.g. "Lynchburg, Blacksburg, and Roanoke"
   const commaParts = working.split(",").map((p) => p.trim()).filter(Boolean);
   const rawCityTokens: string[] = [];
-  let detectedState: string | undefined;
+  // Only a state token/suffix the caller actually typed sets this — never an
+  // inference from a matched city's metro metadata. An explicit state always
+  // wins; without one, a multi-city search carries no implied state unless
+  // every named city resolves to the same known state (design doc Premise 23 /
+  // Step 2: a state constrains the search only when stated outright, or when
+  // every city in the list sits in the same one).
+  let explicitState: string | undefined;
 
   for (let i = 0; i < commaParts.length; i++) {
     let part = commaParts[i];
     // Check if this part is just a 2-letter state code like "VA"
     if (part.length === 2 && US_STATES.has(part.toUpperCase())) {
-      detectedState = part.toUpperCase();
+      explicitState = part.toUpperCase();
       continue;
     }
     // Check if part ends with state like "Lynchburg VA"
     const stateSuffixMatch = part.match(/^(.*?)\s+([a-zA-Z]{2})$/);
     if (stateSuffixMatch && US_STATES.has(stateSuffixMatch[2].toUpperCase())) {
       part = stateSuffixMatch[1].trim();
-      detectedState = stateSuffixMatch[2].toUpperCase();
+      explicitState = stateSuffixMatch[2].toUpperCase();
     }
 
     // Split part on "and" if it contains "and"
     const andParts = part.split(/\band\b/i).map((p) => p.trim()).filter(Boolean);
     for (const ap of andParts) {
       if (ap.length === 2 && US_STATES.has(ap.toUpperCase())) {
-        detectedState = ap.toUpperCase();
+        explicitState = ap.toUpperCase();
       } else if (ap && /[a-zA-Z]/.test(ap) && !/^\d+$/.test(ap)) {
         rawCityTokens.push(ap);
       }
@@ -1059,6 +1065,7 @@ export function parseLocation(input?: string): TargetLocation | null {
   const cities: string[] = [];
   const metroSlugs: string[] = [];
   const surroundingSet = new Set<string>();
+  const perCityKnownStates: (string | undefined)[] = [];
 
   for (const rawToken of rawCityTokens) {
     const lowerToken = rawToken.toLowerCase();
@@ -1066,13 +1073,11 @@ export function parseLocation(input?: string): TargetLocation | null {
     const cityName = known ? known.city : rawToken.replace(/\b\w/g, (c) => c.toUpperCase());
     if (!cities.includes(cityName)) {
       cities.push(cityName);
+      perCityKnownStates.push(known?.state);
     }
     const slug = known?.slug || lowerToken.replace(/\s+/g, "-");
     if (!metroSlugs.includes(slug)) {
       metroSlugs.push(slug);
-    }
-    if (known?.state && !detectedState) {
-      detectedState = known.state;
     }
     // Collect surrounding cities
     const surroundingList = METRO_SURROUNDING[slug] || METRO_SURROUNDING[lowerToken] || [];
@@ -1080,6 +1085,15 @@ export function parseLocation(input?: string): TargetLocation | null {
       surroundingSet.add(sc);
     }
   }
+
+  // Every named city must resolve to the same known state for it to count as
+  // "uniform" — a mix of known and unknown, or two different states, leaves
+  // the state unset rather than silently narrowing to one of them.
+  const uniformKnownState = perCityKnownStates.length > 0 &&
+      perCityKnownStates.every((s) => s !== undefined && s === perCityKnownStates[0])
+    ? perCityKnownStates[0]
+    : undefined;
+  const detectedState = explicitState || uniformKnownState;
 
   // Remove target cities from surroundingCities set
   for (const c of cities) {
