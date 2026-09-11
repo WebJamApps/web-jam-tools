@@ -2,11 +2,12 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import {
+  fetchOutreachReport,
   formatReportPayload,
+  publishAndOpenReport,
   publishOutreachReport,
   WEB_JAM_REPORT_BASE_URL,
 } from "../src/book-gig/publish.ts";
-import { writeDropboxRunLog } from "../src/book-gig/gmail.ts";
 import { runBookGigCli } from "../src/book-gig/cli.ts";
 import type { BookGigResult, TargetWeekend } from "../src/book-gig/types.ts";
 
@@ -145,24 +146,151 @@ Deno.test("publishOutreachReport: handles network throw gracefully without throw
   assertEquals(res.error, "Network connection refused");
 });
 
-Deno.test("writeDropboxRunLog: includes Web Report URL link when reportUrl is present", async () => {
-  const testDir = await Deno.makeTempDir({ prefix: "book_gig_test_" });
+Deno.test("fetchOutreachReport: returns the stored HTML on success", async () => {
+  const mockFetch: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : (input as Request).url;
+    assertStringIncludes(url, "/outreach/report/2026-10-16-to-2026-10-18");
+    return Promise.resolve(
+      new Response("<html><body>Prior report</body></html>", { status: 200 }),
+    );
+  };
+
+  const html = await fetchOutreachReport(
+    "2026-10-16-to-2026-10-18",
+    { backendUrl: "https://mock-backend.web-jam.com" },
+    mockFetch,
+  );
+  assertStringIncludes(html ?? "", "Prior report");
+});
+
+Deno.test("fetchOutreachReport: returns null on 404 (no report exists yet)", async () => {
+  const mockFetch: typeof fetch = () => Promise.resolve(new Response("Not Found", { status: 404 }));
+  const html = await fetchOutreachReport(
+    "2026-10-16-to-2026-10-18",
+    { backendUrl: "https://mock-backend.web-jam.com" },
+    mockFetch,
+  );
+  assertEquals(html, null);
+});
+
+Deno.test("fetchOutreachReport: returns null (never throws) when the fetch itself fails", async () => {
+  const mockFetch: typeof fetch = () => Promise.reject(new Error("network down"));
+  const html = await fetchOutreachReport(
+    "2026-10-16-to-2026-10-18",
+    { backendUrl: "https://mock-backend.web-jam.com" },
+    mockFetch,
+  );
+  assertEquals(html, null);
+});
+
+Deno.test("publishAndOpenReport: writes a disposable scratch HTML file (never Dropbox) and includes the Web Report URL", async () => {
+  const scratchDir = await Deno.makeTempDir({ prefix: "book_gig_scratch_" });
   try {
-    const resultWithUrl: BookGigResult = {
-      ...sampleResult,
-      reportUrl: `${WEB_JAM_REPORT_BASE_URL}/2026-10-16-to-2026-10-18`,
+    const mockFetch: typeof fetch = (input, init) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/outreach/report/") && (!init || init.method === "GET")) {
+        return Promise.resolve(new Response("Not Found", { status: 404 }));
+      }
+      if (url.endsWith("/outreach/report") && init?.method === "POST") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ message: "Created" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
     };
 
-    const logPath = await writeDropboxRunLog(resultWithUrl, testDir);
-    assert(logPath !== null);
-
-    const mdContent = await Deno.readTextFile(logPath);
-    assertStringIncludes(
-      mdContent,
-      `**Web Report URL:** [https://www.web-jam.com/outreach/report/2026-10-16-to-2026-10-18](https://www.web-jam.com/outreach/report/2026-10-16-to-2026-10-18)`,
+    const { result, htmlPath } = await publishAndOpenReport(
+      sampleResult,
+      {
+        backendUrl: "https://mock-backend.web-jam.com",
+        scratchDir,
+        noOpen: true,
+      },
+      mockFetch,
     );
+
+    assertEquals(result.reportUrl, `${WEB_JAM_REPORT_BASE_URL}/2026-10-16-to-2026-10-18`);
+    assert(htmlPath !== null);
+    assertStringIncludes(htmlPath!, scratchDir);
+    assert(!htmlPath!.includes("Dropbox"));
+
+    const scratchContent = await Deno.readTextFile(htmlPath!);
+    assertStringIncludes(scratchContent, "The Glass House");
   } finally {
-    await Deno.remove(testDir, { recursive: true });
+    await Deno.remove(scratchDir, { recursive: true });
+  }
+});
+
+Deno.test("publishAndOpenReport: a second dispatch batch for the same weekend accumulates into the stored report (#955)", async () => {
+  const scratchDir = await Deno.makeTempDir({ prefix: "book_gig_scratch2_" });
+  try {
+    let storedHtml: string | null = null;
+
+    const mockFetch: typeof fetch = (input, init) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/outreach/report/") && (!init || init.method === "GET")) {
+        return Promise.resolve(
+          storedHtml === null
+            ? new Response("Not Found", { status: 404 })
+            : new Response(storedHtml, { status: 200 }),
+        );
+      }
+      if (url.endsWith("/outreach/report") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string);
+        storedHtml = body.htmlContent;
+        return Promise.resolve(
+          new Response(JSON.stringify({ message: "Saved" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    };
+
+    const batch1: BookGigResult = {
+      mode: "send",
+      weekend: sampleWeekend,
+      candidates: [sampleResult.candidates[0]],
+      density: { count: 1, isSparse: true },
+      pitches: [],
+      batchDispatch: { requested: 1, sent: 1, skipped: [], records: [{ venueId: "v1" }] },
+    };
+    const batch2: BookGigResult = {
+      mode: "send",
+      weekend: sampleWeekend,
+      candidates: [sampleResult.candidates[1]],
+      density: { count: 1, isSparse: true },
+      pitches: [],
+      batchDispatch: { requested: 1, sent: 1, skipped: [], records: [{ venueId: "v2" }] },
+    };
+
+    await publishAndOpenReport(
+      batch1,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+    const { result: mergedResult } = await publishAndOpenReport(
+      batch2,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    assertEquals(mergedResult.candidates.length, 2);
+    assertEquals(mergedResult.batchDispatch?.requested, 2);
+    assertEquals(mergedResult.batchDispatch?.sent, 2);
+    assert(storedHtml !== null);
+    assertStringIncludes(storedHtml!, "The Glass House");
+    assertStringIncludes(storedHtml!, "Three Roads Brewing");
+
+    // Reading the merged result back from the stored report proves accumulation lives
+    // in the database, not in a local file.
+    const readBack = await fetchOutreachReport(
+      "2026-10-16-to-2026-10-18",
+      { backendUrl: "https://mock-backend.web-jam.com" },
+      mockFetch,
+    );
+    assertStringIncludes(readBack ?? "", "The Glass House");
+    assertStringIncludes(readBack ?? "", "Three Roads Brewing");
+  } finally {
+    await Deno.remove(scratchDir, { recursive: true });
   }
 });
 
