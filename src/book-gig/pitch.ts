@@ -326,17 +326,40 @@ export function detectConversationContext(venue: CandidateVenue): ConversationCo
   return null;
 }
 
+const PRIOR_PERFORMANCE_NOTE_RE = /\blast\s+played|\bplayed\s+(here|there)\s+before/i;
+const NEVER_PLAYED_NOTE_RE = /\b(never|haven't|not)\s+played\b/i;
+
+export function hasPriorPerformanceInNotes(venue: CandidateVenue): boolean {
+  const combinedNotes = [
+    venue.notes,
+    venue.bookingNotes,
+    venue.contactNotes,
+    venue.priorContactNotes,
+  ].filter(Boolean).join(" ");
+  if (!combinedNotes) return false;
+  if (NEVER_PLAYED_NOTE_RE.test(combinedNotes)) return false;
+  return PRIOR_PERFORMANCE_NOTE_RE.test(combinedNotes);
+}
+
 export function resolveVenueStage(
   venue: CandidateVenue,
   options?: RenderPitchOptions,
 ): TemplateStage {
   if (options?.isReturningVenue) return "returning";
   if (venue.bookingStatus === "booked") return "returning";
+  if (venue.reason?.lastGigDate === "never" || venue.lastGigDate === "never") {
+    return "cold";
+  }
   if (venue.reason?.lastGigDate && venue.reason.lastGigDate !== "never") return "returning";
+  if (venue.lastGig && (venue.lastGig.datetime || venue.lastGig.date)) return "returning";
+  if (venue.lastGigDate && venue.lastGigDate !== "never") return "returning";
   if (
     venue.priorGigs &&
     (Array.isArray(venue.priorGigs) ? venue.priorGigs.length > 0 : Boolean(venue.priorGigs))
   ) {
+    return "returning";
+  }
+  if (hasPriorPerformanceInNotes(venue)) {
     return "returning";
   }
   return "cold";
