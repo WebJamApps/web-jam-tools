@@ -1260,7 +1260,9 @@ Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — the four phrases that worked
 Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — the real phrasings Josh was refused on today", () => {
   // Refused before web-jam-tools#975 merged.
   assertEquals(
-    filingSkillInvoked("create an issue for JaMmusic then for the work you want to dispatch to Flash"),
+    filingSkillInvoked(
+      "create an issue for JaMmusic then for the work you want to dispatch to Flash",
+    ),
     "file-issue",
   );
   // Still refused after #975 merged (leading "please" AND the word "new").
@@ -1313,13 +1315,18 @@ Deno.test("checkTokenWriteAuthorization: three-outcome coverage — holds, does 
   // Outcome 2: condition does not hold — no authorizing invocation anywhere in the transcript.
   const doesNotHold = checkTokenWriteAuthorization({
     entries: [
-      { type: "user", message: { role: "user", content: "we discussed creating an issue yesterday" } },
+      {
+        type: "user",
+        message: { role: "user", content: "we discussed creating an issue yesterday" },
+      },
     ],
     ownConversationId: "sess-1",
     isSubagentInvocation: false,
   });
   assertEquals(doesNotHold.ok, false);
-  assert(doesNotHold.reason?.includes("no /design-issue invocation, and no /file-issue invocation"));
+  assert(
+    doesNotHold.reason?.includes("no /design-issue invocation, and no /file-issue invocation"),
+  );
 
   // Outcome 3: indeterminate (own conversation identity cannot be established) — fails closed even
   // though an authorizing-shaped turn is present.
