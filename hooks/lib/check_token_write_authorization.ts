@@ -136,7 +136,7 @@ function opensWithPhrase(trimmed: string, phrase: string): boolean {
  * so no phrase is added for it here; inventing one without a documented source would be exactly
  * the unenumerated-category failure that guidance warns against.
  */
-const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
+export const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
   "file an issue",
   "open an issue",
   "draft an issue",
