@@ -44,6 +44,15 @@ export interface EmailTemplate {
   active?: boolean;
 }
 
+export type ExclusionReason =
+  | "seasonal-hold"
+  | "gig-spacing"
+  | "direct-chat"
+  | "cooldown"
+  | "no-booking-email"
+  | "out-of-state"
+  | "outside-target-area";
+
 export interface CandidateBadgeInfo {
   badge: string;
   cssClass: string;
@@ -82,7 +91,7 @@ export interface CandidateVenue {
   sentAt?: string | Date | null;
   statusBadge?: string;
   isExcluded?: boolean;
-  exclusionReason?: string;
+  exclusionReason?: ExclusionReason | string;
   reason?: {
     lastGigDate?: string | null;
     gigIntervalMonths?: number;
@@ -98,7 +107,7 @@ export interface CandidateVenue {
     sentAt?: string | Date | null;
     activeDirectChat?: boolean;
     statusBadge?: string;
-    exclusionReason?: string;
+    exclusionReason?: ExclusionReason | string;
   };
   distanceMiles?: number;
 }

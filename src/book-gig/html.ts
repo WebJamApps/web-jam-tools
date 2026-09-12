@@ -107,6 +107,15 @@ export function renderStatusBadge(status: string, replyKind?: string): string {
   if (s.includes("cooldown active") || s.includes("cooldown:")) {
     return `<span class="badge badge-cooldown">${escapeHtml(status)}</span>`;
   }
+  if (s.includes("no booking email")) {
+    return `<span class="badge badge-no-booking-email">${escapeHtml(status)}</span>`;
+  }
+  if (s.includes("out of state")) {
+    return `<span class="badge badge-out-of-state">${escapeHtml(status)}</span>`;
+  }
+  if (s.includes("outside target area")) {
+    return `<span class="badge badge-outside-target-area">${escapeHtml(status)}</span>`;
+  }
   switch (s) {
     case "sent":
       return `<span class="badge badge-sent">sent</span>`;
@@ -812,6 +821,16 @@ export function renderDarkHtml(result: BookGigResult): string {
     .badge-cooldown {
       background-color: #0d3c61;
       color: #4fc3f7;
+    }
+
+    .badge-no-booking-email {
+      background-color: #3e2723;
+      color: #ffab91;
+    }
+
+    .badge-out-of-state, .badge-outside-target-area {
+      background-color: #2c2c2c;
+      color: #9e9e9e;
     }
 
     .badge-sent {

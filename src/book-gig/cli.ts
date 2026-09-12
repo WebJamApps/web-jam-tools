@@ -4,6 +4,7 @@ import {
   assessDensity,
   fetchCandidates,
   filterAndRankCandidates,
+  formatCandidateBreakdown,
   isPitchableCandidate,
   renderCandidateTable,
 } from "./candidates.ts";
@@ -786,15 +787,11 @@ export async function runBookGigCli(
   // 1. Fetch eligible candidates from web-jam-back
   console.log(`Fetching candidate venues from backend...`);
   const rawCandidates = await fetchCandidates({ weekend }, fetchFn);
-  const pitchableRawCount = rawCandidates.filter(isPitchableCandidate).length;
-  const excludedRawCount = rawCandidates.length - pitchableRawCount;
-  console.log(
-    `Backend returned ${rawCandidates.length} total venues evaluated (${pitchableRawCount} pitchable, ${excludedRawCount} excluded).`,
-  );
 
   // 2. Filter & rank by location
   const candidates = filterAndRankCandidates(rawCandidates, location);
   const density = assessDensity(candidates, location);
+  console.log(formatCandidateBreakdown(candidates));
 
   // 3. Output candidate table
   const pitchableCandidates = candidates.filter(isPitchableCandidate);
