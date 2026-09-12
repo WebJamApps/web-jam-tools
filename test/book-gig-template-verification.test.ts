@@ -2,9 +2,12 @@
 // verification: every rendered email must be checked against its stored Template record, with
 // variation strictly confined to declared placeholders and the free-form [Custom Body] slot.
 
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals, assertNotEquals, assertStringIncludes } from "@std/assert";
 import {
+  BACKEND_FOOTER_HTML,
   renderPitch,
+  renderPitchesFromBackend,
+  resolveVenueTemplateType,
   verifyBatchAgainstTemplates,
   verifyPitchAgainstTemplate,
 } from "../src/book-gig/pitch.ts";
@@ -205,4 +208,153 @@ Deno.test("verifyBatchAgainstTemplates: one divergent render refuses the whole b
   assertEquals(result.violations.length, 1);
   assertEquals(result.violations[0].venueId, "venue-batch-d");
   assertEquals(result.violations[0].venueName, "The Corrupted Room");
+});
+
+Deno.test("resolveVenueTemplateType: falls back to MidRangeCafeBar when venue has no explicit venueType or templateOverride", () => {
+  const unclassified = coldVenue({ venueType: undefined, templateOverride: undefined });
+  assertEquals(resolveVenueTemplateType(unclassified), "MidRangeCafeBar");
+
+  const coffeeShop = coldVenue({ venueType: "CoffeeShop" as unknown as undefined });
+  assertEquals(resolveVenueTemplateType(coffeeShop), "MidRangeCafeBar");
+
+  const brewery = coldVenue({ venueType: "Brewery" as unknown as undefined });
+  assertEquals(resolveVenueTemplateType(brewery), "PubFestivalBrewery");
+
+  const override = coldVenue({ templateOverride: "Originals" });
+  assertEquals(resolveVenueTemplateType(override), "Originals");
+});
+
+Deno.test("verifyPitchAgainstTemplate: accommodates backend footerHtml when template.footerPhotoRef is present", () => {
+  const templateWithPhoto: EmailTemplate = {
+    ...FIXTURE_TEMPLATE,
+    footerPhotoRef: "footer-josh-maria",
+  };
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, [templateWithPhoto]);
+
+  // Case 1: Backend pitch preview includes BACKEND_FOOTER_HTML
+  const pitchWithFooter: PitchEmail = {
+    ...pitch,
+    htmlBody: `${pitch.htmlBody}${BACKEND_FOOTER_HTML}`,
+  };
+  const violation = verifyPitchAgainstTemplate(
+    pitchWithFooter,
+    venue,
+    WEEKEND,
+    {},
+    [templateWithPhoto],
+  );
+  assertEquals(violation, null);
+
+  // Case 2: Local pitch without footerHtml still passes
+  const violationLocal = verifyPitchAgainstTemplate(
+    pitch,
+    venue,
+    WEEKEND,
+    {},
+    [templateWithPhoto],
+  );
+  assertEquals(violationLocal, null);
+
+  // Case 3: Template without footerPhotoRef refuses pitch that carries BACKEND_FOOTER_HTML
+  const violationWithoutRef = verifyPitchAgainstTemplate(
+    pitchWithFooter,
+    venue,
+    WEEKEND,
+    {},
+    [FIXTURE_TEMPLATE],
+  );
+  assertNotEquals(violationWithoutRef, null);
+  assertEquals(
+    violationWithoutRef!.reason.includes("diverges from stored template"),
+    true,
+  );
+});
+
+Deno.test("verifyPitchAgainstTemplate: handles 'there' contact name fallback without divergence", () => {
+  const venue = coldVenue({ contactName: "" });
+
+  // Render locally (which uses "Hi,")
+  const localPitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+  assertEquals(localPitch.htmlBody!.includes("<p>Hi,</p>"), true);
+  assertEquals(verifyPitchAgainstTemplate(localPitch, venue, WEEKEND, {}, TEMPLATES), null);
+
+  // Simulate backend render (which substitutes "there" for [Contact Name], yielding "<p>Hi there,</p>")
+  const backendPitch: PitchEmail = {
+    ...localPitch,
+    htmlBody: localPitch.htmlBody!.replace("<p>Hi,</p>", "<p>Hi there,</p>"),
+  };
+  assertEquals(verifyPitchAgainstTemplate(backendPitch, venue, WEEKEND, {}, TEMPLATES), null);
+
+  // An invented greeting still fails closed
+  const corruptedPitch: PitchEmail = {
+    ...localPitch,
+    htmlBody: localPitch.htmlBody!.replace("<p>Hi,</p>", "<p>Hi stranger,</p>"),
+  };
+  const violation = verifyPitchAgainstTemplate(corruptedPitch, venue, WEEKEND, {}, TEMPLATES);
+  assertNotEquals(violation, null);
+  assertEquals(violation!.reason.includes("diverges from stored template"), true);
+});
+
+Deno.test("verifyPitchAgainstTemplate: fails closed when candidate venue record is missing or corrupted", () => {
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+
+  // Missing _id
+  const corruptedVenue = { ...venue, _id: "" } as CandidateVenue;
+  const violation = verifyPitchAgainstTemplate(pitch, corruptedVenue, WEEKEND, {}, TEMPLATES);
+  assertNotEquals(violation, null);
+  assertEquals(violation!.reason.includes("missing or corrupted"), true);
+});
+
+Deno.test("renderPitchesFromBackend: forwards calculated bookingPeriod to fetchPitchPreviews", async () => {
+  let requestedUrl = "";
+  const mockFetch: typeof fetch = (input) => {
+    requestedUrl = typeof input === "string" ? input : (input as Request).url;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify([
+          {
+            venueId: "venue-cold-1",
+            venueName: "The Test Room",
+            subject:
+              "Performance Inquiry: Josh and Maria — Acoustic Duo for October 2026 — The Test Room",
+            body: "<p>Hi there,</p><p>Acoustic Duo</p>",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  };
+
+  const venue = coldVenue();
+  const pitches = await renderPitchesFromBackend([venue], WEEKEND, {}, mockFetch);
+
+  assertEquals(pitches.length, 1);
+  assertStringIncludes(requestedUrl, "bookingPeriod=October+2026");
+  assertStringIncludes(requestedUrl, "targetDates=October+16%E2%80%9318%2C+2026");
+});
+
+Deno.test("renderPitchesFromBackend: detects returning stage from preview subject starting with Back at", async () => {
+  const mockFetch: typeof fetch = () => {
+    return Promise.resolve(
+      new Response(
+        JSON.stringify([
+          {
+            venueId: "venue-cold-1",
+            venueName: "The Test Room",
+            subject: "Back at The Test Room this October 2026? — Josh & Maria",
+            body: "<p>Hi there,</p><p>Returning set</p>",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  };
+
+  const venue = coldVenue();
+  const pitches = await renderPitchesFromBackend([venue], WEEKEND, {}, mockFetch);
+
+  assertEquals(pitches.length, 1);
+  assertEquals(pitches[0].templateStage, "returning");
 });

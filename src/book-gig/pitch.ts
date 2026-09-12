@@ -53,6 +53,7 @@ export const DEFAULT_TEMPLATES: EmailTemplate[] = [
       `<p>Hi [Contact Name],</p>\n<p>My name is Josh Sherman — my wife and I play as Josh and Maria, a professional husband-wife acoustic duo based in Salem, VA. We still have a few [Booking Period] dates open and would love to bring our energetic acoustic set to [Venue Name].</p>`,
     bodyHtml:
       `[Custom Body]\n<p>We have [Target Dates] available and are looking to book a 2-3 hour set. We've spent over 12 years performing at festivals, breweries, and venues throughout Southwest Virginia, providing a versatile mix of original Americana and crowd-pleasing covers.</p>\n<p>Beyond the originals, we know how to read a room. We've built our live set across the Roanoke Valley — regular shows at Stave &amp; Cork in Salem, two summers running at the Pete Dye River Course clubhouse in Blacksburg, the Salem farmers market summer after summer, and Music in the Park up in Marion — so we're equally comfortable filling a dance floor on a Saturday night and holding a quiet room at a Sunday brunch. We bring our own PA.</p>\n<p>A few live samples from our set:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=69fdcd7a586f5175c6db44a9">I'm Yours (Jason Mraz) — live at Salem Farmers Market</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e">Country Roads (John Denver) — live at Gusto's Pizza</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=5f5e6b7d13772f0004a091ad">Misty Rainy Morning (Original)</a></li>\n</ul>\n<p>Our full performance history and music can be found at <a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a>.</p>\n<p>Let me know if any of those dates work — happy to talk through details.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
+    footerPhotoRef: "footer-josh-maria",
   },
   {
     type: "PubFestivalBrewery",
@@ -62,15 +63,17 @@ export const DEFAULT_TEMPLATES: EmailTemplate[] = [
       `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — we had a blast playing [Venue Name] last time and would love to get back on your calendar.</p>`,
     bodyHtml:
       `[Custom Body]\n<p>We're booking [Booking Period] now and wanted to check with the spots we love first. Any chance [Target Dates] is open? We'd bring the same energetic 2-3 hour acoustic set — originals plus crowd-pleasing covers — and our own PA, as always.</p>\n<p>A couple of live samples:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=69fdcd7a586f5175c6db44a9">I'm Yours (Jason Mraz) — live at Salem Farmers Market</a></li>\n</ul>\n<p>Thanks again for having us — hope we can make [Booking Period] work.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
+    footerPhotoRef: "footer-josh-maria",
   },
   {
     type: "Originals",
     stage: "cold",
-    subject: "Performance Inquiry: Josh and Maria (Husband-Wife Acoustic Duo) — [Venue Name]",
+    subject: "Performance Inquiry: Josh and Maria (Original Americana/Roots Duo) — [Venue Name]",
     introHtml:
       `<p>Hi [Contact Name],</p>\n<p>My name is Josh Sherman, and I perform with my wife Maria as the acoustic duo \"Josh and Maria.\" We are a regional act based in Salem, VA, and we are currently booking our [Booking Period] run and would love to be considered for a slot at [Venue Name].</p>`,
     bodyHtml:
-      `[Custom Body]\n<p>We have open availability for [Target Dates]. Our sound comes from a shared kitchen table — balancing our own songwriting with a careful selection of covers. We've built a steady regional following with regular shows at Stave &amp; Cork in Salem; two summers running at the Pete Dye River Course clubhouse in Blacksburg; the Salem farmers market summer after summer; and repeat appearances at Music in the Park in Marion. We take care of our audience and the room.</p>\n<p>A few live samples from our repertoire:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e">Country Roads (John Denver) — live at Gusto's Pizza</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=69fdcc4b586f5175c6db44a9">Dark Light (Original) — live at Salem Farmers Market</a></li>\n</ul>\n<p>Full music links and performance history available at <a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a>.</p>\n<p>Let me know if any of those dates work — happy to talk through details.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
+      `[Custom Body]\n<p>We have open availability for [Target Dates]. Our sound comes from a shared kitchen table — balancing our own songwriting with a careful selection of covers. We've built a steady regional following with regular shows at Stave &amp; Cork in Salem; two summers running at the Pete Dye River Course clubhouse in Blacksburg; the Salem farmers market summer after summer; and repeat appearances at Music in the Park in Marion. We take care of our audience and the room.</p>\n<p>A few live samples from our repertoire:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e">Country Roads (John Denver) — live at Gusto's Pizza</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=69fdcc4b586f5175c6db44a9">Dark Light (Original) — live at Salem Farmers Market</a></li>\n</ul>\n<p>Full music links and performance history available at <a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a>.</p>\n<p>Let me know if any of those dates work — happy to talk through details.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
+    footerPhotoRef: "footer-josh-maria",
   },
   {
     type: "Originals",
@@ -80,16 +83,17 @@ export const DEFAULT_TEMPLATES: EmailTemplate[] = [
       `<p>Hi [Contact Name],</p>\n<p>It's Josh — my wife Maria and I (the husband-wife acoustic duo \"Josh and Maria\") had such a good time the last time we played [Venue Name], and we'd love to come back.</p>`,
     bodyHtml:
       `[Custom Body]\n<p>We're booking our [Booking Period] run now and wanted to check in first with the listening rooms that have been good to us. Could we grab a slot on [Target Dates]? We'd bring fresh originals alongside the close-harmony Americana set you already know.</p>\n<p>A couple of recent live recordings, in case it's helpful:</p>\n<ul>\n  <li><a href="https://web-jam.com/music/songs?id=69fdcc4b586f5175c6db44a7">Dark Light (Original) — live at Salem Farmers Market</a></li>\n  <li><a href="https://web-jam.com/music/songs?id=5f5e6b7d13772f0004a091ad">Misty Rainy Morning (Original)</a></li>\n</ul>\n<p>Thanks again for having us before — hope we can make something work for [Booking Period].</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
+    footerPhotoRef: "footer-josh-maria",
   },
   {
     type: "MidRangeCafeBar",
     stage: "cold",
-    subject:
-      "Performance Inquiry: Josh and Maria — Acoustic Duo for [Booking Period] — [Venue Name]",
+    subject: "Performance Inquiry: Josh and Maria (Husband-Wife Acoustic Duo) — [Venue Name]",
     introHtml:
       `<p>Hi [Contact Name],</p>\n<p>My name is Josh Sherman — my wife Maria and I play as Josh and Maria, an acoustic duo based in Salem, VA. We are currently scheduling [Booking Period] live music and would love to perform at [Venue Name].</p>`,
     bodyHtml:
       `[Custom Body]\n<p>We have [Target Dates] open and offer a 2-3 hour acoustic set tailored for a relaxed dining or listening atmosphere, blending original songs with familiar favorites.</p>\n<p>A couple of live recordings:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e">Country Roads (John Denver) — live at Gusto's Pizza</a></li>\n</ul>\n<p>Full bio and music links available at <a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a>.</p>\n<p>Thanks — Josh Sherman, 540-494-8035</p>`,
+    footerPhotoRef: "footer-josh-maria",
   },
   {
     type: "MidRangeCafeBar",
@@ -99,6 +103,7 @@ export const DEFAULT_TEMPLATES: EmailTemplate[] = [
       `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — Maria and I really enjoyed our last show at [Venue Name], and we'd love to come back.</p>`,
     bodyHtml:
       `[Custom Body]\n<p>We're lining up our [Booking Period] dates and wanted to check in with our favorite rooms first. Would [Target Dates] work for another evening of harmony-driven Americana — the mix of originals and select covers your crowd seemed to enjoy?</p>\n<p>A couple of live samples as a refresher:</p>\n<ul>\n  <li><a href="https://www.web-jam.com/music/songs?id=66a0ec5fd1005f8095f3cef3">Proud Mary (CCR) — live at Olde Salem Brewing</a></li>\n  <li><a href="https://www.web-jam.com/music/songs?id=6728e8bb25cc2073a9395c4e">Country Roads (John Denver) — live at Gusto's Pizza</a></li>\n</ul>\n<p>Thanks again for having us — hope we can find a date that works.</p>\n<p>Best,<br>Josh &amp; Maria<br>540-494-8035<br><a href="https://www.joshandmariamusic.com">joshandmariamusic.com</a></p>`,
+    footerPhotoRef: "footer-josh-maria",
   },
 ];
 
@@ -224,7 +229,7 @@ export function resolveVenueTemplateType(
   if (vt === "CoffeeShop" || vt === "Cafe" || vt === "Winery") {
     return "MidRangeCafeBar";
   }
-  return "PubFestivalBrewery";
+  return "MidRangeCafeBar";
 }
 
 /**
@@ -306,6 +311,7 @@ export function resolveVenueStage(
   options?: RenderPitchOptions,
 ): TemplateStage {
   if (options?.isReturningVenue) return "returning";
+  if (venue.bookingStatus === "booked") return "returning";
   if (venue.reason?.lastGigDate && venue.reason.lastGigDate !== "never") return "returning";
   if (
     venue.priorGigs &&
@@ -435,8 +441,11 @@ export function renderPitch(
       t.active !== false && t.type === type && (t.stage || "cold") === stage
     ) ||
     allTemplates.find((t) =>
-      t.active !== false && t.type === "PubFestivalBrewery" && (t.stage || "cold") === stage
+      t.active !== false && t.type === "MidRangeCafeBar" && (t.stage || "cold") === stage
     ) ||
+    allTemplates.find((t) => t.active !== false && (t.stage || "cold") === stage) ||
+    allTemplates.find((t) => t.active !== false) ||
+    DEFAULT_TEMPLATES.find((t) => t.type === "MidRangeCafeBar" && t.stage === stage) ||
     DEFAULT_TEMPLATES.find((t) => t.type === type && t.stage === stage) ||
     DEFAULT_TEMPLATES[0];
 
@@ -519,6 +528,12 @@ export interface TemplateVerificationResult {
 // located precisely, without disturbing any of the other declared placeholders.
 const CUSTOM_BODY_MARKER = " __BOOK_GIG_CUSTOM_BODY_MARKER__ ";
 
+export const BACKEND_FOOTER_HTML =
+  '\n<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin-top:16px;">' +
+  '<tr><td style="text-align:center;">' +
+  '<img src="cid:footerphoto" width="320" alt="Josh and Maria performing" ' +
+  'style="width:320px;max-width:100%;height:auto;border-radius:8px;display:block;margin:0 auto;"></td></tr></table>';
+
 function substituteNonCustomBodyTokens(
   templateText: string,
   tokens: {
@@ -548,6 +563,37 @@ function findDeclaredTemplate(
   );
 }
 
+function matchesSkeleton(skeleton: string, actualHtml: string): boolean {
+  const markerIndex = skeleton.indexOf(CUSTOM_BODY_MARKER);
+  if (markerIndex === -1) {
+    // No declared [Custom Body] slot in this template: the fixed prose must match exactly.
+    return actualHtml === skeleton;
+  }
+
+  const prefix = skeleton.slice(0, markerIndex);
+  const suffix = skeleton.slice(markerIndex + CUSTOM_BODY_MARKER.length);
+
+  // Empty custom body: the real renderer removes the marker AND its one trailing newline
+  // together, so no gap remains at all.
+  const emptyVariant = prefix + suffix.replace(/^\r?\n/, "");
+  if (actualHtml === emptyVariant) {
+    return true;
+  }
+
+  // Non-empty custom body: the marker is replaced by trimmed free-form content plus a
+  // newline, so the fixed prose on either side — suffix included, with its newline — must
+  // still reappear verbatim, with only the [Custom Body] slot's content varying.
+  if (
+    actualHtml.startsWith(prefix) &&
+    actualHtml.endsWith(suffix) &&
+    actualHtml.length > prefix.length + suffix.length
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Verify a single rendered pitch email against the canonical stored Template record it claims
  * to come from. Returns `null` when the email is faithful to that template (fixed prose intact,
@@ -567,6 +613,12 @@ export function verifyPitchAgainstTemplate(
     reason,
   });
 
+  if (!venue || !venue._id) {
+    return violation(
+      "Candidate venue record is missing or corrupted — cannot verify fidelity.",
+    );
+  }
+
   const template = findDeclaredTemplate(pitch, templates);
   if (!template) {
     return violation(
@@ -577,10 +629,18 @@ export function verifyPitchAgainstTemplate(
   const stage: TemplateStage = (pitch.templateStage as TemplateStage) ||
     resolveVenueStage(venue, options);
   const conversationContext = detectConversationContext(venue);
-  const expectedIntroHtml = resolveIntroHtml(template, stage, conversationContext);
 
-  const monthName = MONTH_NAMES[(weekend.month || 1) - 1] || "October";
-  const bookingPeriod = options.bookingPeriod || `${monthName} ${weekend.year}`;
+  let year = weekend.year;
+  let month = weekend.month;
+  if (!year || !month) {
+    const d = new Date(weekend.start);
+    if (!Number.isNaN(d.getTime())) {
+      year = year || d.getUTCFullYear();
+      month = month || (d.getUTCMonth() + 1);
+    }
+  }
+  const monthName = MONTH_NAMES[(month || 1) - 1] || "October";
+  const bookingPeriod = options.bookingPeriod || `${monthName} ${year || new Date().getFullYear()}`;
   const contactName = options.contactName || venue.contactName || pitch.contactName || "";
 
   const tokens = {
@@ -595,53 +655,91 @@ export function verifyPitchAgainstTemplate(
     const expectedSubject = substituteNonCustomBodyTokens(template.subject, tokens)
       .replace(/\s+/g, " ")
       .trim();
-    if (pitch.subject !== expectedSubject) {
+    const expectedSubjectThere = !contactName.trim()
+      ? substituteNonCustomBodyTokens(template.subject, { ...tokens, contactName: "there" })
+        .replace(/\s+/g, " ")
+        .trim()
+      : expectedSubject;
+
+    if (pitch.subject !== expectedSubject && pitch.subject !== expectedSubjectThere) {
       return violation(
         `Subject diverges from stored template "${template.type}/${stage}": expected "${expectedSubject}", got "${pitch.subject}".`,
       );
     }
   }
 
-  const introResolved = expectedIntroHtml
-    ? substituteNonCustomBodyTokens(expectedIntroHtml, tokens)
-    : "";
-  const bodyResolved = template.bodyHtml
-    ? substituteNonCustomBodyTokens(template.bodyHtml, tokens)
-    : "";
-  const skeleton = `${introResolved}\n${bodyResolved}`.trim();
+  // Legitimate intro variants: customIntro override, conversation-context intro, or base template intro
+  const introVariants: string[] = [];
+  if (options.customIntro && options.customIntro.trim()) {
+    introVariants.push(options.customIntro.trim());
+  } else {
+    const contextIntro = resolveIntroHtml(template, stage, conversationContext);
+    const baseIntro = resolveIntroHtml(template, stage, null);
+    if (contextIntro) introVariants.push(contextIntro);
+    if (baseIntro && baseIntro !== contextIntro) introVariants.push(baseIntro);
+    if (template.introHtml && !introVariants.includes(template.introHtml)) {
+      introVariants.push(template.introHtml);
+    }
+  }
 
   const actualHtml = pitch.htmlBody || "";
-  const markerIndex = skeleton.indexOf(CUSTOM_BODY_MARKER);
+  let normalizedActualHtml = actualHtml;
 
+  // Accommodate backend footerHtml appended when template has footerPhotoRef
+  if (template.footerPhotoRef) {
+    if (normalizedActualHtml.endsWith(BACKEND_FOOTER_HTML)) {
+      normalizedActualHtml = normalizedActualHtml.slice(
+        0,
+        normalizedActualHtml.length - BACKEND_FOOTER_HTML.length,
+      );
+    } else if (normalizedActualHtml.endsWith("\r" + BACKEND_FOOTER_HTML)) {
+      normalizedActualHtml = normalizedActualHtml.slice(
+        0,
+        normalizedActualHtml.length - (BACKEND_FOOTER_HTML.length + 1),
+      );
+    } else if (normalizedActualHtml.trimEnd().endsWith(BACKEND_FOOTER_HTML.trimStart())) {
+      const idx = normalizedActualHtml.lastIndexOf(BACKEND_FOOTER_HTML.trimStart());
+      if (
+        idx !== -1 &&
+        normalizedActualHtml.slice(idx + BACKEND_FOOTER_HTML.trimStart().length).trim() === ""
+      ) {
+        normalizedActualHtml = normalizedActualHtml.slice(0, idx).trimEnd();
+      }
+    }
+  }
+
+  const tokenVariants = [tokens];
+  if (!contactName.trim()) {
+    tokenVariants.push({ ...tokens, contactName: "there" });
+  }
+
+  let matched = false;
+  for (const introTemplate of introVariants) {
+    for (const tks of tokenVariants) {
+      const introResolved = substituteNonCustomBodyTokens(introTemplate, tks);
+      const bodyResolved = template.bodyHtml
+        ? substituteNonCustomBodyTokens(template.bodyHtml, tks)
+        : "";
+      const skeleton = `${introResolved}\n${bodyResolved}`.trim();
+
+      if (matchesSkeleton(skeleton, normalizedActualHtml)) {
+        matched = true;
+        break;
+      }
+    }
+    if (matched) break;
+  }
+
+  if (matched) {
+    return null;
+  }
+
+  const markerIndex = (template.bodyHtml || "").indexOf("[Custom Body]");
   if (markerIndex === -1) {
     // No declared [Custom Body] slot in this template: the fixed prose must match exactly.
-    if (actualHtml !== skeleton) {
-      return violation(
-        `Rendered body diverges from stored template "${template.type}/${stage}" outside its declared placeholders.`,
-      );
-    }
-    return null;
-  }
-
-  const prefix = skeleton.slice(0, markerIndex);
-  const suffix = skeleton.slice(markerIndex + CUSTOM_BODY_MARKER.length);
-
-  // Empty custom body: the real renderer removes the marker AND its one trailing newline
-  // together, so no gap remains at all.
-  const emptyVariant = prefix + suffix.replace(/^\r?\n/, "");
-  if (actualHtml === emptyVariant) {
-    return null;
-  }
-
-  // Non-empty custom body: the marker is replaced by trimmed free-form content plus a
-  // newline, so the fixed prose on either side — suffix included, with its newline — must
-  // still reappear verbatim, with only the [Custom Body] slot's content varying.
-  if (
-    actualHtml.startsWith(prefix) &&
-    actualHtml.endsWith(suffix) &&
-    actualHtml.length > prefix.length + suffix.length
-  ) {
-    return null;
+    return violation(
+      `Rendered body diverges from stored template "${template.type}/${stage}" outside its declared placeholders.`,
+    );
   }
 
   return violation(
@@ -750,6 +848,18 @@ export async function renderPitchesFromBackend(
   const eligible = candidates.filter((c) => c._id && c.email && !c.isExcluded);
   if (eligible.length === 0) return [];
 
+  let year = weekend.year;
+  let month = weekend.month;
+  if (!year || !month) {
+    const d = new Date(weekend.start);
+    if (!Number.isNaN(d.getTime())) {
+      year = year || d.getUTCFullYear();
+      month = month || (d.getUTCMonth() + 1);
+    }
+  }
+  const monthName = MONTH_NAMES[(month || 1) - 1] || "October";
+  const bookingPeriod = options.bookingPeriod || `${monthName} ${year || new Date().getFullYear()}`;
+
   const untweaked = eligible.filter((c) => !findTweakForCandidate(c, options.tweaks));
   const tweaked = eligible.filter((c) => Boolean(findTweakForCandidate(c, options.tweaks)));
 
@@ -764,7 +874,7 @@ export async function renderPitchesFromBackend(
           venueIds: untweaked.map((c) => c._id),
           templateType: options.templateType,
           targetDates: weekend.label,
-          bookingPeriod: options.bookingPeriod,
+          bookingPeriod,
         },
         fetchFn,
       ),
@@ -781,7 +891,7 @@ export async function renderPitchesFromBackend(
           venueIds: [c._id],
           templateType: options.templateType,
           targetDates: weekend.label,
-          bookingPeriod: options.bookingPeriod,
+          bookingPeriod,
           customBody: tweak?.customBody,
           customIntro: tweak?.customIntro,
         },
@@ -798,6 +908,18 @@ export async function renderPitchesFromBackend(
   for (const c of eligible) {
     const preview = previewByVenueId.get(String(c._id));
     if (!preview) continue;
+
+    const templateType = resolveVenueTemplateType(c, options.templateType);
+    let templateStage = resolveVenueStage(c, options);
+    if (
+      preview.subject.startsWith("Back at ") ||
+      preview.subject.startsWith("Love to play ")
+    ) {
+      templateStage = "returning";
+    } else if (preview.subject.startsWith("Performance Inquiry:")) {
+      templateStage = "cold";
+    }
+
     pitches.push({
       venueId: c._id,
       venueName: preview.venueName || c.name,
@@ -808,8 +930,8 @@ export async function renderPitchesFromBackend(
       subject: preview.subject,
       body: htmlToPlainText(preview.body || ""),
       htmlBody: preview.body || "",
-      templateType: resolveVenueTemplateType(c, options.templateType),
-      templateStage: resolveVenueStage(c, options),
+      templateType,
+      templateStage,
     });
   }
   return pitches;
