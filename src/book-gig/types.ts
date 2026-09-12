@@ -90,7 +90,6 @@ export interface CandidateVenue {
     venueId?: string;
     [key: string]: unknown;
   } | null;
-  lastGigDate?: string | Date | null;
   gigInterval?: number;
   payAmount?: number;
   resumeBooking?: string | Date | null;

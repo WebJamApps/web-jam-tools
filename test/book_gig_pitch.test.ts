@@ -92,36 +92,13 @@ Deno.test("resolveVenueStage: resolves to returning when venue has lastGig objec
   assertEquals(resolveVenueStage(venueWithDateOnly), "returning");
 });
 
-Deno.test("resolveVenueStage: resolves to returning when venue has lastGigDate directly", () => {
-  const venueWithDate: CandidateVenue = {
-    _id: "v_lastgigdate",
-    name: "Direct Date Venue",
-    lastGigDate: "2025-05-10",
-  };
-  assertEquals(resolveVenueStage(venueWithDate), "returning");
-
-  const venueWithNever: CandidateVenue = {
-    _id: "v_lastgigdate_never",
-    name: "Never Venue",
-    lastGigDate: "never",
-  };
-  assertEquals(resolveVenueStage(venueWithNever), "cold");
-});
-
-Deno.test("resolveVenueStage: resolves to returning when notes indicate prior performance (last played)", () => {
+Deno.test("resolveVenueStage: notes mentioning a past performance do not make a venue returning without a linked gig (D-34)", () => {
   const venueWithNotes: CandidateVenue = {
     _id: "v_notes_played",
     name: "Notes Venue",
     notes: "Type of gig: brewery\nLast played: 45396\nComments: Great room",
   };
-  assertEquals(resolveVenueStage(venueWithNotes), "returning");
-
-  const venueNeverPlayed: CandidateVenue = {
-    _id: "v_never_played",
-    name: "Never Played Venue",
-    notes: "New venue, never played here before.",
-  };
-  assertEquals(resolveVenueStage(venueNeverPlayed), "cold");
+  assertEquals(resolveVenueStage(venueWithNotes), "cold");
 });
 
 Deno.test("resolveVenueStage: resolves to cold by default when neither past gig nor returning option is present", () => {
