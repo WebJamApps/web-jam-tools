@@ -7,7 +7,7 @@ import {
   renderCandidateTable,
 } from "./candidates.ts";
 export { renderCandidateTable };
-import { renderPitch, verifyBatchAgainstTemplates } from "./pitch.ts";
+import { renderPitchesFromBackend, verifyBatchAgainstTemplates } from "./pitch.ts";
 import { publishAndOpenReport } from "./publish.ts";
 import { executeLinkGig } from "./venue_link.ts";
 import { executeVenueHold } from "./cooldown.ts";
@@ -24,7 +24,6 @@ import type {
   BatchDispatchResult,
   BookGigResult,
   OutreachCampaignRecord,
-  PitchEmail,
   TargetLocation,
 } from "./types.ts";
 
@@ -496,24 +495,18 @@ export async function runBookGigCli(
     }
   }
 
-  // 5. Render pitches for candidates with valid email using template master
-  const templates = await fetchTemplates({}, fetchFn);
-  const pitches: PitchEmail[] = [];
-  for (const c of candidates) {
-    if (c.email && !c.isExcluded) {
-      try {
-        const pitch = renderPitch(c, weekend, {}, templates);
-        pitches.push(pitch);
-      } catch (err) {
-        console.warn(`[book-gig] Warning: Skipping pitch for ${c.name}: ${(err as Error).message}`);
-      }
-    }
-  }
+  // 5. Render pitches for candidates with valid email using the backend's own
+  // rendering (web-jam-tools#948) — the same `buildPitchEmail()` function that
+  // composes what gets mailed, so the draft copy in the review artifact is
+  // byte-identical to what is dispatched rather than a second, separately
+  // implemented rendering that can drift from it.
+  const pitches = await renderPitchesFromBackend(candidates, weekend, {}, fetchFn);
 
-  console.log(`\nDrafted ${pitches.length} personalized pitch email(s) adhering to voice rules.`);
+  console.log(`\nDrafted ${pitches.length} personalized pitch email(s) via backend rendering.`);
 
   // 5b. Verify every rendered email against its stored template before Gate 2 artifact
   // emission or dispatch — a divergence outside declared placeholders refuses the batch (D-50).
+  const templates = await fetchTemplates({}, fetchFn);
   const templateVerification = verifyBatchAgainstTemplates(pitches, candidates, weekend, templates);
   if (!templateVerification.valid) {
     const details = templateVerification.violations

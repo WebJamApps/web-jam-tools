@@ -6,6 +6,7 @@ import type {
   EmailTemplate,
   Gate1ApprovalRecord,
   OutreachCampaignRecord,
+  PitchPreview,
   TargetWeekend,
 } from "./types.ts";
 import { parseTargetWeekend } from "./parser.ts";
@@ -251,6 +252,60 @@ export async function fetchVenueMap(
   }
 
   return map;
+}
+
+export interface FetchPitchPreviewsOptions extends BackendConfigOptions {
+  venueIds: string[];
+  templateType?: string;
+  targetDates?: string;
+  bookingPeriod?: string;
+}
+
+/**
+ * Fetch the backend's own rendering of each venue's pitch draft via the batch
+ * form of GET /outreach/preview?venueIds=id1,id2,... (web-jam-tools#948).
+ *
+ * This calls the exact function (`buildPitchEmail`) that composes what
+ * `POST /outreach/batch` mails, so the subject/body returned here are
+ * byte-identical to the dispatched email rather than a second, separately
+ * implemented rendering that can drift from it (design doc load-bearing
+ * premise 17). Venue ids the backend cannot resolve are simply absent from
+ * the returned array rather than causing the whole request to fail.
+ */
+export async function fetchPitchPreviews(
+  options: FetchPitchPreviewsOptions,
+  fetchFn: typeof fetch = fetch,
+): Promise<PitchPreview[]> {
+  if (!Array.isArray(options.venueIds) || options.venueIds.length === 0) {
+    return [];
+  }
+
+  const { baseUrl, token } = await resolveBackendConfig(options);
+  const params = new URLSearchParams();
+  params.set("venueIds", options.venueIds.join(","));
+  if (options.templateType) params.set("templateType", options.templateType);
+  if (options.targetDates) params.set("targetDates", options.targetDates);
+  if (options.bookingPeriod) params.set("bookingPeriod", options.bookingPeriod);
+  const url = `${baseUrl}/outreach/preview?${params.toString()}`;
+
+  try {
+    const res = await fetchFn(url, {
+      method: "GET",
+      headers: buildHeaders(token),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`[book-gig] pitch preview query returned HTTP ${res.status}: ${errText}`);
+      return [];
+    }
+
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.warn(`[book-gig] Error fetching pitch previews: ${(err as Error).message}`);
+    return [];
+  }
 }
 
 /**

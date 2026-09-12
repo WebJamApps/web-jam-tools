@@ -8,6 +8,7 @@ import type {
   TemplateStage,
   TemplateVenueType,
 } from "./types.ts";
+import { fetchPitchPreviews, type FetchPitchPreviewsOptions } from "./outreach_api.ts";
 
 export const BANNED_VOICE_WORDS = [
   "exciting",
@@ -511,7 +512,7 @@ export interface TemplateVerificationResult {
 // Internal marker swapped in for the literal "[Custom Body]" token so its exact insertion
 // point — and the whitespace the real substitution logic treats specially around it — can be
 // located precisely, without disturbing any of the other declared placeholders.
-const CUSTOM_BODY_MARKER = " __BOOK_GIG_CUSTOM_BODY_MARKER__ ";
+const CUSTOM_BODY_MARKER = " __BOOK_GIG_CUSTOM_BODY_MARKER__ ";
 
 function substituteNonCustomBodyTokens(
   templateText: string,
@@ -679,4 +680,68 @@ export function verifyBatchAgainstTemplates(
   }
 
   return { valid: violations.length === 0, violations };
+}
+
+export interface RenderPitchesFromBackendOptions
+  extends Omit<FetchPitchPreviewsOptions, "venueIds" | "targetDates" | "templateType"> {
+  templateType?: TemplateVenueType;
+}
+
+/**
+ * Render every eligible candidate's pitch draft using the backend's own
+ * rendering (`buildPitchEmail`, via the batch form of `GET /outreach/preview`)
+ * rather than the local template renderer above (web-jam-tools#948). The
+ * subject and HTML body returned here are byte-identical to what
+ * `POST /outreach/batch` will mail, because both paths call the same backend
+ * function — see the design doc's load-bearing premise 17.
+ *
+ * Eligibility mirrors the local pool used elsewhere in the CLI: a candidate
+ * needs an `_id` and a booking `email`, and must not be `isExcluded`. A venue
+ * the backend cannot resolve or render is silently absent from the result
+ * (`fetchPitchPreviews` already logs a warning for the request as a whole)
+ * rather than falling back to a local rendering that could diverge from the
+ * copy that actually gets dispatched.
+ */
+export async function renderPitchesFromBackend(
+  candidates: CandidateVenue[],
+  weekend: TargetWeekend,
+  options: RenderPitchesFromBackendOptions = {},
+  fetchFn: typeof fetch = fetch,
+): Promise<PitchEmail[]> {
+  const eligible = candidates.filter((c) => c._id && c.email && !c.isExcluded);
+  if (eligible.length === 0) return [];
+
+  const previews = await fetchPitchPreviews(
+    {
+      backendUrl: options.backendUrl,
+      token: options.token,
+      venueIds: eligible.map((c) => c._id),
+      templateType: options.templateType,
+      targetDates: weekend.label,
+      bookingPeriod: options.bookingPeriod,
+    },
+    fetchFn,
+  );
+
+  const previewByVenueId = new Map(previews.map((p) => [String(p.venueId), p]));
+
+  const pitches: PitchEmail[] = [];
+  for (const c of eligible) {
+    const preview = previewByVenueId.get(String(c._id));
+    if (!preview) continue;
+    pitches.push({
+      venueId: c._id,
+      venueName: preview.venueName || c.name,
+      to: c.email || "",
+      secondaryTo: c.secondaryEmail,
+      contactName: c.contactName,
+      phone: c.phone,
+      subject: preview.subject,
+      body: htmlToPlainText(preview.body || ""),
+      htmlBody: preview.body || "",
+      templateType: resolveVenueTemplateType(c, options.templateType),
+      templateStage: resolveVenueStage(c, options),
+    });
+  }
+  return pitches;
 }

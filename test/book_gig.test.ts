@@ -549,6 +549,97 @@ Deno.test("formatDraftPayload: formats a pitch as a Gmail draft payload", () => 
   assertEquals(payload.body, pitch.body);
 });
 
+Deno.test("renderDarkHtml: writes a draft's backend-rendered HTML in full into a sandboxed iframe, byte-identical to what dispatch sends (#948)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const htmlBody = `<p>Hi Kevin,</p><p>We'd love to play &amp; bring live music at "Parkway".</p>`;
+
+  const result: BookGigResult = {
+    mode: "preview",
+    weekend,
+    candidates: [],
+    density: { count: 0, isSparse: false },
+    pitches: [
+      {
+        venueId: "v1",
+        venueName: "Parkway Brewing",
+        to: "info@parkway.com",
+        subject: "Sub",
+        body: 'Hi Kevin, We\'d love to play & bring live music at "Parkway".',
+        htmlBody,
+      },
+    ],
+  };
+
+  const html = renderDarkHtml(result);
+
+  // The complete backend HTML is written into the artifact, not summarized,
+  // truncated, or re-rendered — escaped only as required for the srcdoc
+  // attribute, so decoding it reproduces the exact backend markup.
+  const expectedEscaped = htmlBody
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+  assertStringIncludes(html, `srcdoc="${expectedEscaped}"`);
+  assertStringIncludes(html, "pitch-body-frame");
+  // The draft renders with scripting disabled — never a script-enabled sandbox.
+  assertStringIncludes(html, 'sandbox="allow-same-origin"');
+  assertEquals(html.includes("allow-scripts"), false);
+  assertStringIncludes(html, "Copy Email");
+  assertStringIncludes(
+    html,
+    '<pre class="pitch-body-raw" id="pitch-body-1-plain" style="display: none;">',
+  );
+  assertStringIncludes(
+    html,
+    "navigator.clipboard.writeText(document.getElementById('pitch-body-1-plain').innerText)",
+  );
+});
+
+Deno.test("renderDarkHtml: falls back to a plain-text pitch-body block when no backend HTML rendering is available", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const result: BookGigResult = {
+    mode: "preview",
+    weekend,
+    candidates: [],
+    density: { count: 0, isSparse: false },
+    pitches: [
+      {
+        venueId: "v1",
+        venueName: "No HTML Venue",
+        to: "info@example.com",
+        subject: "Sub",
+        body: "Plain text only body.",
+      },
+    ],
+  };
+
+  const html = renderDarkHtml(result);
+  assertStringIncludes(html, '<pre class="pitch-body"');
+  assertStringIncludes(html, "Plain text only body.");
+  // The CSS rule for the iframe variant is always present in the stylesheet,
+  // but no <iframe> element itself is emitted when there is no HTML draft.
+  assertEquals(html.includes("<iframe"), false);
+});
 Deno.test("renderDarkHtml: includes Contact Person and Phone in the rendered report (#874)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
@@ -1717,6 +1808,30 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
               status: "replied",
               replySnippet: "Oct 17 works great!",
               suggestion: { action: "Confirm date", intent: "Booking Offer", confidence: 0.9 },
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/preview")) {
+      const rendered = renderPitch(mockVenues[0], {
+        start: "2026-10-16",
+        end: "2026-10-18",
+        rawText: "Oct 16-18 2026",
+        label: "October 16–18, 2026",
+        year: 2026,
+        month: 10,
+        days: [16, 17, 18],
+      });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              venueId: "v1",
+              venueName: "Olde Salem Brewing",
+              subject: rendered.subject,
+              body: rendered.htmlBody || rendered.body,
             },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } },
