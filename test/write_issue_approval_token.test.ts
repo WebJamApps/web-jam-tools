@@ -860,7 +860,12 @@ Deno.test("checkTokenWriteAuthorization: refuses when an intervening non-filing 
     { type: "assistant", message: { role: "assistant", content: "planning..." } },
     { type: "user", message: { role: "user", content: "/work-issue web-jam-tools#800" } },
     { type: "assistant", message: { role: "assistant", content: "switching to work..." } },
-    { type: "user", message: { role: "user", content: "please file the issue now" } },
+    // Deliberately NOT an authorizing shape (doesn't open with a filing verb) — this test exercises
+    // the scope-ending event itself, not FILE_ISSUE_INVOCATION_RE's recognition. A message that DOES
+    // open with a filing verb after the /work-issue turn (e.g. "please file the issue now") would be
+    // a genuine new authorizing invocation coming AFTER the scope-ending event, and correctly
+    // authorizes — that is not this test's concern.
+    { type: "user", message: { role: "user", content: "let's get the issue filed soon" } },
   ];
   const result = checkTokenWriteAuthorization({
     entries,
@@ -869,6 +874,23 @@ Deno.test("checkTokenWriteAuthorization: refuses when an intervening non-filing 
   });
   assertEquals(result.ok, false);
   assert(result.reason?.includes("different skill or command (/work-issue) was invoked"));
+});
+
+Deno.test("checkTokenWriteAuthorization: a genuine authorizing invocation AFTER a scope-ending slash command still authorizes (not a regression — the scope-ending event only blocks an EARLIER invocation from reaching forward)", () => {
+  const entries: TranscriptEntry[] = [
+    { type: "user", message: { role: "user", content: "/design-issue plan token-savings" } },
+    { type: "assistant", message: { role: "assistant", content: "planning..." } },
+    { type: "user", message: { role: "user", content: "/work-issue web-jam-tools#800" } },
+    { type: "assistant", message: { role: "assistant", content: "switching to work..." } },
+    { type: "user", message: { role: "user", content: "please file the issue now" } },
+  ];
+  const result = checkTokenWriteAuthorization({
+    entries,
+    ownConversationId: "sess-1",
+    isSubagentInvocation: false,
+  });
+  assertEquals(result.ok, true);
+  assertEquals(result.skill, "file-issue");
 });
 
 Deno.test("checkTokenWriteAuthorization: a mid-sentence mention of 'create an issue' does not authorize, and a more recent non-filing slash command still refuses (web-jam-tools#973 — matcher outcome 2)", () => {
