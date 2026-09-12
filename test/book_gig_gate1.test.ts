@@ -2,7 +2,12 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { runBookGigCli } from "../src/book-gig/cli.ts";
 import { parseBookGigArgs } from "../src/book-gig/parser.ts";
-import { fetchGate1Approval, recordGate1Approval } from "../src/book-gig/outreach_api.ts";
+import {
+  classifyGate1Revision,
+  fetchGate1Approval,
+  lookupGate1Approval,
+  recordGate1Approval,
+} from "../src/book-gig/outreach_api.ts";
 import type { TargetWeekend } from "../src/book-gig/types.ts";
 
 /**
@@ -631,8 +636,13 @@ Deno.test("runBookGigCli: Gate 1 mode excludes candidate venues without email ad
   });
 });
 
-Deno.test("recordGate1Approval: throws when an existing approval for the batch has a different venue set", async () => {
+// D-54 (web-jam-tools#959 "book-gig: provide a deliberate path to revise an already-recorded
+// Gate 1 venue-set approval") changed what a differing set means. This test previously asserted
+// that ANY difference refused; a widening — every stored venue kept, one added — is now the
+// approved revision path and must be recorded. The refusal case moved to the test below it.
+Deno.test("recordGate1Approval: widens an existing approval when every stored venue is kept (D-54)", async () => {
   let postCalled = false;
+  let capturedBody: Record<string, unknown> = {};
 
   const mockFetch: typeof fetch = (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method || init.method === "GET") {
@@ -649,6 +659,50 @@ Deno.test("recordGate1Approval: throws when an existing approval for the batch h
       );
     }
     postCalled = true;
+    capturedBody = JSON.parse(String(init?.body));
+    return Promise.resolve(
+      new Response(JSON.stringify({ _id: "widened-approval" }), { status: 200 }),
+    );
+  };
+
+  const outcomes: string[] = [];
+  await recordGate1Approval(
+    {
+      backendUrl: "https://test.example.com",
+      weekend: "2026-10-16-to-2026-10-18",
+      venueIds: ["64a111111111111111111111", "64a222222222222222222222"],
+      onRevision: (o) => outcomes.push(o),
+    },
+    mockFetch,
+  );
+
+  assertEquals(postCalled, true, "a widening must be recorded, not refused");
+  assertEquals(outcomes, ["widening"]);
+  assertEquals(
+    capturedBody.venueIds,
+    ["64a111111111111111111111", "64a222222222222222222222"],
+    "the set is re-recorded as a whole, not as a delta",
+  );
+});
+
+Deno.test("recordGate1Approval: refuses a non-widening revision that drops a stored venue (D-54)", async () => {
+  let postCalled = false;
+
+  const mockFetch: typeof fetch = (_input: string | URL | Request, init?: RequestInit) => {
+    if (!init?.method || init.method === "GET") {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            _id: "existing-approval-1",
+            batchId: "2026-10-16-to-2026-10-18",
+            venueIds: ["64a111111111111111111111", "64a222222222222222222222"],
+            approver: "Josh",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    postCalled = true;
     return Promise.resolve(new Response("{}", { status: 200 }));
   };
 
@@ -658,20 +712,133 @@ Deno.test("recordGate1Approval: throws when an existing approval for the batch h
         {
           backendUrl: "https://test.example.com",
           weekend: "2026-10-16-to-2026-10-18",
-          venueIds: ["64a111111111111111111111", "64a222222222222222222222"],
+          // Replaces the second stored venue with a third — a removal, not a widening.
+          venueIds: ["64a111111111111111111111", "64a333333333333333333333"],
         },
         mockFetch,
       );
     },
     Error,
-    "Gate 1 venue-set approval already exists for batch '2026-10-16-to-2026-10-18' with a different venue set",
+    "is not a widening of it",
   );
 
   assertEquals(
     postCalled,
     false,
-    "POST /outreach/approval/venue-set must not be called when an existing approval's venue set differs",
+    "POST /outreach/approval/venue-set must not be called when a stored venue would be dropped",
   );
+});
+
+Deno.test("recordGate1Approval: refuses without POSTing when the lookup cannot determine prior state (D-54)", async () => {
+  for (
+    const lookupFailure of [
+      () => Promise.resolve(new Response("upstream exploded", { status: 500 })),
+      () => Promise.resolve(new Response("nope", { status: 401 })),
+      () => Promise.reject(new Error("socket hang up")),
+    ]
+  ) {
+    let postCalled = false;
+
+    const mockFetch: typeof fetch = (_input: string | URL | Request, init?: RequestInit) => {
+      if (!init?.method || init.method === "GET") {
+        return lookupFailure();
+      }
+      postCalled = true;
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+
+    await assertRejects(
+      async () => {
+        await recordGate1Approval(
+          {
+            backendUrl: "https://test.example.com",
+            weekend: "2026-10-16-to-2026-10-18",
+            venueIds: ["64a111111111111111111111"],
+          },
+          mockFetch,
+        );
+      },
+      Error,
+      "Cannot determine whether a Gate 1 venue-set approval already exists",
+    );
+
+    assertEquals(
+      postCalled,
+      false,
+      "the guard must fail closed — no POST when the lookup could not be completed",
+    );
+  }
+});
+
+Deno.test("lookupGate1Approval: reports found, absent and indeterminate as three distinct outcomes", async () => {
+  const opts = { backendUrl: "https://test.example.com" };
+
+  const found = await lookupGate1Approval(
+    "b1",
+    opts,
+    () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ _id: "a1", venueIds: ["v1"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+  );
+  assertEquals(found.status, "found");
+
+  // Only a genuine 404 means "no approval exists".
+  const absent = await lookupGate1Approval(
+    "b1",
+    opts,
+    () => Promise.resolve(new Response("not found", { status: 404 })),
+  );
+  assertEquals(absent.status, "absent");
+
+  // Everything else is indeterminate — never silently "absent".
+  const serverError = await lookupGate1Approval(
+    "b1",
+    opts,
+    () => Promise.resolve(new Response("boom", { status: 500 })),
+  );
+  assertEquals(serverError.status, "indeterminate");
+
+  const authFailure = await lookupGate1Approval(
+    "b1",
+    opts,
+    () => Promise.resolve(new Response("expired", { status: 401 })),
+  );
+  assertEquals(authFailure.status, "indeterminate");
+
+  const networkError = await lookupGate1Approval(
+    "b1",
+    opts,
+    () => Promise.reject(new Error("socket hang up")),
+  );
+  assertEquals(networkError.status, "indeterminate");
+
+  // A 200 carrying a body that will not parse is also indeterminate, not found.
+  const unparseable = await lookupGate1Approval(
+    "b1",
+    opts,
+    () =>
+      Promise.resolve(
+        new Response("<html>gateway</html>", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+  );
+  assertEquals(unparseable.status, "indeterminate");
+});
+
+Deno.test("classifyGate1Revision: distinguishes new, identical, widening and non-widening sets", () => {
+  assertEquals(classifyGate1Revision([], ["a"]), "new");
+  assertEquals(classifyGate1Revision(["a"], ["a"]), "identical");
+  // Order and duplicates must not make an identical set look like a revision.
+  assertEquals(classifyGate1Revision(["a", "b"], ["b", "a", "a"]), "identical");
+  assertEquals(classifyGate1Revision(["a"], ["a", "b"]), "widening");
+  assertEquals(classifyGate1Revision(["a", "b"], ["a"]), "non-widening");
+  assertEquals(classifyGate1Revision(["a", "b"], ["a", "c"]), "non-widening");
 });
 
 Deno.test("recordGate1Approval: succeeds as a no-op when re-recording the identical venue set", async () => {
@@ -790,7 +957,11 @@ Deno.test("runBookGigCli: Gate 1 mode fails closed on partially unmatched --venu
   });
 });
 
-Deno.test("runBookGigCli: Gate 1 mode refuses to silently overwrite an existing approval with a different venue set", async () => {
+// D-54: this run approves BOTH venues where only the first was stored — a widening, which is
+// now the approved revision path and must be RECORDED. Before web-jam-tools#959 "book-gig:
+// provide a deliberate path to revise an already-recorded Gate 1 venue-set approval" this
+// asserted a refusal; the CLI-level refusal case is covered by the non-widening test below.
+Deno.test("runBookGigCli: Gate 1 mode widens an existing approval rather than refusing (D-54)", async () => {
   await withIsolatedHome(async () => {
     let gate1Recorded = false;
 
@@ -857,21 +1028,15 @@ Deno.test("runBookGigCli: Gate 1 mode refuses to silently overwrite an existing 
     };
 
     // This run approves BOTH venues — a wider set than the existing approval.
-    await assertRejects(
-      async () => {
-        await runBookGigCli(
-          ["--record-gate1", "Oct 16-18 2026", "Salem, VA"],
-          mockFetch,
-        );
-      },
-      Error,
-      "Gate 1 venue-set approval already exists for batch '2026-10-16-to-2026-10-18' with a different venue set",
+    await runBookGigCli(
+      ["--record-gate1", "Oct 16-18 2026", "Salem, VA"],
+      mockFetch,
     );
 
     assertEquals(
       gate1Recorded,
-      false,
-      "recordGate1Approval POST must not be called when an existing approval's venue set differs from the requested one",
+      true,
+      "a widening must be recorded as a whole rather than refused (D-54)",
     );
   });
 });

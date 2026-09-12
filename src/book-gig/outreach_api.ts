@@ -348,6 +348,40 @@ export interface RecordGate1ApprovalOptions extends BackendConfigOptions {
   approver?: string;
   notes?: string;
   metadata?: Record<string, unknown>;
+  /** Called with how the requested set relates to the stored one, before the write. */
+  onRevision?: (outcome: Gate1RevisionOutcome) => void;
+}
+
+/**
+ * How a requested Gate 1 venue set relates to the one already stored for the batch.
+ *
+ * - `new` — nothing was stored for this batch yet.
+ * - `identical` — same set; re-recording is an idempotent no-op.
+ * - `widening` — every stored venue is still present and at least one was added (D-54 allows it).
+ * - `non-widening` — a stored venue was removed or replaced (D-54 refuses it).
+ */
+export type Gate1RevisionOutcome = "new" | "identical" | "widening" | "non-widening";
+
+/**
+ * Classify a requested venue set against the stored one (D-54).
+ *
+ * Compares by set membership, so ordering and duplicates never make an otherwise identical
+ * set look like a revision.
+ */
+export function classifyGate1Revision(
+  storedIds: string[],
+  requestedIds: string[],
+): Gate1RevisionOutcome {
+  const stored = new Set(storedIds.map(String));
+  const requested = new Set(requestedIds.map(String));
+
+  if (stored.size === 0) return "new";
+
+  // Any stored venue missing from the request is a removal or a replacement, not a widening.
+  const keepsEveryStoredVenue = [...stored].every((id) => requested.has(id));
+  if (!keepsEveryStoredVenue) return "non-widening";
+
+  return requested.size === stored.size ? "identical" : "widening";
 }
 
 /**
@@ -384,28 +418,62 @@ export async function recordGate1Approval(
   // The backend upserts Gate 1 approval records on batchId/weekend (web-jam-back#1078
   // "model/outreach: record the venue-set approval and the per-email draft fingerprints
   // as two independent batch approvals"), so a second --record-gate1 run for the same
-  // weekend would otherwise silently replace a prior, narrower approval with a new venue
-  // set — exactly what web-jam-back#1079 "model/outreach: refuse batch dispatch unless
-  // both approvals exist and match this batch" checks dispatch against. Refuse outright
-  // when an existing record's venue set differs; allow a same-set re-run through as a
-  // harmless no-op (idempotent re-recording, e.g. notes/approver touch-ups).
-  const existing = await fetchGate1Approval(batchId, options, fetchFn);
-  if (existing) {
-    const existingSet = new Set((existing.venueIds || []).map(String));
-    const newSet = new Set(options.venueIds.map(String));
-    const sameSet = existingSet.size === newSet.size &&
-      [...existingSet].every((id) => newSet.has(id));
-    if (!sameSet) {
+  // weekend rewrites whatever is stored — exactly what web-jam-back#1079 "model/outreach:
+  // refuse batch dispatch unless both approvals exist and match this batch" checks dispatch
+  // against. D-54 (web-jam-tools#959 "book-gig: provide a deliberate path to revise an
+  // already-recorded Gate 1 venue-set approval") gives that rewrite four outcomes, below.
+  const lookup = await lookupGate1Approval(batchId, options, fetchFn);
+
+  // Outcome 4: the lookup could not determine whether a prior approval exists. Refuse
+  // (fail closed) WITHOUT posting. Proceeding here would replace an approval through the
+  // backend's upsert on the strength of a failed network call.
+  if (lookup.status === "indeterminate") {
+    throw new Error(
+      `Cannot determine whether a Gate 1 venue-set approval already exists for batch ` +
+        `'${batchId}': ${lookup.reason}. Refusing to record — an approval that cannot be read ` +
+        `cannot be safely revised, and recording anyway would silently overwrite it through the ` +
+        `backend's upsert on the weekend key. Re-run once the backend is reachable.`,
+    );
+  }
+
+  let revision: Gate1RevisionOutcome = "new";
+
+  if (lookup.status === "found") {
+    const storedIds = (lookup.record.venueIds || []).map(String);
+    const requestedIds = options.venueIds.map(String);
+    revision = classifyGate1Revision(storedIds, requestedIds);
+
+    // Outcome 3: a non-widening difference — a stored venue was removed or replaced.
+    if (revision === "non-widening") {
+      const requestedSet = new Set(requestedIds);
+      const dropped = storedIds.filter((id) => !requestedSet.has(id));
       throw new Error(
-        `Gate 1 venue-set approval already exists for batch '${batchId}' with a different ` +
-          `venue set (existing: ${[...existingSet].join(", ") || "none"}; requested: ${
-            [...newSet].join(", ")
-          }). Refusing to silently overwrite a prior approval — recording a genuinely revised ` +
-          `venue set for this batch is a decision Josh must make explicitly, not something this ` +
-          `command does automatically.`,
+        `Gate 1 venue-set approval already exists for batch '${batchId}' and the requested set ` +
+          `is not a widening of it (stored: ${storedIds.join(", ") || "none"}; requested: ${
+            requestedIds.join(", ")
+          }; dropped: ${dropped.join(", ")}). Per D-54 an approved set may be widened by adding ` +
+          `venues, but removing or replacing an approved venue is refused — nothing was recorded. ` +
+          `Re-run with every stored venue still present, or record a different batch.`,
+      );
+    }
+
+    // Outcome 2: a widening. Print the stored set beside the new one BEFORE writing, so the
+    // change is visible rather than implicit (design Step 4, "An approved venue set can be
+    // widened afterwards").
+    if (revision === "widening") {
+      const added = requestedIds.filter((id) => !new Set(storedIds).has(id));
+      console.log(`\n📋 Widening the stored Gate 1 venue set for batch '${batchId}':`);
+      console.log(`  • Stored (${storedIds.length}):    ${storedIds.join(", ") || "none"}`);
+      console.log(`  • Requested (${requestedIds.length}): ${requestedIds.join(", ")}`);
+      console.log(`  • Added (${added.length}):      ${added.join(", ")}`);
+      console.log(
+        `  Dispatch will reach only the venues in the approved set carrying no outreach\n` +
+          `  record for this weekend, so widening never re-mails an already-pitched venue.`,
       );
     }
   }
+
+  options.onRevision?.(revision);
 
   const payload: Record<string, unknown> = {
     batchId,
@@ -455,13 +523,33 @@ export async function recordGate1Approval(
 }
 
 /**
- * Fetch Gate 1 target venue-set approval record via GET /outreach/approval/venue-set/:batchId
+ * Outcome of a Gate 1 approval lookup, keeping "no prior approval exists" distinct from
+ * "I could not find out" (D-54, web-jam-tools#959 "book-gig: provide a deliberate path to
+ * revise an already-recorded Gate 1 venue-set approval").
+ *
+ * `fetchGate1Approval` collapses the last two into `null`, which is safe for a caller that
+ * only wants to display a record but NOT for the re-record guard: the backend upserts on the
+ * weekend key, so treating an unreadable lookup as "absent" silently replaces a prior
+ * approval. Guard callers must use `lookupGate1Approval` and refuse on `indeterminate`.
  */
-export async function fetchGate1Approval(
+export type Gate1ApprovalLookup =
+  | { status: "found"; record: Gate1ApprovalRecord }
+  | { status: "absent" }
+  | { status: "indeterminate"; reason: string };
+
+/**
+ * Look up the Gate 1 venue-set approval for a batch via
+ * GET /outreach/approval/venue-set/:batchId, distinguishing all three outcomes.
+ *
+ * Only a genuine HTTP 404 means "absent". Every other failure — a non-2xx status, an
+ * unparseable body, an expired token, a dropped connection — is `indeterminate`, because the
+ * caller cannot tell from it whether a prior approval exists.
+ */
+export async function lookupGate1Approval(
   batchIdOrWeekend: string,
   options: BackendConfigOptions = {},
   fetchFn: typeof fetch = fetch,
-): Promise<Gate1ApprovalRecord | null> {
+): Promise<Gate1ApprovalLookup> {
   const { baseUrl, token } = await resolveBackendConfig(options);
   const cleanId = encodeURIComponent(batchIdOrWeekend.trim());
   const url = `${baseUrl}/outreach/approval/venue-set/${cleanId}`;
@@ -473,19 +561,54 @@ export async function fetchGate1Approval(
     });
 
     if (res.status === 404) {
-      return null;
+      return { status: "absent" };
     }
 
     if (!res.ok) {
       const errText = await res.text();
-      console.warn(`[book-gig] fetchGate1Approval returned HTTP ${res.status}: ${errText}`);
-      return null;
+      return {
+        status: "indeterminate",
+        reason: `lookup returned HTTP ${res.status}: ${errText}`,
+      };
     }
 
-    const data = await res.json();
-    return data as Gate1ApprovalRecord;
+    try {
+      const data = await res.json();
+      return { status: "found", record: data as Gate1ApprovalRecord };
+    } catch (err) {
+      return {
+        status: "indeterminate",
+        reason: `lookup returned an unparseable response body: ${(err as Error).message}`,
+      };
+    }
   } catch (err) {
-    console.warn(`[book-gig] Error fetching Gate 1 approval: ${(err as Error).message}`);
-    return null;
+    return {
+      status: "indeterminate",
+      reason: `lookup could not be completed: ${(err as Error).message}`,
+    };
   }
+}
+
+/**
+ * Fetch Gate 1 target venue-set approval record via GET /outreach/approval/venue-set/:batchId.
+ *
+ * Returns `null` both when no approval exists and when the lookup could not be completed.
+ * Use `lookupGate1Approval` instead wherever that distinction decides whether to write.
+ */
+export async function fetchGate1Approval(
+  batchIdOrWeekend: string,
+  options: BackendConfigOptions = {},
+  fetchFn: typeof fetch = fetch,
+): Promise<Gate1ApprovalRecord | null> {
+  const lookup = await lookupGate1Approval(batchIdOrWeekend, options, fetchFn);
+
+  if (lookup.status === "found") {
+    return lookup.record;
+  }
+
+  if (lookup.status === "indeterminate") {
+    console.warn(`[book-gig] fetchGate1Approval could not determine state: ${lookup.reason}`);
+  }
+
+  return null;
 }
