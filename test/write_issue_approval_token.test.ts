@@ -31,6 +31,7 @@ import {
 import { checkIssueApprovalToken, loadToken } from "../hooks/lib/check_issue_approval_token.ts";
 import {
   checkTokenWriteAuthorization,
+  FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS,
   filingSkillInvoked,
   nonFilingSlashCommandInvoked,
   tailIsCurrentlySidechain,
@@ -534,6 +535,33 @@ Deno.test("CLI: succeeds when the most recent authorizing turn used file-issue's
   }
 });
 
+Deno.test("CLI: succeeds when the most recent authorizing turn used 'create an issue' as file-issue's natural-language trigger phrase (web-jam-tools#973 — matcher outcome 1)", async () => {
+  const dir = await Deno.makeTempDir();
+  const tokenPath = `${dir}/file-issue-create-an-issue-authorized.json`;
+  try {
+    const authEnv = await writeAuthorizingTranscriptFixture(
+      dir,
+      "create an issue to add zipCode to the Venue model",
+    );
+    const res = await runCli([
+      "--session-id",
+      "file-issue-create-an-issue-session",
+      "--repo",
+      "web-jam-tools",
+      "--title",
+      "Some title",
+      "--token-path",
+      tokenPath,
+    ], envWith(authEnv));
+    assertEquals(res.code, 0, res.stderr);
+    const loaded = loadToken(tokenPath);
+    assert(loaded !== null);
+    assertEquals(loaded?.session_id, "file-issue-create-an-issue-session");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("CLI: writes the token when the authorizing turn is a real Claude Code /file-issue slash invocation, stored in <command-name> wrapper form (web-jam-tools#920)", async () => {
   const dir = await Deno.makeTempDir();
   const tokenPath = `${dir}/wrapper-form-authorized.json`;
@@ -631,6 +659,13 @@ Deno.test("filingSkillInvoked: recognizes file-issue's documented natural-langua
   assertEquals(filingSkillInvoked("  open an issue.\nmore text"), "file-issue");
 });
 
+Deno.test("filingSkillInvoked: recognizes 'create an issue' as a file-issue natural-language trigger (web-jam-tools#973 — matcher outcome 1)", () => {
+  assertEquals(filingSkillInvoked("create an issue about the zip code bug"), "file-issue");
+  assertEquals(filingSkillInvoked("Create an issue, please"), "file-issue");
+  assertEquals(filingSkillInvoked("create an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("  create an issue.\nmore text"), "file-issue");
+});
+
 Deno.test("filingSkillInvoked: does not match the natural-language triggers mid-sentence, as a word prefix, or for design-issue", () => {
   // Mid-sentence: the phrase must open the message, same anchor as the slash form.
   assertEquals(filingSkillInvoked("let's file an issue about this"), null);
@@ -642,6 +677,19 @@ Deno.test("filingSkillInvoked: does not match the natural-language triggers mid-
   // design-issue has no documented natural-language trigger — only its slash form authorizes it.
   assertEquals(filingSkillInvoked("design an issue for this"), null);
   assertEquals(filingSkillInvoked("run design-issue"), null);
+});
+
+Deno.test("filingSkillInvoked: does not match 'create an issue' mid-sentence or as a word prefix (web-jam-tools#973 — matcher outcome 2)", () => {
+  // Mid-sentence mention: the phrase must open the message, same anchor as the other three.
+  assertEquals(filingSkillInvoked("let's create an issue about this"), null);
+  assertEquals(filingSkillInvoked("I should create an issue later"), null);
+  // Word-prefix false positive: "create an issued complaint" is not "create an issue".
+  assertEquals(filingSkillInvoked("create an issued complaint"), null);
+  // Quoting the phrase while discussing it is a mention, not a use.
+  assertEquals(
+    filingSkillInvoked('someone said "create an issue" but that was just an example'),
+    null,
+  );
 });
 
 // --- web-jam-tools#920: Claude Code's <command-name> slash-invocation wrapper ---
@@ -817,6 +865,37 @@ Deno.test("checkTokenWriteAuthorization: refuses when an intervening non-filing 
   });
   assertEquals(result.ok, false);
   assert(result.reason?.includes("different skill or command (/work-issue) was invoked"));
+});
+
+Deno.test("checkTokenWriteAuthorization: a mid-sentence mention of 'create an issue' does not authorize, and a more recent non-filing slash command still refuses (web-jam-tools#973 — matcher outcome 2)", () => {
+  const entries: TranscriptEntry[] = [
+    // Mid-sentence mention, not an opening invocation — must not authorize on its own.
+    { type: "user", message: { role: "user", content: "we could create an issue for this later" } },
+    { type: "assistant", message: { role: "assistant", content: "noted" } },
+    // A more recent non-filing slash command is still a scope-ending event.
+    { type: "user", message: { role: "user", content: "/work-issue web-jam-tools#800" } },
+    { type: "assistant", message: { role: "assistant", content: "switching to work..." } },
+  ];
+  const result = checkTokenWriteAuthorization({
+    entries,
+    ownConversationId: "sess-1",
+    isSubagentInvocation: false,
+  });
+  assertEquals(result.ok, false);
+  assert(result.reason?.includes("different skill or command (/work-issue) was invoked"));
+});
+
+Deno.test("checkTokenWriteAuthorization: refuses (fails closed) when ownConversationId is undetermined even though a 'create an issue' turn is present (web-jam-tools#973 — matcher outcome 3)", () => {
+  const entries: TranscriptEntry[] = [
+    { type: "user", message: { role: "user", content: "create an issue for the bug" } },
+  ];
+  const result = checkTokenWriteAuthorization({
+    entries,
+    ownConversationId: null,
+    isSubagentInvocation: false,
+  });
+  assertEquals(result.ok, false);
+  assert(result.reason?.includes("could not determine"));
 });
 
 Deno.test("checkTokenWriteAuthorization: an invocation more than 20 user turns earlier in the same session still mints the token (web-jam-tools#956)", () => {
@@ -1156,5 +1235,33 @@ Deno.test("Round-trip: written token DENIES when session ID does not match", asy
     assert(parsed.hookSpecificOutput.permissionDecisionReason.includes("different session"));
   } finally {
     await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// --- web-jam-tools#973: drift assertion between the hook array and the skill description ---
+//
+// FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS's own doc comment states it is only allowed to enumerate
+// phrases traceable to skills/file-issue/SKILL.md's frontmatter `description`. This test fails if
+// the two are ever allowed to silently diverge again — e.g. a phrase added to one but not the other.
+
+Deno.test("FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS: every entry appears in skills/file-issue/SKILL.md's frontmatter description (web-jam-tools#973)", async () => {
+  const skillMdPath = new URL(
+    "../skills/file-issue/SKILL.md",
+    import.meta.url,
+  ).pathname;
+  const skillMd = await Deno.readTextFile(skillMdPath);
+  const descriptionLine = skillMd.split("\n").find((line) => line.startsWith("description:"));
+  assert(descriptionLine, "skills/file-issue/SKILL.md must have a frontmatter description: line");
+
+  assert(
+    FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS.length > 0,
+    "FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS must not be empty",
+  );
+  for (const phrase of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS) {
+    assert(
+      descriptionLine!.includes(`"${phrase}"`),
+      `FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS entry "${phrase}" must appear (quoted) in ` +
+        `skills/file-issue/SKILL.md's frontmatter description, or the two have drifted apart`,
+    );
   }
 });
