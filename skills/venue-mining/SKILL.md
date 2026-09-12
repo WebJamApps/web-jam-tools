@@ -46,19 +46,34 @@ publication (name+url, null until discovered), lastSwept, notes`.
 4. **Verify** (delegate: Haiku, batched) — for each new candidate: real venue,
    recurring live-music programming, size fit (reject theaters/large halls —
    optionally offer as a TimShermanMusic lead), find email + phone + website
-   + **street address** from the venue's OWN site. Collect address from sources
-   in this order: (a) venue's website (contact/about/footer), (b) venue's public
-   Google Business listing, (c) the publication being swept. For JS-heavy sites,
-   use Playwright to render the page before extracting. The address must be
-   good enough to drive to: real street number + street name (not "downtown
-   <city>", not a PO box, not a chain HQ mailing address). Prefer the exact
-   address as shown in Google Business. **If a venue has no usable address after
-   exhausting these sources, skip it and report it to Josh** (see Skipped Venues
-   below). Note evidence counts (dates sampled, acts).
+   + **street address**. Look for a website and booking email by every route
+   open and narrow nothing at the point of discovery:
+   - **Query Google Maps / Google Places metadata**: check the venue's public
+     Google Business / Google Maps listing for its official published website
+     link and exact street address; fetch and mine that website for contact info.
+   - **Follow publication & held links**: follow links from the publication being
+     swept and links on pages the agent already holds.
+   - **Probe predictable domain variants**: when those routes come up empty — e.g.
+     a rate-limited search engine, or search results returning only social media
+     pages (Facebook / Instagram) — probe predictable domain variants built from
+     the venue's name, including the non-`.com` endings hospitality venues
+     actually use (`.shop`, `.bar`, `.restaurant`, `.site`, `.beer`, `.square.site`,
+     `.com`) via `deno task venue-contact:extract` or HTTP probe before falling back
+     to Facebook or classifying a venue as phone-only.
+   Collect address from sources in this order: (a) venue's website (contact/about/footer),
+   (b) venue's public Google Business listing, (c) the publication being swept. For
+   JS-heavy sites, use Playwright to render the page before extracting. The address must
+   be good enough to drive to: real street number + street name (not "downtown <city>",
+   not a PO box, not a chain HQ mailing address). Prefer the exact address as shown in
+   Google Business. **If a venue has no usable address after exhausting these sources,
+   skip it and report it to Josh** (see Skipped Venues below). Note evidence counts
+   (dates sampled, acts) and record how each email was discovered (source attribution).
 5. **Propose in chat** — ONE compact evidence table including: venue name, city,
-   state, address, email, phone, website. Josh approves a subset. Keep it
+   state, address, email, email source, phone, website. Josh approves a subset. Keep it
    phone-readable: short lines, no walls of text. Show addresses exactly as
-   sourced (backend normalizes them).
+   sourced (backend normalizes them). The **Email Source** column records how each
+   email was found (e.g. `Google Maps website`, `Publication link`, `Venue website`,
+   `Probed domain (<domain>)`, or `None (phone only)`).
 6. **Create** — ONE batched script call doing all `POST /venue` upserts
    (single permission click). Every create: provenance in `notes` (publication,
    sweep date, issue ref) + `outreachEligible` per the email rule below.
@@ -92,8 +107,10 @@ the venue record once the address is sourced.
 
 A venue can be created or enriched successfully and still have **no viable email** — because
 booking runs through a web form, a phone number, a Facebook page, or a login wall. The agent has
-already done every lookup it can (website with Playwright render + Google Business +
-publication); what remains needs a human. **Never leave this as a silent blank field.**
+already done every lookup it can (Google Maps / Places official website link + venue website with
+Playwright render + swept publication + probing predictable domain variants `.shop`, `.bar`,
+`.restaurant`, `.site`, `.beer`, `.square.site`); what remains needs a human. **Never leave this
+as a silent blank field.**
 
 Every run ends with an explicit hand-back list of venues left without a viable email:
 
@@ -115,7 +132,7 @@ link with the record instead of only in a chat message that scrolls away.
 When using `/venue-mining venue <name>` to verify or refresh an existing venue record, the agent
 sources the SAME field set it would collect for a new venue — **street address, email, phone,
 website** — via website (Playwright-render when a plain fetch returns an empty shell) + Google
-Business + publication.
+Maps / Places metadata + probing predictable domain variants + publication.
 
 **Write back EVERY field that was sourced and is currently empty or wrong**, in one
 `PATCH /venue/<_id>` per venue (partial merge — omitted fields are untouched). Do NOT write only
@@ -127,12 +144,18 @@ conflicting addresses with no way to tell which is current. "Josh might not want
 uncertainty. Never invent a value to fill a blank; a field with no sourced value stays empty and
 is reported as not found.
 
-## Eligibility rule (settled 2026-07-02)
+## Eligibility rule (settled 2026-07-02, reconciled with D-49)
 
-- Viable email found on the venue's own site = **booking@ or general info@** →
-  create with `outreachEligible: true`.
-- Obviously-wrong-purpose inbox (catering@, events-form-only, private-parties@)
-  or no email → `outreachEligible: false`; note why.
+- **Source strength governs `outreachEligible`:**
+  - **Published link** (venue's website, Google Maps / Business listing, swept publication):
+    viable email (**booking@ or general info@**) reached through a link a real source
+    published → create with `outreachEligible: true`.
+  - **Probed domain**: an email lifted from an invented/probed domain flips
+    `outreachEligible: true` **only** when the page identifies itself as that venue
+    (carrying the venue's name together with its city or street address) or when Josh
+    explicitly approves it during candidate review; otherwise `outreachEligible: false`.
+  - **Obviously-wrong-purpose inbox** (catering@, events-form-only, private-parties@)
+    or no email → `outreachEligible: false`; note why.
 - The rule applies **identically to existing records in `venue` seed mode**: if
   enrichment sources a viable booking/general email for a venue that had none,
   set `outreachEligible: true` in the same `PATCH`. An eligible venue whose email

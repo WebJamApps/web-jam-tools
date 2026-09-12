@@ -40,6 +40,8 @@ export interface VenueContactResult {
   pagesVisited: string[];
   /** Set when the whole run failed (dead/slow host, browser failure, etc). */
   error: string | null;
+  /** True when the page content matches venue name + city/address. */
+  identifiesVenue?: boolean;
 }
 
 export interface ExtractOptions {
@@ -88,9 +90,12 @@ const STREET_SUFFIXES =
   "Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|" +
   "Place|Pl|Highway|Hwy|Circle|Cir|Terrace|Ter|Parkway|Pkwy|Square|Sq";
 
+const DIRECTIONALS = "N|S|E|W|NE|NW|SE|SW|North|South|East|West";
+
 const ADDRESS_RE = new RegExp(
-  `\\d{1,6}\\s+[A-Za-z0-9.'\\s]{1,40}(?:${STREET_SUFFIXES})\\.?,?\\s*` +
-    `(?:(?:Suite|Ste|Unit|#)\\s*\\w+,?\\s*)?` +
+  `\\d{1,6}\\s+(?:(?:${DIRECTIONALS})\\.?\\s+)?[A-Za-z0-9.'\\s]{1,40}(?:${STREET_SUFFIXES})\\.?,?\\s*` +
+    `(?:(?:${DIRECTIONALS})\\.?,?\\s*)?` +
+    `(?:(?:Suite|Ste|Unit|#|Apt|Building|Bldg)\\.?\\s*[A-Za-z0-9-]+,?\\s*)?` +
     `[A-Za-z][A-Za-z.\\s]{1,30},?\\s*[A-Z]{2}\\s*\\d{5}(?:-\\d{4})?`,
   "i",
 );
@@ -341,5 +346,156 @@ export async function extractVenueContact(
     collect(page.html, link);
   }
 
-  return { emails, address, fetchPath: landing.path, pagesVisited, error: null };
+  const identifies = options.name
+    ? pageIdentifiesVenue(landing.html, options.name, {
+      city: options.city,
+      address: address ?? undefined,
+    })
+    : undefined;
+
+  return {
+    emails,
+    address,
+    fetchPath: landing.path,
+    pagesVisited,
+    error: null,
+    identifiesVenue: identifies,
+  };
+}
+
+/** Common alternative hospitality TLDs used by venues (D-49). */
+export const HOSPITALITY_TLDS = [
+  ".shop",
+  ".bar",
+  ".restaurant",
+  ".site",
+  ".beer",
+  ".square.site",
+  ".com",
+] as const;
+
+/**
+ * Builds predictable candidate URLs from a venue name using common slug formats
+ * and hospitality TLDs (.shop, .bar, .restaurant, .site, .beer, .square.site, .com).
+ */
+export function generateCandidateDomains(
+  venueName: string,
+  tlds: readonly string[] = HOSPITALITY_TLDS,
+): string[] {
+  const normalized = venueName.toLowerCase().trim();
+  const slugHyphenated = normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const slugCondensed = normalized.replace(/[^a-z0-9]+/g, "");
+
+  const slugs = Array.from(new Set([slugHyphenated, slugCondensed].filter((s) => s.length > 0)));
+  const domains: string[] = [];
+
+  for (const slug of slugs) {
+    for (const tld of tlds) {
+      domains.push(`https://${slug}${tld}`);
+    }
+  }
+
+  return domains;
+}
+
+/**
+ * Checks whether page text contains the venue name together with its city or street address.
+ * Per D-49: an email from a probed domain flips outreachEligible: true only when the page
+ * identifies itself as that venue; otherwise outreachEligible: false.
+ */
+export function pageIdentifiesVenue(
+  html: string,
+  venueName: string,
+  location?: { city?: string; address?: string },
+): boolean {
+  const text = extractVisibleText(html).toLowerCase();
+  const nameNorm = venueName.toLowerCase().trim();
+
+  if (!text.includes(nameNorm)) {
+    return false;
+  }
+
+  if (location?.city && text.includes(location.city.toLowerCase().trim())) {
+    return true;
+  }
+
+  if (location?.address) {
+    const addrParts = location.address.toLowerCase().split(",")[0].trim();
+    if (addrParts && text.includes(addrParts)) {
+      return true;
+    }
+  }
+
+  return !location?.city && !location?.address;
+}
+
+export type EmailDiscoverySource =
+  | "google_maps_website"
+  | "publication_link"
+  | "venue_website"
+  | "probed_domain"
+  | "none";
+
+export interface ProbedVenueResult {
+  url: string;
+  identifiesVenue: boolean;
+  contact: VenueContactResult;
+  sourceType: "probed_domain";
+  outreachEligible: boolean;
+}
+
+export interface ProbeOptions extends ExtractOptions {
+  address?: string;
+  candidateDomains?: string[];
+}
+
+/**
+ * Probes predictable domain patterns built from the venue's name when search engines
+ * are rate-limited or return only social links.
+ * Per D-49: an email lifted from a probed domain flips outreachEligible: true only when
+ * the page identifies itself as that venue (carrying venue name + city or street address);
+ * otherwise outreachEligible: false.
+ */
+export async function probeVenueDomains(
+  venueName: string,
+  options: ProbeOptions = {},
+): Promise<ProbedVenueResult | null> {
+  const domains = options.candidateDomains ?? generateCandidateDomains(venueName);
+  const opts: FetchOpts = {
+    fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    renderTimeoutMs: options.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS,
+    fetchImpl: options.fetchImpl ?? fetch,
+    renderImpl: options.renderImpl ?? defaultRender,
+  };
+
+  for (const domainUrl of domains) {
+    try {
+      const outcome = await fetchPageWithFallback(domainUrl, opts);
+      if ("error" in outcome) continue;
+
+      const contact = await extractVenueContact(domainUrl, options);
+      if (contact.error) continue;
+
+      const identifies = pageIdentifiesVenue(outcome.html, venueName, {
+        city: options.city,
+        address: options.address ?? contact.address ?? undefined,
+      });
+
+      contact.identifiesVenue = identifies;
+      const hasViableEmail = contact.emails.length > 0;
+      const outreachEligible = hasViableEmail && identifies;
+
+      return {
+        url: domainUrl,
+        identifiesVenue: identifies,
+        contact,
+        sourceType: "probed_domain",
+        outreachEligible,
+      };
+    } catch {
+      // Continue to next candidate domain
+    }
+  }
+
+  return null;
 }
