@@ -87,9 +87,11 @@ graph TD
 Batch outreach dispatch is protected by two mandatory, independent, non-fungible hard gates (D-39, D-40, D-41, D-45): Gate 1 (target venue set approval) and Gate 2 (draft email review loop and content fingerprint approval). AI assistants on all surfaces must strictly distinguish between target venue selection and draft copy approval:
 
 #### Phase 2A: Target Venue Set Approval & GATE 1 Recording
-- Present candidate proposal table to Josh in chat:
-  `| # | Venue Name | City, State | Booking Email | Spacing Reason |`
-- Josh reviews candidate eligibility and approves or refines the target venue list (e.g. approving specific IDs with `--venues` or skipping with `--skip`, or approving all proposed candidates).
+- Present candidate proposal tables to Josh in chat, strictly separating actionable targets from excluded audit listings:
+  1. **Eligible Candidate Venues for <weekend> (<count>):** Displays only pitchable venues (valid `_id`, booking email, and not marked excluded) that can receive pitch drafts:
+     `| # | Venue Name | City, State | Contact | Phone | Booking Email | Spacing Status |`
+  2. **Excluded / On-Hold Venues (<count>):** Displays secondary audit summary of venues excluded from outreach (seasonal holds, gig spacing within 60 days, active direct chat, or missing contact info).
+- Josh reviews candidate eligibility from the primary eligible candidate table and approves or refines the target venue list (e.g. approving specific IDs with `--venues` or skipping with `--skip`, or approving all proposed candidates).
 - **GATE 1 RECORDING:** Immediately upon receiving Josh's approval of the target candidate list, the AI assistant MUST record Gate 1 approval server-side:
   - CLI: `deno task book-gig --record-gate1 "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"] [--approver "Josh"]`
   - Client API: `recordGate1Approval({ weekend, venueIds, approver: "Josh" })` calling `POST /outreach/approval/venue-set` on `web-jam-back`.
