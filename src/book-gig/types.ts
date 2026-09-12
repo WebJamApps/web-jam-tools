@@ -80,6 +80,16 @@ export interface CandidateVenue {
   priorGigs?: unknown[];
   outreachEligible?: boolean;
   bookingStatus?: string;
+  lastGig?: {
+    _id?: string;
+    date?: string;
+    datetime?: string | Date;
+    time?: string;
+    location?: string;
+    venue?: string;
+    venueId?: string;
+    [key: string]: unknown;
+  } | null;
   gigInterval?: number;
   payAmount?: number;
   resumeBooking?: string | Date | null;
