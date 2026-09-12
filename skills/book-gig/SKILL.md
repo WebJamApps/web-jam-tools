@@ -5,13 +5,13 @@ description: Identify eligible venues for target performance weekends, filter by
 
 # book-gig — Target Performance Weekend Booking Outreach
 
-Automate identifying eligible live-music venues, filtering them against Josh & Maria's performance history (+- 2 months gig-spacing), triggering `venue-mining` when target density is low, generating personalized booking pitches adhering to `docs/cross-ai-rules.md` voice rules, recording Gate 1 venue-set approval (`POST /outreach/approval/venue-set` via `--record-gate1`), holding the Gate 2 draft copy review loop and recording content fingerprints (`POST /outreach/approval/draft-copy` via `--record-gate2`), dispatching approved batches via `POST /outreach/batch` (`--send --confirm-drafts`), and tracking live venue responses and AI suggestions (`--replies` / `--check-replies`).
+Automate identifying eligible live-music venues, filtering them against Josh & Maria's performance history (+- 2 months gig-spacing), triggering `venue-mining` when target density is low, generating personalized booking pitches adhering to `docs/cross-ai-rules.md` voice rules, recording Gate 1 venue-set approval (`POST /outreach/approval/venue-set` via `--record-gate1`), holding the Gate 2 draft copy review loop and recording content fingerprints (`POST /outreach/approval/draft-fingerprints` via `--record-gate2`), dispatching approved batches via `POST /outreach/batch` (`--send --confirm-drafts`), and tracking live venue responses and AI suggestions (`--replies` / `--check-replies`).
 
 ## Invocation
 
 - `/book-gig <weekend> [location]` — Discovery & preview mode (drafts pitches, logs candidate table, outputs clickable HTML artifact link, and automatically opens it in Chrome).
 - `/book-gig --record-gate1 "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"] [--approver "Josh"]` — Gate 1 venue-set approval mode (records server-side approval of the target venue set via `POST /outreach/approval/venue-set` once Josh approves the candidate table; authorizes ONLY the venue set and nothing else).
-- `/book-gig --record-gate2 "<weekend>" [location] [--confirm-all] [--tweak-venue "<name>" --custom-body "<text>"] [--approver "Josh"]` — Gate 2 draft copy approval & review loop mode (holds review loop for individual venue tweaks via `--tweak-venue`, updates the HTML review artifact, and records server-side draft fingerprints via `POST /outreach/approval/draft-copy` ONLY upon explicit affirmative whole-batch approval via `--confirm-all` or explicit batch signoff statement; authorizes ONLY draft copy and nothing else).
+- `/book-gig --record-gate2 "<weekend>" [location] [--confirm-all] [--tweak-venue "<name>" --custom-body "<text>"] [--approver "Josh"]` — Gate 2 draft copy approval & review loop mode (holds review loop for individual venue tweaks via `--tweak-venue`, updates the HTML review artifact, and records server-side draft fingerprints via `POST /outreach/approval/draft-fingerprints` ONLY upon explicit affirmative whole-batch approval via `--confirm-all` or explicit batch signoff statement; authorizes ONLY draft copy and nothing else).
 - `/book-gig --send "<weekend>" [location] --confirm-drafts [--venues "id1,id2" | --venue "id1"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues, outputs HTML artifact link, and opens in Chrome; refuses unless BOTH Gate 1 and Gate 2 approval records exist and match, AND `--confirm-drafts` is passed on the command line; `--venue <name|id>` acts as an alias for a single target venue in `--send` mode).
 - `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies`, displays live campaign status table, outputs HTML artifact link, and opens in Chrome).
 - `/book-gig --link-gig <venue-name>` — Gig linking mode (resolves single venue by exact normalized name, matches unlinked gig, and writes `venueId` via `PATCH /gig/:id` to correct a wrong new-versus-returning badge per D-26).
@@ -58,7 +58,7 @@ graph TD
     H --> H1{"Josh Feedback"}
     H1 -- "Tweak Requests" --> H2["Per-Venue Tweak Re-Render (--record-gate2 --tweak-venue ...)"]
     H2 --> H
-    H1 -- "Explicit Whole-Batch Approval" --> I["GATE 2: Record Draft Fingerprints Server-Side (POST /outreach/approval/draft-copy via --confirm-all)"]
+    H1 -- "Explicit Whole-Batch Approval" --> I["GATE 2: Record Draft Fingerprints Server-Side (POST /outreach/approval/draft-fingerprints via --confirm-all)"]
     I --> J["Dispatch Outreach Batch (deno task book-gig --send ... --confirm-drafts)"]
     J --> K{"Dual Refusal Gate: CLI & Server Check"}
     K -- "Missing Gate 1, Missing Gate 2, Fingerprint Divergence, or Missing --confirm-drafts" --> K1["REFUSE DISPATCH (Fail Closed)"]
@@ -129,11 +129,11 @@ Batch outreach dispatch is protected by two mandatory, independent, non-fungible
   - Approval is **NEVER** inferred from negations, refusals, or questions ("do not approve drafts", "why would I approve?").
 - **GATE 2 RECORDING:** Upon explicit whole-batch approval, SHA-256 content fingerprints of every rendered email draft are computed and recorded server-side:
   - CLI: `deno task book-gig --record-gate2 "<weekend>" [location] --confirm-all [--approver "Josh"]`
-  - Client API: `recordGate2Approval({ weekend, approver: "Josh", draftFingerprints })` calling `POST /outreach/approval/draft-copy` on `web-jam-back`.
+  - Client API: `recordGate2Approval({ weekend, approver: "Josh", draftFingerprints })` calling `POST /outreach/approval/draft-fingerprints` on `web-jam-back`.
   - **Invalidation:** Any subsequent tweak to copy or venue set breaks the fingerprints and invalidates the approval, re-opening Gate 2.
   - **Independence (D-39 / D-41):** Gate 2 authorizes copy and nothing else. Approving copy does not approve a venue set, and approving a venue set does not approve copy.
 
-### 5. Approved Batch Outreach Dispatch & The Two Refusals (Step 6 / D-39 / D-48)
+### 5. Approved Batch Outreach Dispatch & The Two Refusals (design Step 6 / D-39 / D-48)
 
 Batch outreach dispatch is protected by two distinct, mandatory refusals operating in series:
 
@@ -165,10 +165,10 @@ Batch outreach dispatch is protected by two distinct, mandatory refusals operati
 
 | It refuses to | Because |
 |---|---|
-| Auto-send outreach without explicit draft approval and `--confirm-drafts`, or dispatch based on venue target approval alone (Gate 1) | Two-stage approval gate requires distinct signoff (D-39): Gate 1 authorizes ONLY the target venue set (recorded server-side via `POST /outreach/approval/venue-set`), while Gate 2 authorizes rendered draft copy (recorded server-side via `POST /outreach/approval/draft-copy`). Dispatch requires `--send --confirm-drafts` and fails closed if either gate or `--confirm-drafts` is missing. AI assistants are strictly forbidden from executing `--send` when candidates or venue lists alone are approved. |
+| Auto-send outreach without explicit draft approval and `--confirm-drafts`, or dispatch based on venue target approval alone (Gate 1) | Two-stage approval gate requires distinct signoff (D-39): Gate 1 authorizes ONLY the target venue set (recorded server-side via `POST /outreach/approval/venue-set`), while Gate 2 authorizes rendered draft copy (recorded server-side via `POST /outreach/approval/draft-fingerprints`). Dispatch requires `--send --confirm-drafts` and fails closed if either gate or `--confirm-drafts` is missing. AI assistants are strictly forbidden from executing `--send` when candidates or venue lists alone are approved. |
 | Infer draft copy approval from silence, tweak requests, partial reviews, or venue list approval | D-45: Gate 2 closes ONLY on an explicit affirmative approval of the entire batch in its entirety. Tweak requests, passing remarks ("looks fine"), partial reviews ("venue 1 approved"), silence, negations/refusals, and venue-list approvals are strictly rejected as approvals. |
 | Dispatch when rendered copy diverges from stored Template records | D-50: Every rendered email must match its stored Template record with substitutions strictly confined to declared placeholders. Any fixed prose divergence refuses the batch. |
-| Dispatch when email drafts diverge from Gate 2 approved fingerprints | Step 6 / D-39: `POST /outreach/batch` re-renders each draft and compares SHA-256 content fingerprints against Gate 2's stored record. Any mismatch refuses the entire batch in full (no partial sends). |
+| Dispatch when email drafts diverge from Gate 2 approved fingerprints | design Step 6 / D-39: `POST /outreach/batch` re-renders each draft and compares SHA-256 content fingerprints against Gate 2's stored record. Any mismatch refuses the entire batch in full (no partial sends). |
 | Re-record a Gate 1 venue set that removes or replaces an already-approved venue | D-54 permits a *widening* (every stored venue kept, others added) and refuses anything else. A set that drops an approved venue is a replacement, not a revision, and the backend upserts on the weekend key, so it would silently discard what Josh approved. Nothing is recorded. |
 | Record a Gate 1 or Gate 2 approval when the lookup could not be completed | D-54, fail closed. A non-2xx status, unparseable body, expired token, or dropped connection is indistinguishable from "no approval exists" to the caller, so proceeding would overwrite a prior approval through the backend's upsert on the strength of a failed network call. No POST is made. |
 | Pitch venues within +- 2 months of a booked gig | Preserves local audience draw and venue spacing commitments. |

@@ -1035,3 +1035,43 @@ Deno.test(
     assertStringIncludes(text, "Template Divergence Check (D-50)");
   },
 );
+
+/** Every distinct `/outreach/approval/...` path a file names, without ids or trailing slashes. */
+function approvalEndpoints(source: string): Set<string> {
+  return new Set(source.match(/\/outreach\/approval\/[a-z-]+/g) ?? []);
+}
+
+Deno.test(
+  "skills/book-gig/SKILL.md names only approval endpoints the client actually calls",
+  async () => {
+    // An assertion on a hardcoded path cannot catch a documented endpoint no code serves —
+    // SKILL.md shipped `POST /outreach/approval/draft-copy`, which web-jam-back has never
+    // registered, and every string assertion above still passed. Tie the two files together
+    // instead: what the skill tells an agent to call must be what the client calls.
+    const skill = await Deno.readTextFile("skills/book-gig/SKILL.md");
+    const client = await Deno.readTextFile("src/book-gig/outreach_api.ts");
+
+    const documented = approvalEndpoints(skill);
+    const called = approvalEndpoints(client);
+
+    assertEquals(
+      called.size > 0,
+      true,
+      "the client must call at least one approval endpoint, or this test proves nothing",
+    );
+
+    const invented = [...documented].filter((path) => !called.has(path)).sort();
+    assertEquals(
+      invented,
+      [],
+      `SKILL.md documents approval endpoint(s) no client code calls: ${invented.join(", ")}`,
+    );
+
+    const undocumented = [...called].filter((path) => !documented.has(path)).sort();
+    assertEquals(
+      undocumented,
+      [],
+      `the client calls approval endpoint(s) SKILL.md never documents: ${undocumented.join(", ")}`,
+    );
+  },
+);
