@@ -2,7 +2,11 @@
 // Run:
 //   deno task venue-contact:extract <url> [name] [city]
 //   deno task venue-contact:extract --probe <venueName> [city] [address]
-import { extractVenueContact, probeVenueDomains } from "./extract_venue_contact.ts";
+import {
+  extractVenueContact,
+  type ProbeAttempt,
+  probeVenueDomains,
+} from "./extract_venue_contact.ts";
 
 if (import.meta.main) {
   const args = Deno.args;
@@ -23,10 +27,20 @@ if (import.meta.main) {
       console.error("Usage: deno task venue-contact:extract --probe <venueName> [city] [address]");
       Deno.exit(1);
     }
-    const result = await probeVenueDomains(venueName, { city, address, name: venueName });
+    const attempts: ProbeAttempt[] = [];
+    const result = await probeVenueDomains(venueName, {
+      city,
+      address,
+      name: venueName,
+      onAttempt: (a) => attempts.push(a),
+    });
     if (!result) {
       console.log(
-        JSON.stringify({ found: false, venueName, message: "No probed domain resolved" }, null, 2),
+        JSON.stringify(
+          { found: false, venueName, message: "No probed domain resolved", attempts },
+          null,
+          2,
+        ),
       );
       Deno.exit(0);
     }

@@ -9,12 +9,10 @@
     "jsr:@std/path@1": "1.1.6",
     "jsr:@std/path@^1.1.6": "1.1.6",
     "jsr:@std/yaml@^1.2.0": "1.2.0",
-    "npm:cheerio@*": "1.2.0",
     "npm:cheerio@^1.2.0": "1.2.0",
     "npm:docx@^9.0.3": "9.7.1",
     "npm:jscpd@*": "5.0.16",
     "npm:nodemailer@^9.1.0": "9.1.1",
-    "npm:playwright@*": "1.62.1",
     "npm:playwright@^1.62.1": "1.62.1"
   },
   "jsr": {

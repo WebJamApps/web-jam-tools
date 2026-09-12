@@ -45,10 +45,19 @@ export interface VenueContactResult {
 }
 
 export interface ExtractOptions {
-  /** Venue name, reserved for future disambiguation; unused today. */
+  /** Venue name — when set, the page is checked for whether it identifies as this venue. */
   name?: string;
-  /** Venue city — when set, an address containing this city is preferred. */
+  /**
+   * Venue city AS RECORDED FOR THE VENUE — never scraped from the page under
+   * test. Used to prefer an address containing this city, and as corroborating
+   * evidence for `identifiesVenue`.
+   */
   city?: string;
+  /**
+   * Venue street address AS RECORDED FOR THE VENUE — never scraped from the
+   * page under test. Corroborating evidence for `identifiesVenue`.
+   */
+  address?: string;
   /** Timeout for a single plain HTTP fetch, in ms. Default 8000. */
   fetchTimeoutMs?: number;
   /** Timeout for a single Playwright render, in ms. Default 20000. */
@@ -101,6 +110,13 @@ const ADDRESS_RE = new RegExp(
 );
 
 const CONTACT_LINK_RE = /contact|about|events|booking|find us|visit|location/i;
+
+/**
+ * Separators a site puts between its own name and a tagline in a <title> or
+ * heading (" | ", " - ", " — ", " · ", ": "). A hyphen only counts when it is
+ * whitespace-surrounded, so a hyphenated venue name stays intact.
+ */
+const NAME_SEPARATOR_RE = /\s+[-–—|·•]\s+|\s*\|\s*|\s*:\s*/;
 
 /** Extracts email and telephone from schema.org JSON-LD blocks (single object or @graph array). */
 export function extractFromJsonLd(html: string): { emails: string[]; phones: string[] } {
@@ -292,35 +308,19 @@ async function fetchPageWithFallback(url: string, opts: FetchOpts): Promise<Fetc
 }
 
 /**
- * Extracts venue contact info (emails + address) starting from a venue
- * website URL. Tries a plain fetch, falls back to Playwright for
- * client-rendered shells, and follows a bounded set of contact-bearing
- * internal links. Never invents data — returns null/empty where nothing was
- * found, and a clear `error` (fetchPath "failed") for a dead or slow host.
+ * Collects contact data from an ALREADY-FETCHED landing page plus a bounded set
+ * of contact-bearing internal links. Taking the landing HTML as a parameter is
+ * what lets `probeVenueDomains` fetch each candidate domain exactly once
+ * instead of fetching it, then fetching it again through `extractVenueContact`
+ * (which for a client-rendered shell meant launching Playwright twice).
  */
-export async function extractVenueContact(
+async function collectContactFromPage(
   startUrl: string,
-  options: ExtractOptions = {},
+  landing: { html: string; path: FetchPath },
+  opts: FetchOpts,
+  options: ExtractOptions,
 ): Promise<VenueContactResult> {
-  const opts: FetchOpts = {
-    fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
-    renderTimeoutMs: options.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS,
-    fetchImpl: options.fetchImpl ?? fetch,
-    renderImpl: options.renderImpl ?? defaultRender,
-  };
   const maxExtraPages = options.maxExtraPages ?? DEFAULT_MAX_EXTRA_PAGES;
-
-  const landing = await fetchPageWithFallback(startUrl, opts);
-  if ("error" in landing) {
-    return {
-      emails: [],
-      address: null,
-      fetchPath: "failed",
-      pagesVisited: [],
-      error: landing.error,
-    };
-  }
-
   const pagesVisited = [startUrl];
   const emails: EmailHit[] = [];
   const seenEmails = new Set<string>();
@@ -346,10 +346,12 @@ export async function extractVenueContact(
     collect(page.html, link);
   }
 
+  // Identity evidence comes only from the CALLER's venue record — never from
+  // `address` above, which was scraped off the page being judged.
   const identifies = options.name
     ? pageIdentifiesVenue(landing.html, options.name, {
       city: options.city,
-      address: address ?? undefined,
+      address: options.address,
     })
     : undefined;
 
@@ -363,20 +365,52 @@ export async function extractVenueContact(
   };
 }
 
+/**
+ * Extracts venue contact info (emails + address) starting from a venue
+ * website URL. Tries a plain fetch, falls back to Playwright for
+ * client-rendered shells, and follows a bounded set of contact-bearing
+ * internal links. Never invents data — returns null/empty where nothing was
+ * found, and a clear `error` (fetchPath "failed") for a dead or slow host.
+ */
+export async function extractVenueContact(
+  startUrl: string,
+  options: ExtractOptions = {},
+): Promise<VenueContactResult> {
+  const opts: FetchOpts = {
+    fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    renderTimeoutMs: options.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS,
+    fetchImpl: options.fetchImpl ?? fetch,
+    renderImpl: options.renderImpl ?? defaultRender,
+  };
+
+  const landing = await fetchPageWithFallback(startUrl, opts);
+  if ("error" in landing) {
+    return {
+      emails: [],
+      address: null,
+      fetchPath: "failed",
+      pagesVisited: [],
+      error: landing.error,
+    };
+  }
+
+  return await collectContactFromPage(startUrl, landing, opts, options);
+}
+
 /** Common alternative hospitality TLDs used by venues (D-49). */
 export const HOSPITALITY_TLDS = [
+  ".com",
   ".shop",
   ".bar",
   ".restaurant",
   ".site",
   ".beer",
   ".square.site",
-  ".com",
 ] as const;
 
 /**
  * Builds predictable candidate URLs from a venue name using common slug formats
- * and hospitality TLDs (.shop, .bar, .restaurant, .site, .beer, .square.site, .com).
+ * and hospitality TLDs (.com, .shop, .bar, .restaurant, .site, .beer, .square.site).
  */
 export function generateCandidateDomains(
   venueName: string,
@@ -398,35 +432,73 @@ export function generateCandidateDomains(
   return domains;
 }
 
+/** Lowercases and collapses whitespace for name comparison. */
+function normalizeName(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 /**
- * Checks whether page text contains the venue name together with its city or street address.
- * Per D-49: an email from a probed domain flips outreachEligible: true only when the page
- * identifies itself as that venue; otherwise outreachEligible: false.
+ * True when the venue's name is the page's OWN identity — it appears as a whole
+ * segment of the <title>, an <h1>/<h2>/<h3>, or an og:site_name/og:title — and
+ * not merely as a substring of a longer business name. A bare substring test
+ * would let "Wild Magnolia Florist" satisfy "Wild Magnolia".
+ */
+export function pageNamesVenue(html: string, venueName: string): boolean {
+  const target = normalizeName(venueName);
+  if (!target) return false;
+
+  const $ = cheerio.load(html);
+  const candidates: string[] = [];
+  const push = (value?: string | null) => {
+    if (value) candidates.push(value);
+  };
+
+  push($("title").first().text());
+  $("h1, h2, h3").each((_i, el) => push($(el).text()));
+  push($('meta[property="og:site_name"]').attr("content"));
+  push($('meta[property="og:title"]').attr("content"));
+  push($('meta[name="application-name"]').attr("content"));
+
+  return candidates.some((candidate) =>
+    normalizeName(candidate)
+      .split(NAME_SEPARATOR_RE)
+      .some((segment) => normalizeName(segment) === target)
+  );
+}
+
+/**
+ * Checks whether a page identifies itself as the given venue: its name must be
+ * the page's own identity, corroborated by location evidence SUPPLIED BY THE
+ * CALLER from the venue record.
+ *
+ * Per D-49 an email from a probed domain flips outreachEligible: true only when
+ * the page identifies itself as that venue. The location must therefore never
+ * come from the page under test — a page that supplies its own expected address
+ * verifies itself, and any same-named business anywhere would pass. With no
+ * caller-supplied city or address there is no independent evidence at all, so
+ * the answer is `false`, not `true`.
  */
 export function pageIdentifiesVenue(
   html: string,
   venueName: string,
   location?: { city?: string; address?: string },
 ): boolean {
+  if (!pageNamesVenue(html, venueName)) return false;
+
+  const city = location?.city?.trim();
+  const address = location?.address?.trim();
+  if (!city && !address) return false;
+
   const text = extractVisibleText(html).toLowerCase();
-  const nameNorm = venueName.toLowerCase().trim();
 
-  if (!text.includes(nameNorm)) {
-    return false;
+  if (city && text.includes(city.toLowerCase())) return true;
+
+  if (address) {
+    const street = address.toLowerCase().split(",")[0].trim();
+    if (street && text.includes(street)) return true;
   }
 
-  if (location?.city && text.includes(location.city.toLowerCase().trim())) {
-    return true;
-  }
-
-  if (location?.address) {
-    const addrParts = location.address.toLowerCase().split(",")[0].trim();
-    if (addrParts && text.includes(addrParts)) {
-      return true;
-    }
-  }
-
-  return !location?.city && !location?.address;
+  return false;
 }
 
 export type EmailDiscoverySource =
@@ -436,17 +508,28 @@ export type EmailDiscoverySource =
   | "probed_domain"
   | "none";
 
+/** One candidate domain the probe tried, and what came of it. */
+export interface ProbeAttempt {
+  url: string;
+  outcome: "fetch_failed" | "no_identity" | "no_email" | "match" | "error";
+  detail?: string;
+}
+
 export interface ProbedVenueResult {
   url: string;
   identifiesVenue: boolean;
   contact: VenueContactResult;
   sourceType: "probed_domain";
   outreachEligible: boolean;
+  /** Every candidate domain tried, in order, and why each was rejected. */
+  attempts: ProbeAttempt[];
 }
 
 export interface ProbeOptions extends ExtractOptions {
   address?: string;
   candidateDomains?: string[];
+  /** Called as each candidate domain is tried — lets a caller log a probe that found nothing. */
+  onAttempt?: (attempt: ProbeAttempt) => void;
 }
 
 /**
@@ -454,7 +537,12 @@ export interface ProbeOptions extends ExtractOptions {
  * are rate-limited or return only social links.
  * Per D-49: an email lifted from a probed domain flips outreachEligible: true only when
  * the page identifies itself as that venue (carrying venue name + city or street address);
- * otherwise outreachEligible: false.
+ * otherwise outreachEligible: false. The venue's city/address must be supplied by the
+ * caller from the venue record — never scraped from the page under test. Every candidate
+ * domain is tried (a parked or squatted page returning HTTP 200 must not end the probe
+ * before the venue's real domain is tried), and the strongest outcome across all of them
+ * is returned: identified-with-email short-circuits immediately, otherwise the best of
+ * identified-only or has-an-email-only wins.
  */
 export async function probeVenueDomains(
   venueName: string,
@@ -468,34 +556,59 @@ export async function probeVenueDomains(
     renderImpl: options.renderImpl ?? defaultRender,
   };
 
+  const attempts: ProbeAttempt[] = [];
+  const record = (attempt: ProbeAttempt) => {
+    attempts.push(attempt);
+    options.onAttempt?.(attempt);
+  };
+
+  // A domain that merely resolves is not a result: a parked or squatted page
+  // returning HTTP 200 must not end the probe before the venue's real domain is
+  // tried. Every candidate is visited, and the strongest outcome wins —
+  // identified-with-email short-circuits, then identified, then has-an-email.
+  let best: { rank: number; result: ProbedVenueResult } | null = null;
+
   for (const domainUrl of domains) {
     try {
       const outcome = await fetchPageWithFallback(domainUrl, opts);
-      if ("error" in outcome) continue;
-
-      const contact = await extractVenueContact(domainUrl, options);
-      if (contact.error) continue;
+      if ("error" in outcome) {
+        record({ url: domainUrl, outcome: "fetch_failed", detail: outcome.error });
+        continue;
+      }
 
       const identifies = pageIdentifiesVenue(outcome.html, venueName, {
         city: options.city,
-        address: options.address ?? contact.address ?? undefined,
+        address: options.address,
       });
 
+      const contact = await collectContactFromPage(domainUrl, outcome, opts, {
+        ...options,
+        name: venueName,
+      });
       contact.identifiesVenue = identifies;
-      const hasViableEmail = contact.emails.length > 0;
-      const outreachEligible = hasViableEmail && identifies;
 
-      return {
+      const hasViableEmail = contact.emails.length > 0;
+      const candidate: ProbedVenueResult = {
         url: domainUrl,
         identifiesVenue: identifies,
         contact,
         sourceType: "probed_domain",
-        outreachEligible,
+        outreachEligible: hasViableEmail && identifies,
+        attempts,
       };
-    } catch {
-      // Continue to next candidate domain
+
+      if (identifies && hasViableEmail) {
+        record({ url: domainUrl, outcome: "match" });
+        return candidate;
+      }
+
+      record({ url: domainUrl, outcome: identifies ? "no_email" : "no_identity" });
+      const rank = identifies ? 2 : hasViableEmail ? 1 : 0;
+      if (!best || rank > best.rank) best = { rank, result: candidate };
+    } catch (err) {
+      record({ url: domainUrl, outcome: "error", detail: (err as Error).message });
     }
   }
 
-  return null;
+  return best?.result ?? null;
 }

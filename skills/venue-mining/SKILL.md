@@ -1,6 +1,6 @@
 ---
 name: venue-mining
-description: Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email; NEVER pitches, NEVER scrapes Facebook. Registry + sweep cooldowns live in sources.yaml next to this file. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".
+description: Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Registry + sweep cooldowns live in sources.yaml next to this file. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".
 ---
 
 # venue-mining

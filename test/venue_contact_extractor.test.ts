@@ -10,6 +10,7 @@ import {
   hasMeaningfulText,
   HOSPITALITY_TLDS,
   pageIdentifiesVenue,
+  pageNamesVenue,
   probeVenueDomains,
 } from "../src/venue-contact/extract_venue_contact.ts";
 
@@ -550,6 +551,25 @@ Deno.test("pageIdentifiesVenue rejects page without venue name or from mismatche
   assertEquals(pageIdentifiesVenue(noNameHtml, "Wild Magnolia", { city: "Martinsville" }), false);
 });
 
+Deno.test("pageIdentifiesVenue refuses a bare name match with no caller-supplied location", () => {
+  const html = `<html><body><h1>Wild Magnolia</h1><p>Southern eats.</p></body></html>`;
+  assertEquals(pageIdentifiesVenue(html, "Wild Magnolia"), false);
+  assertEquals(pageIdentifiesVenue(html, "Wild Magnolia", {}), false);
+});
+
+Deno.test("pageNamesVenue requires the venue name to be the page's own identity", () => {
+  const exact = `<html><head><title>Wild Magnolia - Southern Eats</title></head>
+    <body><h1>Wild Magnolia</h1></body></html>`;
+  assertEquals(pageNamesVenue(exact, "Wild Magnolia"), true);
+
+  const longerName = `<html><head><title>Wild Magnolia Florist</title></head>
+    <body><h1>Wild Magnolia Florist</h1><p>Wild Magnolia arrangements.</p></body></html>`;
+  assertEquals(pageNamesVenue(longerName, "Wild Magnolia"), false);
+
+  const bodyOnly = `<html><body><p>We deliver near Wild Magnolia every day.</p></body></html>`;
+  assertEquals(pageNamesVenue(bodyOnly, "Wild Magnolia"), false);
+});
+
 const WILD_MAGNOLIA_SITE = `
 <!DOCTYPE html>
 <html lang="en">
@@ -587,7 +607,13 @@ const WILD_MAGNOLIA_SITE = `
   </body>
 </html>`;
 
-Deno.test("probeVenueDomains: venue verification on Wild Magnolia discovers https://wild-magnolia.shop and extracts wild-magnolia.shop@gmail.com", async () => {
+// NOTE: WILD_MAGNOLIA_SITE is a SYNTHETIC fixture. The live https://wild-magnolia.shop
+// was re-fetched on 2026-09-12 (HTTP 200, ~27.5 KB) and carries NO email address of any
+// kind — only `tel:+1 276-666-6666`; /menu has none either. This test therefore proves
+// the extractor, NOT acceptance criterion 5 of web-jam-tools#935 "venue-mining: probe
+// Google Places website & non-.com TLDs before classifying venue as phone-only", which
+// needs Josh's decision (see the PR discussion).
+Deno.test("probeVenueDomains: an identifying probed domain publishing a mailto flips outreachEligible (synthetic fixture)", async () => {
   const result = await probeVenueDomains("Wild Magnolia", {
     city: "Martinsville",
     fetchImpl: stubFetch({
@@ -628,5 +654,36 @@ Deno.test("probeVenueDomains: probed domain without venue identification sets ou
   assertEquals(result.outreachEligible, false);
   assertEquals(result.contact.emails, [
     { email: "info@wild-magnolia.shop", sourceUrl: "https://wild-magnolia.shop" },
+  ]);
+});
+
+Deno.test("probeVenueDomains: same-named business elsewhere WITH its own street address is refused", async () => {
+  // Regression guard: the probe used to feed the address it scraped off this
+  // very page back in as the expected address, so any page carrying the venue
+  // name plus any US street address "identified" as the venue.
+  const otherCityHtml = `<html>
+    <head><title>Wild Magnolia | Southern Kitchen &amp; Bar</title></head>
+    <body>
+      <h1>Wild Magnolia</h1>
+      <p>Southern kitchen and bar. Find us at 55 Peachtree St, Atlanta, GA 30303.</p>
+      <a href="mailto:hello@wild-magnolia.bar">hello@wild-magnolia.bar</a>
+    </body>
+  </html>`;
+
+  const result = await probeVenueDomains("Wild Magnolia", {
+    city: "Martinsville",
+    address: "730 Church St E #7a, Martinsville, VA 24112",
+    fetchImpl: stubFetch({
+      "https://wild-magnolia.bar": { body: otherCityHtml },
+    }),
+    renderImpl: () => Promise.reject(new Error("renderImpl should not be called")),
+  });
+
+  assert(result !== null);
+  assertEquals(result.identifiesVenue, false);
+  assertEquals(result.outreachEligible, false);
+  // The email is still reported — it is the ELIGIBILITY flip that D-49 withholds.
+  assertEquals(result.contact.emails, [
+    { email: "hello@wild-magnolia.bar", sourceUrl: "https://wild-magnolia.bar" },
   ]);
 });
