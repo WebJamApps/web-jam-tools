@@ -596,6 +596,14 @@ Deno.test("renderDarkHtml: writes a draft's backend-rendered HTML in full into a
   assertStringIncludes(html, 'sandbox="allow-same-origin"');
   assertEquals(html.includes("allow-scripts"), false);
   assertStringIncludes(html, "Copy Email");
+  assertStringIncludes(
+    html,
+    '<pre class="pitch-body-raw" id="pitch-body-1-plain" style="display: none;">',
+  );
+  assertStringIncludes(
+    html,
+    "navigator.clipboard.writeText(document.getElementById('pitch-body-1-plain').innerText)",
+  );
 });
 
 Deno.test("renderDarkHtml: falls back to a plain-text pitch-body block when no backend HTML rendering is available", () => {

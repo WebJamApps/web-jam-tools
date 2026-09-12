@@ -182,12 +182,13 @@ function renderPitchCard(p: PitchEmail, idx: number): string {
       `    <iframe class="pitch-body-frame" id="${cardId}" title="Draft email for ${safeVenue}" sandbox="allow-same-origin" srcdoc="${
         escapeHtml(p.htmlBody)
       }" onload="this.style.height = (this.contentWindow.document.body.scrollHeight + 24) + 'px';"></iframe>`,
-      `    <script type="application/json" id="${plainTextId}">${JSON.stringify(p.body)}</script>`,
+      '    <pre class="pitch-body-raw" id="' + plainTextId + '" style="display: none;">' +
+      safePitchText + "</pre>",
     ].join("\n")
     : '    <pre class="pitch-body" id="' + cardId + '">' + safePitchText + "</pre>";
 
   const copyScript = p.htmlBody && p.htmlBody.trim()
-    ? `const el = document.getElementById('${plainTextId}'); const t = el ? JSON.parse(el.textContent) : ''; navigator.clipboard.writeText(t); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Email', 2000)`
+    ? `navigator.clipboard.writeText(document.getElementById('${plainTextId}').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Email', 2000)`
     : `navigator.clipboard.writeText(document.getElementById('${cardId}').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Email', 2000)`;
 
   return [
