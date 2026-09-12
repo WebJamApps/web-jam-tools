@@ -145,10 +145,10 @@ export function formatPay(amount?: number | null): string {
 
 function renderPitchCard(p: PitchEmail, idx: number): string {
   const safeVenue = escapeHtml(p.venueName);
-  const safeTo = escapeHtml(p.to);
+  const safeTo = escapeHtml(p.to || "");
   const safeSecondary = p.secondaryTo ? escapeHtml(p.secondaryTo) : "";
-  const safeSubject = escapeHtml(p.subject);
-  const safePitchText = escapeHtml(p.body);
+  const safeSubject = escapeHtml(p.subject || "");
+  const safePitchText = escapeHtml(p.body || "");
   const cardId = `pitch-body-${idx + 1}`;
   const plainTextId = `${cardId}-plain`;
 

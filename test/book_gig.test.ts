@@ -28,7 +28,6 @@ import {
   DEFAULT_TEMPLATES,
   htmlToPlainText,
   renderPitch,
-  renderPitchesFromBackend,
   validateVoiceRules,
 } from "../src/book-gig/pitch.ts";
 import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
@@ -624,6 +623,15 @@ Deno.test("renderDarkHtml: falls back to a plain-text pitch-body block when no b
         body: "Plain text only body.",
       },
     ],
+  };
+
+  const html = renderDarkHtml(result);
+  assertStringIncludes(html, '<pre class="pitch-body"');
+  assertStringIncludes(html, "Plain text only body.");
+  // The CSS rule for the iframe variant is always present in the stylesheet,
+  // but no <iframe> element itself is emitted when there is no HTML draft.
+  assertEquals(html.includes("<iframe"), false);
+});
 Deno.test("renderDarkHtml: includes Contact Person and Phone in the rendered report (#874)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",

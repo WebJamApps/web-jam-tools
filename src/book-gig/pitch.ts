@@ -737,8 +737,8 @@ export async function renderPitchesFromBackend(
       contactName: c.contactName,
       phone: c.phone,
       subject: preview.subject,
-      body: htmlToPlainText(preview.body),
-      htmlBody: preview.body,
+      body: htmlToPlainText(preview.body || ""),
+      htmlBody: preview.body || "",
     });
   }
   return pitches;

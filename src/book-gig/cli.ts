@@ -24,7 +24,6 @@ import type {
   BatchDispatchResult,
   BookGigResult,
   OutreachCampaignRecord,
-  PitchEmail,
   TargetLocation,
 } from "./types.ts";
 
