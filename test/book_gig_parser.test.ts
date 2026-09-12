@@ -148,6 +148,8 @@ Deno.test("parseLocation: parses City, State and multi-city expressions", () => 
   );
   assert(loc2 !== null);
   assertEquals(loc2.cities, ["Lynchburg", "Blacksburg", "Martinsville", "Salem", "Roanoke"]);
+  // Every named city sits in VA, so the uniform state is still inferred (#936).
+  assertEquals(loc2.state, "VA");
   assertEquals(loc2.includeSurrounding, true);
   assert(loc2.surroundingCities !== undefined);
   assert(loc2.surroundingCities.includes("Forest"));
@@ -175,6 +177,56 @@ Deno.test("parseLocation: parses City, State and multi-city expressions", () => 
   assert(loc4 !== null);
   assertEquals(loc4.cities, ["Harrisonburg", "Staunton", "Charlottesville"]);
   assertEquals(loc4.city, "Harrisonburg");
+});
+
+Deno.test("parseLocation: multi-city searches do not lock a single state that discards cross-border cities (#936)", () => {
+  // Mayodan, NC has no KNOWN_METROS entry, so it carries no known state. Salem
+  // resolves to VA. The two cities do not share a uniform known state, and no
+  // state was typed outright, so state must stay undefined rather than
+  // locking to Salem's VA and silently excluding Mayodan.
+  const loc1 = parseLocation("Salem, Mayodan");
+  assert(loc1 !== null);
+  assertEquals(loc1.cities, ["Salem", "Mayodan"]);
+  assertEquals(loc1.state, undefined);
+
+  // A state typed outright always wins, even over a mismatched inferred city state.
+  const loc2 = parseLocation("Salem, Mayodan, VA");
+  assert(loc2 !== null);
+  assertEquals(loc2.cities, ["Salem", "Mayodan"]);
+  assertEquals(loc2.state, "VA");
+
+  // Three named cities, two known and in agreement (VA), one unknown: still no uniform state.
+  const loc3 = parseLocation("Salem, Roanoke, Mayodan");
+  assert(loc3 !== null);
+  assertEquals(loc3.state, undefined);
+});
+
+Deno.test("filterAndRankCandidates: multi-city cross-border search retains explicitly named venues in a neighboring state (#936)", () => {
+  const venues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      address: "21 E Main St, Salem, VA 24153",
+      email: "booking@oldesalem.com",
+    },
+    {
+      _id: "v2",
+      name: "Gioia dell'Amore Cellars at Autumn Creek Vineyards",
+      city: "Mayodan",
+      usState: "NC",
+      address: "141 Pine Hall Rd, Mayodan, NC 27027",
+      email: "booking@autumncreekvineyards.com",
+    },
+  ];
+
+  const loc = parseLocation("Salem, Mayodan");
+  const filtered = filterAndRankCandidates(venues, loc ?? undefined);
+
+  assertEquals(filtered.length, 2);
+  assertEquals(filtered.some((v) => v.city === "Salem"), true);
+  assertEquals(filtered.some((v) => v.city === "Mayodan"), true);
 });
 
 Deno.test("parseTargetWeekend: parses valid weekend formats and throws on invalid", () => {
