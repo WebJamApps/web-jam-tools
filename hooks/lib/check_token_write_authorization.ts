@@ -126,22 +126,33 @@ function opensWithPhrase(trimmed: string, phrase: string): boolean {
 }
 
 /**
- * Natural-language phrases that authorize a file-issue write, verbatim from file-issue/SKILL.md's
- * own frontmatter `description` ("Triggered when the user says 'file an issue', 'open an issue',
- * 'draft an issue', 'create an issue' ...") — this scan is only allowed to enumerate phrases it can
- * point at a documented source for (design-issue/SKILL.md's guidance on trigger-list/matcher work: a
- * case list counts as closed only when every entry is a literal string traceable to something, never
- * an invented category). design-issue/SKILL.md's own description documents no equivalent
- * natural-language trigger — only its slash form, `/design-issue`, appears anywhere in that file —
- * so no phrase is added for it here; inventing one without a documented source would be exactly
- * the unenumerated-category failure that guidance warns against.
+ * Recognizes a natural-language file-issue invocation by SHAPE rather than as an enumerated phrase
+ * list (web-jam-tools#973, web-jam-tools#975 fixed one literal phrase at a time and Josh was refused
+ * twice in the same day on ordinary phrasings a literal list can never keep up with — "create an
+ * issue for JaMmusic then for the work you want to dispatch to Flash" before #975 merged, then
+ * "please create a new issue to constrain adding to memory..." right after, because of the leading
+ * "please" AND the word "new"). Josh: "use a regex so that I can say various chat messages that =
+ * file, create, whatever and issue, ticket, whatever". skills/file-issue/SKILL.md's frontmatter
+ * `description` documents the same shape in prose (a filing verb, optionally behind "please"/"can you
+ * ...", followed by issue/ticket/bug) — see the drift test tying the two together below — rather than
+ * a closed list of literal strings, since a regex's contract is "matches this shape", not
+ * "traceable to an enumerated string".
+ *
+ * `^\s*` is load-bearing (see filingSkillInvoked's doc comment): it is the same mention-vs-use
+ * distinction every other check in this file draws. Anchoring at the START of the (already-trimmed)
+ * message is what makes "I don't want you to file an issue" and "the file-issue skill says to open an
+ * issue" both fail to authorize — neither opens with the verb, so neither can reach the alternation at
+ * all. Do not relax this anchor (e.g. to `\b`) to make some hard phrasing match; if a genuine
+ * "must-match" case cannot be matched without weakening it, that is a decision for Josh, not something
+ * to fix by widening the gate.
+ *
+ * design-issue/SKILL.md documents no equivalent natural-language trigger — only its slash form,
+ * `/design-issue`, appears anywhere in that file — so this regex is deliberately used only for
+ * file-issue (see filingSkillInvoked below); inventing a natural-language form for design-issue
+ * without a documented source is out of scope.
  */
-export const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
-  "file an issue",
-  "open an issue",
-  "draft an issue",
-  "create an issue",
-] as const;
+export const FILE_ISSUE_INVOCATION_RE =
+  /^\s*(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?(?:go\s+ahead\s+and\s+)?(?:file|create|open|draft|make|add|log|raise|write)\s+(?:me\s+)?(?:a|an|the)?\s*(?:new\s+|another\s+|quick\s+|separate\s+)?(?:issue|ticket|bug\s+report|bug)\b/i;
 
 /**
  * Returns the filing skill a piece of user-turn text invokes, or null. Recognizes three forms:
@@ -155,12 +166,13 @@ export const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
  *    Same start-of-turn anchor, so the mention-vs-use distinction is unchanged: a `<command-name>`
  *    element quoted inside prose is not the turn's own invocation and does not count
  *    (web-jam-tools#920).
- * 2. For file-issue only, one of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS opening the text (same
+ * 2. For file-issue only, FILE_ISSUE_INVOCATION_RE matching at the start of the text (same
  *    start-of-message anchor — web-jam-tools#866 Suggestion: Josh routinely invokes file-issue by
  *    saying "file an issue" (or "create an issue") rather than typing the slash form, and a session
  *    that started that way was being refused a token write despite a genuine authorizing
- *    invocation). design-issue has no natural-language form recognized here; see
- *    FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS's doc comment for why none is invented for it.
+ *    invocation; web-jam-tools#973/#975 then found that a literal phrase list can never keep up with
+ *    ordinary phrasing, hence the shape-based regex). design-issue has no natural-language form
+ *    recognized here; see FILE_ISSUE_INVOCATION_RE's doc comment for why none is invented for it.
  */
 export function filingSkillInvoked(text: string): FilingSkill | null {
   const trimmed = text.trim().toLowerCase();
@@ -173,10 +185,8 @@ export function filingSkillInvoked(text: string): FilingSkill | null {
       return skill;
     }
   }
-  for (const phrase of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS) {
-    if (opensWithPhrase(trimmed, phrase)) {
-      return "file-issue";
-    }
+  if (FILE_ISSUE_INVOCATION_RE.test(trimmed)) {
+    return "file-issue";
   }
   return null;
 }
@@ -258,7 +268,7 @@ export function checkTokenWriteAuthorization(
   return {
     ok: false,
     reason:
-      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or "file an issue"/"open an issue"/"draft an issue"/"create an issue"), found anywhere in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
+      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or a natural-language phrase like "file an issue"/"create a ticket"/"can you open a bug report"), found anywhere in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
   };
 }
 

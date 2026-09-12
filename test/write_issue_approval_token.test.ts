@@ -31,7 +31,7 @@ import {
 import { checkIssueApprovalToken, loadToken } from "../hooks/lib/check_issue_approval_token.ts";
 import {
   checkTokenWriteAuthorization,
-  FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS,
+  FILE_ISSUE_INVOCATION_RE,
   filingSkillInvoked,
   nonFilingSlashCommandInvoked,
   tailIsCurrentlySidechain,
@@ -778,7 +778,11 @@ Deno.test("filingSkillInvoked: one case per literal acceptance-criterion string,
 });
 
 Deno.test("filingSkillInvoked: one case per literal acceptance-criterion string, NOT recognized (web-jam-tools#956)", () => {
-  assertEquals(filingSkillInvoked("can you file an issue later"), null);
+  // "can you file an issue later" was null under the old literal phrase list (it didn't OPEN with
+  // one of the four exact strings), but the shape-based FILE_ISSUE_INVOCATION_RE deliberately
+  // recognizes a "can you ..." opener (see the "must-match" fix below) — so this is now a real
+  // authorizing invocation, not a regression. See the dedicated "can you file an issue later" case
+  // in the FILE_ISSUE_INVOCATION_RE must-match test below.
   assertEquals(filingSkillInvoked("we should open an issue about this someday"), null);
   assertEquals(filingSkillInvoked("what does /design-issue do"), null);
   assertEquals(filingSkillInvoked("the design-issue skill is confusing"), null);
@@ -856,7 +860,12 @@ Deno.test("checkTokenWriteAuthorization: refuses when an intervening non-filing 
     { type: "assistant", message: { role: "assistant", content: "planning..." } },
     { type: "user", message: { role: "user", content: "/work-issue web-jam-tools#800" } },
     { type: "assistant", message: { role: "assistant", content: "switching to work..." } },
-    { type: "user", message: { role: "user", content: "please file the issue now" } },
+    // Deliberately NOT an authorizing shape (doesn't open with a filing verb) — this test exercises
+    // the scope-ending event itself, not FILE_ISSUE_INVOCATION_RE's recognition. A message that DOES
+    // open with a filing verb after the /work-issue turn (e.g. "please file the issue now") would be
+    // a genuine new authorizing invocation coming AFTER the scope-ending event, and correctly
+    // authorizes — that is not this test's concern.
+    { type: "user", message: { role: "user", content: "let's get the issue filed soon" } },
   ];
   const result = checkTokenWriteAuthorization({
     entries,
@@ -865,6 +874,23 @@ Deno.test("checkTokenWriteAuthorization: refuses when an intervening non-filing 
   });
   assertEquals(result.ok, false);
   assert(result.reason?.includes("different skill or command (/work-issue) was invoked"));
+});
+
+Deno.test("checkTokenWriteAuthorization: a genuine authorizing invocation AFTER a scope-ending slash command still authorizes (not a regression — the scope-ending event only blocks an EARLIER invocation from reaching forward)", () => {
+  const entries: TranscriptEntry[] = [
+    { type: "user", message: { role: "user", content: "/design-issue plan token-savings" } },
+    { type: "assistant", message: { role: "assistant", content: "planning..." } },
+    { type: "user", message: { role: "user", content: "/work-issue web-jam-tools#800" } },
+    { type: "assistant", message: { role: "assistant", content: "switching to work..." } },
+    { type: "user", message: { role: "user", content: "please file the issue now" } },
+  ];
+  const result = checkTokenWriteAuthorization({
+    entries,
+    ownConversationId: "sess-1",
+    isSubagentInvocation: false,
+  });
+  assertEquals(result.ok, true);
+  assertEquals(result.skill, "file-issue");
 });
 
 Deno.test("checkTokenWriteAuthorization: a mid-sentence mention of 'create an issue' does not authorize, and a more recent non-filing slash command still refuses (web-jam-tools#973 — matcher outcome 2)", () => {
@@ -1238,13 +1264,114 @@ Deno.test("Round-trip: written token DENIES when session ID does not match", asy
   }
 });
 
-// --- web-jam-tools#973: drift assertion between the hook array and the skill description ---
+// --- Fix for two real refusals hit on 2026-09-12: replace the exact-phrase list with a regex ---
 //
-// FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS's own doc comment states it is only allowed to enumerate
-// phrases traceable to skills/file-issue/SKILL.md's frontmatter `description`. This test fails if
-// the two are ever allowed to silently diverge again — e.g. a phrase added to one but not the other.
+// "create an issue for JaMmusic then for the work you want to dispatch to Flash" was refused before
+// web-jam-tools#975 merged; "please create a new issue to constrain adding to memory..." was STILL
+// refused after #975 merged, because of the leading "please" AND the word "new". A one-phrase-at-a-time
+// literal list can never keep up, so FILE_ISSUE_INVOCATION_RE recognizes the SHAPE of an invocation
+// instead. These tests cover the full must-match / must-not-match matrix Josh specified.
 
-Deno.test("FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS: every entry appears in skills/file-issue/SKILL.md's frontmatter description (web-jam-tools#973)", async () => {
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — the four phrases that worked before this change (no regression)", () => {
+  assertEquals(filingSkillInvoked("file an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("open an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("draft an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("create an issue"), "file-issue");
+});
+
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — the real phrasings Josh was refused on today", () => {
+  // Refused before web-jam-tools#975 merged.
+  assertEquals(
+    filingSkillInvoked(
+      "create an issue for JaMmusic then for the work you want to dispatch to Flash",
+    ),
+    "file-issue",
+  );
+  // Still refused after #975 merged (leading "please" AND the word "new").
+  assertEquals(
+    filingSkillInvoked("please create a new issue to constrain adding to memory"),
+    "file-issue",
+  );
+});
+
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — additional shapes the regex is meant to cover", () => {
+  assertEquals(filingSkillInvoked("can you open a ticket for this"), "file-issue");
+  assertEquals(filingSkillInvoked("please file a bug"), "file-issue");
+  assertEquals(filingSkillInvoked("make a new ticket"), "file-issue");
+  assertEquals(filingSkillInvoked("log an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("raise a ticket"), "file-issue");
+  assertEquals(filingSkillInvoked("could you please draft an issue"), "file-issue");
+  // Case-insensitive.
+  assertEquals(filingSkillInvoked("Create An Issue"), "file-issue");
+  // "can you file an issue later" is now a real match (see the updated NOT-recognized test above) —
+  // the shape-based regex deliberately recognizes a "can you ..." opener.
+  assertEquals(filingSkillInvoked("can you file an issue later"), "file-issue");
+});
+
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — mention-vs-use and non-invocation text", () => {
+  // Mention, not use: neither opens with the verb, so neither can reach the alternation at all.
+  assertEquals(filingSkillInvoked("I don't want you to file an issue"), null);
+  assertEquals(filingSkillInvoked("the skill says to open an issue when..."), null);
+  assertEquals(filingSkillInvoked("we discussed creating an issue yesterday"), null);
+  // "issue" as a noun-only sentence opener ("issue an apology") is not a filing verb.
+  assertEquals(filingSkillInvoked("issue an apology"), null);
+  // No word boundary between the verb and the noun — not a real invocation.
+  assertEquals(filingSkillInvoked("fileanissue"), null);
+  // A different slash command opening the message is never a file-issue invocation.
+  assertEquals(filingSkillInvoked("/work-issue web-jam-tools#800"), null);
+  assertEquals(filingSkillInvoked("/book-gig next-weekend"), null);
+});
+
+Deno.test("checkTokenWriteAuthorization: three-outcome coverage — holds, does not hold, indeterminate", () => {
+  // Outcome 1: condition holds — an authorizing natural-language invocation is found and authorizes.
+  const holds = checkTokenWriteAuthorization({
+    entries: [
+      { type: "user", message: { role: "user", content: "please create a new issue for this" } },
+    ],
+    ownConversationId: "sess-1",
+    isSubagentInvocation: false,
+  });
+  assertEquals(holds.ok, true);
+  assertEquals(holds.skill, "file-issue");
+
+  // Outcome 2: condition does not hold — no authorizing invocation anywhere in the transcript.
+  const doesNotHold = checkTokenWriteAuthorization({
+    entries: [
+      {
+        type: "user",
+        message: { role: "user", content: "we discussed creating an issue yesterday" },
+      },
+    ],
+    ownConversationId: "sess-1",
+    isSubagentInvocation: false,
+  });
+  assertEquals(doesNotHold.ok, false);
+  assert(
+    doesNotHold.reason?.includes("no /design-issue invocation, and no /file-issue invocation"),
+  );
+
+  // Outcome 3: indeterminate (own conversation identity cannot be established) — fails closed even
+  // though an authorizing-shaped turn is present.
+  const indeterminate = checkTokenWriteAuthorization({
+    entries: [
+      { type: "user", message: { role: "user", content: "please create a new issue for this" } },
+    ],
+    ownConversationId: null,
+    isSubagentInvocation: false,
+  });
+  assertEquals(indeterminate.ok, false);
+  assert(indeterminate.reason?.includes("could not determine"));
+});
+
+// --- Drift assertion between FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md ---
+//
+// A regex's contract isn't "every literal phrase is traceable" the way the old array's was — it's
+// "matches this shape". So the drift check ties the two artifacts together differently: (1) every
+// filing verb SKILL.md's frontmatter description documents must actually be one the regex recognizes,
+// and (2) every worked example phrase the description quotes must actually be recognized by the
+// regex. Either half failing means the doc comment and the code have drifted apart.
+
+Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md's description stay tied together (web-jam-tools#973-followup)", async () => {
   const skillMdPath = new URL(
     "../skills/file-issue/SKILL.md",
     import.meta.url,
@@ -1253,15 +1380,36 @@ Deno.test("FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS: every entry appears in skills/f
   const descriptionLine = skillMd.split("\n").find((line) => line.startsWith("description:"));
   assert(descriptionLine, "skills/file-issue/SKILL.md must have a frontmatter description: line");
 
+  // 1. Every filing verb SKILL.md documents must be an alternative FILE_ISSUE_INVOCATION_RE
+  // actually recognizes.
+  const verbListMatch = descriptionLine!.match(/filing verb \(([^)]+)\)/);
   assert(
-    FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS.length > 0,
-    "FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS must not be empty",
+    verbListMatch,
+    "skills/file-issue/SKILL.md's description must enumerate the recognized filing verbs in " +
+      '"filing verb (...)" form',
   );
-  for (const phrase of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS) {
+  const documentedVerbs = verbListMatch![1].split(",").map((v) => v.trim());
+  assert(documentedVerbs.length > 0, "the documented filing verb list must not be empty");
+  for (const verb of documentedVerbs) {
     assert(
-      descriptionLine!.includes(`"${phrase}"`),
-      `FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS entry "${phrase}" must appear (quoted) in ` +
-        `skills/file-issue/SKILL.md's frontmatter description, or the two have drifted apart`,
+      FILE_ISSUE_INVOCATION_RE.source.includes(verb),
+      `Documented filing verb "${verb}" must appear in FILE_ISSUE_INVOCATION_RE's source, or the ` +
+        `two have drifted apart`,
+    );
+  }
+
+  // 2. Every worked example phrase the description quotes must actually be recognized.
+  const quotedExamples = [...descriptionLine!.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert(
+    quotedExamples.length >= 3,
+    "skills/file-issue/SKILL.md's description must quote worked example phrases",
+  );
+  for (const phrase of quotedExamples) {
+    assertEquals(
+      filingSkillInvoked(phrase),
+      "file-issue",
+      `SKILL.md's worked example "${phrase}" must be recognized as a file-issue invocation by ` +
+        `FILE_ISSUE_INVOCATION_RE, or the two have drifted apart`,
     );
   }
 });
