@@ -11,6 +11,7 @@ import { renderPitchesFromBackend, verifyBatchAgainstTemplates } from "./pitch.t
 import { publishAndOpenReport } from "./publish.ts";
 import { executeLinkGig } from "./venue_link.ts";
 import { executeVenueHold } from "./cooldown.ts";
+import { Gate2ReviewSession, isExplicitWholeBatchApproval } from "./gate2.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -439,11 +440,292 @@ export async function runBookGigCli(
   }
 
   // -------------------------------------------------------------------------
+  // Mode: Record Gate 2 Pitch Copy Approval & Review Loop (--record-gate2 / --gate2)
+  // -------------------------------------------------------------------------
+  if (parsed.mode === "gate2") {
+    console.log(`\n======================================================`);
+    console.log(`  🛡️ book-gig: Gate 2 Pitch Copy Review & Approval`);
+    console.log(`======================================================`);
+    if (!parsed.weekend) {
+      console.error("Error: Missing required target weekend for Gate 2 review.");
+      console.error(
+        'Usage: deno task book-gig --record-gate2 "<weekend>" [location] [--confirm-all] [--tweak-venue <name> --custom-body <text>]',
+      );
+      throw new Error("Missing target weekend argument for Gate 2 review");
+    }
+
+    const weekend = parsed.weekend;
+    const location = parsed.location;
+    const approver = parsed.approver || "Josh";
+
+    console.log(`Target Weekend:  ${weekend.label} (${weekend.start} to ${weekend.end})`);
+    console.log(`Target Location: ${formatLocationDisplay(location)}`);
+    console.log(`Approver:        ${approver}`);
+    console.log(`------------------------------------------------------\n`);
+
+    // 1. Fetch eligible candidates from web-jam-back
+    console.log(`Fetching candidate venues from backend...`);
+    const rawCandidates = await fetchCandidates({ weekend }, fetchFn);
+    const candidates = filterAndRankCandidates(rawCandidates, location);
+    const density = assessDensity(candidates, location);
+
+    // 2. Resolve eligible venues
+    let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
+
+    if (parsed.includeVenues && parsed.includeVenues.length > 0) {
+      const unmatched = parsed.includeVenues.filter(
+        (filterEntry) => !eligibleVenues.some((c) => matchesVenueFilter(c, [filterEntry])),
+      );
+      if (unmatched.length > 0) {
+        console.error(
+          `\n⚠️  No eligible candidate venues matched --venues filter: ${unmatched.join(", ")}`,
+        );
+        throw new Error(
+          `No eligible candidate venues matched --venues filter: ${unmatched.join(", ")}`,
+        );
+      }
+      eligibleVenues = eligibleVenues.filter((c) => matchesVenueFilter(c, parsed.includeVenues!));
+    }
+
+    if (parsed.excludeVenues && parsed.excludeVenues.length > 0) {
+      eligibleVenues = eligibleVenues.filter((c) => !matchesVenueFilter(c, parsed.excludeVenues!));
+    }
+
+    if (eligibleVenues.length === 0) {
+      console.error(`\n⚠️  No eligible candidate venues found to review for ${weekend.label}.`);
+      throw new Error("No eligible candidate venues found for Gate 2 review");
+    }
+
+    // 3. Render pitches via backend with any tweaks
+    const pitches = await renderPitchesFromBackend(
+      eligibleVenues,
+      weekend,
+      { tweaks: parsed.tweaks },
+      fetchFn,
+    );
+
+    console.log(`Rendered ${pitches.length} pitch draft(s) via backend rendering.`);
+
+    // 4. Verify templates
+    const templates = await fetchTemplates({}, fetchFn);
+    const templateVerification = verifyBatchAgainstTemplates(
+      pitches,
+      eligibleVenues,
+      weekend,
+      templates,
+    );
+    if (!templateVerification.valid) {
+      const details = templateVerification.violations
+        .map((v) => `  - ${v.venueName} (${v.venueId}): ${v.reason}`)
+        .join("\n");
+      throw new Error(
+        `Batch refused: ${templateVerification.violations.length} rendered email(s) diverge from ` +
+          `their stored Template record outside declared placeholders:\n${details}`,
+      );
+    }
+    console.log(`✅ Every rendered email verified against its stored template — no divergence.`);
+
+    // 5. Handle tweaks if present (D-44)
+    const hasTweaks = Boolean(
+      (parsed.tweakVenue && parsed.tweakVenue.trim()) ||
+        (parsed.tweaks && parsed.tweaks.length > 0),
+    );
+
+    if (hasTweaks) {
+      console.log(`\n✏️  Gate 2 Tweak Applied:`);
+      for (const t of (parsed.tweaks || [])) {
+        console.log(`  • Venue: "${t.venueName || t.venueId}"`);
+        if (t.customBody) console.log(`    customBody: "${t.customBody.slice(0, 60)}..."`);
+        if (t.customIntro) console.log(`    customIntro: "${t.customIntro.slice(0, 60)}..."`);
+      }
+      console.log(`\n🛑 GATE 2 IS HOLDING IN REVIEW LOOP (D-44, D-45):`);
+      console.log(`   Per-venue tweak has been re-rendered into the review artifact.`);
+      console.log(`   All other venues' draft copy remains strictly untouched.`);
+      console.log(`   Draft fingerprints are NOT recorded server-side.`);
+      console.log(
+        `   Approval is NEVER inferred from tweak submissions, partial reviews, or silence.`,
+      );
+      console.log(
+        `   Next step: Review updated drafts in Chrome. Submit further tweaks or explicitly approve all drafts.\n`,
+      );
+
+      const result: BookGigResult = {
+        mode: "gate2",
+        weekend,
+        location,
+        includeVenues: parsed.includeVenues,
+        excludeVenues: parsed.excludeVenues,
+        candidates,
+        density,
+        pitches,
+        tweaksApplied: parsed.tweaks,
+        gate2Status: "tweaked",
+      };
+
+      const published = await publishAndOpenReport(
+        result,
+        { noOpen: parsed.noOpen, openBrowser: openBrowserImpl },
+        fetchFn,
+      );
+      const finalResult = published.result;
+      if (finalResult.reportUrl) {
+        console.log(`🌐 Live web-jam.com Report URL: ${finalResult.reportUrl}`);
+      }
+      if (published.htmlPath) {
+        const absHtmlPath = path.resolve(published.htmlPath);
+        console.log(
+          `📁 Local Review HTML Artifact: [${
+            path.basename(published.htmlPath)
+          }](file://${absHtmlPath})`,
+        );
+        console.log(`📁 File URL: file://${absHtmlPath}`);
+        if (published.opened) {
+          console.log(`🚀 Automatically opened review artifact in Google Chrome.`);
+        }
+      }
+      return finalResult;
+    }
+
+    // 6. Check explicit affirmative whole-batch approval (D-45)
+    const explicitApproval = Boolean(
+      parsed.confirmAll ||
+        isExplicitWholeBatchApproval(parsed.notes) ||
+        isExplicitWholeBatchApproval(parsed.rawArgs),
+    );
+
+    if (!explicitApproval) {
+      if (parsed.recordGate2) {
+        console.error(
+          "\n❌ Gate 2 approval forbidden: approval cannot be inferred from silence, partial reviews, " +
+            "tweak submissions, or venue-list approval. Explicit affirmative whole-batch approval is required via --confirm-all or whole-batch approval statement.",
+        );
+        throw new Error(
+          "Gate 2 approval forbidden: approval cannot be inferred from silence, partial reviews, " +
+            "tweak submissions, or venue-list approval. Explicit affirmative whole-batch approval is required.",
+        );
+      }
+
+      console.log(`\n🛑 GATE 2 IS HOLDING IN REVIEW LOOP (D-44, D-45):`);
+      console.log(`   Every draft is written out in full in the review artifact.`);
+      console.log(
+        `   Approval is NOT recorded until explicit affirmative whole-batch approval is given.`,
+      );
+      console.log(
+        `   Next step: Review drafts in Chrome. Request tweaks or run with --confirm-all to approve.\n`,
+      );
+
+      const result: BookGigResult = {
+        mode: "gate2",
+        weekend,
+        location,
+        includeVenues: parsed.includeVenues,
+        excludeVenues: parsed.excludeVenues,
+        candidates,
+        density,
+        pitches,
+        gate2Status: "holding",
+      };
+
+      const published = await publishAndOpenReport(
+        result,
+        { noOpen: parsed.noOpen, openBrowser: openBrowserImpl },
+        fetchFn,
+      );
+      const finalResult = published.result;
+      if (finalResult.reportUrl) {
+        console.log(`🌐 Live web-jam.com Report URL: ${finalResult.reportUrl}`);
+      }
+      if (published.htmlPath) {
+        const absHtmlPath = path.resolve(published.htmlPath);
+        console.log(
+          `📁 Local Review HTML Artifact: [${
+            path.basename(published.htmlPath)
+          }](file://${absHtmlPath})`,
+        );
+        console.log(`📁 File URL: file://${absHtmlPath}`);
+        if (published.opened) {
+          console.log(`🚀 Automatically opened review artifact in Google Chrome.`);
+        }
+      }
+      return finalResult;
+    }
+
+    // 7. Explicit whole-batch approval is confirmed — record fingerprints server-side
+    console.log(`Explicit whole-batch approval confirmed. Computing draft fingerprints...`);
+    const session = new Gate2ReviewSession({
+      weekend,
+      location,
+      candidates: eligibleVenues,
+      pitches,
+      fetchFn,
+    });
+
+    const gate2Record = await session.approveWholeBatch({
+      approver,
+      notes: parsed.notes,
+      batchId: parsed.batchId,
+      explicitApproval: true,
+    });
+
+    console.log(`\n✅ Gate 2 draft copy approval recorded successfully!`);
+    console.log(`  • Batch ID:            ${gate2Record.batchId}`);
+    if (gate2Record._id) {
+      console.log(`  • Approval ID:         ${gate2Record._id}`);
+    }
+    console.log(`  • Approved At:         ${gate2Record.approvedAt || new Date().toISOString()}`);
+    console.log(`  • Approver:            ${gate2Record.approver}`);
+    console.log(
+      `  • Draft Fingerprints:  ${gate2Record.draftFingerprints.length} email draft(s) fingerprinted`,
+    );
+
+    console.log(`\n🛑 IMPORTANT INVARIANT (D-39 / D-41 / D-45):`);
+    console.log(`   Gate 2 authorizes draft email copy and nothing else.`);
+    console.log(`   Any subsequent tweak to copy or venue set invalidates these fingerprints.`);
+    console.log(`   Batch outreach dispatch (--send --confirm-drafts) may now proceed.\n`);
+
+    const result: BookGigResult = {
+      mode: "gate2",
+      weekend,
+      location,
+      includeVenues: parsed.includeVenues,
+      excludeVenues: parsed.excludeVenues,
+      candidates,
+      density,
+      pitches,
+      gate2Record,
+      gate2Status: "approved",
+    };
+
+    const published = await publishAndOpenReport(
+      result,
+      { noOpen: parsed.noOpen, openBrowser: openBrowserImpl },
+      fetchFn,
+    );
+    const finalResult = published.result;
+    if (finalResult.reportUrl) {
+      console.log(`🌐 Live web-jam.com Report URL: ${finalResult.reportUrl}`);
+    }
+    if (published.htmlPath) {
+      const absHtmlPath = path.resolve(published.htmlPath);
+      console.log(
+        `📁 Local Review HTML Artifact: [${
+          path.basename(published.htmlPath)
+        }](file://${absHtmlPath})`,
+      );
+      console.log(`📁 File URL: file://${absHtmlPath}`);
+      if (published.opened) {
+        console.log(`🚀 Automatically opened review artifact in Google Chrome.`);
+      }
+    }
+    return finalResult;
+  }
+
+  // -------------------------------------------------------------------------
   // Discovery & Batch Send Modes
   // -------------------------------------------------------------------------
   if (!parsed.weekend) {
     console.error(
-      "Usage: deno task book-gig [--send [--confirm-drafts]|--record-gate1|--replies|--link-gig <venue>|--hold <venue> --until <date>|--booked-through <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
+      "Usage: deno task book-gig [--send [--confirm-drafts]|--record-gate1|--record-gate2 [--confirm-all]|--replies|--link-gig <venue>|--hold <venue> --until <date>|--booked-through <date>] <target-weekend> [location] [--venues <ids>] [--skip <ids>]",
     );
     console.error("Examples:");
     console.error('  deno task book-gig "Oct 16-18 2026" "Lynchburg, VA"');
@@ -451,6 +733,12 @@ export async function runBookGigCli(
       '  deno task book-gig --record-gate1 "Oct 16-18 2026" "Lynchburg, VA" --venues "v1,v2"',
     );
     console.error('  deno task book-gig --record-gate1 "Oct 16-18 2026"');
+    console.error(
+      '  deno task book-gig --record-gate2 "Oct 16-18 2026" "Lynchburg, VA" --confirm-all',
+    );
+    console.error(
+      '  deno task book-gig --record-gate2 "Oct 16-18 2026" --tweak-venue "Olde Salem" --custom-body "Hi folks..."',
+    );
     console.error('  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts');
     console.error(
       '  deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --venues "v1,v2"',
@@ -521,7 +809,12 @@ export async function runBookGigCli(
   // composes what gets mailed, so the draft copy in the review artifact is
   // byte-identical to what is dispatched rather than a second, separately
   // implemented rendering that can drift from it.
-  const pitches = await renderPitchesFromBackend(candidates, weekend, {}, fetchFn);
+  const pitches = await renderPitchesFromBackend(
+    candidates,
+    weekend,
+    { tweaks: parsed.tweaks },
+    fetchFn,
+  );
 
   console.log(`\nDrafted ${pitches.length} personalized pitch email(s) via backend rendering.`);
 
@@ -611,6 +904,7 @@ export async function runBookGigCli(
     density,
     pitches,
     batchDispatch,
+    tweaksApplied: parsed.tweaks,
   };
 
   // 7. Publish the merged report to web-jam-back (the sole durable copy) and open the

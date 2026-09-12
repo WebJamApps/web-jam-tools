@@ -2,7 +2,7 @@
 
 import type { LinkGigResult } from "./venue_link.ts";
 
-export type BookGigMode = "preview" | "send" | "replies" | "link-gig" | "hold" | "gate1";
+export type BookGigMode = "preview" | "send" | "replies" | "link-gig" | "hold" | "gate1" | "gate2";
 
 export interface TargetWeekend {
   start: string; // ISO date string (YYYY-MM-DD), usually Friday
@@ -215,6 +215,37 @@ export interface Gate1ApprovalRecord {
   updatedAt?: string | Date;
 }
 
+export interface DraftFingerprintItem {
+  venueId: string;
+  fingerprint: string;
+  subject?: string;
+}
+
+export interface Gate2ApprovalRecord {
+  _id?: string;
+  batchId: string;
+  weekend?: string;
+  targetWeekend?: {
+    start: string | Date;
+    end: string | Date;
+  };
+  draftFingerprints: DraftFingerprintItem[];
+  approver: string;
+  approvedAt?: string | Date;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface VenueTweak {
+  venueId?: string;
+  venueName?: string;
+  customBody?: string;
+  customIntro?: string;
+  notes?: string;
+}
+
 export interface ParsedBookGigArgs {
   mode: BookGigMode;
   weekend?: TargetWeekend;
@@ -230,6 +261,12 @@ export interface ParsedBookGigArgs {
   approver?: string;
   notes?: string;
   batchId?: string;
+  tweakVenue?: string;
+  customBody?: string;
+  customIntro?: string;
+  tweaks?: VenueTweak[];
+  confirmAll?: boolean;
+  recordGate2?: boolean;
   rawArgs: string;
 }
 
@@ -252,6 +289,9 @@ export interface BookGigResult {
   linkGig?: LinkGigResult;
   holdResult?: VenueHoldResult;
   gate1Record?: Gate1ApprovalRecord;
+  gate2Record?: Gate2ApprovalRecord;
+  tweaksApplied?: VenueTweak[];
+  gate2Status?: "holding" | "tweaked" | "approved";
   htmlPath?: string;
   reportUrl?: string;
   openedBrowser?: boolean;
