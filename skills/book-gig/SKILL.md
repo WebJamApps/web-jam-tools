@@ -90,7 +90,12 @@ Batch outreach dispatch is protected by two mandatory, independent hard gates (D
   - **Gate 1 authorizes ONLY the target venue set and NOTHING else.**
   - Recording Gate 1 approval does **NOT** authorize draft pitch copy and does **NOT** authorize email dispatch.
   - Approval of draft copy or permission to send must **NEVER** be inferred from candidate list approval or Gate 1 recording.
-  - **No Silent Re-Recording:** The backend upserts Gate 1 approval records on batchId/weekend, so recording Gate 1 approval refuses outright when an approval already exists for the same batch with a *different* venue set — it never silently replaces a prior approval with a new one. A re-run with the identical venue set is a harmless no-op.
+  - **No Silent Re-Recording (D-54):** The backend upserts Gate 1 approval records on batchId/weekend, so a re-run rewrites whatever is stored. `--record-gate1` therefore classifies the requested set against the stored one and has exactly four outcomes:
+    1. **No prior approval, or an identical set** — recorded. The identical case is a harmless idempotent no-op (e.g. a notes/approver touch-up).
+    2. **A widening** — every stored venue is still present and at least one was added. The set is re-recorded **as a whole**, and the run prints the stored set beside the new one before writing so the change is visible. Dispatch then reaches only the venues in the approved set carrying no outreach record for that weekend, so widening never re-mails an already-pitched venue: approving eight, pitching them, and later adding five sends five emails.
+    3. **A non-widening difference** — a stored venue was removed or replaced. **Refused**; nothing is recorded. Re-run with every stored venue still present, or use a different batch.
+    4. **The lookup could not determine which applies** — a non-2xx status, an unparseable body, an expired token, or a dropped connection. **Refused (fails closed)**; no POST is made. A lookup that returns nothing and a lookup that could not run are indistinguishable to the caller, so treating the second as "no prior approval exists" would silently replace an approval through the backend's upsert on the weekend key.
+    There is no flag that overrides any of this; no `--re-record` exists.
   - **FORBIDDEN ACTION:** AI assistants are **STRICTLY FORBIDDEN** from executing `deno task book-gig --send` when the user approves target candidates or when Gate 1 is recorded. Gate 1 satisfies only the venue-set check; dispatch requires both Gate 1 and an independent Gate 2 draft copy approval record.
 
 #### Phase 2B: Draft Content Review & Approval (GATE 2)
@@ -128,6 +133,8 @@ Batch outreach dispatch is protected by two mandatory, independent hard gates (D
 | It refuses to | Because |
 |---|---|
 | Auto-send outreach without explicit draft approval and `--confirm-drafts`, or dispatch based on venue target approval alone (Gate 1) | Two-stage approval gate requires distinct signoff (D-39): Gate 1 authorizes ONLY the target venue set (recorded server-side via `POST /outreach/approval/venue-set`), while Gate 2 authorizes rendered draft copy. Dispatch requires `--send --confirm-drafts` and fails closed if either gate or `--confirm-drafts` is missing. AI assistants are strictly forbidden from executing `--send` when candidates or venue lists alone are approved. |
+| Re-record a Gate 1 venue set that removes or replaces an already-approved venue | D-54 permits a *widening* (every stored venue kept, others added) and refuses anything else. A set that drops an approved venue is a replacement, not a revision, and the backend upserts on the weekend key, so it would silently discard what Josh approved. Nothing is recorded. |
+| Record a Gate 1 approval when the existing-approval lookup could not be completed | D-54, fail closed. A non-2xx status, unparseable body, expired token, or dropped connection is indistinguishable from "no approval exists" to the caller, so proceeding would overwrite a prior approval through the backend's upsert on the strength of a failed network call. No POST is made. |
 | Pitch venues within +- 2 months of a booked gig | Preserves local audience draw and venue spacing commitments. |
 | Pitch venues with active outreach campaigns for that weekend | Prevents embarrassing duplicate outreach to venue managers. |
 | Use corporate marketing copy or banned hype words | Violates cross-AI voice rules. Tone must remain genuine and personal. |

@@ -20,6 +20,7 @@ import {
   fetchVenueMap,
   recordGate1Approval,
 } from "./outreach_api.ts";
+import type { Gate1RevisionOutcome } from "./outreach_api.ts";
 import type {
   BatchDispatchResult,
   BookGigResult,
@@ -374,6 +375,15 @@ export async function runBookGigCli(
 
     console.log(`Recording Gate 1 approval for ${venueIds.length} candidate venue(s)...`);
 
+    // D-54: how the requested set related to the stored one, so the operator-facing message
+    // below reports a widening, an idempotent re-record, or a first recording rather than
+    // describing every outcome as a fresh approval. A non-widening difference and an
+    // undeterminable lookup both throw inside recordGate1Approval and never reach here.
+    // Held in an object rather than a plain `let`: the callback fires inside
+    // recordGate1Approval, which TypeScript's control-flow analysis cannot see, so a bare
+    // local would stay narrowed to its initial literal type.
+    const revision: { current: Gate1RevisionOutcome } = { current: "new" };
+
     const gate1Record = await recordGate1Approval(
       {
         batchId: parsed.batchId,
@@ -381,11 +391,22 @@ export async function runBookGigCli(
         venueIds,
         approver,
         notes: parsed.notes || `Gate 1 venue-set approval (${venueIds.length} venues approved)`,
+        onRevision: (outcome) => {
+          revision.current = outcome;
+        },
       },
       fetchFn,
     );
 
-    console.log(`\n✅ Gate 1 venue-set approval recorded successfully!`);
+    if (revision.current === "widening") {
+      console.log(`\n✅ Gate 1 venue-set approval WIDENED and re-recorded successfully!`);
+    } else if (revision.current === "identical") {
+      console.log(
+        `\n✅ Gate 1 venue-set approval re-recorded unchanged (idempotent — same venue set).`,
+      );
+    } else {
+      console.log(`\n✅ Gate 1 venue-set approval recorded successfully!`);
+    }
     console.log(`  • Batch ID:     ${gate1Record.batchId}`);
     if (gate1Record._id) {
       console.log(`  • Approval ID:  ${gate1Record._id}`);
