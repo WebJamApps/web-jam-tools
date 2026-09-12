@@ -18,8 +18,10 @@ import {
   assessDensity,
   fetchCandidates,
   filterAndRankCandidates,
+  formatCandidateBreakdown,
   formatMonthDay,
   formatMonthYear,
+  getCandidateBreakdown,
   identifyCandidateBadge,
   isPitchableCandidate,
   renderCandidateTable,
@@ -255,10 +257,17 @@ Deno.test("filterAndRankCandidates: prioritizes matching location and retains re
   const loc = parseLocation("Lynchburg, VA")!;
   const filtered = filterAndRankCandidates(sampleVenues, loc);
 
-  assertEquals(filtered.length, 2);
-  assertEquals(filtered[0].name, "Waterman's Grill"); // Direct city match
-  assertEquals(filtered[1].name, "Apocalypse Ale Works"); // Surrounding Forest match
-  assertEquals(filtered.some((v) => v.name === "Parkway Brewing"), false); // Unrelated metro excluded
+  const pitchable = filtered.filter(isPitchableCandidate);
+  assertEquals(pitchable.length, 2);
+  assertEquals(pitchable[0].name, "Waterman's Grill"); // Direct city match
+  assertEquals(pitchable[1].name, "Apocalypse Ale Works"); // Surrounding Forest match
+  assertEquals(pitchable.some((v) => v.name === "Parkway Brewing"), false); // Unrelated metro excluded from pitchable
+
+  assertEquals(filtered.length, 3);
+  const parkway = filtered.find((v) => v.name === "Parkway Brewing")!;
+  assertEquals(parkway.isExcluded, true);
+  assertEquals(parkway.exclusionReason, "outside-target-area");
+  assertEquals(parkway.statusBadge, "[Outside Target Area]");
 });
 
 Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metros", () => {
@@ -300,11 +309,18 @@ Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metro
   const loc = parseLocation("Charlotte, Gastonia, Belmont, NC")!;
   const filtered = filterAndRankCandidates(ncVenues, loc);
 
-  assertEquals(filtered.length, 3);
-  assertEquals(filtered.some((v) => v.city === "Charlotte"), true);
-  assertEquals(filtered.some((v) => v.city === "Gastonia"), true);
-  assertEquals(filtered.some((v) => v.city === "Belmont"), true);
-  assertEquals(filtered.some((v) => v.city === "Salem"), false);
+  const pitchable = filtered.filter(isPitchableCandidate);
+  assertEquals(pitchable.length, 3);
+  assertEquals(pitchable.some((v) => v.city === "Charlotte"), true);
+  assertEquals(pitchable.some((v) => v.city === "Gastonia"), true);
+  assertEquals(pitchable.some((v) => v.city === "Belmont"), true);
+  assertEquals(pitchable.some((v) => v.city === "Salem"), false);
+
+  assertEquals(filtered.length, 4);
+  const salem = filtered.find((v) => v.city === "Salem")!;
+  assertEquals(salem.isExcluded, true);
+  assertEquals(salem.exclusionReason, "out-of-state");
+  assertEquals(salem.statusBadge, "[Out of State]");
 });
 
 Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and exclusion of non-target metros", () => {
@@ -387,23 +403,32 @@ Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and 
     "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas",
   )!;
   const filtered = filterAndRankCandidates(venues, loc);
+  const pitchable = filtered.filter(isPitchableCandidate);
 
   // Exact matches first (Blacksburg, Salem VA), then surrounding (Forest VA, Floyd VA)
-  assertEquals(filtered.length, 4);
-  assertEquals(filtered[0].name, "Olde Salem Brewing"); // Exact Salem VA match
-  assertEquals(filtered[1].name, "Rising Silo Brewery"); // Exact Blacksburg VA match
-  assertEquals(filtered[2].name, "Apocalypse Ale Works"); // Surrounding Forest VA match
-  assertEquals(filtered[3].name, "Dogtown Roadhouse"); // Surrounding Floyd VA match
+  assertEquals(pitchable.length, 4);
+  assertEquals(pitchable[0].name, "Olde Salem Brewing"); // Exact Salem VA match
+  assertEquals(pitchable[1].name, "Rising Silo Brewery"); // Exact Blacksburg VA match
+  assertEquals(pitchable[2].name, "Apocalypse Ale Works"); // Surrounding Forest VA match
+  assertEquals(pitchable[3].name, "Dogtown Roadhouse"); // Surrounding Floyd VA match
 
-  // Non-target metros, far-out towns (Marion, Harrisonburg), and out-of-state venues (Charlotte NC, Salem NC, Charleston SC) must be excluded
-  assertEquals(filtered.some((v) => v.city === "Charlotte"), false);
-  assertEquals(filtered.some((v) => v.city === "Harrisonburg"), false);
-  assertEquals(filtered.some((v) => v.city === "Marion"), false);
-  assertEquals(filtered.some((v) => v.usState === "NC"), false);
-  assertEquals(filtered.some((v) => v.usState === "SC"), false);
-  assertEquals(filtered.some((v) => v._id === "v5"), false); // Marion VA excluded
-  assertEquals(filtered.some((v) => v._id === "v7"), false); // Salem NC excluded
-  assertEquals(filtered.some((v) => v._id === "v8"), false); // Charleston SC excluded
+  // Non-target metros, far-out towns (Marion, Harrisonburg), and out-of-state venues (Charlotte NC, Salem NC, Charleston SC) must be excluded from pitchable
+  assertEquals(pitchable.some((v) => v.city === "Charlotte"), false);
+  assertEquals(pitchable.some((v) => v.city === "Harrisonburg"), false);
+  assertEquals(pitchable.some((v) => v.city === "Marion"), false);
+  assertEquals(pitchable.some((v) => v.usState === "NC"), false);
+  assertEquals(pitchable.some((v) => v.usState === "SC"), false);
+  assertEquals(pitchable.some((v) => v._id === "v5"), false); // Marion VA excluded
+  assertEquals(pitchable.some((v) => v._id === "v7"), false); // Salem NC excluded
+  assertEquals(pitchable.some((v) => v._id === "v8"), false); // Charleston SC excluded
+
+  // All 9 venues are retained in filtered with named exclusion reasons
+  assertEquals(filtered.length, 9);
+  assertEquals(filtered.find((v) => v._id === "v1")?.exclusionReason, "out-of-state");
+  assertEquals(filtered.find((v) => v._id === "v2")?.exclusionReason, "outside-target-area");
+  assertEquals(filtered.find((v) => v._id === "v5")?.exclusionReason, "outside-target-area");
+  assertEquals(filtered.find((v) => v._id === "v7")?.exclusionReason, "out-of-state");
+  assertEquals(filtered.find((v) => v._id === "v8")?.exclusionReason, "out-of-state");
 });
 
 Deno.test("formatLocationDisplay: formats multi-city and surrounding area descriptions", () => {
@@ -3058,6 +3083,7 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
       name: "Eligible Returning Spot",
       city: "Salem",
       usState: "VA",
+      email: "spot@salem.com",
       reason: { lastGigDate: "2026-06-15" },
     },
     {
@@ -3065,14 +3091,22 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
       name: "Fresh New Venue",
       city: "Salem",
       usState: "VA",
+      email: "fresh@salem.com",
       reason: {},
+    },
+    {
+      _id: "v7",
+      name: "No Email Spot",
+      city: "Salem",
+      usState: "VA",
+      email: "",
     },
   ];
 
   const loc = parseLocation("Salem, VA")!;
   const filtered = filterAndRankCandidates(candidates, loc, { referenceDate: refDate });
 
-  assertEquals(filtered.length, 6);
+  assertEquals(filtered.length, 7);
 
   const hold = filtered.find((v) => v._id === "v1")!;
   assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
@@ -3100,6 +3134,11 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   const fresh = filtered.find((v) => v._id === "v6")!;
   assertEquals(fresh.statusBadge, "New");
   assertEquals(fresh.isExcluded, false);
+
+  const noEmail = filtered.find((v) => v._id === "v7")!;
+  assertEquals(noEmail.statusBadge, "[No Booking Email]");
+  assertEquals(noEmail.isExcluded, true);
+  assertEquals(noEmail.exclusionReason, "no-booking-email");
 });
 
 Deno.test("filterAndRankCandidates: does not mutate input candidate objects and preserves spacingNote (#879)", () => {
@@ -3109,6 +3148,7 @@ Deno.test("filterAndRankCandidates: does not mutate input candidate objects and 
     name: "Unmutated Venue",
     city: "Salem",
     usState: "VA",
+    email: "unmutated@venue.com",
     reason: {
       lastGigDate: null,
       gigIntervalMonths: 2,
@@ -3758,13 +3798,13 @@ Deno.test("runBookGigCli: logs evaluated vs pitchable discovery counts and print
       isExcluded: true,
       exclusionReason: "gig-spacing",
     },
-    // Venue carrying email but no _id
+    // Venue without booking email
     {
-      _id: "",
-      name: "No ID Cafe",
+      _id: "v4",
+      name: "No Email Cafe",
       city: "Salem",
       usState: "VA",
-      email: "noid@cafe.com",
+      email: "",
       isExcluded: false,
     },
   ];
@@ -3829,10 +3869,10 @@ Deno.test("runBookGigCli: logs evaluated vs pitchable discovery counts and print
 
     const fullLog = loggedLines.join("\n");
 
-    // 1. Discovery log distinguishes total evaluated from pitchable and excluded counts
+    // 1. Discovery log reports reconciled breakdown
     assertStringIncludes(
       fullLog,
-      "Backend returned 4 total venues evaluated (1 pitchable, 3 excluded).",
+      "Backend returned 4 total venues evaluated (1 pitchable, 1 seasonal-hold, 1 no-booking-email, 1 gig-spacing).",
     );
 
     // 2. Primary table heading specifies Eligible Candidate Venues with pitchable count
@@ -3855,15 +3895,301 @@ Deno.test("runBookGigCli: logs evaluated vs pitchable discovery counts and print
       !eligibleSection.includes("Spacing Conflict Venue"),
       "Spacing Conflict must not be in eligible table",
     );
-    assert(!eligibleSection.includes("No ID Cafe"), "No ID Cafe must not be in eligible table");
+    assert(
+      !eligibleSection.includes("No Email Cafe"),
+      "No Email Cafe must not be in eligible table",
+    );
 
     const excludedSection = fullLog.substring(fullLog.indexOf("Excluded / On-Hold Venues"));
     assertStringIncludes(excludedSection, "Seasonal Hold Farm");
     assertStringIncludes(excludedSection, "Spacing Conflict Venue");
-    assertStringIncludes(excludedSection, "No ID Cafe");
+    assertStringIncludes(excludedSection, "No Email Cafe");
+    assertStringIncludes(excludedSection, "[No Booking Email]");
     assert(
       !excludedSection.includes("Eligible Brewery"),
       "Eligible Brewery must not be in excluded table",
+    );
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venue with a named reason (#984)", async () => {
+  const refDate = new Date("2026-10-15T00:00:00.000Z");
+  const weekend = parseTargetWeekend("Oct 16-18 2026");
+  const location = parseLocation("Roanoke, Salem, VA and surrounding areas")!;
+
+  // 1. Candidate fixture set covering pitchable + all seven named exclusion reasons
+  const fixtureVenues: CandidateVenue[] = [
+    // 1. Pitchable venue (in target area, has booking email, not excluded)
+    {
+      _id: "v-pitchable",
+      name: "Roanoke Brewing",
+      city: "Roanoke",
+      usState: "VA",
+      email: "booking@roanokebrewing.com",
+      isExcluded: false,
+    },
+    // 2. Out of state (different state from target location: NC vs VA)
+    {
+      _id: "v-out-of-state",
+      name: "Charlotte Tavern",
+      city: "Charlotte",
+      usState: "NC",
+      email: "booking@charlottetavern.com",
+      isExcluded: false,
+    },
+    // 3. Outside target area (in-state, but outside target and surrounding cities: Richmond vs Roanoke)
+    {
+      _id: "v-outside-area",
+      name: "Richmond Hall",
+      city: "Richmond",
+      usState: "VA",
+      email: "booking@richmondhall.com",
+      isExcluded: false,
+    },
+    // 4. No booking email (in target area, no prior hold/spacing, but email is missing/empty)
+    {
+      _id: "v-no-email",
+      name: "Salem Speakeasy",
+      city: "Salem",
+      usState: "VA",
+      email: "",
+      isExcluded: false,
+    },
+    // 5. Seasonal hold (active hold in future)
+    {
+      _id: "v-seasonal-hold",
+      name: "Vinton Vineyard",
+      city: "Vinton",
+      usState: "VA",
+      email: "booking@vintonvineyard.com",
+      resumeBooking: "2027-04-01",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+    },
+    // 6. Gig spacing (conflicting gig date within ±2 month window)
+    {
+      _id: "v-gig-spacing",
+      name: "Cave Spring Pub",
+      city: "Cave Spring",
+      usState: "VA",
+      email: "booking@cavespringpub.com",
+      conflictingGigDate: "2026-11-15",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+    },
+    // 7. Direct chat (outreachEligible: false with direct chat notes)
+    {
+      _id: "v-direct-chat",
+      name: "Roanoke Cafe",
+      city: "Roanoke",
+      usState: "VA",
+      email: "booking@roanokecafe.com",
+      outreachEligible: false,
+      notes: "Spoke directly with owner on phone",
+      isExcluded: true,
+      exclusionReason: "direct-chat",
+    },
+    // 8. Cooldown (contacted within 7-day cooldown window)
+    {
+      _id: "v-cooldown",
+      name: "Salem Taphouse",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@salemtaphouse.com",
+      cooldownSentDate: "2026-10-14",
+      isExcluded: true,
+      exclusionReason: "cooldown",
+    },
+  ];
+
+  // 2. Mocked fetchFn returning fixture venues from /outreach/candidates
+  const mockFetch: typeof fetch = (url: string | URL | Request) => {
+    const u = String(url);
+    if (u.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(fixtureVenues),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/venue?status=active")) {
+      return Promise.resolve(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/outreach?status=")) {
+      return Promise.resolve(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/outreach/preview")) {
+      const rendered = renderPitch(fixtureVenues[0], weekend);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              venueId: "v-pitchable",
+              venueName: "Roanoke Brewing",
+              subject: rendered.subject,
+              body: rendered.htmlBody || rendered.body,
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/templates")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(DEFAULT_TEMPLATES),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/report")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ ok: true, reportUrl: "https://web-jam.com/outreach/report/test" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  // 3. fetchCandidates retrieves all fixture candidates without mutation
+  const rawCandidates = await fetchCandidates({ weekend }, mockFetch);
+  assertEquals(rawCandidates.length, 8);
+
+  // 4. filterAndRankCandidates retains ALL 8 venues with appropriate named reasons
+  const candidates = filterAndRankCandidates(rawCandidates, location, { referenceDate: refDate });
+  assertEquals(candidates.length, 8);
+
+  // Assert each venue exists exactly once with its specific exclusion reason
+  const pitchableVenue = candidates.find((c) => c._id === "v-pitchable")!;
+  assertEquals(isPitchableCandidate(pitchableVenue), true);
+  assertEquals(pitchableVenue.isExcluded, false);
+
+  const outOfState = candidates.find((c) => c._id === "v-out-of-state")!;
+  assertEquals(isPitchableCandidate(outOfState), false);
+  assertEquals(outOfState.isExcluded, true);
+  assertEquals(outOfState.exclusionReason, "out-of-state");
+  assertEquals(outOfState.statusBadge, "[Out of State]");
+
+  const outsideArea = candidates.find((c) => c._id === "v-outside-area")!;
+  assertEquals(isPitchableCandidate(outsideArea), false);
+  assertEquals(outsideArea.isExcluded, true);
+  assertEquals(outsideArea.exclusionReason, "outside-target-area");
+  assertEquals(outsideArea.statusBadge, "[Outside Target Area]");
+
+  const noEmail = candidates.find((c) => c._id === "v-no-email")!;
+  assertEquals(isPitchableCandidate(noEmail), false);
+  assertEquals(noEmail.isExcluded, true);
+  assertEquals(noEmail.exclusionReason, "no-booking-email");
+  assertEquals(noEmail.statusBadge, "[No Booking Email]");
+
+  const seasonalHold = candidates.find((c) => c._id === "v-seasonal-hold")!;
+  assertEquals(isPitchableCandidate(seasonalHold), false);
+  assertEquals(seasonalHold.isExcluded, true);
+  assertEquals(seasonalHold.exclusionReason, "seasonal-hold");
+  assertStringIncludes(seasonalHold.statusBadge!, "Seasonal Hold");
+
+  const gigSpacing = candidates.find((c) => c._id === "v-gig-spacing")!;
+  assertEquals(isPitchableCandidate(gigSpacing), false);
+  assertEquals(gigSpacing.isExcluded, true);
+  assertEquals(gigSpacing.exclusionReason, "gig-spacing");
+  assertStringIncludes(gigSpacing.statusBadge!, "Gig Spacing");
+
+  const directChat = candidates.find((c) => c._id === "v-direct-chat")!;
+  assertEquals(isPitchableCandidate(directChat), false);
+  assertEquals(directChat.isExcluded, true);
+  assertEquals(directChat.exclusionReason, "direct-chat");
+  assertEquals(directChat.statusBadge, "[Direct Chat Active]");
+
+  const cooldown = candidates.find((c) => c._id === "v-cooldown")!;
+  assertEquals(isPitchableCandidate(cooldown), false);
+  assertEquals(cooldown.isExcluded, true);
+  assertEquals(cooldown.exclusionReason, "cooldown");
+  assertStringIncludes(cooldown.statusBadge!, "Cooldown Active");
+
+  // 5. Reconciled breakdown invariant: pitchable + sum(excluded by reason) === total returned
+  const breakdown = getCandidateBreakdown(candidates);
+  assertEquals(breakdown.total, 8);
+  assertEquals(breakdown.pitchable, 1);
+  assertEquals(breakdown.byReason["out-of-state"], 1);
+  assertEquals(breakdown.byReason["outside-target-area"], 1);
+  assertEquals(breakdown.byReason["seasonal-hold"], 1);
+  assertEquals(breakdown.byReason["no-booking-email"], 1);
+  assertEquals(breakdown.byReason["gig-spacing"], 1);
+  assertEquals(breakdown.byReason["direct-chat"], 1);
+  assertEquals(breakdown.byReason["cooldown"], 1);
+
+  const sumExcluded = Object.values(breakdown.byReason).reduce((a, b) => a + b, 0);
+  assertEquals(breakdown.pitchable + sumExcluded, breakdown.total);
+
+  // 6. Formatted discovery log reconciles exactly to total evaluated
+  const logStr = formatCandidateBreakdown(candidates);
+  assertEquals(
+    logStr,
+    "Backend returned 8 total venues evaluated (1 pitchable, 1 out-of-state, 1 outside-target-area, 1 seasonal-hold, 1 no-booking-email, 1 gig-spacing, 1 direct-chat, 1 cooldown).",
+  );
+
+  // 7. Table rendering: pitchable table contains only pitchable, excluded table contains all reasons and NO "New"
+  const pitchableTable = renderCandidateTable(candidates.filter(isPitchableCandidate), {
+    color: false,
+    referenceDate: refDate,
+  });
+  assertStringIncludes(pitchableTable, "Roanoke Brewing");
+  assert(!pitchableTable.includes("Charlotte Tavern"));
+  assert(!pitchableTable.includes("Richmond Hall"));
+  assert(!pitchableTable.includes("Salem Speakeasy"));
+
+  const excludedTable = renderCandidateTable(candidates.filter((c) => !isPitchableCandidate(c)), {
+    color: false,
+    referenceDate: refDate,
+  });
+  assertStringIncludes(excludedTable, "Charlotte Tavern");
+  assertStringIncludes(excludedTable, "Richmond Hall");
+  assertStringIncludes(excludedTable, "Salem Speakeasy");
+  assertStringIncludes(excludedTable, "Vinton Vineyard");
+  assertStringIncludes(excludedTable, "Cave Spring Pub");
+  assertStringIncludes(excludedTable, "Roanoke Cafe");
+  assertStringIncludes(excludedTable, "Salem Taphouse");
+
+  assertStringIncludes(excludedTable, "[Out of State]");
+  assertStringIncludes(excludedTable, "[Outside Target Area]");
+  assertStringIncludes(excludedTable, "[No Booking Email]");
+  assertStringIncludes(excludedTable, "[Seasonal Hold: Apr 2027]");
+  assertStringIncludes(excludedTable, "[Gig Spacing: Nov 15 Show]");
+  assertStringIncludes(excludedTable, "[Direct Chat Active]");
+  assertStringIncludes(excludedTable, "[Cooldown Active: Sent Oct 14]");
+  assert(!excludedTable.includes("New"), "Excluded table must never display 'New'");
+
+  // 8. CLI integration with mocked fetchFn prints the reconciled discovery breakdown log
+  const loggedLines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    loggedLines.push(args.map(String).join(" "));
+  };
+  try {
+    await runBookGigCli(
+      ["Oct 16-18 2026", "Roanoke, Salem, VA and surrounding areas", "--no-open"],
+      mockFetch,
+      () => Promise.resolve(true),
+    );
+    const cliOutput = loggedLines.join("\n");
+    assertStringIncludes(
+      cliOutput,
+      "Backend returned 8 total venues evaluated (1 pitchable, 1 out-of-state, 1 outside-target-area, 1 seasonal-hold, 1 no-booking-email, 1 gig-spacing, 1 direct-chat, 1 cooldown).",
     );
   } finally {
     console.log = originalLog;

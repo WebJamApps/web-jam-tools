@@ -3,6 +3,7 @@
 import type {
   CandidateBadgeInfo,
   CandidateVenue,
+  ExclusionReason,
   OutreachCampaignRecord,
   TargetLocation,
   TargetWeekend,
@@ -380,6 +381,27 @@ export function formatMonthDay(d: string | Date): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}`;
 }
 
+export function badgeCssToExclusionReason(cssClass: string): ExclusionReason | undefined {
+  switch (cssClass) {
+    case "badge-seasonal-hold":
+      return "seasonal-hold";
+    case "badge-gig-spacing":
+      return "gig-spacing";
+    case "badge-direct-chat":
+      return "direct-chat";
+    case "badge-cooldown":
+      return "cooldown";
+    case "badge-no-booking-email":
+      return "no-booking-email";
+    case "badge-out-of-state":
+      return "out-of-state";
+    case "badge-outside-target-area":
+      return "outside-target-area";
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Identify eligibility status badge and exclusion reasoning for a candidate venue
  */
@@ -401,10 +423,33 @@ export function identifyCandidateBadge(
     if (sb.includes("Cooldown Active") || sb.includes("Cooldown:")) {
       return { badge: sb, cssClass: "badge-cooldown", isExcluded: true };
     }
+    if (sb.includes("No Booking Email")) {
+      return { badge: sb, cssClass: "badge-no-booking-email", isExcluded: true };
+    }
+    if (sb.includes("Out of State")) {
+      return { badge: sb, cssClass: "badge-out-of-state", isExcluded: true };
+    }
+    if (sb.includes("Outside Target Area")) {
+      return { badge: sb, cssClass: "badge-outside-target-area", isExcluded: true };
+    }
     if (sb.startsWith("Returning")) {
       return { badge: sb, cssClass: "badge-returning", isExcluded: false };
     }
     return { badge: sb, cssClass: "badge-eligible", isExcluded: false };
+  }
+
+  if (v.exclusionReason === "no-booking-email") {
+    return { badge: "[No Booking Email]", cssClass: "badge-no-booking-email", isExcluded: true };
+  }
+  if (v.exclusionReason === "out-of-state") {
+    return { badge: "[Out of State]", cssClass: "badge-out-of-state", isExcluded: true };
+  }
+  if (v.exclusionReason === "outside-target-area") {
+    return {
+      badge: "[Outside Target Area]",
+      cssClass: "badge-outside-target-area",
+      isExcluded: true,
+    };
   }
 
   const nowMs = referenceDate.getTime();
@@ -436,6 +481,10 @@ export function identifyCandidateBadge(
         isExcluded: true,
       };
     }
+  }
+
+  if (v.exclusionReason === "seasonal-hold") {
+    return { badge: "[Seasonal Hold]", cssClass: "badge-seasonal-hold", isExcluded: true };
   }
 
   // 2. Gig Spacing: venues excluded by the ±2 month gig window
@@ -492,6 +541,7 @@ export function identifyCandidateBadge(
   if (
     v.activeDirectChat ||
     v.reason?.activeDirectChat ||
+    v.exclusionReason === "direct-chat" ||
     (v.outreachEligible === false && hasDirectChatNotes)
   ) {
     return {
@@ -587,26 +637,42 @@ export function filterAndRankCandidates(
 
   const exactMatches: CandidateVenue[] = [];
   const surroundingMatches: CandidateVenue[] = [];
+  const excludedMatches: CandidateVenue[] = [];
 
   for (const v of candidates) {
     // Populate granular status badge and reasoning on shallow-cloned venue (immutability)
     const badgeInfo = identifyCandidateBadge(v, refDate);
+    let isExcludedVenue = Boolean(v.isExcluded || badgeInfo.isExcluded);
+    let reasonFromBadge = badgeCssToExclusionReason(badgeInfo.cssClass);
+    let resolvedStatusBadge = v.statusBadge || badgeInfo.badge;
+
+    // Check no-booking-email: in-area or non-excluded venues missing email
+    if (!isExcludedVenue && (!v.email || !v.email.trim())) {
+      isExcludedVenue = true;
+      reasonFromBadge = "no-booking-email";
+      resolvedStatusBadge = "[No Booking Email]";
+    }
+
+    const resolvedExclusionReason = v.exclusionReason ||
+      (isExcludedVenue ? reasonFromBadge : undefined);
+
     const vCopy: CandidateVenue = {
       ...v,
-      statusBadge: v.statusBadge || badgeInfo.badge,
-      isExcluded: v.isExcluded ?? badgeInfo.isExcluded,
-      reason: v.reason
-        ? {
-          ...v.reason,
-          statusBadge: v.reason.statusBadge || badgeInfo.badge,
-          ...(badgeInfo.isExcluded
-            ? { exclusionReason: v.reason.exclusionReason || badgeInfo.badge }
-            : {}),
-        }
-        : {
-          statusBadge: badgeInfo.badge,
-          ...(badgeInfo.isExcluded ? { exclusionReason: badgeInfo.badge } : {}),
-        },
+      statusBadge: resolvedStatusBadge,
+      isExcluded: isExcludedVenue,
+      ...(resolvedExclusionReason ? { exclusionReason: resolvedExclusionReason } : {}),
+      reason: {
+        ...v.reason,
+        statusBadge: resolvedStatusBadge,
+        ...(isExcludedVenue
+          ? {
+            exclusionReason: v.reason?.exclusionReason ||
+              (resolvedExclusionReason === "no-booking-email"
+                ? "[No Booking Email]"
+                : badgeInfo.badge),
+          }
+          : {}),
+      },
     };
 
     const vCity = (vCopy.city || "").toLowerCase().trim();
@@ -619,8 +685,20 @@ export function filterAndRankCandidates(
       }
     }
 
-    // If target location has a specific state and venue is in a different state, exclude it
+    // If target location has a specific state and venue is in a different state, retain with named reason
     if (locState && vState && vState !== locState) {
+      const outOfStateVenue: CandidateVenue = {
+        ...vCopy,
+        isExcluded: true,
+        exclusionReason: "out-of-state",
+        statusBadge: "[Out of State]",
+        reason: {
+          ...vCopy.reason,
+          exclusionReason: "out-of-state",
+          statusBadge: "[Out of State]",
+        },
+      };
+      excludedMatches.push(outOfStateVenue);
       continue;
     }
 
@@ -667,13 +745,29 @@ export function filterAndRankCandidates(
 
     if (isSurrounding) {
       surroundingMatches.push(vCopy);
+      continue;
     }
+
+    // 5. Fall-through: venue does not match target or surrounding areas
+    const outsideAreaVenue: CandidateVenue = {
+      ...vCopy,
+      isExcluded: true,
+      exclusionReason: "outside-target-area",
+      statusBadge: "[Outside Target Area]",
+      reason: {
+        ...vCopy.reason,
+        exclusionReason: "outside-target-area",
+        statusBadge: "[Outside Target Area]",
+      },
+    };
+    excludedMatches.push(outsideAreaVenue);
   }
 
-  // Exact matches first, then neighboring surrounding matches
+  // Exact matches first, then neighboring surrounding matches, then excluded matches
   return [
     ...exactMatches.sort((a, b) => a.name.localeCompare(b.name)),
     ...surroundingMatches.sort((a, b) => a.name.localeCompare(b.name)),
+    ...excludedMatches.sort((a, b) => a.name.localeCompare(b.name)),
   ];
 }
 
@@ -723,7 +817,15 @@ export function renderCandidateTable(
     const email = (c.email || "—").slice(0, 24).padEnd(24);
 
     const badgeInfo = identifyCandidateBadge(c, refDate);
-    const rawBadge = c.statusBadge || badgeInfo.badge;
+    let rawBadge = c.statusBadge || badgeInfo.badge;
+    if (
+      (c.isExcluded || !isPitchableCandidate(c)) &&
+      (rawBadge === "New" || !rawBadge.startsWith("["))
+    ) {
+      rawBadge = badgeInfo.badge.startsWith("[")
+        ? badgeInfo.badge
+        : (c.exclusionReason ? `[${c.exclusionReason}]` : "[Excluded]");
+    }
 
     let badgeCol: string;
     const colWidth = 30;
@@ -734,6 +836,10 @@ export function renderCandidateTable(
       else if (badgeInfo.cssClass === "badge-direct-chat") colorCode = "\x1b[35m"; // magenta
       else if (badgeInfo.cssClass === "badge-cooldown") colorCode = "\x1b[34m"; // blue
       else if (badgeInfo.cssClass === "badge-returning") colorCode = "\x1b[33m"; // yellow
+      else if (badgeInfo.cssClass === "badge-no-booking-email") colorCode = "\x1b[31m"; // red
+      else if (badgeInfo.cssClass === "badge-out-of-state") colorCode = "\x1b[90m"; // gray
+      else if (badgeInfo.cssClass === "badge-outside-target-area") colorCode = "\x1b[90m"; // gray
+      else if (c.isExcluded || !isPitchableCandidate(c)) colorCode = "\x1b[90m"; // gray
 
       const visible = rawBadge.slice(0, colWidth);
       const padding = " ".repeat(Math.max(0, colWidth - visible.length));
@@ -777,4 +883,73 @@ export function assessDensity(
     isSparse,
     suggestedMetro,
   };
+}
+
+export interface CandidateBreakdown {
+  total: number;
+  pitchable: number;
+  byReason: Record<ExclusionReason, number>;
+}
+
+export const CANONICAL_EXCLUSION_REASONS: ExclusionReason[] = [
+  "out-of-state",
+  "outside-target-area",
+  "seasonal-hold",
+  "no-booking-email",
+  "gig-spacing",
+  "direct-chat",
+  "cooldown",
+];
+
+/**
+ * Summarizes candidates into pitchable count and granular exclusion reason counts.
+ * Guarantees pitchable + sum(byReason) === total.
+ */
+export function getCandidateBreakdown(candidates: CandidateVenue[]): CandidateBreakdown {
+  const breakdown: CandidateBreakdown = {
+    total: candidates.length,
+    pitchable: 0,
+    byReason: {
+      "out-of-state": 0,
+      "outside-target-area": 0,
+      "seasonal-hold": 0,
+      "no-booking-email": 0,
+      "gig-spacing": 0,
+      "direct-chat": 0,
+      "cooldown": 0,
+    },
+  };
+
+  for (const c of candidates) {
+    if (isPitchableCandidate(c)) {
+      breakdown.pitchable++;
+    } else {
+      const reason = (c.exclusionReason as ExclusionReason) || "outside-target-area";
+      if (reason in breakdown.byReason) {
+        breakdown.byReason[reason]++;
+      } else {
+        breakdown.byReason["outside-target-area"]++;
+      }
+    }
+  }
+
+  return breakdown;
+}
+
+/**
+ * Formats discovery breakdown log string:
+ * "Backend returned 42 total venues evaluated (15 pitchable, 12 out-of-state, 7 outside-target-area, ...)."
+ */
+export function formatCandidateBreakdown(candidates: CandidateVenue[]): string {
+  const b = getCandidateBreakdown(candidates);
+  const parts = [`${b.pitchable} pitchable`];
+
+  for (const r of CANONICAL_EXCLUSION_REASONS) {
+    const count = b.byReason[r];
+    if (count > 0) {
+      parts.push(`${count} ${r}`);
+    }
+  }
+
+  return `Backend returned ${b.total} total venues evaluated (${parts.join(", ")}).`;
 }

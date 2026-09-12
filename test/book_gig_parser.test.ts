@@ -10,7 +10,7 @@ import {
   parseLocation,
   parseTargetWeekend,
 } from "../src/book-gig/parser.ts";
-import { filterAndRankCandidates } from "../src/book-gig/candidates.ts";
+import { filterAndRankCandidates, isPitchableCandidate } from "../src/book-gig/candidates.ts";
 import type { CandidateVenue } from "../src/book-gig/types.ts";
 
 Deno.test("parseBookGigArgs: splits CLI arguments without splitting numeric 4-digit years into location", () => {
@@ -423,23 +423,31 @@ Deno.test("filterAndRankCandidates: with no location argument returns candidates
 
   // Exact matches: Cavendish Brewing, Clementine Cafe, Olde Salem Brewing, Slow Play Brewing, Starr Hill Brewery (5)
   // Surrounding matches: Apocalypse Ale Works (Forest, VA), Primal Brewery (Belmont, NC) (2)
-  assertEquals(filtered.length, 7);
+  const pitchable = filtered.filter(isPitchableCandidate);
+  assertEquals(pitchable.length, 7);
 
   // Exact matches appear first, sorted by name
-  assertEquals(filtered[0].name, "Cavendish Brewing"); // Gastonia (exact)
-  assertEquals(filtered[1].name, "Clementine Cafe"); // Harrisonburg (exact)
-  assertEquals(filtered[2].name, "Olde Salem Brewing"); // Salem (exact)
-  assertEquals(filtered[3].name, "Slow Play Brewing"); // Rock Hill (exact)
-  assertEquals(filtered[4].name, "Starr Hill Brewery"); // Roanoke (exact)
+  assertEquals(pitchable[0].name, "Cavendish Brewing"); // Gastonia (exact)
+  assertEquals(pitchable[1].name, "Clementine Cafe"); // Harrisonburg (exact)
+  assertEquals(pitchable[2].name, "Olde Salem Brewing"); // Salem (exact)
+  assertEquals(pitchable[3].name, "Slow Play Brewing"); // Rock Hill (exact)
+  assertEquals(pitchable[4].name, "Starr Hill Brewery"); // Roanoke (exact)
 
   // Surrounding matches appear second, sorted by name
-  assertEquals(filtered[5].name, "Apocalypse Ale Works"); // Forest (surrounding Lynchburg)
-  assertEquals(filtered[6].name, "Primal Brewery"); // Belmont (surrounding Gastonia)
+  assertEquals(pitchable[5].name, "Apocalypse Ale Works"); // Forest (surrounding Lynchburg)
+  assertEquals(pitchable[6].name, "Primal Brewery"); // Belmont (surrounding Gastonia)
 
-  // Excluded cities are NOT returned in default search
-  assertEquals(filtered.some((v) => v.name === "The Wooden Pickle"), false); // Marion
-  assertEquals(filtered.some((v) => v.name === "State Line Bar & Grill"), false); // Bristol
-  assertEquals(filtered.some((v) => v.name === "The Southern Cafe"), false); // Charlottesville
-  assertEquals(filtered.some((v) => v.name === "The National"), false); // Richmond
-  assertEquals(filtered.some((v) => v.name === "Ballad Brewing"), false); // Danville
+  // Excluded cities are NOT returned as pitchable in default search
+  assertEquals(pitchable.some((v) => v.name === "The Wooden Pickle"), false); // Marion
+  assertEquals(pitchable.some((v) => v.name === "State Line Bar & Grill"), false); // Bristol
+  assertEquals(pitchable.some((v) => v.name === "The Southern Cafe"), false); // Charlottesville
+  assertEquals(pitchable.some((v) => v.name === "The National"), false); // Richmond
+  assertEquals(pitchable.some((v) => v.name === "Ballad Brewing"), false); // Danville
+
+  // All 12 candidates are retained in filtered with outside-target-area reason
+  assertEquals(filtered.length, 12);
+  const pickle = filtered.find((v) => v.name === "The Wooden Pickle")!;
+  assertEquals(pickle.isExcluded, true);
+  assertEquals(pickle.exclusionReason, "outside-target-area");
+  assertEquals(pickle.statusBadge, "[Outside Target Area]");
 });
