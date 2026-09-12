@@ -21,6 +21,7 @@ import {
   formatMonthDay,
   formatMonthYear,
   identifyCandidateBadge,
+  isPitchableCandidate,
   renderCandidateTable,
 } from "../src/book-gig/candidates.ts";
 import {
@@ -3566,4 +3567,305 @@ Deno.test("fetchCandidates: gig spacing uses calendar-month arithmetic matching 
   // Aug 16 is on the boundary (not strictly greater than lower bound) -> not conflicting
   const boundary = candidates.find((c) => c._id === "venue-spacing-exact-boundary");
   assertEquals(boundary, undefined);
+});
+
+Deno.test("isPitchableCandidate: accurately identifies pitchable venues vs excluded / missing contact (#983)", () => {
+  // 1. Valid pitchable venue
+  const validVenue: CandidateVenue = {
+    _id: "v-valid",
+    name: "Valid Brewery",
+    email: "booking@validbrewery.com",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(validVenue), true);
+
+  // 2. Pitchable venue with undefined isExcluded
+  const validUndefinedExcluded = {
+    _id: "v-undef",
+    name: "Undefined Excluded",
+    email: "info@undef.com",
+  };
+  assertEquals(isPitchableCandidate(validUndefinedExcluded), true);
+
+  // 3. Excluded venue (e.g. seasonal hold, spacing, direct chat)
+  const excludedVenue: CandidateVenue = {
+    _id: "v-excluded",
+    name: "Held Venue",
+    email: "held@venue.com",
+    isExcluded: true,
+  };
+  assertEquals(isPitchableCandidate(excludedVenue), false);
+
+  // 4. Missing email (empty string)
+  const emptyEmailVenue: CandidateVenue = {
+    _id: "v-no-email",
+    name: "No Email Venue",
+    email: "",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(emptyEmailVenue), false);
+
+  // 5. Undefined email
+  const undefinedEmailVenue = {
+    _id: "v-undef-email",
+    name: "Undef Email Venue",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(undefinedEmailVenue), false);
+
+  // 6. Venue with email and not excluded, but lacking _id (critical requirement from #983)
+  const missingIdVenue = {
+    name: "Missing ID Venue",
+    email: "noid@venue.com",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(missingIdVenue), false);
+
+  // 7. Venue with empty _id
+  const emptyIdVenue = {
+    _id: "",
+    name: "Empty ID Venue",
+    email: "emptyid@venue.com",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(emptyIdVenue), false);
+});
+
+Deno.test("renderCandidateTable & partition: separates active eligible candidates from held/excluded venues (#983)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+  const candidates: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Eligible Brewery",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@eligible.com",
+      isExcluded: false,
+    },
+    {
+      _id: "v2",
+      name: "Seasonal Hold Farm",
+      city: "Blacksburg",
+      usState: "VA",
+      email: "farm@outside.com",
+      resumeBooking: "2027-03-01",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+    },
+    {
+      _id: "v3",
+      name: "Gig Spacing Tavern",
+      city: "Roanoke",
+      usState: "VA",
+      email: "tavern@spacing.com",
+      conflictingGigDate: "2026-11-15",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+    },
+    {
+      _id: "v4",
+      name: "Direct Chat Market",
+      city: "Salem",
+      usState: "VA",
+      email: "market@chat.com",
+      outreachEligible: false,
+      isExcluded: true,
+      exclusionReason: "direct-chat",
+    },
+    // Venue carrying email but no _id
+    {
+      _id: "",
+      name: "Unidentified Cafe",
+      city: "Salem",
+      usState: "VA",
+      email: "coffee@unidentified.com",
+      isExcluded: false,
+    },
+  ];
+
+  // Partition candidates using the shared helper
+  const pitchable = candidates.filter(isPitchableCandidate);
+  const excluded = candidates.filter((c) => !isPitchableCandidate(c));
+
+  assertEquals(pitchable.length, 1);
+  assertEquals(pitchable[0].name, "Eligible Brewery");
+
+  assertEquals(excluded.length, 4);
+  assert(excluded.some((c) => c.name === "Seasonal Hold Farm"));
+  assert(excluded.some((c) => c.name === "Gig Spacing Tavern"));
+  assert(excluded.some((c) => c.name === "Direct Chat Market"));
+  assert(excluded.some((c) => c.name === "Unidentified Cafe"));
+
+  // Primary table renders only pitchable candidates
+  const primaryTable = renderCandidateTable(pitchable, { color: false, referenceDate: refDate });
+  assertStringIncludes(primaryTable, "Eligible Brewery");
+  assert(
+    !primaryTable.includes("Seasonal Hold Farm"),
+    "Seasonal hold must not be in primary table",
+  );
+  assert(!primaryTable.includes("Gig Spacing Tavern"), "Gig spacing must not be in primary table");
+  assert(!primaryTable.includes("Direct Chat Market"), "Direct chat must not be in primary table");
+  assert(
+    !primaryTable.includes("Unidentified Cafe"),
+    "Venue without _id must not be in primary table",
+  );
+
+  // Secondary table renders excluded candidates
+  const secondaryTable = renderCandidateTable(excluded, { color: false, referenceDate: refDate });
+  assert(
+    !secondaryTable.includes("Eligible Brewery"),
+    "Eligible venue must not be in secondary table",
+  );
+  assertStringIncludes(secondaryTable, "Seasonal Hold Farm");
+  assertStringIncludes(secondaryTable, "Gig Spacing Tavern");
+  assertStringIncludes(secondaryTable, "Direct Chat Market");
+  assertStringIncludes(secondaryTable, "Unidentified Cafe");
+});
+
+Deno.test("runBookGigCli: logs evaluated vs pitchable discovery counts and prints partitioned tables (#983)", async () => {
+  const loggedLines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    loggedLines.push(args.map(String).join(" "));
+  };
+
+  const mockVenues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Eligible Brewery",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@eligible.com",
+      isExcluded: false,
+    },
+    {
+      _id: "v2",
+      name: "Seasonal Hold Farm",
+      city: "Salem",
+      usState: "VA",
+      email: "farm@outside.com",
+      resumeBooking: "2027-03-01",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+    },
+    {
+      _id: "v3",
+      name: "Spacing Conflict Venue",
+      city: "Salem",
+      usState: "VA",
+      email: "conflict@venue.com",
+      conflictingGigDate: "2026-11-10",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+    },
+    // Venue carrying email but no _id
+    {
+      _id: "",
+      name: "No ID Cafe",
+      city: "Salem",
+      usState: "VA",
+      email: "noid@cafe.com",
+      isExcluded: false,
+    },
+  ];
+
+  const mockFetch: typeof fetch = (url: string | URL | Request) => {
+    const u = String(url);
+    if (u.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(mockVenues),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/preview")) {
+      const weekend = parseTargetWeekend("Oct 16-18 2026");
+      const rendered = renderPitch(mockVenues[0], weekend);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              venueId: "v1",
+              venueName: "Eligible Brewery",
+              subject: rendered.subject,
+              body: rendered.htmlBody || rendered.body,
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/templates")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(DEFAULT_TEMPLATES),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/report")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ ok: true, reportUrl: "https://web-jam.com/outreach/report/test" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const mockOpener = () => Promise.resolve(true);
+
+  try {
+    const result = await runBookGigCli(
+      ["Oct 16-18 2026", "Salem, VA", "--no-open"],
+      mockFetch,
+      mockOpener,
+    );
+
+    assertEquals(result.mode, "preview");
+    assertEquals(result.candidates.length, 4);
+
+    const fullLog = loggedLines.join("\n");
+
+    // 1. Discovery log distinguishes total evaluated from pitchable and excluded counts
+    assertStringIncludes(
+      fullLog,
+      "Backend returned 4 total venues evaluated (1 pitchable, 3 excluded).",
+    );
+
+    // 2. Primary table heading specifies Eligible Candidate Venues with pitchable count
+    assertStringIncludes(fullLog, "Eligible Candidate Venues for October 16–18, 2026 (1):");
+
+    // 3. Secondary table heading specifies Excluded / On-Hold Venues with excluded count
+    assertStringIncludes(fullLog, "Excluded / On-Hold Venues (3):");
+
+    // 4. Verify candidate placement: Eligible Brewery in eligible table, others in excluded
+    const eligibleSection = fullLog.substring(
+      fullLog.indexOf("Eligible Candidate Venues"),
+      fullLog.indexOf("Excluded / On-Hold Venues"),
+    );
+    assertStringIncludes(eligibleSection, "Eligible Brewery");
+    assert(
+      !eligibleSection.includes("Seasonal Hold Farm"),
+      "Seasonal Hold Farm must not be in eligible table",
+    );
+    assert(
+      !eligibleSection.includes("Spacing Conflict Venue"),
+      "Spacing Conflict must not be in eligible table",
+    );
+    assert(!eligibleSection.includes("No ID Cafe"), "No ID Cafe must not be in eligible table");
+
+    const excludedSection = fullLog.substring(fullLog.indexOf("Excluded / On-Hold Venues"));
+    assertStringIncludes(excludedSection, "Seasonal Hold Farm");
+    assertStringIncludes(excludedSection, "Spacing Conflict Venue");
+    assertStringIncludes(excludedSection, "No ID Cafe");
+    assert(
+      !excludedSection.includes("Eligible Brewery"),
+      "Eligible Brewery must not be in excluded table",
+    );
+  } finally {
+    console.log = originalLog;
+  }
 });

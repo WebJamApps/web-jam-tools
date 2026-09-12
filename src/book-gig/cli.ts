@@ -4,9 +4,10 @@ import {
   assessDensity,
   fetchCandidates,
   filterAndRankCandidates,
+  isPitchableCandidate,
   renderCandidateTable,
 } from "./candidates.ts";
-export { renderCandidateTable };
+export { isPitchableCandidate, renderCandidateTable };
 import { renderPitchesFromBackend, verifyBatchAgainstTemplates } from "./pitch.ts";
 import { publishAndOpenReport } from "./publish.ts";
 import { executeLinkGig } from "./venue_link.ts";
@@ -346,7 +347,7 @@ export async function runBookGigCli(
     const density = assessDensity(candidates, location);
 
     // 2. Resolve approved venue IDs
-    let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
+    let eligibleVenues = candidates.filter(isPitchableCandidate);
 
     if (parsed.includeVenues && parsed.includeVenues.length > 0) {
       const unmatched = parsed.includeVenues.filter(
@@ -470,7 +471,7 @@ export async function runBookGigCli(
     const density = assessDensity(candidates, location);
 
     // 2. Resolve eligible venues
-    let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
+    let eligibleVenues = candidates.filter(isPitchableCandidate);
 
     if (parsed.includeVenues && parsed.includeVenues.length > 0) {
       const unmatched = parsed.includeVenues.filter(
@@ -785,15 +786,27 @@ export async function runBookGigCli(
   // 1. Fetch eligible candidates from web-jam-back
   console.log(`Fetching candidate venues from backend...`);
   const rawCandidates = await fetchCandidates({ weekend }, fetchFn);
-  console.log(`Backend returned ${rawCandidates.length} eligible venue candidate(s).`);
+  const pitchableRawCount = rawCandidates.filter(isPitchableCandidate).length;
+  const excludedRawCount = rawCandidates.length - pitchableRawCount;
+  console.log(
+    `Backend returned ${rawCandidates.length} total venues evaluated (${pitchableRawCount} pitchable, ${excludedRawCount} excluded).`,
+  );
 
   // 2. Filter & rank by location
   const candidates = filterAndRankCandidates(rawCandidates, location);
   const density = assessDensity(candidates, location);
 
   // 3. Output candidate table
-  console.log(`\nCandidate Venues for ${weekend.label}:`);
-  console.log(renderCandidateTable(candidates));
+  const pitchableCandidates = candidates.filter(isPitchableCandidate);
+  const excludedCandidates = candidates.filter((c) => !isPitchableCandidate(c));
+
+  console.log(`\nEligible Candidate Venues for ${weekend.label} (${pitchableCandidates.length}):`);
+  console.log(renderCandidateTable(pitchableCandidates));
+
+  if (excludedCandidates.length > 0) {
+    console.log(`\nExcluded / On-Hold Venues (${excludedCandidates.length}):`);
+    console.log(renderCandidateTable(excludedCandidates));
+  }
 
   // 4. Check density and offer venue-mining recommendation
   if (density.isSparse) {
@@ -837,7 +850,7 @@ export async function runBookGigCli(
 
   // 6. If in --send mode, dispatch batch outreach via POST /outreach/batch
   if (isSendMode) {
-    let eligibleVenues = candidates.filter((c) => c._id && c.email && !c.isExcluded);
+    let eligibleVenues = candidates.filter(isPitchableCandidate);
 
     if (parsed.includeVenues && parsed.includeVenues.length > 0) {
       console.log(

@@ -678,6 +678,18 @@ export function filterAndRankCandidates(
 }
 
 /**
+ * Evaluates whether a candidate venue is eligible to be pitched.
+ * Matches dispatch eligibility: must have an _id, a non-empty email, and not be excluded.
+ */
+export function isPitchableCandidate<
+  T extends { _id?: string | null; email?: string | null; isExcluded?: boolean | null },
+>(
+  c: T,
+): c is T & { _id: string; email: string } {
+  return Boolean(c._id && c.email && !c.isExcluded);
+}
+
+/**
  * Render candidate table for terminal display with colored status badges
  */
 export function renderCandidateTable(
