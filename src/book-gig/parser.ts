@@ -6,6 +6,7 @@ import type {
   ParsedBookGigArgs,
   TargetLocation,
   TargetWeekend,
+  VenueTweak,
 } from "./types.ts";
 
 export type { ParsedBookGigArgs };
@@ -52,6 +53,11 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   let explicitVenue: string | undefined;
   let holdUntil: string | undefined;
   let bookedThroughDate: string | undefined;
+  let tweakVenue: string | undefined;
+  let customBody: string | undefined;
+  let customIntro: string | undefined;
+  let confirmAll = false;
+  let recordGate2 = false;
   let approver: string | undefined;
   let notes: string | undefined;
   let batchId: string | undefined;
@@ -69,6 +75,44 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode = "send";
     } else if (lower === "--record-gate1" || lower === "--gate1") {
       mode = "gate1";
+    } else if (lower === "--record-gate2") {
+      mode = "gate2";
+      recordGate2 = true;
+    } else if (lower === "--gate2") {
+      mode = "gate2";
+    } else if (lower === "--tweak-venue" || lower === "--tweak") {
+      if (mode === "preview") mode = "gate2";
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        tweakVenue = args[i].trim();
+      }
+    } else if (lower.startsWith("--tweak-venue=") || lower.startsWith("--tweak=")) {
+      if (mode === "preview") mode = "gate2";
+      const eqIdx = arg.indexOf("=");
+      tweakVenue = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--custom-body") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        customBody = args[i].trim();
+      }
+    } else if (lower.startsWith("--custom-body=")) {
+      const eqIdx = arg.indexOf("=");
+      customBody = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--custom-intro") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        customIntro = args[i].trim();
+      }
+    } else if (lower.startsWith("--custom-intro=")) {
+      const eqIdx = arg.indexOf("=");
+      customIntro = arg.slice(eqIdx + 1).trim();
+    } else if (
+      lower === "--approve-all" ||
+      lower === "--approve-drafts" ||
+      lower === "--confirm-all"
+    ) {
+      confirmAll = true;
+      if (mode === "preview") mode = "gate2";
     } else if (lower === "--confirm-drafts") {
       confirmDrafts = true;
     } else if (lower.startsWith("--confirm-drafts=")) {
@@ -187,7 +231,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   }
 
   const rawArgs = positionalArgs.join(" ").trim();
-  if (explicitVenue && (mode === "send" || mode === "gate1")) {
+  if (explicitVenue && (mode === "send" || mode === "gate1" || mode === "gate2")) {
     includeVenues.push(explicitVenue);
   }
   const resIncludes = includeVenues.length > 0 ? Array.from(new Set(includeVenues)) : undefined;
@@ -197,6 +241,33 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   const resApprover = approver ? approver.trim() : undefined;
   const resNotes = notes ? notes.trim() : undefined;
   const resBatchId = batchId ? batchId.trim() : undefined;
+
+  const tweaks: VenueTweak[] = [];
+  if (tweakVenue) {
+    tweaks.push({
+      venueName: tweakVenue,
+      customBody,
+      customIntro,
+    });
+  }
+  const resTweaks = tweaks.length > 0 ? tweaks : undefined;
+  const resConfirmAll = confirmAll ? true : undefined;
+
+  const sharedResult = {
+    includeVenues: resIncludes,
+    excludeVenues: resExcludes,
+    confirmDrafts: resConfirmDrafts,
+    noOpen: resNoOpen,
+    approver: resApprover,
+    notes: resNotes,
+    batchId: resBatchId,
+    tweakVenue,
+    customBody,
+    customIntro,
+    tweaks: resTweaks,
+    confirmAll: resConfirmAll,
+    recordGate2: recordGate2 ? true : undefined,
+  };
 
   if (mode === "link-gig") {
     if (!linkVenueName && positionalArgs.length > 0) {
@@ -238,13 +309,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     return {
       mode,
       location,
-      includeVenues: resIncludes,
-      excludeVenues: resExcludes,
-      confirmDrafts: resConfirmDrafts,
-      noOpen: resNoOpen,
-      approver: resApprover,
-      notes: resNotes,
-      batchId: resBatchId,
+      ...sharedResult,
       rawArgs: "",
     };
   }
@@ -261,13 +326,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode,
       weekend,
       location,
-      includeVenues: resIncludes,
-      excludeVenues: resExcludes,
-      confirmDrafts: resConfirmDrafts,
-      noOpen: resNoOpen,
-      approver: resApprover,
-      notes: resNotes,
-      batchId: resBatchId,
+      ...sharedResult,
       rawArgs,
     };
   }
@@ -279,13 +338,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     return {
       mode,
       weekend,
-      includeVenues: resIncludes,
-      excludeVenues: resExcludes,
-      confirmDrafts: resConfirmDrafts,
-      noOpen: resNoOpen,
-      approver: resApprover,
-      notes: resNotes,
-      batchId: resBatchId,
+      ...sharedResult,
       rawArgs,
     };
   } catch {
@@ -317,13 +370,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
         mode,
         weekend,
         location,
-        includeVenues: resIncludes,
-        excludeVenues: resExcludes,
-        confirmDrafts: resConfirmDrafts,
-        noOpen: resNoOpen,
-        approver: resApprover,
-        notes: resNotes,
-        batchId: resBatchId,
+        ...sharedResult,
         rawArgs,
       };
     }
@@ -334,13 +381,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   return {
     mode,
     location,
-    includeVenues: resIncludes,
-    excludeVenues: resExcludes,
-    confirmDrafts: resConfirmDrafts,
-    noOpen: resNoOpen,
-    approver: resApprover,
-    notes: resNotes,
-    batchId: resBatchId,
+    ...sharedResult,
     rawArgs,
   };
 }
