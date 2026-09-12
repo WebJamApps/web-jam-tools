@@ -7,7 +7,7 @@ import {
   renderCandidateTable,
 } from "./candidates.ts";
 export { renderCandidateTable };
-import { renderPitch } from "./pitch.ts";
+import { renderPitch, verifyBatchAgainstTemplates } from "./pitch.ts";
 import { publishAndOpenReport } from "./publish.ts";
 import { executeLinkGig } from "./venue_link.ts";
 import { executeVenueHold } from "./cooldown.ts";
@@ -512,6 +512,19 @@ export async function runBookGigCli(
 
   console.log(`\nDrafted ${pitches.length} personalized pitch email(s) adhering to voice rules.`);
 
+  // 5b. Verify every rendered email against its stored template before Gate 2 artifact
+  // emission or dispatch — a divergence outside declared placeholders refuses the batch (D-50).
+  const templateVerification = verifyBatchAgainstTemplates(pitches, candidates, weekend, templates);
+  if (!templateVerification.valid) {
+    const details = templateVerification.violations
+      .map((v) => `  - ${v.venueName} (${v.venueId}): ${v.reason}`)
+      .join("\n");
+    throw new Error(
+      `Batch refused: ${templateVerification.violations.length} rendered email(s) diverge from ` +
+        `their stored Template record outside declared placeholders:\n${details}`,
+    );
+  }
+  console.log(`✅ Every rendered email verified against its stored template — no divergence.`);
   let batchDispatch: BatchDispatchResult | undefined;
 
   // 6. If in --send mode, dispatch batch outreach via POST /outreach/batch

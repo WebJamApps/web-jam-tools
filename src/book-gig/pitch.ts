@@ -222,6 +222,41 @@ export function resolveVenueTemplateType(
   return "PubFestivalBrewery";
 }
 
+/**
+ * Resolve the intro HTML a rendered pitch is entitled to use for a given template, stage,
+ * and detected conversation context. Extracted so the same set of legitimate, deterministic
+ * intro variants is used both by `renderPitch` and by `verifyPitchAgainstTemplate` — the
+ * verifier must recognize these canned variants as part of the declared rendering mechanism
+ * rather than flagging them as invented text (D-50).
+ */
+export function resolveIntroHtml(
+  template: EmailTemplate,
+  stage: TemplateStage,
+  conversationContext: ConversationContext,
+): string {
+  if (conversationContext === "phone") {
+    return stage === "returning"
+      ? `<p>Hi [Contact Name],</p>\n<p>Following up on our recent phone conversation — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
+      : `<p>Hi [Contact Name],</p>\n<p>Following up on our recent phone conversation — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
+  }
+  if (conversationContext === "in-person") {
+    return stage === "returning"
+      ? `<p>Hi [Contact Name],</p>\n<p>Following up on connecting in person — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
+      : `<p>Hi [Contact Name],</p>\n<p>Following up on connecting in person — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
+  }
+  if (conversationContext === "general") {
+    return stage === "returning"
+      ? `<p>Hi [Contact Name],</p>\n<p>Following up on our earlier conversation — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
+      : `<p>Hi [Contact Name],</p>\n<p>Following up on our earlier conversation — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
+  }
+  if (stage === "returning") {
+    return template.introHtml?.trim()
+      ? template.introHtml
+      : `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — we had a blast playing [Venue Name] last time and would love to get back on your calendar.</p>`;
+  }
+  return template.introHtml || "";
+}
+
 export type ConversationContext = "phone" | "in-person" | "general" | null;
 
 const IN_PERSON_CONVERSATION_RE =
@@ -404,25 +439,7 @@ export function renderPitch(
   const contactName = options.contactName || venue.contactName || "";
 
   const conversationContext = detectConversationContext(venue);
-  let introHtml = template.introHtml || "";
-
-  if (conversationContext === "phone") {
-    introHtml = stage === "returning"
-      ? `<p>Hi [Contact Name],</p>\n<p>Following up on our recent phone conversation — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
-      : `<p>Hi [Contact Name],</p>\n<p>Following up on our recent phone conversation — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
-  } else if (conversationContext === "in-person") {
-    introHtml = stage === "returning"
-      ? `<p>Hi [Contact Name],</p>\n<p>Following up on connecting in person — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
-      : `<p>Hi [Contact Name],</p>\n<p>Following up on connecting in person — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
-  } else if (conversationContext === "general") {
-    introHtml = stage === "returning"
-      ? `<p>Hi [Contact Name],</p>\n<p>Following up on our earlier conversation — it's always great playing for you guys at [Venue Name], and we'd love to return on [Target Dates].</p>`
-      : `<p>Hi [Contact Name],</p>\n<p>Following up on our earlier conversation — wanted to check if [Target Dates] might work for an acoustic set at [Venue Name].</p>`;
-  } else if (stage === "returning") {
-    introHtml = template.introHtml?.trim()
-      ? template.introHtml
-      : `<p>Hi [Contact Name],</p>\n<p>It's Josh from "Josh and Maria" — we had a blast playing [Venue Name] last time and would love to get back on your calendar.</p>`;
-  }
+  const introHtml = resolveIntroHtml(template, stage, conversationContext);
 
   const hasConversationIntro = Boolean(conversationContext);
   const customBody = synthesizeCustomBodyHook(venue, weekend, {
@@ -471,4 +488,195 @@ export function renderPitch(
     templateType: template.type,
     templateStage: template.stage || stage,
   };
+}
+
+// --- Template fidelity verification (D-50) --------------------------------------------------
+//
+// Every rendered email is checked against the canonical stored `Template` record it claims to
+// come from (its declared `templateType` / `templateStage`), with variation strictly confined
+// to the declared placeholder substitutions. Text that came from neither the template nor a
+// declared placeholder is a mismatch and refuses the batch (Step 5, D-50).
+
+export interface TemplateViolation {
+  venueId: string;
+  venueName: string;
+  reason: string;
+}
+
+export interface TemplateVerificationResult {
+  valid: boolean;
+  violations: TemplateViolation[];
+}
+
+// Internal marker swapped in for the literal "[Custom Body]" token so its exact insertion
+// point — and the whitespace the real substitution logic treats specially around it — can be
+// located precisely, without disturbing any of the other declared placeholders.
+const CUSTOM_BODY_MARKER = " __BOOK_GIG_CUSTOM_BODY_MARKER__ ";
+
+function substituteNonCustomBodyTokens(
+  templateText: string,
+  tokens: {
+    contactName?: string;
+    venueName: string;
+    targetDates: string;
+    bookingPeriod: string;
+  },
+): string {
+  // Protect "[Custom Body]" from substituteTokens' own custom-body handling so every other
+  // declared placeholder still resolves exactly as it would for a real render.
+  const protectedText = templateText.replace(/\[Custom Body\]/gi, CUSTOM_BODY_MARKER);
+  return substituteTokens(protectedText, { ...tokens, customBody: undefined });
+}
+
+function findDeclaredTemplate(
+  pitch: PitchEmail,
+  templates: EmailTemplate[],
+): EmailTemplate | undefined {
+  const type = pitch.templateType as TemplateVenueType | undefined;
+  const stage: TemplateStage = (pitch.templateStage as TemplateStage) || "cold";
+  if (!type) return undefined;
+  const pool = templates && templates.length > 0 ? templates : DEFAULT_TEMPLATES;
+  return (
+    pool.find((t) => t.active !== false && t.type === type && (t.stage || "cold") === stage) ||
+    DEFAULT_TEMPLATES.find((t) => t.type === type && (t.stage || "cold") === stage)
+  );
+}
+
+/**
+ * Verify a single rendered pitch email against the canonical stored Template record it claims
+ * to come from. Returns `null` when the email is faithful to that template (fixed prose intact,
+ * variation confined to declared placeholders and the free-form `[Custom Body]` slot), or a
+ * `TemplateViolation` describing the divergence otherwise.
+ */
+export function verifyPitchAgainstTemplate(
+  pitch: PitchEmail,
+  venue: CandidateVenue,
+  weekend: TargetWeekend,
+  options: RenderPitchOptions = {},
+  templates: EmailTemplate[] = [],
+): TemplateViolation | null {
+  const violation = (reason: string): TemplateViolation => ({
+    venueId: pitch.venueId,
+    venueName: pitch.venueName,
+    reason,
+  });
+
+  const template = findDeclaredTemplate(pitch, templates);
+  if (!template) {
+    return violation(
+      `No stored Template record found matching the declared type "${pitch.templateType}" / stage "${pitch.templateStage}" — cannot verify fidelity.`,
+    );
+  }
+
+  const stage: TemplateStage = (pitch.templateStage as TemplateStage) ||
+    resolveVenueStage(venue, options);
+  const conversationContext = detectConversationContext(venue);
+  const expectedIntroHtml = resolveIntroHtml(template, stage, conversationContext);
+
+  const monthName = MONTH_NAMES[(weekend.month || 1) - 1] || "October";
+  const bookingPeriod = options.bookingPeriod || `${monthName} ${weekend.year}`;
+  const contactName = options.contactName || venue.contactName || pitch.contactName || "";
+
+  const tokens = {
+    contactName,
+    venueName: venue.name || pitch.venueName,
+    targetDates: weekend.label,
+    bookingPeriod,
+  };
+
+  // Subject carries no [Custom Body] slot: it must equal the declared template exactly.
+  if (template.subject) {
+    const expectedSubject = substituteNonCustomBodyTokens(template.subject, tokens)
+      .replace(/\s+/g, " ")
+      .trim();
+    if (pitch.subject !== expectedSubject) {
+      return violation(
+        `Subject diverges from stored template "${template.type}/${stage}": expected "${expectedSubject}", got "${pitch.subject}".`,
+      );
+    }
+  }
+
+  const introResolved = expectedIntroHtml
+    ? substituteNonCustomBodyTokens(expectedIntroHtml, tokens)
+    : "";
+  const bodyResolved = template.bodyHtml
+    ? substituteNonCustomBodyTokens(template.bodyHtml, tokens)
+    : "";
+  const skeleton = `${introResolved}\n${bodyResolved}`.trim();
+
+  const actualHtml = pitch.htmlBody || "";
+  const markerIndex = skeleton.indexOf(CUSTOM_BODY_MARKER);
+
+  if (markerIndex === -1) {
+    // No declared [Custom Body] slot in this template: the fixed prose must match exactly.
+    if (actualHtml !== skeleton) {
+      return violation(
+        `Rendered body diverges from stored template "${template.type}/${stage}" outside its declared placeholders.`,
+      );
+    }
+    return null;
+  }
+
+  const prefix = skeleton.slice(0, markerIndex);
+  const suffix = skeleton.slice(markerIndex + CUSTOM_BODY_MARKER.length);
+
+  // Empty custom body: the real renderer removes the marker AND its one trailing newline
+  // together, so no gap remains at all.
+  const emptyVariant = prefix + suffix.replace(/^\r?\n/, "");
+  if (actualHtml === emptyVariant) {
+    return null;
+  }
+
+  // Non-empty custom body: the marker is replaced by trimmed free-form content plus a
+  // newline, so the fixed prose on either side — suffix included, with its newline — must
+  // still reappear verbatim, with only the [Custom Body] slot's content varying.
+  if (
+    actualHtml.startsWith(prefix) &&
+    actualHtml.endsWith(suffix) &&
+    actualHtml.length > prefix.length + suffix.length
+  ) {
+    return null;
+  }
+
+  return violation(
+    `Rendered body diverges from stored template "${template.type}/${stage}" outside its declared placeholders (Custom Body slot excepted).`,
+  );
+}
+
+/**
+ * Verify every rendered pitch in a batch against its stored template. Any single divergence
+ * refuses the whole batch on the same terms as a broken fingerprint (D-50) — never a partial
+ * send of only the venues that still match.
+ */
+export function verifyBatchAgainstTemplates(
+  pitches: PitchEmail[],
+  venues: CandidateVenue[],
+  weekend: TargetWeekend,
+  templates: EmailTemplate[] = [],
+  optionsByVenueId: Record<string, RenderPitchOptions> = {},
+): TemplateVerificationResult {
+  const venueById = new Map(venues.map((v) => [v._id, v]));
+  const violations: TemplateViolation[] = [];
+
+  for (const pitch of pitches) {
+    const venue = venueById.get(pitch.venueId);
+    if (!venue) {
+      violations.push({
+        venueId: pitch.venueId,
+        venueName: pitch.venueName,
+        reason: "No matching candidate venue found to verify this pitch against its template.",
+      });
+      continue;
+    }
+    const violation = verifyPitchAgainstTemplate(
+      pitch,
+      venue,
+      weekend,
+      optionsByVenueId[pitch.venueId] || {},
+      templates,
+    );
+    if (violation) violations.push(violation);
+  }
+
+  return { valid: violations.length === 0, violations };
 }
