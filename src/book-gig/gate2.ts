@@ -37,13 +37,42 @@ export interface Gate2SessionOptions {
  * - Approval is NEVER inferred from partial reviews ("Olde Salem looks good", "approved venue 1").
  * - Approval is NEVER inferred from venue-list approval ("I approve the venues", Gate 1).
  * - Approval is NEVER inferred from ambiguous passing remarks ("ok", "nice", "looks fine", "continue").
+ * - Approval is NEVER inferred from a negation, refusal or question ("do not approve all drafts",
+ *   "I did not approve the whole batch", "why would I approve all drafts?"). A refusal is a stronger
+ *   "no" than silence, and silence is already refused.
+ *
+ * Every filter fails closed: anything this function cannot read as an unambiguous affirmative
+ * approval of the entire batch returns false. `--confirm-all` remains the unambiguous signal.
  */
 export function isExplicitWholeBatchApproval(input: unknown): boolean {
   if (typeof input !== "string") return false;
   const trimmed = input.trim();
   if (!trimmed) return false;
 
-  const lower = trimmed.toLowerCase();
+  // Normalize curly apostrophes and runs of whitespace, so that "don’t" or a double space
+  // cannot slip a refusal past the guards below.
+  const lower = trimmed
+    .toLowerCase()
+    .replace(/[‘’ʼ`´]/g, "'")
+    .replace(/\s+/g, " ");
+
+  // 0. Negations, refusals and questions can never authorize the batch (D-45).
+  // This MUST run before every other filter: each one below is a substring or pattern test that
+  // reads "do not approve all drafts" exactly as it reads "approve all drafts".
+  if (lower.includes("?")) return false;
+  if (
+    /\b(?:[a-z]+n't|not|no|nope|none|never|cannot|cant|dont|doesnt|didnt|wont|stop|halt|hold|wait|pause|refuse[sd]?|reject(?:s|ed)?|deny|denied|decline[sd]?|unapprove[d]?|disapprove[sd]?|revoke[sd]?|withdraw(?:s|n)?|unless|until|without|but|yet)\b/
+      .test(lower)
+  ) {
+    return false;
+  }
+  // An interrogative opener means the input is a question about approving, not an approval.
+  if (
+    /^(?:why|what|who|whom|whose|when|where|how|which|should|shall|can|could|would|will|do|does|did|is|are|am|was|were|have|has|had|may|might|must)\b/
+      .test(lower)
+  ) {
+    return false;
+  }
 
   // 1. Tweak requests cannot be approvals
   if (
@@ -130,6 +159,11 @@ export class Gate2ReviewSession {
   candidates: CandidateVenue[];
   pitches: PitchEmail[];
   tweaks: Map<string, VenueTweak> = new Map();
+  /**
+   * Display state only — it tells the reviewer whether any tweak has been applied yet.
+   * "holding" and "tweaked" both mean Gate 2 is OPEN; only `isApproved()`, which also
+   * requires a recorded `gate2Record`, may be read as authorization to dispatch.
+   */
   status: "holding" | "tweaked" | "approved" = "holding";
   gate2Record?: Gate2ApprovalRecord;
   private backendConfig?: BackendConfigOptions;
@@ -146,15 +180,32 @@ export class Gate2ReviewSession {
 
   /**
    * Identifies an eligible candidate matching `venueQuery` (by _id or name).
+   *
+   * Matching is tried most-specific first (_id, then exact name, then the normalized
+   * venue filter). If a tier matches more than one candidate the query is ambiguous and
+   * this throws rather than silently tweaking whichever draft happened to come first.
    */
   findCandidate(venueQuery: string): CandidateVenue | undefined {
     const trimmed = venueQuery.trim();
-    return this.candidates.find(
-      (c) =>
-        (c._id && String(c._id) === trimmed) ||
-        (c.name && c.name.toLowerCase() === trimmed.toLowerCase()) ||
-        matchesVenueFilter(c, [trimmed]),
-    );
+    if (!trimmed) return undefined;
+
+    const tiers: CandidateVenue[][] = [
+      this.candidates.filter((c) => c._id && String(c._id) === trimmed),
+      this.candidates.filter((c) => c.name && c.name.toLowerCase() === trimmed.toLowerCase()),
+      this.candidates.filter((c) => matchesVenueFilter(c, [trimmed])),
+    ];
+
+    for (const matches of tiers) {
+      if (matches.length === 1) return matches[0];
+      if (matches.length > 1) {
+        throw new Error(
+          `Ambiguous venue query '${venueQuery}': it matches ${matches.length} candidate venues ` +
+            `(${matches.map((c) => c.name).join(", ")}). Tweak by venue _id instead.`,
+        );
+      }
+    }
+
+    return undefined;
   }
 
   /**

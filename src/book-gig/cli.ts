@@ -586,11 +586,12 @@ export async function runBookGigCli(
       return finalResult;
     }
 
-    // 6. Check explicit affirmative whole-batch approval (D-45)
+    // 6. Check explicit affirmative whole-batch approval (D-45).
+    // Only --confirm-all and a deliberate --notes statement count. `rawArgs` carries the
+    // weekend and location text, so reading approval out of it would let an incidental
+    // word in a positional argument close Gate 2.
     const explicitApproval = Boolean(
-      parsed.confirmAll ||
-        isExplicitWholeBatchApproval(parsed.notes) ||
-        isExplicitWholeBatchApproval(parsed.rawArgs),
+      parsed.confirmAll || isExplicitWholeBatchApproval(parsed.notes),
     );
 
     if (!explicitApproval) {

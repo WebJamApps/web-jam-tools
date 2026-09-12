@@ -1,5 +1,11 @@
 // test/book_gig_gate2.test.ts — Unit tests for /book-gig Gate 2 review loop & draft copy approval
-import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertNotEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { runBookGigCli } from "../src/book-gig/cli.ts";
 import { parseBookGigArgs } from "../src/book-gig/parser.ts";
 import {
@@ -184,6 +190,35 @@ Deno.test("isExplicitWholeBatchApproval: accepts affirmative whole-batch approva
   assertEquals(isExplicitWholeBatchApproval("drafts approved in their entirety"), true);
 });
 
+Deno.test("isExplicitWholeBatchApproval: rejects negations, refusals, and questions", () => {
+  // Every one of these contains an affirmative approval phrase as a substring, so each is a
+  // fail-open if the negation guard does not run before the positive patterns.
+  const refusals = [
+    "do not approve all drafts",
+    "don't approve all drafts",
+    "don’t approve all drafts", // curly apostrophe
+    "do  not  approve  all  drafts", // doubled spaces
+    "do not approve all emails",
+    "never approve all pitches without reading them",
+    "I can't approve all drafts until I read them",
+    "why would I approve all drafts before seeing them?",
+    "stop, do not approve the whole batch",
+    "I did not approve the whole batch",
+    "do NOT approve the whole batch yet",
+    "cannot approve all drafts",
+    "hold off, all drafts are approved once I have read them",
+    "I reject all drafts",
+    "revoke the whole batch approval",
+  ];
+  for (const refusal of refusals) {
+    assertEquals(
+      isExplicitWholeBatchApproval(refusal),
+      false,
+      `Refusal must never authorize the batch: ${refusal}`,
+    );
+  }
+});
+
 // ============================================================================
 // 3. Gate2ReviewSession (D-44 review loop, per-venue tweaks, server-side fingerprints)
 // ============================================================================
@@ -197,6 +232,39 @@ Deno.test("Gate2ReviewSession: holds in review loop initially", () => {
   assertEquals(session.status, "holding");
   assertEquals(session.isApproved(), false);
   assertEquals(session.pitches.length, 2);
+});
+
+Deno.test("Gate2ReviewSession: findCandidate throws on an ambiguous venue query", () => {
+  const session = new Gate2ReviewSession({
+    weekend: sampleWeekend,
+    candidates: [
+      ...sampleCandidates,
+      {
+        _id: "64a333333333333333333333",
+        name: "Olde-Salem Brewing",
+        city: "Salem",
+        usState: "VA",
+        email: "hello@olde-salem.com",
+        outreachEligible: true,
+        isExcluded: false,
+      },
+    ],
+    pitches: samplePitches,
+  });
+
+  // "Olde-Salem Brewing" and "Olde Salem Brewing" normalize to the same filter key, so a
+  // query matching neither name exactly must refuse rather than pick whichever came first.
+  assertThrows(
+    () => session.findCandidate("Olde-Salem-Brewing"),
+    Error,
+    "Ambiguous venue query",
+  );
+
+  // An exact name still wins over the normalized filter, an _id is never ambiguous,
+  // and an unknown name still resolves to undefined.
+  assertEquals(session.findCandidate("Olde Salem Brewing")?._id, "64a111111111111111111111");
+  assertEquals(session.findCandidate("64a333333333333333333333")?.name, "Olde-Salem Brewing");
+  assertEquals(session.findCandidate("Nowhere Taproom"), undefined);
 });
 
 Deno.test("Gate2ReviewSession: applyTweak re-renders tweaked venue and leaves others untouched (D-44)", async () => {
@@ -604,6 +672,26 @@ Deno.test("runBookGigCli: --record-gate2 refuses when explicit whole-batch appro
       },
       Error,
       "Gate 2 approval forbidden: approval cannot be inferred from silence, partial reviews, tweak submissions, or venue-list approval",
+    );
+
+    // A refusal in --notes must refuse just as hard as silence does.
+    await assertRejects(
+      async () => {
+        await runBookGigCli(
+          [
+            "--record-gate2",
+            "Oct 16-18 2026",
+            "Salem, VA",
+            "--no-open",
+            "--notes",
+            "do not approve all drafts",
+          ],
+          mockFetch,
+          () => Promise.resolve(false),
+        );
+      },
+      Error,
+      "Gate 2 approval forbidden",
     );
 
     assertEquals(
