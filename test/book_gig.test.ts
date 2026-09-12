@@ -1814,6 +1814,30 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
         ),
       );
     }
+    if (u.includes("/outreach/preview")) {
+      const rendered = renderPitch(mockVenues[0], {
+        start: "2026-10-16",
+        end: "2026-10-18",
+        rawText: "Oct 16-18 2026",
+        label: "October 16–18, 2026",
+        year: 2026,
+        month: 10,
+        days: [16, 17, 18],
+      });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              venueId: "v1",
+              venueName: "Olde Salem Brewing",
+              subject: rendered.subject,
+              body: rendered.htmlBody || rendered.body,
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
     if (u.includes("/outreach")) {
       return Promise.resolve(
         new Response(

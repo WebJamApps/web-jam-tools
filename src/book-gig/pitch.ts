@@ -739,6 +739,8 @@ export async function renderPitchesFromBackend(
       subject: preview.subject,
       body: htmlToPlainText(preview.body || ""),
       htmlBody: preview.body || "",
+      templateType: resolveVenueTemplateType(c, options.templateType),
+      templateStage: resolveVenueStage(c, options),
     });
   }
   return pitches;
