@@ -596,7 +596,11 @@ Deno.test("runBookGigCli: --record-gate2 refuses when explicit whole-batch appro
 
     await assertRejects(
       async () => {
-        await runBookGigCli(["--record-gate2", "Oct 16-18 2026", "Salem, VA"], mockFetch);
+        await runBookGigCli(
+          ["--record-gate2", "Oct 16-18 2026", "Salem, VA", "--no-open"],
+          mockFetch,
+          () => Promise.resolve(false),
+        );
       },
       Error,
       "Gate 2 approval forbidden: approval cannot be inferred from silence, partial reviews, tweak submissions, or venue-list approval",
@@ -657,8 +661,10 @@ Deno.test("runBookGigCli: --tweak-venue applies tweak, re-renders, holds in loop
         "We have a special acoustic set for your taproom",
         "Oct 16-18 2026",
         "Salem, VA",
+        "--no-open",
       ],
       mockFetch,
+      () => Promise.resolve(false),
     );
 
     assertEquals(result.mode, "gate2");
@@ -738,8 +744,10 @@ Deno.test("runBookGigCli: --record-gate2 with --confirm-all records draft finger
         "--confirm-all",
         "--approver",
         "Josh",
+        "--no-open",
       ],
       mockFetch,
+      () => Promise.resolve(false),
     );
 
     assertEquals(result.mode, "gate2");
