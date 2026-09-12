@@ -128,10 +128,10 @@ function opensWithPhrase(trimmed: string, phrase: string): boolean {
 /**
  * Natural-language phrases that authorize a file-issue write, verbatim from file-issue/SKILL.md's
  * own frontmatter `description` ("Triggered when the user says 'file an issue', 'open an issue',
- * 'draft an issue' ...") — this scan is only allowed to enumerate phrases it can point at a
- * documented source for (design-issue/SKILL.md's guidance on trigger-list/matcher work: a case
- * list counts as closed only when every entry is a literal string traceable to something, never an
- * invented category). design-issue/SKILL.md's own description documents no equivalent
+ * 'draft an issue', 'create an issue' ...") — this scan is only allowed to enumerate phrases it can
+ * point at a documented source for (design-issue/SKILL.md's guidance on trigger-list/matcher work: a
+ * case list counts as closed only when every entry is a literal string traceable to something, never
+ * an invented category). design-issue/SKILL.md's own description documents no equivalent
  * natural-language trigger — only its slash form, `/design-issue`, appears anywhere in that file —
  * so no phrase is added for it here; inventing one without a documented source would be exactly
  * the unenumerated-category failure that guidance warns against.
@@ -140,6 +140,7 @@ const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
   "file an issue",
   "open an issue",
   "draft an issue",
+  "create an issue",
 ] as const;
 
 /**
@@ -156,10 +157,10 @@ const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
  *    (web-jam-tools#920).
  * 2. For file-issue only, one of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS opening the text (same
  *    start-of-message anchor — web-jam-tools#866 Suggestion: Josh routinely invokes file-issue by
- *    saying "file an issue" rather than typing the slash form, and a session that started that way
- *    was being refused a token write despite a genuine authorizing invocation). design-issue has no
- *    natural-language form recognized here; see FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS's doc comment
- *    for why none is invented for it.
+ *    saying "file an issue" (or "create an issue") rather than typing the slash form, and a session
+ *    that started that way was being refused a token write despite a genuine authorizing
+ *    invocation). design-issue has no natural-language form recognized here; see
+ *    FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS's doc comment for why none is invented for it.
  */
 export function filingSkillInvoked(text: string): FilingSkill | null {
   const trimmed = text.trim().toLowerCase();
@@ -257,7 +258,7 @@ export function checkTokenWriteAuthorization(
   return {
     ok: false,
     reason:
-      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or "file an issue"/"open an issue"/"draft an issue"), found anywhere in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
+      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or "file an issue"/"open an issue"/"draft an issue"/"create an issue"), found anywhere in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
   };
 }
 
