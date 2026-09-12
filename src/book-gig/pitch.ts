@@ -4,9 +4,11 @@ import type {
   CandidateVenue,
   EmailTemplate,
   PitchEmail,
+  PitchPreview,
   TargetWeekend,
   TemplateStage,
   TemplateVenueType,
+  VenueTweak,
 } from "./types.ts";
 import { fetchPitchPreviews, type FetchPitchPreviewsOptions } from "./outreach_api.ts";
 
@@ -103,6 +105,8 @@ export const DEFAULT_TEMPLATES: EmailTemplate[] = [
 export interface RenderPitchOptions {
   contactName?: string;
   personalHook?: string;
+  customBody?: string;
+  customIntro?: string;
   isReturningVenue?: boolean;
   bookingPeriod?: string;
   templateType?: TemplateVenueType;
@@ -317,8 +321,9 @@ export function synthesizeCustomBodyHook(
   weekend: TargetWeekend,
   options: RenderPitchOptions = {},
 ): string {
-  if (options.personalHook && options.personalHook.trim()) {
-    const hook = options.personalHook.trim();
+  const hookText = options.customBody || options.personalHook;
+  if (hookText && hookText.trim()) {
+    const hook = hookText.trim();
     return hook.startsWith("<p>") ? hook : `<p>${hook}</p>`;
   }
 
@@ -685,6 +690,36 @@ export function verifyBatchAgainstTemplates(
 export interface RenderPitchesFromBackendOptions
   extends Omit<FetchPitchPreviewsOptions, "venueIds" | "targetDates" | "templateType"> {
   templateType?: TemplateVenueType;
+  tweaks?: VenueTweak[] | Map<string, VenueTweak>;
+}
+
+export function findTweakForCandidate(
+  c: CandidateVenue,
+  tweaks?: VenueTweak[] | Map<string, VenueTweak>,
+): VenueTweak | undefined {
+  if (!tweaks) return undefined;
+  if (tweaks instanceof Map) {
+    if (c._id && tweaks.has(String(c._id))) return tweaks.get(String(c._id));
+    for (const [key, tweak] of tweaks.entries()) {
+      if (
+        (tweak.venueId && tweak.venueId === c._id) ||
+        (tweak.venueName && tweak.venueName.toLowerCase() === c.name.toLowerCase()) ||
+        key.toLowerCase() === c.name.toLowerCase() ||
+        key === c._id
+      ) {
+        return tweak;
+      }
+    }
+    return undefined;
+  }
+  if (Array.isArray(tweaks)) {
+    return tweaks.find(
+      (t) =>
+        (t.venueId && t.venueId === c._id) ||
+        (t.venueName && t.venueName.toLowerCase() === c.name.toLowerCase()),
+    );
+  }
+  return undefined;
 }
 
 /**
@@ -694,6 +729,10 @@ export interface RenderPitchesFromBackendOptions
  * subject and HTML body returned here are byte-identical to what
  * `POST /outreach/batch` will mail, because both paths call the same backend
  * function — see the design doc's load-bearing premise 17.
+ *
+ * If `options.tweaks` contains custom slot modifications for specific venues,
+ * those venues are re-rendered individually with their custom slots (e.g. `customBody`),
+ * while all other venues remain completely untouched (D-44, Gate 2 review loop).
  *
  * Eligibility mirrors the local pool used elsewhere in the CLI: a candidate
  * needs an `_id` and a booking `email`, and must not be `isExcluded`. A venue
@@ -711,18 +750,48 @@ export async function renderPitchesFromBackend(
   const eligible = candidates.filter((c) => c._id && c.email && !c.isExcluded);
   if (eligible.length === 0) return [];
 
-  const previews = await fetchPitchPreviews(
-    {
-      backendUrl: options.backendUrl,
-      token: options.token,
-      venueIds: eligible.map((c) => c._id),
-      templateType: options.templateType,
-      targetDates: weekend.label,
-      bookingPeriod: options.bookingPeriod,
-    },
-    fetchFn,
-  );
+  const untweaked = eligible.filter((c) => !findTweakForCandidate(c, options.tweaks));
+  const tweaked = eligible.filter((c) => Boolean(findTweakForCandidate(c, options.tweaks)));
 
+  const previewPromises: Promise<PitchPreview[]>[] = [];
+
+  if (untweaked.length > 0) {
+    previewPromises.push(
+      fetchPitchPreviews(
+        {
+          backendUrl: options.backendUrl,
+          token: options.token,
+          venueIds: untweaked.map((c) => c._id),
+          templateType: options.templateType,
+          targetDates: weekend.label,
+          bookingPeriod: options.bookingPeriod,
+        },
+        fetchFn,
+      ),
+    );
+  }
+
+  for (const c of tweaked) {
+    const tweak = findTweakForCandidate(c, options.tweaks);
+    previewPromises.push(
+      fetchPitchPreviews(
+        {
+          backendUrl: options.backendUrl,
+          token: options.token,
+          venueIds: [c._id],
+          templateType: options.templateType,
+          targetDates: weekend.label,
+          bookingPeriod: options.bookingPeriod,
+          customBody: tweak?.customBody,
+          customIntro: tweak?.customIntro,
+        },
+        fetchFn,
+      ),
+    );
+  }
+
+  const previewArrays = await Promise.all(previewPromises);
+  const previews = previewArrays.flat();
   const previewByVenueId = new Map(previews.map((p) => [String(p.venueId), p]));
 
   const pitches: PitchEmail[] = [];
