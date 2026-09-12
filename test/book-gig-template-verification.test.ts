@@ -7,7 +7,9 @@ import {
   BACKEND_FOOTER_HTML,
   renderPitch,
   renderPitchesFromBackend,
+  resolveBookingPeriod,
   resolveVenueTemplateType,
+  verificationOptionsFromTweaks,
   verifyBatchAgainstTemplates,
   verifyPitchAgainstTemplate,
 } from "../src/book-gig/pitch.ts";
@@ -335,26 +337,104 @@ Deno.test("renderPitchesFromBackend: forwards calculated bookingPeriod to fetchP
   assertStringIncludes(requestedUrl, "targetDates=October+16%E2%80%9318%2C+2026");
 });
 
-Deno.test("renderPitchesFromBackend: detects returning stage from preview subject starting with Back at", async () => {
-  const mockFetch: typeof fetch = () => {
-    return Promise.resolve(
-      new Response(
-        JSON.stringify([
-          {
-            venueId: "venue-cold-1",
-            venueName: "The Test Room",
-            subject: "Back at The Test Room this October 2026? — Josh & Maria",
-            body: "<p>Hi there,</p><p>Returning set</p>",
-          },
-        ]),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
-  };
+const BACKEND_BODY_EMPTY_SLOT =
+  "\n<p>We have October 16–18, 2026 available for October 2026.</p>\n<p>Thanks for considering us.</p>";
+const BACKEND_COLD_INTRO =
+  "<p>Hi Alex,</p>\n<p>We'd love to bring our acoustic set to The Test Room.</p>";
 
+Deno.test("verifyPitchAgainstTemplate: passes a backend render whose stage differs from the local prediction", () => {
+  // Backend rendered the returning template (e.g. the venue has a replied outreach) while the
+  // local gig-history prediction still declares cold.
   const venue = coldVenue();
-  const pitches = await renderPitchesFromBackend([venue], WEEKEND, {}, mockFetch);
+  const returningRender = renderPitch(
+    coldVenue({ reason: { lastGigDate: "2026-01-10" } }),
+    WEEKEND,
+    {},
+    TEMPLATES,
+  );
+  assertEquals(returningRender.templateStage, "returning");
+  const declaredCold: PitchEmail = { ...returningRender, templateStage: "cold" };
+  assertEquals(verifyPitchAgainstTemplate(declaredCold, venue, WEEKEND, {}, TEMPLATES), null);
 
-  assertEquals(pitches.length, 1);
-  assertEquals(pitches[0].templateStage, "returning");
+  // Backend falls back to the cold template when the type has no returning variant.
+  const coldOnly = [FIXTURE_TEMPLATE];
+  const returning = returningVenue();
+  const coldRender = renderPitch(returning, WEEKEND, {}, coldOnly);
+  const declaredReturning: PitchEmail = { ...coldRender, templateStage: "returning" };
+  assertEquals(
+    verifyPitchAgainstTemplate(declaredReturning, returning, WEEKEND, {}, coldOnly),
+    null,
+  );
+
+  // Prose matching neither stage is still refused, reported against the declared stage.
+  const invented: PitchEmail = {
+    ...declaredCold,
+    htmlBody: declaredCold.htmlBody!.replace("last time", "at the festival"),
+  };
+  const violation = verifyPitchAgainstTemplate(invented, venue, WEEKEND, {}, TEMPLATES);
+  assertNotEquals(violation, null);
+  assertStringIncludes(violation!.reason, "PubFestivalBrewery/cold");
+});
+
+Deno.test("renderPitch: falls back to the same type's cold template, never another stage's copy", () => {
+  const returningPitch = renderPitch(returningVenue(), WEEKEND, {}, [FIXTURE_TEMPLATE]);
+  assertEquals(returningPitch.templateType, "PubFestivalBrewery");
+  assertEquals(returningPitch.templateStage, "cold");
+
+  // A cold venue whose pool only holds returning copy must not receive "last time" prose.
+  const coldPitch = renderPitch(coldVenue(), WEEKEND, {}, [RETURNING_TEMPLATE]);
+  assertEquals(coldPitch.templateStage, "cold");
+  assertEquals(coldPitch.htmlBody!.includes("last time"), false);
+});
+
+Deno.test("verifyPitchAgainstTemplate: accepts a customIntro rendered the way the backend renders it", () => {
+  const venue = coldVenue();
+  const base = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+  const customIntro = "Hey Alex — Matt's sister said to write.\n\nWe'd love a date.";
+  const backendPitch: PitchEmail = {
+    ...base,
+    htmlBody:
+      `<p>Hey Alex — Matt&#39;s sister said to write.</p>\n<p>We&#39;d love a date.</p>${BACKEND_BODY_EMPTY_SLOT}`,
+  };
+  assertEquals(
+    verifyPitchAgainstTemplate(backendPitch, venue, WEEKEND, { customIntro }, TEMPLATES),
+    null,
+  );
+
+  // The raw, unescaped text is not what the backend sends, so it is refused.
+  const rawPitch: PitchEmail = {
+    ...base,
+    htmlBody: `${customIntro}${BACKEND_BODY_EMPTY_SLOT}`,
+  };
+  assertNotEquals(
+    verifyPitchAgainstTemplate(rawPitch, venue, WEEKEND, { customIntro }, TEMPLATES),
+    null,
+  );
+});
+
+Deno.test("verifyPitchAgainstTemplate: accepts a backend customBody with no newline after the intro", () => {
+  const venue = coldVenue();
+  const base = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+  const backendPitch: PitchEmail = {
+    ...base,
+    htmlBody: `${BACKEND_COLD_INTRO}<p>We drove past your marquee.</p>${BACKEND_BODY_EMPTY_SLOT}`,
+  };
+  assertEquals(verifyPitchAgainstTemplate(backendPitch, venue, WEEKEND, {}, TEMPLATES), null);
+});
+
+Deno.test("verificationOptionsFromTweaks: carries each tweaked venue's customIntro into verification", () => {
+  const tweakedVenue = coldVenue({ _id: "venue-tweaked" });
+  const plainVenue = coldVenue({ _id: "venue-plain", name: "Plain Room" });
+  const options = verificationOptionsFromTweaks([tweakedVenue, plainVenue], [
+    { venueId: "venue-tweaked", customIntro: "Hi again!" },
+    { venueName: "Plain Room", customBody: "Body only." },
+  ]);
+  assertEquals(options, { "venue-tweaked": { customIntro: "Hi again!" } });
+});
+
+Deno.test("resolveBookingPeriod: recovers month and year from the weekend start when unparsed", () => {
+  assertEquals(resolveBookingPeriod(WEEKEND), "October 2026");
+  assertEquals(resolveBookingPeriod(WEEKEND, "Fall 2026"), "Fall 2026");
+  const unparsed = { ...WEEKEND, year: 0, month: 0, start: "2027-01-08" };
+  assertEquals(resolveBookingPeriod(unparsed), "January 2027");
 });

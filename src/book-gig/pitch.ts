@@ -43,6 +43,26 @@ const MONTH_NAMES = [
   "December",
 ];
 
+/**
+ * The `[Booking Period]` value for a target weekend (e.g. "January 2027"). Shared by the preview
+ * request and the fidelity check so the value sent to the backend and the value verified against
+ * can never drift apart. Year/month missing from the parsed weekend are recovered from its start.
+ */
+export function resolveBookingPeriod(weekend: TargetWeekend, override?: string): string {
+  if (override) return override;
+  let year = weekend.year;
+  let month = weekend.month;
+  if (!year || !month) {
+    const d = new Date(weekend.start);
+    if (!Number.isNaN(d.getTime())) {
+      year = year || d.getUTCFullYear();
+      month = month || (d.getUTCMonth() + 1);
+    }
+  }
+  const monthName = MONTH_NAMES[(month || 1) - 1] || "October";
+  return `${monthName} ${year || new Date().getFullYear()}`;
+}
+
 export const DEFAULT_TEMPLATES: EmailTemplate[] = [
   {
     type: "PubFestivalBrewery",
@@ -419,6 +439,14 @@ function substituteTokens(
   return result;
 }
 
+function findTemplateIn(
+  pool: EmailTemplate[],
+  type: string,
+  stage: TemplateStage,
+): EmailTemplate | undefined {
+  return pool.find((t) => t.active !== false && t.type === type && (t.stage || "cold") === stage);
+}
+
 /**
  * Render a tailored, voice-rule-compliant pitch email for a candidate venue using template master.
  */
@@ -436,21 +464,16 @@ export function renderPitch(
 
   // Find matching template from fetched templates or default fallback pool
   const allTemplates = templates && templates.length > 0 ? templates : DEFAULT_TEMPLATES;
-  const template =
-    allTemplates.find((t) =>
-      t.active !== false && t.type === type && (t.stage || "cold") === stage
-    ) ||
-    allTemplates.find((t) =>
-      t.active !== false && t.type === "MidRangeCafeBar" && (t.stage || "cold") === stage
-    ) ||
-    allTemplates.find((t) => t.active !== false && (t.stage || "cold") === stage) ||
-    allTemplates.find((t) => t.active !== false) ||
-    DEFAULT_TEMPLATES.find((t) => t.type === "MidRangeCafeBar" && t.stage === stage) ||
-    DEFAULT_TEMPLATES.find((t) => t.type === type && t.stage === stage) ||
+  const template = findTemplateIn(allTemplates, type, stage) ||
+    // Backend findTemplate(): a returning request with no returning variant of the type falls
+    // back to that same type's cold template — never to another type's or stage's copy.
+    findTemplateIn(allTemplates, type, "cold") ||
+    findTemplateIn(DEFAULT_TEMPLATES, type, stage) ||
+    findTemplateIn(allTemplates, "MidRangeCafeBar", stage) ||
+    findTemplateIn(DEFAULT_TEMPLATES, "MidRangeCafeBar", stage) ||
     DEFAULT_TEMPLATES[0];
 
-  const monthName = MONTH_NAMES[(weekend.month || 1) - 1] || "October";
-  const bookingPeriod = options.bookingPeriod || `${monthName} ${weekend.year}`;
+  const bookingPeriod = resolveBookingPeriod(weekend, options.bookingPeriod);
   const contactName = options.contactName || venue.contactName || "";
 
   const conversationContext = detectConversationContext(venue);
@@ -549,18 +572,39 @@ function substituteNonCustomBodyTokens(
   return substituteTokens(protectedText, { ...tokens, customBody: undefined });
 }
 
-function findDeclaredTemplate(
-  pitch: PitchEmail,
-  templates: EmailTemplate[],
-): EmailTemplate | undefined {
+// The stored templates a rendered pitch may legitimately have come from, declared stage first.
+// The backend decides the stage itself (booked venue or a replied/booked outreach → returning,
+// and a returning request with no returning variant falls back to cold), which the local
+// gig-history prediction cannot reproduce — so both stages of the declared type are candidates.
+function findDeclaredTemplates(pitch: PitchEmail, templates: EmailTemplate[]): EmailTemplate[] {
   const type = pitch.templateType as TemplateVenueType | undefined;
-  const stage: TemplateStage = (pitch.templateStage as TemplateStage) || "cold";
-  if (!type) return undefined;
+  if (!type) return [];
+  const declared: TemplateStage = (pitch.templateStage as TemplateStage) || "cold";
+  const stages: TemplateStage[] = declared === "returning"
+    ? ["returning", "cold"]
+    : ["cold", "returning"];
   const pool = templates && templates.length > 0 ? templates : DEFAULT_TEMPLATES;
-  return (
-    pool.find((t) => t.active !== false && t.type === type && (t.stage || "cold") === stage) ||
-    DEFAULT_TEMPLATES.find((t) => t.type === type && (t.stage || "cold") === stage)
-  );
+  const found: EmailTemplate[] = [];
+  for (const stage of stages) {
+    const t = findTemplateIn(pool, type, stage) || findTemplateIn(DEFAULT_TEMPLATES, type, stage);
+    if (t && !found.includes(t)) found.push(t);
+  }
+  return found;
+}
+
+// Mirrors web-jam-back's renderCustomHtml(): free-text customIntro/customBody is HTML-escaped,
+// blank-line-separated paragraphs are wrapped in <p>, single newlines become <br>, and no
+// template tokens are filled.
+function renderCustomHtml(customText: string): string {
+  const escaped = customText.trim()
+    .split("&").join("&amp;")
+    .split("<").join("&lt;")
+    .split(">").join("&gt;")
+    .split('"').join("&quot;")
+    .split("'").join("&#39;");
+  return escaped.split(/\n{2,}/)
+    .map((para) => `<p>${para.split("\n").join("<br>")}</p>`)
+    .join("\n");
 }
 
 function matchesSkeleton(skeleton: string, actualHtml: string): boolean {
@@ -580,13 +624,15 @@ function matchesSkeleton(skeleton: string, actualHtml: string): boolean {
     return true;
   }
 
-  // Non-empty custom body: the marker is replaced by trimmed free-form content plus a
-  // newline, so the fixed prose on either side — suffix included, with its newline — must
-  // still reappear verbatim, with only the [Custom Body] slot's content varying.
+  // Non-empty custom body: the marker is replaced by free-form content, so the fixed prose on
+  // either side — suffix included, with its newline — must still reappear verbatim, with only
+  // the [Custom Body] slot's content varying. The local renderer separates intro and slot with
+  // a newline; the backend concatenates them directly, so that one newline is optional.
+  const prefixNoGap = prefix.replace(/\r?\n$/, "");
   if (
-    actualHtml.startsWith(prefix) &&
+    actualHtml.startsWith(prefixNoGap) &&
     actualHtml.endsWith(suffix) &&
-    actualHtml.length > prefix.length + suffix.length
+    actualHtml.length > prefixNoGap.length + suffix.length
   ) {
     return true;
   }
@@ -619,28 +665,33 @@ export function verifyPitchAgainstTemplate(
     );
   }
 
-  const template = findDeclaredTemplate(pitch, templates);
-  if (!template) {
+  const candidates = findDeclaredTemplates(pitch, templates);
+  if (candidates.length === 0) {
     return violation(
       `No stored Template record found matching the declared type "${pitch.templateType}" / stage "${pitch.templateStage}" — cannot verify fidelity.`,
     );
   }
 
-  const stage: TemplateStage = (pitch.templateStage as TemplateStage) ||
-    resolveVenueStage(venue, options);
-  const conversationContext = detectConversationContext(venue);
-
-  let year = weekend.year;
-  let month = weekend.month;
-  if (!year || !month) {
-    const d = new Date(weekend.start);
-    if (!Number.isNaN(d.getTime())) {
-      year = year || d.getUTCFullYear();
-      month = month || (d.getUTCMonth() + 1);
-    }
+  // Faithful to any candidate passes; otherwise report the declared stage's divergence.
+  const reasons: string[] = [];
+  for (const template of candidates) {
+    const reason = divergenceFromTemplate(pitch, venue, weekend, options, template);
+    if (!reason) return null;
+    reasons.push(reason);
   }
-  const monthName = MONTH_NAMES[(month || 1) - 1] || "October";
-  const bookingPeriod = options.bookingPeriod || `${monthName} ${year || new Date().getFullYear()}`;
+  return violation(reasons[0]);
+}
+
+function divergenceFromTemplate(
+  pitch: PitchEmail,
+  venue: CandidateVenue,
+  weekend: TargetWeekend,
+  options: RenderPitchOptions,
+  template: EmailTemplate,
+): string | null {
+  const stage: TemplateStage = template.stage || "cold";
+  const conversationContext = detectConversationContext(venue);
+  const bookingPeriod = resolveBookingPeriod(weekend, options.bookingPeriod);
   const contactName = options.contactName || venue.contactName || pitch.contactName || "";
 
   const tokens = {
@@ -650,101 +701,73 @@ export function verifyPitchAgainstTemplate(
     bookingPeriod,
   };
 
-  // Subject carries no [Custom Body] slot: it must equal the declared template exactly.
-  if (template.subject) {
-    const expectedSubject = substituteNonCustomBodyTokens(template.subject, tokens)
-      .replace(/\s+/g, " ")
-      .trim();
-    const expectedSubjectThere = !contactName.trim()
-      ? substituteNonCustomBodyTokens(template.subject, { ...tokens, contactName: "there" })
-        .replace(/\s+/g, " ")
-        .trim()
-      : expectedSubject;
-
-    if (pitch.subject !== expectedSubject && pitch.subject !== expectedSubjectThere) {
-      return violation(
-        `Subject diverges from stored template "${template.type}/${stage}": expected "${expectedSubject}", got "${pitch.subject}".`,
-      );
-    }
-  }
-
-  // Legitimate intro variants: customIntro override, conversation-context intro, or base template intro
-  const introVariants: string[] = [];
-  if (options.customIntro && options.customIntro.trim()) {
-    introVariants.push(options.customIntro.trim());
-  } else {
-    const contextIntro = resolveIntroHtml(template, stage, conversationContext);
-    const baseIntro = resolveIntroHtml(template, stage, null);
-    if (contextIntro) introVariants.push(contextIntro);
-    if (baseIntro && baseIntro !== contextIntro) introVariants.push(baseIntro);
-    if (template.introHtml && !introVariants.includes(template.introHtml)) {
-      introVariants.push(template.introHtml);
-    }
-  }
-
-  const actualHtml = pitch.htmlBody || "";
-  let normalizedActualHtml = actualHtml;
-
-  // Accommodate backend footerHtml appended when template has footerPhotoRef
-  if (template.footerPhotoRef) {
-    if (normalizedActualHtml.endsWith(BACKEND_FOOTER_HTML)) {
-      normalizedActualHtml = normalizedActualHtml.slice(
-        0,
-        normalizedActualHtml.length - BACKEND_FOOTER_HTML.length,
-      );
-    } else if (normalizedActualHtml.endsWith("\r" + BACKEND_FOOTER_HTML)) {
-      normalizedActualHtml = normalizedActualHtml.slice(
-        0,
-        normalizedActualHtml.length - (BACKEND_FOOTER_HTML.length + 1),
-      );
-    } else if (normalizedActualHtml.trimEnd().endsWith(BACKEND_FOOTER_HTML.trimStart())) {
-      const idx = normalizedActualHtml.lastIndexOf(BACKEND_FOOTER_HTML.trimStart());
-      if (
-        idx !== -1 &&
-        normalizedActualHtml.slice(idx + BACKEND_FOOTER_HTML.trimStart().length).trim() === ""
-      ) {
-        normalizedActualHtml = normalizedActualHtml.slice(0, idx).trimEnd();
-      }
-    }
-  }
-
+  // The backend fills a missing contact name with "there"; the local renderer drops it.
   const tokenVariants = [tokens];
   if (!contactName.trim()) {
     tokenVariants.push({ ...tokens, contactName: "there" });
   }
 
-  let matched = false;
-  for (const introTemplate of introVariants) {
+  // Subject carries no [Custom Body] slot: it must equal the declared template exactly.
+  if (template.subject) {
+    const expectedSubjects = tokenVariants.map((tks) =>
+      substituteNonCustomBodyTokens(template.subject!, tks).replace(/\s+/g, " ").trim()
+    );
+    if (!expectedSubjects.includes(pitch.subject)) {
+      return `Subject diverges from stored template "${template.type}/${stage}": expected "${
+        expectedSubjects[0]
+      }", got "${pitch.subject}".`;
+    }
+  }
+
+  // Legitimate intros: a customIntro replaces the template intro outright and is rendered as
+  // escaped free text (no tokens filled), exactly as the backend does. Otherwise the
+  // conversation-context intro, the base intro, or the stored introHtml as authored.
+  const introVariants: { html: string; fillTokens: boolean }[] = [];
+  if (options.customIntro && options.customIntro.trim()) {
+    introVariants.push({ html: renderCustomHtml(options.customIntro), fillTokens: false });
+  } else {
+    const intros = [
+      resolveIntroHtml(template, stage, conversationContext),
+      resolveIntroHtml(template, stage, null),
+      template.introHtml || "",
+    ];
+    for (const html of intros) {
+      if (html && !introVariants.some((v) => v.html === html)) {
+        introVariants.push({ html, fillTokens: true });
+      }
+    }
+  }
+
+  const actualHtml = stripBackendFooter(pitch.htmlBody || "", template);
+
+  for (const intro of introVariants) {
     for (const tks of tokenVariants) {
-      const introResolved = substituteNonCustomBodyTokens(introTemplate, tks);
+      const introResolved = intro.fillTokens
+        ? substituteNonCustomBodyTokens(intro.html, tks)
+        : intro.html;
       const bodyResolved = template.bodyHtml
         ? substituteNonCustomBodyTokens(template.bodyHtml, tks)
         : "";
       const skeleton = `${introResolved}\n${bodyResolved}`.trim();
-
-      if (matchesSkeleton(skeleton, normalizedActualHtml)) {
-        matched = true;
-        break;
-      }
+      if (matchesSkeleton(skeleton, actualHtml)) return null;
     }
-    if (matched) break;
   }
 
-  if (matched) {
-    return null;
-  }
-
-  const markerIndex = (template.bodyHtml || "").indexOf("[Custom Body]");
-  if (markerIndex === -1) {
+  if ((template.bodyHtml || "").indexOf("[Custom Body]") === -1) {
     // No declared [Custom Body] slot in this template: the fixed prose must match exactly.
-    return violation(
-      `Rendered body diverges from stored template "${template.type}/${stage}" outside its declared placeholders.`,
-    );
+    return `Rendered body diverges from stored template "${template.type}/${stage}" outside its declared placeholders.`;
   }
+  return `Rendered body diverges from stored template "${template.type}/${stage}" outside its declared placeholders (Custom Body slot excepted).`;
+}
 
-  return violation(
-    `Rendered body diverges from stored template "${template.type}/${stage}" outside its declared placeholders (Custom Body slot excepted).`,
-  );
+// The backend appends its inline-CID footer photo block (web-jam-back footerHtml(), mirrored
+// verbatim in BACKEND_FOOTER_HTML) when the template carries a footerPhotoRef.
+function stripBackendFooter(html: string, template: EmailTemplate): string {
+  if (!template.footerPhotoRef) return html;
+  const footer = BACKEND_FOOTER_HTML.trimStart();
+  const trimmed = html.trimEnd();
+  if (!trimmed.endsWith(footer)) return html;
+  return trimmed.slice(0, trimmed.length - footer.length).replace(/\r?\n$/, "");
 }
 
 /**
@@ -848,17 +871,7 @@ export async function renderPitchesFromBackend(
   const eligible = candidates.filter((c) => c._id && c.email && !c.isExcluded);
   if (eligible.length === 0) return [];
 
-  let year = weekend.year;
-  let month = weekend.month;
-  if (!year || !month) {
-    const d = new Date(weekend.start);
-    if (!Number.isNaN(d.getTime())) {
-      year = year || d.getUTCFullYear();
-      month = month || (d.getUTCMonth() + 1);
-    }
-  }
-  const monthName = MONTH_NAMES[(month || 1) - 1] || "October";
-  const bookingPeriod = options.bookingPeriod || `${monthName} ${year || new Date().getFullYear()}`;
+  const bookingPeriod = resolveBookingPeriod(weekend, options.bookingPeriod);
 
   const untweaked = eligible.filter((c) => !findTweakForCandidate(c, options.tweaks));
   const tweaked = eligible.filter((c) => Boolean(findTweakForCandidate(c, options.tweaks)));
@@ -908,18 +921,6 @@ export async function renderPitchesFromBackend(
   for (const c of eligible) {
     const preview = previewByVenueId.get(String(c._id));
     if (!preview) continue;
-
-    const templateType = resolveVenueTemplateType(c, options.templateType);
-    let templateStage = resolveVenueStage(c, options);
-    if (
-      preview.subject.startsWith("Back at ") ||
-      preview.subject.startsWith("Love to play ")
-    ) {
-      templateStage = "returning";
-    } else if (preview.subject.startsWith("Performance Inquiry:")) {
-      templateStage = "cold";
-    }
-
     pitches.push({
       venueId: c._id,
       venueName: preview.venueName || c.name,
@@ -930,9 +931,26 @@ export async function renderPitchesFromBackend(
       subject: preview.subject,
       body: htmlToPlainText(preview.body || ""),
       htmlBody: preview.body || "",
-      templateType,
-      templateStage,
+      templateType: resolveVenueTemplateType(c, options.templateType),
+      templateStage: resolveVenueStage(c, options),
     });
   }
   return pitches;
+}
+
+/**
+ * Per-venue verification options for a batch rendered with `tweaks`: a tweaked venue's preview
+ * was rendered with its `customIntro`, so its fidelity check must expect that intro rather than
+ * the template's own.
+ */
+export function verificationOptionsFromTweaks(
+  candidates: CandidateVenue[],
+  tweaks?: VenueTweak[] | Map<string, VenueTweak>,
+): Record<string, RenderPitchOptions> {
+  const byVenueId: Record<string, RenderPitchOptions> = {};
+  for (const c of candidates) {
+    const tweak = findTweakForCandidate(c, tweaks);
+    if (c._id && tweak?.customIntro) byVenueId[c._id] = { customIntro: tweak.customIntro };
+  }
+  return byVenueId;
 }

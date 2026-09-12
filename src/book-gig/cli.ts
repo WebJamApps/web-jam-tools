@@ -9,7 +9,11 @@ import {
   renderCandidateTable,
 } from "./candidates.ts";
 export { isPitchableCandidate, renderCandidateTable };
-import { renderPitchesFromBackend, verifyBatchAgainstTemplates } from "./pitch.ts";
+import {
+  renderPitchesFromBackend,
+  verificationOptionsFromTweaks,
+  verifyBatchAgainstTemplates,
+} from "./pitch.ts";
 import { publishAndOpenReport } from "./publish.ts";
 import { executeLinkGig } from "./venue_link.ts";
 import { executeVenueHold } from "./cooldown.ts";
@@ -515,6 +519,7 @@ export async function runBookGigCli(
       eligibleVenues,
       weekend,
       templates,
+      verificationOptionsFromTweaks(eligibleVenues, parsed.tweaks),
     );
     if (!templateVerification.valid) {
       const details = templateVerification.violations
@@ -832,7 +837,13 @@ export async function runBookGigCli(
   // 5b. Verify every rendered email against its stored template before Gate 2 artifact
   // emission or dispatch — a divergence outside declared placeholders refuses the batch (D-50).
   const templates = await fetchTemplates({}, fetchFn);
-  const templateVerification = verifyBatchAgainstTemplates(pitches, candidates, weekend, templates);
+  const templateVerification = verifyBatchAgainstTemplates(
+    pitches,
+    candidates,
+    weekend,
+    templates,
+    verificationOptionsFromTweaks(candidates, parsed.tweaks),
+  );
   if (!templateVerification.valid) {
     const details = templateVerification.violations
       .map((v) => `  - ${v.venueName} (${v.venueId}): ${v.reason}`)

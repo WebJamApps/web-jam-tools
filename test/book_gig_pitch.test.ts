@@ -396,6 +396,7 @@ Deno.test("renderPitch: respects caller-supplied custom templates array for retu
     city: "Salem",
     usState: "VA",
     email: "booking@custombrewery.com",
+    venueType: "PubFestivalBrewery",
     contactName: "Alex",
     reason: { lastGigDate: "2025-06-15" },
   };
