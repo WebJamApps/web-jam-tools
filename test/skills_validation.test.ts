@@ -1001,3 +1001,77 @@ Deno.test("skills/delegate/SKILL.md no longer escalates Flash High up to Sonnet"
     "the superseded escalation ladder placing Sonnet above Flash High must be gone",
   );
 });
+
+Deno.test(
+  "skills/book-gig/SKILL.md defines both approval gates, both refusals, and anti-inference rules",
+  async () => {
+    const text = await Deno.readTextFile("skills/book-gig/SKILL.md");
+
+    // Both gates defined
+    assertStringIncludes(text, "Gate 1 (target venue set approval)");
+    assertStringIncludes(text, "Gate 2 (draft email review loop and content fingerprint approval)");
+    assertStringIncludes(text, "--record-gate1");
+    assertStringIncludes(text, "--record-gate2");
+
+    // Strict anti-inference invariants
+    assertStringIncludes(
+      text,
+      "Approval of draft copy or permission to send must **NEVER** be inferred from candidate list approval or Gate 1 recording.",
+    );
+    assertStringIncludes(
+      text,
+      "AI assistants on all surfaces (Claude Code and agy/Antigravity) are **STRICTLY PROHIBITED** from executing `--send` based on venue list approval alone",
+    );
+
+    // Both refusals: CLI guard and Server-side API guard
+    assertStringIncludes(text, "Command-Line Refusal (CLI Guard)");
+    assertStringIncludes(text, "Server-Side Backend Refusal (API Guard)");
+    assertStringIncludes(text, "--confirm-drafts");
+    assertStringIncludes(text, "POST /outreach/batch");
+
+    // Gate 2 tweak loop, template check, and whole-batch explicit approval
+    assertStringIncludes(text, "--confirm-all");
+    assertStringIncludes(text, "--tweak-venue");
+    assertStringIncludes(text, "Template Divergence Check (D-50)");
+  },
+);
+
+/** Every distinct `/outreach/approval/...` path a file names, without ids or trailing slashes. */
+function approvalEndpoints(source: string): Set<string> {
+  return new Set(source.match(/\/outreach\/approval\/[a-z-]+/g) ?? []);
+}
+
+Deno.test(
+  "skills/book-gig/SKILL.md names only approval endpoints the client actually calls",
+  async () => {
+    // An assertion on a hardcoded path cannot catch a documented endpoint no code serves —
+    // SKILL.md shipped `POST /outreach/approval/draft-copy`, which web-jam-back has never
+    // registered, and every string assertion above still passed. Tie the two files together
+    // instead: what the skill tells an agent to call must be what the client calls.
+    const skill = await Deno.readTextFile("skills/book-gig/SKILL.md");
+    const client = await Deno.readTextFile("src/book-gig/outreach_api.ts");
+
+    const documented = approvalEndpoints(skill);
+    const called = approvalEndpoints(client);
+
+    assertEquals(
+      called.size > 0,
+      true,
+      "the client must call at least one approval endpoint, or this test proves nothing",
+    );
+
+    const invented = [...documented].filter((path) => !called.has(path)).sort();
+    assertEquals(
+      invented,
+      [],
+      `SKILL.md documents approval endpoint(s) no client code calls: ${invented.join(", ")}`,
+    );
+
+    const undocumented = [...called].filter((path) => !documented.has(path)).sort();
+    assertEquals(
+      undocumented,
+      [],
+      `the client calls approval endpoint(s) SKILL.md never documents: ${undocumented.join(", ")}`,
+    );
+  },
+);
