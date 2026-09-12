@@ -501,6 +501,7 @@ Deno.test("renderPitch: generates warm, compliant pitch emails", () => {
     usState: "VA",
     email: "roanoke@starrhill.com",
     secondaryEmail: "booking@starrhill.com",
+    venueType: "PubFestivalBrewery",
   };
 
   const pitch = renderPitch(venue, weekend);

@@ -79,6 +79,7 @@ export interface CandidateVenue {
   priorContactNotes?: string;
   priorGigs?: unknown[];
   outreachEligible?: boolean;
+  bookingStatus?: string;
   gigInterval?: number;
   payAmount?: number;
   resumeBooking?: string | Date | null;

@@ -136,6 +136,7 @@ Deno.test("renderPitch: uses cold template when venue has relationshipStage: 're
     city: "Salem",
     usState: "VA",
     email: "booking@samplepub.com",
+    venueType: "PubFestivalBrewery",
     relationshipStage: "returning",
   };
 
@@ -164,6 +165,7 @@ Deno.test("renderPitch: uses returning template when venue has linked past gig",
     city: "Salem",
     usState: "VA",
     email: "booking@samplepub.com",
+    venueType: "PubFestivalBrewery",
     reason: { lastGigDate: "2025-05-10" },
   };
 
@@ -191,6 +193,7 @@ Deno.test("renderPitch: generates dynamic warm returning phrasing and subject li
     city: "Salem",
     usState: "VA",
     email: "booking@oldesalem.com",
+    venueType: "PubFestivalBrewery",
     contactName: "Matt",
     priorGigs: [{ gigId: "g1", date: "2025-06-20" }],
   };
@@ -286,6 +289,7 @@ Deno.test("renderPitch: falls back to cold template when no notes or prior gigs 
     city: "Salem",
     usState: "VA",
     email: "booking@plaincoldpub.com",
+    venueType: "PubFestivalBrewery",
   };
 
   const pitch = renderPitch(venue, weekend);
@@ -392,6 +396,7 @@ Deno.test("renderPitch: respects caller-supplied custom templates array for retu
     city: "Salem",
     usState: "VA",
     email: "booking@custombrewery.com",
+    venueType: "PubFestivalBrewery",
     contactName: "Alex",
     reason: { lastGigDate: "2025-06-15" },
   };
