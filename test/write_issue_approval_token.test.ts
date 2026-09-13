@@ -562,6 +562,33 @@ Deno.test("CLI: succeeds when the most recent authorizing turn used 'create an i
   }
 });
 
+Deno.test('CLI: succeeds on Josh\'s exact refused message — a leading affirmation plus filler words between verb and noun (web-jam-tools#1000 "Widen file-issue natural-language matcher: leading affirmation + bounded filler words")', async () => {
+  const dir = await Deno.makeTempDir();
+  const tokenPath = `${dir}/file-issue-affirmation-authorized.json`;
+  try {
+    const authEnv = await writeAuthorizingTranscriptFixture(
+      dir,
+      "yes file the new issue and link it to the Epic https://github.com/WebJamApps/web-jam-tools/issues/982",
+    );
+    const res = await runCli([
+      "--session-id",
+      "file-issue-affirmation-session",
+      "--repo",
+      "web-jam-tools",
+      "--title",
+      "Some title",
+      "--token-path",
+      tokenPath,
+    ], envWith(authEnv));
+    assertEquals(res.code, 0, res.stderr);
+    const loaded = loadToken(tokenPath);
+    assert(loaded !== null);
+    assertEquals(loaded?.session_id, "file-issue-affirmation-session");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("CLI: writes the token when the authorizing turn is a real Claude Code /file-issue slash invocation, stored in <command-name> wrapper form (web-jam-tools#920)", async () => {
   const dir = await Deno.makeTempDir();
   const tokenPath = `${dir}/wrapper-form-authorized.json`;
@@ -1308,6 +1335,45 @@ Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — additional shapes the regex 
   assertEquals(filingSkillInvoked("can you file an issue later"), "file-issue");
 });
 
+Deno.test('FILE_ISSUE_INVOCATION_RE: must-match — leading affirmation prefixes (web-jam-tools#1000 "Widen file-issue natural-language matcher: leading affirmation + bounded filler words")', () => {
+  // The real message Josh was refused on: an intervening "the new" between verb and noun (already
+  // fit the old fixed determiner+adjective shape), defeated ONLY by the leading "yes".
+  assertEquals(
+    filingSkillInvoked(
+      "yes file the new issue and link it to the Epic https://github.com/WebJamApps/web-jam-tools/issues/982",
+    ),
+    "file-issue",
+  );
+  assertEquals(filingSkillInvoked("yes, open a ticket for it"), "file-issue");
+  assertEquals(filingSkillInvoked("ok create the new bug report"), "file-issue");
+  assertEquals(filingSkillInvoked("okay, file an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("yeah file a ticket"), "file-issue");
+  assertEquals(filingSkillInvoked("sure, create an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("yep file the bug"), "file-issue");
+});
+
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — a small bounded number of filler words between verb and noun", () => {
+  assertEquals(filingSkillInvoked("file an issue"), "file-issue");
+  assertEquals(filingSkillInvoked("file the issue"), "file-issue");
+  assertEquals(filingSkillInvoked("file a new issue"), "file-issue");
+  assertEquals(filingSkillInvoked("go ahead and file the bug"), "file-issue");
+  assertEquals(filingSkillInvoked("file another separate follow-up issue"), "file-issue");
+  // "quick" was a filler on dev before the bounded repeat replaced the fixed slot — no regression.
+  assertEquals(filingSkillInvoked("file a quick issue"), "file-issue");
+  assertEquals(filingSkillInvoked("create a quick ticket"), "file-issue");
+});
+
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — a demonstrative (this/that) points at an existing issue, not a request to file one", () => {
+  assertEquals(filingSkillInvoked("add that issue to the Epic"), null);
+  assertEquals(filingSkillInvoked("add this issue to the milestone"), null);
+  assertEquals(filingSkillInvoked("open this issue"), null);
+  assertEquals(filingSkillInvoked("open that issue and read it"), null);
+  assertEquals(filingSkillInvoked("yes open this ticket"), null);
+  assertEquals(filingSkillInvoked("make that bug reproducible"), null);
+  assertEquals(filingSkillInvoked("log that bug in the notes"), null);
+  assertEquals(filingSkillInvoked("write that ticket number down"), null);
+});
+
 Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — mention-vs-use and non-invocation text", () => {
   // Mention, not use: neither opens with the verb, so neither can reach the alternation at all.
   assertEquals(filingSkillInvoked("I don't want you to file an issue"), null);
@@ -1320,6 +1386,24 @@ Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — mention-vs-use and non-i
   // A different slash command opening the message is never a file-issue invocation.
   assertEquals(filingSkillInvoked("/work-issue web-jam-tools#800"), null);
   assertEquals(filingSkillInvoked("/book-gig next-weekend"), null);
+});
+
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — negation, non-affirmative openers, and a verb/noun that are far apart", () => {
+  // Negation must still refuse — "yes"/"ok" etc. are the ONLY recognized affirmation openers, and a
+  // negating word right before the verb is not one of them, so the verb group never gets reached.
+  assertEquals(filingSkillInvoked("don't file an issue"), null);
+  assertEquals(filingSkillInvoked("do not file the issue"), null);
+  assertEquals(filingSkillInvoked("no, don't create a ticket"), null);
+  assertEquals(filingSkillInvoked("no, do not create the ticket"), null);
+  assertEquals(filingSkillInvoked("yes, don't file the issue"), null);
+  assertEquals(filingSkillInvoked("ok never file a bug"), null);
+  // Preserve existing question behavior exactly: "can we ..." (not "can you ...") does not match,
+  // and a question opener like "should we" does not match either — unchanged by this widening.
+  assertEquals(filingSkillInvoked("should we file an issue?"), null);
+  assertEquals(filingSkillInvoked("can we file an issue later?"), null);
+  // Verb and noun far apart — the intervening word ("report") is not in the bounded filler list, so
+  // the loop cannot skip past it to reach the noun.
+  assertEquals(filingSkillInvoked("file the report and later issue a refund"), null);
 });
 
 Deno.test("checkTokenWriteAuthorization: three-outcome coverage — holds, does not hold, indeterminate", () => {
