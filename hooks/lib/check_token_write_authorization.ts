@@ -1,16 +1,28 @@
 /**
- * Authorization check for scripts/write_issue_approval_token.ts (web-jam-tools#808).
+ * Authorization check for scripts/write_issue_approval_token.ts (web-jam-tools#808, replaced by
+ * web-jam-tools#1000).
  *
- * Decision 21 of ~/Dropbox/web-jam-llms/Token_Savings/design-issue-enhancements-design-2026-08-23.md:
- * invoking a skill is authorization for what that skill does, so the token writer refuses unless
- * the most recent non-sidechain, own-session user turn invoked one of the two filing skills —
- * design-issue or file-issue — and a dispatched subagent never writes a token at all. This is the
- * same mechanism decision 17 establishes for the work-issue grant (hooks/opus-delegation-gate.sh),
- * applied a second time: it scans the transcript for the most recent authorizing invocation rather
- * than requiring it to be the literal last message, because a `/design-issue` run's Gate 2 approval
- * routinely arrives many turns after the `/design-issue` invocation itself, and requiring the
- * literal last turn would break that legitimate flow (see file header note on scan-vs-last-turn
- * below). It is built on hooks/lib/select_transcript_entry.ts's surface-aware reader (web-jam-tools#841).
+ * web-jam-tools#1000 retired the phrase/slash-command matcher this file used to implement
+ * (FILE_ISSUE_INVOCATION_RE, filingSkillInvoked, nonFilingSlashCommandInvoked — see git history for
+ * that design). Josh, verbatim, on the PR that widened the phrase matcher yet again: "the goal of
+ * the guard is to prevent AGENT not to prevent ME!" A wording matcher over Josh's own typing can
+ * never fully track "does Josh's ordinary phrasing count as approval" without either refusing him
+ * routinely or, eventually, drifting open — the wrong axis to gate on, since Josh is not the party
+ * this guard exists to constrain.
+ *
+ * The replacement gates on two facts a wording matcher can't fake:
+ *
+ *   1. The exact title Josh is approving was actually SHOWN to him, verbatim, by the assistant
+ *      (not by a tool result, a task notification, or a subagent's own turn — those are exactly
+ *      the places an agent could plant a title Josh never saw).
+ *   2. Josh's own most recent HUMAN-TYPED reply came after that title was shown, and is not a
+ *      refusal.
+ *
+ * This makes the check almost entirely wording-independent on Josh's side — "2", "go", "ok", "yes",
+ * a slash command, or a reply that doesn't even mention the title all authorize equally, since what
+ * matters is that he saw the title and didn't say no to it. The only wording test left is a short,
+ * literal refusal-opener list (isRefusalReply) — the sole way Josh can decline what was shown to
+ * him, not the way he approves it.
  *
  * Kept separate from scripts/write_issue_approval_token.ts (rather than inlined) so the pure
  * decision logic is testable via injected entries, matching the pattern
@@ -19,16 +31,12 @@
  */
 
 import {
+  entryConversationId,
   extractEntryText,
-  isOwnSessionUserTurnBoundary,
+  isAntigravityEntry,
+  isHumanPrompt,
   type TranscriptEntry,
 } from "./select_transcript_entry.ts";
-
-/** The two skills decision 21 recognizes as authorizing a token write. Both are filing paths Josh
- * invokes directly — design-issue reaches filing through its own plan gate, file-issue is the
- * standalone path — so recognizing only one would leave the other permanently unable to file. */
-export const AUTHORIZING_FILING_SKILLS = ["design-issue", "file-issue"] as const;
-export type FilingSkill = typeof AUTHORIZING_FILING_SKILLS[number];
 
 /**
  * Claude Code's stored form of a slash-command invocation (web-jam-tools#920). The surface does not
@@ -47,10 +55,9 @@ export type FilingSkill = typeof AUTHORIZING_FILING_SKILLS[number];
  * for the same real invocation, and only recognizing the slashed form left the bare-name form
  * invisible the same way the pre-#920 code left the whole wrapper invisible.
  *
- * Anchored at the START of the trimmed text on purpose, exactly like the bare slash form: this is
- * the same mention-vs-use distinction. Prose that quotes a `<command-name>` element mid-sentence
- * (this doc comment included, were it ever a user turn) is discussing the wrapper, not invoking
- * anything, and must not authorize — nor terminate — anything.
+ * Still used post-web-jam-tools#1000: `hooks/lib/opus_gate.ts` imports this directly for its own,
+ * unrelated slash-command detection, and `textAfterSlashCommand` below reuses it to strip a slash
+ * command's own name off Josh's reply before running the refusal check on what remains.
  */
 const CLAUDE_CODE_COMMAND_NAME_WRAPPER =
   /^(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\s*\/?([a-zA-Z0-9_-]+)\s*<\/command-name>/;
@@ -69,10 +76,7 @@ const CLAUDE_CODE_COMMAND_MESSAGE_ONLY_WRAPPER =
 
 /**
  * Returns the slash command name (lowercased, without its leading `/`) when `text` IS a Claude Code
- * slash invocation stored in wrapper form, or null. Used by both the filing check and the
- * scope-ending check below, so the wrapper form is recognized in both directions: recognizing only
- * the filing half would let an intervening `/work-issue` stay invisible and so widen the gate
- * instead of fixing it (web-jam-tools#920).
+ * slash invocation stored in wrapper form, or null.
  */
 export function slashCommandFromInvocationWrapper(text: string): string | null {
   const trimmed = text.trim();
@@ -84,129 +88,96 @@ export function slashCommandFromInvocationWrapper(text: string): string | null {
 }
 
 /**
- * Returns the non-filing slash command invoked at the start of user-turn text, or null. Recognizes
- * both the bare leading form (`/work-issue …`) and Claude Code's `<command-name>` wrapper form
- * (web-jam-tools#920).
+ * Returns the text a slash-command reply should be refusal-checked against: the `<command-args>`
+ * element's content when present, or "" for a bare wrapper/slash command with no arguments — never
+ * the command name itself, which is never a refusal opener. Non-slash text passes through
+ * unchanged (trimmed).
  *
- * Any intervening slash command (e.g. /work-issue, /book-gig, /handle-gmails) acts as a
- * scope-ending event: once the user invokes a different skill, any earlier filing skill
- * authorization in the session is terminated.
+ * web-jam-tools#1000 acceptance criterion: Josh replying with a bare `/file-issue` (no args) after
+ * seeing a title is an approval, not a refusal — "" is not a refusal opener (isRefusalReply("")
+ * returns false), so it authorizes.
  */
-export function nonFilingSlashCommandInvoked(text: string): string | null {
-  const trimmed = text.trim();
-  const wrapped = slashCommandFromInvocationWrapper(trimmed);
-  if (wrapped && !AUTHORIZING_FILING_SKILLS.includes(wrapped as FilingSkill)) {
-    return `/${wrapped}`;
-  }
-  if (trimmed.startsWith("/")) {
-    const match = trimmed.match(/^\/([a-zA-Z0-9_-]+)/);
-    if (match) {
-      const cmd = match[1].toLowerCase();
-      if (!AUTHORIZING_FILING_SKILLS.includes(cmd as FilingSkill)) {
-        return `/${cmd}`;
-      }
-    }
-  }
-  return null;
+export function textAfterSlashCommand(rawText: string): string {
+  const trimmed = rawText.trim();
+  const argsMatch = trimmed.match(/<command-args>([\s\S]*?)<\/command-args>/);
+  if (argsMatch) return argsMatch[1].trim();
+  if (slashCommandFromInvocationWrapper(trimmed) !== null) return "";
+  const bareSlash = trimmed.match(/^\/[a-zA-Z0-9_-]+\b([\s\S]*)$/);
+  if (bareSlash) return bareSlash[1].trim();
+  return trimmed;
 }
 
 /**
- * True when `trimmed` (already lowercased) opens with `phrase` as a whole invocation, not a
- * substring or a prefix of a longer word — `phrase` must be the entire text, or be followed by
- * whitespace or a sentence-boundary punctuation mark (`, . : ; ! ?`). Shared by the slash-command
- * check and the natural-language phrase check below, since both need the same "opens the message,
- * as itself" anchor and the same "don't match 'file an issued complaint'" word-boundary guard.
+ * The only wording test this file still applies, and only to REFUSE what was already shown to
+ * Josh — never to recognize an approval (see file header). Each opener must be the whole leading
+ * word/phrase, not a prefix of a longer word: `phrase` must be the entire (trimmed, lowercased)
+ * text, or be followed by whitespace or a sentence-boundary punctuation mark (`, . : ; ! ?`).
+ * "nothing to change, file it" is deliberately NOT a refusal — "nothing" starts with "no" but the
+ * next character ("t") is not a word boundary, so the whole-word check correctly rejects it
+ * (web-jam-tools#1000 acceptance criterion).
  */
-function opensWithPhrase(trimmed: string, phrase: string): boolean {
-  if (trimmed === phrase) return true;
-  if (!trimmed.startsWith(phrase)) return false;
-  const next = trimmed[phrase.length];
-  return next === " " || next === "\n" || next === "," || next === "." || next === ":" ||
-    next === ";" || next === "!" || next === "?";
-}
+const REFUSAL_OPENERS = [
+  "not yet",
+  "do not",
+  "hold off",
+  "don't",
+  "dont",
+  "no",
+  "nope",
+  "nah",
+  "stop",
+  "never",
+  "cancel",
+  "wait",
+] as const;
 
-/**
- * Recognizes a natural-language file-issue invocation by SHAPE rather than as an enumerated phrase
- * list (web-jam-tools#973, web-jam-tools#975 fixed one literal phrase at a time and Josh was refused
- * twice in the same day on ordinary phrasings a literal list can never keep up with — "create an
- * issue for JaMmusic then for the work you want to dispatch to Flash" before #975 merged, then
- * "please create a new issue to constrain adding to memory..." right after, because of the leading
- * "please" AND the word "new"). Josh: "use a regex so that I can say various chat messages that =
- * file, create, whatever and issue, ticket, whatever". skills/file-issue/SKILL.md's frontmatter
- * `description` documents the same shape in prose (a filing verb, optionally behind "please"/"can you
- * ...", followed by issue/ticket/bug) — see the drift test tying the two together below — rather than
- * a closed list of literal strings, since a regex's contract is "matches this shape", not
- * "traceable to an enumerated string".
- *
- * Widened again for web-jam-tools#1000 "Widen file-issue natural-language matcher: leading
- * affirmation + bounded filler words": Josh was refused on "yes file the new issue and link it to the
- * Epic https://..." because the leading "yes" affirmation, a normal way Josh approves, was not a
- * recognized opener ("the new" already fit the old determiner+adjective slot). Two additions, neither
- * loosening the anchor:
- *   1. An optional leading affirmation — yes/yeah/yep/ok/okay/sure, with an optional comma — since
- *      Josh routinely opens an approval with one of these before the actual instruction.
- *   2. The single fixed determiner-then-adjective slot is replaced with a BOUNDED repeat (0 to 3) of
- *      one filler-word group (a/an/the/new/another/quick/separate/follow-up), so short runs of
- *      filler in any order/count up to the bound are absorbed, while an unrelated word (as in "file
- *      the report and later issue a refund") still is not — it is not in the filler list, so the
- *      loop stops and the required noun fails to match right after, exactly as before.
- *      The demonstratives "this"/"that" are deliberately NOT fillers: they point at an issue that
- *      already exists, and after the verbs with a non-filing meaning (open/add/make/log/write) they
- *      would authorize filing on "add that issue to the Epic" or "open this issue".
- * Neither change touches the START anchor below, so mention-vs-use and the far-apart-verb-and-noun
- * case are unaffected.
- *
- * `^\s*` is load-bearing (see filingSkillInvoked's doc comment): it is the same mention-vs-use
- * distinction every other check in this file draws. Anchoring at the START of the (already-trimmed)
- * message is what makes "I don't want you to file an issue" and "the file-issue skill says to open an
- * issue" both fail to authorize — neither opens with the verb, so neither can reach the alternation at
- * all. Do not relax this anchor (e.g. to `\b`) to make some hard phrasing match; if a genuine
- * "must-match" case cannot be matched without weakening it, that is a decision for Josh, not something
- * to fix by widening the gate.
- *
- * design-issue/SKILL.md documents no equivalent natural-language trigger — only its slash form,
- * `/design-issue`, appears anywhere in that file — so this regex is deliberately used only for
- * file-issue (see filingSkillInvoked below); inventing a natural-language form for design-issue
- * without a documented source is out of scope.
- */
-export const FILE_ISSUE_INVOCATION_RE =
-  /^\s*(?:(?:yes|yeah|yep|okay|ok|sure)\b(?:\s*,)?\s+)?(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?(?:go\s+ahead\s+and\s+)?(?:file|create|open|draft|make|add|log|raise|write)\s+(?:me\s+)?(?:(?:a|an|the|new|another|quick|separate|follow-up)\b\s+){0,3}(?:issue|ticket|bug\s+report|bug)\b/i;
-
-/**
- * Returns the filing skill a piece of user-turn text invokes, or null. Recognizes three forms:
- *
- * 1. A slash command (`/file-issue`, `/design-issue`) opening the (trimmed) text — a slash command
- *    is only recognized by either surface when it opens the message, so prose that merely mentions
- *    "/file-issue" mid-sentence (discussing the skill, not invoking it) must not count, the same
- *    mention-vs-use distinction this repo's other banned-phrase/invocation checks apply.
- * 1a. The same slash command in Claude Code's `<command-name>` invocation wrapper, which is what
- *    that surface actually stores for a typed `/file-issue` — see CLAUDE_CODE_INVOCATION_WRAPPER.
- *    Same start-of-turn anchor, so the mention-vs-use distinction is unchanged: a `<command-name>`
- *    element quoted inside prose is not the turn's own invocation and does not count
- *    (web-jam-tools#920).
- * 2. For file-issue only, FILE_ISSUE_INVOCATION_RE matching at the start of the text (same
- *    start-of-message anchor — web-jam-tools#866 Suggestion: Josh routinely invokes file-issue by
- *    saying "file an issue" (or "create an issue") rather than typing the slash form, and a session
- *    that started that way was being refused a token write despite a genuine authorizing
- *    invocation; web-jam-tools#973/#975 then found that a literal phrase list can never keep up with
- *    ordinary phrasing, hence the shape-based regex). design-issue has no natural-language form
- *    recognized here; see FILE_ISSUE_INVOCATION_RE's doc comment for why none is invented for it.
- */
-export function filingSkillInvoked(text: string): FilingSkill | null {
+/** True when `text` (Josh's reply, or the argument text of a slash command he typed) opens with a
+ * literal refusal phrase. Empty text is never a refusal — there is nothing to refuse with. */
+export function isRefusalReply(text: string): boolean {
   const trimmed = text.trim().toLowerCase();
-  const wrapped = slashCommandFromInvocationWrapper(trimmed);
-  if (wrapped && AUTHORIZING_FILING_SKILLS.includes(wrapped as FilingSkill)) {
-    return wrapped as FilingSkill;
-  }
-  for (const skill of AUTHORIZING_FILING_SKILLS) {
-    if (opensWithPhrase(trimmed, `/${skill}`)) {
-      return skill;
+  if (trimmed === "") return false;
+  for (const phrase of REFUSAL_OPENERS) {
+    if (trimmed === phrase) return true;
+    if (!trimmed.startsWith(phrase)) continue;
+    const next = trimmed[phrase.length];
+    if (
+      next === " " || next === "\n" || next === "," || next === "." || next === ":" ||
+      next === ";" || next === "!" || next === "?"
+    ) {
+      return true;
     }
   }
-  if (FILE_ISSUE_INVOCATION_RE.test(trimmed)) {
-    return "file-issue";
+  return false;
+}
+
+/**
+ * True when `entry` belongs to the session's own main thread: on Claude Code, not a subagent's
+ * interleaved sidechain entry and not a synthetic API-error entry; on Antigravity, an entry
+ * recorded in the same conversation as `ownConversationId` (a subagent runs in its own isolated
+ * conversation with its own transcript, so a mismatch means the entry is not this session's own).
+ * Role-agnostic — narrow further with isAssistantAuthored or isHumanPrompt.
+ */
+function isOwnSessionMainThreadEntry(
+  entry: TranscriptEntry | null | undefined,
+  ownConversationId: string | null,
+): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (isAntigravityEntry(entry)) {
+    if (!ownConversationId) return false;
+    return entryConversationId(entry) === ownConversationId;
   }
-  return null;
+  return entry.isSidechain !== true && entry.isApiErrorMessage !== true;
+}
+
+/** True when `entry` is model/assistant-authored text, on either surface. Antigravity has no
+ * documented "assistant" type constant the way it does for a prompt (ANTIGRAVITY_PROMPT_ENTRY_TYPE
+ * in select_transcript_entry.ts); the only thing distinguishing a model turn from Josh's own prompt
+ * in that store is that it is NOT that prompt type, so that is what this checks. */
+function isAssistantAuthored(entry: TranscriptEntry): boolean {
+  if (isAntigravityEntry(entry)) {
+    return entry.type !== "USER_INPUT";
+  }
+  return entry.type === "assistant" || entry.message?.role === "assistant";
 }
 
 export interface TokenWriteAuthorizationContext {
@@ -217,36 +188,44 @@ export interface TokenWriteAuthorizationContext {
   ownConversationId: string | null;
   /**
    * True when THIS invocation is itself happening inside a dispatched subagent's turn, so the
-   * write must be refused regardless of what an authorizing turn elsewhere in the transcript says
-   * (acceptance criterion: "A dispatched subagent is refused a token write even when an
-   * authorizing skill invocation is present on the most recent user turn"). Claude Code computes
-   * this mechanically (see tailIsCurrentlySidechain below); Antigravity subagents run in isolated
-   * conversations with their own conversationId and separate transcript containing only the
-   * dispatched task prompt (which does not start with /file-issue or /design-issue), so
-   * isOwnSessionUserTurnBoundary never matches a parent turn and the scan denies it in practice.
+   * write must be refused regardless of what the transcript shows elsewhere (acceptance
+   * criterion: "A dispatched subagent is refused a token write even when the exact title was
+   * shown and approved on the main thread"). Claude Code computes this mechanically (see
+   * tailIsCurrentlySidechain below); Antigravity subagents run in isolated conversations with
+   * their own conversationId and separate transcript, so isOwnSessionMainThreadEntry never
+   * matches a parent turn and the scan denies it in practice.
    */
   isSubagentInvocation: boolean;
+  /** The exact issue titles the write is being requested for. Every one of these must have been
+   * shown verbatim by the assistant before Josh's latest human-typed, non-refusing reply. */
+  titles: readonly string[];
 }
 
 export interface TokenWriteAuthorizationResult {
   ok: boolean;
   reason?: string;
-  /** Which skill's invocation satisfied the check, when ok is true. */
-  skill?: FilingSkill;
 }
 
 /**
- * Decides whether scripts/write_issue_approval_token.ts may write a token for this invocation.
+ * Decides whether scripts/write_issue_approval_token.ts may write a token for `ctx.titles`
+ * (web-jam-tools#1000, replacing web-jam-tools#808's decision 21 phrase check).
  *
- * Scans the transcript BACKWARD (most recent first) for the first own-session user turn
- * (isOwnSessionUserTurnBoundary — already excludes another conversation's/subagent's entries) that
- * invokes /design-issue or /file-issue. The scan is bounded only by one thing — a scope-ending
- * event: any intervening non-filing slash command (/work-issue, etc.) terminates authorization
- * immediately, preventing cross-skill leaks. There is no separate turn-count cap (web-jam-tools#956
- * removed the earlier 20-turn window): the search covers this session's own transcript in full,
- * since a long `/design-issue` run can settle decisions over many turns before filing at the end,
- * and the token this check gates is already bound to this session id and carries its own bounded
- * TTL — a second, shorter expiry here only broke the runs it exists to serve.
+ * Three conditions, all required:
+ *   1. For every requested title, some own-session, main-thread ASSISTANT message contains that
+ *      title verbatim (case-sensitive exact substring — quotes/backticks/markdown around it in the
+ *      assistant's own formatting are irrelevant, since a substring search does not care what
+ *      surrounds the match). The title's "shown point" is the LATEST such assistant entry, since an
+ *      earlier draft of a title is not the one being approved.
+ *   2. The most recent human-typed turn in the session (isHumanPrompt — typed, queued, or an
+ *      accepted suggestion; never a tool_result, task notification, isMeta/system-reminder
+ *      injection, or subagent/sidechain entry) comes AFTER every requested title's shown point. A
+ *      title shown only after Josh's latest reply has not yet been put in front of him.
+ *   3. That most recent human-typed turn is not a refusal (isRefusalReply) — checked against the
+ *      command-argument text when that turn was itself a slash command Josh typed
+ *      (textAfterSlashCommand), since a slash command's own name is never a refusal opener.
+ *
+ * Any condition failing, or the transcript/conversation identity being unreadable or undetermined,
+ * refuses (fails closed) — this function never guesses in the agent's favor.
  */
 export function checkTokenWriteAuthorization(
   ctx: TokenWriteAuthorizationContext,
@@ -263,31 +242,78 @@ export function checkTokenWriteAuthorization(
     return {
       ok: false,
       reason:
-        "Refused: could not determine this invocation's own session/conversation identity, so the authorizing invocation cannot be verified. Failing closed rather than guessing.",
+        "Refused: could not determine this invocation's own session/conversation identity, so Josh's approval cannot be verified. Failing closed rather than guessing.",
     };
   }
 
-  for (let i = ctx.entries.length - 1; i >= 0; i--) {
+  const titles = (ctx.titles ?? []).map((t) => t.trim()).filter((t) => t.length > 0);
+
+  // Condition 1: every requested title's latest verbatim "shown" point.
+  const shownAtIndex = new Map<string, number>();
+  for (let i = 0; i < ctx.entries.length; i++) {
     const entry = ctx.entries[i];
-    if (!isOwnSessionUserTurnBoundary(entry, ctx.ownConversationId)) continue;
+    if (!isOwnSessionMainThreadEntry(entry, ctx.ownConversationId)) continue;
+    if (!isAssistantAuthored(entry)) continue;
     const text = extractEntryText(entry);
-    const otherCmd = nonFilingSlashCommandInvoked(text);
-    if (otherCmd) {
-      return {
-        ok: false,
-        reason:
-          `Refused: a different skill or command (${otherCmd}) was invoked since any filing skill invocation.`,
-      };
+    if (!text) continue;
+    for (const title of titles) {
+      if (text.includes(title)) shownAtIndex.set(title, i);
     }
-    const skill = filingSkillInvoked(text);
-    if (skill) return { ok: true, skill };
   }
 
-  return {
-    ok: false,
-    reason:
-      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or a natural-language phrase like "file an issue"/"create a ticket"/"can you open a bug report"), found anywhere in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
-  };
+  const neverShown = titles.find((t) => !shownAtIndex.has(t));
+  if (neverShown !== undefined) {
+    return {
+      ok: false,
+      reason:
+        `Refused: the exact title ${JSON.stringify(neverShown)} was never shown to Josh, verbatim, in an assistant message in this session — his approval of it cannot be verified.`,
+    };
+  }
+
+  // Condition 2: the most recent human-typed turn, anywhere in the session's own main thread.
+  let lastHumanIndex = -1;
+  let lastHumanEntry: TranscriptEntry | null = null;
+  for (let i = ctx.entries.length - 1; i >= 0; i--) {
+    const entry = ctx.entries[i];
+    if (!isOwnSessionMainThreadEntry(entry, ctx.ownConversationId)) continue;
+    if (isHumanPrompt(entry)) {
+      lastHumanIndex = i;
+      lastHumanEntry = entry;
+      break;
+    }
+  }
+
+  if (lastHumanIndex === -1 || lastHumanEntry === null) {
+    return {
+      ok: false,
+      reason:
+        "Refused: no human-typed reply found anywhere in this session, so Josh's approval cannot be verified.",
+    };
+  }
+
+  const shownTooLate = titles.find((t) => (shownAtIndex.get(t) ?? -1) >= lastHumanIndex);
+  if (shownTooLate !== undefined) {
+    return {
+      ok: false,
+      reason:
+        `Refused: the exact title ${
+          JSON.stringify(shownTooLate)
+        } was shown to Josh only AFTER his most recent reply — he has not had a chance to approve it yet.`,
+    };
+  }
+
+  // Condition 3: that most recent human-typed turn must not be a refusal.
+  const rawReplyText = extractEntryText(lastHumanEntry).trim();
+  const replyTextForRefusalCheck = textAfterSlashCommand(rawReplyText);
+  if (isRefusalReply(replyTextForRefusalCheck)) {
+    return {
+      ok: false,
+      reason:
+        `Refused: Josh's most recent reply ("${rawReplyText}") reads as a refusal, not an approval.`,
+    };
+  }
+
+  return { ok: true };
 }
 
 /**

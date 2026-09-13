@@ -12,14 +12,16 @@
  * Default token path: $HOME/.claude/state/issue-approval-token.json
  * Supports path override via ISSUE_APPROVAL_TOKEN_PATH env var or --token-path flag.
  *
- * web-jam-tools#808: the CLI invocation below refuses to write at all unless
- * hooks/lib/check_token_write_authorization.ts's decision 21 check passes — the most recent
- * own-session, non-sidechain user turn must have invoked /design-issue or /file-issue, and the
- * invocation must not itself be a dispatched subagent's own turn. See resolveWriteContext() below
- * for how the transcript to check is located on each surface. The exported buildApprovalToken/
- * writeApprovalToken/writeApprovalTokenSync functions themselves stay unchanged and unauthorized —
- * they are the mechanical "write this already-authorized token" primitives the CLI block calls
- * only after authorizeWrite() passes; nothing else in this repo imports them directly.
+ * web-jam-tools#1000 (replacing web-jam-tools#808's decision 21 phrase check): the CLI invocation
+ * below refuses to write at all unless hooks/lib/check_token_write_authorization.ts's check
+ * passes — every requested title must have been shown to Josh verbatim by the assistant, his most
+ * recent human-typed reply must come after every one of those titles was shown, that reply must not
+ * be a refusal, and the invocation must not itself be a dispatched subagent's own turn. See
+ * resolveWriteContext() below for how the transcript to check is located on each surface. The
+ * exported buildApprovalToken/writeApprovalToken/writeApprovalTokenSync functions themselves stay
+ * unchanged and unauthorized — they are the mechanical "write this already-authorized token"
+ * primitives the CLI block calls only after authorizeWrite() passes; nothing else in this repo
+ * imports them directly.
  *
  * CLI usage:
  *   deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts \
@@ -263,12 +265,20 @@ export async function resolveWriteContext(
   return { entries: [], ownConversationId: null, isSubagentInvocation: false };
 }
 
-/** Runs the decision 21 authorization check for one CLI invocation. Exported for testing. */
+/**
+ * Runs the web-jam-tools#1000 authorization check (exact title shown, approved by Josh's most
+ * recent human-typed non-refusal reply) for one CLI invocation. Exported for testing.
+ */
 export async function authorizeWrite(
-  options: { sessionId: string; transcriptPath?: string; conversationId?: string },
+  options: {
+    sessionId: string;
+    transcriptPath?: string;
+    conversationId?: string;
+    titles?: string[];
+  },
 ): Promise<TokenWriteAuthorizationResult> {
   const context = await resolveWriteContext(options);
-  return checkTokenWriteAuthorization(context);
+  return checkTokenWriteAuthorization({ ...context, titles: options.titles ?? [] });
 }
 
 if (import.meta.main) {
@@ -365,9 +375,10 @@ Options:
     const expiresAt = args["expires-at"];
     const tokenPath = args["token-path"];
 
-    // web-jam-tools#808: refuse unless the most recent own-session, non-sidechain user turn
-    // invoked /design-issue or /file-issue, and never for a dispatched subagent's own turn — see
-    // hooks/lib/check_token_write_authorization.ts for the decision and this file's
+    // web-jam-tools#1000: refuse unless every requested title was shown to Josh verbatim by the
+    // assistant, his most recent human-typed reply comes after every one of those titles was
+    // shown, and that reply is not a refusal — and never for a dispatched subagent's own turn —
+    // see hooks/lib/check_token_write_authorization.ts for the decision and this file's
     // resolveWriteContext() for how each surface's transcript is located.
     //
     // web-jam-tools#866: transcript/conversation-identity override is a test-only seam, never a
@@ -387,6 +398,7 @@ Options:
       sessionId,
       transcriptPath: testTranscriptPath || undefined,
       conversationId: testConversationId || undefined,
+      titles,
     });
     if (!authorization.ok) {
       console.error(`Refused to write approval token: ${authorization.reason}`);
