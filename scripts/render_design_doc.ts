@@ -652,6 +652,39 @@ export function renderDesignDoc(
       white-space: nowrap;
     }
 
+    .table-pager {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 8px 0 1.5rem;
+      font-size: 0.9rem;
+    }
+
+    .table-pager-btn {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-color);
+      border-radius: 4px;
+      padding: 4px 12px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .table-pager-btn:hover:not(:disabled) {
+      background-color: var(--code-bg);
+    }
+
+    .table-pager-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .table-pager-status {
+      color: var(--text-color);
+      opacity: 0.85;
+    }
+
     pre {
       background-color: var(--code-bg);
       padding: 16px;
@@ -810,6 +843,16 @@ export function renderDesignDoc(
         font-size: 0.95rem;
       }
     }
+
+    @media print {
+      .table-pager {
+        display: none;
+      }
+
+      tr.table-pager-hidden-row {
+        display: table-row !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -835,6 +878,79 @@ export function renderDesignDoc(
         restoreBtn.addEventListener("click", function() {
           layout.classList.remove("nav-collapsed");
         });
+      }
+    })();
+
+    (function() {
+      var PAGE_SIZE = 10;
+      var tables = document.querySelectorAll(".table-wrapper > table");
+      for (var t = 0; t < tables.length; t++) {
+        (function(table) {
+          var tbody = table.querySelector("tbody");
+          if (!tbody) return;
+          var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+          if (rows.length <= PAGE_SIZE) return;
+
+          var wrapper = table.closest(".table-wrapper");
+          if (!wrapper || !wrapper.parentNode) return;
+
+          var totalPages = Math.ceil(rows.length / PAGE_SIZE);
+          var currentPage = 1;
+
+          var pager = document.createElement("div");
+          pager.className = "table-pager";
+          pager.setAttribute("role", "navigation");
+          pager.setAttribute("aria-label", "Table pagination");
+
+          var prevBtn = document.createElement("button");
+          prevBtn.type = "button";
+          prevBtn.className = "table-pager-btn table-pager-prev";
+          prevBtn.textContent = "Previous";
+
+          var status = document.createElement("span");
+          status.className = "table-pager-status";
+
+          var nextBtn = document.createElement("button");
+          nextBtn.type = "button";
+          nextBtn.className = "table-pager-btn table-pager-next";
+          nextBtn.textContent = "Next";
+
+          pager.appendChild(prevBtn);
+          pager.appendChild(status);
+          pager.appendChild(nextBtn);
+          wrapper.parentNode.insertBefore(pager, wrapper.nextSibling);
+
+          function render() {
+            for (var i = 0; i < rows.length; i++) {
+              var visible = i >= (currentPage - 1) * PAGE_SIZE && i < currentPage * PAGE_SIZE;
+              rows[i].style.display = visible ? "" : "none";
+              if (visible) {
+                rows[i].classList.remove("table-pager-hidden-row");
+              } else {
+                rows[i].classList.add("table-pager-hidden-row");
+              }
+            }
+            status.textContent = "Page " + currentPage + " of " + totalPages +
+              " (" + rows.length + " rows)";
+            prevBtn.disabled = currentPage === 1;
+            nextBtn.disabled = currentPage === totalPages;
+          }
+
+          prevBtn.addEventListener("click", function() {
+            if (currentPage > 1) {
+              currentPage--;
+              render();
+            }
+          });
+          nextBtn.addEventListener("click", function() {
+            if (currentPage < totalPages) {
+              currentPage++;
+              render();
+            }
+          });
+
+          render();
+        })(tables[t]);
       }
     })();
   </script>
