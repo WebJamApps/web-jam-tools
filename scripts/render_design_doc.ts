@@ -90,6 +90,22 @@ export function parseInlineMarkdown(text: string): string {
     },
   );
 
+  // Line breaks: only a bare <br>, <br/>, <br />, or <BR> (any case) is
+  // allowed through as a real line break — anything else (attributes,
+  // unclosed tags, lookalike tag names) stays as escaped text below. This
+  // must run after code-span/SVG extraction so a `<br>` written literally
+  // inside a backtick code span or an SVG block is never treated as a
+  // line-break tag.
+  const brTags: string[] = [];
+  placeholderText = placeholderText.replace(
+    /<br\s*\/?\s*>/gi,
+    () => {
+      const idx = brTags.length;
+      brTags.push("<br>");
+      return `%%BRTAG${idx}%%`;
+    },
+  );
+
   placeholderText = escapeHtml(placeholderText);
 
   // Links: [text](url)
@@ -146,6 +162,14 @@ export function parseInlineMarkdown(text: string): string {
     },
   );
 
+  // Restore <br> tags
+  placeholderText = placeholderText.replace(
+    /%%BRTAG(\d+)%%/g,
+    (_match, idxStr) => {
+      return brTags[parseInt(idxStr, 10)];
+    },
+  );
+
   return placeholderText;
 }
 
@@ -154,6 +178,31 @@ export function parseInlineMarkdown(text: string): string {
  */
 function stripCellDecoration(cell: string): string {
   return cell.replace(/[`*_"'“”‘’]/g, "").trim();
+}
+
+/**
+ * Splits a Markdown table row (e.g. "| a | b\| c | d |") into trimmed cells,
+ * treating a backslash-escaped pipe (`\|`) as a literal `|` inside a cell
+ * rather than a column separator.
+ */
+function parseTableRow(rowStr: string): string[] {
+  const inner = rowStr.substring(1, rowStr.length - 1);
+  const cells: string[] = [];
+  let current = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === "\\" && inner[i + 1] === "|") {
+      current += "|";
+      i++;
+    } else if (ch === "|") {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
 }
 
 export function renderDesignDoc(
@@ -205,13 +254,7 @@ export function renderDesignDoc(
             j++;
           }
           if (tableLines.length >= 3) {
-            const parseRow = (rowStr: string) => {
-              return rowStr
-                .substring(1, rowStr.length - 1)
-                .split("|")
-                .map((c) => c.trim());
-            };
-            const headerCells = parseRow(tableLines[0]);
+            const headerCells = parseTableRow(tableLines[0]);
             const versionIdx = headerCells.findIndex((c) =>
               /^version$/i.test(stripCellDecoration(c))
             );
@@ -219,7 +262,7 @@ export function renderDesignDoc(
               /^date$/i.test(stripCellDecoration(c))
             );
             if (versionIdx !== -1 && dateIdx !== -1) {
-              const dataRows = tableLines.slice(2).map(parseRow);
+              const dataRows = tableLines.slice(2).map(parseTableRow);
               if (dataRows.length > 0) {
                 // Newest row is the last row (oldest-to-newest order)
                 const lastRow = dataRows[dataRows.length - 1];
@@ -389,14 +432,8 @@ export function renderDesignDoc(
         i++;
       }
       if (tableLines.length >= 2) {
-        const parseRow = (rowStr: string) => {
-          return rowStr
-            .substring(1, rowStr.length - 1)
-            .split("|")
-            .map((c) => c.trim());
-        };
-        const headerCells = parseRow(tableLines[0]);
-        const bodyRows = tableLines.slice(2).map(parseRow);
+        const headerCells = parseTableRow(tableLines[0]);
+        const bodyRows = tableLines.slice(2).map(parseTableRow);
 
         let tableHtml = `<div class="table-wrapper">\n<table>\n<thead>\n<tr>\n`;
         for (const cell of headerCells) {
@@ -602,7 +639,12 @@ export function renderDesignDoc(
       padding: 8px 12px;
       text-align: left;
       max-width: 500px;
-      overflow-wrap: break-word;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    img, svg {
+      max-width: 100%;
     }
 
     th {
