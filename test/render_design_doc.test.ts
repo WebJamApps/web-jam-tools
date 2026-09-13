@@ -239,6 +239,46 @@ Deno.test("A fixed-pixel-width raw SVG is capped to its container instead of ove
   assertStringIncludes(html, "img, svg {\n      max-width: 100%;\n    }");
 });
 
+function makeRowsTable(rowCount: number): string {
+  const header = "| # | Value |\n|---|---|\n";
+  const rows = Array.from(
+    { length: rowCount },
+    (_, i) => `| ${i + 1} | v${i + 1} |`,
+  ).join("\n");
+  return `# Pagination Test\n\n## Big Table\n\n${header}${rows}\n`;
+}
+
+Deno.test("Table pagination: a table with more than 10 rows emits the pagination script/CSS and every row is still present in the DOM", () => {
+  const html = renderDesignDoc(makeRowsTable(25));
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  // All 25 body rows are present in the static, no-JS DOM (only client-side
+  // JS hides rows at load — nothing is ever dropped server-side).
+  const bodyRowCount = (mainContent.match(/<td>v\d+<\/td>/g) ?? []).length;
+  assertEquals(bodyRowCount, 25);
+
+  // The pagination script and its CSS classes are present.
+  assertStringIncludes(html, "table-pager");
+  assertStringIncludes(html, ".table-pager-btn");
+  assertStringIncludes(html, "table-pager-hidden-row");
+  assertStringIncludes(html, "PAGE_SIZE");
+  assertStringIncludes(html, "@media print {");
+
+  // A print stylesheet forces any JS-hidden row back to visible.
+  assertStringIncludes(
+    html,
+    "tr.table-pager-hidden-row {\n        display: table-row !important;\n      }",
+  );
+});
+
+Deno.test("Table pagination: the pagination initializer only activates on tables with more than 10 rows", () => {
+  const html = renderDesignDoc(makeRowsTable(10));
+  // The script text itself is always emitted (it's a static asset embedded
+  // once per page), so this is a source-level pin on the runtime guard that
+  // keeps it a no-op for <=10 row tables, not a DOM assertion.
+  assertStringIncludes(html, "if (rows.length <= PAGE_SIZE) return;");
+});
+
 Deno.test("AC5: Section navigation includes collapse and restore controls", () => {
   const md = `# Doc with TOC
 
