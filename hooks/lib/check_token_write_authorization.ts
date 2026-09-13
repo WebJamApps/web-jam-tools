@@ -138,6 +138,22 @@ function opensWithPhrase(trimmed: string, phrase: string): boolean {
  * a closed list of literal strings, since a regex's contract is "matches this shape", not
  * "traceable to an enumerated string".
  *
+ * Widened again for web-jam-tools (this change): a bare intervening word between the verb and the
+ * noun still defeated the match — Josh was refused on "yes file the new issue and link it to the
+ * Epic https://..." because (a) the leading "yes" affirmation, a normal way Josh approves, was not a
+ * recognized opener at all, and (b) although "the new" happened to already fit the old two-fixed-slot
+ * determiner+adjective shape, a single filler word like "that"/"this" ("file that issue") did not, nor
+ * did three in a row. Two additions fix this without loosening the anchor:
+ *   1. An optional leading affirmation — yes/yeah/yep/ok/okay/sure, with an optional comma — since
+ *      Josh routinely opens an approval with one of these before the actual instruction.
+ *   2. The single fixed determiner-then-adjective slot is replaced with a BOUNDED repeat (0 to 3) of
+ *      one filler-word group (a/an/the/this/that/new/another/separate/follow-up), so short runs of
+ *      filler in any order/count up to the bound are absorbed, while an unrelated word (as in "file
+ *      the report and later issue a refund") still is not — it is not in the filler list, so the
+ *      loop stops and the required noun fails to match right after, exactly as before.
+ * Neither change touches the START anchor below, so mention-vs-use and the far-apart-verb-and-noun
+ * case are unaffected.
+ *
  * `^\s*` is load-bearing (see filingSkillInvoked's doc comment): it is the same mention-vs-use
  * distinction every other check in this file draws. Anchoring at the START of the (already-trimmed)
  * message is what makes "I don't want you to file an issue" and "the file-issue skill says to open an
@@ -152,7 +168,7 @@ function opensWithPhrase(trimmed: string, phrase: string): boolean {
  * without a documented source is out of scope.
  */
 export const FILE_ISSUE_INVOCATION_RE =
-  /^\s*(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?(?:go\s+ahead\s+and\s+)?(?:file|create|open|draft|make|add|log|raise|write)\s+(?:me\s+)?(?:a|an|the)?\s*(?:new\s+|another\s+|quick\s+|separate\s+)?(?:issue|ticket|bug\s+report|bug)\b/i;
+  /^\s*(?:(?:yes|yeah|yep|okay|ok|sure)\b(?:\s*,)?\s+)?(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?(?:go\s+ahead\s+and\s+)?(?:file|create|open|draft|make|add|log|raise|write)\s+(?:me\s+)?(?:(?:a|an|the|this|that|new|another|separate|follow-up)\b\s+){0,3}(?:issue|ticket|bug\s+report|bug)\b/i;
 
 /**
  * Returns the filing skill a piece of user-turn text invokes, or null. Recognizes three forms:
