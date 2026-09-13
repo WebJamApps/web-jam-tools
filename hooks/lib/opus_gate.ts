@@ -120,9 +120,60 @@ export function asksForOpusSubagent(text: string): boolean {
  * complaint ("why did you use Opus", "don't use Opus") or a bare mention ("the problem with Opus")
  * does not match, so anything that is not plainly a request fails closed.
  */
-export function asksOpusToDoTheWork(text: string): boolean {
+function usesHaveLetMakeGetAskOpus(text: string): boolean {
   return /(?:^\s*|[.!?,;:]\s*|\b(?:please|and|then)\s+)(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?opus\b/im
     .test(text);
+}
+
+/** True when the text plainly says Opus should do something, e.g. "Opus should fix this" — but not
+ * when that's negated ("Opus should not/never/shouldn't ..."). */
+function opusShouldDoIt(text: string): boolean {
+  return /\bopus\s+should\b(?!\s*n['’]?t\b)(?!\s+(?:not|never)\b)/i.test(text);
+}
+
+const OPUS_ROUTING_VERB = /\b(?:send|dispatch|give|hand|assign|route)\b/gi;
+const OPUS_ROUTING_NEGATION = /\b(?:don't|don’t|do\s+not|never|stop|no|not)\b/i;
+
+/**
+ * True when a clause plainly routes work to Opus — "send/dispatch/give/hand/assign/route ... to
+ * (the|a|an)? opus" (Josh: "dispatch this to Opus", "send it to opus") — with:
+ *   - no negation (don't|do not|never|stop|no|not) earlier in the clause or between the verb and
+ *     "to opus" ("don't send this to Opus", "do not dispatch to opus" refuse), and
+ *   - the clause not a question: a "?" must not be the first clause-ending punctuation reached after
+ *     the match ("did you send it to Opus?", "should we send this to Opus?" refuse). Anything else
+ *     between the match and the next "."/"!"/"?" or "and"/"then" — including a "!" or more of the
+ *     same clause running on past it — does not disqualify it: "dispatch to Opus to fix this and you
+ *     seem to have ignored me !?" and "send the PR 1000 fix to OPUS !  this is the THIRD time ..."
+ *     both approve because the "?" they contain lands in a later clause, not this one.
+ * A verb with no direct object ("never give Opus this work") or a different object ("send the report
+ * to Josh, not Opus") never matches at all, since "to opus" must immediately follow.
+ */
+function routesWorkToOpus(text: string): boolean {
+  OPUS_ROUTING_VERB.lastIndex = 0;
+  let verbMatch: RegExpExecArray | null;
+  while ((verbMatch = OPUS_ROUTING_VERB.exec(text))) {
+    const verbEnd = verbMatch.index + verbMatch[0].length;
+
+    let clauseStart = 0;
+    for (const brk of text.slice(0, verbMatch.index).matchAll(/[.!?]+|\b(?:and|then)\b/gi)) {
+      clauseStart = brk.index! + brk[0].length;
+    }
+    if (OPUS_ROUTING_NEGATION.test(text.slice(clauseStart, verbMatch.index))) continue;
+
+    const toOpus = text.slice(verbEnd).match(/^([^.!?]*?)\bto\s+(?:(?:the|a|an)\s+)?opus\b/i);
+    if (!toOpus || OPUS_ROUTING_NEGATION.test(toOpus[1])) continue;
+
+    const nextBreak = text.slice(verbEnd + toOpus[0].length).match(/[.!?]+|\b(?:and|then)\b/i);
+    const isQuestion = !!nextBreak && /^[.!?]+$/.test(nextBreak[0]) && nextBreak[0].includes("?");
+    if (isQuestion) continue;
+
+    return true;
+  }
+  return false;
+}
+
+export function asksOpusToDoTheWork(text: string): boolean {
+  return usesHaveLetMakeGetAskOpus(text) || opusShouldDoIt(text) || routesWorkToOpus(text);
 }
 
 export function approvesOpusSubagent(text: string): boolean {
