@@ -562,7 +562,7 @@ Deno.test("CLI: succeeds when the most recent authorizing turn used 'create an i
   }
 });
 
-Deno.test("CLI: succeeds on Josh's exact refused message — a leading affirmation plus filler words between verb and noun (web-jam-tools, this change)", async () => {
+Deno.test('CLI: succeeds on Josh\'s exact refused message — a leading affirmation plus filler words between verb and noun (web-jam-tools#1000 "Widen file-issue natural-language matcher: leading affirmation + bounded filler words")', async () => {
   const dir = await Deno.makeTempDir();
   const tokenPath = `${dir}/file-issue-affirmation-authorized.json`;
   try {
@@ -1335,7 +1335,7 @@ Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — additional shapes the regex 
   assertEquals(filingSkillInvoked("can you file an issue later"), "file-issue");
 });
 
-Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — leading affirmation prefixes (web-jam-tools, this change)", () => {
+Deno.test('FILE_ISSUE_INVOCATION_RE: must-match — leading affirmation prefixes (web-jam-tools#1000 "Widen file-issue natural-language matcher: leading affirmation + bounded filler words")', () => {
   // The real message Josh was refused on: an intervening "the new" between verb and noun (already
   // fit the old fixed determiner+adjective shape), defeated ONLY by the leading "yes".
   assertEquals(
@@ -1353,12 +1353,25 @@ Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — leading affirmation prefixes
 });
 
 Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — a small bounded number of filler words between verb and noun", () => {
+  assertEquals(filingSkillInvoked("file an issue"), "file-issue");
   assertEquals(filingSkillInvoked("file the issue"), "file-issue");
-  assertEquals(filingSkillInvoked("file that issue"), "file-issue");
   assertEquals(filingSkillInvoked("file a new issue"), "file-issue");
   assertEquals(filingSkillInvoked("go ahead and file the bug"), "file-issue");
-  assertEquals(filingSkillInvoked("please file this issue"), "file-issue");
   assertEquals(filingSkillInvoked("file another separate follow-up issue"), "file-issue");
+  // "quick" was a filler on dev before the bounded repeat replaced the fixed slot — no regression.
+  assertEquals(filingSkillInvoked("file a quick issue"), "file-issue");
+  assertEquals(filingSkillInvoked("create a quick ticket"), "file-issue");
+});
+
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — a demonstrative (this/that) points at an existing issue, not a request to file one", () => {
+  assertEquals(filingSkillInvoked("add that issue to the Epic"), null);
+  assertEquals(filingSkillInvoked("add this issue to the milestone"), null);
+  assertEquals(filingSkillInvoked("open this issue"), null);
+  assertEquals(filingSkillInvoked("open that issue and read it"), null);
+  assertEquals(filingSkillInvoked("yes open this ticket"), null);
+  assertEquals(filingSkillInvoked("make that bug reproducible"), null);
+  assertEquals(filingSkillInvoked("log that bug in the notes"), null);
+  assertEquals(filingSkillInvoked("write that ticket number down"), null);
 });
 
 Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — mention-vs-use and non-invocation text", () => {
@@ -1381,6 +1394,9 @@ Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — negation, non-affirmativ
   assertEquals(filingSkillInvoked("don't file an issue"), null);
   assertEquals(filingSkillInvoked("do not file the issue"), null);
   assertEquals(filingSkillInvoked("no, don't create a ticket"), null);
+  assertEquals(filingSkillInvoked("no, do not create the ticket"), null);
+  assertEquals(filingSkillInvoked("yes, don't file the issue"), null);
+  assertEquals(filingSkillInvoked("ok never file a bug"), null);
   // Preserve existing question behavior exactly: "can we ..." (not "can you ...") does not match,
   // and a question opener like "should we" does not match either — unchanged by this widening.
   assertEquals(filingSkillInvoked("should we file an issue?"), null);
