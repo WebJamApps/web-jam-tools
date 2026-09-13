@@ -155,6 +155,47 @@ Deno.test("asksOpusToDoTheWork: only an instruction naming Opus approves; compla
   assert(approvesOpusSubagent("please use OPUS to fix it"));
 });
 
+// --- routing instructions widening (web-jam-tools PR: "send/dispatch/give/hand/assign/route ...
+// to Opus" and "Opus should ..." count as D-8 approval like "use/have/let/make/get/ask Opus" does) ---
+
+Deno.test("asksOpusToDoTheWork: a plain routing instruction to Opus approves; a negated, questioning, or misdirected one refuses", () => {
+  const approves = [
+    // Josh's real messages that were wrongly refused (web-jam-tools PR #1000 follow-up):
+    "hi i asked you earlier to dispatch to Opus to fix this and you seem to have ignored me !?  https://github.com/WebJamApps/web-jam-tools/pull/1000",
+    "send the PR 1000 fix to OPUS !  this is the THIRD time I have said this what is going on !!!!!!!?",
+    "dispatch this to Opus",
+    "send it to opus",
+    "give this to Opus",
+    "hand the fix to Opus",
+    "assign it to opus",
+    "route this to Opus",
+    "Opus should fix this",
+    // already passed before this change; must keep passing:
+    "let Opus do it",
+    "please use OPUS to fix this",
+    "/pr-review web-jam-tools#1000 dispatch to Opus subagent",
+  ];
+  for (const text of approves) assert(asksOpusToDoTheWork(text), text);
+
+  const refuses = [
+    "why did you use Opus",
+    "don't send this to Opus",
+    "do not dispatch to opus",
+    "never give Opus this work",
+    "stop sending everything to Opus",
+    "Opus should not be doing this",
+    "the problem with Opus is cost",
+    "did you send it to Opus?",
+    "should we send this to Opus?",
+    "Sonnet, not Opus",
+    "send the report to Josh, not Opus",
+    "Opusly",
+    "opuses",
+    "",
+  ];
+  for (const text of refuses) assert(!asksOpusToDoTheWork(text), text);
+});
+
 Deno.test("resolveSessionFiles: main transcript and subagent transcript resolve to the same files", () => {
   assertEquals(resolveSessionFiles(MAIN), FILES);
   assertEquals(resolveSessionFiles(`${SUBAGENTS}/agent-abc.jsonl`), FILES);
