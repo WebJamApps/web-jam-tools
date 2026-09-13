@@ -172,11 +172,111 @@ Deno.test("AC3 & AC4: Table styling preserves narrow columns and enables wrapper
   // Verifies table CSS rules in generated HTML
   assertStringIncludes(html, "width: max-content;");
   assertStringIncludes(html, "max-width: 500px;");
-  assertStringIncludes(html, "overflow-wrap: break-word;");
+  assertStringIncludes(html, "overflow-wrap: anywhere;");
+  assertStringIncludes(html, "word-break: break-word;");
   assertStringIncludes(html, "white-space: nowrap;");
   assertStringIncludes(html, ".table-wrapper, pre");
   assertStringIncludes(html, "overflow-x: auto;");
   assertStringIncludes(html, "max-width: 100%;");
+});
+
+Deno.test("Every rendered <table> is wrapped in a horizontally-scrollable container, and the wrapping CSS is present", () => {
+  const md = `# Multi-Table Test
+
+## First Table
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+## Second Table
+
+| X | Y | Z |
+|---|---|---|
+| a | b | c |
+| d | e | f |
+`;
+  const html = renderDesignDoc(md);
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  const tableCount = (mainContent.match(/<table>/g) ?? []).length;
+  const wrapperCount = (mainContent.match(/<div class="table-wrapper">/g) ?? []).length;
+  assertEquals(tableCount, 2);
+  assertEquals(wrapperCount, 2);
+  // Every table-wrapper must directly precede its <table> (i.e. the table
+  // itself, not some other element, is what's placed inside the scroll
+  // container) so a table can never render outside its wrapper.
+  for (const match of mainContent.matchAll(/<div class="table-wrapper">\s*<table>/g)) {
+    assertStringIncludes(match[0], "<table>");
+  }
+
+  // The wrapping CSS that makes the container (not the page) scroll.
+  assertStringIncludes(html, ".table-wrapper, pre {");
+  assertStringIncludes(html, "overflow-x: auto;");
+  assertStringIncludes(html, "max-width: 100%;");
+
+  // Images/SVGs are capped so a fixed-pixel-width diagram cannot force page
+  // scroll (web-jam-tools responsiveness fix).
+  assertStringIncludes(html, "img, svg {");
+});
+
+Deno.test("A fixed-pixel-width raw SVG is capped to its container instead of overflowing the page", () => {
+  const md = `# Wide SVG Test
+
+## Diagram
+
+<svg width="2000" height="200" viewBox="0 0 2000 200">
+  <rect x="0" y="0" width="2000" height="200" fill="blue" />
+</svg>
+`;
+  const html = renderDesignDoc(md);
+
+  // The raw width="2000" attribute is preserved in the markup (we don't
+  // rewrite the SVG's own attributes)...
+  assertStringIncludes(html, '<svg width="2000" height="200" viewBox="0 0 2000 200">');
+  // ...but the stylesheet caps it to the container so it cannot force
+  // document.documentElement.scrollWidth past the viewport width.
+  assertStringIncludes(html, "img, svg {\n      max-width: 100%;\n    }");
+});
+
+function makeRowsTable(rowCount: number): string {
+  const header = "| # | Value |\n|---|---|\n";
+  const rows = Array.from(
+    { length: rowCount },
+    (_, i) => `| ${i + 1} | v${i + 1} |`,
+  ).join("\n");
+  return `# Pagination Test\n\n## Big Table\n\n${header}${rows}\n`;
+}
+
+Deno.test("Table pagination: a table with more than 10 rows emits the pagination script/CSS and every row is still present in the DOM", () => {
+  const html = renderDesignDoc(makeRowsTable(25));
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  // All 25 body rows are present in the static, no-JS DOM (only client-side
+  // JS hides rows at load — nothing is ever dropped server-side).
+  const bodyRowCount = (mainContent.match(/<td>v\d+<\/td>/g) ?? []).length;
+  assertEquals(bodyRowCount, 25);
+
+  // The pagination script and its CSS classes are present.
+  assertStringIncludes(html, "table-pager");
+  assertStringIncludes(html, ".table-pager-btn");
+  assertStringIncludes(html, "table-pager-hidden-row");
+  assertStringIncludes(html, "PAGE_SIZE");
+  assertStringIncludes(html, "@media print {");
+
+  // A print stylesheet forces any JS-hidden row back to visible.
+  assertStringIncludes(
+    html,
+    "tr.table-pager-hidden-row {\n        display: table-row !important;\n      }",
+  );
+});
+
+Deno.test("Table pagination: the pagination initializer only activates on tables with more than 10 rows", () => {
+  const html = renderDesignDoc(makeRowsTable(10));
+  // The script text itself is always emitted (it's a static asset embedded
+  // once per page), so this is a source-level pin on the runtime guard that
+  // keeps it a no-op for <=10 row tables, not a DOM assertion.
+  assertStringIncludes(html, "if (rows.length <= PAGE_SIZE) return;");
 });
 
 Deno.test("AC5: Section navigation includes collapse and restore controls", () => {
@@ -250,6 +350,88 @@ Section text.
   assertFalse(mainWithoutTable.includes("Version:"));
   assertFalse(mainWithoutTable.includes("Revised:"));
   assertStringIncludes(mainWithoutTable, "<h1>Clean Title</h1>");
+});
+
+Deno.test("parseInlineMarkdown renders <br> variants as real line breaks in table cells", () => {
+  assertEquals(parseInlineMarkdown("a<br>b"), "a<br>b");
+  assertEquals(parseInlineMarkdown("a<br/>b"), "a<br>b");
+  assertEquals(parseInlineMarkdown("a<br />b"), "a<br>b");
+  assertEquals(parseInlineMarkdown("a<BR>b"), "a<br>b");
+  assertEquals(
+    parseInlineMarkdown("1. Option A (Rec)<br>2. Option B<br>3. Option C"),
+    "1. Option A (Rec)<br>2. Option B<br>3. Option C",
+  );
+});
+
+Deno.test("parseInlineMarkdown keeps unsafe or malformed <br>-like input escaped as text", () => {
+  assertEquals(
+    parseInlineMarkdown('<br onclick="x">'),
+    "&lt;br onclick=&quot;x&quot;&gt;",
+  );
+  assertEquals(
+    parseInlineMarkdown('<br style="x">'),
+    "&lt;br style=&quot;x&quot;&gt;",
+  );
+  assertEquals(
+    parseInlineMarkdown("<script>alert(1)</script>"),
+    "&lt;script&gt;alert(1)&lt;/script&gt;",
+  );
+  assertEquals(
+    parseInlineMarkdown("<img src=x onerror=alert(1)>"),
+    "&lt;img src=x onerror=alert(1)&gt;",
+  );
+  assertEquals(parseInlineMarkdown("<b>bold</b>"), "&lt;b&gt;bold&lt;/b&gt;");
+  assertEquals(parseInlineMarkdown("<brx>"), "&lt;brx&gt;");
+  assertEquals(parseInlineMarkdown("<br"), "&lt;br");
+});
+
+Deno.test("parseInlineMarkdown never double-unescapes an already-escaped &lt;br&gt; entity into a tag", () => {
+  const html = parseInlineMarkdown("literal &lt;br&gt; text");
+  assertStringIncludes(html, "&amp;lt;br&amp;gt;");
+  assertFalse(html.includes("<br>"));
+});
+
+Deno.test("parseInlineMarkdown keeps <br> literal inside a backtick code span", () => {
+  const html = parseInlineMarkdown("Use `<br>` for a line break.");
+  assertStringIncludes(html, "<code>&lt;br&gt;</code>");
+  // Only the code-span's own <code> tag should be present — no bare <br> tag.
+  assertFalse(html.replace("<code>&lt;br&gt;</code>", "").includes("<br>"));
+});
+
+Deno.test("Design-doc table cells with <br> render real line breaks, not literal &lt;br&gt; text", () => {
+  const md = `# Decisions Test
+
+## Decisions
+
+| # | Question | Options |
+|---|---|---|
+| 1 | Which approach? | 1. Option A (Rec)<br>2. Option B<br>3. Option C |
+`;
+  const html = renderDesignDoc(md);
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  assertFalse(mainContent.includes("&lt;br&gt;"));
+  assertStringIncludes(
+    mainContent,
+    "<td>1. Option A (Rec)<br>2. Option B<br>3. Option C</td>",
+  );
+});
+
+Deno.test("Optional fix: escaped pipe (\\|) in a table cell renders as a literal | without splitting the cell", () => {
+  const md = `# Escaped Pipe Test
+
+## Table
+
+| Name | Formula |
+|---|---|
+| Sum | a \\| b |
+`;
+  const html = renderDesignDoc(md);
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  // The row must still have exactly 2 columns (not split into 3 by the escaped pipe).
+  assertStringIncludes(mainContent, "<td>Sum</td>");
+  assertStringIncludes(mainContent, "<td>a | b</td>");
 });
 
 Deno.test("renderDesignDocFile reads markdown file and writes HTML", () => {
