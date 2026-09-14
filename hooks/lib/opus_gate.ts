@@ -113,67 +113,61 @@ export function asksForOpusSubagent(text: string): boolean {
   return /\bopus\s+sub-?agents?\b/i.test(text);
 }
 
-/**
- * True when the text instructs Opus to do the work, e.g. "please use OPUS to fix this" or "have Opus
- * fix it" (D-8). Only an instruction counts: use/have/let/make/get/ask must open the text, a line or a
- * clause (after punctuation, "please", "and" or "then"), then an optional article, then "opus". A
- * complaint ("why did you use Opus", "don't use Opus") or a bare mention ("the problem with Opus")
- * does not match, so anything that is not plainly a request fails closed.
- */
-function usesHaveLetMakeGetAskOpus(text: string): boolean {
-  return /(?:^\s*|[.!?,;:]\s*|\b(?:please|and|then)\s+)(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?opus\b/im
-    .test(text);
-}
+/** Where an instruction may start: the text, a line, or a clause (after punctuation, "please", "and" or "then"). */
+const CLAUSE_OPENER = String.raw`(?:^\s*|[.!?,;:]\s*|\b(?:please|and|then)\s+)`;
 
-/** True when the text plainly says Opus should do something, e.g. "Opus should fix this" — but not
- * when that's negated ("Opus should not/never/shouldn't ..."). */
-function opusShouldDoIt(text: string): boolean {
-  return /\bopus\s+should\b(?!\s*n['’]?t\b)(?!\s+(?:not|never)\b)/i.test(text);
-}
+const USE_HAVE_LET_MAKE_GET_ASK_OPUS = new RegExp(
+  String.raw`${CLAUSE_OPENER}(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?opus\b`,
+  "im",
+);
 
-const OPUS_ROUTING_VERB = /\b(?:send|dispatch|give|hand|assign|route)\b/gi;
-const OPUS_ROUTING_NEGATION = /\b(?:don't|don’t|do\s+not|never|stop|no|not)\b/i;
+/** "send/dispatch/give/hand/assign/route <object>? to (the|a|an)? opus"; group 1 is the object. */
+const ROUTES_TO_OPUS = new RegExp(
+  String
+    .raw`${CLAUSE_OPENER}(?:send|dispatch|give|hand|assign|route)\s+(?:([^.!?,;:\n]*?)\s+)?to\s+(?:(?:the|a|an)\s+)?opus\b`,
+  "gim",
+);
+
+const NEGATION =
+  /\b(?:not|no|never|stop|nothing|none|cannot|\w+n['’]t|dont|didnt|doesnt|wont|cant|shouldnt|wouldnt)\b/i;
 
 /**
- * True when a clause plainly routes work to Opus — "send/dispatch/give/hand/assign/route ... to
- * (the|a|an)? opus" (Josh: "dispatch this to Opus", "send it to opus") — with:
- *   - no negation (don't|do not|never|stop|no|not) earlier in the clause or between the verb and
- *     "to opus" ("don't send this to Opus", "do not dispatch to opus" refuse), and
- *   - the clause not a question: a "?" must not be the first clause-ending punctuation reached after
- *     the match ("did you send it to Opus?", "should we send this to Opus?" refuse). Anything else
- *     between the match and the next "."/"!"/"?" or "and"/"then" — including a "!" or more of the
- *     same clause running on past it — does not disqualify it: "dispatch to Opus to fix this and you
- *     seem to have ignored me !?" and "send the PR 1000 fix to OPUS !  this is the THIRD time ..."
- *     both approve because the "?" they contain lands in a later clause, not this one.
- * A verb with no direct object ("never give Opus this work") or a different object ("send the report
- * to Josh, not Opus") never matches at all, since "to opus" must immediately follow.
+ * True when a routing verb opening a clause sends work to Opus, with no negation earlier in that
+ * clause or in the object ("don't take this and send it to Opus", "send nothing to Opus"), and the
+ * clause not a question: "?" must not be the first clause-ending punctuation after the match
+ * ("send it to Opus?"). A "?" in a later clause does not count.
  */
 function routesWorkToOpus(text: string): boolean {
-  OPUS_ROUTING_VERB.lastIndex = 0;
-  let verbMatch: RegExpExecArray | null;
-  while ((verbMatch = OPUS_ROUTING_VERB.exec(text))) {
-    const verbEnd = verbMatch.index + verbMatch[0].length;
+  ROUTES_TO_OPUS.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ROUTES_TO_OPUS.exec(text))) {
+    const verbStart = match.index + match[0].search(/(?:send|dispatch|give|hand|assign|route)\b/i);
+    const clauseStart = Math.max(
+      ...[".", "!", "?", ",", ";", ":", "\n"].map((c) => text.lastIndexOf(c, verbStart - 1)),
+    ) + 1;
+    const negated = NEGATION.test(text.slice(clauseStart, verbStart)) ||
+      NEGATION.test(match[1] ?? "");
 
-    let clauseStart = 0;
-    for (const brk of text.slice(0, verbMatch.index).matchAll(/[.!?]+|\b(?:and|then)\b/gi)) {
-      clauseStart = brk.index! + brk[0].length;
-    }
-    if (OPUS_ROUTING_NEGATION.test(text.slice(clauseStart, verbMatch.index))) continue;
+    const nextBreak = text.slice(match.index + match[0].length).match(/[.!?]+|\b(?:and|then)\b/i);
+    const isQuestion = !!nextBreak && nextBreak[0].includes("?");
 
-    const toOpus = text.slice(verbEnd).match(/^([^.!?]*?)\bto\s+(?:(?:the|a|an)\s+)?opus\b/i);
-    if (!toOpus || OPUS_ROUTING_NEGATION.test(toOpus[1])) continue;
-
-    const nextBreak = text.slice(verbEnd + toOpus[0].length).match(/[.!?]+|\b(?:and|then)\b/i);
-    const isQuestion = !!nextBreak && /^[.!?]+$/.test(nextBreak[0]) && nextBreak[0].includes("?");
-    if (isQuestion) continue;
-
-    return true;
+    if (!negated && !isQuestion) return true;
   }
   return false;
 }
 
+/**
+ * True when the text instructs Opus to do the work (D-8): "please use OPUS to fix this", "have Opus
+ * fix it", "dispatch this to Opus", "send the fix to OPUS". Only an instruction counts: the verb
+ * (use/have/let/make/get/ask before "opus", or send/dispatch/give/hand/assign/route before "to opus")
+ * must open the text, a line or a clause. A complaint or question ("why did you send this to Opus",
+ * "should we send this to Opus", "you shouldn't send it to Opus"), a statement about Opus ("Opus
+ * should only be used for design") or a bare mention ("the problem with Opus") does not match, so
+ * anything that is not plainly a request fails closed — including an instruction reported
+ * second-hand ("I asked you earlier to dispatch to Opus"), which has the same shape as a complaint.
+ */
 export function asksOpusToDoTheWork(text: string): boolean {
-  return usesHaveLetMakeGetAskOpus(text) || opusShouldDoIt(text) || routesWorkToOpus(text);
+  return USE_HAVE_LET_MAKE_GET_ASK_OPUS.test(text) || routesWorkToOpus(text);
 }
 
 export function approvesOpusSubagent(text: string): boolean {

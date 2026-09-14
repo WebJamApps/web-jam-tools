@@ -155,45 +155,66 @@ Deno.test("asksOpusToDoTheWork: only an instruction naming Opus approves; compla
   assert(approvesOpusSubagent("please use OPUS to fix it"));
 });
 
-// --- routing instructions widening (web-jam-tools PR: "send/dispatch/give/hand/assign/route ...
-// to Opus" and "Opus should ..." count as D-8 approval like "use/have/let/make/get/ask Opus" does) ---
-
-Deno.test("asksOpusToDoTheWork: a plain routing instruction to Opus approves; a negated, questioning, or misdirected one refuses", () => {
+Deno.test("asksOpusToDoTheWork: a routing instruction to Opus that opens a clause approves; a complaint, question, negation or statement refuses", () => {
   const approves = [
-    // Josh's real messages that were wrongly refused (web-jam-tools PR #1000 follow-up):
-    "hi i asked you earlier to dispatch to Opus to fix this and you seem to have ignored me !?  https://github.com/WebJamApps/web-jam-tools/pull/1000",
+    // Josh's real message that was wrongly refused (web-jam-tools PR 1000 follow-up):
     "send the PR 1000 fix to OPUS !  this is the THIRD time I have said this what is going on !!!!!!!?",
     "dispatch this to Opus",
+    "dispatch to Opus",
     "send it to opus",
-    "give this to Opus",
+    "please send it to Opus",
+    "yes, give this to Opus",
     "hand the fix to Opus",
     "assign it to opus",
     "route this to Opus",
-    "Opus should fix this",
-    // already passed before this change; must keep passing:
-    "let Opus do it",
+    "ok and send it to the Opus agent",
     "please use OPUS to fix this",
-    "/pr-review web-jam-tools#1000 dispatch to Opus subagent",
+    "let Opus do it",
   ];
   for (const text of approves) assert(asksOpusToDoTheWork(text), text);
 
   const refuses = [
+    // An instruction reported second-hand has the same shape as a complaint, so it fails closed:
+    "hi i asked you earlier to dispatch to Opus to fix this and you seem to have ignored me !?  https://github.com/WebJamApps/web-jam-tools/pull/1000",
+    // Complaints and questions, with or without a "?":
     "why did you use Opus",
-    "don't send this to Opus",
-    "do not dispatch to opus",
-    "never give Opus this work",
-    "stop sending everything to Opus",
-    "Opus should not be doing this",
-    "the problem with Opus is cost",
+    "why did you send this to Opus",
+    "who told you to dispatch this to Opus",
+    "should we send this to Opus",
+    "did you dispatch it to Opus and why",
     "did you send it to Opus?",
     "should we send this to Opus?",
+    "send it to Opus?",
+    // Negations, including contractions and a negated object:
+    "don't send this to Opus",
+    "do not dispatch to opus",
+    "please don't send it to Opus",
+    "you shouldn't send this to Opus",
+    "I didn't send it to Opus",
+    "you won't send it to opus",
+    "don't take this and send it to Opus",
+    "stop, send nothing to Opus",
+    "stop send it to Opus",
+    "give nothing to Opus",
+    "never give Opus this work",
+    "stop sending everything to Opus",
+    // Statements about Opus:
+    "Opus should fix this",
+    "Opus should not be doing this",
+    "I don't think Opus should do this",
+    "Opus should only be used for design",
+    "can we avoid Opus? Opus should be the last resort",
+    "the problem with Opus is cost",
+    // Misdirected or not the word "opus":
     "Sonnet, not Opus",
     "send the report to Josh, not Opus",
-    "Opusly",
-    "opuses",
+    "send it to Opusly",
+    "send it to opuses",
     "",
   ];
   for (const text of refuses) assert(!asksOpusToDoTheWork(text), text);
+
+  assert(approvesOpusSubagent("/pr-review web-jam-tools#1000 dispatch to Opus subagent"));
 });
 
 Deno.test("resolveSessionFiles: main transcript and subagent transcript resolve to the same files", () => {
