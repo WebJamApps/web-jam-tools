@@ -161,7 +161,7 @@ if [ "$kind" = "subagent" ]; then
 In auto mode a Sonnet or Haiku subagent may edit. An Opus subagent may edit only when the message Josh typed to ask for it contains \"opus edit ok\", asks for an Opus subagent, or asks Opus to do the work.
 $why"
 else
-  reason="⛔ Opus delegation gate: refused $what.
+  reason="⛔ Opus delegation gate: refused ${via_bash:+a }$what.
 Repository code must not be edited directly on Opus — implementation work belongs on a cheaper tier.
 To delegate:
   • Backend / contained coding work: spawn a subagent with model: \"sonnet\" (or Haiku)
