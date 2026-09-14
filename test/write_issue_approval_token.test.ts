@@ -1406,6 +1406,25 @@ Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — negation, non-affirmativ
   assertEquals(filingSkillInvoked("file the report and later issue a refund"), null);
 });
 
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-match — plural nouns (Josh's 'file the issues' was refused a token write)", () => {
+  assertEquals(filingSkillInvoked("file the issues"), "file-issue");
+  assertEquals(filingSkillInvoked("yes file the issues"), "file-issue");
+  assertEquals(filingSkillInvoked("create the tickets"), "file-issue");
+  assertEquals(filingSkillInvoked("file the bugs"), "file-issue");
+  assertEquals(filingSkillInvoked("file the bug reports"), "file-issue");
+  assertEquals(filingSkillInvoked("please create new issues"), "file-issue");
+});
+
+Deno.test("FILE_ISSUE_INVOCATION_RE: must-NOT-match — the plural widening keeps the word boundary, filler list and start anchor", () => {
+  // The optional "s" sits before the same trailing \b, so a longer word still fails.
+  assertEquals(filingSkillInvoked("file an issued complaint"), null);
+  assertEquals(filingSkillInvoked("file issuesx"), null);
+  // "those" is not a filler word, so it points at existing issues rather than asking to file them.
+  assertEquals(filingSkillInvoked("add those issues to the Epic"), null);
+  // Mention, not use: the start anchor still refuses a verb that does not open the message.
+  assertEquals(filingSkillInvoked("I don't want you to file the issues"), null);
+});
+
 Deno.test("checkTokenWriteAuthorization: three-outcome coverage — holds, does not hold, indeterminate", () => {
   // Outcome 1: condition holds — an authorizing natural-language invocation is found and authorizes.
   const holds = checkTokenWriteAuthorization({

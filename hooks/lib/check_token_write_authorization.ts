@@ -156,6 +156,11 @@ function opensWithPhrase(trimmed: string, phrase: string): boolean {
  * Neither change touches the START anchor below, so mention-vs-use and the far-apart-verb-and-noun
  * case are unaffected.
  *
+ * Each noun also accepts its plural (issues/tickets/bugs/bug reports): Josh was refused a token write
+ * on "file the issues" when approving a batch, which is normal in /design-issue Phase 3, because the
+ * trailing `\b` failed on the "s". The optional `s` sits before that same `\b`, so "file an issued
+ * complaint" and "file issuesx" still do not match.
+ *
  * `^\s*` is load-bearing (see filingSkillInvoked's doc comment): it is the same mention-vs-use
  * distinction every other check in this file draws. Anchoring at the START of the (already-trimmed)
  * message is what makes "I don't want you to file an issue" and "the file-issue skill says to open an
@@ -170,7 +175,7 @@ function opensWithPhrase(trimmed: string, phrase: string): boolean {
  * without a documented source is out of scope.
  */
 export const FILE_ISSUE_INVOCATION_RE =
-  /^\s*(?:(?:yes|yeah|yep|okay|ok|sure)\b(?:\s*,)?\s+)?(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?(?:go\s+ahead\s+and\s+)?(?:file|create|open|draft|make|add|log|raise|write)\s+(?:me\s+)?(?:(?:a|an|the|new|another|quick|separate|follow-up)\b\s+){0,3}(?:issue|ticket|bug\s+report|bug)\b/i;
+  /^\s*(?:(?:yes|yeah|yep|okay|ok|sure)\b(?:\s*,)?\s+)?(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?(?:go\s+ahead\s+and\s+)?(?:file|create|open|draft|make|add|log|raise|write)\s+(?:me\s+)?(?:(?:a|an|the|new|another|quick|separate|follow-up)\b\s+){0,3}(?:issues?|tickets?|bug\s+reports?|bugs?)\b/i;
 
 /**
  * Returns the filing skill a piece of user-turn text invokes, or null. Recognizes three forms:
