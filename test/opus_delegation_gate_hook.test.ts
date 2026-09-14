@@ -670,12 +670,103 @@ Deno.test("empty transcript file is denied (fail-closed)", async () => {
 
 // --- Matcher regex verification ---
 
-Deno.test("install-hooks.sh matcher Write|Edit|NotebookEdit matches Edit, Write, and NotebookEdit", () => {
-  const matcher = "Write|Edit|NotebookEdit";
-  const re = new RegExp(`^(?:${matcher})$`);
+Deno.test("install-hooks.sh registers the gate on Bash, Write, Edit and NotebookEdit", async () => {
+  const installer = await Deno.readTextFile(new URL("../scripts/install-hooks.sh", import.meta.url));
+  const entry = installer.match(/"([^"]*)::opus-delegation-gate\.sh"/);
+  assert(entry, "opus-delegation-gate.sh is registered in install-hooks.sh");
+  const re = new RegExp(`^(?:${entry[1]})$`);
   assertEquals(re.test("Edit"), true);
   assertEquals(re.test("Write"), true);
   assertEquals(re.test("NotebookEdit"), true);
-  assertEquals(re.test("Bash"), false);
+  assertEquals(re.test("Bash"), true);
   assertEquals(re.test("Read"), false);
+});
+
+// --- Bash: a file write through Bash is gated like Edit/Write ---
+
+const REPO_DIR = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+
+function bashPayload(command: string, transcript_path: string, extra: Record<string, unknown> = {}) {
+  return { tool_name: "Bash", tool_input: { command }, cwd: REPO_DIR, transcript_path, ...extra };
+}
+
+const UNAUTHORIZED_OPUS = [userTurn("please look at this"), assistantTurn("claude-opus-5")];
+
+const BASH_WRITES_REFUSED = [
+  "python3 - <<'EOF'\nopen('hooks/x.ts','w').write('x')\nEOF",
+  "sed -i 's/a/b/' src/a.ts",
+  "echo x > src/a.ts",
+  "cat foo | tee src/a.ts",
+  `cd ${REPO_DIR} && node -e "require('fs').writeFileSync('src/a.ts', 'x')"`,
+];
+
+const BASH_NON_WRITES_ALLOWED = [
+  "git commit -m x",
+  "deno task test",
+  "grep -n foo src/a.ts",
+  "echo hi 2>&1",
+  "ls > /dev/null",
+  "git status && git diff && git log --oneline -5",
+  "gh pr view 1 --json title",
+];
+
+Deno.test("Bash: an unapproved Opus session's file-writing command is refused like an Edit", async () => {
+  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    for (const command of BASH_WRITES_REFUSED) {
+      const res = await runHook(bashPayload(command, transcript_path));
+      assertEquals(res.code, 0, command);
+      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+    }
+  });
+});
+
+Deno.test("Bash: commands that write no file, or write only outside a git working tree, are allowed", async () => {
+  const outside = await Deno.makeTempDir();
+  try {
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const commands = [
+        ...BASH_NON_WRITES_ALLOWED,
+        `echo x > ${outside}/notes.md`,
+        `sed -i 's/a/b/' ${outside}/notes.md`,
+        `python3 - <<'EOF'\nopen('${outside}/n.txt','w')\nEOF`,
+      ];
+      for (const command of commands) {
+        assertAllowed(await runHook(bashPayload(command, transcript_path)));
+      }
+    });
+  } finally {
+    await Deno.remove(outside, { recursive: true });
+  }
+});
+
+Deno.test("Bash: an approved Opus session, a Sonnet session, a non-auto subagent and a non-Opus agy model may write", async () => {
+  await withTranscript(
+    [userTurn("yes dispatch the fix for that hook right now to Opus please"), assistantTurn("claude-opus-5")],
+    async (transcript_path) => {
+      for (const command of BASH_WRITES_REFUSED) {
+        assertAllowed(await runHook(bashPayload(command, transcript_path)));
+      }
+    },
+  );
+  await withTranscript(
+    [userTurn("please edit code"), assistantTurn("claude-sonnet-4-6")],
+    async (transcript_path) => {
+      assertAllowed(await runHook(bashPayload("echo x > src/a.ts", transcript_path)));
+    },
+  );
+  assertAllowed(
+    await runHook(bashPayload("echo x > src/a.ts", "/nonexistent.jsonl", { agent_id: "a1" })),
+  );
+  assertAllowed(
+    await runHook(
+      bashPayload("echo x > src/a.ts", "/nonexistent.jsonl", { modelName: "gemini-3.8-flash-high" }),
+    ),
+  );
+});
+
+Deno.test("Bash: an agy payload naming an Opus model is still judged, and fails closed without a transcript", async () => {
+  const res = await runHook(
+    bashPayload("echo x > src/a.ts", "/nonexistent.jsonl", { modelName: "claude-opus-4-6-thinking" }),
+  );
+  assertDenied(res.stdout, ["Bash command that writes to"]);
 });

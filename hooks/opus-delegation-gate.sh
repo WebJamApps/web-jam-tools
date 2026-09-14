@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # opus-delegation-gate.sh — web-jam-tools#641, web-jam-tools#965
 #
-# HARD PreToolUse gate on Edit, Write, and NotebookEdit:
+# HARD PreToolUse gate on Edit, Write, NotebookEdit, and file-writing Bash commands:
 # Refuses repository code modifications made on Opus without Josh's approval, forcing
 # implementation work down to a cheaper model tier (Sonnet, Haiku, or Flash).
+#
+# Bash: a command that writes files (a redirect, tee, sed -i, cp/mv, inline python/node/deno code
+# that writes, ...) is judged exactly like an Edit/Write to each file it writes — same exemptions,
+# same decision. hooks/lib/bash_write_targets.ts lists the shapes recognized and the known gaps; it
+# closes the accidental path (an Opus session refused Edit rewrote repo files with a python script),
+# not a determined bypass. Commands that write nothing (git, gh, deno task test, grep, ls) pass.
 #
 # Design: ~/Dropbox/web-jam-llms/Token_Savings/opus-delegation-gate-design-2026-08-18.md
 # (decision record D-1..D-7 in its Appendix C).
@@ -60,38 +66,77 @@ if [ -n "$agent_id" ] && [ "$permission_mode" != "auto" ]; then
   exit 0
 fi
 
-# Step 2: No target path in tool input?
-target_path="$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // empty' 2>/dev/null || true)"
-if [ -z "$target_path" ]; then
-  exit 0
-fi
-
-# Resolve directory relative to cwd if target_path is relative
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
-resolved_path="$target_path"
-if [[ "$resolved_path" != /* ]] && [ -n "$cwd" ]; then
-  resolved_path="$cwd/$resolved_path"
-fi
 
-dir="$resolved_path"
-if [ ! -d "$dir" ]; then
-  dir="$(dirname "$resolved_path")"
-fi
+# Prints "true" when a path (relative to the payload cwd) is inside a git working tree. A path that
+# does not exist yet is judged by its nearest existing ancestor directory.
+in_git_tree() {
+  local resolved_path="$1" dir parent
+  if [[ "$resolved_path" != /* ]] && [ -n "$cwd" ]; then
+    resolved_path="$cwd/$resolved_path"
+  fi
+  dir="$resolved_path"
+  if [ ! -d "$dir" ]; then
+    dir="$(dirname "$resolved_path")"
+  fi
+  while [ -n "$dir" ] && [ ! -d "$dir" ]; do
+    parent="$(dirname "$dir")"
+    [ "$parent" = "$dir" ] && break
+    dir="$parent"
+  done
+  if [ -n "$dir" ] && [ -d "$dir" ]; then
+    git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null || true
+  fi
+}
 
-while [ -n "$dir" ] && [ ! -d "$dir" ]; do
-  parent="$(dirname "$dir")"
-  [ "$parent" = "$dir" ] && break
-  dir="$parent"
-done
+tool_name="$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+command_text="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+via_bash=""
 
-# Step 3: Inside a git working tree?
-in_tree=""
-if [ -n "$dir" ] && [ -d "$dir" ]; then
-  in_tree="$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null || true)"
-fi
+if [ "$tool_name" = "Bash" ]; then
+  # Bash (web-jam-tools PR "accept Josh's plain 'dispatch … to Opus' wording and refuse file writes
+  # made through Bash"): a command that writes files is judged exactly like an Edit/Write to each of
+  # them. hooks/lib/bash_write_targets.ts lists the targets and documents the shapes and known gaps.
+  via_bash="1"
 
-if [ "$in_tree" != "true" ]; then
-  exit 0
+  # agy/Antigravity (the shim maps run_command to Bash) names its model in modelName and has no
+  # Claude transcript to read. A non-Opus agy model is never gated; without this, every file write
+  # Flash makes through run_command would fail closed on the unreadable transcript.
+  agy_model="$(printf '%s' "$input" | jq -r '.modelName // empty' 2>/dev/null || true)"
+  if [ -n "$agy_model" ] && ! printf '%s' "$agy_model" | grep -qi 'opus'; then
+    exit 0
+  fi
+
+  # Cheap pre-filter: a command with none of these words or a ">" cannot write a file this gate
+  # recognizes, so it never pays for a deno start (git status, ls, gh, grep ...).
+  if ! printf '%s' "$command_text" | grep -qE '>|\b(tee|sed|perl|ruby|python[0-9.]*|node|nodejs|deno|cp|mv|install|truncate|dd|patch|apply|eval|sh|bash|zsh|ksh|dash)\b'; then
+    exit 0
+  fi
+
+  # Step 2 (Bash): no written file named -> allow. Step 3 (Bash): the first target inside a git
+  # working tree is the one judged; when none is, allow.
+  target_path=""
+  while IFS= read -r candidate; do
+    [ -z "$candidate" ] && continue
+    if [ "$(in_git_tree "$candidate")" = "true" ]; then
+      target_path="$candidate"
+      break
+    fi
+  done < <(printf '%s' "$input" | deno run --no-config --allow-read --allow-env=HOME "$HOOK_DIR/lib/bash_write_targets.ts" 2>/dev/null || true)
+  if [ -z "$target_path" ]; then
+    exit 0
+  fi
+else
+  # Step 2: No target path in tool input?
+  target_path="$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // empty' 2>/dev/null || true)"
+  if [ -z "$target_path" ]; then
+    exit 0
+  fi
+
+  # Step 3: Inside a git working tree?
+  if [ "$(in_git_tree "$target_path")" != "true" ]; then
+    exit 0
+  fi
 fi
 
 # Step 4: One invocation of opus_gate.ts decides the rest.
@@ -105,15 +150,20 @@ if [ "$decision" = "allow" ]; then
 fi
 
 # Step 5: Refuse (deny)
+what="write to '$target_path'"
+if [ -n "$via_bash" ]; then
+  what="Bash command that writes to '$target_path' (a file write through Bash is gated like Edit/Write)"
+fi
+
 if [ "$kind" = "subagent" ]; then
   if [ -z "$why" ]; then
     why="The subagent's model or spawning message could not be determined."
   fi
-  reason="⛔ Opus delegation gate: refused a subagent's write to '$target_path'.
+  reason="⛔ Opus delegation gate: refused a subagent's $what.
 In auto mode a Sonnet or Haiku subagent may edit. An Opus subagent may edit only when the message Josh typed to ask for it contains \"opus edit ok\", asks for an Opus subagent, or asks Opus to do the work.
 $why"
 else
-  reason="⛔ Opus delegation gate: refused write to '$target_path'.
+  reason="⛔ Opus delegation gate: refused $what.
 Repository code must not be edited directly on Opus — implementation work belongs on a cheaper tier.
 To delegate:
   • Backend / contained coding work: spawn a subagent with model: \"sonnet\" (or Haiku)
