@@ -113,8 +113,15 @@ export function asksForOpusSubagent(text: string): boolean {
   return /\bopus\s+sub-?agents?\b/i.test(text);
 }
 
-/** Where an instruction may start: the text, a line, or a clause (after punctuation, "please", "and" or "then"). */
-const CLAUSE_OPENER = String.raw`(?:^\s*|[.!?,;:]\s*|\b(?:please|and|then)\s+)`;
+/**
+ * Where an instruction may start: the text, a line, or a clause (after punctuation, "please", "and" or
+ * "then"). A bare affirmation (yes/yeah/yep/ok/okay/sure) may sit between the start of the text, line
+ * or clause and the verb: "yes dispatch the fix to Opus" was refused before, because only "yes," with a
+ * comma opened a clause. The affirmation must itself open the text, line or clause, so "you said yes
+ * send it to Opus" still refuses.
+ */
+const CLAUSE_OPENER =
+  String.raw`(?:(?:^\s*|[.!?,;:]\s*)(?:(?:yes|yeah|yep|ok|okay|sure)\s+)?|\b(?:please|and|then)\s+)`;
 
 const USE_HAVE_LET_MAKE_GET_ASK_OPUS = new RegExp(
   String.raw`${CLAUSE_OPENER}(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?opus\b`,
