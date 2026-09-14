@@ -217,6 +217,36 @@ Deno.test("asksOpusToDoTheWork: a routing instruction to Opus that opens a claus
   assert(approvesOpusSubagent("/pr-review web-jam-tools#1000 dispatch to Opus subagent"));
 });
 
+Deno.test("asksOpusToDoTheWork: a bare affirmation before the routing verb still opens the instruction", () => {
+  const approves = [
+    // Josh's real message, refused before because a bare "yes" (no comma) did not open a clause:
+    "yes dispatch the fix for that hook right now to Opus please",
+    "yeah send it to Opus",
+    "ok dispatch this to opus",
+    "okay, fine. sure give it to Opus",
+    "yes use Opus",
+  ];
+  for (const text of approves) assert(asksOpusToDoTheWork(text), text);
+  for (const text of approves) assert(approvesOpusSubagent(text), text);
+
+  // Josh's later message spawning an Opus subagent approves that subagent's edits:
+  assert(
+    approvesOpusSubagent(
+      "fix now the 'Two problems with the Opus edit gate' fix them now using an Opus subagent, …",
+    ),
+  );
+
+  const refuses = [
+    "you said yes send it to Opus",
+    "yes don't send it to Opus",
+    "ok send nothing to Opus",
+    "yes send it to Opus?",
+    "yes, I asked you earlier to dispatch to Opus",
+    "yesterday send it to Opus",
+  ];
+  for (const text of refuses) assert(!asksOpusToDoTheWork(text), text);
+});
+
 Deno.test("resolveSessionFiles: main transcript and subagent transcript resolve to the same files", () => {
   assertEquals(resolveSessionFiles(MAIN), FILES);
   assertEquals(resolveSessionFiles(`${SUBAGENTS}/agent-abc.jsonl`), FILES);

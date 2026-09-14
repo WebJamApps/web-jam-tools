@@ -163,7 +163,7 @@ PRE_TOOL_USE_HOOKS=(
   "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
   "Bash|mcp__.*__issue_write::require-model-label-on-issue-create.sh"
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
-  "Write|Edit|NotebookEdit::opus-delegation-gate.sh"
+  "Bash|Write|Edit|NotebookEdit::opus-delegation-gate.sh"
   "Bash|mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
   "Bash::block-raw-gh-write.sh"
 )
