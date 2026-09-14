@@ -94,9 +94,7 @@ command_text="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/d
 via_bash=""
 
 if [ "$tool_name" = "Bash" ]; then
-  # Bash (web-jam-tools PR "accept Josh's plain 'dispatch … to Opus' wording and refuse file writes
-  # made through Bash"): a command that writes files is judged exactly like an Edit/Write to each of
-  # them. hooks/lib/bash_write_targets.ts lists the targets and documents the shapes and known gaps.
+  # Bash: a command that writes files is judged exactly like an Edit/Write to each of them. hooks/lib/bash_write_targets.ts lists the targets and documents the shapes and known gaps.
   via_bash="1"
 
   # agy/Antigravity (the shim maps run_command to Bash) names its model in modelName and has no

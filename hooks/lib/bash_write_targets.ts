@@ -19,7 +19,8 @@
  *     python `open(..., 'w'|'a'|'x'|'+')`, `.write_text(`, `.write_bytes(`, `shutil.copy` and
  *     `shutil.move` (and variants), `os.rename`, `os.replace`; node `fs.writeFile`, `appendFile`,
  *     `createWriteStream`, `copyFile`, `rename`, `cpSync` (and their Sync forms); Deno
- *     `writeTextFile`, `writeFile`, `create`, `copyFile`, `rename`, `truncate` (and Sync forms); perl `open(FH, '>...')`; ruby `File.write`, `IO.write`, `File.open(..., 'w'|'a')`.
+ *     `writeTextFile`, `writeFile`, `create`, `copyFile`, `rename`, `truncate` (and Sync forms); perl `open(FH, '>...')`; ruby
+ *     `File.write`, `IO.write`, `File.open(..., 'w'|'a')`.
  *     A literal quoted path as the write call's first argument is the target; a write through a
  *     variable is judged by the working directory, because the file it writes is unknown but the
  *     write itself is certain.
@@ -57,7 +58,7 @@ const NOT_A_FILE = /^\/dev\/(?:null|stdout|stderr|stdin|tty|fd\/\d+)$/;
  */
 const SCRIPT_WRITES: RegExp[] = [
   // python open('path', 'w') / open(path, mode='a')
-  /\bopen\(\s*(?:(['"])([^'"\n]*)\1|[^,()\n]+)\s*,\s*(?:mode\s*=\s*)?['"][^'"\n]*[wax+][^'"\n]*['"]/g,
+  /\bopen\(\s*(?:(['"])([^'"\n]*)\1|[^,()\n]+)\s*,\s*(?:mode\s*=\s*)?['"](?![<>])[^'"\n]*[wax+][^'"\n]*['"]/g,
   // pathlib Path('path').write_text / write_bytes, or p.write_text
   /(?:\bPath\(\s*(['"])([^'"\n]*)\1\s*\)|[\w\])]+)\.write_(?:text|bytes)\(/g,
   // shutil / os moves and copies: destination is the second argument, so the path is never literal here
@@ -104,7 +105,7 @@ export function scriptWriteTargets(code: string, cwd: string, home: string): str
       targets.push(resolved ?? cwd);
     }
   }
-  return targets;
+  return [...new Set(targets)];
 }
 
 /** The file words that redirections in one simple command write to. */
@@ -312,7 +313,8 @@ function argvTargets(argv: string[], cwd: string, home: string): ArgvResult {
       }
       if (args[j] !== "apply") return { targets: [] };
       const rest = args.slice(j + 1);
-      const readOnly = rest.some((a) => ["--check", "--stat", "--numstat", "--summary"].includes(a)) &&
+      const readOnly =
+        rest.some((a) => ["--check", "--stat", "--numstat", "--summary"].includes(a)) &&
         !rest.includes("--apply");
       return { targets: readOnly ? [] : resolveAll([dir]) };
     }

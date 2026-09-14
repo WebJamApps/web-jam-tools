@@ -120,8 +120,8 @@ export function asksForOpusSubagent(text: string): boolean {
  * comma opened a clause. The affirmation must itself open the text, line or clause, so "you said yes
  * send it to Opus" still refuses.
  */
-const CLAUSE_OPENER =
-  String.raw`(?:(?:^\s*|[.!?,;:]\s*)(?:(?:yes|yeah|yep|ok|okay|sure)\s+)?|\b(?:please|and|then)\s+)`;
+const CLAUSE_OPENER = String
+  .raw`(?:(?:^\s*|[.!?,;:]\s*)(?:(?:yes|yeah|yep|ok|okay|sure)\s+)?|\b(?:please|and|then)\s+)`;
 
 const USE_HAVE_LET_MAKE_GET_ASK_OPUS = new RegExp(
   String.raw`${CLAUSE_OPENER}(?:use|have|let|make|get|ask)\s+(?:(?:a|an|the)\s+)?opus\b`,
