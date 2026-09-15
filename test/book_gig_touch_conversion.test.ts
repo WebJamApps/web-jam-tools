@@ -1,7 +1,7 @@
 // test/book_gig_touch_conversion.test.ts
 // Unit tests for converting venue notes into structured call and visit touches (D-68 / web-jam-tools#1006)
 
-import { assertEquals, assertNotEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import {
   detectVenueConversationTouch,
   executeTouchConversion,
@@ -340,4 +340,98 @@ Deno.test("executeTouchConversion: supports filtering and skipping venues", asyn
 
   assertEquals(skipResult.proposals.length, 1);
   assertEquals(skipResult.proposals[0].venueName, "Big Lick Brewing Company");
+});
+
+Deno.test("executeTouchConversion: fetches live venues when venues option is omitted", async () => {
+  const venuesData = [
+    {
+      _id: "v-live",
+      name: "Live Brewery",
+      notes: "Spoke on the phone about a 2027 booking",
+    },
+  ];
+
+  // Array response
+  const result1 = await executeTouchConversion(
+    { apply: false },
+    () => Promise.resolve(new Response(JSON.stringify(venuesData), { status: 200 })),
+  );
+  assertEquals(result1.proposals.length, 1);
+  assertEquals(result1.proposals[0].venueName, "Live Brewery");
+
+  // Object response ({ venues: [...] })
+  const result2 = await executeTouchConversion(
+    { apply: false },
+    () => Promise.resolve(new Response(JSON.stringify({ venues: venuesData }), { status: 200 })),
+  );
+  assertEquals(result2.proposals.length, 1);
+
+  // Network/HTTP error
+  await assertRejects(
+    () =>
+      executeTouchConversion(
+        { apply: false },
+        () => Promise.resolve(new Response("Internal error", { status: 500 })),
+      ),
+    Error,
+    "Failed to fetch venues",
+  );
+});
+
+Deno.test("executeTouchConversion: handles touch write failure and network error in apply mode", async () => {
+  const fixtureVenues: VenueNotesRecord[] = [
+    {
+      _id: "v-fail-http",
+      name: "Fail Http Venue",
+      notes: "Phone call successful — confirmed.",
+    },
+    {
+      _id: "v-fail-net",
+      name: "Fail Network Venue",
+      notes: "Visited in person to drop off card.",
+    },
+  ];
+
+  const mockFetch: typeof fetch = (input) => {
+    const url = String(input);
+    if (url.includes("v-fail-http")) {
+      return Promise.resolve(new Response("DB Error", { status: 500 }));
+    }
+    if (url.includes("v-fail-net")) {
+      return Promise.reject(new Error("Network connection dropped"));
+    }
+    return Promise.resolve(new Response(JSON.stringify(fixtureVenues), { status: 200 }));
+  };
+
+  const result = await executeTouchConversion(
+    {
+      apply: true,
+      venues: fixtureVenues,
+    },
+    mockFetch,
+  );
+
+  assertEquals(result.applied.length, 2);
+  assertEquals(result.applied[0].success, false);
+  assertStringIncludes(result.applied[0].error!, "HTTP 500: DB Error");
+  assertEquals(result.applied[1].success, false);
+  assertStringIncludes(result.applied[1].error!, "Network connection dropped");
+  assertStringIncludes(result.summary, "Successfully wrote 0 of 2");
+});
+
+Deno.test("detectVenueConversationTouch: skips proposal when venue already has identical touch", () => {
+  const venueWithTouch: VenueNotesRecord = {
+    _id: "v-has-touch",
+    name: "Existing Ale Works",
+    notes: "Booking confirmation from May 18, 2026; Phone call successful — confirmed.",
+    touches: [
+      {
+        type: "call",
+        date: "2026-05-18T00:00:00.000Z",
+      },
+    ],
+  };
+
+  const proposal = detectVenueConversationTouch(venueWithTouch);
+  assertEquals(proposal, null, "Should not propose touch if already in venue.touches");
 });
