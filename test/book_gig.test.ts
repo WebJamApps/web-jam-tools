@@ -58,6 +58,7 @@ import {
   normalizeVenueName,
   resolveGigVenueId,
 } from "../src/book-gig/venue_link.ts";
+import { executeTouchConversion } from "../src/book-gig/convert_touches.ts";
 import type {
   BookGigResult,
   CandidateVenue,
@@ -4195,4 +4196,60 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   } finally {
     console.log = originalLog;
   }
+});
+
+Deno.test("touch conversion: proposes genuine phone conversation, rejects legacy metadata, and requires explicit approval to write (#1006)", async () => {
+  const fixtureVenues = [
+    {
+      _id: "v-phone",
+      name: "Phone Note Venue",
+      city: "Roanoke",
+      usState: "VA",
+      notes: "Spoke on the phone about a 2027 booking",
+    },
+    {
+      _id: "v-hamlet",
+      name: "Hamlet Vineyards",
+      city: "Bassett",
+      usState: "VA",
+      notes: "Date called: 2026-05-09",
+    },
+  ];
+
+  let postCalls = 0;
+  const postedRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const mockFetch: typeof fetch = (input, init) => {
+    if (init?.method === "POST") {
+      postCalls++;
+      postedRequests.push({ url: String(input), body: JSON.parse(String(init.body)) });
+      return Promise.resolve(new Response(JSON.stringify({ _id: "touch-id" }), { status: 201 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify(fixtureVenues), { status: 200 }));
+  };
+
+  // 1. Dry run: proposes without writing
+  const dryRun = await executeTouchConversion(
+    { apply: false, venues: fixtureVenues },
+    mockFetch,
+  );
+  assertEquals(dryRun.proposals.length, 1);
+  assertEquals(dryRun.proposals[0].venueName, "Phone Note Venue");
+  assertEquals(dryRun.proposals[0].touchType, "call");
+  assertEquals(dryRun.proposals[0].sentence, "Spoke on the phone about a 2027 booking");
+  assertEquals(dryRun.applied.length, 0);
+  assertEquals(postCalls, 0, "No POST /venue/:id/touch must be made on dry run");
+
+  // 2. Explicit approval write: writes the approved touch
+  const approvedRun = await executeTouchConversion(
+    { apply: true, venues: fixtureVenues, actor: "Josh" },
+    mockFetch,
+  );
+  assertEquals(approvedRun.proposals.length, 1);
+  assertEquals(approvedRun.applied.length, 1);
+  assertEquals(approvedRun.applied[0].success, true);
+  assertEquals(postCalls, 1);
+  assertEquals(postedRequests[0].url, "https://webjamsalem.herokuapp.com/venue/v-phone/touch");
+  assertEquals(postedRequests[0].body.type, "call");
+  assertEquals(postedRequests[0].body.actor, "Josh");
+  assertEquals(postedRequests[0].body.note, "Spoke on the phone about a 2027 booking");
 });
