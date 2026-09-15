@@ -17,7 +17,7 @@
 #     ~/.gemini/antigravity-cli/settings.json, a laptop-local step outside
 #     this hook's / this repo's reach, web-jam-tools#267 item 2, web-jam-tools#549).
 #   - `--model` (or `--model=`) equal to a Flash model (3.7 floor or newer)
-#     (e.g. gemini-3.8-flash-high, gemini-3.8-flash-medium).
+#     (e.g. gemini-3.8-flash-high, gemini-3.8-flash-medium, gemini-3.8-flash-tiered).
 #
 # BLOCKED:
 #   - any other --model value (notably claude-sonnet-4-6,
@@ -48,7 +48,7 @@ result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
-ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-medium")
+ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-medium or gemini-3.8-flash-tiered")
 
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2

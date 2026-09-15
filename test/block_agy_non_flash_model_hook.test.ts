@@ -73,12 +73,25 @@ Deno.test("agy --model gemini-3.8-flash-medium --dangerously-skip-permissions -p
   assertEquals(res.code, 0, res.stderr);
 });
 
+Deno.test("agy --model gemini-3.8-flash-tiered is allowed", async () => {
+  const res = await runHook("agy --model gemini-3.8-flash-tiered");
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("agy --model=gemini-3.8-flash-tiered (single-token form) is allowed", async () => {
+  const res = await runHook("agy --model=gemini-3.8-flash-tiered -i hi");
+  assertEquals(res.code, 0, res.stderr);
+});
+
 Deno.test("Flash 3.7 models are allowed (>= 3.7 floor)", async () => {
   const res37 = await runHook("agy --model gemini-3.7-flash-high"); // 3.7 floor
   assertEquals(res37.code, 0, res37.stderr);
 
   const res37Med = await runHook("agy --model gemini-3.7-flash-medium"); // 3.7 floor
   assertEquals(res37Med.code, 0, res37Med.stderr);
+
+  const res37Tiered = await runHook("agy --model gemini-3.7-flash-tiered"); // 3.7 floor
+  assertEquals(res37Tiered.code, 0, res37Tiered.stderr);
 });
 
 Deno.test("future Flash 4.0 models (>= 3.7 floor) are allowed", async () => {
@@ -96,6 +109,12 @@ Deno.test("agy --model gemini-3.6-flash-medium is blocked (below 3.7 floor)", as
 
 Deno.test("agy --model gemini-3.6-flash-high is blocked (below 3.7 floor)", async () => {
   const res = await runHook("agy --model gemini-3.6-flash-high");
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("agy --model gemini-3.6-flash-tiered is blocked (below 3.7 floor)", async () => {
+  const res = await runHook("agy --model gemini-3.6-flash-tiered");
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
@@ -163,7 +182,13 @@ Deno.test("agy --model gemini-3.5-flash-low is blocked (old Flash generation)", 
 Deno.test("block message names permitted slugs", async () => {
   const res = await runHook("agy --model claude-sonnet-4-6");
   assertEquals(res.code, 2);
-  for (const slug of ["gemini-3.8-flash-high", "gemini-3.8-flash-medium"]) {
+  for (
+    const slug of [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-tiered",
+    ]
+  ) {
     if (!res.stderr.includes(slug)) {
       throw new Error(`expected block message to name ${slug}, got: ${res.stderr}`);
     }

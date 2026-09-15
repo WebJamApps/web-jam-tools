@@ -13,10 +13,15 @@ export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
   { slug: "gemini-3.8-flash-medium", displayName: "Gemini 3.8 Flash (Medium)" },
 ];
 
-export const ALLOWED = new Set(ALLOWED_AGY_MODELS.map((m) => m.slug));
+export const ALLOWED_SESSION_SLUGS: readonly string[] = [
+  ...ALLOWED_AGY_MODELS.map((m) => m.slug),
+  "gemini-3.8-flash-tiered",
+];
+
+export const ALLOWED = new Set(ALLOWED_SESSION_SLUGS);
 
 export function isAllowedModelSlug(slug: string): boolean {
-  const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(medium|high)$/);
+  const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(medium|high|tiered)$/);
   if (!match) return false;
   const versionStr = match[1];
   const parts = versionStr.split(".").map((p) => parseInt(p, 10));
@@ -110,7 +115,7 @@ if (import.meta.main) {
   if (arg === "--default-models") {
     console.log(ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"));
   } else if (arg === "--allowed-slugs") {
-    console.log(ALLOWED_AGY_MODELS.map((m) => m.slug).join(" or "));
+    console.log(ALLOWED_SESSION_SLUGS.join(" or "));
   } else {
     const cmd = Deno.env.get("CMD_FOR_PY") || arg;
     console.log(checkAgyModel(cmd));
