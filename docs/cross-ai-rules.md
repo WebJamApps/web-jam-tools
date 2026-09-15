@@ -56,7 +56,9 @@ Never create version-suffixed copies (V2, V3, -new, -copy) — edit the master.
 
 - claude-sonnet-tasks.txt (Drive root, id 1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ) — Claude Sonnet (Josh's
   phone app); Drive is authoritative.
-- claude-opus-tasks.txt — Claude Opus (laptop); Dropbox-resident (web-jam-llms/).
+
+claude-opus-tasks.txt (Claude Opus lane) is RETIRED — the file no longer exists on disk (logged as
+"bridge dormant" in `web-jam-llms/bridge-log.md`, 2026-08-26); Opus work is tracked in GitHub issues.
 
 agy-tasks.txt (agy/Flash lane) is RETIRED (web-jam-tools#249) — Josh deleted it and moved agy/Flash
 dispatch to GitHub-issues-only; see `skills/delegate/SKILL.md`.
