@@ -1,10 +1,17 @@
 // test/design_issue_verify_citations.test.ts — web-jam-tools#1025
 //
 // Citation liveness checker: reads every issue a design document cites and fails on a title that
-// no longer matches, or on a closed issue the document does not acknowledge as closed. Fails
-// closed (REFUSES) when a lookup cannot be completed, never treating an unresolvable citation as
-// passing. Network-dependent by design (it calls `gh api graphql`), so every test here stubs the
-// lookup — this suite must never hit the network.
+// no longer matches. Fails closed (REFUSES) when a lookup cannot be completed, never treating an
+// unresolvable citation as passing. Network-dependent by design (it calls `gh api graphql`), so
+// every test here stubs the lookup — this suite must never hit the network.
+//
+// This checker previously also required a closed or merged citation to be acknowledged as closed
+// within its surrounding sentence or table cell. That requirement, and the tests that pinned it,
+// are removed (Josh's ruling, 2026-09-16 — web-jam-tools#1025): a design document now carries no
+// issue/PR citation outside the `## Revision History` table or a verbatim quote, enforced by
+// `design:lint-doc`'s `no-issue-citation-outside-exempt-locations` rule (see
+// `test/design_issue_lint_doc.test.ts`), so there is no longer a location where an unacknowledged
+// closed citation could legitimately appear.
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
@@ -75,100 +82,6 @@ Deno.test("extractCitations: a document with no citations returns an empty list"
   assertEquals(extractCitations(doc).length, 0);
 });
 
-// --- sentence-scoped acknowledgement (web-jam-tools#1025 follow-up) ---
-
-Deno.test("verifyCitations: acknowledging 'closed' on a LATER wrapped line of the same sentence passes", async () => {
-  // Hard-wrapped prose: one sentence spanning three physical lines, "closed" arriving on the
-  // third — a plain per-physical-line check would miss it; the sentence-wide scope must not.
-  const doc =
-    `This is why web-jam-tools#432 "agy hooks do not enforce — all 12 are inert on Flash, and a
-Stop/SessionStart entry kills the whole config; fix that, then give Antigravity Gmail MCP fenced by
-a working hook" was filed and closed about.
-`;
-
-  const result = await verifyCitations(doc, "test.md", {
-    lookupImpl: stubLookup({
-      "WebJamApps/web-jam-tools#432": {
-        state: "CLOSED",
-        title:
-          "agy hooks do not enforce — all 12 are inert on Flash, and a\nStop/SessionStart entry kills the whole config; fix that, then give Antigravity Gmail MCP fenced by\na working hook",
-      },
-    }),
-  });
-
-  // Title comparison isn't the point of this test (the quoted title itself also wraps physical
-  // lines, which would be a drift concern for a different test); only check the acknowledgement.
-  const closedViolation = result.violations.find((v) =>
-    v.rule === "unacknowledged-closed-citation"
-  );
-  assertEquals(closedViolation, undefined, JSON.stringify(result.violations));
-});
-
-Deno.test("verifyCitations: 'closed' in a DIFFERENT sentence of the same paragraph still fails — widening is to the sentence, not the paragraph", () => {
-  const doc = `See web-jam-tools#1018 "hooks fix" for the original report. That issue is now closed.
-`;
-
-  // This is a same-paragraph, two-sentence case: assert directly on extractCitations's computed
-  // scope, which is what verifyCitations checks "closed" against.
-  const citations = extractCitations(doc);
-  assertEquals(citations.length, 1);
-  assertEquals(citations[0].acknowledgementScope.includes("closed"), false);
-  assertStringIncludes(citations[0].acknowledgementScope, "hooks fix");
-});
-
-Deno.test("verifyCitations integration: 'closed' in a different sentence of the same paragraph fails", async () => {
-  const doc = `See web-jam-tools#1018 "hooks fix" for the original report. That issue is now closed.
-`;
-
-  const result = await verifyCitations(doc, "test.md", {
-    lookupImpl: stubLookup({
-      "WebJamApps/web-jam-tools#1018": { state: "CLOSED", title: "hooks fix" },
-    }),
-  });
-
-  const violation = result.violations.find((v) => v.rule === "unacknowledged-closed-citation");
-  assertEquals(Boolean(violation), true, JSON.stringify(result.violations));
-});
-
-Deno.test("extractCitations: a table-cell citation is scoped to its own cell — an adjacent cell saying 'closed' does not acknowledge it", () => {
-  const doc = `| web-jam-tools#1018 | hooks/agy-model-guard fix | closed |
-`;
-  const citations = extractCitations(doc);
-  assertEquals(citations.length, 1);
-  assertEquals(citations[0].acknowledgementScope.includes("closed"), false);
-  assertStringIncludes(citations[0].acknowledgementScope, "web-jam-tools#1018");
-});
-
-Deno.test("extractCitations: a table-cell citation whose OWN cell says closed is acknowledged", () => {
-  const doc = `| web-jam-tools#1018 "hooks/agy-model-guard fix", closed | In progress |
-`;
-  const citations = extractCitations(doc);
-  assertEquals(citations.length, 1);
-  assertEquals(citations[0].acknowledgementScope.includes("closed"), true);
-});
-
-Deno.test("extractCitations: a period inside a backtick code span does not split the sentence", () => {
-  const doc =
-    `The fix lives in \`hooks/lib/opus_gate.ts\` and resolves web-jam-tools#1018 "hooks fix", and was closed.
-`;
-  const citations = extractCitations(doc);
-  assertEquals(citations.length, 1);
-  // If the code span's internal structure were mistaken for sentence punctuation, the scope
-  // would be truncated before reaching "closed" at the end of the real sentence.
-  assertEquals(citations[0].acknowledgementScope.includes("closed"), true);
-  assertStringIncludes(citations[0].acknowledgementScope, "opus_gate.ts");
-});
-
-Deno.test("extractCitations: a period inside a version number such as 1.38.15 does not split the sentence", () => {
-  const doc =
-    `The fix shipped in 1.38.15 and resolves web-jam-tools#1018 "hooks fix", and was closed.
-`;
-  const citations = extractCitations(doc);
-  assertEquals(citations.length, 1);
-  assertEquals(citations[0].acknowledgementScope.includes("closed"), true);
-  assertStringIncludes(citations[0].acknowledgementScope, "1.38.15");
-});
-
 // --- verifyCitations ---
 
 function stubLookup(map: Record<string, CitationLookup>) {
@@ -195,9 +108,9 @@ Deno.test("verifyCitations: a document with no citations passes without ever cal
   assertEquals(called, false);
 });
 
-Deno.test("verifyCitations: a closed issue acknowledged as closed on its line passes", async () => {
+Deno.test("verifyCitations: a closed issue with a matching title passes, with no acknowledgement required", async () => {
   const doc =
-    `web-jam-tools#526 "block-irreversible-operations.sh matches text inside heredocs and strings, so writing a test about the guard is blocked as if it were a deletion" records the same shape in a different guard, and was closed by tokenising rather than raw text matching.\n`;
+    `web-jam-tools#526 "block-irreversible-operations.sh matches text inside heredocs and strings, so writing a test about the guard is blocked as if it were a deletion" records the same shape in a different guard.\n`;
 
   const result = await verifyCitations(doc, "test.md", {
     lookupImpl: stubLookup({
@@ -212,8 +125,8 @@ Deno.test("verifyCitations: a closed issue acknowledged as closed on its line pa
   assertEquals(result.valid, true, JSON.stringify(result.violations));
 });
 
-Deno.test("verifyCitations: a merged pull request acknowledged as merged in its sentence passes", async () => {
-  const doc = `web-jam-tools#526 "some PR title" was merged in an earlier release.\n`;
+Deno.test("verifyCitations: a merged pull request with a matching title passes, with no acknowledgement required", async () => {
+  const doc = `web-jam-tools#526 "some PR title" is referenced here.\n`;
 
   const result = await verifyCitations(doc, "test.md", {
     lookupImpl: stubLookup({
@@ -227,7 +140,7 @@ Deno.test("verifyCitations: a merged pull request acknowledged as merged in its 
   assertEquals(result.valid, true, JSON.stringify(result.violations));
 });
 
-Deno.test("verifyCitations: a closed issue NOT acknowledged on its line fails", async () => {
+Deno.test("verifyCitations: a closed issue in a table cell with a matching title passes, with no acknowledgement required", async () => {
   const doc = `| web-jam-tools#1018 | hooks/agy-model-guard fix | In progress |\n`;
 
   const result = await verifyCitations(doc, "test.md", {
@@ -239,10 +152,7 @@ Deno.test("verifyCitations: a closed issue NOT acknowledged on its line fails", 
     }),
   });
 
-  assertEquals(result.valid, false);
-  const violation = result.violations.find((v) => v.rule === "unacknowledged-closed-citation");
-  assertEquals(Boolean(violation), true, JSON.stringify(result.violations));
-  assertEquals(violation?.line, 1);
+  assertEquals(result.valid, true, JSON.stringify(result.violations));
 });
 
 Deno.test("verifyCitations: a drifted title fails, naming the quoted and live titles", async () => {
@@ -280,7 +190,7 @@ Deno.test("verifyCitations: an unresolvable lookup REFUSES rather than passing, 
   assertStringIncludes(violation!.message, "Could not resolve to an issue");
 });
 
-Deno.test("verifyCitations: an OPEN issue with a matching title and no closed-acknowledgement issue passes cleanly", async () => {
+Deno.test("verifyCitations: an OPEN issue with a matching title passes cleanly", async () => {
   const doc = `web-jam-tools#742 "design document linter and body checks" is still open work.\n`;
 
   const result = await verifyCitations(doc, "test.md", {
@@ -295,9 +205,9 @@ Deno.test("verifyCitations: an OPEN issue with a matching title and no closed-ac
   assertEquals(result.valid, true, JSON.stringify(result.violations));
 });
 
-Deno.test("verifyCitations: the same issue cited on two lines is looked up once (deduped) but checked on each line", async () => {
+Deno.test("verifyCitations: the same issue cited on two lines is looked up once (deduped) and both lines pass on a matching title", async () => {
   const doc =
-    `web-jam-tools#1018 "hooks fix" line one.\nweb-jam-tools#1018 "hooks fix" line two, also closed.\n`;
+    `web-jam-tools#1018 "hooks fix" line one.\nweb-jam-tools#1018 "hooks fix" line two.\n`;
 
   let callCount = 0;
   const result = await verifyCitations(doc, "test.md", {
@@ -311,13 +221,7 @@ Deno.test("verifyCitations: the same issue cited on two lines is looked up once 
   });
 
   assertEquals(callCount, 1);
-  assertEquals(result.valid, false);
-  const closedViolations = result.violations.filter((v) =>
-    v.rule === "unacknowledged-closed-citation"
-  );
-  // Line one doesn't say "closed"; line two does, so only line one violates.
-  assertEquals(closedViolations.length, 1);
-  assertEquals(closedViolations[0].line, 1);
+  assertEquals(result.valid, true, JSON.stringify(result.violations));
 });
 
 Deno.test("verifyCitationsFile throws when path is missing or file does not exist", async () => {
@@ -612,11 +516,11 @@ Deno.test("defaultLookupCitations: a number that is neither an issue nor a pull 
   assertEquals(Boolean(entry?.error), true);
 });
 
-Deno.test("verifyCitations: a cited merged pull request that is acknowledged passes; an unacknowledged one fails", async () => {
-  const acknowledgedDoc =
-    `web-jam-tools#526 "block-irreversible-operations.sh matches text inside heredocs and strings, so writing a test about the guard is blocked as if it were a deletion" records the same shape in a different guard, and was closed by tokenising rather than raw text matching.\n`;
+Deno.test("verifyCitations: a cited merged pull request with a matching title passes, in prose or in a table cell alike", async () => {
+  const proseDoc =
+    `web-jam-tools#526 "block-irreversible-operations.sh matches text inside heredocs and strings, so writing a test about the guard is blocked as if it were a deletion" records the same shape in a different guard.\n`;
 
-  const acknowledgedResult = await verifyCitations(acknowledgedDoc, "test.md", {
+  const proseResult = await verifyCitations(proseDoc, "test.md", {
     lookupImpl: stubLookup({
       "WebJamApps/web-jam-tools#526": {
         state: "CLOSED",
@@ -625,21 +529,18 @@ Deno.test("verifyCitations: a cited merged pull request that is acknowledged pas
       },
     }),
   });
-  assertEquals(acknowledgedResult.valid, true, JSON.stringify(acknowledgedResult.violations));
+  assertEquals(proseResult.valid, true, JSON.stringify(proseResult.violations));
 
-  const unacknowledgedDoc = `| web-jam-tools#526 | some PR title | merged recently |\n`;
-  const unacknowledgedResult = await verifyCitations(unacknowledgedDoc, "test.md", {
+  const tableDoc = `| web-jam-tools#526 | some PR title | merged recently |\n`;
+  const tableResult = await verifyCitations(tableDoc, "test.md", {
     lookupImpl: stubLookup({
       "WebJamApps/web-jam-tools#526": { state: "CLOSED", title: "some PR title" },
     }),
   });
-  const violation = unacknowledgedResult.violations.find((v) =>
-    v.rule === "unacknowledged-closed-citation"
-  );
-  assertEquals(Boolean(violation), true, JSON.stringify(unacknowledgedResult.violations));
+  assertEquals(tableResult.valid, true, JSON.stringify(tableResult.violations));
 });
 
-Deno.test("verifyCitations: a cited OPEN pull request passes without needing acknowledgement", async () => {
+Deno.test("verifyCitations: a cited OPEN pull request passes", async () => {
   const doc = `web-jam-tools#600 "some open PR" is still in review.\n`;
 
   const result = await verifyCitations(doc, "test.md", {

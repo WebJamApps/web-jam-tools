@@ -382,6 +382,63 @@ const invokedMarkerRegex = /\binvoked\b/i;
 /** A markdown blockquote line (one or more `>` after leading whitespace). */
 const blockquoteLineRegex = /^\s*>/;
 
+// --- Issue/PR citation location (web-jam-tools#1025 follow-up, Josh's ruling 2026-09-16) ---
+//
+// "please do not keep records of github issues in the design documents ... we have github itself
+// and git itself to track issues, we do not need a third record to track issues that then becomes
+// out of date, stale, and additional beauracracty and token waster." A design document records how
+// the system works and what was decided, never GitHub issue/PR history. The only places a citation
+// may live are the `## Revision History` table (a version-to-issue map, not a status narrative) and
+// a verbatim quote of Josh's own words (his sentence is not rewritten to remove what he typed). Both
+// exemptions are resolved on the SAME single pass the other rules already make over `lines`, using
+// state (`inRevisionHistorySection`) this file already tracks for the revision-history-table rule.
+
+/** `repo#number` or `owner/repo#number`, e.g. `web-jam-tools#1018` or
+ * `WebJamApps/web-jam-tools#1018`. Mirrors `verify_citations.ts`'s own citation regex — duplicated
+ * rather than imported, matching this file's existing pattern of not depending on the
+ * network-capable module (see that file's header comment on why the split exists). */
+const CITATION_REPO_NUMBER_REGEX =
+  /\b([A-Za-z0-9][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*)?)#(\d+)/g;
+
+/** A bare `#123` citation with no repo prefix — GitHub's own same-repo shorthand, and still a
+ * citation when a human reads it (HARD RULE: every issue/PR mention carries repo + number + title).
+ * The lookbehind excludes a `#` whose preceding character is alphanumeric/`.`/`-`/`/` — that's
+ * always the tail of a `repo#N` match `CITATION_REPO_NUMBER_REGEX` already reports, never a second,
+ * separate bare citation. Requiring `\d+` immediately after `#` (with no space) keeps a heading
+ * (`# Title` — space before the text) and a letter-bearing hex color (`#fff`) from matching; an
+ * all-numeric hex color (`#000000`) in prose outside a fenced block is a known, accepted false
+ * positive this rule does not attempt to rule out. */
+const CITATION_BARE_NUMBER_REGEX = /(?<![A-Za-z0-9_.\/-])#(\d+)\b/g;
+
+/** `https://github.com/<owner>/<repo>/issues/<n>` or `.../pull/<n>`. */
+const CITATION_URL_REGEX =
+  /https?:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(?:issues|pull)\/\d+/g;
+
+/** Every issue/PR citation match on one line, from all three forms above, sorted left to right and
+ * de-duplicated by position — the three regexes target disjoint syntax (a URL has no `#`; a bare
+ * `#N` match's lookbehind excludes a `repo#N` match's tail) so overlap is not expected in practice,
+ * but a scan is still de-duplicated defensively rather than trusting that. */
+function findCitationsOnLine(line: string): Array<{ index: number; text: string }> {
+  const matches: Array<{ index: number; text: string }> = [];
+  for (const m of line.matchAll(CITATION_URL_REGEX)) {
+    if (m.index !== undefined) matches.push({ index: m.index, text: m[0] });
+  }
+  for (const m of line.matchAll(CITATION_REPO_NUMBER_REGEX)) {
+    if (m.index !== undefined) matches.push({ index: m.index, text: m[0] });
+  }
+  for (const m of line.matchAll(CITATION_BARE_NUMBER_REGEX)) {
+    if (m.index !== undefined) matches.push({ index: m.index, text: m[0] });
+  }
+  matches.sort((a, b) => a.index - b.index);
+  const seen = new Set<string>();
+  return matches.filter((m) => {
+    const key = `${m.index}:${m.text}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Phrases that mark a `## Load-bearing premises` row's Proof cell as hedged rather than proven
  * (web-jam-tools#815 acceptance criterion 2's own examples — "probably", "should be", "I believe"
  * — plus the same vocabulary the skill body itself uses for an unproven premise: "unverified",
@@ -1193,9 +1250,26 @@ export function lintDesignDoc(
         }
       }
     }
+
+    // 6. Issue/PR citation location check (web-jam-tools#1025 follow-up, Josh's ruling
+    // 2026-09-16): a design document carries no issue/PR citation outside the Revision History
+    // table or a verbatim quote block. `inRevisionHistorySection` is already current for this
+    // line — the tracking block above runs before this check on every iteration.
+    const isExemptCitationLocation = inRevisionHistorySection || blockquoteLineRegex.test(line);
+    if (!isExemptCitationLocation) {
+      for (const citation of findCitationsOnLine(line)) {
+        violations.push({
+          rule: "no-issue-citation-outside-exempt-locations",
+          message:
+            `Design document contains issue/PR citation "${citation.text}" outside the '## Revision History' table and a verbatim quote block`,
+          line: lineNum,
+          lineContent: line,
+        });
+      }
+    }
   }
 
-  // 6. Check for Both surfaces section
+  // 7. Check for Both surfaces section
   if (!hasBothSurfacesSection) {
     violations.push({
       rule: "require-both-surfaces-section",
@@ -1203,7 +1277,7 @@ export function lintDesignDoc(
     });
   }
 
-  // 7. Check for Load-bearing premises section and validate its Proof column
+  // 8. Check for Load-bearing premises section and validate its Proof column
   if (!loadBearingPremisesFound) {
     violations.push({
       rule: "require-load-bearing-premises-section",
@@ -1213,7 +1287,7 @@ export function lintDesignDoc(
     violations.push(...validateLoadBearingPremisesTable(loadBearingPremisesTableLines, todayIso));
   }
 
-  // 8. Check for a verbatim appendix when the document names a target issue it was invoked on
+  // 9. Check for a verbatim appendix when the document names a target issue it was invoked on
   if (sawTargetIssueMarker && !sawBlockquoteAfterMarker) {
     violations.push({
       rule: "require-target-issue-verbatim-appendix",
@@ -1222,7 +1296,7 @@ export function lintDesignDoc(
     });
   }
 
-  // 9. Check Revision History table if section is present (web-jam-tools#892)
+  // 10. Check Revision History table if section is present (web-jam-tools#892)
   if (revisionHistoryHeadingFound) {
     violations.push(
       ...validateRevisionHistoryTable(

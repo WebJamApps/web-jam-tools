@@ -204,7 +204,7 @@ Deno.test("runGate1 refuses to render or open a document that fails design:verif
               valid: false,
               violations: [
                 {
-                  rule: "unacknowledged-closed-citation",
+                  rule: "drifted-citation-title",
                   message: "stubbed failure for test",
                   line: 1,
                 },
