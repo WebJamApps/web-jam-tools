@@ -13,7 +13,7 @@
  * rather than guessed at — same fail-open convention as
  * hooks/block-agy-non-flash-model.sh.
  */
-import { ALLOWED_AGY_MODELS, isAllowedModelSlug } from "./check_agy_model.ts";
+import { ALLOWED_SESSION_SLUGS, isAllowedModelSlug } from "./check_agy_model.ts";
 
 export interface SessionModelResult {
   allowed: boolean;
@@ -27,7 +27,7 @@ export function checkSessionModel(modelName: string | undefined | null): Session
   if (isAllowedModelSlug(modelName)) {
     return { allowed: true };
   }
-  const allowedSlugs = ALLOWED_AGY_MODELS.map((m) => m.slug).join(" or ");
+  const allowedSlugs = ALLOWED_SESSION_SLUGS.join(" or ");
   return {
     allowed: false,
     reason:
