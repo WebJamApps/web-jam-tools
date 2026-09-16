@@ -410,11 +410,69 @@ function stripCellDecoration(cell: string): string {
   return cell.replace(/[`*_"'“”‘’]/g, "").trim();
 }
 
-/** A single row of a markdown table, split on unescaped `|`, trimmed, with the leading/trailing
- * empty cells produced by a `| a | b |`-style line dropped. */
+/** The backtick-delimited code span ranges on a single table row line, using the same
+ * CommonMark run-length delimiter rule as `computeExemptRanges` above (an opening run of N
+ * backticks closes only at the next run of exactly N unescaped backticks). Used by
+ * `splitTableRow` so a literal `|` inside a code span — e.g. `` `Bash|mcp__.*` `` — is not
+ * treated as a cell delimiter: GitHub Flavored Markdown table parsing treats a code span as
+ * opaque before splitting a row into cells, so a pipe inside one needs no escaping. */
+function computeBacktickSpanRanges(line: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === "\\" && i + 1 < line.length) {
+      i += 2;
+      continue;
+    }
+    if (line[i] === "`") {
+      let j = i;
+      while (j < line.length && line[j] === "`") j++;
+      const runLen = j - i;
+      let closeStart: number | null = null;
+      let k = j;
+      while (k < line.length) {
+        if (line[k] === "`") {
+          const crStart = k;
+          while (k < line.length && line[k] === "`") k++;
+          if (k - crStart === runLen) {
+            closeStart = crStart;
+            break;
+          }
+        } else {
+          k++;
+        }
+      }
+      if (closeStart !== null) {
+        ranges.push({ start: i, end: closeStart + runLen });
+        i = closeStart + runLen;
+      } else {
+        i = j;
+      }
+      continue;
+    }
+    i++;
+  }
+  return ranges;
+}
+
+/** A single row of a markdown table, split on unescaped `|` that is not inside a backtick code
+ * span, trimmed, with the leading/trailing empty cells produced by a `| a | b |`-style line
+ * dropped. */
 function splitTableRow(line: string): string[] {
   const trimmed = line.trim();
-  const cells = trimmed.split("|").map((c) => c.trim());
+  const codeSpans = computeBacktickSpanRanges(trimmed);
+  const isInCodeSpan = (idx: number) => codeSpans.some((r) => idx >= r.start && idx < r.end);
+
+  const cells: string[] = [];
+  let cellStart = 0;
+  for (let i = 0; i < trimmed.length; i++) {
+    if (trimmed[i] === "|" && !isInCodeSpan(i)) {
+      cells.push(trimmed.slice(cellStart, i).trim());
+      cellStart = i + 1;
+    }
+  }
+  cells.push(trimmed.slice(cellStart).trim());
+
   if (cells.length > 0 && cells[0] === "") cells.shift();
   if (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
   return cells;
@@ -427,9 +485,105 @@ function isTableSeparatorRow(cells: string[]): boolean {
 }
 
 /**
- * Validates the `## Load-bearing premises` table collected by the main scan below: finds the
- * "Proof" column by its header name (case-insensitive) and fails any data row whose Proof cell is
- * empty, "N/A", or hedged.
+ * Validates the structure of the `## Load-bearing premises` table itself, independent of any
+ * column's content: the separator row must sit immediately after the header row and nowhere
+ * else, there must be at least one data row, no two data rows may be duplicates of each other,
+ * and every data row must carry the same cell count as the header. `rows` is the same
+ * `{ line, lineNum, cells }` shape
+ * `validateLoadBearingPremisesTable` builds from the collected table lines; `headerRow` is its
+ * already-identified header row. Returns violations only — callers decide whether to keep
+ * validating the Proof column after structural violations are found.
+ */
+function validateLoadBearingPremisesTableStructure(
+  rows: Array<{ line: string; lineNum: number; cells: string[] }>,
+  headerRow: { line: string; lineNum: number; cells: string[] },
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+
+  const headerIdx = rows.indexOf(headerRow);
+  const afterHeader = rows.slice(headerIdx + 1);
+
+  const separatorImmediatelyAfterHeader = afterHeader.length > 0 &&
+    isTableSeparatorRow(afterHeader[0].cells);
+
+  if (!separatorImmediatelyAfterHeader) {
+    violations.push({
+      rule: "load-bearing-premises-malformed-table",
+      message:
+        `Load-bearing premises table is missing its separator row immediately after the header row (line ${headerRow.lineNum}) — markdown will not render the header as a header.`,
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+  }
+
+  // A separator row anywhere other than immediately after the header — most importantly, one
+  // sitting below one or more data rows, which markdown then renders as part of the header.
+  const remainingAfterSeparator = separatorImmediatelyAfterHeader
+    ? afterHeader.slice(1)
+    : afterHeader;
+  for (const row of remainingAfterSeparator) {
+    if (isTableSeparatorRow(row.cells)) {
+      violations.push({
+        rule: "load-bearing-premises-malformed-table",
+        message:
+          `Load-bearing premises table has a separator row at line ${row.lineNum} that is not immediately after the header — markdown renders the row(s) above it as part of the header.`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+  }
+
+  const dataRows = afterHeader.filter((row) => !isTableSeparatorRow(row.cells));
+
+  if (dataRows.length === 0) {
+    violations.push({
+      rule: "load-bearing-premises-malformed-table",
+      message:
+        `Load-bearing premises table has a header and separator but no data rows (section starting at line ${headerRow.lineNum}).`,
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+  }
+
+  const expectedCellCount = headerRow.cells.length;
+  for (const row of dataRows) {
+    if (row.cells.length !== expectedCellCount) {
+      violations.push({
+        rule: "load-bearing-premises-malformed-table",
+        message:
+          `Load-bearing premises row at line ${row.lineNum} has ${row.cells.length} cell(s), expected ${expectedCellCount} to match the header row.`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+  }
+
+  const seenAt = new Map<string, number>();
+  for (const row of dataRows) {
+    const normalized = row.cells.map((c) => c.trim()).join("");
+    const firstLineNum = seenAt.get(normalized);
+    if (firstLineNum !== undefined) {
+      violations.push({
+        rule: "load-bearing-premises-malformed-table",
+        message:
+          `Load-bearing premises table has duplicate rows at line ${firstLineNum} and line ${row.lineNum}: "${row.line.trim()}"`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    } else {
+      seenAt.set(normalized, row.lineNum);
+    }
+  }
+
+  return violations;
+}
+
+/**
+ * Validates the `## Load-bearing premises` table collected by the main scan below: checks the
+ * table's own structure (separator placement, at least one data row, no duplicate rows, no ragged
+ * rows — see `validateLoadBearingPremisesTableStructure`), then finds the "Proof" column by its
+ * header name (case-insensitive) and fails any data row whose Proof cell is empty, "N/A", or
+ * hedged.
  */
 function validateLoadBearingPremisesTable(
   tableLines: Array<{ line: string; lineNum: number }>,
@@ -448,6 +602,8 @@ function validateLoadBearingPremisesTable(
     });
     return violations;
   }
+
+  violations.push(...validateLoadBearingPremisesTableStructure(rows, headerRow));
 
   const proofColIdx = headerRow.cells.findIndex((c) => /^proof$/i.test(stripCellDecoration(c)));
   if (proofColIdx === -1) {
@@ -682,7 +838,9 @@ function validateRevisionHistoryTable(
  * 5. Fails if the document contains bare decision labels (e.g., "per D-7", "R-39").
  * 6. Fails if the document lacks a "## Both surfaces" section.
  * 7. Fails if the document lacks a "## Load-bearing premises" section, or that section's table has
- *    a Proof cell that is empty, "N/A", or hedged (web-jam-tools#815).
+ *    a Proof cell that is empty, "N/A", or hedged (web-jam-tools#815); or the table itself is
+ *    malformed — its separator row missing immediately after the header or present anywhere else,
+ *    no data rows, a duplicate data row, or a data row with a different cell count than the header.
  * 8. Fails if the document names a target issue it was invoked on but carries no verbatim
  *    blockquote of that issue's directive anywhere after naming it (web-jam-tools#815).
  * 9. Fails if a '## Revision History' table is present and lacks a 'Version' or 'Date' column, has
@@ -1007,7 +1165,8 @@ Checks a design document against the skill's body rules:
   - Fails if the document contains bare decision labels ("per D-7", "R-39").
   - Fails if the document lacks a "## Both surfaces" section.
   - Fails if the document lacks a "## Load-bearing premises" section, or that section's Proof
-    column has a cell that is empty, "N/A", or hedged.
+    column has a cell that is empty, "N/A", or hedged, or its table is structurally malformed
+    (separator row missing/misplaced, no data rows, a duplicate row, or a ragged row).
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
 
