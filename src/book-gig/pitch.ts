@@ -559,6 +559,100 @@ export const BACKEND_FOOTER_HTML =
   '<img src="cid:footerphoto" width="320" alt="Josh and Maria performing" ' +
   'style="width:320px;max-width:100%;height:auto;border-radius:8px;display:block;margin:0 auto;"></td></tr></table>';
 
+export const DARK_WRAPPER_BG = "#121212";
+export const DARK_WRAPPER_TEXT = "#f0f0f0";
+export const DARK_WRAPPER_LINK = "#4fc3f7";
+
+export const DARK_WRAPPER_START = '<meta name="color-scheme" content="dark">\n' +
+  '<meta name="supported-color-schemes" content="dark">\n' +
+  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="${DARK_WRAPPER_BG}" ` +
+  `style="background-color:${DARK_WRAPPER_BG};color:${DARK_WRAPPER_TEXT};">\n` +
+  `<tr><td style="color:${DARK_WRAPPER_TEXT};">\n`;
+
+export const DARK_WRAPPER_END = "\n</td></tr></table>";
+
+export const BACKEND_DARK_WRAPPER_START = DARK_WRAPPER_START;
+export const BACKEND_DARK_WRAPPER_END = DARK_WRAPPER_END;
+
+// Apply inline light link color to ensure contrast >= 4.5:1 against dark background (D-72, #1094).
+export function applyInlineLinkColor(html: string): string {
+  return html.replace(/<a\b([^>]*)>/gi, (match, attrs) => {
+    if (!attrs) return `<a style="color:${DARK_WRAPPER_LINK};">`;
+    const styleMatch = attrs.match(/\bstyle="([^"]*)"/i);
+    if (styleMatch) {
+      if (/(?:^|;)\s*color\s*:/i.test(styleMatch[1])) return match;
+      const newStyle = `style="color:${DARK_WRAPPER_LINK};${styleMatch[1]}"`;
+      return `<a${attrs.replace(styleMatch[0], () => newStyle)}>`;
+    }
+    const singleStyleMatch = attrs.match(/\bstyle='([^']*)'/i);
+    if (singleStyleMatch) {
+      if (/(?:^|;)\s*color\s*:/i.test(singleStyleMatch[1])) return match;
+      const newStyle = `style='color:${DARK_WRAPPER_LINK};${singleStyleMatch[1]}'`;
+      return `<a${attrs.replace(singleStyleMatch[0], () => newStyle)}>`;
+    }
+    return `<a style="color:${DARK_WRAPPER_LINK};"${attrs}>`;
+  });
+}
+
+// Reverse the inline link color added by applyInlineLinkColor when stripping the dark wrapper.
+export function stripInlineLinkColor(html: string): string {
+  return html.replace(/<a\b([^>]*)>/gi, (match, attrs) => {
+    if (!attrs) return match;
+    const doubleMatch = attrs.match(/\bstyle="([^"]*)"/i);
+    if (doubleMatch) {
+      const styleContent = doubleMatch[1];
+      if (/^color\s*:\s*#4fc3f7;?\s*$/i.test(styleContent)) {
+        return `<a${attrs.replace(/\s*\bstyle="[^"]*"/i, "")}>`;
+      }
+      if (/^color\s*:\s*#4fc3f7;?\s*/i.test(styleContent)) {
+        const remaining = styleContent.replace(/^color\s*:\s*#4fc3f7;?\s*/i, "");
+        return `<a${attrs.replace(doubleMatch[0], `style="${remaining}"`)}>`;
+      }
+    }
+    const singleMatch = attrs.match(/\bstyle='([^']*)'/i);
+    if (singleMatch) {
+      const styleContent = singleMatch[1];
+      if (/^color\s*:\s*#4fc3f7;?\s*$/i.test(styleContent)) {
+        return `<a${attrs.replace(/\s*\bstyle='[^']*'/i, "")}>`;
+      }
+      if (/^color\s*:\s*#4fc3f7;?\s*/i.test(styleContent)) {
+        const remaining = styleContent.replace(/^color\s*:\s*#4fc3f7;?\s*/i, "");
+        return `<a${attrs.replace(singleMatch[0], `style='${remaining}'`)}>`;
+      }
+    }
+    return match;
+  });
+}
+
+// Wrap finished email HTML in the presentation table with dark background and light text
+// (D-72, web-jam-back#1094).
+export function wrapDarkEmail(html: string): string {
+  return `${DARK_WRAPPER_START}${applyInlineLinkColor(html)}${DARK_WRAPPER_END}`;
+}
+
+// Strip the backend's dark-mode wrapper presentation table (D-72, web-jam-back#1094),
+// returning the inner email HTML with link styling restored to template baseline.
+export function stripDarkWrapper(html: string): string {
+  let inner = html;
+  let wasWrapped = false;
+  if (html.startsWith(DARK_WRAPPER_START) && html.endsWith(DARK_WRAPPER_END)) {
+    inner = html.slice(DARK_WRAPPER_START.length, html.length - DARK_WRAPPER_END.length);
+    wasWrapped = true;
+  } else {
+    const trimmed = html.trim();
+    const start = DARK_WRAPPER_START.trimStart();
+    const end = DARK_WRAPPER_END.trimEnd();
+    if (trimmed.startsWith(start) && trimmed.endsWith(end)) {
+      inner = trimmed.slice(start.length, trimmed.length - end.length)
+        .replace(/^\r?\n/, "")
+        .replace(/\r?\n$/, "");
+      wasWrapped = true;
+    }
+  }
+  if (!wasWrapped) return html;
+  return stripInlineLinkColor(inner);
+}
+
 function substituteNonCustomBodyTokens(
   templateText: string,
   tokens: {
@@ -610,10 +704,11 @@ function renderCustomHtml(customText: string): string {
 }
 
 function matchesSkeleton(skeleton: string, actualHtml: string): boolean {
+  const unwrappedHtml = stripDarkWrapper(actualHtml);
   const markerIndex = skeleton.indexOf(CUSTOM_BODY_MARKER);
   if (markerIndex === -1) {
     // No declared [Custom Body] slot in this template: the fixed prose must match exactly.
-    return actualHtml === skeleton;
+    return unwrappedHtml === skeleton;
   }
 
   const prefix = skeleton.slice(0, markerIndex);
@@ -622,7 +717,7 @@ function matchesSkeleton(skeleton: string, actualHtml: string): boolean {
   // Empty custom body: the real renderer removes the marker AND its one trailing newline
   // together, so no gap remains at all.
   const emptyVariant = prefix + suffix.replace(/^\r?\n/, "");
-  if (actualHtml === emptyVariant) {
+  if (unwrappedHtml === emptyVariant) {
     return true;
   }
 
@@ -632,9 +727,9 @@ function matchesSkeleton(skeleton: string, actualHtml: string): boolean {
   // a newline; the backend concatenates them directly, so that one newline is optional.
   const prefixNoGap = prefix.replace(/\r?\n$/, "");
   if (
-    actualHtml.startsWith(prefixNoGap) &&
-    actualHtml.endsWith(suffix) &&
-    actualHtml.length > prefixNoGap.length + suffix.length
+    unwrappedHtml.startsWith(prefixNoGap) &&
+    unwrappedHtml.endsWith(suffix) &&
+    unwrappedHtml.length > prefixNoGap.length + suffix.length
   ) {
     return true;
   }
@@ -740,7 +835,8 @@ function divergenceFromTemplate(
     }
   }
 
-  const actualHtml = stripBackendFooter(pitch.htmlBody || "", template);
+  const unwrappedHtml = stripDarkWrapper(pitch.htmlBody || "");
+  const actualHtml = stripBackendFooter(unwrappedHtml, template);
 
   for (const intro of introVariants) {
     for (const tks of tokenVariants) {
