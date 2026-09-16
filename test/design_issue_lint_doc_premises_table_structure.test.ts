@@ -162,6 +162,18 @@ Deno.test("lintDesignDoc: a literal pipe inside a backtick code span in a cell i
   assertEquals(result.violations.length, 0);
 });
 
+Deno.test("lintDesignDoc: an escaped pipe (\\|) in a cell is not a false-positive ragged row", () => {
+  const doc = docWithPremisesTable(
+    `| Premise | Proof | Proved |
+|---|---|---|
+| Premise with \\| escaped pipe | Proof with \\| escaped pipe | ${TODAY} |`,
+  );
+
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
 Deno.test("lintDesignDoc: document missing the '## Load-bearing premises' section entirely still fails as before", () => {
   const doc = `# Title
 

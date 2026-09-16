@@ -212,6 +212,21 @@ Deno.test("verifyCitations: a closed issue acknowledged as closed on its line pa
   assertEquals(result.valid, true, JSON.stringify(result.violations));
 });
 
+Deno.test("verifyCitations: a merged pull request acknowledged as merged in its sentence passes", async () => {
+  const doc = `web-jam-tools#526 "some PR title" was merged in an earlier release.\n`;
+
+  const result = await verifyCitations(doc, "test.md", {
+    lookupImpl: stubLookup({
+      "WebJamApps/web-jam-tools#526": {
+        state: "CLOSED",
+        title: "some PR title",
+      },
+    }),
+  });
+
+  assertEquals(result.valid, true, JSON.stringify(result.violations));
+});
+
 Deno.test("verifyCitations: a closed issue NOT acknowledged on its line fails", async () => {
   const doc = `| web-jam-tools#1018 | hooks/agy-model-guard fix | In progress |\n`;
 

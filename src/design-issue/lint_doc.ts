@@ -467,22 +467,39 @@ function computeBacktickSpanRanges(line: string): Array<{ start: number; end: nu
 }
 
 /** A single row of a markdown table, split on unescaped `|` that is not inside a backtick code
- * span, trimmed, with the leading/trailing empty cells produced by a `| a | b |`-style line
- * dropped. */
+ * span and not escaped as `\|`, trimmed, with the leading/trailing empty cells produced by a
+ * `| a | b |`-style line dropped. */
 function splitTableRow(line: string): string[] {
   const trimmed = line.trim();
   const codeSpans = computeBacktickSpanRanges(trimmed);
   const isInCodeSpan = (idx: number) => codeSpans.some((r) => idx >= r.start && idx < r.end);
 
   const cells: string[] = [];
-  let cellStart = 0;
-  for (let i = 0; i < trimmed.length; i++) {
-    if (trimmed[i] === "|" && !isInCodeSpan(i)) {
-      cells.push(trimmed.slice(cellStart, i).trim());
-      cellStart = i + 1;
+  let current = "";
+  let i = 0;
+  while (i < trimmed.length) {
+    if (!isInCodeSpan(i) && trimmed[i] === "\\" && i + 1 < trimmed.length) {
+      if (trimmed[i + 1] === "|") {
+        current += "|";
+        i += 2;
+        continue;
+      }
+      if (trimmed[i + 1] === "\\") {
+        current += "\\\\";
+        i += 2;
+        continue;
+      }
     }
+    if (trimmed[i] === "|" && !isInCodeSpan(i)) {
+      cells.push(current.trim());
+      current = "";
+      i++;
+      continue;
+    }
+    current += trimmed[i];
+    i++;
   }
-  cells.push(trimmed.slice(cellStart).trim());
+  cells.push(current.trim());
 
   if (cells.length > 0 && cells[0] === "") cells.shift();
   if (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
@@ -941,6 +958,13 @@ function validateRevisionHistoryTable(
  *     date is missing, malformed, or earlier than today — matched by header name, never by
  *     position (web-jam-tools#1025).
  */
+function toLocalIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function lintDesignDoc(
   content: string,
   docPath: string = "",
@@ -949,7 +973,12 @@ export function lintDesignDoc(
   const violations: LintViolation[] = [];
   const lines = content.split(/\r?\n/);
   const nowImpl = options.nowImpl ?? (() => new Date());
-  const todayIso = nowImpl().toISOString().slice(0, 10);
+  const now = nowImpl();
+  const todayUtc = now.toISOString().slice(0, 10);
+  const todayLocal = toLocalIsoDate(now);
+  // Earliest calendar day of today across local and UTC time, so evening local work
+  // (where UTC has already rolled over to tomorrow) does not flag today's local date as stale.
+  const todayIso = todayLocal < todayUtc ? todayLocal : todayUtc;
 
   let inCodeBlock = false;
   let hasBothSurfacesSection = false;

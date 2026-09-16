@@ -182,3 +182,20 @@ Deno.test("lintDesignDoc: without an nowImpl override, the production path uses 
   );
   assertEquals(Boolean(violation), true, JSON.stringify(staleResult.violations));
 });
+
+Deno.test("lintDesignDoc: today's local calendar date always passes without timezone false positives", () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const localToday = `${y}-${m}-${d}`;
+
+  const doc = docWithPremisesTable(
+    `| Premise | Proof | Proved |
+|---|---|---|
+| P8 proved today locally | Proof eight | ${localToday} |`,
+  );
+
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, true, JSON.stringify(result.violations));
+});

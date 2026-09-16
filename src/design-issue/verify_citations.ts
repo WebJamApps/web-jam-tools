@@ -547,7 +547,7 @@ export interface VerifyCitationsOptions {
   lookupImpl?: CitationLookupFn;
 }
 
-const CLOSED_WORD_REGEX = /\bclosed\b/i;
+const CLOSED_WORD_REGEX = /\b(?:closed|merged)\b/i;
 
 /**
  * Checks a design document's citations for liveness (web-jam-tools#1025): every cited issue or
@@ -687,7 +687,7 @@ Reads every issue or pull request a design document cites (repo#number, owner/re
 GitHub issue URL) and checks it against the live issue or pull request:
   - Fails if the document quotes a title beside a citation and the live title differs.
   - Fails if the cited issue is CLOSED (or the cited pull request is CLOSED or MERGED) and the
-    sentence carrying the citation does not say "closed".
+    sentence carrying the citation does not say "closed" or "merged".
   - REFUSES (exit 2) rather than passing when a lookup cannot be completed — the call errors,
     times out, is rate-limited, returns unparseable data, names a repo that cannot be resolved, or
     the number names neither an issue nor a pull request.
