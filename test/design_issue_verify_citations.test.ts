@@ -75,6 +75,100 @@ Deno.test("extractCitations: a document with no citations returns an empty list"
   assertEquals(extractCitations(doc).length, 0);
 });
 
+// --- sentence-scoped acknowledgement (web-jam-tools#1025 follow-up) ---
+
+Deno.test("verifyCitations: acknowledging 'closed' on a LATER wrapped line of the same sentence passes", async () => {
+  // Hard-wrapped prose: one sentence spanning three physical lines, "closed" arriving on the
+  // third — a plain per-physical-line check would miss it; the sentence-wide scope must not.
+  const doc =
+    `This is why web-jam-tools#432 "agy hooks do not enforce — all 12 are inert on Flash, and a
+Stop/SessionStart entry kills the whole config; fix that, then give Antigravity Gmail MCP fenced by
+a working hook" was filed and closed about.
+`;
+
+  const result = await verifyCitations(doc, "test.md", {
+    lookupImpl: stubLookup({
+      "WebJamApps/web-jam-tools#432": {
+        state: "CLOSED",
+        title:
+          "agy hooks do not enforce — all 12 are inert on Flash, and a\nStop/SessionStart entry kills the whole config; fix that, then give Antigravity Gmail MCP fenced by\na working hook",
+      },
+    }),
+  });
+
+  // Title comparison isn't the point of this test (the quoted title itself also wraps physical
+  // lines, which would be a drift concern for a different test); only check the acknowledgement.
+  const closedViolation = result.violations.find((v) =>
+    v.rule === "unacknowledged-closed-citation"
+  );
+  assertEquals(closedViolation, undefined, JSON.stringify(result.violations));
+});
+
+Deno.test("verifyCitations: 'closed' in a DIFFERENT sentence of the same paragraph still fails — widening is to the sentence, not the paragraph", () => {
+  const doc = `See web-jam-tools#1018 "hooks fix" for the original report. That issue is now closed.
+`;
+
+  // This is a same-paragraph, two-sentence case: assert directly on extractCitations's computed
+  // scope, which is what verifyCitations checks "closed" against.
+  const citations = extractCitations(doc);
+  assertEquals(citations.length, 1);
+  assertEquals(citations[0].acknowledgementScope.includes("closed"), false);
+  assertStringIncludes(citations[0].acknowledgementScope, "hooks fix");
+});
+
+Deno.test("verifyCitations integration: 'closed' in a different sentence of the same paragraph fails", async () => {
+  const doc = `See web-jam-tools#1018 "hooks fix" for the original report. That issue is now closed.
+`;
+
+  const result = await verifyCitations(doc, "test.md", {
+    lookupImpl: stubLookup({
+      "WebJamApps/web-jam-tools#1018": { state: "CLOSED", title: "hooks fix" },
+    }),
+  });
+
+  const violation = result.violations.find((v) => v.rule === "unacknowledged-closed-citation");
+  assertEquals(Boolean(violation), true, JSON.stringify(result.violations));
+});
+
+Deno.test("extractCitations: a table-cell citation is scoped to its own cell — an adjacent cell saying 'closed' does not acknowledge it", () => {
+  const doc = `| web-jam-tools#1018 | hooks/agy-model-guard fix | closed |
+`;
+  const citations = extractCitations(doc);
+  assertEquals(citations.length, 1);
+  assertEquals(citations[0].acknowledgementScope.includes("closed"), false);
+  assertStringIncludes(citations[0].acknowledgementScope, "web-jam-tools#1018");
+});
+
+Deno.test("extractCitations: a table-cell citation whose OWN cell says closed is acknowledged", () => {
+  const doc = `| web-jam-tools#1018 "hooks/agy-model-guard fix", closed | In progress |
+`;
+  const citations = extractCitations(doc);
+  assertEquals(citations.length, 1);
+  assertEquals(citations[0].acknowledgementScope.includes("closed"), true);
+});
+
+Deno.test("extractCitations: a period inside a backtick code span does not split the sentence", () => {
+  const doc =
+    `The fix lives in \`hooks/lib/opus_gate.ts\` and resolves web-jam-tools#1018 "hooks fix", and was closed.
+`;
+  const citations = extractCitations(doc);
+  assertEquals(citations.length, 1);
+  // If the code span's internal structure were mistaken for sentence punctuation, the scope
+  // would be truncated before reaching "closed" at the end of the real sentence.
+  assertEquals(citations[0].acknowledgementScope.includes("closed"), true);
+  assertStringIncludes(citations[0].acknowledgementScope, "opus_gate.ts");
+});
+
+Deno.test("extractCitations: a period inside a version number such as 1.38.15 does not split the sentence", () => {
+  const doc =
+    `The fix shipped in 1.38.15 and resolves web-jam-tools#1018 "hooks fix", and was closed.
+`;
+  const citations = extractCitations(doc);
+  assertEquals(citations.length, 1);
+  assertEquals(citations[0].acknowledgementScope.includes("closed"), true);
+  assertStringIncludes(citations[0].acknowledgementScope, "1.38.15");
+});
+
 // --- verifyCitations ---
 
 function stubLookup(map: Record<string, CitationLookup>) {
@@ -399,6 +493,162 @@ Deno.test("defaultLookupCitations: an issue number GraphQL could not resolve ref
   const bad = results.get("WebJamApps/web-jam-tools#999999");
   assertEquals(Boolean(bad?.error), true);
   assertStringIncludes(bad!.error!, "999999");
+});
+
+Deno.test("defaultLookupCitations: a number that resolves as a pull request (not an issue) is used, batched in the same query", async () => {
+  let queryArg = "";
+  const mockRunner: CommandRunner = (args: string[]): Promise<CommandResult> => {
+    queryArg = args.find((a) => a.startsWith("query="))!;
+    return Promise.resolve({
+      code: 0,
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            i526: null,
+            p526: {
+              number: 526,
+              title:
+                "block-irreversible-operations.sh matches text inside heredocs and strings, so writing a test about the guard is blocked as if it were a deletion",
+              state: "MERGED",
+            },
+          },
+        },
+        errors: [
+          {
+            type: "NOT_FOUND",
+            path: ["repository", "i526"],
+            message: "Could not resolve to an Issue with the number of 526.",
+          },
+        ],
+      }),
+      stderr: "",
+    });
+  };
+
+  const results = await defaultLookupCitations(
+    [{ repo: "WebJamApps/web-jam-tools", number: 526 }],
+    mockRunner,
+  );
+
+  assertStringIncludes(queryArg, "issue(number: 526)");
+  assertStringIncludes(queryArg, "pullRequest(number: 526)");
+
+  const entry = results.get("WebJamApps/web-jam-tools#526");
+  assertEquals(
+    entry?.title,
+    "block-irreversible-operations.sh matches text inside heredocs and strings, so writing a test about the guard is blocked as if it were a deletion",
+  );
+  assertEquals(entry?.state, "CLOSED");
+  assertEquals(entry?.error, undefined);
+});
+
+Deno.test("defaultLookupCitations: a MERGED pull request maps to CLOSED, a CLOSED pull request maps to CLOSED, an OPEN one maps to OPEN", async () => {
+  const stateFor = async (rawState: string) => {
+    const mockRunner: CommandRunner = (): Promise<CommandResult> => {
+      return Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({
+          data: { repository: { i1: null, p1: { number: 1, title: "T", state: rawState } } },
+        }),
+        stderr: "",
+      });
+    };
+    const results = await defaultLookupCitations(
+      [{ repo: "WebJamApps/web-jam-tools", number: 1 }],
+      mockRunner,
+    );
+    return results.get("WebJamApps/web-jam-tools#1")?.state;
+  };
+
+  assertEquals(await stateFor("MERGED"), "CLOSED");
+  assertEquals(await stateFor("CLOSED"), "CLOSED");
+  assertEquals(await stateFor("OPEN"), "OPEN");
+});
+
+Deno.test("defaultLookupCitations: a number that is neither an issue nor a pull request REFUSES with unresolved-citation", async () => {
+  const mockRunner: CommandRunner = (): Promise<CommandResult> => {
+    return Promise.resolve({
+      code: 1,
+      stdout: JSON.stringify({
+        data: { repository: { i999999: null, p999999: null } },
+        errors: [
+          {
+            type: "NOT_FOUND",
+            path: ["repository", "i999999"],
+            message: "Could not resolve to an Issue with the number of 999999.",
+          },
+          {
+            type: "NOT_FOUND",
+            path: ["repository", "p999999"],
+            message: "Could not resolve to a PullRequest with the number of 999999.",
+          },
+        ],
+      }),
+      stderr: "gh: Could not resolve to an Issue with the number of 999999.",
+    });
+  };
+
+  const results = await defaultLookupCitations(
+    [{ repo: "WebJamApps/web-jam-tools", number: 999999 }],
+    mockRunner,
+  );
+
+  const entry = results.get("WebJamApps/web-jam-tools#999999");
+  assertEquals(Boolean(entry?.error), true);
+});
+
+Deno.test("verifyCitations: a cited merged pull request that is acknowledged passes; an unacknowledged one fails", async () => {
+  const acknowledgedDoc =
+    `web-jam-tools#526 "block-irreversible-operations.sh matches text inside heredocs and strings, so writing a test about the guard is blocked as if it were a deletion" records the same shape in a different guard, and was closed by tokenising rather than raw text matching.\n`;
+
+  const acknowledgedResult = await verifyCitations(acknowledgedDoc, "test.md", {
+    lookupImpl: stubLookup({
+      "WebJamApps/web-jam-tools#526": {
+        state: "CLOSED",
+        title:
+          "block-irreversible-operations.sh matches text inside heredocs and strings, so writing a test about the guard is blocked as if it were a deletion",
+      },
+    }),
+  });
+  assertEquals(acknowledgedResult.valid, true, JSON.stringify(acknowledgedResult.violations));
+
+  const unacknowledgedDoc = `| web-jam-tools#526 | some PR title | merged recently |\n`;
+  const unacknowledgedResult = await verifyCitations(unacknowledgedDoc, "test.md", {
+    lookupImpl: stubLookup({
+      "WebJamApps/web-jam-tools#526": { state: "CLOSED", title: "some PR title" },
+    }),
+  });
+  const violation = unacknowledgedResult.violations.find((v) =>
+    v.rule === "unacknowledged-closed-citation"
+  );
+  assertEquals(Boolean(violation), true, JSON.stringify(unacknowledgedResult.violations));
+});
+
+Deno.test("verifyCitations: a cited OPEN pull request passes without needing acknowledgement", async () => {
+  const doc = `web-jam-tools#600 "some open PR" is still in review.\n`;
+
+  const result = await verifyCitations(doc, "test.md", {
+    lookupImpl: stubLookup({
+      "WebJamApps/web-jam-tools#600": { state: "OPEN", title: "some open PR" },
+    }),
+  });
+
+  assertEquals(result.valid, true, JSON.stringify(result.violations));
+});
+
+Deno.test("verifyCitations: a drifted pull-request title fails the same way a drifted issue title does", async () => {
+  const doc = `See web-jam-tools#600 "old PR title" for background.\n`;
+
+  const result = await verifyCitations(doc, "test.md", {
+    lookupImpl: stubLookup({
+      "WebJamApps/web-jam-tools#600": { state: "OPEN", title: "new live PR title" },
+    }),
+  });
+
+  const violation = result.violations.find((v) => v.rule === "drifted-citation-title");
+  assertEquals(Boolean(violation), true, JSON.stringify(result.violations));
+  assertStringIncludes(violation!.message, "old PR title");
+  assertStringIncludes(violation!.message, "new live PR title");
 });
 
 Deno.test("defaultLookupCitations: gh's non-zero exit on a field-level error doesn't poison the other citations in the same batch", async () => {
