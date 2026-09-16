@@ -5,16 +5,16 @@
  */
 
 export interface ChordLyricLine {
-  /** Lyrics text (e.g. "I'll meet you there in the narthex") */
+  /** Lyrics text with inline chord markers (e.g. "re[C/E]member") */
   lyrics: string;
-  /** Guitar capo chords positioned at character indices (or space-padded string) */
-  guitarChords?: string;
-  /** Bass sounding chords positioned at character indices (or space-padded string) */
-  bassChords?: string;
-  /** Single-tier chords when guitar and bass share the same key/no capo */
-  chords?: string;
   /** Optional performance annotations (e.g. "[mp]", "[soft]", "[no bass]") */
   annotation?: string;
+  /** Optional legacy/explicit guitar chords positioned at character indices */
+  guitarChords?: string;
+  /** Optional legacy/explicit bass chords positioned at character indices */
+  bassChords?: string;
+  /** Optional legacy/explicit single-tier chords when guitar and bass share the same key/no capo */
+  chords?: string;
 }
 
 export interface SongSection {
@@ -50,4 +50,18 @@ export interface SongMetadata {
 export interface SongDefinition {
   metadata: SongMetadata;
   sections: SongSection[];
+}
+
+export interface RenderedLine {
+  lyrics: string;
+  guitarChords: string;
+  bassChords?: string;
+  chords?: string;
+  annotation?: string;
+}
+
+export interface ParseLineOptions {
+  mode?: "dual-tier" | "single-tier";
+  capo?: number;
+  maxLineWidth?: number;
 }
