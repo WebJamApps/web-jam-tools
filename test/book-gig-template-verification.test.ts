@@ -298,6 +298,31 @@ Deno.test("verifyPitchAgainstTemplate: handles 'there' contact name fallback wit
   assertEquals(violation!.reason.includes("diverges from stored template"), true);
 });
 
+Deno.test("verifyPitchAgainstTemplate: greets first word of multi-word contactName and matches backend (#1007, D-69)", () => {
+  const venue = coldVenue({ contactName: "Liza Crowder" });
+
+  // Render locally (which predicts first word "Liza")
+  const localPitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+  assertEquals(localPitch.htmlBody!.includes("<p>Hi Liza,</p>"), true);
+  assertEquals(localPitch.htmlBody!.includes("<p>Hi Liza Crowder,</p>"), false);
+  assertEquals(verifyPitchAgainstTemplate(localPitch, venue, WEEKEND, {}, TEMPLATES), null);
+
+  // Backend render also greets first word "Hi Liza,"
+  const backendPitch: PitchEmail = {
+    ...localPitch,
+  };
+  assertEquals(verifyPitchAgainstTemplate(backendPitch, venue, WEEKEND, {}, TEMPLATES), null);
+
+  // Stale rendered email containing full name "Hi Liza Crowder," fails verification
+  const stalePitch: PitchEmail = {
+    ...localPitch,
+    htmlBody: localPitch.htmlBody!.replace("<p>Hi Liza,</p>", "<p>Hi Liza Crowder,</p>"),
+  };
+  const violation = verifyPitchAgainstTemplate(stalePitch, venue, WEEKEND, {}, TEMPLATES);
+  assertNotEquals(violation, null);
+  assertEquals(violation!.reason.includes("diverges from stored template"), true);
+});
+
 Deno.test("verifyPitchAgainstTemplate: fails closed when candidate venue record is missing or corrupted", () => {
   const venue = coldVenue();
   const pitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
