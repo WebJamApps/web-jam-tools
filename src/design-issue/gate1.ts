@@ -5,6 +5,7 @@
 import * as path from "@std/path";
 import { renderDesignDoc } from "../../scripts/render_design_doc.ts";
 import { lintDesignDoc } from "./lint_doc.ts";
+import { verifyCitations, type VerifyCitationsResult } from "./verify_citations.ts";
 
 export interface Gate1Options {
   docPath: string;
@@ -15,6 +16,11 @@ export interface Gate1Options {
   display?: string;
   dropboxDir?: string;
   findExistingDesignDocsImpl?: typeof findExistingDesignDocs;
+  /** Overrides the citation-liveness check (web-jam-tools#1025) for tests. The default
+   * (`verifyCitations`) never reaches the network for a document with no citations at all — most
+   * gate1 test fixtures — but a test exercising this rule's wiring without a real `gh` call
+   * injects a stub here instead. Production (CLI) always uses the default. */
+  verifyCitationsImpl?: (content: string, docPath: string) => Promise<VerifyCitationsResult>;
 }
 
 export interface Gate1Result {
@@ -221,6 +227,21 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
       .join("\n");
     throw new Error(
       `Design document at ${absDocPath} failed design:lint-doc with ${lintResult.violations.length} violation(s) — refusing to render or open Gate 1:\n${violationLines}`,
+    );
+  }
+
+  // Refuse to render or open a document whose citations don't check out — a drifted title, a
+  // closed issue cited as though it were open, or a citation whose lookup could not even be
+  // completed (fail closed, same as design:lint-doc above; web-jam-tools#1025). There is no flag
+  // to skip this either.
+  const verifyCitationsRunner = options.verifyCitationsImpl ?? verifyCitations;
+  const citationsResult = await verifyCitationsRunner(markdownContent, absDocPath);
+  if (!citationsResult.valid) {
+    const violationLines = citationsResult.violations
+      .map((v) => `  - [${v.rule}]${v.line ? ` (line ${v.line})` : ""} ${v.message}`)
+      .join("\n");
+    throw new Error(
+      `Design document at ${absDocPath} failed design:verify-citations with ${citationsResult.violations.length} violation(s) — refusing to render or open Gate 1:\n${violationLines}`,
     );
   }
 

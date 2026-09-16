@@ -23,6 +23,17 @@ export interface LintDocOptions {
   json?: boolean;
 }
 
+/**
+ * Options threaded through `lintDesignDoc` for injecting "today" in tests (web-jam-tools#1025).
+ * Follows this repo's existing `xImpl` dependency-injection convention (see `screenshotImpl` /
+ * `openBrowserImpl` in gate1.ts, `readTextFileImpl` in `resolveCanonicalDesignDoc`): a default
+ * production implementation, overridable only by callers (i.e. tests) that pass one explicitly.
+ * The CLI and Gate 1 never pass `nowImpl`, so the production path always uses the real clock.
+ */
+export interface LintDesignDocOptions {
+  nowImpl?: () => Date;
+}
+
 /** A half-open character range `[start, end)` on a single line that is a mention (inline code
  * span or quoted text) rather than a use, and is therefore exempt from banned-phrase matching. */
 interface ExemptRange {
@@ -410,11 +421,86 @@ function stripCellDecoration(cell: string): string {
   return cell.replace(/[`*_"'“”‘’]/g, "").trim();
 }
 
-/** A single row of a markdown table, split on unescaped `|`, trimmed, with the leading/trailing
- * empty cells produced by a `| a | b |`-style line dropped. */
+/** The backtick-delimited code span ranges on a single table row line, using the same
+ * CommonMark run-length delimiter rule as `computeExemptRanges` above (an opening run of N
+ * backticks closes only at the next run of exactly N unescaped backticks). Used by
+ * `splitTableRow` so a literal `|` inside a code span — e.g. `` `Bash|mcp__.*` `` — is not
+ * treated as a cell delimiter: GitHub Flavored Markdown table parsing treats a code span as
+ * opaque before splitting a row into cells, so a pipe inside one needs no escaping. */
+function computeBacktickSpanRanges(line: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === "\\" && i + 1 < line.length) {
+      i += 2;
+      continue;
+    }
+    if (line[i] === "`") {
+      let j = i;
+      while (j < line.length && line[j] === "`") j++;
+      const runLen = j - i;
+      let closeStart: number | null = null;
+      let k = j;
+      while (k < line.length) {
+        if (line[k] === "`") {
+          const crStart = k;
+          while (k < line.length && line[k] === "`") k++;
+          if (k - crStart === runLen) {
+            closeStart = crStart;
+            break;
+          }
+        } else {
+          k++;
+        }
+      }
+      if (closeStart !== null) {
+        ranges.push({ start: i, end: closeStart + runLen });
+        i = closeStart + runLen;
+      } else {
+        i = j;
+      }
+      continue;
+    }
+    i++;
+  }
+  return ranges;
+}
+
+/** A single row of a markdown table, split on unescaped `|` that is not inside a backtick code
+ * span and not escaped as `\|`, trimmed, with the leading/trailing empty cells produced by a
+ * `| a | b |`-style line dropped. */
 function splitTableRow(line: string): string[] {
   const trimmed = line.trim();
-  const cells = trimmed.split("|").map((c) => c.trim());
+  const codeSpans = computeBacktickSpanRanges(trimmed);
+  const isInCodeSpan = (idx: number) => codeSpans.some((r) => idx >= r.start && idx < r.end);
+
+  const cells: string[] = [];
+  let current = "";
+  let i = 0;
+  while (i < trimmed.length) {
+    if (!isInCodeSpan(i) && trimmed[i] === "\\" && i + 1 < trimmed.length) {
+      if (trimmed[i + 1] === "|") {
+        current += "|";
+        i += 2;
+        continue;
+      }
+      if (trimmed[i + 1] === "\\") {
+        current += "\\\\";
+        i += 2;
+        continue;
+      }
+    }
+    if (trimmed[i] === "|" && !isInCodeSpan(i)) {
+      cells.push(current.trim());
+      current = "";
+      i++;
+      continue;
+    }
+    current += trimmed[i];
+    i++;
+  }
+  cells.push(current.trim());
+
   if (cells.length > 0 && cells[0] === "") cells.shift();
   if (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
   return cells;
@@ -427,12 +513,188 @@ function isTableSeparatorRow(cells: string[]): boolean {
 }
 
 /**
- * Validates the `## Load-bearing premises` table collected by the main scan below: finds the
- * "Proof" column by its header name (case-insensitive) and fails any data row whose Proof cell is
- * empty, "N/A", or hedged.
+ * Validates the structure of the `## Load-bearing premises` table itself, independent of any
+ * column's content: the separator row must sit immediately after the header row and nowhere
+ * else, there must be at least one data row, no two data rows may be duplicates of each other,
+ * and every data row must carry the same cell count as the header. `rows` is the same
+ * `{ line, lineNum, cells }` shape
+ * `validateLoadBearingPremisesTable` builds from the collected table lines; `headerRow` is its
+ * already-identified header row. Returns violations only — callers decide whether to keep
+ * validating the Proof column after structural violations are found.
+ */
+function validateLoadBearingPremisesTableStructure(
+  rows: Array<{ line: string; lineNum: number; cells: string[] }>,
+  headerRow: { line: string; lineNum: number; cells: string[] },
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+
+  const headerIdx = rows.indexOf(headerRow);
+  const afterHeader = rows.slice(headerIdx + 1);
+
+  const separatorImmediatelyAfterHeader = afterHeader.length > 0 &&
+    isTableSeparatorRow(afterHeader[0].cells);
+
+  if (!separatorImmediatelyAfterHeader) {
+    violations.push({
+      rule: "load-bearing-premises-malformed-table",
+      message:
+        `Load-bearing premises table is missing its separator row immediately after the header row (line ${headerRow.lineNum}) — markdown will not render the header as a header.`,
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+  }
+
+  // A separator row anywhere other than immediately after the header — most importantly, one
+  // sitting below one or more data rows, which markdown then renders as part of the header.
+  const remainingAfterSeparator = separatorImmediatelyAfterHeader
+    ? afterHeader.slice(1)
+    : afterHeader;
+  for (const row of remainingAfterSeparator) {
+    if (isTableSeparatorRow(row.cells)) {
+      violations.push({
+        rule: "load-bearing-premises-malformed-table",
+        message:
+          `Load-bearing premises table has a separator row at line ${row.lineNum} that is not immediately after the header — markdown renders the row(s) above it as part of the header.`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+  }
+
+  const dataRows = afterHeader.filter((row) => !isTableSeparatorRow(row.cells));
+
+  if (dataRows.length === 0) {
+    violations.push({
+      rule: "load-bearing-premises-malformed-table",
+      message:
+        `Load-bearing premises table has a header and separator but no data rows (section starting at line ${headerRow.lineNum}).`,
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+  }
+
+  const expectedCellCount = headerRow.cells.length;
+  for (const row of dataRows) {
+    if (row.cells.length !== expectedCellCount) {
+      violations.push({
+        rule: "load-bearing-premises-malformed-table",
+        message:
+          `Load-bearing premises row at line ${row.lineNum} has ${row.cells.length} cell(s), expected ${expectedCellCount} to match the header row.`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+  }
+
+  const seenAt = new Map<string, number>();
+  for (const row of dataRows) {
+    const normalized = row.cells.map((c) => c.trim()).join("");
+    const firstLineNum = seenAt.get(normalized);
+    if (firstLineNum !== undefined) {
+      violations.push({
+        rule: "load-bearing-premises-malformed-table",
+        message:
+          `Load-bearing premises table has duplicate rows at line ${firstLineNum} and line ${row.lineNum}: "${row.line.trim()}"`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    } else {
+      seenAt.set(normalized, row.lineNum);
+    }
+  }
+
+  return violations;
+}
+
+/** True when `s` is a syntactically valid `YYYY-MM-DD` date that also parses to a real calendar
+ * date (rejects e.g. "2026-02-30"). */
+function isValidIsoDate(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map((part) => parseInt(part, 10));
+  const parsed = new Date(Date.UTC(y, m - 1, d));
+  return (
+    parsed.getUTCFullYear() === y &&
+    parsed.getUTCMonth() === m - 1 &&
+    parsed.getUTCDate() === d
+  );
+}
+
+/**
+ * Validates the `## Load-bearing premises` table's `Proved` column (web-jam-tools#1025): every
+ * row must carry a `Proved` date, matched by header name (never by position, so a document that
+ * reorders or adds columns around it is unaffected). A row whose `Proved` cell is missing, empty,
+ * not a valid `YYYY-MM-DD` date, or earlier than `todayIso` fails — the checker cannot let a
+ * document assert in the present tense that a premise proved on an earlier day is proven today.
+ * Same-day is the pass condition. Runs independently of the "Proof" column checks below: a table
+ * missing "Proved" gets exactly one violation naming the missing column, not one per row.
+ */
+function validateLoadBearingPremisesProvedDates(
+  rows: Array<{ line: string; lineNum: number; cells: string[] }>,
+  headerRow: { line: string; lineNum: number; cells: string[] },
+  todayIso: string,
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+
+  const provedColIdx = headerRow.cells.findIndex((c) => /^proved$/i.test(stripCellDecoration(c)));
+  if (provedColIdx === -1) {
+    violations.push({
+      rule: "load-bearing-premises-missing-proved-column",
+      message:
+        "Design document's '## Load-bearing premises' table has no 'Proved' column — cannot verify any premise's proof is current.",
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+    return violations;
+  }
+
+  const premiseColIdx = headerRow.cells.findIndex((c) => /^premise$/i.test(stripCellDecoration(c)));
+
+  for (const row of rows) {
+    if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
+    const rawCell = row.cells[provedColIdx] ?? "";
+    const stripped = stripCellDecoration(rawCell);
+    const premiseText = premiseColIdx !== -1
+      ? stripCellDecoration(row.cells[premiseColIdx] ?? "")
+      : row.line.trim();
+
+    if (stripped === "" || !isValidIsoDate(stripped)) {
+      violations.push({
+        rule: "load-bearing-premises-stale-proof",
+        message:
+          `Load-bearing premises row at line ${row.lineNum} ("${premiseText}") has a missing or malformed Proved date: "${
+            stripped || "(empty)"
+          }" (expected ISO date YYYY-MM-DD).`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+      continue;
+    }
+
+    if (stripped < todayIso) {
+      violations.push({
+        rule: "load-bearing-premises-stale-proof",
+        message:
+          `Load-bearing premises row at line ${row.lineNum} ("${premiseText}") was proved on ${stripped}, earlier than today (${todayIso}) — a premise proved on an earlier day cannot be asserted as proven today.`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+  }
+
+  return violations;
+}
+
+/**
+ * Validates the `## Load-bearing premises` table collected by the main scan below: checks the
+ * table's own structure (separator placement, at least one data row, no duplicate rows, no ragged
+ * rows — see `validateLoadBearingPremisesTableStructure`), finds the "Proof" column by its header
+ * name (case-insensitive) and fails any data row whose Proof cell is empty, "N/A", or hedged, and
+ * finds the "Proved" column by header name and fails any row whose date is missing, malformed, or
+ * earlier than `todayIso` (web-jam-tools#1025).
  */
 function validateLoadBearingPremisesTable(
   tableLines: Array<{ line: string; lineNum: number }>,
+  todayIso: string,
 ): LintViolation[] {
   const violations: LintViolation[] = [];
   const rows = tableLines
@@ -449,6 +711,8 @@ function validateLoadBearingPremisesTable(
     return violations;
   }
 
+  violations.push(...validateLoadBearingPremisesTableStructure(rows, headerRow));
+
   const proofColIdx = headerRow.cells.findIndex((c) => /^proof$/i.test(stripCellDecoration(c)));
   if (proofColIdx === -1) {
     violations.push({
@@ -458,49 +722,50 @@ function validateLoadBearingPremisesTable(
       line: headerRow.lineNum,
       lineContent: headerRow.line,
     });
-    return violations;
+  } else {
+    for (const row of rows) {
+      if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
+      const rawCell = row.cells[proofColIdx] ?? "";
+      const stripped = stripCellDecoration(rawCell);
+
+      if (stripped === "") {
+        violations.push({
+          rule: "load-bearing-premises-unproven-row",
+          message: `Load-bearing premises row has an empty Proof cell: "${row.line.trim()}"`,
+          line: row.lineNum,
+          lineContent: row.line,
+        });
+        continue;
+      }
+
+      if (/^n\/a$/i.test(stripped)) {
+        violations.push({
+          rule: "load-bearing-premises-unproven-row",
+          message: `Load-bearing premises row has an "N/A" Proof cell: "${row.line.trim()}"`,
+          line: row.lineNum,
+          lineContent: row.line,
+        });
+        continue;
+      }
+
+      const hedgeMatch = firstNonExemptMatch(
+        rawCell,
+        hedgedProofRegexes,
+        computeExemptRanges(rawCell),
+      );
+      if (hedgeMatch) {
+        violations.push({
+          rule: "load-bearing-premises-unproven-row",
+          message:
+            `Load-bearing premises row has a hedged Proof cell ("${hedgeMatch.text}"): "${row.line.trim()}"`,
+          line: row.lineNum,
+          lineContent: row.line,
+        });
+      }
+    }
   }
 
-  for (const row of rows) {
-    if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
-    const rawCell = row.cells[proofColIdx] ?? "";
-    const stripped = stripCellDecoration(rawCell);
-
-    if (stripped === "") {
-      violations.push({
-        rule: "load-bearing-premises-unproven-row",
-        message: `Load-bearing premises row has an empty Proof cell: "${row.line.trim()}"`,
-        line: row.lineNum,
-        lineContent: row.line,
-      });
-      continue;
-    }
-
-    if (/^n\/a$/i.test(stripped)) {
-      violations.push({
-        rule: "load-bearing-premises-unproven-row",
-        message: `Load-bearing premises row has an "N/A" Proof cell: "${row.line.trim()}"`,
-        line: row.lineNum,
-        lineContent: row.line,
-      });
-      continue;
-    }
-
-    const hedgeMatch = firstNonExemptMatch(
-      rawCell,
-      hedgedProofRegexes,
-      computeExemptRanges(rawCell),
-    );
-    if (hedgeMatch) {
-      violations.push({
-        rule: "load-bearing-premises-unproven-row",
-        message:
-          `Load-bearing premises row has a hedged Proof cell ("${hedgeMatch.text}"): "${row.line.trim()}"`,
-        line: row.lineNum,
-        lineContent: row.line,
-      });
-    }
-  }
+  violations.push(...validateLoadBearingPremisesProvedDates(rows, headerRow, todayIso));
 
   return violations;
 }
@@ -682,15 +947,38 @@ function validateRevisionHistoryTable(
  * 5. Fails if the document contains bare decision labels (e.g., "per D-7", "R-39").
  * 6. Fails if the document lacks a "## Both surfaces" section.
  * 7. Fails if the document lacks a "## Load-bearing premises" section, or that section's table has
- *    a Proof cell that is empty, "N/A", or hedged (web-jam-tools#815).
+ *    a Proof cell that is empty, "N/A", or hedged (web-jam-tools#815); or the table itself is
+ *    malformed — its separator row missing immediately after the header or present anywhere else,
+ *    no data rows, a duplicate data row, or a data row with a different cell count than the header.
  * 8. Fails if the document names a target issue it was invoked on but carries no verbatim
  *    blockquote of that issue's directive anywhere after naming it (web-jam-tools#815).
  * 9. Fails if a '## Revision History' table is present and lacks a 'Version' or 'Date' column, has
  *    no data rows, carries an unparseable version or date, or lists rows newest-first (web-jam-tools#892).
+ * 10. Fails if the '## Load-bearing premises' table has no 'Proved' column, or a row's 'Proved'
+ *     date is missing, malformed, or earlier than today — matched by header name, never by
+ *     position (web-jam-tools#1025).
  */
-export function lintDesignDoc(content: string, docPath: string = ""): LintDocResult {
+function toLocalIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function lintDesignDoc(
+  content: string,
+  docPath: string = "",
+  options: LintDesignDocOptions = {},
+): LintDocResult {
   const violations: LintViolation[] = [];
   const lines = content.split(/\r?\n/);
+  const nowImpl = options.nowImpl ?? (() => new Date());
+  const now = nowImpl();
+  const todayUtc = now.toISOString().slice(0, 10);
+  const todayLocal = toLocalIsoDate(now);
+  // Earliest calendar day of today across local and UTC time, so evening local work
+  // (where UTC has already rolled over to tomorrow) does not flag today's local date as stale.
+  const todayIso = todayLocal < todayUtc ? todayLocal : todayUtc;
 
   let inCodeBlock = false;
   let hasBothSurfacesSection = false;
@@ -922,7 +1210,7 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
       message: "Design document lacks required '## Load-bearing premises' section",
     });
   } else {
-    violations.push(...validateLoadBearingPremisesTable(loadBearingPremisesTableLines));
+    violations.push(...validateLoadBearingPremisesTable(loadBearingPremisesTableLines, todayIso));
   }
 
   // 8. Check for a verbatim appendix when the document names a target issue it was invoked on
@@ -954,7 +1242,10 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
 /**
  * Reads and lints a design document file from disk.
  */
-export async function lintDesignDocFile(filePath: string): Promise<LintDocResult> {
+export async function lintDesignDocFile(
+  filePath: string,
+  options: LintDesignDocOptions = {},
+): Promise<LintDocResult> {
   if (!filePath || filePath.trim() === "") {
     throw new Error("Design document path is required");
   }
@@ -976,7 +1267,7 @@ export async function lintDesignDocFile(filePath: string): Promise<LintDocResult
     throw new Error(`Design document at ${absPath} is empty`);
   }
 
-  return lintDesignDoc(content, absPath);
+  return lintDesignDoc(content, absPath, options);
 }
 
 /**
@@ -1007,7 +1298,10 @@ Checks a design document against the skill's body rules:
   - Fails if the document contains bare decision labels ("per D-7", "R-39").
   - Fails if the document lacks a "## Both surfaces" section.
   - Fails if the document lacks a "## Load-bearing premises" section, or that section's Proof
-    column has a cell that is empty, "N/A", or hedged.
+    column has a cell that is empty, "N/A", or hedged, or its table is structurally malformed
+    (separator row missing/misplaced, no data rows, a duplicate row, or a ragged row).
+  - Fails if the "## Load-bearing premises" table has no "Proved" column, or a row's Proved date
+    is missing, malformed, or earlier than today (web-jam-tools#1025).
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
 
