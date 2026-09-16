@@ -23,6 +23,17 @@ export interface LintDocOptions {
   json?: boolean;
 }
 
+/**
+ * Options threaded through `lintDesignDoc` for injecting "today" in tests (web-jam-tools#1025).
+ * Follows this repo's existing `xImpl` dependency-injection convention (see `screenshotImpl` /
+ * `openBrowserImpl` in gate1.ts, `readTextFileImpl` in `resolveCanonicalDesignDoc`): a default
+ * production implementation, overridable only by callers (i.e. tests) that pass one explicitly.
+ * The CLI and Gate 1 never pass `nowImpl`, so the production path always uses the real clock.
+ */
+export interface LintDesignDocOptions {
+  nowImpl?: () => Date;
+}
+
 /** A half-open character range `[start, end)` on a single line that is a mention (inline code
  * span or quoted text) rather than a use, and is therefore exempt from banned-phrase matching. */
 interface ExemptRange {
@@ -578,15 +589,95 @@ function validateLoadBearingPremisesTableStructure(
   return violations;
 }
 
+/** True when `s` is a syntactically valid `YYYY-MM-DD` date that also parses to a real calendar
+ * date (rejects e.g. "2026-02-30"). */
+function isValidIsoDate(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map((part) => parseInt(part, 10));
+  const parsed = new Date(Date.UTC(y, m - 1, d));
+  return (
+    parsed.getUTCFullYear() === y &&
+    parsed.getUTCMonth() === m - 1 &&
+    parsed.getUTCDate() === d
+  );
+}
+
+/**
+ * Validates the `## Load-bearing premises` table's `Proved` column (web-jam-tools#1025): every
+ * row must carry a `Proved` date, matched by header name (never by position, so a document that
+ * reorders or adds columns around it is unaffected). A row whose `Proved` cell is missing, empty,
+ * not a valid `YYYY-MM-DD` date, or earlier than `todayIso` fails — the checker cannot let a
+ * document assert in the present tense that a premise proved on an earlier day is proven today.
+ * Same-day is the pass condition. Runs independently of the "Proof" column checks below: a table
+ * missing "Proved" gets exactly one violation naming the missing column, not one per row.
+ */
+function validateLoadBearingPremisesProvedDates(
+  rows: Array<{ line: string; lineNum: number; cells: string[] }>,
+  headerRow: { line: string; lineNum: number; cells: string[] },
+  todayIso: string,
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+
+  const provedColIdx = headerRow.cells.findIndex((c) => /^proved$/i.test(stripCellDecoration(c)));
+  if (provedColIdx === -1) {
+    violations.push({
+      rule: "load-bearing-premises-missing-proved-column",
+      message:
+        "Design document's '## Load-bearing premises' table has no 'Proved' column — cannot verify any premise's proof is current.",
+      line: headerRow.lineNum,
+      lineContent: headerRow.line,
+    });
+    return violations;
+  }
+
+  const premiseColIdx = headerRow.cells.findIndex((c) => /^premise$/i.test(stripCellDecoration(c)));
+
+  for (const row of rows) {
+    if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
+    const rawCell = row.cells[provedColIdx] ?? "";
+    const stripped = stripCellDecoration(rawCell);
+    const premiseText = premiseColIdx !== -1
+      ? stripCellDecoration(row.cells[premiseColIdx] ?? "")
+      : row.line.trim();
+
+    if (stripped === "" || !isValidIsoDate(stripped)) {
+      violations.push({
+        rule: "load-bearing-premises-stale-proof",
+        message:
+          `Load-bearing premises row at line ${row.lineNum} ("${premiseText}") has a missing or malformed Proved date: "${
+            stripped || "(empty)"
+          }" (expected ISO date YYYY-MM-DD).`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+      continue;
+    }
+
+    if (stripped < todayIso) {
+      violations.push({
+        rule: "load-bearing-premises-stale-proof",
+        message:
+          `Load-bearing premises row at line ${row.lineNum} ("${premiseText}") was proved on ${stripped}, earlier than today (${todayIso}) — a premise proved on an earlier day cannot be asserted as proven today.`,
+        line: row.lineNum,
+        lineContent: row.line,
+      });
+    }
+  }
+
+  return violations;
+}
+
 /**
  * Validates the `## Load-bearing premises` table collected by the main scan below: checks the
  * table's own structure (separator placement, at least one data row, no duplicate rows, no ragged
- * rows — see `validateLoadBearingPremisesTableStructure`), then finds the "Proof" column by its
- * header name (case-insensitive) and fails any data row whose Proof cell is empty, "N/A", or
- * hedged.
+ * rows — see `validateLoadBearingPremisesTableStructure`), finds the "Proof" column by its header
+ * name (case-insensitive) and fails any data row whose Proof cell is empty, "N/A", or hedged, and
+ * finds the "Proved" column by header name and fails any row whose date is missing, malformed, or
+ * earlier than `todayIso` (web-jam-tools#1025).
  */
 function validateLoadBearingPremisesTable(
   tableLines: Array<{ line: string; lineNum: number }>,
+  todayIso: string,
 ): LintViolation[] {
   const violations: LintViolation[] = [];
   const rows = tableLines
@@ -614,49 +705,50 @@ function validateLoadBearingPremisesTable(
       line: headerRow.lineNum,
       lineContent: headerRow.line,
     });
-    return violations;
+  } else {
+    for (const row of rows) {
+      if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
+      const rawCell = row.cells[proofColIdx] ?? "";
+      const stripped = stripCellDecoration(rawCell);
+
+      if (stripped === "") {
+        violations.push({
+          rule: "load-bearing-premises-unproven-row",
+          message: `Load-bearing premises row has an empty Proof cell: "${row.line.trim()}"`,
+          line: row.lineNum,
+          lineContent: row.line,
+        });
+        continue;
+      }
+
+      if (/^n\/a$/i.test(stripped)) {
+        violations.push({
+          rule: "load-bearing-premises-unproven-row",
+          message: `Load-bearing premises row has an "N/A" Proof cell: "${row.line.trim()}"`,
+          line: row.lineNum,
+          lineContent: row.line,
+        });
+        continue;
+      }
+
+      const hedgeMatch = firstNonExemptMatch(
+        rawCell,
+        hedgedProofRegexes,
+        computeExemptRanges(rawCell),
+      );
+      if (hedgeMatch) {
+        violations.push({
+          rule: "load-bearing-premises-unproven-row",
+          message:
+            `Load-bearing premises row has a hedged Proof cell ("${hedgeMatch.text}"): "${row.line.trim()}"`,
+          line: row.lineNum,
+          lineContent: row.line,
+        });
+      }
+    }
   }
 
-  for (const row of rows) {
-    if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
-    const rawCell = row.cells[proofColIdx] ?? "";
-    const stripped = stripCellDecoration(rawCell);
-
-    if (stripped === "") {
-      violations.push({
-        rule: "load-bearing-premises-unproven-row",
-        message: `Load-bearing premises row has an empty Proof cell: "${row.line.trim()}"`,
-        line: row.lineNum,
-        lineContent: row.line,
-      });
-      continue;
-    }
-
-    if (/^n\/a$/i.test(stripped)) {
-      violations.push({
-        rule: "load-bearing-premises-unproven-row",
-        message: `Load-bearing premises row has an "N/A" Proof cell: "${row.line.trim()}"`,
-        line: row.lineNum,
-        lineContent: row.line,
-      });
-      continue;
-    }
-
-    const hedgeMatch = firstNonExemptMatch(
-      rawCell,
-      hedgedProofRegexes,
-      computeExemptRanges(rawCell),
-    );
-    if (hedgeMatch) {
-      violations.push({
-        rule: "load-bearing-premises-unproven-row",
-        message:
-          `Load-bearing premises row has a hedged Proof cell ("${hedgeMatch.text}"): "${row.line.trim()}"`,
-        line: row.lineNum,
-        lineContent: row.line,
-      });
-    }
-  }
+  violations.push(...validateLoadBearingPremisesProvedDates(rows, headerRow, todayIso));
 
   return violations;
 }
@@ -845,10 +937,19 @@ function validateRevisionHistoryTable(
  *    blockquote of that issue's directive anywhere after naming it (web-jam-tools#815).
  * 9. Fails if a '## Revision History' table is present and lacks a 'Version' or 'Date' column, has
  *    no data rows, carries an unparseable version or date, or lists rows newest-first (web-jam-tools#892).
+ * 10. Fails if the '## Load-bearing premises' table has no 'Proved' column, or a row's 'Proved'
+ *     date is missing, malformed, or earlier than today — matched by header name, never by
+ *     position (web-jam-tools#1025).
  */
-export function lintDesignDoc(content: string, docPath: string = ""): LintDocResult {
+export function lintDesignDoc(
+  content: string,
+  docPath: string = "",
+  options: LintDesignDocOptions = {},
+): LintDocResult {
   const violations: LintViolation[] = [];
   const lines = content.split(/\r?\n/);
+  const nowImpl = options.nowImpl ?? (() => new Date());
+  const todayIso = nowImpl().toISOString().slice(0, 10);
 
   let inCodeBlock = false;
   let hasBothSurfacesSection = false;
@@ -1080,7 +1181,7 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
       message: "Design document lacks required '## Load-bearing premises' section",
     });
   } else {
-    violations.push(...validateLoadBearingPremisesTable(loadBearingPremisesTableLines));
+    violations.push(...validateLoadBearingPremisesTable(loadBearingPremisesTableLines, todayIso));
   }
 
   // 8. Check for a verbatim appendix when the document names a target issue it was invoked on
@@ -1112,7 +1213,10 @@ export function lintDesignDoc(content: string, docPath: string = ""): LintDocRes
 /**
  * Reads and lints a design document file from disk.
  */
-export async function lintDesignDocFile(filePath: string): Promise<LintDocResult> {
+export async function lintDesignDocFile(
+  filePath: string,
+  options: LintDesignDocOptions = {},
+): Promise<LintDocResult> {
   if (!filePath || filePath.trim() === "") {
     throw new Error("Design document path is required");
   }
@@ -1134,7 +1238,7 @@ export async function lintDesignDocFile(filePath: string): Promise<LintDocResult
     throw new Error(`Design document at ${absPath} is empty`);
   }
 
-  return lintDesignDoc(content, absPath);
+  return lintDesignDoc(content, absPath, options);
 }
 
 /**
@@ -1167,6 +1271,8 @@ Checks a design document against the skill's body rules:
   - Fails if the document lacks a "## Load-bearing premises" section, or that section's Proof
     column has a cell that is empty, "N/A", or hedged, or its table is structurally malformed
     (separator row missing/misplaced, no data rows, a duplicate row, or a ragged row).
+  - Fails if the "## Load-bearing premises" table has no "Proved" column, or a row's Proved date
+    is missing, malformed, or earlier than today (web-jam-tools#1025).
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
 

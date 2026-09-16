@@ -24,9 +24,13 @@ How this mechanism functions across agent surfaces:
 
 ## Load-bearing premises
 
-| Premise                                                  | Proof                                                                                       |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| The WebSocket server exposes a subscribable event stream | Read the server's event-emitter API and confirmed it publishes a `message` event per update |
+A static fixture's Proved date can't track "today" the way a real design document's can, so this row
+is dated comfortably in the future (never "earlier than today") rather than hardcoding a date that
+would go stale and start failing this fixture's own passing tests.
+
+| Premise                                                  | Proof                                                                                       | Proved     |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ---------- |
+| The WebSocket server exposes a subscribable event stream | Read the server's event-emitter API and confirmed it publishes a `message` event per update | 2099-01-01 |
 
 ## Appendix A — Decision Record
 

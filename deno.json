@@ -25,6 +25,7 @@
     "design:stale-bodies": "deno run -A src/design-issue/cli.ts stale-bodies",
     "design:lint-plan": "deno run -A src/design-issue/cli.ts lint-plan",
     "design:file-plan": "deno run -A src/design-issue/cli.ts file-plan",
+    "design:verify-citations": "deno run -A src/design-issue/cli.ts verify-citations",
     "render_design_doc": "deno run --allow-read --allow-write scripts/render_design_doc.ts",
     "write_issue_approval_token": "deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts",
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",

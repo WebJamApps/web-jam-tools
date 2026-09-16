@@ -7,6 +7,7 @@
 // - deno task design:stale-bodies <doc.md> --issues <list> (web-jam-tools#746)
 // - deno task design:lint-plan <plan.md> (web-jam-tools#796)
 // - deno task design:file-plan <plan.json> (web-jam-tools#748)
+// - deno task design:verify-citations <doc.md> (web-jam-tools#1025)
 
 import { parseArgs } from "@std/cli/parse-args";
 import { runCandidatesCli } from "./candidates.ts";
@@ -23,6 +24,7 @@ import { runLintDocCli } from "./lint_doc.ts";
 import { runLintPlanCli } from "./lint_plan.ts";
 import { runLintRunbookCli } from "./lint_runbook.ts";
 import { runStaleBodiesCli } from "./stale_bodies.ts";
+import { runVerifyCitationsCli } from "./verify_citations.ts";
 
 export {
   runCandidatesCli,
@@ -31,6 +33,7 @@ export {
   runLintPlanCli,
   runLintRunbookCli,
   runStaleBodiesCli,
+  runVerifyCitationsCli,
 };
 
 export async function runGate1Cli(
@@ -188,6 +191,10 @@ export async function runCli(
 
   if (firstArg === "lint-doc" || firstArg === "lint_doc") {
     return await runLintDocCli(args.slice(1));
+  }
+
+  if (firstArg === "verify-citations" || firstArg === "verify_citations") {
+    return await runVerifyCitationsCli(args.slice(1));
   }
 
   if (firstArg === "lint-runbook" || firstArg === "lint_runbook") {

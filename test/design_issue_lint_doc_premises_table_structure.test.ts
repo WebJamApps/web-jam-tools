@@ -10,6 +10,11 @@
 import { assertEquals } from "@std/assert";
 import { lintDesignDoc } from "../src/design-issue/lint_doc.ts";
 
+// This suite tests table *structure*, not the Proved-date freshness rule (web-jam-tools#1025,
+// covered in test/design_issue_lint_doc_proved_date.test.ts), so every fixture below carries a
+// same-day Proved column to stay out of that rule's way.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 function docWithPremisesTable(tableBlock: string): string {
   return `# Title
 
@@ -31,10 +36,10 @@ function violationsFor(doc: string, rule: string) {
 
 Deno.test("lintDesignDoc: well-formed premises table passes (no false positive)", () => {
   const doc = docWithPremisesTable(
-    `| Premise | Proof |
-|---|---|
-| The runner exists as a deno task | Checked deno.json's tasks map |
-| The CLI is wired into cli.ts | Read the dispatch table |`,
+    `| Premise | Proof | Proved |
+|---|---|---|
+| The runner exists as a deno task | Checked deno.json's tasks map | ${TODAY} |
+| The CLI is wired into cli.ts | Read the dispatch table | ${TODAY} |`,
   );
 
   const result = lintDesignDoc(doc, "test.md");
@@ -147,9 +152,9 @@ Deno.test("lintDesignDoc: a literal pipe inside a backtick code span in a cell i
   // backticks needs no escaping (web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md line 364
   // is a real document that hit this before splitTableRow learned to respect code spans).
   const doc = docWithPremisesTable(
-    `| Premise | Proof |
-|---|---|
-| The matcher is broad | Registered on \`Bash|mcp__.*\`; matches \`gh\` and \`git push\` too. |`,
+    `| Premise | Proof | Proved |
+|---|---|---|
+| The matcher is broad | Registered on \`Bash|mcp__.*\`; matches \`gh\` and \`git push\` too. | ${TODAY} |`,
   );
 
   const result = lintDesignDoc(doc, "test.md");

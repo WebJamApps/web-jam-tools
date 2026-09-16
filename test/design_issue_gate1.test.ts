@@ -30,7 +30,9 @@ import { runCli, runMatchDesignCli } from "../src/design-issue/cli.ts";
 
 // A minimal document that still satisfies design:lint-doc's required sections (web-jam-tools#815)
 // — used by tests below that are exercising gate1's render/screenshot/browser mechanics, not the
-// linter itself, so the fixture just needs to pass rather than being representative content.
+// linter itself, so the fixture just needs to pass rather than being representative content. The
+// Proved date is computed at load time (web-jam-tools#1025) so this fixture never goes stale.
+const TODAY = new Date().toISOString().slice(0, 10);
 const MINIMAL_LINT_CLEAN_DOC = `# Test
 
 ## Section
@@ -40,9 +42,9 @@ Content
 Identical on both surfaces.
 
 ## Load-bearing premises
-| Premise | Proof |
-|---|---|
-| This is a test fixture, not a real design | Read this file |
+| Premise | Proof | Proved |
+|---|---|---|
+| This is a test fixture, not a real design | Read this file | ${TODAY} |
 `;
 
 Deno.test("expandHome expands leading tilde to home directory", () => {
@@ -175,6 +177,77 @@ Deno.test("runGate1's refusal names each design:lint-doc violation", async () =>
   }
 });
 
+Deno.test("runGate1 refuses to render or open a document that fails design:verify-citations", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-citations-fail-" });
+  const docPath = path.join(tempDir, "doc.md");
+  await Deno.writeTextFile(docPath, MINIMAL_LINT_CLEAN_DOC);
+
+  let screenshotCalled = false;
+  let browserCalled = false;
+
+  try {
+    await assertRejects(
+      async () => {
+        await runGate1({
+          docPath,
+          screenshotImpl: () => {
+            screenshotCalled = true;
+            return Promise.resolve({ sizeBytes: 100 });
+          },
+          openBrowserImpl: () => {
+            browserCalled = true;
+            return Promise.resolve();
+          },
+          verifyCitationsImpl: () =>
+            Promise.resolve({
+              docPath,
+              valid: false,
+              violations: [
+                {
+                  rule: "unacknowledged-closed-citation",
+                  message: "stubbed failure for test",
+                  line: 1,
+                },
+              ],
+            }),
+        });
+      },
+      Error,
+      "failed design:verify-citations",
+    );
+
+    assertEquals(screenshotCalled, false);
+    assertEquals(browserCalled, false);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runGate1 proceeds past design:verify-citations when the stubbed check passes", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-citations-pass-" });
+  const docPath = path.join(tempDir, "doc.md");
+  await Deno.writeTextFile(docPath, MINIMAL_LINT_CLEAN_DOC);
+
+  let verifyCitationsCalled = false;
+
+  try {
+    const result = await runGate1({
+      docPath,
+      noOpen: true,
+      screenshotImpl: () => Promise.resolve({ sizeBytes: 100 }),
+      verifyCitationsImpl: (_content, resultDocPath) => {
+        verifyCitationsCalled = true;
+        return Promise.resolve({ docPath: resultDocPath, valid: true, violations: [] });
+      },
+    });
+
+    assertEquals(verifyCitationsCalled, true);
+    assertEquals(result.opened, false);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("cli.ts's design:gate1 subcommand also refuses a document that fails design:lint-doc", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-cli-lint-fail-" });
   const docPath = path.join(tempDir, "doc.md");
@@ -207,9 +280,9 @@ This is a sample design document for testing Gate 1 automation.
 Works on Claude Code and Antigravity.
 
 ## Load-bearing premises
-| Premise | Proof |
-|---|---|
-| Gate 1 automation renders markdown to HTML | Read render_design_doc.ts's output format |
+| Premise | Proof | Proved |
+|---|---|---|
+| Gate 1 automation renders markdown to HTML | Read render_design_doc.ts's output format | ${TODAY} |
 `;
 
   await Deno.writeTextFile(docPath, markdownContent);
