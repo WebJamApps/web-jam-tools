@@ -9,6 +9,7 @@ import {
   ALLOWED_AGY_MODELS,
   ALLOWED_SESSION_SLUGS,
   checkAgyModel,
+  deriveSessionSlugs,
   isAllowedModelSlug,
 } from "../hooks/lib/check_agy_model.ts";
 
@@ -91,10 +92,39 @@ Deno.test("checkAgyModel: blocks agy invocations using below-floor, flash-low, o
   );
 });
 
-Deno.test("ALLOWED_SESSION_SLUGS contains gemini-3.8-flash-tiered", () => {
-  assert(ALLOWED_SESSION_SLUGS.includes("gemini-3.8-flash-tiered"));
-  assert(ALLOWED_SESSION_SLUGS.includes("gemini-3.8-flash-high"));
-  assert(ALLOWED_SESSION_SLUGS.includes("gemini-3.8-flash-medium"));
+Deno.test("ALLOWED_SESSION_SLUGS derives -tiered slug matching ALLOWED_AGY_MODELS versions", () => {
+  const versions = Array.from(
+    new Set(
+      ALLOWED_AGY_MODELS.map((m) => m.slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-/)?.[1]).filter(
+        (v): v is string => Boolean(v),
+      ),
+    ),
+  );
+  assert(versions.length > 0, "Expected at least one version in ALLOWED_AGY_MODELS");
+  for (const v of versions) {
+    assert(
+      ALLOWED_SESSION_SLUGS.includes(`gemini-${v}-flash-tiered`),
+      `Expected ALLOWED_SESSION_SLUGS to include gemini-${v}-flash-tiered`,
+    );
+  }
+  // Verify it contains no stale versions that are not present in ALLOWED_AGY_MODELS
+  for (const slug of ALLOWED_SESSION_SLUGS) {
+    const v = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-/)?.[1];
+    assert(v && versions.includes(v), `Unexpected version ${v} in ALLOWED_SESSION_SLUGS`);
+  }
+});
+
+Deno.test("deriveSessionSlugs: derives tiered slug in lockstep with model versions on migration", () => {
+  const syntheticModels = [
+    { slug: "gemini-3.9-flash-high", displayName: "Gemini 3.9 Flash (High)" },
+    { slug: "gemini-3.9-flash-medium", displayName: "Gemini 3.9 Flash (Medium)" },
+  ];
+  const slugs = deriveSessionSlugs(syntheticModels);
+  assertEquals(slugs, [
+    "gemini-3.9-flash-high",
+    "gemini-3.9-flash-medium",
+    "gemini-3.9-flash-tiered",
+  ]);
 });
 
 Deno.test("check_agy_model.ts CLI --allowed-slugs includes gemini-3.8-flash-tiered", async () => {

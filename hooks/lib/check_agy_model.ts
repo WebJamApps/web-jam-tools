@@ -13,12 +13,27 @@ export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
   { slug: "gemini-3.8-flash-medium", displayName: "Gemini 3.8 Flash (Medium)" },
 ];
 
-export const ALLOWED_SESSION_SLUGS: readonly string[] = [
-  ...ALLOWED_AGY_MODELS.map((m) => m.slug),
-  "gemini-3.8-flash-tiered",
-];
+/**
+ * Derives the runtime session slugs by combining the explicit AGY models
+ * with the corresponding -tiered variant derived from each model version,
+ * keeping the tiered slug in lockstep whenever ALLOWED_AGY_MODELS migrates.
+ */
+export function deriveSessionSlugs(models: readonly AgyModelSpec[]): readonly string[] {
+  const versions = Array.from(
+    new Set(
+      models
+        .map((m) => m.slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-/)?.[1])
+        .filter((v): v is string => Boolean(v)),
+    ),
+  );
+  const tieredSlugs = versions.map((v) => `gemini-${v}-flash-tiered`);
+  return [
+    ...models.map((m) => m.slug),
+    ...tieredSlugs,
+  ];
+}
 
-export const ALLOWED = new Set(ALLOWED_SESSION_SLUGS);
+export const ALLOWED_SESSION_SLUGS: readonly string[] = deriveSessionSlugs(ALLOWED_AGY_MODELS);
 
 export function isAllowedModelSlug(slug: string): boolean {
   const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(medium|high|tiered)$/);
