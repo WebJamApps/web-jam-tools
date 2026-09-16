@@ -665,6 +665,35 @@ Deno.test("executeTouchConversion: proposal index is stable across --skip, and t
   assertStringIncludes(table, `│ ${String(3).padEnd(3)} │`);
 });
 
+Deno.test("executeTouchConversion: --venues and --skip together still address the numbers in the table", async () => {
+  const fixtureVenues: VenueNotesRecord[] = [
+    { _id: "v1", name: "Venue One", notes: "2026-05-01: Phone call successful — confirmed." },
+    { _id: "v2", name: "Venue Two", notes: "2026-06-01: Josh visited in person to drop off card." },
+    { _id: "v3", name: "Venue Three", notes: "2026-07-01: Phone call successful — confirmed." },
+    {
+      _id: "v4",
+      name: "Venue Four",
+      notes: "2026-08-01: Josh visited in person to drop off card.",
+    },
+  ];
+
+  // Josh reads rows 1-4, keeps 2, 3 and 4, then drops 4. Before the stable index, --skip filtered
+  // on the position within the already-filtered list, so "4" matched nothing and Venue Four was
+  // written anyway — the numbers no longer meant what the table showed.
+  const result = await executeTouchConversion(
+    {
+      apply: false,
+      venues: fixtureVenues,
+      filterVenues: ["2", "3", "4"],
+      skipVenues: ["4"],
+    },
+    () => Promise.resolve(new Response(JSON.stringify({}), { status: 200 })),
+  );
+
+  assertEquals(result.proposals.map((p) => p.venueName), ["Venue Two", "Venue Three"]);
+  assertEquals(result.proposals.map((p) => p.index), [2, 3]);
+});
+
 // --- A row an existing touch already covers is reported, not dropped -------
 
 Deno.test("executeTouchConversion: an undated row an existing touch already covers is reported in suppressed, never proposed or POSTed", async () => {
