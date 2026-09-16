@@ -4239,17 +4239,30 @@ Deno.test("touch conversion: proposes genuine phone conversation, rejects legacy
   assertEquals(dryRun.applied.length, 0);
   assertEquals(postCalls, 0, "No POST /venue/:id/touch must be made on dry run");
 
-  // 2. Explicit approval write: writes the approved touch
-  const approvedRun = await executeTouchConversion(
+  // 2. Explicit approval write with no date supplied: an undated proposal is never written.
+  const approvedRunNoDate = await executeTouchConversion(
     { apply: true, venues: fixtureVenues, actor: "Josh" },
     mockFetch,
   );
-  assertEquals(approvedRun.proposals.length, 1);
-  assertEquals(approvedRun.applied.length, 1);
-  assertEquals(approvedRun.applied[0].success, true);
+  assertEquals(approvedRunNoDate.proposals.length, 1);
+  assertEquals(approvedRunNoDate.applied.length, 0);
+  assertEquals(postCalls, 0, "An undated row must never be POSTed");
+  assertEquals(approvedRunNoDate.skippedNoDate.length, 1);
+  assertEquals(approvedRunNoDate.skippedNoDate[0].venueName, "Phone Note Venue");
+  assertStringIncludes(approvedRunNoDate.summary, "Skipped 1 undated row");
+
+  // 3. Explicit approval write with a date supplied via --date: writes the approved touch.
+  const approvedRunWithDate = await executeTouchConversion(
+    { apply: true, venues: fixtureVenues, actor: "Josh", dates: ["v-phone=2026-05-09"] },
+    mockFetch,
+  );
+  assertEquals(approvedRunWithDate.proposals.length, 1);
+  assertEquals(approvedRunWithDate.applied.length, 1);
+  assertEquals(approvedRunWithDate.applied[0].success, true);
   assertEquals(postCalls, 1);
   assertEquals(postedRequests[0].url, "https://webjamsalem.herokuapp.com/venue/v-phone/touch");
   assertEquals(postedRequests[0].body.type, "call");
   assertEquals(postedRequests[0].body.actor, "Josh");
   assertEquals(postedRequests[0].body.note, "Spoke on the phone about a 2027 booking");
+  assertEquals(postedRequests[0].body.date, "2026-05-09T00:00:00.000Z");
 });

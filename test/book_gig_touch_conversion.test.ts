@@ -1,12 +1,21 @@
 // test/book_gig_touch_conversion.test.ts
 // Unit tests for converting venue notes into structured call and visit touches (D-68 / web-jam-tools#1006)
 
-import { assertEquals, assertNotEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import {
+  assertEquals,
+  assertNotEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
+import {
+  applyDateFills,
   detectVenueConversationTouch,
   executeTouchConversion,
   extractDateFromText,
   hasExistingTouch,
+  isPhoneConversation,
+  isValidIsoDate,
   renderProposalsTable,
   type TouchProposal,
   type VenueNotesRecord,
@@ -383,12 +392,12 @@ Deno.test("executeTouchConversion: handles touch write failure and network error
     {
       _id: "v-fail-http",
       name: "Fail Http Venue",
-      notes: "Phone call successful — confirmed.",
+      notes: "2026-05-01: Phone call successful — confirmed.",
     },
     {
       _id: "v-fail-net",
       name: "Fail Network Venue",
-      notes: "Visited in person to drop off card.",
+      notes: "2026-05-02: Visited in person to drop off card.",
     },
   ];
 
@@ -434,4 +443,256 @@ Deno.test("detectVenueConversationTouch: skips proposal when venue already has i
 
   const proposal = detectVenueConversationTouch(venueWithTouch);
   assertEquals(proposal, null, "Should not propose touch if already in venue.touches");
+});
+
+// --- Undated rows are never written (#1006 PR review) ---------------------
+
+Deno.test("executeTouchConversion: apply mode never POSTs an undated row, reports it in skippedNoDate", async () => {
+  const fixtureVenues: VenueNotesRecord[] = [
+    {
+      _id: "v-nodate",
+      name: "No Date Brewery",
+      notes: "Spoke on the phone about a 2027 booking",
+    },
+  ];
+
+  let postCalls = 0;
+  const mockFetch: typeof fetch = (_input, init) => {
+    if (init?.method === "POST") postCalls++;
+    return Promise.resolve(new Response(JSON.stringify(fixtureVenues), { status: 200 }));
+  };
+
+  const result = await executeTouchConversion(
+    { apply: true, venues: fixtureVenues },
+    mockFetch,
+  );
+
+  assertEquals(postCalls, 0, "An undated row must never be POSTed");
+  assertEquals(result.applied.length, 0);
+  assertEquals(result.skippedNoDate.length, 1);
+  assertEquals(result.skippedNoDate[0].venueName, "No Date Brewery");
+  assertStringIncludes(result.summary, "Skipped 1 undated row");
+});
+
+// --- --date <selector>=<YYYY-MM-DD> fills a missing date -------------------
+
+Deno.test("executeTouchConversion: --date selector by venue id fills the date and writes on apply", async () => {
+  const fixtureVenues: VenueNotesRecord[] = [
+    {
+      _id: "v-a",
+      name: "A Brewery",
+      notes: "Spoke on the phone about a 2027 booking",
+    },
+  ];
+
+  const postedRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const mockFetch: typeof fetch = (input, init) => {
+    if (init?.method === "POST") {
+      postedRequests.push({ url: String(input), body: JSON.parse(String(init.body)) });
+      return Promise.resolve(new Response(JSON.stringify({ _id: "touch-id" }), { status: 201 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify(fixtureVenues), { status: 200 }));
+  };
+
+  const result = await executeTouchConversion(
+    { apply: true, venues: fixtureVenues, dates: ["v-a=2026-06-01"] },
+    mockFetch,
+  );
+
+  assertEquals(result.proposals[0].dateSuppliedByFlag, true);
+  assertEquals(result.proposals[0].date, "2026-06-01");
+  assertEquals(result.skippedNoDate.length, 0);
+  assertEquals(postedRequests.length, 1);
+  assertEquals(postedRequests[0].url, "https://webjamsalem.herokuapp.com/venue/v-a/touch");
+  assertEquals(postedRequests[0].body.date, "2026-06-01T00:00:00.000Z");
+});
+
+Deno.test("executeTouchConversion: --date selector by stable row number fills the date and writes on apply", async () => {
+  const fixtureVenues: VenueNotesRecord[] = [
+    {
+      _id: "v-1",
+      name: "First Venue",
+      notes: "Spoke on the phone about a 2027 booking",
+    },
+    {
+      _id: "v-2",
+      name: "Second Venue",
+      notes: "Visited in person to say hi.",
+    },
+  ];
+
+  const postedRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const mockFetch: typeof fetch = (input, init) => {
+    if (init?.method === "POST") {
+      postedRequests.push({ url: String(input), body: JSON.parse(String(init.body)) });
+      return Promise.resolve(new Response(JSON.stringify({ _id: "touch-id" }), { status: 201 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify(fixtureVenues), { status: 200 }));
+  };
+
+  const result = await executeTouchConversion(
+    { apply: true, venues: fixtureVenues, dates: ["2=2026-06-02"] },
+    mockFetch,
+  );
+
+  // Row 1 (First Venue) remains undated and unwritten; row 2 (Second Venue) gets the fill.
+  assertEquals(result.skippedNoDate.length, 1);
+  assertEquals(result.skippedNoDate[0].venueName, "First Venue");
+  assertEquals(postedRequests.length, 1);
+  assertEquals(postedRequests[0].url, "https://webjamsalem.herokuapp.com/venue/v-2/touch");
+  assertEquals(postedRequests[0].body.type, "visit");
+  assertEquals(postedRequests[0].body.date, "2026-06-02T00:00:00.000Z");
+
+  const secondProposal = result.proposals.find((p) => p.venueId === "v-2");
+  assertEquals(secondProposal?.dateSuppliedByFlag, true);
+});
+
+Deno.test("applyDateFills: throws on malformed entry, impossible date, and unmatched selector", () => {
+  const proposals: TouchProposal[] = [
+    {
+      index: 1,
+      venueId: "v1",
+      venueName: "A Brewery",
+      city: "",
+      usState: "",
+      touchType: "call",
+      date: "",
+      sentence: "x",
+    },
+  ];
+
+  assertThrows(
+    () => applyDateFills(proposals, ["no-equals-sign"]),
+    Error,
+    "Invalid --date entry",
+  );
+  assertThrows(
+    () => applyDateFills(proposals, ["v1=2026-02-31"]),
+    Error,
+    "Invalid --date value",
+  );
+  assertThrows(
+    () => applyDateFills(proposals, ["no-such-venue=2026-05-01"]),
+    Error,
+    "matched no proposed row",
+  );
+});
+
+Deno.test("isValidIsoDate: accepts real calendar dates only", () => {
+  assertEquals(isValidIsoDate("2026-05-18"), true);
+  assertEquals(isValidIsoDate("2026-02-31"), false);
+  assertEquals(isValidIsoDate("05/18/2026"), false);
+  assertEquals(isValidIsoDate("not-a-date"), false);
+});
+
+// --- "spoke to/with <Name>" is case-sensitive on the name ------------------
+
+Deno.test("isPhoneConversation: 'spoke with <lowercase>' is not a phone conversation, 'Spoke with <Name>' is", () => {
+  assertEquals(isPhoneConversation("spoke with the owner"), false);
+  assertEquals(isPhoneConversation("Spoke with Liza"), true);
+});
+
+Deno.test("detectVenueConversationTouch: 'Spoke with the manager while I was there.' is not classified as a call", () => {
+  const venue: VenueNotesRecord = {
+    _id: "v-manager",
+    name: "Manager Venue",
+    notes: "Spoke with the manager while I was there.",
+  };
+  assertEquals(detectVenueConversationTouch(venue), null);
+});
+
+// --- Legacy metadata is discarded per sentence, not per line ---------------
+
+Deno.test("detectVenueConversationTouch: keeps the conversation sentence when legacy metadata shares a line", () => {
+  const venue: VenueNotesRecord = {
+    _id: "v-mixed-line",
+    name: "Mixed Line Venue",
+    notes: "Date called: 2026-05-09. Spoke on the phone with Liza about Sunday afternoons.",
+  };
+
+  const proposal = detectVenueConversationTouch(venue);
+  assertNotEquals(proposal, null);
+  assertEquals(proposal?.touchType, "call");
+  assertEquals(proposal?.date, "2026-05-09");
+  assertStringIncludes(proposal!.sentence, "Spoke on the phone with Liza");
+
+  // The Hamlet Vineyards legacy-only case (no real conversation sentence) still yields null.
+  const hamlet: VenueNotesRecord = {
+    _id: "venue-hamlet-1",
+    name: "Hamlet Vineyards",
+    city: "Bassett",
+    usState: "VA",
+    notes:
+      "Type of gig: Vineyard\nComments: Sent pitch email regarding Sunday afternoons 2026-05-09\nStatus (sheet): [S]\nDate called: 2026-05-09\nNotes: Sent pitch email regarding Sunday afternoons to va@hamletvineyards.com on 2026-05-09.\n\n[2026-07-22] Liza Crowder: 2026 music calendar is fully booked.",
+  };
+  assertEquals(detectVenueConversationTouch(hamlet), null);
+});
+
+// --- Stable numbering under --venues / --skip ------------------------------
+
+Deno.test("executeTouchConversion: proposal index is stable across --skip, and the table reflects it", async () => {
+  const fixtureVenues: VenueNotesRecord[] = [
+    {
+      _id: "v1",
+      name: "Venue One",
+      notes: "Phone call successful — confirmed. 2026-05-01",
+    },
+    {
+      _id: "v2",
+      name: "Venue Two",
+      notes: "2026-06-01: Josh visited in person to drop off card.",
+    },
+    {
+      _id: "v3",
+      name: "Venue Three",
+      notes: "Phone call successful — confirmed. 2026-07-01",
+    },
+  ];
+
+  const result = await executeTouchConversion(
+    { apply: false, venues: fixtureVenues, skipVenues: ["1"] },
+    () => Promise.resolve(new Response(JSON.stringify({}), { status: 200 })),
+  );
+
+  assertEquals(result.proposals.length, 2);
+  assertEquals(result.proposals[0].venueName, "Venue Two");
+  assertEquals(result.proposals[0].index, 2);
+  assertEquals(result.proposals[1].venueName, "Venue Three");
+  assertEquals(result.proposals[1].index, 3);
+
+  const table = renderProposalsTable(result.proposals);
+  assertStringIncludes(table, `│ ${String(2).padEnd(3)} │`);
+  assertStringIncludes(table, `│ ${String(3).padEnd(3)} │`);
+});
+
+// --- A row an existing touch already covers is reported, not dropped -------
+
+Deno.test("executeTouchConversion: an undated row an existing touch already covers is reported in suppressed, never proposed or POSTed", async () => {
+  const fixtureVenues: VenueNotesRecord[] = [
+    {
+      _id: "v-suppressed",
+      name: "Already Touched Venue",
+      notes: "Spoke on the phone about a 2027 booking",
+      touches: [
+        { type: "call", date: "2026-01-01T00:00:00.000Z" },
+      ],
+    },
+  ];
+
+  let postCalls = 0;
+  const mockFetch: typeof fetch = (_input, init) => {
+    if (init?.method === "POST") postCalls++;
+    return Promise.resolve(new Response(JSON.stringify(fixtureVenues), { status: 200 }));
+  };
+
+  const result = await executeTouchConversion(
+    { apply: true, venues: fixtureVenues },
+    mockFetch,
+  );
+
+  assertEquals(result.proposals.length, 0);
+  assertEquals(result.suppressed.length, 1);
+  assertEquals(result.suppressed[0].venueName, "Already Touched Venue");
+  assertStringIncludes(result.suppressed[0].suppressed!, "already has a call touch");
+  assertEquals(postCalls, 0);
 });

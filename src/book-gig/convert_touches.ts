@@ -27,6 +27,8 @@ export interface VenueNotesRecord {
 }
 
 export interface TouchProposal {
+  /** Stable 1-based row number assigned at detection time, before any filtering. */
+  index?: number;
   venueId: string;
   venueName: string;
   city: string;
@@ -34,6 +36,10 @@ export interface TouchProposal {
   touchType: TouchType;
   date: string; // YYYY-MM-DD or ""
   sentence: string;
+  /** Set when the row is reported but never written (e.g. the venue already carries a touch of this type). */
+  suppressed?: string;
+  /** Set when the date came from --date rather than from the note itself. */
+  dateSuppliedByFlag?: boolean;
 }
 
 export interface AppliedTouchResult {
@@ -47,7 +53,12 @@ export interface AppliedTouchResult {
 }
 
 export interface TouchConversionResult {
+  /** Rows shown in the approval table (dated and undated alike, never suppressed rows). */
   proposals: TouchProposal[];
+  /** Rows detected but not proposable — reported so the decision stays visible. */
+  suppressed: TouchProposal[];
+  /** Proposed rows carrying no date: never written, reported so a date can be supplied. */
+  skippedNoDate: TouchProposal[];
   applied: AppliedTouchResult[];
   summary: string;
 }
@@ -58,6 +69,8 @@ export interface TouchConversionOptions extends BackendConfigOptions {
   actor?: string;
   filterVenues?: string[];
   skipVenues?: string[];
+  /** `<index|venueId|name fragment>=YYYY-MM-DD` entries filling the date on undated proposals. */
+  dates?: string[];
 }
 
 /**
@@ -85,10 +98,22 @@ export const IN_PERSON_CONVERSATION_RE =
   /\b(?:in[- ]person visit|visited?\s+(?:in[- ]person|the venue|them)|spoke\s+(?:in[- ]person|at the venue)|talked\s+(?:in[- ]person|at the venue)|met\s+in[- ]person|stopped by\s+(?:in[- ]person|the venue)|after in[- ]person visit)\b/i;
 
 /**
- * Phone conversation patterns.
+ * Phone conversation patterns. Case-insensitive: every alternative names the phone explicitly.
  */
 export const PHONE_CONVERSATION_RE =
-  /\b(?:spoke\s+(?:on(?: the)?|by|over the)\s+phone|talked\s+(?:on(?: the)?|by|over the)\s+phone|phone\s+call\s+(?:successful|confirmed|with)|phone\s+conversation|called\s+(?:and spoke|them and spoke)|left voicemail|spoke\s+(?:to|with)\s+[A-Z][a-z]+)\b/i;
+  /\b(?:spoke\s+(?:on(?: the)?|by|over the)\s+phone|talked\s+(?:on(?: the)?|by|over the)\s+phone|phone\s+call\s+(?:successful|confirmed|with)|phone\s+conversation|called\s+(?:and spoke|them and spoke)|left voicemail)\b/i;
+
+/**
+ * "Spoke to <Name>" as evidence of a real conversation. Deliberately case-SENSITIVE on the name:
+ * a capitalized proper name is the whole signal. Under /i this alternative matched "spoke with the
+ * owner" and "spoke with the manager while I was there", classifying an in-person chat as a call.
+ */
+export const PHONE_CONVERSATION_NAME_RE = /\b[Ss]poke\s+(?:to|with)\s+[A-Z][a-z]+\b/;
+
+/** True when the sentence records an actual phone conversation. */
+export function isPhoneConversation(sentence: string): boolean {
+  return PHONE_CONVERSATION_RE.test(sentence) || PHONE_CONVERSATION_NAME_RE.test(sentence);
+}
 
 /**
  * Parse an ISO date or Month DD, YYYY date from text context. Returns YYYY-MM-DD or "".
@@ -164,6 +189,8 @@ export function hasExistingTouch(
 /**
  * Evaluates active venue notes for genuine conversations.
  * Proposes exactly one touch per venue, with visit taking precedence over call.
+ * A row the venue's existing touches already cover comes back marked `suppressed` — reported but
+ * never written — unless it is an exact same-date duplicate, which returns null.
  */
 export function detectVenueConversationTouch(
   venue: VenueNotesRecord,
@@ -191,11 +218,12 @@ export function detectVenueConversationTouch(
     const trimmedLine = line.trim();
     if (!trimmedLine) continue;
 
-    // Ignore legacy spreadsheet lines
-    if (LEGACY_METADATA_LINE_RE.test(trimmedLine)) continue;
     if (PHONE_NUMBER_LABEL_RE.test(trimmedLine)) continue;
 
-    // Split line into sentences (period followed by space, or semicolon)
+    // Split line into sentences (period followed by space, or semicolon).
+    // Legacy spreadsheet metadata is discarded per sentence, not per line: imported rows routinely
+    // concatenate metadata and prose ("Date called: 2026-05-09. Spoke on the phone with Liza."),
+    // and dropping the whole line would lose the real conversation with it.
     const sentences = trimmedLine
       .split(/(?<=[.!?])\s+|;\s+/)
       .map((s) => s.trim())
@@ -209,7 +237,7 @@ export function detectVenueConversationTouch(
       if (!candidateVisit && IN_PERSON_CONVERSATION_RE.test(s)) {
         const date = extractDateFromText(s) || extractDateFromText(trimmedLine);
         candidateVisit = { sentence: s, date };
-      } else if (!candidateCall && PHONE_CONVERSATION_RE.test(s)) {
+      } else if (!candidateCall && isPhoneConversation(s)) {
         const date = extractDateFromText(s) || extractDateFromText(trimmedLine);
         candidateCall = { sentence: s, date };
       }
@@ -221,25 +249,81 @@ export function detectVenueConversationTouch(
   if (!chosen) return null;
 
   const touchType: TouchType = candidateVisit ? "visit" : "call";
-  const venueId = String(venue._id || venue.id || "");
-  const venueName = String(venue.name || "Unknown Venue");
-  const city = String(venue.city || "");
-  const usState = String(venue.usState || "");
-
-  // Skip if already in touches
-  if (hasExistingTouch(venue, touchType, chosen.date)) {
-    return null;
-  }
-
-  return {
-    venueId,
-    venueName,
-    city,
-    usState,
+  const proposal: TouchProposal = {
+    venueId: String(venue._id || venue.id || ""),
+    venueName: String(venue.name || "Unknown Venue"),
+    city: String(venue.city || ""),
+    usState: String(venue.usState || ""),
     touchType,
     date: chosen.date,
     sentence: chosen.sentence,
   };
+
+  if (hasExistingTouch(venue, touchType, chosen.date)) {
+    // Same type, same date — a genuine duplicate, nothing to decide.
+    if (chosen.date) return null;
+    // Undated, and the venue carries some other touch of this type. That is a judgement call, so
+    // report it rather than dropping it out of the table silently.
+    return { ...proposal, suppressed: `venue already has a ${touchType} touch` };
+  }
+
+  return proposal;
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** True when the string is a real calendar date in YYYY-MM-DD form. */
+export function isValidIsoDate(value: string): boolean {
+  if (!ISO_DATE_RE.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/** True when the selector (stable row number, venue id, or name fragment) picks out this proposal. */
+function matchesSelector(proposal: TouchProposal, selector: string): boolean {
+  const s = selector.toLowerCase().trim();
+  return s === String(proposal.index ?? "") ||
+    s === proposal.venueId.toLowerCase() ||
+    proposal.venueName.toLowerCase().includes(s);
+}
+
+/**
+ * Fills in dates supplied on the command line as `<index|venueId|name fragment>=YYYY-MM-DD`.
+ * Throws on a malformed entry, an impossible date, or a selector matching no row — a typo must not
+ * quietly leave a row undated on a one-time write.
+ */
+export function applyDateFills(
+  proposals: TouchProposal[],
+  fills: string[],
+): TouchProposal[] {
+  const result = proposals.map((p) => ({ ...p }));
+
+  for (const raw of fills) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    const eq = entry.lastIndexOf("=");
+    if (eq <= 0 || eq === entry.length - 1) {
+      throw new Error(
+        `Invalid --date entry "${entry}". Expected <index|venueId|name fragment>=YYYY-MM-DD.`,
+      );
+    }
+    const selector = entry.slice(0, eq).trim();
+    const value = entry.slice(eq + 1).trim();
+    if (!isValidIsoDate(value)) {
+      throw new Error(`Invalid --date value "${value}" in "${entry}". Expected YYYY-MM-DD.`);
+    }
+
+    const matched = result.filter((p) => matchesSelector(p, selector));
+    if (matched.length === 0) {
+      throw new Error(`--date selector "${selector}" matched no proposed row.`);
+    }
+    for (const p of matched) {
+      p.date = value;
+      p.dateSuppliedByFlag = true;
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -262,11 +346,11 @@ export function renderProposalsTable(proposals: TouchProposal[]): string {
   );
 
   proposals.forEach((p, idx) => {
-    const num = String(idx + 1).padEnd(3);
+    const num = String(p.index ?? idx + 1).padEnd(3);
     const name = p.venueName.slice(0, 28).padEnd(28);
     const loc = [p.city, p.usState].filter(Boolean).join(", ").slice(0, 20).padEnd(20);
     const type = p.touchType.slice(0, 10).padEnd(10);
-    const date = (p.date || "—").slice(0, 10).padEnd(10);
+    const date = (p.date || "— none").slice(0, 10).padEnd(10);
     const sentence = p.sentence.replace(/\r?\n/g, " ").slice(0, 54).padEnd(54);
     lines.push(`│ ${num} │ ${name} │ ${loc} │ ${type} │ ${date} │ ${sentence} │`);
   });
@@ -279,8 +363,10 @@ export function renderProposalsTable(proposals: TouchProposal[]): string {
 }
 
 /**
- * Propose-then-write pipeline: scans venues, outputs single proposal table,
- * and writes via POST /venue/:id/touch ONLY when options.apply is true.
+ * Propose-then-write pipeline: scans venues, outputs single proposal table, and writes via
+ * POST /venue/:id/touch ONLY when options.apply is true.
+ * A row carrying no date is never written: the backend defaults a missing date to Date.now, which
+ * would stamp the record with the day the script ran rather than the day anything happened.
  */
 export async function executeTouchConversion(
   options: TouchConversionOptions = {},
@@ -308,41 +394,34 @@ export async function executeTouchConversion(
     }
   }
 
-  // 1. Propose touches across all venues
-  const allProposals: TouchProposal[] = [];
+  // 1. Propose touches across all venues, numbering every detected row once so the numbers Josh
+  //    reads in the table stay stable under --venues / --skip / --date.
+  const detected: TouchProposal[] = [];
   for (const v of rawVenues) {
     const proposal = detectVenueConversationTouch(v);
     if (proposal) {
-      allProposals.push(proposal);
+      detected.push({ ...proposal, index: detected.length + 1 });
     }
   }
+  const suppressed = detected.filter((p) => p.suppressed);
+  let allProposals = detected.filter((p) => !p.suppressed);
 
-  // 2. Filter / skip if options provided
+  // 2. Fill any dates supplied on the command line, before filtering, so --date selectors refer to
+  //    the same row numbers as the table.
+  if (options.dates && options.dates.length > 0) {
+    allProposals = applyDateFills(allProposals, options.dates);
+  }
+
+  // 3. Filter / skip if options provided — matched against the stable row number.
   let filtered = allProposals;
   if (options.filterVenues && options.filterVenues.length > 0) {
     const filters = options.filterVenues.map((f) => f.toLowerCase().trim());
-    filtered = filtered.filter((p, idx) => {
-      const idxStr = String(idx + 1);
-      return filters.some(
-        (f) =>
-          f === idxStr ||
-          f === p.venueId.toLowerCase() ||
-          p.venueName.toLowerCase().includes(f),
-      );
-    });
+    filtered = filtered.filter((p) => filters.some((f) => matchesSelector(p, f)));
   }
 
   if (options.skipVenues && options.skipVenues.length > 0) {
     const skips = options.skipVenues.map((s) => s.toLowerCase().trim());
-    filtered = filtered.filter((p, idx) => {
-      const idxStr = String(idx + 1);
-      return !skips.some(
-        (s) =>
-          s === idxStr ||
-          s === p.venueId.toLowerCase() ||
-          p.venueName.toLowerCase().includes(s),
-      );
-    });
+    filtered = filtered.filter((p) => !skips.some((s) => matchesSelector(p, s)));
   }
 
   const tableStr = renderProposalsTable(filtered);
@@ -352,34 +431,67 @@ export async function executeTouchConversion(
   console.log(`Proposed Contact Touches from Venue Notes (${filtered.length} found):\n`);
   console.log(tableStr);
 
-  const applied: AppliedTouchResult[] = [];
+  const suppliedDates = filtered.filter((p) => p.dateSuppliedByFlag);
+  if (suppliedDates.length > 0) {
+    console.log("\nDates supplied with --date (not read from the note):");
+    for (const p of suppliedDates) {
+      console.log(`  #${p.index} ${p.venueName} → ${p.date}`);
+    }
+  }
 
-  // 3. Propose-only / Dry Run check
+  if (suppressed.length > 0) {
+    console.log(`\nSuppressed (${suppressed.length}) — reported, never written:`);
+    for (const p of suppressed) {
+      console.log(
+        `  #${p.index} ${p.venueName}: ${p.suppressed} — proposed ${p.touchType} from "${p.sentence}"`,
+      );
+    }
+  }
+
+  const skippedNoDate = filtered.filter((p) => !p.date);
+  if (skippedNoDate.length > 0) {
+    console.log(
+      `\n⚠ ${skippedNoDate.length} row(s) carry no date and will NOT be written — the record would` +
+        ` otherwise be stamped with today's date, which is not when the conversation happened.`,
+    );
+    for (const p of skippedNoDate) {
+      console.log(`  #${p.index} ${p.venueName} — supply one with --date "${p.index}=YYYY-MM-DD"`);
+    }
+  }
+
+  const applied: AppliedTouchResult[] = [];
+  const writable = filtered.filter((p) => p.date);
+
+  // 4. Propose-only / Dry Run check
   if (!options.apply) {
-    const summary =
+    let summary =
       `Dry run: proposed ${filtered.length} touches across ${filtered.length} venues. No touches were written. To write these touches, run with --apply (or --approve).`;
+    if (skippedNoDate.length > 0) {
+      summary +=
+        ` ${skippedNoDate.length} of them carry no date and will be skipped until a date is supplied with --date.`;
+    }
     console.log(`\n[dry-run] ${summary}\n`);
     return {
       proposals: filtered,
+      suppressed,
+      skippedNoDate,
       applied: [],
       summary,
     };
   }
 
-  // 4. Approved write execution
-  console.log(`\nApplying ${filtered.length} approved touches to backend...`);
+  // 5. Approved write execution — dated rows only
+  console.log(`\nApplying ${writable.length} approved touches to backend...`);
   const actor = options.actor || "Josh";
 
-  for (const p of filtered) {
+  for (const p of writable) {
     const touchUrl = `${baseUrl}/venue/${p.venueId}/touch`;
     const payload: Record<string, unknown> = {
       type: p.touchType,
       note: p.sentence,
       actor,
+      date: `${p.date}T00:00:00.000Z`,
     };
-    if (p.date) {
-      payload.date = `${p.date}T00:00:00.000Z`;
-    }
 
     try {
       const touchRes = await fetchFn(touchUrl, {
@@ -427,11 +539,17 @@ export async function executeTouchConversion(
   }
 
   const successCount = applied.filter((a) => a.success).length;
-  const summary = `Successfully wrote ${successCount} of ${applied.length} approved touches.`;
+  let summary = `Successfully wrote ${successCount} of ${applied.length} approved touches.`;
+  if (skippedNoDate.length > 0) {
+    summary +=
+      ` Skipped ${skippedNoDate.length} undated row(s) — supply a date with --date and re-run.`;
+  }
   console.log(`\n[touch-conversion] ${summary}\n`);
 
   return {
     proposals: filtered,
+    suppressed,
+    skippedNoDate,
     applied,
     summary,
   };
@@ -440,7 +558,8 @@ export async function executeTouchConversion(
 if (import.meta.main) {
   const flags = parseArgs(Deno.args, {
     boolean: ["apply", "approve", "dry-run", "help"],
-    string: ["venues", "skip", "backend-url", "token", "actor"],
+    string: ["venues", "skip", "backend-url", "token", "actor", "date"],
+    collect: ["date"],
     alias: {
       a: "apply",
       h: "help",
@@ -457,12 +576,15 @@ if (import.meta.main) {
 Usage: deno task book-gig:convert-touches [options]
 
 Converts recorded phone calls and in-person visits in venue notes into structured touches.
+A proposal with no date in the note is reported but never written — supply the date with --date.
 
 Options:
   --apply, --approve       Apply the approved touches via POST /venue/:id/touch
   --dry-run                Preview proposals without writing (default)
-  --venues <list>          Comma-separated venue IDs, names, or indices to process
-  --skip <list>            Comma-separated venue IDs, names, or indices to skip
+  --venues <list>          Comma-separated venue IDs, names, or row numbers to process
+  --skip <list>            Comma-separated venue IDs, names, or row numbers to skip
+  --date <sel>=<date>      Fill an undated row's date, e.g. --date "3=2026-05-18"
+                           (repeatable; <sel> is a row number, venue ID, or name fragment)
   --actor <name>           Actor recorded on touch (default: "Josh")
   --backend-url <url>      Override backend API URL
   --token <token>          Override API Bearer token
@@ -474,6 +596,7 @@ Options:
   const apply = (flags.apply || flags.approve) && !flags["dry-run"];
   const filterVenues = flags.venues ? flags.venues.split(",").map((s) => s.trim()) : undefined;
   const skipVenues = flags.skip ? flags.skip.split(",").map((s) => s.trim()) : undefined;
+  const dates = (flags.date as string[] | undefined)?.filter(Boolean);
 
   try {
     await executeTouchConversion({
@@ -483,6 +606,7 @@ Options:
       actor: flags.actor,
       filterVenues,
       skipVenues,
+      dates,
     });
   } catch (err) {
     console.error(`Error: ${(err as Error).message}`);
