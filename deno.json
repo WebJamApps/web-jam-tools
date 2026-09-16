@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.38.12",
+  "version": "1.38.13",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "sheet-music:generate": "deno run --allow-read --allow-write src/sheet-music/generate_docx.ts",
@@ -30,6 +30,7 @@
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "issue:create": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "book-gig": "deno run --allow-all src/book-gig/cli.ts",
+    "book-gig:convert-touches": "deno run --allow-all src/book-gig/convert_touches.ts",
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
     "coverage": "rm -rf cov_profile && deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile && deno coverage cov_profile",
