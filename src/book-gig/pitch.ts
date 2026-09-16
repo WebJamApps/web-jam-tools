@@ -421,7 +421,8 @@ function substituteTokens(
 
   // 2. Replace [Contact Name]
   if (tokens.contactName && tokens.contactName.trim()) {
-    result = result.replace(/\[Contact Name\]/gi, tokens.contactName.trim());
+    const firstWord = tokens.contactName.trim().split(/\s+/)[0];
+    result = result.replace(/\[Contact Name\]/gi, firstWord);
   } else {
     // If no contact name provided, format "Hi [Contact Name]," to "Hi," cleanly
     result = result.replace(/Hi\s+\[Contact Name\],/gi, "Hi,");

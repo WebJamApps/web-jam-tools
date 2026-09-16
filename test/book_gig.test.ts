@@ -32,6 +32,7 @@ import {
   htmlToPlainText,
   renderPitch,
   validateVoiceRules,
+  verifyPitchAgainstTemplate,
 } from "../src/book-gig/pitch.ts";
 import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
 import {
@@ -2443,13 +2444,69 @@ Deno.test("renderPitch: injects prior contact context into custom body for retur
 
   const pitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
 
-  assertStringIncludes(pitch.body, "Hi Matt Kimble,");
+  assertStringIncludes(pitch.body, "Hi Matt,");
+  assertEquals(pitch.body.includes("Hi Matt Kimble,"), false);
   assertStringIncludes(pitch.body, "Following up on our earlier conversation");
   assertStringIncludes(pitch.body, "January 15–17, 2027");
   assertEquals(pitch.body.includes("[Custom Body]"), false);
 
   const validation = validateVoiceRules(pitch.body);
   assertEquals(validation.valid, true);
+});
+
+Deno.test("renderPitch: greets only the first word of a multi-word contactName (#1007, D-69)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v_liza",
+    name: "Parkway Brewing Company",
+    city: "Salem",
+    usState: "VA",
+    email: "booking@parkwaybrewing.com",
+    venueType: "PubFestivalBrewery",
+    contactName: "Liza Crowder",
+  };
+
+  const pitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
+  assertStringIncludes(pitch.body, "Hi Liza,");
+  assertEquals(pitch.body.includes("Hi Liza Crowder,"), false);
+  assertEquals(pitch.body.includes("[Contact Name]"), false);
+  assertEquals(validateVoiceRules(pitch.body).valid, true);
+});
+
+Deno.test("verifyPitchAgainstTemplate: predicts empty contactName as 'Hi,' fallback (#1007)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v_empty_contact",
+    name: "The Spot on Kirk",
+    city: "Roanoke",
+    usState: "VA",
+    email: "info@thespotonkirk.org",
+    venueType: "Originals",
+    contactName: "",
+  };
+
+  const localPitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
+  assertStringIncludes(localPitch.htmlBody!, "<p>Hi,</p>");
+  assertEquals(localPitch.htmlBody!.includes("[Contact Name]"), false);
+  assertEquals(verifyPitchAgainstTemplate(localPitch, venue, weekend, {}, DEFAULT_TEMPLATES), null);
 });
 
 Deno.test("renderPitch: formats greeting cleanly when contactName is empty", () => {
