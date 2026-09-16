@@ -34,7 +34,7 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
    - **Refusal of Redundant Parallel Documents:** The skill strictly refuses to create redundant parallel design documents (such as `*-phase-2-design-*.md` or disconnected parallel files) for a feature that already has a canonical design document. Gate 1 (`runGate1`) actively enforces this check in code and refuses to render or open any document that duplicates a pre-existing canonical topic.
 2. **Record what Josh asked for verbatim**, and the existing ground the work sits on.
 3. **Put every decision to Josh one at a time** — applying the Decision-Readiness rule below — and write his answer into the document as he gives it, never batched at the end. An item is decided only when he rules on THAT item by name.
-4. **Verify facts rather than asserting them**, and record what was verified and how. Where a premise turns out to be false, the body records the corrected fact in present tense and the falsified premise goes in the decision-record appendix — never a "this turned out to be false" note in the body. Recording an unverified load-bearing premise is NOT sufficient to reach Gate 1 — every load-bearing premise must be resolved and proven, not merely logged as an unknown or caveat, before presenting the design for Gate 1 approval.
+4. **Verify facts rather than asserting them**, and record what was verified and how. Where a premise turns out to be false, the body records the corrected fact in present tense and the falsified premise goes in the decision-record appendix — never a "this turned out to be false" note in the body. Recording an unverified load-bearing premise is NOT sufficient to reach Gate 1 — every load-bearing premise must be resolved and proven, not merely logged as an unknown or caveat, before presenting the design for Gate 1 approval. A premise that cannot be proved from what exists — because the thing it asserts has never been measured — does not become a caveat and does not become an unchecked row: it converts the run to a measure-first run (below).
 5. **Reconcile edits continuously.** Apply the Edit-Reconciliation rule after any passage replacement.
 6. **Record revision in `## Revision History` table before Gate 1 (web-jam-tools#892):** When revising an existing design document, add the `## Revision History` table if absent, and append exactly one row for that Epic or Issue before Gate 1:
 
@@ -69,6 +69,22 @@ When `/design-issue` or `design:candidates` runs on an Epic or feature whose top
    - **Preserve Single Source of Truth:** Retains a single canonical document for the feature, eliminating documentation fragmentation across disconnected files.
 4. **Refusal of Parallel Files:** The skill strictly refuses to create redundant parallel design documents (such as `*-phase-2-design-*.md`) for the same feature. Gate 1 (`runGate1`) actively enforces this check in code and throws an error if an older canonical document exists for the topic.
 5. **Fail Closed When Discovery Cannot Answer:** Discovery has exactly three outcomes, and the third is not "no document". When the design-documents root or theme folder is missing, Dropbox is not mounted, a directory is unreadable, the topic cannot be resolved, or the resolved document cannot be read, `resolveCanonicalDesignDoc` in `src/design-issue/gate1.ts` throws and the commands exit `2` naming the path — distinct from the exit `1` they use for a genuine no-document result. **The run stops there.** It never treats an indeterminate answer as a licence to design from scratch, because a run that could not look and a run that found nothing are otherwise indistinguishable. This precondition sits beside the Gate 1 refusal in item 4, never in place of it: item 4 guards writing a duplicate file at the end of Phase 1, and a run that writes no file never reaches it.
+
+### The Measure-First Run
+
+Some topics cannot be designed yet. The design's mechanism rests on a premise that no amount of reading settles — an inventory nobody has taken, a probe nobody has run, a behaviour observable only on a surface this run cannot reach — and obtaining it is work in its own right rather than a lookup. A run in that position is a **measure-first run**, and its deliverable is the measurement, not a design.
+
+**How the run recognises itself.** Phase 1 step 4 requires every load-bearing premise to be proven before Gate 1, and a premise fails that test in two different ways with two different remedies. A premise that is merely unchecked gets checked, and the run continues. A premise that cannot be checked from what exists converts the run at that moment. The test is whether obtaining the proof is a lookup or a piece of work: if it needs its own issue, it is a piece of work.
+
+**What the run produces.** The measurement, filed as an issue, and nothing else. The measurement issue's deliverable is the record it produces **and the design document, or the revision to it, written from that record** — the design is an output of the measurement, never an input to it. The run never dispatches the measurement; filing it is where the run ends, exactly as every other run ends at "the issues exist".
+
+**What the run does not produce.** A design. A measure-first run presents nothing at Gate 1 and never asks Josh to approve a design, because there is no design to approve. A document whose mechanism half is still waiting on evidence is not a design; it is a plan to go and get one, and presenting it asks Josh to approve conclusions nobody has reached yet.
+
+**Where the run's decisions live.** A measure-first run still rules decisions, and the settled ones are settled permanently — a remit, a policy, a scope boundary, anything measurement cannot overturn. Those are written into the canonical design document as Josh gives them, exactly as Phase 1 step 3 requires. The document then exists as the run's record rather than as a design awaiting approval, and the measurement revises it into an actual design, which is what reaches Gate 1. This is why the measurement's deliverable is the design document *or the revision to it*: which of the two it writes depends only on whether a document already existed.
+
+**The gates.** Gate 1 does not fire in a measure-first run. Gate 2 does, unchanged: the measurement is an issue, the plan naming it is presented, and nothing is filed until Josh approves that plan. Gate 1 fires later, against the document the measurement produced, in the run that picks the topic back up.
+
+**Sequencing already assumed this and had no shape for it.** Phase 2 rule 9 already requires that where a load-bearing proof needs implementation work to obtain, that proof is sequenced first in the dependency chain. The measure-first run is the same rule one step earlier — for when the proof is not merely first in the chain, but a precondition of there being a design to build a chain out of at all.
 
 ### Decision-Readiness Rule
 A decision is not ready to put to Josh until these conditions are met:
@@ -176,6 +192,8 @@ When a run finishes on Claude Code, the skill reads the memory surfaces for rule
 
 Nothing is filed to GitHub until GATE 2 passes.
 
+A measure-first run does not reach Gate 1 at all, because it produces no design to approve. Gate 2 still holds there, since the measurement is filed as an issue like any other.
+
 A third gate — dispatch — exists as a standing rule and is not this skill's to hold, because the skill never dispatches at all.
 
 ---
@@ -188,6 +206,7 @@ These are properties of the skill, written as explicit refusals:
 |---|---|
 | write anything to a GitHub issue before GATE 1 | the design gate is real or it is decoration |
 | present Gate 1 while a load-bearing assumption the design's mechanism depends on is unverified | recording an unknown is not resolving it; an unproven mechanism is not an approved design |
+| present a design at Gate 1 whose mechanism rests on measurement that has not been performed | a document waiting on evidence is not a design but a plan to go and get one; the run converts to a measure-first run, files the measurement, and the design is written from what that measurement reports |
 | create, edit or label an issue before GATE 2 | the plan gate, likewise |
 | create a redundant parallel design document (e.g. `*-phase-2-design-*.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` | fragments feature documentation across multiple files and causes architectural drift; updates must be conducted as Major Revisions to the existing canonical document in-place |
 | put any decision to Josh before resolving the topic's canonical design document and reading it end to end, decisions-record appendix included | the refusal above guards writing a duplicate file, which a run that writes no file never trips, and it fires at the end of Phase 1, after every decision has already been put to him; the resolution is therefore a precondition of the run, checked at step zero |
