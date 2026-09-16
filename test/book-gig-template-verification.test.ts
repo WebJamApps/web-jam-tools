@@ -308,8 +308,18 @@ Deno.test("verifyPitchAgainstTemplate: greets first word of multi-word contactNa
   assertEquals(verifyPitchAgainstTemplate(localPitch, venue, WEEKEND, {}, TEMPLATES), null);
 
   // Backend render also greets first word "Hi Liza,"
+  const backendHtmlBody =
+    `<p>Hi Liza,</p>\n<p>We'd love to bring our acoustic set to The Test Room.</p>\n<p>We have October 16–18, 2026 available for October 2026.</p>\n<p>Thanks for considering us.</p>`;
   const backendPitch: PitchEmail = {
-    ...localPitch,
+    venueId: venue._id!,
+    venueName: venue.name,
+    to: venue.email!,
+    subject: "Performance Inquiry: Josh and Maria — Acoustic Duo for October 2026 — The Test Room",
+    body:
+      "Hi Liza,\n\nWe'd love to bring our acoustic set to The Test Room.\n\nWe have October 16–18, 2026 available for October 2026.\n\nThanks for considering us.",
+    htmlBody: backendHtmlBody,
+    templateType: "PubFestivalBrewery",
+    templateStage: "cold",
   };
   assertEquals(verifyPitchAgainstTemplate(backendPitch, venue, WEEKEND, {}, TEMPLATES), null);
 

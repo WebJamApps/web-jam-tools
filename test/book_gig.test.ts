@@ -65,7 +65,6 @@ import type {
   CandidateVenue,
   EmailTemplate,
   OutreachCampaignRecord,
-  PitchEmail,
   TargetWeekend,
 } from "../src/book-gig/types.ts";
 
@@ -2481,52 +2480,6 @@ Deno.test("renderPitch: greets only the first word of a multi-word contactName (
   assertEquals(pitch.body.includes("Hi Liza Crowder,"), false);
   assertEquals(pitch.body.includes("[Contact Name]"), false);
   assertEquals(validateVoiceRules(pitch.body).valid, true);
-});
-
-Deno.test("verifyPitchAgainstTemplate: predicts first word of contactName and verifies first-name backend greeting (#1007, D-69)", () => {
-  const weekend: TargetWeekend = {
-    start: "2026-10-16",
-    end: "2026-10-18",
-    rawText: "Oct 16-18 2026",
-    label: "October 16–18, 2026",
-    year: 2026,
-    month: 10,
-    days: [16, 17, 18],
-  };
-
-  const venue: CandidateVenue = {
-    _id: "v_liza",
-    name: "Parkway Brewing Company",
-    city: "Salem",
-    usState: "VA",
-    email: "booking@parkwaybrewing.com",
-    venueType: "PubFestivalBrewery",
-    contactName: "Liza Crowder",
-  };
-
-  // Render locally — prediction uses first word "Liza" -> "Hi Liza,"
-  const localPitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
-  assertStringIncludes(localPitch.htmlBody!, "<p>Hi Liza,</p>");
-  assertEquals(localPitch.htmlBody!.includes("<p>Hi Liza Crowder,</p>"), false);
-
-  // Verification against local/backend first-name greeting passes
-  const violation = verifyPitchAgainstTemplate(localPitch, venue, weekend, {}, DEFAULT_TEMPLATES);
-  assertEquals(violation, null);
-
-  // A stale rendered email with full name "Hi Liza Crowder," now fails verification as divergent
-  const stalePitch: PitchEmail = {
-    ...localPitch,
-    htmlBody: localPitch.htmlBody!.replace("<p>Hi Liza,</p>", "<p>Hi Liza Crowder,</p>"),
-  };
-  const staleViolation = verifyPitchAgainstTemplate(
-    stalePitch,
-    venue,
-    weekend,
-    {},
-    DEFAULT_TEMPLATES,
-  );
-  assertNotEquals(staleViolation, null);
-  assertEquals(staleViolation!.reason.includes("diverges from stored template"), true);
 });
 
 Deno.test("verifyPitchAgainstTemplate: predicts empty contactName as 'Hi,' fallback (#1007)", () => {
