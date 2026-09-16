@@ -13,8 +13,18 @@
  *      already parses (`toolCall.name` -> `tool_name`, `toolCall.args` ->
  *      `tool_input`, `transcriptPath` -> `transcript_path`, and known agy
  *      tool/arg names -> their Claude equivalents),
- *   2. enforce the `matcher` itself (agy ignores that field entirely), and
- *      skip running the underlying hook at all when it doesn't match,
+ *   2. enforce the REAL matcher itself, and skip running the underlying
+ *      hook at all when it doesn't match. This is NOT because agy ignores
+ *      its own `matcher` field — agy filters which `hooks.json` entries it
+ *      calls AT ALL by testing the registered matcher against agy's OWN
+ *      native tool names (e.g. `run_command`, not `Bash`), so a matcher
+ *      registered as a Claude-shaped value never matches and the entry is
+ *      silently never invoked (web-jam-tools#1036, measured 2026-09-16 —
+ *      corrects the "agy ignores that field entirely" claim this comment
+ *      carried before). `scripts/install-hooks.sh` therefore registers
+ *      every agy-side entry under matcher `.*` so agy always calls this
+ *      shim, and passes the REAL matcher separately, base64-encoded, as
+ *      this shim's second CLI argument — enforced here, unchanged,
  *   3. run the existing hook, unmodified, feeding it the normalized JSON,
  *   4. convert its verdict (`exit 2`, or
  *      `hookSpecificOutput.permissionDecision`) into agy's own
