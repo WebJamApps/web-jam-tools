@@ -12,6 +12,11 @@ const FIXTURES_DIR = path.resolve(
   new URL("../test/fixtures/design-issue", import.meta.url).pathname,
 );
 
+// This suite predates the Proved-date freshness rule (web-jam-tools#1025, covered in
+// test/design_issue_lint_doc_proved_date.test.ts); every premises table fixture below carries a
+// same-day Proved column purely to stay out of that rule's way.
+const TODAY = new Date().toISOString().slice(0, 10);
+
 Deno.test("lintDesignDoc returns valid for compliant design document", () => {
   const validMarkdown = `# My Feature Design
 
@@ -28,9 +33,9 @@ How each mechanism behaves on Claude Code and agy/Antigravity:
 | Runner | deno task | identical |
 
 ## Load-bearing premises
-| Premise | Proof |
-|---|---|
-| The runner exists as a deno task | Checked deno.json's tasks map |
+| Premise | Proof | Proved |
+|---|---|---|
+| The runner exists as a deno task | Checked deno.json's tasks map | ${TODAY} |
 
 ## Appendix — Decision Record
 | # | Decision | Outcome | Rejected alternatives |
@@ -86,9 +91,9 @@ const status: string = "active";
 Cross-surface parity is preserved.
 
 ## Load-bearing premises
-| Premise | Proof |
-|---|---|
-| The status enum has exactly two members | Read the interface definition above |
+| Premise | Proof | Proved |
+|---|---|---|
+| The status enum has exactly two members | Read the interface definition above | ${TODAY} |
 `;
 
   const result = lintDesignDoc(docWithCode, "test.md");
@@ -191,9 +196,9 @@ Clean description without bare labels in prose.
 Parity details.
 
 ## Load-bearing premises
-| Premise | Proof |
-|---|---|
-| The folder-naming convention is already established | Read the existing Dropbox theme folders |
+| Premise | Proof | Proved |
+|---|---|---|
+| The folder-naming convention is already established | Read the existing Dropbox theme folders | ${TODAY} |
 
 ## Appendix — Decision Record
 | D-1 | Folder naming convention | Milestone name | Repo name |
@@ -215,9 +220,9 @@ Clean description.
 Parity details.
 
 ## Load-bearing premises
-| **Premise** | **Proof** |
-|---|---|
-| The folder-naming convention is already established | Read the existing Dropbox theme folders |
+| **Premise** | **Proof** | **Proved** |
+|---|---|---|
+| The folder-naming convention is already established | Read the existing Dropbox theme folders | ${TODAY} |
 
 ## Appendix — Decision Record
 | D-1 | Folder naming convention | Milestone name | Repo name |
@@ -409,9 +414,9 @@ Design content.
 Parity details.
 
 ## Load-bearing premises
-| # | Premise | Proof |
-|---|---|---|
-| 1 | P1 | Verified in code |
+| # | Premise | Proof | Proved |
+|---|---|---|---|
+| 1 | P1 | Verified in code | ${TODAY} |
 `;
   const result = lintDesignDoc(doc, "test.md");
   assertEquals(result.valid, true);
@@ -428,9 +433,9 @@ Content.
 Parity details.
 
 ## Load-bearing premises
-| # | Premise | Proof |
-|---|---|---|
-| 1 | P1 | Verified in code |
+| # | Premise | Proof | Proved |
+|---|---|---|---|
+| 1 | P1 | Verified in code | ${TODAY} |
 `;
   const result = lintDesignDoc(doc, "test.md");
   assertEquals(result.valid, true);

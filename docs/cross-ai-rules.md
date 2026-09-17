@@ -9,7 +9,7 @@ This content used to live in Dropbox `SHARED.md` (mirrored to Google Drive so Ma
 Sonnet could read it). It is now maintained here in `web-jam-tools` as the single source of truth.
 AI-specific rules live in CLAUDE.md / AGENTS.md.
 
-Last updated: 2026-07-11.
+Last updated: 2026-08-27.
 
 ## VOICE RULES (for any email/pitch drafting task)
 
@@ -56,7 +56,9 @@ Never create version-suffixed copies (V2, V3, -new, -copy) — edit the master.
 
 - claude-sonnet-tasks.txt (Drive root, id 1ooDgwiatb66PGH40ae1KpRTb9WAvn-IZ) — Claude Sonnet (Josh's
   phone app); Drive is authoritative.
-- claude-opus-tasks.txt — Claude Opus (laptop); Dropbox-resident (web-jam-llms/).
+
+claude-opus-tasks.txt (Claude Opus lane) is RETIRED — the file no longer exists on disk (logged as
+"bridge dormant" in `web-jam-llms/bridge-log.md`, 2026-08-26); Opus work is tracked in GitHub issues.
 
 agy-tasks.txt (agy/Flash lane) is RETIRED (web-jam-tools#249) — Josh deleted it and moved agy/Flash
 dispatch to GitHub-issues-only; see `skills/delegate/SKILL.md`.
@@ -79,9 +81,26 @@ skill.
 
 - CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
 - EMAIL: always DRAFT, never send. Save as Gmail draft for Josh's review.
+- **EMAIL SEND CARVE-OUT — `/book-gig` gated batch dispatch only:** The single named
+  exception to "EMAIL: always DRAFT, never send" is `/book-gig`'s batch outreach dispatch
+  (`deno task book-gig --send ... --confirm-drafts`), and only once BOTH independent approval
+  gates for that batch are explicitly recorded: **Gate 1** (target venue-set approval, recorded
+  server-side via `POST /outreach/approval/venue-set`) and **Gate 2** (Josh's distinct, explicit
+  approval of the rendered draft copy itself, recorded server-side as a fingerprint of each
+  approved email — any later change to the venue set or the rendered copy invalidates it). Gate 1
+  approval of the venue set never authorizes dispatch on its own, and neither gate may ever be
+  inferred from the other or from any other statement Josh makes — see
+  `skills/book-gig/SKILL.md` for the full gate mechanics and fail-closed
+  guards. This carve-out names this one dispatch path and nothing else: it does not generalize to
+  any other skill, agent, or workflow, and it does not loosen voice rules or any other restriction
+  in this document. Outside this one path, "EMAIL: always DRAFT, never send" remains absolute.
 - FILES: never create a version-suffixed copy. Edit the master.
 - **NO SCRATCH FILES OR SCRATCH FOLDERS IN GIT REPOSITORIES**: Never create scratch files, draft markdown files, temporary summaries, or a `scratch/` folder inside any GitHub repository workspace. All temporary files (such as `--summary-file`, `--test-plan-file`, `--test-evidence-file` for `create-draft-pr.sh`, or scratch issue templates) MUST be written to `/tmp/` (e.g. `/tmp/pr-summary.md`) or the agent session artifact scratch directory, and cleaned up when done, keeping repository working trees completely clean.
 - Never contact venues, churches, or other third parties directly — Josh handles all outreach.
+- **Third-party contact carve-out (same one as above):** The `/book-gig` gated batch
+  dispatch path described under the EMAIL SEND CARVE-OUT above is the only path on which an agent
+  may contact a venue directly, and only under that same dual-gate condition. No other path, skill,
+  or workflow permits an agent to contact venues, churches, or other third parties directly.
 - **STATE VERIFICATION**: Before any suggestion, to-do item, or "ready for you" claim about a
   PR/issue/CI/deploy, run a fresh liveness check in that same turn (e.g.
   `gh pr view --json state,mergedAt` / `gh issue view --json state`). If state ≠ OPEN, it is done:

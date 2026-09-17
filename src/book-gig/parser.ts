@@ -6,6 +6,7 @@ import type {
   ParsedBookGigArgs,
   TargetLocation,
   TargetWeekend,
+  VenueTweak,
 } from "./types.ts";
 
 export type { ParsedBookGigArgs };
@@ -46,11 +47,20 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
 
   let mode: BookGigMode = "preview";
   let noOpen = false;
+  let confirmDrafts = false;
   let linkVenueName: string | undefined;
   let holdVenue: string | undefined;
   let explicitVenue: string | undefined;
   let holdUntil: string | undefined;
   let bookedThroughDate: string | undefined;
+  let tweakVenue: string | undefined;
+  let customBody: string | undefined;
+  let customIntro: string | undefined;
+  let confirmAll = false;
+  let recordGate2 = false;
+  let approver: string | undefined;
+  let notes: string | undefined;
+  let batchId: string | undefined;
   let explicitLocationStr: string | undefined;
   const includeVenues: string[] = [];
   const excludeVenues: string[] = [];
@@ -63,6 +73,76 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
 
     if (lower === "--send") {
       mode = "send";
+    } else if (lower === "--record-gate1" || lower === "--gate1") {
+      mode = "gate1";
+    } else if (lower === "--record-gate2") {
+      mode = "gate2";
+      recordGate2 = true;
+    } else if (lower === "--gate2") {
+      mode = "gate2";
+    } else if (lower === "--tweak-venue" || lower === "--tweak") {
+      if (mode === "preview") mode = "gate2";
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        tweakVenue = args[i].trim();
+      }
+    } else if (lower.startsWith("--tweak-venue=") || lower.startsWith("--tweak=")) {
+      if (mode === "preview") mode = "gate2";
+      const eqIdx = arg.indexOf("=");
+      tweakVenue = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--custom-body") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        customBody = args[i].trim();
+      }
+    } else if (lower.startsWith("--custom-body=")) {
+      const eqIdx = arg.indexOf("=");
+      customBody = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--custom-intro") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        customIntro = args[i].trim();
+      }
+    } else if (lower.startsWith("--custom-intro=")) {
+      const eqIdx = arg.indexOf("=");
+      customIntro = arg.slice(eqIdx + 1).trim();
+    } else if (
+      lower === "--approve-all" ||
+      lower === "--approve-drafts" ||
+      lower === "--confirm-all"
+    ) {
+      confirmAll = true;
+      if (mode === "preview") mode = "gate2";
+    } else if (lower === "--confirm-drafts") {
+      confirmDrafts = true;
+    } else if (lower.startsWith("--confirm-drafts=")) {
+      const eqIdx = arg.indexOf("=");
+      const val = arg.slice(eqIdx + 1).trim().toLowerCase();
+      confirmDrafts = val === "true" || val === "yes" || val === "1";
+    } else if (lower === "--approver") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        approver = args[i].trim();
+      }
+    } else if (lower.startsWith("--approver=")) {
+      const eqIdx = arg.indexOf("=");
+      approver = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--notes") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        notes = args[i].trim();
+      }
+    } else if (lower.startsWith("--notes=")) {
+      const eqIdx = arg.indexOf("=");
+      notes = arg.slice(eqIdx + 1).trim();
+    } else if (lower === "--batch-id" || lower === "--batchid") {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+        batchId = args[i].trim();
+      }
+    } else if (lower.startsWith("--batch-id=") || lower.startsWith("--batchid=")) {
+      const eqIdx = arg.indexOf("=");
+      batchId = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--replies" || lower === "--check-replies") {
       mode = "replies";
     } else if (lower === "--link-gig" || lower === "--link") {
@@ -151,12 +231,43 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   }
 
   const rawArgs = positionalArgs.join(" ").trim();
-  if (explicitVenue && mode === "send") {
+  if (explicitVenue && (mode === "send" || mode === "gate1" || mode === "gate2")) {
     includeVenues.push(explicitVenue);
   }
   const resIncludes = includeVenues.length > 0 ? Array.from(new Set(includeVenues)) : undefined;
   const resExcludes = excludeVenues.length > 0 ? Array.from(new Set(excludeVenues)) : undefined;
   const resNoOpen = noOpen ? true : undefined;
+  const resConfirmDrafts = confirmDrafts ? true : undefined;
+  const resApprover = approver ? approver.trim() : undefined;
+  const resNotes = notes ? notes.trim() : undefined;
+  const resBatchId = batchId ? batchId.trim() : undefined;
+
+  const tweaks: VenueTweak[] = [];
+  if (tweakVenue) {
+    tweaks.push({
+      venueName: tweakVenue,
+      customBody,
+      customIntro,
+    });
+  }
+  const resTweaks = tweaks.length > 0 ? tweaks : undefined;
+  const resConfirmAll = confirmAll ? true : undefined;
+
+  const sharedResult = {
+    includeVenues: resIncludes,
+    excludeVenues: resExcludes,
+    confirmDrafts: resConfirmDrafts,
+    noOpen: resNoOpen,
+    approver: resApprover,
+    notes: resNotes,
+    batchId: resBatchId,
+    tweakVenue,
+    customBody,
+    customIntro,
+    tweaks: resTweaks,
+    confirmAll: resConfirmAll,
+    recordGate2: recordGate2 ? true : undefined,
+  };
 
   if (mode === "link-gig") {
     if (!linkVenueName && positionalArgs.length > 0) {
@@ -198,9 +309,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     return {
       mode,
       location,
-      includeVenues: resIncludes,
-      excludeVenues: resExcludes,
-      noOpen: resNoOpen,
+      ...sharedResult,
       rawArgs: "",
     };
   }
@@ -217,9 +326,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode,
       weekend,
       location,
-      includeVenues: resIncludes,
-      excludeVenues: resExcludes,
-      noOpen: resNoOpen,
+      ...sharedResult,
       rawArgs,
     };
   }
@@ -231,9 +338,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
     return {
       mode,
       weekend,
-      includeVenues: resIncludes,
-      excludeVenues: resExcludes,
-      noOpen: resNoOpen,
+      ...sharedResult,
       rawArgs,
     };
   } catch {
@@ -265,9 +370,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
         mode,
         weekend,
         location,
-        includeVenues: resIncludes,
-        excludeVenues: resExcludes,
-        noOpen: resNoOpen,
+        ...sharedResult,
         rawArgs,
       };
     }
@@ -278,9 +381,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   return {
     mode,
     location,
-    includeVenues: resIncludes,
-    excludeVenues: resExcludes,
-    noOpen: resNoOpen,
+    ...sharedResult,
     rawArgs,
   };
 }
@@ -773,9 +874,9 @@ export function parseTargetWeekend(input: string, referenceYear = 2026): TargetW
     throw new Error("Target weekend cannot be empty");
   }
 
-  // Check ISO range: "2026-10-16 to 2026-10-18" or "2026-10-16/2026-10-18"
+  // Check ISO range: "2026-10-16 to 2026-10-18", "2026-10-16-to-2026-10-18", or "2026-10-16/2026-10-18"
   const isoRangeMatch = clean.match(
-    /^(\d{4})-(\d{2})-(\d{2})\s*(?:to|\/|-)\s*(\d{4})-(\d{2})-(\d{2})$/i,
+    /^(\d{4})-(\d{2})-(\d{2})\s*(?:-to-|to|\/|-)\s*(\d{4})-(\d{2})-(\d{2})$/i,
   );
   if (isoRangeMatch) {
     const y1 = parseInt(isoRangeMatch[1], 10);
@@ -964,27 +1065,33 @@ export function parseLocation(input?: string): TargetLocation | null {
   // E.g. "Lynchburg, Blacksburg, and Roanoke"
   const commaParts = working.split(",").map((p) => p.trim()).filter(Boolean);
   const rawCityTokens: string[] = [];
-  let detectedState: string | undefined;
+  // Only a state token/suffix the caller actually typed sets this — never an
+  // inference from a matched city's metro metadata. An explicit state always
+  // wins; without one, a multi-city search carries no implied state unless
+  // every named city resolves to the same known state (design doc Premise 23 /
+  // Step 2: a state constrains the search only when stated outright, or when
+  // every city in the list sits in the same one).
+  let explicitState: string | undefined;
 
   for (let i = 0; i < commaParts.length; i++) {
     let part = commaParts[i];
     // Check if this part is just a 2-letter state code like "VA"
     if (part.length === 2 && US_STATES.has(part.toUpperCase())) {
-      detectedState = part.toUpperCase();
+      explicitState = part.toUpperCase();
       continue;
     }
     // Check if part ends with state like "Lynchburg VA"
     const stateSuffixMatch = part.match(/^(.*?)\s+([a-zA-Z]{2})$/);
     if (stateSuffixMatch && US_STATES.has(stateSuffixMatch[2].toUpperCase())) {
       part = stateSuffixMatch[1].trim();
-      detectedState = stateSuffixMatch[2].toUpperCase();
+      explicitState = stateSuffixMatch[2].toUpperCase();
     }
 
     // Split part on "and" if it contains "and"
     const andParts = part.split(/\band\b/i).map((p) => p.trim()).filter(Boolean);
     for (const ap of andParts) {
       if (ap.length === 2 && US_STATES.has(ap.toUpperCase())) {
-        detectedState = ap.toUpperCase();
+        explicitState = ap.toUpperCase();
       } else if (ap && /[a-zA-Z]/.test(ap) && !/^\d+$/.test(ap)) {
         rawCityTokens.push(ap);
       }
@@ -999,6 +1106,7 @@ export function parseLocation(input?: string): TargetLocation | null {
   const cities: string[] = [];
   const metroSlugs: string[] = [];
   const surroundingSet = new Set<string>();
+  const perCityKnownStates: (string | undefined)[] = [];
 
   for (const rawToken of rawCityTokens) {
     const lowerToken = rawToken.toLowerCase();
@@ -1006,13 +1114,11 @@ export function parseLocation(input?: string): TargetLocation | null {
     const cityName = known ? known.city : rawToken.replace(/\b\w/g, (c) => c.toUpperCase());
     if (!cities.includes(cityName)) {
       cities.push(cityName);
+      perCityKnownStates.push(known?.state);
     }
     const slug = known?.slug || lowerToken.replace(/\s+/g, "-");
     if (!metroSlugs.includes(slug)) {
       metroSlugs.push(slug);
-    }
-    if (known?.state && !detectedState) {
-      detectedState = known.state;
     }
     // Collect surrounding cities
     const surroundingList = METRO_SURROUNDING[slug] || METRO_SURROUNDING[lowerToken] || [];
@@ -1020,6 +1126,15 @@ export function parseLocation(input?: string): TargetLocation | null {
       surroundingSet.add(sc);
     }
   }
+
+  // Every named city must resolve to the same known state for it to count as
+  // "uniform" — a mix of known and unknown, or two different states, leaves
+  // the state unset rather than silently narrowing to one of them.
+  const uniformKnownState = perCityKnownStates.length > 0 &&
+      perCityKnownStates.every((s) => s !== undefined && s === perCityKnownStates[0])
+    ? perCityKnownStates[0]
+    : undefined;
+  const detectedState = explicitState || uniformKnownState;
 
   // Remove target cities from surroundingCities set
   for (const c of cities) {

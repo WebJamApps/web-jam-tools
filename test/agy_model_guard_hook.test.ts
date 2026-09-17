@@ -64,12 +64,15 @@ async function runViaShim(payload: unknown): Promise<{ decision: string; reason?
 Deno.test("checkSessionModel: allowed Flash slugs pass", () => {
   assert(checkSessionModel("gemini-3.8-flash-high").allowed);
   assert(checkSessionModel("gemini-3.8-flash-medium").allowed);
+  assert(checkSessionModel("gemini-3.8-flash-tiered").allowed);
   assert(checkSessionModel("gemini-3.7-flash-high").allowed); // 3.7 floor
   assert(checkSessionModel("gemini-3.7-flash-medium").allowed); // 3.7 floor
+  assert(checkSessionModel("gemini-3.7-flash-tiered").allowed); // 3.7 floor
 });
 
 Deno.test("checkSessionModel: below-floor and non-Flash slugs are denied", () => {
   assert(!checkSessionModel("gemini-3.6-flash-low").allowed);
+  assert(!checkSessionModel("gemini-3.6-flash-tiered").allowed);
   assert(!checkSessionModel("claude-opus-4-6-thinking").allowed);
   assert(!checkSessionModel("gpt-oss-120b-medium").allowed);
 });
@@ -90,6 +93,11 @@ Deno.test("agy-model-guard.sh denies a non-Flash modelName with exit 2", async (
 
 Deno.test("agy-model-guard.sh allows an allowed Flash modelName", async () => {
   const res = await runDirect({ modelName: "gemini-3.8-flash-high" });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("agy-model-guard.sh allows gemini-3.8-flash-tiered", async () => {
+  const res = await runDirect({ modelName: "gemini-3.8-flash-tiered" });
   assertEquals(res.code, 0, res.stderr);
 });
 
@@ -118,6 +126,17 @@ Deno.test(
     const verdict = await runViaShim({
       toolCall: { name: "run_command", args: { CommandLine: "ls" } },
       modelName: "gemini-3.8-flash-medium",
+    });
+    assertEquals(verdict.decision, "allow");
+  },
+);
+
+Deno.test(
+  "agy-native model guard: gemini-3.8-flash-tiered driven through the shim yields decision:allow",
+  async () => {
+    const verdict = await runViaShim({
+      toolCall: { name: "run_command", args: { CommandLine: "ls" } },
+      modelName: "gemini-3.8-flash-tiered",
     });
     assertEquals(verdict.decision, "allow");
   },

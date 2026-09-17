@@ -31,13 +31,6 @@ export const AUTHORIZING_FILING_SKILLS = ["design-issue", "file-issue"] as const
 export type FilingSkill = typeof AUTHORIZING_FILING_SKILLS[number];
 
 /**
- * Maximum number of own-session user turns to scan backward for an authorizing filing skill.
- * Prevents a filing skill invocation early in a long session from unboundedly authorizing token
- * writes hours later during unrelated chat (Must Fix 2 on web-jam-tools#866).
- */
-export const MAX_AUTHORIZING_USER_TURNS = 20;
-
-/**
  * Claude Code's stored form of a slash-command invocation (web-jam-tools#920). The surface does not
  * record the user's keystrokes as the bare text `/file-issue`; it records a user turn whose whole
  * content is an invocation wrapper:
@@ -49,13 +42,30 @@ export const MAX_AUTHORIZING_USER_TURNS = 20;
  * follow). Verified live on 2026-09-05 in session 26d83a7a-6a81-41c8-8729-45ec0e75348b, where a
  * genuine `/file-issue` was refused a token because that text opens with `<` rather than `/`.
  *
+ * The leading `/` inside `<command-name>` is optional (web-jam-tools#956): a live transcript can
+ * carry either `<command-name>/file-issue</command-name>` or `<command-name>file-issue</command-name>`
+ * for the same real invocation, and only recognizing the slashed form left the bare-name form
+ * invisible the same way the pre-#920 code left the whole wrapper invisible.
+ *
  * Anchored at the START of the trimmed text on purpose, exactly like the bare slash form: this is
  * the same mention-vs-use distinction. Prose that quotes a `<command-name>` element mid-sentence
  * (this doc comment included, were it ever a user turn) is discussing the wrapper, not invoking
  * anything, and must not authorize — nor terminate — anything.
  */
-const CLAUDE_CODE_INVOCATION_WRAPPER =
-  /^(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\s*\/([a-zA-Z0-9_-]+)\s*<\/command-name>/;
+const CLAUDE_CODE_COMMAND_NAME_WRAPPER =
+  /^(?:<command-message>[^<]*<\/command-message>\s*)?<command-name>\s*\/?([a-zA-Z0-9_-]+)\s*<\/command-name>/;
+
+/**
+ * Fallback form of the wrapper above, for a transcript entry whose `<command-name>` element is
+ * missing and only `<command-message>` carries the invoked skill's name (web-jam-tools#956). Kept as
+ * a separate regex rather than folding into CLAUDE_CODE_COMMAND_NAME_WRAPPER above. This regex has
+ * no end anchor, so on its own it also matches a `<command-message>` followed by anything —
+ * including a `<command-name>` element the pattern above rejected. What keeps a well-formed wrapper
+ * on its `<command-name>` element is the ORDER of the checks in slashCommandFromInvocationWrapper:
+ * CLAUDE_CODE_COMMAND_NAME_WRAPPER is tried first, and this fallback runs only when it does not match.
+ */
+const CLAUDE_CODE_COMMAND_MESSAGE_ONLY_WRAPPER =
+  /^<command-message>\s*\/?([a-zA-Z0-9_-]+)\s*<\/command-message>/;
 
 /**
  * Returns the slash command name (lowercased, without its leading `/`) when `text` IS a Claude Code
@@ -65,8 +75,12 @@ const CLAUDE_CODE_INVOCATION_WRAPPER =
  * instead of fixing it (web-jam-tools#920).
  */
 export function slashCommandFromInvocationWrapper(text: string): string | null {
-  const match = text.trim().match(CLAUDE_CODE_INVOCATION_WRAPPER);
-  return match ? match[1].toLowerCase() : null;
+  const trimmed = text.trim();
+  const nameMatch = trimmed.match(CLAUDE_CODE_COMMAND_NAME_WRAPPER);
+  if (nameMatch) return nameMatch[1].toLowerCase();
+  const messageMatch = trimmed.match(CLAUDE_CODE_COMMAND_MESSAGE_ONLY_WRAPPER);
+  if (messageMatch) return messageMatch[1].toLowerCase();
+  return null;
 }
 
 /**
@@ -112,21 +126,56 @@ function opensWithPhrase(trimmed: string, phrase: string): boolean {
 }
 
 /**
- * Natural-language phrases that authorize a file-issue write, verbatim from file-issue/SKILL.md's
- * own frontmatter `description` ("Triggered when the user says 'file an issue', 'open an issue',
- * 'draft an issue' ...") — this scan is only allowed to enumerate phrases it can point at a
- * documented source for (design-issue/SKILL.md's guidance on trigger-list/matcher work: a case
- * list counts as closed only when every entry is a literal string traceable to something, never an
- * invented category). design-issue/SKILL.md's own description documents no equivalent
- * natural-language trigger — only its slash form, `/design-issue`, appears anywhere in that file —
- * so no phrase is added for it here; inventing one without a documented source would be exactly
- * the unenumerated-category failure that guidance warns against.
+ * Recognizes a natural-language file-issue invocation by SHAPE rather than as an enumerated phrase
+ * list (web-jam-tools#973, web-jam-tools#975 fixed one literal phrase at a time and Josh was refused
+ * twice in the same day on ordinary phrasings a literal list can never keep up with — "create an
+ * issue for JaMmusic then for the work you want to dispatch to Flash" before #975 merged, then
+ * "please create a new issue to constrain adding to memory..." right after, because of the leading
+ * "please" AND the word "new"). Josh: "use a regex so that I can say various chat messages that =
+ * file, create, whatever and issue, ticket, whatever". skills/file-issue/SKILL.md's frontmatter
+ * `description` documents the same shape in prose (a filing verb, optionally behind "please"/"can you
+ * ...", followed by issue/ticket/bug) — see the drift test tying the two together below — rather than
+ * a closed list of literal strings, since a regex's contract is "matches this shape", not
+ * "traceable to an enumerated string".
+ *
+ * Widened again for web-jam-tools#1000 "Widen file-issue natural-language matcher: leading
+ * affirmation + bounded filler words": Josh was refused on "yes file the new issue and link it to the
+ * Epic https://..." because the leading "yes" affirmation, a normal way Josh approves, was not a
+ * recognized opener ("the new" already fit the old determiner+adjective slot). Two additions, neither
+ * loosening the anchor:
+ *   1. An optional leading affirmation — yes/yeah/yep/ok/okay/sure, with an optional comma — since
+ *      Josh routinely opens an approval with one of these before the actual instruction.
+ *   2. The single fixed determiner-then-adjective slot is replaced with a BOUNDED repeat (0 to 3) of
+ *      one filler-word group (a/an/the/new/another/quick/separate/follow-up), so short runs of
+ *      filler in any order/count up to the bound are absorbed, while an unrelated word (as in "file
+ *      the report and later issue a refund") still is not — it is not in the filler list, so the
+ *      loop stops and the required noun fails to match right after, exactly as before.
+ *      The demonstratives "this"/"that" are deliberately NOT fillers: they point at an issue that
+ *      already exists, and after the verbs with a non-filing meaning (open/add/make/log/write) they
+ *      would authorize filing on "add that issue to the Epic" or "open this issue".
+ * Neither change touches the START anchor below, so mention-vs-use and the far-apart-verb-and-noun
+ * case are unaffected.
+ *
+ * Each noun also accepts its plural (issues/tickets/bugs/bug reports): Josh was refused a token write
+ * on "file the issues" when approving a batch, which is normal in /design-issue Phase 3, because the
+ * trailing `\b` failed on the "s". The optional `s` sits before that same `\b`, so "file an issued
+ * complaint" and "file issuesx" still do not match.
+ *
+ * `^\s*` is load-bearing (see filingSkillInvoked's doc comment): it is the same mention-vs-use
+ * distinction every other check in this file draws. Anchoring at the START of the (already-trimmed)
+ * message is what makes "I don't want you to file an issue" and "the file-issue skill says to open an
+ * issue" both fail to authorize — neither opens with the verb, so neither can reach the alternation at
+ * all. Do not relax this anchor (e.g. to `\b`) to make some hard phrasing match; if a genuine
+ * "must-match" case cannot be matched without weakening it, that is a decision for Josh, not something
+ * to fix by widening the gate.
+ *
+ * design-issue/SKILL.md documents no equivalent natural-language trigger — only its slash form,
+ * `/design-issue`, appears anywhere in that file — so this regex is deliberately used only for
+ * file-issue (see filingSkillInvoked below); inventing a natural-language form for design-issue
+ * without a documented source is out of scope.
  */
-const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
-  "file an issue",
-  "open an issue",
-  "draft an issue",
-] as const;
+export const FILE_ISSUE_INVOCATION_RE =
+  /^\s*(?:(?:yes|yeah|yep|okay|ok|sure)\b(?:\s*,)?\s+)?(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?(?:go\s+ahead\s+and\s+)?(?:file|create|open|draft|make|add|log|raise|write)\s+(?:me\s+)?(?:(?:a|an|the|new|another|quick|separate|follow-up)\b\s+){0,3}(?:issues?|tickets?|bug\s+reports?|bugs?)\b/i;
 
 /**
  * Returns the filing skill a piece of user-turn text invokes, or null. Recognizes three forms:
@@ -140,12 +189,13 @@ const FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS = [
  *    Same start-of-turn anchor, so the mention-vs-use distinction is unchanged: a `<command-name>`
  *    element quoted inside prose is not the turn's own invocation and does not count
  *    (web-jam-tools#920).
- * 2. For file-issue only, one of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS opening the text (same
+ * 2. For file-issue only, FILE_ISSUE_INVOCATION_RE matching at the start of the text (same
  *    start-of-message anchor — web-jam-tools#866 Suggestion: Josh routinely invokes file-issue by
- *    saying "file an issue" rather than typing the slash form, and a session that started that way
- *    was being refused a token write despite a genuine authorizing invocation). design-issue has no
- *    natural-language form recognized here; see FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS's doc comment
- *    for why none is invented for it.
+ *    saying "file an issue" (or "create an issue") rather than typing the slash form, and a session
+ *    that started that way was being refused a token write despite a genuine authorizing
+ *    invocation; web-jam-tools#973/#975 then found that a literal phrase list can never keep up with
+ *    ordinary phrasing, hence the shape-based regex). design-issue has no natural-language form
+ *    recognized here; see FILE_ISSUE_INVOCATION_RE's doc comment for why none is invented for it.
  */
 export function filingSkillInvoked(text: string): FilingSkill | null {
   const trimmed = text.trim().toLowerCase();
@@ -158,10 +208,8 @@ export function filingSkillInvoked(text: string): FilingSkill | null {
       return skill;
     }
   }
-  for (const phrase of FILE_ISSUE_NATURAL_LANGUAGE_TRIGGERS) {
-    if (opensWithPhrase(trimmed, phrase)) {
-      return "file-issue";
-    }
+  if (FILE_ISSUE_INVOCATION_RE.test(trimmed)) {
+    return "file-issue";
   }
   return null;
 }
@@ -197,11 +245,13 @@ export interface TokenWriteAuthorizationResult {
  *
  * Scans the transcript BACKWARD (most recent first) for the first own-session user turn
  * (isOwnSessionUserTurnBoundary — already excludes another conversation's/subagent's entries) that
- * invokes /design-issue or /file-issue, bounded by two constraints:
- * 1. Scope-ending event: Any intervening non-filing slash command (/work-issue, etc.) terminates
- *    authorization immediately, preventing cross-skill leaks.
- * 2. Turn bound: The scan looks at most MAX_AUTHORIZING_USER_TURNS (20) user turns back,
- *    preventing an early filing skill invocation from authorizing writes in unrelated later chat.
+ * invokes /design-issue or /file-issue. The scan is bounded only by one thing — a scope-ending
+ * event: any intervening non-filing slash command (/work-issue, etc.) terminates authorization
+ * immediately, preventing cross-skill leaks. There is no separate turn-count cap (web-jam-tools#956
+ * removed the earlier 20-turn window): the search covers this session's own transcript in full,
+ * since a long `/design-issue` run can settle decisions over many turns before filing at the end,
+ * and the token this check gates is already bound to this session id and carries its own bounded
+ * TTL — a second, shorter expiry here only broke the runs it exists to serve.
  */
 export function checkTokenWriteAuthorization(
   ctx: TokenWriteAuthorizationContext,
@@ -222,14 +272,9 @@ export function checkTokenWriteAuthorization(
     };
   }
 
-  let userTurnsScanned = 0;
   for (let i = ctx.entries.length - 1; i >= 0; i--) {
     const entry = ctx.entries[i];
     if (!isOwnSessionUserTurnBoundary(entry, ctx.ownConversationId)) continue;
-    userTurnsScanned++;
-    if (userTurnsScanned > MAX_AUTHORIZING_USER_TURNS) {
-      break;
-    }
     const text = extractEntryText(entry);
     const otherCmd = nonFilingSlashCommandInvoked(text);
     if (otherCmd) {
@@ -246,7 +291,7 @@ export function checkTokenWriteAuthorization(
   return {
     ok: false,
     reason:
-      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or "file an issue"/"open an issue"/"draft an issue"), found within the last ${MAX_AUTHORIZING_USER_TURNS} user turns in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
+      `Refused: no /design-issue invocation, and no /file-issue invocation (slash form, or a natural-language phrase like "file an issue"/"create a ticket"/"can you open a bug report"), found anywhere in this session's own transcript. Get Josh's explicit approval for this plan first, or ask him directly.`,
   };
 }
 

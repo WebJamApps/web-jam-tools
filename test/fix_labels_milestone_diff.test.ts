@@ -172,7 +172,6 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     "song-recordings",
     "set-lists",
     "promote-gigs",
-    "venue-mining",
     "financial",
     "health-wellness",
     "politics",
@@ -211,16 +210,16 @@ Deno.test("loadSchema: the real labels.yaml's milestoneTopics match web-jam-tool
     schema.milestoneTopics.find((t) => t.name === "AI Misbehaves")?.repos,
     ["web-jam-tools"],
   );
-  // web-jam-tools#287 "fix-labels skill expanded / corrected": seven topics
+  // web-jam-tools#287 "fix-labels skill expanded / corrected": six topics
   // from Josh's list, created live as milestones on 2026-07-31 in exactly
   // these four repos each (not `all`) — matching the convention already
-  // used for "Access Controls" and "AI Misbehaves" above.
+  // used for "Access Controls" and "AI Misbehaves" above. (venue-mining was
+  // dropped 2026-09-17)
   for (
     const name of [
       "song-recordings",
       "set-lists",
       "promote-gigs",
-      "venue-mining",
       "financial",
       "health-wellness",
       "politics",

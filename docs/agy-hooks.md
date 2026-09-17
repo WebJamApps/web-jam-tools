@@ -51,10 +51,23 @@ under a control/test A/B, not by what the model said.
 7. **agy exposes `modelName` to hooks** (e.g. `gemini-3.6-flash-low`) directly in the payload —
    Claude Code does not expose the current model to hooks at all.
 8. **`PostToolUse` fires, but cannot see tool output.** Its payload carries `toolCall`, `error`,
-   `modelName`, `stepIdx`, `transcriptPath` — no tool result. `PostToolHookResult` also carries no
-   fields, so nothing a `PostToolUse` hook returns can influence anything on agy; a detector hook
-   can only report (via `PreToolHookResult`-shaped stdout, which agy ignores for this event), not
-   veto.
+   `modelName`, `stepIdx`, `transcriptPath` — no tool result. `PostToolHookResult` carries no
+   `decision`/veto field of any kind, so nothing a `PostToolUse` hook returns can veto anything on
+   agy. **Correction (2026-09-16, decoded directly from the shipped agy binary — `strings
+   "$(readlink -f "$(command -v agy)")"` — since agy is closed-source and this wasn't verifiable
+   any other way):** `PostToolHookResult` is not fieldless — it carries exactly one optional field,
+   `overwrite_result` (a string; protobuf tag `bytes,1,opt,name=overwrite_result,
+   json=overwriteResult,proto3,oneof`), whose jsonschema description reads *"Optional. Replaces the
+   result of the tool call that just ran with this string. The model is told that the result was
+   replaced. Omit to leave the result untouched."* There is still no `decision` field on this
+   message (that only exists on `PreToolHookResult`/`StopHookResult`), so a `PostToolUse` hook still
+   cannot hard-block a call — but it CAN suppress/replace what the model sees of the tool's output,
+   which is the closest available substitute for a post-hoc veto. Printing `{"decision":"allow"}`
+   for this event (as the shim did before this correction) is invalid — agy's protojson unmarshal
+   rejects the unknown field and replaces the tool's real output with its own unmarshal-error text
+   instead (web-jam-tools#1038 "agy-hook-shim: agy rejects the shim's PostToolUse allow reply, so
+   every allowed agy tool call returns an error instead of its output"). See `toAgyReply()` in
+   `hooks/lib/agy_hook_shim.ts` for the corrected translation.
 9. **🔴 Registering a `Stop` or `SessionStart` hook silently disables the ENTIRE hooks config.**
    Not just that event — with one `Stop` entry present, or one `SessionStart` entry, no hook fires
    at all, `PreToolUse` guards included. Verified by isolating one variable at a time: the same

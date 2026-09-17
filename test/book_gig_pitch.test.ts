@@ -69,6 +69,38 @@ Deno.test("resolveVenueStage: resolves to returning when venue has priorGigs arr
   assertEquals(resolveVenueStage(venueEmptyGigs), "cold");
 });
 
+Deno.test("resolveVenueStage: resolves to returning when venue has lastGig object with datetime or date", () => {
+  const venueWithDatetime: CandidateVenue = {
+    _id: "v_lastgig_dt",
+    name: "Datetime Venue",
+    lastGig: {
+      _id: "g1",
+      datetime: "2022-07-17T00:00:00.000Z",
+      date: "Jul 17, 2022",
+    },
+  };
+  assertEquals(resolveVenueStage(venueWithDatetime), "returning");
+
+  const venueWithDateOnly: CandidateVenue = {
+    _id: "v_lastgig_d",
+    name: "Date Only Venue",
+    lastGig: {
+      _id: "g2",
+      date: "Jul 17, 2022",
+    },
+  };
+  assertEquals(resolveVenueStage(venueWithDateOnly), "returning");
+});
+
+Deno.test("resolveVenueStage: notes mentioning a past performance do not make a venue returning without a linked gig (D-34)", () => {
+  const venueWithNotes: CandidateVenue = {
+    _id: "v_notes_played",
+    name: "Notes Venue",
+    notes: "Type of gig: brewery\nLast played: 45396\nComments: Great room",
+  };
+  assertEquals(resolveVenueStage(venueWithNotes), "cold");
+});
+
 Deno.test("resolveVenueStage: resolves to cold by default when neither past gig nor returning option is present", () => {
   const venue: CandidateVenue = {
     _id: "v6",
@@ -136,6 +168,7 @@ Deno.test("renderPitch: uses cold template when venue has relationshipStage: 're
     city: "Salem",
     usState: "VA",
     email: "booking@samplepub.com",
+    venueType: "PubFestivalBrewery",
     relationshipStage: "returning",
   };
 
@@ -164,6 +197,7 @@ Deno.test("renderPitch: uses returning template when venue has linked past gig",
     city: "Salem",
     usState: "VA",
     email: "booking@samplepub.com",
+    venueType: "PubFestivalBrewery",
     reason: { lastGigDate: "2025-05-10" },
   };
 
@@ -171,6 +205,38 @@ Deno.test("renderPitch: uses returning template when venue has linked past gig",
   assertEquals(pitch.templateStage, "returning");
   assertStringIncludes(pitch.subject, "Back at Sample Pub");
   assertStringIncludes(pitch.body, "we had a blast playing Sample Pub last time");
+  assertEquals(validateVoiceRules(pitch.body).valid, true);
+});
+
+Deno.test("renderPitch: uses returning template when venue has lastGig object", () => {
+  const weekend: TargetWeekend = {
+    start: "2027-01-08",
+    end: "2027-01-10",
+    rawText: "Jan 8-10 2027",
+    label: "January 8–10, 2027",
+    year: 2027,
+    month: 1,
+    days: [8, 9, 10],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v_olde_salem",
+    name: "Olde Salem Brewery",
+    city: "Salem",
+    usState: "VA",
+    email: "ben@oldesalembrewing.com",
+    venueType: "PubFestivalBrewery",
+    lastGig: {
+      _id: "g_olde_salem",
+      datetime: "2022-07-17T00:00:00.000Z",
+      date: "Jul 17, 2022",
+    },
+  };
+
+  const pitch = renderPitch(venue, weekend);
+  assertEquals(pitch.templateStage, "returning");
+  assertStringIncludes(pitch.subject, "Back at Olde Salem Brewery this January 2027?");
+  assertStringIncludes(pitch.body, "we had a blast playing Olde Salem Brewery last time");
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
@@ -191,6 +257,7 @@ Deno.test("renderPitch: generates dynamic warm returning phrasing and subject li
     city: "Salem",
     usState: "VA",
     email: "booking@oldesalem.com",
+    venueType: "PubFestivalBrewery",
     contactName: "Matt",
     priorGigs: [{ gigId: "g1", date: "2025-06-20" }],
   };
@@ -286,6 +353,7 @@ Deno.test("renderPitch: falls back to cold template when no notes or prior gigs 
     city: "Salem",
     usState: "VA",
     email: "booking@plaincoldpub.com",
+    venueType: "PubFestivalBrewery",
   };
 
   const pitch = renderPitch(venue, weekend);
@@ -392,6 +460,7 @@ Deno.test("renderPitch: respects caller-supplied custom templates array for retu
     city: "Salem",
     usState: "VA",
     email: "booking@custombrewery.com",
+    venueType: "PubFestivalBrewery",
     contactName: "Alex",
     reason: { lastGigDate: "2025-06-15" },
   };

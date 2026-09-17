@@ -344,7 +344,10 @@ export function extractEntryText(entry: TranscriptEntry | null | undefined): str
   if (Array.isArray(content)) {
     return content
       .filter((block): block is TranscriptContentBlock & { text: string } =>
-        Boolean(block && typeof block === "object" && block.type === "text" && typeof block.text === "string")
+        Boolean(
+          block && typeof block === "object" && block.type === "text" &&
+            typeof block.text === "string",
+        )
       )
       .map((block) => block.text)
       .join("\n");
@@ -417,6 +420,36 @@ export function selectSessionModel(entries: readonly TranscriptEntry[]): string 
   return "";
 }
 
+/**
+ * Is this entry a prompt a person actually sent (web-jam-tools#965)?
+ *
+ * Narrower than isUserTurnBoundary(), which also accepts task notifications
+ * (`origin.kind: "task-notification"`), hook and skill-body injections (`isMeta: true`), and
+ * local-command echoes that carry no origin at all. Claude Code marks a real prompt — typed, queued,
+ * or an accepted suggestion — `origin.kind: "human"`. Only such an entry may carry approval for the
+ * Opus delegation gate. isUserTurnBoundary() itself is deliberately unchanged: the Stop hooks use it
+ * for turn grading.
+ */
+export function isHumanPrompt(entry: TranscriptEntry | null | undefined): boolean {
+  if (!isUserTurnBoundary(entry)) return false;
+  if (entry?.isMeta === true) return false;
+  const origin = entry?.origin;
+  return typeof origin === "object" && origin !== null &&
+    (origin as { kind?: unknown }).kind === "human";
+}
+
+/** Selects the most recent prompt a person actually sent (see isHumanPrompt), or null. */
+export function selectLastHumanPromptEntry(
+  entries: readonly TranscriptEntry[],
+): TranscriptEntry | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (isHumanPrompt(entries[i])) {
+      return entries[i];
+    }
+  }
+  return null;
+}
+
 export interface OpusGateInfo {
   model: string;
   hasEscape: boolean;
@@ -425,10 +458,13 @@ export interface OpusGateInfo {
 
 /**
  * Extracts session model and escape phrase grant information for the Opus delegation gate.
+ *
+ * The escape phrase is read from Josh's latest HUMAN prompt (selectLastHumanPromptEntry), so a task
+ * notification or isMeta entry arriving after it neither cancels the grant nor supplies one.
  */
 export function getOpusGateInfo(entries: readonly TranscriptEntry[]): OpusGateInfo {
   const model = selectSessionModel(entries);
-  const lastUser = selectLastUserEntry(entries);
+  const lastUser = selectLastHumanPromptEntry(entries);
   const lastUserText = extractEntryText(lastUser);
   const hasEscape = lastUserText.toLowerCase().includes("opus edit ok");
   return {

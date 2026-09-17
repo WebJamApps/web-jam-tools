@@ -222,11 +222,13 @@ milestoneTopics:
     repos:
       - web-jam-tools
 
-  # Seven topics from Josh's list on web-jam-tools#287 "fix-labels skill
+  # Six topics from Josh's list on web-jam-tools#287 "fix-labels skill
   # expanded / corrected" — never created at the time that issue landed, and
   # created live (as milestones, in exactly these four repos each) on
   # 2026-07-31 at his instruction. Registered here the same day so
   # `fix-labels:milestone-diff` stops reporting them as non-canonical drift.
+  # (venue-mining was dropped 2026-09-17 at Josh's instruction; its work goes
+  # under `gig-outreach`)
   - name: song-recordings
     repos:
       - JaMmusic
@@ -240,12 +242,6 @@ milestoneTopics:
       - WebJamSocketCluster
       - web-jam-tools
   - name: promote-gigs
-    repos:
-      - JaMmusic
-      - web-jam-back
-      - WebJamSocketCluster
-      - web-jam-tools
-  - name: venue-mining
     repos:
       - JaMmusic
       - web-jam-back

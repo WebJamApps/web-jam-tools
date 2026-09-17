@@ -8,6 +8,7 @@ import type {
   PitchEmail,
 } from "./types.ts";
 import { identifyCandidateBadge } from "./candidates.ts";
+import type { WeekendRunData } from "./gmail.ts";
 
 function escapeHtml(str: string): string {
   return str
@@ -106,6 +107,15 @@ export function renderStatusBadge(status: string, replyKind?: string): string {
   if (s.includes("cooldown active") || s.includes("cooldown:")) {
     return `<span class="badge badge-cooldown">${escapeHtml(status)}</span>`;
   }
+  if (s.includes("no booking email")) {
+    return `<span class="badge badge-no-booking-email">${escapeHtml(status)}</span>`;
+  }
+  if (s.includes("out of state")) {
+    return `<span class="badge badge-out-of-state">${escapeHtml(status)}</span>`;
+  }
+  if (s.includes("outside target area")) {
+    return `<span class="badge badge-outside-target-area">${escapeHtml(status)}</span>`;
+  }
   switch (s) {
     case "sent":
       return `<span class="badge badge-sent">sent</span>`;
@@ -144,11 +154,12 @@ export function formatPay(amount?: number | null): string {
 
 function renderPitchCard(p: PitchEmail, idx: number): string {
   const safeVenue = escapeHtml(p.venueName);
-  const safeTo = escapeHtml(p.to);
+  const safeTo = escapeHtml(p.to || "");
   const safeSecondary = p.secondaryTo ? escapeHtml(p.secondaryTo) : "";
-  const safeSubject = escapeHtml(p.subject);
-  const safePitchText = escapeHtml(p.body);
+  const safeSubject = escapeHtml(p.subject || "");
+  const safePitchText = escapeHtml(p.body || "");
   const cardId = `pitch-body-${idx + 1}`;
+  const plainTextId = `${cardId}-plain`;
 
   const contactMeta = p.contactName
     ? `<span class="meta-contact" style="color: var(--text-secondary); margin-right: 0.5rem;">Contact: <strong>${
@@ -164,6 +175,30 @@ function renderPitchCard(p: PitchEmail, idx: number): string {
   const secondaryMeta = safeSecondary
     ? `<span class="meta-secondary">(${safeSecondary})</span>`
     : "";
+
+  // The draft is written out in full here using the backend's own rendering
+  // (web-jam-tools#948): `p.htmlBody` is the exact HTML `buildPitchEmail()`
+  // produces on the server, so this artifact is byte-identical to what is
+  // dispatched rather than a second, separately implemented rendering. It
+  // renders in a sandboxed iframe with scripting disabled (`sandbox`
+  // carries `allow-same-origin` only, never `allow-scripts`), so nothing the
+  // backend returns can execute in this page — the draft is displayed, never
+  // trusted — while still letting the page size the frame to its content.
+  // Falls back to the plain-text `<pre>` block only when no HTML rendering
+  // is available at all.
+  const bodyMarkup = p.htmlBody && p.htmlBody.trim()
+    ? [
+      `    <iframe class="pitch-body-frame" id="${cardId}" title="Draft email for ${safeVenue}" sandbox="allow-same-origin" srcdoc="${
+        escapeHtml(p.htmlBody)
+      }" onload="this.style.height = (this.contentWindow.document.body.scrollHeight + 24) + 'px';"></iframe>`,
+      '    <pre class="pitch-body-raw" id="' + plainTextId + '" style="display: none;">' +
+      safePitchText + "</pre>",
+    ].join("\n")
+    : '    <pre class="pitch-body" id="' + cardId + '">' + safePitchText + "</pre>";
+
+  const copyScript = p.htmlBody && p.htmlBody.trim()
+    ? `navigator.clipboard.writeText(document.getElementById('${plainTextId}').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Email', 2000)`
+    : `navigator.clipboard.writeText(document.getElementById('${cardId}').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Email', 2000)`;
 
   return [
     `<section class="pitch-card" id="pitch-${idx + 1}" data-venue-id="${escapeHtml(p.venueId)}">`,
@@ -185,11 +220,11 @@ function renderPitchCard(p: PitchEmail, idx: number): string {
     `  </div>`,
     `  <div class="pitch-body-wrap">`,
     `    <div class="pitch-actions">`,
-    `      <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('${cardId}').innerText); this.innerText='Copied!'; setTimeout(() => this.innerText='Copy Email', 2000)">`,
+    `      <button class="copy-btn" onclick="${copyScript}">`,
     `        Copy Email`,
     `      </button>`,
     `    </div>`,
-    '    <pre class="pitch-body" id="' + cardId + '">' + safePitchText + "</pre>",
+    bodyMarkup,
     `  </div>`,
     `</section>`,
   ].join("\n");
@@ -788,6 +823,16 @@ export function renderDarkHtml(result: BookGigResult): string {
       color: #4fc3f7;
     }
 
+    .badge-no-booking-email {
+      background-color: #3e2723;
+      color: #ffab91;
+    }
+
+    .badge-out-of-state, .badge-outside-target-area {
+      background-color: #2c2c2c;
+      color: #9e9e9e;
+    }
+
     .badge-sent {
       background-color: var(--badge-sent-bg);
       color: var(--badge-sent-txt);
@@ -978,6 +1023,15 @@ export function renderDarkHtml(result: BookGigResult): string {
       word-break: break-word;
     }
 
+    iframe.pitch-body-frame {
+      width: 100%;
+      min-height: 200px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background-color: #ffffff;
+      color-scheme: light;
+    }
+
     footer {
       text-align: center;
       color: var(--text-muted);
@@ -1053,6 +1107,8 @@ ${
       weekend: result.weekend,
       location: result.location,
       reportUrl: result.reportUrl,
+      batches: (result as unknown as { _runDataBatches?: WeekendRunData["batches"] })
+        ._runDataBatches,
     })
   }
   </script>
@@ -1073,6 +1129,7 @@ export function extractRunDataFromHtml(htmlContent: string): {
   pitches?: PitchEmail[];
   batchDispatch?: BatchDispatchResult;
   reportUrl?: string;
+  batches?: WeekendRunData["batches"];
 } | null {
   const scriptMatch = htmlContent.match(
     /<script\s+id=["']book-gig-run-data["']\s+type=["']application\/json["']>([\s\S]*?)<\/script>/i,
@@ -1085,6 +1142,7 @@ export function extractRunDataFromHtml(htmlContent: string): {
         pitches: Array.isArray(parsed.pitches) ? parsed.pitches : [],
         batchDispatch: parsed.batchDispatch,
         reportUrl: parsed.reportUrl,
+        batches: Array.isArray(parsed.batches) ? parsed.batches : undefined,
       };
     } catch {
       // Fall through to DOM parsing

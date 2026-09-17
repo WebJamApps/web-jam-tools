@@ -93,9 +93,11 @@ per D-7
 Parity
 
 ## Load-bearing premises
-| Premise | Proof |
-|---|---|
-| The fenced block above is not scanned | Read the checker's inCodeBlock toggle logic |
+| Premise | Proof | Proved |
+|---|---|---|
+| The fenced block above is not scanned | Read the checker's inCodeBlock toggle logic | ${
+    new Date().toISOString().slice(0, 10)
+  } |
 `;
   const result = lintDesignDoc(doc, "test.md");
   assertEquals(result.valid, true);

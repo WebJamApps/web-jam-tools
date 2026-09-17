@@ -13,13 +13,27 @@
  *      already parses (`toolCall.name` -> `tool_name`, `toolCall.args` ->
  *      `tool_input`, `transcriptPath` -> `transcript_path`, and known agy
  *      tool/arg names -> their Claude equivalents),
- *   2. enforce the `matcher` itself (agy ignores that field entirely), and
- *      skip running the underlying hook at all when it doesn't match,
+ *   2. enforce the REAL matcher itself, and skip running the underlying
+ *      hook at all when it doesn't match. This is NOT because agy ignores
+ *      its own `matcher` field — agy filters which `hooks.json` entries it
+ *      calls AT ALL by testing the registered matcher against agy's OWN
+ *      native tool names (e.g. `run_command`, not `Bash`), so a matcher
+ *      registered as a Claude-shaped value never matches and the entry is
+ *      silently never invoked (web-jam-tools#1036, measured 2026-09-16 —
+ *      corrects the "agy ignores that field entirely" claim this comment
+ *      carried before). `scripts/install-hooks.sh` therefore registers
+ *      every agy-side entry under matcher `.*` so agy always calls this
+ *      shim, and passes the REAL matcher separately, base64-encoded, as
+ *      this shim's second CLI argument — enforced here, unchanged,
  *   3. run the existing hook, unmodified, feeding it the normalized JSON,
  *   4. convert its verdict (`exit 2`, or
- *      `hookSpecificOutput.permissionDecision`) into agy's own
- *      `{"decision":"deny","reason":"..."}` veto form (confirmed working
- *      2026-08-07 — see finding 6 in the issue).
+ *      `hookSpecificOutput.permissionDecision`) into agy's own reply shape —
+ *      for `PreToolUse`, `{"decision":"deny"|"allow"|"ask","reason":"..."}`
+ *      (confirmed working 2026-08-07 — see finding 6 in web-jam-tools#432);
+ *      for `PostToolUse`, a DIFFERENT contract — `{}` for allow, or
+ *      `{"overwrite_result":"..."}` for deny/ask, since `PostToolHookResult`
+ *      has no `decision` field at all (verified by decoding the shipped agy
+ *      binary — see `toAgyReply()` below and the issue that fixed this).
  *
  * HONESTY NOTE on field-name mapping: only `run_command` (agy's shell tool,
  * args `CommandLine`/`Cwd`) is independently verified against a live agy
@@ -321,6 +335,55 @@ export function translateVerdict(exitCode: number, stdout: string, stderr: strin
   return { decision: "deny", reason: stderr.trim() || `hook exited ${exitCode} unexpectedly` };
 }
 
+export interface AgyPostToolReply {
+  overwrite_result?: string;
+}
+
+/**
+ * agy's PostToolUse reply is NOT the same contract as PreToolUse — printing
+ * `{"decision":"allow"}` for this event is the root cause of
+ * web-jam-tools#1038: agy rejects it as "unknown field \"decision\"" and
+ * replaces the tool's real output with that unmarshal error.
+ *
+ * Evidence (measured 2026-09-16, agy is closed-source so this is decoded
+ * directly from the shipped binary, not documentation): `strings
+ * "$(readlink -f "$(command -v agy)")"` shows agy's Go proto struct for this
+ * event carries exactly ONE field —
+ *   `OverwriteResult *string "protobuf:\"bytes,1,opt,name=overwrite_result,
+ *   json=overwriteResult,proto3,oneof\""`
+ * — with the jsonschema description "Optional. Replaces the result of the
+ * tool call that just ran with this string. The model is told that the
+ * result was replaced. Omit to leave the result untouched." No `decision`
+ * field exists on `PostToolHookResult` at all (that field only exists on
+ * `PreToolHookResult`/`StopHookResult`) — see docs/agy-hooks.md §2 finding 8
+ * and the issue for the full string dump.
+ *
+ * Translation, event-aware:
+ *   - PreToolUse: unchanged — `{decision, reason?}`, as before.
+ *   - PostToolUse "allow" (nothing to report): the empty object `{}` — valid
+ *     protojson for a message with its one optional field unset, matching
+ *     the proto's own "omit to leave untouched" semantics.
+ *   - PostToolUse "deny"/"ask": the tool call already ran and cannot be
+ *     un-run post-hoc, so there is no true veto available here. The closest
+ *     substitute is `overwrite_result`: it replaces what the model sees as
+ *     the tool's output with a warning, and (per the same jsonschema
+ *     description) agy tells the model the result was replaced — the model
+ *     never sees the original (possibly sensitive) output.
+ */
+export function toAgyReply(
+  event: "PreToolUse" | "PostToolUse",
+  verdict: AgyVerdict,
+): AgyVerdict | AgyPostToolReply {
+  if (event === "PreToolUse") return verdict;
+  if (verdict.decision === "allow") return {};
+  const reason = verdict.reason?.trim();
+  return {
+    overwrite_result: `[BLOCKED BY HOOK]${
+      reason ? ` ${reason}` : ""
+    } — original tool output withheld by a PostToolUse guard.`,
+  };
+}
+
 async function readAllStdin(): Promise<string> {
   const decoder = new TextDecoder();
   let text = "";
@@ -428,5 +491,5 @@ if (import.meta.main) {
   }
   const rawInput = await readAllStdin();
   const verdict = await runShim(event, matcher, targetHookPath, rawInput);
-  console.log(JSON.stringify(verdict));
+  console.log(JSON.stringify(toAgyReply(event, verdict)));
 }

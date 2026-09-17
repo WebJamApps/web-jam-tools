@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import {
   extractAddress,
   extractEmails,
@@ -6,7 +6,12 @@ import {
   extractVenueContact,
   extractVisibleText,
   findContactLinks,
+  generateCandidateDomains,
   hasMeaningfulText,
+  HOSPITALITY_TLDS,
+  pageIdentifiesVenue,
+  pageNamesVenue,
+  probeVenueDomains,
 } from "../src/venue-contact/extract_venue_contact.ts";
 
 // --- test fixtures --------------------------------------------------------
@@ -236,6 +241,20 @@ Deno.test("extractAddress prefers a match containing the cityHint", () => {
   const html =
     `<p>Mailing: 1 PO Box Rd, Bristol, VA 24201. Venue: 55 Show St, Roanoke, VA 24011.</p>`;
   assertEquals(extractAddress(html, "Roanoke"), "55 Show St, Roanoke, VA 24011");
+});
+
+Deno.test("extractAddress finds address with directional suffix and unit designator", () => {
+  const html =
+    `<p>Visit us at 730 Church St E #7a, Martinsville, VA 24112, United States for dinner.</p>`;
+  assertEquals(extractAddress(html, "Martinsville"), "730 Church St E #7a, Martinsville, VA 24112");
+});
+
+Deno.test("extractAddress finds address with directional prefix and suite", () => {
+  const html = `<p>Located at 100 N Main St, Suite 200, Blacksburg, VA 24060.</p>`;
+  assertEquals(
+    extractAddress(html, "Blacksburg"),
+    "100 N Main St, Suite 200, Blacksburg, VA 24060",
+  );
 });
 
 // --- findContactLinks --------------------------------------------------------
@@ -486,4 +505,185 @@ Deno.test("extractVenueContact: follows find us link and extracts email from tar
   assertEquals(emails, ["info@thewaterdog.example"]);
   const waterDogHit = result.emails.find((e) => e.email === "info@thewaterdog.example");
   assertEquals(waterDogHit?.sourceUrl, "https://thewaterdog.example/findus");
+});
+
+// --- domain probing & venue verification -----------------------------------
+
+Deno.test("generateCandidateDomains builds predictable URLs with hospitality TLDs", () => {
+  assert(HOSPITALITY_TLDS.includes(".shop"));
+  assertEquals(HOSPITALITY_TLDS.length, 7);
+  const domains = generateCandidateDomains("Wild Magnolia");
+  assert(domains.includes("https://wild-magnolia.shop"));
+  assert(domains.includes("https://wildmagnolia.shop"));
+  assert(domains.includes("https://wild-magnolia.bar"));
+  assert(domains.includes("https://wild-magnolia.restaurant"));
+  assert(domains.includes("https://wild-magnolia.site"));
+  assert(domains.includes("https://wild-magnolia.beer"));
+  assert(domains.includes("https://wild-magnolia.square.site"));
+  assert(domains.includes("https://wild-magnolia.com"));
+});
+
+Deno.test("pageIdentifiesVenue confirms identity when page text includes venue name and city/address", () => {
+  const html = `<html><body>
+    <h1>Wild Magnolia</h1>
+    <p>Authentic Southern Eats in Martinsville, VA. 730 Church St E #7a.</p>
+  </body></html>`;
+  assertEquals(pageIdentifiesVenue(html, "Wild Magnolia", { city: "Martinsville" }), true);
+  assertEquals(
+    pageIdentifiesVenue(html, "Wild Magnolia", {
+      address: "730 Church St E #7a, Martinsville, VA 24112",
+    }),
+    true,
+  );
+});
+
+Deno.test("pageIdentifiesVenue rejects page without venue name or from mismatched location", () => {
+  const diffCityHtml = `<html><body>
+    <h1>Wild Magnolia</h1>
+    <p>Dining in Savannah, GA.</p>
+  </body></html>`;
+  assertEquals(pageIdentifiesVenue(diffCityHtml, "Wild Magnolia", { city: "Martinsville" }), false);
+
+  const noNameHtml = `<html><body>
+    <h1>Downtown Grill</h1>
+    <p>Located in Martinsville, VA.</p>
+  </body></html>`;
+  assertEquals(pageIdentifiesVenue(noNameHtml, "Wild Magnolia", { city: "Martinsville" }), false);
+});
+
+Deno.test("pageIdentifiesVenue refuses a bare name match with no caller-supplied location", () => {
+  const html = `<html><body><h1>Wild Magnolia</h1><p>Southern eats.</p></body></html>`;
+  assertEquals(pageIdentifiesVenue(html, "Wild Magnolia"), false);
+  assertEquals(pageIdentifiesVenue(html, "Wild Magnolia", {}), false);
+});
+
+Deno.test("pageNamesVenue requires the venue name to be the page's own identity", () => {
+  const exact = `<html><head><title>Wild Magnolia - Southern Eats</title></head>
+    <body><h1>Wild Magnolia</h1></body></html>`;
+  assertEquals(pageNamesVenue(exact, "Wild Magnolia"), true);
+
+  const longerName = `<html><head><title>Wild Magnolia Florist</title></head>
+    <body><h1>Wild Magnolia Florist</h1><p>Wild Magnolia arrangements.</p></body></html>`;
+  assertEquals(pageNamesVenue(longerName, "Wild Magnolia"), false);
+
+  const bodyOnly = `<html><body><p>We deliver near Wild Magnolia every day.</p></body></html>`;
+  assertEquals(pageNamesVenue(bodyOnly, "Wild Magnolia"), false);
+});
+
+const WILD_MAGNOLIA_SITE = `
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Wild Magnolia - Authentic Southern Eats & Welcoming Atmosphere in Martinsville, VA</title>
+  </head>
+  <body>
+    <header>
+      <h1>Wild Magnolia</h1>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/menu">Menu</a>
+      </nav>
+    </header>
+    <main>
+      <p>
+        Discover Wild Magnolia in Martinsville, VA, where friendly service meets hearty dishes like
+        Monte Cristo sandwiches, burgers, and pimento cheese. Enjoy a lively setting with live music
+        and generous portions that keep locals and visitors coming back.
+      </p>
+    </main>
+    <footer>
+      <div class="contact-info">
+        <span>730 Church St E #7a, Martinsville, VA 24112, United States</span> -
+        <span>Phone: +1 276-666-6666</span>
+      </div>
+      <div class="booking-contact">
+        <a href="mailto:wild-magnolia.shop@gmail.com">wild-magnolia.shop@gmail.com</a>
+      </div>
+      <div class="copyright">
+        <span>&copy; 2026 wild-magnolia.shop</span>
+      </div>
+    </footer>
+  </body>
+</html>`;
+
+// NOTE: WILD_MAGNOLIA_SITE is a SYNTHETIC fixture. The live https://wild-magnolia.shop
+// was re-fetched on 2026-09-12 (HTTP 200, ~27.5 KB) and carries NO email address of any
+// kind — only `tel:+1 276-666-6666`; /menu has none either. This test therefore proves
+// the extractor, NOT acceptance criterion 5 of web-jam-tools#935 "venue-mining: probe
+// Google Places website & non-.com TLDs before classifying venue as phone-only", which
+// needs Josh's decision (see the PR discussion).
+Deno.test("probeVenueDomains: an identifying probed domain publishing a mailto flips outreachEligible (synthetic fixture)", async () => {
+  const result = await probeVenueDomains("Wild Magnolia", {
+    city: "Martinsville",
+    fetchImpl: stubFetch({
+      // Probing encounters 404 on earlier candidates until wild-magnolia.shop
+      "https://wild-magnolia.shop": { body: WILD_MAGNOLIA_SITE },
+    }),
+    renderImpl: () => Promise.reject(new Error("renderImpl should not be called")),
+  });
+
+  assert(result !== null);
+  assertEquals(result.url, "https://wild-magnolia.shop");
+  assertEquals(result.sourceType, "probed_domain");
+  assertEquals(result.identifiesVenue, true);
+  assertEquals(result.outreachEligible, true);
+  assertEquals(result.contact.address, "730 Church St E #7a, Martinsville, VA 24112");
+  assertEquals(result.contact.emails, [
+    { email: "wild-magnolia.shop@gmail.com", sourceUrl: "https://wild-magnolia.shop" },
+  ]);
+});
+
+Deno.test("probeVenueDomains: probed domain without venue identification sets outreachEligible: false", async () => {
+  const unrelatedShopHtml = `<html><body>
+    <h1>Wild Magnolia Florist</h1>
+    <p>Flower arrangements in Portland, OR. Contact us at info@wild-magnolia.shop.</p>
+  </body></html>`;
+
+  const result = await probeVenueDomains("Wild Magnolia", {
+    city: "Martinsville",
+    fetchImpl: stubFetch({
+      "https://wild-magnolia.shop": { body: unrelatedShopHtml },
+    }),
+    renderImpl: () => Promise.reject(new Error("renderImpl should not be called")),
+  });
+
+  assert(result !== null);
+  assertEquals(result.identifiesVenue, false);
+  // Email was found on probed domain, but page did NOT identify as the venue -> outreachEligible is false
+  assertEquals(result.outreachEligible, false);
+  assertEquals(result.contact.emails, [
+    { email: "info@wild-magnolia.shop", sourceUrl: "https://wild-magnolia.shop" },
+  ]);
+});
+
+Deno.test("probeVenueDomains: same-named business elsewhere WITH its own street address is refused", async () => {
+  // Regression guard: the probe used to feed the address it scraped off this
+  // very page back in as the expected address, so any page carrying the venue
+  // name plus any US street address "identified" as the venue.
+  const otherCityHtml = `<html>
+    <head><title>Wild Magnolia | Southern Kitchen &amp; Bar</title></head>
+    <body>
+      <h1>Wild Magnolia</h1>
+      <p>Southern kitchen and bar. Find us at 55 Peachtree St, Atlanta, GA 30303.</p>
+      <a href="mailto:hello@wild-magnolia.bar">hello@wild-magnolia.bar</a>
+    </body>
+  </html>`;
+
+  const result = await probeVenueDomains("Wild Magnolia", {
+    city: "Martinsville",
+    address: "730 Church St E #7a, Martinsville, VA 24112",
+    fetchImpl: stubFetch({
+      "https://wild-magnolia.bar": { body: otherCityHtml },
+    }),
+    renderImpl: () => Promise.reject(new Error("renderImpl should not be called")),
+  });
+
+  assert(result !== null);
+  assertEquals(result.identifiesVenue, false);
+  assertEquals(result.outreachEligible, false);
+  // The email is still reported — it is the ELIGIBILITY flip that D-49 withholds.
+  assertEquals(result.contact.emails, [
+    { email: "hello@wild-magnolia.bar", sourceUrl: "https://wild-magnolia.bar" },
+  ]);
 });

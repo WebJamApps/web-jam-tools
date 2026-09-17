@@ -186,10 +186,11 @@ registration).
 
 `~/.claude/settings.json` has no `permissions.defaultMode` key by default, so
 a Claude Code session starts in whatever permission mode was last selected
-rather than a deliberate one. When that mode is `auto`,
-`hooks/opus-delegation-gate.sh` withdraws its subagent exemption and refuses
-EVERY Edit/Write/NotebookEdit to a git-tracked path — main thread and
-subagent alike (measured cost: two dispatched Sonnet subagents refused on
+rather than a deliberate one. When that mode was `auto`,
+`hooks/opus-delegation-gate.sh` refused EVERY Edit/Write/NotebookEdit to a
+git-tracked path — main thread and subagent alike. Since web-jam-tools#965 it
+decides a subagent's edit by that subagent's real model and the message Josh
+typed to spawn it (measured cost before that fix: two dispatched Sonnet subagents refused on
 their first edit, ~93k and ~62k tokens burned for zero output, 2026-08-22 —
 web-jam-tools#705).
 

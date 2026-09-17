@@ -10,7 +10,7 @@ import {
   parseLocation,
   parseTargetWeekend,
 } from "../src/book-gig/parser.ts";
-import { filterAndRankCandidates } from "../src/book-gig/candidates.ts";
+import { filterAndRankCandidates, isPitchableCandidate } from "../src/book-gig/candidates.ts";
 import type { CandidateVenue } from "../src/book-gig/types.ts";
 
 Deno.test("parseBookGigArgs: splits CLI arguments without splitting numeric 4-digit years into location", () => {
@@ -148,6 +148,8 @@ Deno.test("parseLocation: parses City, State and multi-city expressions", () => 
   );
   assert(loc2 !== null);
   assertEquals(loc2.cities, ["Lynchburg", "Blacksburg", "Martinsville", "Salem", "Roanoke"]);
+  // Every named city sits in VA, so the uniform state is still inferred (#936).
+  assertEquals(loc2.state, "VA");
   assertEquals(loc2.includeSurrounding, true);
   assert(loc2.surroundingCities !== undefined);
   assert(loc2.surroundingCities.includes("Forest"));
@@ -175,6 +177,56 @@ Deno.test("parseLocation: parses City, State and multi-city expressions", () => 
   assert(loc4 !== null);
   assertEquals(loc4.cities, ["Harrisonburg", "Staunton", "Charlottesville"]);
   assertEquals(loc4.city, "Harrisonburg");
+});
+
+Deno.test("parseLocation: multi-city searches do not lock a single state that discards cross-border cities (#936)", () => {
+  // Mayodan, NC has no KNOWN_METROS entry, so it carries no known state. Salem
+  // resolves to VA. The two cities do not share a uniform known state, and no
+  // state was typed outright, so state must stay undefined rather than
+  // locking to Salem's VA and silently excluding Mayodan.
+  const loc1 = parseLocation("Salem, Mayodan");
+  assert(loc1 !== null);
+  assertEquals(loc1.cities, ["Salem", "Mayodan"]);
+  assertEquals(loc1.state, undefined);
+
+  // A state typed outright always wins, even over a mismatched inferred city state.
+  const loc2 = parseLocation("Salem, Mayodan, VA");
+  assert(loc2 !== null);
+  assertEquals(loc2.cities, ["Salem", "Mayodan"]);
+  assertEquals(loc2.state, "VA");
+
+  // Three named cities, two known and in agreement (VA), one unknown: still no uniform state.
+  const loc3 = parseLocation("Salem, Roanoke, Mayodan");
+  assert(loc3 !== null);
+  assertEquals(loc3.state, undefined);
+});
+
+Deno.test("filterAndRankCandidates: multi-city cross-border search retains explicitly named venues in a neighboring state (#936)", () => {
+  const venues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      address: "21 E Main St, Salem, VA 24153",
+      email: "booking@oldesalem.com",
+    },
+    {
+      _id: "v2",
+      name: "Gioia dell'Amore Cellars at Autumn Creek Vineyards",
+      city: "Mayodan",
+      usState: "NC",
+      address: "141 Pine Hall Rd, Mayodan, NC 27027",
+      email: "booking@autumncreekvineyards.com",
+    },
+  ];
+
+  const loc = parseLocation("Salem, Mayodan");
+  const filtered = filterAndRankCandidates(venues, loc ?? undefined);
+
+  assertEquals(filtered.length, 2);
+  assertEquals(filtered.some((v) => v.city === "Salem"), true);
+  assertEquals(filtered.some((v) => v.city === "Mayodan"), true);
 });
 
 Deno.test("parseTargetWeekend: parses valid weekend formats and throws on invalid", () => {
@@ -371,23 +423,31 @@ Deno.test("filterAndRankCandidates: with no location argument returns candidates
 
   // Exact matches: Cavendish Brewing, Clementine Cafe, Olde Salem Brewing, Slow Play Brewing, Starr Hill Brewery (5)
   // Surrounding matches: Apocalypse Ale Works (Forest, VA), Primal Brewery (Belmont, NC) (2)
-  assertEquals(filtered.length, 7);
+  const pitchable = filtered.filter(isPitchableCandidate);
+  assertEquals(pitchable.length, 7);
 
   // Exact matches appear first, sorted by name
-  assertEquals(filtered[0].name, "Cavendish Brewing"); // Gastonia (exact)
-  assertEquals(filtered[1].name, "Clementine Cafe"); // Harrisonburg (exact)
-  assertEquals(filtered[2].name, "Olde Salem Brewing"); // Salem (exact)
-  assertEquals(filtered[3].name, "Slow Play Brewing"); // Rock Hill (exact)
-  assertEquals(filtered[4].name, "Starr Hill Brewery"); // Roanoke (exact)
+  assertEquals(pitchable[0].name, "Cavendish Brewing"); // Gastonia (exact)
+  assertEquals(pitchable[1].name, "Clementine Cafe"); // Harrisonburg (exact)
+  assertEquals(pitchable[2].name, "Olde Salem Brewing"); // Salem (exact)
+  assertEquals(pitchable[3].name, "Slow Play Brewing"); // Rock Hill (exact)
+  assertEquals(pitchable[4].name, "Starr Hill Brewery"); // Roanoke (exact)
 
   // Surrounding matches appear second, sorted by name
-  assertEquals(filtered[5].name, "Apocalypse Ale Works"); // Forest (surrounding Lynchburg)
-  assertEquals(filtered[6].name, "Primal Brewery"); // Belmont (surrounding Gastonia)
+  assertEquals(pitchable[5].name, "Apocalypse Ale Works"); // Forest (surrounding Lynchburg)
+  assertEquals(pitchable[6].name, "Primal Brewery"); // Belmont (surrounding Gastonia)
 
-  // Excluded cities are NOT returned in default search
-  assertEquals(filtered.some((v) => v.name === "The Wooden Pickle"), false); // Marion
-  assertEquals(filtered.some((v) => v.name === "State Line Bar & Grill"), false); // Bristol
-  assertEquals(filtered.some((v) => v.name === "The Southern Cafe"), false); // Charlottesville
-  assertEquals(filtered.some((v) => v.name === "The National"), false); // Richmond
-  assertEquals(filtered.some((v) => v.name === "Ballad Brewing"), false); // Danville
+  // Excluded cities are NOT returned as pitchable in default search
+  assertEquals(pitchable.some((v) => v.name === "The Wooden Pickle"), false); // Marion
+  assertEquals(pitchable.some((v) => v.name === "State Line Bar & Grill"), false); // Bristol
+  assertEquals(pitchable.some((v) => v.name === "The Southern Cafe"), false); // Charlottesville
+  assertEquals(pitchable.some((v) => v.name === "The National"), false); // Richmond
+  assertEquals(pitchable.some((v) => v.name === "Ballad Brewing"), false); // Danville
+
+  // All 12 candidates are retained in filtered with outside-target-area reason
+  assertEquals(filtered.length, 12);
+  const pickle = filtered.find((v) => v.name === "The Wooden Pickle")!;
+  assertEquals(pickle.isExcluded, true);
+  assertEquals(pickle.exclusionReason, "outside-target-area");
+  assertEquals(pickle.statusBadge, "[Outside Target Area]");
 });

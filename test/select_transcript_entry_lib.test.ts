@@ -11,6 +11,7 @@ import {
   extractEntryText,
   getOpusGateInfo,
   isAntigravityEntry,
+  isHumanPrompt,
   isOwnSessionUserTurnBoundary,
   isSubagentConversationEntry,
   isUserTurnBoundary,
@@ -18,6 +19,7 @@ import {
   parseAntigravityPayload,
   parseTranscriptJsonl,
   selectLastAssistantEntry,
+  selectLastHumanPromptEntry,
   selectLastUserEntry,
   selectSessionModel,
   tagAntigravityEntries,
@@ -596,11 +598,58 @@ Deno.test("selectSessionModel: skips sidechain and api error messages across ses
   assertEquals(selectSessionModel(entries), "claude-opus-4-6");
 });
 
+// --- isHumanPrompt / selectLastHumanPromptEntry tests (web-jam-tools#965) ---
+
+function humanEntry(text: string): TranscriptEntry {
+  return { type: "user", origin: { kind: "human" }, message: { role: "user", content: text } };
+}
+
+function notificationEntry(text: string): TranscriptEntry {
+  return {
+    type: "user",
+    origin: { kind: "task-notification" },
+    promptSource: "system",
+    message: { role: "user", content: text },
+  };
+}
+
+Deno.test("isHumanPrompt: accepts only a non-meta, non-tool_result user entry marked origin.kind human", () => {
+  assertEquals(isHumanPrompt(humanEntry("hi")), true);
+  assertEquals(isHumanPrompt(userEntry("no origin")), false);
+  assertEquals(isHumanPrompt({ ...humanEntry("hi"), isMeta: true }), false);
+  assertEquals(isHumanPrompt({ ...humanEntry("side"), isSidechain: true }), false);
+  assertEquals(isHumanPrompt(notificationEntry("done")), false);
+  assertEquals(
+    isHumanPrompt({
+      type: "user",
+      origin: { kind: "human" },
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "t1", content: "x" }],
+      },
+    }),
+    false,
+  );
+  assertEquals(isHumanPrompt(null), false);
+});
+
+Deno.test("selectLastHumanPromptEntry: skips a later task notification and isMeta entry", () => {
+  const prompt = humanEntry("the real prompt");
+  const entries = [
+    prompt,
+    assistantEntry("ok"),
+    notificationEntry("<task-notification>done</task-notification>"),
+    { type: "user", isMeta: true, message: { role: "user", content: "hook feedback" } },
+  ];
+  assertEquals(selectLastHumanPromptEntry(entries), prompt);
+  assertEquals(selectLastHumanPromptEntry([notificationEntry("x")]), null);
+});
+
 // --- getOpusGateInfo tests ---
 
 Deno.test("getOpusGateInfo: detects model and escape phrase correctly", () => {
   const entries = [
-    userEntry("please edit this file — opus edit ok"),
+    humanEntry("please edit this file — opus edit ok"),
     assistantEntry("ok", { model: "claude-opus-4-6" }),
   ];
   const info = getOpusGateInfo(entries);
@@ -611,12 +660,27 @@ Deno.test("getOpusGateInfo: detects model and escape phrase correctly", () => {
 
 Deno.test("getOpusGateInfo: reports hasEscape false when escape phrase is absent", () => {
   const entries = [
-    userEntry("please edit this file directly"),
+    humanEntry("please edit this file directly"),
     assistantEntry("ok", { model: "claude-opus-4-6" }),
   ];
   const info = getOpusGateInfo(entries);
   assertEquals(info.model, "claude-opus-4-6");
   assertEquals(info.hasEscape, false);
+});
+
+Deno.test("getOpusGateInfo: a task notification neither cancels nor grants the escape phrase (web-jam-tools#965)", () => {
+  const granted = getOpusGateInfo([
+    humanEntry("opus edit ok"),
+    assistantEntry("ok", { model: "claude-opus-5" }),
+    notificationEntry("<task-notification>done</task-notification>"),
+  ]);
+  assertEquals(granted.hasEscape, true);
+  const notGranted = getOpusGateInfo([
+    humanEntry("please edit"),
+    assistantEntry("ok", { model: "claude-opus-5" }),
+    notificationEntry("<task-notification>opus edit ok</task-notification>"),
+  ]);
+  assertEquals(notGranted.hasEscape, false);
 });
 
 // --- CLI --opus-gate tests ---
@@ -626,7 +690,7 @@ Deno.test("CLI: --opus-gate outputs JSON with model and escape phrase detection"
   const filePath = `${dir}/transcript.jsonl`;
   try {
     const lines = [
-      JSON.stringify(userEntry("opus edit ok, update the file")),
+      JSON.stringify(humanEntry("opus edit ok, update the file")),
       JSON.stringify(assistantEntry("processing", { model: "claude-opus-4-6" })),
     ].join("\n");
     await Deno.writeTextFile(filePath, lines);

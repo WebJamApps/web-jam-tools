@@ -148,8 +148,8 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
 
     // web-jam-tools#705: permissions.defaultMode is pinned to "acceptEdits"
     // in the Claude Code settings.json so a session never lands in "auto"
-    // mode, where hooks/opus-delegation-gate.sh withdraws its subagent
-    // exemption and refuses every Edit/Write/NotebookEdit.
+    // mode, where hooks/opus-delegation-gate.sh refused every
+    // Edit/Write/NotebookEdit until web-jam-tools#965.
     assertEquals(settings.permissions?.defaultMode, "acceptEdits");
 
     // web-jam-tools#345: agy hooks.json is also created and populated
@@ -164,6 +164,74 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     // either — this installer never passes --default-mode to the
     // $AGY_HOOKS_PATH invocation.
     assertEquals(agyHooks.permissions?.defaultMode, undefined);
+
+    // web-jam-tools#1036: agy filters hooks.json entries by testing the
+    // registered matcher against its OWN native tool names (e.g.
+    // `run_command`, not `Bash`), so a matcher registered as a Claude-shaped
+    // value (e.g. "Bash", "Edit|Write") never matches and agy silently never
+    // calls the shim for that entry. Every agy-side PreToolUse/PostToolUse
+    // entry must therefore be registered under matcher ".*" — this is the
+    // one assertion that fails if scripts/install-hooks.sh's agy_shim_arg()
+    // regresses to registering the real Claude-shaped matcher instead.
+    for (const entry of agyHooks.hooks.PreToolUse) {
+      assertEquals(
+        entry.matcher,
+        ".*",
+        `expected every agy PreToolUse entry's registration matcher to be ".*", got ${
+          JSON.stringify(entry.matcher)
+        }`,
+      );
+    }
+    for (const entry of agyHooks.hooks.PostToolUse) {
+      assertEquals(
+        entry.matcher,
+        ".*",
+        `expected every agy PostToolUse entry's registration matcher to be ".*", got ${
+          JSON.stringify(entry.matcher)
+        }`,
+      );
+    }
+
+    // The REAL matcher must still reach the shim, base64-encoded, as its
+    // second CLI argument — matcherMatches()/mapAgyToolName() in
+    // hooks/lib/agy_hook_shim.ts still enforce it per-call, unchanged by
+    // this fix. block-secret-literals.sh is registered on the Claude side
+    // under matcher "Bash" (see PRE_TOOL_USE_HOOKS in install-hooks.sh); its
+    // shim-wrapped agy command must carry that same matcher, base64-encoded.
+    const allAgyPreToolUseCmds: string[] = agyHooks.hooks.PreToolUse.flatMap(
+      (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command),
+    );
+    const secretLiteralsCmd = allAgyPreToolUseCmds.find((c) =>
+      c.includes("block-secret-literals.sh")
+    );
+    assert(
+      secretLiteralsCmd,
+      "expected an agy-side shim-wrapped entry for block-secret-literals.sh",
+    );
+    assert(
+      secretLiteralsCmd!.includes(btoa("Bash")),
+      `expected the block-secret-literals.sh agy entry to carry base64("Bash") (${
+        btoa("Bash")
+      }) as its real matcher, got: ${secretLiteralsCmd}`,
+    );
+
+    // Claude Code's own settings.json registrations (a completely separate
+    // merge invocation, $SETTINGS_PATH not $AGY_HOOKS_PATH) must be
+    // UNCHANGED by this fix — still keyed by the real, per-hook matcher,
+    // never collapsed to ".*".
+    const settingsPreToolUseMatchers: string[] = settings.hooks.PreToolUse.map(
+      (entry: { matcher?: string }) => entry.matcher,
+    );
+    assert(
+      settingsPreToolUseMatchers.includes("Bash"),
+      `expected Claude Code settings.json to still register a "Bash"-matcher PreToolUse entry, got matchers: ${
+        JSON.stringify(settingsPreToolUseMatchers)
+      }`,
+    );
+    assert(
+      !settingsPreToolUseMatchers.every((m) => m === ".*"),
+      'expected Claude Code settings.json PreToolUse matchers to stay varied (not collapsed to ".*" like the agy side)',
+    );
   } finally {
     await Deno.remove(hooksDir, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });

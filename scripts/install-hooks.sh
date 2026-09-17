@@ -27,8 +27,9 @@
 #    (currently "acceptEdits") in ~/.claude/settings.json — Claude Code ONLY,
 #    never agy's hooks.json, since agy has no permission-mode concept at all
 #    (docs/agy-hooks.md). This pins the session out of the "auto" mode in
-#    which hooks/opus-delegation-gate.sh withdraws its subagent exemption and
-#    refuses every Edit/Write/NotebookEdit — a defect that burned two
+#    which hooks/opus-delegation-gate.sh used to refuse every
+#    Edit/Write/NotebookEdit (web-jam-tools#965 now decides a subagent's edit
+#    by its real model instead) — a defect that burned two
 #    dispatched subagents (~93k and ~62k tokens, zero output) before nothing
 #    pinned the mode (web-jam-tools#705).
 #
@@ -162,7 +163,7 @@ PRE_TOOL_USE_HOOKS=(
   "mcp__(gmail|claude_ai_Gmail)__.*::haiku-only-gmail-gate.sh"
   "Bash|mcp__.*__issue_write::require-model-label-on-issue-create.sh"
   "Write|Edit|NotebookEdit::block-out-of-tree-write.sh"
-  "Write|Edit|NotebookEdit::opus-delegation-gate.sh"
+  "Bash|Write|Edit|NotebookEdit::opus-delegation-gate.sh"
   "Bash|mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
   "Bash::block-raw-gh-write.sh"
 )
@@ -187,10 +188,11 @@ AGY_ONLY_PRE_TOOL_USE_HOOKS=(
 )
 
 # permissions.defaultMode this installer keeps set in settings.json
-# (web-jam-tools#705). When the session's permission mode is "auto" (rather
-# than a deliberate mode), hooks/opus-delegation-gate.sh withdraws its
-# subagent exemption and refuses EVERY Edit/Write/NotebookEdit to a
-# git-tracked path, main thread and subagent alike — measured cost: two
+# (web-jam-tools#705). When the session's permission mode was "auto" (rather
+# than a deliberate mode), hooks/opus-delegation-gate.sh refused EVERY
+# Edit/Write/NotebookEdit to a git-tracked path, main thread and subagent
+# alike, until web-jam-tools#965 made it decide a subagent's edit by that
+# subagent's real model — measured cost before that fix: two
 # dispatched Sonnet subagents refused on their first edit, ~93k and ~62k
 # tokens burned for zero output (2026-08-22). Nothing pinned the session out
 # of the mode that triggers it, so this installer now does: it sets
@@ -746,18 +748,34 @@ merge_status_line_args=("$STATUS_LINE_COMMAND")
 # to the $SETTINGS_PATH invocations below, never to $AGY_HOOKS_PATH.
 merge_default_mode_args=("$DEFAULT_MODE")
 
-# --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432) ---
+# --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432, matcher-by-
+# -own-tool-names regression fixed by web-jam-tools#1036) ---
 #
-# agy ignores its own PreToolUse "matcher" JSON field entirely (finding 2),
-# and neither Claude veto mechanism (exit 2 /
-# hookSpecificOutput.permissionDecision) is honoured there (finding 5) — so
-# every hook registered directly is a no-op on that surface. Instead of
-# registering each hook script directly (as the Claude settings.json args
-# above do), every agy-side entry is wrapped in
-# hooks/agy-hook-shim.sh <event> <base64-matcher> <target-hook-path>, which
-# normalizes the payload, enforces the matcher itself, runs the target hook
-# UNMODIFIED, and translates its verdict into agy's own
-# {"decision":"deny","reason":"..."} form (verified working — finding 6).
+# agy does NOT ignore its own PreToolUse "matcher" JSON field (that finding-2
+# claim, "verified 2026-08-07", was wrong — see web-jam-tools#1036): agy
+# filters which hooks.json entries it invokes AT ALL by testing the
+# registered matcher against agy's OWN native tool names (e.g. its shell
+# tool is "run_command", not "Bash"), never Claude Code's tool names. A
+# matcher registered here as the real Claude-shaped value ("Bash",
+# "Edit|Write", ...) therefore never matches an agy tool name and agy simply
+# never calls the shim for that entry — a silent no-op, not the "runs
+# unconditionally" behavior the old comment described. Confirmed 2026-09-16:
+# /tmp/agy-hook-invocations.jsonl (written before any matcher check) showed
+# invocations only for the two entries already registered under an
+# agy-native-compatible matcher (".*" and the raw Gmail tool-name
+# alternation) — every Claude-tool-name-matcher entry had zero invocations.
+#
+# Fix: EVERY agy-side entry is registered under matcher ".*" so agy always
+# calls the shim. The REAL matcher still travels to the shim, base64-encoded,
+# as its second CLI argument — hooks/agy-hook-shim.sh <event> <base64-matcher>
+# <target-hook-path>, which normalizes the payload, enforces the REAL matcher
+# itself via matcherMatches()/mapAgyToolName() (unchanged — see
+# hooks/lib/agy_hook_shim.ts), runs the target hook UNMODIFIED only when it
+# matches, and translates its verdict into agy's own
+# {"decision":"deny","reason":"..."} form (verified working — finding 6). A
+# non-matching tool call still resolves to "allow", exactly as before this
+# fix — only the outer registration key agy filters hooks.json entries by
+# changed, not the shim's own per-call enforcement.
 #
 # The matcher is base64-encoded rather than embedded as literal shell text:
 # agy's exact command-string invocation mechanism (full shell parse, vs. a
@@ -770,9 +788,11 @@ agy_shim_arg() {
   local event="$1" matcher="$2" name="$3"
   local matcher_b64
   matcher_b64="$(printf '%s' "$matcher" | base64 | tr -d '\n')"
+  # Registration matcher is always ".*" (see comment block above) — the real
+  # matcher travels separately, base64-encoded, as $matcher_b64 below.
   # shellcheck disable=SC2016 # literal $HOME on purpose: expanded by the
   # shell that runs the hook later, not by this installer (see header note).
-  printf '%s' "$matcher"'::$HOME/.claude/hooks/agy-hook-shim.sh '"$event"' '"$matcher_b64"' $HOME/.claude/hooks/'"$name"
+  printf '%s' '.*::$HOME/.claude/hooks/agy-hook-shim.sh '"$event"' '"$matcher_b64"' $HOME/.claude/hooks/'"$name"
 }
 
 merge_agy_pre_tool_use_args=()

@@ -27,6 +27,7 @@ import {
   redactSensitiveText,
   RETAINED_RECORD_BYTES,
   runShim as runShimPure,
+  toAgyReply,
   translateVerdict,
 } from "../hooks/lib/agy_hook_shim.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
@@ -38,6 +39,9 @@ interface ShimResult {
   code: number;
   decision: string;
   reason?: string;
+  overwriteResult?: string;
+  hasDecisionField: boolean;
+  parsedKeys: string[];
   stdout: string;
   stderr: string;
 }
@@ -69,14 +73,29 @@ async function runShim(
   const stderrText = new TextDecoder().decode(stderr);
   let decision = "";
   let reason: string | undefined;
+  let overwriteResult: string | undefined;
+  let hasDecisionField = false;
+  let parsedKeys: string[] = [];
   try {
     const parsed = JSON.parse(stdoutText.trim());
+    parsedKeys = Object.keys(parsed);
+    hasDecisionField = Object.prototype.hasOwnProperty.call(parsed, "decision");
     decision = parsed.decision;
     reason = parsed.reason;
+    overwriteResult = parsed.overwrite_result;
   } catch {
     // left empty; assertion messages below include raw stdout for debugging
   }
-  return { code, decision, reason, stdout: stdoutText, stderr: stderrText };
+  return {
+    code,
+    decision,
+    reason,
+    overwriteResult,
+    hasDecisionField,
+    parsedKeys,
+    stdout: stdoutText,
+    stderr: stderrText,
+  };
 }
 
 function agyRunCommand(command: string, extra: Record<string, unknown> = {}) {
@@ -204,6 +223,44 @@ Deno.test("translateVerdict: unexpected nonzero exit fails CLOSED (deny)", () =>
   assertEquals(v.decision, "deny");
 });
 
+// --- toAgyReply: agy's actual per-event reply contract (web-jam-tools#1038) ---
+// PostToolHookResult has no `decision` field on agy's own proto (decoded
+// from the shipped binary — only PreToolHookResult/StopHookResult carry
+// one), so a PostToolUse reply must never contain "decision" at all.
+
+Deno.test("toAgyReply: PreToolUse passes the verdict through unchanged (allow)", () => {
+  const verdict = { decision: "allow" as const };
+  assertEquals(toAgyReply("PreToolUse", verdict), verdict);
+});
+
+Deno.test("toAgyReply: PreToolUse passes the verdict through unchanged (deny + reason)", () => {
+  const verdict = { decision: "deny" as const, reason: "nope" };
+  assertEquals(toAgyReply("PreToolUse", verdict), verdict);
+});
+
+Deno.test("toAgyReply: PostToolUse allow becomes the empty object, no decision field", () => {
+  const reply = toAgyReply("PostToolUse", { decision: "allow" });
+  assertEquals(reply, {});
+  assert(!Object.prototype.hasOwnProperty.call(reply, "decision"));
+});
+
+Deno.test("toAgyReply: PostToolUse deny becomes overwrite_result, no decision field", () => {
+  const reply = toAgyReply("PostToolUse", { decision: "deny", reason: "credential detected" }) as {
+    overwrite_result?: string;
+  };
+  assert(!Object.prototype.hasOwnProperty.call(reply, "decision"));
+  assert(reply.overwrite_result !== undefined);
+  assert(reply.overwrite_result!.includes("credential detected"));
+});
+
+Deno.test("toAgyReply: PostToolUse ask also becomes overwrite_result (no post-hoc ask on agy)", () => {
+  const reply = toAgyReply("PostToolUse", { decision: "ask", reason: "confirm?" }) as {
+    overwrite_result?: string;
+  };
+  assert(!Object.prototype.hasOwnProperty.call(reply, "decision"));
+  assert(reply.overwrite_result !== undefined);
+});
+
 // --- End-to-end: real agy payload shape, through the shim, wrapping the
 // UNMODIFIED underlying hooks (none of the twelve hooks under hooks/ are
 // edited to achieve this) ---
@@ -308,7 +365,13 @@ Deno.test("scan-output-for-secrets.sh detects a canary credential recovered from
       transcriptPath,
       stepIdx: 4,
     });
-    assertEquals(res.decision, "deny", res.stdout);
+    // PostToolUse never carries a `decision` field (web-jam-tools#1038) —
+    // agy's PostToolHookResult proto has no such field; only
+    // `overwrite_result` exists. A detected credential is translated into
+    // overwrite_result so the model never sees the raw output.
+    assert(!res.hasDecisionField, `unexpected "decision" field in ${res.stdout}`);
+    assert(res.overwriteResult !== undefined, res.stdout);
+    assertEquals(res.parsedKeys, ["overwrite_result"], res.stdout);
   } finally {
     await Deno.remove(transcriptPath);
   }
@@ -326,7 +389,12 @@ Deno.test("scan-output-for-secrets.sh allows output with no credential shape", a
       transcriptPath,
       stepIdx: 1,
     });
-    assertEquals(res.decision, "allow", res.stdout);
+    // PostToolUse allow is the empty object — no `decision` field at all
+    // (web-jam-tools#1038; printing `{"decision":"allow"}` here is exactly
+    // what made agy replace every allowed tool's real output with an
+    // unmarshal error).
+    assert(!res.hasDecisionField, `unexpected "decision" field in ${res.stdout}`);
+    assertEquals(res.stdout.trim(), "{}", res.stdout);
   } finally {
     await Deno.remove(transcriptPath);
   }

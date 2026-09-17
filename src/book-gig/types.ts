@@ -2,7 +2,7 @@
 
 import type { LinkGigResult } from "./venue_link.ts";
 
-export type BookGigMode = "preview" | "send" | "replies" | "link-gig" | "hold";
+export type BookGigMode = "preview" | "send" | "replies" | "link-gig" | "hold" | "gate1" | "gate2";
 
 export interface TargetWeekend {
   start: string; // ISO date string (YYYY-MM-DD), usually Friday
@@ -44,6 +44,15 @@ export interface EmailTemplate {
   active?: boolean;
 }
 
+export type ExclusionReason =
+  | "seasonal-hold"
+  | "gig-spacing"
+  | "direct-chat"
+  | "cooldown"
+  | "no-booking-email"
+  | "out-of-state"
+  | "outside-target-area";
+
 export interface CandidateBadgeInfo {
   badge: string;
   cssClass: string;
@@ -70,6 +79,17 @@ export interface CandidateVenue {
   priorContactNotes?: string;
   priorGigs?: unknown[];
   outreachEligible?: boolean;
+  bookingStatus?: string;
+  lastGig?: {
+    _id?: string;
+    date?: string;
+    datetime?: string | Date;
+    time?: string;
+    location?: string;
+    venue?: string;
+    venueId?: string;
+    [key: string]: unknown;
+  } | null;
   gigInterval?: number;
   payAmount?: number;
   resumeBooking?: string | Date | null;
@@ -82,7 +102,7 @@ export interface CandidateVenue {
   sentAt?: string | Date | null;
   statusBadge?: string;
   isExcluded?: boolean;
-  exclusionReason?: string;
+  exclusionReason?: ExclusionReason | string;
   reason?: {
     lastGigDate?: string | null;
     gigIntervalMonths?: number;
@@ -98,7 +118,7 @@ export interface CandidateVenue {
     sentAt?: string | Date | null;
     activeDirectChat?: boolean;
     statusBadge?: string;
-    exclusionReason?: string;
+    exclusionReason?: ExclusionReason | string;
   };
   distanceMiles?: number;
 }
@@ -185,17 +205,88 @@ export interface VenueHoldResult {
   message: string;
 }
 
+export interface PitchPreview {
+  venueId: string;
+  venueName: string;
+  subject: string;
+  /**
+   * The rendered email HTML, exactly as returned by the backend's
+   * `buildPitchEmail()` via `GET /outreach/preview` (web-jam-tools#948) — the
+   * same function `POST /outreach/batch` mails through, so this is
+   * byte-identical to what is dispatched rather than a second rendering.
+   */
+  body: string;
+}
+
+export interface Gate1ApprovalRecord {
+  _id?: string;
+  batchId: string;
+  weekend?: string;
+  targetWeekend?: {
+    start: string | Date;
+    end: string | Date;
+  };
+  venueIds: string[];
+  approver: string;
+  approvedAt?: string | Date;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface DraftFingerprintItem {
+  venueId: string;
+  fingerprint: string;
+  subject?: string;
+}
+
+export interface Gate2ApprovalRecord {
+  _id?: string;
+  batchId: string;
+  weekend?: string;
+  targetWeekend?: {
+    start: string | Date;
+    end: string | Date;
+  };
+  draftFingerprints: DraftFingerprintItem[];
+  approver: string;
+  approvedAt?: string | Date;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface VenueTweak {
+  venueId?: string;
+  venueName?: string;
+  customBody?: string;
+  customIntro?: string;
+  notes?: string;
+}
+
 export interface ParsedBookGigArgs {
   mode: BookGigMode;
   weekend?: TargetWeekend;
   location?: TargetLocation;
   includeVenues?: string[];
   excludeVenues?: string[];
+  confirmDrafts?: boolean;
   noOpen?: boolean;
   linkVenueName?: string;
   holdVenue?: string;
   holdUntil?: string;
   bookedThrough?: string;
+  approver?: string;
+  notes?: string;
+  batchId?: string;
+  tweakVenue?: string;
+  customBody?: string;
+  customIntro?: string;
+  tweaks?: VenueTweak[];
+  confirmAll?: boolean;
+  recordGate2?: boolean;
   rawArgs: string;
 }
 
@@ -205,6 +296,7 @@ export interface BookGigResult {
   location?: TargetLocation;
   includeVenues?: string[];
   excludeVenues?: string[];
+  confirmDrafts?: boolean;
   candidates: CandidateVenue[];
   density: {
     count: number;
@@ -216,6 +308,10 @@ export interface BookGigResult {
   repliesTracking?: RepliesTrackingResult;
   linkGig?: LinkGigResult;
   holdResult?: VenueHoldResult;
+  gate1Record?: Gate1ApprovalRecord;
+  gate2Record?: Gate2ApprovalRecord;
+  tweaksApplied?: VenueTweak[];
+  gate2Status?: "holding" | "tweaked" | "approved";
   htmlPath?: string;
   reportUrl?: string;
   openedBrowser?: boolean;

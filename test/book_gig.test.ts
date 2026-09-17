@@ -18,9 +18,12 @@ import {
   assessDensity,
   fetchCandidates,
   filterAndRankCandidates,
+  formatCandidateBreakdown,
   formatMonthDay,
   formatMonthYear,
+  getCandidateBreakdown,
   identifyCandidateBadge,
+  isPitchableCandidate,
   renderCandidateTable,
 } from "../src/book-gig/candidates.ts";
 import {
@@ -29,13 +32,9 @@ import {
   htmlToPlainText,
   renderPitch,
   validateVoiceRules,
+  verifyPitchAgainstTemplate,
 } from "../src/book-gig/pitch.ts";
-import {
-  extractRunDataFromMarkdown,
-  formatDraftPayload,
-  mergeWeekendRuns,
-  writeDropboxRunLog,
-} from "../src/book-gig/gmail.ts";
+import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
 import {
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -60,6 +59,7 @@ import {
   normalizeVenueName,
   resolveGigVenueId,
 } from "../src/book-gig/venue_link.ts";
+import { executeTouchConversion } from "../src/book-gig/convert_touches.ts";
 import type {
   BookGigResult,
   CandidateVenue,
@@ -259,10 +259,17 @@ Deno.test("filterAndRankCandidates: prioritizes matching location and retains re
   const loc = parseLocation("Lynchburg, VA")!;
   const filtered = filterAndRankCandidates(sampleVenues, loc);
 
-  assertEquals(filtered.length, 2);
-  assertEquals(filtered[0].name, "Waterman's Grill"); // Direct city match
-  assertEquals(filtered[1].name, "Apocalypse Ale Works"); // Surrounding Forest match
-  assertEquals(filtered.some((v) => v.name === "Parkway Brewing"), false); // Unrelated metro excluded
+  const pitchable = filtered.filter(isPitchableCandidate);
+  assertEquals(pitchable.length, 2);
+  assertEquals(pitchable[0].name, "Waterman's Grill"); // Direct city match
+  assertEquals(pitchable[1].name, "Apocalypse Ale Works"); // Surrounding Forest match
+  assertEquals(pitchable.some((v) => v.name === "Parkway Brewing"), false); // Unrelated metro excluded from pitchable
+
+  assertEquals(filtered.length, 3);
+  const parkway = filtered.find((v) => v.name === "Parkway Brewing")!;
+  assertEquals(parkway.isExcluded, true);
+  assertEquals(parkway.exclusionReason, "outside-target-area");
+  assertEquals(parkway.statusBadge, "[Outside Target Area]");
 });
 
 Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metros", () => {
@@ -304,11 +311,18 @@ Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metro
   const loc = parseLocation("Charlotte, Gastonia, Belmont, NC")!;
   const filtered = filterAndRankCandidates(ncVenues, loc);
 
-  assertEquals(filtered.length, 3);
-  assertEquals(filtered.some((v) => v.city === "Charlotte"), true);
-  assertEquals(filtered.some((v) => v.city === "Gastonia"), true);
-  assertEquals(filtered.some((v) => v.city === "Belmont"), true);
-  assertEquals(filtered.some((v) => v.city === "Salem"), false);
+  const pitchable = filtered.filter(isPitchableCandidate);
+  assertEquals(pitchable.length, 3);
+  assertEquals(pitchable.some((v) => v.city === "Charlotte"), true);
+  assertEquals(pitchable.some((v) => v.city === "Gastonia"), true);
+  assertEquals(pitchable.some((v) => v.city === "Belmont"), true);
+  assertEquals(pitchable.some((v) => v.city === "Salem"), false);
+
+  assertEquals(filtered.length, 4);
+  const salem = filtered.find((v) => v.city === "Salem")!;
+  assertEquals(salem.isExcluded, true);
+  assertEquals(salem.exclusionReason, "out-of-state");
+  assertEquals(salem.statusBadge, "[Out of State]");
 });
 
 Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and exclusion of non-target metros", () => {
@@ -391,23 +405,32 @@ Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and 
     "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas",
   )!;
   const filtered = filterAndRankCandidates(venues, loc);
+  const pitchable = filtered.filter(isPitchableCandidate);
 
   // Exact matches first (Blacksburg, Salem VA), then surrounding (Forest VA, Floyd VA)
-  assertEquals(filtered.length, 4);
-  assertEquals(filtered[0].name, "Olde Salem Brewing"); // Exact Salem VA match
-  assertEquals(filtered[1].name, "Rising Silo Brewery"); // Exact Blacksburg VA match
-  assertEquals(filtered[2].name, "Apocalypse Ale Works"); // Surrounding Forest VA match
-  assertEquals(filtered[3].name, "Dogtown Roadhouse"); // Surrounding Floyd VA match
+  assertEquals(pitchable.length, 4);
+  assertEquals(pitchable[0].name, "Olde Salem Brewing"); // Exact Salem VA match
+  assertEquals(pitchable[1].name, "Rising Silo Brewery"); // Exact Blacksburg VA match
+  assertEquals(pitchable[2].name, "Apocalypse Ale Works"); // Surrounding Forest VA match
+  assertEquals(pitchable[3].name, "Dogtown Roadhouse"); // Surrounding Floyd VA match
 
-  // Non-target metros, far-out towns (Marion, Harrisonburg), and out-of-state venues (Charlotte NC, Salem NC, Charleston SC) must be excluded
-  assertEquals(filtered.some((v) => v.city === "Charlotte"), false);
-  assertEquals(filtered.some((v) => v.city === "Harrisonburg"), false);
-  assertEquals(filtered.some((v) => v.city === "Marion"), false);
-  assertEquals(filtered.some((v) => v.usState === "NC"), false);
-  assertEquals(filtered.some((v) => v.usState === "SC"), false);
-  assertEquals(filtered.some((v) => v._id === "v5"), false); // Marion VA excluded
-  assertEquals(filtered.some((v) => v._id === "v7"), false); // Salem NC excluded
-  assertEquals(filtered.some((v) => v._id === "v8"), false); // Charleston SC excluded
+  // Non-target metros, far-out towns (Marion, Harrisonburg), and out-of-state venues (Charlotte NC, Salem NC, Charleston SC) must be excluded from pitchable
+  assertEquals(pitchable.some((v) => v.city === "Charlotte"), false);
+  assertEquals(pitchable.some((v) => v.city === "Harrisonburg"), false);
+  assertEquals(pitchable.some((v) => v.city === "Marion"), false);
+  assertEquals(pitchable.some((v) => v.usState === "NC"), false);
+  assertEquals(pitchable.some((v) => v.usState === "SC"), false);
+  assertEquals(pitchable.some((v) => v._id === "v5"), false); // Marion VA excluded
+  assertEquals(pitchable.some((v) => v._id === "v7"), false); // Salem NC excluded
+  assertEquals(pitchable.some((v) => v._id === "v8"), false); // Charleston SC excluded
+
+  // All 9 venues are retained in filtered with named exclusion reasons
+  assertEquals(filtered.length, 9);
+  assertEquals(filtered.find((v) => v._id === "v1")?.exclusionReason, "out-of-state");
+  assertEquals(filtered.find((v) => v._id === "v2")?.exclusionReason, "outside-target-area");
+  assertEquals(filtered.find((v) => v._id === "v5")?.exclusionReason, "outside-target-area");
+  assertEquals(filtered.find((v) => v._id === "v7")?.exclusionReason, "out-of-state");
+  assertEquals(filtered.find((v) => v._id === "v8")?.exclusionReason, "out-of-state");
 });
 
 Deno.test("formatLocationDisplay: formats multi-city and surrounding area descriptions", () => {
@@ -480,6 +503,7 @@ Deno.test("renderPitch: generates warm, compliant pitch emails", () => {
     usState: "VA",
     email: "roanoke@starrhill.com",
     secondaryEmail: "booking@starrhill.com",
+    venueType: "PubFestivalBrewery",
   };
 
   const pitch = renderPitch(venue, weekend);
@@ -527,7 +551,7 @@ Deno.test("renderPitch: generates returning venue pitch with custom contact and 
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
-Deno.test("formatDraftPayload and writeDropboxRunLog: formats and writes run log", async () => {
+Deno.test("formatDraftPayload: formats a pitch as a Gmail draft payload", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -552,36 +576,100 @@ Deno.test("formatDraftPayload and writeDropboxRunLog: formats and writes run log
   assertEquals(payload.to, "info@parkway.com");
   assertEquals(payload.subject, pitch.subject);
   assertEquals(payload.body, pitch.body);
-
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const result = {
-      mode: "preview" as const,
-      weekend,
-      candidates: [venue],
-      density: { count: 1, isSparse: true, suggestedMetro: "roanoke" },
-      pitches: [pitch],
-    };
-    const logPath = await writeDropboxRunLog(result, tmpDir);
-    assert(logPath !== null);
-    const mdContent = await Deno.readTextFile(logPath);
-    assertStringIncludes(mdContent, "Parkway Brewing");
-    assertStringIncludes(mdContent, "October 16–18, 2026");
-
-    // Verify corresponding HTML artifact was created
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const htmlContent = await Deno.readTextFile(htmlPath);
-    assertStringIncludes(htmlContent, "<!DOCTYPE html>");
-    assertStringIncludes(htmlContent, "Parkway Brewing");
-    assertStringIncludes(htmlContent, "--bg-primary: #121212");
-    assertStringIncludes(htmlContent, 'name="viewport"');
-    assertStringIncludes(htmlContent, "Copy Email");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
 });
 
-Deno.test("writeDropboxRunLog & renderDarkHtml: includes Contact Person and Phone in markdown and HTML artifacts (#874)", async () => {
+Deno.test("renderDarkHtml: writes a draft's backend-rendered HTML in full into a sandboxed iframe, byte-identical to what dispatch sends (#948)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const htmlBody = `<p>Hi Kevin,</p><p>We'd love to play &amp; bring live music at "Parkway".</p>`;
+
+  const result: BookGigResult = {
+    mode: "preview",
+    weekend,
+    candidates: [],
+    density: { count: 0, isSparse: false },
+    pitches: [
+      {
+        venueId: "v1",
+        venueName: "Parkway Brewing",
+        to: "info@parkway.com",
+        subject: "Sub",
+        body: 'Hi Kevin, We\'d love to play & bring live music at "Parkway".',
+        htmlBody,
+      },
+    ],
+  };
+
+  const html = renderDarkHtml(result);
+
+  // The complete backend HTML is written into the artifact, not summarized,
+  // truncated, or re-rendered — escaped only as required for the srcdoc
+  // attribute, so decoding it reproduces the exact backend markup.
+  const expectedEscaped = htmlBody
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+  assertStringIncludes(html, `srcdoc="${expectedEscaped}"`);
+  assertStringIncludes(html, "pitch-body-frame");
+  // The draft renders with scripting disabled — never a script-enabled sandbox.
+  assertStringIncludes(html, 'sandbox="allow-same-origin"');
+  assertEquals(html.includes("allow-scripts"), false);
+  assertStringIncludes(html, "Copy Email");
+  assertStringIncludes(
+    html,
+    '<pre class="pitch-body-raw" id="pitch-body-1-plain" style="display: none;">',
+  );
+  assertStringIncludes(
+    html,
+    "navigator.clipboard.writeText(document.getElementById('pitch-body-1-plain').innerText)",
+  );
+});
+
+Deno.test("renderDarkHtml: falls back to a plain-text pitch-body block when no backend HTML rendering is available", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const result: BookGigResult = {
+    mode: "preview",
+    weekend,
+    candidates: [],
+    density: { count: 0, isSparse: false },
+    pitches: [
+      {
+        venueId: "v1",
+        venueName: "No HTML Venue",
+        to: "info@example.com",
+        subject: "Sub",
+        body: "Plain text only body.",
+      },
+    ],
+  };
+
+  const html = renderDarkHtml(result);
+  assertStringIncludes(html, '<pre class="pitch-body"');
+  assertStringIncludes(html, "Plain text only body.");
+  // The CSS rule for the iframe variant is always present in the stylesheet,
+  // but no <iframe> element itself is emitted when there is no HTML draft.
+  assertEquals(html.includes("<iframe"), false);
+});
+Deno.test("renderDarkHtml: includes Contact Person and Phone in the rendered report (#874)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -606,45 +694,32 @@ Deno.test("writeDropboxRunLog & renderDarkHtml: includes Contact Person and Phon
   assertEquals(pitch.contactName, "Lezlie Snyder");
   assertEquals(pitch.phone, "540-555-1234");
 
-  const tmpDir = await Deno.makeTempDir();
-  try {
-    const result = {
-      mode: "preview" as const,
-      weekend,
-      candidates: [venue],
-      density: { count: 1, isSparse: false },
-      pitches: [pitch],
-    };
+  const result = {
+    mode: "preview" as const,
+    weekend,
+    candidates: [venue],
+    density: { count: 1, isSparse: false },
+    pitches: [pitch],
+  };
 
-    const logPath = await writeDropboxRunLog(result, tmpDir);
-    assert(logPath !== null);
-
-    const mdContent = await Deno.readTextFile(logPath);
-    assertStringIncludes(
-      mdContent,
-      "| # | Venue Name | Location | Contact Person | Phone | Booking Email | Spacing Note |",
-    );
-    assertStringIncludes(
-      mdContent,
-      "| 1 | Parkway Brewing | Salem, VA | Lezlie Snyder | 540-555-1234 | lezlie@parkwaybrewing.com |",
-    );
-
-    const html = renderDarkHtml(result);
-    assertStringIncludes(html, "<th>Contact Person</th>");
-    assertStringIncludes(html, "<th>Phone</th>");
-    assertStringIncludes(html, "<td>Lezlie Snyder</td>");
-    assertStringIncludes(html, '<a href="tel:540-555-1234" class="email-link">540-555-1234</a>');
-    assertStringIncludes(html, "Contact: <strong>Lezlie Snyder</strong>");
-    assertStringIncludes(
-      html,
-      'Tel: <a href="tel:540-555-1234" class="meta-email">540-555-1234</a>',
-    );
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+  const html = renderDarkHtml(result);
+  assertStringIncludes(html, "<!DOCTYPE html>");
+  assertStringIncludes(html, "Parkway Brewing");
+  assertStringIncludes(html, "--bg-primary: #121212");
+  assertStringIncludes(html, 'name="viewport"');
+  assertStringIncludes(html, "Copy Email");
+  assertStringIncludes(html, "<th>Contact Person</th>");
+  assertStringIncludes(html, "<th>Phone</th>");
+  assertStringIncludes(html, "<td>Lezlie Snyder</td>");
+  assertStringIncludes(html, '<a href="tel:540-555-1234" class="email-link">540-555-1234</a>');
+  assertStringIncludes(html, "Contact: <strong>Lezlie Snyder</strong>");
+  assertStringIncludes(
+    html,
+    'Tel: <a href="tel:540-555-1234" class="meta-email">540-555-1234</a>',
+  );
 });
 
-Deno.test("writeDropboxRunLog: accumulates multiple batches for the same weekend into a single consolidated report (#876)", async () => {
+Deno.test("mergeWeekendRuns: accumulates multiple batches for the same weekend into a single consolidated result (#876, #955)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -677,114 +752,81 @@ Deno.test("writeDropboxRunLog: accumulates multiple batches for the same weekend
   const pitch1 = renderPitch(venue1, weekend);
   const pitch2 = renderPitch(venue2, weekend);
 
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_accum_" });
-  try {
-    // Batch 1: 2 candidates, both sent
-    const batch1: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venue1, venue2],
-      density: { count: 2, isSparse: true, suggestedMetro: "roanoke" },
-      pitches: [pitch1, pitch2],
-      batchDispatch: {
-        requested: 2,
-        sent: 2,
-        skipped: [],
-        records: [{ venueId: "v1" }, { venueId: "v2" }],
-      },
-    };
+  // Batch 1: 2 candidates, both sent
+  const batch1: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venue1, venue2],
+    density: { count: 2, isSparse: true, suggestedMetro: "roanoke" },
+    pitches: [pitch1, pitch2],
+    batchDispatch: {
+      requested: 2,
+      sent: 2,
+      skipped: [],
+      records: [{ venueId: "v1" }, { venueId: "v2" }],
+    },
+  };
 
-    const logPath1 = await writeDropboxRunLog(batch1, tmpDir);
-    assert(logPath1 !== null);
+  // Batch 2: 2 different candidates for the same weekend, 1 sent, 1 skipped
+  const venue3: CandidateVenue = {
+    _id: "v3",
+    name: "The Glass House",
+    city: "Lynchburg",
+    usState: "VA",
+    email: "booking@glasshouse.com",
+  };
+  const venue4: CandidateVenue = {
+    _id: "v4",
+    name: "Riverviews Artspace",
+    city: "Lynchburg",
+    usState: "VA",
+    email: "info@riverviews.net",
+  };
 
-    const md1 = await Deno.readTextFile(logPath1);
-    assertStringIncludes(md1, "Parkway Brewing");
-    assertStringIncludes(md1, "Olde Salem Brewery");
-    assertStringIncludes(md1, "**Batch Dispatch:** 2 sent / 2 requested (0 skipped)");
+  const pitch3 = renderPitch(venue3, weekend);
+  const pitch4 = renderPitch(venue4, weekend);
 
-    // Batch 2: 2 different candidates for same weekend, 1 sent, 1 skipped
-    const venue3: CandidateVenue = {
-      _id: "v3",
-      name: "The Glass House",
-      city: "Lynchburg",
-      usState: "VA",
-      email: "booking@glasshouse.com",
-    };
-    const venue4: CandidateVenue = {
-      _id: "v4",
-      name: "Riverviews Artspace",
-      city: "Lynchburg",
-      usState: "VA",
-      email: "info@riverviews.net",
-    };
+  const batch2: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venue3, venue4],
+    density: { count: 2, isSparse: true, suggestedMetro: "lynchburg" },
+    pitches: [pitch3, pitch4],
+    batchDispatch: {
+      requested: 2,
+      sent: 1,
+      skipped: [{
+        venueId: "v4",
+        venueName: "Riverviews Artspace",
+        reason: "Invalid booking email",
+      }],
+      records: [{ venueId: "v3" }],
+    },
+  };
 
-    const pitch3 = renderPitch(venue3, weekend);
-    const pitch4 = renderPitch(venue4, weekend);
+  const merged = mergeWeekendRuns(
+    { candidates: batch1.candidates, pitches: batch1.pitches, batchDispatch: batch1.batchDispatch },
+    batch2,
+  );
 
-    const batch2: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venue3, venue4],
-      density: { count: 2, isSparse: true, suggestedMetro: "lynchburg" },
-      pitches: [pitch3, pitch4],
-      batchDispatch: {
-        requested: 2,
-        sent: 1,
-        skipped: [{
-          venueId: "v4",
-          venueName: "Riverviews Artspace",
-          reason: "Invalid booking email",
-        }],
-        records: [{ venueId: "v3" }],
-      },
-    };
+  assertEquals(merged.candidates.length, 4);
+  assertEquals(merged.pitches.length, 4);
+  assertEquals(merged.batchDispatch?.requested, 4);
+  assertEquals(merged.batchDispatch?.sent, 3);
+  assertEquals(merged.batchDispatch?.skipped.length, 1);
 
-    const logPath2 = await writeDropboxRunLog(batch2, tmpDir);
-    assertEquals(logPath2, logPath1);
-
-    // Verify consolidated Markdown log
-    const consolidatedMd = await Deno.readTextFile(logPath2!);
-    assertStringIncludes(consolidatedMd, "Parkway Brewing");
-    assertStringIncludes(consolidatedMd, "Olde Salem Brewery");
-    assertStringIncludes(consolidatedMd, "The Glass House");
-    assertStringIncludes(consolidatedMd, "Riverviews Artspace");
-    assertStringIncludes(consolidatedMd, "**Candidates Found:** 4");
-    assertStringIncludes(consolidatedMd, "**Pitches Drafted:** 4");
-    assertStringIncludes(consolidatedMd, "**Batch Dispatch:** 3 sent / 4 requested (1 skipped)");
-
-    // Verify consolidated Dark Mode HTML artifact
-    const htmlPath = logPath2!.replace(/\.md$/, ".html");
-    const consolidatedHtml = await Deno.readTextFile(htmlPath);
-    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v1">');
-    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v2">');
-    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v3">');
-    assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v4">');
-    assertStringIncludes(
-      consolidatedHtml,
-      '<section class="pitch-card" id="pitch-1" data-venue-id="v1">',
-    );
-    assertStringIncludes(
-      consolidatedHtml,
-      '<section class="pitch-card" id="pitch-2" data-venue-id="v2">',
-    );
-    assertStringIncludes(
-      consolidatedHtml,
-      '<section class="pitch-card" id="pitch-3" data-venue-id="v3">',
-    );
-    assertStringIncludes(
-      consolidatedHtml,
-      '<section class="pitch-card" id="pitch-4" data-venue-id="v4">',
-    );
-    assertStringIncludes(consolidatedHtml, "3 dispatched");
-    assertStringIncludes(consolidatedHtml, "1 venues");
-    assertStringIncludes(consolidatedHtml, "3 of 4 venue pitch emails sent");
-    assertStringIncludes(consolidatedHtml, "Invalid booking email");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+  const consolidatedHtml = renderDarkHtml(merged);
+  assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v1">');
+  assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v2">');
+  assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v3">');
+  assertStringIncludes(consolidatedHtml, '<tr data-venue-id="v4">');
+  assertStringIncludes(consolidatedHtml, "3 dispatched");
+  assertStringIncludes(consolidatedHtml, "1 venues");
+  assertStringIncludes(consolidatedHtml, "3 of 4 venue pitch emails sent");
+  assertStringIncludes(consolidatedHtml, "Invalid booking email");
 });
 
-Deno.test("writeDropboxRunLog: deduplicates candidate rows and pitch cards by venueId across batches (#876)", async () => {
+Deno.test("mergeWeekendRuns: deduplicates candidate rows and pitch cards by venueId across batches (#876)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -834,56 +876,52 @@ Deno.test("writeDropboxRunLog: deduplicates candidate rows and pitch cards by ve
   const pitchA_new = renderPitch(venueA_new, weekend);
   const pitchC = renderPitch(venueC, weekend);
 
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_dedup_" });
-  try {
-    const batch1: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venueA_old, venueB],
-      density: { count: 2, isSparse: true },
-      pitches: [pitchA_old, pitchB],
-      batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
-    };
-    await writeDropboxRunLog(batch1, tmpDir);
+  const batch1: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venueA_old, venueB],
+    density: { count: 2, isSparse: true },
+    pitches: [pitchA_old, pitchB],
+    batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
+  };
+  const batch2: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venueA_new, venueC],
+    density: { count: 2, isSparse: true },
+    pitches: [pitchA_new, pitchC],
+    batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
+  };
 
-    const batch2: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venueA_new, venueC],
-      density: { count: 2, isSparse: true },
-      pitches: [pitchA_new, pitchC],
-      batchDispatch: { requested: 2, sent: 2, skipped: [], records: [] },
-    };
-    const logPath = await writeDropboxRunLog(batch2, tmpDir);
-    assert(logPath !== null);
+  const merged = mergeWeekendRuns(
+    { candidates: batch1.candidates, pitches: batch1.pitches, batchDispatch: batch1.batchDispatch },
+    batch2,
+  );
 
-    const md = await Deno.readTextFile(logPath);
-    // Should have 3 candidates total (Venue A, Venue B, Venue C) - not 4
-    assertStringIncludes(md, "**Candidates Found:** 3");
-    assertStringIncludes(md, "**Pitches Drafted:** 3");
-    assertStringIncludes(md, "**Batch Dispatch:** 4 sent / 4 requested (0 skipped)");
+  // Should have 3 candidates total (Venue A, Venue B, Venue C) - not 4
+  assertEquals(merged.candidates.length, 3);
+  assertEquals(merged.pitches.length, 3);
+  assertEquals(merged.batchDispatch?.requested, 4);
+  assertEquals(merged.batchDispatch?.sent, 4);
 
-    // Venue A details should be updated to new contact and email
-    assertStringIncludes(md, "new@venuea.com");
-    assertStringIncludes(md, "Alice Updated");
-    assertStringIncludes(md, "999-999-9999");
+  // Venue A details should be updated to new contact and email
+  const mergedVenueA = merged.candidates.find((c) => c._id === "vA");
+  assertEquals(mergedVenueA?.email, "new@venuea.com");
+  assertEquals(mergedVenueA?.contactName, "Alice Updated");
+  assertEquals(mergedVenueA?.phone, "999-999-9999");
 
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const html = await Deno.readTextFile(htmlPath);
-    // Verify only one data-venue-id="vA" in candidate rows
-    const matchesA = html.match(/<tr data-venue-id="vA">/g);
-    assertEquals(matchesA?.length, 1);
+  const html = renderDarkHtml(merged);
+  // Verify only one data-venue-id="vA" in candidate rows
+  const matchesA = html.match(/<tr data-venue-id="vA">/g);
+  assertEquals(matchesA?.length, 1);
 
-    // Verify only one pitch card for vA
-    const pitchCardsA = html.match(/data-venue-id="vA"/g);
-    // 1 in candidate table row + 1 in pitch card = 2 total occurrences
-    assertEquals(pitchCardsA?.length, 2);
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+  // Verify only one pitch card for vA
+  const pitchCardsA = html.match(/data-venue-id="vA"/g);
+  // 1 in candidate table row + 1 in pitch card = 2 total occurrences
+  assertEquals(pitchCardsA?.length, 2);
 });
 
-Deno.test("writeDropboxRunLog: deduplicates skipped venues by venueId across batches (#876)", async () => {
+Deno.test("mergeWeekendRuns: deduplicates skipped venues by venueId across batches (#876)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -899,160 +937,54 @@ Deno.test("writeDropboxRunLog: deduplicates skipped venues by venueId across bat
   const pitch1 = renderPitch(venue1, weekend);
   const pitch2 = renderPitch(venue2, weekend);
 
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_skip_dedup_" });
-  try {
-    const batch1: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venue1],
-      density: { count: 1, isSparse: true },
-      pitches: [pitch1],
-      batchDispatch: {
-        requested: 1,
-        sent: 0,
-        skipped: [{ venueId: "v1", venueName: "Venue 1", reason: "Initial error" }],
-        records: [],
-      },
-    };
-    await writeDropboxRunLog(batch1, tmpDir);
-
-    const batch2: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [venue2],
-      density: { count: 1, isSparse: true },
-      pitches: [pitch2],
-      batchDispatch: {
-        requested: 2,
-        sent: 1,
-        skipped: [
-          { venueId: "v1", venueName: "Venue 1", reason: "Updated skip reason" },
-          { venueId: "v2", venueName: "Venue 2", reason: "Bounced" },
-        ],
-        records: [],
-      },
-    };
-    const logPath = await writeDropboxRunLog(batch2, tmpDir);
-    assert(logPath !== null);
-
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const html = await Deno.readTextFile(htmlPath);
-
-    // Skipped table should have exactly 2 distinct rows: v1 and v2
-    assertStringIncludes(html, "Skipped Venues (2)");
-    assertStringIncludes(html, "Updated skip reason");
-    assertStringIncludes(html, "Bounced");
-
-    const md = await Deno.readTextFile(logPath);
-    // Cumulative: requested = 1 + 2 = 3, sent = 0 + 1 = 1, skipped = 2 deduplicated
-    assertStringIncludes(md, "**Batch Dispatch:** 1 sent / 3 requested (2 skipped)");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
-});
-
-Deno.test("writeDropboxRunLog: consolidates with legacy run logs lacking embedded JSON (#876)", async () => {
-  const weekend: TargetWeekend = {
-    start: "2026-10-16",
-    end: "2026-10-18",
-    rawText: "Oct 16-18 2026",
-    label: "October 16–18, 2026",
-    year: 2026,
-    month: 10,
-    days: [16, 17, 18],
+  const batch1: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venue1],
+    density: { count: 1, isSparse: true },
+    pitches: [pitch1],
+    batchDispatch: {
+      requested: 1,
+      sent: 0,
+      skipped: [{ venueId: "v1", venueName: "Venue 1", reason: "Initial error" }],
+      records: [],
+    },
   };
 
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_legacy_" });
-  try {
-    const legacyMd = `# \`book-gig\` Run Record: October 16–18, 2026
+  const batch2: BookGigResult = {
+    mode: "send",
+    weekend,
+    candidates: [venue2],
+    density: { count: 1, isSparse: true },
+    pitches: [pitch2],
+    batchDispatch: {
+      requested: 2,
+      sent: 1,
+      skipped: [
+        { venueId: "v1", venueName: "Venue 1", reason: "Updated skip reason" },
+        { venueId: "v2", venueName: "Venue 2", reason: "Bounced" },
+      ],
+      records: [],
+    },
+  };
 
-**Run Timestamp:** 2026-08-20T10:00:00.000Z  
-**Mode:** send  
-**Target Weekend:** 2026-10-16 to 2026-10-18 (October 16–18, 2026)  
-**Target Location Filter:** Roanoke, VA  
-**Candidates Found:** 1 (Sparse: Yes)  
-**Pitches Drafted:** 1  
-**Batch Dispatch:** 1 sent / 1 requested (0 skipped)  
+  const merged = mergeWeekendRuns(
+    { candidates: batch1.candidates, pitches: batch1.pitches, batchDispatch: batch1.batchDispatch },
+    batch2,
+  );
 
----
+  // Cumulative: requested = 1 + 2 = 3, sent = 0 + 1 = 1, skipped = 2 deduplicated
+  assertEquals(merged.batchDispatch?.requested, 3);
+  assertEquals(merged.batchDispatch?.sent, 1);
+  assertEquals(merged.batchDispatch?.skipped.length, 2);
 
-## 1. Candidate Venues Evaluated
-
-| # | Venue Name | Location | Contact Person | Phone | Booking Email | Spacing Note |
-|---|---|---|---|---|---|---|
-| 1 | Legacy Taproom | Roanoke, VA | Bob | 540-000-0000 | bob@legacy.com | Eligible |
-
----
-
-## 2. Generated Gmail Pitches
-
-### Pitch 1: Legacy Taproom
-- **To:** \`bob@legacy.com\`
-- **Subject:** Booking Inquiry - Legacy Taproom
-
-\`\`\`text
-Hi Bob, we would love to perform at Legacy Taproom on Oct 16-18.
-\`\`\`
-
----
-
-*Note: Generated by WebJamApps \`book-gig\` outreach pipeline.*
-`;
-    await Deno.writeTextFile(`${tmpDir}/book-gig-run-2026-10-16-to-2026-10-18.md`, legacyMd);
-
-    const newVenue: CandidateVenue = {
-      _id: "vNew",
-      name: "New Taproom",
-      city: "Salem",
-      usState: "VA",
-      email: "booking@newtaproom.com",
-    };
-    const newPitch = renderPitch(newVenue, weekend);
-
-    const batch2: BookGigResult = {
-      mode: "send",
-      weekend,
-      candidates: [newVenue],
-      density: { count: 1, isSparse: true },
-      pitches: [newPitch],
-      batchDispatch: { requested: 1, sent: 1, skipped: [], records: [] },
-    };
-
-    const logPath = await writeDropboxRunLog(batch2, tmpDir);
-    assert(logPath !== null);
-
-    const md = await Deno.readTextFile(logPath);
-    assertStringIncludes(md, "Legacy Taproom");
-    assertStringIncludes(md, "New Taproom");
-    assertStringIncludes(md, "**Candidates Found:** 2");
-    assertStringIncludes(md, "**Batch Dispatch:** 2 sent / 2 requested (0 skipped)");
-
-    const htmlPath = logPath.replace(/\.md$/, ".html");
-    const html = await Deno.readTextFile(htmlPath);
-    assertStringIncludes(html, "Legacy Taproom");
-    assertStringIncludes(html, "New Taproom");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
+  const html = renderDarkHtml(merged);
+  assertStringIncludes(html, "Skipped Venues (2)");
+  assertStringIncludes(html, "Updated skip reason");
+  assertStringIncludes(html, "Bounced");
 });
 
-Deno.test("extractRunDataFromMarkdown & extractRunDataFromHtml: extracts and parses run data", () => {
-  const sampleMd = `
-# Run Record
-<!-- BOOK_GIG_RUN_DATA:
-{
-  "candidates": [{"_id": "v1", "name": "Venue 1"}],
-  "pitches": [{"venueId": "v1", "venueName": "Venue 1", "to": "a@b.com", "subject": "Sub", "body": "Body"}],
-  "batchDispatch": {"requested": 1, "sent": 1, "skipped": [], "records": []}
-}
--->
-`;
-  const parsedMd = extractRunDataFromMarkdown(sampleMd);
-  assert(parsedMd);
-  assertEquals(parsedMd.candidates.length, 1);
-  assertEquals(parsedMd.candidates[0].name, "Venue 1");
-  assertEquals(parsedMd.batchDispatch?.sent, 1);
-
+Deno.test("extractRunDataFromHtml: extracts and parses run data embedded in a published report", () => {
   const sampleHtml = `
 <html>
 <body>
@@ -1911,6 +1843,30 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
         ),
       );
     }
+    if (u.includes("/outreach/preview")) {
+      const rendered = renderPitch(mockVenues[0], {
+        start: "2026-10-16",
+        end: "2026-10-18",
+        rawText: "Oct 16-18 2026",
+        label: "October 16–18, 2026",
+        year: 2026,
+        month: 10,
+        days: [16, 17, 18],
+      });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              venueId: "v1",
+              venueName: "Olde Salem Brewing",
+              subject: rendered.subject,
+              body: rendered.htmlBody || rendered.body,
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
     if (u.includes("/outreach")) {
       return Promise.resolve(
         new Response(
@@ -1954,7 +1910,7 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
 
   // Batch send mode (--send)
   const resultSend = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "Salem, VA"],
+    ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts"],
     mockFetch,
     mockOpener,
   );
@@ -2153,7 +2109,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 1: Send all without --venues / --skip
   const resAll = await runBookGigCli(
-    ["--send", "Oct 16-18 2026"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts"],
     mockFetch,
     mockOpener,
   );
@@ -2162,7 +2118,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 2: Send with --venues (approved subset by ID)
   const resSubsetId = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "--venues", "v1,v3"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts", "--venues", "v1,v3"],
     mockFetch,
     mockOpener,
   );
@@ -2171,7 +2127,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 3: Send with --venues (approved subset by Name)
   const resSubsetName = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "--venues", "Parkway Brewing"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts", "--venues", "Parkway Brewing"],
     mockFetch,
     mockOpener,
   );
@@ -2180,7 +2136,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 4: Send with --skip (exclude specific ID)
   const resSkip = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "--skip", "v2"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts", "--skip", "v2"],
     mockFetch,
     mockOpener,
   );
@@ -2189,7 +2145,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
 
   // Test 5: Send with non-matching --venues
   const resNone = await runBookGigCli(
-    ["--send", "Oct 16-18 2026", "--venues", "non-existent-id"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts", "--venues", "non-existent-id"],
     mockFetch,
     mockOpener,
   );
@@ -2244,7 +2200,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
     return Promise.resolve(new Response("{}", { status: 200 }));
   };
   const resExcluded = await runBookGigCli(
-    ["--send", "Oct 16-18 2026"],
+    ["--send", "Oct 16-18 2026", "--confirm-drafts"],
     mockFetchWithExcluded,
     mockOpener,
   );
@@ -2488,13 +2444,69 @@ Deno.test("renderPitch: injects prior contact context into custom body for retur
 
   const pitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
 
-  assertStringIncludes(pitch.body, "Hi Matt Kimble,");
+  assertStringIncludes(pitch.body, "Hi Matt,");
+  assertEquals(pitch.body.includes("Hi Matt Kimble,"), false);
   assertStringIncludes(pitch.body, "Following up on our earlier conversation");
   assertStringIncludes(pitch.body, "January 15–17, 2027");
   assertEquals(pitch.body.includes("[Custom Body]"), false);
 
   const validation = validateVoiceRules(pitch.body);
   assertEquals(validation.valid, true);
+});
+
+Deno.test("renderPitch: greets only the first word of a multi-word contactName (#1007, D-69)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v_liza",
+    name: "Parkway Brewing Company",
+    city: "Salem",
+    usState: "VA",
+    email: "booking@parkwaybrewing.com",
+    venueType: "PubFestivalBrewery",
+    contactName: "Liza Crowder",
+  };
+
+  const pitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
+  assertStringIncludes(pitch.body, "Hi Liza,");
+  assertEquals(pitch.body.includes("Hi Liza Crowder,"), false);
+  assertEquals(pitch.body.includes("[Contact Name]"), false);
+  assertEquals(validateVoiceRules(pitch.body).valid, true);
+});
+
+Deno.test("verifyPitchAgainstTemplate: predicts empty contactName as 'Hi,' fallback (#1007)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venue: CandidateVenue = {
+    _id: "v_empty_contact",
+    name: "The Spot on Kirk",
+    city: "Roanoke",
+    usState: "VA",
+    email: "info@thespotonkirk.org",
+    venueType: "Originals",
+    contactName: "",
+  };
+
+  const localPitch = renderPitch(venue, weekend, {}, DEFAULT_TEMPLATES);
+  assertStringIncludes(localPitch.htmlBody!, "<p>Hi,</p>");
+  assertEquals(localPitch.htmlBody!.includes("[Contact Name]"), false);
+  assertEquals(verifyPitchAgainstTemplate(localPitch, venue, weekend, {}, DEFAULT_TEMPLATES), null);
 });
 
 Deno.test("renderPitch: formats greeting cleanly when contactName is empty", () => {
@@ -3130,6 +3142,7 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
       name: "Eligible Returning Spot",
       city: "Salem",
       usState: "VA",
+      email: "spot@salem.com",
       reason: { lastGigDate: "2026-06-15" },
     },
     {
@@ -3137,14 +3150,22 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
       name: "Fresh New Venue",
       city: "Salem",
       usState: "VA",
+      email: "fresh@salem.com",
       reason: {},
+    },
+    {
+      _id: "v7",
+      name: "No Email Spot",
+      city: "Salem",
+      usState: "VA",
+      email: "",
     },
   ];
 
   const loc = parseLocation("Salem, VA")!;
   const filtered = filterAndRankCandidates(candidates, loc, { referenceDate: refDate });
 
-  assertEquals(filtered.length, 6);
+  assertEquals(filtered.length, 7);
 
   const hold = filtered.find((v) => v._id === "v1")!;
   assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
@@ -3172,6 +3193,11 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   const fresh = filtered.find((v) => v._id === "v6")!;
   assertEquals(fresh.statusBadge, "New");
   assertEquals(fresh.isExcluded, false);
+
+  const noEmail = filtered.find((v) => v._id === "v7")!;
+  assertEquals(noEmail.statusBadge, "[No Booking Email]");
+  assertEquals(noEmail.isExcluded, true);
+  assertEquals(noEmail.exclusionReason, "no-booking-email");
 });
 
 Deno.test("filterAndRankCandidates: does not mutate input candidate objects and preserves spacingNote (#879)", () => {
@@ -3181,6 +3207,7 @@ Deno.test("filterAndRankCandidates: does not mutate input candidate objects and 
     name: "Unmutated Venue",
     city: "Salem",
     usState: "VA",
+    email: "unmutated@venue.com",
     reason: {
       lastGigDate: null,
       gigIntervalMonths: 2,
@@ -3211,7 +3238,7 @@ Deno.test("filterAndRankCandidates: does not mutate input candidate objects and 
   assertEquals(secondPass[0].isExcluded, false);
 });
 
-Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in terminal and HTML artifacts (#879)", async () => {
+Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in terminal and HTML artifacts (#879)", () => {
   const refDate = new Date("2026-10-01T00:00:00.000Z");
   const candidates: CandidateVenue[] = [
     {
@@ -3300,20 +3327,6 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
   assertStringIncludes(html, "[Direct Chat Active]");
   assertStringIncludes(html, "badge-cooldown");
   assertStringIncludes(html, "[Cooldown Active: Sent Sep 28]");
-
-  // 4. Markdown run log
-  const tmpDir = await Deno.makeTempDir({ prefix: "book_gig_badges_" });
-  try {
-    const logPath = await writeDropboxRunLog(result, tmpDir);
-    assert(logPath !== null);
-    const mdContent = await Deno.readTextFile(logPath);
-    assertStringIncludes(mdContent, "[Seasonal Hold: Jan 2027]");
-    assertStringIncludes(mdContent, "[Gig Spacing: Nov 20 Show]");
-    assertStringIncludes(mdContent, "[Direct Chat Active]");
-    assertStringIncludes(mdContent, "[Cooldown Active: Sent Sep 28]");
-  } finally {
-    await Deno.remove(tmpDir, { recursive: true });
-  }
 });
 
 Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and cooldown venues alongside genuine /outreach/candidates response", async () => {
@@ -3653,4 +3666,660 @@ Deno.test("fetchCandidates: gig spacing uses calendar-month arithmetic matching 
   // Aug 16 is on the boundary (not strictly greater than lower bound) -> not conflicting
   const boundary = candidates.find((c) => c._id === "venue-spacing-exact-boundary");
   assertEquals(boundary, undefined);
+});
+
+Deno.test("isPitchableCandidate: accurately identifies pitchable venues vs excluded / missing contact (#983)", () => {
+  // 1. Valid pitchable venue
+  const validVenue: CandidateVenue = {
+    _id: "v-valid",
+    name: "Valid Brewery",
+    email: "booking@validbrewery.com",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(validVenue), true);
+
+  // 2. Pitchable venue with undefined isExcluded
+  const validUndefinedExcluded = {
+    _id: "v-undef",
+    name: "Undefined Excluded",
+    email: "info@undef.com",
+  };
+  assertEquals(isPitchableCandidate(validUndefinedExcluded), true);
+
+  // 3. Excluded venue (e.g. seasonal hold, spacing, direct chat)
+  const excludedVenue: CandidateVenue = {
+    _id: "v-excluded",
+    name: "Held Venue",
+    email: "held@venue.com",
+    isExcluded: true,
+  };
+  assertEquals(isPitchableCandidate(excludedVenue), false);
+
+  // 4. Missing email (empty string)
+  const emptyEmailVenue: CandidateVenue = {
+    _id: "v-no-email",
+    name: "No Email Venue",
+    email: "",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(emptyEmailVenue), false);
+
+  // 5. Undefined email
+  const undefinedEmailVenue = {
+    _id: "v-undef-email",
+    name: "Undef Email Venue",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(undefinedEmailVenue), false);
+
+  // 6. Venue with email and not excluded, but lacking _id (critical requirement from #983)
+  const missingIdVenue = {
+    name: "Missing ID Venue",
+    email: "noid@venue.com",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(missingIdVenue), false);
+
+  // 7. Venue with empty _id
+  const emptyIdVenue = {
+    _id: "",
+    name: "Empty ID Venue",
+    email: "emptyid@venue.com",
+    isExcluded: false,
+  };
+  assertEquals(isPitchableCandidate(emptyIdVenue), false);
+});
+
+Deno.test("renderCandidateTable & partition: separates active eligible candidates from held/excluded venues (#983)", () => {
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+  const candidates: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Eligible Brewery",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@eligible.com",
+      isExcluded: false,
+    },
+    {
+      _id: "v2",
+      name: "Seasonal Hold Farm",
+      city: "Blacksburg",
+      usState: "VA",
+      email: "farm@outside.com",
+      resumeBooking: "2027-03-01",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+    },
+    {
+      _id: "v3",
+      name: "Gig Spacing Tavern",
+      city: "Roanoke",
+      usState: "VA",
+      email: "tavern@spacing.com",
+      conflictingGigDate: "2026-11-15",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+    },
+    {
+      _id: "v4",
+      name: "Direct Chat Market",
+      city: "Salem",
+      usState: "VA",
+      email: "market@chat.com",
+      outreachEligible: false,
+      isExcluded: true,
+      exclusionReason: "direct-chat",
+    },
+    // Venue carrying email but no _id
+    {
+      _id: "",
+      name: "Unidentified Cafe",
+      city: "Salem",
+      usState: "VA",
+      email: "coffee@unidentified.com",
+      isExcluded: false,
+    },
+  ];
+
+  // Partition candidates using the shared helper
+  const pitchable = candidates.filter(isPitchableCandidate);
+  const excluded = candidates.filter((c) => !isPitchableCandidate(c));
+
+  assertEquals(pitchable.length, 1);
+  assertEquals(pitchable[0].name, "Eligible Brewery");
+
+  assertEquals(excluded.length, 4);
+  assert(excluded.some((c) => c.name === "Seasonal Hold Farm"));
+  assert(excluded.some((c) => c.name === "Gig Spacing Tavern"));
+  assert(excluded.some((c) => c.name === "Direct Chat Market"));
+  assert(excluded.some((c) => c.name === "Unidentified Cafe"));
+
+  // Primary table renders only pitchable candidates
+  const primaryTable = renderCandidateTable(pitchable, { color: false, referenceDate: refDate });
+  assertStringIncludes(primaryTable, "Eligible Brewery");
+  assert(
+    !primaryTable.includes("Seasonal Hold Farm"),
+    "Seasonal hold must not be in primary table",
+  );
+  assert(!primaryTable.includes("Gig Spacing Tavern"), "Gig spacing must not be in primary table");
+  assert(!primaryTable.includes("Direct Chat Market"), "Direct chat must not be in primary table");
+  assert(
+    !primaryTable.includes("Unidentified Cafe"),
+    "Venue without _id must not be in primary table",
+  );
+
+  // Secondary table renders excluded candidates
+  const secondaryTable = renderCandidateTable(excluded, { color: false, referenceDate: refDate });
+  assert(
+    !secondaryTable.includes("Eligible Brewery"),
+    "Eligible venue must not be in secondary table",
+  );
+  assertStringIncludes(secondaryTable, "Seasonal Hold Farm");
+  assertStringIncludes(secondaryTable, "Gig Spacing Tavern");
+  assertStringIncludes(secondaryTable, "Direct Chat Market");
+  assertStringIncludes(secondaryTable, "Unidentified Cafe");
+});
+
+Deno.test("runBookGigCli: logs evaluated vs pitchable discovery counts and prints partitioned tables (#983)", async () => {
+  const loggedLines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    loggedLines.push(args.map(String).join(" "));
+  };
+
+  const mockVenues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Eligible Brewery",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@eligible.com",
+      isExcluded: false,
+    },
+    {
+      _id: "v2",
+      name: "Seasonal Hold Farm",
+      city: "Salem",
+      usState: "VA",
+      email: "farm@outside.com",
+      resumeBooking: "2027-03-01",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+    },
+    {
+      _id: "v3",
+      name: "Spacing Conflict Venue",
+      city: "Salem",
+      usState: "VA",
+      email: "conflict@venue.com",
+      conflictingGigDate: "2026-11-10",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+    },
+    // Venue without booking email
+    {
+      _id: "v4",
+      name: "No Email Cafe",
+      city: "Salem",
+      usState: "VA",
+      email: "",
+      isExcluded: false,
+    },
+  ];
+
+  const mockFetch: typeof fetch = (url: string | URL | Request) => {
+    const u = String(url);
+    if (u.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(mockVenues),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/preview")) {
+      const weekend = parseTargetWeekend("Oct 16-18 2026");
+      const rendered = renderPitch(mockVenues[0], weekend);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              venueId: "v1",
+              venueName: "Eligible Brewery",
+              subject: rendered.subject,
+              body: rendered.htmlBody || rendered.body,
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/templates")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(DEFAULT_TEMPLATES),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/report")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ ok: true, reportUrl: "https://web-jam.com/outreach/report/test" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const mockOpener = () => Promise.resolve(true);
+
+  try {
+    const result = await runBookGigCli(
+      ["Oct 16-18 2026", "Salem, VA", "--no-open"],
+      mockFetch,
+      mockOpener,
+    );
+
+    assertEquals(result.mode, "preview");
+    assertEquals(result.candidates.length, 4);
+
+    const fullLog = loggedLines.join("\n");
+
+    // 1. Discovery log reports reconciled breakdown
+    assertStringIncludes(
+      fullLog,
+      "Backend returned 4 total venues evaluated (1 pitchable, 1 seasonal-hold, 1 no-booking-email, 1 gig-spacing).",
+    );
+
+    // 2. Primary table heading specifies Eligible Candidate Venues with pitchable count
+    assertStringIncludes(fullLog, "Eligible Candidate Venues for October 16–18, 2026 (1):");
+
+    // 3. Secondary table heading specifies Excluded / On-Hold Venues with excluded count
+    assertStringIncludes(fullLog, "Excluded / On-Hold Venues (3):");
+
+    // 4. Verify candidate placement: Eligible Brewery in eligible table, others in excluded
+    const eligibleSection = fullLog.substring(
+      fullLog.indexOf("Eligible Candidate Venues"),
+      fullLog.indexOf("Excluded / On-Hold Venues"),
+    );
+    assertStringIncludes(eligibleSection, "Eligible Brewery");
+    assert(
+      !eligibleSection.includes("Seasonal Hold Farm"),
+      "Seasonal Hold Farm must not be in eligible table",
+    );
+    assert(
+      !eligibleSection.includes("Spacing Conflict Venue"),
+      "Spacing Conflict must not be in eligible table",
+    );
+    assert(
+      !eligibleSection.includes("No Email Cafe"),
+      "No Email Cafe must not be in eligible table",
+    );
+
+    const excludedSection = fullLog.substring(fullLog.indexOf("Excluded / On-Hold Venues"));
+    assertStringIncludes(excludedSection, "Seasonal Hold Farm");
+    assertStringIncludes(excludedSection, "Spacing Conflict Venue");
+    assertStringIncludes(excludedSection, "No Email Cafe");
+    assertStringIncludes(excludedSection, "[No Booking Email]");
+    assert(
+      !excludedSection.includes("Eligible Brewery"),
+      "Eligible Brewery must not be in excluded table",
+    );
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venue with a named reason (#984)", async () => {
+  const refDate = new Date("2026-10-15T00:00:00.000Z");
+  const weekend = parseTargetWeekend("Oct 16-18 2026");
+  const location = parseLocation("Roanoke, Salem, VA and surrounding areas")!;
+
+  // 1. Candidate fixture set covering pitchable + all seven named exclusion reasons
+  const fixtureVenues: CandidateVenue[] = [
+    // 1. Pitchable venue (in target area, has booking email, not excluded)
+    {
+      _id: "v-pitchable",
+      name: "Roanoke Brewing",
+      city: "Roanoke",
+      usState: "VA",
+      email: "booking@roanokebrewing.com",
+      isExcluded: false,
+    },
+    // 2. Out of state (different state from target location: NC vs VA)
+    {
+      _id: "v-out-of-state",
+      name: "Charlotte Tavern",
+      city: "Charlotte",
+      usState: "NC",
+      email: "booking@charlottetavern.com",
+      isExcluded: false,
+    },
+    // 3. Outside target area (in-state, but outside target and surrounding cities: Richmond vs Roanoke)
+    {
+      _id: "v-outside-area",
+      name: "Richmond Hall",
+      city: "Richmond",
+      usState: "VA",
+      email: "booking@richmondhall.com",
+      isExcluded: false,
+    },
+    // 4. No booking email (in target area, no prior hold/spacing, but email is missing/empty)
+    {
+      _id: "v-no-email",
+      name: "Salem Speakeasy",
+      city: "Salem",
+      usState: "VA",
+      email: "",
+      isExcluded: false,
+    },
+    // 5. Seasonal hold (active hold in future)
+    {
+      _id: "v-seasonal-hold",
+      name: "Vinton Vineyard",
+      city: "Vinton",
+      usState: "VA",
+      email: "booking@vintonvineyard.com",
+      resumeBooking: "2027-04-01",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+    },
+    // 6. Gig spacing (conflicting gig date within ±2 month window)
+    {
+      _id: "v-gig-spacing",
+      name: "Cave Spring Pub",
+      city: "Cave Spring",
+      usState: "VA",
+      email: "booking@cavespringpub.com",
+      conflictingGigDate: "2026-11-15",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+    },
+    // 7. Direct chat (outreachEligible: false with direct chat notes)
+    {
+      _id: "v-direct-chat",
+      name: "Roanoke Cafe",
+      city: "Roanoke",
+      usState: "VA",
+      email: "booking@roanokecafe.com",
+      outreachEligible: false,
+      notes: "Spoke directly with owner on phone",
+      isExcluded: true,
+      exclusionReason: "direct-chat",
+    },
+    // 8. Cooldown (contacted within 7-day cooldown window)
+    {
+      _id: "v-cooldown",
+      name: "Salem Taphouse",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@salemtaphouse.com",
+      cooldownSentDate: "2026-10-14",
+      isExcluded: true,
+      exclusionReason: "cooldown",
+    },
+  ];
+
+  // 2. Mocked fetchFn returning fixture venues from /outreach/candidates
+  const mockFetch: typeof fetch = (url: string | URL | Request) => {
+    const u = String(url);
+    if (u.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(fixtureVenues),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/venue?status=active")) {
+      return Promise.resolve(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/outreach?status=")) {
+      return Promise.resolve(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/outreach/preview")) {
+      const rendered = renderPitch(fixtureVenues[0], weekend);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              venueId: "v-pitchable",
+              venueName: "Roanoke Brewing",
+              subject: rendered.subject,
+              body: rendered.htmlBody || rendered.body,
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/templates")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(DEFAULT_TEMPLATES),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/report")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ ok: true, reportUrl: "https://web-jam.com/outreach/report/test" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  // 3. fetchCandidates retrieves all fixture candidates without mutation
+  const rawCandidates = await fetchCandidates({ weekend }, mockFetch);
+  assertEquals(rawCandidates.length, 8);
+
+  // 4. filterAndRankCandidates retains ALL 8 venues with appropriate named reasons
+  const candidates = filterAndRankCandidates(rawCandidates, location, { referenceDate: refDate });
+  assertEquals(candidates.length, 8);
+
+  // Assert each venue exists exactly once with its specific exclusion reason
+  const pitchableVenue = candidates.find((c) => c._id === "v-pitchable")!;
+  assertEquals(isPitchableCandidate(pitchableVenue), true);
+  assertEquals(pitchableVenue.isExcluded, false);
+
+  const outOfState = candidates.find((c) => c._id === "v-out-of-state")!;
+  assertEquals(isPitchableCandidate(outOfState), false);
+  assertEquals(outOfState.isExcluded, true);
+  assertEquals(outOfState.exclusionReason, "out-of-state");
+  assertEquals(outOfState.statusBadge, "[Out of State]");
+
+  const outsideArea = candidates.find((c) => c._id === "v-outside-area")!;
+  assertEquals(isPitchableCandidate(outsideArea), false);
+  assertEquals(outsideArea.isExcluded, true);
+  assertEquals(outsideArea.exclusionReason, "outside-target-area");
+  assertEquals(outsideArea.statusBadge, "[Outside Target Area]");
+
+  const noEmail = candidates.find((c) => c._id === "v-no-email")!;
+  assertEquals(isPitchableCandidate(noEmail), false);
+  assertEquals(noEmail.isExcluded, true);
+  assertEquals(noEmail.exclusionReason, "no-booking-email");
+  assertEquals(noEmail.statusBadge, "[No Booking Email]");
+
+  const seasonalHold = candidates.find((c) => c._id === "v-seasonal-hold")!;
+  assertEquals(isPitchableCandidate(seasonalHold), false);
+  assertEquals(seasonalHold.isExcluded, true);
+  assertEquals(seasonalHold.exclusionReason, "seasonal-hold");
+  assertStringIncludes(seasonalHold.statusBadge!, "Seasonal Hold");
+
+  const gigSpacing = candidates.find((c) => c._id === "v-gig-spacing")!;
+  assertEquals(isPitchableCandidate(gigSpacing), false);
+  assertEquals(gigSpacing.isExcluded, true);
+  assertEquals(gigSpacing.exclusionReason, "gig-spacing");
+  assertStringIncludes(gigSpacing.statusBadge!, "Gig Spacing");
+
+  const directChat = candidates.find((c) => c._id === "v-direct-chat")!;
+  assertEquals(isPitchableCandidate(directChat), false);
+  assertEquals(directChat.isExcluded, true);
+  assertEquals(directChat.exclusionReason, "direct-chat");
+  assertEquals(directChat.statusBadge, "[Direct Chat Active]");
+
+  const cooldown = candidates.find((c) => c._id === "v-cooldown")!;
+  assertEquals(isPitchableCandidate(cooldown), false);
+  assertEquals(cooldown.isExcluded, true);
+  assertEquals(cooldown.exclusionReason, "cooldown");
+  assertStringIncludes(cooldown.statusBadge!, "Cooldown Active");
+
+  // 5. Reconciled breakdown invariant: pitchable + sum(excluded by reason) === total returned
+  const breakdown = getCandidateBreakdown(candidates);
+  assertEquals(breakdown.total, 8);
+  assertEquals(breakdown.pitchable, 1);
+  assertEquals(breakdown.byReason["out-of-state"], 1);
+  assertEquals(breakdown.byReason["outside-target-area"], 1);
+  assertEquals(breakdown.byReason["seasonal-hold"], 1);
+  assertEquals(breakdown.byReason["no-booking-email"], 1);
+  assertEquals(breakdown.byReason["gig-spacing"], 1);
+  assertEquals(breakdown.byReason["direct-chat"], 1);
+  assertEquals(breakdown.byReason["cooldown"], 1);
+
+  const sumExcluded = Object.values(breakdown.byReason).reduce((a, b) => a + b, 0);
+  assertEquals(breakdown.pitchable + sumExcluded, breakdown.total);
+
+  // 6. Formatted discovery log reconciles exactly to total evaluated
+  const logStr = formatCandidateBreakdown(candidates);
+  assertEquals(
+    logStr,
+    "Backend returned 8 total venues evaluated (1 pitchable, 1 out-of-state, 1 outside-target-area, 1 seasonal-hold, 1 no-booking-email, 1 gig-spacing, 1 direct-chat, 1 cooldown).",
+  );
+
+  // 7. Table rendering: pitchable table contains only pitchable, excluded table contains all reasons and NO "New"
+  const pitchableTable = renderCandidateTable(candidates.filter(isPitchableCandidate), {
+    color: false,
+    referenceDate: refDate,
+  });
+  assertStringIncludes(pitchableTable, "Roanoke Brewing");
+  assert(!pitchableTable.includes("Charlotte Tavern"));
+  assert(!pitchableTable.includes("Richmond Hall"));
+  assert(!pitchableTable.includes("Salem Speakeasy"));
+
+  const excludedTable = renderCandidateTable(candidates.filter((c) => !isPitchableCandidate(c)), {
+    color: false,
+    referenceDate: refDate,
+  });
+  assertStringIncludes(excludedTable, "Charlotte Tavern");
+  assertStringIncludes(excludedTable, "Richmond Hall");
+  assertStringIncludes(excludedTable, "Salem Speakeasy");
+  assertStringIncludes(excludedTable, "Vinton Vineyard");
+  assertStringIncludes(excludedTable, "Cave Spring Pub");
+  assertStringIncludes(excludedTable, "Roanoke Cafe");
+  assertStringIncludes(excludedTable, "Salem Taphouse");
+
+  assertStringIncludes(excludedTable, "[Out of State]");
+  assertStringIncludes(excludedTable, "[Outside Target Area]");
+  assertStringIncludes(excludedTable, "[No Booking Email]");
+  assertStringIncludes(excludedTable, "[Seasonal Hold: Apr 2027]");
+  assertStringIncludes(excludedTable, "[Gig Spacing: Nov 15 Show]");
+  assertStringIncludes(excludedTable, "[Direct Chat Active]");
+  assertStringIncludes(excludedTable, "[Cooldown Active: Sent Oct 14]");
+  assert(!excludedTable.includes("New"), "Excluded table must never display 'New'");
+
+  // 8. CLI integration with mocked fetchFn prints the reconciled discovery breakdown log
+  const loggedLines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    loggedLines.push(args.map(String).join(" "));
+  };
+  try {
+    await runBookGigCli(
+      ["Oct 16-18 2026", "Roanoke, Salem, VA and surrounding areas", "--no-open"],
+      mockFetch,
+      () => Promise.resolve(true),
+    );
+    const cliOutput = loggedLines.join("\n");
+    assertStringIncludes(
+      cliOutput,
+      "Backend returned 8 total venues evaluated (1 pitchable, 1 out-of-state, 1 outside-target-area, 1 seasonal-hold, 1 no-booking-email, 1 gig-spacing, 1 direct-chat, 1 cooldown).",
+    );
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+Deno.test("touch conversion: proposes genuine phone conversation, rejects legacy metadata, and requires explicit approval to write (#1006)", async () => {
+  const fixtureVenues = [
+    {
+      _id: "v-phone",
+      name: "Phone Note Venue",
+      city: "Roanoke",
+      usState: "VA",
+      notes: "Spoke on the phone about a 2027 booking",
+    },
+    {
+      _id: "v-hamlet",
+      name: "Hamlet Vineyards",
+      city: "Bassett",
+      usState: "VA",
+      notes: "Date called: 2026-05-09",
+    },
+  ];
+
+  let postCalls = 0;
+  const postedRequests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const mockFetch: typeof fetch = (input, init) => {
+    if (init?.method === "POST") {
+      postCalls++;
+      postedRequests.push({ url: String(input), body: JSON.parse(String(init.body)) });
+      return Promise.resolve(new Response(JSON.stringify({ _id: "touch-id" }), { status: 201 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify(fixtureVenues), { status: 200 }));
+  };
+
+  // 1. Dry run: proposes without writing
+  const dryRun = await executeTouchConversion(
+    { apply: false, venues: fixtureVenues },
+    mockFetch,
+  );
+  assertEquals(dryRun.proposals.length, 1);
+  assertEquals(dryRun.proposals[0].venueName, "Phone Note Venue");
+  assertEquals(dryRun.proposals[0].touchType, "call");
+  assertEquals(dryRun.proposals[0].sentence, "Spoke on the phone about a 2027 booking");
+  assertEquals(dryRun.applied.length, 0);
+  assertEquals(postCalls, 0, "No POST /venue/:id/touch must be made on dry run");
+
+  // 2. Explicit approval write with no date supplied: an undated proposal is never written.
+  const approvedRunNoDate = await executeTouchConversion(
+    { apply: true, venues: fixtureVenues, actor: "Josh" },
+    mockFetch,
+  );
+  assertEquals(approvedRunNoDate.proposals.length, 1);
+  assertEquals(approvedRunNoDate.applied.length, 0);
+  assertEquals(postCalls, 0, "An undated row must never be POSTed");
+  assertEquals(approvedRunNoDate.skippedNoDate.length, 1);
+  assertEquals(approvedRunNoDate.skippedNoDate[0].venueName, "Phone Note Venue");
+  assertStringIncludes(approvedRunNoDate.summary, "Skipped 1 undated row");
+
+  // 3. Explicit approval write with a date supplied via --date: writes the approved touch.
+  const approvedRunWithDate = await executeTouchConversion(
+    { apply: true, venues: fixtureVenues, actor: "Josh", dates: ["v-phone=2026-05-09"] },
+    mockFetch,
+  );
+  assertEquals(approvedRunWithDate.proposals.length, 1);
+  assertEquals(approvedRunWithDate.applied.length, 1);
+  assertEquals(approvedRunWithDate.applied[0].success, true);
+  assertEquals(postCalls, 1);
+  assertEquals(postedRequests[0].url, "https://webjamsalem.herokuapp.com/venue/v-phone/touch");
+  assertEquals(postedRequests[0].body.type, "call");
+  assertEquals(postedRequests[0].body.actor, "Josh");
+  assertEquals(postedRequests[0].body.note, "Spoke on the phone about a 2027 booking");
+  assertEquals(postedRequests[0].body.date, "2026-05-09T00:00:00.000Z");
 });
