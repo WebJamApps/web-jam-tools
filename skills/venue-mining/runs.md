@@ -96,11 +96,11 @@ via PATCH after creation.
 Publication discovered = **C-VILLE Weekly** (`http://events.c-ville.com`, SceneThink JSON API endpoint at `http://events.c-ville.com/cville/search.json?category=13`). Swept 12 archive pages (~1,200 events). Dedupe against 124 existing DB venues dropped *The Southern Cafe & Music Hall* (already in DB).
 
 **Results:**
-- **12 Candidate Venues Verified & Proposed** (all with verified street addresses and published booking/inquiry emails on venue websites): Eastwood Farm and Winery, Dürty Nelly's, The Bebedero, Albemarle Ciderworks, Firefly, Chisholm Vineyards at Adventure Farm, Three Notch'd Craft Kitchen & Brewery, Pro Re Nata Farm Brewery, Kardinal Hall, Southwest Mountains Vineyards, Potter's Craft Cider, Merrie Mill Farm & Vineyard.
+- **12 Candidate Venues Created in DB** (all with verified street addresses, valid 5-digit ZIP codes, and published booking/inquiry emails with `outreachEligible: true`): Eastwood Farm and Winery, Dürty Nelly's, The Bebedero, Albemarle Ciderworks, Firefly, Chisholm Vineyards at Adventure Farm, Three Notch'd Craft Kitchen & Brewery, Pro Re Nata Farm Brewery, Kardinal Hall, Southwest Mountains Vineyards, Potter's Craft Cider, Merrie Mill Farm & Vineyard.
 - **4 Hand-Back Venues** (verified street addresses, active live-music programming, but phone/web-form only): The Whiskey Jar, Holly's Diner, The Front Porch, Maya Restaurant.
 - **3 TimShermanMusic Leads** (theaters/large halls): The Paramount Theater, The Jefferson Theater, Ting Pavilion.
 
 **Enhancements:**
-- Added `src/venue-mining/sweep_cville.ts` (`deno task venue-mining:sweep-cville`) for automated event harvesting, non-music entity filtering, TSM lead separation, and DB deduplication.
+- Added generalized `src/venue-mining/sweep.ts` (`deno task venue-mining:sweep [metro]` and `deno task venue-mining:sweep-cville`) for automated event harvesting, registry lookup in `sources.yaml`, cooldown enforcement, non-music entity filtering, TSM lead separation, and DB deduplication across any city or metro area.
 - Enhanced `src/venue-contact/extract_venue_contact.ts` with `/usr/bin/google-chrome` executable fallback in `defaultRender`.
 

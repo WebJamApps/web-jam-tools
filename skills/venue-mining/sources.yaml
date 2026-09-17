@@ -33,10 +33,24 @@ metros:
     label: Charlottesville VA
     driveTier: "1.5-2.5h"
     publication:
-      name: C-VILLE Weekly (Events Calendar)
+      name: C-VILLE Weekly (SceneThink calendar)
       url: http://events.c-ville.com
+      api: http://events.c-ville.com/cville/search.json?category=13
+      type: scenethink
     lastSwept: 2026-09-16
-    notes: "Run 5 = swept 12 pages (~1,200 events) via events.c-ville.com JSON API. +12 candidate venues identified with verified addresses and published emails; 4 phone/web-form leads; 3 TSM large-hall leads."
+    notes: "Run 5 = swept 12 pages (~1,200 events) via C-VILLE Weekly SceneThink JSON API. +12 candidate venues created in live DB with verified addresses and emails; 4 phone/web-form leads; 3 TSM large-hall leads."
+    coverageArea:
+      - charlottesville
+      - crozet
+      - keswick
+      - scottsville
+      - earlysville
+      - north garden
+      - ivy
+      - free union
+      - barboursville
+      - palmyra
+      - albemarle
   - { slug: harrisonburg,        label: Harrisonburg VA,                  driveTier: "1.5-2.5h", publication: null, lastSwept: null }
   - { slug: staunton-waynesboro, label: Staunton / Waynesboro VA,         driveTier: "1.5-2.5h", publication: null, lastSwept: null }
   - { slug: danville,            label: Danville VA,                      driveTier: "1.5-2.5h", publication: null, lastSwept: null }
