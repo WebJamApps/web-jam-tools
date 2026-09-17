@@ -338,7 +338,6 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "song-recordings",
     "set-lists",
     "promote-gigs",
-    "venue-mining",
     "financial",
     "health-wellness",
     "politics",
@@ -363,16 +362,15 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   );
   assertEquals(aiMisbehavesTopic?.repos, ["web-jam-tools"]);
 
-  // web-jam-tools#287: the seven new topics each carry exactly the same four
+  // web-jam-tools#287: the six new topics each carry exactly the same four
   // repos (not `all`) — JaMmusic, web-jam-back, WebJamSocketCluster, and
   // web-jam-tools — matching the convention already used for
   // `Access Controls` and `AI Misbehaves` (each asserted its own repo
-  // scope above).
+  // scope above). (venue-mining was dropped 2026-09-17)
   const fourRepoTopicNames = [
     "song-recordings",
     "set-lists",
     "promote-gigs",
-    "venue-mining",
     "financial",
     "health-wellness",
     "politics",
