@@ -37,10 +37,16 @@ publication (name+url, null until discovered), lastSwept, notes`.
 
 1. **Resolve source** — look up the metro in sources.yaml; enforce the cooldown;
    discover + record the publication if null.
+   When the metro's `publication.type` is supported by the sweep CLI (today, `scenethink`),
+   run `deno task venue-mining:sweep <metro>` for automated source resolution, cooldown
+   enforcement, harvesting, geographic filtering, non-music filtering, and DB deduplication.
 2. **Harvest** (delegate: parallel Haiku subagents) — sweep the publication
    archive (12-mo for a first sweep, delta-since-lastSwept for re-sweeps).
    Collect venue names with dates/acts as evidence. Subagents do the fetching
    so the churn stays out of the main context.
+   When `publication.type` is supported by `deno task venue-mining:sweep`, use the CLI
+   instead of manual subagents. When `publication.type` is unsupported or null, fall back
+   to parallel Haiku subagents for harvest.
 3. **Dedupe** — `GET /venue`; match **by name** (never a remembered `_id` —
    AI-recalled ids are wrong). Drop venues already in the DB, active OR archived.
 4. **Verify** (delegate: Haiku, batched) — for each new candidate: real venue,

@@ -101,6 +101,6 @@ Publication discovered = **C-VILLE Weekly** (`http://events.c-ville.com`, SceneT
 - **3 TimShermanMusic Leads** (theaters/large halls): The Paramount Theater, The Jefferson Theater, Ting Pavilion.
 
 **Enhancements:**
-- Added generalized `src/venue-mining/sweep.ts` (`deno task venue-mining:sweep [metro]` and `deno task venue-mining:sweep-cville`) for automated event harvesting, registry lookup in `sources.yaml`, cooldown enforcement, non-music entity filtering, TSM lead separation, and DB deduplication across any city or metro area.
-- Enhanced `src/venue-contact/extract_venue_contact.ts` with `/usr/bin/google-chrome` executable fallback in `defaultRender`.
+- Added generalized `src/venue-mining/sweep.ts` (`deno task venue-mining:sweep [metro]`) for automated event harvesting, registry lookup in `sources.yaml`, cooldown enforcement, non-music entity filtering, TSM lead separation, and DB deduplication.
+- Enhanced `src/venue-contact/extract_venue_contact.ts` with Playwright `channel: "chrome"` fallback in `defaultRender`.
 

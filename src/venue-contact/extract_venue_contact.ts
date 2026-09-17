@@ -265,12 +265,13 @@ async function defaultRender(url: string, timeoutMs: number): Promise<string> {
   let browser;
   try {
     browser = await chromium.launch();
-  } catch {
-    // Fall back to system google-chrome or chromium if playwright-bundled browser is not installed
-    browser = await chromium.launch({
-      executablePath: "/usr/bin/google-chrome",
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+  } catch (primaryErr) {
+    // Fall back to system chrome channel if playwright-bundled browser is not installed
+    try {
+      browser = await chromium.launch({ channel: "chrome" });
+    } catch {
+      throw primaryErr;
+    }
   }
   try {
     const page = await browser.newPage();

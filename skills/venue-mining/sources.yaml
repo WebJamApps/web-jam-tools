@@ -51,6 +51,17 @@ metros:
       - barboursville
       - palmyra
       - albemarle
+    excludeKeywords:
+      - scrappy elephant
+      - monticello
+      - downtown mall
+      - hall 107
+      - hall 229a
+      - campbell hall
+      - nau hall
+      - bryan hall
+      - jaba
+      - wtju
   - { slug: harrisonburg,        label: Harrisonburg VA,                  driveTier: "1.5-2.5h", publication: null, lastSwept: null }
   - { slug: staunton-waynesboro, label: Staunton / Waynesboro VA,         driveTier: "1.5-2.5h", publication: null, lastSwept: null }
   - { slug: danville,            label: Danville VA,                      driveTier: "1.5-2.5h", publication: null, lastSwept: null }
