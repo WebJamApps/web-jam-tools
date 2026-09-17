@@ -52,7 +52,7 @@
     "dropbox:link": "deno run --allow-net --allow-env src/dropbox-link/dropbox_link_cli.ts",
     "venue-contact:extract": "deno run -A src/venue-contact/cli.ts",
     "venue-tag:diff": "deno run --allow-env=WEB_JAM_LLM_TOKEN,WEB_JAM_BACK_URL --allow-net=webjamsalem.herokuapp.com --allow-read=. src/venue-tag-diff/cli.ts",
-    "venue-mining:sweep": "deno run --allow-read --allow-env --allow-net src/venue-mining/sweep.ts",
+    "venue-mining:sweep": "deno run --allow-read=skills/venue-mining,$HOME/Dropbox/web-jam-llms/web-jam-llm.token --allow-env=HOME,WEB_JAM_LLM_TOKEN,WEB_JAM_BACK_URL --allow-net=events.c-ville.com,webjamsalem.herokuapp.com src/venue-mining/sweep.ts",
     "fix-labels:diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/diff.ts",
     "fix-labels:milestone-diff": "deno run --allow-run=gh --allow-read=skills/fix-labels/labels.yaml src/fix-labels/milestone-diff.ts",
     "fix-labels:generate-model-labels": "deno run --allow-read=skills/fix-labels/labels.yaml --allow-write=skills/fix-labels/model-labels.json src/fix-labels/generate-model-labels.ts",
