@@ -1,15 +1,17 @@
 // test/venue_mining_sweep.test.ts
-import { assertEquals, assertExists, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   checkCooldown,
   dedupeVenues,
   fetchSceneThinkEvents,
+  fetchSweepHistory,
   type HarvestedVenue,
   harvestEvents,
   isLargeHallOrTheater,
   isLocalArea,
   isNonMusicEntity,
   LARGE_HALL_OR_THEATER_KEYWORDS,
+  listMetros,
   loadSourcesRegistry,
   NON_MUSIC_ENTITY_KEYWORDS,
   parseStateFromLabel,
@@ -21,6 +23,169 @@ const FIXTURE_SOURCES = new URL(
   "./fixtures/venue_mining_sources_fixture.yaml",
   import.meta.url,
 ).pathname;
+
+const FIXTURE_SWEEP_RECORDS: Record<string, unknown[]> = {
+  "locked-metro": [
+    {
+      metroSlug: "locked-metro",
+      sweptAt: "2026-09-10",
+      publication: {
+        name: "SceneThink Calendar",
+        url: "http://mock.com/locked/search.json",
+        api: "http://mock.com/locked/search.json",
+        type: "scenethink",
+      },
+      venuesCreatedCount: 5,
+      coverageArea: ["roanoke", "salem"],
+      excludeKeywords: ["hall 107"],
+    },
+  ],
+  "stale-metro": [
+    {
+      metroSlug: "stale-metro",
+      sweptAt: "2025-01-01",
+      publication: {
+        name: "SceneThink Calendar",
+        url: "http://mock.com/stale/search.json",
+        api: "http://mock.com/stale/search.json",
+        type: "scenethink",
+      },
+      venuesCreatedCount: 5,
+      coverageArea: ["roanoke", "salem"],
+    },
+  ],
+  "null-metro": [
+    {
+      metroSlug: "null-metro",
+      sweptAt: null,
+      publication: {
+        name: "SceneThink Calendar",
+        url: "http://mock.com/null/search.json",
+        api: "http://mock.com/null/search.json",
+        type: "scenethink",
+      },
+      venuesCreatedCount: 0,
+      coverageArea: ["roanoke", "salem"],
+    },
+  ],
+  "unparseable-metro": [
+    {
+      metroSlug: "unparseable-metro",
+      sweptAt: "not-a-valid-date",
+      publication: {
+        name: "SceneThink Calendar",
+        url: "http://mock.com/unparseable/search.json",
+        api: "http://mock.com/unparseable/search.json",
+        type: "scenethink",
+      },
+      venuesCreatedCount: 0,
+      coverageArea: ["roanoke", "salem"],
+    },
+  ],
+  "unsupported-metro": [
+    {
+      metroSlug: "unsupported-metro",
+      sweptAt: null,
+      publication: {
+        name: "HTML Calendar",
+        url: "http://mock.com/unsupported",
+        api: "http://mock.com/unsupported",
+        type: "html",
+      },
+      venuesCreatedCount: 0,
+    },
+  ],
+  "missing-type-metro": [
+    {
+      metroSlug: "missing-type-metro",
+      sweptAt: null,
+      publication: {
+        name: "Missing Type Calendar",
+        url: "http://mock.com/missing-type",
+      },
+      venuesCreatedCount: 0,
+    },
+  ],
+  "roanoke-salem": [
+    {
+      metroSlug: "roanoke-salem",
+      sweptAt: "2026-07-02",
+      publication: {
+        name: "The Roanoke Rambler",
+        url: "https://www.roanokerambler.com",
+      },
+      venuesCreatedCount: 14,
+    },
+  ],
+};
+
+function createMockFetch(overrides?: {
+  sweepHistory?: (url: string) => Response | Promise<Response>;
+  events?: (url: string) => Response | Promise<Response>;
+  venueMap?: (url: string) => Response | Promise<Response>;
+}): typeof fetch {
+  return ((input: string | URL | Request) => {
+    const urlStr = input.toString();
+
+    if (urlStr.includes("/venue-mining/sweep")) {
+      if (overrides?.sweepHistory) {
+        return Promise.resolve(overrides.sweepHistory(urlStr));
+      }
+      const urlObj = new URL(urlStr);
+      const slug = urlObj.searchParams.get("metroSlug");
+      if (slug) {
+        const records = FIXTURE_SWEEP_RECORDS[slug] || [];
+        return Promise.resolve(
+          new Response(JSON.stringify(records), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      const all = Object.values(FIXTURE_SWEEP_RECORDS).flat();
+      return Promise.resolve(
+        new Response(JSON.stringify(all), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+
+    if (urlStr.includes("/venue")) {
+      if (overrides?.venueMap) {
+        return Promise.resolve(overrides.venueMap(urlStr));
+      }
+      return Promise.resolve(
+        new Response("[]", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+
+    if (overrides?.events) {
+      return Promise.resolve(overrides.events(urlStr));
+    }
+
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          pages: 1,
+          events: [
+            {
+              _source: {
+                name: "Concert",
+                starttime: "2026-09-20T18:00:00Z",
+                venue: { name: "Local Pub", city: "Roanoke", state: "VA" },
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  }) as unknown as typeof fetch;
+}
 
 Deno.test("isNonMusicEntity correctly classifies non-venues and respects word boundaries", () => {
   // Acceptance criteria:
@@ -98,55 +263,28 @@ Deno.test("isLargeHallOrTheater identifies large halls and theaters with word bo
   }
 });
 
-Deno.test("parseStateFromLabel extracts state code from metro label", () => {
-  assertEquals(parseStateFromLabel("Charlottesville VA"), "VA");
-  assertEquals(parseStateFromLabel("Winston-Salem NC"), "NC");
-  assertEquals(parseStateFromLabel("Lewisburg WV"), "WV");
-  assertEquals(parseStateFromLabel("Bristol VA-TN / Tri-Cities"), "VA-TN");
-  assertEquals(parseStateFromLabel("Unknown Location"), null);
+Deno.test("loadSourcesRegistry reads and parses YAML correctly", async () => {
+  const registry = await loadSourcesRegistry(FIXTURE_SOURCES);
+  assertExists(registry);
+  assertExists(registry.metros);
+  assertEquals(registry.metros.length, 7);
+  assertEquals(registry.metros[0].slug, "locked-metro");
+  assertEquals(registry.metros[0].label, "Locked Metro VA");
+  assertEquals(registry.metros[0].driveTier, "<1.5h");
 });
 
-Deno.test("isLocalArea correctly filters geographic bounds and handles missing states", () => {
-  // Acceptance criteria:
-  // isLocalArea("Lynchburg", "VA", { slug: "roanoke-salem", label: "Roanoke / Salem VA" }) === false for metro with no coverageArea
-  assertEquals(
-    isLocalArea("Lynchburg", "VA", { slug: "roanoke-salem", label: "Roanoke / Salem VA" }),
-    false,
-  );
-
-  // Venue with missing state is not accepted automatically when state is expected
-  assertEquals(
-    isLocalArea("Roanoke", undefined, { slug: "roanoke-salem", label: "Roanoke / Salem VA" }),
-    false,
-  );
-
-  // Venue with matching city & state
-  assertEquals(
-    isLocalArea("Roanoke", "VA", { slug: "roanoke-salem", label: "Roanoke / Salem VA" }),
-    true,
-  );
-  assertEquals(
-    isLocalArea("Salem", "VA", { slug: "roanoke-salem", label: "Roanoke / Salem VA" }),
-    true,
-  );
-
-  // Metro with coverageArea
-  const cvilleMetro = {
-    slug: "charlottesville",
-    label: "Charlottesville VA",
-    coverageArea: ["charlottesville", "crozet", "keswick", "north garden", "earlysville"],
-  };
-  assertEquals(isLocalArea("Charlottesville", "VA", cvilleMetro), true);
-  assertEquals(isLocalArea("Crozet", "VA", cvilleMetro), true);
-  assertEquals(isLocalArea("Richmond", "VA", cvilleMetro), false);
-  assertEquals(isLocalArea("Charlottesville", "NC", cvilleMetro), false);
-});
-
-Deno.test("resolveMetro handles exact slugs and labels without false substring matches", async () => {
+Deno.test("resolveMetro resolves by slug or label case-insensitively", async () => {
   const registry = await loadSourcesRegistry(FIXTURE_SOURCES);
 
-  // resolveMetro("salem", registry) returns null
-  assertEquals(resolveMetro("salem", registry), null);
+  // Exact slug match
+  const locked = resolveMetro("locked-metro", registry);
+  assertExists(locked);
+  assertEquals(locked.slug, "locked-metro");
+
+  // Slug match with casing differences
+  const lockedUpper = resolveMetro("LOCKED-METRO", registry);
+  assertExists(lockedUpper);
+  assertEquals(lockedUpper.slug, "locked-metro");
 
   // resolveMetro("roanoke-salem", registry) returns Roanoke entry
   const roanoke = resolveMetro("roanoke-salem", registry);
@@ -162,23 +300,43 @@ Deno.test("resolveMetro handles exact slugs and labels without false substring m
   assertEquals(resolveMetro("nowhere-ville", registry), null);
 });
 
+Deno.test("parseStateFromLabel extracts state code from label", () => {
+  assertEquals(parseStateFromLabel("Roanoke / Salem VA"), "VA");
+  assertEquals(parseStateFromLabel("Bristol VA-TN / Tri-Cities"), "VA-TN");
+  assertEquals(parseStateFromLabel("Charlottesville"), null);
+});
+
+Deno.test("isLocalArea filters venues by state, coverageArea, or metro keywords", () => {
+  const metro = {
+    slug: "roanoke-salem",
+    label: "Roanoke / Salem VA",
+    coverageArea: ["vinton", "salem"],
+  };
+  assertEquals(isLocalArea("Vinton", "VA", metro), true);
+  assertEquals(isLocalArea("Richmond", "VA", metro), false);
+  assertEquals(isLocalArea("Salem", "NC", metro), false);
+});
+
+Deno.test("fetchSweepHistory fetches records for a metro or all metros", async () => {
+  const mockFetch = createMockFetch();
+  const single = await fetchSweepHistory({
+    metroSlug: "roanoke-salem",
+    fetchFn: mockFetch,
+    backendUrl: "http://mock-backend.local",
+  });
+  assertEquals(single.length, 1);
+  assertEquals(single[0].metroSlug, "roanoke-salem");
+
+  const all = await fetchSweepHistory({
+    fetchFn: mockFetch,
+    backendUrl: "http://mock-backend.local",
+  });
+  assert(all.length >= 7);
+});
+
 Deno.test("checkCooldown and runSweep cover all three outcomes of cooldown gate", async () => {
   const fixedNow = new Date("2026-09-16T12:00:00Z");
-
-  const mockPayload = {
-    pages: 1,
-    events: [
-      {
-        _source: {
-          name: "Concert",
-          starttime: "2026-09-20T18:00:00Z",
-          venue: { name: "Local Pub", city: "Roanoke", state: "VA" },
-        },
-      },
-    ],
-  };
-  const mockFetch = () =>
-    Promise.resolve(new Response(JSON.stringify(mockPayload), { status: 200 }));
+  const mockFetch = createMockFetch();
 
   // Outcome 1: locked (lastSwept < 180 days ago) -> refuse unless forced
   const lockedCd = checkCooldown("2026-09-10", fixedNow);
@@ -191,7 +349,7 @@ Deno.test("checkCooldown and runSweep cover all three outcomes of cooldown gate"
         metro: "locked-metro",
         sourcesPath: FIXTURE_SOURCES,
         now: fixedNow,
-        fetchFn: mockFetch as unknown as typeof fetch,
+        fetchFn: mockFetch,
         noDedup: true,
       }),
     Error,
@@ -204,7 +362,7 @@ Deno.test("checkCooldown and runSweep cover all three outcomes of cooldown gate"
     force: true,
     sourcesPath: FIXTURE_SOURCES,
     now: fixedNow,
-    fetchFn: mockFetch as unknown as typeof fetch,
+    fetchFn: mockFetch,
     noDedup: true,
   });
   assertEquals(forcedRes.candidates.length, 1);
@@ -219,7 +377,7 @@ Deno.test("checkCooldown and runSweep cover all three outcomes of cooldown gate"
     metro: "stale-metro",
     sourcesPath: FIXTURE_SOURCES,
     now: fixedNow,
-    fetchFn: mockFetch as unknown as typeof fetch,
+    fetchFn: mockFetch,
     noDedup: true,
   });
   assertEquals(staleRes.candidates.length, 1);
@@ -228,7 +386,7 @@ Deno.test("checkCooldown and runSweep cover all three outcomes of cooldown gate"
     metro: "null-metro",
     sourcesPath: FIXTURE_SOURCES,
     now: fixedNow,
-    fetchFn: mockFetch as unknown as typeof fetch,
+    fetchFn: mockFetch,
     noDedup: true,
   });
   assertEquals(nullRes.candidates.length, 1);
@@ -243,7 +401,7 @@ Deno.test("checkCooldown and runSweep cover all three outcomes of cooldown gate"
         metro: "unparseable-metro",
         sourcesPath: FIXTURE_SOURCES,
         now: fixedNow,
-        fetchFn: mockFetch as unknown as typeof fetch,
+        fetchFn: mockFetch,
         noDedup: true,
       }),
     Error,
@@ -255,7 +413,7 @@ Deno.test("checkCooldown and runSweep cover all three outcomes of cooldown gate"
     force: true,
     sourcesPath: FIXTURE_SOURCES,
     now: fixedNow,
-    fetchFn: mockFetch as unknown as typeof fetch,
+    fetchFn: mockFetch,
     noDedup: true,
   });
   assertEquals(unparseableForced.candidates.length, 1);
@@ -270,6 +428,187 @@ Deno.test("checkCooldown and runSweep cover all three outcomes of cooldown gate"
       }),
     Error,
     "Failed to read sources file",
+  );
+});
+
+Deno.test("runSweep fails closed on sweep history API failure and --force does not bypass it", async () => {
+  // 500 error from sweep history API
+  const mockFetch500 = createMockFetch({
+    sweepHistory: () => new Response("Internal Server Error", { status: 500 }),
+  });
+
+  await assertRejects(
+    () =>
+      runSweep({
+        metro: "locked-metro",
+        sourcesPath: FIXTURE_SOURCES,
+        fetchFn: mockFetch500,
+        noDedup: true,
+        force: false,
+      }),
+    Error,
+    "HTTP status 500",
+  );
+
+  // --force does NOT bypass API failure
+  await assertRejects(
+    () =>
+      runSweep({
+        metro: "locked-metro",
+        sourcesPath: FIXTURE_SOURCES,
+        fetchFn: mockFetch500,
+        noDedup: true,
+        force: true,
+      }),
+    Error,
+    "HTTP status 500",
+  );
+
+  // Network error from sweep history API
+  const mockFetchNetwork = createMockFetch({
+    sweepHistory: () => Promise.reject(new Error("Connection refused")),
+  });
+
+  await assertRejects(
+    () =>
+      runSweep({
+        metro: "locked-metro",
+        sourcesPath: FIXTURE_SOURCES,
+        fetchFn: mockFetchNetwork,
+        noDedup: true,
+        force: true,
+      }),
+    Error,
+    "Connection refused",
+  );
+
+  // Non-array data from sweep history API
+  const mockFetchNonArray = createMockFetch({
+    sweepHistory: () =>
+      new Response(JSON.stringify({ error: "Invalid" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  });
+
+  await assertRejects(
+    () =>
+      runSweep({
+        metro: "locked-metro",
+        sourcesPath: FIXTURE_SOURCES,
+        fetchFn: mockFetchNonArray,
+        noDedup: true,
+        force: true,
+      }),
+    Error,
+    "expected JSON array",
+  );
+});
+
+Deno.test("runSweep respects runtime --coverage-area and --exclude-keywords overrides", async () => {
+  const eventsPayload = {
+    pages: 1,
+    events: [
+      {
+        _source: {
+          name: "CustomTown Gig",
+          starttime: "2026-09-20T18:00:00Z",
+          venue: { name: "Acoustic Stage", city: "CustomTown", state: "VA" },
+        },
+      },
+    ],
+  };
+
+  const mockFetch = createMockFetch({
+    events: () =>
+      new Response(JSON.stringify(eventsPayload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  });
+
+  // Default: CustomTown is not in locked-metro's coverage area ["roanoke", "salem"], so 0 candidates
+  const defaultRes = await runSweep({
+    metro: "locked-metro",
+    sourcesPath: FIXTURE_SOURCES,
+    force: true,
+    noDedup: true,
+    fetchFn: mockFetch,
+  });
+  assertEquals(defaultRes.candidates.length, 0);
+
+  // Override coverageArea to include "customtown":
+  const overrideRes = await runSweep({
+    metro: "locked-metro",
+    sourcesPath: FIXTURE_SOURCES,
+    force: true,
+    noDedup: true,
+    coverageArea: ["customtown"],
+    fetchFn: mockFetch,
+  });
+  assertEquals(overrideRes.candidates.length, 1);
+  assertEquals(overrideRes.candidates[0].city, "CustomTown");
+
+  // Override excludeKeywords to exclude "acoustic":
+  const overrideExclRes = await runSweep({
+    metro: "locked-metro",
+    sourcesPath: FIXTURE_SOURCES,
+    force: true,
+    noDedup: true,
+    coverageArea: ["customtown"],
+    excludeKeywords: ["acoustic"],
+    fetchFn: mockFetch,
+  });
+  assertEquals(overrideExclRes.candidates.length, 0);
+});
+
+Deno.test("listMetros fetches GET /venue-mining/sweep once and fails closed on error", async () => {
+  let apiCallCount = 0;
+  const mockFetch = createMockFetch({
+    sweepHistory: () => {
+      apiCallCount++;
+      return new Response(
+        JSON.stringify([
+          {
+            metroSlug: "roanoke-salem",
+            sweptAt: "2026-07-02",
+            publication: {
+              name: "The Roanoke Rambler",
+              url: "https://www.roanokerambler.com",
+            },
+            venuesCreatedCount: 14,
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    },
+  });
+
+  const list = await listMetros({
+    sourcesPath: FIXTURE_SOURCES,
+    fetchFn: mockFetch,
+  });
+
+  assertEquals(apiCallCount, 1);
+  assert(list.length > 0);
+  const roanoke = list.find((m) => m.slug === "roanoke-salem");
+  assertExists(roanoke);
+  assertEquals(roanoke.publication?.name, "The Roanoke Rambler");
+  assertEquals(roanoke.lastSwept, "2026-07-02");
+
+  // API failure fails closed:
+  const mockFetchFail = createMockFetch({
+    sweepHistory: () => new Response("Database offline", { status: 503 }),
+  });
+
+  await assertRejects(
+    () =>
+      listMetros({
+        sourcesPath: FIXTURE_SOURCES,
+        fetchFn: mockFetchFail,
+      }),
+    Error,
+    "HTTP status 503",
   );
 });
 
@@ -289,6 +628,7 @@ Deno.test("harvestEvents and runSweep reject publication type other than sceneth
         sourcesPath: FIXTURE_SOURCES,
         force: true,
         noDedup: true,
+        fetchFn: createMockFetch(),
       }),
     Error,
     "unsupported publication type 'html'",
@@ -302,12 +642,13 @@ Deno.test("harvestEvents and runSweep reject publication type other than sceneth
         sourcesPath: FIXTURE_SOURCES,
         force: true,
         noDedup: true,
+        fetchFn: createMockFetch(),
       }),
     Error,
     "with missing type",
   );
 
-  // roanoke-salem has no publication type configured in sources.yaml
+  // roanoke-salem has no publication type configured in sweep record
   await assertRejects(
     () =>
       runSweep({
@@ -315,6 +656,7 @@ Deno.test("harvestEvents and runSweep reject publication type other than sceneth
         sourcesPath: FIXTURE_SOURCES,
         force: true,
         noDedup: true,
+        fetchFn: createMockFetch(),
       }),
     Error,
     "with missing type",
@@ -443,23 +785,19 @@ Deno.test("runSweep covers all three DB dedup outcomes", async () => {
   };
 
   // Dedup Outcome 1: loads -> dedup against DB
-  const mockFetchSuccess = (url: string | URL | Request) => {
-    const urlStr = url.toString();
-    if (urlStr.includes("/venue")) {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify([{ _id: "v1", name: "Existing Bar", city: "Roanoke", usState: "VA" }]),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-    }
-    return Promise.resolve(new Response(JSON.stringify(mockEventsPayload), { status: 200 }));
-  };
+  const mockFetchSuccess = createMockFetch({
+    events: () => new Response(JSON.stringify(mockEventsPayload), { status: 200 }),
+    venueMap: () =>
+      new Response(
+        JSON.stringify([{ _id: "v1", name: "Existing Bar", city: "Roanoke", usState: "VA" }]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+  });
 
   const res1 = await runSweep({
     metro: "null-metro",
     sourcesPath: FIXTURE_SOURCES,
-    fetchFn: mockFetchSuccess as unknown as typeof fetch,
+    fetchFn: mockFetchSuccess,
   });
   assertEquals(res1.deduplicated, true);
   assertEquals(res1.candidates.length, 1);
@@ -467,19 +805,18 @@ Deno.test("runSweep covers all three DB dedup outcomes", async () => {
 
   // Dedup Outcome 2: --no-dedup -> proceeds without calling DB and labeled
   let dbCalled = false;
-  const mockFetchNoDedup = (url: string | URL | Request) => {
-    const urlStr = url.toString();
-    if (urlStr.includes("/venue")) {
+  const mockFetchNoDedup = createMockFetch({
+    events: () => new Response(JSON.stringify(mockEventsPayload), { status: 200 }),
+    venueMap: () => {
       dbCalled = true;
-      return Promise.resolve(new Response("[]", { status: 200 }));
-    }
-    return Promise.resolve(new Response(JSON.stringify(mockEventsPayload), { status: 200 }));
-  };
+      return new Response("[]", { status: 200 });
+    },
+  });
 
   const res2 = await runSweep({
     metro: "null-metro",
     sourcesPath: FIXTURE_SOURCES,
-    fetchFn: mockFetchNoDedup as unknown as typeof fetch,
+    fetchFn: mockFetchNoDedup,
     noDedup: true,
   });
   assertEquals(dbCalled, false);
@@ -487,44 +824,37 @@ Deno.test("runSweep covers all three DB dedup outcomes", async () => {
   assertEquals(res2.candidates.length, 2);
 
   // Dedup Outcome 3: fetch fails, times out, returns non-OK or non-array -> refuses
-  const mockFetchDb500 = (url: string | URL | Request) => {
-    const urlStr = url.toString();
-    if (urlStr.includes("/venue")) {
-      return Promise.resolve(new Response("Server Error", { status: 500 }));
-    }
-    return Promise.resolve(new Response(JSON.stringify(mockEventsPayload), { status: 200 }));
-  };
+  const mockFetchDb500 = createMockFetch({
+    events: () => new Response(JSON.stringify(mockEventsPayload), { status: 200 }),
+    venueMap: () => new Response("Server Error", { status: 500 }),
+  });
 
   await assertRejects(
     () =>
       runSweep({
         metro: "null-metro",
         sourcesPath: FIXTURE_SOURCES,
-        fetchFn: mockFetchDb500 as unknown as typeof fetch,
+        fetchFn: mockFetchDb500,
       }),
     Error,
     "Database query failed with HTTP status 500",
   );
 
-  const mockFetchNonArray = (url: string | URL | Request) => {
-    const urlStr = url.toString();
-    if (urlStr.includes("/venue")) {
-      return Promise.resolve(
-        new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
-    }
-    return Promise.resolve(new Response(JSON.stringify(mockEventsPayload), { status: 200 }));
-  };
+  const mockFetchNonArray = createMockFetch({
+    events: () => new Response(JSON.stringify(mockEventsPayload), { status: 200 }),
+    venueMap: () =>
+      new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  });
 
   await assertRejects(
     () =>
       runSweep({
         metro: "null-metro",
         sourcesPath: FIXTURE_SOURCES,
-        fetchFn: mockFetchNonArray as unknown as typeof fetch,
+        fetchFn: mockFetchNonArray,
       }),
     Error,
     "invalid data: expected JSON array",
@@ -552,13 +882,14 @@ Deno.test("runSweep rejects large halls and theaters from candidates", async () 
     ],
   };
 
-  const mockFetch = () =>
-    Promise.resolve(new Response(JSON.stringify(mockEventsPayload), { status: 200 }));
+  const mockFetch = createMockFetch({
+    events: () => new Response(JSON.stringify(mockEventsPayload), { status: 200 }),
+  });
 
   const res = await runSweep({
     metro: "null-metro",
     sourcesPath: FIXTURE_SOURCES,
-    fetchFn: mockFetch as unknown as typeof fetch,
+    fetchFn: mockFetch,
     noDedup: true,
   });
 

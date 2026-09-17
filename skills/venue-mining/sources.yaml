@@ -1,98 +1,36 @@
-# venue-mining per-metro source registry (web-jam-tools#126/#127)
+# venue-mining per-metro source registry (web-jam-tools#126/#127/#1045)
 # Region: <= ~3.5h drive from Salem VA (settled 2026-07-02).
-# publication: null = discover that metro's local-events publication on its
-# first run, then commit it here. Cooldown: no re-sweep within 6 months of
-# lastSwept; re-sweeps scan only the delta since lastSwept.
+# Metro list (slug, label, driveTier) lives here.
+# Sweep history, cooldowns, publications, coverage areas and exclude keywords live in the database (GET/POST /venue-mining/sweep).
+# A sweep never edits this file. It changes only when adding, removing or renaming a metro.
 
 metros:
-  - slug: roanoke-salem
-    label: Roanoke / Salem VA
-    driveTier: "<1.5h"
-    publication:
-      name: The Roanoke Rambler (Happenings archive)
-      url: https://www.roanokerambler.com    # use www. URLs — bare domain redirects flakily
-    lastSwept: 2026-07-02
-    notes: Run 1 (12-mo sweep) = +14 venues, 7 pitched. Covers Vinton, Rocky Mount, Floyd spillover.
+  - { slug: roanoke-salem,       label: Roanoke / Salem VA,               driveTier: "<1.5h" }
+  - { slug: blacksburg-nrv,      label: Blacksburg / New River Valley VA, driveTier: "<1.5h" }
+  - { slug: lynchburg,           label: Lynchburg VA,                     driveTier: "<1.5h" }
+  - { slug: lexington,           label: Lexington VA,                     driveTier: "<1.5h" }
+  - { slug: floyd,               label: Floyd VA,                         driveTier: "<1.5h" }
+  - { slug: martinsville,        label: Martinsville VA,                  driveTier: "<1.5h" }
+  - { slug: rocky-mount-sml,     label: Rocky Mount / Smith Mtn Lake VA,  driveTier: "<1.5h" }
+  - { slug: lewisburg-wv,        label: Lewisburg WV,                     driveTier: "<1.5h" }
 
-  - { slug: blacksburg-nrv,      label: Blacksburg / New River Valley VA, driveTier: "<1.5h",    publication: null, lastSwept: null }
-  - slug: lynchburg
-    label: Lynchburg VA
-    driveTier: "<1.5h"
-    publication:
-      name: Downtown Lynchburg Association
-      url: https://www.downtownlynchburg.com/calendar
-    lastSwept: 2026-07-18
-    notes: "Run 4 = +6 venues created (1 email-eligible). Small-venue scene is FB-only; 2 rejected as too-large. Incident: first POST for Starr Hill On Main (shared email info@starrhill.com) overwrote Starr Hill Pilot Brewery (Roanoke) record; restored via PATCH."
-  - { slug: lexington,           label: Lexington VA,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
-  - { slug: floyd,               label: Floyd VA,                         driveTier: "<1.5h",    publication: null, lastSwept: null }
-  - { slug: martinsville,        label: Martinsville VA,                  driveTier: "<1.5h",    publication: null, lastSwept: null }
-  - { slug: rocky-mount-sml,     label: Rocky Mount / Smith Mtn Lake VA,  driveTier: "<1.5h",    publication: null, lastSwept: null }
-  - { slug: lewisburg-wv,        label: Lewisburg WV,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
+  - { slug: charlottesville,     label: Charlottesville VA,               driveTier: "1.5-2.5h" }
+  - { slug: harrisonburg,        label: Harrisonburg VA,                  driveTier: "1.5-2.5h" }
+  - { slug: staunton-waynesboro, label: Staunton / Waynesboro VA,         driveTier: "1.5-2.5h" }
+  - { slug: danville,            label: Danville VA,                      driveTier: "1.5-2.5h" }
+  - { slug: galax,               label: Galax VA (Crooked Road),          driveTier: "1.5-2.5h" }
+  - { slug: winston-salem,       label: Winston-Salem NC,                 driveTier: "1.5-2.5h" }
+  - { slug: greensboro,          label: Greensboro NC,                    driveTier: "1.5-2.5h" }
+  - { slug: boone-mt-airy,       label: Boone / Mount Airy NC,            driveTier: "1.5-2.5h" }
+  - { slug: bristol-tri-cities,  label: Bristol VA-TN / Tri-Cities,       driveTier: "1.5-2.5h" }
+  - { slug: beckley-wv,          label: Beckley WV,                       driveTier: "1.5-2.5h" }
 
-  - slug: charlottesville
-    label: Charlottesville VA
-    driveTier: "1.5-2.5h"
-    publication:
-      name: C-VILLE Weekly (SceneThink calendar)
-      url: http://events.c-ville.com
-      api: http://events.c-ville.com/cville/search.json?category=13
-      type: scenethink
-    lastSwept: 2026-09-16
-    notes: "Run 5 = swept 12 pages (~1,200 events) via C-VILLE Weekly SceneThink JSON API. +12 candidate venues created in live DB with verified addresses and emails; 4 phone/web-form leads; 3 rejected as too-large."
-    coverageArea:
-      - charlottesville
-      - crozet
-      - keswick
-      - scottsville
-      - earlysville
-      - north garden
-      - ivy
-      - free union
-      - barboursville
-      - palmyra
-      - albemarle
-    excludeKeywords:
-      - scrappy elephant
-      - monticello
-      - downtown mall
-      - hall 107
-      - hall 229a
-      - campbell hall
-      - nau hall
-      - bryan hall
-      - jaba
-      - wtju
-  - { slug: harrisonburg,        label: Harrisonburg VA,                  driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-  - { slug: staunton-waynesboro, label: Staunton / Waynesboro VA,         driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-  - { slug: danville,            label: Danville VA,                      driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-  - { slug: galax,               label: Galax VA (Crooked Road),          driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-  - { slug: winston-salem,       label: Winston-Salem NC,                 driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-  - { slug: greensboro,          label: Greensboro NC,                    driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-  - { slug: boone-mt-airy,       label: Boone / Mount Airy NC,            driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-  - { slug: bristol-tri-cities,  label: Bristol VA-TN / Tri-Cities,       driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-  - { slug: beckley-wv,          label: Beckley WV,                       driveTier: "1.5-2.5h", publication: null, lastSwept: null }
-
-  - { slug: richmond,            label: Richmond VA,                      driveTier: "2.5-3.5h", publication: null, lastSwept: null }
-  - { slug: asheville,           label: Asheville NC,                     driveTier: "2.5-3.5h", publication: null, lastSwept: null }
-  - slug: gastonia
-    label: Gastonia / Gaston County NC
-    driveTier: "2.5-3.5h"
-    publication:
-      name: Go Gaston NC (tourism directory + events)
-      url: https://gogastonnc.org    # directory strong, archive shallow; runner-up charlotteonthecheap.com
-    lastSwept: 2026-07-03
-    notes: Run 3 = +3 venues, all pitched. Covers Belmont, Mt Holly, Cramerton, Lowell NC, Cherryville. Watch geo-traps (a "Lowell" hit was Lowell MA).
-
-  - { slug: charlotte,           label: Charlotte NC (proper),            driveTier: "2.5-3.5h", publication: null, lastSwept: null }
-  - slug: rock-hill-sc
-    label: Rock Hill SC
-    driveTier: "2.5-3.5h"
-    publication:
-      name: Rock Hill Connection (events calendar)
-      url: https://rockhillconnection.com/events/    # shallow archive — supplement w/ visityorkcounty.com + venue sites; heraldonline.com 403s
-    lastSwept: 2026-07-02
-    notes: Run 2 = +6 venues (3 eligible). Metro is heavily FB-only; venue-site corroboration required. Covers Fort Mill, Tega Cay, York, Clover.
-  - { slug: raleigh-durham,      label: Raleigh / Durham NC,              driveTier: "2.5-3.5h", publication: null, lastSwept: null }
-  - { slug: hickory,             label: Hickory NC,                       driveTier: "2.5-3.5h", publication: null, lastSwept: null }
-  - { slug: charleston-wv,       label: Charleston WV,                    driveTier: "2.5-3.5h", publication: null, lastSwept: null }
-  - { slug: winchester,          label: Winchester VA,                    driveTier: "2.5-3.5h", publication: null, lastSwept: null }
+  - { slug: richmond,            label: Richmond VA,                      driveTier: "2.5-3.5h" }
+  - { slug: asheville,           label: Asheville NC,                     driveTier: "2.5-3.5h" }
+  - { slug: gastonia,            label: Gastonia / Gaston County NC,      driveTier: "2.5-3.5h" }
+  - { slug: charlotte,           label: Charlotte NC (proper),            driveTier: "2.5-3.5h" }
+  - { slug: rock-hill-sc,        label: Rock Hill SC,                     driveTier: "2.5-3.5h" }
+  - { slug: raleigh-durham,      label: Raleigh / Durham NC,              driveTier: "2.5-3.5h" }
+  - { slug: hickory,             label: Hickory NC,                       driveTier: "2.5-3.5h" }
+  - { slug: charleston-wv,       label: Charleston WV,                    driveTier: "2.5-3.5h" }
+  - { slug: winchester,          label: Winchester VA,                    driveTier: "2.5-3.5h" }

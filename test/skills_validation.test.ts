@@ -95,12 +95,28 @@ Deno.test("skills/venue-mining/sources.yaml parses with the expected top-level s
       `sources.yaml: metro "${metro.slug}" needs a non-empty \`label\``,
     );
     assert(
-      "publication" in metro,
-      `sources.yaml: metro "${metro.slug}" needs a \`publication\` key (null or an object)`,
+      typeof metro.driveTier === "string" && metro.driveTier.trim().length > 0,
+      `sources.yaml: metro "${metro.slug}" needs a non-empty \`driveTier\``,
     );
     assert(
-      "lastSwept" in metro,
-      `sources.yaml: metro "${metro.slug}" needs a \`lastSwept\` key (null or a date)`,
+      !("publication" in metro),
+      `sources.yaml: metro "${metro.slug}" must not contain \`publication\``,
+    );
+    assert(
+      !("lastSwept" in metro),
+      `sources.yaml: metro "${metro.slug}" must not contain \`lastSwept\``,
+    );
+    assert(
+      !("notes" in metro),
+      `sources.yaml: metro "${metro.slug}" must not contain \`notes\``,
+    );
+    assert(
+      !("coverageArea" in metro),
+      `sources.yaml: metro "${metro.slug}" must not contain \`coverageArea\``,
+    );
+    assert(
+      !("excludeKeywords" in metro),
+      `sources.yaml: metro "${metro.slug}" must not contain \`excludeKeywords\``,
     );
   }
 });

@@ -2,7 +2,7 @@
 // Generalized venue-mining sweeper supporting any city/metro area.
 import { parse as parseYaml } from "@std/yaml";
 import { parseArgs } from "@std/cli/parse-args";
-import { fetchVenueMap } from "../book-gig/outreach_api.ts";
+import { buildHeaders, fetchVenueMap, resolveBackendConfig } from "../book-gig/outreach_api.ts";
 
 export interface HarvestedEvent {
   title: string;
@@ -32,8 +32,8 @@ export interface MetroEntry {
   slug: string;
   label: string;
   driveTier: string;
-  publication: MetroPublication | null;
-  lastSwept: string | Date | null;
+  publication?: MetroPublication | null;
+  lastSwept?: string | Date | null;
   notes?: string;
   coverageArea?: string[];
   excludeKeywords?: string[];
@@ -50,6 +50,18 @@ export interface CooldownStatus {
   unparseable?: boolean;
 }
 
+export interface SweepHistoryRecord {
+  _id?: string;
+  metroSlug: string;
+  sweptAt: string | Date;
+  publication: MetroPublication;
+  venuesCreatedCount: number;
+  coverageArea?: string[];
+  excludeKeywords?: string[];
+  notes?: string;
+  createdAt?: string | Date;
+}
+
 export interface SweepOptions {
   metro?: string;
   url?: string;
@@ -61,6 +73,10 @@ export interface SweepOptions {
   sourcesPath?: string;
   fetchFn?: typeof fetch;
   now?: Date;
+  backendUrl?: string;
+  token?: string;
+  coverageArea?: string[];
+  excludeKeywords?: string[];
 }
 
 export interface SweepResult {
@@ -71,6 +87,15 @@ export interface SweepResult {
   candidates: HarvestedVenue[];
   cooldownStatus?: CooldownStatus;
   deduplicated: boolean;
+}
+
+export interface MetroListEntry {
+  slug: string;
+  label: string;
+  driveTier: string;
+  lastSwept: string | Date | null;
+  publication: MetroPublication | null;
+  cooldownStatus: CooldownStatus;
 }
 
 export const NON_MUSIC_ENTITY_KEYWORDS = [
@@ -301,6 +326,94 @@ export function dedupeVenues(
   });
 }
 
+export async function fetchSweepHistory(options: {
+  metroSlug?: string;
+  backendUrl?: string;
+  token?: string;
+  fetchFn?: typeof fetch;
+} = {}): Promise<SweepHistoryRecord[]> {
+  const config = await resolveBackendConfig({
+    backendUrl: options.backendUrl,
+    token: options.token,
+  });
+  const fetchFn = options.fetchFn || fetch;
+  const headers = buildHeaders(config.token);
+
+  let url = `${config.baseUrl}/venue-mining/sweep`;
+  if (options.metroSlug) {
+    url += `?metroSlug=${encodeURIComponent(options.metroSlug)}`;
+  }
+
+  let res: Response;
+  try {
+    res = await fetchFn(url, { headers });
+  } catch (err) {
+    throw new Error(
+      `Sweep history query failed at '${url}': ${(err as Error).message}`,
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      `Sweep history query failed with HTTP status ${res.status} at '${url}'`,
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch (err) {
+    throw new Error(
+      `Sweep history query at '${url}' returned unparseable JSON: ${(err as Error).message}`,
+    );
+  }
+
+  if (!Array.isArray(data)) {
+    throw new Error(
+      `Sweep history query at '${url}' returned invalid data: expected JSON array`,
+    );
+  }
+
+  return data as SweepHistoryRecord[];
+}
+
+export async function listMetros(options: {
+  sourcesPath?: string;
+  backendUrl?: string;
+  token?: string;
+  fetchFn?: typeof fetch;
+  now?: Date;
+} = {}): Promise<MetroListEntry[]> {
+  const registry = await loadSourcesRegistry(options.sourcesPath);
+  const allSweeps = await fetchSweepHistory({
+    backendUrl: options.backendUrl,
+    token: options.token,
+    fetchFn: options.fetchFn,
+  });
+
+  const newestMap = new Map<string, SweepHistoryRecord>();
+  for (const sweep of allSweeps) {
+    if (!newestMap.has(sweep.metroSlug)) {
+      newestMap.set(sweep.metroSlug, sweep);
+    }
+  }
+
+  return registry.metros.map((m) => {
+    const newest = newestMap.get(m.slug);
+    const lastSwept = newest ? newest.sweptAt : null;
+    const publication = newest ? newest.publication : null;
+    const cooldownStatus = checkCooldown(lastSwept, options.now);
+    return {
+      slug: m.slug,
+      label: m.label,
+      driveTier: m.driveTier,
+      lastSwept,
+      publication,
+      cooldownStatus,
+    };
+  });
+}
+
 export async function fetchSceneThinkEvents(
   endpointUrl: string,
   fetchFn: typeof fetch = fetch,
@@ -436,40 +549,63 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
 
   let sourceUrl = options.url;
   let sourceType = "scenethink";
+  let lastSwept: string | Date | null = null;
+  let activeCoverageArea: string[] | undefined = options.coverageArea;
+  let activeExcludeKeywords: string[] | undefined = options.excludeKeywords;
+  let cooldownStatus: CooldownStatus | undefined;
 
   if (targetMetro) {
-    const cooldown = checkCooldown(targetMetro.lastSwept, options.now);
-    if (cooldown.unparseable) {
+    // Fail closed: sweep history query failure throws immediately and is NOT bypassed by --force
+    const history = await fetchSweepHistory({
+      metroSlug: targetMetro.slug,
+      backendUrl: options.backendUrl,
+      token: options.token,
+      fetchFn,
+    });
+
+    const newestRecord = history.length > 0 ? history[0] : null;
+    lastSwept = newestRecord?.sweptAt || null;
+    cooldownStatus = checkCooldown(lastSwept, options.now);
+
+    if (cooldownStatus.unparseable) {
       if (!options.force) {
         throw new Error(
-          `Sweep refused for metro '${targetMetro.slug}': 'lastSwept' field value '${targetMetro.lastSwept}' is unparseable as a date. Pass --force to override.`,
+          `Sweep refused for metro '${targetMetro.slug}': 'lastSwept' field value '${lastSwept}' is unparseable as a date. Pass --force to override.`,
         );
       }
-    } else if (cooldown.isLocked && !options.force) {
+    } else if (cooldownStatus.isLocked && !options.force) {
       throw new Error(
-        `Sweep refused for metro '${targetMetro.slug}': 6-month cooldown active (${cooldown.daysRemaining} days remaining, unlocks ${cooldown.unlockDate}). Pass --force to override.`,
+        `Sweep refused for metro '${targetMetro.slug}': 6-month cooldown active (${cooldownStatus.daysRemaining} days remaining, unlocks ${cooldownStatus.unlockDate}). Pass --force to override.`,
       );
     }
-    if (!sourceUrl && targetMetro.publication) {
-      if (!targetMetro.publication.type) {
+
+    if (!sourceUrl && newestRecord?.publication) {
+      if (!newestRecord.publication.type) {
         throw new Error(
-          `Metro '${targetMetro.slug}' has publication '${targetMetro.publication.name}' with missing type. Only 'scenethink' is supported.`,
+          `Metro '${targetMetro.slug}' has publication '${newestRecord.publication.name}' with missing type. Only 'scenethink' is supported.`,
         );
       }
-      if (targetMetro.publication.type !== "scenethink") {
+      if (newestRecord.publication.type !== "scenethink") {
         throw new Error(
-          `Metro '${targetMetro.slug}' has unsupported publication type '${targetMetro.publication.type}'. Only 'scenethink' is supported.`,
+          `Metro '${targetMetro.slug}' has unsupported publication type '${newestRecord.publication.type}'. Only 'scenethink' is supported.`,
         );
       }
-      sourceUrl = targetMetro.publication.api || targetMetro.publication.url;
-      sourceType = targetMetro.publication.type;
+      sourceUrl = newestRecord.publication.api || newestRecord.publication.url;
+      sourceType = newestRecord.publication.type;
+    }
+
+    if (!activeCoverageArea || activeCoverageArea.length === 0) {
+      activeCoverageArea = newestRecord?.coverageArea;
+    }
+    if (!activeExcludeKeywords || activeExcludeKeywords.length === 0) {
+      activeExcludeKeywords = newestRecord?.excludeKeywords;
     }
   }
 
   if (!sourceUrl) {
     if (targetMetro) {
       throw new Error(
-        `Metro '${targetMetro.slug}' has no publication configured in sources.yaml. Discovering the local events publication is step one. Pass --url <calendar-url> to sweep directly.`,
+        `Metro '${targetMetro.slug}' has no publication configured in sweep history. Discovering the local events publication is step one. Pass --url <calendar-url> to sweep directly.`,
       );
     }
     throw new Error(
@@ -482,17 +618,23 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     sourceType,
     fetchFn,
     options.pageLimit,
-    targetMetro?.lastSwept,
+    lastSwept,
   );
 
   // Filter out non-music entities
-  const musicVenues = rawVenues.filter((v) =>
-    !isNonMusicEntity(v.name, targetMetro?.excludeKeywords)
-  );
+  const musicVenues = rawVenues.filter((v) => !isNonMusicEntity(v.name, activeExcludeKeywords));
 
   // Geographic filtering
+  const targetMetroForGeo = targetMetro
+    ? {
+      slug: targetMetro.slug,
+      label: targetMetro.label,
+      coverageArea: activeCoverageArea,
+    }
+    : undefined;
+
   const localVenues = musicVenues.filter((v) =>
-    isLocalArea(v.city, v.state, targetMetro, options.city, options.state)
+    isLocalArea(v.city, v.state, targetMetroForGeo, options.city, options.state)
   );
 
   // Reject large halls, arenas, and theaters
@@ -535,7 +677,10 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
       return res;
     };
 
-    const venueMap = await fetchVenueMap({}, trackingFetch);
+    const venueMap = await fetchVenueMap(
+      { backendUrl: options.backendUrl, token: options.token },
+      trackingFetch,
+    );
     if (dedupError) {
       throw dedupError;
     }
@@ -549,12 +694,19 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
   finalCandidates.sort((a, b) => b.eventCount - a.eventCount);
 
   return {
-    metro: targetMetro,
+    metro: targetMetro
+      ? {
+        ...targetMetro,
+        lastSwept,
+        coverageArea: activeCoverageArea,
+        excludeKeywords: activeExcludeKeywords,
+      }
+      : undefined,
     sourceUrl,
     sourceType,
     rawCount: rawVenues.length,
     candidates: finalCandidates,
-    cooldownStatus: targetMetro ? checkCooldown(targetMetro.lastSwept, options.now) : undefined,
+    cooldownStatus,
     deduplicated,
   };
 }
@@ -572,23 +724,44 @@ Examples:
   deno task venue-mining:sweep --list
 
 Options:
-  -m, --metro <slug|name>   Target metro slug or name from sources.yaml
-  -u, --url <url>           Direct calendar or API endpoint URL to sweep
-  -c, --city <name>         Filter venues to target city
-  -s, --state <code>        Filter venues to 2-letter state code (e.g. VA, NC, WV)
-  -p, --pages <n>           Limit number of calendar pages to sweep
-  --no-dedup                Skip deduplicating candidates against live database
-  --force                   Bypass 6-month cooldown lock
-  --json                    Output results as structured JSON
-  --list                    List all registered metros and sweep status from sources.yaml
-  -h, --help                Show this help message
+  -m, --metro <slug|name>     Target metro slug or name from sources.yaml
+  -u, --url <url>             Direct calendar or API endpoint URL to sweep
+  -c, --city <name>           Filter venues to target city
+  -s, --state <code>          Filter venues to 2-letter state code (e.g. VA, NC, WV)
+  -p, --pages <n>             Limit number of calendar pages to sweep
+  --coverage-area <towns>     Override coverage area with comma-separated list of towns
+  --exclude-keywords <words>  Override non-music exclude keywords with comma-separated list
+  --no-dedup                  Skip deduplicating candidates against live database
+  --force                     Bypass 6-month cooldown lock (does NOT bypass API failure)
+  --json                      Output results as structured JSON
+  --list                      List all registered metros and sweep status from database
+  --backend-url <url>         Backend base URL (default: WEB_JAM_BACK_URL or production)
+  --token <token>             Auth Bearer token (default: WEB_JAM_LLM_TOKEN or local file)
+  -h, --help                  Show this help message
 `);
+}
+
+function parseList(val: unknown): string[] | undefined {
+  if (typeof val !== "string" || !val.trim()) return undefined;
+  return val.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 if (import.meta.main) {
   const flags = parseArgs(Deno.args, {
     boolean: ["help", "list", "no-dedup", "force", "json"],
-    string: ["metro", "url", "city", "state", "pages", "page-limit", "sources"],
+    string: [
+      "metro",
+      "url",
+      "city",
+      "state",
+      "pages",
+      "page-limit",
+      "sources",
+      "coverage-area",
+      "exclude-keywords",
+      "backend-url",
+      "token",
+    ],
     alias: {
       h: "help",
       m: "metro",
@@ -605,23 +778,32 @@ if (import.meta.main) {
   }
 
   if (flags.list) {
-    const registry = await loadSourcesRegistry(flags.sources);
-    console.log(`\nRegistered Metros (${registry.metros.length}):\n`);
-    for (const m of registry.metros) {
-      const cd = checkCooldown(m.lastSwept);
-      const cdInfo = cd.unparseable
-        ? "[UNPARSEABLE lastSwept]"
-        : cd.isLocked
-        ? `[LOCKED: ${cd.daysRemaining}d left until ${cd.unlockDate}]`
-        : "[READY]";
-      const pubInfo = m.publication
-        ? `${m.publication.name} (${m.publication.url})`
-        : "None (publication missing)";
-      console.log(
-        `- ${m.slug.padEnd(20)} | ${m.label.padEnd(30)} | ${cdInfo.padEnd(25)} | ${pubInfo}`,
-      );
+    try {
+      const metros = await listMetros({
+        sourcesPath: flags.sources,
+        backendUrl: flags["backend-url"],
+        token: flags.token,
+      });
+      console.log(`\nRegistered Metros (${metros.length}):\n`);
+      for (const m of metros) {
+        const cd = m.cooldownStatus;
+        const cdInfo = cd.unparseable
+          ? "[UNPARSEABLE lastSwept]"
+          : cd.isLocked
+          ? `[LOCKED: ${cd.daysRemaining}d left until ${cd.unlockDate}]`
+          : "[READY]";
+        const pubInfo = m.publication
+          ? `${m.publication.name} (${m.publication.url})`
+          : "None (publication missing)";
+        console.log(
+          `- ${m.slug.padEnd(20)} | ${m.label.padEnd(30)} | ${cdInfo.padEnd(25)} | ${pubInfo}`,
+        );
+      }
+      Deno.exit(0);
+    } catch (err) {
+      console.error(`\nError listing metros: ${(err as Error).message}\n`);
+      Deno.exit(1);
     }
-    Deno.exit(0);
   }
 
   const rawPages = flags.pages || flags["page-limit"];
@@ -647,6 +829,10 @@ if (import.meta.main) {
       noDedup: flags["no-dedup"],
       force: flags.force,
       sourcesPath: flags.sources,
+      coverageArea: parseList(flags["coverage-area"]),
+      excludeKeywords: parseList(flags["exclude-keywords"]),
+      backendUrl: flags["backend-url"],
+      token: flags.token,
     });
 
     if (flags.json) {
