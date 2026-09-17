@@ -29,7 +29,14 @@ metros:
   - { slug: rocky-mount-sml,     label: Rocky Mount / Smith Mtn Lake VA,  driveTier: "<1.5h",    publication: null, lastSwept: null }
   - { slug: lewisburg-wv,        label: Lewisburg WV,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
 
-  - { slug: charlottesville,     label: Charlottesville VA,               driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - slug: charlottesville
+    label: Charlottesville VA
+    driveTier: "1.5-2.5h"
+    publication:
+      name: C-VILLE Weekly (Events Calendar)
+      url: http://events.c-ville.com
+    lastSwept: 2026-09-16
+    notes: "Run 5 = swept 12 pages (~1,200 events) via events.c-ville.com JSON API. +12 candidate venues identified with verified addresses and published emails; 4 phone/web-form leads; 3 TSM large-hall leads."
   - { slug: harrisonburg,        label: Harrisonburg VA,                  driveTier: "1.5-2.5h", publication: null, lastSwept: null }
   - { slug: staunton-waynesboro, label: Staunton / Waynesboro VA,         driveTier: "1.5-2.5h", publication: null, lastSwept: null }
   - { slug: danville,            label: Danville VA,                      driveTier: "1.5-2.5h", publication: null, lastSwept: null }
