@@ -83,6 +83,8 @@ export interface SweepResult {
   metro?: MetroEntry;
   sourceUrl: string;
   sourceType: string;
+  /** Publication resolved from the newest sweep record; undefined when --url was given. */
+  publication?: MetroPublication;
   rawCount: number;
   candidates: HarvestedVenue[];
   cooldownStatus?: CooldownStatus;
@@ -326,11 +328,14 @@ export function dedupeVenues(
   });
 }
 
+export const SWEEP_HISTORY_TIMEOUT_MS = 30_000;
+
 export async function fetchSweepHistory(options: {
   metroSlug?: string;
   backendUrl?: string;
   token?: string;
   fetchFn?: typeof fetch;
+  timeoutMs?: number;
 } = {}): Promise<SweepHistoryRecord[]> {
   const config = await resolveBackendConfig({
     backendUrl: options.backendUrl,
@@ -346,7 +351,10 @@ export async function fetchSweepHistory(options: {
 
   let res: Response;
   try {
-    res = await fetchFn(url, { headers });
+    res = await fetchFn(url, {
+      headers,
+      signal: AbortSignal.timeout(options.timeoutMs ?? SWEEP_HISTORY_TIMEOUT_MS),
+    });
   } catch (err) {
     throw new Error(
       `Sweep history query failed at '${url}': ${(err as Error).message}`,
@@ -549,6 +557,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
 
   let sourceUrl = options.url;
   let sourceType = "scenethink";
+  let publication: MetroPublication | undefined;
   let lastSwept: string | Date | null = null;
   let activeCoverageArea: string[] | undefined = options.coverageArea;
   let activeExcludeKeywords: string[] | undefined = options.excludeKeywords;
@@ -592,6 +601,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
       }
       sourceUrl = newestRecord.publication.api || newestRecord.publication.url;
       sourceType = newestRecord.publication.type;
+      publication = newestRecord.publication;
     }
 
     if (!activeCoverageArea || activeCoverageArea.length === 0) {
@@ -704,6 +714,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
       : undefined,
     sourceUrl,
     sourceType,
+    publication,
     rawCount: rawVenues.length,
     candidates: finalCandidates,
     cooldownStatus,
@@ -843,6 +854,19 @@ if (import.meta.main) {
         : "Ad-hoc URL";
       console.log(`\nSwept: ${metroLabel}`);
       console.log(`Source: ${result.sourceUrl}`);
+      // Settings this run used — pass them to venue-mining:record-sweep.
+      if (result.publication) {
+        const p = result.publication;
+        console.log(
+          `Publication: ${p.name} | url: ${p.url} | api: ${p.api || "none"} | type: ${
+            p.type || "none"
+          }`,
+        );
+      }
+      if (result.metro) {
+        console.log(`Coverage area: ${result.metro.coverageArea?.join(",") || "none"}`);
+        console.log(`Exclude keywords: ${result.metro.excludeKeywords?.join(",") || "none"}`);
+      }
       console.log(`Raw venues discovered: ${result.rawCount}`);
       console.log(
         `Candidate venues${

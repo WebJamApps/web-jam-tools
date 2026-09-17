@@ -273,8 +273,11 @@ Deno.test("loadSourcesRegistry reads and parses YAML correctly", async () => {
   assertEquals(registry.metros[0].driveTier, "<1.5h");
 });
 
-Deno.test("resolveMetro resolves by slug or label case-insensitively", async () => {
+Deno.test("resolveMetro handles exact slugs and labels without false substring matches", async () => {
   const registry = await loadSourcesRegistry(FIXTURE_SOURCES);
+
+  // resolveMetro("salem", registry) returns null
+  assertEquals(resolveMetro("salem", registry), null);
 
   // Exact slug match
   const locked = resolveMetro("locked-metro", registry);
@@ -300,21 +303,59 @@ Deno.test("resolveMetro resolves by slug or label case-insensitively", async () 
   assertEquals(resolveMetro("nowhere-ville", registry), null);
 });
 
-Deno.test("parseStateFromLabel extracts state code from label", () => {
+Deno.test("parseStateFromLabel extracts state code from metro label", () => {
   assertEquals(parseStateFromLabel("Roanoke / Salem VA"), "VA");
+  assertEquals(parseStateFromLabel("Charlottesville VA"), "VA");
+  assertEquals(parseStateFromLabel("Winston-Salem NC"), "NC");
+  assertEquals(parseStateFromLabel("Lewisburg WV"), "WV");
   assertEquals(parseStateFromLabel("Bristol VA-TN / Tri-Cities"), "VA-TN");
   assertEquals(parseStateFromLabel("Charlottesville"), null);
+  assertEquals(parseStateFromLabel("Unknown Location"), null);
 });
 
-Deno.test("isLocalArea filters venues by state, coverageArea, or metro keywords", () => {
-  const metro = {
+Deno.test("isLocalArea correctly filters geographic bounds and handles missing states", () => {
+  // Acceptance criteria:
+  // isLocalArea("Lynchburg", "VA", { slug: "roanoke-salem", label: "Roanoke / Salem VA" }) === false for metro with no coverageArea
+  assertEquals(
+    isLocalArea("Lynchburg", "VA", { slug: "roanoke-salem", label: "Roanoke / Salem VA" }),
+    false,
+  );
+
+  // Venue with missing state is not accepted automatically when state is expected
+  assertEquals(
+    isLocalArea("Roanoke", undefined, { slug: "roanoke-salem", label: "Roanoke / Salem VA" }),
+    false,
+  );
+
+  // Venue with matching city & state
+  assertEquals(
+    isLocalArea("Roanoke", "VA", { slug: "roanoke-salem", label: "Roanoke / Salem VA" }),
+    true,
+  );
+  assertEquals(
+    isLocalArea("Salem", "VA", { slug: "roanoke-salem", label: "Roanoke / Salem VA" }),
+    true,
+  );
+
+  // Metro with coverageArea
+  const cvilleMetro = {
+    slug: "charlottesville",
+    label: "Charlottesville VA",
+    coverageArea: ["charlottesville", "crozet", "keswick", "north garden", "earlysville"],
+  };
+  assertEquals(isLocalArea("Charlottesville", "VA", cvilleMetro), true);
+  assertEquals(isLocalArea("Crozet", "VA", cvilleMetro), true);
+  assertEquals(isLocalArea("Richmond", "VA", cvilleMetro), false);
+  assertEquals(isLocalArea("Charlottesville", "NC", cvilleMetro), false);
+
+  const roanokeWithCoverage = {
     slug: "roanoke-salem",
     label: "Roanoke / Salem VA",
     coverageArea: ["vinton", "salem"],
   };
-  assertEquals(isLocalArea("Vinton", "VA", metro), true);
-  assertEquals(isLocalArea("Richmond", "VA", metro), false);
-  assertEquals(isLocalArea("Salem", "NC", metro), false);
+  assertEquals(isLocalArea("Vinton", "VA", roanokeWithCoverage), true);
+  assertEquals(isLocalArea("Richmond", "VA", roanokeWithCoverage), false);
+  assertEquals(isLocalArea("Salem", "NC", roanokeWithCoverage), false);
 });
 
 Deno.test("fetchSweepHistory fetches records for a metro or all metros", async () => {
@@ -502,6 +543,77 @@ Deno.test("runSweep fails closed on sweep history API failure and --force does n
       }),
     Error,
     "expected JSON array",
+  );
+});
+
+Deno.test("runSweep on a metro with no sweep history proceeds with --url and refuses without it", async () => {
+  const fixedNow = new Date("2026-09-16T12:00:00Z");
+  const mockFetch = createMockFetch({
+    sweepHistory: () =>
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+  });
+
+  // No record and no --url -> refuses, telling the operator to pass --url
+  await assertRejects(
+    () =>
+      runSweep({
+        metro: "roanoke-salem",
+        sourcesPath: FIXTURE_SOURCES,
+        now: fixedNow,
+        fetchFn: mockFetch,
+        noDedup: true,
+      }),
+    Error,
+    "has no publication configured in sweep history",
+  );
+
+  // No record with --url -> proceeds unlocked, with no publication or lastSwept carried in
+  const res = await runSweep({
+    metro: "roanoke-salem",
+    url: "http://mock.com/roanoke/search.json",
+    sourcesPath: FIXTURE_SOURCES,
+    now: fixedNow,
+    fetchFn: mockFetch,
+    noDedup: true,
+  });
+  assertEquals(res.cooldownStatus?.isLocked, false);
+  assertEquals(res.metro?.lastSwept, null);
+  assertEquals(res.publication, undefined);
+  assertEquals(res.sourceUrl, "http://mock.com/roanoke/search.json");
+  assertEquals(res.candidates.length, 1);
+});
+
+Deno.test("runSweep returns the publication it resolved from the newest record", async () => {
+  const res = await runSweep({
+    metro: "stale-metro",
+    sourcesPath: FIXTURE_SOURCES,
+    now: new Date("2026-09-16T12:00:00Z"),
+    fetchFn: createMockFetch(),
+    noDedup: true,
+  });
+  assertEquals(res.publication?.name, "SceneThink Calendar");
+  assertEquals(res.publication?.api, "http://mock.com/stale/search.json");
+  assertEquals(res.metro?.coverageArea, ["roanoke", "salem"]);
+});
+
+Deno.test("fetchSweepHistory fails closed when the backend does not answer in time", async () => {
+  const hangingFetch =
+    ((_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      })) as unknown as typeof fetch;
+
+  await assertRejects(
+    () =>
+      fetchSweepHistory({
+        metroSlug: "roanoke-salem",
+        backendUrl: "http://mock-backend.local",
+        token: "test-token",
+        fetchFn: hangingFetch,
+        timeoutMs: 10,
+      }),
+    Error,
+    "Sweep history query failed",
   );
 });
 
@@ -902,6 +1014,7 @@ Deno.test("runSweep rejects large halls and theaters from candidates", async () 
       "cooldownStatus",
       "deduplicated",
       "metro",
+      "publication",
       "rawCount",
       "sourceType",
       "sourceUrl",

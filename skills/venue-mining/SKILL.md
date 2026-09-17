@@ -1,6 +1,6 @@
 ---
 name: venue-mining
-description: Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep cooldowns and publication history live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".
+description: Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".
 ---
 
 # venue-mining
@@ -108,6 +108,13 @@ The sweep process never edits `sources.yaml`.
      [--exclude-keywords "kw1,kw2,..."] \
      --notes "<notes>"
    ```
+   Pass the publication, coverage area and exclude keywords this run actually used —
+   the sweep prints them under `Source:`. Any you leave out are copied from the
+   metro's previous sweep (publication api/type only when the url is unchanged),
+   because the next sweep reads its settings from this record alone.
+   **The run is not done until this command prints "Sweep recorded".** On
+   "NOT recorded" or "already recorded", report that to Josh with the printed
+   error and retry command — never report the run as complete.
    `artist` and `venue` seed modes do NOT record a sweep (they are targeted queries,
    not publication sweeps). No wrap-up PR, git commits, or edits to `runs.md` or
    `sources.yaml` are needed for recording sweeps.

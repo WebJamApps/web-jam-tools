@@ -1,5 +1,5 @@
 // test/venue_mining_seed_sweep_history.test.ts
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { SEED_SWEEP_RECORDS, seedSweepHistory } from "../src/venue-mining/seed_sweep_history.ts";
 
 Deno.test("seedSweepHistory runs in dry-run mode by default without making network requests", async () => {
@@ -95,7 +95,7 @@ Deno.test("seedSweepHistory treats 409 conflict as already present and succeeds"
   assertEquals(roanoke?.status, "already_present");
 });
 
-Deno.test("seedSweepHistory throws and reports failure on non-409/non-201 error", async () => {
+Deno.test("seedSweepHistory reports each failed record with its status and body", async () => {
   const mockFetch = () =>
     Promise.resolve(
       new Response("Internal Server Error", {
@@ -103,15 +103,27 @@ Deno.test("seedSweepHistory throws and reports failure on non-409/non-201 error"
       }),
     );
 
-  await assertRejects(
-    () =>
-      seedSweepHistory({
-        confirm: true,
-        backendUrl: "http://mock-backend.local",
-        token: "test-token",
-        fetchFn: mockFetch as unknown as typeof fetch,
-      }),
-    Error,
-    "Failed to seed 5 of 5 sweep records",
-  );
+  const res = await seedSweepHistory({
+    confirm: true,
+    backendUrl: "http://mock-backend.local",
+    token: "test-token",
+    fetchFn: mockFetch as unknown as typeof fetch,
+  });
+
+  assertEquals(res.failed, 5);
+  assertEquals(res.created, 0);
+  assertEquals(res.records.length, 5);
+  for (const r of res.records) {
+    assertEquals(r.status, "failed");
+    assertEquals(r.statusCode, 500);
+    assertEquals(r.message?.includes("Internal Server Error"), true);
+  }
+});
+
+Deno.test("seed notes keep the lessons that lived only in sources.yaml comments", () => {
+  const notes = (slug: string) => SEED_SWEEP_RECORDS.find((r) => r.metroSlug === slug)?.notes || "";
+  assertEquals(notes("roanoke-salem").includes("Use www. URLs"), true);
+  assertEquals(notes("rock-hill-sc").includes("heraldonline.com 403s"), true);
+  assertEquals(notes("rock-hill-sc").includes("visityorkcounty.com"), true);
+  assertEquals(notes("gastonia").includes("charlotteonthecheap.com"), true);
 });

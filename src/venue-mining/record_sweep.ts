@@ -2,6 +2,7 @@
 // Record a completed venue-mining metro sweep into the backend sweep history database (web-jam-tools#1045).
 import { parseArgs } from "@std/cli/parse-args";
 import { buildHeaders, resolveBackendConfig } from "../book-gig/outreach_api.ts";
+import { fetchSweepHistory, type MetroPublication, type SweepHistoryRecord } from "./sweep.ts";
 
 export interface RecordSweepOptions {
   metro: string;
@@ -25,6 +26,42 @@ export interface RecordSweepResult {
   data?: unknown;
   error?: string;
   retryCommand: string;
+  /** Settings not passed on the command line that were copied from the newest record. */
+  inherited?: string[];
+}
+
+/**
+ * Fill settings the caller didn't pass from the metro's newest sweep record.
+ * Publication api/type carry forward only when the publication url is unchanged,
+ * so switching publications never inherits the old one's endpoint. Returns the
+ * names of the settings copied.
+ */
+export function carryForwardSettings(
+  payload: Record<string, unknown>,
+  publication: MetroPublication,
+  newest: SweepHistoryRecord | undefined,
+): string[] {
+  const inherited: string[] = [];
+  if (!newest) return inherited;
+  if (newest.publication?.url === publication.url) {
+    if (!publication.api && newest.publication.api) {
+      publication.api = newest.publication.api;
+      inherited.push("publication.api");
+    }
+    if (!publication.type && newest.publication.type) {
+      publication.type = newest.publication.type;
+      inherited.push("publication.type");
+    }
+  }
+  if (payload.coverageArea === undefined && newest.coverageArea?.length) {
+    payload.coverageArea = newest.coverageArea;
+    inherited.push("coverageArea");
+  }
+  if (payload.excludeKeywords === undefined && newest.excludeKeywords?.length) {
+    payload.excludeKeywords = newest.excludeKeywords;
+    inherited.push("excludeKeywords");
+  }
+  return inherited;
 }
 
 export function buildRetryCommand(options: RecordSweepOptions): string {
@@ -58,7 +95,10 @@ export async function recordSweep(options: RecordSweepOptions): Promise<RecordSw
       retryCommand,
     };
   }
-  if (!options.sweptAt || Number.isNaN(new Date(options.sweptAt).getTime())) {
+  if (
+    !options.sweptAt || !/^\d{4}-\d{2}-\d{2}$/.test(options.sweptAt.trim()) ||
+    Number.isNaN(new Date(options.sweptAt.trim()).getTime())
+  ) {
     return {
       status: "failed",
       error: "Invalid or missing required option: --swept-at (must be a valid date YYYY-MM-DD)",
@@ -127,6 +167,26 @@ export async function recordSweep(options: RecordSweepOptions): Promise<RecordSw
   const fetchFn = options.fetchFn || fetch;
   const headers = buildHeaders(config.token);
 
+  // The next sweep reads its settings from this record only, so any setting not
+  // passed is carried forward from the metro's newest record. Fail closed if that
+  // history can't be read — never save a record that silently drops settings.
+  let history;
+  try {
+    history = await fetchSweepHistory({
+      metroSlug: options.metro.trim(),
+      backendUrl: config.baseUrl,
+      token: config.token,
+      fetchFn,
+    });
+  } catch (err) {
+    return {
+      status: "failed",
+      error: `Could not read sweep history to carry settings forward: ${(err as Error).message}`,
+      retryCommand,
+    };
+  }
+  const inherited = carryForwardSettings(payload, publication, history[0]);
+
   const targetUrl = `${config.baseUrl}/venue-mining/sweep`;
   try {
     const res = await fetchFn(targetUrl, {
@@ -147,6 +207,7 @@ export async function recordSweep(options: RecordSweepOptions): Promise<RecordSw
         statusCode: 201,
         data,
         retryCommand,
+        inherited,
       };
     }
 
@@ -258,6 +319,9 @@ if (import.meta.main) {
     console.log(
       `\nSweep recorded: successfully saved sweep for metro '${options.metro}' (${options.sweptAt}) with ${options.venuesCreated} venues created.`,
     );
+    if (result.inherited?.length) {
+      console.log(`Carried forward from the previous sweep: ${result.inherited.join(", ")}`);
+    }
     Deno.exit(0);
   }
 

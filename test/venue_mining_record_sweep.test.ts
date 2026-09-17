@@ -21,29 +21,56 @@ const sampleOptions: RecordSweepOptions = {
   token: "test-token",
 };
 
-Deno.test("recordSweep succeeds and returns status 'recorded' on 201", async () => {
-  let postedBody: unknown = null;
-  const mockFetch = (_url: string | URL | Request, init?: RequestInit) => {
-    if (init?.body) {
-      postedBody = JSON.parse(String(init.body));
-    }
-    return Promise.resolve(
-      new Response(JSON.stringify({ _id: "new-record-id", ...sampleOptions }), {
-        status: 201,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-  };
+const PREVIOUS_CVILLE_SWEEP = {
+  metroSlug: "charlottesville",
+  sweptAt: "2026-03-01",
+  publication: {
+    name: "C-VILLE Weekly",
+    url: "http://events.c-ville.com",
+    api: "http://events.c-ville.com/cville/search.json?category=13",
+    type: "scenethink",
+  },
+  venuesCreatedCount: 4,
+  coverageArea: ["charlottesville", "crozet", "keswick"],
+  excludeKeywords: ["monticello", "wtju"],
+};
 
-  const result = await recordSweep({
-    ...sampleOptions,
-    fetchFn: mockFetch as unknown as typeof fetch,
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
   });
+}
+
+/** Mock backend: GET returns `history` (or `historyResponse`), POST is answered by `onPost`. */
+function mockBackend(options: {
+  onPost: (body: Record<string, unknown>) => Response | Promise<Response>;
+  history?: unknown[];
+  historyResponse?: () => Response | Promise<Response>;
+}): { fetchFn: typeof fetch; posted: Record<string, unknown>[] } {
+  const posted: Record<string, unknown>[] = [];
+  const fetchFn = ((_url: string | URL | Request, init?: RequestInit) => {
+    if ((init?.method || "GET") === "GET") {
+      if (options.historyResponse) return Promise.resolve(options.historyResponse());
+      return Promise.resolve(jsonResponse(options.history || []));
+    }
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    posted.push(body);
+    return Promise.resolve(options.onPost(body));
+  }) as unknown as typeof fetch;
+  return { fetchFn, posted };
+}
+
+Deno.test("recordSweep succeeds and returns status 'recorded' on 201", async () => {
+  const backend = mockBackend({ onPost: (body) => jsonResponse({ _id: "new-id", ...body }, 201) });
+
+  const result = await recordSweep({ ...sampleOptions, fetchFn: backend.fetchFn });
 
   assertEquals(result.status, "recorded");
   assertEquals(result.statusCode, 201);
-  assertEquals(postedBody !== null, true);
-  const pb = postedBody as Record<string, unknown>;
+  assertEquals(result.inherited, []);
+  assertEquals(backend.posted.length, 1);
+  const pb = backend.posted[0];
   assertEquals(pb.metroSlug, "charlottesville");
   assertEquals(pb.sweptAt, "2026-09-16");
   assertEquals(pb.venuesCreatedCount, 12);
@@ -53,19 +80,86 @@ Deno.test("recordSweep succeeds and returns status 'recorded' on 201", async () 
   assertEquals(pb.excludeKeywords, ["hall 107", "monticello"]);
 });
 
-Deno.test("recordSweep returns status 'already_recorded' on 409", async () => {
-  const mockFetch = () =>
-    Promise.resolve(
-      new Response(JSON.stringify({ message: "Sweep for this metro and date already exists" }), {
-        status: 409,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+Deno.test("recordSweep carries forward settings not passed from the metro's newest record", async () => {
+  const backend = mockBackend({
+    history: [PREVIOUS_CVILLE_SWEEP],
+    onPost: (body) => jsonResponse(body, 201),
+  });
 
   const result = await recordSweep({
-    ...sampleOptions,
-    fetchFn: mockFetch as unknown as typeof fetch,
+    metro: "charlottesville",
+    sweptAt: "2027-03-20",
+    pubName: "C-VILLE Weekly",
+    pubUrl: "http://events.c-ville.com",
+    venuesCreated: 2,
+    backendUrl: "http://mock-backend.local",
+    token: "test-token",
+    fetchFn: backend.fetchFn,
   });
+
+  assertEquals(result.status, "recorded");
+  assertEquals(result.inherited, [
+    "publication.api",
+    "publication.type",
+    "coverageArea",
+    "excludeKeywords",
+  ]);
+  const pb = backend.posted[0];
+  assertEquals(pb.publication, PREVIOUS_CVILLE_SWEEP.publication);
+  assertEquals(pb.coverageArea, PREVIOUS_CVILLE_SWEEP.coverageArea);
+  assertEquals(pb.excludeKeywords, PREVIOUS_CVILLE_SWEEP.excludeKeywords);
+});
+
+Deno.test("recordSweep keeps passed settings and never inherits api/type across a publication change", async () => {
+  const backend = mockBackend({
+    history: [PREVIOUS_CVILLE_SWEEP],
+    onPost: (body) => jsonResponse(body, 201),
+  });
+
+  const result = await recordSweep({
+    metro: "charlottesville",
+    sweptAt: "2027-03-20",
+    pubName: "Cville Events Daily",
+    pubUrl: "https://cvilleevents.example",
+    venuesCreated: 0,
+    coverageArea: ["charlottesville"],
+    backendUrl: "http://mock-backend.local",
+    token: "test-token",
+    fetchFn: backend.fetchFn,
+  });
+
+  assertEquals(result.status, "recorded");
+  assertEquals(result.inherited, ["excludeKeywords"]);
+  const pb = backend.posted[0];
+  assertEquals(pb.publication, {
+    name: "Cville Events Daily",
+    url: "https://cvilleevents.example",
+  });
+  assertEquals(pb.coverageArea, ["charlottesville"]);
+  assertEquals(pb.excludeKeywords, PREVIOUS_CVILLE_SWEEP.excludeKeywords);
+});
+
+Deno.test("recordSweep refuses to record when the sweep history can't be read", async () => {
+  const backend = mockBackend({
+    historyResponse: () => new Response("Service Unavailable", { status: 503 }),
+    onPost: (body) => jsonResponse(body, 201),
+  });
+
+  const result = await recordSweep({ ...sampleOptions, fetchFn: backend.fetchFn });
+
+  assertEquals(result.status, "failed");
+  assertEquals(result.error?.includes("Could not read sweep history"), true);
+  assertEquals(result.error?.includes("HTTP status 503"), true);
+  assertEquals(result.retryCommand.includes("deno task venue-mining:record-sweep"), true);
+  assertEquals(backend.posted.length, 0);
+});
+
+Deno.test("recordSweep returns status 'already_recorded' on 409", async () => {
+  const backend = mockBackend({
+    onPost: () => jsonResponse({ message: "Sweep for this metro and date already exists" }, 409),
+  });
+
+  const result = await recordSweep({ ...sampleOptions, fetchFn: backend.fetchFn });
 
   assertEquals(result.status, "already_recorded");
   assertEquals(result.statusCode, 409);
@@ -73,17 +167,11 @@ Deno.test("recordSweep returns status 'already_recorded' on 409", async () => {
 });
 
 Deno.test("recordSweep returns status 'failed' with retry command on 500 error", async () => {
-  const mockFetch = () =>
-    Promise.resolve(
-      new Response("Internal Database Error", {
-        status: 500,
-      }),
-    );
-
-  const result = await recordSweep({
-    ...sampleOptions,
-    fetchFn: mockFetch as unknown as typeof fetch,
+  const backend = mockBackend({
+    onPost: () => new Response("Internal Database Error", { status: 500 }),
   });
+
+  const result = await recordSweep({ ...sampleOptions, fetchFn: backend.fetchFn });
 
   assertEquals(result.status, "failed");
   assertEquals(result.statusCode, 500);
@@ -96,12 +184,11 @@ Deno.test("recordSweep returns status 'failed' with retry command on 500 error",
 });
 
 Deno.test("recordSweep returns status 'failed' on network error with retry command", async () => {
-  const mockFetch = () => Promise.reject(new Error("Connection refused"));
-
-  const result = await recordSweep({
-    ...sampleOptions,
-    fetchFn: mockFetch as unknown as typeof fetch,
+  const backend = mockBackend({
+    onPost: () => Promise.reject(new Error("Connection refused")),
   });
+
+  const result = await recordSweep({ ...sampleOptions, fetchFn: backend.fetchFn });
 
   assertEquals(result.status, "failed");
   assertEquals(result.error, "Network error: Connection refused");
@@ -133,6 +220,18 @@ Deno.test("recordSweep validates required fields before making requests", async 
   });
   assertEquals(resBadDate.status, "failed");
   assertEquals(resBadDate.error?.includes("--swept-at"), true);
+  assertEquals(fetchCalled, false);
+
+  // Timestamps and unpadded dates are rejected: the backend dedupes on the exact value
+  for (const sweptAt of ["2026-09-16T14:02:00Z", "2026-9-16"]) {
+    const res = await recordSweep({
+      ...sampleOptions,
+      sweptAt,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+    assertEquals(res.status, "failed");
+    assertEquals(res.error?.includes("--swept-at"), true);
+  }
   assertEquals(fetchCalled, false);
 
   // Invalid venues created

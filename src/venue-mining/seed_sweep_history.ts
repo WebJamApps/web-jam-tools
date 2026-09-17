@@ -28,7 +28,7 @@ export const SEED_SWEEP_RECORDS: SeedSweepRecord[] = [
     },
     venuesCreatedCount: 14,
     notes:
-      "Run 1 (12-mo sweep) = +14 venues, 7 pitched. Covers Vinton, Rocky Mount, Floyd spillover.",
+      "Run 1 (12-mo sweep) = +14 venues, 7 pitched. Covers Vinton, Rocky Mount, Floyd spillover. Use www. URLs — bare domain redirects flakily.",
   },
   {
     metroSlug: "rock-hill-sc",
@@ -39,7 +39,7 @@ export const SEED_SWEEP_RECORDS: SeedSweepRecord[] = [
     },
     venuesCreatedCount: 6,
     notes:
-      "Run 2 = +6 venues (3 eligible). Metro is heavily FB-only; venue-site corroboration required. Covers Fort Mill, Tega Cay, York, Clover.",
+      "Run 2 = +6 venues (3 eligible). Metro is heavily FB-only; venue-site corroboration required. Covers Fort Mill, Tega Cay, York, Clover. Shallow archive — supplement w/ visityorkcounty.com + venue sites; heraldonline.com 403s.",
   },
   {
     metroSlug: "gastonia",
@@ -50,7 +50,7 @@ export const SEED_SWEEP_RECORDS: SeedSweepRecord[] = [
     },
     venuesCreatedCount: 3,
     notes:
-      'Run 3 = +3 venues, all pitched. Covers Belmont, Mt Holly, Cramerton, Lowell NC, Cherryville. Watch geo-traps (a "Lowell" hit was Lowell MA).',
+      'Run 3 = +3 venues, all pitched. Covers Belmont, Mt Holly, Cramerton, Lowell NC, Cherryville. Watch geo-traps (a "Lowell" hit was Lowell MA). Directory strong, archive shallow; runner-up source charlotteonthecheap.com.',
   },
   {
     metroSlug: "lynchburg",
@@ -210,12 +210,6 @@ export async function seedSweepHistory(
     }
   }
 
-  if (failedCount > 0) {
-    throw new Error(
-      `Failed to seed ${failedCount} of ${SEED_SWEEP_RECORDS.length} sweep records.`,
-    );
-  }
-
   return {
     dryRun: false,
     total: SEED_SWEEP_RECORDS.length,
@@ -280,6 +274,12 @@ if (import.meta.main) {
         );
       }
       console.log("");
+      if (result.failed > 0) {
+        console.error(
+          `Error: failed to seed ${result.failed} of ${result.total} sweep records (see above).\n`,
+        );
+        Deno.exit(1);
+      }
       Deno.exit(0);
     }
   } catch (err) {
