@@ -33,7 +33,56 @@ import type {
   BookGigResult,
   OutreachCampaignRecord,
   TargetLocation,
+  TargetWeekend,
 } from "./types.ts";
+
+export function matchesWeekend(
+  record: OutreachCampaignRecord,
+  weekend: TargetWeekend,
+): boolean {
+  if (record.targetWeekend?.start && record.targetWeekend?.end) {
+    const rStart = new Date(record.targetWeekend.start).getTime();
+    const rEnd = new Date(record.targetWeekend.end).getTime();
+    if (!isNaN(rStart) && !isNaN(rEnd)) {
+      const wStart = new Date(weekend.start).getTime();
+      const wEnd = new Date(weekend.end).getTime();
+      if (rStart <= wEnd && rEnd >= wStart) {
+        return true;
+      }
+    }
+  }
+  if (record.targetDates) {
+    if (
+      record.targetDates.includes(weekend.start) ||
+      record.targetDates.includes(weekend.label)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function deduplicateCampaignsByVenue(
+  campaigns: OutreachCampaignRecord[],
+): OutreachCampaignRecord[] {
+  const campaignsByVenue = new Map<string, OutreachCampaignRecord>();
+  for (const c of campaigns) {
+    const key = String(c.venueId || c._id);
+    const existing = campaignsByVenue.get(key);
+    if (!existing) {
+      campaignsByVenue.set(key, c);
+    } else {
+      const existingSent = existing.sentAt ? new Date(existing.sentAt).getTime() : 0;
+      const currentSent = c.sentAt ? new Date(c.sentAt).getTime() : 0;
+      const existingTime = isNaN(existingSent) ? 0 : existingSent;
+      const currentTime = isNaN(currentSent) ? 0 : currentSent;
+      if (currentTime > existingTime) {
+        campaignsByVenue.set(key, c);
+      }
+    }
+  }
+  return Array.from(campaignsByVenue.values());
+}
 
 function printCampaignsTable(campaigns: OutreachCampaignRecord[]): void {
   if (campaigns.length === 0) {
@@ -140,25 +189,13 @@ export async function runBookGigCli(
     };
 
     let campaigns = rawCampaigns.map(enrichRecord);
-    const enrichedPending = pendingReplies.map(enrichRecord);
+    let enrichedPending = pendingReplies.map(enrichRecord);
 
     // Filter by target weekend if specified
     if (parsed.weekend) {
-      const wStart = new Date(parsed.weekend.start).getTime();
-      const wEnd = new Date(parsed.weekend.end).getTime();
-
-      campaigns = campaigns.filter((c) => {
-        if (c.targetWeekend?.start && c.targetWeekend?.end) {
-          const cStart = new Date(c.targetWeekend.start).getTime();
-          const cEnd = new Date(c.targetWeekend.end).getTime();
-          return cStart <= wEnd && cEnd >= wStart;
-        }
-        if (c.targetDates && parsed.weekend) {
-          return c.targetDates.includes(parsed.weekend.start) ||
-            c.targetDates.includes(parsed.weekend.label);
-        }
-        return true;
-      });
+      campaigns = campaigns.filter((c) => matchesWeekend(c, parsed.weekend!));
+      enrichedPending = enrichedPending.filter((p) => matchesWeekend(p, parsed.weekend!));
+      campaigns = deduplicateCampaignsByVenue(campaigns);
     }
 
     // 4. Output campaigns table
