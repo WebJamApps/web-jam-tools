@@ -13,7 +13,7 @@ Pok-E-Joe's, Starr Hill Pilot); long-tail pass added 6 more (Floyd Country Store
 Golden Cactus, Montano's, Fork in the Alley, Living Proof Beer Co, The Alley Cat)
 — **14 new venues total**, all `outreachEligible: false` + Rambler provenance.
 Dan Carrell found as a bonus (Parkway Brewing 2025-12-13). Hotel Roanoke Foxx
-City Jazz Club deliberately NOT added — saved as a TimShermanMusic lead.
+City Jazz Club deliberately NOT added — rejected for being too large.
 Contact-hunt same day: all 4 contact-less venues got phone+website via PATCH
 (incl. booking email litterbox@alleycatlive.com).
 
@@ -78,9 +78,8 @@ Publication discovered = **Downtown Lynchburg Association**
 (haley@7rooftopbar.com, `outreachEligible:true`, Fri "Sunset Sessions"; sole
 email yield), Starr Hill On Main, Palmera House, Super Rad Arcade Bar, The Water
 Dog, Dish (all created `outreachEligible:false`, FB-only booking). Rejected as
-too-large: Academy Center of the Arts, Lynchburg Amphitheater (TimShermanMusic
-leads).
-
+too-large: Academy Center of the Arts, Lynchburg Amphitheater.
+ 
 **Incident:** First POST for "Starr Hill On Main" used email `info@starrhill.com`
 (shared Starr Hill chain booking inbox). Email dedup in `POST /venue` → it
 **matched and overwrote the existing "Starr Hill Pilot Brewery" (Roanoke) record**,
@@ -98,9 +97,9 @@ Publication discovered = **C-VILLE Weekly** (`http://events.c-ville.com`, SceneT
 **Results:**
 - **12 Candidate Venues Created in DB** (all with verified street addresses, valid 5-digit ZIP codes, and published booking/inquiry emails with `outreachEligible: true`): Eastwood Farm and Winery, Dürty Nelly's, The Bebedero, Albemarle Ciderworks, Firefly, Chisholm Vineyards at Adventure Farm, Three Notch'd Craft Kitchen & Brewery, Pro Re Nata Farm Brewery, Kardinal Hall, Southwest Mountains Vineyards, Potter's Craft Cider, Merrie Mill Farm & Vineyard.
 - **4 Hand-Back Venues** (verified street addresses, active live-music programming, but phone/web-form only): The Whiskey Jar, Holly's Diner, The Front Porch, Maya Restaurant.
-- **3 TimShermanMusic Leads** (theaters/large halls): The Paramount Theater, The Jefferson Theater, Ting Pavilion.
+- **3 rejected as too large**: The Paramount Theater, The Jefferson Theater, Ting Pavilion.
 
 **Enhancements:**
-- Added generalized `src/venue-mining/sweep.ts` (`deno task venue-mining:sweep [metro]`) for automated event harvesting, registry lookup in `sources.yaml`, cooldown enforcement, non-music entity filtering, TSM lead separation, and DB deduplication.
+- Added generalized `src/venue-mining/sweep.ts` (`deno task venue-mining:sweep [metro]`) for automated event harvesting, registry lookup in `sources.yaml`, cooldown enforcement, non-music entity filtering, and DB deduplication.
 - Enhanced `src/venue-contact/extract_venue_contact.ts` with Playwright `channel: "chrome"` fallback in `defaultRender`.
 

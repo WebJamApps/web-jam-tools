@@ -50,8 +50,8 @@ publication (name+url, null until discovered), lastSwept, notes`.
 3. **Dedupe** — `GET /venue`; match **by name** (never a remembered `_id` —
    AI-recalled ids are wrong). Drop venues already in the DB, active OR archived.
 4. **Verify** (delegate: Haiku, batched) — for each new candidate: real venue,
-   recurring live-music programming, size fit (reject theaters/large halls —
-   optionally offer as a TimShermanMusic lead), find email + phone + website
+   recurring live-music programming, size fit (reject theaters/large halls),
+   find email + phone + website
    + **street address**. Look for a website and booking email by every route
    open and narrow nothing at the point of discovery:
    - **Query Google Maps / Google Places metadata**: check the venue's public

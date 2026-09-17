@@ -69,7 +69,6 @@ export interface SweepResult {
   sourceType: string;
   rawCount: number;
   candidates: HarvestedVenue[];
-  tsmLeads: HarvestedVenue[];
   cooldownStatus?: CooldownStatus;
   deduplicated: boolean;
 }
@@ -111,6 +110,9 @@ export const NON_MUSIC_ENTITY_KEYWORDS = [
 ];
 
 export const LARGE_HALL_OR_THEATER_KEYWORDS = [
+  "theater",
+  "theatre",
+  "pavilion",
   "amphitheater",
   "amphitheatre",
   "coliseum",
@@ -493,9 +495,8 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     isLocalArea(v.city, v.state, targetMetro, options.city, options.state)
   );
 
-  // Classify regular duo venues vs TSM leads (arenas, large halls, theaters)
+  // Reject large halls, arenas, and theaters
   const regularVenues = localVenues.filter((v) => !isLargeHallOrTheater(v.name));
-  const tsmLeads = localVenues.filter((v) => isLargeHallOrTheater(v.name));
 
   let finalCandidates = regularVenues;
   let deduplicated = false;
@@ -553,7 +554,6 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     sourceType,
     rawCount: rawVenues.length,
     candidates: finalCandidates,
-    tsmLeads,
     cooldownStatus: targetMetro ? checkCooldown(targetMetro.lastSwept, options.now) : undefined,
     deduplicated,
   };
@@ -561,14 +561,13 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
 
 function printUsage() {
   console.log(`
-venue-mining sweep: Mine live-music venues from local events publications across any metro area.
+venue-mining sweep: Mine live-music venues from supported SceneThink events publications.
 
 Usage:
   deno task venue-mining:sweep [metro] [options]
 
 Examples:
-  deno task venue-mining:sweep charlottesville
-  deno task venue-mining:sweep roanoke-salem --force
+  deno task venue-mining:sweep charlottesville --force
   deno task venue-mining:sweep --url "http://events.c-ville.com/cville/search.json?category=13" --city Charlottesville --state VA
   deno task venue-mining:sweep --list
 
@@ -610,7 +609,9 @@ if (import.meta.main) {
     console.log(`\nRegistered Metros (${registry.metros.length}):\n`);
     for (const m of registry.metros) {
       const cd = checkCooldown(m.lastSwept);
-      const cdInfo = cd.isLocked
+      const cdInfo = cd.unparseable
+        ? "[UNPARSEABLE lastSwept]"
+        : cd.isLocked
         ? `[LOCKED: ${cd.daysRemaining}d left until ${cd.unlockDate}]`
         : "[READY]";
       const pubInfo = m.publication
@@ -662,7 +663,6 @@ if (import.meta.main) {
           result.deduplicated ? "" : " (not deduplicated)"
         }: ${result.candidates.length}`,
       );
-      console.log(`TimShermanMusic leads (theaters/arenas): ${result.tsmLeads.length}`);
 
       console.log(`\n=== Top Candidates (${result.candidates.length}) ===`);
       for (const c of result.candidates.slice(0, 20)) {
@@ -673,17 +673,6 @@ if (import.meta.main) {
             c.phone || "none"
           } | url: ${c.website || "none"}`,
         );
-      }
-
-      if (result.tsmLeads.length > 0) {
-        console.log(`\n=== TimShermanMusic Leads (${result.tsmLeads.length}) ===`);
-        for (const t of result.tsmLeads) {
-          console.log(
-            `- ${t.name} (${t.city || "Unknown"}, ${
-              t.state || "Unknown"
-            }) | events: ${t.eventCount}`,
-          );
-        }
       }
     }
   } catch (err) {

@@ -62,10 +62,13 @@ Deno.test("isNonMusicEntity correctly classifies non-venues and respects word bo
   }
 });
 
-Deno.test("isLargeHallOrTheater identifies TSM leads with word boundaries", () => {
+Deno.test("isLargeHallOrTheater identifies large halls and theaters with word boundaries", () => {
   assertEquals(isLargeHallOrTheater("Roanoke Civic Center Coliseum"), true);
   assertEquals(isLargeHallOrTheater("Salem Civic Center"), true);
   assertEquals(isLargeHallOrTheater("Charlottesville Amphitheater"), true);
+  assertEquals(isLargeHallOrTheater("The Paramount Theater"), true);
+  assertEquals(isLargeHallOrTheater("The Jefferson Theater"), true);
+  assertEquals(isLargeHallOrTheater("Ting Pavilion"), true);
 
   // Word boundary prevents false match on substrings (e.g. 'arena' in 'Macarena')
   assertEquals(isLargeHallOrTheater("Macarena Grill"), false);
@@ -73,7 +76,12 @@ Deno.test("isLargeHallOrTheater identifies TSM leads with word boundaries", () =
   assertEquals(isLargeHallOrTheater("Firefly"), false);
   assertEquals(isLargeHallOrTheater("Pro Re Nata Farm Brewery"), false);
 
-  // C-VILLE specific keywords removed from shared lists
+  // Generic keywords are in LARGE_HALL_OR_THEATER_KEYWORDS
+  assertEquals(LARGE_HALL_OR_THEATER_KEYWORDS.includes("theater"), true);
+  assertEquals(LARGE_HALL_OR_THEATER_KEYWORDS.includes("theatre"), true);
+  assertEquals(LARGE_HALL_OR_THEATER_KEYWORDS.includes("pavilion"), true);
+
+  // C-VILLE specific venue names removed from shared lists
   const cvilleLargeKeywords = [
     "paramount theater",
     "jefferson theater",
@@ -520,5 +528,44 @@ Deno.test("runSweep covers all three DB dedup outcomes", async () => {
       }),
     Error,
     "invalid data: expected JSON array",
+  );
+});
+
+Deno.test("runSweep rejects large halls and theaters from candidates", async () => {
+  const mockEventsPayload = {
+    pages: 1,
+    events: [
+      {
+        _source: {
+          name: "Theater Show",
+          starttime: "2026-09-20T18:00:00Z",
+          venue: { name: "The Paramount Theater", city: "Roanoke", state: "VA" },
+        },
+      },
+      {
+        _source: {
+          name: "Club Gig",
+          starttime: "2026-09-20T18:00:00Z",
+          venue: { name: "Acoustic Cafe", city: "Roanoke", state: "VA" },
+        },
+      },
+    ],
+  };
+
+  const mockFetch = () =>
+    Promise.resolve(new Response(JSON.stringify(mockEventsPayload), { status: 200 }));
+
+  const res = await runSweep({
+    metro: "null-metro",
+    sourcesPath: FIXTURE_SOURCES,
+    fetchFn: mockFetch as unknown as typeof fetch,
+    noDedup: true,
+  });
+
+  assertEquals(res.candidates.length, 1);
+  assertEquals(res.candidates[0].name, "Acoustic Cafe");
+  assertEquals(
+    Object.keys(res).sort(),
+    ["candidates", "cooldownStatus", "deduplicated", "metro", "rawCount", "sourceType", "sourceUrl"],
   );
 });
