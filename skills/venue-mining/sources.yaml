@@ -22,14 +22,46 @@ metros:
       name: Downtown Lynchburg Association
       url: https://www.downtownlynchburg.com/calendar
     lastSwept: 2026-07-18
-    notes: "Run 4 = +6 venues created (1 email-eligible). Small-venue scene is FB-only; 2 rejected as too-large (TimShermanMusic leads). Incident: first POST for Starr Hill On Main (shared email info@starrhill.com) overwrote Starr Hill Pilot Brewery (Roanoke) record; restored via PATCH."
+    notes: "Run 4 = +6 venues created (1 email-eligible). Small-venue scene is FB-only; 2 rejected as too-large. Incident: first POST for Starr Hill On Main (shared email info@starrhill.com) overwrote Starr Hill Pilot Brewery (Roanoke) record; restored via PATCH."
   - { slug: lexington,           label: Lexington VA,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
   - { slug: floyd,               label: Floyd VA,                         driveTier: "<1.5h",    publication: null, lastSwept: null }
   - { slug: martinsville,        label: Martinsville VA,                  driveTier: "<1.5h",    publication: null, lastSwept: null }
   - { slug: rocky-mount-sml,     label: Rocky Mount / Smith Mtn Lake VA,  driveTier: "<1.5h",    publication: null, lastSwept: null }
   - { slug: lewisburg-wv,        label: Lewisburg WV,                     driveTier: "<1.5h",    publication: null, lastSwept: null }
 
-  - { slug: charlottesville,     label: Charlottesville VA,               driveTier: "1.5-2.5h", publication: null, lastSwept: null }
+  - slug: charlottesville
+    label: Charlottesville VA
+    driveTier: "1.5-2.5h"
+    publication:
+      name: C-VILLE Weekly (SceneThink calendar)
+      url: http://events.c-ville.com
+      api: http://events.c-ville.com/cville/search.json?category=13
+      type: scenethink
+    lastSwept: 2026-09-16
+    notes: "Run 5 = swept 12 pages (~1,200 events) via C-VILLE Weekly SceneThink JSON API. +12 candidate venues created in live DB with verified addresses and emails; 4 phone/web-form leads; 3 rejected as too-large."
+    coverageArea:
+      - charlottesville
+      - crozet
+      - keswick
+      - scottsville
+      - earlysville
+      - north garden
+      - ivy
+      - free union
+      - barboursville
+      - palmyra
+      - albemarle
+    excludeKeywords:
+      - scrappy elephant
+      - monticello
+      - downtown mall
+      - hall 107
+      - hall 229a
+      - campbell hall
+      - nau hall
+      - bryan hall
+      - jaba
+      - wtju
   - { slug: harrisonburg,        label: Harrisonburg VA,                  driveTier: "1.5-2.5h", publication: null, lastSwept: null }
   - { slug: staunton-waynesboro, label: Staunton / Waynesboro VA,         driveTier: "1.5-2.5h", publication: null, lastSwept: null }
   - { slug: danville,            label: Danville VA,                      driveTier: "1.5-2.5h", publication: null, lastSwept: null }

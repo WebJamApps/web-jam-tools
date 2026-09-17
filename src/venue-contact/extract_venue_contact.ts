@@ -262,7 +262,17 @@ async function defaultRender(url: string, timeoutMs: number): Promise<string> {
   // plain-fetch-only run (and every unit test, which injects `renderImpl`)
   // never has to load or launch Playwright.
   const { chromium } = await import("playwright");
-  const browser = await chromium.launch();
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (primaryErr) {
+    // Fall back to system chrome channel if playwright-bundled browser is not installed
+    try {
+      browser = await chromium.launch({ channel: "chrome" });
+    } catch {
+      throw primaryErr;
+    }
+  }
   try {
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: "networkidle", timeout: timeoutMs });
