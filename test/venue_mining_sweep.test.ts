@@ -566,6 +566,14 @@ Deno.test("runSweep rejects large halls and theaters from candidates", async () 
   assertEquals(res.candidates[0].name, "Acoustic Cafe");
   assertEquals(
     Object.keys(res).sort(),
-    ["candidates", "cooldownStatus", "deduplicated", "metro", "rawCount", "sourceType", "sourceUrl"],
+    [
+      "candidates",
+      "cooldownStatus",
+      "deduplicated",
+      "metro",
+      "rawCount",
+      "sourceType",
+      "sourceUrl",
+    ],
   );
 });
