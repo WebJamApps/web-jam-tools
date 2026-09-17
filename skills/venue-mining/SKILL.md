@@ -1,14 +1,15 @@
 ---
 name: venue-mining
-description: Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Registry + sweep cooldowns live in sources.yaml next to this file. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".
+description: Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".
 ---
 
 # venue-mining
 
 Grow the venue DB (web-jam-back Mongo, master) with net-new, verified live-music
 venues. This SKILL.md is the living spec (originally settled on web-jam-tools#126,
-closed); the run log = `runs.md` next to this file. Success metric = net-new
-venues created, NOT seed-calendar coverage.
+closed); historical runs 1–5 live in `runs.md` next to this file (archived as of
+web-jam-tools#1045; active sweep history is queried via `GET /venue-mining/sweep`).
+Success metric = net-new venues created, NOT seed-calendar coverage.
 
 ## Invocation
 
@@ -19,25 +20,30 @@ venues created, NOT seed-calendar coverage.
 
 ## sources.yaml (registry — same dir as this file)
 
-One entry per metro: `slug, label, driveTier (<1.5h | 1.5-2.5h | 2.5-3.5h),
-publication (name+url, null until discovered), lastSwept, notes`.
+One entry per metro: `slug, label, driveTier (<1.5h | 1.5-2.5h | 2.5-3.5h)`.
+The sweep process never edits `sources.yaml`.
 
-- **Cooldown: 6 months.** If `lastSwept` is under 6 months old, REFUSE the sweep
-  and tell Josh when it unlocks — he can explicitly override.
-- **Re-sweeps are incremental**: only scan issues/listings published since
-  `lastSwept`, never the full archive again.
-- Publication missing? Discovering the metro's "Rambler-equivalent" (a local
-  events publication with real archive depth) is step one of that run, and the
-  discovery gets committed back to sources.yaml in the run's wrap-up PR.
-  National aggregators bot-block (403) and tourism calendars are noise — a
-  local publication is the only source class that has worked.
+- **Cooldown: 6 months.** Evaluated against the metro's newest record in the
+  sweep-history database (`GET /venue-mining/sweep?metroSlug=<slug>`). If the
+  latest sweep is under 6 months old, REFUSE the sweep and tell Josh when it
+  unlocks — he can explicitly override (`--force`).
+- **Re-sweeps are incremental**: only scan issues/listings published since the
+  latest sweep date recorded in the database, never the full archive again.
+- **Publication metadata**: resolved from the metro's newest sweep record in the
+  database, or supplied via `--url` during discovery. Discovering an unswept
+  metro's "Rambler-equivalent" (a local events publication with real archive
+  depth) is step one of that run. National aggregators bot-block (403) and
+  tourism calendars are noise — a local publication is the only source class
+  that has worked.
 - Region is capped at ~3.5h drive from Salem VA. Adding metros = Josh's call.
 
 ## Procedure
 
-1. **Resolve source** — look up the metro in sources.yaml; enforce the cooldown;
-   discover + record the publication if null.
-   When the metro's `publication.type` is supported by the sweep CLI (today, `scenethink`),
+1. **Resolve source** — look up the metro in `sources.yaml`; query sweep history
+   via `GET /venue-mining/sweep?metroSlug=<slug>` to enforce the 6-month cooldown
+   and resolve the latest publication metadata (or discover a publication and pass
+   `--url` if unswept).
+   When the metro's publication type is supported by the sweep CLI (today, `scenethink`),
    run `deno task venue-mining:sweep <metro>` for automated source resolution, cooldown
    enforcement, harvesting, geographic filtering, non-music filtering, and DB deduplication.
 2. **Harvest** (delegate: parallel Haiku subagents) — sweep the publication
@@ -87,12 +93,31 @@ publication (name+url, null until discovered), lastSwept, notes`.
    address is NOT created — no placeholder, no "TBD". The backend requires it
    and uses it to dedupe records. When confirming creation, show the
    server-returned address value (the backend may have normalized it).
-7. **Wrap up** — file a small issue for the run if one doesn't exist yet
-   (`venue sweep: <slug>`), then one PR into dev that closes it, containing BOTH
-   the run entry appended to `runs.md` (results, holds/rejects, lessons) AND the
-   sources.yaml update (`lastSwept` + any new publication). No long-running
-   tracking issue: every issue this skill touches gets closed by its PR
-   (create-draft-pr.sh emits `Closes #N` by default).
+7. **Record sweep** — for `metro` sweeps, record the completed run in the database
+   via `deno task venue-mining:record-sweep`:
+   ```sh
+   deno task venue-mining:record-sweep \
+     --metro <slug> \
+     --swept-at <YYYY-MM-DD> \
+     --pub-name "<name>" \
+     --pub-url "<url>" \
+     [--pub-api "<api>"] \
+     [--pub-type <type>] \
+     --venues-created <N> \
+     [--coverage-area "town1,town2,..."] \
+     [--exclude-keywords "kw1,kw2,..."] \
+     --notes "<notes>"
+   ```
+   Pass the publication, coverage area and exclude keywords this run actually used —
+   the sweep prints them under `Source:`. Any you leave out are copied from the
+   metro's previous sweep (publication api/type only when the url is unchanged),
+   because the next sweep reads its settings from this record alone.
+   **The run is not done until this command prints "Sweep recorded".** On
+   "NOT recorded" or "already recorded", report that to Josh with the printed
+   error and retry command — never report the run as complete.
+   `artist` and `venue` seed modes do NOT record a sweep (they are targeted queries,
+   not publication sweeps). No wrap-up PR, git commits, or edits to `runs.md` or
+   `sources.yaml` are needed for recording sweeps.
 
 ## Skipped venues (real candidates dropped for lack of address)
 
