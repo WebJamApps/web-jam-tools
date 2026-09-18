@@ -51,6 +51,24 @@
 #     the author's side, since rewriting the real message can't change what
 #     is being judged. Confirmed present in real transcripts on this laptop
 #     (top-level fields, siblings of "message", not nested under it).
+# DECISION on outcome 3 (cannot evaluate) — proceed with visible warning (web-jam-tools#1073):
+# When the hook cannot determine whether a reply is clean or violating (stdin unreadable
+# or empty, transcript_path missing from payload, transcript file nonexistent, the selector
+# EXITING non-zero, or the detector exiting non-zero), it proceeds (exit 0) with a visible
+# diagnostic naming the failed step and the captured stderr, rather than refusing.
+# Because this is a Stop hook, refusing would block the reply from being delivered at all.
+# A transient deno or runtime failure would then wedge every turn in every session with no
+# way for the author to comply, since rewriting the message cannot fix a broken subprocess.
+#
+# The diagnostic goes to stdout as a Stop-hook `systemMessage` JSON object, and to stderr
+# as plain text. stdout is what Claude Code surfaces for a hook that proceeds; stderr on
+# exit 0 is not surfaced, so stderr alone would have left outcome 3 as invisible as the
+# `|| true` fallbacks this replaced. See cannot_evaluate() below.
+#
+# NOT outcome 3: the selector succeeding with an EMPTY selection. The selector is bounded
+# to the current turn (web-jam-tools#596), so no selectable entry means there is no reply
+# from this turn to judge — a designed outcome that exits 0 silently. Warning there would
+# fire on healthy turns and bury the diagnostics that matter.
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
@@ -65,19 +83,84 @@ CONFIG="$HOOK_DIR/clear-communication.yaml"
 # this hook never depends on repo state to evaluate.
 DENO_HOOK_CONFIG="$HOOK_DIR/lib/deno-hook-config.json"
 
-input="$(cat)" || exit 0
-tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
-[ -n "$tp" ] && [ -f "$tp" ] || exit 0
+# Emits the outcome-3 diagnostic on BOTH channels, then proceeds (exit 0).
+#
+# stdout carries a Stop-hook JSON object with `systemMessage`, because that is
+# the only channel Claude Code surfaces for a hook that proceeds: on exit 0 it
+# shows stdout (and renders `systemMessage` to the user), while stderr is
+# surfaced only on a non-zero exit. Writing the warning to stderr alone left it
+# exactly as invisible as the `|| true` fallbacks it replaced — the gap
+# web-jam-tools#1073 "hooks/require-clear-communication: the guard fails open
+# silently on every internal failure, so a violating reply ships with no trace"
+# exists to close. stderr is kept as well so `bash hooks/...` by hand still
+# shows it.
+#
+# The captured detail is bounded (first 5 lines, 500 chars): a detector stack
+# trace is diagnostic, but dumping it whole into the user's chat is not.
+cannot_evaluate() {
+  local step="$1"
+  local detail="${2:-}"
+  local trimmed=""
+  if [ -n "$detail" ]; then
+    trimmed="$(printf '%s' "$detail" | head -n 5 | head -c 500)"
+  fi
+  local message="WARN (clear-communication guard): could not evaluate reply — failed at step: $step"
+  if [ -n "$trimmed" ]; then
+    message="$message"$'\n'"$trimmed"
+  fi
+  printf '%s\n' "$message" >&2
+  jq -cn --arg m "$message" '{systemMessage:$m}' || true
+  exit 0
+}
+
+TMP_ERR="$(mktemp)"
+trap 'rm -f "$TMP_ERR"' EXIT
+
+if ! input="$(cat 2>"$TMP_ERR")"; then
+  cannot_evaluate "read stdin payload" "$(<"$TMP_ERR")"
+fi
+
+if [ -z "$input" ]; then
+  cannot_evaluate "read stdin payload" "empty stdin payload"
+fi
+
+if ! tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>"$TMP_ERR")"; then
+  cannot_evaluate "extract transcript_path" "$(<"$TMP_ERR")"
+fi
+
+if [ -z "$tp" ]; then
+  cannot_evaluate "extract transcript_path" "payload carries no transcript_path"
+fi
+
+if [ ! -f "$tp" ]; then
+  cannot_evaluate "verify transcript file" "transcript file does not exist: $tp"
+fi
 
 # Last genuine assistant transcript entry's text content, selected via
 # hooks/lib/select_transcript_entry.ts (excludes isSidechain and
 # isApiErrorMessage entries, bounds search to current turn — web-jam-tools#596).
-msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
+if ! msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>"$TMP_ERR")"; then
+  cannot_evaluate "run selector" "$(<"$TMP_ERR")"
+fi
 
-[ -n "$msg" ] || exit 0
+# An empty selection is NOT a failure: the selector is deliberately bounded to
+# the current turn (web-jam-tools#596 "clear-communication guard blocks a turn
+# over violations in a previous turn's reply"), so returning nothing means there
+# is no reply from this turn to judge. That is the designed outcome, not
+# outcome 3, and it stays silent — a warning here would cry failure on a healthy
+# path and drown the diagnostics this guard now emits when something really did
+# break. A selector that EXITS non-zero is a real failure and is caught above.
+if [ -z "$msg" ]; then
+  exit 0
+fi
 
-report="$(MSG_FOR_PY="$msg" deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>/dev/null || true)"
-[ -n "$report" ] || exit 0
+if ! report="$(MSG_FOR_PY="$msg" deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>"$TMP_ERR")"; then
+  cannot_evaluate "run detector" "$(<"$TMP_ERR")"
+fi
+
+if [ -z "$report" ]; then
+  exit 0
+fi
 
 {
   echo "BLOCKED (clear-communication guard): this message violates one or more chat"
