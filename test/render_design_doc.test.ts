@@ -9,6 +9,7 @@
 import { assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
+  computeTablePagination,
   parseInlineMarkdown,
   renderDesignDoc,
   renderDesignDocFile,
@@ -288,6 +289,10 @@ Deno.test("Sticky header and scrolling wrapper: thead cells are styled with posi
   assertStringIncludes(html, "top: 0;");
   assertStringIncludes(html, "z-index: 2;");
   assertStringIncludes(html, "background-color: var(--toc-bg);");
+  assertStringIncludes(
+    html,
+    "box-shadow: inset 0 1px 0 var(--border-color), inset 0 -1px 0 var(--border-color);",
+  );
 
   assertStringIncludes(html, ".table-wrapper {");
   assertStringIncludes(html, "max-height: 70vh;");
@@ -302,6 +307,91 @@ Deno.test("Table pagination: page navigation and position range format (e.g. '6-
     'status.textContent = startDisplay + "-" + endDisplay + " of " + rows.length;',
   );
   assertStringIncludes(html, "Rows per page: ");
+});
+
+Deno.test("computeTablePagination: calculates correct ranges and boundary states for 40 rows with pageSize 5", () => {
+  // Page 1
+  const page1 = computeTablePagination(40, 1, 5);
+  assertEquals(page1.startDisplay, 1);
+  assertEquals(page1.endDisplay, 5);
+  assertEquals(page1.totalPages, 8);
+  assertEquals(page1.statusText, "1-5 of 40");
+  assertEquals(page1.prevDisabled, true);
+  assertEquals(page1.nextDisabled, false);
+
+  // Page 2
+  const page2 = computeTablePagination(40, 2, 5);
+  assertEquals(page2.startDisplay, 6);
+  assertEquals(page2.endDisplay, 10);
+  assertEquals(page2.totalPages, 8);
+  assertEquals(page2.statusText, "6-10 of 40");
+  assertEquals(page2.prevDisabled, false);
+  assertEquals(page2.nextDisabled, false);
+
+  // Page 8
+  const page8 = computeTablePagination(40, 8, 5);
+  assertEquals(page8.startDisplay, 36);
+  assertEquals(page8.endDisplay, 40);
+  assertEquals(page8.totalPages, 8);
+  assertEquals(page8.statusText, "36-40 of 40");
+  assertEquals(page8.prevDisabled, false);
+  assertEquals(page8.nextDisabled, true);
+});
+
+Deno.test("computeTablePagination: handles remainder page calculation for 38 rows with pageSize 5", () => {
+  const page8 = computeTablePagination(38, 8, 5);
+  assertEquals(page8.startDisplay, 36);
+  assertEquals(page8.endDisplay, 38);
+  assertEquals(page8.statusText, "36-38 of 38");
+  assertEquals(page8.nextDisabled, true);
+});
+
+Deno.test("computeTablePagination: calculates correct ranges for 40 rows with pageSize 25", () => {
+  // Page 1
+  const page1 = computeTablePagination(40, 1, 25);
+  assertEquals(page1.startDisplay, 1);
+  assertEquals(page1.endDisplay, 25);
+  assertEquals(page1.statusText, "1-25 of 40");
+  assertEquals(page1.prevDisabled, true);
+  assertEquals(page1.nextDisabled, false);
+
+  // Page 2
+  const page2 = computeTablePagination(40, 2, 25);
+  assertEquals(page2.startDisplay, 26);
+  assertEquals(page2.endDisplay, 40);
+  assertEquals(page2.statusText, "26-40 of 40");
+  assertEquals(page2.prevDisabled, false);
+  assertEquals(page2.nextDisabled, true);
+});
+
+Deno.test("computeTablePagination: handles pageSize 'all'", () => {
+  const state = computeTablePagination(40, 1, "all");
+  assertEquals(state.isAll, true);
+  assertEquals(state.totalPages, 1);
+  assertEquals(state.currentPage, 1);
+  assertEquals(state.startDisplay, 1);
+  assertEquals(state.endDisplay, 40);
+  assertEquals(state.statusText, "1-40 of 40");
+  assertEquals(state.prevDisabled, true);
+  assertEquals(state.nextDisabled, true);
+});
+
+Deno.test("computeTablePagination: handles page clamping and edge cases", () => {
+  // Requested page 0 or negative clamps to page 1
+  const clampedZero = computeTablePagination(40, 0, 5);
+  assertEquals(clampedZero.currentPage, 1);
+  const clampedNeg = computeTablePagination(40, -5, 5);
+  assertEquals(clampedNeg.currentPage, 1);
+
+  // Requested page 99 with 8 total pages clamps to page 8
+  const clampedHigh = computeTablePagination(40, 99, 5);
+  assertEquals(clampedHigh.currentPage, 8);
+
+  // 0 total rows returns "0 of 0", both prev and next disabled
+  const empty = computeTablePagination(0, 1, 5);
+  assertEquals(empty.statusText, "0 of 0");
+  assertEquals(empty.prevDisabled, true);
+  assertEquals(empty.nextDisabled, true);
 });
 
 Deno.test("Table degradation without JavaScript: all rows present in HTML without display:none", () => {

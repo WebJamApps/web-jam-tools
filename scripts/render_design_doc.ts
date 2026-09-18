@@ -258,9 +258,7 @@ export function renderDesignDoc(
             const versionIdx = headerCells.findIndex((c) =>
               /^version$/i.test(stripCellDecoration(c))
             );
-            const dateIdx = headerCells.findIndex((c) =>
-              /^date$/i.test(stripCellDecoration(c))
-            );
+            const dateIdx = headerCells.findIndex((c) => /^date$/i.test(stripCellDecoration(c)));
             if (versionIdx !== -1 && dateIdx !== -1) {
               const dataRows = tableLines.slice(2).map(parseTableRow);
               if (dataRows.length > 0) {
@@ -358,7 +356,9 @@ export function renderDesignDoc(
             }
             metaHtml += `  </div>`;
             bodyHtmlParts.push(
-              `<header class="doc-header">\n  <h1>${parseInlineMarkdown(text)}</h1>\n  ${metaHtml}\n</header>`,
+              `<header class="doc-header">\n  <h1>${
+                parseInlineMarkdown(text)
+              }</h1>\n  ${metaHtml}\n</header>`,
             );
           } else {
             bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text)}</h1>`);
@@ -375,7 +375,9 @@ export function renderDesignDoc(
             }
             metaHtml += `  </div>`;
             bodyHtmlParts.push(
-              `<header class="doc-header">\n  <h1>${escapeHtml(documentTitle)}</h1>\n  ${metaHtml}\n</header>`,
+              `<header class="doc-header">\n  <h1>${
+                escapeHtml(documentTitle)
+              }</h1>\n  ${metaHtml}\n</header>`,
             );
           }
           if (inAppendixDetails) {
@@ -655,9 +657,6 @@ export function renderDesignDoc(
     th {
       background-color: var(--toc-bg);
       white-space: nowrap;
-      position: sticky;
-      top: 0;
-      z-index: 2;
     }
 
     thead th {
@@ -665,6 +664,7 @@ export function renderDesignDoc(
       top: 0;
       z-index: 2;
       background-color: var(--toc-bg);
+      box-shadow: inset 0 1px 0 var(--border-color), inset 0 -1px 0 var(--border-color);
     }
 
     .table-pager {
@@ -921,7 +921,6 @@ export function renderDesignDoc(
 
     (function() {
       var DEFAULT_PAGE_SIZE = 5;
-      var PAGE_SIZE = DEFAULT_PAGE_SIZE;
       var tables = document.querySelectorAll(".table-wrapper > table");
       for (var t = 0; t < tables.length; t++) {
         (function(table) {
@@ -982,11 +981,10 @@ export function renderDesignDoc(
             var isAll = currentSize === "all";
             var size = isAll ? rows.length : parseInt(currentSize, 10);
             var totalPages = isAll ? 1 : Math.ceil(rows.length / size);
-            if (currentPage > totalPages) currentPage = 1;
-            if (currentPage < 1) currentPage = 1;
+            currentPage = Math.max(1, Math.min(currentPage, totalPages));
 
             var startIdx = (currentPage - 1) * size;
-            var endIdx = Math.min(startIdx + size, rows.length);
+            var endIdx = isAll ? rows.length : Math.min(startIdx + size, rows.length);
 
             for (var i = 0; i < rows.length; i++) {
               var visible = isAll || (i >= startIdx && i < endIdx);
@@ -1001,8 +999,8 @@ export function renderDesignDoc(
             var startDisplay = rows.length > 0 ? (startIdx + 1) : 0;
             var endDisplay = endIdx;
             status.textContent = startDisplay + "-" + endDisplay + " of " + rows.length;
-            prevBtn.disabled = currentPage === 1;
-            nextBtn.disabled = isAll || currentPage === totalPages;
+            prevBtn.disabled = currentPage <= 1;
+            nextBtn.disabled = currentPage >= totalPages;
           }
 
           sizeSelect.addEventListener("change", function() {
@@ -1036,6 +1034,74 @@ export function renderDesignDoc(
 </body>
 </html>
 `;
+}
+
+export interface TablePaginationState {
+  pageSize: number;
+  isAll: boolean;
+  totalPages: number;
+  currentPage: number;
+  startIdx: number; // 0-based inclusive
+  endIdx: number; // 0-based exclusive
+  startDisplay: number; // 1-based display
+  endDisplay: number; // 1-based display
+  statusText: string; // e.g. "1-5 of 40" or "0 of 0"
+  prevDisabled: boolean;
+  nextDisabled: boolean;
+}
+
+export function computeTablePagination(
+  totalRows: number,
+  requestedPage: number,
+  pageSizeOption: number | "all" | string,
+): TablePaginationState {
+  const isAll = typeof pageSizeOption === "string" &&
+    pageSizeOption.toLowerCase() === "all";
+  const parsedSize = typeof pageSizeOption === "number"
+    ? pageSizeOption
+    : parseInt(String(pageSizeOption), 10);
+  const pageSize = isAll ? totalRows : (isNaN(parsedSize) || parsedSize <= 0 ? 5 : parsedSize);
+
+  const totalPages = totalRows === 0 ? 1 : (isAll ? 1 : Math.ceil(totalRows / pageSize));
+  const currentPage = Math.max(1, Math.min(requestedPage, totalPages));
+
+  if (totalRows === 0) {
+    return {
+      pageSize,
+      isAll,
+      totalPages: 1,
+      currentPage: 1,
+      startIdx: 0,
+      endIdx: 0,
+      startDisplay: 0,
+      endDisplay: 0,
+      statusText: "0 of 0",
+      prevDisabled: true,
+      nextDisabled: true,
+    };
+  }
+
+  const startIdx = (currentPage - 1) * pageSize;
+  const endIdx = isAll ? totalRows : Math.min(startIdx + pageSize, totalRows);
+  const startDisplay = startIdx + 1;
+  const endDisplay = endIdx;
+  const statusText = `${startDisplay}-${endDisplay} of ${totalRows}`;
+  const prevDisabled = currentPage <= 1;
+  const nextDisabled = currentPage >= totalPages;
+
+  return {
+    pageSize,
+    isAll,
+    totalPages,
+    currentPage,
+    startIdx,
+    endIdx,
+    startDisplay,
+    endDisplay,
+    statusText,
+    prevDisabled,
+    nextDisabled,
+  };
 }
 
 export function renderDesignDocFile(
