@@ -489,7 +489,7 @@ function looksLikeBackendMutation(command: string): boolean {
 function decideSegment(
   argv: string[],
   _rawSegment: string,
-  payload: Record<string, unknown>,
+  _payload: Record<string, unknown>,
   tokenPath: string,
   nowMs: number,
   inVenueMining: boolean,
