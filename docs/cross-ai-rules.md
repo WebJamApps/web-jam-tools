@@ -342,9 +342,10 @@ skill.
   `PATCH`, `PUT`, `DELETE`) against the production backend (`https://webjamsalem.herokuapp.com`)
   are protected by a safety PreToolUse guard hook (`hooks/block-backend-mutation.sh`).
   - **Explicit Approval Gate for Venue Writes:** Mutating backend records requires an active
-    session approval token file (default `~/.claude/state/backend-approval-token.json`, override
-    with `BACKEND_APPROVAL_TOKEN_PATH` or `VENUE_APPROVAL_TOKEN_PATH`), approved by Josh —
-    replacing ungated ad-hoc `curl` or `fetch` executions.
+    session approval token file, minted by running `deno task backend-approval-token` (default
+    output path `~/.claude/state/backend-approval-token.json`, override with
+    `BACKEND_APPROVAL_TOKEN_PATH` or `VENUE_APPROVAL_TOKEN_PATH`), approved by Josh — replacing
+    ungated ad-hoc `curl` or `fetch` executions.
   - **Strict Skill Boundary Enforcement:** Outreach endpoints (`/outreach/*`, including preview,
     check-replies, and send operations) are unconditionally blocked whenever the active task or
     context is within `skills/venue-mining/SKILL.md`, maintaining strict isolation between venue

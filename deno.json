@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.38.27",
+  "version": "1.38.28",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "sheet-music:generate": "deno run --allow-read --allow-write src/sheet-music/generate_docx.ts",
@@ -28,6 +28,7 @@
     "design:verify-citations": "deno run -A src/design-issue/cli.ts verify-citations",
     "render_design_doc": "deno run --allow-read --allow-write scripts/render_design_doc.ts",
     "write_issue_approval_token": "deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts",
+    "backend-approval-token": "deno run --allow-env=CLAUDE_CODE_SESSION_ID,CLAUDE_SESSION_ID,SESSION_ID,HOME,USERPROFILE,BACKEND_APPROVAL_TOKEN_PATH,VENUE_APPROVAL_TOKEN_PATH --allow-write scripts/write_backend_approval_token.ts",
     "create-issue": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "issue:create": "deno run --allow-env --allow-run --allow-read --allow-write scripts/create-issue.ts",
     "book-gig": "deno run --allow-all src/book-gig/cli.ts",
