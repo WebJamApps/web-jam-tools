@@ -341,16 +341,16 @@ skill.
 - **PRODUCTION BACKEND MUTATION GUARD & SKILL BOUNDARIES (wjt#1021):** HTTP mutations (`POST`,
   `PATCH`, `PUT`, `DELETE`) against the production backend (`https://webjamsalem.herokuapp.com`)
   are protected by a safety PreToolUse guard hook (`hooks/block-backend-mutation.sh`).
-  - **Explicit Approval Gate for Venue Writes:** Mutating backend records requires an explicit
-    session approval token (e.g. `~/.claude/state/backend-approval-token.json`) or structured CLI
-    confirmation (e.g. `deno task venue:create ... --token <token>`), replacing ungated ad-hoc
-    `curl` or `fetch` executions.
+  - **Explicit Approval Gate for Venue Writes:** Mutating backend records requires an active
+    session approval token file (default `~/.claude/state/backend-approval-token.json`, override
+    with `BACKEND_APPROVAL_TOKEN_PATH` or `VENUE_APPROVAL_TOKEN_PATH`), approved by Josh —
+    replacing ungated ad-hoc `curl` or `fetch` executions.
   - **Strict Skill Boundary Enforcement:** Outreach endpoints (`/outreach/*`, including preview,
     check-replies, and send operations) are unconditionally blocked whenever the active task or
     context is within `skills/venue-mining/SKILL.md`, maintaining strict isolation between venue
-    discovery and gig booking (citing web-jam-tools#208 "venue-mining: require a mandatory street
-    address for every venue create"). Outreach operations remain exclusively gated in
-    `skills/book-gig/SKILL.md`.
+    discovery and gig booking (citing web-jam-tools#1021 "hooks/backend-guard: guard production
+    backend mutations and enforce venue-mining skill boundaries"). Outreach operations remain
+    exclusively gated in `skills/book-gig/SKILL.md`.
   - **Safety Guard Defaults:** Authorized mutations with valid tokens proceed; unauthorized writes
     are refused with structured explanation; indeterminate or unparseable commands/payloads refuse
     (fail closed with exit 2 / permission deny). The guard never consults workflow off-switches.

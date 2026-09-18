@@ -11,15 +11,29 @@
  * Safety guards NEVER read workflow off-switches.
  *
  * Outcomes:
- *   - Condition holds (permitted): Target is an authorized venue endpoint, carries
- *     a valid in-session approval token or approved CLI task invocation (--token),
- *     and is within permissible skill scope -> ALLOW (proceeds without prompt).
- *   - Condition does not hold (denied): Lacks approval token, attempts ad-hoc
- *     unapproved write, or attempts outreach operations during venue-mining ->
- *     DENY (refuses with structured explanation).
+ *   - Condition holds (permitted): Target is an authorized venue endpoint AND a
+ *     presented token (bearer header, `--token <v>`, `--token=<v>`) — if any is
+ *     presented — MATCHES the `token` field of an approval token file that also
+ *     passes its own expiry/session/endpoint checks (a valid approval file with
+ *     NO token presented on the command line is itself sufficient) -> ALLOW.
+ *   - Condition does not hold (denied): No matching/valid approval, an ad-hoc
+ *     unapproved write, or an outreach operation during venue-mining -> DENY
+ *     (refuses with structured explanation naming which check failed).
  *   - Indeterminate condition: Parser failure, missing environment, unparseable
  *     command, or corrupt token state -> DENY (fails closed).
  *   - Out of scope (read-only query or unrelated command) -> PASS.
+ *
+ * Script files (`deno run <file>`, `node <file>`, `python3 <file>`, `bash
+ * <file>`, `sh <file>`) are read (capped at ~256 KB) and analyzed with the
+ * same backend-mutation/outreach logic as inline code (`deno eval`, `node
+ * -e`, `python3 -c`) — see `readScriptFile` / `decideScriptContent`. An
+ * unreadable or missing script file PASSES rather than denying.
+ *
+ * venue-mining context (`isVenueMiningContext`) is inferred ONLY from
+ * `ACTIVE_SKILL`/`SKILL_NAME` env, `payload.cwd`, and a narrow match on the
+ * CURRENT command (skill invocation, its SKILL.md path, or one of its deno
+ * tasks) — never from `transcript_path`. See the comment on
+ * `isVenueMiningContext` for why a transcript scan is unsafe for a guard.
  */
 
 import {
@@ -50,6 +64,28 @@ export function defaultBackendTokenPath(): string {
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "/home/joshua";
   return `${home}/.claude/state/backend-approval-token.json`;
 }
+
+// The remediation named in every deny message that requires approval. The
+// sanctioned route is an active session approval token FILE, approved by
+// Josh — NOT `deno task venue:create`/`venue:patch`, which are not real
+// `deno.json` tasks on this branch (web-jam-tools#1021 review Must Fix #4).
+// The `venue:*` deno-task branch below stays in the code (harmless, and
+// correct if such a task ever ships) but uses this same remediation text.
+const APPROVAL_REMEDIATION =
+  "Approve via an active session approval token file (default " +
+  "~/.claude/state/backend-approval-token.json, override with " +
+  "BACKEND_APPROVAL_TOKEN_PATH or VENUE_APPROVAL_TOKEN_PATH), approved by Josh.";
+
+const OUTREACH_DURING_VENUE_MINING_REASON =
+  'Outreach operations (/outreach/*, book-gig, outreach:*) are forbidden during ' +
+  'venue-mining tasks (skill boundary violation; see web-jam-tools#1021 ' +
+  '"hooks/backend-guard: guard production backend mutations and enforce ' +
+  'venue-mining skill boundaries").';
+
+const DIRECT_OUTREACH_MUTATION_REASON =
+  "Direct outreach mutations against the production backend " +
+  "(https://webjamsalem.herokuapp.com) are forbidden; outreach workflows must " +
+  "run through approved skills/book-gig/SKILL.md gates.";
 
 export type TokenLoadResult =
   | { kind: "missing" }
@@ -107,11 +143,22 @@ export function isTokenExpired(token: BackendApprovalToken, nowMs: number): bool
   return expMs <= nowMs;
 }
 
+/**
+ * Validate the session approval token file, and — if `presentedToken` is
+ * given (from a curl bearer header, `--token <v>`, or `--token=<v>`) —
+ * require it to MATCH the file's own `token` field on top of the existing
+ * expiry/session/endpoint checks. A presented token is never itself
+ * authorization; it only narrows an otherwise-valid approval file to the
+ * caller that was actually handed the token. Omitting `presentedToken`
+ * (i.e. no token was presented on the command line) validates the file
+ * alone — a valid approval file with nothing presented is the approval.
+ */
 export function checkSessionToken(
   tokenPath: string,
   sessionId?: string,
   endpoint?: string,
   nowMs = Date.now(),
+  presentedToken?: string,
 ): { valid: boolean; reason?: string; corrupt?: boolean } {
   const load = loadBackendToken(tokenPath);
   if (load.kind === "missing") {
@@ -138,9 +185,40 @@ export function checkSessionToken(
       return { valid: false, reason: `Approval token does not cover endpoint ${endpoint}` };
     }
   }
+  if (presentedToken !== undefined) {
+    if (!token.token || token.token !== presentedToken) {
+      return { valid: false, reason: "Presented token does not match the approval token file" };
+    }
+  }
   return { valid: true };
 }
 
+const VENUE_MINING_SKILL_INVOKE_RE = /(^|\s)\/venue-mining(?=\s|$)/;
+const VENUE_MINING_SKILL_PATH_RE = /skills\/venue-mining\/SKILL\.md\b/;
+const VENUE_MINING_TASK_RE = /\bvenue-mining:[A-Za-z0-9_-]+\b/;
+
+/**
+ * Whether the CURRENT command is running inside the venue-mining skill.
+ *
+ * Deliberately does NOT read `payload.transcript_path`. Transcripts are
+ * append-only, and this guard's own DENY text contains the words
+ * "venue-mining" and "outreach" — so a transcript-content scan meant a
+ * single denied command permanently tainted every later command in the
+ * same session (the transcript now contains the deny reason itself), and a
+ * transcript that merely quotes or discusses the skill (`let's look at
+ * skills/venue-mining/SKILL.md`) falsely put an unrelated, read-only
+ * session into venue-mining context. A safety guard must never carry a
+ * self-inflicted, permanent off-switch.
+ *
+ * Context is instead: `ACTIVE_SKILL`/`SKILL_NAME` env equal to
+ * "venue-mining"; `payload.cwd` containing `skills/venue-mining`; or the
+ * command itself invoking the skill (`/venue-mining` as its own token, or
+ * the literal `skills/venue-mining/SKILL.md` path) or running one of its
+ * deno tasks (`venue-mining:<task>`). A bare `\bvenue-mining\b` substring
+ * match was removed for the same reason as the transcript scan — it made
+ * any command merely mentioning the word (e.g. in a code comment or file
+ * path unrelated to the skill) count as venue-mining context.
+ */
 export function isVenueMiningContext(
   payload: Record<string, unknown>,
   command: string,
@@ -148,37 +226,30 @@ export function isVenueMiningContext(
   const activeSkill = Deno.env.get("ACTIVE_SKILL") || Deno.env.get("SKILL_NAME");
   if (activeSkill === "venue-mining") return true;
 
-  if (/\bvenue-mining\b/.test(command) || /skills\/venue-mining\b/.test(command)) {
-    return true;
-  }
-
   const cwd = typeof payload.cwd === "string" ? payload.cwd : "";
   if (cwd.includes("skills/venue-mining")) return true;
 
-  const transcriptPath = typeof payload.transcript_path === "string" ? payload.transcript_path : "";
-  if (transcriptPath) {
-    try {
-      const content = Deno.readTextFileSync(transcriptPath);
-      if (
-        content.includes("/venue-mining") ||
-        content.includes("skills/venue-mining") ||
-        content.includes("<command-name>venue-mining</command-name>") ||
-        content.includes("<command-name>/venue-mining</command-name>") ||
-        content.includes("<command-message>venue-mining</command-message>")
-      ) {
-        return true;
-      }
-    } catch {
-      // ignore
-    }
+  if (
+    VENUE_MINING_SKILL_INVOKE_RE.test(command) ||
+    VENUE_MINING_SKILL_PATH_RE.test(command) ||
+    VENUE_MINING_TASK_RE.test(command)
+  ) {
+    return true;
   }
 
   return false;
 }
 
-const BACKEND_HOST_RE = /(?:https?:\/\/)?webjamsalem\.herokuapp\.com|\$WEB_JAM_BACK_URL|\bWEB_JAM_BACK_URL\b/;
+// Matches the literal production host, or a shell EXPANSION of
+// WEB_JAM_BACK_URL ($WEB_JAM_BACK_URL / ${WEB_JAM_BACK_URL}) — but not the
+// bare identifier, so a command merely mentioning the env var's NAME (e.g.
+// in a comment, or `echo "uses WEB_JAM_BACK_URL"`) doesn't get classified
+// as production traffic.
+const BACKEND_HOST_RE = /(?:https?:\/\/)?webjamsalem\.herokuapp\.com|\$\{?WEB_JAM_BACK_URL\}?/;
 const OUTREACH_PATH_RE = /\/outreach(?:\/|\b|$)/;
 const VENUE_PATH_RE = /\/(?:venue|venue-mining)(?:\/|\b|$)/;
+const MUTATION_CODE_RE =
+  /(?:method\s*:\s*["'](POST|PUT|PATCH|DELETE)["']|\b(POST|PUT|PATCH|DELETE)\b|requests\.(post|patch|put|delete)|body\s*:)/i;
 
 function extractTokenArg(args: string[]): string | null {
   for (let i = 0; i < args.length; i++) {
@@ -198,6 +269,93 @@ function stripLeadingAssignments(tokens: string[]): string[] {
   let i = 0;
   while (i < tokens.length && ASSIGN_RE.test(tokens[i])) i++;
   return tokens.slice(i);
+}
+
+// Cap on how much of a script file is read for analysis (web-jam-tools#1021
+// review Must Fix #2). Large enough for any real script; prevents a huge
+// file from blowing up the hook's latency or memory.
+const SCRIPT_READ_CAP_BYTES = 256 * 1024;
+
+/**
+ * Read a script file for backend-mutation/outreach analysis, capped at
+ * ~256 KB. Returns `null` (never denies) when the path is missing,
+ * unreadable, or not a plain file — this guard cannot distinguish an
+ * ordinary repo script this process merely lacks permission to read (or a
+ * script that doesn't exist yet, e.g. a generator's own output path) from
+ * a hostile one, and denying every unreadable `deno run`/`node`/etc. would
+ * break ordinary repo tasks, which is a worse failure than the narrow gap
+ * of an unreadable script that happens to mutate the backend.
+ */
+function readScriptFile(path: string): string | null {
+  try {
+    const info = Deno.statSync(path);
+    if (!info.isFile) return null;
+    const bytes = Deno.readFileSync(path);
+    const capped = bytes.length > SCRIPT_READ_CAP_BYTES
+      ? bytes.subarray(0, SCRIPT_READ_CAP_BYTES)
+      : bytes;
+    return new TextDecoder().decode(capped);
+  } catch {
+    return null;
+  }
+}
+
+// The first non-flag argument after the program's own name (and, for
+// `deno`, after the `run` subcommand) — i.e. the script file path. Flags
+// are skipped positionally rather than by an allowlist, since deno/node/
+// python3/bash/sh flags are all `-x`/`--long`/`--long=value` single tokens
+// with no separately-tokenized value in the forms this guard needs to see
+// through (`deno run -A file.ts`, `node file.js`, `python3 file.py`,
+// `bash file.sh`).
+function extractScriptPath(prog: string, stripped: string[]): string | null {
+  const startIdx = prog === "deno" ? 2 : 1;
+  for (let i = startIdx; i < stripped.length; i++) {
+    const a = stripped[i];
+    if (a.startsWith("-")) continue;
+    return a;
+  }
+  return null;
+}
+
+/**
+ * Shared backend-mutation/outreach analysis for a blob of CODE — whether
+ * it came from inline `deno eval`/`node -e`/`python3 -c`, or was read from
+ * a script FILE (`deno run <file>`, `node <file>`, `python3 <file>`,
+ * `bash <file>`, `sh <file>`; web-jam-tools#1021 review Must Fix #2).
+ * Returns `null` when the code doesn't reference the backend at all, or
+ * references it but isn't a mutation — i.e. "no opinion, keep evaluating
+ * this segment other ways" rather than "pass".
+ */
+function decideScriptContent(
+  code: string,
+  tokenPath: string,
+  nowMs: number,
+  inVenueMining: boolean,
+  sessionId?: string,
+): DecisionResult | null {
+  if (!BACKEND_HOST_RE.test(code)) return null;
+
+  if (OUTREACH_PATH_RE.test(code)) {
+    if (inVenueMining) {
+      return { outcome: "deny", reason: OUTREACH_DURING_VENUE_MINING_REASON };
+    }
+    return { outcome: "deny", reason: DIRECT_OUTREACH_MUTATION_REASON };
+  }
+
+  if (!MUTATION_CODE_RE.test(code)) return null;
+
+  const tokenCheck = checkSessionToken(tokenPath, sessionId, "/venue", nowMs);
+  if (tokenCheck.valid) {
+    return {
+      outcome: "allow",
+      reason: "Authorized venue script mutation with active session approval token.",
+    };
+  }
+  return {
+    outcome: "deny",
+    reason: `Script attempts unauthorized backend mutation against production backend ` +
+      `(https://webjamsalem.herokuapp.com): ${tokenCheck.reason}. ${APPROVAL_REMEDIATION}`,
+  };
 }
 
 interface CurlInfo {
@@ -330,7 +488,7 @@ function looksLikeBackendMutation(command: string): boolean {
 
 function decideSegment(
   argv: string[],
-  rawSegment: string,
+  _rawSegment: string,
   payload: Record<string, unknown>,
   tokenPath: string,
   nowMs: number,
@@ -350,18 +508,10 @@ function decideSegment(
     // Outreach endpoints
     if (curl.isOutreach) {
       if (inVenueMining) {
-        return {
-          outcome: "deny",
-          reason:
-            'Outreach operations (/outreach/*) are forbidden during venue-mining tasks (skill boundary violation; see web-jam-tools#208 "venue-mining: require a mandatory street address for every venue create").',
-        };
+        return { outcome: "deny", reason: OUTREACH_DURING_VENUE_MINING_REASON };
       }
       if (["POST", "PATCH", "PUT", "DELETE"].includes(curl.method)) {
-        return {
-          outcome: "deny",
-          reason:
-            "Direct outreach mutations against the production backend (https://webjamsalem.herokuapp.com) are forbidden; outreach workflows must run through approved skills/book-gig/SKILL.md gates.",
-        };
+        return { outcome: "deny", reason: DIRECT_OUTREACH_MUTATION_REASON };
       }
       return { outcome: "pass" };
     }
@@ -374,29 +524,19 @@ function decideSegment(
       }
 
       if (curl.isVenue) {
-        if (curl.token) {
-          return {
-            outcome: "allow",
-            reason: "Authorized venue mutation with approval token.",
-          };
-        }
-        const tokenCheck = checkSessionToken(tokenPath, sessionId, curl.path, nowMs);
+        const tokenCheck = checkSessionToken(tokenPath, sessionId, curl.path, nowMs, curl.token);
         if (tokenCheck.valid) {
           return {
             outcome: "allow",
-            reason: "Authorized venue mutation with active session approval token.",
-          };
-        }
-        if (tokenCheck.reason && tokenCheck.reason !== "No session approval token found") {
-          return {
-            outcome: "deny",
-            reason: `Approval token rejected: ${tokenCheck.reason}.`,
+            reason: curl.token
+              ? "Authorized venue mutation: presented token matches the active session approval token."
+              : "Authorized venue mutation with active session approval token.",
           };
         }
         return {
           outcome: "deny",
-          reason:
-            "Unauthorized venue mutation against production backend (https://webjamsalem.herokuapp.com) without an approval token. Requires an explicit session approval token or structured approved CLI invocation.",
+          reason: `Unauthorized venue mutation against production backend ` +
+            `(https://webjamsalem.herokuapp.com): ${tokenCheck.reason}. ${APPROVAL_REMEDIATION}`,
         };
       }
 
@@ -410,36 +550,32 @@ function decideSegment(
     return { outcome: "pass" };
   }
 
-  // 2. Check deno task / deno run
+  // 2. deno task / deno run / deno eval
   if (prog === "deno") {
     const sub = stripped[1];
     if (sub === "task") {
       const task = stripped[2] ?? "";
       if (task === "venue:create" || task === "venue:patch" || task.startsWith("venue:")) {
         const token = extractTokenArg(stripped);
-        if (token && token.trim().length > 0) {
-          return {
-            outcome: "allow",
-            reason: "Authorized venue task invocation with approval token.",
-          };
-        }
-        const tokenCheck = checkSessionToken(tokenPath, sessionId, "/venue", nowMs);
+        const tokenCheck = checkSessionToken(
+          tokenPath,
+          sessionId,
+          "/venue",
+          nowMs,
+          token ?? undefined,
+        );
         if (tokenCheck.valid) {
           return {
             outcome: "allow",
-            reason: "Authorized venue task invocation with active session approval token.",
-          };
-        }
-        if (tokenCheck.reason && tokenCheck.reason !== "No session approval token found") {
-          return {
-            outcome: "deny",
-            reason: `Approval token rejected: ${tokenCheck.reason}.`,
+            reason: token
+              ? "Authorized venue task invocation: presented token matches the active session approval token."
+              : "Authorized venue task invocation with active session approval token.",
           };
         }
         return {
           outcome: "deny",
-          reason:
-            "Venue mutation task requires an approval token (--token <token> or active session approval token).",
+          reason: `Unauthorized venue task invocation against production backend ` +
+            `(https://webjamsalem.herokuapp.com): ${tokenCheck.reason}. ${APPROVAL_REMEDIATION}`,
         };
       }
 
@@ -449,11 +585,7 @@ function decideSegment(
 
       if (task.startsWith("outreach:") || task === "book-gig" || task.startsWith("book-gig:")) {
         if (inVenueMining) {
-          return {
-            outcome: "deny",
-            reason:
-              'Outreach operations are forbidden during venue-mining tasks (skill boundary violation; see web-jam-tools#208 "venue-mining: require a mandatory street address for every venue create").',
-          };
+          return { outcome: "deny", reason: OUTREACH_DURING_VENUE_MINING_REASON };
         }
         return { outcome: "pass" };
       }
@@ -461,80 +593,54 @@ function decideSegment(
 
     if (sub === "eval") {
       const code = stripped[2] ?? "";
-      if (BACKEND_HOST_RE.test(code)) {
-        if (OUTREACH_PATH_RE.test(code)) {
-          if (inVenueMining) {
-            return {
-              outcome: "deny",
-              reason:
-                'Outreach operations (/outreach/*) are forbidden during venue-mining tasks (skill boundary violation; see web-jam-tools#208 "venue-mining: require a mandatory street address for every venue create").',
-            };
-          }
-          return {
-            outcome: "deny",
-            reason:
-              "Direct outreach mutations against the production backend (https://webjamsalem.herokuapp.com) are forbidden; outreach workflows must run through approved skills/book-gig/SKILL.md gates.",
-          };
-        }
+      const dec = decideScriptContent(code, tokenPath, nowMs, inVenueMining, sessionId);
+      if (dec) return dec;
+    }
 
-        const isMutation = /(?:method\s*:\s*["'](POST|PUT|PATCH|DELETE)["']|\b(POST|PUT|PATCH|DELETE)\b|body\s*:)/i
-          .test(code);
-        if (isMutation) {
-          const tokenCheck = checkSessionToken(tokenPath, sessionId, "/venue", nowMs);
-          if (tokenCheck.valid) {
-            return {
-              outcome: "allow",
-              reason: "Authorized venue script evaluation with session approval token.",
-            };
-          }
-          return {
-            outcome: "deny",
-            reason:
-              "Script evaluation attempts unauthorized backend mutation against production backend without an approval token.",
-          };
+    if (sub === "run") {
+      const scriptPath = extractScriptPath("deno", stripped);
+      if (scriptPath) {
+        const content = readScriptFile(scriptPath);
+        if (content !== null) {
+          const dec = decideScriptContent(content, tokenPath, nowMs, inVenueMining, sessionId);
+          if (dec) return dec;
         }
       }
     }
   }
 
-  // 3. Node or Python script evaluation
-  if ((prog === "node" && stripped[1] === "-e") || (prog === "python3" && stripped[1] === "-c")) {
-    const code = stripped[2] ?? "";
-    if (BACKEND_HOST_RE.test(code)) {
-      if (OUTREACH_PATH_RE.test(code) && inVenueMining) {
-        return {
-          outcome: "deny",
-          reason:
-            'Outreach operations are forbidden during venue-mining tasks (skill boundary violation; see web-jam-tools#208 "venue-mining: require a mandatory street address for every venue create").',
-        };
-      }
-      const isMutation = /(?:method\s*:\s*["'](POST|PUT|PATCH|DELETE)["']|\b(POST|PUT|PATCH|DELETE)\b|requests\.(post|patch|put|delete)|body\s*:)/i
-        .test(code);
-      if (isMutation) {
-        const tokenCheck = checkSessionToken(tokenPath, sessionId, "/venue", nowMs);
-        if (tokenCheck.valid) {
-          return {
-            outcome: "allow",
-            reason: "Authorized venue script evaluation with session approval token.",
-          };
+  // 3. node / python3 — inline eval (-e / -c) or a script FILE
+  if (prog === "node" || prog === "python3") {
+    const inlineFlag = prog === "node" ? "-e" : "-c";
+    if (stripped[1] === inlineFlag) {
+      const code = stripped[2] ?? "";
+      const dec = decideScriptContent(code, tokenPath, nowMs, inVenueMining, sessionId);
+      if (dec) return dec;
+    } else {
+      const scriptPath = extractScriptPath(prog, stripped);
+      if (scriptPath) {
+        const content = readScriptFile(scriptPath);
+        if (content !== null) {
+          const dec = decideScriptContent(content, tokenPath, nowMs, inVenueMining, sessionId);
+          if (dec) return dec;
         }
-        return {
-          outcome: "deny",
-          reason:
-            "Script evaluation attempts unauthorized backend mutation against production backend without an approval token.",
-        };
       }
     }
   }
 
-  // 4. Outreach commands during venue-mining
-  if (inVenueMining) {
-    if (OUTREACH_PATH_RE.test(rawSegment) || /\bbook-gig\b/.test(rawSegment)) {
-      return {
-        outcome: "deny",
-        reason:
-          'Outreach operations (/outreach/*) are forbidden during venue-mining tasks (skill boundary violation; see web-jam-tools#208 "venue-mining: require a mandatory street address for every venue create").',
-      };
+  // 4. bash / sh — a script FILE (`bash -c "..."` is resolved to a nested
+  // command string by resolveThroughWrappers before decideSegment ever
+  // sees it, so only the file-argument form reaches here).
+  if (prog === "bash" || prog === "sh") {
+    if (stripped[1] !== "-c") {
+      const scriptPath = extractScriptPath(prog, stripped);
+      if (scriptPath) {
+        const content = readScriptFile(scriptPath);
+        if (content !== null) {
+          const dec = decideScriptContent(content, tokenPath, nowMs, inVenueMining, sessionId);
+          if (dec) return dec;
+        }
+      }
     }
   }
 
