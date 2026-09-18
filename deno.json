@@ -79,7 +79,8 @@
     "lineWidth": 100,
     "include": [
       "src/",
-      "test/"
+      "test/",
+      "hooks/"
     ],
     "exclude": [
       "src/gig-scraper/*.json"
@@ -88,7 +89,8 @@
   "lint": {
     "include": [
       "src/",
-      "test/"
+      "test/",
+      "hooks/"
     ],
     "exclude": [
       "src/gig-scraper/*.json"
