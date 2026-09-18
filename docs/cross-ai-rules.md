@@ -338,6 +338,22 @@ skill.
   assertions must explicitly verify the specific mode indicator or feature-specific output (e.g.
   asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than
   relying only on assertions shared with default paths.
+- **PRODUCTION BACKEND MUTATION GUARD & SKILL BOUNDARIES (wjt#1021):** HTTP mutations (`POST`,
+  `PATCH`, `PUT`, `DELETE`) against the production backend (`https://webjamsalem.herokuapp.com`)
+  are protected by a safety PreToolUse guard hook (`hooks/block-backend-mutation.sh`).
+  - **Explicit Approval Gate for Venue Writes:** Mutating backend records requires an active
+    session approval token file (default `~/.claude/state/backend-approval-token.json`, override
+    with `BACKEND_APPROVAL_TOKEN_PATH` or `VENUE_APPROVAL_TOKEN_PATH`), approved by Josh —
+    replacing ungated ad-hoc `curl` or `fetch` executions.
+  - **Strict Skill Boundary Enforcement:** Outreach endpoints (`/outreach/*`, including preview,
+    check-replies, and send operations) are unconditionally blocked whenever the active task or
+    context is within `skills/venue-mining/SKILL.md`, maintaining strict isolation between venue
+    discovery and gig booking (citing web-jam-tools#1021 "hooks/backend-guard: guard production
+    backend mutations and enforce venue-mining skill boundaries"). Outreach operations remain
+    exclusively gated in `skills/book-gig/SKILL.md`.
+  - **Safety Guard Defaults:** Authorized mutations with valid tokens proceed; unauthorized writes
+    are refused with structured explanation; indeterminate or unparseable commands/payloads refuse
+    (fail closed with exit 2 / permission deny). The guard never consults workflow off-switches.
 - **DESIGN WORK RUNS THROUGH `/design-issue`:** Design work — options, trade-offs, decisions worth
   recording — does not happen in plain chat. The moment a conversation turns into design, invoke
   `/design-issue` and work inside it.
