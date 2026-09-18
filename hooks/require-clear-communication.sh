@@ -51,6 +51,15 @@
 #     the author's side, since rewriting the real message can't change what
 #     is being judged. Confirmed present in real transcripts on this laptop
 #     (top-level fields, siblings of "message", not nested under it).
+# DECISION on outcome 3 (cannot evaluate) — proceed with visible warning (web-jam-tools#1073):
+# When the hook cannot determine whether a reply is clean or violating (stdin unreadable
+# or empty, transcript_path missing from payload, transcript file nonexistent, selector
+# errors or returns empty, or detector errors), it proceeds (exit 0) with a visible
+# diagnostic on stderr naming the failed step and captured stderr, rather than refusing.
+# Because this is a Stop hook, refusing would block the reply from being delivered at all.
+# A transient deno or runtime failure would then wedge every turn in every session with no
+# way for the author to comply, since rewriting the message cannot fix a broken subprocess.
+# Visibility on stderr ensures failures leave an actionable trace without wedging sessions.
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
@@ -65,19 +74,59 @@ CONFIG="$HOOK_DIR/clear-communication.yaml"
 # this hook never depends on repo state to evaluate.
 DENO_HOOK_CONFIG="$HOOK_DIR/lib/deno-hook-config.json"
 
-input="$(cat)" || exit 0
-tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
-[ -n "$tp" ] && [ -f "$tp" ] || exit 0
+cannot_evaluate() {
+  local step="$1"
+  local detail="${2:-}"
+  {
+    echo "WARN (clear-communication guard): could not evaluate reply — failed at step: $step"
+    if [ -n "$detail" ]; then
+      printf '%s\n' "$detail"
+    fi
+  } >&2
+  exit 0
+}
+
+TMP_ERR="$(mktemp)"
+trap 'rm -f "$TMP_ERR"' EXIT
+
+if ! input="$(cat 2>"$TMP_ERR")"; then
+  cannot_evaluate "read stdin payload" "$(<"$TMP_ERR")"
+fi
+
+if [ -z "$input" ]; then
+  cannot_evaluate "read stdin payload" "empty stdin payload"
+fi
+
+if ! tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>"$TMP_ERR")"; then
+  cannot_evaluate "extract transcript_path" "$(<"$TMP_ERR")"
+fi
+
+if [ -z "$tp" ]; then
+  cannot_evaluate "extract transcript_path" "payload carries no transcript_path"
+fi
+
+if [ ! -f "$tp" ]; then
+  cannot_evaluate "verify transcript file" "transcript file does not exist: $tp"
+fi
 
 # Last genuine assistant transcript entry's text content, selected via
 # hooks/lib/select_transcript_entry.ts (excludes isSidechain and
 # isApiErrorMessage entries, bounds search to current turn — web-jam-tools#596).
-msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
+if ! msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>"$TMP_ERR")"; then
+  cannot_evaluate "run selector" "$(<"$TMP_ERR")"
+fi
 
-[ -n "$msg" ] || exit 0
+if [ -z "$msg" ]; then
+  cannot_evaluate "select assistant message" "no selectable assistant message found in transcript"
+fi
 
-report="$(MSG_FOR_PY="$msg" deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>/dev/null || true)"
-[ -n "$report" ] || exit 0
+if ! report="$(MSG_FOR_PY="$msg" deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>"$TMP_ERR")"; then
+  cannot_evaluate "run detector" "$(<"$TMP_ERR")"
+fi
+
+if [ -z "$report" ]; then
+  exit 0
+fi
 
 {
   echo "BLOCKED (clear-communication guard): this message violates one or more chat"
@@ -90,3 +139,4 @@ report="$(MSG_FOR_PY="$msg" deno run --config "$DENO_HOOK_CONFIG" --no-lock --al
 } >&2
 
 exit 2
+

@@ -414,14 +414,22 @@ Deno.test("a sidechain entry is skipped even when it is the only assistant entry
   });
 });
 
-// --- fail-open: unreadable/absent transcript stays silent, exit 0 ---
+// --- outcome 3: cannot evaluate -> proceed with visible diagnostic on stderr, exit 0 (web-jam-tools#1073) ---
 
-Deno.test("nonexistent transcript path stays silent, exit 0 (fail-open)", async () => {
+Deno.test("nonexistent transcript path proceeds with warning on stderr, exit 0", async () => {
   const res = await runHook("/nonexistent/path/does-not-exist.jsonl");
   assertEquals(res.code, 0, res.stderr);
+  assert(
+    res.stderr.includes(
+      "WARN (clear-communication guard): could not evaluate reply — failed at step: verify transcript file",
+    ),
+  );
+  assert(
+    res.stderr.includes("transcript file does not exist: /nonexistent/path/does-not-exist.jsonl"),
+  );
 });
 
-Deno.test("invalid JSON on stdin stays silent, exit 0 (fail-open)", async () => {
+Deno.test("invalid JSON on stdin proceeds with warning on stderr, exit 0", async () => {
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
     stdin: "piped",
@@ -433,7 +441,70 @@ Deno.test("invalid JSON on stdin stays silent, exit 0 (fail-open)", async () => 
   await writer.write(new TextEncoder().encode("not valid json{{{"));
   await writer.close();
   const { code, stderr } = await child.output();
-  assertEquals(code, 0, new TextDecoder().decode(stderr));
+  const stderrStr = new TextDecoder().decode(stderr);
+  assertEquals(code, 0, stderrStr);
+  assert(
+    stderrStr.includes(
+      "WARN (clear-communication guard): could not evaluate reply — failed at step: extract transcript_path",
+    ),
+  );
+});
+
+Deno.test("payload with no transcript_path proceeds with warning on stderr, exit 0", async () => {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(new TextEncoder().encode("{}"));
+  await writer.close();
+  const { code, stderr } = await child.output();
+  const stderrStr = new TextDecoder().decode(stderr);
+  assertEquals(code, 0, stderrStr);
+  assert(
+    stderrStr.includes(
+      "WARN (clear-communication guard): could not evaluate reply — failed at step: extract transcript_path",
+    ),
+  );
+  assert(stderrStr.includes("payload carries no transcript_path"));
+});
+
+Deno.test("empty stdin payload proceeds with warning on stderr, exit 0", async () => {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.close();
+  const { code, stderr } = await child.output();
+  const stderrStr = new TextDecoder().decode(stderr);
+  assertEquals(code, 0, stderrStr);
+  assert(
+    stderrStr.includes(
+      "WARN (clear-communication guard): could not evaluate reply — failed at step: read stdin payload",
+    ),
+  );
+  assert(stderrStr.includes("empty stdin payload"));
+});
+
+Deno.test("transcript with no selectable assistant entry proceeds with warning on stderr, exit 0", async () => {
+  const entries = [userTurn("hi there")];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      res.stderr.includes(
+        "WARN (clear-communication guard): could not evaluate reply — failed at step: select assistant message",
+      ),
+    );
+    assert(res.stderr.includes("no selectable assistant message found in transcript"));
+  });
 });
 
 // --- turn boundary tests (web-jam-tools#596) ---
@@ -455,7 +526,12 @@ Deno.test("reproduces issue #596: previous turn contains clear-communication vio
   await withFixtureTranscript(entries, async (path) => {
     const res = await runHook(path);
     assertEquals(res.code, 0, res.stderr);
-    assertEquals(res.stderr.trim(), "");
+    assert(!res.stderr.includes("BLOCKED"));
+    assert(
+      res.stderr.includes(
+        "WARN (clear-communication guard): could not evaluate reply — failed at step: select assistant message",
+      ),
+    );
   });
 });
 
