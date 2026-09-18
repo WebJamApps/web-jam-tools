@@ -391,7 +391,7 @@ Deno.test("check_backend_mutation: venue-mining context is NOT inferred from tra
       transcript_path: transcriptPath,
       tool_input: { command: "deno task book-gig 2026-10-10" },
     });
-    const res = checkBackendMutation(payload);
+    const res = checkBackendMutation(payload, "/nonexistent/token.json");
     assertEquals(res, "PASS");
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -411,7 +411,7 @@ Deno.test("check_backend_mutation: grep for /outreach substring outside real inv
       transcript_path: transcriptPath,
       tool_input: { command: "grep -rn '/outreach' src/" },
     });
-    const res = checkBackendMutation(payload);
+    const res = checkBackendMutation(payload, "/nonexistent/token.json");
     assertEquals(res, "PASS");
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -425,7 +425,7 @@ Deno.test("check_backend_mutation: cat docs/book-gig.md PASSES even inside real 
       tool_name: "Bash",
       tool_input: { command: "cat docs/book-gig.md" },
     });
-    const res = checkBackendMutation(payload);
+    const res = checkBackendMutation(payload, "/nonexistent/token.json");
     assertEquals(res, "PASS");
   } finally {
     Deno.env.delete("ACTIVE_SKILL");
@@ -439,7 +439,7 @@ Deno.test("check_backend_mutation: grep -rn '/outreach' src/ PASSES even inside 
       tool_name: "Bash",
       tool_input: { command: "grep -rn '/outreach' src/" },
     });
-    const res = checkBackendMutation(payload);
+    const res = checkBackendMutation(payload, "/nonexistent/token.json");
     assertEquals(res, "PASS");
   } finally {
     Deno.env.delete("ACTIVE_SKILL");
@@ -453,7 +453,7 @@ Deno.test("check_backend_mutation: deno task book-gig is DENIED when ACTIVE_SKIL
       tool_name: "Bash",
       tool_input: { command: "deno task book-gig 2026-10-10" },
     });
-    const res = checkBackendMutation(payload);
+    const res = checkBackendMutation(payload, "/nonexistent/token.json");
     assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
     assert(
       res.includes(
@@ -474,7 +474,7 @@ Deno.test("check_backend_mutation: real outreach curl during venue-mining is BLO
       command: "curl https://webjamsalem.herokuapp.com/outreach/preview",
     },
   };
-  const res = checkBackendMutation(JSON.stringify(payload));
+  const res = checkBackendMutation(JSON.stringify(payload), "/nonexistent/token.json");
   assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
   assert(
     res.includes(
@@ -492,7 +492,7 @@ Deno.test("check_backend_mutation: /venue-mining skill invocation as a command t
       tool_input: { command: "deno task book-gig --send" },
     });
     // Not venue-mining context here (no /venue-mining token in THIS command) — sanity check PASS.
-    assertEquals(checkBackendMutation(payload), "PASS");
+    assertEquals(checkBackendMutation(payload, "/nonexistent/token.json"), "PASS");
 
     const payload2 = {
       tool_name: "Bash",
@@ -500,7 +500,7 @@ Deno.test("check_backend_mutation: /venue-mining skill invocation as a command t
         command: "/venue-mining roanoke && deno task book-gig --send",
       },
     };
-    const res2 = checkBackendMutation(JSON.stringify(payload2));
+    const res2 = checkBackendMutation(JSON.stringify(payload2), "/nonexistent/token.json");
     assert(res2.startsWith("DENY:"), `Expected DENY, got: ${res2}`);
   } finally {
     Deno.env.delete("SKILL_NAME");
@@ -532,7 +532,7 @@ Deno.test("check_backend_mutation: venue-mining:record-sweep is ALLOWED", () => 
       command: "deno task venue-mining:record-sweep --metro roanoke --swept-at 2026-09-18",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("ALLOW:"), `Expected ALLOW, got: ${res}`);
 });
 
@@ -543,7 +543,7 @@ Deno.test("check_backend_mutation: curl -X POST https://webjamsalem.herokuapp.co
       command: "curl -X POST https://webjamsalem.herokuapp.com/outreach/check-replies",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
   assert(res.includes("Direct outreach mutations against the production backend"), res);
 });
@@ -555,7 +555,7 @@ Deno.test("check_backend_mutation: read-only queries (GET /venue) outside venue-
       command: "curl https://webjamsalem.herokuapp.com/venue",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -566,7 +566,7 @@ Deno.test("check_backend_mutation: read-only query with GET flag PASS", () => {
       command: "curl -X GET https://webjamsalem.herokuapp.com/venue/123",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -577,7 +577,7 @@ Deno.test("check_backend_mutation: unrelated shell commands PASS", () => {
       command: "git status && deno test test/manifest.test.ts",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -588,17 +588,17 @@ Deno.test("check_backend_mutation: non-Bash tools PASS", () => {
       file_path: "/tmp/foo.txt",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
 Deno.test("check_backend_mutation: indeterminate conditions fail closed (DENIED)", () => {
   // null tool_input
   const nullInput = JSON.stringify({ tool_name: "Bash", tool_input: null });
-  assert(checkBackendMutation(nullInput).startsWith("DENY:"));
+  assert(checkBackendMutation(nullInput, "/nonexistent/token.json").startsWith("DENY:"));
 
   // unparseable JSON
-  assert(checkBackendMutation("invalid json {").startsWith("DENY:"));
+  assert(checkBackendMutation("invalid json {", "/nonexistent/token.json").startsWith("DENY:"));
 
   // unterminated quote on backend command
   const unterm = JSON.stringify({
@@ -607,7 +607,7 @@ Deno.test("check_backend_mutation: indeterminate conditions fail closed (DENIED)
       command: "curl -X POST https://webjamsalem.herokuapp.com/venue -d 'unterminated",
     },
   });
-  assert(checkBackendMutation(unterm).startsWith("DENY:"));
+  assert(checkBackendMutation(unterm, "/nonexistent/token.json").startsWith("DENY:"));
 });
 
 Deno.test("check_backend_mutation: inline script evaluation with backend POST is DENIED", () => {
@@ -618,7 +618,7 @@ Deno.test("check_backend_mutation: inline script evaluation with backend POST is
         'deno eval \'fetch("https://webjamsalem.herokuapp.com/venue", {method: "POST", body: "{}"})\'',
     },
   });
-  assert(checkBackendMutation(denoEval).startsWith("DENY:"));
+  assert(checkBackendMutation(denoEval, "/nonexistent/token.json").startsWith("DENY:"));
 
   const nodeEval = JSON.stringify({
     tool_name: "Bash",
@@ -626,7 +626,7 @@ Deno.test("check_backend_mutation: inline script evaluation with backend POST is
       command: 'node -e \'fetch("https://webjamsalem.herokuapp.com/venue", {method: "POST"})\'',
     },
   });
-  assert(checkBackendMutation(nodeEval).startsWith("DENY:"));
+  assert(checkBackendMutation(nodeEval, "/nonexistent/token.json").startsWith("DENY:"));
 
   const pyEval = JSON.stringify({
     tool_name: "Bash",
@@ -635,7 +635,7 @@ Deno.test("check_backend_mutation: inline script evaluation with backend POST is
         "python3 -c 'import requests; requests.post(\"https://webjamsalem.herokuapp.com/venue\")'",
     },
   });
-  assert(checkBackendMutation(pyEval).startsWith("DENY:"));
+  assert(checkBackendMutation(pyEval, "/nonexistent/token.json").startsWith("DENY:"));
 });
 
 Deno.test("check_backend_mutation: commands resolved through wrappers are DENIED", () => {
@@ -646,7 +646,7 @@ Deno.test("check_backend_mutation: commands resolved through wrappers are DENIED
         'sudo timeout 10 curl -X POST https://webjamsalem.herokuapp.com/venue -d \'{"name":"Test"}\'',
     },
   });
-  assert(checkBackendMutation(wrapped).startsWith("DENY:"));
+  assert(checkBackendMutation(wrapped, "/nonexistent/token.json").startsWith("DENY:"));
 
   const nested = JSON.stringify({
     tool_name: "Bash",
@@ -655,7 +655,7 @@ Deno.test("check_backend_mutation: commands resolved through wrappers are DENIED
         'bash -c "curl -X POST https://webjamsalem.herokuapp.com/venue -d \\"{\\\\\\"name\\\\\\":\\\\\\"Test\\\\\\"}\\""',
     },
   });
-  assert(checkBackendMutation(nested).startsWith("DENY:"));
+  assert(checkBackendMutation(nested, "/nonexistent/token.json").startsWith("DENY:"));
 });
 
 Deno.test("check_backend_mutation: bare WEB_JAM_BACK_URL identifier alone is NOT treated as production host", () => {
@@ -665,7 +665,7 @@ Deno.test("check_backend_mutation: bare WEB_JAM_BACK_URL identifier alone is NOT
       command: "echo 'this script reads WEB_JAM_BACK_URL from the environment'",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -800,7 +800,7 @@ Deno.test("check_backend_mutation: a leading VAR=value assignment prefix is skip
     tool_name: "Bash",
     tool_input: { command: "METRO=roanoke deno task venue-mining:record-sweep --metro roanoke" },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("ALLOW:"), `Expected ALLOW, got: ${res}`);
 });
 
@@ -823,7 +823,7 @@ Deno.test("check_backend_mutation: deno run with only flags and no script positi
     tool_name: "Bash",
     tool_input: { command: "deno run -A --unstable-temporal" },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -836,7 +836,7 @@ Deno.test("check_backend_mutation: script file mentioning the backend but not mu
         tool_name: "Bash",
         tool_input: { command: `deno run -A ${path}` },
       });
-      const res = checkBackendMutation(payload);
+      const res = checkBackendMutation(payload, "/nonexistent/token.json");
       assertEquals(res, "PASS");
     },
   );
@@ -848,7 +848,7 @@ Deno.test("check_backend_mutation: script file with no backend mention at all PA
       tool_name: "Bash",
       tool_input: { command: `node ${path}` },
     });
-    const res = checkBackendMutation(payload);
+    const res = checkBackendMutation(payload, "/nonexistent/token.json");
     assertEquals(res, "PASS");
   });
 });
@@ -862,7 +862,7 @@ Deno.test("check_backend_mutation: script file hitting an outreach endpoint outs
         tool_name: "Bash",
         tool_input: { command: `deno run -A ${path}` },
       });
-      const res = checkBackendMutation(payload);
+      const res = checkBackendMutation(payload, "/nonexistent/token.json");
       assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
       assert(res.includes("Direct outreach mutations against the production backend"), res);
     },
@@ -880,7 +880,7 @@ Deno.test("check_backend_mutation: script file hitting an outreach endpoint duri
           tool_name: "Bash",
           tool_input: { command: `deno run -A ${path}` },
         });
-        const res = checkBackendMutation(payload);
+        const res = checkBackendMutation(payload, "/nonexistent/token.json");
         assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
         assert(
           res.includes(
@@ -942,7 +942,7 @@ Deno.test("check_backend_mutation: curl -G/--get treats the request as read-only
       command: 'curl -G -d "search=1" https://webjamsalem.herokuapp.com/venue',
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -971,7 +971,7 @@ Deno.test("check_backend_mutation: a read-only (GET) request to an outreach endp
       command: "curl https://webjamsalem.herokuapp.com/outreach/preview",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -980,7 +980,7 @@ Deno.test("check_backend_mutation: an unterminated quote that does NOT reference
     tool_name: "Bash",
     tool_input: { command: "echo 'unterminated" },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -991,7 +991,7 @@ Deno.test("check_backend_mutation: backend mutation outside /venue and /outreach
       command: "curl -X POST https://webjamsalem.herokuapp.com/some-other-endpoint -d '{}'",
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
   assert(res.includes("Unauthorized HTTP mutation against production backend"), res);
 });
@@ -1001,7 +1001,7 @@ Deno.test("check_backend_mutation: curl to a non-backend host PASSES", () => {
     tool_name: "Bash",
     tool_input: { command: "curl https://example.com/foo" },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -1021,7 +1021,7 @@ Deno.test("check_backend_mutation: an empty segment between operators is skipped
     tool_name: "Bash",
     tool_input: { command: "git status;;git log" },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
@@ -1031,7 +1031,7 @@ Deno.test("check_backend_mutation: exceeding the wrapper recursion depth (nested
     tool_name: "Bash",
     tool_input: { command },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
   assert(res.includes("recursion depth"), res);
 });
@@ -1042,7 +1042,7 @@ Deno.test("check_backend_mutation: exceeding the wrapper ITERATION cap (long pre
     tool_name: "Bash",
     tool_input: { command },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
   assert(res.includes("iteration cap"), res);
 });
@@ -1054,32 +1054,32 @@ Deno.test("check_backend_mutation: an ALLOW from a nested bash -c command bubble
       command: 'bash -c "deno task venue-mining:record-sweep --metro roanoke"',
     },
   });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("ALLOW:"), `Expected ALLOW, got: ${res}`);
 });
 
 Deno.test("check_backend_mutation: top-level payload that parses to a non-object JSON value fails closed", () => {
-  assert(checkBackendMutation("42").startsWith("DENY:"));
-  assert(checkBackendMutation("42").includes("not an object"));
+  assert(checkBackendMutation("42", "/nonexistent/token.json").startsWith("DENY:"));
+  assert(checkBackendMutation("42", "/nonexistent/token.json").includes("not an object"));
 });
 
 Deno.test("check_backend_mutation: tool_input that is a non-object (string) fails closed", () => {
   const payload = JSON.stringify({ tool_name: "Bash", tool_input: "oops" });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
   assert(res.includes("tool_input is not an object"), res);
 });
 
 Deno.test("check_backend_mutation: tool_input with neither command nor CommandLine fails closed", () => {
   const payload = JSON.stringify({ tool_name: "Bash", tool_input: {} });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assert(res.startsWith("DENY:"), `Expected DENY, got: ${res}`);
   assert(res.includes("command is missing or not a string"), res);
 });
 
 Deno.test("check_backend_mutation: a whitespace-only command PASSES", () => {
   const payload = JSON.stringify({ tool_name: "Bash", tool_input: { command: "   " } });
-  const res = checkBackendMutation(payload);
+  const res = checkBackendMutation(payload, "/nonexistent/token.json");
   assertEquals(res, "PASS");
 });
 
