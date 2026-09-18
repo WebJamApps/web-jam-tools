@@ -356,7 +356,7 @@ export function extractBodyValue(args: string[]): string | null {
   return bodyParts.length ? bodyParts.join("\n") : null;
 }
 
-export function isEpicType(toolInput: Record<string, any>, tokens?: string[]): boolean {
+export function isEpicType(toolInput: Record<string, unknown>, tokens?: string[]): boolean {
   if (!toolInput || typeof toolInput !== "object") toolInput = {};
   for (const key of ["type", "issue_type", "type_name"]) {
     const val = toolInput[key];
@@ -501,7 +501,7 @@ async function runDuplicateCheck(createArgs: string[], runner: CommandRunner): P
  */
 async function scanIssueCommandSegments(
   segments: string[],
-  toolInput: Record<string, any>,
+  toolInput: Record<string, unknown>,
   modelLabelsPath: string,
   cmdForMessage: string,
   runner: CommandRunner,
@@ -567,7 +567,7 @@ export async function checkModelLabelOnIssueCreate(
   modelLabelsPath: string,
   runner: CommandRunner = runGhCommand,
 ): Promise<string> {
-  let payload: Record<string, any>;
+  let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(inputJson);
   } catch {
@@ -577,7 +577,7 @@ export async function checkModelLabelOnIssueCreate(
   const toolName = String(payload.tool_name || "");
   const toolInputRaw = payload.tool_input || {};
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
-    ? (toolInputRaw as Record<string, any>)
+    ? (toolInputRaw as Record<string, unknown>)
     : {};
 
   if (

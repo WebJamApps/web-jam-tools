@@ -92,7 +92,15 @@ export function hasReservedHost(text: string): boolean {
   return RESERVED_HOST_RE.test(text);
 }
 
-const PLACEHOLDER_WORDS = ["example", "fixture", "dummy", "placeholder", "redacted", "changeme", "xxx"];
+const PLACEHOLDER_WORDS = [
+  "example",
+  "fixture",
+  "dummy",
+  "placeholder",
+  "redacted",
+  "changeme",
+  "xxx",
+];
 const GENERIC_STANDIN_WORDS = new Set(["user", "password", "secret", "token"]);
 
 /** Rule 2 (general half): a placeholder word anywhere in the matched text. */
@@ -133,7 +141,8 @@ function sameSequentialClass(a: string, b: string): boolean {
 function longestSequentialRun(s: string): number {
   let best = s.length > 0 ? 1 : 0, cur = 1;
   for (let i = 1; i < s.length; i++) {
-    const isNext = sameSequentialClass(s[i - 1], s[i]) && s.charCodeAt(i) === s.charCodeAt(i - 1) + 1;
+    const isNext = sameSequentialClass(s[i - 1], s[i]) &&
+      s.charCodeAt(i) === s.charCodeAt(i - 1) + 1;
     cur = isNext ? cur + 1 : 1;
     if (cur > best) best = cur;
   }
@@ -175,7 +184,10 @@ export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
   ["JWT token", JWT_TOKEN_PATTERN],
   ["Bearer token", /\bBearer\s+[A-Za-z0-9._~+/-]{15,}=*/i],
   ["MongoDB connection string", /mongodb(?:\+srv)?:\/\/[^\s"']+/i],
-  ["Auth header flag", /(?:--header|-H)\s+["']?(?:[A-Za-z0-9_-]+:\s*)?(?:Bearer|token|Basic|Secret|[A-Za-z0-9_-]{15,})/i],
+  [
+    "Auth header flag",
+    /(?:--header|-H)\s+["']?(?:[A-Za-z0-9_-]+:\s*)?(?:Bearer|token|Basic|Secret|[A-Za-z0-9_-]{15,})/i,
+  ],
 ];
 
 /**
@@ -191,8 +203,8 @@ export const SPECIFIC_PATTERNS: Array<[string, RegExp]> = [
  * bare, sits in any other URL, or sits on a different circleci.com path
  * still fires exactly as before.
  */
-const CIRCLECI_PRESIGNED_OUTPUT_TOKEN_SOURCE =
-  String.raw`https:\/\/circleci\.com\/api\/private\/output\/[^\s"'<>#]*[?&]token=([^\s"'&<>]+)`;
+const CIRCLECI_PRESIGNED_OUTPUT_TOKEN_SOURCE = String
+  .raw`https:\/\/circleci\.com\/api\/private\/output\/[^\s"'<>#]*[?&]token=([^\s"'&<>]+)`;
 
 /** True when `value` is, verbatim, the `token=` value of a CircleCI presigned output-log URL somewhere in `text`. */
 export function isCircleCiPresignedOutputUrlToken(text: string, value: string): boolean {
@@ -235,7 +247,8 @@ export function isPlaceholderValue(val: string): boolean {
 
   if (
     /^your[-_]?(?:api[-_]?)?(?:key|token|secret|password)(?:[-_]?here)?$/i.test(trimmed) ||
-    /^(?:key|token|secret|password|api[-_]?key)[-_]?(?:here|example|placeholder|name|value)?$/i.test(trimmed)
+    /^(?:key|token|secret|password|api[-_]?key)[-_]?(?:here|example|placeholder|name|value)?$/i
+      .test(trimmed)
   ) {
     return true;
   }
