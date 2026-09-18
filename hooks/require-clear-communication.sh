@@ -144,8 +144,8 @@ if ! msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>"$TMP_E
 fi
 
 # An empty selection is NOT a failure: the selector is deliberately bounded to
-# the current turn (web-jam-tools#596 "clear-communication guard blocks a turn
-# over violations in a previous turn's reply"), so returning nothing means there
+# the current turn (web-jam-tools#596 "The shared transcript selector has no turn
+# boundary, so Stop hooks grade the previous message"), so returning nothing means there
 # is no reply from this turn to judge. That is the designed outcome, not
 # outcome 3, and it stays silent — a warning here would cry failure on a healthy
 # path and drown the diagnostics this guard now emits when something really did
