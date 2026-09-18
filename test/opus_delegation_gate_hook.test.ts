@@ -304,7 +304,7 @@ Deno.test("(f) auto mode: a nested Opus subagent under an authorized Opus subage
   );
 });
 
-Deno.test("(g) auto mode: missing subagent files, a broken parent chain, or a missing spawning tool_use is refused", async () => {
+Deno.test("(g) auto mode: missing subagent files, a broken parent chain, or a missing spawning tool_use is allowed", async () => {
   await withSession(
     [userTurn("opus edit ok"), spawnTurn("toolu_g")],
     [
@@ -312,13 +312,9 @@ Deno.test("(g) auto mode: missing subagent files, a broken parent chain, or a mi
       { id: "child", meta: agentMeta("opus", "toolu_inner", "parent-gone") },
     ],
     async ({ mainPath }) => {
-      assertDenied((await runHook(subagentCall("no-files", mainPath))).stdout, [
-        "model could not be determined",
-      ]);
-      assertDenied((await runHook(subagentCall("orphan", mainPath))).stdout, [
-        "could not be found",
-      ]);
-      assertDenied((await runHook(subagentCall("child", mainPath))).stdout, ["could not be found"]);
+      assertAllowed(await runHook(subagentCall("no-files", mainPath)));
+      assertAllowed(await runHook(subagentCall("orphan", mainPath)));
+      assertAllowed(await runHook(subagentCall("child", mainPath)));
     },
   );
 });
@@ -638,33 +634,30 @@ Deno.test("Opus session with interleaved Haiku subagent is still recognized as O
   );
 });
 
-// --- Fail-closed on missing/unreadable transcript ---
+// --- Allow on missing/unreadable transcript (workflow guard default) ---
 
-Deno.test("missing transcript_path is denied (fail-closed)", async () => {
+Deno.test("missing transcript_path is allowed (workflow default)", async () => {
   const res = await runHook({
     tool_input: { file_path: IN_REPO_FILE },
   });
-  assertEquals(res.code, 0);
-  assertDenied(res.stdout);
+  assertAllowed(res);
 });
 
-Deno.test("nonexistent transcript file is denied (fail-closed)", async () => {
+Deno.test("nonexistent transcript file is allowed (workflow default)", async () => {
   const res = await runHook({
     tool_input: { file_path: IN_REPO_FILE },
     transcript_path: "/tmp/nonexistent-transcript-gate-test.jsonl",
   });
-  assertEquals(res.code, 0);
-  assertDenied(res.stdout);
+  assertAllowed(res);
 });
 
-Deno.test("empty transcript file is denied (fail-closed)", async () => {
+Deno.test("empty transcript file is allowed (workflow default)", async () => {
   await withTranscript([], async (transcript_path) => {
     const res = await runHook({
       tool_input: { file_path: IN_REPO_FILE },
       transcript_path,
     });
-    assertEquals(res.code, 0);
-    assertDenied(res.stdout);
+    assertAllowed(res);
   });
 });
 
@@ -775,11 +768,29 @@ Deno.test("Bash: an approved Opus session, a Sonnet session, a non-auto subagent
   );
 });
 
-Deno.test("Bash: an agy payload naming an Opus model is still judged, and fails closed without a transcript", async () => {
+Deno.test("Bash: an agy payload naming an Opus model without a transcript allows by workflow default", async () => {
   const res = await runHook(
     bashPayload("echo x > src/a.ts", "/nonexistent.jsonl", {
       modelName: "claude-opus-4-6-thinking",
     }),
   );
-  assertDenied(res.stdout, ["Bash command that writes to"]);
+  assertAllowed(res);
+});
+
+Deno.test("Bash reproduction: deno eval containing a Python heredoc writing via pathlib allows", async () => {
+  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    const cmd = `deno eval '
+const script = \`
+cd ${REPO_DIR}
+python3 - <<EOF
+import pathlib
+p = pathlib.Path("/home/joshua/Dropbox/test.txt")
+p.write_text("hello")
+EOF
+\`;
+console.log(script);
+'`;
+    const res = await runHook(bashPayload(cmd, transcript_path));
+    assertAllowed(res);
+  });
 });
