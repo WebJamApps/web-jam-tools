@@ -226,7 +226,9 @@ function checkTokenValidity(
     return {
       deny: {
         outcome: "deny",
-        reason: "Approval token belongs to a different session and does not apply here.",
+        reason: isExpired(token, nowMs)
+          ? `Approval token belongs to a different session and does not apply here. It is also already expired (expires_at: ${token.expires_at}).`
+          : "Approval token belongs to a different session and does not apply here.",
       },
     };
   }
