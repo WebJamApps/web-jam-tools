@@ -794,3 +794,20 @@ console.log(script);
     assertAllowed(res);
   });
 });
+
+Deno.test("Bash: a real write chained onto a read-only invocation is still refused", async () => {
+  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    for (
+      const cmd of [
+        `deno eval 'console.log(1)' && echo pwned > ${IN_REPO_FILE}`,
+        `python3 -c 'print(1)'; echo pwned > ${IN_REPO_FILE}`,
+        `node -e 'console.log(1)' && echo pwned > ${IN_REPO_FILE}`,
+        `echo pwned > ${IN_REPO_FILE} # deno eval`,
+      ]
+    ) {
+      assertDenied((await runHook(bashPayload(cmd, transcript_path))).stdout, [
+        "Bash command that writes to",
+      ]);
+    }
+  });
+});

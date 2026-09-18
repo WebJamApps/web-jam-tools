@@ -16,6 +16,7 @@ import {
   decideSubagentEdit,
   findSpawningHumanPrompt,
   isOpusModel,
+  isReadOnlyQuotedWrite,
   type IssueRef,
   LABEL_CACHE_TTL_MS,
   type LabelLookup,
@@ -26,6 +27,7 @@ import {
   resolveSessionFiles,
   resolveSubagentModel,
   runGhLabels,
+  singleSimpleCommandTokens,
   slashCommandOf,
   workIssueApprovalActive,
   workIssueArgs,
@@ -694,6 +696,85 @@ console.log(script);
     res.why.includes("read-only command whose quoted text merely contains a write") ||
       res.why.includes("destination cannot be read"),
   );
+});
+
+// --- A read-only invocation may not launder a real write (web-jam-tools#1077 review) ---
+
+Deno.test("isReadOnlyQuotedWrite: only a lone read-only invocation counts, never a chained write", () => {
+  // Genuinely read-only: the write pattern lives in text the interpreter merely prints.
+  assert(isReadOnlyQuotedWrite(`deno eval 'console.log("open(f, \\"w\\")")'`));
+  assert(isReadOnlyQuotedWrite(`node -p 'JSON.stringify({a:1})'`));
+  assert(isReadOnlyQuotedWrite(`python3 -c 'print("writeFileSync")'`));
+
+  // A real write chained onto a harmless evaluation is NOT read-only: the second command writes.
+  assert(!isReadOnlyQuotedWrite(`deno eval 'console.log(1)' && echo x > src/a.ts`));
+  assert(!isReadOnlyQuotedWrite(`python3 -c 'print(1)'; echo x > src/a.ts`));
+  assert(!isReadOnlyQuotedWrite(`node -e 'console.log(1)' && echo x > src/a.ts`));
+  assert(!isReadOnlyQuotedWrite(`deno eval 'console.log(1)' | tee src/a.ts`));
+  assert(!isReadOnlyQuotedWrite(`deno eval 'console.log(1)' && rm -rf src`));
+
+  // A trailing comment naming an interpreter does not make a write read-only.
+  assert(!isReadOnlyQuotedWrite(`echo x > src/a.ts # deno eval`));
+
+  // The script's own write APIs are matched under the runtime that actually runs it.
+  assert(!isReadOnlyQuotedWrite(`deno eval 'Deno.writeTextFileSync("src/a.ts","x")'`));
+  assert(!isReadOnlyQuotedWrite(`node -e 'require("fs").writeFileSync("src/a.ts","x")'`));
+  assert(!isReadOnlyQuotedWrite(`python3 -c 'open("src/a.ts","w").write("x")'`));
+
+  // Spawning a subprocess from an inline script is a write the gate cannot see into.
+  assert(!isReadOnlyQuotedWrite(`deno eval 'new Deno.Command("sh",{args:["-c","echo x > a"]})'`));
+  assert(!isReadOnlyQuotedWrite(`python3 -c 'import subprocess; subprocess.run(["sh"])'`));
+
+  // A command substitution can run anything, so the shape is not readable.
+  assert(!isReadOnlyQuotedWrite('deno eval "console.log(`cat /etc/passwd`)"'));
+  assert(!isReadOnlyQuotedWrite('deno eval "console.log($(id))"'));
+});
+
+Deno.test("singleSimpleCommandTokens: one simple command tokenizes, anything else is null", () => {
+  assertEquals(singleSimpleCommandTokens(`deno eval 'console.log(1)'`), [
+    "deno",
+    "eval",
+    "console.log(1)",
+  ]);
+  // An operator inside a quoted argument is data, not a second command.
+  assertEquals(singleSimpleCommandTokens(`deno eval 'a && b > c'`), ["deno", "eval", "a && b > c"]);
+
+  for (
+    const command of [
+      `deno eval 'x' && echo y`,
+      `deno eval 'x'; echo y`,
+      `deno eval 'x' | cat`,
+      `deno eval 'x' > out.txt`,
+      `deno eval 'x' &`,
+      `deno eval 'x' # comment`,
+      `deno eval 'unterminated`,
+    ]
+  ) {
+    assertEquals(singleSimpleCommandTokens(command), null, command);
+  }
+});
+
+Deno.test("decide: a write chained onto a read-only invocation is still refused", () => {
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+  const bypasses = [
+    `deno eval 'console.log(1)' && echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts`,
+    `python3 -c 'print(1)'; echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts`,
+    `node -e 'console.log(1)' && echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts`,
+    `echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts # deno eval`,
+  ];
+  for (const command of bypasses) {
+    const res = decide(
+      {
+        tool_name: "Bash",
+        tool_input: { command },
+        cwd: "/home/joshua/WebJamApps/web-jam-tools",
+        transcript_path: MAIN,
+      },
+      read,
+      labels,
+    );
+    assertEquals(res.decision, "deny", command);
+  }
 });
 
 // --- Checker throws proceeds by workflow default ---
