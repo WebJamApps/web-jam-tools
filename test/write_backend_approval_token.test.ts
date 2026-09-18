@@ -515,3 +515,31 @@ Deno.test("Guard remediation text names `deno task backend-approval-token`, not 
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test(
+  "CLI: `deno task backend-approval-token --path <tempPath>` writes to temporary directory outside ~/.claude/state",
+  async () => {
+    const dir = await Deno.makeTempDir();
+    const tokenPath = `${dir}/task-temp-token.json`;
+    try {
+      const cmd = new Deno.Command("deno", {
+        args: ["task", "backend-approval-token", "--path", tokenPath],
+        cwd: new URL("..", import.meta.url).pathname,
+        stdout: "piped",
+        stderr: "piped",
+      });
+      const { code, stdout, stderr } = await cmd.output();
+      const outText = new TextDecoder().decode(stdout);
+      const errText = new TextDecoder().decode(stderr);
+      assertEquals(code, 0, errText);
+      assert(outText.includes("Approval token successfully written to"));
+      assert(outText.includes(tokenPath));
+
+      const written = JSON.parse(await Deno.readTextFile(tokenPath));
+      assert(typeof written.token === "string" && written.token.length > 0);
+      assertEquals(written.endpoints, [...DEFAULT_ENDPOINTS]);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  },
+);
