@@ -258,9 +258,7 @@ export function renderDesignDoc(
             const versionIdx = headerCells.findIndex((c) =>
               /^version$/i.test(stripCellDecoration(c))
             );
-            const dateIdx = headerCells.findIndex((c) =>
-              /^date$/i.test(stripCellDecoration(c))
-            );
+            const dateIdx = headerCells.findIndex((c) => /^date$/i.test(stripCellDecoration(c)));
             if (versionIdx !== -1 && dateIdx !== -1) {
               const dataRows = tableLines.slice(2).map(parseTableRow);
               if (dataRows.length > 0) {
@@ -358,7 +356,9 @@ export function renderDesignDoc(
             }
             metaHtml += `  </div>`;
             bodyHtmlParts.push(
-              `<header class="doc-header">\n  <h1>${parseInlineMarkdown(text)}</h1>\n  ${metaHtml}\n</header>`,
+              `<header class="doc-header">\n  <h1>${
+                parseInlineMarkdown(text)
+              }</h1>\n  ${metaHtml}\n</header>`,
             );
           } else {
             bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text)}</h1>`);
@@ -375,7 +375,9 @@ export function renderDesignDoc(
             }
             metaHtml += `  </div>`;
             bodyHtmlParts.push(
-              `<header class="doc-header">\n  <h1>${escapeHtml(documentTitle)}</h1>\n  ${metaHtml}\n</header>`,
+              `<header class="doc-header">\n  <h1>${
+                escapeHtml(documentTitle)
+              }</h1>\n  ${metaHtml}\n</header>`,
             );
           }
           if (inAppendixDetails) {
@@ -627,6 +629,11 @@ export function renderDesignDoc(
       max-width: 100%;
     }
 
+    .table-wrapper {
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+
     table {
       border-collapse: collapse;
       margin: 1rem 0;
@@ -652,6 +659,14 @@ export function renderDesignDoc(
       white-space: nowrap;
     }
 
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background-color: var(--toc-bg);
+      box-shadow: inset 0 1px 0 var(--border-color), inset 0 -1px 0 var(--border-color);
+    }
+
     .table-pager {
       display: flex;
       align-items: center;
@@ -659,6 +674,29 @@ export function renderDesignDoc(
       gap: 12px;
       margin: 8px 0 1.5rem;
       font-size: 0.9rem;
+    }
+
+    .table-pager-size-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-color);
+      opacity: 0.85;
+    }
+
+    .table-pager-size {
+      background-color: var(--bg-color);
+      border: 1px solid var(--border-color);
+      color: var(--text-color);
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .table-pager-size:focus {
+      outline: 2px solid var(--link-color);
+      outline-offset: 1px;
     }
 
     .table-pager-btn {
@@ -882,25 +920,43 @@ export function renderDesignDoc(
     })();
 
     (function() {
-      var PAGE_SIZE = 10;
+      var DEFAULT_PAGE_SIZE = 5;
       var tables = document.querySelectorAll(".table-wrapper > table");
       for (var t = 0; t < tables.length; t++) {
         (function(table) {
           var tbody = table.querySelector("tbody");
           if (!tbody) return;
           var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
-          if (rows.length <= PAGE_SIZE) return;
+          if (rows.length <= DEFAULT_PAGE_SIZE) return;
 
           var wrapper = table.closest(".table-wrapper");
           if (!wrapper || !wrapper.parentNode) return;
 
-          var totalPages = Math.ceil(rows.length / PAGE_SIZE);
+          var currentSize = DEFAULT_PAGE_SIZE;
           var currentPage = 1;
 
           var pager = document.createElement("div");
           pager.className = "table-pager";
           pager.setAttribute("role", "navigation");
           pager.setAttribute("aria-label", "Table pagination");
+
+          var sizeLabel = document.createElement("label");
+          sizeLabel.className = "table-pager-size-label";
+          sizeLabel.textContent = "Rows per page: ";
+
+          var sizeSelect = document.createElement("select");
+          sizeSelect.className = "table-pager-size";
+          sizeSelect.setAttribute("aria-label", "Rows per page");
+
+          var sizeOptions = ["5", "10", "25", "All"];
+          for (var o = 0; o < sizeOptions.length; o++) {
+            var opt = document.createElement("option");
+            opt.value = sizeOptions[o].toLowerCase();
+            opt.textContent = sizeOptions[o];
+            if (sizeOptions[o] === "5") opt.selected = true;
+            sizeSelect.appendChild(opt);
+          }
+          sizeLabel.appendChild(sizeSelect);
 
           var prevBtn = document.createElement("button");
           prevBtn.type = "button";
@@ -915,14 +971,23 @@ export function renderDesignDoc(
           nextBtn.className = "table-pager-btn table-pager-next";
           nextBtn.textContent = "Next";
 
+          pager.appendChild(sizeLabel);
           pager.appendChild(prevBtn);
           pager.appendChild(status);
           pager.appendChild(nextBtn);
           wrapper.parentNode.insertBefore(pager, wrapper.nextSibling);
 
           function render() {
+            var isAll = currentSize === "all";
+            var size = isAll ? rows.length : parseInt(currentSize, 10);
+            var totalPages = isAll ? 1 : Math.ceil(rows.length / size);
+            currentPage = Math.max(1, Math.min(currentPage, totalPages));
+
+            var startIdx = (currentPage - 1) * size;
+            var endIdx = isAll ? rows.length : Math.min(startIdx + size, rows.length);
+
             for (var i = 0; i < rows.length; i++) {
-              var visible = i >= (currentPage - 1) * PAGE_SIZE && i < currentPage * PAGE_SIZE;
+              var visible = isAll || (i >= startIdx && i < endIdx);
               rows[i].style.display = visible ? "" : "none";
               if (visible) {
                 rows[i].classList.remove("table-pager-hidden-row");
@@ -930,11 +995,20 @@ export function renderDesignDoc(
                 rows[i].classList.add("table-pager-hidden-row");
               }
             }
-            status.textContent = "Page " + currentPage + " of " + totalPages +
-              " (" + rows.length + " rows)";
-            prevBtn.disabled = currentPage === 1;
-            nextBtn.disabled = currentPage === totalPages;
+
+            var startDisplay = rows.length > 0 ? (startIdx + 1) : 0;
+            var endDisplay = endIdx;
+            status.textContent = startDisplay + "-" + endDisplay + " of " + rows.length;
+            prevBtn.disabled = currentPage <= 1;
+            nextBtn.disabled = currentPage >= totalPages;
           }
+
+          sizeSelect.addEventListener("change", function() {
+            var val = sizeSelect.value;
+            currentSize = val === "all" ? "all" : parseInt(val, 10);
+            currentPage = 1;
+            render();
+          });
 
           prevBtn.addEventListener("click", function() {
             if (currentPage > 1) {
@@ -943,6 +1017,9 @@ export function renderDesignDoc(
             }
           });
           nextBtn.addEventListener("click", function() {
+            var isAll = currentSize === "all";
+            var size = isAll ? rows.length : parseInt(currentSize, 10);
+            var totalPages = isAll ? 1 : Math.ceil(rows.length / size);
             if (currentPage < totalPages) {
               currentPage++;
               render();
@@ -957,6 +1034,74 @@ export function renderDesignDoc(
 </body>
 </html>
 `;
+}
+
+export interface TablePaginationState {
+  pageSize: number;
+  isAll: boolean;
+  totalPages: number;
+  currentPage: number;
+  startIdx: number; // 0-based inclusive
+  endIdx: number; // 0-based exclusive
+  startDisplay: number; // 1-based display
+  endDisplay: number; // 1-based display
+  statusText: string; // e.g. "1-5 of 40" or "0 of 0"
+  prevDisabled: boolean;
+  nextDisabled: boolean;
+}
+
+export function computeTablePagination(
+  totalRows: number,
+  requestedPage: number,
+  pageSizeOption: number | "all" | string,
+): TablePaginationState {
+  const isAll = typeof pageSizeOption === "string" &&
+    pageSizeOption.toLowerCase() === "all";
+  const parsedSize = typeof pageSizeOption === "number"
+    ? pageSizeOption
+    : parseInt(String(pageSizeOption), 10);
+  const pageSize = isAll ? totalRows : (isNaN(parsedSize) || parsedSize <= 0 ? 5 : parsedSize);
+
+  const totalPages = totalRows === 0 ? 1 : (isAll ? 1 : Math.ceil(totalRows / pageSize));
+  const currentPage = Math.max(1, Math.min(requestedPage, totalPages));
+
+  if (totalRows === 0) {
+    return {
+      pageSize,
+      isAll,
+      totalPages: 1,
+      currentPage: 1,
+      startIdx: 0,
+      endIdx: 0,
+      startDisplay: 0,
+      endDisplay: 0,
+      statusText: "0 of 0",
+      prevDisabled: true,
+      nextDisabled: true,
+    };
+  }
+
+  const startIdx = (currentPage - 1) * pageSize;
+  const endIdx = isAll ? totalRows : Math.min(startIdx + pageSize, totalRows);
+  const startDisplay = startIdx + 1;
+  const endDisplay = endIdx;
+  const statusText = `${startDisplay}-${endDisplay} of ${totalRows}`;
+  const prevDisabled = currentPage <= 1;
+  const nextDisabled = currentPage >= totalPages;
+
+  return {
+    pageSize,
+    isAll,
+    totalPages,
+    currentPage,
+    startIdx,
+    endIdx,
+    startDisplay,
+    endDisplay,
+    statusText,
+    prevDisabled,
+    nextDisabled,
+  };
 }
 
 export function renderDesignDocFile(
