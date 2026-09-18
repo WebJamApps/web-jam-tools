@@ -224,7 +224,8 @@ is reported as not found.
   (`https://webjamsalem.herokuapp.com`) are protected by a safety guard hook
   (`hooks/block-backend-mutation.sh`).
   - **Venue writes require approval:** Mutating venue records (`POST /venue`, `PATCH /venue/:id`)
-    requires an active session approval token file (default
+    requires an active session approval token file, minted by running
+    `deno task backend-approval-token` (default output path
     `~/.claude/state/backend-approval-token.json`, override with `BACKEND_APPROVAL_TOKEN_PATH` or
     `VENUE_APPROVAL_TOKEN_PATH`), approved by Josh. Ad-hoc ungated `fetch()` or `curl` execution is
     refused.

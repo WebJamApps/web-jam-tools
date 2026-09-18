@@ -72,13 +72,13 @@ export function defaultBackendTokenPath(): string {
 // The `venue:*` deno-task branch below stays in the code (harmless, and
 // correct if such a task ever ships) but uses this same remediation text.
 const APPROVAL_REMEDIATION =
-  "Approve via an active session approval token file (default " +
-  "~/.claude/state/backend-approval-token.json, override with " +
+  "Approve by running `deno task backend-approval-token` (writes an active session " +
+  "approval token file, default ~/.claude/state/backend-approval-token.json, override with " +
   "BACKEND_APPROVAL_TOKEN_PATH or VENUE_APPROVAL_TOKEN_PATH), approved by Josh.";
 
 const OUTREACH_DURING_VENUE_MINING_REASON =
-  'Outreach operations (/outreach/*, book-gig, outreach:*) are forbidden during ' +
-  'venue-mining tasks (skill boundary violation; see web-jam-tools#1021 ' +
+  "Outreach operations (/outreach/*, book-gig, outreach:*) are forbidden during " +
+  "venue-mining tasks (skill boundary violation; see web-jam-tools#1021 " +
   '"hooks/backend-guard: guard production backend mutations and enforce ' +
   'venue-mining skill boundaries").';
 
