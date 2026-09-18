@@ -219,6 +219,18 @@ is reported as not found.
   resolves the source, reviews subagent output, talks to Josh, and does the
   batched writes. Subagent prompts must be self-contained (they have no session
   context) — see the delegate skill.
+- **Backend Mutation Guard & Outreach Boundary (web-jam-tools#1021):** All HTTP mutations
+  (`POST`, `PATCH`, `PUT`, `DELETE`) against the production backend
+  (`https://webjamsalem.herokuapp.com`) are protected by a safety guard hook
+  (`hooks/block-backend-mutation.sh`).
+  - **Venue writes require approval:** Mutating venue records (`POST /venue`, `PATCH /venue/:id`)
+    requires an explicit session approval token (e.g. `~/.claude/state/backend-approval-token.json`)
+    or structured CLI confirmation (`--token <token>`). Ad-hoc ungated `fetch()` or `curl`
+    execution is refused.
+  - **Strict skill boundary:** Outreach endpoints (`/outreach/*`) and outreach task invocations
+    (e.g. `book-gig`, `outreach:check-replies`, `outreach:preview`) are unconditionally blocked
+    during venue-mining tasks, keeping outreach strictly isolated to `skills/book-gig/SKILL.md`
+    (citing web-jam-tools#208 "venue-mining: require a mandatory street address for every venue create").
 
 ## POST /venue example payload (with required address)
 

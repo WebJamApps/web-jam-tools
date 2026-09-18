@@ -64,6 +64,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // (web-jam-tools#432 scope item 3) — agy-only.
   "block-agy-gmail-send-delete.sh",
   "block-agy-non-flash-model.sh",
+  // PreToolUse guard (web-jam-tools#1021) — prevents unauthorized HTTP mutations
+  // against the production backend and enforces venue-mining skill boundaries.
+  "block-backend-mutation.sh",
   "block-dangerous-git-deploy.sh",
   "block-human-only-credentials.sh",
   "block-irreversible-operations.sh",
