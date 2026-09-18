@@ -197,6 +197,34 @@ gh pr view 263 --repo WebJamApps/<repo> --json title -q .title
 
 ## How to file it
 
+**Step 0 — write the approval token before calling `create-issue`.** `deno task create-issue` is
+gated by `hooks/lib/check_issue_approval_token.ts`, which requires a valid approval token at
+`$HOME/.claude/state/issue-approval-token.json` matching the current session id, the target repo,
+the exact issue title(s), and an unexpired `expires_at`. Nothing writes that token automatically —
+run the sanctioned writer yourself, before `deno task create-issue`:
+
+```sh
+deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts \
+  --session-id "<session-id>" \
+  --repo "WebJamApps/<repo>" \
+  --title "Short, specific title"
+```
+
+Pass one `--title` per issue being filed in this run (repeat the flag). **Each `--title` here must
+match the `--title` passed to `deno task create-issue` below EXACTLY** — the token binds the
+titles, so any mismatch (even punctuation or casing) means the create-issue call is denied even
+though a token exists.
+
+The writer authorizes itself off `hooks/lib/check_token_write_authorization.ts`'s check that the
+most recent own-session, non-sidechain user turn invoked `/file-issue` or `/design-issue` — run it
+outside that context (a different session, or after other turns intervened) and it refuses. That
+refusal is the gate working as designed, not a bug to route around: get Josh's fresh `/file-issue`
+(or `/design-issue`) invocation first rather than looking for a workaround.
+
+Running this writer step is not a bypass of the approval gate: `hooks/lib/check_issue_approval_token.ts`
+still independently validates session, repo, title, and expiry at `deno task create-issue` time,
+exactly as before this step existed.
+
 Always use `scripts/create-issue.ts` (or `deno task create-issue`):
 
 ```sh
