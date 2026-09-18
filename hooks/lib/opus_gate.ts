@@ -44,6 +44,7 @@ import {
   type TranscriptEntry,
 } from "./select_transcript_entry.ts";
 import { slashCommandFromInvocationWrapper } from "./check_token_write_authorization.ts";
+import { bashWriteTargets } from "./bash_write_targets.ts";
 
 export const ESCAPE_PHRASE = "opus edit ok";
 
@@ -86,22 +87,270 @@ export interface GatePayload {
   agent_id?: unknown;
   permission_mode?: unknown;
   transcript_path?: unknown;
+  tool_name?: unknown;
+  tool_input?: {
+    command?: unknown;
+    file_path?: unknown;
+    notebook_path?: unknown;
+    path?: unknown;
+    [key: string]: unknown;
+  };
+  cwd?: unknown;
 }
 
 export interface GateDecision {
   decision: "allow" | "deny";
   /** Which path decided: the main thread's own edit, or a subagent's. */
   kind: "main" | "subagent";
-  /** Why a call was refused, for the refusal message. Empty when allowed or when the reason is the standard one. */
+  /** Why a call was refused or noted on allow. Empty when allowed or when the reason is the standard one. */
   why: string;
 }
 
-function allow(kind: GateDecision["kind"]): GateDecision {
-  return { decision: "allow", kind, why: "" };
+function allow(kind: GateDecision["kind"], why = ""): GateDecision {
+  return { decision: "allow", kind, why };
 }
 
 function deny(kind: GateDecision["kind"], why: string): GateDecision {
   return { decision: "deny", kind, why };
+}
+
+export interface WriteTargetCheck {
+  determinable: boolean;
+  target?: string;
+  targets?: string[];
+  note?: string;
+}
+
+/**
+ * Splits a command into its top-level argv tokens, or returns null when the command is anything
+ * other than ONE simple invocation: a pipeline, a list (`&&`, `||`, `;`), a redirect, a background
+ * job, a command substitution, or a trailing comment all return null. Quoted text is returned with
+ * its quotes removed and is never scanned for operators, which is the whole point — an operator
+ * inside a quoted script argument is data, and one outside it is a second command.
+ */
+export function singleSimpleCommandTokens(command: string): string[] | null {
+  const tokens: string[] = [];
+  let current = "";
+  let started = false;
+  let i = 0;
+
+  while (i < command.length) {
+    const ch = command[i];
+
+    if (ch === "'") {
+      const end = command.indexOf("'", i + 1);
+      if (end === -1) return null;
+      current += command.slice(i + 1, end);
+      started = true;
+      i = end + 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      let j = i + 1;
+      let quoted = "";
+      while (j < command.length && command[j] !== '"') {
+        if (command[j] === "\\") {
+          quoted += command[j + 1] ?? "";
+          j += 2;
+          continue;
+        }
+        // An expansion inside double quotes can run anything, so the shape is not readable.
+        if (command[j] === "`") return null;
+        if (command[j] === "$" && command[j + 1] === "(") return null;
+        quoted += command[j];
+        j += 1;
+      }
+      if (j >= command.length) return null;
+      current += quoted;
+      started = true;
+      i = j + 1;
+      continue;
+    }
+
+    if (ch === "\\") {
+      current += command[i + 1] ?? "";
+      started = true;
+      i += 2;
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      if (started) {
+        tokens.push(current);
+        current = "";
+        started = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    // Any unquoted shell metacharacter means this is not a single simple command.
+    if ("&|;<>()`\n".includes(ch)) return null;
+    if (ch === "#" && !started) return null;
+    if (ch === "$" && command[i + 1] === "(") return null;
+
+    current += ch;
+    started = true;
+    i += 1;
+  }
+
+  if (started) tokens.push(current);
+  return tokens.length > 0 ? tokens : null;
+}
+
+/** The write and subprocess APIs that make an interpreter's inline script an actual write. */
+const WRITE_APIS: Record<"deno" | "node" | "python", RegExp> = {
+  deno:
+    /\bDeno\.(?:writeTextFile|writeTextFileSync|writeFile|writeFileSync|create|createSync|copyFile|copyFileSync|rename|renameSync|truncate|truncateSync|open|openSync|mkdir|mkdirSync|remove|removeSync|symlink|symlinkSync|Command|run)\b/,
+  node:
+    /\b(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|copyFileSync|rename|renameSync|cpSync|mkdirSync|rmSync|unlinkSync|execSync|spawnSync|exec|spawn|child_process)\b/,
+  python:
+    /(?:\bopen\s*\([^)]*['"][wax+][^'"]*['"]|\bwrite_(?:text|bytes)\s*\(|\bshutil\.|\bos\.(?:rename|replace|remove|unlink|mkdir|makedirs|system|popen)\b|\bsubprocess\b)/,
+};
+
+/** The inline script argument of a read-only interpreter invocation, with which runtime ran it. */
+function inlineScriptOf(
+  tokens: string[],
+): { runtime: "deno" | "node" | "python"; script: string } | null {
+  const [argv0, ...rest] = tokens;
+  const program = argv0.slice(argv0.lastIndexOf("/") + 1);
+
+  // `deno eval [flags] <script>`
+  if (program === "deno" && rest[0] === "eval") {
+    const script = rest.slice(1).find((t) => !t.startsWith("-"));
+    return script === undefined ? null : { runtime: "deno", script };
+  }
+
+  // `node -e|-p|--eval|--print <script>`
+  if (program === "node" || program === "nodejs") {
+    const flagAt = rest.findIndex((t) => ["-e", "-p", "--eval", "--print"].includes(t));
+    if (flagAt === -1) return null;
+    const script = rest[flagAt + 1];
+    return script === undefined ? null : { runtime: "node", script };
+  }
+
+  // `python[3][.x] -c <script>`
+  if (/^python[0-9.]*$/.test(program)) {
+    const flagAt = rest.indexOf("-c");
+    if (flagAt === -1) return null;
+    const script = rest[flagAt + 1];
+    return script === undefined ? null : { runtime: "python", script };
+  }
+
+  return null;
+}
+
+/**
+ * True when the command is SOLELY a read-only script evaluation whose quoted text merely contains
+ * a write — the 2026-09-17 finding, where a `deno eval` printing a Python heredoc was read as a
+ * write to the repository.
+ *
+ * Both halves are load-bearing, and checking either one alone is the defect this replaces. The
+ * command must be one simple invocation, so a real write chained onto a harmless evaluation
+ * (`deno eval 'console.log(1)' && echo x > src/a.ts`, or the same write with a trailing
+ * `# deno eval` comment) is NOT read-only and stays gated. And the write APIs are matched against
+ * the script argument only, under the runtime that actually runs it, so a Python write API inside
+ * a string a `deno eval` merely prints does not make that eval a write.
+ */
+export function isReadOnlyQuotedWrite(command: string): boolean {
+  const tokens = singleSimpleCommandTokens(command);
+  if (!tokens) return false;
+
+  const inline = inlineScriptOf(tokens);
+  if (!inline) return false;
+
+  return !WRITE_APIS[inline.runtime].test(inline.script);
+}
+
+/**
+ * Checks whether a Bash command's write target is determinable or whether it falls into an
+ * undeterminable case (unreadable destination, unreadable shape, or read-only command whose
+ * quoted text merely contains a write).
+ */
+export function checkBashCommandTarget(
+  command: string,
+  cwd: string,
+  home: string,
+): WriteTargetCheck {
+  if (!command.trim()) {
+    return {
+      determinable: false,
+      note: "A Bash command could not be read, so write target is undeterminable.",
+    };
+  }
+
+  // Check for read-only interpreter commands whose quoted text merely contains a write pattern
+  if (isReadOnlyQuotedWrite(command)) {
+    return {
+      determinable: false,
+      note: "A read-only command whose quoted text merely contains a write.",
+    };
+  }
+
+  const targets = bashWriteTargets(command, { cwd, home });
+  if (targets.length === 0) {
+    return { determinable: true, targets: [] };
+  }
+
+  // bash_write_targets.ts reports the working directory, or a bare directory, when it cannot name
+  // the file a command writes — "somewhere under here", not a destination this gate can judge.
+  const unnamedDestination = (t: string) => t === cwd || t === ".";
+  if (targets.some(unnamedDestination) || targets.every((t) => t.endsWith("/"))) {
+    return {
+      determinable: false,
+      note: "A Bash write whose destination cannot be read.",
+    };
+  }
+
+  return { determinable: true, target: targets[0], targets };
+}
+
+/** Resolves whether the tool call's write target is determinable. */
+export function checkWriteTarget(payload: GatePayload): WriteTargetCheck {
+  // Backwards compatibility with unit tests calling decide with only transcript_path
+  if (payload.tool_name === undefined && payload.tool_input === undefined) {
+    return { determinable: true };
+  }
+
+  const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "";
+  const toolInput = payload.tool_input && typeof payload.tool_input === "object"
+    ? payload.tool_input as Record<string, unknown>
+    : {};
+
+  if (toolName === "Bash" || ("command" in toolInput && typeof toolInput.command === "string")) {
+    const command = typeof toolInput.command === "string" ? toolInput.command : "";
+    const cwd = typeof payload.cwd === "string" && payload.cwd
+      ? payload.cwd
+      : (typeof Deno !== "undefined" && typeof Deno.cwd === "function" ? Deno.cwd() : "/");
+    let home = "";
+    try {
+      home = (typeof Deno !== "undefined" && typeof Deno.env?.get === "function" &&
+        Deno.env.get("HOME")) || "";
+    } catch {
+      // No env permission: keep empty string.
+    }
+
+    return checkBashCommandTarget(command, cwd, home);
+  }
+
+  // Edit / Write / NotebookEdit
+  const filePath = typeof toolInput.file_path === "string"
+    ? toolInput.file_path
+    : typeof toolInput.notebook_path === "string"
+    ? toolInput.notebook_path
+    : typeof toolInput.path === "string"
+    ? toolInput.path
+    : "";
+
+  if (filePath.trim().length > 0) {
+    return { determinable: true, target: filePath };
+  }
+
+  return {
+    determinable: false,
+    note: "The target file path could not be determined from the tool input.",
+  };
 }
 
 export function isOpusModel(model: string): boolean {
@@ -455,7 +704,7 @@ export function decideMainThreadEdit(
 ): GateDecision {
   const raw = transcriptPath ? read(transcriptPath) : null;
   if (raw === null) {
-    return deny(
+    return allow(
       "main",
       "The session transcript could not be read, so the session model is unknown.",
     );
@@ -463,7 +712,7 @@ export function decideMainThreadEdit(
   const entries = parseTranscriptJsonl(raw);
   const info = getOpusGateInfo(entries);
   if (!info.model) {
-    return deny("main", "The session model could not be determined from the transcript.");
+    return allow("main", "The session model could not be determined from the transcript.");
   }
   if (!isOpusModel(info.model)) return allow("main");
   if (
@@ -482,11 +731,11 @@ export function decideSubagentEdit(
 ): GateDecision {
   const files = resolveSessionFiles(transcriptPath);
   if (!files) {
-    return deny("subagent", "The session's files could not be located from transcript_path.");
+    return allow("subagent", "The session's files could not be located from transcript_path.");
   }
   const model = resolveSubagentModel(files, agentId, read);
   if (!model) {
-    return deny(
+    return allow(
       "subagent",
       "The subagent's model could not be determined: no meta file or transcript names it.",
     );
@@ -494,7 +743,7 @@ export function decideSubagentEdit(
   if (!isOpusModel(model)) return allow("subagent");
   const prompt = findSpawningHumanPrompt(files, agentId, read);
   if (!prompt) {
-    return deny(
+    return allow(
       "subagent",
       "The message Josh typed that spawned this Opus subagent could not be found.",
     );
@@ -512,25 +761,52 @@ export function decide(
   read: ReadText = readTextOrNull,
   lookupLabels: LabelLookup = defaultLabelLookup(),
 ): GateDecision {
-  const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "";
-  const transcriptPath = typeof payload.transcript_path === "string" ? payload.transcript_path : "";
-  if (agentId && payload.permission_mode === "auto") {
-    return decideSubagentEdit(agentId, transcriptPath, read);
+  try {
+    const targetCheck = checkWriteTarget(payload);
+    const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "";
+    if (!targetCheck.determinable) {
+      return allow(
+        agentId ? "subagent" : "main",
+        targetCheck.note ?? "Write target could not be determined.",
+      );
+    }
+
+    const transcriptPath = typeof payload.transcript_path === "string"
+      ? payload.transcript_path
+      : "";
+    if (agentId && payload.permission_mode === "auto") {
+      return decideSubagentEdit(agentId, transcriptPath, read);
+    }
+    // A subagent call outside auto mode keeps its exemption. The shell hook exits before calling this
+    // module in that case; the branch keeps decide() total.
+    if (agentId) return allow("subagent");
+    return decideMainThreadEdit(transcriptPath, read, lookupLabels);
+  } catch (err) {
+    return allow(
+      "main",
+      `The gate's checker threw an error (${
+        err instanceof Error ? err.message : String(err)
+      }), so proceeding by workflow default.`,
+    );
   }
-  // A subagent call outside auto mode keeps its exemption. The shell hook exits before calling this
-  // module in that case; the branch keeps decide() total.
-  if (agentId) return allow("subagent");
-  return decideMainThreadEdit(transcriptPath, read, lookupLabels);
 }
 
 if (import.meta.main) {
-  let result = deny("main", "The hook payload could not be read.");
+  let result = allow(
+    "main",
+    "The hook payload could not be read, so proceeding by workflow default.",
+  );
   try {
     const raw = await new Response(Deno.stdin.readable).text();
     const payload = JSON.parse(raw);
     if (payload && typeof payload === "object") result = decide(payload as GatePayload);
-  } catch {
-    // Fail closed: the deny above stands.
+  } catch (err) {
+    result = allow(
+      "main",
+      `The gate's checker threw an error (${
+        err instanceof Error ? err.message : String(err)
+      }), so proceeding by workflow default.`,
+    );
   }
   console.log(JSON.stringify(result));
 }

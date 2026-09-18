@@ -16,6 +16,7 @@ import {
   decideSubagentEdit,
   findSpawningHumanPrompt,
   isOpusModel,
+  isReadOnlyQuotedWrite,
   type IssueRef,
   LABEL_CACHE_TTL_MS,
   type LabelLookup,
@@ -26,6 +27,7 @@ import {
   resolveSessionFiles,
   resolveSubagentModel,
   runGhLabels,
+  singleSimpleCommandTokens,
   slashCommandOf,
   workIssueApprovalActive,
   workIssueArgs,
@@ -478,7 +480,8 @@ Deno.test("decideMainThreadEdit: every outcome", () => {
     throw new Error("the label lookup must not run");
   };
 
-  assertEquals(decideMainThreadEdit("", reader({}), noLookup).decision, "deny");
+  assertEquals(decideMainThreadEdit("", reader({}), noLookup).decision, "allow");
+  assert(decideMainThreadEdit("", reader({}), noLookup).why.includes("could not be read"));
   assert(decideMainThreadEdit(MAIN, reader({}), noLookup).why.includes("could not be read"));
   assert(
     decideMainThreadEdit(MAIN, at([human("hi")]), noLookup).why.includes("could not be determined"),
@@ -604,7 +607,185 @@ Deno.test("decide: routes auto-mode subagent calls, exempts other subagent calls
     kind: "main",
     why: "",
   });
-  assertEquals(decide({}, read, labels).decision, "deny");
+  assertEquals(decide({}, read, labels).decision, "allow");
+  assert(decide({}, read, labels).why.includes("could not be read"));
+});
+
+// --- Four literal cases named in 'What this builds' (allow and say so) ---
+
+Deno.test("Case 1: an unreadable transcript allows with note", () => {
+  const read = reader({});
+  const res = decide({ transcript_path: "/nonexistent/transcript.jsonl" }, read, labels);
+  assertEquals(res.decision, "allow");
+  assert(res.why.includes("could not be read"));
+});
+
+Deno.test("Case 2: missing subagent metadata allows with note", () => {
+  const read = reader({ [MAIN]: jsonl([human("opus edit ok"), spawn("toolu_sub")]) });
+  const res = decide(
+    { agent_id: "missing-meta", permission_mode: "auto", transcript_path: MAIN },
+    read,
+    labels,
+  );
+  assertEquals(res.decision, "allow");
+  assertEquals(res.kind, "subagent");
+  assert(res.why.includes("model could not be determined"));
+});
+
+Deno.test("Case 3: a Bash write whose destination cannot be read allows with note", () => {
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+  const res = decide(
+    {
+      tool_name: "Bash",
+      tool_input: {
+        command: "python3 -c \"import pathlib; p = pathlib.Path('foo'); p.write_text('hi')\"",
+      },
+      cwd: "/home/joshua/WebJamApps/web-jam-tools",
+      transcript_path: MAIN,
+    },
+    read,
+    labels,
+  );
+  assertEquals(res.decision, "allow");
+  assert(res.why.includes("destination cannot be read"));
+});
+
+Deno.test("Case 4: a read-only command whose quoted text merely contains a write allows with note", () => {
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+  const res = decide(
+    {
+      tool_name: "Bash",
+      tool_input: { command: 'deno eval \'console.log("open(f, \\"w\\")")\'' },
+      cwd: "/home/joshua/WebJamApps/web-jam-tools",
+      transcript_path: MAIN,
+    },
+    read,
+    labels,
+  );
+  assertEquals(res.decision, "allow");
+  assert(res.why.includes("read-only command whose quoted text merely contains a write"));
+});
+
+// --- Reproduction check: 2026-09-17 finding ---
+
+Deno.test("Reproduction 2026-09-17: deno eval with Python heredoc writing via pathlib allows with note", () => {
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+  const cmd = `deno eval '
+const script = \`
+cd /home/joshua/WebJamApps/web-jam-tools
+python3 - <<EOF
+import pathlib
+p = pathlib.Path("/home/joshua/Dropbox/test.txt")
+p.write_text("hello")
+EOF
+\`;
+console.log(script);
+'`;
+  const res = decide(
+    {
+      tool_name: "Bash",
+      tool_input: { command: cmd },
+      cwd: "/home/joshua/WebJamApps/web-jam-tools",
+      transcript_path: MAIN,
+    },
+    read,
+    labels,
+  );
+  assertEquals(res.decision, "allow");
+  assert(
+    res.why.includes("read-only command whose quoted text merely contains a write") ||
+      res.why.includes("destination cannot be read"),
+  );
+});
+
+// --- A read-only invocation may not launder a real write (web-jam-tools#1077 review) ---
+
+Deno.test("isReadOnlyQuotedWrite: only a lone read-only invocation counts, never a chained write", () => {
+  // Genuinely read-only: the write pattern lives in text the interpreter merely prints.
+  assert(isReadOnlyQuotedWrite(`deno eval 'console.log("open(f, \\"w\\")")'`));
+  assert(isReadOnlyQuotedWrite(`node -p 'JSON.stringify({a:1})'`));
+  assert(isReadOnlyQuotedWrite(`python3 -c 'print("writeFileSync")'`));
+
+  // A real write chained onto a harmless evaluation is NOT read-only: the second command writes.
+  assert(!isReadOnlyQuotedWrite(`deno eval 'console.log(1)' && echo x > src/a.ts`));
+  assert(!isReadOnlyQuotedWrite(`python3 -c 'print(1)'; echo x > src/a.ts`));
+  assert(!isReadOnlyQuotedWrite(`node -e 'console.log(1)' && echo x > src/a.ts`));
+  assert(!isReadOnlyQuotedWrite(`deno eval 'console.log(1)' | tee src/a.ts`));
+  assert(!isReadOnlyQuotedWrite(`deno eval 'console.log(1)' && rm -rf src`));
+
+  // A trailing comment naming an interpreter does not make a write read-only.
+  assert(!isReadOnlyQuotedWrite(`echo x > src/a.ts # deno eval`));
+
+  // The script's own write APIs are matched under the runtime that actually runs it.
+  assert(!isReadOnlyQuotedWrite(`deno eval 'Deno.writeTextFileSync("src/a.ts","x")'`));
+  assert(!isReadOnlyQuotedWrite(`node -e 'require("fs").writeFileSync("src/a.ts","x")'`));
+  assert(!isReadOnlyQuotedWrite(`python3 -c 'open("src/a.ts","w").write("x")'`));
+
+  // Spawning a subprocess from an inline script is a write the gate cannot see into.
+  assert(!isReadOnlyQuotedWrite(`deno eval 'new Deno.Command("sh",{args:["-c","echo x > a"]})'`));
+  assert(!isReadOnlyQuotedWrite(`python3 -c 'import subprocess; subprocess.run(["sh"])'`));
+
+  // A command substitution can run anything, so the shape is not readable.
+  assert(!isReadOnlyQuotedWrite('deno eval "console.log(`cat /etc/passwd`)"'));
+  assert(!isReadOnlyQuotedWrite('deno eval "console.log($(id))"'));
+});
+
+Deno.test("singleSimpleCommandTokens: one simple command tokenizes, anything else is null", () => {
+  assertEquals(singleSimpleCommandTokens(`deno eval 'console.log(1)'`), [
+    "deno",
+    "eval",
+    "console.log(1)",
+  ]);
+  // An operator inside a quoted argument is data, not a second command.
+  assertEquals(singleSimpleCommandTokens(`deno eval 'a && b > c'`), ["deno", "eval", "a && b > c"]);
+
+  for (
+    const command of [
+      `deno eval 'x' && echo y`,
+      `deno eval 'x'; echo y`,
+      `deno eval 'x' | cat`,
+      `deno eval 'x' > out.txt`,
+      `deno eval 'x' &`,
+      `deno eval 'x' # comment`,
+      `deno eval 'unterminated`,
+    ]
+  ) {
+    assertEquals(singleSimpleCommandTokens(command), null, command);
+  }
+});
+
+Deno.test("decide: a write chained onto a read-only invocation is still refused", () => {
+  const read = reader({ [MAIN]: jsonl([human("fix this"), assistant("claude-opus-5")]) });
+  const bypasses = [
+    `deno eval 'console.log(1)' && echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts`,
+    `python3 -c 'print(1)'; echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts`,
+    `node -e 'console.log(1)' && echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts`,
+    `echo x > /home/joshua/WebJamApps/web-jam-tools/src/a.ts # deno eval`,
+  ];
+  for (const command of bypasses) {
+    const res = decide(
+      {
+        tool_name: "Bash",
+        tool_input: { command },
+        cwd: "/home/joshua/WebJamApps/web-jam-tools",
+        transcript_path: MAIN,
+      },
+      read,
+      labels,
+    );
+    assertEquals(res.decision, "deny", command);
+  }
+});
+
+// --- Checker throws proceeds by workflow default ---
+
+Deno.test("checker throws proceeds by workflow default (allow)", () => {
+  const throwingRead: ReadText = () => {
+    throw new Error("disk read error");
+  };
+  const res = decide({ transcript_path: MAIN }, throwingRead, labels);
+  assertEquals(res.decision, "allow");
+  assert(res.why.includes("The gate's checker threw an error"));
 });
 
 // --- CLI ---
@@ -628,7 +809,7 @@ async function runCli(stdin: string): Promise<Record<string, unknown>> {
   return JSON.parse(new TextDecoder().decode(stdout));
 }
 
-Deno.test("CLI: prints a decision for a payload and fails closed on unreadable stdin", async () => {
+Deno.test("CLI: prints a decision for a payload and allows by workflow default on unreadable stdin", async () => {
   const dir = await Deno.makeTempDir();
   try {
     const transcript = `${dir}/sess.jsonl`;
@@ -637,11 +818,9 @@ Deno.test("CLI: prints a decision for a payload and fails closed on unreadable s
       jsonl([human("opus edit ok"), assistant("claude-opus-5")]),
     );
     assertEquals((await runCli(JSON.stringify({ transcript_path: transcript }))).decision, "allow");
-    assertEquals(await runCli("not json"), {
-      decision: "deny",
-      kind: "main",
-      why: "The hook payload could not be read.",
-    });
+    const unreadable = await runCli("not json");
+    assertEquals(unreadable.decision, "allow");
+    assert(typeof unreadable.why === "string" && unreadable.why.length > 0);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
