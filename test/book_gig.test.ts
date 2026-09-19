@@ -51,7 +51,12 @@ import {
   SORTING_SCRIPT,
 } from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
-import { formatLocationDisplay, runBookGigCli } from "../src/book-gig/cli.ts";
+import {
+  deduplicateCampaignsByVenue,
+  formatLocationDisplay,
+  matchesWeekend,
+  runBookGigCli,
+} from "../src/book-gig/cli.ts";
 import {
   buildUnambiguousNameIndex,
   decodeHtmlEntities,
@@ -1835,6 +1840,8 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
               _id: "o1",
               venueId: "v1",
               status: "replied",
+              targetDates: "2026-10-16 to 2026-10-18",
+              targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
               replySnippet: "Oct 17 works great!",
               suggestion: { action: "Confirm date", intent: "Booking Offer", confidence: 0.9 },
             },
@@ -4322,4 +4329,338 @@ Deno.test("touch conversion: proposes genuine phone conversation, rejects legacy
   assertEquals(postedRequests[0].body.actor, "Josh");
   assertEquals(postedRequests[0].body.note, "Spoke on the phone about a 2027 booking");
   assertEquals(postedRequests[0].body.date, "2026-05-09T00:00:00.000Z");
+});
+
+Deno.test("matchesWeekend: three-outcome guard behavior for weekend matching (#998)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  // Outcome 1: Matches via targetWeekend range overlap
+  const matchingOverlap: OutreachCampaignRecord = {
+    _id: "r1",
+    venueId: "v1",
+    status: "replied",
+    targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
+  };
+  assertEquals(matchesWeekend(matchingOverlap, weekend), true);
+
+  // Outcome 1 (alt): Matches via targetDates containing start or label
+  const matchingDates: OutreachCampaignRecord = {
+    _id: "r2",
+    venueId: "v2",
+    status: "replied",
+    targetDates: "2026-10-16 to 2026-10-18",
+  };
+  assertEquals(matchesWeekend(matchingDates, weekend), true);
+
+  const matchingLabel: OutreachCampaignRecord = {
+    _id: "r3",
+    venueId: "v3",
+    status: "replied",
+    targetDates: "Bookings for October 16–18, 2026",
+  };
+  assertEquals(matchesWeekend(matchingLabel, weekend), true);
+
+  // Outcome 2: Excluded when targetWeekend does not overlap and targetDates does not match
+  const mismatchedWeekend: OutreachCampaignRecord = {
+    _id: "r4",
+    venueId: "v4",
+    status: "replied",
+    targetWeekend: { start: "2026-11-06", end: "2026-11-08" },
+    targetDates: "2026-11-06 to 2026-11-08",
+  };
+  assertEquals(matchesWeekend(mismatchedWeekend, weekend), false);
+
+  // Outcome 3: Excluded (fails closed) when targetWeekend has missing, null, or unparseable metadata
+  const missingMetadata: OutreachCampaignRecord = {
+    _id: "r5",
+    venueId: "v5",
+    status: "replied",
+  };
+  assertEquals(matchesWeekend(missingMetadata, weekend), false);
+
+  const unparseableWeekend: OutreachCampaignRecord = {
+    _id: "r6",
+    venueId: "v6",
+    status: "replied",
+    targetWeekend: { start: "not-a-date", end: "invalid" },
+  };
+  assertEquals(matchesWeekend(unparseableWeekend, weekend), false);
+});
+
+Deno.test("deduplicateCampaignsByVenue: deduplicates multiple outreach records by venueId preserving latest sentAt (#998)", () => {
+  const records: OutreachCampaignRecord[] = [
+    {
+      _id: "c1",
+      venueId: "v1",
+      venueName: "Venue One",
+      status: "sent",
+      sentAt: "2026-08-10T10:00:00Z",
+    },
+    {
+      _id: "c2",
+      venueId: "v1",
+      venueName: "Venue One - Resend",
+      status: "replied",
+      sentAt: "2026-08-12T15:00:00Z",
+      replySnippet: "Resend reply",
+    },
+    {
+      _id: "c3",
+      venueId: "v2",
+      venueName: "Venue Two",
+      status: "sent",
+      sentAt: "2026-08-11T12:00:00Z",
+    },
+  ];
+
+  const deduped = deduplicateCampaignsByVenue(records);
+  assertEquals(deduped.length, 2);
+  // Venue One should retain the latest record c2 (2026-08-12)
+  const v1Record = deduped.find((r) => r.venueId === "v1");
+  assertEquals(v1Record?._id, "c2");
+  assertEquals(v1Record?.replySnippet, "Resend reply");
+  // Venue Two should be preserved
+  const v2Record = deduped.find((r) => r.venueId === "v2");
+  assertEquals(v2Record?._id, "c3");
+
+  // Also verify order-independence: latest record first, older second
+  const reverseOrder: OutreachCampaignRecord[] = [
+    {
+      _id: "c2",
+      venueId: "v1",
+      venueName: "Venue One - Resend",
+      status: "replied",
+      sentAt: "2026-08-12T15:00:00Z",
+    },
+    {
+      _id: "c1",
+      venueId: "v1",
+      venueName: "Venue One",
+      status: "sent",
+      sentAt: "2026-08-10T10:00:00Z",
+    },
+  ];
+  const dedupedReverse = deduplicateCampaignsByVenue(reverseOrder);
+  assertEquals(dedupedReverse.length, 1);
+  assertEquals(dedupedReverse[0]._id, "c2");
+});
+
+Deno.test("runBookGigCli: --replies filters pending replies by weekend and deduplicates campaigns (#998)", async () => {
+  const mockVenues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Matching Venue",
+      city: "Salem",
+      usState: "VA",
+    },
+    {
+      _id: "v2",
+      name: "Mismatched Venue",
+      city: "Roanoke",
+      usState: "VA",
+    },
+    {
+      _id: "v3",
+      name: "Missing Weekend Venue",
+      city: "Lynchburg",
+      usState: "VA",
+    },
+  ];
+
+  const mockFetch: typeof fetch = (input) => {
+    const u = String(input);
+    if (u.includes("/outreach/check-replies")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ checked: 3, matched: 1, classified: 1, bounced: 0 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/replies/pending")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            // Reply 1: Matching target weekend -> included
+            {
+              _id: "p1",
+              venueId: "v1",
+              status: "replied",
+              targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
+              targetDates: "2026-10-16 to 2026-10-18",
+              replySnippet: "Oct 17 is open!",
+            },
+            // Reply 2: Mismatched target weekend (prior month) -> excluded
+            {
+              _id: "p2",
+              venueId: "v2",
+              status: "replied",
+              targetWeekend: { start: "2026-09-11", end: "2026-09-13" },
+              targetDates: "2026-09-11 to 2026-09-13",
+              replySnippet: "September was fun",
+            },
+            // Reply 3: Missing target weekend metadata -> excluded (fails closed)
+            {
+              _id: "p3",
+              venueId: "v3",
+              status: "replied",
+              replySnippet: "Undated reply",
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/report")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            url: "https://web-jam.com/outreach/report/2026-10-16-to-2026-10-18",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach")) {
+      // Return multiple campaigns for v1 (older and newer) to test deduplication
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              _id: "c1",
+              venueId: "v1",
+              status: "sent",
+              sentAt: "2026-08-01T10:00:00Z",
+              targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
+              targetDates: "2026-10-16 to 2026-10-18",
+            },
+            {
+              _id: "c2",
+              venueId: "v1",
+              status: "replied",
+              sentAt: "2026-08-05T12:00:00Z",
+              targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
+              targetDates: "2026-10-16 to 2026-10-18",
+              replySnippet: "Oct 17 is open!",
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const mockOpener = () => Promise.resolve(true);
+
+  const result = await runBookGigCli(
+    ["--replies", "Oct 16-18 2026", "--no-open"],
+    mockFetch,
+    mockOpener,
+  );
+
+  assertEquals(result.mode, "replies");
+  // 1. Pending replies filtering: only p1 included, p2 (mismatched) and p3 (missing metadata) excluded
+  const pending = result.repliesTracking?.pendingReplies || [];
+  assertEquals(pending.length, 1);
+  assertEquals(pending[0]._id, "p1");
+  assertEquals(pending[0].venueName, "Matching Venue");
+
+  // 2. Campaigns deduplication: v1 had c1 and c2; only c2 (latest sentAt) is preserved
+  const campaigns = result.repliesTracking?.campaigns || [];
+  assertEquals(campaigns.length, 1);
+  assertEquals(campaigns[0]._id, "c2");
+  assertEquals(campaigns[0].sentAt, "2026-08-05T12:00:00Z");
+});
+
+Deno.test("renderDarkHtml: places sortable candidates table as first section beneath header (#998)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const candidates: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      contactName: "Brewmaster Bob",
+      email: "bob@oldesalem.com",
+    },
+  ];
+
+  const campaigns: OutreachCampaignRecord[] = [
+    {
+      _id: "c1",
+      venueId: "v1",
+      venueName: "Olde Salem Brewing",
+      status: "replied",
+      sentAt: "2026-08-10T10:00:00Z",
+      replySnippet: "We would love to host you!",
+    },
+  ];
+
+  const result: BookGigResult = {
+    mode: "replies",
+    weekend,
+    candidates,
+    density: { count: 1, isSparse: false },
+    pitches: [],
+    repliesTracking: {
+      checkReplies: { checked: 1, matched: 1, classified: 1, bounced: 0 },
+      pendingReplies: [campaigns[0]],
+      campaigns,
+      targetWeekend: weekend,
+    },
+  };
+
+  const html = renderDarkHtml(result);
+
+  // Assert candidates section exists with id="candidates-table"
+  assertStringIncludes(html, 'id="candidates-table"');
+  assertStringIncludes(html, "📊 Eligible Candidates");
+  assertStringIncludes(html, "⚠️ Pending Reply Reviews");
+  assertStringIncludes(html, "Live Outreach Campaigns");
+
+  // Assert section ordering within <main>:
+  // candidatesSectionHtml must be rendered before pendingSectionHtml and campaignsSectionHtml
+  const candidatesIndex = html.indexOf('id="candidates-table"');
+  const pendingIndex = html.indexOf("⚠️ Pending Reply Reviews");
+  const campaignsIndex = html.indexOf("Live Outreach Campaigns");
+
+  assert(candidatesIndex !== -1, "Candidates section should be present");
+  assert(pendingIndex !== -1, "Pending reply reviews section should be present");
+  assert(campaignsIndex !== -1, "Campaigns section should be present");
+
+  assert(
+    candidatesIndex < pendingIndex,
+    `Candidates table (${candidatesIndex}) must appear before Pending Reviews (${pendingIndex})`,
+  );
+  assert(
+    candidatesIndex < campaignsIndex,
+    `Candidates table (${candidatesIndex}) must appear before Campaigns (${campaignsIndex})`,
+  );
 });

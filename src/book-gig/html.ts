@@ -507,7 +507,7 @@ export function renderDarkHtml(result: BookGigResult): string {
     }).join("\n");
 
     candidatesSectionHtml = `
-      <section class="section-block">
+      <section class="section-block" id="candidates-table">
         <h2 class="section-title">📊 Eligible Candidates</h2>
         <div class="table-wrap">
           <table class="candidate-table">
@@ -1087,10 +1087,10 @@ export function renderDarkHtml(result: BookGigResult): string {
     </header>
 
     <main>
+      ${candidatesSectionHtml}
       ${pendingSectionHtml}
       ${campaignsSectionHtml}
       ${batchSectionHtml}
-      ${candidatesSectionHtml}
       ${pitchesSectionHtml}
     </main>
 
