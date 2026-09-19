@@ -20,6 +20,7 @@ import {
   type IssueRef,
   LABEL_CACHE_TTL_MS,
   type LabelLookup,
+  opusEditApprovalActive,
   parseIssueRef,
   parseLabelsJson,
   type ReadText,
@@ -68,6 +69,45 @@ function notification(text: string): TranscriptEntry {
 function metaEntry(text: string): TranscriptEntry {
   return { type: "user", isMeta: true, message: { role: "user", content: text } };
 }
+
+Deno.test("opusEditApprovalActive: approval is session-scoped, not per-turn", () => {
+  // The defect this replaces: approval was read from the latest prompt alone, so any following
+  // message at all silently withdrew permission Josh had already given.
+  assert(opusEditApprovalActive([human("opus edit ok")]));
+  assert(
+    opusEditApprovalActive([human("opus edit ok"), human("api error try again")]),
+    "an unrelated later message must not withdraw approval",
+  );
+  assert(
+    opusEditApprovalActive([human("opus edit ok"), human("bullshit gate"), human("damnit")]),
+    "several unrelated later messages must not withdraw approval",
+  );
+
+  // Nothing approving anywhere in the session.
+  assertEquals(opusEditApprovalActive([human("fix the gate")]), false);
+  assertEquals(opusEditApprovalActive([]), false);
+
+  // Explicit withdrawal wins over an earlier approval, and a later approval revives it.
+  assertEquals(opusEditApprovalActive([human("opus edit ok"), human("opus edit off")]), false);
+  assert(
+    opusEditApprovalActive([human("opus edit ok"), human("opus edit off"), human("opus edit ok")]),
+  );
+
+  // Asking Opus to do the work approves the same way (D-8), and still persists.
+  assert(opusEditApprovalActive([human("have opus fix it"), human("thanks")]));
+
+  // Only prompts Josh actually sent count: injected turns neither grant nor cancel approval.
+  assertEquals(opusEditApprovalActive([notification("opus edit ok")]), false);
+  assertEquals(opusEditApprovalActive([metaEntry("opus edit ok")]), false);
+  assert(
+    opusEditApprovalActive([human("opus edit ok"), notification("opus edit off")]),
+    "an injected revocation must not cancel Josh's approval",
+  );
+  assert(
+    opusEditApprovalActive([human("opus edit ok"), metaEntry("opus edit off")]),
+    "an isMeta revocation must not cancel Josh's approval",
+  );
+});
 
 function assistant(model: string, extra: Record<string, unknown> = {}): TranscriptEntry {
   return {
