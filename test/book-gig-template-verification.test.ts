@@ -650,3 +650,36 @@ Deno.test("verifyPitchAgainstTemplate: accepts dark-wrapped emails with links mo
   assertNotEquals(violationCorrupted, null);
   assertStringIncludes(violationCorrupted!.reason, "diverges from stored template");
 });
+
+Deno.test("verifyPitchAgainstTemplate: accepts a faithful render whose template already styles a link with the wrapper link colour", () => {
+  // Regression guard. The backend leaves an <a> alone when the template already declares a color:
+  // of its own, so removing that colour from the rendered side alone dropped it from the render
+  // while the skeleton kept it — refusing an email that is in fact faithful. #4fc3f7 is this repo's
+  // own accent colour (src/book-gig/html.ts), so a template styling a link for dark mode lands on
+  // exactly this value.
+  const templateWithWrapperColourLink: EmailTemplate = {
+    ...FIXTURE_TEMPLATE,
+    bodyHtml:
+      `[Custom Body]\n<p>Hear us at <a href="https://joshandmariamusic.com" style="color:#4fc3f7;">our site</a>.</p>\n<p>Thanks for considering us.</p>`,
+  };
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, [templateWithWrapperColourLink]);
+  const wrapped: PitchEmail = { ...pitch, htmlBody: wrapDarkEmail(pitch.htmlBody!) };
+
+  const violation = verifyPitchAgainstTemplate(wrapped, venue, WEEKEND, {}, [
+    templateWithWrapperColourLink,
+  ]);
+  assertEquals(violation, null);
+
+  // A real divergence inside that same template is still refused — the fix narrows nothing.
+  const diverged: PitchEmail = {
+    ...pitch,
+    htmlBody: wrapDarkEmail(
+      pitch.htmlBody!.replace("Thanks for considering us.", "Invented text."),
+    ),
+  };
+  const divergedViolation = verifyPitchAgainstTemplate(diverged, venue, WEEKEND, {}, [
+    templateWithWrapperColourLink,
+  ]);
+  assertNotEquals(divergedViolation, null);
+});

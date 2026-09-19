@@ -704,15 +704,22 @@ function renderCustomHtml(customText: string): string {
 }
 
 function matchesSkeleton(skeleton: string, actualHtml: string): boolean {
-  const unwrappedHtml = stripDarkWrapper(actualHtml);
-  const markerIndex = skeleton.indexOf(CUSTOM_BODY_MARKER);
+  // The wrapper-injected link colour is normalised away on BOTH sides. stripDarkWrapper() already
+  // removes it from a wrapped render, but the backend deliberately leaves an <a> alone when the
+  // template already declares a color: of its own. A template using the same link colour as the
+  // wrapper would therefore keep it in the skeleton while the render lost it, and a faithful email
+  // would be refused as a divergence. Normalising both sides makes the comparison symmetric by
+  // construction, rather than relying on the strip being a perfect inverse of what was applied.
+  const unwrappedHtml = stripInlineLinkColor(stripDarkWrapper(actualHtml));
+  const normalizedSkeleton = stripInlineLinkColor(skeleton);
+  const markerIndex = normalizedSkeleton.indexOf(CUSTOM_BODY_MARKER);
   if (markerIndex === -1) {
     // No declared [Custom Body] slot in this template: the fixed prose must match exactly.
-    return unwrappedHtml === skeleton;
+    return unwrappedHtml === normalizedSkeleton;
   }
 
-  const prefix = skeleton.slice(0, markerIndex);
-  const suffix = skeleton.slice(markerIndex + CUSTOM_BODY_MARKER.length);
+  const prefix = normalizedSkeleton.slice(0, markerIndex);
+  const suffix = normalizedSkeleton.slice(markerIndex + CUSTOM_BODY_MARKER.length);
 
   // Empty custom body: the real renderer removes the marker AND its one trailing newline
   // together, so no gap remains at all.
