@@ -597,12 +597,34 @@ Deno.test("Opus main session in-repo write without escape phrase is denied with 
   );
 });
 
-Deno.test("Opus session where escape phrase was in an older turn but not the latest turn is denied", async () => {
+Deno.test("Opus session where the escape phrase was in an older turn is still allowed", async () => {
+  // Josh's approval is session-scoped. It used to be read from his latest prompt alone, so any
+  // following message silently withdrew permission he had already given and he had to retype the
+  // phrase before every edit — the guard policing him rather than the agent.
   await withTranscript(
     [
       userTurn("opus edit ok — first turn"),
       assistantTurn("claude-opus-4-6", "done turn 1"),
       userTurn("now do another edit on this file"),
+      assistantTurn("claude-opus-4-6"),
+    ],
+    async (transcript_path) => {
+      const res = await runHook({
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertEquals(res.code, 0);
+      assertEquals(res.stdout.trim(), "", "an approved session emits no denial");
+    },
+  );
+});
+
+Deno.test("Opus session is denied again once Josh withdraws his approval", async () => {
+  await withTranscript(
+    [
+      userTurn("opus edit ok"),
+      assistantTurn("claude-opus-4-6", "done turn 1"),
+      userTurn("opus edit off"),
       assistantTurn("claude-opus-4-6"),
     ],
     async (transcript_path) => {

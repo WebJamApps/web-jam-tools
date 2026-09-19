@@ -12,7 +12,9 @@
  *
  * Main-thread call — allowed when:
  *   - the session model is not Opus, or
- *   - Josh's latest HUMAN prompt contains "opus edit ok" or asks Opus to do the work, or
+ *   - Josh has approved Opus edits anywhere earlier in the SESSION — a human prompt containing
+ *     "opus edit ok" or asking Opus to do the work — and has not since withdrawn it with
+ *     "opus edit off". His approval is not discarded by whatever he happens to type next, or
  *   - the most recent slash command in the transcript is a `/work-issue` Josh typed, naming an issue
  *     whose model label is Opus (D-7). Any other label, no issue named, or a failed label lookup gives
  *     no approval — the skill then has to delegate to the labeled tier.
@@ -47,6 +49,9 @@ import { slashCommandFromInvocationWrapper } from "./check_token_write_authoriza
 import { bashWriteTargets } from "./bash_write_targets.ts";
 
 export const ESCAPE_PHRASE = "opus edit ok";
+
+/** Withdraws a session-scoped approval granted by {@link ESCAPE_PHRASE}. */
+export const REVOKE_PHRASE = "opus edit off";
 
 /** A parent chain longer than this is treated as broken rather than walked forever. */
 export const MAX_SPAWN_DEPTH = 32;
@@ -697,6 +702,33 @@ export function workIssueApprovalActive(
   return false;
 }
 
+/**
+ * Whether Josh's approval for Opus edits is active, scoped to the SESSION rather than to the one
+ * turn he typed it in.
+ *
+ * The gate previously read only his latest prompt, so an approval was discarded the moment he sent
+ * any other message — a correction, a "try again", even an expression of annoyance — and he had to
+ * retype the phrase before every single edit. That made the guard police him rather than the agent,
+ * which is not what it is for: it exists to stop Opus editing without his say-so, and once he has
+ * said so that answer holds until he withdraws it.
+ *
+ * Walks human turns newest-first and returns on the first decisive one, so a later revocation beats
+ * an earlier approval. Mirrors {@link workIssueApprovalActive}, which already scopes this way. Only
+ * prompts Josh actually sent count (`isHumanPrompt`, not `isMeta`), so a task notification or an
+ * injected reminder can neither grant approval nor cancel it.
+ */
+export function opusEditApprovalActive(entries: readonly TranscriptEntry[]): boolean {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (!isUserTurnBoundary(entry) || entry.isMeta === true) continue;
+    if (!isHumanPrompt(entry)) continue;
+    const text = extractEntryText(entry).toLowerCase();
+    if (text.includes(REVOKE_PHRASE)) return false;
+    if (text.includes(ESCAPE_PHRASE) || asksOpusToDoTheWork(text)) return true;
+  }
+  return false;
+}
+
 export function decideMainThreadEdit(
   transcriptPath: string,
   read: ReadText,
@@ -716,7 +748,7 @@ export function decideMainThreadEdit(
   }
   if (!isOpusModel(info.model)) return allow("main");
   if (
-    info.hasEscape || asksOpusToDoTheWork(info.lastUserText) ||
+    opusEditApprovalActive(entries) ||
     workIssueApprovalActive(entries, lookupLabels)
   ) {
     return allow("main");
