@@ -44,6 +44,7 @@ import {
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
 import {
+  DRAFT_PREVIEW_DARK_STYLE,
   extractRunDataFromHtml,
   formatPay,
   renderDarkHtml,
@@ -624,7 +625,7 @@ Deno.test("renderDarkHtml: writes a draft's backend-rendered HTML in full into a
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-  assertStringIncludes(html, `srcdoc="${expectedEscaped}"`);
+  assertStringIncludes(html, `srcdoc="${DRAFT_PREVIEW_DARK_STYLE}${expectedEscaped}"`);
   assertStringIncludes(html, "pitch-body-frame");
   // The draft renders with scripting disabled — never a script-enabled sandbox.
   assertStringIncludes(html, 'sandbox="allow-same-origin"');
@@ -638,6 +639,96 @@ Deno.test("renderDarkHtml: writes a draft's backend-rendered HTML in full into a
     html,
     "navigator.clipboard.writeText(document.getElementById('pitch-body-1-plain').innerText)",
   );
+});
+
+Deno.test("renderDarkHtml: email preview frames render with dark surface token, dark color-scheme, and injected dark style block (D-71, #999)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const htmlBody1 = "<p>Hi Alex, We'd love to play at <strong>Parkway</strong>.</p>";
+  const htmlBody2 =
+    '<p>Hi Sam, Checking in about <a href="https://example.com">available dates</a>.</p>';
+
+  const result: BookGigResult = {
+    mode: "preview",
+    weekend,
+    candidates: [
+      { _id: "v1", name: "Parkway Brewing", email: "info@parkway.com" },
+      { _id: "v2", name: "Second Venue", email: "info@second.com" },
+    ],
+    density: { count: 2, isSparse: false },
+    pitches: [
+      {
+        venueId: "v1",
+        venueName: "Parkway Brewing",
+        to: "info@parkway.com",
+        subject: "Sub 1",
+        body: "Body 1",
+        htmlBody: htmlBody1,
+      },
+      {
+        venueId: "v2",
+        venueName: "Second Venue",
+        to: "info@second.com",
+        subject: "Sub 2",
+        body: "Body 2",
+        htmlBody: htmlBody2,
+      },
+    ],
+  };
+
+  const html = renderDarkHtml(result);
+
+  // (a) Does not contain color-scheme: light or background-color: #ffffff on iframe.pitch-body-frame
+  const iframeCssMatch = html.match(/iframe\.pitch-body-frame\s*\{([^}]+)\}/);
+  assert(iframeCssMatch, "iframe.pitch-body-frame CSS rule must exist in renderDarkHtml output");
+  const iframeCss = iframeCssMatch[1];
+  assertEquals(iframeCss.includes("color-scheme: light"), false);
+  assertEquals(iframeCss.includes("background-color: #ffffff"), false);
+
+  // (b) Contains color-scheme: dark and background-color: var(--bg-surface) on that rule
+  assertStringIncludes(iframeCss, "color-scheme: dark");
+  assertStringIncludes(iframeCss, "background-color: var(--bg-surface)");
+
+  // (c) Every srcdoc begins with the injected dark <style> block followed by the unchanged escaped htmlBody
+  const srcdocMatches = Array.from(html.matchAll(/srcdoc="([^"]*)"/g));
+  assertEquals(srcdocMatches.length, 2);
+
+  const escapeExpected = (s: string) =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
+  for (const [idx, m] of srcdocMatches.entries()) {
+    const srcdocVal = m[1];
+    assert(
+      srcdocVal.startsWith(DRAFT_PREVIEW_DARK_STYLE),
+      `srcdoc #${idx + 1} must start with DRAFT_PREVIEW_DARK_STYLE`,
+    );
+    const expectedEscaped = escapeExpected(idx === 0 ? htmlBody1 : htmlBody2);
+    assertEquals(
+      srcdocVal,
+      `${DRAFT_PREVIEW_DARK_STYLE}${expectedEscaped}`,
+    );
+  }
+
+  // Ensure sandbox remains unchanged with allow-same-origin only
+  const sandboxMatches = Array.from(html.matchAll(/sandbox="([^"]*)"/g));
+  assertEquals(sandboxMatches.length, 2);
+  for (const sm of sandboxMatches) {
+    assertEquals(sm[1], "allow-same-origin");
+  }
+  assertEquals(html.includes("allow-scripts"), false);
 });
 
 Deno.test("renderDarkHtml: falls back to a plain-text pitch-body block when no backend HTML rendering is available", () => {
