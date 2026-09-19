@@ -4,14 +4,20 @@
 
 import { assertEquals, assertNotEquals, assertStringIncludes } from "@std/assert";
 import {
+  BACKEND_DARK_WRAPPER_END,
+  BACKEND_DARK_WRAPPER_START,
   BACKEND_FOOTER_HTML,
+  DARK_WRAPPER_END,
+  DARK_WRAPPER_START,
   renderPitch,
   renderPitchesFromBackend,
   resolveBookingPeriod,
   resolveVenueTemplateType,
+  stripDarkWrapper,
   verificationOptionsFromTweaks,
   verifyBatchAgainstTemplates,
   verifyPitchAgainstTemplate,
+  wrapDarkEmail,
 } from "../src/book-gig/pitch.ts";
 import type {
   CandidateVenue,
@@ -472,4 +478,208 @@ Deno.test("resolveBookingPeriod: recovers month and year from the weekend start 
   assertEquals(resolveBookingPeriod(WEEKEND, "Fall 2026"), "Fall 2026");
   const unparsed = { ...WEEKEND, year: 0, month: 0, start: "2027-01-08" };
   assertEquals(resolveBookingPeriod(unparsed), "January 2027");
+});
+
+Deno.test("stripDarkWrapper: strips exact wrapper start and end correctly", () => {
+  const inner = "<p>Hello world</p>";
+  const wrapped = `${DARK_WRAPPER_START}${inner}${DARK_WRAPPER_END}`;
+  assertEquals(stripDarkWrapper(wrapped), inner);
+
+  // Trimming tolerance
+  const padded = `  ${DARK_WRAPPER_START}${inner}${DARK_WRAPPER_END} \n`;
+  assertEquals(stripDarkWrapper(padded), inner);
+
+  // Unwrapped string is returned untouched
+  assertEquals(stripDarkWrapper(inner), inner);
+
+  // Corrupted / altered wrapper is not stripped
+  const corrupted = `<table bgcolor="#000000">${inner}</table>`;
+  assertEquals(stripDarkWrapper(corrupted), corrupted);
+});
+
+Deno.test("verifyPitchAgainstTemplate: accepts a faithful render wrapped in backend dark-mode markup", () => {
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+  const wrappedPitch: PitchEmail = {
+    ...pitch,
+    htmlBody: wrapDarkEmail(pitch.htmlBody!),
+  };
+
+  const violation = verifyPitchAgainstTemplate(wrappedPitch, venue, WEEKEND, {}, TEMPLATES);
+  assertEquals(violation, null);
+});
+
+Deno.test("verifyPitchAgainstTemplate: accepts an unwrapped faithful render (backward-compatible)", () => {
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+
+  // Pitch without wrapper (e.g. older stored draft or local preview) passes cleanly
+  const violation = verifyPitchAgainstTemplate(pitch, venue, WEEKEND, {}, TEMPLATES);
+  assertEquals(violation, null);
+});
+
+Deno.test("verifyPitchAgainstTemplate: handles backend dark wrapper when footer table is also present inside it", () => {
+  const templateWithPhoto: EmailTemplate = {
+    ...FIXTURE_TEMPLATE,
+    footerPhotoRef: "footer-josh-maria",
+  };
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, [templateWithPhoto]);
+
+  // Backend wrap order: footer is appended first, then whole email is wrapped in dark mode
+  const wrappedWithFooter: PitchEmail = {
+    ...pitch,
+    htmlBody: wrapDarkEmail(`${pitch.htmlBody}${BACKEND_FOOTER_HTML}`),
+  };
+
+  const violation = verifyPitchAgainstTemplate(
+    wrappedWithFooter,
+    venue,
+    WEEKEND,
+    {},
+    [templateWithPhoto],
+  );
+  assertEquals(violation, null);
+
+  // Unexpected footer inside dark wrapper is still refused if template has no footerPhotoRef
+  const violationWithoutRef = verifyPitchAgainstTemplate(
+    wrappedWithFooter,
+    venue,
+    WEEKEND,
+    {},
+    [FIXTURE_TEMPLATE],
+  );
+  assertNotEquals(violationWithoutRef, null);
+  assertStringIncludes(violationWithoutRef!.reason, "diverges from stored template");
+});
+
+Deno.test("verifyPitchAgainstTemplate: refuses batch when inner content diverges despite correct dark wrapper", () => {
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+
+  const corruptedInner = pitch.htmlBody!.replace(
+    "Thanks for considering us.",
+    "Thanks for considering us. Invented rogue line here!",
+  );
+  const wrappedCorrupted: PitchEmail = {
+    ...pitch,
+    htmlBody: wrapDarkEmail(corruptedInner),
+  };
+
+  const violation = verifyPitchAgainstTemplate(wrappedCorrupted, venue, WEEKEND, {}, TEMPLATES);
+  assertNotEquals(violation, null);
+  assertStringIncludes(violation!.reason, "diverges from stored template");
+});
+
+Deno.test("verifyPitchAgainstTemplate: refuses batch when dark wrapper is altered or corrupted", () => {
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
+
+  // Altered wrapper markup (e.g. altered background color or unauthorized attributes)
+  const alteredStart = BACKEND_DARK_WRAPPER_START.replace('bgcolor="#121212"', 'bgcolor="#333333"');
+  const corruptedPitch: PitchEmail = {
+    ...pitch,
+    htmlBody: `${alteredStart}${pitch.htmlBody}${BACKEND_DARK_WRAPPER_END}`,
+  };
+
+  const violation = verifyPitchAgainstTemplate(corruptedPitch, venue, WEEKEND, {}, TEMPLATES);
+  assertNotEquals(violation, null);
+  assertStringIncludes(violation!.reason, "diverges from stored template");
+});
+
+Deno.test("verifyBatchAgainstTemplates: batch with dark-wrapped emails passes verification", () => {
+  const venueA = coldVenue({ _id: "venue-batch-dark-a" });
+  const venueB = returningVenue({ _id: "venue-batch-dark-b" });
+  const pitchA = renderPitch(venueA, WEEKEND, {}, TEMPLATES);
+  const pitchB = renderPitch(venueB, WEEKEND, {}, TEMPLATES);
+
+  const wrappedA: PitchEmail = { ...pitchA, htmlBody: wrapDarkEmail(pitchA.htmlBody!) };
+  const wrappedB: PitchEmail = { ...pitchB, htmlBody: wrapDarkEmail(pitchB.htmlBody!) };
+
+  const result = verifyBatchAgainstTemplates(
+    [wrappedA, wrappedB],
+    [venueA, venueB],
+    WEEKEND,
+    TEMPLATES,
+  );
+
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
+Deno.test("stripDarkWrapper: normalizes inline link colors added by dark wrapper back to baseline", () => {
+  const innerWithLinks = '<p>Check <a href="https://example.com">our site</a> for details.</p>';
+  const wrapped = wrapDarkEmail(innerWithLinks);
+  assertStringIncludes(wrapped, 'style="color:#4fc3f7;"');
+  assertEquals(stripDarkWrapper(wrapped), innerWithLinks);
+});
+
+Deno.test("verifyPitchAgainstTemplate: accepts dark-wrapped emails with links modified by applyInlineLinkColor", () => {
+  const templateWithLinks: EmailTemplate = {
+    type: "MidRangeCafeBar",
+    stage: "cold",
+    subject: "Performance Inquiry — Josh and Maria",
+    introHtml: "<p>Hi [Contact Name],</p>",
+    bodyHtml:
+      '<p>Samples at <a href="https://joshandmariamusic.com">joshandmariamusic.com</a>.</p>',
+  };
+  const venue = coldVenue({ venueType: "MidRangeCafeBar" });
+  const basePitch = renderPitch(venue, WEEKEND, {}, [templateWithLinks]);
+  const wrappedPitch: PitchEmail = {
+    ...basePitch,
+    htmlBody: wrapDarkEmail(basePitch.htmlBody!),
+  };
+
+  const violation = verifyPitchAgainstTemplate(wrappedPitch, venue, WEEKEND, {}, [
+    templateWithLinks,
+  ]);
+  assertEquals(violation, null);
+
+  // Divergent link text inside dark wrapper is still caught and refused
+  const corruptedInner = basePitch.htmlBody!.replace(
+    'href="https://joshandmariamusic.com"',
+    'href="https://roguesite.example.com"',
+  );
+  const corruptedWrapped: PitchEmail = {
+    ...basePitch,
+    htmlBody: wrapDarkEmail(corruptedInner),
+  };
+  const violationCorrupted = verifyPitchAgainstTemplate(corruptedWrapped, venue, WEEKEND, {}, [
+    templateWithLinks,
+  ]);
+  assertNotEquals(violationCorrupted, null);
+  assertStringIncludes(violationCorrupted!.reason, "diverges from stored template");
+});
+
+Deno.test("verifyPitchAgainstTemplate: accepts a faithful render whose template already styles a link with the wrapper link colour", () => {
+  // Regression guard. The backend leaves an <a> alone when the template already declares a color:
+  // of its own, so removing that colour from the rendered side alone dropped it from the render
+  // while the skeleton kept it — refusing an email that is in fact faithful. #4fc3f7 is this repo's
+  // own accent colour (src/book-gig/html.ts), so a template styling a link for dark mode lands on
+  // exactly this value.
+  const templateWithWrapperColourLink: EmailTemplate = {
+    ...FIXTURE_TEMPLATE,
+    bodyHtml:
+      `[Custom Body]\n<p>Hear us at <a href="https://joshandmariamusic.com" style="color:#4fc3f7;">our site</a>.</p>\n<p>Thanks for considering us.</p>`,
+  };
+  const venue = coldVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, [templateWithWrapperColourLink]);
+  const wrapped: PitchEmail = { ...pitch, htmlBody: wrapDarkEmail(pitch.htmlBody!) };
+
+  const violation = verifyPitchAgainstTemplate(wrapped, venue, WEEKEND, {}, [
+    templateWithWrapperColourLink,
+  ]);
+  assertEquals(violation, null);
+
+  // A real divergence inside that same template is still refused — the fix narrows nothing.
+  const diverged: PitchEmail = {
+    ...pitch,
+    htmlBody: wrapDarkEmail(
+      pitch.htmlBody!.replace("Thanks for considering us.", "Invented text."),
+    ),
+  };
+  const divergedViolation = verifyPitchAgainstTemplate(diverged, venue, WEEKEND, {}, [
+    templateWithWrapperColourLink,
+  ]);
+  assertNotEquals(divergedViolation, null);
 });
