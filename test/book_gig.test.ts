@@ -20,7 +20,9 @@ import {
   fetchCandidates,
   filterAndRankCandidates,
   formatCandidateBreakdown,
+  formatExcludedAuditSummary,
   formatMonthDay,
+  formatMonthDayYear,
   formatMonthYear,
   getCandidateBreakdown,
   identifyCandidateBadge,
@@ -4959,4 +4961,149 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
   assertEquals(outOfArea.isExcluded, true);
   assertEquals(outOfArea.exclusionReason, "outside-target-area");
   assertEquals(outOfArea.statusBadge, "[Outside Target Area]");
+});
+
+Deno.test("formatMonthDayYear: formats date string or Date object with 4-digit year (#1103)", () => {
+  assertEquals(formatMonthDayYear("2026-12-12"), "Dec 12, 2026");
+  assertEquals(formatMonthDayYear("2026-05-09"), "May 9, 2026");
+  assertEquals(formatMonthDayYear("Dec 12, 2026"), "Dec 12, 2026");
+});
+
+Deno.test("formatExcludedAuditSummary: returns None when empty (#1103)", () => {
+  assertEquals(formatExcludedAuditSummary([]), "Excluded Candidate Audit Summary: None");
+});
+
+Deno.test("formatExcludedAuditSummary: groups excluded candidates across all canonical categories (#1103)", () => {
+  const excludedVenues: CandidateVenue[] = [
+    {
+      _id: "lwb",
+      name: "Long Way Brewing",
+      city: "Radford",
+      usState: "VA",
+      email: "booking@longway.com",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+      conflictingGigDate: "2026-12-12",
+      statusBadge: "[Gig Spacing: Dec 12, 2026 Show]",
+    },
+    {
+      _id: "5pts",
+      name: "5 Points Music Sanctuary",
+      city: "Roanoke",
+      usState: "VA",
+      email: "info@5pointsmusic.com",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+      conflictingGigDate: "2026-11-15",
+      statusBadge: "[Gig Spacing: Nov 15, 2026 Show]",
+    },
+    {
+      _id: "garrison",
+      name: "The Garrison",
+      city: "Tega Cay",
+      usState: "SC",
+      email: "booking@thegarrison.com",
+      isExcluded: true,
+      exclusionReason: "cooldown",
+      statusBadge: "[Cooldown Active: Sent Sep 13]",
+    },
+    {
+      _id: "osb",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@oldesalem.com",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+      statusBadge: "[Seasonal Hold: Jan 2027]",
+    },
+    {
+      _id: "chat",
+      name: "Twin Creeks Brewing",
+      city: "Vinton",
+      usState: "VA",
+      email: "info@twincreeks.com",
+      isExcluded: true,
+      exclusionReason: "direct-chat",
+      statusBadge: "[Direct Chat Active]",
+    },
+    {
+      _id: "no-email",
+      name: "Mystery Tavern",
+      city: "Roanoke",
+      usState: "VA",
+      email: "",
+      isExcluded: true,
+      exclusionReason: "no-booking-email",
+      statusBadge: "[No Booking Email]",
+    },
+    {
+      _id: "parkway",
+      name: "Parkway Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@parkway.com",
+      isExcluded: true,
+      exclusionReason: "outside-target-area",
+      statusBadge: "[Outside Target Area]",
+    },
+    {
+      _id: "beales",
+      name: "Beale's Brewery",
+      city: "Bedford",
+      usState: "VA",
+      email: "info@beales.com",
+      isExcluded: true,
+      exclusionReason: "outside-target-area",
+      statusBadge: "[Outside Target Area]",
+    },
+    {
+      _id: "raleigh",
+      name: "Raleigh Pour House",
+      city: "Raleigh",
+      usState: "NC",
+      email: "info@raleighpour.com",
+      isExcluded: true,
+      exclusionReason: "out-of-state",
+      statusBadge: "[Out of State]",
+    },
+  ];
+
+  const summary = formatExcludedAuditSummary(excludedVenues);
+
+  // Asserts total count in header
+  assertStringIncludes(summary, "Excluded Candidate Audit Summary (9 total):");
+
+  // Asserts Gig Spacing Conflicts section with dates and correct venue names (prevents misattribution)
+  assertStringIncludes(summary, "• Gig Spacing Conflicts (2):");
+  assertStringIncludes(summary, "- 5 Points Music Sanctuary (Nov 15, 2026 Show)");
+  assertStringIncludes(summary, "- Long Way Brewing (Dec 12, 2026 Show)");
+
+  // Asserts Active Cooldowns
+  assertStringIncludes(summary, "• Active Cooldowns (1):");
+  assertStringIncludes(summary, "- The Garrison (Sent Sep 13)");
+
+  // Asserts Seasonal Holds
+  assertStringIncludes(summary, "• Seasonal Holds (1):");
+  assertStringIncludes(summary, "- Olde Salem Brewing (Jan 2027)");
+
+  // Asserts Direct Chat Active
+  assertStringIncludes(summary, "• Direct Chat Active (1):");
+  assertStringIncludes(summary, "- Twin Creeks Brewing (Direct Chat Active)");
+
+  // Asserts No Booking Email
+  assertStringIncludes(summary, "• No Booking Email (1):");
+  assertStringIncludes(summary, "- Mystery Tavern (No Booking Email)");
+
+  // Asserts Outside Target Area with alphabetical ordering (Beale's before Parkway)
+  assertStringIncludes(summary, "• Outside Target Area (2):");
+  assertStringIncludes(summary, "- Beale's Brewery (Bedford, VA)");
+  assertStringIncludes(summary, "- Parkway Brewing (Salem, VA)");
+  const bealesIdx = summary.indexOf("Beale's Brewery");
+  const parkwayIdx = summary.indexOf("Parkway Brewing");
+  assert(bealesIdx !== -1 && parkwayIdx !== -1 && bealesIdx < parkwayIdx);
+
+  // Asserts Out of State
+  assertStringIncludes(summary, "• Out of State (1):");
+  assertStringIncludes(summary, "- Raleigh Pour House (Raleigh, NC)");
 });
