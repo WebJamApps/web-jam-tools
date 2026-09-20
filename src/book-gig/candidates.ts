@@ -675,6 +675,11 @@ export function filterAndRankCandidates(
       },
     };
 
+    if (targetLoc.allLocations) {
+      exactMatches.push(vCopy);
+      continue;
+    }
+
     const vCity = (vCopy.city || "").toLowerCase().trim();
     const vAddr = (vCopy.address || "").toLowerCase();
     let vState = (vCopy.usState || "").toUpperCase().trim();
@@ -749,15 +754,27 @@ export function filterAndRankCandidates(
     }
 
     // 5. Fall-through: venue does not match target or surrounding areas
+    const hasPreExistingExclusion = Boolean(
+      (vCopy.isExcluded || vCopy.exclusionReason) &&
+        vCopy.exclusionReason !== "outside-target-area" &&
+        vCopy.exclusionReason !== "out-of-state" &&
+        vCopy.statusBadge !== "[Outside Target Area]" &&
+        vCopy.statusBadge !== "[Out of State]",
+    );
+
     const outsideAreaVenue: CandidateVenue = {
       ...vCopy,
       isExcluded: true,
-      exclusionReason: "outside-target-area",
-      statusBadge: "[Outside Target Area]",
+      exclusionReason: hasPreExistingExclusion ? vCopy.exclusionReason : "outside-target-area",
+      statusBadge: hasPreExistingExclusion ? vCopy.statusBadge : "[Outside Target Area]",
       reason: {
         ...vCopy.reason,
-        exclusionReason: "outside-target-area",
-        statusBadge: "[Outside Target Area]",
+        exclusionReason: hasPreExistingExclusion
+          ? (vCopy.reason?.exclusionReason || vCopy.exclusionReason)
+          : "outside-target-area",
+        statusBadge: hasPreExistingExclusion
+          ? (vCopy.reason?.statusBadge || vCopy.statusBadge)
+          : "[Outside Target Area]",
       },
     };
     excludedMatches.push(outsideAreaVenue);

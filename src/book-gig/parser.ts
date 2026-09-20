@@ -62,6 +62,7 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   let notes: string | undefined;
   let batchId: string | undefined;
   let explicitLocationStr: string | undefined;
+  let isAllLocations = false;
   const includeVenues: string[] = [];
   const excludeVenues: string[] = [];
   const positionalArgs: string[] = [];
@@ -191,6 +192,8 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       bookedThroughDate = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--no-open") {
       noOpen = true;
+    } else if (lower === "--all" || lower === "--all-locations") {
+      isAllLocations = true;
     } else if (lower === "--cities" || lower === "--locations" || lower === "--location") {
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         i++;
@@ -303,6 +306,13 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   let location: TargetLocation | undefined;
   if (explicitLocationStr) {
     location = parseLocation(explicitLocationStr) ?? undefined;
+  }
+  if (isAllLocations) {
+    if (location) {
+      location.allLocations = true;
+    } else {
+      location = { raw: "all", allLocations: true };
+    }
   }
 
   if (!rawArgs) {
@@ -560,6 +570,7 @@ export const METRO_SURROUNDING: Record<string, string[]> = {
     "Pineville",
     "Fort Mill",
     "Rock Hill",
+    "Tega Cay",
   ],
   "gastonia": [
     "Belmont",
@@ -976,6 +987,18 @@ export function parseLocation(input?: string): TargetLocation | null {
   const raw = input.trim();
   let working = raw;
 
+  const lowerRaw = raw.toLowerCase();
+  if (
+    lowerRaw === "all" ||
+    lowerRaw === "all locations" ||
+    lowerRaw === "everywhere"
+  ) {
+    return {
+      raw,
+      allLocations: true,
+    };
+  }
+
   // Reject standalone numeric strings that are not valid 5-digit zip codes (e.g. 4-digit years like "2026")
   if (/^\d+$/.test(working) && working.length !== 5) {
     return null;
@@ -993,6 +1016,18 @@ export function parseLocation(input?: string): TargetLocation | null {
   } else if (surroundingShortRegex.test(working)) {
     includeSurrounding = true;
     working = working.replace(surroundingShortRegex, "").trim();
+  }
+
+  const lowerWorking = working.toLowerCase();
+  if (
+    lowerWorking === "all" ||
+    lowerWorking === "all locations" ||
+    lowerWorking === "everywhere"
+  ) {
+    return {
+      raw,
+      allLocations: true,
+    };
   }
 
   // Reject if remaining working string is purely numeric and not a 5-digit zip code

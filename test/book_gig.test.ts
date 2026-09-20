@@ -10,6 +10,7 @@ import {
 } from "@std/assert";
 import {
   matchesVenueFilter,
+  METRO_SURROUNDING,
   parseBookGigArgs,
   parseLocation,
   parseTargetWeekend,
@@ -4754,4 +4755,208 @@ Deno.test("renderDarkHtml: places sortable candidates table as first section ben
     candidatesIndex < campaignsIndex,
     `Candidates table (${candidatesIndex}) must appear before Campaigns (${campaignsIndex})`,
   );
+});
+
+Deno.test("parseLocation: treats 'all', 'all locations', and 'everywhere' (case-insensitive) as all-locations (#1104)", () => {
+  const loc1 = parseLocation("all");
+  assertEquals(loc1?.allLocations, true);
+  assertEquals(loc1?.cities, undefined);
+  assertEquals(loc1?.city, undefined);
+
+  const loc2 = parseLocation("all locations");
+  assertEquals(loc2?.allLocations, true);
+  assertEquals(loc2?.cities, undefined);
+
+  const loc3 = parseLocation("everywhere");
+  assertEquals(loc3?.allLocations, true);
+  assertEquals(loc3?.cities, undefined);
+
+  // Case-insensitivity
+  assertEquals(parseLocation("ALL")?.allLocations, true);
+  assertEquals(parseLocation("All Locations")?.allLocations, true);
+  assertEquals(parseLocation("Everywhere")?.allLocations, true);
+  assertEquals(parseLocation("ALL LOCATIONS")?.allLocations, true);
+});
+
+Deno.test("parseBookGigArgs: recognizes --all, --all-locations, and all location string (#1104)", () => {
+  const res1 = parseBookGigArgs(["Oct 16-18", "--all"]);
+  assertEquals(res1.location?.allLocations, true);
+  assertEquals(res1.weekend?.start, "2026-10-16");
+
+  const res2 = parseBookGigArgs(["Oct 16-18", "--all-locations"]);
+  assertEquals(res2.location?.allLocations, true);
+  assertEquals(res2.weekend?.start, "2026-10-16");
+
+  const res3 = parseBookGigArgs(["Oct 16-18 2026", "all"]);
+  assertEquals(res3.location?.allLocations, true);
+  assertEquals(res3.weekend?.start, "2026-10-16");
+
+  const res4 = parseBookGigArgs(["all"]);
+  assertEquals(res4.location?.allLocations, true);
+
+  const res5 = parseBookGigArgs(["--all"]);
+  assertEquals(res5.location?.allLocations, true);
+});
+
+Deno.test("METRO_SURROUNDING: charlotte contains Tega Cay (#1104)", () => {
+  assert(METRO_SURROUNDING["charlotte"].includes("Tega Cay"));
+});
+
+Deno.test("filterAndRankCandidates: bypasses city/metro filtering when location.allLocations is true (#1104)", () => {
+  const venues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Roanoke Venue",
+      city: "Roanoke",
+      usState: "VA",
+      email: "rke@test.com",
+    },
+    {
+      _id: "v2",
+      name: "Charlotte Venue",
+      city: "Charlotte",
+      usState: "NC",
+      email: "clt@test.com",
+    },
+    {
+      _id: "v3",
+      name: "Rock Hill Venue",
+      city: "Rock Hill",
+      usState: "SC",
+      email: "rh@test.com",
+    },
+    {
+      _id: "v4",
+      name: "Tega Cay Venue",
+      city: "Tega Cay",
+      usState: "SC",
+      email: "tc@test.com",
+    },
+  ];
+
+  const loc = parseLocation("all")!;
+  const filtered = filterAndRankCandidates(venues, loc);
+  const pitchable = filtered.filter(isPitchableCandidate);
+
+  assertEquals(pitchable.length, 4);
+  assertEquals(filtered.every((v) => !v.isExcluded), true);
+  assertEquals(filtered.some((v) => v.exclusionReason === "outside-target-area"), false);
+});
+
+Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion badges when out-of-area (#1104)", () => {
+  const venues: CandidateVenue[] = [
+    {
+      _id: "garrison",
+      name: "The Garrison",
+      city: "Tega Cay",
+      usState: "SC",
+      email: "booking@thegarrison.com",
+      isExcluded: true,
+      statusBadge: "[Cooldown Active: Sent Sep 13]",
+      exclusionReason: "cooldown",
+      reason: {
+        statusBadge: "[Cooldown Active: Sent Sep 13]",
+        exclusionReason: "cooldown",
+      },
+    },
+    {
+      _id: "hold-venue",
+      name: "Hold Venue",
+      city: "Charlotte",
+      usState: "NC",
+      email: "booking@hold.com",
+      isExcluded: true,
+      statusBadge: "[Seasonal Hold: Jan 2027]",
+      exclusionReason: "seasonal-hold",
+      reason: {
+        statusBadge: "[Seasonal Hold: Jan 2027]",
+        exclusionReason: "seasonal-hold",
+      },
+    },
+    {
+      _id: "direct-chat-venue",
+      name: "Chat Venue",
+      city: "Gastonia",
+      usState: "NC",
+      email: "booking@chat.com",
+      isExcluded: true,
+      statusBadge: "[Direct Chat Active]",
+      exclusionReason: "direct-chat",
+      reason: {
+        statusBadge: "[Direct Chat Active]",
+        exclusionReason: "direct-chat",
+      },
+    },
+    {
+      _id: "spacing-venue",
+      name: "Spacing Venue",
+      city: "Concord",
+      usState: "NC",
+      email: "booking@spacing.com",
+      isExcluded: true,
+      statusBadge: "[Gig Spacing: Nov 15 Show]",
+      exclusionReason: "gig-spacing",
+      reason: {
+        statusBadge: "[Gig Spacing: Nov 15 Show]",
+        exclusionReason: "gig-spacing",
+      },
+    },
+    {
+      _id: "in-area-venue",
+      name: "Waterman's Grill",
+      city: "Lynchburg",
+      usState: "VA",
+      email: "booking@watermans.com",
+      isExcluded: false,
+    },
+    {
+      _id: "out-of-area-eligible",
+      name: "Eligible Faraway Venue",
+      city: "Raleigh",
+      usState: "NC",
+      email: "booking@raleigh.com",
+      isExcluded: false,
+    },
+  ];
+
+  // Explicit multi-city filter targeting Lynchburg, VA and Rock Hill, SC (cross-state, no uniform state filter)
+  const loc = parseLocation("Lynchburg, Rock Hill")!;
+  const filtered = filterAndRankCandidates(venues, loc);
+
+  const garrison = filtered.find((v) => v._id === "garrison")!;
+  assertEquals(garrison.isExcluded, true);
+  assertEquals(garrison.exclusionReason, "cooldown");
+  assertEquals(garrison.statusBadge, "[Cooldown Active: Sent Sep 13]");
+  assertEquals(garrison.reason?.exclusionReason, "cooldown");
+  assertEquals(garrison.reason?.statusBadge, "[Cooldown Active: Sent Sep 13]");
+
+  const hold = filtered.find((v) => v._id === "hold-venue")!;
+  assertEquals(hold.isExcluded, true);
+  assertEquals(hold.exclusionReason, "seasonal-hold");
+  assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.reason?.exclusionReason, "seasonal-hold");
+  assertEquals(hold.reason?.statusBadge, "[Seasonal Hold: Jan 2027]");
+
+  const chat = filtered.find((v) => v._id === "direct-chat-venue")!;
+  assertEquals(chat.isExcluded, true);
+  assertEquals(chat.exclusionReason, "direct-chat");
+  assertEquals(chat.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.reason?.exclusionReason, "direct-chat");
+  assertEquals(chat.reason?.statusBadge, "[Direct Chat Active]");
+
+  const spacing = filtered.find((v) => v._id === "spacing-venue")!;
+  assertEquals(spacing.isExcluded, true);
+  assertEquals(spacing.exclusionReason, "gig-spacing");
+  assertEquals(spacing.statusBadge, "[Gig Spacing: Nov 15 Show]");
+  assertEquals(spacing.reason?.exclusionReason, "gig-spacing");
+  assertEquals(spacing.reason?.statusBadge, "[Gig Spacing: Nov 15 Show]");
+
+  const inArea = filtered.find((v) => v._id === "in-area-venue")!;
+  assertEquals(inArea.isExcluded, false);
+  assertEquals(isPitchableCandidate(inArea), true);
+
+  const outOfArea = filtered.find((v) => v._id === "out-of-area-eligible")!;
+  assertEquals(outOfArea.isExcluded, true);
+  assertEquals(outOfArea.exclusionReason, "outside-target-area");
+  assertEquals(outOfArea.statusBadge, "[Outside Target Area]");
 });

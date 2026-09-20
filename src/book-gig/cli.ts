@@ -125,6 +125,7 @@ function printCampaignsTable(campaigns: OutreachCampaignRecord[]): void {
 
 export function formatLocationDisplay(location?: TargetLocation): string {
   if (!location) return "All Regional Metros (~3.5h drive)";
+  if (location.allLocations) return "All Locations";
   if (location.cities && location.cities.length > 1) {
     const list = location.cities.join(", ");
     return location.includeSurrounding ? `${list} (and surrounding regional areas)` : list;

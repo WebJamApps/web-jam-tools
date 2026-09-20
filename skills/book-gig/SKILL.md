@@ -18,10 +18,13 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
 - `/book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>` — Contact hold mode (sets `resumeBooking` to resume date at UTC midnight via `PATCH /venue/:id`; also accepts `--resume`).
 - `/book-gig --booked-through <YYYY-MM-DD> --venue "<venueId|venueName>"` — Booked-through availability mode (sets `bookedThrough` to target date at UTC 23:59:59.999Z via `PATCH /venue/:id`; accepts `--venue` or `--hold`).
 - **Location Syntax & Flags:**
+  - All locations: `/book-gig "<weekend>" all` or `--all` / `--all-locations` sweeps all eligible venues across all locations without distance or metro filtering (also accepts `"all locations"` or `"everywhere"`).
   - Multi-city compound list: `deno task book-gig "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"`
   - Explicit flag: `deno task book-gig "Oct 16-18 2026" --cities "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke"`
-  - Supports `--cities`, `--locations`, or `--location`.
+  - Supports `--cities`, `--locations`, `--location`, `--all`, or `--all-locations`.
 - **Examples:**
+  - `deno task book-gig "Oct 16-18 2026" all` — sweep all eligible venues across all locations without distance or metro filtering.
+  - `deno task book-gig "Oct 16-18 2026" --all` — sweep all eligible venues across all locations using the `--all` flag.
   - `deno task book-gig "Oct 16-18 2026"` — sweep all venues across the regional driving radius (~3.5h from Salem, VA) and automatically open the Dark Mode HTML artifact in Chrome.
   - `deno task book-gig "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"` — focus on target cities and their surrounding regional communities, excluding non-target metros.
   - `deno task book-gig "Oct 16-18 2026" --no-open` — generate pitches and logs without automatically opening Chrome.
