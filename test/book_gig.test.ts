@@ -1784,7 +1784,8 @@ Deno.test("dispatchBatchOutreach: sends POST /outreach/batch with correct payloa
   assertEquals(capturedUrl, "https://test.local/outreach/batch");
   assertEquals(capturedAuth, "Bearer secret-token");
   assertEquals(capturedBody.venueIds, ["v1", "v2"]);
-  assertEquals(capturedBody.targetDates, "2026-10-16 to 2026-10-18");
+  assertEquals(capturedBody.targetDates, "October 16–18, 2026");
+  assertEquals(capturedBody.bookingPeriod, "October 2026");
   assertEquals(capturedBody.targetWeekend, { start: "2026-10-16", end: "2026-10-18" });
   assertEquals(res.sent, 2);
   assertEquals(res.requested, 2);

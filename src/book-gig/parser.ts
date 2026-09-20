@@ -439,6 +439,26 @@ const MONTH_NAMES = [
   "December",
 ];
 
+/**
+ * The `[Booking Period]` value for a target weekend (e.g. "January 2027"). Shared by preview,
+ * dispatch, and fidelity checks so values sent to the backend and verified against can never drift.
+ * Year/month missing from the parsed weekend are recovered from its start.
+ */
+export function resolveBookingPeriod(weekend: TargetWeekend, override?: string): string {
+  if (override) return override;
+  let year = weekend.year;
+  let month = weekend.month;
+  if (!year || !month) {
+    const d = new Date(weekend.start);
+    if (!Number.isNaN(d.getTime())) {
+      year = year || d.getUTCFullYear();
+      month = month || (d.getUTCMonth() + 1);
+    }
+  }
+  const monthName = MONTH_NAMES[month || 1] || "October";
+  return `${monthName} ${year || new Date().getFullYear()}`;
+}
+
 export const METRO_SURROUNDING: Record<string, string[]> = {
   "lynchburg": [
     "Forest",

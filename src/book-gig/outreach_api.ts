@@ -10,7 +10,7 @@ import type {
   PitchPreview,
   TargetWeekend,
 } from "./types.ts";
-import { parseTargetWeekend } from "./parser.ts";
+import { parseTargetWeekend, resolveBookingPeriod } from "./parser.ts";
 
 export const DEFAULT_BACKEND_URL = "https://webjamsalem.herokuapp.com";
 
@@ -81,13 +81,13 @@ export async function dispatchBatchOutreach(
 
   const payload = {
     venueIds: options.venueIds,
-    targetDates: `${options.weekend.start} to ${options.weekend.end}`,
+    targetDates: options.weekend.label || `${options.weekend.start} to ${options.weekend.end}`,
     targetWeekend: {
       start: options.weekend.start,
       end: options.weekend.end,
     },
     templateType: options.templateType,
-    bookingPeriod: options.bookingPeriod,
+    bookingPeriod: options.bookingPeriod || resolveBookingPeriod(options.weekend),
   };
 
   try {
@@ -692,9 +692,13 @@ export async function recordGate2Approval(
     const newMap = new Map(
       options.draftFingerprints.map((f) => [String(f.venueId), f.fingerprint]),
     );
-    const sameFps = existingMap.size === newMap.size &&
-      [...existingMap.entries()].every(([id, fp]) => newMap.get(id) === fp);
-    if (!sameFps) {
+    const allMatches = [...newMap.entries()].every(([id, fp]) => existingMap.get(id) === fp);
+    const sameFps = existingMap.size === newMap.size && allMatches;
+    if (sameFps) {
+      return existing as unknown as Gate2ApprovalRecord;
+    }
+    const hasDivergedOrNew = [...newMap.entries()].some(([id, fp]) => existingMap.get(id) !== fp);
+    if (hasDivergedOrNew) {
       throw new Error(
         `Gate 2 draft fingerprint approval already exists for batch '${batchId}' with different ` +
           `fingerprints. Refusing to silently overwrite a prior approval — recording revised ` +
@@ -702,6 +706,10 @@ export async function recordGate2Approval(
           `command does automatically.`,
       );
     }
+    console.log(
+      `\n📋 Updating Gate 2 draft fingerprints for batch '${batchId}' (${newMap.size} unpitched venue(s) remaining):`,
+    );
+    console.log(`  • All ${newMap.size} draft fingerprints match the previously approved copy.`);
   }
 
   const payload: Record<string, unknown> = {
