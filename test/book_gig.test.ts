@@ -1020,6 +1020,61 @@ Deno.test("mergeWeekendRuns: deduplicates candidate rows and pitch cards by venu
   assertEquals(pitchCardsA?.length, 2);
 });
 
+Deno.test("mergeWeekendRuns: purges pitch cards for venues that became excluded or placed on seasonal hold", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venueEligible: CandidateVenue = {
+    _id: "v1",
+    name: "Open Brewery",
+    email: "open@brewery.com",
+    isExcluded: false,
+  };
+  const venueOnHold: CandidateVenue = {
+    _id: "v2",
+    name: "Held Brewery",
+    email: "held@brewery.com",
+    isExcluded: false,
+  };
+
+  const pitch1 = renderPitch(venueEligible, weekend);
+  const pitch2 = renderPitch(venueOnHold, weekend);
+
+  const existing = {
+    candidates: [venueEligible, venueOnHold],
+    pitches: [pitch1, pitch2],
+  };
+
+  // Second run: venueOnHold was placed on seasonal hold (isExcluded: true)
+  const current: BookGigResult = {
+    mode: "preview",
+    weekend,
+    candidates: [
+      venueEligible,
+      {
+        ...venueOnHold,
+        isExcluded: true,
+        statusBadge: "[Seasonal Hold: Mar 2027]",
+        exclusionReason: "seasonal-hold",
+      },
+    ],
+    density: { count: 1, isSparse: true },
+    pitches: [pitch1],
+  };
+
+  const merged = mergeWeekendRuns(existing, current);
+  assertEquals(merged.candidates.length, 2);
+  assertEquals(merged.pitches.length, 1);
+  assertEquals(merged.pitches[0].venueId, "v1");
+});
+
 Deno.test("mergeWeekendRuns: deduplicates skipped venues by venueId across batches (#876)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
