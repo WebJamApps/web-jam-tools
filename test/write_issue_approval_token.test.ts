@@ -34,6 +34,7 @@ import {
   FILE_ISSUE_INVOCATION_RE,
   filingSkillInvoked,
   nonFilingSlashCommandInvoked,
+  stripUserRequestWrapper,
   tailIsCurrentlySidechain,
 } from "../hooks/lib/check_token_write_authorization.ts";
 import type { TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
@@ -1515,4 +1516,75 @@ Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md's description
         `FILE_ISSUE_INVOCATION_RE, or the two have drifted apart`,
     );
   }
+});
+
+// --- Antigravity USER_REQUEST wrapper & plugin prefix tests ---
+
+Deno.test("stripUserRequestWrapper: unwraps Antigravity USER_REQUEST block", () => {
+  assertEquals(
+    stripUserRequestWrapper("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    "/webjam-tasks:file-issue",
+  );
+  assertEquals(
+    stripUserRequestWrapper(
+      "<USER_REQUEST>\nfile an issue for book-gig\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nsome metadata\n</ADDITIONAL_METADATA>",
+    ),
+    "file an issue for book-gig",
+  );
+  assertEquals(
+    stripUserRequestWrapper("plain prompt text without wrapper"),
+    "plain prompt text without wrapper",
+  );
+});
+
+Deno.test("filingSkillInvoked: recognizes plugin-prefixed slash commands and USER_REQUEST wrappers", () => {
+  assertEquals(filingSkillInvoked("/webjam-tasks:file-issue"), "file-issue");
+  assertEquals(filingSkillInvoked("/webjam-tasks:design-issue"), "design-issue");
+  assertEquals(
+    filingSkillInvoked("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    "file-issue",
+  );
+  assertEquals(
+    filingSkillInvoked("<USER_REQUEST>\n/webjam-tasks:design-issue\n</USER_REQUEST>"),
+    "design-issue",
+  );
+  assertEquals(
+    filingSkillInvoked(
+      "<USER_REQUEST>\nplease create a new issue for book-gig\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>",
+    ),
+    "file-issue",
+  );
+});
+
+Deno.test("nonFilingSlashCommandInvoked: recognizes plugin-prefixed slash commands and USER_REQUEST wrappers", () => {
+  assertEquals(nonFilingSlashCommandInvoked("/webjam-tasks:work-issue 123"), "/work-issue");
+  assertEquals(nonFilingSlashCommandInvoked("/webjam-tasks:book-gig"), "/book-gig");
+  assertEquals(
+    nonFilingSlashCommandInvoked("<USER_REQUEST>\n/webjam-tasks:work-issue 123\n</USER_REQUEST>"),
+    "/work-issue",
+  );
+  assertEquals(
+    nonFilingSlashCommandInvoked("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    null,
+  );
+});
+
+Deno.test("checkTokenWriteAuthorization: authorizes when Antigravity USER_REQUEST carries /webjam-tasks:file-issue", () => {
+  const agyEntry: TranscriptEntry = {
+    type: "USER_INPUT",
+    source: "USER_EXPLICIT",
+    step_index: 0,
+    conversationId: "test-conversation-id",
+    content:
+      "<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>",
+  };
+
+  const res = checkTokenWriteAuthorization({
+    entries: [agyEntry],
+    ownConversationId: "test-conversation-id",
+    isSubagentInvocation: false,
+  });
+
+  assertEquals(res.ok, true);
+  assertEquals(res.skill, "file-issue");
 });
