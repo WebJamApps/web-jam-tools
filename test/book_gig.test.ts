@@ -3157,6 +3157,16 @@ Deno.test("identifyCandidateBadge: handles eligible returning and new venues (#8
   assertEquals(badgeReturning.cssClass, "badge-returning");
   assertEquals(badgeReturning.isExcluded, false);
 
+  const priorYearVenue: CandidateVenue = {
+    _id: "v-prior",
+    name: "Parkway Brewing",
+    reason: { lastGigDate: "2019-11-17T05:00:00.000Z" },
+  };
+  const badgePrior = identifyCandidateBadge(priorYearVenue, refDate);
+  assertEquals(badgePrior.badge, "Returning · Last: Nov 17, 2019");
+  assertEquals(badgePrior.cssClass, "badge-returning");
+  assertEquals(badgePrior.isExcluded, false);
+
   const newVenue: CandidateVenue = {
     _id: "v2",
     name: "Brand New Brewery",

@@ -638,9 +638,27 @@ export function identifyCandidateBadge(
   }
 
   // 5. Eligible: Returning or New
-  if (v.reason?.lastGigDate) {
+  if (v.reason?.lastGigDate && v.reason.lastGigDate !== "never") {
+    let gigYear: number | undefined;
+    if ((v.reason.lastGigDate as unknown) instanceof Date) {
+      gigYear = ((v.reason.lastGigDate as unknown) as Date).getUTCFullYear();
+    } else if (typeof v.reason.lastGigDate === "string") {
+      const match = v.reason.lastGigDate.match(/^(\d{4})/);
+      if (match) {
+        gigYear = parseInt(match[1], 10);
+      } else {
+        const parsed = new Date(v.reason.lastGigDate);
+        if (!Number.isNaN(parsed.getTime())) {
+          gigYear = parsed.getUTCFullYear();
+        }
+      }
+    }
+    const refYear = referenceDate.getUTCFullYear();
+    const formatted = gigYear && gigYear !== refYear
+      ? formatMonthDayYear(v.reason.lastGigDate)
+      : formatMonthDay(v.reason.lastGigDate);
     return {
-      badge: `Returning · Last: ${formatMonthDay(v.reason.lastGigDate)}`,
+      badge: `Returning · Last: ${formatted}`,
       cssClass: "badge-returning",
       isExcluded: false,
     };
