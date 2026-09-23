@@ -6,7 +6,7 @@
 
 import { Document, Packer, PageOrientation, Paragraph, TextRun } from "docx";
 import type { ChordLyricLine, ParseLineOptions, RenderedLine, SongDefinition } from "./types.ts";
-import { autoTransposeSong, transposeChord } from "./transpose.ts";
+import { autoTransposeSong, soundingPrefersSharps, transposeChord } from "./transpose.ts";
 
 export const FONT_FAMILY = "Consolas";
 export const TITLE_SIZE = 32; // 16pt
@@ -23,10 +23,11 @@ export const PAGE_WIDTH_DXA = 12240;
 export const PAGE_HEIGHT_DXA = 15840;
 
 /**
- * Valid chord symbol regex matching standard roots, qualities, and slash chords.
+ * Valid chord symbol regex matching standard roots, qualities, and slash chords, including 6/9
+ * chords, the diminished (°) and half-diminished (ø) symbols, and altered dominants (alt).
  */
 export const CHORD_REGEX =
-  /^[A-G](?:#|b)?(?:maj|min|m|M|dim|aug|sus|add|\(|\)|[0-9]|b|#|\+|-)*(?:\/[A-G](?:#|b)?)?$/;
+  /^[A-G](?:#|b)?(?:maj|min|m|M|dim|aug|sus|add|alt|6\/9|°|ø|\(|\)|[0-9]|b|#|\+|-)*(?:\/[A-G](?:#|b)?)?$/;
 
 /**
  * Validates whether a token represents a legitimate chord symbol.
@@ -225,7 +226,7 @@ export function parseAndLayoutLine(
           );
         }
         if (mode === "dual-tier" && capo && capo > 0) {
-          bassChord = transposeChord(guitarChord, capo);
+          bassChord = transposeChord(guitarChord, capo, options?.preferSharps);
         } else {
           bassChord = guitarChord;
         }
@@ -739,10 +740,12 @@ export function buildLineParagraphs(
   line: ChordLyricLine,
   isDualTier: boolean,
   capo?: number,
+  preferSharps?: boolean,
 ): Paragraph[] {
   const renderedLines = parseAndLayoutLine(line, {
     mode: isDualTier ? "dual-tier" : "single-tier",
     capo: capo,
+    preferSharps,
   });
 
   const paras: Paragraph[] = [];
@@ -762,6 +765,7 @@ export function buildSongDocument(songInput: SongDefinition): Document {
   const song = autoTransposeSong(songInput);
   const isDualTier = song.metadata.mode === "dual-tier";
   const capo = song.metadata.capo;
+  const preferSharps = capo ? soundingPrefersSharps(song, capo) : undefined;
 
   const children: Paragraph[] = [];
 
@@ -859,7 +863,7 @@ export function buildSongDocument(songInput: SongDefinition): Document {
 
     // Section Lines
     for (const line of section.lines) {
-      const lineParagraphs = buildLineParagraphs(line, isDualTier, capo);
+      const lineParagraphs = buildLineParagraphs(line, isDualTier, capo, preferSharps);
       children.push(...lineParagraphs);
     }
   }

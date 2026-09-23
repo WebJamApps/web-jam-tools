@@ -6,8 +6,12 @@ import * as path from "@std/path";
 import { Packer } from "docx";
 import {
   autoTransposeSong,
+  keyPrefersSharps,
+  songGuitarKey,
+  soundingPrefersSharps,
   transposeChord,
   transposeChordLine,
+  transposeKey,
   transposeNote,
 } from "../src/sheet-music/transpose.ts";
 import {
@@ -854,4 +858,89 @@ Deno.test("Criterion 13: Guard outcome undeterminable — non-string lyric field
     Error,
     'Section "Bridge", line 1: "lyrics" field must be a string, got undefined',
   );
+});
+
+Deno.test("Chord names G6/9, C6/9, C°7, Cø7 and G7alt parse; performance annotations are still refused", () => {
+  for (const chord of ["G6/9", "C6/9", "C°7", "Cø7", "G7alt"]) {
+    assert(isValidChordToken(chord), chord);
+    const result = parseAndLayoutLine(`[${chord}]word`);
+    assertEquals(result[0].guitarChords, chord);
+  }
+  for (const annotation of ["[Everybody!]word", "[hold]word"]) {
+    assertThrows(() => parseAndLayoutLine(annotation), Error, "performance annotations");
+  }
+});
+
+Deno.test("transposeChord and transposeChordLine carry 6/9, °, ø and alt chords through a capo", () => {
+  assertEquals(transposeChord("G6/9", 2), "A6/9");
+  assertEquals(transposeChord("G6/9/B", 2), "A6/9/C#");
+  assertEquals(transposeChord("C°7", 2), "D°7");
+  assertEquals(transposeChord("Cø7", 2), "Dø7");
+  assertEquals(transposeChord("G7alt", 2), "A7alt");
+  assertEquals(transposeChordLine("G6/9  C°7", 2), "A6/9  D°7");
+  const dual = parseAndLayoutLine("[G6/9]You [C°7]say", { mode: "dual-tier", capo: 2 });
+  assertEquals(dual[0].bassChords?.trim().split(/\s+/), ["A6/9", "D°7"]);
+});
+
+Deno.test("transposeKey names the result with the fewest accidentals, and keyPrefersSharps follows the key signature", () => {
+  assertEquals(transposeKey("G", 3), "Bb");
+  assertEquals(transposeKey("Em", 3), "Gm");
+  assertEquals(transposeKey("E", 2), "F#");
+  assertEquals(transposeKey("G major", 2), "A major");
+  assertEquals(transposeKey("Dmaj7", 1), "Ebmaj7");
+  assertEquals(transposeKey("hold", 1), undefined);
+  assertEquals(keyPrefersSharps("Bb"), false);
+  assertEquals(keyPrefersSharps("Gm"), false);
+  assertEquals(keyPrefersSharps("A"), true);
+  assertEquals(keyPrefersSharps("F#m"), true);
+  assertEquals(keyPrefersSharps("C"), undefined);
+  assertEquals(keyPrefersSharps("Am"), undefined);
+});
+
+Deno.test("capo spelling follows the sounding key: G shapes at capo 3 print Bb, Eb, Gm and F/A", () => {
+  const flats = parseAndLayoutLine("[G]one [C]two [Em]three [D/F#]four", {
+    mode: "dual-tier",
+    capo: 3,
+    preferSharps: false,
+  });
+  assertEquals(flats[0].bassChords?.trim().split(/\s+/), ["Bb", "Eb", "Gm", "F/A"]);
+  const sharps = parseAndLayoutLine("[E]one [A]two [B]three [C#m]four", {
+    mode: "dual-tier",
+    capo: 2,
+    preferSharps: true,
+  });
+  assertEquals(sharps[0].bassChords?.trim().split(/\s+/), ["F#", "B", "C#", "D#m"]);
+});
+
+Deno.test("soundingPrefersSharps reads guitarKey, else the song's first chord", () => {
+  const song = (guitarKey: string | undefined, lyrics: string): SongDefinition => ({
+    metadata: {
+      title: "Spelling",
+      capo: 3,
+      mode: "dual-tier",
+      ...(guitarKey ? { guitarKey } : {}),
+    },
+    sections: [{ title: "Verse", lines: [{ lyrics }] }],
+  } as SongDefinition);
+  assertEquals(songGuitarKey(song("E", "[G]one")), "E");
+  assertEquals(songGuitarKey(song(undefined, "no chord here\n")), undefined);
+  assertEquals(soundingPrefersSharps(song(undefined, "[G]one [C]two"), 3), false);
+  assertEquals(soundingPrefersSharps(song("E", "[G]one"), 2), true);
+  assertEquals(soundingPrefersSharps(song(undefined, "no chords"), 3), undefined);
+});
+
+Deno.test("buildSongDocument spells capo-3 G shapes in Bb, and autoTransposeSong names the bass key Bb", async () => {
+  const song = {
+    metadata: { title: "Spelling", capo: 3, mode: "dual-tier", guitarKey: "G" },
+    sections: [{ title: "Verse", lines: [{ lyrics: "[G]one [C]two [D/F#]three" }] }],
+  } as SongDefinition;
+  assertEquals(autoTransposeSong(song).metadata.bassKey, "Bb");
+  const buffer = await Packer.toBuffer(buildSongDocument(song));
+  const entries = await readDocxEntries(
+    new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+  );
+  const xml = new TextDecoder().decode(entries.docXml);
+  assert(xml.includes("Bb"), "bass line spelled Bb");
+  assert(xml.includes("F/A"), "slash bass spelled F/A");
+  assert(!xml.includes("A#") && !xml.includes("D#"), "no sharps in a Bb chart");
 });

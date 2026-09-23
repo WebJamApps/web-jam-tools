@@ -64,4 +64,6 @@ export interface ParseLineOptions {
   mode?: "dual-tier" | "single-tier";
   capo?: number;
   maxLineWidth?: number;
+  /** Spell transposed bass chords with sharps (true) or flats (false); unset keeps the default. */
+  preferSharps?: boolean;
 }
