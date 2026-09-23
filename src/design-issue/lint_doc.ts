@@ -370,7 +370,7 @@ function firstNonExemptMatch(
 const loadBearingPremisesHeadingRegex = /^\s*#{1,6}\s+Load-bearing premises\b/i;
 
 /** A line self-identifying a cited issue as the one this design run was invoked on — the one
- * concrete convention observed in practice (design-issue-enhancements-design-2026-08-23.md:
+ * concrete convention observed in practice (design-issue-file-issue-design-2026-08-23.md:
  * "The directive carried at the top of the target issue this run was invoked on:"). This is a
  * deliberately narrow, mechanical proxy for "the document names a target issue": it requires the
  * document's own prose to say so in those terms, rather than guessing from any bare issue citation
