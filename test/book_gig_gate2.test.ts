@@ -572,7 +572,10 @@ Deno.test("recordGate2Approval: updates Gate 2 draft fingerprints when recording
   );
 
   assertEquals(rec._id, "existing-gate2");
-  assertEquals((postedBody as any)?.draftFingerprints, [{ venueId: "v2", fingerprint: "hash-2" }]);
+  assertEquals((postedBody as Record<string, unknown> | null)?.draftFingerprints, [{
+    venueId: "v2",
+    fingerprint: "hash-2",
+  }]);
 });
 
 Deno.test("fetchGate2Approval: returns record on 200 and null on 404", async () => {
