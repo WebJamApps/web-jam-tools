@@ -10,6 +10,7 @@
  */
 import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
 import { findUnresolvableIssuePointers } from "./detect_unresolvable_issue_pointers.ts";
+import { findDeferredVerifications } from "./detect_deferred_verifications.ts";
 import {
   checkDuplicateTitle,
   type CommandRunner,
@@ -302,8 +303,14 @@ export function extractDedupOverride(
   return { candidate, reason };
 }
 
-export function extractBodyValue(args: string[]): string | null {
+export interface ExtractedBody {
+  body: string | null;
+  readError?: string;
+}
+
+export function extractBodyDetails(args: string[]): ExtractedBody {
   const bodyParts: string[] = [];
+  let readError: string | undefined;
   let j = 0;
   while (j < args.length) {
     const a = args[j];
@@ -327,7 +334,7 @@ export function extractBodyValue(args: string[]): string | null {
         try {
           bodyParts.push(Deno.readTextFileSync(filepath));
         } catch {
-          // file read failure ignored
+          readError = `could not read body file '${filepath}'`;
         }
         j += 2;
         continue;
@@ -337,7 +344,7 @@ export function extractBodyValue(args: string[]): string | null {
       try {
         bodyParts.push(Deno.readTextFileSync(filepath));
       } catch {
-        // ignored
+        readError = `could not read body file '${filepath}'`;
       }
       j += 1;
       continue;
@@ -346,14 +353,21 @@ export function extractBodyValue(args: string[]): string | null {
       try {
         bodyParts.push(Deno.readTextFileSync(filepath));
       } catch {
-        // ignored
+        readError = `could not read body file '${filepath}'`;
       }
       j += 1;
       continue;
     }
     j += 1;
   }
-  return bodyParts.length ? bodyParts.join("\n") : null;
+  return {
+    body: bodyParts.length ? bodyParts.join("\n") : null,
+    readError,
+  };
+}
+
+export function extractBodyValue(args: string[]): string | null {
+  return extractBodyDetails(args).body;
 }
 
 export function isEpicType(toolInput: Record<string, unknown>, tokens?: string[]): boolean {
@@ -393,6 +407,49 @@ export function isEpicType(toolInput: Record<string, unknown>, tokens?: string[]
             p.replace(/^['"]|['"]$/g, "").trim().toLowerCase()
           );
           if (parts.includes("epic")) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+export function hasNeedsDesignLabel(
+  toolInput: Record<string, unknown>,
+  tokens?: string[],
+): boolean {
+  if (!toolInput || typeof toolInput !== "object") toolInput = {};
+  const labels = toolInput.labels;
+  if (Array.isArray(labels)) {
+    if (
+      labels.some((lbl) =>
+        typeof lbl === "string" &&
+        lbl.replace(/^['"]|['"]$/g, "").trim().toLowerCase() === "needs design"
+      )
+    ) {
+      return true;
+    }
+  }
+
+  if (tokens) {
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (["--label", "-l", "--add-label"].includes(tok)) {
+        if (i + 1 < tokens.length) {
+          const val = tokens[i + 1].replace(/^['"]|['"]$/g, "");
+          const parts = val.split(",").map((p) =>
+            p.replace(/^['"]|['"]$/g, "").trim().toLowerCase()
+          );
+          if (parts.includes("needs design")) return true;
+        }
+      }
+      for (const flag of ["--label=", "-l=", "--add-label="]) {
+        if (tok.startsWith(flag)) {
+          const val = tok.slice(flag.length).replace(/^['"]|['"]$/g, "");
+          const parts = val.split(",").map((p) =>
+            p.replace(/^['"]|['"]$/g, "").trim().toLowerCase()
+          );
+          if (parts.includes("needs design")) return true;
         }
       }
     }
@@ -527,18 +584,28 @@ async function scanIssueCommandSegments(
       const escalationReason = extractEscalationReason(createArgs);
       const res = decide(labels, modelLabels, escalationReason, cmdForMessage, "cli");
       if (res !== "PASS") return res;
-      const body = extractBodyValue(createArgs);
-      if (body && !isEpicType(toolInput, createArgs)) {
+      const { body, readError } = extractBodyDetails(createArgs);
+      // An unreadable body skips only the body checks; the duplicate search below still runs.
+      const bodyNote = readError ? `PASS: could not check the body (${readError})` : "PASS";
+      if (!readError && body && !isEpicType(toolInput, createArgs)) {
         const pointers = findUnresolvableIssuePointers(body);
         if (pointers.length) {
           return `DENY:unresolvable pointer phrase '${
             pointers[0]
           }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
         }
+        if (!hasNeedsDesignLabel(toolInput, createArgs)) {
+          const deferred = findDeferredVerifications(body);
+          if (deferred.length) {
+            return `DENY:deferred verification phrase '${
+              deferred[0]
+            }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
+          }
+        }
       }
       const dedupRes = await runDuplicateCheck(createArgs, runner);
       if (dedupRes !== "PASS") return dedupRes;
-      return "PASS";
+      return bodyNote;
     }
 
     const editArgs = findGhIssueEditArgs(scTokens);
@@ -546,7 +613,10 @@ async function scanIssueCommandSegments(
       if (isEpicType(toolInput, scTokens)) {
         return "PASS";
       }
-      const body = extractBodyValue(editArgs);
+      const { body, readError } = extractBodyDetails(editArgs);
+      if (readError) {
+        return `PASS: could not check the body (${readError})`;
+      }
       if (body) {
         const pointers = findUnresolvableIssuePointers(body);
         if (pointers.length) {
@@ -637,8 +707,12 @@ export async function checkModelLabelOnIssueCreate(
     const method = toolInput.method;
     if (method === "update" || method === "edit") {
       if (isEpicType(toolInput)) return "PASS";
-      const body = toolInput.body;
-      if (typeof body === "string" && body) {
+      const rawBody = toolInput.body;
+      if (rawBody !== undefined && typeof rawBody !== "string") {
+        return "PASS: could not check the body (invalid body payload)";
+      }
+      const body = typeof rawBody === "string" ? rawBody : "";
+      if (body) {
         const pointers = findUnresolvableIssuePointers(body);
         if (pointers.length) {
           return `DENY:unresolvable pointer phrase '${
@@ -679,13 +753,26 @@ export async function checkModelLabelOnIssueCreate(
     const escalationReason = rawEscalation ? rawEscalation.trim() : null;
     const res = decide(rawLabels as string[], modelLabels, escalationReason, undefined, "mcp");
     if (res !== "PASS") return res;
-    const body = toolInput.body;
-    if (typeof body === "string" && body && !isEpicType(toolInput)) {
+    const rawBody = toolInput.body;
+    // An invalid body skips only the body checks; the duplicate search below still runs.
+    const bodyNote = rawBody !== undefined && typeof rawBody !== "string"
+      ? "PASS: could not check the body (invalid body payload)"
+      : "PASS";
+    const body = typeof rawBody === "string" ? rawBody : "";
+    if (body && !isEpicType(toolInput)) {
       const pointers = findUnresolvableIssuePointers(body);
       if (pointers.length) {
         return `DENY:unresolvable pointer phrase '${
           pointers[0]
         }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+      }
+      if (!hasNeedsDesignLabel(toolInput)) {
+        const deferred = findDeferredVerifications(body);
+        if (deferred.length) {
+          return `DENY:deferred verification phrase '${
+            deferred[0]
+          }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
+        }
       }
     }
     const mcpTitle = typeof toolInput.title === "string" ? toolInput.title : null;
@@ -713,7 +800,7 @@ export async function checkModelLabelOnIssueCreate(
         return `DENY:couldn't search ${dedupRes.repoFull} for duplicate open issues (the search failed — not a duplicate finding). Supply a non-empty 'dedup_override_reason' property to override.`;
       }
     }
-    return "PASS";
+    return bodyNote;
   }
 
   return "PASS";

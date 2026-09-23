@@ -45,6 +45,12 @@ case "$result" in
   PASS)
     exit 0
     ;;
+  PASS:*)
+    # Allowed, and the guard says why it could not check everything (web-jam-tools#1115).
+    note="model-label guard: ${result#PASS: }"
+    jq -cn --arg note "$note" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $note}}'
+    exit 0
+    ;;
   DENY:*)
     echo "BLOCKED (model-label guard): ${result#DENY:}" >&2
     echo "(rule: executable-issue / model-label / native-type — see skills/file-issue/SKILL.md)" >&2

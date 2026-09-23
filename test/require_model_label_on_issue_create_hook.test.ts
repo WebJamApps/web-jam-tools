@@ -7,14 +7,21 @@
 // python logic in TypeScript would test a copy, not the real guard).
 
 import { assertEquals } from "@std/assert";
+import { checkModelLabelOnIssueCreate } from "../hooks/lib/check_model_label_on_issue_create.ts";
 
 const SCRIPT_PATH = new URL(
   "../hooks/require-model-label-on-issue-create.sh",
   import.meta.url,
 ).pathname;
 
+const MODEL_LABELS_PATH = new URL(
+  "../skills/fix-labels/model-labels.json",
+  import.meta.url,
+).pathname;
+
 interface RunResult {
   code: number;
+  stdout: string;
   stderr: string;
 }
 
@@ -30,8 +37,12 @@ async function runHook(payload: Record<string, unknown>): Promise<RunResult> {
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(input));
   await writer.close();
-  const { code, stderr } = await child.output();
-  return { code, stderr: new TextDecoder().decode(stderr) };
+  const { code, stdout, stderr } = await child.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
 }
 
 function bashCall(command: string): Record<string, unknown> {
@@ -1275,4 +1286,254 @@ Deno.test("web-jam-tools#813: a data heredoc redirected to a non-.md interpreter
     ),
   );
   assertEquals(res.code, 0, res.stderr);
+});
+
+// --- Deferred verification check (web-jam-tools#1115) ---
+
+Deno.test("web-jam-tools#1115 (case 1): gh issue create with 'must be verified before removal' in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "This helper must be verified before removal" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("must be verified before removal"), true);
+  assertEquals(res.stderr.includes("rewrite the sentence as the settled fact"), true);
+  assertEquals(res.stderr.includes("present the question to Josh as a numbered decision"), true);
+});
+
+Deno.test("web-jam-tools#1115 (case 2): gh issue create with 'needs to be verified' in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "The cache behavior needs to be verified" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("needs to be verified"), true);
+  assertEquals(res.stderr.includes("rewrite the sentence as the settled fact"), true);
+  assertEquals(res.stderr.includes("present the question to Josh as a numbered decision"), true);
+});
+
+Deno.test("web-jam-tools#1115 (case 3): gh issue create with 'should be verified' in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "The token expiration should be verified" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("should be verified"), true);
+  assertEquals(res.stderr.includes("rewrite the sentence as the settled fact"), true);
+  assertEquals(res.stderr.includes("present the question to Josh as a numbered decision"), true);
+});
+
+Deno.test("web-jam-tools#1115 (case 4): gh issue create with 'to be confirmed' in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "Database schema details are to be confirmed" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("to be confirmed"), true);
+  assertEquals(res.stderr.includes("rewrite the sentence as the settled fact"), true);
+  assertEquals(res.stderr.includes("present the question to Josh as a numbered decision"), true);
+});
+
+Deno.test("web-jam-tools#1115 (case 5): gh issue create with 'not yet confirmed' in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "The API payload shape is not yet confirmed" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("not yet confirmed"), true);
+  assertEquals(res.stderr.includes("rewrite the sentence as the settled fact"), true);
+  assertEquals(res.stderr.includes("present the question to Josh as a numbered decision"), true);
+});
+
+Deno.test("web-jam-tools#1115 (case 6): gh issue create with 'remains to be' in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "Handling of edge cases remains to be determined" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("remains to be"), true);
+  assertEquals(res.stderr.includes("rewrite the sentence as the settled fact"), true);
+  assertEquals(res.stderr.includes("present the question to Josh as a numbered decision"), true);
+});
+
+Deno.test("web-jam-tools#1115 (case 7): gh issue create with 'assumed but not confirmed' in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "The parameter is assumed but not confirmed to be optional" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("assumed but not confirmed"), true);
+  assertEquals(res.stderr.includes("rewrite the sentence as the settled fact"), true);
+  assertEquals(res.stderr.includes("present the question to Josh as a numbered decision"), true);
+});
+
+Deno.test("web-jam-tools#1115 (case 8): gh issue create with 'verify against `scripts/install-skills.sh` before removing' in body is denied", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "Please verify against \\\`scripts/install-skills.sh\\\` before removing" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(
+    res.stderr.includes("verify against `scripts/install-skills.sh` before removing"),
+    true,
+  );
+  assertEquals(res.stderr.includes("rewrite the sentence as the settled fact"), true);
+  assertEquals(res.stderr.includes("present the question to Josh as a numbered decision"), true);
+});
+
+Deno.test("web-jam-tools#1115 (case 9): gh issue create with 'dead too, verified against `scripts/install-skills.sh`' in body is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "dead too, verified against \\\`scripts/install-skills.sh\\\`" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115 (case 10): gh issue create with 'verified by deleting the file and re-running the check' in body is allowed", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "verified by deleting the file and re-running the check" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115 (case 11): gh issue create with deferred phrases inside ``` code fence is allowed", async () => {
+  const body =
+    "Instructions:\\n```sh\\n# must be verified before removal\\n# needs to be verified\\n# should be verified\\n# to be confirmed\\n# not yet confirmed\\n# remains to be\\n# assumed but not confirmed\\n# verify against `scripts/install-skills.sh` before removing\\n```";
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "${body}" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115 (case 12): gh issue create with deferred phrases inside > blockquote is allowed", async () => {
+  const body =
+    "> must be verified before removal\\n> needs to be verified\\n> should be verified\\n> to be confirmed\\n> not yet confirmed\\n> remains to be\\n> assumed but not confirmed\\n> verify against `scripts/install-skills.sh` before removing";
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "${body}" --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115 (case 13): gh issue create with native type Epic is allowed regardless of body content", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "This needs to be verified before removal" --label "Flash High" --type Epic`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115 (case 14): gh issue create carrying 'Needs Design' label is allowed regardless of body content", async () => {
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "This needs to be verified before removal" --label "Flash High,Needs Design" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115 (case 15): unreadable body file proceeds and states plainly that it could not check the body", async () => {
+  const missingPath = `/tmp/nonexistent_body_file_${Date.now()}.md`;
+  const payload = JSON.stringify(
+    bashCall(
+      `gh issue create --title T --body-file ${missingPath} --label "Flash High" --type Task`,
+    ),
+  );
+  const result = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH);
+  assertEquals(result.startsWith("PASS"), true);
+  assertEquals(result.includes("could not check the body"), true);
+
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body-file ${missingPath} --label "Flash High" --type Task`,
+    ),
+  );
+  assertEquals(res.code, 0, res.stderr);
+  const out = JSON.parse(res.stdout);
+  assertEquals(out.hookSpecificOutput.hookEventName, "PreToolUse");
+  assertEquals(out.hookSpecificOutput.additionalContext.includes("could not check the body"), true);
+});
+
+Deno.test("web-jam-tools#1115: gh issue edit is not checked for deferred verification phrases (creates only)", async () => {
+  const res = await runHook(
+    bashCall(`gh issue edit 123 --body "This helper must be verified before removal"`),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115: MCP issue_write create with deferred verification phrase is denied", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      title: "T",
+      type: "Task",
+      labels: ["Flash High"],
+      body: "The behavior needs to be verified.",
+    }),
+  );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("needs to be verified"), true);
+});
+
+Deno.test("web-jam-tools#1115: MCP issue_write update is not checked for deferred verification phrases (creates only)", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "update",
+      issue_number: 123,
+      body: "Database migration must be verified before removal.",
+    }),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115: MCP issue_write create with Needs Design label is allowed", async () => {
+  const res = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      title: "T",
+      type: "Task",
+      labels: ["Flash High", "Needs Design"],
+      body: "The behavior needs to be verified.",
+    }),
+  );
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("web-jam-tools#1115: MCP issue_write with invalid unparseable body payload proceeds and states so", async () => {
+  const payload = JSON.stringify(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "create",
+      title: "T",
+      type: "Task",
+      labels: ["Flash High"],
+      body: 12345,
+    }),
+  );
+  const result = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH);
+  assertEquals(result.startsWith("PASS"), true);
+  assertEquals(result.includes("could not check the body"), true);
 });

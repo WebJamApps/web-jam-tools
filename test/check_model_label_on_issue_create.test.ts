@@ -270,6 +270,56 @@ Deno.test("checkModelLabelOnIssueCreate: CLI create using -R (gh's repo shorthan
   assertEquals(res.startsWith("DENY:possible duplicate issue(s) found"), true);
 });
 
+Deno.test("checkModelLabelOnIssueCreate: CLI create whose body file cannot be read is still searched for duplicates (web-jam-tools#1115)", async () => {
+  const missingPath = `/tmp/nonexistent_body_file_${Date.now()}.md`;
+  const payload = JSON.stringify({
+    tool_name: "Bash",
+    tool_input: {
+      command:
+        `gh issue create --repo WebJamApps/web-jam-tools --title "skills/design-issue: support and validate structured Revision History tables" --body-file ${missingPath} --type Task --label "Flash High"`,
+    },
+  });
+  const denied = await checkModelLabelOnIssueCreate(
+    payload,
+    MODEL_LABELS_PATH,
+    fakeRunnerReturning([{ number: 885, title: EXISTING_TITLE }]),
+  );
+  assertEquals(denied.startsWith("DENY:possible duplicate issue(s) found"), true);
+  const allowed = await checkModelLabelOnIssueCreate(
+    payload,
+    MODEL_LABELS_PATH,
+    fakeRunnerReturning([]),
+  );
+  assertEquals(allowed.startsWith("PASS: could not check the body"), true);
+});
+
+Deno.test("checkModelLabelOnIssueCreate: MCP create with a non-string body is still searched for duplicates (web-jam-tools#1115)", async () => {
+  const payload = JSON.stringify({
+    tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+    tool_input: {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "skills/design-issue: support and validate structured Revision History tables",
+      type: "Task",
+      labels: ["Flash High"],
+      body: 12345,
+    },
+  });
+  const denied = await checkModelLabelOnIssueCreate(
+    payload,
+    MODEL_LABELS_PATH,
+    fakeRunnerReturning([{ number: 885, title: EXISTING_TITLE }]),
+  );
+  assertEquals(denied.startsWith("DENY:possible duplicate issue(s) found"), true);
+  const allowed = await checkModelLabelOnIssueCreate(
+    payload,
+    MODEL_LABELS_PATH,
+    fakeRunnerReturning([]),
+  );
+  assertEquals(allowed, "PASS: could not check the body (invalid body payload)");
+});
+
 Deno.test("checkModelLabelOnIssueCreate: CLI create with no similar OPEN issue proceeds unchanged", async () => {
   const payload = JSON.stringify({
     tool_name: "Bash",

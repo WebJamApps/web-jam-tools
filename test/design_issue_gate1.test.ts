@@ -6,6 +6,8 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
+  classifyTopicMatch,
+  compareDesignDocMatches,
   defaultOpenBrowserImpl,
   defaultScreenshotImpl,
   DesignDocResolutionRefusal,
@@ -16,6 +18,7 @@ import {
   findExistingDesignDocs,
   formatMajorRevisionPrompt,
   isDesignDocFilename,
+  isThemeLevelDesignDoc,
   matchesTopic,
   normalizeTopicSlug,
   parseDecisionsRecord,
@@ -24,6 +27,8 @@ import {
   resolveDesignDocsRoot,
   resolveHtmlPath,
   runGate1,
+  TOPIC_MATCH_SOURCE_PRECEDENCE,
+  type TopicMatchSource,
 } from "../src/design-issue/gate1.ts";
 import { runCandidatesCli } from "../src/design-issue/candidates.ts";
 import { runCli, runMatchDesignCli } from "../src/design-issue/cli.ts";
@@ -1296,4 +1301,343 @@ Deno.test("web-jam-tools#942: parseDecisionsRecord reads both decisions-record t
   assertEquals(long.length, 1);
   assertEquals(long[0].outcome.length, 51);
   assertStringIncludes(long[0].outcome, "…");
+});
+
+// web-jam-tools#1098: Resolver tests for 6 key sources, pairwise collisions, and theme-level fallback.
+
+Deno.test("web-jam-tools#1098: classifyTopicMatch correctly classifies all 6 sources", () => {
+  // Source 1: Direct prefix <topic>- (without prefix-before-design)
+  assertEquals(
+    classifyTopicMatch("book-gig-overview-2026-08-16.md", "book-gig"),
+    null, // not a design doc filename without -design
+  );
+  // Direct prefix design doc with simple topic prefix
+  assertEquals(
+    classifyTopicMatch("book-gig-design-2026-08-16.md", "book-gig"),
+    "exact-prefix-before-design", // S3 (exact prefix) takes precedence when prefix === normTopic
+  );
+  assertEquals(
+    classifyTopicMatch("book-gig-skill-design-2026-08-16.md", "book-gig"),
+    "prefix-starts-with-topic", // S4: prefix-before-design starting with <topic>-
+  );
+  assertEquals(
+    classifyTopicMatch("book_gig-skill-design-2026-08-16.md", "book-gig"),
+    "underscore-variant", // S2: underscore variant
+  );
+  assertEquals(
+    classifyTopicMatch("issue-design-skill-design-2026-08-08.md", "design-issue"),
+    "all-tokens-contained", // S5: all topic tokens in prefix-before-design
+  );
+  assertEquals(
+    classifyTopicMatch("gig-outreach-design-2026-09-18.md", "book-gig", "gig-outreach"),
+    "theme-fallback", // S6: theme-level fallback
+  );
+  assertEquals(
+    classifyTopicMatch("gig-outreach-design-2026-09-18.md", "venue-mining", "gig-outreach"),
+    "theme-fallback", // S6: theme-level fallback
+  );
+
+  // isThemeLevelDesignDoc helper tests
+  assertEquals(isThemeLevelDesignDoc("gig-outreach-design-2026-09-18.md", "gig-outreach"), true);
+  assertEquals(isThemeLevelDesignDoc("gig_outreach-design-2026-09-18.md", "gig-outreach"), true);
+  assertEquals(isThemeLevelDesignDoc("gig-outreach-design.md", "gig-outreach"), true);
+  assertEquals(isThemeLevelDesignDoc("other-feature-design-2026-09-18.md", "gig-outreach"), false);
+
+  // TOPIC_MATCH_SOURCE_PRECEDENCE ordering
+  assertEquals(TOPIC_MATCH_SOURCE_PRECEDENCE["direct-prefix"], 1);
+  assertEquals(TOPIC_MATCH_SOURCE_PRECEDENCE["underscore-variant"], 2);
+  assertEquals(TOPIC_MATCH_SOURCE_PRECEDENCE["exact-prefix-before-design"], 3);
+  assertEquals(TOPIC_MATCH_SOURCE_PRECEDENCE["prefix-starts-with-topic"], 4);
+  assertEquals(TOPIC_MATCH_SOURCE_PRECEDENCE["all-tokens-contained"], 5);
+  assertEquals(TOPIC_MATCH_SOURCE_PRECEDENCE["theme-fallback"], 6);
+
+  // When theme does not match or is omitted, S6 does not match
+  assertEquals(
+    classifyTopicMatch("gig-outreach-design-2026-09-18.md", "venue-mining", "access-controls"),
+    null,
+  );
+  assertEquals(
+    classifyTopicMatch("gig-outreach-design-2026-09-18.md", "venue-mining"),
+    null,
+  );
+});
+
+Deno.test("web-jam-tools#1098: matchesTopic matches all 6 sources and respects theme argument", () => {
+  // S1 / S3
+  assertEquals(matchesTopic("book-gig-design-2026-08-16.md", "book-gig"), true);
+  // S4
+  assertEquals(matchesTopic("book-gig-skill-design-2026-08-16.md", "book-gig"), true);
+  // S2
+  assertEquals(matchesTopic("book_gig-skill-design-2026-08-16.md", "book-gig"), true);
+  // S5
+  assertEquals(matchesTopic("issue-design-skill-design-2026-08-08.md", "design-issue"), true);
+  // S6 with matching theme
+  assertEquals(matchesTopic("gig-outreach-design-2026-09-18.md", "book-gig", "gig-outreach"), true);
+  assertEquals(
+    matchesTopic("gig-outreach-design-2026-09-18.md", "venue-mining", "gig-outreach"),
+    true,
+  );
+  // S6 with mismatching theme
+  assertEquals(
+    matchesTopic("gig-outreach-design-2026-09-18.md", "book-gig", "Token_Savings"),
+    false,
+  );
+  // S6 without theme
+  assertEquals(matchesTopic("gig-outreach-design-2026-09-18.md", "book-gig"), false);
+});
+
+Deno.test("web-jam-tools#1098: compareDesignDocMatches resolves all 21 pairwise collisions correctly", () => {
+  // Helper to create synthetic match objects
+  const makeMatch = (opts: {
+    filename: string;
+    source: TopicMatchSource;
+    date?: string;
+    theme?: string;
+  }) => ({
+    path: `/tmp/${opts.theme || "theme"}/${opts.filename}`,
+    theme: opts.theme || "theme",
+    filename: opts.filename,
+    topic: "test-topic",
+    date: opts.date,
+    isMatch: true,
+    suggestion: "prompt",
+    source: opts.source,
+  });
+
+  // --- Rule 1: Topic-level matches (S1..S5) ALWAYS beat Theme-level fallback (S6) ---
+  // Even if S6 has a newer date:
+  const s6Newer = makeMatch({
+    filename: "gig-outreach-design-2026-09-18.md",
+    source: "theme-fallback",
+    date: "2026-09-18",
+  });
+  const s1Older = makeMatch({
+    filename: "test-topic-design-2026-08-01.md",
+    source: "direct-prefix",
+    date: "2026-08-01",
+  });
+  const s2Older = makeMatch({
+    filename: "test_topic-design-2026-08-01.md",
+    source: "underscore-variant",
+    date: "2026-08-01",
+  });
+  const s3Older = makeMatch({
+    filename: "test-topic-design-2026-08-01.md",
+    source: "exact-prefix-before-design",
+    date: "2026-08-01",
+  });
+  const s4Older = makeMatch({
+    filename: "test-topic-ext-design-2026-08-01.md",
+    source: "prefix-starts-with-topic",
+    date: "2026-08-01",
+  });
+  const s5Older = makeMatch({
+    filename: "topic-test-ext-design-2026-08-01.md",
+    source: "all-tokens-contained",
+    date: "2026-08-01",
+  });
+
+  // 1. {S1, S6}: S1 wins unconditionally
+  assertEquals(compareDesignDocMatches(s1Older, s6Newer) < 0, true, "{S1, S6} -> S1 must beat S6");
+  assertEquals(compareDesignDocMatches(s6Newer, s1Older) > 0, true, "{S6, S1} -> S1 must beat S6");
+
+  // 2. {S2, S6}: S2 wins unconditionally
+  assertEquals(compareDesignDocMatches(s2Older, s6Newer) < 0, true, "{S2, S6} -> S2 must beat S6");
+  assertEquals(compareDesignDocMatches(s6Newer, s2Older) > 0, true, "{S6, S2} -> S2 must beat S6");
+
+  // 3. {S3, S6}: S3 wins unconditionally
+  assertEquals(compareDesignDocMatches(s3Older, s6Newer) < 0, true, "{S3, S6} -> S3 must beat S6");
+  assertEquals(compareDesignDocMatches(s6Newer, s3Older) > 0, true, "{S6, S3} -> S3 must beat S6");
+
+  // 4. {S4, S6}: S4 wins unconditionally
+  assertEquals(compareDesignDocMatches(s4Older, s6Newer) < 0, true, "{S4, S6} -> S4 must beat S6");
+  assertEquals(compareDesignDocMatches(s6Newer, s4Older) > 0, true, "{S6, S4} -> S4 must beat S6");
+
+  // 5. {S5, S6}: S5 wins unconditionally
+  assertEquals(compareDesignDocMatches(s5Older, s6Newer) < 0, true, "{S5, S6} -> S5 must beat S6");
+  assertEquals(compareDesignDocMatches(s6Newer, s5Older) > 0, true, "{S6, S5} -> S5 must beat S6");
+
+  // --- Rule 2: Distinct pairs among topic-level matches (S1..S5) ---
+  // On date tie, source precedence: S1 (1) > S2 (2) > S3 (3) > S4 (4) > S5 (5)
+  const date = "2026-08-16";
+  const s1 = makeMatch({ filename: "a-s1-design-2026-08-16.md", source: "direct-prefix", date });
+  const s2 = makeMatch({
+    filename: "b-s2-design-2026-08-16.md",
+    source: "underscore-variant",
+    date,
+  });
+  const s3 = makeMatch({
+    filename: "c-s3-design-2026-08-16.md",
+    source: "exact-prefix-before-design",
+    date,
+  });
+  const s4 = makeMatch({
+    filename: "d-s4-design-2026-08-16.md",
+    source: "prefix-starts-with-topic",
+    date,
+  });
+  const s5 = makeMatch({
+    filename: "e-s5-design-2026-08-16.md",
+    source: "all-tokens-contained",
+    date,
+  });
+
+  // 6. {S1, S2}: S1 beats S2
+  assertEquals(compareDesignDocMatches(s1, s2) < 0, true, "{S1, S2} -> S1 beats S2 on date tie");
+  // 7. {S1, S3}: S1 beats S3
+  assertEquals(compareDesignDocMatches(s1, s3) < 0, true, "{S1, S3} -> S1 beats S3 on date tie");
+  // 8. {S1, S4}: S1 beats S4
+  assertEquals(compareDesignDocMatches(s1, s4) < 0, true, "{S1, S4} -> S1 beats S4 on date tie");
+  // 9. {S1, S5}: S1 beats S5
+  assertEquals(compareDesignDocMatches(s1, s5) < 0, true, "{S1, S5} -> S1 beats S5 on date tie");
+
+  // 10. {S2, S3}: S2 beats S3
+  assertEquals(compareDesignDocMatches(s2, s3) < 0, true, "{S2, S3} -> S2 beats S3 on date tie");
+  // 11. {S2, S4}: S2 beats S4
+  assertEquals(compareDesignDocMatches(s2, s4) < 0, true, "{S2, S4} -> S2 beats S4 on date tie");
+  // 12. {S2, S5}: S2 beats S5
+  assertEquals(compareDesignDocMatches(s2, s5) < 0, true, "{S2, S5} -> S2 beats S5 on date tie");
+
+  // 13. {S3, S4}: S3 beats S4
+  assertEquals(compareDesignDocMatches(s3, s4) < 0, true, "{S3, S4} -> S3 beats S4 on date tie");
+  // 14. {S3, S5}: S3 beats S5
+  assertEquals(compareDesignDocMatches(s3, s5) < 0, true, "{S3, S5} -> S3 beats S5 on date tie");
+
+  // 15. {S4, S5}: S4 beats S5
+  assertEquals(compareDesignDocMatches(s4, s5) < 0, true, "{S4, S5} -> S4 beats S5 on date tie");
+
+  // Between topic-level sources, newer date beats older regardless of source:
+  const s5NewerDate = makeMatch({
+    filename: "s5-newer-design-2026-09-01.md",
+    source: "all-tokens-contained",
+    date: "2026-09-01",
+  });
+  assertEquals(
+    compareDesignDocMatches(s5NewerDate, s1) < 0,
+    true,
+    "Newer date in S5 beats older date in S1",
+  );
+
+  // --- Rule 3: 6 Self-collisions (each source against itself) ---
+  // Newer date wins; on date tie, filename descending wins.
+  const testSelfCollision = (src: TopicMatchSource) => {
+    const older = makeMatch({
+      filename: `doc-older-${src}-2026-07-01.md`,
+      source: src,
+      date: "2026-07-01",
+    });
+    const newer = makeMatch({
+      filename: `doc-newer-${src}-2026-08-01.md`,
+      source: src,
+      date: "2026-08-01",
+    });
+    assertEquals(compareDesignDocMatches(newer, older) < 0, true, `${src} newer date wins`);
+
+    // Date tie -> filename descending (b.localeCompare(a))
+    const fileAlpha = makeMatch({
+      filename: `alpha-${src}-2026-08-01.md`,
+      source: src,
+      date: "2026-08-01",
+    });
+    const fileBeta = makeMatch({
+      filename: `beta-${src}-2026-08-01.md`,
+      source: src,
+      date: "2026-08-01",
+    });
+    assertEquals(
+      compareDesignDocMatches(fileBeta, fileAlpha) < 0,
+      true,
+      `${src} filename descending wins`,
+    );
+  };
+
+  // 16. {S1, S1}
+  testSelfCollision("direct-prefix");
+  // 17. {S2, S2}
+  testSelfCollision("underscore-variant");
+  // 18. {S3, S3}
+  testSelfCollision("exact-prefix-before-design");
+  // 19. {S4, S4}
+  testSelfCollision("prefix-starts-with-topic");
+  // 20. {S5, S5}
+  testSelfCollision("all-tokens-contained");
+  // 21. {S6, S6}
+  testSelfCollision("theme-fallback");
+});
+
+Deno.test("web-jam-tools#1098: theme folder with both theme-level and topic-level docs resolves to topic-level one", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "theme-fallback-test-" });
+  const themeDir = path.join(tempDir, "gig-outreach");
+  await Deno.mkdir(themeDir, { recursive: true });
+
+  // A theme folder holds both gig-outreach-design-*.md (theme-level doc, newer date 2026-09-18)
+  // and book-gig-design-*.md (topic-level doc, older date 2026-08-16)
+  const themeDoc = path.join(themeDir, "gig-outreach-design-2026-09-18.md");
+  const topicDoc = path.join(themeDir, "book-gig-design-2026-08-16.md");
+
+  await Deno.writeTextFile(
+    themeDoc,
+    "# Gig Outreach Design\n\n## Appendix B — decision record\n\n| # | Decision | Outcome |\n|---|---|---|\n| 1 | Scope | Unified gig outreach |\n",
+  );
+  await Deno.writeTextFile(
+    topicDoc,
+    "# Book Gig Design\n\n## Appendix B — decision record\n\n| # | Decision | Outcome |\n|---|---|---|\n| 1 | Cadence | Bi-weekly pitches |\n",
+  );
+
+  try {
+    // 1. Topic 'book-gig' resolves to the topic-level doc, NOT the newer theme-level doc
+    const bookGigMatch = await findExistingDesignDoc({
+      topic: "book-gig",
+      theme: "gig-outreach",
+      dropboxDir: tempDir,
+    });
+    assertEquals(bookGigMatch !== null, true);
+    assertEquals(bookGigMatch?.filename, "book-gig-design-2026-08-16.md");
+    assertEquals(bookGigMatch?.source, "exact-prefix-before-design");
+
+    // Also works without explicit theme option when scanning all themes
+    const bookGigMatchAll = await findExistingDesignDoc({
+      topic: "book-gig",
+      dropboxDir: tempDir,
+    });
+    assertEquals(bookGigMatchAll !== null, true);
+    assertEquals(bookGigMatchAll?.filename, "book-gig-design-2026-08-16.md");
+
+    // 2. Topic 'venue-mining' has no topic-level doc in gig-outreach, so it resolves to theme-level fallback
+    const venueMiningMatch = await findExistingDesignDoc({
+      topic: "venue-mining",
+      theme: "gig-outreach",
+      dropboxDir: tempDir,
+    });
+    assertEquals(venueMiningMatch !== null, true);
+    assertEquals(venueMiningMatch?.filename, "gig-outreach-design-2026-09-18.md");
+    assertEquals(venueMiningMatch?.source, "theme-fallback");
+    assertEquals(venueMiningMatch?.theme, "gig-outreach");
+
+    // 3. resolveCanonicalDesignDoc for venue-mining resolves existing-document to gig-outreach-design-2026-09-18.md
+    const resolution = await resolveCanonicalDesignDoc({
+      topic: "venue-mining",
+      theme: "gig-outreach",
+      dropboxDir: tempDir,
+    });
+    assertEquals(resolution.outcome, "existing-document");
+    assertEquals(resolution.match?.filename, "gig-outreach-design-2026-09-18.md");
+    assertEquals(resolution.decisions.length, 1);
+    assertEquals(resolution.decisions[0].id, "1");
+
+    // 4. refuseRedundantDesignDoc throws when trying to create parallel document for venue-mining in gig-outreach
+    await assertRejects(
+      async () => {
+        await refuseRedundantDesignDoc({
+          topic: "venue-mining",
+          theme: "gig-outreach",
+          dropboxDir: tempDir,
+        });
+      },
+      Error,
+      "Refusing to create redundant parallel design document",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
 });

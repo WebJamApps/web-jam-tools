@@ -405,7 +405,7 @@ Deno.test("skills/design-issue/SKILL.md contains resume rule in Phase 1 step 1",
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as a precondition of the run, in every place the check is described (web-jam-tools#942)", async () => {
+Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as a precondition of the run, in exactly one place (STEP ZERO) (web-jam-tools#942, web-jam-tools#1113)", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
@@ -416,7 +416,7 @@ Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as 
   );
   assertStringIncludes(
     text,
-    "it happens at the start of every design run, including a run that will never write a document",
+    "it happens at the start of every design run (Epic, Feature, Task or Bug alike), including a run that will never write a document",
   );
 
   // The step-zero read requirement, and its three outcomes.
@@ -439,12 +439,24 @@ Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as 
     "| create a redundant parallel design document (e.g. `*-phase-2-design-*.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` |",
   );
 
-  // The Major Revision protocol section agrees with step zero rather than contradicting it: no
-  // copy of the old "before creating a document/file" trigger survives anywhere in the body.
-  assertStringIncludes(
-    text,
-    "5. **Fail Closed When Discovery Cannot Answer:**",
+  // Canonical-document discovery is described in exactly one place (STEP ZERO) — the duplicate
+  // bullets under step 1 and the duplicate Major Revision protocol section are deleted (web-jam-tools#1113).
+  assertEquals(
+    text.includes("### Automatic Feature Matching & Major Revision Protocol"),
+    false,
+    "skills/design-issue/SKILL.md must not contain the duplicate ### Automatic Feature Matching & Major Revision Protocol section",
   );
+  assertEquals(
+    text.includes("Automatic Feature Matching & Canonical Document Discovery"),
+    false,
+    "skills/design-issue/SKILL.md must not contain the duplicate Automatic Feature Matching & Canonical Document Discovery bullet under step 1",
+  );
+  assertEquals(
+    text.includes("5. **Fail Closed When Discovery Cannot Answer:**"),
+    false,
+    "skills/design-issue/SKILL.md must not contain Fail Closed heading from deleted protocol section",
+  );
+
   for (
     const staleTrigger of [
       "Before creating a design document, look in the theme folder",
@@ -664,14 +676,54 @@ Deno.test("skills/design-issue/SKILL.md contains Epic or Flat rule", async () =>
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md contains Closeable, Always rule", async () => {
+Deno.test("skills/design-issue/SKILL.md contains Closeable, Always rule pointer (web-jam-tools#1113)", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
   assertStringIncludes(text, "### Closeable, Always");
   assertStringIncludes(
     text,
-    "Every issue must be closeable. A non-epic closes when its work is done; **an epic closes when its children close.** Epics are not implementable but they are closeable when their sub-issues are done. Perpetual trackers remain banned.",
+    'Follows `skills/file-issue/SKILL.md` item 3 ("Draft acceptance criteria that let the issue CLOSE (Epics close when children close)").',
+  );
+  assertEquals(
+    text.includes("Every issue must be closeable. A non-epic closes when its work is done"),
+    false,
+    "skills/design-issue/SKILL.md must not restate full Closeable, Always rule",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md states shared rules once via pointers and announces permission-prompt count (web-jam-tools#1113)", async () => {
+  const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
+  const text = await Deno.readTextFile(designIssuePath);
+
+  // Phase 2 item 7 pointer to file-issue item 17
+  assertStringIncludes(
+    text,
+    '- **Issue Titles**: Follows `skills/file-issue/SKILL.md` item 17 ("Issue Titles for Project Manager Audience with Skill/Feature Prefix and Epic Citation").',
+  );
+  assertEquals(
+    text.includes(
+      "Proposed titles in the plan table must be written for a project manager audience",
+    ),
+    false,
+    "skills/design-issue/SKILL.md must not restate full Issue Titles rule",
+  );
+
+  // Phase 3 item 16 pointer to file-issue item 10
+  assertStringIncludes(
+    text,
+    '16. **Set the native Priority field, then verify it by reading it back**, following `skills/file-issue/SKILL.md` item 10 ("Set Native Priority Field via MCP or create-issue.ts, Never via gh issue create / gh issue edit — Then Verify It by Reading It Back").',
+  );
+  assertEquals(
+    text.includes("gh issue create / gh issue edit cannot set a native field"),
+    false,
+    "skills/design-issue/SKILL.md must not restate full native Priority rule",
+  );
+
+  // Phase 3 permission prompt count announcement
+  assertStringIncludes(
+    text,
+    "Before the first issue write of the filing run, state how many permission prompts filing will raise and that switching the session's permission mode for the filing silences them, for the duration, persisting nothing.",
   );
 });
 
