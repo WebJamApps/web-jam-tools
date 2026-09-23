@@ -288,7 +288,9 @@ export function renderDarkHtml(result: BookGigResult): string {
 
   let locText = "All Regional Metros (~3.5h drive)";
   if (result.location) {
-    if (result.location.cities && result.location.cities.length > 1) {
+    if (result.location.allLocations) {
+      locText = "All Locations";
+    } else if (result.location.cities && result.location.cities.length > 1) {
       const list = result.location.cities.join(", ");
       locText = result.location.includeSurrounding ? `${list} (+ surrounding)` : list;
     } else if (result.location.city) {

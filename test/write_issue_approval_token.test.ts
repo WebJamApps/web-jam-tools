@@ -22,8 +22,11 @@
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
+  antigravityBrainRoot,
   authorizeWrite,
   buildApprovalToken,
+  isAntigravitySubagentConversation,
+  resolveAntigravityWriteContext,
   resolveClaudeCodeWriteContext,
   writeApprovalToken,
   writeApprovalTokenSync,
@@ -34,6 +37,7 @@ import {
   FILE_ISSUE_INVOCATION_RE,
   filingSkillInvoked,
   nonFilingSlashCommandInvoked,
+  stripUserRequestWrapper,
   tailIsCurrentlySidechain,
 } from "../hooks/lib/check_token_write_authorization.ts";
 import type { TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
@@ -1514,5 +1518,244 @@ Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md's description
       `SKILL.md's worked example "${phrase}" must be recognized as a file-issue invocation by ` +
         `FILE_ISSUE_INVOCATION_RE, or the two have drifted apart`,
     );
+  }
+});
+
+// --- Antigravity USER_REQUEST wrapper & plugin prefix tests ---
+
+Deno.test("stripUserRequestWrapper: unwraps Antigravity USER_REQUEST block", () => {
+  assertEquals(
+    stripUserRequestWrapper("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    "/webjam-tasks:file-issue",
+  );
+  assertEquals(
+    stripUserRequestWrapper(
+      "<USER_REQUEST>\nfile an issue for book-gig\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nsome metadata\n</ADDITIONAL_METADATA>",
+    ),
+    "file an issue for book-gig",
+  );
+  assertEquals(
+    stripUserRequestWrapper("plain prompt text without wrapper"),
+    "plain prompt text without wrapper",
+  );
+});
+
+Deno.test("filingSkillInvoked: recognizes plugin-prefixed slash commands and USER_REQUEST wrappers", () => {
+  assertEquals(filingSkillInvoked("/webjam-tasks:file-issue"), "file-issue");
+  assertEquals(filingSkillInvoked("/webjam-tasks:design-issue"), "design-issue");
+  assertEquals(
+    filingSkillInvoked("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    "file-issue",
+  );
+  assertEquals(
+    filingSkillInvoked("<USER_REQUEST>\n/webjam-tasks:design-issue\n</USER_REQUEST>"),
+    "design-issue",
+  );
+  assertEquals(
+    filingSkillInvoked(
+      "<USER_REQUEST>\nplease create a new issue for book-gig\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>",
+    ),
+    "file-issue",
+  );
+});
+
+Deno.test("nonFilingSlashCommandInvoked: recognizes plugin-prefixed slash commands and USER_REQUEST wrappers", () => {
+  assertEquals(nonFilingSlashCommandInvoked("/webjam-tasks:work-issue 123"), "/work-issue");
+  assertEquals(nonFilingSlashCommandInvoked("/webjam-tasks:book-gig"), "/book-gig");
+  assertEquals(
+    nonFilingSlashCommandInvoked("<USER_REQUEST>\n/webjam-tasks:work-issue 123\n</USER_REQUEST>"),
+    "/work-issue",
+  );
+  assertEquals(
+    nonFilingSlashCommandInvoked("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    null,
+  );
+});
+
+Deno.test("checkTokenWriteAuthorization: authorizes when Antigravity USER_REQUEST carries /webjam-tasks:file-issue", () => {
+  const agyEntry: TranscriptEntry = {
+    type: "USER_INPUT",
+    source: "USER_EXPLICIT",
+    step_index: 0,
+    conversationId: "test-conversation-id",
+    content:
+      "<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>",
+  };
+
+  const res = checkTokenWriteAuthorization({
+    entries: [agyEntry],
+    ownConversationId: "test-conversation-id",
+    isSubagentInvocation: false,
+  });
+
+  assertEquals(res.ok, true);
+  assertEquals(res.skill, "file-issue");
+});
+
+// --- Antigravity subagent detection from the surface's own spawn record ---
+
+const AGY_PARENT = "11111111-1111-4111-8111-111111111111";
+const AGY_CHILD = "22222222-2222-4222-8222-222222222222";
+
+/** Builds `<tmp>/brain/<id>/.system_generated/logs/transcript_full.jsonl` for each conversation,
+ * and the parent's spawn record for the child when `withSpawnRecord` is set. */
+async function makeAgyBrain(
+  prompts: Record<string, string>,
+  withSpawnRecord: boolean,
+): Promise<{ root: string; brain: string; transcript: (id: string) => string }> {
+  const root = await Deno.makeTempDir();
+  const brain = `${root}/brain`;
+  const transcript = (id: string) => `${brain}/${id}/.system_generated/logs/transcript_full.jsonl`;
+  for (const [id, prompt] of Object.entries(prompts)) {
+    await Deno.mkdir(`${brain}/${id}/.system_generated/logs`, { recursive: true });
+    await Deno.writeTextFile(
+      transcript(id),
+      JSON.stringify({
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        step_index: 0,
+        content: `<USER_REQUEST>\n${prompt}\n</USER_REQUEST>`,
+      }) + "\n",
+    );
+  }
+  if (withSpawnRecord) {
+    await Deno.mkdir(`${brain}/${AGY_PARENT}/.system_generated/subagents`, { recursive: true });
+    await Deno.writeTextFile(
+      `${brain}/${AGY_PARENT}/.system_generated/subagents/${AGY_CHILD}.json`,
+      JSON.stringify({ conversationId: AGY_CHILD, state: "SUBAGENT_STATE_ALIVE" }),
+    );
+  }
+  return { root, brain, transcript };
+}
+
+Deno.test("antigravityBrainRoot: returns the brain directory of an Antigravity transcript path, null otherwise", () => {
+  assertEquals(
+    antigravityBrainRoot(
+      `/home/j/.gemini/antigravity-cli/brain/${AGY_CHILD}/.system_generated/logs/transcript_full.jsonl`,
+    ),
+    "/home/j/.gemini/antigravity-cli/brain",
+  );
+  assertEquals(antigravityBrainRoot("/home/j/.claude/projects/-home-j/abc.jsonl"), null);
+  assertEquals(antigravityBrainRoot(""), null);
+});
+
+Deno.test("isAntigravitySubagentConversation: true when a parent's spawn record names the conversation", async () => {
+  const { root, brain } = await makeAgyBrain({ [AGY_PARENT]: "hi", [AGY_CHILD]: "task" }, true);
+  try {
+    assertEquals(await isAntigravitySubagentConversation(brain, AGY_CHILD), true);
+    assertEquals(await isAntigravitySubagentConversation(brain, AGY_PARENT), false);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("isAntigravitySubagentConversation: null (could not look) for an unreadable brain directory or empty id", async () => {
+  assertEquals(
+    await isAntigravitySubagentConversation("/definitely/not/a/brain/dir", AGY_CHILD),
+    null,
+  );
+  const { root, brain } = await makeAgyBrain({ [AGY_PARENT]: "hi" }, false);
+  try {
+    assertEquals(await isAntigravitySubagentConversation(brain, ""), null);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+for (
+  const prompt of [
+    "/file-issue for the audit summary",
+    "/webjam-tasks:file-issue for the audit summary",
+    "/design-issue web-jam-tools#1108",
+    "File an issue for the audit summary",
+  ]
+) {
+  Deno.test(`authorizeWrite: refuses an Antigravity subagent whose parent-composed prompt reads "${prompt}"`, async () => {
+    const { root, transcript } = await makeAgyBrain(
+      { [AGY_PARENT]: "hi", [AGY_CHILD]: prompt },
+      true,
+    );
+    try {
+      const result = await authorizeWrite({
+        sessionId: "",
+        transcriptPath: transcript(AGY_CHILD),
+        conversationId: AGY_CHILD,
+      });
+      assertEquals(result.ok, false);
+      assert(result.reason?.includes("subagent"));
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+}
+
+Deno.test("authorizeWrite: authorizes a main Antigravity conversation whose own turn invoked /file-issue", async () => {
+  const { root, transcript } = await makeAgyBrain(
+    { [AGY_PARENT]: "/webjam-tasks:file-issue", [AGY_CHILD]: "task" },
+    true,
+  );
+  try {
+    const result = await authorizeWrite({
+      sessionId: "",
+      transcriptPath: transcript(AGY_PARENT),
+      conversationId: AGY_PARENT,
+    });
+    assertEquals(result.ok, true);
+    assertEquals(result.skill, "file-issue");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("resolveAntigravityWriteContext: marks the recorded conversation a subagent from its spawn record", async () => {
+  const { root, transcript } = await makeAgyBrain(
+    { [AGY_PARENT]: "hi", [AGY_CHILD]: "/file-issue x" },
+    true,
+  );
+  const recordPath = `${root}/agy-hook-invocations.jsonl`;
+  const original = Deno.env.get("AGY_HOOK_RECORD_PATH");
+  try {
+    for (const [id, expected] of [[AGY_CHILD, true], [AGY_PARENT, false]] as const) {
+      await Deno.writeTextFile(
+        recordPath,
+        JSON.stringify({ conversationId: id, transcriptPath: transcript(id) }) + "\n",
+      );
+      Deno.env.set("AGY_HOOK_RECORD_PATH", recordPath);
+      const ctx = await resolveAntigravityWriteContext();
+      assertEquals(ctx?.ownConversationId, id);
+      assertEquals(ctx?.isSubagentInvocation, expected);
+    }
+  } finally {
+    if (original === undefined) Deno.env.delete("AGY_HOOK_RECORD_PATH");
+    else Deno.env.set("AGY_HOOK_RECORD_PATH", original);
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("resolveAntigravityWriteContext: fails closed when the recorded transcript is outside the brain layout", async () => {
+  const root = await Deno.makeTempDir();
+  const transcriptPath = `${root}/elsewhere.jsonl`;
+  await Deno.writeTextFile(
+    transcriptPath,
+    JSON.stringify({
+      type: "USER_INPUT",
+      content: "<USER_REQUEST>\n/file-issue\n</USER_REQUEST>",
+    }) +
+      "\n",
+  );
+  const recordPath = `${root}/agy-hook-invocations.jsonl`;
+  await Deno.writeTextFile(
+    recordPath,
+    JSON.stringify({ conversationId: AGY_PARENT, transcriptPath }) + "\n",
+  );
+  const original = Deno.env.get("AGY_HOOK_RECORD_PATH");
+  try {
+    Deno.env.set("AGY_HOOK_RECORD_PATH", recordPath);
+    const ctx = await resolveAntigravityWriteContext();
+    assertEquals(ctx?.isSubagentInvocation, true);
+  } finally {
+    if (original === undefined) Deno.env.delete("AGY_HOOK_RECORD_PATH");
+    else Deno.env.set("AGY_HOOK_RECORD_PATH", original);
+    await Deno.remove(root, { recursive: true });
   }
 });

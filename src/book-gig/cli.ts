@@ -5,10 +5,11 @@ import {
   fetchCandidates,
   filterAndRankCandidates,
   formatCandidateBreakdown,
+  formatExcludedAuditSummary,
   isPitchableCandidate,
   renderCandidateTable,
 } from "./candidates.ts";
-export { isPitchableCandidate, renderCandidateTable };
+export { formatExcludedAuditSummary, isPitchableCandidate, renderCandidateTable };
 import {
   renderPitchesFromBackend,
   verificationOptionsFromTweaks,
@@ -125,6 +126,7 @@ function printCampaignsTable(campaigns: OutreachCampaignRecord[]): void {
 
 export function formatLocationDisplay(location?: TargetLocation): string {
   if (!location) return "All Regional Metros (~3.5h drive)";
+  if (location.allLocations) return "All Locations";
   if (location.cities && location.cities.length > 1) {
     const list = location.cities.join(", ");
     return location.includeSurrounding ? `${list} (and surrounding regional areas)` : list;
@@ -845,6 +847,7 @@ export async function runBookGigCli(
   if (excludedCandidates.length > 0) {
     console.log(`\nExcluded / On-Hold Venues (${excludedCandidates.length}):`);
     console.log(renderCandidateTable(excludedCandidates));
+    console.log(`\n${formatExcludedAuditSummary(excludedCandidates)}`);
   }
 
   // 4. Check density and offer venue-mining recommendation

@@ -18,10 +18,13 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
 - `/book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>` — Contact hold mode (sets `resumeBooking` to resume date at UTC midnight via `PATCH /venue/:id`; also accepts `--resume`).
 - `/book-gig --booked-through <YYYY-MM-DD> --venue "<venueId|venueName>"` — Booked-through availability mode (sets `bookedThrough` to target date at UTC 23:59:59.999Z via `PATCH /venue/:id`; accepts `--venue` or `--hold`).
 - **Location Syntax & Flags:**
+  - All locations: `/book-gig "<weekend>" all` or `--all` / `--all-locations` sweeps all eligible venues across all locations without distance or metro filtering (also accepts `"all locations"` or `"everywhere"`).
   - Multi-city compound list: `deno task book-gig "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"`
   - Explicit flag: `deno task book-gig "Oct 16-18 2026" --cities "Lynchburg, Blacksburg, Martinsville, Salem, Roanoke"`
-  - Supports `--cities`, `--locations`, or `--location`.
+  - Supports `--cities`, `--locations`, `--location`, `--all`, or `--all-locations`.
 - **Examples:**
+  - `deno task book-gig "Oct 16-18 2026" all` — sweep all eligible venues across all locations without distance or metro filtering.
+  - `deno task book-gig "Oct 16-18 2026" --all` — sweep all eligible venues across all locations using the `--all` flag.
   - `deno task book-gig "Oct 16-18 2026"` — sweep all venues across the regional driving radius (~3.5h from Salem, VA) and automatically open the Dark Mode HTML artifact in Chrome.
   - `deno task book-gig "Oct 16-18 and Lynchburg, Blacksburg, Martinsville, Salem, Roanoke, and surrounding areas"` — focus on target cities and their surrounding regional communities, excluding non-target metros.
   - `deno task book-gig "Oct 16-18 2026" --no-open` — generate pitches and logs without automatically opening Chrome.
@@ -90,7 +93,7 @@ Batch outreach dispatch is protected by two mandatory, independent, non-fungible
 - Present candidate proposal tables to Josh in chat, strictly separating actionable targets from excluded audit listings:
   1. **Eligible Candidate Venues for <weekend> (<count>):** Displays only pitchable venues (valid `_id`, booking email, and not marked excluded) that can receive pitch drafts:
      `| # | Venue Name | City, State | Contact | Phone | Booking Email | Spacing Status |`
-  2. **Excluded / On-Hold Venues (<count>):** Displays secondary audit summary of venues excluded from outreach (seasonal holds, gig spacing within 60 days, active direct chat, or missing contact info).
+  2. **Excluded / On-Hold Venues (<count>):** Report the CLI-generated categorized audit summary directly (`formatExcludedAuditSummary` output in stdout), which groups excluded venues into distinct categories (Gig Spacing Conflicts, Active Cooldowns, Seasonal Holds, Direct Chat Active, Outside Target Area, etc.) with specific venue names and dates/details (e.g. `Long Way Brewing (Dec 12, 2026 Show)`). Never manually transcribe rows from the ASCII table into chat summaries to prevent misattribution errors.
 - Josh reviews candidate eligibility from the primary eligible candidate table and approves or refines the target venue list (e.g. approving specific IDs with `--venues` or skipping with `--skip`, or approving all proposed candidates).
 - **GATE 1 RECORDING:** Immediately upon receiving Josh's approval of the target candidate list, the AI assistant MUST record Gate 1 approval server-side:
   - CLI: `deno task book-gig --record-gate1 "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"] [--approver "Josh"]`

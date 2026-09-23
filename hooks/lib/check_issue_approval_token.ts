@@ -532,7 +532,9 @@ export function checkIssueApprovalToken(
     return "PASS";
   }
   const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
-  const sessionId = typeof data.session_id === "string" ? data.session_id : "";
+  const sessionId = typeof data.session_id === "string"
+    ? data.session_id
+    : (typeof data.conversationId === "string" ? data.conversationId : "");
   const toolInputRaw = data.tool_input;
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)

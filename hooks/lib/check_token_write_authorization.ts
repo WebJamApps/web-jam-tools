@@ -74,8 +74,19 @@ const CLAUDE_CODE_COMMAND_MESSAGE_ONLY_WRAPPER =
  * the filing half would let an intervening `/work-issue` stay invisible and so widen the gate
  * instead of fixing it (web-jam-tools#920).
  */
-export function slashCommandFromInvocationWrapper(text: string): string | null {
+/**
+ * Strips Antigravity's `<USER_REQUEST>...</USER_REQUEST>` prompt wrapper if present.
+ * In Antigravity transcripts (transcript_full.jsonl), user prompt text is stored wrapped
+ * in `<USER_REQUEST>` blocks, optionally followed by `<ADDITIONAL_METADATA>` and settings tags.
+ */
+export function stripUserRequestWrapper(text: string): string {
   const trimmed = text.trim();
+  const match = trimmed.match(/^<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/i);
+  return match ? match[1].trim() : trimmed;
+}
+
+export function slashCommandFromInvocationWrapper(text: string): string | null {
+  const trimmed = stripUserRequestWrapper(text).trim();
   const nameMatch = trimmed.match(CLAUDE_CODE_COMMAND_NAME_WRAPPER);
   if (nameMatch) return nameMatch[1].toLowerCase();
   const messageMatch = trimmed.match(CLAUDE_CODE_COMMAND_MESSAGE_ONLY_WRAPPER);
@@ -85,21 +96,21 @@ export function slashCommandFromInvocationWrapper(text: string): string | null {
 
 /**
  * Returns the non-filing slash command invoked at the start of user-turn text, or null. Recognizes
- * both the bare leading form (`/work-issue …`) and Claude Code's `<command-name>` wrapper form
- * (web-jam-tools#920).
+ * both the bare leading form (`/work-issue …`), plugin-prefixed forms (`/webjam-tasks:work-issue …`),
+ * and Claude Code's `<command-name>` wrapper form (web-jam-tools#920).
  *
  * Any intervening slash command (e.g. /work-issue, /book-gig, /handle-gmails) acts as a
  * scope-ending event: once the user invokes a different skill, any earlier filing skill
  * authorization in the session is terminated.
  */
 export function nonFilingSlashCommandInvoked(text: string): string | null {
-  const trimmed = text.trim();
+  const trimmed = stripUserRequestWrapper(text).trim();
   const wrapped = slashCommandFromInvocationWrapper(trimmed);
   if (wrapped && !AUTHORIZING_FILING_SKILLS.includes(wrapped as FilingSkill)) {
     return `/${wrapped}`;
   }
   if (trimmed.startsWith("/")) {
-    const match = trimmed.match(/^\/([a-zA-Z0-9_-]+)/);
+    const match = trimmed.match(/^\/(?:[a-zA-Z0-9_-]+:)?([a-zA-Z0-9_-]+)/);
     if (match) {
       const cmd = match[1].toLowerCase();
       if (!AUTHORIZING_FILING_SKILLS.includes(cmd as FilingSkill)) {
@@ -198,13 +209,18 @@ export const FILE_ISSUE_INVOCATION_RE =
  *    recognized here; see FILE_ISSUE_INVOCATION_RE's doc comment for why none is invented for it.
  */
 export function filingSkillInvoked(text: string): FilingSkill | null {
-  const trimmed = text.trim().toLowerCase();
+  const unwrapped = stripUserRequestWrapper(text);
+  const trimmed = unwrapped.trim().toLowerCase();
   const wrapped = slashCommandFromInvocationWrapper(trimmed);
   if (wrapped && AUTHORIZING_FILING_SKILLS.includes(wrapped as FilingSkill)) {
     return wrapped as FilingSkill;
   }
   for (const skill of AUTHORIZING_FILING_SKILLS) {
     if (opensWithPhrase(trimmed, `/${skill}`)) {
+      return skill;
+    }
+    const pluginPrefixRe = new RegExp(`^\\/(?:[a-z0-9_-]+:)${skill}(?:[\\s,.:;!?]|$)`, "i");
+    if (pluginPrefixRe.test(trimmed)) {
       return skill;
     }
   }
@@ -225,10 +241,10 @@ export interface TokenWriteAuthorizationContext {
    * write must be refused regardless of what an authorizing turn elsewhere in the transcript says
    * (acceptance criterion: "A dispatched subagent is refused a token write even when an
    * authorizing skill invocation is present on the most recent user turn"). Claude Code computes
-   * this mechanically (see tailIsCurrentlySidechain below); Antigravity subagents run in isolated
-   * conversations with their own conversationId and separate transcript containing only the
-   * dispatched task prompt (which does not start with /file-issue or /design-issue), so
-   * isOwnSessionUserTurnBoundary never matches a parent turn and the scan denies it in practice.
+   * this mechanically (see tailIsCurrentlySidechain below). Antigravity cannot compute it from the
+   * transcript — a subagent's opening prompt is filed in the same `<USER_REQUEST>` wrapper as a
+   * person's turn — so scripts/write_issue_approval_token.ts decides it from the subagent record
+   * the surface writes when it spawns one (isAntigravitySubagentConversation).
    */
   isSubagentInvocation: boolean;
 }
