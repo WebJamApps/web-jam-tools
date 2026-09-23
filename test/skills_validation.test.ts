@@ -342,6 +342,40 @@ Deno.test("skills/file-issue/SKILL.md contains the issue titles rule for PM audi
   );
 });
 
+Deno.test("skills/file-issue/SKILL.md announces permission-prompt count and forbids deferred verifications (web-jam-tools#1114)", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  // Permission prompt count announcement at step 0 of How to file it
+  assertStringIncludes(
+    text,
+    "Before the first issue write of a filing run, state how many permission prompts filing will raise and that switching the session's permission mode for the filing silences them, for the duration, persisting nothing.",
+  );
+
+  // Item 18: deferred verification rule
+  assert(
+    text.includes("An Issue Body May Never Defer a Verification") ||
+      text.includes("An issue body may never defer a verification"),
+    "skills/file-issue/SKILL.md must contain the numbered rule 'An Issue Body May Never Defer a Verification' in Before you file",
+  );
+  assertStringIncludes(
+    text,
+    'No "this must be checked before removal", no "assumed but not confirmed", no "verify against X first"',
+  );
+  assertStringIncludes(
+    text,
+    "If a fact can be established by reading a file, running a command, or checking history, it is established before the issue is called ready",
+  );
+  assertStringIncludes(
+    text,
+    "The only thing that may stay open is something genuinely needing Josh's own knowledge or a credential the agent lacks, and that is presented as a numbered decision",
+  );
+  assertStringIncludes(
+    text,
+    'web-jam-tools#1115 "hooks: refuse at issue create a body that defers a verification"',
+  );
+});
+
 Deno.test("skills/design-issue/SKILL.md contains the both-surfaces rule and refusal table entry", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);

@@ -176,6 +176,11 @@ that's what following this skill prevents.
     - **Written for a Project Manager Audience**: Issue titles must be professional, concise, action-oriented, and immediately clear to project managers, developers, and stakeholder agents reviewing issues in milestone boards or queues. Avoid vague, generic, or overly terse titles (e.g. avoid bare "fix bug" or "clean up"); state clearly what capability, fix, or requirement is delivered.
     - **Skill or Feature Scope Prefix**: Where applicable, prefix the title with the specific skill, component, module, or feature path being touched followed by a colon (e.g. `skills/file-issue: ...`, `skills/pr-review: ...`, `model/venue: ...`, `src/uptime: ...`, `venue-mining: ...`, `book-gig: ...`).
     - **Link/Cite Parent Epic**: When an issue is planned or filed as a sub-issue/child of an Epic, cite the parent Epic by `repo#number "title"` in the issue body (e.g. `## Context` / `Parent Epic: <repo#number "title">`) and link it natively via `--parent <epic_num>` (or GraphQL `addSubIssue`).
+18. **An Issue Body May Never Defer a Verification.**
+    - No "this must be checked before removal", no "assumed but not confirmed", no "verify against X first".
+    - If a fact can be established by reading a file, running a command, or checking history, it is established before the issue is called ready and before Josh is asked to dispatch it — "I could not confirm this" is not a finding, it is unfinished work.
+    - The only thing that may stay open is something genuinely needing Josh's own knowledge or a credential the agent lacks, and that is presented as a numbered decision, never parked in a body someone else will execute.
+    - This rule is enforced by a hook, citing web-jam-tools#1115 "hooks: refuse at issue create a body that defers a verification".
 
 ## Citation format (every reference, every time)
 
@@ -196,6 +201,8 @@ gh pr view 263 --repo WebJamApps/<repo> --json title -q .title
 ```
 
 ## How to file it
+
+Before the first issue write of a filing run, state how many permission prompts filing will raise and that switching the session's permission mode for the filing silences them, for the duration, persisting nothing.
 
 **Step 0 — write the approval token before calling `create-issue`.** `deno task create-issue` is
 gated by `hooks/lib/check_issue_approval_token.ts`, which requires a valid approval token at
@@ -265,7 +272,7 @@ deno task create-issue \
 ## If the hook denies the call
 
 The denial message names what's wrong (missing/invalid native issue type, no model label,
-multiple model labels, unresolvable pointer phrases, or unparseable command) and lists valid native
+multiple model labels, unresolvable pointer phrases, a deferred verification, or unparseable command) and lists valid native
 types or model labels straight from `skills/fix-labels/model-labels.json`. Fix the `--type` and
 `--label` flags (or the MCP `type` and `labels` fields) per the message and retry — there is no
 bypass, and there shouldn't be one: the hook exists to enforce executable, properly categorized issues.
