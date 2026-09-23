@@ -17,6 +17,8 @@ Success metric = net-new venues created, NOT seed-calendar coverage.
 - `/venue-mining artist <name>` — harvest every venue that artist has played
 - `/venue-mining venue <name>` — verify viability + enrich contacts for ONE venue
   (also the refresh path for an existing DB record)
+- `/venue-mining email` (or providing an inbound booking email thread) — process venue
+  contact updates and outreach campaign outcomes from inbound replies
 
 ## sources.yaml (registry — same dir as this file)
 
@@ -175,6 +177,38 @@ conflicting addresses with no way to tell which is current. "Josh might not want
 uncertainty. Never invent a value to fill a blank; a field with no sourced value stays empty and
 is reported as not found.
 
+## Email response handling mode (process inbound booking replies)
+
+When Josh provides an inbound booking email reply or thread (no automated, unassisted sending or
+direct inbox scraping — input is provided by Josh in session context), the agent parses the
+correspondence to update both venue records and outreach campaign status.
+
+### 1. Venue contact updates (`PATCH /venue/<_id>`)
+
+Extract and propose any newly discovered or updated contact metadata from the email body or signature:
+- **`contactName`**: Name of the booking manager, talent buyer, or event coordinator responding.
+- **`secondaryEmail`**: Alternate booking/events email address if specified or CC'd in the reply.
+- **`notes`**: Append dated operational context (e.g. preferred lead times, booking policies, room capacity, PA specs).
+- **`phone` / `website` / `address`**: Update if a new direct line, website, or physical address is revealed in the signature.
+- **`outreachEligible`**: Update according to eligibility rules (e.g. set to `false` if the respondent states they no longer host live music).
+
+### 2. Outreach campaign outcome updates (`PUT /outreach/<_id>`)
+
+Locate the associated outreach record for the venue (or target booking cycle) and record the outcome:
+- **`"target-filled"`**: The venue indicates the targeted date or weekend is already booked/filled.
+  Record the `targetWeekend` (e.g. `"YYYY-MM-DD"`) in the outcome payload.
+- **`"not-interested"`**: The venue declined, is not booking outside acts, or is not interested.
+- **`"booked"`**: The gig is confirmed / booked for the date.
+
+### 3. Execution and approval workflow
+
+- **Propose updates in chat first**: Present proposed venue updates and outreach outcome changes
+  together in a clear, phone-readable table for Josh's review.
+- **Backend approval required**: Executing `PATCH /venue/<_id>` and `PUT /outreach/<_id>` requires
+  an active session approval token covering `/venue/*` and `/outreach/*` (or `/outreach/:id`).
+- **No unassisted sending**: Direct dispatch (`POST /outreach/batch`, `POST /outreach/pitch`) remains
+  strictly blocked and is never invoked during email response processing.
+
 ## Eligibility rule (settled 2026-07-02, reconciled with D-49)
 
 - **Source strength governs `outreachEligible`:**
@@ -234,6 +268,11 @@ is reported as not found.
     during venue-mining tasks, keeping outreach strictly isolated to `skills/book-gig/SKILL.md`
     (citing web-jam-tools#1021 "hooks/backend-guard: guard production backend mutations and
     enforce venue-mining skill boundaries").
+  - **Authorized outreach outcome updates permitted:** In email response handling mode, authorized
+    `PUT /outreach/:id` mutations (updating campaign outcomes such as `target-filled`, `not-interested`,
+    or `booked`) are permitted when authorized by an active backend approval token covering
+    `/outreach/*` or `/outreach/:id`. Direct dispatch (`POST /outreach/batch`, `POST /outreach/pitch`,
+    and pitch generation) remains strictly blocked during venue-mining tasks.
 
 ## POST /venue example payload (with required address)
 

@@ -11,13 +11,15 @@
  * Safety guards NEVER read workflow off-switches.
  *
  * Outcomes:
- *   - Condition holds (permitted): Target is an authorized venue endpoint AND a
- *     presented token (bearer header, `--token <v>`, `--token=<v>`) — if any is
- *     presented — MATCHES the `token` field of an approval token file that also
- *     passes its own expiry/session/endpoint checks (a valid approval file with
- *     NO token presented on the command line is itself sufficient) -> ALLOW.
+ *   - Condition holds (permitted): Target is an authorized venue endpoint or
+ *     authorized PUT /outreach/:id outcome update AND a presented token
+ *     (bearer header, `--token <v>`, `--token=<v>`) — if any is presented —
+ *     MATCHES the `token` field of an approval token file that also passes its
+ *     own expiry/session/endpoint checks (a valid approval file with NO token
+ *     presented on the command line is itself sufficient) -> ALLOW.
  *   - Condition does not hold (denied): No matching/valid approval, an ad-hoc
- *     unapproved write, or an outreach operation during venue-mining -> DENY
+ *     unapproved write, an unauthorized outreach operation during venue-mining, or
+ *     direct dispatch (POST /outreach/batch, POST /outreach/pitch) -> DENY
  *     (refuses with structured explanation naming which check failed).
  *   - Indeterminate condition: Parser failure, missing environment, unparseable
  *     command, or corrupt token state -> DENY (fails closed).
@@ -179,7 +181,15 @@ export function checkSessionToken(
       if (pattern.endsWith("*")) {
         return endpoint.startsWith(pattern.slice(0, -1));
       }
-      return endpoint === pattern;
+      if (pattern === endpoint) {
+        return true;
+      }
+      if (pattern.includes("/:")) {
+        const regexStr = "^" + pattern.replace(/:[a-zA-Z0-9_]+/g, "[a-zA-Z0-9_-]+") + "$";
+        const regex = new RegExp(regexStr);
+        return regex.test(endpoint);
+      }
+      return false;
     });
     if (!matched) {
       return { valid: false, reason: `Approval token does not cover endpoint ${endpoint}` };
@@ -250,6 +260,23 @@ const OUTREACH_PATH_RE = /\/outreach(?:\/|\b|$)/;
 const VENUE_PATH_RE = /\/(?:venue|venue-mining)(?:\/|\b|$)/;
 const MUTATION_CODE_RE =
   /(?:method\s*:\s*["'](POST|PUT|PATCH|DELETE)["']|\b(POST|PUT|PATCH|DELETE)\b|requests\.(post|patch|put|delete)|body\s*:)/i;
+
+const NON_ITEM_OUTREACH_SUBPATHS = new Set([
+  "batch",
+  "pitch",
+  "preview",
+  "candidates",
+  "send",
+  "replies",
+  "sweep",
+]);
+
+export function isOutreachItemPath(path?: string): boolean {
+  if (!path) return false;
+  const m = path.match(/^\/outreach\/([a-zA-Z0-9_-]+)\/?$/);
+  if (!m) return false;
+  return !NON_ITEM_OUTREACH_SUBPATHS.has(m[1].toLowerCase());
+}
 
 function extractTokenArg(args: string[]): string | null {
   for (let i = 0; i < args.length; i++) {
@@ -336,6 +363,24 @@ function decideScriptContent(
   if (!BACKEND_HOST_RE.test(code)) return null;
 
   if (OUTREACH_PATH_RE.test(code)) {
+    const isPutMutation = /method\s*:\s*["']PUT["']/i.test(code) || /\bPUT\b/i.test(code);
+    const isDispatch = /\/outreach\/(?:batch|pitch)\b/i.test(code) ||
+      /\b(?:batch|pitch)\b/i.test(code);
+    if (isPutMutation && !isDispatch) {
+      const tokenCheck = checkSessionToken(tokenPath, sessionId, "/outreach/*", nowMs);
+      if (tokenCheck.valid) {
+        return {
+          outcome: "allow",
+          reason: "Authorized outreach script mutation with active session approval token.",
+        };
+      }
+      return {
+        outcome: "deny",
+        reason: `Script attempts unauthorized outreach mutation against production backend ` +
+          `(https://webjamsalem.herokuapp.com): ${tokenCheck.reason}. ${APPROVAL_REMEDIATION}`,
+      };
+    }
+
     if (inVenueMining) {
       return { outcome: "deny", reason: OUTREACH_DURING_VENUE_MINING_REASON };
     }
@@ -507,6 +552,23 @@ function decideSegment(
 
     // Outreach endpoints
     if (curl.isOutreach) {
+      if (curl.method === "PUT" && isOutreachItemPath(curl.path)) {
+        const tokenCheck = checkSessionToken(tokenPath, sessionId, curl.path, nowMs, curl.token);
+        if (tokenCheck.valid) {
+          return {
+            outcome: "allow",
+            reason: curl.token
+              ? "Authorized outreach outcome mutation: presented token matches the active session approval token."
+              : "Authorized outreach outcome mutation with active session approval token.",
+          };
+        }
+        return {
+          outcome: "deny",
+          reason: `Unauthorized outreach mutation against production backend ` +
+            `(https://webjamsalem.herokuapp.com): ${tokenCheck.reason}. ${APPROVAL_REMEDIATION}`,
+        };
+      }
+
       if (inVenueMining) {
         return { outcome: "deny", reason: OUTREACH_DURING_VENUE_MINING_REASON };
       }
