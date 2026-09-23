@@ -1,7 +1,7 @@
 /**
  * Authorization check for scripts/write_issue_approval_token.ts (web-jam-tools#808).
  *
- * Decision 21 of ~/Dropbox/web-jam-llms/Token_Savings/design-issue-enhancements-design-2026-08-23.md:
+ * Decision 21 of ~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md:
  * invoking a skill is authorization for what that skill does, so the token writer refuses unless
  * the most recent non-sidechain, own-session user turn invoked one of the two filing skills —
  * design-issue or file-issue — and a dispatched subagent never writes a token at all. This is the

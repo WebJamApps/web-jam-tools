@@ -46,7 +46,7 @@ and lists available CLI options.
 
 ```sh
 cd /home/joshua/WebJamApps/web-jam-tools
-deno task design:gate1 /home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-enhancements-design-2026-08-23.md
+deno task design:gate1 /home/joshua/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md
 ```
 
 **What this proves:** Verifies that `deno task design:gate1` executes the complete Gate 1 sequence:
