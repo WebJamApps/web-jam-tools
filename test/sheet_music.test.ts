@@ -944,3 +944,25 @@ Deno.test("buildSongDocument spells capo-3 G shapes in Bb, and autoTransposeSong
   assert(xml.includes("F/A"), "slash bass spelled F/A");
   assert(!xml.includes("A#") && !xml.includes("D#"), "no sharps in a Bb chart");
 });
+
+Deno.test("buildSongDocument writes custom properties passed to it through the Document options, and none by default", async () => {
+  const song = {
+    metadata: { title: "Stamp", mode: "single-tier" },
+    sections: [{ title: "Verse", lines: [{ lyrics: "[G]one" }] }],
+  } as SongDefinition;
+  const read = async (doc: ReturnType<typeof buildSongDocument>) => {
+    const buffer = await Packer.toBuffer(doc);
+    const entries = await readDocxEntries(
+      new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+    );
+    return entries.customXml
+      ? parseCustomProperties(new TextDecoder().decode(entries.customXml))
+      : new Map<string, string>();
+  };
+  const stamped = await read(
+    buildSongDocument(song, [{ name: "sheetMusicGenerator", value: "web-jam-tools" }]),
+  );
+  assertEquals(stamped.get("sheetMusicGenerator"), "web-jam-tools");
+  const plain = await read(buildSongDocument(song));
+  assertEquals(plain.get("sheetMusicGenerator"), undefined);
+});

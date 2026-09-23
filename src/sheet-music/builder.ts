@@ -760,7 +760,10 @@ export function buildLineParagraphs(
 /**
  * Builds a Word Document instance from a structured SongDefinition.
  */
-export function buildSongDocument(songInput: SongDefinition): Document {
+export function buildSongDocument(
+  songInput: SongDefinition,
+  customProperties: ReadonlyArray<{ name: string; value: string }> = [],
+): Document {
   validateSongDefinition(songInput);
   const song = autoTransposeSong(songInput);
   const isDualTier = song.metadata.mode === "dual-tier";
@@ -869,6 +872,7 @@ export function buildSongDocument(songInput: SongDefinition): Document {
   }
 
   const doc = new Document({
+    customProperties,
     sections: [
       {
         properties: {

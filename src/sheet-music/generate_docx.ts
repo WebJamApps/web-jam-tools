@@ -40,15 +40,6 @@ export function parseCliArgs(args: string[]): GenerateDocxOptions {
 }
 
 /**
- * Interface representing docx document structure with custom properties.
- */
-interface DocxWithCustomProps {
-  customProperties?: {
-    addCustomProperty: (property: { name: string; value: string }) => void;
-  };
-}
-
-/**
  * Computes the lowercase hex-encoded SHA-256 hash of a byte array.
  */
 export async function computeSha256Hex(data: Uint8Array): Promise<string> {
@@ -318,15 +309,29 @@ export async function generateFingerprintedDocx(
   const fingerprint = await computeSha256Hex(entriesInitial.docXml);
 
   // 2. Final pass adding customProperties with generator tag and computed fingerprint
-  const docFinal = buildSongDocument(song);
-  const cp = (docFinal as unknown as DocxWithCustomProps).customProperties;
-  if (cp && typeof cp.addCustomProperty === "function") {
-    cp.addCustomProperty({ name: "sheetMusicGenerator", value: "web-jam-tools" });
-    cp.addCustomProperty({ name: "sheetMusicFingerprint", value: fingerprint });
-  }
+  const docFinal = buildSongDocument(song, [
+    { name: "sheetMusicGenerator", value: "web-jam-tools" },
+    { name: "sheetMusicFingerprint", value: fingerprint },
+  ]);
 
   const bufFinal = await Packer.toBuffer(docFinal);
   const buffer = new Uint8Array(bufFinal.buffer, bufFinal.byteOffset, bufFinal.byteLength);
+
+  // A file that reaches disk untagged would read as "untagged" on every later run and pile up
+  // numbered copies with no error, so the stamp is read back from the built bytes before returning.
+  const stamped = await readDocxEntries(buffer);
+  const props = stamped.customXml
+    ? parseCustomProperties(new TextDecoder().decode(stamped.customXml))
+    : new Map<string, string>();
+  const finalFingerprint = stamped.docXml ? await computeSha256Hex(stamped.docXml) : undefined;
+  if (
+    props.get("sheetMusicGenerator") !== "web-jam-tools" ||
+    props.get("sheetMusicFingerprint") !== fingerprint || finalFingerprint !== fingerprint
+  ) {
+    throw new Error(
+      "Generated lead sheet is missing its sheetMusicGenerator/sheetMusicFingerprint stamp, or its word/document.xml does not match the fingerprint; refusing to write an unprotectable file",
+    );
+  }
   return { buffer, fingerprint };
 }
 
