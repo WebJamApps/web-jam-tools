@@ -196,3 +196,69 @@ Deno.test("citation-location: a citation inside a fenced code block is skipped, 
   );
   assertEquals(citationViolations(result).length, 0, JSON.stringify(citationViolations(result)));
 });
+
+// --- web-jam-tools#1097: Hex colour codes must NOT be flagged as issue citations ---
+
+Deno.test("citation-location: hex colours (#475569, #334155, #166534, #1e1e24, #FEF2C0) are NOT flagged (web-jam-tools#1097 AC1)", () => {
+  const hexColors = ["#475569", "#334155", "#166534", "#1e1e24", "#FEF2C0"];
+  for (const color of hexColors) {
+    const result = lintDesignDoc(
+      doc(`The diagram uses colour ${color} for accents and borders.`),
+      "test.md",
+    );
+    assertEquals(
+      citationViolations(result).length,
+      0,
+      `Expected ${color} to not be flagged as an issue citation, got: ${
+        JSON.stringify(citationViolations(result))
+      }`,
+    );
+  }
+});
+
+Deno.test("citation-location: hex colours inside inline SVG diagrams are NOT flagged (web-jam-tools#1097 AC1)", () => {
+  const svgBlock = `<svg width="200" height="100">
+  <rect fill="#475569" stroke="#334155" width="50" height="50" />
+  <path fill="#166534" d="M10 10" />
+  <circle fill="#1e1e24" r="5" />
+  <text fill="#FEF2C0">Diagram</text>
+</svg>`;
+  const result = lintDesignDoc(
+    doc(svgBlock),
+    "test.md",
+  );
+  assertEquals(
+    citationViolations(result).length,
+    0,
+    `Expected inline SVG hex colours to not be flagged, got: ${
+      JSON.stringify(citationViolations(result))
+    }`,
+  );
+});
+
+Deno.test("citation-location: valid issue citations (#881, repo#N, URL) STILL flagged (web-jam-tools#1097 AC2)", () => {
+  const citations = [
+    { text: "#881", snippet: "Reported in #881 earlier." },
+    { text: "web-jam-tools#744", snippet: "See web-jam-tools#744 for the ticket." },
+    { text: "web-jam-back#1052", snippet: "Couples with web-jam-back#1052 endpoint." },
+    { text: "JaMmusic#1347", snippet: "Aligns with JaMmusic#1347 UI change." },
+    {
+      text: "https://github.com/WebJamApps/web-jam-tools/issues/744",
+      snippet: "Full link: https://github.com/WebJamApps/web-jam-tools/issues/744 to check.",
+    },
+  ];
+  for (const c of citations) {
+    const result = lintDesignDoc(doc(c.snippet), "test.md");
+    const violations = citationViolations(result);
+    assertEquals(
+      violations.length >= 1,
+      true,
+      `Expected ${c.text} to be flagged as an issue citation in: ${c.snippet}`,
+    );
+    assertEquals(
+      violations.some((v) => v.message.includes(c.text)),
+      true,
+      `Expected violation message to name ${c.text}, got: ${JSON.stringify(violations)}`,
+    );
+  }
+});
