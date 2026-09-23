@@ -100,14 +100,96 @@ export function transposeNote(note: string, semitones: number, preferSharps = tr
   return preferSharps ? SHARP_NOTES[targetSemitone] : FLAT_NOTES[targetSemitone];
 }
 
+/** Each pitch class's key name with the fewest accidentals, major then minor. */
+const MAJOR_KEY_BY_PITCH = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+const MINOR_KEY_BY_PITCH = [
+  "Cm",
+  "C#m",
+  "Dm",
+  "Ebm",
+  "Em",
+  "Fm",
+  "F#m",
+  "Gm",
+  "G#m",
+  "Am",
+  "Bbm",
+  "Bm",
+];
+
+// Keys whose signatures carry flats; chords in them are spelled with flats.
+const FLAT_KEYS = new Set([
+  "F",
+  "Bb",
+  "Eb",
+  "Ab",
+  "Db",
+  "Gb",
+  "Cb",
+  "Dm",
+  "Gm",
+  "Cm",
+  "Fm",
+  "Bbm",
+  "Ebm",
+  "Abm",
+]);
+
 /**
- * Parses and transposes an individual chord token (e.g. "E", "C#m", "D/F#", "Aadd9", "G7").
+ * Transposes a key name (e.g. "G", "Em", "G major") by a given number of semitones, naming the
+ * result with the fewest accidentals: "G" up 3 is "Bb", not "A#". Returns undefined when the key
+ * has no recognisable root.
+ */
+export function transposeKey(key: string, semitones: number): string | undefined {
+  const trimmed = key.trim();
+  const match = trimmed.match(/^([A-G][#b]?)(m(?!aj))?/);
+  if (!match || !(match[1] in NOTE_TO_SEMITONE)) return undefined;
+  const pitch = ((NOTE_TO_SEMITONE[match[1]] + semitones) % 12 + 12) % 12;
+  const name = (match[2] ? MINOR_KEY_BY_PITCH : MAJOR_KEY_BY_PITCH)[pitch];
+  return name + trimmed.slice(match[0].length);
+}
+
+/**
+ * Whether chords in a key are spelled with sharps (true) or flats (false). Undefined for C major
+ * and A minor, whose signatures carry neither, and for a key with no recognisable root.
+ */
+export function keyPrefersSharps(key: string): boolean | undefined {
+  const name = transposeKey(key, 0)?.match(/^[A-G][#b]?m?/)?.[0];
+  if (!name || name === "C" || name === "Am") return undefined;
+  return !FLAT_KEYS.has(name);
+}
+
+/** The key a song's guitar chords are in: its `guitarKey`, or failing that its first chord. */
+export function songGuitarKey(song: SongDefinition): string | undefined {
+  if (song.metadata.guitarKey) return song.metadata.guitarKey;
+  for (const section of song.sections) {
+    for (const line of section.lines) {
+      const marker = typeof line.lyrics === "string" ? line.lyrics.match(/\[([^\]|]+)/) : null;
+      const chord = marker?.[1] ?? line.guitarChords?.trim().split(/\s+/)[0];
+      if (chord && chord.trim()) return chord.trim();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * How chords sounding `capo` semitones above the guitar shapes are spelled: the sharps or flats
+ * of the key they sound in. Undefined when that key is C major, A minor, or unknown.
+ */
+export function soundingPrefersSharps(song: SongDefinition, capo: number): boolean | undefined {
+  const key = songGuitarKey(song);
+  const sounding = key ? transposeKey(key, capo) : undefined;
+  return sounding ? keyPrefersSharps(sounding) : undefined;
+}
+
+/**
+ * Parses and transposes an individual chord token (e.g. "E", "C#m", "D/F#", "Aadd9", "G7", "G6/9").
  */
 export function transposeChord(chord: string, semitones: number, preferSharps?: boolean): string {
   const trimmed = chord.trim();
   if (!trimmed) return chord;
 
-  const match = trimmed.match(/^([A-G][#b]?)([^/]*)(?:\/([A-G][#b]?))?$/);
+  const match = trimmed.match(/^([A-G][#b]?)(.*?)(?:\/([A-G][#b]?))?$/);
   if (!match) return chord;
 
   const root = match[1];
@@ -135,7 +217,7 @@ export function transposeChordLine(
   if (!line || semitones === 0) return line;
 
   // Match chords as non-whitespace clusters: e.g. "E", "D", "A", "C#m", "D/F#"
-  const chordRegex = /[A-G][#b]?(?:[^\s/]*)(?:\/[A-G][#b]?)?/g;
+  const chordRegex = /[A-G][#b]?(?:6\/9|[^\s/])*(?:\/[A-G][#b]?)?/g;
   const matches: Array<{ chord: string; index: number }> = [];
   let m: RegExpExecArray | null;
 
@@ -177,13 +259,15 @@ export function autoTransposeSong(song: SongDefinition): SongDefinition {
 
   if (isDualTier && capo > 0) {
     if (cloned.metadata.guitarKey && !cloned.metadata.bassKey) {
-      cloned.metadata.bassKey = transposeChord(cloned.metadata.guitarKey, capo);
+      cloned.metadata.bassKey = transposeKey(cloned.metadata.guitarKey, capo) ??
+        transposeChord(cloned.metadata.guitarKey, capo);
     }
 
+    const preferSharps = soundingPrefersSharps(song, capo);
     for (const section of cloned.sections) {
       for (const line of section.lines) {
         if (line.guitarChords && !line.bassChords) {
-          line.bassChords = transposeChordLine(line.guitarChords, capo);
+          line.bassChords = transposeChordLine(line.guitarChords, capo, preferSharps);
         }
       }
     }

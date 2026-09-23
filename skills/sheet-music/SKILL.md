@@ -38,6 +38,7 @@ graph TD
    - Extract title, songwriter/composer credits, copyright year, and tempo.
    - Detect Capo position (e.g. `Capo 2`) and base guitar chord shapes (e.g. `E`, `D`, `A`).
    - Extract or automatically transpose sounding bass chords (e.g. Capo 2 shifts `E` → `F#`, `D` → `E`, `A` → `B`).
+   - Transposed bass chords are spelled in the key they sound in: the song's `guitarKey`, or its first chord when no key is given, moved up by the capo and named with the fewest accidentals. G shapes at Capo 3 sound in Bb, so they print `Bb`, `Eb`, `Gm`, `F/A` rather than `A#` and `D#`. Set `guitarKey` in the song definition when the first chord is not the key.
    - Extract section structure (Verse, Chorus, Bridge, etc.), lyrics, and exact chord alignment over syllables.
    - Preserve performance markings (e.g. `[mp]`, `[soft]`, `[no bass]`, `[Add Maria w/ harm]`, `[last time]`).
 3. **Harmonic Configuration**:
