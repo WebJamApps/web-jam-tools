@@ -14,6 +14,7 @@ export interface Gate1Options {
   screenshotImpl?: (htmlPath: string, screenshotPath: string) => Promise<{ sizeBytes: number }>;
   openBrowserImpl?: (htmlPath: string, display?: string) => Promise<void>;
   display?: string;
+  theme?: string;
   dropboxDir?: string;
   findExistingDesignDocsImpl?: typeof findExistingDesignDocs;
   /** Overrides the citation-liveness check (web-jam-tools#1025) for tests. The default
@@ -253,6 +254,7 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     const finder = options.findExistingDesignDocsImpl || findExistingDesignDocs;
     const existing = await finder({
       topic: docTopic,
+      theme: options.theme,
       dropboxDir: options.dropboxDir,
     });
     const olderCanonical = existing.find(
@@ -302,6 +304,23 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
   };
 }
 
+export type TopicMatchSource =
+  | "direct-prefix" // 1. Direct prefix <topic>-
+  | "underscore-variant" // 2. Underscore variant <topic_with_underscores>-
+  | "exact-prefix-before-design" // 3. Exact prefix before the final -design
+  | "prefix-starts-with-topic" // 4. Prefix-before-`-design` starting with `<topic>-`
+  | "all-tokens-contained" // 5. All topic tokens contained in the prefix-before-`-design`
+  | "theme-fallback"; // 6. Theme-level fallback
+
+export const TOPIC_MATCH_SOURCE_PRECEDENCE: Record<TopicMatchSource, number> = {
+  "direct-prefix": 1,
+  "underscore-variant": 2,
+  "exact-prefix-before-design": 3,
+  "prefix-starts-with-topic": 4,
+  "all-tokens-contained": 5,
+  "theme-fallback": 6,
+};
+
 export interface ExistingDesignDocMatch {
   path: string;
   theme: string;
@@ -310,6 +329,7 @@ export interface ExistingDesignDocMatch {
   date?: string;
   isMatch: boolean;
   suggestion: string;
+  source?: TopicMatchSource;
 }
 
 export interface FindDesignDocOptions {
@@ -450,42 +470,194 @@ export function extractDateFromFilename(filename: string): string | undefined {
 }
 
 /**
- * Checks whether a design document filename matches a given topic slug.
- * Avoids dynamic RegExp construction for ReDoS safety.
+ * Checks whether a design document filename is a theme-level document for the given theme.
+ * A theme-level document is typically named `<theme>-design-<date>.md` or `<theme>-design.md`,
+ * or its underscore equivalent `<theme_with_underscores>-design-...`.
  */
-export function matchesTopic(filename: string, topic: string): boolean {
-  if (!filename || !topic) return false;
+export function isThemeLevelDesignDoc(filename: string, normTheme: string): boolean {
+  if (!filename || !normTheme) return false;
   if (!isDesignDocFilename(filename)) return false;
 
   const base = path.basename(filename).toLowerCase();
-  const normTopic = normalizeTopicSlug(topic);
-  if (!normTopic) return false;
+  const themeUnderscore = normTheme.replace(/-/g, "_");
 
-  // Direct prefix match: <topic>-*
-  if (base.startsWith(`${normTopic}-`) || base.startsWith(`${normTopic}.`)) {
+  if (
+    base.startsWith(`${normTheme}-design-`) ||
+    base.startsWith(`${normTheme}-design.`) ||
+    base === `${normTheme}-design.md`
+  ) {
+    return true;
+  }
+  if (
+    base.startsWith(`${themeUnderscore}-design-`) ||
+    base.startsWith(`${themeUnderscore}-design.`) ||
+    base === `${themeUnderscore}-design.md`
+  ) {
     return true;
   }
 
-  // Topic with underscores
-  const topicUnderscore = normTopic.replace(/-/g, "_");
-  if (base.startsWith(`${topicUnderscore}-`) || base.startsWith(`${topicUnderscore}.`)) {
-    return true;
-  }
-
-  // Check prefix before the final "-design"
   const designIndex = base.lastIndexOf("-design");
   if (designIndex !== -1) {
     const prefix = base.slice(0, designIndex);
-    if (prefix === normTopic || prefix.startsWith(`${normTopic}-`)) {
-      return true;
-    }
-    const tokens = normTopic.split("-").filter(Boolean);
-    if (tokens.length > 1 && tokens.every((tok) => prefix.includes(tok))) {
+    if (prefix === normTheme || prefix === themeUnderscore) {
       return true;
     }
   }
 
   return false;
+}
+
+/**
+ * Classifies the match source of a design document filename against a topic (and optional theme).
+ * Avoids dynamic RegExp construction for ReDoS safety.
+ *
+ * The six admitted sources (web-jam-tools#1098) are:
+ *   1. "direct-prefix": Direct prefix `<topic>-` or `<topic>.`.
+ *   2. "underscore-variant": Underscore variant `<topic_with_underscores>-` or `.` or exact prefix.
+ *   3. "exact-prefix-before-design": Exact prefix before the final `-design` (`prefix === normTopic`).
+ *   4. "prefix-starts-with-topic": Prefix-before-`-design` starting with `<topic>-`.
+ *   5. "all-tokens-contained": All topic tokens contained in the prefix-before-`-design`.
+ *   6. "theme-fallback": Theme-level fallback (`<theme>-design-<date>.md`), tried only when theme is provided.
+ */
+export function classifyTopicMatch(
+  filename: string,
+  topic: string,
+  theme?: string,
+): TopicMatchSource | null {
+  if (!filename || !topic) return null;
+  if (!isDesignDocFilename(filename)) return null;
+
+  const base = path.basename(filename).toLowerCase();
+  const normTopic = normalizeTopicSlug(topic);
+  if (!normTopic) return null;
+
+  const topicUnderscore = normTopic.replace(/-/g, "_");
+  const designIndex = base.lastIndexOf("-design");
+
+  let prefix: string | undefined;
+  if (designIndex !== -1) {
+    prefix = base.slice(0, designIndex);
+  }
+
+  // 3. Exact prefix before the final "-design" (e.g. <topic>-design-<date>.md)
+  if (prefix === normTopic) {
+    return "exact-prefix-before-design";
+  }
+
+  // 1. Direct prefix match: <topic>-* or <topic>.*
+  if (base.startsWith(`${normTopic}-`) || base.startsWith(`${normTopic}.`)) {
+    if (prefix && prefix.startsWith(`${normTopic}-`)) {
+      return "prefix-starts-with-topic";
+    }
+    return "direct-prefix";
+  }
+
+  // 2. Topic with underscores: <topic_with_underscores>-* or <topic_with_underscores>.*
+  if (
+    base.startsWith(`${topicUnderscore}-`) ||
+    base.startsWith(`${topicUnderscore}.`) ||
+    prefix === topicUnderscore
+  ) {
+    return "underscore-variant";
+  }
+
+  // 4. Prefix-before-`-design` starting with `<topic>-`
+  if (prefix && prefix.startsWith(`${normTopic}-`)) {
+    return "prefix-starts-with-topic";
+  }
+
+  // 5. All topic tokens contained in the prefix-before-`-design`
+  if (prefix) {
+    const tokens = normTopic.split("-").filter(Boolean);
+    if (tokens.length > 1 && tokens.every((tok) => prefix.includes(tok))) {
+      return "all-tokens-contained";
+    }
+  }
+
+  // 6. Theme-level fallback (tried only when theme is provided)
+  if (theme) {
+    const normTheme = normalizeTopicSlug(theme);
+    if (normTheme && isThemeLevelDesignDoc(base, normTheme)) {
+      return "theme-fallback";
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Checks whether a design document filename matches a given topic slug (and optional theme).
+ * Avoids dynamic RegExp construction for ReDoS safety.
+ */
+export function matchesTopic(filename: string, topic: string, theme?: string): boolean {
+  return classifyTopicMatch(filename, topic, theme) !== null;
+}
+
+/**
+ * Comparator for design document matches implementing the pairwise collision resolution rules (web-jam-tools#1098).
+ *
+ * Collision Resolution Specification for all 21 unordered pairs:
+ *
+ * Tiered Rule:
+ *   Topic-level matches (Sources 1–5: direct-prefix, underscore-variant, exact-prefix-before-design,
+ *   prefix-starts-with-topic, all-tokens-contained) ALWAYS beat Theme-level fallback (Source 6),
+ *   unconditionally, regardless of file dates or filenames.
+ *
+ * 15 Unordered Pairs of Distinct Sources:
+ *   - {S1, S6}: S1 ALWAYS beats S6 (topic-level beats theme fallback unconditionally)
+ *   - {S2, S6}: S2 ALWAYS beats S6 (topic-level beats theme fallback unconditionally)
+ *   - {S3, S6}: S3 ALWAYS beats S6 (topic-level beats theme fallback unconditionally)
+ *   - {S4, S6}: S4 ALWAYS beats S6 (topic-level beats theme fallback unconditionally)
+ *   - {S5, S6}: S5 ALWAYS beats S6 (topic-level beats theme fallback unconditionally)
+ *   - {S1, S2}: Newest date wins; on date tie/undated, S1 beats S2 by source rank (1 < 2); on tie, filename descending.
+ *   - {S1, S3}: Newest date wins; on date tie/undated, S1 beats S3 by source rank (1 < 3); on tie, filename descending.
+ *   - {S1, S4}: Newest date wins; on date tie/undated, S1 beats S4 by source rank (1 < 4); on tie, filename descending.
+ *   - {S1, S5}: Newest date wins; on date tie/undated, S1 beats S5 by source rank (1 < 5); on tie, filename descending.
+ *   - {S2, S3}: Newest date wins; on date tie/undated, S2 beats S3 by source rank (2 < 3); on tie, filename descending.
+ *   - {S2, S4}: Newest date wins; on date tie/undated, S2 beats S4 by source rank (2 < 4); on tie, filename descending.
+ *   - {S2, S5}: Newest date wins; on date tie/undated, S2 beats S5 by source rank (2 < 5); on tie, filename descending.
+ *   - {S3, S4}: Newest date wins; on date tie/undated, S3 beats S4 by source rank (3 < 4); on tie, filename descending.
+ *   - {S3, S5}: Newest date wins; on date tie/undated, S3 beats S5 by source rank (3 < 5); on tie, filename descending.
+ *   - {S4, S5}: Newest date wins; on date tie/undated, S4 beats S5 by source rank (4 < 5); on tie, filename descending.
+ *
+ * 6 Self-Collision Pairs (each source against itself):
+ *   - {S1, S1}: Newest date wins; on date tie/undated, filename descending.
+ *   - {S2, S2}: Newest date wins; on date tie/undated, filename descending.
+ *   - {S3, S3}: Newest date wins; on date tie/undated, filename descending.
+ *   - {S4, S4}: Newest date wins; on date tie/undated, filename descending.
+ *   - {S5, S5}: Newest date wins; on date tie/undated, filename descending.
+ *   - {S6, S6}: Newest date wins; on date tie/undated, filename descending.
+ */
+export function compareDesignDocMatches(
+  a: ExistingDesignDocMatch,
+  b: ExistingDesignDocMatch,
+): number {
+  const aIsTopic = a.source ? a.source !== "theme-fallback" : true;
+  const bIsTopic = b.source ? b.source !== "theme-fallback" : true;
+
+  // Topic-level match ALWAYS beats theme-level fallback
+  if (aIsTopic && !bIsTopic) return -1;
+  if (!aIsTopic && bIsTopic) return 1;
+
+  // Within the same tier (both topic-level or both theme-fallback):
+  // 1. Newest revision date first
+  if (a.date && b.date) {
+    if (a.date !== b.date) return b.date.localeCompare(a.date);
+  } else if (a.date) {
+    return -1;
+  } else if (b.date) {
+    return 1;
+  }
+
+  // 2. Source precedence (lower number = higher precedence)
+  const aRank = a.source ? TOPIC_MATCH_SOURCE_PRECEDENCE[a.source] : 5;
+  const bRank = b.source ? TOPIC_MATCH_SOURCE_PRECEDENCE[b.source] : 5;
+  if (aRank !== bRank) {
+    return aRank - bRank;
+  }
+
+  // 3. Filename descending tie-breaker
+  return b.filename.localeCompare(a.filename);
 }
 
 /**
@@ -506,7 +678,7 @@ export function formatMajorRevisionPrompt(docPath: string, topic: string): strin
 
 /**
  * Scans ~/Dropbox/web-jam-llms/<Theme>/ for existing topic design documents.
- * Returns matches sorted newest-first by revision date.
+ * Returns matches sorted newest-first by revision date and source specificity.
  */
 export async function findExistingDesignDocs(
   options: FindDesignDocOptions,
@@ -532,24 +704,49 @@ export async function findExistingDesignDocs(
     }
   }
 
-  const matches: ExistingDesignDocMatch[] = [];
+  const topicMatches: ExistingDesignDocMatch[] = [];
+  const themeFallbackMatches: ExistingDesignDocMatch[] = [];
 
   for (const theme of themesToScan) {
     const themeDir = path.join(baseDir, theme);
+    // Theme-level fallback is permitted when options.theme is explicitly provided,
+    // or if options.title mentions/contains the theme name.
+    const allowThemeFallback = Boolean(
+      options.theme ||
+        (options.title && normalizeTopicSlug(options.title).includes(normalizeTopicSlug(theme))),
+    );
+
     try {
       for await (const entry of Deno.readDir(themeDir)) {
-        if (entry.isFile && matchesTopic(entry.name, topic)) {
-          const fullPath = path.join(themeDir, entry.name);
-          const docDate = extractDateFromFilename(entry.name);
-          matches.push({
-            path: fullPath,
-            theme,
-            filename: entry.name,
-            topic,
-            date: docDate,
-            isMatch: true,
-            suggestion: formatMajorRevisionPrompt(fullPath, topic),
-          });
+        if (!entry.isFile) continue;
+
+        const matchSource = classifyTopicMatch(
+          entry.name,
+          topic,
+          allowThemeFallback ? theme : undefined,
+        );
+        if (!matchSource) continue;
+
+        const fullPath = path.join(themeDir, entry.name);
+        const docDate = extractDateFromFilename(entry.name);
+        const matchObj: ExistingDesignDocMatch = {
+          path: fullPath,
+          theme,
+          filename: entry.name,
+          topic: matchSource === "theme-fallback" ? theme : topic,
+          date: docDate,
+          isMatch: true,
+          source: matchSource,
+          suggestion: formatMajorRevisionPrompt(
+            fullPath,
+            matchSource === "theme-fallback" ? theme : topic,
+          ),
+        };
+
+        if (matchSource === "theme-fallback") {
+          themeFallbackMatches.push(matchObj);
+        } else {
+          topicMatches.push(matchObj);
         }
       }
     } catch {
@@ -557,19 +754,15 @@ export async function findExistingDesignDocs(
     }
   }
 
-  // Sort newest-first (date descending, then filename descending)
-  matches.sort((a, b) => {
-    if (a.date && b.date) {
-      if (a.date !== b.date) return b.date.localeCompare(a.date);
-    } else if (a.date) {
-      return -1;
-    } else if (b.date) {
-      return 1;
-    }
-    return b.filename.localeCompare(a.filename);
-  });
+  // Topic-level match ALWAYS beats theme-level fallback.
+  // Add a theme-level fallback, tried only after every topic-level match fails.
+  if (topicMatches.length > 0) {
+    topicMatches.sort(compareDesignDocMatches);
+    return topicMatches;
+  }
 
-  return matches;
+  themeFallbackMatches.sort(compareDesignDocMatches);
+  return themeFallbackMatches;
 }
 
 /**

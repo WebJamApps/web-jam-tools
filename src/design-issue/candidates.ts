@@ -125,16 +125,15 @@ export function formatCandidateCitation(issue: NeedsDesignIssue): string {
 }
 
 /**
- * Resolves a topic slug from an issue/epic citation or title.
- * If given a bare citation like `web-jam-tools#737`, attempts to query GitHub issue title via runner.
+ * Resolves citation details (topic slug and milestone) from an issue/epic citation or title.
  */
-export async function resolveTopicFromCitation(
+export async function resolveCitationDetails(
   citation: string,
   runner: CommandRunner = defaultCommandRunner,
   owner = REPO_OWNER,
-): Promise<string> {
-  const extracted = extractTopicFromText(citation);
-  if (extracted) return extracted;
+): Promise<{ topic: string; milestone?: string }> {
+  let topic = extractTopicFromText(citation);
+  let milestone: string | undefined;
 
   // Try parsing repo#number or #number
   const match = citation.match(/(?:([a-zA-Z0-9_-]+)\/)?([a-zA-Z0-9_-]+)?#(\d+)/);
@@ -149,19 +148,36 @@ export async function resolveTopicFromCitation(
         "--repo",
         `${owner}/${repo}`,
         "--json",
-        "title",
-        "-q",
-        ".title",
+        "title,milestone",
       ]);
       if (res.code === 0 && res.stdout.trim()) {
-        return extractTopicFromText(res.stdout.trim());
+        try {
+          const parsed = JSON.parse(res.stdout.trim());
+          if (parsed.title) {
+            topic = extractTopicFromText(parsed.title) || topic;
+          }
+          if (parsed.milestone?.title) {
+            milestone = parsed.milestone.title;
+          }
+        } catch {
+          topic = extractTopicFromText(res.stdout.trim()) || topic;
+        }
       }
     } catch {
       // ignore
     }
   }
 
-  return "";
+  return { topic, milestone };
+}
+
+export async function resolveTopicFromCitation(
+  citation: string,
+  runner: CommandRunner = defaultCommandRunner,
+  owner = REPO_OWNER,
+): Promise<string> {
+  const details = await resolveCitationDetails(citation, runner, owner);
+  return details.topic;
 }
 
 export async function runCandidatesCli(
@@ -210,7 +226,9 @@ reporting "no existing design document" when it cannot tell whether one exists.`
     (flags._.length > 0 ? String(flags._[0]) : "");
 
   if (targetQuery) {
-    const topic = await resolveTopicFromCitation(targetQuery, runner, owner) || targetQuery;
+    const details = await resolveCitationDetails(targetQuery, runner, owner);
+    const topic = details.topic || targetQuery;
+    const theme = flags.theme || details.milestone;
 
     // The canonical-document precondition (web-jam-tools#942): this resolution runs before any
     // decision is put to Josh, and fails closed rather than reporting "no document found" when it
@@ -220,7 +238,7 @@ reporting "no existing design document" when it cannot tell whether one exists.`
       resolution = await resolveCanonicalDesignDoc({
         topic,
         title: targetQuery,
-        theme: flags.theme,
+        theme,
         dropboxDir: flags["dropbox-dir"] || options.dropboxDir,
       });
     } catch (err) {
