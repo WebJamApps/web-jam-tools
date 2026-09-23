@@ -241,10 +241,10 @@ export interface TokenWriteAuthorizationContext {
    * write must be refused regardless of what an authorizing turn elsewhere in the transcript says
    * (acceptance criterion: "A dispatched subagent is refused a token write even when an
    * authorizing skill invocation is present on the most recent user turn"). Claude Code computes
-   * this mechanically (see tailIsCurrentlySidechain below); Antigravity subagents run in isolated
-   * conversations with their own conversationId and separate transcript containing only the
-   * dispatched task prompt (which does not start with /file-issue or /design-issue), so
-   * isOwnSessionUserTurnBoundary never matches a parent turn and the scan denies it in practice.
+   * this mechanically (see tailIsCurrentlySidechain below). Antigravity cannot compute it from the
+   * transcript — a subagent's opening prompt is filed in the same `<USER_REQUEST>` wrapper as a
+   * person's turn — so scripts/write_issue_approval_token.ts decides it from the subagent record
+   * the surface writes when it spawns one (isAntigravitySubagentConversation).
    */
   isSubagentInvocation: boolean;
 }

@@ -5173,3 +5173,67 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
   assertStringIncludes(summary, "• Out of State (1):");
   assertStringIncludes(summary, "- Raleigh Pour House (Raleigh, NC)");
 });
+
+Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion reason, never by an old send date or a missing email (#1103)", () => {
+  const now = new Date("2026-09-22T12:00:00Z");
+  const summary = formatExcludedAuditSummary([
+    {
+      _id: "hold",
+      name: "Durty Bull Brewing Company",
+      email: "booking@durtybull.com",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+      statusBadge: "[Seasonal Hold: Jan 2027]",
+      sentAt: "2026-07-24T12:00:00Z",
+    },
+    {
+      _id: "far",
+      name: "Far Away Tavern",
+      city: "Asheville",
+      usState: "NC",
+      email: "",
+      isExcluded: true,
+      exclusionReason: "outside-target-area",
+      statusBadge: "[Outside Target Area]",
+      sentAt: "2026-03-01T12:00:00Z",
+    },
+    {
+      _id: "badge-only",
+      name: "Badge Only Brewing",
+      email: "booking@badgeonly.com",
+      isExcluded: true,
+      statusBadge: "[Seasonal Hold: Feb 2027]",
+      lastSentDate: "2026-09-20T12:00:00Z",
+    },
+    {
+      _id: "old-send",
+      name: "Old Send Hall",
+      email: "booking@oldsend.com",
+      isExcluded: true,
+      resumeBooking: "2027-01-15T00:00:00Z",
+      sentAt: "2026-07-24T12:00:00Z",
+    },
+    {
+      _id: "recent-send",
+      name: "Recent Send Hall",
+      email: "booking@recentsend.com",
+      isExcluded: true,
+      sentAt: "2026-09-20T12:00:00Z",
+    },
+  ], now);
+
+  assertEquals(
+    summary,
+    [
+      "Excluded Candidate Audit Summary (5 total):",
+      "  • Active Cooldowns (1):",
+      "    - Recent Send Hall (Sent Sep 20)",
+      "  • Seasonal Holds (3):",
+      "    - Badge Only Brewing (Feb 2027)",
+      "    - Durty Bull Brewing Company (Jan 2027)",
+      "    - Old Send Hall (Jan 2027)",
+      "  • Outside Target Area (1):",
+      "    - Far Away Tavern (Asheville, NC)",
+    ].join("\n"),
+  );
+});

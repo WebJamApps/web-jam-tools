@@ -1029,18 +1029,68 @@ export function formatCandidateBreakdown(candidates: CandidateVenue[]): string {
   return `Backend returned ${b.total} total venues evaluated (${parts.join(", ")}).`;
 }
 
-function classifyExcludedCandidate(c: CandidateVenue): { category: string; line: string } {
-  const reason = c.exclusionReason || "";
+const RECORDED_REASON_CATEGORY: Record<string, string> = {
+  "gig-spacing": "Gig Spacing Conflicts",
+  "cooldown": "Active Cooldowns",
+  "seasonal-hold": "Seasonal Holds",
+  "direct-chat": "Direct Chat Active",
+  "no-booking-email": "No Booking Email",
+  "outside-target-area": "Outside Target Area",
+  "out-of-state": "Out of State",
+};
+
+const BADGE_CATEGORY: Array<[string, string]> = [
+  ["Gig Spacing", "Gig Spacing Conflicts"],
+  ["Spacing:", "Gig Spacing Conflicts"],
+  ["Cooldown", "Active Cooldowns"],
+  ["Seasonal Hold", "Seasonal Holds"],
+  ["Hold:", "Seasonal Holds"],
+  ["Direct Chat", "Direct Chat Active"],
+  ["No Booking Email", "No Booking Email"],
+  ["Outside Target Area", "Outside Target Area"],
+  ["Out of State", "Out of State"],
+];
+
+const COOLDOWN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The audit category for an excluded venue. Its recorded exclusion reason decides, then its status
+ * badge — the two the candidate table printed beside this summary shows — and only when neither
+ * names a category do its date fields, so the summary never files a venue differently from the
+ * table: a seasonal hold pitched months ago stays a seasonal hold, not an active cooldown. A bare
+ * `sentAt` counts as a cooldown only inside the same 7-day window identifyCandidateBadge uses.
+ */
+function excludedCategory(c: CandidateVenue, nowMs: number): string {
+  for (const recorded of [c.exclusionReason, c.reason?.exclusionReason]) {
+    if (recorded && RECORDED_REASON_CATEGORY[recorded]) return RECORDED_REASON_CATEGORY[recorded];
+  }
+  for (const badge of [c.statusBadge, c.reason?.statusBadge, c.reason?.exclusionReason]) {
+    if (!badge) continue;
+    const hit = BADGE_CATEGORY.find(([text]) => badge.includes(text));
+    if (hit) return hit[1];
+  }
+  if (c.conflictingGigDate) return "Gig Spacing Conflicts";
+  const sentAt = c.sentAt ? new Date(c.sentAt).getTime() : NaN;
+  const sentInWindow = !Number.isNaN(sentAt) && nowMs - sentAt >= 0 &&
+    nowMs - sentAt <= COOLDOWN_WINDOW_MS;
+  if (c.cooldownSentDate || c.cooldownRepliedDate || c.lastSentDate || sentInWindow) {
+    return "Active Cooldowns";
+  }
+  if (c.resumeBooking || c.bookedThrough) return "Seasonal Holds";
+  if (c.activeDirectChat || c.reason?.activeDirectChat) return "Direct Chat Active";
+  if (!c.email || !c.email.trim()) return "No Booking Email";
+  return "Other Excluded";
+}
+
+function classifyExcludedCandidate(
+  c: CandidateVenue,
+  nowMs: number,
+): { category: string; line: string } {
   const badge = c.statusBadge || "";
+  const category = excludedCategory(c, nowMs);
 
   // 1. Gig Spacing Conflicts
-  if (
-    reason === "gig-spacing" ||
-    badge.includes("Gig Spacing") ||
-    badge.includes("Spacing:") ||
-    c.reason?.exclusionReason?.includes("Gig Spacing") ||
-    Boolean(c.conflictingGigDate)
-  ) {
+  if (category === "Gig Spacing Conflicts") {
     let detail = "";
     if (c.conflictingGigDate) {
       detail = `${formatMonthDayYear(c.conflictingGigDate)} Show`;
@@ -1060,11 +1110,7 @@ function classifyExcludedCandidate(c: CandidateVenue): { category: string; line:
   }
 
   // 2. Active Cooldowns
-  if (
-    reason === "cooldown" ||
-    badge.includes("Cooldown") ||
-    Boolean(c.cooldownSentDate || c.cooldownRepliedDate || c.lastSentDate || c.sentAt)
-  ) {
+  if (category === "Active Cooldowns") {
     let detail = "";
     if (badge.includes("Cooldown Active:")) {
       detail = badge.replace(/^\[Cooldown Active:\s*/i, "").replace(/\]$/, "").trim();
@@ -1084,12 +1130,7 @@ function classifyExcludedCandidate(c: CandidateVenue): { category: string; line:
   }
 
   // 3. Seasonal Holds
-  if (
-    reason === "seasonal-hold" ||
-    badge.includes("Seasonal Hold") ||
-    badge.includes("Hold:") ||
-    Boolean(c.resumeBooking || c.bookedThrough)
-  ) {
+  if (category === "Seasonal Holds") {
     let detail = "";
     if (badge.includes("Seasonal Hold:")) {
       detail = badge.replace(/^\[Seasonal Hold:\s*/i, "").replace(/\]$/, "").trim();
@@ -1109,12 +1150,7 @@ function classifyExcludedCandidate(c: CandidateVenue): { category: string; line:
   }
 
   // 4. Direct Chat Active
-  if (
-    reason === "direct-chat" ||
-    badge.includes("Direct Chat") ||
-    c.activeDirectChat ||
-    c.reason?.activeDirectChat
-  ) {
+  if (category === "Direct Chat Active") {
     return {
       category: "Direct Chat Active",
       line: `${c.name} (Direct Chat Active)`,
@@ -1122,11 +1158,7 @@ function classifyExcludedCandidate(c: CandidateVenue): { category: string; line:
   }
 
   // 5. No Booking Email
-  if (
-    reason === "no-booking-email" ||
-    badge.includes("No Booking Email") ||
-    (!c.email || !c.email.trim())
-  ) {
+  if (category === "No Booking Email") {
     return {
       category: "No Booking Email",
       line: `${c.name} (No Booking Email)`,
@@ -1134,10 +1166,7 @@ function classifyExcludedCandidate(c: CandidateVenue): { category: string; line:
   }
 
   // 6. Outside Target Area
-  if (
-    reason === "outside-target-area" ||
-    badge.includes("Outside Target Area")
-  ) {
+  if (category === "Outside Target Area") {
     const loc = c.city ? `${c.city}${c.usState ? `, ${c.usState}` : ""}` : "Outside Target Area";
     return {
       category: "Outside Target Area",
@@ -1146,10 +1175,7 @@ function classifyExcludedCandidate(c: CandidateVenue): { category: string; line:
   }
 
   // 7. Out of State
-  if (
-    reason === "out-of-state" ||
-    badge.includes("Out of State")
-  ) {
+  if (category === "Out of State") {
     const loc = c.city ? `${c.city}${c.usState ? `, ${c.usState}` : ""}` : "Out of State";
     return {
       category: "Out of State",
@@ -1170,7 +1196,10 @@ function classifyExcludedCandidate(c: CandidateVenue): { category: string; line:
  * Seasonal Holds, Direct Chat Active, No Booking Email, Outside Target Area, Out of State)
  * and lists venue names alongside their specific exclusion notes or dates.
  */
-export function formatExcludedAuditSummary(excludedCandidates: CandidateVenue[]): string {
+export function formatExcludedAuditSummary(
+  excludedCandidates: CandidateVenue[],
+  now: Date = new Date(),
+): string {
   if (!excludedCandidates || excludedCandidates.length === 0) {
     return "Excluded Candidate Audit Summary: None";
   }
@@ -1192,7 +1221,7 @@ export function formatExcludedAuditSummary(excludedCandidates: CandidateVenue[])
   }
 
   for (const c of excludedCandidates) {
-    const { category, line } = classifyExcludedCandidate(c);
+    const { category, line } = classifyExcludedCandidate(c, now.getTime());
     const list = grouped.get(category);
     if (list) {
       list.push(line);

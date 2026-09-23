@@ -32,7 +32,11 @@
 import { dirname } from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
 import { type ApprovalToken, defaultTokenPath } from "../hooks/lib/check_issue_approval_token.ts";
-import { loadTranscript, type TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
+import {
+  conversationIdFromTranscriptPath,
+  loadTranscript,
+  type TranscriptEntry,
+} from "../hooks/lib/select_transcript_entry.ts";
 import {
   checkTokenWriteAuthorization,
   tailIsCurrentlySidechain,
@@ -189,13 +193,14 @@ export async function resolveClaudeCodeWriteContext(
  *
  * Known limitation, stated rather than silently assumed away: this is a shared, cross-session log.
  * Under genuine concurrent agy activity the last line could belong to a different session's call
- * instead, and Antigravity's own transcript shape carries no in-band signal distinguishing a
- * subagent's turn from a person's (web-jam-tools#841 non-goals) — so unlike
- * resolveClaudeCodeWriteContext, this cannot compute isSubagentInvocation directly and always
- * returns false for it. However, on Antigravity each subagent runs in an isolated conversation with
- * its own unique conversationId and its own separate transcript containing only the dispatched
- * prompt, so checkTokenWriteAuthorization's own-conversation filter and bounded scan deny the write
- * in practice without needing a shared-transcript sidechain flag.
+ * instead.
+ *
+ * Antigravity's transcript carries no in-band signal distinguishing a subagent's turn from a
+ * person's: a subagent's opening prompt, composed by its parent, is filed as USER_INPUT /
+ * USER_EXPLICIT inside the same `<USER_REQUEST>` wrapper as a person's turn, so a prompt opening
+ * "File an issue for …" would otherwise authorize a token the subagent wrote for itself.
+ * isSubagentInvocation is therefore decided from outside the transcript, by
+ * isAntigravitySubagentConversation().
  */
 export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteContext | null> {
   const recordPath = Deno.env.get("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
@@ -224,9 +229,71 @@ export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteCon
     } catch {
       return null;
     }
-    return { entries, ownConversationId: conversationId, isSubagentInvocation: false };
+    return {
+      entries,
+      ownConversationId: conversationId,
+      isSubagentInvocation: await antigravityTranscriptIsSubagent(transcriptPath, conversationId),
+    };
   }
   return null;
+}
+
+/**
+ * Antigravity records every subagent it starts at
+ * `<brain>/<parent conversationId>/.system_generated/subagents/<child conversationId>.json`. The
+ * surface writes that file itself when it spawns the subagent, before the subagent's first tool
+ * call, so a conversation is a subagent exactly when another conversation's subagents directory
+ * names it.
+ *
+ * Returns null when the brain directory cannot be read, which callers treat as a subagent: "could
+ * not look" must never pass as "not a subagent".
+ */
+export async function isAntigravitySubagentConversation(
+  brainRoot: string,
+  conversationId: string,
+): Promise<boolean | null> {
+  if (!conversationId) return null;
+  try {
+    for await (const entry of Deno.readDir(brainRoot)) {
+      if (!entry.isDirectory || entry.name === conversationId) continue;
+      try {
+        await Deno.stat(
+          `${brainRoot}/${entry.name}/.system_generated/subagents/${conversationId}.json`,
+        );
+        return true;
+      } catch (err) {
+        if (err instanceof Deno.errors.NotFound) continue;
+        return null;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return false;
+}
+
+/** The brain directory an Antigravity transcript path sits under, or null when it is not one. */
+export function antigravityBrainRoot(transcriptPath: string): string | null {
+  const match = transcriptPath.match(/^(.*\/brain)\/[^/]+\//);
+  return match ? match[1] : null;
+}
+
+/**
+ * True when the Antigravity conversation behind this transcript is a subagent, or when that cannot
+ * be established — a path outside the brain layout, or an unreadable brain directory, fails closed.
+ */
+async function antigravityTranscriptIsSubagent(
+  transcriptPath: string,
+  conversationId: string,
+): Promise<boolean> {
+  const brainRoot = antigravityBrainRoot(transcriptPath);
+  if (!brainRoot) return true;
+  const ids = new Set([conversationId, conversationIdFromTranscriptPath(transcriptPath)]);
+  for (const id of ids) {
+    if (!id) continue;
+    if ((await isAntigravitySubagentConversation(brainRoot, id)) !== false) return true;
+  }
+  return false;
 }
 
 /**
@@ -247,10 +314,13 @@ export async function resolveWriteContext(
       entries = [];
     }
     const ownConversationId = options.conversationId || options.sessionId || null;
+    const isAntigravityTranscript = antigravityBrainRoot(options.transcriptPath) !== null;
     return {
       entries,
       ownConversationId,
-      isSubagentInvocation: tailIsCurrentlySidechain(entries),
+      isSubagentInvocation: tailIsCurrentlySidechain(entries) ||
+        (isAntigravityTranscript &&
+          await antigravityTranscriptIsSubagent(options.transcriptPath, ownConversationId || "")),
     };
   }
 
