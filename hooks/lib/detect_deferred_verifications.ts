@@ -18,8 +18,6 @@ export const FORBIDDEN_DEFERRED_VERIFICATION_PHRASES = [
   "assumed but not confirmed",
 ];
 
-export const DEFERRED_VERIFICATION_PHRASES = FORBIDDEN_DEFERRED_VERIFICATION_PHRASES;
-
 export function stripBlockquotes(text: string): string {
   const blank = (match: string) => " ".repeat(match.length);
   return text.replace(/^[ \t]*>.*$/gm, blank);
@@ -75,10 +73,6 @@ export function findDeferredVerifications(text: string): string[] {
   }
 
   return offenders;
-}
-
-export function detectDeferredVerifications(text: string): string[] {
-  return findDeferredVerifications(text);
 }
 
 if (import.meta.main) {

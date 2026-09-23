@@ -21,6 +21,7 @@ const MODEL_LABELS_PATH = new URL(
 
 interface RunResult {
   code: number;
+  stdout: string;
   stderr: string;
 }
 
@@ -36,8 +37,12 @@ async function runHook(payload: Record<string, unknown>): Promise<RunResult> {
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(input));
   await writer.close();
-  const { code, stderr } = await child.output();
-  return { code, stderr: new TextDecoder().decode(stderr) };
+  const { code, stdout, stderr } = await child.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
 }
 
 function bashCall(command: string): Record<string, unknown> {
@@ -1467,15 +1472,16 @@ Deno.test("web-jam-tools#1115 (case 15): unreadable body file proceeds and state
     ),
   );
   assertEquals(res.code, 0, res.stderr);
+  const out = JSON.parse(res.stdout);
+  assertEquals(out.hookSpecificOutput.hookEventName, "PreToolUse");
+  assertEquals(out.hookSpecificOutput.additionalContext.includes("could not check the body"), true);
 });
 
-Deno.test("web-jam-tools#1115: gh issue edit with deferred verification phrase in body is denied", async () => {
+Deno.test("web-jam-tools#1115: gh issue edit is not checked for deferred verification phrases (creates only)", async () => {
   const res = await runHook(
     bashCall(`gh issue edit 123 --body "This helper must be verified before removal"`),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
-  assertEquals(res.stderr.includes("must be verified before removal"), true);
+  assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("web-jam-tools#1115: MCP issue_write create with deferred verification phrase is denied", async () => {
@@ -1493,7 +1499,7 @@ Deno.test("web-jam-tools#1115: MCP issue_write create with deferred verification
   assertEquals(res.stderr.includes("needs to be verified"), true);
 });
 
-Deno.test("web-jam-tools#1115: MCP issue_write update with deferred verification phrase is denied", async () => {
+Deno.test("web-jam-tools#1115: MCP issue_write update is not checked for deferred verification phrases (creates only)", async () => {
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "update",
@@ -1501,9 +1507,7 @@ Deno.test("web-jam-tools#1115: MCP issue_write update with deferred verification
       body: "Database migration must be verified before removal.",
     }),
   );
-  assertEquals(res.code, 2);
-  assertBlocked(res.stderr);
-  assertEquals(res.stderr.includes("must be verified before removal"), true);
+  assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("web-jam-tools#1115: MCP issue_write create with Needs Design label is allowed", async () => {

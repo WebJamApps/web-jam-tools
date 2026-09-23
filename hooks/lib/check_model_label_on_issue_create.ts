@@ -585,10 +585,9 @@ async function scanIssueCommandSegments(
       const res = decide(labels, modelLabels, escalationReason, cmdForMessage, "cli");
       if (res !== "PASS") return res;
       const { body, readError } = extractBodyDetails(createArgs);
-      if (readError) {
-        return `PASS: could not check the body (${readError})`;
-      }
-      if (body && !isEpicType(toolInput, createArgs)) {
+      // An unreadable body skips only the body checks; the duplicate search below still runs.
+      const bodyNote = readError ? `PASS: could not check the body (${readError})` : "PASS";
+      if (!readError && body && !isEpicType(toolInput, createArgs)) {
         const pointers = findUnresolvableIssuePointers(body);
         if (pointers.length) {
           return `DENY:unresolvable pointer phrase '${
@@ -606,7 +605,7 @@ async function scanIssueCommandSegments(
       }
       const dedupRes = await runDuplicateCheck(createArgs, runner);
       if (dedupRes !== "PASS") return dedupRes;
-      return "PASS";
+      return bodyNote;
     }
 
     const editArgs = findGhIssueEditArgs(scTokens);
@@ -624,14 +623,6 @@ async function scanIssueCommandSegments(
           return `DENY:unresolvable pointer phrase '${
             pointers[0]
           }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
-        }
-        if (!hasNeedsDesignLabel(toolInput, scTokens)) {
-          const deferred = findDeferredVerifications(body);
-          if (deferred.length) {
-            return `DENY:deferred verification phrase '${
-              deferred[0]
-            }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
-          }
         }
       }
       return "PASS";
@@ -728,14 +719,6 @@ export async function checkModelLabelOnIssueCreate(
             pointers[0]
           }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
         }
-        if (!hasNeedsDesignLabel(toolInput)) {
-          const deferred = findDeferredVerifications(body);
-          if (deferred.length) {
-            return `DENY:deferred verification phrase '${
-              deferred[0]
-            }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
-          }
-        }
       }
       return "PASS";
     }
@@ -771,9 +754,10 @@ export async function checkModelLabelOnIssueCreate(
     const res = decide(rawLabels as string[], modelLabels, escalationReason, undefined, "mcp");
     if (res !== "PASS") return res;
     const rawBody = toolInput.body;
-    if (rawBody !== undefined && typeof rawBody !== "string") {
-      return "PASS: could not check the body (invalid body payload)";
-    }
+    // An invalid body skips only the body checks; the duplicate search below still runs.
+    const bodyNote = rawBody !== undefined && typeof rawBody !== "string"
+      ? "PASS: could not check the body (invalid body payload)"
+      : "PASS";
     const body = typeof rawBody === "string" ? rawBody : "";
     if (body && !isEpicType(toolInput)) {
       const pointers = findUnresolvableIssuePointers(body);
@@ -816,7 +800,7 @@ export async function checkModelLabelOnIssueCreate(
         return `DENY:couldn't search ${dedupRes.repoFull} for duplicate open issues (the search failed — not a duplicate finding). Supply a non-empty 'dedup_override_reason' property to override.`;
       }
     }
-    return "PASS";
+    return bodyNote;
   }
 
   return "PASS";
