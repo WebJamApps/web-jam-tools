@@ -4,7 +4,12 @@
 // Consumes the Gate 2 plan-table parser (`./plan_table.ts`, web-jam-tools#795) and validates the
 // value in each cell: missing values, unknown model tiers, unknown repos, personal-name title
 // prefixes, out-of-range priorities, unpaired/composite `Josh` manual rows, uncited cross-repo
-// children, and unproven `Tests` cells. Report-only -- writes nothing, makes no GitHub call.
+// children, and unproven `Tests` cells. Report-only -- writes nothing.
+//
+// It also checks the plan's `## Needs Design label removals` list (web-jam-tools#1131 "skills/design-issue: a target issue's requirement can be narrowed and parked as not resolved at Gate 2 instead of designed before Gate 1"): a removal
+// whose "Not resolved" part quotes or narrows a directive line of the same issue's body fails,
+// because that requirement was cut down instead of designed. That check reads each cited issue's
+// body with a read-only `gh issue view`, and fails closed when a body cannot be read.
 //
 // Canonical vocabularies are read from source at runtime, never hardcoded:
 //   - Model tiers: `skills/fix-labels/labels.yaml`, via the existing loader in
@@ -27,7 +32,7 @@ import { ACTIVE_REPOS } from "../flash-issues/types.ts";
 import {
   type MalformedPlanTableRow,
   type ParsedPlanTable,
-  parsePlanTableFromFile,
+  parsePlanTable,
   PLAN_TABLE_HEADER,
   type PlanTableRow,
 } from "./plan_table.ts";
@@ -59,7 +64,14 @@ export interface LintPlanOptions {
   schema?: Schema;
   /** Canonical active-repo vocabulary. Defaults to `ACTIVE_REPOS`. */
   activeRepos?: readonly string[];
+  /** Reads an issue's body for the `Needs Design` removal check. Defaults to a read-only
+   * `gh issue view`; tests inject a stub. Throws when the body cannot be read. */
+  fetchIssueBody?: IssueBodyFetcher;
 }
+
+/** Returns the body of `repo#number`, or throws when it cannot be read. `repo` is either a bare
+ * WebJamApps repo name or an `owner/repo` slug, exactly as cited in the plan. */
+export type IssueBodyFetcher = (repo: string, number: number) => Promise<string>;
 
 // Column indices resolved from PLAN_TABLE_HEADER (never hardcoded against reordering).
 const COL_TITLE = PLAN_TABLE_HEADER.indexOf("Proposed title");
@@ -398,24 +410,190 @@ export async function loadCanonicalSchema(
   return await loadSchema(schemaPath);
 }
 
-/** Reads a design document from disk, parses its Gate 2 plan table, and validates every cell. */
+/** Reads a design document from disk, parses its Gate 2 plan table, validates every cell, and
+ * checks its `Needs Design` label removals against the removed issues' own bodies. */
 export async function lintPlanTableFile(
   filePath: string,
   options?: LintPlanOptions,
 ): Promise<LintPlanResult> {
-  const parsed = await parsePlanTableFromFile(filePath);
+  const markdown = await Deno.readTextFile(filePath);
+  const parsed = parsePlanTable(markdown);
   if (parsed === null) {
     throw new Error(`No Gate 2 plan table found in ${filePath}`);
   }
 
   const schema = options?.schema ?? await loadCanonicalSchema();
   const violations = validatePlanTable(parsed, { schema, activeRepos: options?.activeRepos });
+  violations.push(
+    ...await checkNeedsDesignRemovals(markdown, options?.fetchIssueBody ?? ghIssueBody),
+  );
 
   return {
     docPath: filePath,
     valid: violations.length === 0,
     violations,
   };
+}
+
+// --- Needs Design removals: "Not resolved" must never narrow the issue's own directive ---
+// (web-jam-tools#1131). Real shape, from the Gate 2 plan that caused it:
+//   ## Needs Design label removals
+//   2. web-jam-tools#485 "new skill record-song" — ... Not resolved: "setup things based on
+//      previous recordings" is limited to the know-how list the design names (...). Remove the label?
+
+/** One item of the plan's `Needs Design label removals` list. */
+export interface NeedsDesignRemoval {
+  /** 1-based source line of the item's first line. */
+  line: number;
+  /** Repo as cited: a bare WebJamApps repo name or an `owner/repo` slug. */
+  repo: string;
+  number: number;
+  /** The text after "Not resolved:", up to "Remove the label?"; `null` when the item has none. */
+  notResolved: string | null;
+}
+
+const REMOVALS_HEADING = /^(#{1,6})\s+Needs Design label removals?\b/i;
+const ANY_HEADING = /^(#{1,6})\s/;
+const LIST_ITEM = /^\s*(?:\d+[.)]|[-*])\s+/;
+const ISSUE_CITATION = /([\w.-]+(?:\/[\w.-]+)?)#(\d+)/;
+const NOT_RESOLVED = /\bNot resolved:\s*([\s\S]*?)\s*(?:Remove the label\?|$)/i;
+
+/** A "Not resolved" part that resolves nothing is the only kind that can never narrow anything. */
+const NOTHING_VALUES = new Set(["nothing", "none", "n/a"]);
+
+/** A quoted fragment this many words long or longer that appears in a directive line is a quote
+ * of that line. Shorter quotes ("the", "setup") are too common to attribute. */
+const MIN_QUOTE_WORDS = 3;
+/** An unquoted run of this many consecutive words shared with a directive line is a paraphrase
+ * that narrows it. Four words keeps ordinary shared phrases from matching while still catching a
+ * requirement restated with a qualifier bolted on. */
+const MIN_SHARED_RUN_WORDS = 4;
+
+/** Parses the `Needs Design label removals` section's list items. Returns `[]` when the plan has
+ * no such section. A list item continues onto following lines until the next item or heading. */
+export function parseNeedsDesignRemovals(markdown: string): NeedsDesignRemoval[] {
+  const lines = markdown.split(/\r?\n/);
+  const items: { line: number; text: string }[] = [];
+  let sectionLevel = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const heading = raw.match(ANY_HEADING);
+    if (heading) {
+      if (REMOVALS_HEADING.test(raw)) sectionLevel = heading[1].length;
+      else if (sectionLevel && heading[1].length <= sectionLevel) sectionLevel = 0;
+      continue;
+    }
+    if (!sectionLevel) continue;
+    if (LIST_ITEM.test(raw)) {
+      items.push({ line: i + 1, text: raw.replace(LIST_ITEM, "") });
+    } else if (items.length > 0 && raw.trim() !== "") {
+      items[items.length - 1].text += ` ${raw.trim()}`;
+    }
+  }
+
+  const removals: NeedsDesignRemoval[] = [];
+  for (const item of items) {
+    const citation = item.text.match(ISSUE_CITATION);
+    if (!citation) continue;
+    const notResolved = item.text.match(NOT_RESOLVED);
+    removals.push({
+      line: item.line,
+      repo: citation[1],
+      number: Number(citation[2]),
+      notResolved: notResolved ? notResolved[1].trim() : null,
+    });
+  }
+  return removals;
+}
+
+/** Lowercased words with markdown and punctuation stripped, so quoting style never hides a match. */
+function words(text: string): string[] {
+  return text.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+}
+
+function containsRun(haystack: string[], needle: string[]): boolean {
+  for (let i = 0; i + needle.length <= haystack.length; i++) {
+    if (needle.every((w, j) => haystack[i + j] === w)) return true;
+  }
+  return false;
+}
+
+function sharesRun(a: string[], b: string[], runLength: number): boolean {
+  for (let i = 0; i + runLength <= a.length; i++) {
+    if (containsRun(b, a.slice(i, i + runLength))) return true;
+  }
+  return false;
+}
+
+/** Returns the directive line of `issueBody` that `notResolved` quotes or narrows, or `null`.
+ * Every non-blank body line is a directive line: the issue body is the requirement, so no line of
+ * it may be cut down in a "Not resolved" part instead of being designed. */
+export function findNarrowedDirective(notResolved: string, issueBody: string): string | null {
+  const directives = issueBody.split(/\r?\n/).map((l) => l.trim()).filter((l) => words(l).length);
+  const quotes = [...notResolved.matchAll(/["“]([^"”]+)["”]/g)]
+    .map((m) => words(m[1]))
+    .filter((q) => q.length >= MIN_QUOTE_WORDS);
+  const text = words(notResolved);
+  for (const directive of directives) {
+    const directiveWords = words(directive);
+    if (quotes.some((q) => containsRun(directiveWords, q))) return directive;
+    if (sharesRun(text, directiveWords, MIN_SHARED_RUN_WORDS)) return directive;
+  }
+  return null;
+}
+
+function isNothing(notResolved: string): boolean {
+  return NOTHING_VALUES.has(notResolved.toLowerCase().replace(/[.\s`*_]/g, ""));
+}
+
+/** Checks every `Needs Design` removal in the plan: a "Not resolved" part that quotes or narrows a
+ * directive line of that issue's own body fails, and a body that cannot be read fails closed. */
+export async function checkNeedsDesignRemovals(
+  markdown: string,
+  fetchIssueBody: IssueBodyFetcher,
+): Promise<PlanTableViolation[]> {
+  const violations: PlanTableViolation[] = [];
+  for (const removal of parseNeedsDesignRemovals(markdown)) {
+    if (removal.notResolved === null || isNothing(removal.notResolved)) continue;
+    const cited = `${removal.repo}#${removal.number}`;
+    let body: string;
+    try {
+      body = await fetchIssueBody(removal.repo, removal.number);
+    } catch (err) {
+      violations.push({
+        rule: "needs-design-issue-unreadable",
+        line: removal.line,
+        message: `Could not read ${cited}'s body to check its "Not resolved" part (` +
+          `${err instanceof Error ? err.message : String(err)}) -- refusing rather than passing`,
+      });
+      continue;
+    }
+    const directive = findNarrowedDirective(removal.notResolved, body);
+    if (directive) {
+      violations.push({
+        rule: "needs-design-directive-narrowed",
+        line: removal.line,
+        message: `${cited}'s "Not resolved" part quotes or narrows its own directive line ` +
+          `"${directive}" -- design that directive before Gate 1, or put the narrowing to Josh ` +
+          `by name, instead of parking it at Gate 2`,
+      });
+    }
+  }
+  return violations;
+}
+
+/** Default `IssueBodyFetcher`: a read-only `gh issue view`. Throws on any non-zero exit. */
+export async function ghIssueBody(repo: string, number: number): Promise<string> {
+  const slug = repo.includes("/") ? repo : `WebJamApps/${repo}`;
+  const { code, stdout, stderr } = await new Deno.Command("gh", {
+    args: ["issue", "view", String(number), "--repo", slug, "--json", "body", "-q", ".body"],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  if (code !== 0) {
+    throw new Error(new TextDecoder().decode(stderr).trim() || `gh exited ${code}`);
+  }
+  return new TextDecoder().decode(stdout);
 }
 
 /**
@@ -448,8 +626,11 @@ Validates the Gate 2 plan table's cell values in a design document:
   - a composite Josh-labeled manual row (doc review + live walkthrough)
   - a cross-repo child not cited as repo#number "title"
   - a Tests cell with no statement of what proves the issue
+  - a "Needs Design label removals" item whose "Not resolved" part quotes or
+    narrows a directive line of that issue's own body (read with gh; a body
+    that cannot be read fails the check)
 
-Report-only. Writes nothing, makes no GitHub call.
+Report-only. Writes nothing; its only GitHub call is a read-only gh issue view.
 
 Arguments:
   <plan.md>       Path to design document markdown file containing the plan table

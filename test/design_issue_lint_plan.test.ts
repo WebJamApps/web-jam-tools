@@ -7,10 +7,14 @@
 // cells, deno.json task registration, and the four repo-wide gates. One test per acceptance-
 // criteria case (13 cases, web-jam-tools#796).
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { parsePlanTable } from "../src/design-issue/plan_table.ts";
 import {
+  checkNeedsDesignRemovals,
+  findNarrowedDirective,
+  type IssueBodyFetcher,
   lintPlanTableFile,
+  parseNeedsDesignRemovals,
   type PlanTableViolation,
   runLintPlanCli,
   validatePlanTable,
@@ -417,4 +421,114 @@ Deno.test("runLintPlanCli: document with violations exits with code 1", async ()
   } finally {
     await Deno.remove(tmpFile);
   }
+});
+
+// --- Needs Design removals: "Not resolved" must not narrow the issue's own directive
+// (web-jam-tools#1131). The fixtures reproduce the Gate 2 plan that parked part of
+// web-jam-tools#485 "new skill record-song" as "not resolved" instead of designing it. ---
+
+const ISSUE_485_BODY = "new skill record-song\n" +
+  "knows how to use reaper mcp\n" +
+  "knows how to setup things based on previous recordings\n";
+const NARROWED_FIXTURE =
+  new URL("./fixtures/design-issue/plan-needs-design-narrowed.md", import.meta.url).pathname;
+const RESOLVED_FIXTURE =
+  new URL("./fixtures/design-issue/plan-needs-design-resolved.md", import.meta.url).pathname;
+
+function stubBodies(bodies: Record<string, string>): IssueBodyFetcher {
+  return (repo, number) => {
+    const body = bodies[`${repo}#${number}`];
+    return body === undefined
+      ? Promise.reject(new Error(`no such issue ${repo}#${number}`))
+      : Promise.resolve(body);
+  };
+}
+
+function removalsDoc(item: string): string {
+  return `${planTableDoc([EPIC_ROW])}\n## Needs Design label removals\n\n1. ${item}\n`;
+}
+
+Deno.test("#1131: parseNeedsDesignRemovals reads the issue and its Not resolved part", async () => {
+  const removals = parseNeedsDesignRemovals(await Deno.readTextFile(NARROWED_FIXTURE));
+  assertEquals(removals.length, 1);
+  assertEquals(removals[0].repo, "web-jam-tools");
+  assertEquals(removals[0].number, 485);
+  assertEquals(
+    removals[0].notResolved?.startsWith('"setup things based on previous recordings" is limited'),
+    true,
+  );
+});
+
+Deno.test("#1131: parseNeedsDesignRemovals joins a wrapped item and stops at the next heading", () => {
+  const removals = parseNeedsDesignRemovals(
+    "## Needs Design label removals\n\n" +
+      '1. WebJamApps/JaMmusic#12 "t" — done.\n   Not resolved: the Android\n   surface. Remove the label?\n' +
+      "\n## Dependency chain\n\n1. web-jam-tools#9 not a removal. Not resolved: x\n",
+  );
+  assertEquals(removals.length, 1);
+  assertEquals(removals[0].repo, "WebJamApps/JaMmusic");
+  assertEquals(removals[0].notResolved, "the Android surface.");
+});
+
+Deno.test("#1131: refuses a removal whose Not resolved part quotes the issue's directive line", async () => {
+  const result = await lintPlanTableFile(NARROWED_FIXTURE, {
+    schema: TEST_SCHEMA,
+    fetchIssueBody: stubBodies({ "web-jam-tools#485": ISSUE_485_BODY }),
+  });
+  assertEquals(result.valid, false);
+  const [v] = findRule(result.violations, "needs-design-directive-narrowed");
+  assertEquals(v.line, 11);
+  assertStringIncludes(v.message, "web-jam-tools#485");
+  assertStringIncludes(v.message, '"knows how to setup things based on previous recordings"');
+});
+
+Deno.test("#1131: refuses a removal that narrows a directive line without quoting it", async () => {
+  const violations = await checkNeedsDesignRemovals(
+    removalsDoc(
+      'web-jam-tools#485 "new skill record-song" — done. Not resolved: setup things based on ' +
+        "previous recordings covers track layout only. Remove the label?",
+    ),
+    stubBodies({ "web-jam-tools#485": ISSUE_485_BODY }),
+  );
+  assertEquals(violations.length, 1);
+  assertEquals(violations[0].rule, "needs-design-directive-narrowed");
+});
+
+Deno.test("#1131: passes the same plan when Not resolved says nothing", async () => {
+  let fetched = 0;
+  const result = await lintPlanTableFile(RESOLVED_FIXTURE, {
+    schema: TEST_SCHEMA,
+    fetchIssueBody: () => {
+      fetched++;
+      return Promise.resolve(ISSUE_485_BODY);
+    },
+  });
+  assertEquals(result.violations, []);
+  assertEquals(fetched, 0);
+});
+
+Deno.test("#1131: passes a Not resolved part that names nothing from the issue's directive", async () => {
+  const violations = await checkNeedsDesignRemovals(
+    removalsDoc(
+      'web-jam-tools#485 "new skill record-song" — done. Not resolved: the agy surface\'s ' +
+        "REAPER bridge, which a later design run owns. Remove the label?",
+    ),
+    stubBodies({ "web-jam-tools#485": ISSUE_485_BODY }),
+  );
+  assertEquals(violations, []);
+});
+
+Deno.test("#1131: fails closed, naming the issue, when its body cannot be read", async () => {
+  const violations = await checkNeedsDesignRemovals(
+    removalsDoc('web-jam-tools#485 "new skill record-song" — done. Not resolved: something.'),
+    () => Promise.reject(new Error("HTTP 401: Bad credentials")),
+  );
+  assertEquals(violations.length, 1);
+  assertEquals(violations[0].rule, "needs-design-issue-unreadable");
+  assertStringIncludes(violations[0].message, "web-jam-tools#485");
+  assertStringIncludes(violations[0].message, "Bad credentials");
+});
+
+Deno.test("#1131: findNarrowedDirective ignores quotes shorter than three words", () => {
+  assertEquals(findNarrowedDirective('the "reaper mcp" bridge is deferred', ISSUE_485_BODY), null);
 });
