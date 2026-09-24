@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.38.54",
+  "version": "1.38.57",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "sheet-music:generate": "deno run --allow-read --allow-write src/sheet-music/generate_docx.ts",
@@ -65,6 +65,8 @@
     "memory-index": "deno run --allow-read --allow-write --allow-env src/memory-index/cli.ts",
     "memory-cleanup:scan": "deno run --allow-read --allow-run=gh --allow-env=HOME src/memory-cleanup/cli.ts",
     "memory:consume": "bash scripts/consume-memory-rules.sh",
+    "update": "bash scripts/update-all.sh",
+    "update:all": "bash scripts/update-all.sh",
     "update:reaper": "bash scripts/reaper-update.sh",
     "monitor:uptime": "deno run --allow-net --allow-env --allow-sys src/uptime/cli.ts",
     "monitor:cron": "deno run --allow-net --allow-env --allow-sys src/uptime/cron.ts"
