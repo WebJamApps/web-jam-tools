@@ -676,9 +676,14 @@ export function parseCharlotteOnTheCheapHtml(
 export async function fetchCharlotteOnTheCheapEvents(
   sourceUrl: string,
   fetchFn: typeof fetch = fetch,
-  _pageLimit?: number,
+  pageLimit?: number,
   sinceDate?: string | Date | null,
 ): Promise<HarvestedVenue[]> {
+  if (pageLimit !== undefined && pageLimit > 1) {
+    console.warn(
+      `Charlotte on the Cheap: only the first events page is read; --pages ${pageLimit} has no effect.`,
+    );
+  }
   let targetUrl = sourceUrl;
   try {
     const parsed = new URL(sourceUrl);
@@ -718,6 +723,11 @@ export const EVENT_PARSER_REGISTRY: Record<string, EventParserFn> = {
   "charlotte-on-the-cheap": fetchCharlotteOnTheCheapEvents,
 };
 
+/** Names every registered parser type, for errors that refuse an unsupported one. */
+function supportedTypesNote(): string {
+  return `Supported types: ${Object.keys(EVENT_PARSER_REGISTRY).join(", ")}.`;
+}
+
 export function registerEventParser(type: string, parser: EventParserFn): void {
   EVENT_PARSER_REGISTRY[type.toLowerCase().trim()] = parser;
 }
@@ -730,6 +740,9 @@ export function getEventParser(
   if (normType in EVENT_PARSER_REGISTRY) {
     return EVENT_PARSER_REGISTRY[normType];
   }
+  // The live sweep history records the `charlotte` metro's Charlotte on the Cheap publication as
+  // the generic `type: "html"`, so that record reaches this parser by its URL. Every other
+  // `html` publication (e.g. Visit Damascus) still has no parser and is refused.
   if (normType === "html" && sourceUrl && /charlotteonthecheap\.com/i.test(sourceUrl)) {
     return fetchCharlotteOnTheCheapEvents;
   }
@@ -746,7 +759,7 @@ export async function harvestEvents(
   const parser = getEventParser(sourceType, sourceUrl);
   if (!parser) {
     throw new Error(
-      `Unsupported publication type '${sourceType}'. Only 'scenethink' is supported.`,
+      `Unsupported publication type '${sourceType}'. ${supportedTypesNote()}`,
     );
   }
   return await parser(sourceUrl, fetchFn, pageLimit, sinceDate);
@@ -799,17 +812,17 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     }
 
     if (!sourceUrl && newestRecord?.publication) {
-      if (!newestRecord.publication.type) {
+      const effectiveType = options.type || newestRecord.publication.type;
+      if (!effectiveType) {
         throw new Error(
-          `Metro '${targetMetro.slug}' has publication '${newestRecord.publication.name}' with missing type. Only 'scenethink' is supported.`,
+          `Metro '${targetMetro.slug}' has publication '${newestRecord.publication.name}' with missing type. Pass --type to choose a parser. ${supportedTypesNote()}`,
         );
       }
       const candidateUrl = newestRecord.publication.api || newestRecord.publication.url;
-      const effectiveType = options.type || newestRecord.publication.type;
       const parser = getEventParser(effectiveType, candidateUrl);
       if (!parser) {
         throw new Error(
-          `Metro '${targetMetro.slug}' has unsupported publication type '${newestRecord.publication.type}'. Only 'scenethink' is supported.`,
+          `Metro '${targetMetro.slug}' has unsupported publication type '${effectiveType}'. ${supportedTypesNote()}`,
         );
       }
       sourceUrl = candidateUrl;
