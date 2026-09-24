@@ -39,6 +39,8 @@ import {
 } from "../src/book-gig/pitch.ts";
 import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
 import {
+  BATCH_CHUNK_SIZE,
+  BatchDispatchError,
   checkGmailReplies,
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
@@ -1789,6 +1791,347 @@ Deno.test("dispatchBatchOutreach: sends POST /outreach/batch with correct payloa
   assertEquals(capturedBody.targetWeekend, { start: "2026-10-16", end: "2026-10-18" });
   assertEquals(res.sent, 2);
   assertEquals(res.requested, 2);
+});
+
+Deno.test("dispatchBatchOutreach: slices 60 venues into sequential chunks of 25, 25, 10 and aggregates results (#1107)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venueIds = Array.from({ length: 60 }, (_, i) => `venue-${i + 1}`);
+  const capturedPayloads: Record<string, unknown>[] = [];
+  const progressCalls: { chunkIndex: number; totalChunks: number; chunkSize: number }[] = [];
+
+  const mockFetch: typeof fetch = (_url, init) => {
+    const body = JSON.parse(String(init?.body || "{}"));
+    capturedPayloads.push(body);
+    const chunkVenues = body.venueIds as string[];
+    const chunkSent = chunkVenues.length > 20 ? chunkVenues.length - 1 : chunkVenues.length;
+    const chunkSkipped = chunkVenues.length > 20
+      ? [{ venueId: chunkVenues[0], venueName: `Skipped ${chunkVenues[0]}`, reason: "opt-out" }]
+      : [];
+
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          requested: chunkVenues.length,
+          sent: chunkSent,
+          skipped: chunkSkipped,
+          records: Array.from(
+            { length: chunkSent },
+            (_, idx) => ({ _id: `rec-${chunkVenues[idx]}` }),
+          ),
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+  };
+
+  const res = await dispatchBatchOutreach(
+    {
+      weekend,
+      venueIds,
+      onChunkProgress: (chunkIndex, totalChunks, chunkSize) => {
+        progressCalls.push({ chunkIndex, totalChunks, chunkSize });
+      },
+    },
+    mockFetch,
+  );
+
+  // Assert 3 chunks sequentially dispatched
+  assertEquals(capturedPayloads.length, 3);
+  assertEquals((capturedPayloads[0].venueIds as string[]).length, 25);
+  assertEquals((capturedPayloads[0].venueIds as string[])[0], "venue-1");
+  assertEquals((capturedPayloads[0].venueIds as string[])[24], "venue-25");
+
+  assertEquals((capturedPayloads[1].venueIds as string[]).length, 25);
+  assertEquals((capturedPayloads[1].venueIds as string[])[0], "venue-26");
+  assertEquals((capturedPayloads[1].venueIds as string[])[24], "venue-50");
+
+  assertEquals((capturedPayloads[2].venueIds as string[]).length, 10);
+  assertEquals((capturedPayloads[2].venueIds as string[])[0], "venue-51");
+  assertEquals((capturedPayloads[2].venueIds as string[])[9], "venue-60");
+
+  // Assert progress callback was called for each chunk
+  assertEquals(progressCalls, [
+    { chunkIndex: 1, totalChunks: 3, chunkSize: 25 },
+    { chunkIndex: 2, totalChunks: 3, chunkSize: 25 },
+    { chunkIndex: 3, totalChunks: 3, chunkSize: 10 },
+  ]);
+
+  // Assert aggregation (24 + 24 + 10 = 58 sent, 2 skipped, 60 requested)
+  assertEquals(res.requested, 60);
+  assertEquals(res.sent, 58);
+  assertEquals(res.skipped.length, 2);
+  assertEquals(res.records.length, 58);
+});
+
+Deno.test("dispatchBatchOutreach: halts on chunk refusal (HTTP 403) and reports partial sent count (#1107)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venueIds = Array.from({ length: 60 }, (_, i) => `venue-${i + 1}`);
+  let callCount = 0;
+
+  const mockFetch: typeof fetch = (_url, init) => {
+    callCount++;
+    const body = JSON.parse(String(init?.body || "{}"));
+    const chunkVenues = body.venueIds as string[];
+
+    if (callCount === 1) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            requested: 25,
+            sent: 25,
+            skipped: [],
+            records: Array.from({ length: 25 }, (_, idx) => ({ _id: `rec-${chunkVenues[idx]}` })),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+
+    // Chunk 2 refuses with HTTP 403 Gate 2 refusal
+    return Promise.resolve(
+      new Response(
+        "Gate 2 draft copy approval invalid or missing for batch",
+        { status: 403, headers: { "Content-Type": "text/plain" } },
+      ),
+    );
+  };
+
+  const err = await assertRejects(
+    async () => {
+      await dispatchBatchOutreach({ weekend, venueIds }, mockFetch);
+    },
+    BatchDispatchError,
+  );
+
+  // Assert call count halted at chunk 2 (chunk 3 never called)
+  assertEquals(callCount, 2);
+  assertEquals(err.status, 403);
+  assertEquals(err.chunkIndex, 2);
+  assertEquals(err.totalChunks, 3);
+  assertEquals(err.partialResult.sent, 25);
+  assertEquals(err.partialResult.requested, 25);
+  assertEquals(err.partialResult.records.length, 25);
+  assertStringIncludes(err.message, "HTTP 403 on chunk 2/3 (25 venue(s))");
+  assertStringIncludes(err.message, "Gate 2 draft copy approval invalid");
+  assertStringIncludes(err.message, "Previously sent: 25 venue(s)");
+});
+
+Deno.test("dispatchBatchOutreach: fails closed on network failure during chunked dispatch (#1107)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venueIds = Array.from({ length: 60 }, (_, i) => `venue-${i + 1}`);
+  let callCount = 0;
+
+  const mockFetch: typeof fetch = (_url, init) => {
+    callCount++;
+    const body = JSON.parse(String(init?.body || "{}"));
+    const chunkVenues = body.venueIds as string[];
+
+    if (callCount === 1) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            requested: 25,
+            sent: 25,
+            skipped: [],
+            records: Array.from({ length: 25 }, (_, idx) => ({ _id: `rec-${chunkVenues[idx]}` })),
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+
+    // Chunk 2 experiences network failure / socket timeout
+    return Promise.reject(new Error("Connection reset by peer"));
+  };
+
+  const err = await assertRejects(
+    async () => {
+      await dispatchBatchOutreach({ weekend, venueIds }, mockFetch);
+    },
+    BatchDispatchError,
+  );
+
+  // Assert call count halted at chunk 2 (chunk 3 never attempted)
+  assertEquals(callCount, 2);
+  assertEquals(err.status, undefined);
+  assertEquals(err.chunkIndex, 2);
+  assertEquals(err.totalChunks, 3);
+  assertEquals(err.partialResult.sent, 25);
+  assertStringIncludes(err.message, "network error on chunk 2/3 (25 venue(s))");
+  assertStringIncludes(err.message, "Connection reset by peer");
+  assertStringIncludes(err.message, "Previously sent: 25 venue(s)");
+});
+
+Deno.test("dispatchBatchOutreach: handles empty venueIds, exact chunk boundary, and custom chunkSize option (#1107)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  let callCount = 0;
+  const mockFetch: typeof fetch = () => {
+    callCount++;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ requested: 5, sent: 5, skipped: [], records: [] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  };
+
+  // 0. BATCH_CHUNK_SIZE constant is 25
+  assertEquals(BATCH_CHUNK_SIZE, 25);
+
+  // 1. Empty venueIds returns zero result without calling fetch
+  const emptyRes = await dispatchBatchOutreach({ weekend, venueIds: [] }, mockFetch);
+  assertEquals(callCount, 0);
+  assertEquals(emptyRes, { requested: 0, sent: 0, skipped: [], records: [] });
+
+  // 2. Exactly 25 venueIds produces exactly 1 chunk
+  const exactly25 = Array.from({ length: 25 }, (_, i) => `v-${i + 1}`);
+  const exactRes = await dispatchBatchOutreach({ weekend, venueIds: exactly25 }, mockFetch);
+  assertEquals(callCount, 1);
+  assertEquals(exactRes.sent, 5);
+
+  // 3. Custom chunkSize: 12 venues with chunkSize = 5 yields 3 chunks (5, 5, 2)
+  callCount = 0;
+  const twelveVenues = Array.from({ length: 12 }, (_, i) => `v-${i + 1}`);
+  await dispatchBatchOutreach({ weekend, venueIds: twelveVenues, chunkSize: 5 }, mockFetch);
+  assertEquals(callCount, 3);
+});
+
+Deno.test("runBookGigCli: halts and logs partial summary when chunk dispatch fails in --send mode (#1107)", async () => {
+  const venues = Array.from({ length: 30 }, (_, i) => ({
+    _id: `v-${i + 1}`,
+    name: `Venue ${i + 1}`,
+    email: `booking${i + 1}@venue.com`,
+    city: "Salem",
+    usState: "VA",
+    outreachEligible: true,
+  }));
+
+  let batchCalls = 0;
+  const mockFetch: typeof fetch = (url) => {
+    const u = String(url);
+    if (u.includes("/venue/candidates") || u.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(venues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/outreach/preview")) {
+      const w: TargetWeekend = {
+        start: "2026-10-16",
+        end: "2026-10-18",
+        rawText: "Oct 16-18 2026",
+        label: "October 16–18, 2026",
+        year: 2026,
+        month: 10,
+        days: [16, 17, 18],
+      };
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(venues.map((v) => {
+            const p = renderPitch(v, w);
+            return {
+              venueId: v._id,
+              venueName: v.name,
+              to: v.email,
+              subject: p.subject,
+              body: p.htmlBody || p.body,
+            };
+          })),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/template")) {
+      return Promise.resolve(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    if (u.includes("/outreach/batch")) {
+      batchCalls++;
+      if (batchCalls === 1) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ requested: 25, sent: 25, skipped: [], records: [] }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response("Gate 2 refusal", { status: 403, headers: { "Content-Type": "text/plain" } }),
+      );
+    }
+    if (u.includes("/outreach/report")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ success: true, url: "https://web-jam.com/report/1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const mockOpener = () => Promise.resolve(true);
+
+  const err = await assertRejects(
+    async () => {
+      await runBookGigCli(
+        ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts", "--no-open"],
+        mockFetch,
+        mockOpener,
+      );
+    },
+    BatchDispatchError,
+  );
+
+  assertEquals(batchCalls, 2);
+  assertEquals(err.status, 403);
+  assertEquals(err.chunkIndex, 2);
+  assertEquals(err.partialResult.sent, 25);
 });
 
 Deno.test("checkGmailReplies, fetchPendingReplies, fetchOutreachCampaigns, and fetchVenueMap: mocked backend API interactions", async () => {

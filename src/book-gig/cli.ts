@@ -9,7 +9,7 @@ import {
   isPitchableCandidate,
   renderCandidateTable,
 } from "./candidates.ts";
-export { formatExcludedAuditSummary, isPitchableCandidate, renderCandidateTable };
+export { BATCH_CHUNK_SIZE, formatExcludedAuditSummary, isPitchableCandidate, renderCandidateTable };
 import {
   renderPitchesFromBackend,
   verificationOptionsFromTweaks,
@@ -20,6 +20,8 @@ import { executeLinkGig } from "./venue_link.ts";
 import { executeVenueHold } from "./cooldown.ts";
 import { Gate2ReviewSession, isExplicitWholeBatchApproval } from "./gate2.ts";
 import {
+  BATCH_CHUNK_SIZE,
+  BatchDispatchError,
   checkGmailReplies,
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
@@ -927,6 +929,13 @@ export async function runBookGigCli(
           {
             weekend,
             venueIds,
+            onChunkProgress: (chunkIndex, totalChunks, chunkSize) => {
+              if (totalChunks > 1) {
+                console.log(
+                  `  → Dispatching chunk ${chunkIndex}/${totalChunks} (${chunkSize} venue(s))...`,
+                );
+              }
+            },
           },
           fetchFn,
         );
@@ -949,7 +958,17 @@ export async function runBookGigCli(
           `📧 Each pitch CC'd Josh & Maria (joshua.v.sherman@gmail.com, chemmariasherman@gmail.com).`,
         );
       } catch (err) {
-        console.error(`❌ Batch dispatch failed: ${(err as Error).message}`);
+        if (err instanceof BatchDispatchError) {
+          batchDispatch = err.partialResult;
+          console.error(`\n❌ Batch dispatch halted: ${err.message}`);
+          if (batchDispatch && batchDispatch.sent > 0) {
+            console.log(`\n📤 Partial Dispatch Summary:`);
+            console.log(`  • Successfully Dispatched: ${batchDispatch.sent}`);
+            console.log(`  • Skipped: ${batchDispatch.skipped.length}`);
+          }
+        } else {
+          console.error(`❌ Batch dispatch failed: ${(err as Error).message}`);
+        }
         throw err;
       }
     }

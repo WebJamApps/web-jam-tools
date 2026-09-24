@@ -155,6 +155,12 @@ Batch outreach dispatch is protected by two distinct, mandatory refusals operati
      1. **Both approvals present and matching:** A valid Gate 1 approval record exists for this batch/weekend, the batch's venues match the approved set (accounting for widened venues carrying no outreach record for that weekend), and a valid Gate 2 approval record exists whose stored fingerprints match the re-rendered drafts -> **batch sends**.
      2. **Either approval absent, or divergent:** Missing Gate 1 record, missing Gate 2 record, venue set mismatch, or any email draft diverging from its approved fingerprint -> **refuses the entire batch in full**. No partial sends: venues that still match are never dispatched on their own.
      3. **Lookup or comparison failure:** Cannot read approval records, network error, or verification failure -> **refuses (fails closed)**.
+
+3. **Chunked Sequential Execution (Heroku 30s Timeout Protection, web-jam-tools#1107):**
+   - When candidate venue count exceeds 25 (`BATCH_CHUNK_SIZE = 25`), `dispatchBatchOutreach` automatically slices the venues into sequential chunks of 25 and submits each slice sequentially to `POST /outreach/batch`.
+   - When all chunks succeed, total requested, sent, and skipped counts and campaign records are aggregated into a single unified dispatch summary.
+   - If any chunk returns an HTTP error (e.g. 400/403 refusal or 500 error) or network failure, dispatch halts immediately (fails closed) without sending remaining chunks, reporting the failure reason and the number of venues successfully dispatched in earlier chunks.
+
 - **Strict Prohibition for AI Assistants:** AI assistants on all surfaces (Claude Code and agy/Antigravity) are **STRICTLY PROHIBITED** from executing `--send` based on venue list approval alone, without explicit whole-batch draft approval, or without `--confirm-drafts`.
 - Dispatches pitch emails to candidate booking contacts, CCs Josh and Maria (`joshua.v.sherman@gmail.com`, `chemmariasherman@gmail.com`), initializes active campaigns in MongoDB (`status: 'sent'`), and logs email touches on venue timelines.
 

@@ -62,57 +62,160 @@ export function buildHeaders(token?: string): Record<string, string> {
   return headers;
 }
 
+export const BATCH_CHUNK_SIZE = 25;
+
+export class BatchDispatchError extends Error {
+  readonly partialResult: BatchDispatchResult;
+  readonly status?: number;
+  readonly chunkIndex: number;
+  readonly totalChunks: number;
+
+  constructor(
+    message: string,
+    partialResult: BatchDispatchResult,
+    context: { status?: number; chunkIndex: number; totalChunks: number },
+  ) {
+    super(message);
+    this.name = "BatchDispatchError";
+    this.partialResult = partialResult;
+    this.status = context.status;
+    this.chunkIndex = context.chunkIndex;
+    this.totalChunks = context.totalChunks;
+  }
+}
+
 export interface DispatchBatchOptions extends BackendConfigOptions {
   weekend: TargetWeekend;
   venueIds: string[];
   templateType?: string;
   bookingPeriod?: string;
+  chunkSize?: number;
+  onChunkProgress?: (chunkIndex: number, totalChunks: number, chunkSize: number) => void;
 }
 
 /**
  * Dispatch batch outreach pitches to approved candidate venue IDs via POST /outreach/batch
+ * in sequential chunks (default BATCH_CHUNK_SIZE = 25) to avoid Heroku 30s timeouts.
  */
 export async function dispatchBatchOutreach(
   options: DispatchBatchOptions,
   fetchFn: typeof fetch = fetch,
 ): Promise<BatchDispatchResult> {
+  if (!Array.isArray(options.venueIds) || options.venueIds.length === 0) {
+    return {
+      requested: 0,
+      sent: 0,
+      skipped: [],
+      records: [],
+    };
+  }
+
   const { baseUrl, token } = await resolveBackendConfig(options);
   const url = `${baseUrl}/outreach/batch`;
 
-  const payload = {
-    venueIds: options.venueIds,
-    targetDates: options.weekend.label || `${options.weekend.start} to ${options.weekend.end}`,
-    targetWeekend: {
-      start: options.weekend.start,
-      end: options.weekend.end,
-    },
-    templateType: options.templateType,
-    bookingPeriod: options.bookingPeriod || resolveBookingPeriod(options.weekend),
+  const chunkSize = options.chunkSize && options.chunkSize > 0
+    ? options.chunkSize
+    : BATCH_CHUNK_SIZE;
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < options.venueIds.length; i += chunkSize) {
+    chunks.push(options.venueIds.slice(i, i + chunkSize));
+  }
+
+  const aggregateResult: BatchDispatchResult = {
+    requested: 0,
+    sent: 0,
+    skipped: [],
+    records: [],
   };
 
-  try {
-    const res = await fetchFn(url, {
-      method: "POST",
-      headers: buildHeaders(token),
-      body: JSON.stringify(payload),
-    });
+  const bookingPeriod = options.bookingPeriod || resolveBookingPeriod(options.weekend);
+  const targetDates = options.weekend.label || `${options.weekend.start} to ${options.weekend.end}`;
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Outreach batch dispatch returned HTTP ${res.status}: ${errText}`);
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkIndex = i + 1;
+    const chunk = chunks[i];
+
+    options.onChunkProgress?.(chunkIndex, chunks.length, chunk.length);
+
+    const payload = {
+      venueIds: chunk,
+      targetDates,
+      targetWeekend: {
+        start: options.weekend.start,
+        end: options.weekend.end,
+      },
+      templateType: options.templateType,
+      bookingPeriod,
+    };
+
+    let res: Response;
+    try {
+      res = await fetchFn(url, {
+        method: "POST",
+        headers: buildHeaders(token),
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      const msg = `Outreach batch dispatch network error on chunk ${chunkIndex}/${chunks.length} ` +
+        `(${chunk.length} venue(s)): ${
+          (err as Error).message
+        }. Previously sent: ${aggregateResult.sent} venue(s).`;
+      console.error(`[book-gig] Error dispatching outreach batch: ${msg}`);
+      throw new BatchDispatchError(msg, aggregateResult, {
+        chunkIndex,
+        totalChunks: chunks.length,
+      });
     }
 
-    const data = await res.json();
-    return {
-      requested: data.requested ?? options.venueIds.length,
-      sent: data.sent ?? 0,
-      skipped: data.skipped ?? [],
-      records: data.records ?? [],
-    };
-  } catch (err) {
-    console.error(`[book-gig] Error dispatching outreach batch: ${(err as Error).message}`);
-    throw err;
+    if (!res.ok) {
+      let errText = "";
+      try {
+        errText = await res.text();
+      } catch {
+        errText = res.statusText || "";
+      }
+      const msg =
+        `Outreach batch dispatch returned HTTP ${res.status} on chunk ${chunkIndex}/${chunks.length} ` +
+        `(${chunk.length} venue(s)): ${errText}. Previously sent: ${aggregateResult.sent} venue(s).`;
+      console.error(
+        `[book-gig] Error dispatching outreach batch chunk ${chunkIndex}/${chunks.length}: ${msg}`,
+      );
+      throw new BatchDispatchError(msg, aggregateResult, {
+        status: res.status,
+        chunkIndex,
+        totalChunks: chunks.length,
+      });
+    }
+
+    let data: Record<string, unknown>;
+    try {
+      data = await res.json();
+    } catch (err) {
+      const msg =
+        `Outreach batch dispatch response unparseable on chunk ${chunkIndex}/${chunks.length} ` +
+        `(${chunk.length} venue(s)): ${
+          (err as Error).message
+        }. Previously sent: ${aggregateResult.sent} venue(s).`;
+      console.error(`[book-gig] Error dispatching outreach batch: ${msg}`);
+      throw new BatchDispatchError(msg, aggregateResult, {
+        status: res.status,
+        chunkIndex,
+        totalChunks: chunks.length,
+      });
+    }
+
+    aggregateResult.requested += typeof data.requested === "number" ? data.requested : chunk.length;
+    aggregateResult.sent += typeof data.sent === "number" ? data.sent : 0;
+    if (Array.isArray(data.skipped)) {
+      aggregateResult.skipped.push(...(data.skipped as BatchDispatchResult["skipped"]));
+    }
+    if (Array.isArray(data.records)) {
+      aggregateResult.records.push(...(data.records as BatchDispatchResult["records"]));
+    }
   }
+
+  return aggregateResult;
 }
 
 /**
