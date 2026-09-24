@@ -44,6 +44,24 @@ export interface VenueContactResult {
   identifiesVenue?: boolean;
 }
 
+export type BrowserPageLike = {
+  goto: (url: string, opts: { waitUntil?: string; timeout?: number }) => Promise<unknown>;
+  content: () => Promise<string>;
+  close: () => Promise<void>;
+};
+
+export type BrowserLike = {
+  newPage: () => Promise<BrowserPageLike>;
+  close: () => Promise<void>;
+};
+
+export type BrowserLauncher = () => Promise<BrowserLike>;
+
+export interface BatchRenderer {
+  render: (url: string, timeoutMs: number) => Promise<string>;
+  close: () => Promise<void>;
+}
+
 export interface ExtractOptions {
   /** Venue name — when set, the page is checked for whether it identifies as this venue. */
   name?: string;
@@ -68,6 +86,11 @@ export interface ExtractOptions {
   fetchImpl?: typeof fetch;
   /** Injectable Playwright-render implementation — tests stub this to avoid launching a browser. */
   renderImpl?: (url: string, timeoutMs: number) => Promise<string>;
+  /**
+   * Injectable Playwright browser launcher — tests stub this to count or avoid launching real Chromium.
+   * When omitted, uses Playwright chromium.launch() lazily on the first render in a batch.
+   */
+  launchBrowser?: BrowserLauncher;
 }
 
 const DEFAULT_FETCH_TIMEOUT_MS = 8000;
@@ -257,9 +280,9 @@ async function fetchPlainHtml(
   }
 }
 
-async function defaultRender(url: string, timeoutMs: number): Promise<string> {
+export async function defaultLaunchBrowser(): Promise<BrowserLike> {
   // Lazy import: only loaded when a real fallback is actually needed, so a
-  // plain-fetch-only run (and every unit test, which injects `renderImpl`)
+  // plain-fetch-only run (and every unit test, which injects `renderImpl` or `launchBrowser`)
   // never has to load or launch Playwright.
   const { chromium } = await import("playwright");
   let browser;
@@ -273,12 +296,59 @@ async function defaultRender(url: string, timeoutMs: number): Promise<string> {
       throw primaryErr;
     }
   }
+  return browser as unknown as BrowserLike;
+}
+
+export function createBatchRenderer(options: {
+  renderImpl?: (url: string, timeoutMs: number) => Promise<string>;
+  launchBrowser?: BrowserLauncher;
+}): BatchRenderer {
+  if (options.renderImpl) {
+    return {
+      render: options.renderImpl,
+      close: () => Promise.resolve(),
+    };
+  }
+
+  let browserPromise: Promise<BrowserLike> | null = null;
+
+  return {
+    async render(url: string, timeoutMs: number): Promise<string> {
+      if (!browserPromise) {
+        browserPromise = (options.launchBrowser ?? defaultLaunchBrowser)();
+      }
+      const browser = await browserPromise;
+      const page = await browser.newPage();
+      try {
+        await page.goto(url, { waitUntil: "networkidle", timeout: timeoutMs });
+        return await page.content();
+      } finally {
+        await page.close();
+      }
+    },
+    async close(): Promise<void> {
+      if (browserPromise) {
+        try {
+          const browser = await browserPromise;
+          await browser.close();
+        } catch {
+          // ignore launch or cleanup errors
+        }
+      }
+    },
+  };
+}
+
+export async function defaultRender(
+  url: string,
+  timeoutMs: number,
+  launcher: BrowserLauncher = defaultLaunchBrowser,
+): Promise<string> {
+  const renderer = createBatchRenderer({ launchBrowser: launcher });
   try {
-    const page = await browser.newPage();
-    await page.goto(url, { waitUntil: "networkidle", timeout: timeoutMs });
-    return await page.content();
+    return await renderer.render(url, timeoutMs);
   } finally {
-    await browser.close();
+    await renderer.close();
   }
 }
 
@@ -386,25 +456,30 @@ export async function extractVenueContact(
   startUrl: string,
   options: ExtractOptions = {},
 ): Promise<VenueContactResult> {
-  const opts: FetchOpts = {
-    fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
-    renderTimeoutMs: options.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS,
-    fetchImpl: options.fetchImpl ?? fetch,
-    renderImpl: options.renderImpl ?? defaultRender,
-  };
-
-  const landing = await fetchPageWithFallback(startUrl, opts);
-  if ("error" in landing) {
-    return {
-      emails: [],
-      address: null,
-      fetchPath: "failed",
-      pagesVisited: [],
-      error: landing.error,
+  const batchRenderer = createBatchRenderer(options);
+  try {
+    const opts: FetchOpts = {
+      fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+      renderTimeoutMs: options.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS,
+      fetchImpl: options.fetchImpl ?? fetch,
+      renderImpl: (url, timeoutMs) => batchRenderer.render(url, timeoutMs),
     };
-  }
 
-  return await collectContactFromPage(startUrl, landing, opts, options);
+    const landing = await fetchPageWithFallback(startUrl, opts);
+    if ("error" in landing) {
+      return {
+        emails: [],
+        address: null,
+        fetchPath: "failed",
+        pagesVisited: [],
+        error: landing.error,
+      };
+    }
+
+    return await collectContactFromPage(startUrl, landing, opts, options);
+  } finally {
+    await batchRenderer.close();
+  }
 }
 
 /** Common alternative hospitality TLDs used by venues (D-49). */
@@ -533,13 +608,89 @@ export interface ProbedVenueResult {
   outreachEligible: boolean;
   /** Every candidate domain tried, in order, and why each was rejected. */
   attempts: ProbeAttempt[];
+  /** Total probe rounds executed. */
+  probeRounds?: number;
 }
+
+export const DEFAULT_PROBE_CONCURRENCY = 4;
 
 export interface ProbeOptions extends ExtractOptions {
   address?: string;
   candidateDomains?: string[];
   /** Called as each candidate domain is tried — lets a caller log a probe that found nothing. */
   onAttempt?: (attempt: ProbeAttempt) => void;
+  /** Max candidate domains probed concurrently in each batch. Defaults to 4. */
+  concurrency?: number;
+  /** Called at the start of each probe round with the 1-based round index and domains in the batch. */
+  onRound?: (roundIndex: number, batch: string[]) => void;
+}
+
+async function probeSingleCandidate(
+  domainUrl: string,
+  venueName: string,
+  opts: FetchOpts,
+  options: ProbeOptions,
+  attemptsRef: ProbeAttempt[],
+): Promise<{
+  url: string;
+  attempt: ProbeAttempt;
+  candidate?: ProbedVenueResult;
+  rank: number;
+}> {
+  try {
+    const outcome = await fetchPageWithFallback(domainUrl, opts);
+    if ("error" in outcome) {
+      return {
+        url: domainUrl,
+        attempt: { url: domainUrl, outcome: "fetch_failed", detail: outcome.error },
+        rank: 0,
+      };
+    }
+
+    const identifies = pageIdentifiesVenue(outcome.html, venueName, {
+      city: options.city,
+      address: options.address,
+    });
+
+    const contact = await collectContactFromPage(domainUrl, outcome, opts, {
+      ...options,
+      name: venueName,
+    });
+    contact.identifiesVenue = identifies;
+
+    const hasViableEmail = contact.emails.length > 0;
+    const candidate: ProbedVenueResult = {
+      url: domainUrl,
+      identifiesVenue: identifies,
+      contact,
+      sourceType: "probed_domain",
+      outreachEligible: hasViableEmail && identifies,
+      attempts: attemptsRef,
+    };
+
+    if (identifies && hasViableEmail) {
+      return {
+        url: domainUrl,
+        attempt: { url: domainUrl, outcome: "match" },
+        candidate,
+        rank: 3,
+      };
+    }
+
+    const rank = identifies ? 2 : hasViableEmail ? 1 : 0;
+    return {
+      url: domainUrl,
+      attempt: { url: domainUrl, outcome: identifies ? "no_email" : "no_identity" },
+      candidate,
+      rank,
+    };
+  } catch (err) {
+    return {
+      url: domainUrl,
+      attempt: { url: domainUrl, outcome: "error", detail: (err as Error).message },
+      rank: 0,
+    };
+  }
 }
 
 /**
@@ -548,23 +699,26 @@ export interface ProbeOptions extends ExtractOptions {
  * Per D-49: an email lifted from a probed domain flips outreachEligible: true only when
  * the page identifies itself as that venue (carrying venue name + city or street address);
  * otherwise outreachEligible: false. The venue's city/address must be supplied by the
- * caller from the venue record — never scraped from the page under test. Every candidate
- * domain is tried (a parked or squatted page returning HTTP 200 must not end the probe
- * before the venue's real domain is tried), and the strongest outcome across all of them
- * is returned: identified-with-email short-circuits immediately, otherwise the best of
- * identified-only or has-an-email-only wins.
+ * caller from the venue record — never scraped from the page under test.
+ *
+ * Probes candidate domains in batches with bounded concurrency (default 4).
+ * Launches one browser per batch and shares it across renders.
+ * Every candidate domain in a batch is tried (a parked or squatted page returning HTTP 200
+ * must not end the probe before the venue's real domain is tried), and the strongest outcome
+ * across all batches is returned: identified-with-email short-circuits further batches,
+ * otherwise the best of identified-only or has-an-email-only wins.
  */
 export async function probeVenueDomains(
   venueName: string,
   options: ProbeOptions = {},
 ): Promise<ProbedVenueResult | null> {
   const domains = options.candidateDomains ?? generateCandidateDomains(venueName);
-  const opts: FetchOpts = {
-    fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
-    renderTimeoutMs: options.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS,
-    fetchImpl: options.fetchImpl ?? fetch,
-    renderImpl: options.renderImpl ?? defaultRender,
-  };
+  const concurrency = Math.max(
+    1,
+    Number.isFinite(options.concurrency)
+      ? (options.concurrency as number)
+      : DEFAULT_PROBE_CONCURRENCY,
+  );
 
   const attempts: ProbeAttempt[] = [];
   const record = (attempt: ProbeAttempt) => {
@@ -572,53 +726,55 @@ export async function probeVenueDomains(
     options.onAttempt?.(attempt);
   };
 
-  // A domain that merely resolves is not a result: a parked or squatted page
-  // returning HTTP 200 must not end the probe before the venue's real domain is
-  // tried. Every candidate is visited, and the strongest outcome wins —
-  // identified-with-email short-circuits, then identified, then has-an-email.
   let best: { rank: number; result: ProbedVenueResult } | null = null;
+  let rounds = 0;
 
-  for (const domainUrl of domains) {
+  for (let i = 0; i < domains.length; i += concurrency) {
+    rounds++;
+    const batch = domains.slice(i, i + concurrency);
+    options.onRound?.(rounds, batch);
+
+    const batchRenderer = createBatchRenderer(options);
     try {
-      const outcome = await fetchPageWithFallback(domainUrl, opts);
-      if ("error" in outcome) {
-        record({ url: domainUrl, outcome: "fetch_failed", detail: outcome.error });
-        continue;
-      }
-
-      const identifies = pageIdentifiesVenue(outcome.html, venueName, {
-        city: options.city,
-        address: options.address,
-      });
-
-      const contact = await collectContactFromPage(domainUrl, outcome, opts, {
-        ...options,
-        name: venueName,
-      });
-      contact.identifiesVenue = identifies;
-
-      const hasViableEmail = contact.emails.length > 0;
-      const candidate: ProbedVenueResult = {
-        url: domainUrl,
-        identifiesVenue: identifies,
-        contact,
-        sourceType: "probed_domain",
-        outreachEligible: hasViableEmail && identifies,
-        attempts,
+      const batchOpts: FetchOpts = {
+        fetchTimeoutMs: options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+        renderTimeoutMs: options.renderTimeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS,
+        fetchImpl: options.fetchImpl ?? fetch,
+        renderImpl: (url, timeoutMs) => batchRenderer.render(url, timeoutMs),
       };
 
-      if (identifies && hasViableEmail) {
-        record({ url: domainUrl, outcome: "match" });
-        return candidate;
+      const batchResults = await Promise.all(
+        batch.map((domainUrl) =>
+          probeSingleCandidate(domainUrl, venueName, batchOpts, options, attempts)
+        ),
+      );
+
+      for (const res of batchResults) {
+        record(res.attempt);
       }
 
-      record({ url: domainUrl, outcome: identifies ? "no_email" : "no_identity" });
-      const rank = identifies ? 2 : hasViableEmail ? 1 : 0;
-      if (!best || rank > best.rank) best = { rank, result: candidate };
-    } catch (err) {
-      record({ url: domainUrl, outcome: "error", detail: (err as Error).message });
+      // Short-circuit on the earliest candidate that identified the venue with email (rank 3)
+      const matches = batchResults.filter((r) => r.candidate && r.rank === 3);
+      if (matches.length > 0) {
+        const winner = matches[0].candidate!;
+        winner.probeRounds = rounds;
+        return winner;
+      }
+
+      for (const res of batchResults) {
+        if (res.candidate && (!best || res.rank > best.rank)) {
+          best = { rank: res.rank, result: res.candidate };
+        }
+      }
+    } finally {
+      await batchRenderer.close();
     }
   }
 
-  return best?.result ?? null;
+  if (best) {
+    best.result.probeRounds = rounds;
+    return best.result;
+  }
+
+  return null;
 }

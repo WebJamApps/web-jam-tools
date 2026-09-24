@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import {
+  type BrowserLauncher,
   extractAddress,
   extractEmails,
   extractFromJsonLd,
@@ -687,3 +688,194 @@ Deno.test("probeVenueDomains: same-named business elsewhere WITH its own street 
     { email: "hello@wild-magnolia.bar", sourceUrl: "https://wild-magnolia.bar" },
   ]);
 });
+
+Deno.test(
+  "probeVenueDomains: bounded concurrency drops round count and browser launches for candidate lists requiring rendering",
+  async () => {
+    const candidates = Array.from(
+      { length: 8 },
+      (_, i) => `https://spa-candidate-${i + 1}.example`,
+    );
+    const routes = Object.fromEntries(
+      candidates.map((c) => [c, { body: CLIENT_RENDERED_SHELL }]),
+    );
+
+    // Concurrency 1: 8 candidates -> 8 rounds, 1 browser per round = 8 launches
+    let launchesConc1 = 0;
+    const roundsConc1: string[][] = [];
+    const mockLauncherConc1: BrowserLauncher = () => {
+      launchesConc1++;
+      return Promise.resolve({
+        newPage: () =>
+          Promise.resolve({
+            goto: () => Promise.resolve(),
+            content: () => Promise.resolve("<html><body><p>Still empty</p></body></html>"),
+            close: () => Promise.resolve(),
+          }),
+        close: () => Promise.resolve(),
+      });
+    };
+
+    const resultConc1 = await probeVenueDomains("Sample Venue", {
+      city: "Roanoke",
+      candidateDomains: candidates,
+      concurrency: 1,
+      fetchImpl: stubFetch(routes),
+      launchBrowser: mockLauncherConc1,
+      onRound: (_idx, batch) => roundsConc1.push(batch),
+    });
+
+    // Concurrency 4: 8 candidates -> 2 rounds, 1 browser per round = 2 launches
+    let launchesConc4 = 0;
+    const roundsConc4: string[][] = [];
+    const mockLauncherConc4: BrowserLauncher = () => {
+      launchesConc4++;
+      return Promise.resolve({
+        newPage: () =>
+          Promise.resolve({
+            goto: () => Promise.resolve(),
+            content: () => Promise.resolve("<html><body><p>Still empty</p></body></html>"),
+            close: () => Promise.resolve(),
+          }),
+        close: () => Promise.resolve(),
+      });
+    };
+
+    const resultConc4 = await probeVenueDomains("Sample Venue", {
+      city: "Roanoke",
+      candidateDomains: candidates,
+      concurrency: 4,
+      fetchImpl: stubFetch(routes),
+      launchBrowser: mockLauncherConc4,
+      onRound: (_idx, batch) => roundsConc4.push(batch),
+    });
+
+    assert(resultConc1 !== null);
+    assert(resultConc4 !== null);
+
+    assertEquals(resultConc1.probeRounds, 8);
+    assertEquals(roundsConc1.length, 8);
+    assertEquals(launchesConc1, 8);
+
+    assertEquals(resultConc4.probeRounds, 2);
+    assertEquals(roundsConc4.length, 2);
+    assertEquals(launchesConc4, 2);
+
+    assert((resultConc4.probeRounds ?? 0) < (resultConc1.probeRounds ?? 0));
+    assert(launchesConc4 < launchesConc1);
+  },
+);
+
+Deno.test(
+  "probeVenueDomains: parked-page-then-real-domain candidate list resolves to real identifying domain",
+  async () => {
+    const parkedHtml = `<!DOCTYPE html>
+<html>
+  <head><title>Domain For Sale | taproom.shop</title></head>
+  <body>
+    <h1>taproom.shop is parked</h1>
+    <p>This premium domain may be for sale. Contact broker at sales@parking-broker.example.</p>
+  </body>
+</html>`;
+
+    const realVenueHtml = `<!DOCTYPE html>
+<html>
+  <head><title>The Tap Room - Downtown Craft Beer</title></head>
+  <body>
+    <header><h1>The Tap Room</h1></header>
+    <main>
+      <p>Live music and craft beers in Roanoke, VA. Located at 123 Main Street, Roanoke, VA 24011.</p>
+      <p>Band booking inquiries: <a href="mailto:booking@taproom.bar">booking@taproom.bar</a></p>
+    </main>
+  </body>
+</html>`;
+
+    const candidates = [
+      "https://taproom.shop",
+      "https://taproom.bar",
+    ];
+
+    const result = await probeVenueDomains("The Tap Room", {
+      city: "Roanoke",
+      address: "123 Main Street, Roanoke, VA 24011",
+      candidateDomains: candidates,
+      concurrency: 2,
+      fetchImpl: stubFetch({
+        "https://taproom.shop": { body: parkedHtml },
+        "https://taproom.bar": { body: realVenueHtml },
+      }),
+      renderImpl: () => Promise.reject(new Error("renderImpl should not be called")),
+    });
+
+    assert(result !== null);
+    // Parked page has an email but does not identify venue (rank 1: has-email-only).
+    // Real venue page identifies venue AND has booking email (rank 3: identified-with-email).
+    // Extractor selects real venue domain despite parked page being first candidate.
+    assertEquals(result.url, "https://taproom.bar");
+    assertEquals(result.identifiesVenue, true);
+    assertEquals(result.outreachEligible, true);
+    assertEquals(result.contact.emails, [
+      { email: "booking@taproom.bar", sourceUrl: "https://taproom.bar" },
+    ]);
+  },
+);
+
+Deno.test(
+  "probeVenueDomains: short-circuits subsequent candidate batches when a candidate identifies with email",
+  async () => {
+    const identifyingHtml = `<!DOCTYPE html>
+<html>
+  <head><title>The Tap Room</title></head>
+  <body>
+    <h1>The Tap Room</h1>
+    <p>Live music, craft brews, and great food located in downtown Roanoke, VA. Join us every weekend for shows!</p>
+    <a href="mailto:booking@cand2.example">booking@cand2.example</a>
+  </body>
+</html>`;
+
+    let cand3Fetched = false;
+    let cand4Fetched = false;
+
+    const candidates = [
+      "https://cand1.example",
+      "https://cand2.example",
+      "https://cand3.example",
+      "https://cand4.example",
+    ];
+
+    const result = await probeVenueDomains("The Tap Room", {
+      city: "Roanoke",
+      candidateDomains: candidates,
+      concurrency: 2,
+      fetchImpl: (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === "https://cand1.example") {
+          return Promise.resolve(new Response("Not found", { status: 404 }));
+        }
+        if (url === "https://cand2.example") {
+          return Promise.resolve(new Response(identifyingHtml, { status: 200 }));
+        }
+        if (url === "https://cand3.example") {
+          cand3Fetched = true;
+          return Promise.resolve(new Response("ok", { status: 200 }));
+        }
+        if (url === "https://cand4.example") {
+          cand4Fetched = true;
+          return Promise.resolve(new Response("ok", { status: 200 }));
+        }
+        return Promise.resolve(new Response("not found", { status: 404 }));
+      },
+      renderImpl: () => Promise.reject(new Error("renderImpl should not be called")),
+    });
+
+    assert(result !== null);
+    assertEquals(result.url, "https://cand2.example");
+    assertEquals(result.identifiesVenue, true);
+    assertEquals(result.outreachEligible, true);
+    // Batch 1 had 2 candidates, cand2 succeeded with rank 3 -> batch 2 never evaluated
+    assertEquals(result.probeRounds, 1);
+    assertEquals(result.attempts.length, 2);
+    assertEquals(cand3Fetched, false);
+    assertEquals(cand4Fetched, false);
+  },
+);
