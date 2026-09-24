@@ -167,6 +167,53 @@ echo '{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | scripts/status
   Overriding this is a test-only seam (the real default hits the network,
   which an automated test must not depend on); leave it unset for normal use.
 
+### `update-all.sh`
+
+Master update script that updates the local AI agent CLIs and DAW tooling in sequence:
+1. `claude update` (Anthropic Claude Code CLI)
+2. `agy update` (Google Antigravity CLI)
+3. `codex update` (OpenAI Codex CLI)
+4. `reaper-update` (Cockos REAPER digital audio workstation)
+
+See [docs/local-dev-setup.md](local-dev-setup.md) for full developer environment setup and installation steps on Linux.
+
+**Invocation options (in preference order):**
+
+1. **From anywhere** (after one-time setup):
+   ```bash
+   update-all
+   ```
+   One-time setup (run from repo root):
+   ```bash
+   ln -s "$PWD/scripts/update-all.sh" ~/.local/bin/update-all
+   ```
+   Requires `~/.local/bin` on PATH.
+
+2. **From inside the repo:**
+   ```bash
+   deno task update:all
+   ```
+   or:
+   ```bash
+   deno task update
+   ```
+
+3. **Direct script invocation:**
+   ```bash
+   bash scripts/update-all.sh
+   ```
+
+**Options & Flags:**
+- `--dry-run` (`-n`): Preview the update commands without executing them.
+- `--fail-on-missing` / `--strict` (`-s`): Treat missing tools as failures (exit 1).
+- `--help` (`-h`): Show usage and installation commands.
+
+**Environment variables:**
+- `CLAUDE_BIN`: Path or binary name for Claude CLI (default: `claude`).
+- `AGY_BIN`: Path or binary name for Antigravity CLI (default: `agy`).
+- `CODEX_BIN`: Path or binary name for Codex CLI (default: `codex`).
+- `REAPER_UPDATE_BIN`: Path or command for REAPER updater (default: auto-detected from PATH or `$SCRIPT_DIR/reaper-update.sh`).
+
 ### `install-hooks.sh` — what actually gets symlinked
 
 `scripts/install-hooks.sh` symlinks `hooks/*.sh` only — `hooks/lib/` is
