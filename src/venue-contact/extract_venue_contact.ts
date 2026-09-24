@@ -339,19 +339,6 @@ export function createBatchRenderer(options: {
   };
 }
 
-export async function defaultRender(
-  url: string,
-  timeoutMs: number,
-  launcher: BrowserLauncher = defaultLaunchBrowser,
-): Promise<string> {
-  const renderer = createBatchRenderer({ launchBrowser: launcher });
-  try {
-    return await renderer.render(url, timeoutMs);
-  } finally {
-    await renderer.close();
-  }
-}
-
 type FetchOpts = {
   fetchTimeoutMs: number;
   renderTimeoutMs: number;
@@ -715,9 +702,11 @@ export async function probeVenueDomains(
   const domains = options.candidateDomains ?? generateCandidateDomains(venueName);
   const concurrency = Math.max(
     1,
-    Number.isFinite(options.concurrency)
-      ? (options.concurrency as number)
-      : DEFAULT_PROBE_CONCURRENCY,
+    Math.floor(
+      Number.isFinite(options.concurrency)
+        ? (options.concurrency as number)
+        : DEFAULT_PROBE_CONCURRENCY,
+    ),
   );
 
   const attempts: ProbeAttempt[] = [];

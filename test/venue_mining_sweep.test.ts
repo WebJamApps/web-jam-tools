@@ -1,5 +1,11 @@
 // test/venue_mining_sweep.test.ts
-import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import {
   checkCooldown,
   dedupeVenues,
@@ -797,6 +803,41 @@ Deno.test("harvestEvents and runSweep reject publication type other than sceneth
   );
 });
 
+Deno.test("runSweep --type overrides the metro's publication type and errors name that type", async () => {
+  // An unregistered --type is named in the refusal, not the metro's recorded type ('html').
+  const err = await assertRejects(
+    () =>
+      runSweep({
+        metro: "unsupported-metro",
+        type: "bogus",
+        sourcesPath: FIXTURE_SOURCES,
+        force: true,
+        noDedup: true,
+        fetchFn: createMockFetch(),
+      }),
+    Error,
+    "unsupported publication type 'bogus'",
+  );
+  assertStringIncludes(err.message, "Supported types: scenethink, charlotteonthecheap");
+  assertEquals(err.message.includes("Only 'scenethink' is supported"), false);
+
+  // --type supplies a type for a publication recorded without one, so the missing-type
+  // refusal no longer fires; the supplied type is what gets checked.
+  await assertRejects(
+    () =>
+      runSweep({
+        metro: "missing-type-metro",
+        type: "bogus",
+        sourcesPath: FIXTURE_SOURCES,
+        force: true,
+        noDedup: true,
+        fetchFn: createMockFetch(),
+      }),
+    Error,
+    "unsupported publication type 'bogus'",
+  );
+});
+
 Deno.test("runSweep raises not-found error for unknown metro", async () => {
   await assertRejects(
     () =>
@@ -1127,7 +1168,7 @@ Deno.test("harvestEvents dispatches through parser registry and rejects unregist
   );
   assertEquals(cotcAliasVenues.length, cotcVenues.length);
 
-  // 3. Custom parser registered dynamically
+  // 3. Custom parser registered dynamically (removed afterwards so it never leaks into later tests)
   registerEventParser("custom-csv", (_url) =>
     Promise.resolve([
       {
@@ -1138,14 +1179,18 @@ Deno.test("harvestEvents dispatches through parser registry and rejects unregist
         events: [{ title: "Folk Gig", date: "2026-10-01" }],
       },
     ]));
-
-  const customVenues = await harvestEvents(
-    "https://custom-csv.example/events.csv",
-    "custom-csv",
-    mockFetch,
-  );
-  assertEquals(customVenues.length, 1);
-  assertEquals(customVenues[0].name, "Custom Music Hall");
+  try {
+    const customVenues = await harvestEvents(
+      "https://custom-csv.example/events.csv",
+      "custom-csv",
+      mockFetch,
+    );
+    assertEquals(customVenues.length, 1);
+    assertEquals(customVenues[0].name, "Custom Music Hall");
+  } finally {
+    delete EVENT_PARSER_REGISTRY["custom-csv"];
+  }
+  assertEquals("custom-csv" in EVENT_PARSER_REGISTRY, false);
 
   // 4. Unregistered type still throws naming the type
   await assertRejects(
