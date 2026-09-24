@@ -185,7 +185,8 @@ export function checkSessionToken(
         return true;
       }
       if (pattern.includes("/:")) {
-        const regexStr = "^" + pattern.replace(/:[a-zA-Z0-9_]+/g, "[a-zA-Z0-9_-]+") + "$";
+        const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regexStr = "^" + escaped.replace(/:[a-zA-Z0-9_]+/g, "[a-zA-Z0-9_-]+") + "$";
         const regex = new RegExp(regexStr);
         return regex.test(endpoint);
       }
@@ -278,6 +279,29 @@ export function isOutreachItemPath(path?: string): boolean {
   return !NON_ITEM_OUTREACH_SUBPATHS.has(m[1].toLowerCase());
 }
 
+const SCRIPT_PUT_RE = /method\s*[:=]\s*["']PUT["']|requests\.put\s*\(|\bPUT\b/;
+const SCRIPT_OTHER_MUTATION_RE =
+  /method\s*[:=]\s*["'](?:POST|PATCH|DELETE)["']|requests\.(?:post|patch|delete)\s*\(|\b(?:POST|PATCH|DELETE)\b/i;
+const SCRIPT_BACKEND_PATH_RE = new RegExp(`(?:${BACKEND_HOST_RE.source})(\\/[^\\s"'\`)]*)?`, "g");
+const SCRIPT_OUTREACH_PATH_RE = /\/outreach(?:\/[^\s"'`)]*)?/g;
+
+/**
+ * Returns the outreach paths a script PUTs to when the script does nothing
+ * but PUT to single outreach records (`/outreach/<id>`); otherwise null.
+ * Any other method, any other backend path, or a path the text cannot pin
+ * down (built at runtime, e.g. `/outreach/${id}` or `BASE + "/gig"`) yields
+ * null, which sends the caller to the existing outreach deny.
+ */
+function outreachItemPutPaths(code: string): string[] | null {
+  if (!SCRIPT_PUT_RE.test(code) || SCRIPT_OTHER_MUTATION_RE.test(code)) return null;
+  const paths = [
+    ...[...code.matchAll(SCRIPT_BACKEND_PATH_RE)].map((m) => m[1] ?? ""),
+    ...(code.match(SCRIPT_OUTREACH_PATH_RE) ?? []),
+  ];
+  if (paths.length === 0 || !paths.every((p) => isOutreachItemPath(p))) return null;
+  return paths;
+}
+
 function extractTokenArg(args: string[]): string | null {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -363,21 +387,21 @@ function decideScriptContent(
   if (!BACKEND_HOST_RE.test(code)) return null;
 
   if (OUTREACH_PATH_RE.test(code)) {
-    const isPutMutation = /method\s*:\s*["']PUT["']/i.test(code) || /\bPUT\b/i.test(code);
-    const isDispatch = /\/outreach\/(?:batch|pitch)\b/i.test(code) ||
-      /\b(?:batch|pitch)\b/i.test(code);
-    if (isPutMutation && !isDispatch) {
-      const tokenCheck = checkSessionToken(tokenPath, sessionId, "/outreach/*", nowMs);
-      if (tokenCheck.valid) {
-        return {
-          outcome: "allow",
-          reason: "Authorized outreach script mutation with active session approval token.",
-        };
+    const outreachPaths = outreachItemPutPaths(code);
+    if (outreachPaths) {
+      for (const path of outreachPaths) {
+        const tokenCheck = checkSessionToken(tokenPath, sessionId, path, nowMs);
+        if (!tokenCheck.valid) {
+          return {
+            outcome: "deny",
+            reason: `Script attempts unauthorized outreach mutation against production backend ` +
+              `(https://webjamsalem.herokuapp.com): ${tokenCheck.reason}. ${APPROVAL_REMEDIATION}`,
+          };
+        }
       }
       return {
-        outcome: "deny",
-        reason: `Script attempts unauthorized outreach mutation against production backend ` +
-          `(https://webjamsalem.herokuapp.com): ${tokenCheck.reason}. ${APPROVAL_REMEDIATION}`,
+        outcome: "allow",
+        reason: "Authorized outreach script mutation with active session approval token.",
       };
     }
 

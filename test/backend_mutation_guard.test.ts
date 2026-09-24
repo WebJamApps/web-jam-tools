@@ -9,7 +9,11 @@
 //   deno test --allow-env --allow-read --allow-write test/backend_mutation_guard.test.ts
 
 import { assert, assertEquals } from "@std/assert";
-import { checkBackendMutation, isOutreachItemPath } from "../hooks/lib/check_backend_mutation.ts";
+import {
+  checkBackendMutation,
+  checkSessionToken,
+  isOutreachItemPath,
+} from "../hooks/lib/check_backend_mutation.ts";
 
 async function withTempTokenFile(
   tokenData: Record<string, unknown> | string | null,
@@ -199,6 +203,89 @@ Deno.test("Outcome 1: Script doing PUT /outreach/:id with valid token ALLOWS", a
 
       const res = checkBackendMutation(payload, tokenPath);
       assert(res.startsWith("ALLOW:"), `Expected ALLOW for script PUT, got: ${res}`);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Script branch: only PUTs to single outreach records are ever allowed
+// ---------------------------------------------------------------------------
+
+const BACKEND = "https://webjamsalem.herokuapp.com";
+
+function scriptPayload(code: string): string {
+  return JSON.stringify({ tool_name: "Bash", tool_input: { command: `deno eval '${code}'` } });
+}
+
+function assertScript(
+  code: string,
+  endpoints: string[],
+  expected: "ALLOW" | "DENY",
+): Promise<void> {
+  return withTempTokenFile({ endpoints, expires_at: futureExpiry() }, (tokenPath) => {
+    const res = checkBackendMutation(scriptPayload(code), tokenPath);
+    assert(res.startsWith(`${expected}:`), `Expected ${expected} for script ${code}, got: ${res}`);
+  });
+}
+
+Deno.test("Script PUT /outreach/:id with a token covering only /outreach/:id ALLOWS", () =>
+  assertScript(
+    `await fetch("${BACKEND}/outreach/648a123", {method: "PUT", body: "{}"});`,
+    ["/outreach/:id"],
+    "ALLOW",
+  ));
+
+Deno.test("Script PUT /outreach/:id that also POSTs a Gate 2 draft approval DENIES", () =>
+  assertScript(
+    `await fetch("${BACKEND}/outreach/648a123", {method: "PUT", body: "{}"}); ` +
+      `await fetch("${BACKEND}/outreach/approval/draft-fingerprints", {method: "POST", body: "{}"});`,
+    ["/outreach/*"],
+    "DENY",
+  ));
+
+Deno.test("Script POSTing a Gate 2 draft approval with 'put' only in a comment DENIES", () =>
+  assertScript(
+    `await fetch("${BACKEND}/outreach/approval/draft-fingerprints", {method: "POST", body: "{}"}); // put`,
+    ["/outreach/*"],
+    "DENY",
+  ));
+
+Deno.test("Script DELETE /outreach/:id with 'put' only in a comment DENIES", () =>
+  assertScript(
+    `await fetch("${BACKEND}/outreach/648a123", {method: "DELETE"}); // put`,
+    ["/outreach/*"],
+    "DENY",
+  ));
+
+Deno.test("Script PUT to a two-segment outreach path (Gate 1 venue-set) DENIES", () =>
+  assertScript(
+    `await fetch("${BACKEND}/outreach/approval/venue-set", {method: "PUT", body: "{}"});`,
+    ["/outreach/*"],
+    "DENY",
+  ));
+
+Deno.test("Script PUT /outreach/:id that also PUTs another backend route DENIES", () =>
+  assertScript(
+    `await fetch("${BACKEND}/outreach/648a123", {method: "PUT", body: "{}"}); ` +
+      `await fetch("${BACKEND}/gig/abc", {method: "PUT", body: "{}"});`,
+    ["/outreach/*"],
+    "DENY",
+  ));
+
+Deno.test("Script PUT to an outreach path built at runtime DENIES", () =>
+  assertScript(
+    "const id = Deno.args[0]; " +
+      `await fetch(\`${BACKEND}/outreach/\${id}\`, {method: "PUT", body: "{}"});`,
+    ["/outreach/*"],
+    "DENY",
+  ));
+
+Deno.test("Token pattern placeholders match literally around the :param", async () => {
+  await withTempTokenFile(
+    { endpoints: ["/venue.v2/:id"], expires_at: futureExpiry() },
+    (tokenPath) => {
+      assertEquals(checkSessionToken(tokenPath, undefined, "/venue.v2/abc").valid, true);
+      assertEquals(checkSessionToken(tokenPath, undefined, "/venueXv2/abc").valid, false);
     },
   );
 });
