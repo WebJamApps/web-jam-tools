@@ -962,6 +962,123 @@ Deno.test("checkApprovalToken: token scoped to a different repo is refused", asy
   );
 });
 
+// --- checkApprovalToken directory-scan mode (web-jam-tools#1158) ---
+//
+// checkApprovalToken() has no session context, so with no explicit tokenPath and no
+// ISSUE_APPROVAL_TOKEN_PATH override it scans every *.json file directly under the per-session token
+// directory (HOME/.claude/state/issue-approval-tokens) instead of reading one fixed file. These tests
+// point HOME at a temp dir so nothing here ever touches the real ~/.claude/state/.
+
+async function withDefaultTokenDir(
+  fn: (dir: string) => Promise<void> | void,
+): Promise<void> {
+  const homeDir = await Deno.makeTempDir();
+  const dir = `${homeDir}/.claude/state/issue-approval-tokens`;
+  const prevHome = Deno.env.get("HOME");
+  const prevOverride = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+  Deno.env.set("HOME", homeDir);
+  try {
+    await fn(dir);
+  } finally {
+    if (prevHome === undefined) Deno.env.delete("HOME");
+    else Deno.env.set("HOME", prevHome);
+    if (prevOverride === undefined) Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+    else Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", prevOverride);
+    await Deno.remove(homeDir, { recursive: true });
+  }
+}
+
+Deno.test("checkApprovalToken (directory scan, no override): a missing token directory refuses (fails closed)", async () => {
+  await withDefaultTokenDir((dir) => {
+    const res = checkApprovalToken("WebJamApps/web-jam-tools", "Any title");
+    assertEquals(res.ok, false);
+    assertStringIncludes(res.reason ?? "", "No approval token directory found");
+    assertStringIncludes(res.reason ?? "", dir);
+  });
+});
+
+Deno.test("checkApprovalToken (directory scan, no override): a malformed file next to a valid matching file still proceeds", async () => {
+  await withDefaultTokenDir(async (dir) => {
+    await Deno.mkdir(dir, { recursive: true });
+    await Deno.writeTextFile(`${dir}/malformed.json`, "{ not valid json");
+    await Deno.writeTextFile(
+      `${dir}/session-good.json`,
+      JSON.stringify({
+        session_id: "session-good",
+        repo: "WebJamApps/web-jam-tools",
+        titles: ["Directory scan title"],
+        expires_at: new Date(Date.now() + 4 * 3600_000).toISOString(),
+      }),
+    );
+    const res = checkApprovalToken("WebJamApps/web-jam-tools", "Directory scan title");
+    assertEquals(res.ok, true);
+  });
+});
+
+Deno.test("checkApprovalToken (directory scan, no override): refuses when no file in the directory matches repo/title", async () => {
+  await withDefaultTokenDir(async (dir) => {
+    await Deno.mkdir(dir, { recursive: true });
+    await Deno.writeTextFile(
+      `${dir}/session-other.json`,
+      JSON.stringify({
+        session_id: "session-other",
+        repo: "WebJamApps/web-jam-tools",
+        titles: ["A different title"],
+        expires_at: new Date(Date.now() + 4 * 3600_000).toISOString(),
+      }),
+    );
+    const res = checkApprovalToken("WebJamApps/web-jam-tools", "Directory scan title");
+    assertEquals(res.ok, false);
+    assertStringIncludes(res.reason ?? "", "is not among the titles approved by any live token");
+  });
+});
+
+Deno.test("checkApprovalToken (directory scan, no override): refuses when the only matching file is expired", async () => {
+  await withDefaultTokenDir(async (dir) => {
+    await Deno.mkdir(dir, { recursive: true });
+    await Deno.writeTextFile(
+      `${dir}/session-expired.json`,
+      JSON.stringify({
+        session_id: "session-expired",
+        repo: "WebJamApps/web-jam-tools",
+        titles: ["Directory scan title"],
+        expires_at: new Date(Date.now() - 3600_000).toISOString(),
+      }),
+    );
+    const res = checkApprovalToken("WebJamApps/web-jam-tools", "Directory scan title");
+    assertEquals(res.ok, false);
+    assertStringIncludes(res.reason ?? "", "has expired");
+  });
+});
+
+Deno.test("checkApprovalToken (directory scan, no override): two different sessions' files each independently satisfy their own title", async () => {
+  await withDefaultTokenDir(async (dir) => {
+    await Deno.mkdir(dir, { recursive: true });
+    await Deno.writeTextFile(
+      `${dir}/session-A.json`,
+      JSON.stringify({
+        session_id: "session-A",
+        repo: "WebJamApps/web-jam-tools",
+        titles: ["Title A"],
+        expires_at: new Date(Date.now() + 4 * 3600_000).toISOString(),
+      }),
+    );
+    await Deno.writeTextFile(
+      `${dir}/session-B.json`,
+      JSON.stringify({
+        session_id: "session-B",
+        repo: "WebJamApps/web-jam-tools",
+        titles: ["Title B"],
+        expires_at: new Date(Date.now() + 4 * 3600_000).toISOString(),
+      }),
+    );
+    assertEquals(checkApprovalToken("WebJamApps/web-jam-tools", "Title A").ok, true);
+    assertEquals(checkApprovalToken("WebJamApps/web-jam-tools", "Title B").ok, true);
+    assertEquals(checkApprovalToken("WebJamApps/web-jam-tools", "Title C").ok, false);
+  });
+});
+
 Deno.test("createIssueAndVerify (default approvalCheck, no third arg): refuses to file when no token covers the title", async () => {
   await withTokenFile(null, async (tokenPath) => {
     const prevEnv = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");

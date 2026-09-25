@@ -206,7 +206,7 @@ Before the first issue write of a filing run, state how many permission prompts 
 
 **Step 0 — write the approval token before calling `create-issue`.** `deno task create-issue` is
 gated by `hooks/lib/check_issue_approval_token.ts`, which requires a valid approval token at
-`$HOME/.claude/state/issue-approval-token.json` matching the current session id, the target repo,
+`$HOME/.claude/state/issue-approval-tokens/<session-id>.json` matching the current session id, the target repo,
 the exact issue title(s), and an unexpired `expires_at`. Nothing writes that token automatically —
 run the sanctioned writer yourself, before `deno task create-issue`:
 
