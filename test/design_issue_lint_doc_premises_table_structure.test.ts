@@ -22,7 +22,7 @@ function docWithPremisesTable(tableBlock: string): string {
 A description of the feature.
 
 ## Both surfaces
-Parity details.
+Parity details across Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 ${tableBlock}
@@ -181,7 +181,7 @@ Deno.test("lintDesignDoc: document missing the '## Load-bearing premises' sectio
 A description of the feature.
 
 ## Both surfaces
-Parity details.
+Parity details across Claude Code, agy, and Codex.
 `;
 
   const result = lintDesignDoc(doc, "test.md");

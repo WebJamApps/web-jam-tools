@@ -997,13 +997,79 @@ function validateRevisionHistoryTable(
 }
 
 /**
+ * Validates the `## Both surfaces` section (web-jam-tools#1146):
+ * - If the section contains a table: requires a 'Codex' column in the header row, and requires every
+ *   data row to carry a non-empty Codex entry. If the column is missing or any row has an empty
+ *   Codex entry, reports `require-both-surfaces-codex`.
+ * - If the section contains prose without a table: requires the prose to mention Codex (`/\bcodex\b/i`).
+ *   If missing, reports `require-both-surfaces-codex`.
+ */
+function validateBothSurfacesSection(
+  bothSurfacesLines: Array<{ line: string; lineNum: number }>,
+  headingLineNum: number,
+): LintViolation[] {
+  const violations: LintViolation[] = [];
+  const tableLines = bothSurfacesLines.filter((entry) => entry.line.trim().startsWith("|"));
+
+  if (tableLines.length > 0) {
+    const rows = tableLines
+      .map((entry) => ({ ...entry, cells: splitTableRow(entry.line) }))
+      .filter((entry) => entry.cells.length > 0);
+    const headerRow = rows.find((r) => !isTableSeparatorRow(r.cells));
+
+    if (headerRow) {
+      const codexColIdx = headerRow.cells.findIndex((c) =>
+        /\bcodex\b/i.test(stripCellDecoration(c))
+      );
+
+      if (codexColIdx === -1) {
+        violations.push({
+          rule: "require-both-surfaces-codex",
+          message: "Design document's '## Both surfaces' table lacks a 'Codex' column",
+          line: headerRow.lineNum,
+          lineContent: headerRow.line,
+        });
+      } else {
+        for (const row of rows) {
+          if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
+          const codexCell = stripCellDecoration(row.cells[codexColIdx] ?? "");
+          if (codexCell === "") {
+            violations.push({
+              rule: "require-both-surfaces-codex",
+              message:
+                `Design document's '## Both surfaces' table row at line ${row.lineNum} has an empty Codex entry: "${row.line.trim()}"`,
+              line: row.lineNum,
+              lineContent: row.line,
+            });
+          }
+        }
+      }
+      return violations;
+    }
+  }
+
+  // Prose check (when no table with a header row is present)
+  const hasCodexProse = bothSurfacesLines.some((entry) => /\bcodex\b/i.test(entry.line));
+  if (!hasCodexProse) {
+    violations.push({
+      rule: "require-both-surfaces-codex",
+      message: "Design document's '## Both surfaces' section lacks a Codex entry in prose",
+      line: headingLineNum,
+    });
+  }
+
+  return violations;
+}
+
+/**
  * Checks a design document markdown string against the skill body rules:
  * 1. Fails if the document contains a status line (e.g., Status: / status: ...).
  * 2. Fails if the document contains a gate or approval state (e.g., Gate 1, Gate 2 approval state).
  * 3. Fails if the document contains the phrase "design complete" (case-insensitive).
  * 4. Fails if the document contains revision narration ("what changed", "an earlier version said", before/after framing).
  * 5. Fails if the document contains bare decision labels (e.g., "per D-7", "R-39").
- * 6. Fails if the document lacks a "## Both surfaces" section.
+ * 6. Fails if the document lacks a "## Both surfaces" section, or that section names no Codex
+ *    column (in a table) or no Codex entry (in prose) for any mechanism (web-jam-tools#1146).
  * 7. Fails if the document lacks a "## Load-bearing premises" section, or that section's table has
  *    a Proof cell that is empty, "N/A", or hedged (web-jam-tools#815); or the table itself is
  *    malformed — its separator row missing immediately after the header or present anywhere else,
@@ -1040,6 +1106,9 @@ export function lintDesignDoc(
 
   let inCodeBlock = false;
   let hasBothSurfacesSection = false;
+  let inBothSurfacesSection = false;
+  let bothSurfacesHeadingLineNum = 0;
+  const bothSurfacesLines: Array<{ line: string; lineNum: number }> = [];
   let loadBearingPremisesFound = false;
   const loadBearingPremisesTableLines: Array<{ line: string; lineNum: number }> = [];
   let inLoadBearingPremisesSection = false;
@@ -1119,6 +1188,12 @@ export function lintDesignDoc(
     // Check for ## Both surfaces section heading
     if (bothSurfacesHeadingRegex.test(line)) {
       hasBothSurfacesSection = true;
+      inBothSurfacesSection = true;
+      bothSurfacesHeadingLineNum = lineNum;
+    } else if (inBothSurfacesSection && anyHeadingRegex.test(line)) {
+      inBothSurfacesSection = false;
+    } else if (inBothSurfacesSection) {
+      bothSurfacesLines.push({ line, lineNum });
     }
 
     // Track the '## Load-bearing premises' section: on, from its heading, until the next
@@ -1270,12 +1345,14 @@ export function lintDesignDoc(
     }
   }
 
-  // 7. Check for Both surfaces section
+  // 7. Check for Both surfaces section (web-jam-tools#1146)
   if (!hasBothSurfacesSection) {
     violations.push({
       rule: "require-both-surfaces-section",
       message: "Design document lacks required '## Both surfaces' section",
     });
+  } else {
+    violations.push(...validateBothSurfacesSection(bothSurfacesLines, bothSurfacesHeadingLineNum));
   }
 
   // 8. Check for Load-bearing premises section and validate its Proof column

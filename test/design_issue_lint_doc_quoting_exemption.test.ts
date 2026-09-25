@@ -11,7 +11,7 @@ import { assertEquals } from "@std/assert";
 import { lintDesignDoc } from "../src/design-issue/lint_doc.ts";
 
 function docWith(line: string): string {
-  return `# Title\n\n## What it is\n${line}\n\n## Both surfaces\nParity`;
+  return `# Title\n\n## What it is\n${line}\n\n## Both surfaces\nParity across Claude Code, agy, and Codex`;
 }
 
 function violationsFor(line: string, rule: string): number {
@@ -90,7 +90,7 @@ per D-7
 \`\`\`
 
 ## Both surfaces
-Parity
+Parity across Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 | Premise | Proof | Proved |
