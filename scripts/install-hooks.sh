@@ -124,7 +124,7 @@ FORCE=0
 # each into the literal command string "$HOME/.claude/hooks/<name>" (expanded
 # by the shell that runs the hook, not by this installer — matches the style
 # of the hooks already wired into settings.json).
-SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh flash-issues-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh)
+SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh flash-issues-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh codex-reaper-startup-check.sh)
 
 # SessionEnd hooks this installer keeps registered in settings.json (web-jam-tools#818).
 # Same flat, no-matcher shape as SESSION_START_HOOKS and STOP_HOOKS — SessionEnd
