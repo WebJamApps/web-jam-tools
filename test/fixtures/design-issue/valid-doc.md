@@ -17,10 +17,10 @@ The service attaches to the existing WebSocket server and listens for event stre
 
 How this mechanism functions across agent surfaces:
 
-| Mechanism    | Claude Code                | agy/Antigravity |
-| ------------ | -------------------------- | --------------- |
-| CLI runner   | `deno task monitor:uptime` | identical       |
-| Verification | Unit tests in CI           | identical       |
+| Mechanism    | Claude Code                | agy/Antigravity | Codex     |
+| ------------ | -------------------------- | --------------- | --------- |
+| CLI runner   | `deno task monitor:uptime` | identical       | identical |
+| Verification | Unit tests in CI           | identical       | identical |
 
 ## Load-bearing premises
 

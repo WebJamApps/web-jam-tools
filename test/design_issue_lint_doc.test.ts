@@ -28,9 +28,9 @@ Technical details explaining the implementation.
 
 ## Both surfaces
 How each mechanism behaves on Claude Code and agy/Antigravity:
-| Mechanism | Claude Code | agy |
-|---|---|---|
-| Runner | deno task | identical |
+| Mechanism | Claude Code | agy | Codex |
+|---|---|---|---|
+| Runner | deno task | identical | identical |
 
 ## Load-bearing premises
 | Premise | Proof | Proved |
@@ -88,7 +88,7 @@ const status: string = "active";
 \`\`\`
 
 ## Both surfaces
-Cross-surface parity is preserved.
+Cross-surface parity is preserved across Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 | Premise | Proof | Proved |
@@ -193,7 +193,7 @@ Deno.test("lintDesignDoc allows table row IDs in Decision Record tables", () => 
 Clean description without bare labels in prose.
 
 ## Both surfaces
-Parity details.
+Parity details across Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 | Premise | Proof | Proved |
@@ -217,7 +217,7 @@ Deno.test("lintDesignDoc recognizes decorated/bold Proof column headers", () => 
 Clean description.
 
 ## Both surfaces
-Parity details.
+Parity details across Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 | **Premise** | **Proof** | **Proved** |
@@ -247,6 +247,152 @@ Architecture details.
   assertEquals(result.valid, false);
   const violation = result.violations.find((v) => v.rule === "require-both-surfaces-section");
   assertEquals(Boolean(violation), true);
+});
+
+Deno.test("lintDesignDoc flags '## Both surfaces' table lacking Codex column", () => {
+  const doc = `# Feature Design
+
+## What it is
+A description of the feature.
+
+## Both surfaces
+| Mechanism | Claude Code | agy |
+|---|---|---|
+| Runner | deno task | identical |
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| The runner exists | Verified | ${TODAY} |
+`;
+
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) => v.rule === "require-both-surfaces-codex");
+  assertEquals(Boolean(violation), true);
+  assertEquals(violation?.message.includes("'Codex' column"), true);
+});
+
+Deno.test("lintDesignDoc flags '## Both surfaces' table row with empty Codex entry", () => {
+  const doc = `# Feature Design
+
+## What it is
+A description of the feature.
+
+## Both surfaces
+| Mechanism | Claude Code | agy | Codex |
+|---|---|---|---|
+| Runner | deno task | identical |  |
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| The runner exists | Verified | ${TODAY} |
+`;
+
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) => v.rule === "require-both-surfaces-codex");
+  assertEquals(Boolean(violation), true);
+  assertEquals(violation?.message.includes("empty Codex entry"), true);
+});
+
+Deno.test("lintDesignDoc flags '## Both surfaces' prose that never mentions Codex", () => {
+  const doc = `# Feature Design
+
+## What it is
+A description of the feature.
+
+## Both surfaces
+Cross-surface parity is preserved across Claude Code and agy.
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| The runner exists | Verified | ${TODAY} |
+`;
+
+  const result = lintDesignDoc(doc, "test.md");
+  assertEquals(result.valid, false);
+  const violation = result.violations.find((v) => v.rule === "require-both-surfaces-codex");
+  assertEquals(Boolean(violation), true);
+  assertEquals(violation?.message.includes("lacks a Codex entry in prose"), true);
+});
+
+Deno.test("lintDesignDoc passes '## Both surfaces' table with Claude Code, agy (Antigravity), and Codex columns", () => {
+  const doc = `# Feature Design
+
+## What it is
+A description of the feature.
+
+## Both surfaces
+| Mechanism | Claude Code | agy (Antigravity) | Codex |
+|---|---|---|---|
+| Runner | deno task | identical | identical |
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| The runner exists | Verified | ${TODAY} |
+`;
+
+  const result = lintDesignDoc(doc, "test.md");
+  const bothSurfacesViolations = result.violations.filter(
+    (v) => v.rule === "require-both-surfaces-section" || v.rule === "require-both-surfaces-codex",
+  );
+  assertEquals(bothSurfacesViolations.length, 0);
+  assertEquals(result.valid, true);
+});
+
+Deno.test("lintDesignDoc: codex-integration-design-2026-09-23.md passes Both surfaces check", async () => {
+  const codexDocPath =
+    "/home/joshua/Dropbox/web-jam-llms/Token_Savings/codex-integration-design-2026-09-23.md";
+  let content = "";
+  try {
+    content = await Deno.readTextFile(codexDocPath);
+  } catch {
+    // Skipped if ~/Dropbox is unmounted (e.g. CI)
+  }
+
+  if (content) {
+    const result = await lintDesignDocFile(codexDocPath);
+    const bothSurfacesViolations = result.violations.filter(
+      (v) => v.rule === "require-both-surfaces-section" || v.rule === "require-both-surfaces-codex",
+    );
+    assertEquals(bothSurfacesViolations, []);
+
+    const datedResult = await lintDesignDocFile(codexDocPath, {
+      nowImpl: () => new Date("2026-09-24T12:00:00Z"),
+    });
+    assertEquals(datedResult.valid, true);
+    assertEquals(datedResult.violations, []);
+  } else {
+    // Verbatim excerpt for CI environments
+    const excerptDoc = `# ChatGPT and Codex Integration — Design
+
+## What it is
+Design for integration of Codex into WebJamApps workflows.
+
+## Both surfaces — Claude Code, agy and Codex
+
+Every design document states, for each mechanism it designs, how it works on Claude Code, agy and Codex; the section keeps its \`## Both surfaces\` heading, and \`deno task design:lint-doc\` requires a Codex entry in it.
+
+| Mechanism | Claude Code | agy (Antigravity) | Codex |
+|---|---|---|---|
+| Skills | Symlinked from the canonical clone; invoked as \`/name\` | Symlinked into agy's plugin directory; invoked as \`/name\` | Symlinked into \`~/.agents/skills\`; invoked as \`$name\`. |
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| Codex CLI is installed | Verified | ${TODAY} |
+`;
+    const result = lintDesignDoc(excerptDoc, "codex-integration-design.md");
+    const bothSurfacesViolations = result.violations.filter(
+      (v) => v.rule === "require-both-surfaces-section" || v.rule === "require-both-surfaces-codex",
+    );
+    assertEquals(bothSurfacesViolations, []);
+    assertEquals(result.valid, true);
+  }
 });
 
 Deno.test("lintDesignDocFile throws when path is missing or empty", async () => {
@@ -411,7 +557,7 @@ Design content.
 | 1.1.0 | 2026-09-02 | [Issue 2](https://example.com/2) | Added new features |
 
 ## Both surfaces
-Parity details.
+Parity details across Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 | # | Premise | Proof | Proved |
@@ -430,7 +576,7 @@ Deno.test("AC7: lintDesignDoc passes document without Revision History table", (
 Content.
 
 ## Both surfaces
-Parity details.
+Parity details across Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 | # | Premise | Proof | Proved |

@@ -44,7 +44,7 @@ const MINIMAL_LINT_CLEAN_DOC = `# Test
 Content
 
 ## Both surfaces
-Identical on both surfaces.
+Identical on Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 | Premise | Proof | Proved |
@@ -282,7 +282,7 @@ This is a sample design document for testing Gate 1 automation.
 | Gate 1 | In Progress |
 
 ## Both surfaces
-Works on Claude Code and Antigravity.
+Works on Claude Code, Antigravity, and Codex.
 
 ## Load-bearing premises
 | Premise | Proof | Proved |
