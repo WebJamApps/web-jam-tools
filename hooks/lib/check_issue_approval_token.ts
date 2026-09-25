@@ -102,11 +102,37 @@ export interface ApprovalToken {
   expires_at: string;
 }
 
-export function defaultTokenPath(): string {
+/**
+ * Directory holding one approval-token file per session (web-jam-tools#1158). Never affected by
+ * `ISSUE_APPROVAL_TOKEN_PATH` — that override always names a single file, not a directory; callers
+ * that need the override's single-file behavior read it themselves (see `defaultTokenPath()` and
+ * `checkApprovalToken()` in src/create-issue/lib.ts).
+ */
+export function defaultTokenDir(): string {
+  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "/home/joshua";
+  return `${home}/.claude/state/issue-approval-tokens`;
+}
+
+/**
+ * The token file for one specific session (web-jam-tools#1158): `<defaultTokenDir()>/<sessionId>.json`,
+ * unless `ISSUE_APPROVAL_TOKEN_PATH` is set, which keeps its pre-existing meaning — a single fixed
+ * file used for every session, ignoring `sessionId` entirely (existing tests depend on this).
+ */
+export function defaultTokenPath(sessionId: string): string {
   const override = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
   if (override) return override;
-  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "/home/joshua";
-  return `${home}/.claude/state/issue-approval-token.json`;
+  return `${defaultTokenDir()}/${sessionId}.json`;
+}
+
+/**
+ * True when `id` is safe to use as a token filename: non-empty and free of path-traversal or
+ * separator characters. Shared by the writer (scripts/write_issue_approval_token.ts, which refuses
+ * to write for an unsafe id) and the hook path below (which refuses to read for one).
+ */
+export function isSafeSessionId(id: string): boolean {
+  if (!id) return false;
+  if (id.includes("/") || id.includes("\\") || id.includes("..")) return false;
+  return true;
 }
 
 /** Returns null on anything not a well-formed token (missing file, bad JSON, wrong shape) — fail closed. */
@@ -205,20 +231,53 @@ function extractBashTitle(args: string[]): string | null {
   return null;
 }
 
-/** Loads and validates the token against session/expiry/repo. Returns a deny Decision on any failure, or null if the token is good to use. */
+/**
+ * Loads and validates the token against session/expiry/repo. Returns a deny Decision on any
+ * failure, or null if the token is good to use.
+ *
+ * `tokenPath`: a concrete string is used verbatim (the `ISSUE_APPROVAL_TOKEN_PATH` single-file
+ * override, or an explicit path a test supplies). `null` means "resolve this session's own file" —
+ * web-jam-tools#1158's per-session default. That resolution can itself fail closed (missing or
+ * path-unsafe session id), which is why this is the one place doing it: it only needs to happen when
+ * a token is actually about to be checked, not for every hook invocation regardless of tool.
+ */
 function checkTokenValidity(
   repoFull: string,
   sessionId: string,
-  tokenPath: string,
+  tokenPath: string | null,
   nowMs: number,
 ): { token: ApprovalToken } | { deny: Decision } {
-  const token = loadToken(tokenPath);
+  let resolvedPath: string;
+  if (tokenPath !== null) {
+    resolvedPath = tokenPath;
+  } else if (!sessionId) {
+    return {
+      deny: {
+        outcome: "deny",
+        reason:
+          "No session id was provided with this call, so this session's own approval token file cannot be located.",
+      },
+    };
+  } else if (!isSafeSessionId(sessionId)) {
+    return {
+      deny: {
+        outcome: "deny",
+        reason:
+          `Session id is not safe to use as a filename (contains "/", "\\", or ".."), so this session's own approval token file cannot be located: ${
+            JSON.stringify(sessionId)
+          }`,
+      },
+    };
+  } else {
+    resolvedPath = defaultTokenPath(sessionId);
+  }
+  const token = loadToken(resolvedPath);
   if (!token) {
     return {
       deny: {
         outcome: "deny",
         reason:
-          `No approval token found at ${tokenPath}. Get Josh's explicit approval for this plan first (via /design-issue's plan gate), or ask him directly.`,
+          `No approval token found at ${resolvedPath}. Get Josh's explicit approval for this plan first (via /design-issue's plan gate), or ask him directly.`,
       },
     };
   }
@@ -313,7 +372,7 @@ function looksLikeIssueCreatingCommand(command: string): boolean {
 function decideBash(
   command: string,
   sessionId: string,
-  tokenPath: string,
+  tokenPath: string | null,
   nowMs: number,
 ): Decision {
   const { segments, unterminated } = splitOnOperators(command);
@@ -369,7 +428,7 @@ function decideBash(
 function retryAmbiguousParseWithHeredocsStripped(
   command: string,
   sessionId: string,
-  tokenPath: string,
+  tokenPath: string | null,
   nowMs: number,
 ): Decision {
   const stripped = stripHeredocs(command);
@@ -409,7 +468,7 @@ function retryAmbiguousParseWithHeredocsStripped(
 function scanBashSegments(
   segments: string[],
   sessionId: string,
-  tokenPath: string,
+  tokenPath: string | null,
   nowMs: number,
 ): Decision {
   for (const segment of segments) {
@@ -471,7 +530,7 @@ export function decide(
   toolName: string,
   toolInput: Record<string, unknown>,
   sessionId: string,
-  tokenPath: string,
+  tokenPath: string | null,
   nowMs: number,
 ): Decision {
   if (toolName === "Bash") {
@@ -546,6 +605,42 @@ export function checkIssueApprovalToken(
   return `DENY:${result.reason ?? ""}`;
 }
 
+/**
+ * The real hook entry point (web-jam-tools#1158): when `ISSUE_APPROVAL_TOKEN_PATH` is set, this
+ * delegates straight to `checkIssueApprovalToken()` with that single file, unchanged from before —
+ * every existing hook test sets this env var, so that path is byte-for-byte the same behavior. When
+ * it is not set, the calling session's own token file is resolved from the session id in the
+ * payload, lazily and only when `decide()` actually needs to check a token — a missing/unparseable
+ * payload still PASSes exactly as before, and a tool this hook has no opinion on is never blocked on
+ * session-id validity it doesn't need.
+ */
+export function checkIssueApprovalTokenAuto(inputJson: string, nowMs: number): string {
+  const override = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  if (override) {
+    return checkIssueApprovalToken(inputJson, override, nowMs);
+  }
+
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(inputJson);
+  } catch {
+    return "PASS";
+  }
+  const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
+  const sessionId = typeof data.session_id === "string"
+    ? data.session_id
+    : (typeof data.conversationId === "string" ? data.conversationId : "");
+  const toolInputRaw = data.tool_input;
+  const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
+    ? (toolInputRaw as Record<string, unknown>)
+    : {};
+
+  const result = decide(toolName, toolInput, sessionId, null, nowMs);
+  if (result.outcome === "pass") return "PASS";
+  if (result.outcome === "allow") return `ALLOW:${result.reason ?? ""}`;
+  return `DENY:${result.reason ?? ""}`;
+}
+
 if (import.meta.main) {
   let inputJson = "";
   try {
@@ -553,5 +648,5 @@ if (import.meta.main) {
   } catch {
     // ignore
   }
-  console.log(checkIssueApprovalToken(inputJson, defaultTokenPath(), Date.now()));
+  console.log(checkIssueApprovalTokenAuto(inputJson, Date.now()));
 }

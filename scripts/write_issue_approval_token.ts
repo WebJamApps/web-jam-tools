@@ -9,8 +9,16 @@
  *     "expires_at": "<ISO 8601 timestamp>"
  *   }
  *
- * Default token path: $HOME/.claude/state/issue-approval-token.json
- * Supports path override via ISSUE_APPROVAL_TOKEN_PATH env var or --token-path flag.
+ * Default token path: $HOME/.claude/state/issue-approval-tokens/<session-id>.json — one file per
+ * session (web-jam-tools#1158), so two sessions writing approval at the same time never overwrite
+ * each other. Refuses to write, and exits non-zero, when the session id is empty or unsafe to use as
+ * a filename (contains "/", "\", or "..").
+ * Supports path override via ISSUE_APPROVAL_TOKEN_PATH env var or --token-path flag — either one
+ * keeps its pre-existing meaning: a single fixed file, ignoring the session id entirely.
+ * Each write also deletes any EXPIRED token file left behind by another session in the same default
+ * directory; unexpired files from other sessions are never touched. This cleanup only runs when
+ * writing to the default per-session directory (not under a --token-path/ISSUE_APPROVAL_TOKEN_PATH
+ * override, which names a single file rather than a directory of sessions).
  *
  * web-jam-tools#808: the CLI invocation below refuses to write at all unless
  * hooks/lib/check_token_write_authorization.ts's decision 21 check passes — the most recent
@@ -31,7 +39,13 @@
 
 import { dirname } from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
-import { type ApprovalToken, defaultTokenPath } from "../hooks/lib/check_issue_approval_token.ts";
+import {
+  type ApprovalToken,
+  defaultTokenPath,
+  isExpired,
+  isSafeSessionId,
+  loadToken,
+} from "../hooks/lib/check_issue_approval_token.ts";
 import {
   conversationIdFromTranscriptPath,
   loadTranscript,
@@ -60,6 +74,13 @@ export function buildApprovalToken(options: WriteApprovalTokenOptions): Approval
   const sessionId = options.sessionId?.trim();
   if (!sessionId) {
     throw new Error("sessionId is required and cannot be empty");
+  }
+  if (!isSafeSessionId(sessionId)) {
+    throw new Error(
+      `sessionId is not safe to use as a filename (must not contain "/", "\\", or ".."): ${
+        JSON.stringify(sessionId)
+      }`,
+    );
   }
 
   let repo = options.repo?.trim();
@@ -97,18 +118,80 @@ export function buildApprovalToken(options: WriteApprovalTokenOptions): Approval
 }
 
 /**
+ * Deletes every EXPIRED `*.json` file in `dir` other than `keepPath` (web-jam-tools#1158). Unexpired
+ * files — including another session's live approval — are never touched. Best-effort: an unreadable
+ * or malformed file is left alone (not deleted, not treated as an error), and a missing/unlistable
+ * directory is a silent no-op — this sweep piggybacks on a successful write, it never blocks one.
+ */
+async function sweepExpiredTokenFiles(
+  dir: string,
+  keepPath: string,
+  nowMs: number,
+): Promise<void> {
+  let entries: Deno.DirEntry[];
+  try {
+    entries = [];
+    for await (const entry of Deno.readDir(dir)) entries.push(entry);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile || !entry.name.endsWith(".json")) continue;
+    const filePath = `${dir}/${entry.name}`;
+    if (filePath === keepPath) continue;
+    const otherToken = loadToken(filePath);
+    if (!otherToken) continue;
+    if (isExpired(otherToken, nowMs)) {
+      try {
+        await Deno.remove(filePath);
+      } catch {
+        // best-effort cleanup — a failed delete never blocks the write that triggered it
+      }
+    }
+  }
+}
+
+/** Synchronous counterpart of sweepExpiredTokenFiles(), same contract. */
+function sweepExpiredTokenFilesSync(dir: string, keepPath: string, nowMs: number): void {
+  let entries: Deno.DirEntry[];
+  try {
+    entries = [...Deno.readDirSync(dir)];
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile || !entry.name.endsWith(".json")) continue;
+    const filePath = `${dir}/${entry.name}`;
+    if (filePath === keepPath) continue;
+    const otherToken = loadToken(filePath);
+    if (!otherToken) continue;
+    if (isExpired(otherToken, nowMs)) {
+      try {
+        Deno.removeSync(filePath);
+      } catch {
+        // best-effort cleanup — a failed delete never blocks the write that triggered it
+      }
+    }
+  }
+}
+
+/**
  * Writes the approval token to disk asynchronously.
  */
 export async function writeApprovalToken(
   options: WriteApprovalTokenOptions,
 ): Promise<{ token: ApprovalToken; path: string }> {
   const token = buildApprovalToken(options);
-  const path = options.tokenPath || defaultTokenPath();
+  const path = options.tokenPath || defaultTokenPath(token.session_id);
   const dir = dirname(path);
   if (dir && dir !== ".") {
     await Deno.mkdir(dir, { recursive: true });
   }
   await Deno.writeTextFile(path, JSON.stringify(token, null, 2) + "\n");
+  const usingSessionDir = !options.tokenPath && !Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  if (usingSessionDir) {
+    await sweepExpiredTokenFiles(dir, path, Date.now());
+  }
   return { token, path };
 }
 
@@ -119,12 +202,16 @@ export function writeApprovalTokenSync(
   options: WriteApprovalTokenOptions,
 ): { token: ApprovalToken; path: string } {
   const token = buildApprovalToken(options);
-  const path = options.tokenPath || defaultTokenPath();
+  const path = options.tokenPath || defaultTokenPath(token.session_id);
   const dir = dirname(path);
   if (dir && dir !== ".") {
     Deno.mkdirSync(dir, { recursive: true });
   }
   Deno.writeTextFileSync(path, JSON.stringify(token, null, 2) + "\n");
+  const usingSessionDir = !options.tokenPath && !Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  if (usingSessionDir) {
+    sweepExpiredTokenFilesSync(dir, path, Date.now());
+  }
   return { token, path };
 }
 
@@ -378,7 +465,7 @@ Options:
   --titles-file <path>      Path to file with titles (one per line or JSON array)
   --ttl-hours <hours>       Token TTL in hours (default: 4)
   --expires-at <iso>        Explicit expiration ISO 8601 timestamp
-  -p, --token-path <path>   Override token output path (defaults to $ISSUE_APPROVAL_TOKEN_PATH or ~/.claude/state/issue-approval-token.json)
+  -p, --token-path <path>   Override token output path (defaults to $ISSUE_APPROVAL_TOKEN_PATH or ~/.claude/state/issue-approval-tokens/<session-id>.json)
   --json                    Output written token as JSON to stdout
   -h, --help                Show this help message
 `,

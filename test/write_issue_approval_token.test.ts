@@ -276,6 +276,102 @@ Deno.test("writeApprovalTokenSync: writes token synchronously", async () => {
   }
 });
 
+// --- Per-session token storage (web-jam-tools#1158) ---
+//
+// scripts/write_issue_approval_token: store one approval token per session so concurrent sessions
+// stop overwriting each other. Every test below that exercises the DEFAULT (no --token-path, no
+// ISSUE_APPROVAL_TOKEN_PATH) storage location points HOME at a temp directory first, so nothing here
+// ever reads, writes, or deletes anything under the real ~/.claude/state/.
+
+/** Points HOME at `home` and clears ISSUE_APPROVAL_TOKEN_PATH for the duration of `fn`, restoring
+ * both afterward — the in-process equivalent of runHookWithHome() below for functions
+ * (writeApprovalToken/writeApprovalTokenSync) called directly rather than through a subprocess. */
+async function withHomeAndNoOverride(
+  fn: (home: string) => Promise<void> | void,
+): Promise<void> {
+  const homeDir = await Deno.makeTempDir();
+  const prevHome = Deno.env.get("HOME");
+  const prevOverride = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+  Deno.env.set("HOME", homeDir);
+  try {
+    await fn(homeDir);
+  } finally {
+    if (prevHome === undefined) Deno.env.delete("HOME");
+    else Deno.env.set("HOME", prevHome);
+    if (prevOverride === undefined) Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+    else Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", prevOverride);
+    await Deno.remove(homeDir, { recursive: true });
+  }
+}
+
+Deno.test("buildApprovalToken: throws when sessionId contains '..' (path traversal)", () => {
+  assertThrows(
+    () => buildApprovalToken({ sessionId: "../evil", repo: "web-jam-tools", titles: ["T1"] }),
+    Error,
+    "not safe to use as a filename",
+  );
+});
+
+Deno.test("buildApprovalToken: throws when sessionId contains a path separator", () => {
+  assertThrows(
+    () => buildApprovalToken({ sessionId: "a/b", repo: "web-jam-tools", titles: ["T1"] }),
+    Error,
+    "not safe to use as a filename",
+  );
+  assertThrows(
+    () => buildApprovalToken({ sessionId: "a\\b", repo: "web-jam-tools", titles: ["T1"] }),
+    Error,
+    "not safe to use as a filename",
+  );
+});
+
+Deno.test("writeApprovalToken: with no tokenPath and no ISSUE_APPROVAL_TOKEN_PATH override, writes to the per-session default directory under HOME", async () => {
+  await withHomeAndNoOverride(async (homeDir) => {
+    const { token, path } = await writeApprovalToken({
+      sessionId: "session-default-dir",
+      repo: "web-jam-tools",
+      titles: ["Default dir title"],
+    });
+    assertEquals(
+      path,
+      `${homeDir}/.claude/state/issue-approval-tokens/session-default-dir.json`,
+    );
+    const loaded = loadToken(path);
+    assertEquals(loaded, token);
+  });
+});
+
+Deno.test("writeApprovalToken: deletes an expired token file from another session in the same default directory, but leaves an unexpired one in place", async () => {
+  await withHomeAndNoOverride(async () => {
+    const { path: expiredPath } = await writeApprovalToken({
+      sessionId: "session-expired",
+      repo: "web-jam-tools",
+      titles: ["Old title"],
+      expiresAt: new Date(Date.now() - 3600_000).toISOString(),
+    });
+    const exists = (p: string) => Deno.stat(p).then(() => true).catch(() => false);
+    assertEquals(await exists(expiredPath), true);
+
+    // The next write (a different session) sweeps the now-expired file.
+    const { path: liveOtherPath } = await writeApprovalToken({
+      sessionId: "session-live-other",
+      repo: "web-jam-tools",
+      titles: ["Live other title"],
+    });
+    assertEquals(await exists(expiredPath), false);
+    assertEquals(await exists(liveOtherPath), true);
+
+    // A further write must not disturb the still-unexpired file left behind above.
+    await writeApprovalToken({
+      sessionId: "session-triggering-sweep",
+      repo: "web-jam-tools",
+      titles: ["Triggering title"],
+    });
+    assertEquals(await exists(liveOtherPath), true);
+  });
+});
+
 // --- CLI execution tests ---
 
 Deno.test("CLI: writes token via repeated --title arguments", async () => {
@@ -377,6 +473,27 @@ Deno.test("CLI: fails with exit code 1 when required arguments are missing (auth
     );
     assertEquals(res.code, 1);
     assert(res.stderr.includes("sessionId is required"));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: fails with exit code 1 when session id is path-unsafe ('../evil')", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const authEnv = await writeAuthorizingTranscriptFixture(dir, "/file-issue do the thing");
+    const res = await runCli([
+      "--session-id",
+      "../evil",
+      "--repo",
+      "web-jam-tools",
+      "--title",
+      "Some title",
+    ], envWith({ ...authEnv, HOME: dir })); // HOME pinned to the temp dir as a safety net — this call
+    // must never reach the point of computing a real path at all, but pinning HOME means it couldn't
+    // touch ~/.claude/state/ even if it did.
+    assertEquals(res.code, 1);
+    assert(res.stderr.includes("not safe to use as a filename"));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -1292,6 +1409,165 @@ Deno.test("Round-trip: written token DENIES when session ID does not match", asy
     assert(parsed.hookSpecificOutput.permissionDecisionReason.includes("different session"));
   } finally {
     await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// --- Per-session hook regression tests (web-jam-tools#1158) ---
+//
+// Every test above that exercises the hook sets ISSUE_APPROVAL_TOKEN_PATH, which keeps its
+// pre-existing single-file override meaning untouched by this change. These tests instead point HOME
+// at a temp dir and leave ISSUE_APPROVAL_TOKEN_PATH unset, so the hook resolves each call's token
+// file from its own session id — this is the actual regression: on the pre-#1158 code, two concurrent
+// sessions shared one file and the second write silently clobbered the first session's approval.
+
+/** Like runHook() above, but drives the real per-session default path instead of the
+ * ISSUE_APPROVAL_TOKEN_PATH single-file override: sets HOME to `home` and ensures
+ * ISSUE_APPROVAL_TOKEN_PATH is NOT inherited into the child process. */
+async function runHookWithHome(
+  payload: Record<string, unknown>,
+  home: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const input = JSON.stringify(payload);
+  const env: Record<string, string> = { ...Deno.env.toObject(), HOME: home };
+  delete env["ISSUE_APPROVAL_TOKEN_PATH"];
+  const cmd = new Deno.Command("bash", {
+    args: [HOOK_PATH],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+    env,
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(new TextEncoder().encode(input));
+  await writer.close();
+  const { code, stdout, stderr } = await child.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
+}
+
+Deno.test("Two-session regression (web-jam-tools#1158): concurrent sessions A and B each pass the hook for their own approved title", async () => {
+  await withHomeAndNoOverride(async (homeDir) => {
+    await writeApprovalToken({
+      sessionId: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Title A"],
+    });
+    await writeApprovalToken({
+      sessionId: "session-B",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Title B"],
+    });
+
+    const resA = await runHookWithHome({
+      session_id: "session-A",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Title A",
+      },
+    }, homeDir);
+    assertEquals(resA.code, 0, resA.stderr);
+    assertEquals(JSON.parse(resA.stdout).hookSpecificOutput.permissionDecision, "allow");
+
+    const resB = await runHookWithHome({
+      session_id: "session-B",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Title B",
+      },
+    }, homeDir);
+    assertEquals(resB.code, 0, resB.stderr);
+    assertEquals(JSON.parse(resB.stdout).hookSpecificOutput.permissionDecision, "allow");
+
+    // Cross-check: session A's token must not accidentally cover session B's title, or vice versa —
+    // this is what the pre-#1158 shared single file could never guarantee.
+    const resACrossTitle = await runHookWithHome({
+      session_id: "session-A",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Title B",
+      },
+    }, homeDir);
+    assertEquals(JSON.parse(resACrossTitle.stdout).hookSpecificOutput.permissionDecision, "deny");
+  });
+});
+
+Deno.test("Hook (per-session default, no override): DENIES (fails closed) when session id is path-unsafe", async () => {
+  const homeDir = await Deno.makeTempDir();
+  try {
+    const res = await runHookWithHome({
+      session_id: "../evil",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Any title",
+      },
+    }, homeDir);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout);
+    assertEquals(parsed.hookSpecificOutput.permissionDecision, "deny");
+    assert(
+      parsed.hookSpecificOutput.permissionDecisionReason.includes("not safe to use as a filename"),
+    );
+  } finally {
+    await Deno.remove(homeDir, { recursive: true });
+  }
+});
+
+Deno.test("Hook (per-session default, no override): DENIES (fails closed) when no session id is provided at all", async () => {
+  const homeDir = await Deno.makeTempDir();
+  try {
+    const res = await runHookWithHome({
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Any title",
+      },
+    }, homeDir);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout);
+    assertEquals(parsed.hookSpecificOutput.permissionDecision, "deny");
+    assert(parsed.hookSpecificOutput.permissionDecisionReason.includes("No session id"));
+  } finally {
+    await Deno.remove(homeDir, { recursive: true });
+  }
+});
+
+Deno.test("Hook (per-session default, no override): DENIES (fails closed) with a clear reason when the session has no token file at all", async () => {
+  const homeDir = await Deno.makeTempDir();
+  try {
+    const res = await runHookWithHome({
+      session_id: "session-with-no-token",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Any title",
+      },
+    }, homeDir);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout);
+    assertEquals(parsed.hookSpecificOutput.permissionDecision, "deny");
+    assert(parsed.hookSpecificOutput.permissionDecisionReason.includes("No approval token found"));
+  } finally {
+    await Deno.remove(homeDir, { recursive: true });
   }
 });
 
