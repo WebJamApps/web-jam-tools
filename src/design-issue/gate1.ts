@@ -6,6 +6,7 @@ import * as path from "@std/path";
 import { renderDesignDoc } from "../../scripts/render_design_doc.ts";
 import { lintDesignDoc } from "./lint_doc.ts";
 import { verifyCitations, type VerifyCitationsResult } from "./verify_citations.ts";
+import { openGate1Record } from "./gate1_record.ts";
 
 export interface Gate1Options {
   docPath: string;
@@ -22,6 +23,8 @@ export interface Gate1Options {
    * gate1 test fixtures — but a test exercising this rule's wiring without a real `gh` call
    * injects a stub here instead. Production (CLI) always uses the default. */
   verifyCitationsImpl?: (content: string, docPath: string) => Promise<VerifyCitationsResult>;
+  stateDir?: string;
+  openGate1RecordImpl?: typeof openGate1Record;
 }
 
 export interface Gate1Result {
@@ -30,6 +33,7 @@ export interface Gate1Result {
   screenshotPath: string;
   screenshotSizeBytes: number;
   opened: boolean;
+  recordPath?: string;
 }
 
 /**
@@ -295,12 +299,18 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     opened = true;
   }
 
+  const recordOpener = options.openGate1RecordImpl || openGate1Record;
+  const { recordPath } = await recordOpener(absDocPath, markdownContent, {
+    stateDir: options.stateDir,
+  });
+
   return {
     docPath: absDocPath,
     htmlPath,
     screenshotPath,
     screenshotSizeBytes,
     opened,
+    recordPath,
   };
 }
 
