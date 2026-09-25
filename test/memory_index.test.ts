@@ -7,6 +7,7 @@ import {
   archiveDoneCheckpoints,
   generateMemoryIndex,
   parseMemoryFile,
+  parseMemoryFileWithReason,
   scanMemoryDirectory,
 } from "../src/memory-index/generator.ts";
 import { runCli } from "../src/memory-index/cli.ts";
@@ -56,6 +57,37 @@ Body text
   assert(result !== null);
   assertEquals(result.isCheckpoint, true);
   assertEquals(result.status, "done");
+});
+
+Deno.test("parseMemoryFile: returns null and reports reason when front matter is missing", () => {
+  let skipReason = "";
+  const result = parseMemoryFile("Just body text\nno front matter\n", "broken.md", (r) => {
+    skipReason = r;
+  });
+  assertEquals(result, null);
+  assertEquals(skipReason, "no front matter block");
+
+  const withReason = parseMemoryFileWithReason("Just body text\n", "broken.md");
+  assertEquals(withReason.entry, null);
+  assertEquals(withReason.reason, "no front matter block");
+});
+
+Deno.test("parseMemoryFile: returns null and reports reason on YAML parse error", () => {
+  const content = `---
+name: bad-yaml
+description: unquoted: colon in description
+---
+`;
+  let skipReason = "";
+  const result = parseMemoryFile(content, "bad-yaml.md", (r) => {
+    skipReason = r;
+  });
+  assertEquals(result, null);
+  assert(skipReason.length > 0);
+
+  const withReason = parseMemoryFileWithReason(content, "bad-yaml.md");
+  assertEquals(withReason.entry, null);
+  assert(withReason.reason !== undefined && withReason.reason.length > 0);
 });
 
 Deno.test("generateMemoryIndex: groups by type, sorts slugs alphabetically, formats live checkpoints", () => {
@@ -154,7 +186,7 @@ Deno.test("archiveDoneCheckpoints: moves done checkpoints to archive directory",
       `---\nmetadata:\n  type: feedback\n---\n`,
     );
 
-    const entries = await scanMemoryDirectory(tempDir);
+    const { entries } = await scanMemoryDirectory(tempDir);
     const { remaining, archivedCount } = await archiveDoneCheckpoints(tempDir, entries);
 
     assertEquals(archivedCount, 1);
@@ -198,6 +230,114 @@ Deno.test("runCli: write and --check flags", async () => {
   }
 });
 
+Deno.test("scanMemoryDirectory: collects parsed entries and skipped files with reasons", async () => {
+  const tempDir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      join(tempDir, "valid.md"),
+      `---\nname: valid\ndescription: "Valid entry"\nmetadata:\n  type: feedback\n---\n`,
+    );
+    await Deno.writeTextFile(
+      join(tempDir, "no-frontmatter.md"),
+      `# Just markdown\nNo front matter block here.\n`,
+    );
+    await Deno.writeTextFile(
+      join(tempDir, "bad-yaml.md"),
+      `---\nname: bad-yaml\ndescription: unquoted: colon\n---\n`,
+    );
+
+    const { entries, skipped } = await scanMemoryDirectory(tempDir);
+    assertEquals(entries.length, 1);
+    assertEquals(entries[0].slug, "valid");
+
+    assertEquals(skipped.length, 2);
+    assertEquals(skipped[0].filename, "bad-yaml.md");
+    assert(skipped[0].reason.length > 0);
+    assertEquals(skipped[1].filename, "no-frontmatter.md");
+    assertEquals(skipped[1].reason, "no front matter block");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runCli: write mode writes valid entries, reports skips, and returns exit code 1", async () => {
+  const tempDir = await Deno.makeTempDir();
+  const originalError = console.error;
+  const loggedErrors: string[] = [];
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+  };
+  try {
+    await Deno.writeTextFile(
+      join(tempDir, "valid-a.md"),
+      `---\ndescription: "Valid A"\nmetadata:\n  type: feedback\n---\n`,
+    );
+    await Deno.writeTextFile(
+      join(tempDir, "broken-no-fm.md"),
+      `no front matter here\n`,
+    );
+    await Deno.writeTextFile(
+      join(tempDir, "broken-bad-yaml.md"),
+      `---\ndescription: unquoted: colon\n---\n`,
+    );
+
+    const exitCode = await runCli(["--dir", tempDir]);
+    assertEquals(exitCode, 1);
+
+    // Verify MEMORY.md was still written from valid entries (write-and-warn)
+    const memoryMdPath = join(tempDir, "MEMORY.md");
+    const content = await Deno.readTextFile(memoryMdPath);
+    assert(content.includes("valid-a"));
+
+    // Verify stderr output named skipped files and reasons
+    assert(
+      loggedErrors.some((e) =>
+        e.includes("broken-no-fm.md") && e.includes("no front matter block")
+      ),
+    );
+    assert(loggedErrors.some((e) => e.includes("broken-bad-yaml.md")));
+  } finally {
+    console.error = originalError;
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runCli: --check mode reports skips and returns exit code 1 even when MEMORY.md matches", async () => {
+  const tempDir = await Deno.makeTempDir();
+  const originalError = console.error;
+  const loggedErrors: string[] = [];
+  console.error = (...args: unknown[]) => {
+    loggedErrors.push(args.map(String).join(" "));
+  };
+  try {
+    await Deno.writeTextFile(
+      join(tempDir, "valid-a.md"),
+      `---\ndescription: "Valid A"\nmetadata:\n  type: feedback\n---\n`,
+    );
+    await Deno.writeTextFile(
+      join(tempDir, "broken.md"),
+      `no front matter here\n`,
+    );
+
+    // First generate MEMORY.md (write mode exits 1 due to skip)
+    const writeCode = await runCli(["--dir", tempDir]);
+    assertEquals(writeCode, 1);
+
+    loggedErrors.length = 0;
+
+    // Check mode should also exit 1 due to the skip, despite MEMORY.md matching the valid entries
+    const checkCode = await runCli(["--dir", tempDir, "--check"]);
+    assertEquals(checkCode, 1);
+
+    assert(
+      loggedErrors.some((e) => e.includes("broken.md") && e.includes("no front matter block")),
+    );
+  } finally {
+    console.error = originalError;
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 // P1-6 budget check: Derived budget function (Design 1C):
 //   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
 // Evaluates to ~6.7KB currently; 7,500 bytes is the hard upper bound limit.
@@ -210,7 +350,7 @@ Deno.test("real memory directory index generation budget check (<= 7500 bytes)",
     return; // Skip if path not present on test runner
   }
 
-  const entries = await scanMemoryDirectory(realDir);
+  const { entries } = await scanMemoryDirectory(realDir);
   const activeEntries = entries.filter((e) => !(e.isCheckpoint && e.status === "done"));
   const output = generateMemoryIndex(activeEntries);
   const byteCount = new TextEncoder().encode(output).length;
