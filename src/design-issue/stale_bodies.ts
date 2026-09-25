@@ -1192,9 +1192,7 @@ export async function scanStaleBodies(
         const msg = err instanceof Error ? err.message : String(err);
         epicChildErrors.set(
           `${epic.repo}#${epic.number}`,
-          msg.includes("sub-issue")
-            ? msg
-            : `Failed to determine child set for ${epic.repo}#${epic.number}: ${msg}`,
+          msg,
         );
       }
     }
