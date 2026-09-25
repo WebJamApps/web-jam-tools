@@ -32,6 +32,7 @@ import {
 } from "../src/design-issue/gate1.ts";
 import { runCandidatesCli } from "../src/design-issue/candidates.ts";
 import { runCli, runMatchDesignCli } from "../src/design-issue/cli.ts";
+import { approveGate1Record, getGate1Status } from "../src/design-issue/gate1_record.ts";
 
 // A minimal document that still satisfies design:lint-doc's required sections (web-jam-tools#815)
 // — used by tests below that are exercising gate1's render/screenshot/browser mechanics, not the
@@ -1637,6 +1638,51 @@ Deno.test("web-jam-tools#1098: theme folder with both theme-level and topic-leve
       Error,
       "Refusing to create redundant parallel design document",
     );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runGate1 opens Gate 1 record as open and clears any earlier approval", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-run-record-" });
+  const docPath = path.join(tempDir, "sample-design-2026-09-25.md");
+  await Deno.writeTextFile(docPath, MINIMAL_LINT_CLEAN_DOC);
+  const stateDir = path.join(tempDir, "state");
+
+  try {
+    const result = await runGate1({
+      docPath,
+      noOpen: true,
+      screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+      verifyCitationsImpl: (_c, dPath) =>
+        Promise.resolve({ valid: true, violations: [], docPath: dPath }),
+      stateDir,
+    });
+
+    assertEquals(typeof result.recordPath, "string");
+    const status1 = await getGate1Status(docPath, { stateDir });
+    assertEquals(status1.status, "open");
+
+    // Approve the record
+    await approveGate1Record(docPath, "Approved by Josh", { stateDir });
+    const status2 = await getGate1Status(docPath, { stateDir });
+    assertEquals(status2.status, "approved");
+    assertEquals(status2.reply, "Approved by Josh");
+
+    // Re-run runGate1 on the same document: approval must be cleared and reset to open
+    const rerunResult = await runGate1({
+      docPath,
+      noOpen: true,
+      screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+      verifyCitationsImpl: (_c, dPath) =>
+        Promise.resolve({ valid: true, violations: [], docPath: dPath }),
+      stateDir,
+    });
+
+    assertEquals(typeof rerunResult.recordPath, "string");
+    const status3 = await getGate1Status(docPath, { stateDir });
+    assertEquals(status3.status, "open");
+    assertEquals(status3.reply, undefined);
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
