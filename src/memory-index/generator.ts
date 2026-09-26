@@ -13,15 +13,34 @@ export interface MemoryEntry {
   isCheckpoint: boolean;
 }
 
+export interface SkippedMemoryFile {
+  filename: string;
+  reason: string;
+}
+
+export type SkipReasonHandler = (reason: string) => void;
+
+export interface MemoryDirectoryScanResult {
+  entries: MemoryEntry[];
+  skipped: SkippedMemoryFile[];
+}
+
 /**
  * Derived budget function (Design 1C):
  *   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
  * Evaluates to ~6.2KB currently; hard budget is 6,500 bytes.
  */
 
-export function parseMemoryFile(content: string, filename: string): MemoryEntry | null {
+export function parseMemoryFile(
+  content: string,
+  filename: string,
+  onSkip?: SkipReasonHandler,
+): MemoryEntry | null {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return null;
+  if (!match) {
+    onSkip?.("no front matter block");
+    return null;
+  }
 
   try {
     const fm = (parseYaml(match[1]) || {}) as Record<string, unknown>;
@@ -48,28 +67,46 @@ export function parseMemoryFile(content: string, filename: string): MemoryEntry 
       description,
       isCheckpoint,
     };
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message.split("\n")[0].trim() : String(err);
+    onSkip?.(msg);
     return null;
   }
 }
 
-export async function scanMemoryDirectory(dirPath: string): Promise<MemoryEntry[]> {
+export async function scanMemoryDirectory(dirPath: string): Promise<MemoryDirectoryScanResult> {
   const entries: MemoryEntry[] = [];
+  const skipped: SkippedMemoryFile[] = [];
+
   for await (const entry of Deno.readDir(dirPath)) {
     if (!entry.isFile || entry.name === "MEMORY.md" || !entry.name.endsWith(".md")) {
       continue;
     }
     try {
       const content = await Deno.readTextFile(join(dirPath, entry.name));
-      const parsed = parseMemoryFile(content, entry.name);
+      let skipReason = "";
+      const parsed = parseMemoryFile(content, entry.name, (reason) => {
+        skipReason = reason;
+      });
       if (parsed) {
         entries.push(parsed);
+      } else {
+        skipped.push({
+          filename: entry.name,
+          reason: skipReason,
+        });
       }
-    } catch {
-      // Ignore unreadable files
+    } catch (err) {
+      skipped.push({
+        filename: entry.name,
+        reason: err instanceof Error ? err.message.split("\n")[0].trim() : String(err),
+      });
     }
   }
-  return entries;
+
+  skipped.sort((a, b) => a.filename.localeCompare(b.filename));
+
+  return { entries, skipped };
 }
 
 export async function archiveDoneCheckpoints(

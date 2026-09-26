@@ -32,7 +32,11 @@ export async function runCli(args: string[]): Promise<number> {
   const defaultDir = "~/.claude/projects/-home-joshua/memory";
   const targetDir = expandHome(flags.dir || defaultDir);
 
-  const entries = await scanMemoryDirectory(targetDir);
+  const { entries, skipped } = await scanMemoryDirectory(targetDir);
+
+  for (const skip of skipped) {
+    console.error(`Skipped ${skip.filename}: ${skip.reason}`);
+  }
 
   if (flags.check) {
     // In check mode: do not modify disk. Simulate filtering out done checkpoints.
@@ -56,6 +60,10 @@ export async function runCli(args: string[]): Promise<number> {
       return 1;
     }
 
+    if (skipped.length > 0) {
+      return 1;
+    }
+
     console.log(`MEMORY.md is up to date (${expectedBytes} bytes).`);
     return 0;
   }
@@ -70,7 +78,7 @@ export async function runCli(args: string[]): Promise<number> {
   console.log(
     `Wrote ${memoryMdPath} (${byteCount} bytes). Archived ${archivedCount} done checkpoints.`,
   );
-  return 0;
+  return skipped.length > 0 ? 1 : 0;
 }
 
 if (import.meta.main) {
