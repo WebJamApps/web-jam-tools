@@ -1631,3 +1631,77 @@ Deno.test("createIssueAndVerify: --dedup-override clears a duplicate deny and re
   assertStringIncludes(createdBody, "considered web-jam-tools#885");
   assertStringIncludes(createdBody, "narrower scope, docs only");
 });
+
+// --- Body checks run by the task itself (web-jam-tools#1167) ---
+
+function recordingDeps(body: string): { deps: ExecDeps; calls: string[][] } {
+  const calls: string[][] = [];
+  return {
+    calls,
+    deps: {
+      runCmd(cmd: string[]) {
+        calls.push(cmd);
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      },
+      readFileText: () => Promise.resolve(body),
+    },
+  };
+}
+
+Deno.test("createIssueAndVerify refuses a deferred-verification body before any gh call (web-jam-tools#1167)", async () => {
+  const { deps, calls } = recordingDeps("The old helper is assumed but not confirmed unused.");
+  await assertRejects(
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Flash High"] },
+        deps,
+        APPROVE_ALL,
+      ),
+    Error,
+    "Refused to file issue — deferred verification phrase 'assumed but not confirmed' in issue body.",
+  );
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("createIssueAndVerify refuses an unresolvable-pointer body before any gh call (web-jam-tools#1167)", async () => {
+  const { deps, calls } = recordingDeps("For the rest, see the epic.");
+  await assertRejects(
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Flash High"] },
+        deps,
+        APPROVE_ALL,
+      ),
+    Error,
+    "Refused to file issue — unresolvable pointer phrase 'see the epic' in issue body.",
+  );
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("createIssueAndVerify lets a deferred-verification body through with Needs Design (web-jam-tools#1167)", async () => {
+  const { deps } = recordingDeps("The old helper is assumed but not confirmed unused.");
+  const result = await createIssueAndVerify(
+    {
+      title: "T",
+      bodyFile: "/tmp/b.md",
+      type: "Task",
+      labels: ["Flash High", "Needs Design"],
+      dryRun: true,
+    },
+    deps,
+    APPROVE_ALL,
+  );
+  assertEquals(result, 'dry run: would create issue "T" in WebJamApps/web-jam-tools');
+});
+
+Deno.test("createIssueAndVerify skips both body checks for --type Epic (web-jam-tools#1167)", async () => {
+  const { deps } = recordingDeps(
+    "See the epic. The old helper is assumed but not confirmed unused.",
+  );
+  const result = await createIssueAndVerify(
+    { title: "T", bodyFile: "/tmp/b.md", type: "Epic", labels: ["Flash High"], dryRun: true },
+    deps,
+    APPROVE_ALL,
+  );
+  assertEquals(result, 'dry run: would create issue "T" in WebJamApps/web-jam-tools');
+});
