@@ -42,6 +42,27 @@ async function runHook(transcriptPath: string): Promise<RunResult> {
   };
 }
 
+async function runHookWithPayload(payload: string): Promise<RunResult> {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  if (payload.length > 0) {
+    await writer.write(new TextEncoder().encode(payload));
+  }
+  await writer.close();
+  const { code, stdout, stderr } = await child.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
+}
+
 // deno-lint-ignore no-explicit-any
 type TranscriptEntry = Record<string, any>;
 
@@ -399,4 +420,46 @@ Deno.test("current turn contains bare citation followed by tool-use -> blocked (
     assertEquals(res.code, 2);
     assertBlocked(res.stderr, "#299");
   });
+});
+
+// --- Codex Stop payload tests (web-jam-tools#1139) ---
+
+Deno.test("Codex Stop payload: bare citation with stop_hook_active: false is blocked (exit 2)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: "see #263 for details",
+    stop_hook_active: false,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr, "#263");
+});
+
+Deno.test("Codex Stop payload: full citation with stop_hook_active: false passes (exit 0)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: 'see web-jam-tools#263 "hooks: end-of-turn citation" for details',
+    stop_hook_active: false,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 0, res.stderr);
+  assertEquals(res.stderr.trim(), "");
+});
+
+Deno.test("Codex Stop payload: bare citation with stop_hook_active: true is blocked (exit 2)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: "see #263 for details",
+    stop_hook_active: true,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr, "#263");
+});
+
+Deno.test("Codex Stop payload: full citation with stop_hook_active: true passes (exit 0)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: 'see web-jam-tools#263 "hooks: end-of-turn citation" for details',
+    stop_hook_active: true,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 0, res.stderr);
+  assertEquals(res.stderr.trim(), "");
 });

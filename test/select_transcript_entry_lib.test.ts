@@ -404,6 +404,17 @@ Deno.test("loadTranscript: returns empty array on nonexistent file", async () =>
   assertEquals(loaded, []);
 });
 
+Deno.test("loadTranscript: loads from JSON payload containing last_assistant_message when transcript_path is absent (web-jam-tools#1139)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: "Codex assistant response text",
+    stop_hook_active: false,
+  });
+  const loaded = await loadTranscript(payload);
+  assertEquals(loaded.length, 1);
+  assertEquals(loaded[0].type, "assistant");
+  assertEquals(extractEntryText(loaded[0]), "Codex assistant response text");
+});
+
 // --- CLI execution tests ---
 
 async function runCli(
