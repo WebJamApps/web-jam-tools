@@ -13,6 +13,7 @@ import {
   type CommandRunner as DedupCommandRunner,
   formatCandidates,
 } from "../../hooks/lib/detect_duplicate_issue.ts";
+import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_on_issue_create.ts";
 
 export interface CreateIssueOptions {
   repo?: string;
@@ -541,6 +542,21 @@ export async function createIssueAndVerify(
     throw new Error("Missing required argument --body-file");
   }
 
+  // Body checks (web-jam-tools#1167) — the hook can't read a body file whose
+  // path the shell has yet to expand, and agy has no hooks at all, so this
+  // task checks the file it actually reads, before any GitHub call. Same
+  // exemptions as the hook: an Epic skips them, `Needs Design` skips the
+  // deferred-verification check.
+  const fileBody = await deps.readFileText(options.bodyFile);
+  const lowerLabels = (options.labels || []).map((l) => l.trim().toLowerCase());
+  const isEpic = options.type?.trim().toLowerCase() === "epic" || lowerLabels.includes("epic");
+  if (!isEpic) {
+    const violation = findIssueCreateBodyViolation(fileBody, lowerLabels.includes("needs design"));
+    if (violation) {
+      throw new Error(`Refused to file issue — ${violation}`);
+    }
+  }
+
   const repoInfo = normalizeRepo(options.repo);
 
   // Parse requested blockers (if any)
@@ -614,7 +630,7 @@ export async function createIssueAndVerify(
     );
   }
 
-  let bodyText = await deps.readFileText(options.bodyFile);
+  let bodyText = fileBody;
   if (options.dedupOverrideReason && options.dedupOverrideReason.trim()) {
     const candidateNote = options.dedupOverride ? ` (considered ${options.dedupOverride})` : "";
     bodyText +=

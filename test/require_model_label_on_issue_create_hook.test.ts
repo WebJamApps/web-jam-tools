@@ -1455,26 +1455,63 @@ Deno.test("web-jam-tools#1115 (case 14): gh issue create carrying 'Needs Design'
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("web-jam-tools#1115 (case 15): unreadable body file proceeds and states plainly that it could not check the body", async () => {
-  const missingPath = `/tmp/nonexistent_body_file_${Date.now()}.md`;
-  const payload = JSON.stringify(
-    bashCall(
-      `gh issue create --title T --body-file ${missingPath} --label "Flash High" --type Task`,
-    ),
-  );
-  const result = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH);
-  assertEquals(result.startsWith("PASS"), true);
-  assertEquals(result.includes("could not check the body"), true);
-
+Deno.test("web-jam-tools#1167: raw gh issue create with an unreadable body file is refused, naming the path", async () => {
   const res = await runHook(
-    bashCall(
-      `gh issue create --title T --body-file ${missingPath} --label "Flash High" --type Task`,
-    ),
+    bashCall(`gh issue create --title T --body-file '$D/x.md' --label "Flash High" --type Task`),
   );
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("could not read body file '$D/x.md'"), true, res.stderr);
+  assertEquals(res.stderr.includes("deno task create-issue"), true, res.stderr);
+});
+
+Deno.test("web-jam-tools#1167: raw gh issue edit with an unreadable body file is refused, naming the path", async () => {
+  const res = await runHook(bashCall(`gh issue edit 123 --body-file '$D/x.md'`));
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("could not read body file '$D/x.md'"), true, res.stderr);
+  assertEquals(res.stderr.includes("deno task edit-issue"), true, res.stderr);
+});
+
+Deno.test("web-jam-tools#1167: deno task create-issue with an unreadable body file proceeds, noting the task checks the body", async () => {
+  const call = bashCall(
+    `deno task create-issue --title T --body-file '$D/x.md' --label "Flash High" --type Task`,
+  );
+  const result = await checkModelLabelOnIssueCreate(JSON.stringify(call), MODEL_LABELS_PATH);
+  assertEquals(result, "PASS: body checked by create-issue itself");
+
+  const res = await runHook(call);
   assertEquals(res.code, 0, res.stderr);
   const out = JSON.parse(res.stdout);
   assertEquals(out.hookSpecificOutput.hookEventName, "PreToolUse");
-  assertEquals(out.hookSpecificOutput.additionalContext.includes("could not check the body"), true);
+  assertEquals(
+    out.hookSpecificOutput.additionalContext,
+    "model-label guard: body checked by create-issue itself",
+  );
+});
+
+Deno.test("web-jam-tools#1167: a relative --body-file is resolved against the payload's cwd and checked", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(`${dir}/x.md`, "This needs to be verified before removal.");
+    const res = await runHook({
+      ...bashCall(`gh issue create --title T --body-file x.md --label "Flash High" --type Task`),
+      cwd: dir,
+    });
+    assertEquals(res.code, 2);
+    assertBlocked(res.stderr);
+    assertEquals(res.stderr.includes("deferred verification phrase"), true, res.stderr);
+
+    await Deno.writeTextFile(`${dir}/x.md`, "A plain body.");
+    const clean = await runHook({
+      ...bashCall(`gh issue create --title T --body-file x.md --label "Flash High" --type Task`),
+      cwd: dir,
+    });
+    assertEquals(clean.code, 0, clean.stderr);
+    assertEquals(clean.stdout, "");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
 
 Deno.test("web-jam-tools#1115: gh issue edit is not checked for deferred verification phrases (creates only)", async () => {
@@ -1523,17 +1560,28 @@ Deno.test("web-jam-tools#1115: MCP issue_write create with Needs Design label is
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("web-jam-tools#1115: MCP issue_write with invalid unparseable body payload proceeds and states so", async () => {
-  const payload = JSON.stringify(
+Deno.test("web-jam-tools#1167: MCP issue_write create or update with a non-string body is refused", async () => {
+  const create = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
       title: "T",
       type: "Task",
       labels: ["Flash High"],
-      body: 12345,
+      body: 42,
     }),
   );
-  const result = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH);
-  assertEquals(result.startsWith("PASS"), true);
-  assertEquals(result.includes("could not check the body"), true);
+  assertEquals(create.code, 2);
+  assertBlocked(create.stderr);
+  assertEquals(create.stderr.includes("invalid body payload"), true, create.stderr);
+
+  const update = await runHook(
+    mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+      method: "update",
+      issue_number: 123,
+      body: 42,
+    }),
+  );
+  assertEquals(update.code, 2);
+  assertBlocked(update.stderr);
+  assertEquals(update.stderr.includes("invalid body payload"), true, update.stderr);
 });

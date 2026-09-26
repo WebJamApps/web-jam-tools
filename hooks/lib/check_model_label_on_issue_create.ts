@@ -20,6 +20,8 @@ import {
 
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 const MCP_ISSUE_WRITE_RE = /^mcp__.*__issue_write$/;
+const INVALID_MCP_BODY_DENY =
+  "DENY:the issue_write body is not a string (invalid body payload), so it can't be checked. Pass the body as a string.";
 
 export function loadModelLabels(modelLabelsPath: string): Set<string> {
   const text = Deno.readTextFileSync(modelLabelsPath);
@@ -308,9 +310,28 @@ export interface ExtractedBody {
   readError?: string;
 }
 
-export function extractBodyDetails(args: string[]): ExtractedBody {
+/**
+ * A relative `--body-file` path is resolved against the hook payload's `cwd`
+ * (web-jam-tools#1167). Paths the shell would expand (`$VAR`, `$(…)`, `~`)
+ * are left as typed, so they stay unreadable here.
+ */
+function resolveBodyFilePath(filepath: string, cwd?: string): string {
+  if (!cwd || filepath.startsWith("/") || filepath.startsWith("~") || filepath.includes("$")) {
+    return filepath;
+  }
+  return `${cwd.replace(/\/+$/, "")}/${filepath}`;
+}
+
+export function extractBodyDetails(args: string[], cwd?: string): ExtractedBody {
   const bodyParts: string[] = [];
   let readError: string | undefined;
+  const readBodyFile = (filepath: string) => {
+    try {
+      bodyParts.push(Deno.readTextFileSync(resolveBodyFilePath(filepath, cwd)));
+    } catch {
+      readError = `could not read body file '${filepath}'`;
+    }
+  };
   let j = 0;
   while (j < args.length) {
     const a = args[j];
@@ -330,31 +351,16 @@ export function extractBodyDetails(args: string[]): ExtractedBody {
       continue;
     } else if (a === "--body-file" || a === "-F") {
       if (j + 1 < args.length) {
-        const filepath = args[j + 1];
-        try {
-          bodyParts.push(Deno.readTextFileSync(filepath));
-        } catch {
-          readError = `could not read body file '${filepath}'`;
-        }
+        readBodyFile(args[j + 1]);
         j += 2;
         continue;
       }
     } else if (a.startsWith("--body-file=")) {
-      const filepath = a.slice("--body-file=".length);
-      try {
-        bodyParts.push(Deno.readTextFileSync(filepath));
-      } catch {
-        readError = `could not read body file '${filepath}'`;
-      }
+      readBodyFile(a.slice("--body-file=".length));
       j += 1;
       continue;
     } else if (a.startsWith("-F=")) {
-      const filepath = a.slice("-F=".length);
-      try {
-        bodyParts.push(Deno.readTextFileSync(filepath));
-      } catch {
-        readError = `could not read body file '${filepath}'`;
-      }
+      readBodyFile(a.slice("-F=".length));
       j += 1;
       continue;
     }
@@ -455,6 +461,31 @@ export function hasNeedsDesignLabel(
     }
   }
   return false;
+}
+
+/**
+ * The body checks a non-Epic issue create must pass: no unresolvable pointer
+ * phrase, and — unless it carries `Needs Design` — no deferred verification.
+ * Returns the refusal reason, or null when the body is clean. Shared with
+ * `src/create-issue/lib.ts` so `deno task create-issue` refuses with the same
+ * wording (web-jam-tools#1167).
+ */
+export function findIssueCreateBodyViolation(body: string, needsDesign: boolean): string | null {
+  const pointers = findUnresolvableIssuePointers(body);
+  if (pointers.length) {
+    return `unresolvable pointer phrase '${
+      pointers[0]
+    }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+  }
+  if (!needsDesign) {
+    const deferred = findDeferredVerifications(body);
+    if (deferred.length) {
+      return `deferred verification phrase '${
+        deferred[0]
+      }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -562,10 +593,12 @@ async function scanIssueCommandSegments(
   modelLabelsPath: string,
   cmdForMessage: string,
   runner: CommandRunner,
+  cwd?: string,
 ): Promise<string> {
   for (const segment of segments) {
     const scTokens = stripLeadingAssignments(splitShellTokens(segment));
-    const createArgs = findGhIssueCreateArgs(scTokens) ?? findCreateIssueScriptArgs(scTokens);
+    const rawCreateArgs = findGhIssueCreateArgs(scTokens);
+    const createArgs = rawCreateArgs ?? findCreateIssueScriptArgs(scTokens);
     if (createArgs !== null) {
       const typeVal = extractTypeValue(createArgs);
       if (!typeVal || !VALID_NATIVE_TYPES_LOWER.has(typeVal.toLowerCase())) {
@@ -584,24 +617,21 @@ async function scanIssueCommandSegments(
       const escalationReason = extractEscalationReason(createArgs);
       const res = decide(labels, modelLabels, escalationReason, cmdForMessage, "cli");
       if (res !== "PASS") return res;
-      const { body, readError } = extractBodyDetails(createArgs);
-      // An unreadable body skips only the body checks; the duplicate search below still runs.
-      const bodyNote = readError ? `PASS: could not check the body (${readError})` : "PASS";
+      const { body, readError } = extractBodyDetails(createArgs, cwd);
+      // An unreadable body fails closed on raw `gh issue create`. On the
+      // create-issue script path the task reads the expanded path and runs
+      // the same body checks itself (web-jam-tools#1167), so only the body
+      // checks are skipped here; the duplicate search below still runs.
+      if (readError && rawCreateArgs !== null) {
+        return `DENY:couldn't read the issue body (${readError}), so it can't be checked. Pass a literal path to --body-file, or use deno task create-issue.`;
+      }
+      const bodyNote = readError ? "PASS: body checked by create-issue itself" : "PASS";
       if (!readError && body && !isEpicType(toolInput, createArgs)) {
-        const pointers = findUnresolvableIssuePointers(body);
-        if (pointers.length) {
-          return `DENY:unresolvable pointer phrase '${
-            pointers[0]
-          }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
-        }
-        if (!hasNeedsDesignLabel(toolInput, createArgs)) {
-          const deferred = findDeferredVerifications(body);
-          if (deferred.length) {
-            return `DENY:deferred verification phrase '${
-              deferred[0]
-            }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
-          }
-        }
+        const violation = findIssueCreateBodyViolation(
+          body,
+          hasNeedsDesignLabel(toolInput, createArgs),
+        );
+        if (violation) return `DENY:${violation}`;
       }
       const dedupRes = await runDuplicateCheck(createArgs, runner);
       if (dedupRes !== "PASS") return dedupRes;
@@ -613,9 +643,9 @@ async function scanIssueCommandSegments(
       if (isEpicType(toolInput, scTokens)) {
         return "PASS";
       }
-      const { body, readError } = extractBodyDetails(editArgs);
+      const { body, readError } = extractBodyDetails(editArgs, cwd);
       if (readError) {
-        return `PASS: could not check the body (${readError})`;
+        return `DENY:couldn't read the issue body (${readError}), so it can't be checked. Pass a literal path to --body-file, or use deno task edit-issue.`;
       }
       if (body) {
         const pointers = findUnresolvableIssuePointers(body);
@@ -656,10 +686,18 @@ export async function checkModelLabelOnIssueCreate(
   ) {
     const cmd = String(toolInput.command || "").trim();
     if (!cmd) return "PASS";
+    const cwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : undefined;
 
     const { segments, unterminated } = splitOnOperators(cmd);
     if (!unterminated) {
-      return await scanIssueCommandSegments(segments, toolInput, modelLabelsPath, cmd, runner);
+      return await scanIssueCommandSegments(
+        segments,
+        toolInput,
+        modelLabelsPath,
+        cmd,
+        runner,
+        cwd,
+      );
     }
 
     // Ambiguous parse (web-jam-tools#813): a heredoc body redirected into a
@@ -689,6 +727,7 @@ export async function checkModelLabelOnIssueCreate(
         modelLabelsPath,
         cmd,
         runner,
+        cwd,
       );
     }
 
@@ -709,7 +748,7 @@ export async function checkModelLabelOnIssueCreate(
       if (isEpicType(toolInput)) return "PASS";
       const rawBody = toolInput.body;
       if (rawBody !== undefined && typeof rawBody !== "string") {
-        return "PASS: could not check the body (invalid body payload)";
+        return INVALID_MCP_BODY_DENY;
       }
       const body = typeof rawBody === "string" ? rawBody : "";
       if (body) {
@@ -754,26 +793,13 @@ export async function checkModelLabelOnIssueCreate(
     const res = decide(rawLabels as string[], modelLabels, escalationReason, undefined, "mcp");
     if (res !== "PASS") return res;
     const rawBody = toolInput.body;
-    // An invalid body skips only the body checks; the duplicate search below still runs.
-    const bodyNote = rawBody !== undefined && typeof rawBody !== "string"
-      ? "PASS: could not check the body (invalid body payload)"
-      : "PASS";
+    if (rawBody !== undefined && typeof rawBody !== "string") {
+      return INVALID_MCP_BODY_DENY;
+    }
     const body = typeof rawBody === "string" ? rawBody : "";
     if (body && !isEpicType(toolInput)) {
-      const pointers = findUnresolvableIssuePointers(body);
-      if (pointers.length) {
-        return `DENY:unresolvable pointer phrase '${
-          pointers[0]
-        }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
-      }
-      if (!hasNeedsDesignLabel(toolInput)) {
-        const deferred = findDeferredVerifications(body);
-        if (deferred.length) {
-          return `DENY:deferred verification phrase '${
-            deferred[0]
-          }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
-        }
-      }
+      const violation = findIssueCreateBodyViolation(body, hasNeedsDesignLabel(toolInput));
+      if (violation) return `DENY:${violation}`;
     }
     const mcpTitle = typeof toolInput.title === "string" ? toolInput.title : null;
     const mcpOwner = typeof toolInput.owner === "string" ? toolInput.owner : null;
@@ -800,7 +826,7 @@ export async function checkModelLabelOnIssueCreate(
         return `DENY:couldn't search ${dedupRes.repoFull} for duplicate open issues (the search failed — not a duplicate finding). Supply a non-empty 'dedup_override_reason' property to override.`;
       }
     }
-    return bodyNote;
+    return "PASS";
   }
 
   return "PASS";
