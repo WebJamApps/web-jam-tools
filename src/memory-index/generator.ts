@@ -18,7 +18,7 @@ export interface SkippedMemoryFile {
   reason: string;
 }
 
-export type SkipReasonHandler = ((reason: string) => void) | { reason?: string };
+export type SkipReasonHandler = (reason: string) => void;
 
 export interface MemoryDirectoryScanResult {
   entries: MemoryEntry[];
@@ -36,17 +36,9 @@ export function parseMemoryFile(
   filename: string,
   onSkip?: SkipReasonHandler,
 ): MemoryEntry | null {
-  const reportReason = (reason: string) => {
-    if (typeof onSkip === "function") {
-      onSkip(reason);
-    } else if (onSkip && typeof onSkip === "object") {
-      onSkip.reason = reason;
-    }
-  };
-
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) {
-    reportReason("no front matter block");
+    onSkip?.("no front matter block");
     return null;
   }
 
@@ -77,20 +69,9 @@ export function parseMemoryFile(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message.split("\n")[0].trim() : String(err);
-    reportReason(msg);
+    onSkip?.(msg);
     return null;
   }
-}
-
-export function parseMemoryFileWithReason(
-  content: string,
-  filename: string,
-): { entry: MemoryEntry | null; reason?: string } {
-  let reason: string | undefined;
-  const entry = parseMemoryFile(content, filename, (r) => {
-    reason = r;
-  });
-  return { entry, reason };
 }
 
 export async function scanMemoryDirectory(dirPath: string): Promise<MemoryDirectoryScanResult> {
@@ -112,7 +93,7 @@ export async function scanMemoryDirectory(dirPath: string): Promise<MemoryDirect
       } else {
         skipped.push({
           filename: entry.name,
-          reason: skipReason || "could not parse file",
+          reason: skipReason,
         });
       }
     } catch (err) {

@@ -7,7 +7,6 @@ import {
   archiveDoneCheckpoints,
   generateMemoryIndex,
   parseMemoryFile,
-  parseMemoryFileWithReason,
   scanMemoryDirectory,
 } from "../src/memory-index/generator.ts";
 import { runCli } from "../src/memory-index/cli.ts";
@@ -66,10 +65,6 @@ Deno.test("parseMemoryFile: returns null and reports reason when front matter is
   });
   assertEquals(result, null);
   assertEquals(skipReason, "no front matter block");
-
-  const withReason = parseMemoryFileWithReason("Just body text\n", "broken.md");
-  assertEquals(withReason.entry, null);
-  assertEquals(withReason.reason, "no front matter block");
 });
 
 Deno.test("parseMemoryFile: returns null and reports reason on YAML parse error", () => {
@@ -84,10 +79,6 @@ description: unquoted: colon in description
   });
   assertEquals(result, null);
   assert(skipReason.length > 0);
-
-  const withReason = parseMemoryFileWithReason(content, "bad-yaml.md");
-  assertEquals(withReason.entry, null);
-  assert(withReason.reason !== undefined && withReason.reason.length > 0);
 });
 
 Deno.test("generateMemoryIndex: groups by type, sorts slugs alphabetically, formats live checkpoints", () => {
