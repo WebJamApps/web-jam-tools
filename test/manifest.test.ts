@@ -73,6 +73,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // PreToolUse guard (web-jam-tools#511) — denies Write/Edit/NotebookEdit
   // to paths outside the repository working tree.
   "block-out-of-tree-write.sh",
+  // PreToolUse guard (web-jam-tools#1141) — refuses shell command naming any
+  // of the 16 private Dropbox folders.
+  "block-private-folder-read.sh",
   // PreToolUse guard (web-jam-tools#685) — denies the four raw `gh` write
   // verbs (gh pr review/comment, gh issue comment/edit) so a dispatched
   // reviewing subagent can only reach them through the guarded

@@ -53,6 +53,7 @@ Deno.test("extractDirectCommandHookScripts extracts Claude and agy direct comman
   assert(direct.has("opus-delegation-gate.sh"));
   assert(direct.has("require-approval-token-on-issue-write.sh"));
   assert(direct.has("block-backend-mutation.sh"));
+  assert(direct.has("block-private-folder-read.sh"));
   assert(direct.has("scan-output-for-secrets.sh"));
 
   // Must include agy direct command wrapper
