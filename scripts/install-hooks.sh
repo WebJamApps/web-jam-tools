@@ -761,6 +761,13 @@ STATUS_LINE_DEST="$HOOKS_DEST/statusline.sh"
 STATUS_LINE_COMMAND="$STATUS_LINE_DEST"
 merge_status_line_args=("$STATUS_LINE_COMMAND")
 
+# --- agent-alert.sh (web-jam-tools#1176) ---
+[ -e "$REPO_DIR/scripts/agent-alert.sh" ] || { echo "error: $REPO_DIR/scripts/agent-alert.sh not found" >&2; exit 1; }
+ALERT_DEST="$HOOKS_DEST/agent-alert.sh"
+# shellcheck disable=SC2016
+ALERT_AGY_COMMAND='$HOME/.claude/hooks/agent-alert.sh agy'
+merge_agy_stop_args=("$ALERT_AGY_COMMAND")
+
 # --- permissions.defaultMode (web-jam-tools#705) ---
 # Same Claude-Code-only scoping as merge_status_line_args above: passed only
 # to the $SETTINGS_PATH invocations below, never to $AGY_HOOKS_PATH.
@@ -863,6 +870,11 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if [ ! -L "$ALERT_DEST" ] || [ "$(readlink -f "$ALERT_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agent-alert.sh")" ]; then
+    echo "drift: agent-alert script is not linked at $ALERT_DEST" >&2
+    DRIFT=1
+  fi
+
   if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
     AGENTS_DEST="$BIN_DIR/agents"
     if [ ! -L "$AGENTS_DEST" ] || [ "$(readlink -f "$AGENTS_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agents.sh")" ]; then
@@ -875,7 +887,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
     DRIFT=1
   fi
 
@@ -968,6 +980,18 @@ else
   echo "statusline.sh: linked (new)"
 fi
 
+# --- Agent-alert script symlink (web-jam-tools#1176) ---
+if [ -L "$ALERT_DEST" ] && [ "$(readlink -f "$ALERT_DEST")" = "$(readlink -f "$REPO_DIR/scripts/agent-alert.sh")" ]; then
+  echo "agent-alert.sh: ok (already linked)"
+elif [ -e "$ALERT_DEST" ] || [ -L "$ALERT_DEST" ]; then
+  mv "$ALERT_DEST" "$ALERT_DEST.bak-$STAMP"
+  ln -s "$REPO_DIR/scripts/agent-alert.sh" "$ALERT_DEST"
+  echo "agent-alert.sh: linked (previous version backed up to agent-alert.sh.bak-$STAMP)"
+else
+  ln -s "$REPO_DIR/scripts/agent-alert.sh" "$ALERT_DEST"
+  echo "agent-alert.sh: linked (new)"
+fi
+
 # --- CLI tools symlink (~/.local/bin/agents, web-jam-tools#1174) ---
 # Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default).
 # Only linked when targeting the real default destination (HOOKS_DEST_IS_DEFAULT=1)
@@ -997,6 +1021,6 @@ fi
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH"

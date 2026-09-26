@@ -1,0 +1,9 @@
+# Codex per-session configuration overrides for the agents tmux session (web-jam-tools#1176).
+# Design reference: ~/Dropbox/web-jam-llms/Operations/agent-remote-access-design-2026-09-26.md
+
+notify = ["/home/joshua/.claude/hooks/agent-alert.sh", "codex"]
+
+[hooks]
+PermissionRequest = [
+  { matcher = ".*", hooks = [ { type = "command", command = "/home/joshua/.claude/hooks/agent-alert.sh codex" } ] }
+]
