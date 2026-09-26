@@ -38,7 +38,6 @@ case "$result" in
   DENY:*)
     reason="${result#DENY:}"
     echo "BLOCKED (backend mutation guard): $reason" >&2
-    jq -cn --arg r "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
     exit 2
     ;;
   PASS)
