@@ -184,7 +184,7 @@ When a run finishes on Claude Code, the skill reads the memory surfaces for rule
 
 | Gate | The skill waits for | It must not, before that gate | When it passes |
 |---|---|---|---|
-| 1 — design | Josh's explicit approval of the design document | write anything to any GitHub issue | proceed to Phase 2 planning (the approval itself lives in the conversation, never written into the design document) |
+| 1 — design | Josh's explicit approval of the design document, presented through `design:gate1` | write anything to any GitHub issue, or present an issue plan | record the approval with `design:gate1-approve` and proceed to Phase 2 planning (the approval lives in the conversation and the Gate 1 record, never in the design document) |
 | 2 — plan | Josh's explicit approval of the issue plan table | create, edit or label any issue | write the issue-approval token (`scripts/write_issue_approval_token.ts`), authorize removing the `Needs Design` labels listed in the approved plan, and proceed to Phase 3 filing |
 
 Nothing is filed to GitHub until GATE 2 passes.
@@ -370,7 +370,7 @@ When `/design-issue` resolves an existing issue into paired implementation and J
 3. anything it did **not** resolve;
 4. an actual question asking Josh to confirm.
 
-**A removal whose "not resolved" part names part of that issue's own directive is not presentable.** Part 3 is for what the design deliberately leaves to other work, never for a piece of the issue's own requirement that the design cut down. When it would name one, the run goes back to Phase 1 for that directive: design it in full, or put the narrowing to Josh by name, before Gate 1. `deno task design:lint-plan <plan.md>` enforces this — it reads each removed issue's body and fails a plan whose "Not resolved" part quotes or narrows one of that issue's directive lines, and fails closed, naming the issue, when it cannot read the body. The Gate 2 presentation depends on that check passing.
+**A removal whose "not resolved" part names part of that issue's own directive is not presentable.** Part 3 is for what the design deliberately leaves to other work, never for a piece of the issue's own requirement that the design cut down. When it would name one, the run goes back to Phase 1 for that directive: design it in full, or put the narrowing to Josh by name, before Gate 1. `deno task design:lint-plan <plan.md> --design-doc <doc.md>` enforces this — it reads each removed issue's body and fails a plan whose "Not resolved" part quotes or narrows one of that issue's directive lines, and fails closed, naming the issue, when it cannot read the body. The Gate 2 presentation depends on that check passing.
 
 Gate 2 approval of the plan authorizes those removals, executed in the filing phase alongside the issues. An unlisted label is not approved and stays on. The skill still never asserts a design is complete on its own (wording like "design complete, removing the label" is a defect), still never removes a label that was not listed, and still never adds `Needs Design` to anything in the approved executable set. If Josh declines, the skill does not re-ask in the same run.
 

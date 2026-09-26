@@ -5,7 +5,7 @@
 // - deno task design:lint-runbook <runbook.md> (web-jam-tools#743)
 // - deno task design:candidates (web-jam-tools#745)
 // - deno task design:stale-bodies <doc.md> --issues <list> (web-jam-tools#746)
-// - deno task design:lint-plan <plan.md> (web-jam-tools#796)
+// - deno task design:lint-plan <plan.md> --design-doc <doc.md> (web-jam-tools#796, #1156)
 // - deno task design:file-plan <plan.json> (web-jam-tools#748)
 // - deno task design:verify-citations <doc.md> (web-jam-tools#1025)
 
