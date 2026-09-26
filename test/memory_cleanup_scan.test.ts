@@ -113,6 +113,13 @@ Deno.test("containsWholeSlug: matches whole tokens only, not substrings of longe
     !containsWholeSlug("see never-verify-dont-assume-anything in the index", "verify-dont-assume"),
   );
   assert(containsWholeSlug("[Title](my-slug.md)", "my-slug"));
+  assert(containsWholeSlug("my-slug is at start", "my-slug"));
+  assert(containsWholeSlug("is at end my-slug", "my-slug"));
+  assert(containsWholeSlug("my-slug", "my-slug"));
+  assert(containsWholeSlug("prefix-my-slug but then my-slug", "my-slug"));
+  assert(!containsWholeSlug("just prefix-my-slug", "my-slug"));
+  assert(!containsWholeSlug("just my-slug-suffix", "my-slug"));
+  assert(!containsWholeSlug("empty slug search", ""));
 });
 
 // --- scanMemoryIndexSurface ---

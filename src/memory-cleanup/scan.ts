@@ -170,10 +170,32 @@ export function extractLinkedSlugs(text: string): string[] {
   return [...seen];
 }
 
+function isSlugChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) || // 0-9
+    (code >= 65 && code <= 90) || // A-Z
+    (code >= 97 && code <= 122) || // a-z
+    code === 95 || // _
+    code === 45 // -
+  );
+}
+
 /** True if `slug` appears in `haystack` as a whole token (not as part of a longer slug). */
 export function containsWholeSlug(haystack: string, slug: string): boolean {
-  const re = new RegExp(`(^|[^A-Za-z0-9_-])${escapeRegExp(slug)}($|[^A-Za-z0-9_-])`);
-  return re.test(haystack);
+  if (slug.length === 0) return false;
+  let pos = 0;
+  while ((pos = haystack.indexOf(slug, pos)) !== -1) {
+    const prevChar = pos > 0 ? haystack[pos - 1] : "";
+    const nextChar = pos + slug.length < haystack.length ? haystack[pos + slug.length] : "";
+    const prevOk = prevChar === "" || !isSlugChar(prevChar);
+    const nextOk = nextChar === "" || !isSlugChar(nextChar);
+    if (prevOk && nextOk) {
+      return true;
+    }
+    pos += 1;
+  }
+  return false;
 }
 
 // --- findings & surface result shapes ---
