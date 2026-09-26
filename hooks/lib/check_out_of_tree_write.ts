@@ -11,6 +11,7 @@
  */
 
 import * as path from "jsr:@std/path@^1.0.0";
+import { parseApplyPatchFilePaths } from "./parse_apply_patch.ts";
 
 export function expandHome(filePath: string): string {
   if (filePath === "~" || filePath.startsWith("~/")) {
@@ -132,39 +133,59 @@ export function main(): void {
     Deno.exit(0);
   }
 
+  const toolName = String(data.tool_name ?? data.name ?? "").trim();
   const toolInputRaw = data.tool_input ?? data.input ?? data.arguments ?? {};
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)
     : {};
 
-  const targetPath = String(
-    toolInput.file_path ??
-      toolInput.notebook_path ??
-      toolInput.path ??
-      toolInput.TargetFile ??
-      toolInput.target_file ??
-      "",
-  ).trim();
+  let targetPaths: string[] = [];
+  if (toolName === "apply_patch") {
+    const command = String(toolInput.command ?? "");
+    targetPaths = parseApplyPatchFilePaths(command);
+    if (targetPaths.length === 0) {
+      console.error(
+        "BLOCKED (out-of-tree write guard): apply_patch contains no parseable file paths (malformed or unrecognized patch text).",
+      );
+      console.error(
+        "An out-of-repo write is invisible to gh pr diff, is not undone by closing the PR, and is covered by no test or CI gate.",
+      );
+      console.error("(rule: web-jam-tools#511 — fence Write/Edit to repo working tree)");
+      Deno.exit(2);
+    }
+  } else {
+    const singlePath = String(
+      toolInput.file_path ??
+        toolInput.notebook_path ??
+        toolInput.path ??
+        toolInput.TargetFile ??
+        toolInput.target_file ??
+        "",
+    ).trim();
 
-  if (!targetPath) {
-    Deno.exit(0);
+    if (!singlePath) {
+      Deno.exit(0);
+    }
+    targetPaths = [singlePath];
   }
 
   const cwd = Deno.cwd();
   const repoRoot = getRepoRoot(cwd);
 
-  if (!isInsideTree(targetPath, repoRoot, cwd)) {
-    const expanded = expandHome(targetPath);
-    const resolvedTarget = path.resolve(cwd, expanded);
-    const repoInfo = repoRoot ? `'${repoRoot}'` : "none (not inside a git repository)";
-    console.error(
-      `BLOCKED (out-of-tree write guard): attempted write to '${targetPath}' (resolved: '${resolvedTarget}') outside the repository working tree (${repoInfo}).`,
-    );
-    console.error(
-      "An out-of-repo write is invisible to gh pr diff, is not undone by closing the PR, and is covered by no test or CI gate.",
-    );
-    console.error("(rule: web-jam-tools#511 — fence Write/Edit to repo working tree)");
-    Deno.exit(2);
+  for (const targetPath of targetPaths) {
+    if (!isInsideTree(targetPath, repoRoot, cwd)) {
+      const expanded = expandHome(targetPath);
+      const resolvedTarget = path.resolve(cwd, expanded);
+      const repoInfo = repoRoot ? `'${repoRoot}'` : "none (not inside a git repository)";
+      console.error(
+        `BLOCKED (out-of-tree write guard): attempted write to '${targetPath}' (resolved: '${resolvedTarget}') outside the repository working tree (${repoInfo}).`,
+      );
+      console.error(
+        "An out-of-repo write is invisible to gh pr diff, is not undone by closing the PR, and is covered by no test or CI gate.",
+      );
+      console.error("(rule: web-jam-tools#511 — fence Write/Edit to repo working tree)");
+      Deno.exit(2);
+    }
   }
 
   Deno.exit(0);

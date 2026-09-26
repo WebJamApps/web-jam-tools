@@ -21,8 +21,8 @@ interface RunResult {
   stderr: string;
 }
 
-async function runHook(filePath: string): Promise<RunResult> {
-  const input = JSON.stringify({ tool_input: { file_path: filePath } });
+async function runHookPayload(payload: Record<string, unknown>): Promise<RunResult> {
+  const input = JSON.stringify(payload);
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
     stdin: "piped",
@@ -35,6 +35,10 @@ async function runHook(filePath: string): Promise<RunResult> {
   await writer.close();
   const { code, stderr } = await child.output();
   return { code, stderr: new TextDecoder().decode(stderr) };
+}
+
+async function runHook(filePath: string): Promise<RunResult> {
+  return await runHookPayload({ tool_input: { file_path: filePath } });
 }
 
 async function run(cmd: string, args: string[]): Promise<void> {
@@ -117,4 +121,78 @@ Deno.test("editing a file outside any git repo is allowed", async () => {
 Deno.test("no file_path at all is allowed (nothing to check)", async () => {
   const res = await runHook("");
   assertEquals(res.code, 0, res.stderr);
+});
+
+// --- Codex apply_patch tests (web-jam-tools#1138) ---
+
+Deno.test("apply_patch: editing a file on 'dev' is blocked", async () => {
+  await withRepoOnBranch("dev", async (filePath) => {
+    const res = await runHookPayload({
+      tool_name: "apply_patch",
+      tool_input: {
+        command: `*** Add File: ${filePath}\n+new content\n`,
+      },
+    });
+    assertEquals(res.code, 2);
+    assertBlocked(res.stderr, "dev");
+  });
+});
+
+Deno.test("apply_patch: editing a file on a feature branch is allowed", async () => {
+  await withRepoOnBranch("codex/1138-apply-patch-feature-branch", async (filePath) => {
+    const res = await runHookPayload({
+      tool_name: "apply_patch",
+      tool_input: {
+        command: `*** Add File: ${filePath}\n+new content\n`,
+      },
+    });
+    assertEquals(res.code, 0, res.stderr);
+  });
+});
+
+Deno.test("apply_patch: file outside any git repo is allowed", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const res = await runHookPayload({
+      tool_name: "apply_patch",
+      tool_input: {
+        command: `*** Update File: ${dir}/probe.txt\n--- a/probe.txt\n+++ b/probe.txt\n`,
+      },
+    });
+    assertEquals(res.code, 0, res.stderr);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("apply_patch: two files in one patch where one is on 'dev' is blocked", async () => {
+  await withRepoOnBranch("dev", async (devFilePath) => {
+    const dir = await Deno.makeTempDir();
+    try {
+      const outOfTreeFile = `${dir}/out-of-tree.txt`;
+      // Check two files where the first is out of tree and the second is on dev
+      const res = await runHookPayload({
+        tool_name: "apply_patch",
+        tool_input: {
+          command:
+            `*** Add File: ${outOfTreeFile}\n+hello\n*** Update File: ${devFilePath}\n--- a/f\n+++ b/f\n`,
+        },
+      });
+      assertEquals(res.code, 2);
+      assertBlocked(res.stderr, "dev");
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+});
+
+Deno.test("apply_patch: patch with no parseable file path is refused (fails closed)", async () => {
+  const res = await runHookPayload({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: "malformed patch without header lines\n+line 1\n",
+    },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED"));
 });
