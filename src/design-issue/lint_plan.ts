@@ -21,6 +21,7 @@
 //   - Repos: `ACTIVE_REPOS` in `../flash-issues/types.ts` -- read-only, that module is never
 //     modified here.
 
+import * as path from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
 import {
   computeModelLabels,
@@ -29,6 +30,8 @@ import {
   type Schema,
 } from "../fix-labels/diff.ts";
 import { ACTIVE_REPOS } from "../flash-issues/types.ts";
+import { expandHome } from "./gate1.ts";
+import { type Gate1StatusResult, type Gate1StatusType, getGate1Status } from "./gate1_record.ts";
 import {
   type MalformedPlanTableRow,
   type ParsedPlanTable,
@@ -49,10 +52,24 @@ export interface PlanTableViolation {
   message: string;
 }
 
+export interface Gate1VerificationResult {
+  valid: boolean;
+  status?: Gate1StatusType;
+  approvalLine?: string;
+  error?: string;
+  reply?: string;
+  approvedAt?: string;
+}
+
 export interface LintPlanResult {
   docPath: string;
   valid: boolean;
   violations: PlanTableViolation[];
+  gate1Approval?: {
+    approvedAt: string;
+    reply: string;
+    approvalLine: string;
+  };
 }
 
 export interface LintPlanOptions {
@@ -67,6 +84,10 @@ export interface LintPlanOptions {
   /** Reads an issue's body for the `Needs Design` removal check. Defaults to a read-only
    * `gh issue view`; tests inject a stub. Throws when the body cannot be read. */
   fetchIssueBody?: IssueBodyFetcher;
+  /** Canonical design document path to check Gate 1 approval against. */
+  designDocPath?: string;
+  /** Gate 1 state directory override (for testing). */
+  stateDir?: string;
 }
 
 /** Returns the body of `repo#number`, or throws when it cannot be read. `repo` is either a bare
@@ -410,8 +431,100 @@ export async function loadCanonicalSchema(
   return await loadSchema(schemaPath);
 }
 
+/**
+ * Verifies Gate 1 disk record for a design document before Gate 2 can pass.
+ * - Passes when Gate 1 record shows approval and document content matches approved fingerprint,
+ *   returning the quoted `Gate 1 approval recorded <date>: "<reply>"` line.
+ * - Refuses when designDocPath is omitted.
+ * - Refuses when no Gate 1 record exists.
+ * - Refuses when record is open but never approved.
+ * - Refuses when document changed since approval (fingerprint mismatch).
+ * - Refuses when record file or design document cannot be read.
+ */
+export async function checkGate1ApprovalRecord(
+  designDocPath?: string,
+  options?: { stateDir?: string },
+): Promise<Gate1VerificationResult> {
+  if (!designDocPath || designDocPath.trim() === "") {
+    return {
+      valid: false,
+      error:
+        "Missing required --design-doc argument. Gate 2 requires verified Gate 1 approval of the design document.",
+    };
+  }
+
+  const absDocPath = path.resolve(expandHome(designDocPath.trim()));
+
+  try {
+    await Deno.readTextFile(absDocPath);
+  } catch (err) {
+    return {
+      valid: false,
+      error: `Cannot read design document at ${absDocPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+
+  let statusResult: Gate1StatusResult;
+  try {
+    statusResult = await getGate1Status(absDocPath, { stateDir: options?.stateDir });
+  } catch (err) {
+    return {
+      valid: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  if (statusResult.status === "not presented") {
+    return {
+      valid: false,
+      status: "not presented",
+      error:
+        `No Gate 1 record exists for ${absDocPath}. Present the design document with deno task design:gate1 first.`,
+    };
+  }
+
+  if (statusResult.status === "open") {
+    return {
+      valid: false,
+      status: "open",
+      error:
+        `Gate 1 record for ${absDocPath} is open but has not been approved yet. Obtain Josh's explicit approval and record it with deno task design:gate1-approve first.`,
+    };
+  }
+
+  if (statusResult.status === "changed since approval") {
+    return {
+      valid: false,
+      status: "changed since approval",
+      error:
+        `Design document ${absDocPath} has changed since Gate 1 approval. Re-present the document with deno task design:gate1 and obtain fresh approval before Gate 2.`,
+    };
+  }
+
+  if (statusResult.status === "approved") {
+    const approvalLine = `Gate 1 approval recorded ${statusResult.approvedAt ?? ""}: "${
+      statusResult.reply ?? ""
+    }"`;
+    return {
+      valid: true,
+      status: "approved",
+      approvalLine,
+      reply: statusResult.reply,
+      approvedAt: statusResult.approvedAt,
+    };
+  }
+
+  return {
+    valid: false,
+    error: `Unexpected Gate 1 status '${statusResult.status}' for ${absDocPath}`,
+  };
+}
+
 /** Reads a design document from disk, parses its Gate 2 plan table, validates every cell, and
- * checks its `Needs Design` label removals against the removed issues' own bodies. */
+ * checks its `Needs Design` label removals against the removed issues' own bodies. Also verifies
+ * Gate 1 disk record when `options.designDocPath` is provided. */
 export async function lintPlanTableFile(
   filePath: string,
   options?: LintPlanOptions,
@@ -428,10 +541,31 @@ export async function lintPlanTableFile(
     ...await checkNeedsDesignRemovals(markdown, options?.fetchIssueBody ?? ghIssueBody),
   );
 
+  let gate1Approval: LintPlanResult["gate1Approval"];
+  if (options?.designDocPath !== undefined) {
+    const gate1 = await checkGate1ApprovalRecord(options.designDocPath, {
+      stateDir: options.stateDir,
+    });
+    if (!gate1.valid) {
+      violations.push({
+        rule: "gate1-approval-missing",
+        line: 1,
+        message: gate1.error ?? "Gate 1 approval check failed",
+      });
+    } else {
+      gate1Approval = {
+        approvedAt: gate1.approvedAt!,
+        reply: gate1.reply!,
+        approvalLine: gate1.approvalLine!,
+      };
+    }
+  }
+
   return {
     docPath: filePath,
     valid: violations.length === 0,
     violations,
+    gate1Approval,
   };
 }
 
@@ -596,13 +730,29 @@ export async function ghIssueBody(repo: string, number: number): Promise<string>
   return new TextDecoder().decode(stdout);
 }
 
+export interface LintPlanCliOptions {
+  log?: (msg: string) => void;
+  errorLog?: (msg: string) => void;
+  schema?: Schema;
+  fetchIssueBody?: IssueBodyFetcher;
+  activeRepos?: string[];
+  stateDir?: string;
+  designDoc?: string;
+}
+
 /**
- * CLI runner for `deno task design:lint-plan <plan.md>`.
+ * CLI runner for `deno task design:lint-plan <plan.md> --design-doc <doc.md>`.
  */
-export async function runLintPlanCli(args: string[]): Promise<number> {
+export async function runLintPlanCli(
+  args: string[],
+  options?: LintPlanCliOptions,
+): Promise<number> {
+  const log = options?.log ?? console.log;
+  const errorLog = options?.errorLog ?? console.error;
+
   const flags = parseArgs(args, {
     boolean: ["help", "json"],
-    string: ["doc"],
+    string: ["doc", "design-doc", "design_doc", "state-dir", "state_dir"],
     alias: {
       h: "help",
       j: "json",
@@ -614,9 +764,10 @@ export async function runLintPlanCli(args: string[]): Promise<number> {
   });
 
   if (flags.help) {
-    console.log(`Usage: deno task design:lint-plan <plan.md> [options]
+    log(`Usage: deno task design:lint-plan <plan.md> --design-doc <doc.md> [options]
 
 Validates the Gate 2 plan table's cell values in a design document:
+  - verifies Gate 1 approval record on disk for --design-doc <doc.md>
   - missing values (empty, whitespace-only, "-"/"—"/"N/A")
   - unknown model tiers (against skills/fix-labels/labels.yaml)
   - unknown repos (against ACTIVE_REPOS in src/flash-issues/types.ts)
@@ -633,43 +784,69 @@ Validates the Gate 2 plan table's cell values in a design document:
 Report-only. Writes nothing; its only GitHub call is a read-only gh issue view.
 
 Arguments:
-  <plan.md>       Path to design document markdown file containing the plan table
+  <plan.md>               Path to markdown file containing the plan table
 
 Options:
-  --doc <path>    Explicit design document path
-  -j, --json      Output result as JSON
-  -h, --help      Show this help message
+  --design-doc <path>     Canonical design document path to verify Gate 1 approval
+  --doc <path>            Explicit plan document path
+  -j, --json              Output result as JSON
+  -h, --help              Show this help message
 `);
     return 0;
   }
 
   const docPath = flags.doc || (flags._.length > 0 ? String(flags._[0]) : "");
   if (!docPath) {
-    console.error("Error: Missing required plan document path.");
-    console.error("Usage: deno task design:lint-plan <plan.md>");
+    errorLog("Error: Missing required plan document path.");
+    errorLog("Usage: deno task design:lint-plan <plan.md> --design-doc <doc.md>");
     return 1;
   }
 
+  const designDocRaw = flags["design-doc"] ??
+    flags.design_doc ??
+    options?.designDoc;
+  const designDocPath = typeof designDocRaw === "string" ? designDocRaw.trim() : "";
+
+  if (!designDocPath) {
+    errorLog("Error: Missing required --design-doc argument.");
+    errorLog("Usage: deno task design:lint-plan <plan.md> --design-doc <doc.md>");
+    return 1;
+  }
+
+  const stateDirRaw = flags["state-dir"] ??
+    flags.state_dir ??
+    options?.stateDir;
+  const stateDir = typeof stateDirRaw === "string" ? stateDirRaw.trim() : options?.stateDir;
+
   try {
-    const result = await lintPlanTableFile(docPath);
+    const result = await lintPlanTableFile(docPath, {
+      schema: options?.schema,
+      fetchIssueBody: options?.fetchIssueBody,
+      activeRepos: options?.activeRepos,
+      designDocPath,
+      stateDir,
+    });
 
     if (flags.json) {
-      console.log(JSON.stringify(result, null, 2));
+      log(JSON.stringify(result, null, 2));
     } else if (result.valid) {
-      console.log(`[design:lint-plan] PASS: ${result.docPath}'s plan table has no violations.`);
+      if (result.gate1Approval) {
+        log(result.gate1Approval.approvalLine);
+      }
+      log(`[design:lint-plan] PASS: ${result.docPath}'s plan table has no violations.`);
     } else {
-      console.error(
+      errorLog(
         `[design:lint-plan] FAIL: ${result.docPath} has ${result.violations.length} violation(s):`,
       );
       for (const v of result.violations) {
         const column = v.column ? ` [${v.column}]` : "";
-        console.error(`  - line ${v.line}${column} (${v.rule}): ${v.message}`);
+        errorLog(`  - line ${v.line}${column} (${v.rule}): ${v.message}`);
       }
     }
 
     return result.valid ? 0 : 1;
   } catch (err) {
-    console.error(`[design:lint-plan] Error: ${err instanceof Error ? err.message : String(err)}`);
+    errorLog(`[design:lint-plan] Error: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
 }
