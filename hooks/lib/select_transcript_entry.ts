@@ -545,6 +545,21 @@ export async function loadTranscript(pathOrInput: string): Promise<TranscriptEnt
           return [];
         }
       }
+      if (
+        payload &&
+        typeof payload.last_assistant_message === "string" &&
+        (!payload.transcript_path || typeof payload.transcript_path !== "string")
+      ) {
+        return [
+          {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: payload.last_assistant_message,
+            },
+          },
+        ];
+      }
       if (payload && typeof payload === "object") {
         return [payload];
       }

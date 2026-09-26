@@ -56,12 +56,19 @@ SELECTOR="$HOOK_DIR/lib/select_transcript_entry.ts"
 
 input="$(cat)" || exit 0
 tp="$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null || true)"
-[ -n "$tp" ] && [ -f "$tp" ] || exit 0
 
-# Last genuine assistant transcript entry's text content, selected via
-# hooks/lib/select_transcript_entry.ts (excludes isSidechain and
-# isApiErrorMessage entries — web-jam-tools#565).
-msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
+if [ -n "$tp" ]; then
+  [ -f "$tp" ] || exit 0
+  # Last genuine assistant transcript entry's text content, selected via
+  # hooks/lib/select_transcript_entry.ts (excludes isSidechain and
+  # isApiErrorMessage entries — web-jam-tools#565).
+  msg="$(deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>/dev/null || true)"
+elif printf '%s' "$input" | jq -e '.last_assistant_message != null and (.last_assistant_message | type == "string")' >/dev/null 2>&1; then
+  # On Codex, Stop payload carries last_assistant_message directly (web-jam-tools#1139)
+  msg="$(printf '%s' "$input" | deno run --no-config --allow-read "$SELECTOR" --text 2>/dev/null || true)"
+else
+  exit 0
+fi
 
 [ -n "$msg" ] || exit 0
 

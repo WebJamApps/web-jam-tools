@@ -643,3 +643,49 @@ Deno.test("web-jam-tools#714: a clean reply still passes through while deno.json
     await Deno.remove(backupPath);
   }
 });
+
+// --- Codex Stop payload tests (web-jam-tools#1139) ---
+
+Deno.test("Codex Stop payload: clear-communication violation with stop_hook_active: false is blocked (exit 2)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: "Should I dispatch the Sonnet agent now? Should I also open the issue?",
+    stop_hook_active: false,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assert(res.stderr.includes("Rule 1"));
+});
+
+Deno.test("Codex Stop payload: clean reply with stop_hook_active: false passes (exit 0)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: 'see web-jam-tools#263 "hooks: end-of-turn citation" for details',
+    stop_hook_active: false,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 0, res.stderr);
+  assertEquals(res.stdout.trim(), "");
+  assertEquals(res.stderr.trim(), "");
+});
+
+Deno.test("Codex Stop payload: clear-communication violation with stop_hook_active: true is blocked (exit 2)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: "Should I dispatch the Sonnet agent now? Should I also open the issue?",
+    stop_hook_active: true,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assert(res.stderr.includes("Rule 1"));
+});
+
+Deno.test("Codex Stop payload: clean reply with stop_hook_active: true passes (exit 0)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: 'see web-jam-tools#263 "hooks: end-of-turn citation" for details',
+    stop_hook_active: true,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 0, res.stderr);
+  assertEquals(res.stdout.trim(), "");
+  assertEquals(res.stderr.trim(), "");
+});
