@@ -52,8 +52,8 @@ CLAUDE_CMD="${AGENTS_CLAUDE_CMD:-claude}"
 CODEX_CMD="${AGENTS_CODEX_CMD:-codex}"
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
 
-# If session already exists, attach to it. Never create a second session.
-if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
+# Attach to the session (or switch to it from inside tmux), then exit.
+attach_and_exit() {
   if [ "$DO_ATTACH" = "1" ]; then
     if { [ -t 0 ] && [ "${TERM:-dumb}" != "dumb" ]; } || [ "${AGENTS_FORCE_ATTACH:-0}" = "1" ]; then
       if [ -n "${TMUX:-}" ] && [ ${#TMUX_ARGS[@]} -eq 0 ]; then
@@ -64,11 +64,25 @@ if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
     fi
   fi
   exit 0
+}
+
+# If session already exists, attach to it. Never create a second session.
+if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
+  attach_and_exit
 fi
 
 # Create session with tab 1: claude in Josh's home folder.
 # Drop to a plain shell prompt when the agent exits instead of closing the tab.
-tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$CLAUDE_CMD; exec $USER_SHELL"
+# Another `agents` run (laptop and tablet connecting at once) can create the
+# session between the check above and this line; when it did, attach to that
+# session instead of failing with "duplicate session".
+if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
+  if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
+    attach_and_exit
+  fi
+  echo "error: could not create tmux session '$SESSION': $new_session_err" >&2
+  exit 1
+fi
 
 # Ensure the first tab is at index 1 even if global tmux base-index is 0.
 if tmux "${TMUX_ARGS[@]}" list-windows -t "$SESSION" -F "#{window_index}" | grep -q "^0$"; then
@@ -92,13 +106,4 @@ tmux "${TMUX_ARGS[@]}" set-window-option -t "$SESSION:3" automatic-rename off
 # Start on tab 1 (claude).
 tmux "${TMUX_ARGS[@]}" select-window -t "$SESSION:1"
 
-# Attach to the session.
-if [ "$DO_ATTACH" = "1" ]; then
-  if { [ -t 0 ] && [ "${TERM:-dumb}" != "dumb" ]; } || [ "${AGENTS_FORCE_ATTACH:-0}" = "1" ]; then
-    if [ -n "${TMUX:-}" ] && [ ${#TMUX_ARGS[@]} -eq 0 ]; then
-      exec tmux switch-client -t "$SESSION"
-    else
-      exec tmux "${TMUX_ARGS[@]}" attach-session -t "$SESSION"
-    fi
-  fi
-fi
+attach_and_exit

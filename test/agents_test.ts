@@ -210,6 +210,44 @@ Deno.test("agents.sh second run attaches to existing session without creating a 
   });
 });
 
+Deno.test("agents.sh started twice at the same moment never fails with duplicate session", async () => {
+  // The laptop and the tablet connecting at once must both succeed and share one session.
+  for (let trial = 0; trial < 5; trial++) {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const env = {
+        TMUX_TMPDIR: tmpDir,
+        AGENTS_CLAUDE_CMD: "sleep 60",
+        AGENTS_CODEX_CMD: "sleep 60",
+        AGENTS_AGY_CMD: "sleep 60",
+      };
+      const [first, second] = await Promise.all([
+        run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env),
+        run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env),
+      ]);
+      assertEquals(first.code, 0, `first run failed: ${first.stderr}`);
+      assertEquals(second.code, 0, `second run failed: ${second.stderr}`);
+
+      const sessions = await run("tmux", [
+        "-L",
+        socketName,
+        "list-sessions",
+        "-F",
+        "#{session_name}",
+      ], {
+        TMUX_TMPDIR: tmpDir,
+      });
+      assertEquals(sessions.stdout.trim().split("\n"), ["agents"]);
+
+      const windows = await run(
+        "tmux",
+        ["-L", socketName, "list-windows", "-t", "agents", "-F", "#{window_index}:#{window_name}"],
+        { TMUX_TMPDIR: tmpDir },
+      );
+      assertEquals(windows.stdout.trim().split("\n"), ["1:claude", "2:codex", "3:agy"]);
+    });
+  }
+});
+
 Deno.test("agents.sh drops a tab to a plain shell when its agent exits instead of closing the tab", async () => {
   await withThrowawayTmux(async (socketName, tmpDir) => {
     // Configure the claude tab to run an agent that exits immediately
