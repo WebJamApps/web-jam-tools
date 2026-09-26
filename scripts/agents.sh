@@ -48,8 +48,11 @@ if [ ${#TMUX_ARGS[@]} -eq 0 ] && [ -n "${TMUX_SOCKET:-}" ]; then
 fi
 
 USER_SHELL="${SHELL:-/bin/bash}"
-CLAUDE_CMD="${AGENTS_CLAUDE_CMD:-claude}"
-CODEX_CMD="${AGENTS_CODEX_CMD:-codex}"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLAUDE_SETTINGS="$REPO_DIR/scripts/claude-settings.json"
+CLAUDE_CMD="${AGENTS_CLAUDE_CMD:-claude --settings $CLAUDE_SETTINGS}"
+# shellcheck disable=SC2016 # literal $HOME on purpose
+CODEX_CMD="${AGENTS_CODEX_CMD:-codex -c 'hooks.PermissionRequest=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$HOME/.claude/hooks/agent-alert.sh codex\"}]}]' -c 'notify=[\"$HOME/.claude/hooks/agent-alert.sh\", \"codex\"]'}"
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
 
 # Attach to the session (or switch to it from inside tmux), then exit.
@@ -92,6 +95,9 @@ fi
 # Apply session-scoped settings to the `agents` session only.
 tmux "${TMUX_ARGS[@]}" set -t "$SESSION" base-index 1
 tmux "${TMUX_ARGS[@]}" set -t "$SESSION" window-size latest
+tmux "${TMUX_ARGS[@]}" set-hook -t "$SESSION" after-select-window 'set -w -u @waiting'
+tmux "${TMUX_ARGS[@]}" set -t "$SESSION" window-status-format '#{?@waiting,#[fg=red]!#I:#W#[default],#I:#W#F}'
+tmux "${TMUX_ARGS[@]}" set -t "$SESSION" window-status-current-format '#{?@waiting,#[fg=red]!#I:#W#[default],#I:#W#F}'
 tmux "${TMUX_ARGS[@]}" set-window-option -t "$SESSION" automatic-rename off
 tmux "${TMUX_ARGS[@]}" set-window-option -t "$SESSION:1" automatic-rename off
 

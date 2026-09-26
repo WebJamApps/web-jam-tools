@@ -98,7 +98,6 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const passedLifecycle = [
     sessionStartCmds.length > 0 ? "SessionStart" : "",
-    stopCmds.length > 0 ? "Stop" : "",
     sessionEndCmds.length > 0 ? "SessionEnd" : "",
   ].filter(Boolean).join(" or ");
 
@@ -106,9 +105,9 @@ export function merge(settingsPath: string, args: string[]): number {
     console.error(
       `error: refusing to write ${path.basename(settingsPath)} — a ${passedLifecycle} ` +
         "entry was passed for a target invoked with --forbid-lifecycle-hooks. On agy, " +
-        "registering ANY lifecycle event silently disables the entire hooks config — not just " +
+        "registering SessionStart or SessionEnd silently disables the entire hooks config — not just " +
         "that event, every PreToolUse guard included (web-jam-tools#432 finding 9, " +
-        "verified 2026-08-07). Remove the --stop/--session-end/head SessionStart args from this call.",
+        "verified 2026-08-07). Remove the --session-end/head SessionStart args from this call.",
     );
     return 1;
   }
