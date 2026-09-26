@@ -36,15 +36,53 @@ not actioned.
 
 ---
 
-## Phase 1 — Scan (read-only, on a Haiku or Flash subagent)
+## Phase 1 — Scan (deterministic pre-pass first; Haiku/Flash only for judgment)
+
+**Step 1 — run the deterministic mechanical scan (no model, no subagent spawn):**
+
+```
+deno task memory-cleanup:scan
+```
+
+(Run once per project memory directory that needs auditing — pass
+`--dir <path>` to point surface 1 at a project other than the default
+`~/.claude/projects/-home-joshua/memory`; surface 10 always scans
+`~/.claude/shared-memory` and surface 6 always scans the three Dropbox queue
+files, regardless of `--dir`.)
+
+This is `web-jam-tools`'s `src/memory-cleanup/scan.ts` (+ `cli.ts`), the same
+precedent as `scripts/drive-cleanup-prepass.sh`: a deterministic, read-only
+pre-pass that reuses `src/memory-index/generator.ts`'s `scanMemoryDirectory`/
+`parseMemoryFile` to compute, with **no model call**, for surfaces 1, 6, and
+10: the null-parse (unparseable) file list, a dangling-`[[link]]` slug diff,
+per-file inbound link counts, an index↔file sync check (does every memory
+file's slug actually appear in its `MEMORY.md`), and live `gh` state for
+every `project`-typed memory or queue line that cites a `repo#number`. It
+prints one JSON object with an explicit `status` (`checked` or `error`) for
+each of the three surfaces — a failed single `gh` lookup shows up as its own
+`"status":"error"` finding with a reason, never a silent drop and never
+folded into a false "clean" verdict.
+
+**Treat this JSON as already-established fact for surfaces 1, 6, and 10** —
+do not re-derive it. Hand it to the scan subagent verbatim.
+
+**Step 2 — spawn the scan subagent for judgment calls only:**
 
 Spawn the scan as a cheap subagent based on the host surface:
 - **Claude Code surface:** Spawn via `Agent(subagent_type: "Explore", model: "haiku")`.
 - **Antigravity (`agy`) surface:** Spawn via `invoke_subagent(TypeName: "self", Role: "Memory Cleanup Scanner", Model: "inherit")`.
 
-The subagent does read-only work only: it reads files, checks issue/PR status (`gh issue view <n>`, `gh pr view <n>`), verifies git commit dates (`git log -1 --format=%ad --date=short -- <file>`), performs dangling-link slug diffs, and returns findings. **It must not write, edit, or delete anything.**
+The subagent does read-only work only: for surfaces 1, 6, and 10, its job is
+now limited to the judgment calls the Step 1 JSON doesn't already resolve
+(e.g. deciding whether an untouched-but-not-closed `project` memory is still
+worth flagging as stale) — it must not re-run the mechanical checks the JSON
+already answered. For surfaces 2–5, 7–9, 11–12 it does the full read-only
+scan as before: it reads files, checks issue/PR status (`gh issue view <n>`,
+`gh pr view <n>`), verifies git commit dates (`git log -1 --format=%ad
+--date=short -- <file>`), performs dangling-link slug diffs, and returns
+findings. **It must not write, edit, or delete anything.**
 
-Give the subagent this surfaces list and the staleness policy.
+Give the subagent the Step 1 JSON, this surfaces list, and the staleness policy.
 
 **Command discipline & Evidence requirements:**
 1. The subagent must use dedicated Read / Glob / Grep tools for file inspection. Bash is allowed only as single, simple allowed commands (`ls`, `cat`, `grep`, `gh issue view`, `gh pr view`, `git log`). Never use compound or ad-hoc Bash (`cd ... && ...`, loops, `;` chains, inline python/node).
@@ -52,6 +90,7 @@ Give the subagent this surfaces list and the staleness policy.
 3. **Reproducible Clean Verdicts:** Reporting a surface as clean requires stating the exact command/computation executed to verify clean state.
 4. **Reproducible Dangling-Link Slug Diff:** Collect all `[[slug]]` targets referenced across memory files, compute the set diff against actual `<slug>.md` filenames in the target directory, and report any missing target slugs.
 5. **Inbound Link Protection:** Before proposing a `delete` or `merge` for a memory file, perform a mandatory grep for inbound `[[slug]]` references across memory dirs (`~/.claude/projects/*/memory/`, `~/.claude/shared-memory/`) and `CLAUDE.md`/`AGENTS.md` files. Report the inbound link count in the findings table. Pair any deletion or merge with a preservation edit that folds surviving facts into a linked memory that remains.
+6. **Every surface gets a verdict, never a silent gap.** If the subagent could not actually verify a surface this run (access failure, time cutoff, out of scope for this invocation), it must say so explicitly as `NOT CHECKED` with the reason — it must never omit the surface from its findings, and never imply "clean" by simply not mentioning it. Phase 2's report template requires this for all 12 surfaces (see below).
 
 ### Surfaces to audit (12)
 
@@ -104,11 +143,48 @@ Present the subagent's findings split into two separate output sections: **Appro
 | 2 | scratch | ~/.gemini/antigravity-cli/brain/abc123/scratch/tmp.py | file mtime > 14 days ago | Flag for manual cleanup |
 | 3 | handle-gmails | rules.yaml | sender "foo@bar.com" unhandled >60d | Review sender rule relevance |
 
-### Clean Surface Verification Summary
+### 3. Surface Verdicts (all 12 — mandatory, no exceptions)
 
-If a surface is clean, state so explicitly along with the exact command/computation executed:
-- Surface 2 (`~/.claude/CLAUDE.md`): Clean (`grep -i contradiction` verified 0 conflicts).
-- Surface 3 (`/home/joshua/WebJamApps/*/CLAUDE.md`): Clean (`git log -1` checked across 8 repos, all updated within 14 days).
+Every one of the 12 surfaces gets exactly one explicit verdict line, in this
+table, **even when it's also covered by an Approvable Action Row above.** A
+surface missing from this table is itself a defect this skill's own hard
+rules forbid — it means Phase 1 skipped a surface and reported nothing,
+which reads as "clean" to Josh even though nothing was checked. Each verdict
+is one of:
+
+- **`checked — clean`** — verified, no findings. Must cite the exact
+  command/computation executed (for surfaces 1/6/10, this is "per Step 1's
+  `deno task memory-cleanup:scan` JSON"; for the rest, the subagent's own
+  command, e.g. `git log -1`, `grep -i contradiction`).
+- **`checked — N findings`** — verified, N findings reported above (in the
+  Approvable Action Rows or Informational/Flag-Only Notes tables).
+- **`NOT CHECKED`** — the subagent did not actually verify this surface this
+  run. State the reason (access failure, time cutoff, out of scope for this
+  invocation, etc.). This is not itself a finding to fix — it's an honest
+  admission the check didn't happen, so Josh knows to ask for a follow-on
+  pass rather than assume the surface is fine.
+
+| # | Surface | Verdict | Evidence / reason |
+|---|---|---|---|
+| 1 | `~/.claude/projects/*/memory/*.md` + `MEMORY.md` | checked — clean | per Step 1's `deno task memory-cleanup:scan` JSON |
+| 2 | `~/.claude/CLAUDE.md` (global) | checked — clean | `grep -i contradiction` verified 0 conflicts |
+| 3 | per-repo `CLAUDE.md` | checked — clean | `git log -1` checked across 8 repos, all updated within 14 days |
+| 4 | per-repo `AGENTS.md` | checked — clean | `git log -1` checked across 8 repos; no stray `GEMINI.md` found |
+| 5 | `docs/cross-ai-rules.md` | checked — clean | read in full, no contradictions found |
+| 6 | Dropbox `{agy,claude-opus,claude-fable}-tasks.txt` | checked — clean | per Step 1's `deno task memory-cleanup:scan` JSON |
+| 7 | `~/Dropbox/web-jam-llms/bridge-log.md` | checked — clean | read in full, all bridge items logged |
+| 8 | Google Drive memory/bridge files | NOT CHECKED | flag-only surface — deferred to `/drive-cleanup` by design |
+| 9 | `handle-gmails/rules.yaml` | checked — 1 finding | see Informational/Flag-Only Notes row 3 |
+| 10 | `~/.claude/shared-memory/*.md` + `MEMORY.md` | checked — clean | per Step 1's `deno task memory-cleanup:scan` JSON |
+| 11 | `~/.gemini/config/hooks.json` | checked — clean | JSON parsed, schema matches expected hooks |
+| 12 | `~/.gemini/antigravity-cli/brain/*/scratch/` | NOT CHECKED | out of scope for this invocation — flag-only surface |
+
+(This example table is illustrative; a real run fills in the actual verdict
+and evidence for each row. Surfaces 8 and 12 being flag-only by design does
+NOT excuse them from appearing in this table — a flag-only surface still
+gets an honest verdict, it's just always `NOT CHECKED` for execution purposes
+or `checked — N findings` when the subagent did do the read-only flagging
+pass the surfaces table asks for.)
 
 Then **STOP and wait for explicit approval.** Accept "yes", "do 1,3", "all but 2", etc. Never execute an unapproved row.
 
@@ -146,6 +222,7 @@ Only after approval, and only for approved rows:
 - **Empirical Evidence Required.** Staleness or closure claims must cite empirical command/SHA evidence (`git log`, `gh issue/pr view`). Statements lacking evidence are omitted. Clean verdicts must report the exact verification command.
 - **Dual Surface Compatibility.** Fully compatible with Claude Code (`Agent` with `haiku`/`sonnet`) and Antigravity (`invoke_subagent` with `Model: "inherit"`). All paths specified as explicit home paths.
 - **Stamp on every approved run**, even a zero-action one, so the daily reminder clears.
+- **Every surface gets a verdict.** Phase 2's report must include a `checked — clean` / `checked — N findings` / `NOT CHECKED` line for all 12 surfaces (see Phase 2 §3). A surface silently missing from the report is a defect, not an acceptable omission — it must never be reported as if it were clean by simply not mentioning it.
 
 ## Triggering
 
