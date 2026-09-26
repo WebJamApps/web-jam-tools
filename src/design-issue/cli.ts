@@ -9,17 +9,20 @@
 // - deno task design:file-plan <plan.json> (web-jam-tools#748)
 // - deno task design:verify-citations <doc.md> (web-jam-tools#1025)
 
+import * as path from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
 import { runCandidatesCli } from "./candidates.ts";
 import { runFilePlanCli } from "./file_plan.ts";
 import {
   DesignDocResolutionRefusal,
+  expandHome,
   type FindDesignDocOptions,
   formatCanonicalDesignDocResolution,
   type Gate1Options,
   resolveCanonicalDesignDoc,
   runGate1,
 } from "./gate1.ts";
+import { approveGate1Record, formatGate1Status, getGate1Status } from "./gate1_record.ts";
 import { runLintDocCli } from "./lint_doc.ts";
 import { runLintPlanCli } from "./lint_plan.ts";
 import { runLintRunbookCli } from "./lint_runbook.ts";
@@ -95,9 +98,183 @@ Options:
     if (result.opened) {
       console.log(`[design:gate1] Opened ${result.htmlPath} in Google Chrome`);
     }
+    if (result.recordPath) {
+      console.log(`[design:gate1] Gate 1 record opened: ${result.recordPath}`);
+    }
     return 0;
   } catch (err) {
     console.error(`[design:gate1] Error: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+}
+
+export interface Gate1ApproveCliOptions {
+  docPath?: string;
+  reply?: string;
+  replyFile?: string;
+  stateDir?: string;
+  log?: (msg: string) => void;
+  errorLog?: (msg: string) => void;
+}
+
+export async function runGate1ApproveCli(
+  args: string[],
+  options?: Gate1ApproveCliOptions,
+): Promise<number> {
+  const log = options?.log ?? console.log;
+  const errorLog = options?.errorLog ?? console.error;
+
+  const flags = parseArgs(args, {
+    boolean: ["help"],
+    string: ["doc", "reply", "reply-file", "state-dir"],
+    alias: {
+      h: "help",
+    },
+    default: {
+      help: false,
+    },
+  });
+
+  if (flags.help) {
+    log(`Usage: deno task design:gate1-approve <doc.md> [options]
+
+Records Gate 1 approval for a design document against its content fingerprint.
+
+Arguments:
+  <doc.md>              Path to design document markdown file
+
+Options:
+  --reply <text>        Verbatim text of the approving reply
+  --reply-file <path>   Path to file containing verbatim text of the approving reply
+  --doc <path>          Explicit design document path
+  --state-dir <path>    Override Gate 1 state directory
+  -h, --help            Show this help message
+`);
+    return 0;
+  }
+
+  const docPath = flags.doc || (flags._.length > 0 ? String(flags._[0]) : "") ||
+    options?.docPath || "";
+  if (!docPath) {
+    errorLog("Error: Missing required design document path.");
+    errorLog(
+      "Usage: deno task design:gate1-approve <doc.md> --reply <text> (or --reply-file <path>)",
+    );
+    return 1;
+  }
+
+  let reply = "";
+  if (flags["reply-file"] || options?.replyFile) {
+    const replyFilePath = path.resolve(
+      expandHome(String(flags["reply-file"] || options?.replyFile)),
+    );
+    try {
+      reply = await Deno.readTextFile(replyFilePath);
+    } catch (err) {
+      errorLog(
+        `[design:gate1-approve] Error: Cannot read reply file at ${replyFilePath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return 1;
+    }
+  } else if (flags.reply !== undefined) {
+    reply = String(flags.reply);
+  } else if (options?.reply !== undefined) {
+    reply = options.reply;
+  } else {
+    errorLog("Error: Missing required --reply or --reply-file argument.");
+    errorLog(
+      "Usage: deno task design:gate1-approve <doc.md> --reply <text> (or --reply-file <path>)",
+    );
+    return 1;
+  }
+
+  const stateDir = flags["state-dir"] || options?.stateDir;
+
+  try {
+    const result = await approveGate1Record(docPath, reply, { stateDir });
+    log(`[design:gate1-approve] Gate 1 approved for ${result.record.docPath}`);
+    log(`[design:gate1-approve] Recorded reply: "${result.record.reply}"`);
+    log(`[design:gate1-approve] Fingerprint: ${result.record.approvedFingerprint}`);
+    return 0;
+  } catch (err) {
+    errorLog(`[design:gate1-approve] Error: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+}
+
+export interface Gate1StatusCliOptions {
+  docPath?: string;
+  stateDir?: string;
+  json?: boolean;
+  log?: (msg: string) => void;
+  errorLog?: (msg: string) => void;
+}
+
+export async function runGate1StatusCli(
+  args: string[],
+  options?: Gate1StatusCliOptions,
+): Promise<number> {
+  const log = options?.log ?? console.log;
+  const errorLog = options?.errorLog ?? console.error;
+
+  const flags = parseArgs(args, {
+    boolean: ["help", "json"],
+    string: ["doc", "state-dir"],
+    alias: {
+      h: "help",
+    },
+    default: {
+      help: false,
+      json: false,
+    },
+  });
+
+  if (flags.help) {
+    log(`Usage: deno task design:gate1-status <doc.md> [options]
+
+Reports the Gate 1 status of a design document:
+  - not presented: no record exists on disk
+  - open: record exists but has not been approved yet
+  - approved: record approved and document content matches approved fingerprint
+  - changed since approval: record was approved but document content changed
+
+Arguments:
+  <doc.md>            Path to design document markdown file
+
+Options:
+  --doc <path>        Explicit design document path
+  --state-dir <path>  Override Gate 1 state directory
+  --json              Output status in JSON format
+  -h, --help          Show this help message
+`);
+    return 0;
+  }
+
+  const docPath = flags.doc || (flags._.length > 0 ? String(flags._[0]) : "") ||
+    options?.docPath || "";
+  if (!docPath) {
+    errorLog("Error: Missing required design document path.");
+    errorLog("Usage: deno task design:gate1-status <doc.md>");
+    return 1;
+  }
+
+  const stateDir = flags["state-dir"] || options?.stateDir;
+  const outputJson = flags.json || options?.json;
+
+  try {
+    const result = await getGate1Status(docPath, { stateDir });
+    if (outputJson) {
+      log(JSON.stringify(result, null, 2));
+    } else {
+      for (const line of formatGate1Status(result)) {
+        log(line);
+      }
+    }
+    return 0;
+  } catch (err) {
+    errorLog(`[design:gate1-status] Error: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
 }
@@ -222,6 +399,14 @@ export async function runCli(
 
   if (firstArg === "file-plan" || firstArg === "file_plan") {
     return await runFilePlanCli(args.slice(1));
+  }
+
+  if (firstArg === "gate1-approve" || firstArg === "gate1_approve") {
+    return await runGate1ApproveCli(args.slice(1));
+  }
+
+  if (firstArg === "gate1-status" || firstArg === "gate1_status") {
+    return await runGate1StatusCli(args.slice(1));
   }
 
   if (firstArg === "gate1") {
