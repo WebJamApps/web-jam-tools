@@ -2,13 +2,17 @@ import { assertEquals } from "@std/assert";
 
 const HOOK_PATH = new URL("../hooks/gh-api-guard.sh", import.meta.url).pathname;
 
-async function runHook(cmd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+async function runHook(
+  cmd: string,
+  env?: Record<string, string>,
+): Promise<{ code: number; stdout: string; stderr: string }> {
   const input = JSON.stringify({ tool_input: { command: cmd } });
   const process = new Deno.Command("bash", {
     args: [HOOK_PATH],
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
+    env: env ? { ...Deno.env.toObject(), ...env } : undefined,
   });
   const child = process.spawn();
   const writer = child.stdin.getWriter();
@@ -175,4 +179,63 @@ Deno.test("gh api GET passes through silently", async () => {
   assertEquals(res2.code, 0);
   assertEquals(res2.stdout, "");
   assertEquals(res2.stderr, "");
+});
+
+// --- Surface-dependent behavior: Codex (WJT_SURFACE=codex) vs Claude Code / agy (web-jam-tools#1140) ---
+
+Deno.test("gh api -X POST repos/x/y/issues with WJT_SURFACE=codex set exits 0 with no stdout JSON", async () => {
+  const res = await runHook("gh api -X POST repos/x/y/issues", { WJT_SURFACE: "codex" });
+  assertEquals(res.code, 0);
+  assertEquals(res.stdout, "");
+  assertEquals(res.stderr, "");
+});
+
+Deno.test("gh api -X POST repos/x/y/issues with no WJT_SURFACE set returns permissionDecision: ask JSON", async () => {
+  const res = await runHook("gh api -X POST repos/x/y/issues", { WJT_SURFACE: "" });
+  assertEquals(res.code, 0);
+  const parsed = JSON.parse(res.stdout);
+  assertEquals(parsed.hookSpecificOutput?.permissionDecision, "ask");
+});
+
+Deno.test("gh api PUT/PATCH and field flags with WJT_SURFACE=codex exit 0 with no stdout JSON", async () => {
+  const codexPassForms = [
+    "gh api -X PUT repos/x/y/issues/1",
+    "gh api -X PATCH repos/x/y/issues/1",
+    "gh api repos/x/y/issues -f title='test'",
+    "gh api repos/x/y/issues --field title='test'",
+    "gh api repos/x/y/issues --raw-field title='test'",
+    "gh api repos/x/y/issues --input body.json",
+  ];
+  for (const cmd of codexPassForms) {
+    const res = await runHook(cmd, { WJT_SURFACE: "codex" });
+    assertEquals(res.code, 0, `expected exit 0 for: ${cmd}`);
+    assertEquals(res.stdout, "", `expected empty stdout for: ${cmd}`);
+    assertEquals(res.stderr, "", `expected empty stderr for: ${cmd}`);
+  }
+});
+
+Deno.test("gh api --method DELETE repos/x/y/issues/1/dependencies/blocked_by/2 with WJT_SURFACE=codex is still allowed", async () => {
+  const res = await runHook(
+    "gh api --method DELETE repos/x/y/issues/1/dependencies/blocked_by/2",
+    { WJT_SURFACE: "codex" },
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.stdout, "");
+  assertEquals(res.stderr, "");
+});
+
+Deno.test("gh api --method DELETE repos/x/y/issues/1 on any surface is still denied (exit 2)", async () => {
+  // On Codex
+  const resCodex = await runHook("gh api --method DELETE repos/x/y/issues/1", {
+    WJT_SURFACE: "codex",
+  });
+  assertEquals(resCodex.code, 2);
+  assertEquals(resCodex.stderr.includes("BLOCKED (gh api guard)"), true);
+
+  // Without WJT_SURFACE
+  const resDefault = await runHook("gh api --method DELETE repos/x/y/issues/1", {
+    WJT_SURFACE: "",
+  });
+  assertEquals(resDefault.code, 2);
+  assertEquals(resDefault.stderr.includes("BLOCKED (gh api guard)"), true);
 });
