@@ -50,7 +50,7 @@
 # never removes or reorders any existing permissions.deny entry (hand-added
 # or from a previous run).
 #
-# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--force]
+# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--bin-dir PATH] [--force]
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
 #                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
 #                           the symlink step without touching the real hooks dir.
@@ -72,6 +72,8 @@
 #                           (also settable via AGY_HOOKS_PATH).
 #   --agents-md-path PATH  Merge rules pointer into PATH instead of $HOME/.agents/AGENTS.md
 #                           (also settable via AGENTS_MD_PATH).
+#   --bin-dir PATH         Symlink CLI scripts into PATH instead of $HOME/.local/bin
+#                           (also settable via BIN_DIR; web-jam-tools#1174).
 #   --force                 Required to link into the default hooks destination when
 #                           this script is running from inside a git worktree (see
 #                           the worktree guard below). Not needed with --hooks-dir.
@@ -118,6 +120,16 @@ else
   HOOKS_DEST_IS_DEFAULT=1
 fi
 FORCE=0
+
+# BIN_DIR_IS_DEFAULT tracks whether BIN_DIR is still the real default destination
+# ($HOME/.local/bin) or overridden via --bin-dir / BIN_DIR (web-jam-tools#1174).
+BIN_DIR_IS_DEFAULT=1
+if [ -n "${BIN_DIR:-}" ]; then
+  BIN_DIR="$BIN_DIR"
+  BIN_DIR_IS_DEFAULT=0
+else
+  BIN_DIR="$HOME/.local/bin"
+fi
 
 # SessionStart hooks this installer keeps registered in settings.json.
 # Script names only (must exist under hooks/); the merge step below turns
@@ -621,6 +633,11 @@ while [ $# -gt 0 ]; do
       AGENTS_MD_PATH_EXPLICIT=1
       shift 2
       ;;
+    --bin-dir)
+      BIN_DIR="$2"
+      BIN_DIR_IS_DEFAULT=0
+      shift 2
+      ;;
     --force)
       FORCE=1
       shift
@@ -846,6 +863,14 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
+    AGENTS_DEST="$BIN_DIR/agents"
+    if [ ! -L "$AGENTS_DEST" ] || [ "$(readlink -f "$AGENTS_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agents.sh")" ]; then
+      echo "drift: agents script is not linked at $AGENTS_DEST" >&2
+      DRIFT=1
+    fi
+  fi
+
   if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
     DRIFT=1
   fi
@@ -941,6 +966,26 @@ elif [ -e "$STATUS_LINE_DEST" ] || [ -L "$STATUS_LINE_DEST" ]; then
 else
   ln -s "$REPO_DIR/scripts/statusline.sh" "$STATUS_LINE_DEST"
   echo "statusline.sh: linked (new)"
+fi
+
+# --- CLI tools symlink (~/.local/bin/agents, web-jam-tools#1174) ---
+# Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default).
+# Only linked when targeting the real default destination (HOOKS_DEST_IS_DEFAULT=1)
+# or when an explicit --bin-dir/BIN_DIR override is provided, keeping sandboxed
+# hook tests from touching the real ~/.local/bin.
+if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
+  mkdir -p "$BIN_DIR"
+  AGENTS_DEST="$BIN_DIR/agents"
+  if [ -L "$AGENTS_DEST" ] && [ "$(readlink -f "$AGENTS_DEST")" = "$(readlink -f "$REPO_DIR/scripts/agents.sh")" ]; then
+    echo "agents: ok (already linked)"
+  elif [ -e "$AGENTS_DEST" ] || [ -L "$AGENTS_DEST" ]; then
+    mv "$AGENTS_DEST" "$AGENTS_DEST.bak-$STAMP"
+    ln -s "$REPO_DIR/scripts/agents.sh" "$AGENTS_DEST"
+    echo "agents: linked (previous version backed up to agents.bak-$STAMP)"
+  else
+    ln -s "$REPO_DIR/scripts/agents.sh" "$AGENTS_DEST"
+    echo "agents: linked (new)"
+  fi
 fi
 
 # The merge logic itself lives in its own file (web-jam-tools#265) so it can
