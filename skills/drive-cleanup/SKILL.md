@@ -35,13 +35,12 @@ exact `rclone` command), an **Ambiguous** list, and `### Status: CLEAN` or
 
 - **If `Status: CLEAN`** → say `Drive is clean — no actions needed.`, write the stamp (see
   **Triggering**), and **STOP**. Do NOT spawn a subagent and do NOT make a single
-  `mcp__google-drive__*` call. This is the zero-token path for clean days.
+  Drive API call. This is the zero-token path for clean days.
 - **Otherwise** → Step 2, for the Ambiguous remainder only.
 
-**Step 2 — Haiku subagent classifies ONLY the pre-pass's Ambiguous list:**
+**Step 2 — Classify ONLY the pre-pass's Ambiguous list:**
 
-Spawn a **Haiku subagent** (Agent tool, `model: "haiku"`) and hand it just the Ambiguous
-items (name + Drive ID) from the pre-pass. It uses `mcp__google-drive__*` reads to bucket
+Classify ambiguous items using a subagent or direct execution: on Claude Code, spawn via the `Agent` tool (`model: "haiku"`); on Antigravity, use `invoke_subagent`; on Codex, execute directly. Read file content via `rclone cat gdrive:"<path>"` to bucket
 each one (canonical / known folder / finding / leave-alone), returns its verdicts as text,
 and **writes, edits, trashes, moves NOTHING**. The parent then assembles the **combined**
 Phase-2 table: the pre-pass's proposed actions (already exact, with `rclone` commands +
@@ -120,11 +119,10 @@ If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` D
 
 **Execution path (Tier 2):** `gdrive:` has full read-write scope (verified 2026-06-13,
 web-jam-tools#51), so execute trashes / moves / mirror pushes via the **exact `rclone`
-commands the pre-pass emitted** rather than `mcp__google-drive__*` calls — fewer
+commands the pre-pass emitted** rather than remote Drive API calls — fewer
 round-trips, and the paths/IDs are already resolved. **Bridge-file text merges into the
 Dropbox queue files stay with the model** (queue lines must stay unambiguous and wrapped at
-120 cols — see the bridge steps below). If `gdrive:` is ever read-only, fall back to MCP for
-execution and note it in the run summary.
+120 cols — see the bridge steps below).
 
 ### Bridge actions (`for-opus-*.txt`, legacy `claude-opus-tasks-*.txt`)
 
@@ -151,16 +149,16 @@ Workflow when detected:
 
 1. Download both: the root copy AND the folder copy.
 2. `diff` them to confirm the root copy is genuinely a revision (not an accidental re-upload of an older version).
-3. If the root copy is newer/revised: use `mcp__google-drive__updateTextFile` against the FOLDER copy's file id, passing the root copy's content. This overwrites the in-folder file with the new content while preserving its file id (so any existing references to that id stay valid).
+3. If the root copy is newer/revised: overwrite the folder copy with the root copy's content using `rclone copyto` (e.g. `rclone copyto gdrive:"<root-path>" gdrive:"<folder-path>"`).
 4. Re-download the folder copy and verify the bytes match the root copy.
-5. Trash the root copy via `mcp__google-drive__deleteItem`.
+5. Trash the root copy via `rclone delete --drive-use-trash gdrive:"<root-path>"`.
 6. If the diff shows the root copy is OLDER than the folder copy (rare — would mean Sonnet uploaded a stale revision), surface to Josh; don't overwrite. The folder copy is authoritative when it's newer.
 
 Surface in Phase 2 as: `Sonnet re-upload of <filename>: root copy (modified <date>) vs folder copy (modified <date>) — propose update folder copy with root content + trash root.`
 
 ### Other actions
 
-Moves / trashes / dedupes — use the appropriate Drive MCP tool. Verify high-stakes changes with a follow-up read.
+Moves / trashes / dedupes — use the appropriate `rclone` command (`rclone moveto`, `rclone delete --drive-use-trash`). Verify high-stakes changes with a follow-up read (`rclone ls` or `rclone cat`).
 
 ### Queue renumber — RETIRED (Josh's call 2026-06-12)
 
