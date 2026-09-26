@@ -1108,7 +1108,7 @@ Deno.test("hooks/block-backend-mutation.sh: ALLOWED invocation exits 0 with JSON
   );
 });
 
-Deno.test("hooks/block-backend-mutation.sh: DENIED invocation exits 2 with BLOCKED in stderr and JSON deny in stdout", async () => {
+Deno.test("hooks/block-backend-mutation.sh: DENIED invocation exits 2 with BLOCKED in stderr and empty stdout", async () => {
   const payload = {
     tool_name: "Bash",
     tool_input: {
@@ -1118,8 +1118,20 @@ Deno.test("hooks/block-backend-mutation.sh: DENIED invocation exits 2 with BLOCK
   const res = await runHook(payload, NO_TOKEN);
   assertEquals(res.code, 2);
   assert(res.stderr.includes("BLOCKED (backend mutation guard):"), res.stderr);
-  const parsed = JSON.parse(res.stdout);
-  assertEquals(parsed.hookSpecificOutput.permissionDecision, "deny");
+  assertEquals(res.stdout, "");
+});
+
+Deno.test("hooks/block-backend-mutation.sh: DENIED invocation under Codex (WJT_SURFACE=codex) exits 2 with empty stdout", async () => {
+  const payload = {
+    tool_name: "Bash",
+    tool_input: {
+      command: 'curl -X POST https://webjamsalem.herokuapp.com/venue -d \'{"name":"Test"}\'',
+    },
+  };
+  const res = await runHook(payload, NO_TOKEN, { WJT_SURFACE: "codex" });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED (backend mutation guard):"), res.stderr);
+  assertEquals(res.stdout, "");
 });
 
 Deno.test("hooks/block-backend-mutation.sh: tool_input: null exits 2 failing closed", async () => {
