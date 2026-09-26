@@ -1307,3 +1307,75 @@ Deno.test(
     }
   },
 );
+
+// --- --bin-dir symlink for scripts/agents.sh (web-jam-tools#1174) ---
+
+Deno.test(
+  "install-hooks.sh --bin-dir creates agents symlink and --check detects missing link",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const binDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--bin-dir",
+        binDir,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      const agentsSymlink = `${binDir}/agents`;
+      assert(await pathExists(agentsSymlink), "expected agents to be symlinked in binDir");
+      const lstat = await Deno.lstat(agentsSymlink);
+      assert(lstat.isSymlink, "expected agents to be a symlink");
+      const target = await Deno.readLink(agentsSymlink);
+      assert(
+        target.endsWith("scripts/agents.sh"),
+        `expected target to end with scripts/agents.sh, got ${target}`,
+      );
+
+      // Clean check passes
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--bin-dir",
+        binDir,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+
+      // Remove the symlink -> --check reports drift
+      await Deno.remove(agentsSymlink);
+      const checkDriftRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--bin-dir",
+        binDir,
+        "--check",
+      ]);
+      assert(
+        checkDriftRes.code !== 0,
+        "expected --check to report drift when agents symlink is missing",
+      );
+      assert(
+        checkDriftRes.stderr.includes("drift: agents script is not linked at"),
+        checkDriftRes.stderr,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+      await Deno.remove(binDir, { recursive: true });
+    }
+  },
+);
