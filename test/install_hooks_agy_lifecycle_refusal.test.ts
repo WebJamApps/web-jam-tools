@@ -2,18 +2,20 @@
 //
 // Finding 9 (measured 2026-08-07): registering a Stop OR a SessionStart
 // entry in agy's hooks.json silently disables the ENTIRE hooks config on
-// that surface — not just that event, every PreToolUse guard included. That
-// landmine wasn't armed at the time (install-hooks.sh only ever passed
-// --pre-tool-use/--post-tool-use for the agy target), but nothing stopped a
-// future change from adding one. This pins the active refusal:
-//   1. scripts/merge-hooks-into-settings.ts refuses to write anything at all
-//      when --forbid-lifecycle-hooks is combined with a --stop/SessionStart
-//      argument (unit level, sandboxed temp file).
+// that surface — not just that event, every PreToolUse guard included.
+// Re-measured 2026-09-28 on agy 1.2.12 (web-jam-tools#1176): for Stop, the
+// cause is the entry's shape. A nested { hooks: [{ type, command }] } Stop
+// entry makes agy reject the whole file ("command hook must specify
+// 'command'"); a flat { type, command } Stop entry loads, fires, and leaves
+// the PreToolUse guards firing. This pins:
+//   1. scripts/merge-hooks-into-settings.ts writes agy's Stop entry flat,
+//      flattens (and --check reports) any nested one, and still refuses
+//      SessionStart/SessionEnd when --forbid-lifecycle-hooks is passed.
 //   2. scripts/install-hooks.sh's own agy-targeting invocations always pass
 //      --forbid-lifecycle-hooks (source-level pin, same pattern as
 //      test/install_hooks_force_push_policy.test.ts).
-//   3. A full, sandboxed install-hooks.sh run never writes a Stop or
-//      SessionStart key into the agy hooks file at all (behavioural proof).
+//   3. A full, sandboxed install-hooks.sh run writes only a flat Stop entry
+//      and no SessionStart/SessionEnd into the agy hooks file.
 
 import { assert, assertEquals } from "@std/assert";
 
@@ -63,8 +65,48 @@ Deno.test("merge-hooks-into-settings.ts permits --stop with --forbid-lifecycle-h
     assertEquals(res.code, 0, res.stderr);
     const data = JSON.parse(await Deno.readTextFile(path));
     assertEquals(data.hooks.Stop, [
-      { hooks: [{ type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy" }] },
+      { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy" },
     ]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("merge-hooks-into-settings.ts flattens a nested agy Stop entry, and --check reports it first (web-jam-tools#1176)", async () => {
+  const dir = await Deno.makeTempDir();
+  const path = `${dir}/agy_hooks.json`;
+  const cmd = "$HOME/.claude/hooks/agent-alert.sh agy";
+  const mergeArgs = (...extra: string[]) => [
+    "run",
+    "--allow-read",
+    "--allow-write",
+    "--allow-env",
+    MERGE_SCRIPT,
+    path,
+    ...extra,
+    "--forbid-lifecycle-hooks",
+    "--",
+    "--stop",
+    cmd,
+  ];
+  try {
+    // The nested shape agy rejects, which disarms every guard in the file.
+    await Deno.writeTextFile(
+      path,
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: cmd }] }] } }),
+    );
+
+    const check = await run(Deno.execPath(), mergeArgs("--check"));
+    assertEquals(check.code, 1, "a nested agy Stop entry must be reported as drift");
+    assert(check.stderr.includes("nested Stop entr"), check.stderr);
+
+    const res = await run(Deno.execPath(), mergeArgs());
+    assertEquals(res.code, 0, res.stderr);
+    const data = JSON.parse(await Deno.readTextFile(path));
+    assertEquals(data.hooks.Stop, [{ type: "command", command: cmd }]);
+
+    const recheck = await run(Deno.execPath(), mergeArgs("--check"));
+    assertEquals(recheck.code, 0, recheck.stderr);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -223,7 +265,7 @@ Deno.test("a full sandboxed install-hooks.sh run writes agy Stop hook into agy h
 
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
     assertEquals(agyHooks.hooks.Stop, [
-      { hooks: [{ type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy" }] },
+      { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy" },
     ]);
     assertEquals(agyHooks.hooks.SessionStart ?? [], []);
     assertEquals(agyHooks.hooks.SessionEnd ?? [], []);
