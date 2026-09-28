@@ -41,6 +41,7 @@ configure the notes-sync reminder.
 Then read:
 
 - [AGENTS.md](AGENTS.md) — workspace rules (apply to all AI assistants and human contributors)
+- [docs/local-dev-setup.md](docs/local-dev-setup.md) — setting up local development tools (Claude Code, Antigravity/agy, Codex, REAPER) and combined updating
 - [docs/ai-team-playbook.md](docs/ai-team-playbook.md) — the AI team: who does what, how work flows, and where Josh approves
 - [docs/scripts.md](docs/scripts.md) — what each script does and when to use it
 - [docs/ai-assistant-google-setup.md](docs/ai-assistant-google-setup.md) — generic recipe for setting up Google Drive/Calendar/Gmail/Tasks MCP servers for Claude Code
