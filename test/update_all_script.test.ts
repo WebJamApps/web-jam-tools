@@ -76,16 +76,64 @@ Deno.test("scripts/update-all.sh rejects unknown options with code 1", async () 
 });
 
 Deno.test("scripts/update-all.sh --dry-run prints planned execution in order without running commands", async () => {
-  const result = await runUpdateAll(["--dry-run"]);
-  assertEquals(result.code, 0);
-  assertStringIncludes(result.stdout, "(dry-run) Would execute: claude update");
-  assertStringIncludes(result.stdout, "(dry-run) Would execute: agy update");
-  assertStringIncludes(result.stdout, "(dry-run) Would execute: codex update");
-  assertStringIncludes(result.stdout, "claude update:   DRY-RUN");
-  assertStringIncludes(result.stdout, "agy update:      DRY-RUN");
-  assertStringIncludes(result.stdout, "codex update:    DRY-RUN");
-  assertStringIncludes(result.stdout, "reaper-update:   DRY-RUN");
-  assertStringIncludes(result.stdout, "Dry run completed successfully.");
+  const tempDir = await Deno.makeTempDir();
+  try {
+    const claudeMock = join(tempDir, "claude");
+    const agyMock = join(tempDir, "agy");
+    const codexMock = join(tempDir, "codex");
+    const reaperMock = join(tempDir, "reaper-update");
+
+    await Deno.writeTextFile(claudeMock, "#!/bin/bash\nexit 0\n");
+    await Deno.writeTextFile(agyMock, "#!/bin/bash\nexit 0\n");
+    await Deno.writeTextFile(codexMock, "#!/bin/bash\nexit 0\n");
+    await Deno.writeTextFile(reaperMock, "#!/bin/bash\nexit 0\n");
+
+    await Deno.chmod(claudeMock, 0o755);
+    await Deno.chmod(agyMock, 0o755);
+    await Deno.chmod(codexMock, 0o755);
+    await Deno.chmod(reaperMock, 0o755);
+
+    const result = await runUpdateAll(["--dry-run"], {
+      PATH: `${tempDir}:${Deno.env.get("PATH") ?? ""}`,
+    });
+    assertEquals(result.code, 0);
+    assertStringIncludes(result.stdout, "(dry-run) Would execute: claude update");
+    assertStringIncludes(result.stdout, "(dry-run) Would execute: agy update");
+    assertStringIncludes(result.stdout, "(dry-run) Would execute: codex update");
+    assertStringIncludes(result.stdout, "claude update:   DRY-RUN");
+    assertStringIncludes(result.stdout, "agy update:      DRY-RUN");
+    assertStringIncludes(result.stdout, "codex update:    DRY-RUN");
+    assertStringIncludes(result.stdout, "reaper-update:   DRY-RUN");
+    assertStringIncludes(result.stdout, "Dry run completed successfully.");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("scripts/update-all.sh --dry-run reports skipped status when a tool is not installed", async () => {
+  const tempDir = await Deno.makeTempDir();
+  try {
+    const claudeMock = join(tempDir, "mock-claude.sh");
+    await Deno.writeTextFile(claudeMock, "#!/bin/bash\nexit 0\n");
+    await Deno.chmod(claudeMock, 0o755);
+
+    const result = await runUpdateAll(["--dry-run"], {
+      CLAUDE_BIN: claudeMock,
+      AGY_BIN: join(tempDir, "nonexistent-agy"),
+      CODEX_BIN: join(tempDir, "nonexistent-codex"),
+      REAPER_UPDATE_BIN: join(tempDir, "nonexistent-reaper"),
+    });
+
+    assertEquals(result.code, 0);
+    assertStringIncludes(result.stdout, `(dry-run) Would execute: ${claudeMock} update`);
+    assertStringIncludes(result.stdout, "claude update:   DRY-RUN");
+    assertStringIncludes(result.stdout, "agy update:      SKIPPED (not installed)");
+    assertStringIncludes(result.stdout, "codex update:    SKIPPED (not installed)");
+    assertStringIncludes(result.stdout, "reaper-update:   SKIPPED (not installed)");
+    assertStringIncludes(result.stdout, "Dry run completed successfully.");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
 });
 
 Deno.test("scripts/update-all.sh executes all 4 updates in exact sequence and records success", async () => {
