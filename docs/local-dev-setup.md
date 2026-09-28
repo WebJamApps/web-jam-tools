@@ -111,7 +111,7 @@ codex update
 
 ### 4. Cockos REAPER DAW (`reaper` & `reaper-update`)
 
-REAPER is installed to `$REAPER_PREFIX` (default: `/home/joshua/opt` or `$HOME/opt`).
+REAPER is installed to `$REAPER_PREFIX`. Its default is the literal path `/home/joshua/opt`, so any other developer must set `REAPER_PREFIX` (for example `REAPER_PREFIX="$HOME/opt"`) whenever running `reaper-update` or `update-all`.
 
 1. **Initial Installation / Updates via `reaper-update.sh`:**
    Run the repository's REAPER updater script:
@@ -160,8 +160,6 @@ Or from inside the `web-jam-tools` repository:
 
 ```bash
 deno task update:all
-# or alias:
-deno task update
 # or direct script:
 bash scripts/update-all.sh
 ```

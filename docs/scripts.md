@@ -193,10 +193,6 @@ See [docs/local-dev-setup.md](local-dev-setup.md) for full developer environment
    ```bash
    deno task update:all
    ```
-   or:
-   ```bash
-   deno task update
-   ```
 
 3. **Direct script invocation:**
    ```bash

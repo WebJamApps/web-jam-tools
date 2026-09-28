@@ -25,7 +25,8 @@
 set -u
 set -o pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the ~/.local/bin/update-all symlink so the reaper-update.sh fallback finds scripts/.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Overridable binary names or paths
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
@@ -68,7 +69,6 @@ Options:
 Invocation:
   update-all             (when symlinked to ~/.local/bin/update-all)
   deno task update:all   (from web-jam-tools repository)
-  deno task update       (from web-jam-tools repository)
   bash scripts/update-all.sh
 
 Environment Variables:

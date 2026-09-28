@@ -110,6 +110,36 @@ Deno.test("scripts/update-all.sh --dry-run prints planned execution in order wit
   }
 });
 
+Deno.test("update-all run through its ~/.local/bin symlink falls back to the repo's scripts/reaper-update.sh", async () => {
+  const tempDir = await Deno.makeTempDir();
+  try {
+    const link = join(tempDir, "update-all");
+    await Deno.symlink(SCRIPT_PATH, link);
+    for (const tool of ["claude", "agy", "codex"]) {
+      await Deno.writeTextFile(join(tempDir, tool), "#!/bin/bash\nexit 0\n");
+      await Deno.chmod(join(tempDir, tool), 0o755);
+    }
+
+    // No reaper-update on PATH and no REAPER_UPDATE_BIN, so only the fallback can find it.
+    const cmd = new Deno.Command(link, {
+      args: ["--dry-run"],
+      stdout: "piped",
+      stderr: "piped",
+      clearEnv: true,
+      env: { PATH: `${tempDir}:/usr/bin:/bin` },
+    });
+    const { code, stdout } = await cmd.output();
+    const out = new TextDecoder().decode(stdout);
+    const repoReaper = new URL("../scripts/reaper-update.sh", import.meta.url).pathname;
+
+    assertEquals(code, 0, out);
+    assertStringIncludes(out, `(dry-run) Would execute: ${repoReaper}`);
+    assertStringIncludes(out, "reaper-update:   DRY-RUN");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("scripts/update-all.sh --dry-run reports skipped status when a tool is not installed", async () => {
   const tempDir = await Deno.makeTempDir();
   try {
