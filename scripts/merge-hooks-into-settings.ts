@@ -27,13 +27,14 @@ export function merge(settingsPath: string, args: string[]): number {
   let defaultModeArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
-  // web-jam-tools#432 finding 9: a Stop, SessionEnd, or SessionStart entry in agy's
+  // web-jam-tools#432 finding 9: a SessionStart or SessionEnd entry in agy's
   // hooks.json silently disables the ENTIRE hooks config on that surface —
   // not just that event, every PreToolUse guard included. install-hooks.sh
   // passes --forbid-lifecycle-hooks on every invocation targeting agy's
-  // hooks file, so a future change that accidentally adds a --stop, --session-end, or
+  // hooks file, so a future change that accidentally adds a --session-end or
   // head/SessionStart argument to that call is refused here rather than
-  // silently landing and disarming every guard on the Flash surface.
+  // silently landing and disarming every guard on the Flash surface. Stop is
+  // allowed on that target only in agy's flat shape (see mergeAgyFlatHooks).
   const forbidLifecycleHooks = args.includes("--forbid-lifecycle-hooks");
   const filteredArgs = args.filter((a) => a !== "--check" && a !== "--forbid-lifecycle-hooks");
 
@@ -98,7 +99,6 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const passedLifecycle = [
     sessionStartCmds.length > 0 ? "SessionStart" : "",
-    stopCmds.length > 0 ? "Stop" : "",
     sessionEndCmds.length > 0 ? "SessionEnd" : "",
   ].filter(Boolean).join(" or ");
 
@@ -106,9 +106,11 @@ export function merge(settingsPath: string, args: string[]): number {
     console.error(
       `error: refusing to write ${path.basename(settingsPath)} — a ${passedLifecycle} ` +
         "entry was passed for a target invoked with --forbid-lifecycle-hooks. On agy, " +
-        "registering ANY lifecycle event silently disables the entire hooks config — not just " +
-        "that event, every PreToolUse guard included (web-jam-tools#432 finding 9, " +
-        "verified 2026-08-07). Remove the --stop/--session-end/head SessionStart args from this call.",
+        "registering SessionStart or SessionEnd silently disables the entire hooks config — not just " +
+        "that event, every PreToolUse guard included (web-jam-tools#432 finding 9). " +
+        "Stop is allowed there only as a flat { type, command } entry, which this " +
+        "script writes (measured 2026-09-28, agy 1.2.12). Remove the --session-end/head " +
+        "SessionStart args from this call.",
     );
     return 1;
   }
@@ -226,8 +228,60 @@ export function merge(settingsPath: string, args: string[]): number {
     return [added, pruned];
   }
 
+  // agy rejects its WHOLE hooks file when a Stop entry uses Claude Code's nested
+  // { hooks: [{ type, command }] } shape — "Failed to parse hooks file …: invalid
+  // hook "hooks": command hook must specify 'command'" — so every PreToolUse guard
+  // goes silent. A flat { type, command } Stop entry loads, fires, and leaves the
+  // guards firing. Measured 2026-09-28 on agy 1.2.12 (web-jam-tools#1176); this is
+  // what web-jam-tools#432 finding 9 observed. Any nested entry found is flattened.
+  function mergeAgyFlatHooks(kind: string, cmds: string[]): [string[], string[], number] {
+    const current: unknown[] = Array.isArray(hooks[kind]) ? hooks[kind] : [];
+    const entries: Array<{ type: string; command: string }> = [];
+    let reshaped = 0;
+    for (const entry of current) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as { command?: unknown; hooks?: unknown };
+      if (Array.isArray(e.hooks)) {
+        reshaped++;
+        for (const h of e.hooks as Array<{ command?: unknown }>) {
+          if (h && typeof h.command === "string") {
+            entries.push({ type: "command", command: h.command });
+          }
+        }
+      } else if (typeof e.command === "string") {
+        entries.push({ type: "command", command: e.command });
+      }
+    }
+
+    const desiredScripts = new Set(cmds.map((c) => extractScriptPath(c)));
+    const desiredCmds = new Set(cmds);
+    const pruned: string[] = [];
+    const kept = entries.filter((e) => {
+      if (!isManagedHook(e.command)) return true;
+      if (desiredCmds.has(e.command) || desiredScripts.has(extractScriptPath(e.command))) {
+        return true;
+      }
+      pruned.push(e.command);
+      return false;
+    });
+
+    const existing = new Set(kept.map((e) => e.command));
+    const added: string[] = [];
+    for (const cmd of cmds) {
+      if (!existing.has(cmd)) {
+        kept.push({ type: "command", command: cmd });
+        existing.add(cmd);
+        added.push(cmd);
+      }
+    }
+    hooks[kind] = kept;
+    return [added, pruned, reshaped];
+  }
+
   const [addedSession, prunedSession] = mergeFlatHooks("SessionStart", sessionStartCmds);
-  const [addedStop, prunedStop] = mergeFlatHooks("Stop", stopCmds);
+  const [addedStop, prunedStop, reshapedStop] = forbidLifecycleHooks
+    ? mergeAgyFlatHooks("Stop", stopCmds)
+    : [...mergeFlatHooks("Stop", stopCmds), 0];
   const [addedSessionEnd, prunedSessionEnd] = mergeFlatHooks("SessionEnd", sessionEndCmds);
 
   function mergeMatcherHooks(
@@ -319,7 +373,10 @@ export function merge(settingsPath: string, args: string[]): number {
     postToolUsePairs,
   );
 
-  function mergePermissionsList(sectionName: "deny" | "ask" | "allow", patterns: string[]): string[] {
+  function mergePermissionsList(
+    sectionName: "deny" | "ask" | "allow",
+    patterns: string[],
+  ): string[] {
     if (patterns.length === 0) return [];
     if (!data.permissions || typeof data.permissions !== "object") {
       data.permissions = {};
@@ -440,6 +497,13 @@ export function merge(settingsPath: string, args: string[]): number {
       if (Array.isArray(bucket)) {
         for (let b = 0; b < bucket.length; b++) {
           const entry = bucket[b];
+          if (entry && typeof entry.command === "string") {
+            // agy's flat Stop entry shape (see mergeAgyFlatHooks).
+            const match = findCredentialLiteral(entry.command);
+            if (match) {
+              secretFindings.push(`hooks.${kind}[${b}]: ${match}`);
+            }
+          }
           if (entry && Array.isArray(entry.hooks)) {
             for (let h = 0; h < entry.hooks.length; h++) {
               const cmd = entry.hooks[h]?.command;
@@ -471,6 +535,7 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedSession.length > 0 ||
     addedStop.length > 0 ||
     prunedStop.length > 0 ||
+    reshapedStop > 0 ||
     addedSessionEnd.length > 0 ||
     prunedSessionEnd.length > 0 ||
     addedPreToolUse.length > 0 ||
@@ -505,6 +570,13 @@ export function merge(settingsPath: string, args: string[]): number {
       }
       for (const cmd of prunedStop) {
         console.error(`${targetFilename}: has retired Stop hook ${cmd}`);
+      }
+      if (reshapedStop > 0) {
+        console.error(
+          `${targetFilename}: has ${reshapedStop} nested Stop entr${
+            reshapedStop === 1 ? "y" : "ies"
+          } agy rejects — the whole hooks file fails to load`,
+        );
       }
       for (const cmd of addedSessionEnd) {
         console.error(`${targetFilename}: missing SessionEnd hook ${cmd}`);
@@ -625,6 +697,9 @@ export function merge(settingsPath: string, args: string[]): number {
   for (const cmd of addedStop) console.log(`${targetFilename}: added Stop hook ${cmd}`);
   for (const cmd of prunedStop) {
     console.log(`${targetFilename}: removed retired Stop hook ${cmd}`);
+  }
+  if (reshapedStop > 0) {
+    console.log(`${targetFilename}: flattened ${reshapedStop} nested Stop entries agy rejects`);
   }
   for (const cmd of addedSessionEnd) console.log(`${targetFilename}: added SessionEnd hook ${cmd}`);
   for (const cmd of prunedSessionEnd) {

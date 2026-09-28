@@ -290,6 +290,43 @@ Deno.test("agents.sh drops a tab to a plain shell when its agent exits instead o
   });
 });
 
+Deno.test("agents run through its ~/.local/bin symlink passes the repo's claude-settings.json to claude (web-jam-tools#1176)", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    // install-hooks.sh links scripts/agents.sh as ~/.local/bin/agents; run it the same way.
+    const binDir = `${tmpDir}/bin`;
+    await Deno.mkdir(binDir);
+    await Deno.symlink(AGENTS_SCRIPT, `${binDir}/agents`);
+    // A fake claude that records the arguments it was started with.
+    const argsOut = `${tmpDir}/claude-args.txt`;
+    await Deno.writeTextFile(
+      `${binDir}/claude`,
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argsOut}"\n`,
+    );
+    await Deno.chmod(`${binDir}/claude`, 0o755);
+
+    const res = await run(`${binDir}/agents`, ["-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+    });
+    assertEquals(res.code, 0, res.stderr);
+
+    let args = "";
+    for (let i = 0; i < 30 && !args; i++) {
+      try {
+        args = await Deno.readTextFile(argsOut);
+      } catch {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    assertEquals(args.trim().split("\n"), [
+      "--settings",
+      `${REPO_ROOT}scripts/claude-settings.json`,
+    ]);
+  });
+});
+
 Deno.test("agents.sh supports -S socket path and --no-attach", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "agents-test-sock-" });
   const socketPath = `${tmpDir}/custom_socket`;
