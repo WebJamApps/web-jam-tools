@@ -57,6 +57,11 @@ CLAUDE_CMD="${AGENTS_CLAUDE_CMD:-claude --settings $CLAUDE_SETTINGS}"
 # shellcheck disable=SC2016 # false positive, see above
 CODEX_CMD="${AGENTS_CODEX_CMD:-codex -c 'hooks.PermissionRequest=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$HOME/.claude/hooks/agent-alert.sh codex\"}]}]' -c 'notify=[\"$HOME/.claude/hooks/agent-alert.sh\", \"codex\"]'}"
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
+# agy skips the laptop's login keyring whenever any SSH_* variable is set, so a
+# session started over SSH (tablet or phone) made agy ask to log in again
+# (measured 2026-09-28, agy 1.2.12). Every tab starts without them, so the session
+# behaves the same wherever `agents` was typed.
+TAB_ENV="unset SSH_CLIENT SSH_CONNECTION SSH_TTY;"
 
 # Attach to the session (or switch to it from inside tmux), then exit.
 attach_and_exit() {
@@ -82,7 +87,7 @@ fi
 # Another `agents` run (laptop and tablet connecting at once) can create the
 # session between the check above and this line; when it did, attach to that
 # session instead of failing with "duplicate session".
-if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
+if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$TAB_ENV $CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
   if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
     attach_and_exit
   fi
@@ -105,11 +110,11 @@ tmux "${TMUX_ARGS[@]}" set-window-option -t "$SESSION" automatic-rename off
 tmux "${TMUX_ARGS[@]}" set-window-option -t "$SESSION:1" automatic-rename off
 
 # Create tab 2: codex in Josh's home folder.
-tmux "${TMUX_ARGS[@]}" new-window -t "$SESSION:2" -n codex -c "$HOME" "$CODEX_CMD; exec $USER_SHELL"
+tmux "${TMUX_ARGS[@]}" new-window -t "$SESSION:2" -n codex -c "$HOME" "$TAB_ENV $CODEX_CMD; exec $USER_SHELL"
 tmux "${TMUX_ARGS[@]}" set-window-option -t "$SESSION:2" automatic-rename off
 
 # Create tab 3: agy in Josh's home folder.
-tmux "${TMUX_ARGS[@]}" new-window -t "$SESSION:3" -n agy -c "$HOME" "$AGY_CMD; exec $USER_SHELL"
+tmux "${TMUX_ARGS[@]}" new-window -t "$SESSION:3" -n agy -c "$HOME" "$TAB_ENV $AGY_CMD; exec $USER_SHELL"
 tmux "${TMUX_ARGS[@]}" set-window-option -t "$SESSION:3" automatic-rename off
 
 # Start on tab 1 (claude).

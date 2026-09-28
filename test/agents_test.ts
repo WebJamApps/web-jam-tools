@@ -327,6 +327,36 @@ Deno.test("agents run through its ~/.local/bin symlink passes the repo's claude-
   });
 });
 
+Deno.test("agents started over SSH starts every tab without SSH_* variables, so agy keeps its keyring login", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    // Each tab records the SSH variables its agent command sees.
+    const probe = (name: string) =>
+      `echo "[$SSH_CONNECTION|$SSH_CLIENT|$SSH_TTY]" > ${tmpDir}/${name}.env; sleep 60`;
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      SSH_CONNECTION: "100.85.167.74 43414 100.66.248.113 22",
+      SSH_CLIENT: "100.85.167.74 43414 22",
+      SSH_TTY: "/dev/pts/0",
+      AGENTS_CLAUDE_CMD: probe("claude"),
+      AGENTS_CODEX_CMD: probe("codex"),
+      AGENTS_AGY_CMD: probe("agy"),
+    });
+    assertEquals(res.code, 0, res.stderr);
+
+    for (const name of ["claude", "codex", "agy"]) {
+      let seen = "";
+      for (let i = 0; i < 30 && !seen; i++) {
+        try {
+          seen = (await Deno.readTextFile(`${tmpDir}/${name}.env`)).trim();
+        } catch {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+      assertEquals(seen, "[||]", `${name} tab saw SSH variables: ${seen}`);
+    }
+  });
+});
+
 Deno.test("agents.sh supports -S socket path and --no-attach", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "agents-test-sock-" });
   const socketPath = `${tmpDir}/custom_socket`;
