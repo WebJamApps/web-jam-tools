@@ -21,7 +21,7 @@
 #   ("The waiting alert", "When the alert stays silent", "What it refuses to do").
 #
 # Usage:
-#   agent-alert.sh <claude|codex|agy>
+#   agent-alert.sh <claude|codex|agy> [codex-notify-json]
 set -euo pipefail
 
 # Refuse to fail or block an agent under any circumstances.
@@ -54,24 +54,18 @@ if [ "$WINDOW_NAME" != "$AGENT" ]; then
   exit 0
 fi
 
-# Read stdin if available (for Codex hidden title-writing check).
-INPUT=""
-if [ ! -t 0 ]; then
-  INPUT=$(cat 2>/dev/null || true)
-fi
-
 # Silent case 4: Codex title-writing step at the start of conversation.
+# Codex's `notify` passes its agent-turn-complete JSON as the final argument
+# (stdin is null), so match the start of the first "input-messages" entry.
 if [ "$AGENT" = "codex" ]; then
-  case "$INPUT" in
-    *"Generate a concise, single-line task title"*)
-      exit 0
-      ;;
-  esac
+  TITLE_STEP='"input-messages"[[:space:]]*:[[:space:]]*\[[[:space:]]*"Generate a concise, single-line task title'
+  if [[ "${2:-}" =~ $TITLE_STEP ]]; then
+    exit 0
+  fi
 fi
 
-# 1. Mark the waiting agent's tab in tmux.
+# 1. Mark the waiting agent's tab in tmux (agents.sh owns the after-select-window hook that clears it).
 "${TMUX_CMD[@]}" set -w -t "$TMUX_PANE" @waiting 1 2>/dev/null || true
-"${TMUX_CMD[@]}" set-hook -t "$SESSION_NAME" after-select-window 'set -w -u @waiting' 2>/dev/null || true
 
 # 2. Format notification message.
 case "$AGENT" in
@@ -89,6 +83,7 @@ if [ -z "$TOPIC" ] && [ -f "$TOPIC_FILE" ]; then
   TOPIC=$(tr -d ' \r\n' < "$TOPIC_FILE" 2>/dev/null || true)
 fi
 if [ -z "$TOPIC" ]; then
+  umask 077 # the topic file is private: anyone who reads it can subscribe or post
   mkdir -p "$(dirname "$TOPIC_FILE")" 2>/dev/null || true
   TOPIC="agent-alerts-$(od -vN 16 -An -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || date +%s%N)"
   echo "$TOPIC" > "$TOPIC_FILE" 2>/dev/null || true

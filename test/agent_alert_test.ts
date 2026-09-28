@@ -28,35 +28,33 @@ async function run(
   cmd: string,
   args: string[],
   env?: Record<string, string>,
-  stdinText?: string,
 ): Promise<RunResult> {
   const command = new Deno.Command(cmd, {
     args,
-    stdin: stdinText !== undefined ? "piped" : "null",
+    stdin: "null",
     stdout: "piped",
     stderr: "piped",
     env: env ? { ...Deno.env.toObject(), ...env } : undefined,
   });
-
-  if (stdinText !== undefined) {
-    const child = command.spawn();
-    const writer = child.stdin.getWriter();
-    await writer.write(new TextEncoder().encode(stdinText));
-    await writer.close();
-    const { code, stdout, stderr } = await child.output();
-    return {
-      code,
-      stdout: new TextDecoder().decode(stdout),
-      stderr: new TextDecoder().decode(stderr),
-    };
-  }
-
   const { code, stdout, stderr } = await command.output();
   return {
     code,
     stdout: new TextDecoder().decode(stdout),
     stderr: new TextDecoder().decode(stderr),
   };
+}
+
+// Codex's `notify` appends its agent-turn-complete JSON as the final argv
+// argument with stdin set to null (codex-rs/hooks/src/legacy_notify.rs).
+function codexNotifyJson(...inputMessages: string[]): string {
+  return JSON.stringify({
+    type: "agent-turn-complete",
+    "thread-id": "test-thread",
+    "turn-id": "1",
+    cwd: "/tmp",
+    "input-messages": inputMessages,
+    "last-assistant-message": "done",
+  });
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -153,7 +151,7 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
     const curlOut = `${tmpDir}/curl_alert.txt`;
     const res = await run(
       "bash",
-      [ALERT_SCRIPT, "codex"],
+      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -162,7 +160,6 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
         CURL_OUT: curlOut,
         HOME: tmpDir,
       },
-      "Run the shell command: touch x\n",
     );
     assertEquals(res.code, 0, `agent-alert.sh failed: ${res.stderr}`);
 
@@ -178,6 +175,14 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
     assert(await pathExists(curlOut), "curl should have been called");
     const body = await Deno.readTextFile(curlOut);
     assertEquals(body, "Codex is waiting for you");
+
+    // The generated ntfy topic file is private to the user.
+    const topicInfo = await Deno.stat(`${tmpDir}/.config/agent-alerts/ntfy-topic`);
+    assertEquals(
+      (topicInfo.mode ?? 0) & 0o077,
+      0,
+      "topic file must not be readable by group/others",
+    );
   });
 });
 
@@ -186,14 +191,13 @@ Deno.test("silent with TMUX_PANE unset", async () => {
     const curlOut = `${tmpDir}/curl_unset.txt`;
     const res = await run(
       "bash",
-      [ALERT_SCRIPT, "codex"],
+      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: "",
         PATH: `${fakeBinDir}:${Deno.env.get("PATH") ?? ""}`,
         CURL_OUT: curlOut,
         HOME: tmpDir,
       },
-      "Run the shell command: touch x\n",
     );
     assertEquals(res.code, 0);
     assert(!(await pathExists(curlOut)), "should be silent when TMUX_PANE is unset");
@@ -225,7 +229,7 @@ Deno.test("silent in session 'other'", async () => {
     const curlOut = `${tmpDir}/curl_other.txt`;
     const res = await run(
       "bash",
-      [ALERT_SCRIPT, "codex"],
+      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -234,7 +238,6 @@ Deno.test("silent in session 'other'", async () => {
         CURL_OUT: curlOut,
         HOME: tmpDir,
       },
-      "Run the shell command: touch x\n",
     );
     assertEquals(res.code, 0);
     assert(!(await pathExists(curlOut)), "should be silent for session other");
@@ -322,7 +325,13 @@ Deno.test(
       const curlOut = `${tmpDir}/curl_codex_title.txt`;
       const res = await run(
         "bash",
-        [ALERT_SCRIPT, "codex"],
+        [
+          ALERT_SCRIPT,
+          "codex",
+          codexNotifyJson(
+            "Generate a concise, single-line task title of at most 36 characters and under five words",
+          ),
+        ],
         {
           TMUX_PANE: paneId,
           TMUX_SOCKET: socketName,
@@ -331,7 +340,6 @@ Deno.test(
           CURL_OUT: curlOut,
           HOME: tmpDir,
         },
-        "Generate a concise, single-line task title of at most 36 characters and under five words\n",
       );
       assertEquals(res.code, 0);
       assert(!(await pathExists(curlOut)), "should be silent for Codex title-writing step");
@@ -345,6 +353,52 @@ Deno.test(
     });
   },
 );
+
+Deno.test("alerts when the title text is not Codex's first input message", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir, fakeBinDir) => {
+    await run("tmux", [
+      "-L",
+      socketName,
+      "new-session",
+      "-d",
+      "-s",
+      "agents",
+      "-n",
+      "codex",
+      "sleep 60",
+    ], {
+      TMUX_TMPDIR: tmpDir,
+    });
+    const paneId = (await run(
+      "tmux",
+      ["-L", socketName, "list-panes", "-t", "agents:codex", "-F", "#{pane_id}"],
+      { TMUX_TMPDIR: tmpDir },
+    )).stdout.trim();
+
+    const curlOut = `${tmpDir}/curl_codex_later.txt`;
+    const res = await run(
+      "bash",
+      [
+        ALERT_SCRIPT,
+        "codex",
+        codexNotifyJson(
+          "Run the shell command: touch x",
+          "Generate a concise, single-line task title",
+        ),
+      ],
+      {
+        TMUX_PANE: paneId,
+        TMUX_SOCKET: socketName,
+        TMUX_TMPDIR: tmpDir,
+        PATH: `${fakeBinDir}:${Deno.env.get("PATH") ?? ""}`,
+        CURL_OUT: curlOut,
+        HOME: tmpDir,
+      },
+    );
+    assertEquals(res.code, 0);
+    assertEquals(await Deno.readTextFile(curlOut), "Codex is waiting for you");
+  });
+});
 
 Deno.test("exits 0 when curl times out or fails", async () => {
   await withThrowawayTmux(async (socketName, tmpDir, fakeBinDir) => {
@@ -371,7 +425,7 @@ Deno.test("exits 0 when curl times out or fails", async () => {
     // Test curl timeout (exit 28)
     const resTimeout = await run(
       "bash",
-      [ALERT_SCRIPT, "codex"],
+      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -380,14 +434,13 @@ Deno.test("exits 0 when curl times out or fails", async () => {
         FAKE_CURL_EXIT_CODE: "28",
         HOME: tmpDir,
       },
-      "Run the shell command: touch x\n",
     );
     assertEquals(resTimeout.code, 0, "must exit 0 on curl timeout");
 
     // Test curl connection failure (exit 7)
     const resFailed = await run(
       "bash",
-      [ALERT_SCRIPT, "codex"],
+      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -396,7 +449,6 @@ Deno.test("exits 0 when curl times out or fails", async () => {
         FAKE_CURL_EXIT_CODE: "7",
         HOME: tmpDir,
       },
-      "Run the shell command: touch x\n",
     );
     assertEquals(resFailed.code, 0, "must exit 0 on curl failure");
   });

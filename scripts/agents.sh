@@ -48,10 +48,13 @@ if [ ${#TMUX_ARGS[@]} -eq 0 ] && [ -n "${TMUX_SOCKET:-}" ]; then
 fi
 
 USER_SHELL="${SHELL:-/bin/bash}"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve the ~/.local/bin/agents symlink so REPO_DIR is the repository, not ~/.local.
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 CLAUDE_SETTINGS="$REPO_DIR/scripts/claude-settings.json"
 CLAUDE_CMD="${AGENTS_CLAUDE_CMD:-claude --settings $CLAUDE_SETTINGS}"
-# shellcheck disable=SC2016 # literal $HOME on purpose
+# $HOME expands here (the single quotes sit inside a double-quoted default); Codex runs
+# the notify argv without a shell, so it needs the real path.
+# shellcheck disable=SC2016 # false positive, see above
 CODEX_CMD="${AGENTS_CODEX_CMD:-codex -c 'hooks.PermissionRequest=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$HOME/.claude/hooks/agent-alert.sh codex\"}]}]' -c 'notify=[\"$HOME/.claude/hooks/agent-alert.sh\", \"codex\"]'}"
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
 
