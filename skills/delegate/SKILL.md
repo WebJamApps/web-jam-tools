@@ -123,7 +123,7 @@ what makes headless dispatch reliable, not the one-shot call.
 
 ## 2. Per-tier subagent prompt templates (Haiku / Sonnet / Opus)
 
-Dispatch these via the `Agent` tool (`model: "haiku"` / omit for session default /
+On Claude Code, dispatch these via the `Agent` tool (`model: "haiku"` / omit for session default /
 `model: "opus"`). A fresh subagent has none of this session's context, so the
 prompt must be self-contained: repo path, branch, commit format, the version-bump
 rule, and an explicit report-back list. Fill in the placeholders; don't paste them
@@ -133,9 +133,9 @@ literally.
 issue body — e.g. the design got settled through back-and-forth in the comment
 thread), the dispatching parent MUST inline that spec text into the prompt's
 `Task:` field. Never pass a bare issue number expecting the sub-agent to
-reconstruct it from the issue plus its comments — a sub-agent dispatched via the
-`Agent` tool doesn't fetch the issue at all; it only ever sees what's in the
-prompt.
+reconstruct it from the issue plus its comments — a sub-agent doesn't fetch the
+issue at all (on Claude Code, the `Agent` tool hands it only the prompt); it only
+ever sees what's in the prompt.
 
 The templates below say `package.json` "version" — that's correct for the Node
 repos (CollegeLutheran, JaMmusic, web-jam-back, AppersonAuto, WebJamSocketCluster).
@@ -145,15 +145,13 @@ the subagent has to self-police.
 
 ### PR-review dispatch nudge (parent-side, before dispatching)
 
-> Before dispatching a subagent to run `/pr-review` (e.g. the Flash-reviews-Sonnet /
-> Sonnet-reviews-Flash cross-model pairing), know that the subagent **cannot** post
-> its finished review itself — Agent-tool subagents don't inherit this session's
-> `permissions.allow` list and dead-end on `gh pr review --comment` with no human
-> present to approve it (harness limitation, not a WebJamApps settings gap; see
-> `skills/pr-review/SKILL.md` Step 3 for the citations). The subagent will write
-> the finished review to a scratch file and hand you back its path — **you** (the
-> orchestrating session) post it via `gh pr review --comment --body-file <path>`
-> once it reports back. Don't wait on the subagent in the meantime.
+> A subagent dispatched to run `/pr-review` (e.g. the Flash-reviews-Sonnet /
+> Sonnet-reviews-Flash cross-model pairing) posts its own finished review with
+> `deno task post-pr-review` — no handoff back to you, and you never re-post it.
+> That task is a `permissions.allow` capability, so a subagent with no human present
+> completes the post; the raw `gh` review verb is what dead-ends, and
+> `hooks/block-raw-gh-write.sh` denies it on every surface. See
+> `skills/pr-review/SKILL.md` Step 3. Don't wait on the subagent in the meantime.
 
 ### Coupling nudge (parent-side, before dispatching)
 

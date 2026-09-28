@@ -362,8 +362,8 @@ afterward.
    ```
    *(Note: Review comments provide feedback for the PR author and Josh. Final PR merge remains under Josh's approval.)*
 
-   **This works identically whether the skill is running as the top-level session or as an
-   Agent-tool-dispatched subagent — no scratch-file handoff back to the orchestrating session is
+   **This works identically whether the skill is running as the top-level session or as a
+   subagent (on Claude Code, an Agent-tool-dispatched one) — no scratch-file handoff back to the orchestrating session is
    needed or correct anymore.** The earlier version of this step asked a dispatched subagent to
    write the file and report its path back, on the theory that subagents run in an independent
    permission context that never inherits `permissions.allow`. That theory was wrong (verified
