@@ -520,6 +520,64 @@ Deno.test("recordGate2Approval: succeeds as no-op when re-recording identical fi
   assertEquals(rec._id, "existing-gate2");
 });
 
+Deno.test("recordGate2Approval: updates Gate 2 draft fingerprints when recording an unpitched subset with unchanged copy", async () => {
+  let postedBody: Record<string, unknown> | null = null;
+  const mockFetch: typeof fetch = (input: string | URL | Request, init?: RequestInit) => {
+    const urlStr = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : input.url;
+
+    if (urlStr.includes("/outreach/approval/draft-fingerprints")) {
+      if (!init?.method || init.method === "GET") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              _id: "existing-gate2",
+              batchId: "2026-10-16-to-2026-10-18",
+              draftFingerprints: [
+                { venueId: "v1", fingerprint: "hash-1" },
+                { venueId: "v2", fingerprint: "hash-2" },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (init.method === "POST") {
+        postedBody = JSON.parse(String(init.body || "{}"));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              _id: "existing-gate2",
+              batchId: "2026-10-16-to-2026-10-18",
+              draftFingerprints: [{ venueId: "v2", fingerprint: "hash-2" }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const rec = await recordGate2Approval(
+    {
+      backendUrl: "https://test.example.com",
+      weekend: sampleWeekend,
+      draftFingerprints: [{ venueId: "v2", fingerprint: "hash-2" }],
+    },
+    mockFetch,
+  );
+
+  assertEquals(rec._id, "existing-gate2");
+  assertEquals((postedBody as Record<string, unknown> | null)?.draftFingerprints, [{
+    venueId: "v2",
+    fingerprint: "hash-2",
+  }]);
+});
+
 Deno.test("fetchGate2Approval: returns record on 200 and null on 404", async () => {
   const mock200: typeof fetch = () =>
     Promise.resolve(

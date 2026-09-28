@@ -23,6 +23,7 @@ export interface TargetLocation {
   cities?: string[];
   includeSurrounding?: boolean;
   surroundingCities?: string[];
+  allLocations?: boolean;
 }
 
 export type TemplateVenueType =

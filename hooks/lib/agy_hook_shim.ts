@@ -260,6 +260,7 @@ export interface NormalizedPayload {
   modelName?: string;
   stepIdx?: number;
   conversationId?: string;
+  session_id?: string;
   artifactDirectoryPath?: string;
   workspacePaths?: string[];
 }
@@ -279,6 +280,7 @@ export function normalize(
     modelName: payload.modelName,
     stepIdx: payload.stepIdx,
     conversationId: payload.conversationId,
+    session_id: payload.conversationId,
     artifactDirectoryPath: payload.artifactDirectoryPath,
     workspacePaths: payload.workspacePaths,
   };

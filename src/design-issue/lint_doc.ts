@@ -370,7 +370,7 @@ function firstNonExemptMatch(
 const loadBearingPremisesHeadingRegex = /^\s*#{1,6}\s+Load-bearing premises\b/i;
 
 /** A line self-identifying a cited issue as the one this design run was invoked on — the one
- * concrete convention observed in practice (design-issue-enhancements-design-2026-08-23.md:
+ * concrete convention observed in practice (design-issue-file-issue-design-2026-08-23.md:
  * "The directive carried at the top of the target issue this run was invoked on:"). This is a
  * deliberately narrow, mechanical proxy for "the document names a target issue": it requires the
  * document's own prose to say so in those terms, rather than guessing from any bare issue citation
@@ -404,11 +404,12 @@ const CITATION_REPO_NUMBER_REGEX =
  * citation when a human reads it (HARD RULE: every issue/PR mention carries repo + number + title).
  * The lookbehind excludes a `#` whose preceding character is alphanumeric/`.`/`-`/`/` — that's
  * always the tail of a `repo#N` match `CITATION_REPO_NUMBER_REGEX` already reports, never a second,
- * separate bare citation. Requiring `\d+` immediately after `#` (with no space) keeps a heading
- * (`# Title` — space before the text) and a letter-bearing hex color (`#fff`) from matching; an
- * all-numeric hex color (`#000000`) in prose outside a fenced block is a known, accepted false
- * positive this rule does not attempt to rule out. */
-const CITATION_BARE_NUMBER_REGEX = /(?<![A-Za-z0-9_.\/-])#(\d+)\b/g;
+ * separate bare citation. Requiring `[1-9]\d{0,4}` immediately after `#` (with no space) matches
+ * 1-to-5 digit GitHub issue numbers while keeping headings (`# Title`), letter-bearing hex colors
+ * (`#fff`, `#1e1e24`, `#FEF2C0`), and 6-digit hex color codes (`#475569`, `#334155`, `#166534`,
+ * `#000000`) commonly found in SVG diagrams or styles from matching as issue citations
+ * (web-jam-tools#1097). */
+const CITATION_BARE_NUMBER_REGEX = /(?<![A-Za-z0-9_.\/-])#([1-9]\d{0,4})\b/g;
 
 /** `https://github.com/<owner>/<repo>/issues/<n>` or `.../pull/<n>`. */
 const CITATION_URL_REGEX =

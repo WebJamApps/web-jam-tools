@@ -414,14 +414,55 @@ Deno.test("a sidechain entry is skipped even when it is the only assistant entry
   });
 });
 
-// --- fail-open: unreadable/absent transcript stays silent, exit 0 ---
+// --- outcome 3: cannot evaluate -> proceed with a diagnostic the harness actually
+// surfaces (stdout `systemMessage`) plus plain stderr, exit 0 (web-jam-tools#1073) ---
 
-Deno.test("nonexistent transcript path stays silent, exit 0 (fail-open)", async () => {
-  const res = await runHook("/nonexistent/path/does-not-exist.jsonl");
+/**
+ * Asserts the outcome-3 contract on both channels. stdout is the one that
+ * matters in a real session: Claude Code surfaces a proceeding hook's stdout
+ * and renders `systemMessage`, while stderr on exit 0 is never shown, so a
+ * stderr-only assertion would pass while the diagnostic stayed invisible.
+ */
+function assertCannotEvaluate(
+  res: { code: number; stdout: string; stderr: string },
+  step: string,
+  detail?: string,
+) {
+  const expected =
+    `WARN (clear-communication guard): could not evaluate reply — failed at step: ${step}`;
   assertEquals(res.code, 0, res.stderr);
+  assert(res.stderr.includes(expected), `stderr missing step "${step}": ${res.stderr}`);
+  const parsed = JSON.parse(res.stdout.trim()) as { systemMessage?: string };
+  const systemMessage = parsed.systemMessage ?? "";
+  assert(
+    systemMessage.includes(expected),
+    `stdout systemMessage missing step "${step}": ${res.stdout}`,
+  );
+  if (detail) {
+    assert(res.stderr.includes(detail), `stderr missing detail "${detail}": ${res.stderr}`);
+    assert(
+      systemMessage.includes(detail),
+      `stdout systemMessage missing detail "${detail}": ${res.stdout}`,
+    );
+  }
+  // The captured detail is bounded so a stack trace cannot flood the chat.
+  assert(
+    systemMessage.split("\n").length <= 6,
+    `systemMessage is not bounded to the step line plus <=5 detail lines: ${systemMessage}`,
+  );
+}
+
+Deno.test("nonexistent transcript path proceeds with a surfaced diagnostic, exit 0", async () => {
+  const res = await runHook("/nonexistent/path/does-not-exist.jsonl");
+  assertCannotEvaluate(
+    res,
+    "verify transcript file",
+    "transcript file does not exist: /nonexistent/path/does-not-exist.jsonl",
+  );
 });
 
-Deno.test("invalid JSON on stdin stays silent, exit 0 (fail-open)", async () => {
+/** Feeds a raw stdin payload to the hook, for payloads runHook cannot express. */
+async function runHookWithPayload(payload: string) {
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
     stdin: "piped",
@@ -430,10 +471,44 @@ Deno.test("invalid JSON on stdin stays silent, exit 0 (fail-open)", async () => 
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode("not valid json{{{"));
+  if (payload.length > 0) {
+    await writer.write(new TextEncoder().encode(payload));
+  }
   await writer.close();
-  const { code, stderr } = await child.output();
-  assertEquals(code, 0, new TextDecoder().decode(stderr));
+  const { code, stdout, stderr } = await child.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
+}
+
+Deno.test("invalid JSON on stdin proceeds with a surfaced diagnostic, exit 0", async () => {
+  const res = await runHookWithPayload("not valid json{{{");
+  assertCannotEvaluate(res, "extract transcript_path");
+});
+
+Deno.test("payload with no transcript_path proceeds with a surfaced diagnostic, exit 0", async () => {
+  const res = await runHookWithPayload("{}");
+  assertCannotEvaluate(res, "extract transcript_path", "payload carries no transcript_path");
+});
+
+Deno.test("empty stdin payload proceeds with a surfaced diagnostic, exit 0", async () => {
+  const res = await runHookWithPayload("");
+  assertCannotEvaluate(res, "read stdin payload", "empty stdin payload");
+});
+
+// An empty selection is the turn-boundary design of web-jam-tools#596, not a guard
+// failure: there is simply no reply from this turn to judge, so the hook stays silent
+// on BOTH channels rather than reporting a step it never failed at.
+Deno.test("transcript with no selectable assistant entry stays silent, exit 0", async () => {
+  const entries = [userTurn("hi there")];
+  await withFixtureTranscript(entries, async (path) => {
+    const res = await runHook(path);
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stdout.trim(), "");
+    assertEquals(res.stderr.trim(), "");
+  });
 });
 
 // --- turn boundary tests (web-jam-tools#596) ---
@@ -455,6 +530,9 @@ Deno.test("reproduces issue #596: previous turn contains clear-communication vio
   await withFixtureTranscript(entries, async (path) => {
     const res = await runHook(path);
     assertEquals(res.code, 0, res.stderr);
+    // Silent on both channels: the previous turn's violation is out of scope by
+    // design, and "nothing to judge this turn" is not a guard failure.
+    assertEquals(res.stdout.trim(), "");
     assertEquals(res.stderr.trim(), "");
   });
 });

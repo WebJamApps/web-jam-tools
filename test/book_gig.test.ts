@@ -10,6 +10,7 @@ import {
 } from "@std/assert";
 import {
   matchesVenueFilter,
+  METRO_SURROUNDING,
   parseBookGigArgs,
   parseLocation,
   parseTargetWeekend,
@@ -19,7 +20,9 @@ import {
   fetchCandidates,
   filterAndRankCandidates,
   formatCandidateBreakdown,
+  formatExcludedAuditSummary,
   formatMonthDay,
+  formatMonthDayYear,
   formatMonthYear,
   getCandidateBreakdown,
   identifyCandidateBadge,
@@ -44,6 +47,7 @@ import {
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
 import {
+  DRAFT_PREVIEW_DARK_STYLE,
   extractRunDataFromHtml,
   formatPay,
   renderDarkHtml,
@@ -51,7 +55,12 @@ import {
   SORTING_SCRIPT,
 } from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
-import { formatLocationDisplay, runBookGigCli } from "../src/book-gig/cli.ts";
+import {
+  deduplicateCampaignsByVenue,
+  formatLocationDisplay,
+  matchesWeekend,
+  runBookGigCli,
+} from "../src/book-gig/cli.ts";
 import {
   buildUnambiguousNameIndex,
   decodeHtmlEntities,
@@ -619,7 +628,7 @@ Deno.test("renderDarkHtml: writes a draft's backend-rendered HTML in full into a
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-  assertStringIncludes(html, `srcdoc="${expectedEscaped}"`);
+  assertStringIncludes(html, `srcdoc="${DRAFT_PREVIEW_DARK_STYLE}${expectedEscaped}"`);
   assertStringIncludes(html, "pitch-body-frame");
   // The draft renders with scripting disabled — never a script-enabled sandbox.
   assertStringIncludes(html, 'sandbox="allow-same-origin"');
@@ -633,6 +642,96 @@ Deno.test("renderDarkHtml: writes a draft's backend-rendered HTML in full into a
     html,
     "navigator.clipboard.writeText(document.getElementById('pitch-body-1-plain').innerText)",
   );
+});
+
+Deno.test("renderDarkHtml: email preview frames render with dark surface token, dark color-scheme, and injected dark style block (D-71, #999)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const htmlBody1 = "<p>Hi Alex, We'd love to play at <strong>Parkway</strong>.</p>";
+  const htmlBody2 =
+    '<p>Hi Sam, Checking in about <a href="https://example.com">available dates</a>.</p>';
+
+  const result: BookGigResult = {
+    mode: "preview",
+    weekend,
+    candidates: [
+      { _id: "v1", name: "Parkway Brewing", email: "info@parkway.com" },
+      { _id: "v2", name: "Second Venue", email: "info@second.com" },
+    ],
+    density: { count: 2, isSparse: false },
+    pitches: [
+      {
+        venueId: "v1",
+        venueName: "Parkway Brewing",
+        to: "info@parkway.com",
+        subject: "Sub 1",
+        body: "Body 1",
+        htmlBody: htmlBody1,
+      },
+      {
+        venueId: "v2",
+        venueName: "Second Venue",
+        to: "info@second.com",
+        subject: "Sub 2",
+        body: "Body 2",
+        htmlBody: htmlBody2,
+      },
+    ],
+  };
+
+  const html = renderDarkHtml(result);
+
+  // (a) Does not contain color-scheme: light or background-color: #ffffff on iframe.pitch-body-frame
+  const iframeCssMatch = html.match(/iframe\.pitch-body-frame\s*\{([^}]+)\}/);
+  assert(iframeCssMatch, "iframe.pitch-body-frame CSS rule must exist in renderDarkHtml output");
+  const iframeCss = iframeCssMatch[1];
+  assertEquals(iframeCss.includes("color-scheme: light"), false);
+  assertEquals(iframeCss.includes("background-color: #ffffff"), false);
+
+  // (b) Contains color-scheme: dark and background-color: var(--bg-surface) on that rule
+  assertStringIncludes(iframeCss, "color-scheme: dark");
+  assertStringIncludes(iframeCss, "background-color: var(--bg-surface)");
+
+  // (c) Every srcdoc begins with the injected dark <style> block followed by the unchanged escaped htmlBody
+  const srcdocMatches = Array.from(html.matchAll(/srcdoc="([^"]*)"/g));
+  assertEquals(srcdocMatches.length, 2);
+
+  const escapeExpected = (s: string) =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
+  for (const [idx, m] of srcdocMatches.entries()) {
+    const srcdocVal = m[1];
+    assert(
+      srcdocVal.startsWith(DRAFT_PREVIEW_DARK_STYLE),
+      `srcdoc #${idx + 1} must start with DRAFT_PREVIEW_DARK_STYLE`,
+    );
+    const expectedEscaped = escapeExpected(idx === 0 ? htmlBody1 : htmlBody2);
+    assertEquals(
+      srcdocVal,
+      `${DRAFT_PREVIEW_DARK_STYLE}${expectedEscaped}`,
+    );
+  }
+
+  // Ensure sandbox remains unchanged with allow-same-origin only
+  const sandboxMatches = Array.from(html.matchAll(/sandbox="([^"]*)"/g));
+  assertEquals(sandboxMatches.length, 2);
+  for (const sm of sandboxMatches) {
+    assertEquals(sm[1], "allow-same-origin");
+  }
+  assertEquals(html.includes("allow-scripts"), false);
 });
 
 Deno.test("renderDarkHtml: falls back to a plain-text pitch-body block when no backend HTML rendering is available", () => {
@@ -919,6 +1018,61 @@ Deno.test("mergeWeekendRuns: deduplicates candidate rows and pitch cards by venu
   const pitchCardsA = html.match(/data-venue-id="vA"/g);
   // 1 in candidate table row + 1 in pitch card = 2 total occurrences
   assertEquals(pitchCardsA?.length, 2);
+});
+
+Deno.test("mergeWeekendRuns: purges pitch cards for venues that became excluded or placed on seasonal hold", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const venueEligible: CandidateVenue = {
+    _id: "v1",
+    name: "Open Brewery",
+    email: "open@brewery.com",
+    isExcluded: false,
+  };
+  const venueOnHold: CandidateVenue = {
+    _id: "v2",
+    name: "Held Brewery",
+    email: "held@brewery.com",
+    isExcluded: false,
+  };
+
+  const pitch1 = renderPitch(venueEligible, weekend);
+  const pitch2 = renderPitch(venueOnHold, weekend);
+
+  const existing = {
+    candidates: [venueEligible, venueOnHold],
+    pitches: [pitch1, pitch2],
+  };
+
+  // Second run: venueOnHold was placed on seasonal hold (isExcluded: true)
+  const current: BookGigResult = {
+    mode: "preview",
+    weekend,
+    candidates: [
+      venueEligible,
+      {
+        ...venueOnHold,
+        isExcluded: true,
+        statusBadge: "[Seasonal Hold: Mar 2027]",
+        exclusionReason: "seasonal-hold",
+      },
+    ],
+    density: { count: 1, isSparse: true },
+    pitches: [pitch1],
+  };
+
+  const merged = mergeWeekendRuns(existing, current);
+  assertEquals(merged.candidates.length, 2);
+  assertEquals(merged.pitches.length, 1);
+  assertEquals(merged.pitches[0].venueId, "v1");
 });
 
 Deno.test("mergeWeekendRuns: deduplicates skipped venues by venueId across batches (#876)", () => {
@@ -1630,7 +1784,8 @@ Deno.test("dispatchBatchOutreach: sends POST /outreach/batch with correct payloa
   assertEquals(capturedUrl, "https://test.local/outreach/batch");
   assertEquals(capturedAuth, "Bearer secret-token");
   assertEquals(capturedBody.venueIds, ["v1", "v2"]);
-  assertEquals(capturedBody.targetDates, "2026-10-16 to 2026-10-18");
+  assertEquals(capturedBody.targetDates, "October 16–18, 2026");
+  assertEquals(capturedBody.bookingPeriod, "October 2026");
   assertEquals(capturedBody.targetWeekend, { start: "2026-10-16", end: "2026-10-18" });
   assertEquals(res.sent, 2);
   assertEquals(res.requested, 2);
@@ -1835,6 +1990,8 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
               _id: "o1",
               venueId: "v1",
               status: "replied",
+              targetDates: "2026-10-16 to 2026-10-18",
+              targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
               replySnippet: "Oct 17 works great!",
               suggestion: { action: "Confirm date", intent: "Booking Offer", confidence: 0.9 },
             },
@@ -3055,6 +3212,16 @@ Deno.test("identifyCandidateBadge: handles eligible returning and new venues (#8
   assertEquals(badgeReturning.badge, "Returning · Last: Jun 15");
   assertEquals(badgeReturning.cssClass, "badge-returning");
   assertEquals(badgeReturning.isExcluded, false);
+
+  const priorYearVenue: CandidateVenue = {
+    _id: "v-prior",
+    name: "Parkway Brewing",
+    reason: { lastGigDate: "2019-11-17T05:00:00.000Z" },
+  };
+  const badgePrior = identifyCandidateBadge(priorYearVenue, refDate);
+  assertEquals(badgePrior.badge, "Returning · Last: Nov 17, 2019");
+  assertEquals(badgePrior.cssClass, "badge-returning");
+  assertEquals(badgePrior.isExcluded, false);
 
   const newVenue: CandidateVenue = {
     _id: "v2",
@@ -4322,4 +4489,751 @@ Deno.test("touch conversion: proposes genuine phone conversation, rejects legacy
   assertEquals(postedRequests[0].body.actor, "Josh");
   assertEquals(postedRequests[0].body.note, "Spoke on the phone about a 2027 booking");
   assertEquals(postedRequests[0].body.date, "2026-05-09T00:00:00.000Z");
+});
+
+Deno.test("matchesWeekend: three-outcome guard behavior for weekend matching (#998)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  // Outcome 1: Matches via targetWeekend range overlap
+  const matchingOverlap: OutreachCampaignRecord = {
+    _id: "r1",
+    venueId: "v1",
+    status: "replied",
+    targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
+  };
+  assertEquals(matchesWeekend(matchingOverlap, weekend), true);
+
+  // Outcome 1 (alt): Matches via targetDates containing start or label
+  const matchingDates: OutreachCampaignRecord = {
+    _id: "r2",
+    venueId: "v2",
+    status: "replied",
+    targetDates: "2026-10-16 to 2026-10-18",
+  };
+  assertEquals(matchesWeekend(matchingDates, weekend), true);
+
+  const matchingLabel: OutreachCampaignRecord = {
+    _id: "r3",
+    venueId: "v3",
+    status: "replied",
+    targetDates: "Bookings for October 16–18, 2026",
+  };
+  assertEquals(matchesWeekend(matchingLabel, weekend), true);
+
+  // Outcome 2: Excluded when targetWeekend does not overlap and targetDates does not match
+  const mismatchedWeekend: OutreachCampaignRecord = {
+    _id: "r4",
+    venueId: "v4",
+    status: "replied",
+    targetWeekend: { start: "2026-11-06", end: "2026-11-08" },
+    targetDates: "2026-11-06 to 2026-11-08",
+  };
+  assertEquals(matchesWeekend(mismatchedWeekend, weekend), false);
+
+  // Outcome 3: Excluded (fails closed) when targetWeekend has missing, null, or unparseable metadata
+  const missingMetadata: OutreachCampaignRecord = {
+    _id: "r5",
+    venueId: "v5",
+    status: "replied",
+  };
+  assertEquals(matchesWeekend(missingMetadata, weekend), false);
+
+  const unparseableWeekend: OutreachCampaignRecord = {
+    _id: "r6",
+    venueId: "v6",
+    status: "replied",
+    targetWeekend: { start: "not-a-date", end: "invalid" },
+  };
+  assertEquals(matchesWeekend(unparseableWeekend, weekend), false);
+});
+
+Deno.test("deduplicateCampaignsByVenue: deduplicates multiple outreach records by venueId preserving latest sentAt (#998)", () => {
+  const records: OutreachCampaignRecord[] = [
+    {
+      _id: "c1",
+      venueId: "v1",
+      venueName: "Venue One",
+      status: "sent",
+      sentAt: "2026-08-10T10:00:00Z",
+    },
+    {
+      _id: "c2",
+      venueId: "v1",
+      venueName: "Venue One - Resend",
+      status: "replied",
+      sentAt: "2026-08-12T15:00:00Z",
+      replySnippet: "Resend reply",
+    },
+    {
+      _id: "c3",
+      venueId: "v2",
+      venueName: "Venue Two",
+      status: "sent",
+      sentAt: "2026-08-11T12:00:00Z",
+    },
+  ];
+
+  const deduped = deduplicateCampaignsByVenue(records);
+  assertEquals(deduped.length, 2);
+  // Venue One should retain the latest record c2 (2026-08-12)
+  const v1Record = deduped.find((r) => r.venueId === "v1");
+  assertEquals(v1Record?._id, "c2");
+  assertEquals(v1Record?.replySnippet, "Resend reply");
+  // Venue Two should be preserved
+  const v2Record = deduped.find((r) => r.venueId === "v2");
+  assertEquals(v2Record?._id, "c3");
+
+  // Also verify order-independence: latest record first, older second
+  const reverseOrder: OutreachCampaignRecord[] = [
+    {
+      _id: "c2",
+      venueId: "v1",
+      venueName: "Venue One - Resend",
+      status: "replied",
+      sentAt: "2026-08-12T15:00:00Z",
+    },
+    {
+      _id: "c1",
+      venueId: "v1",
+      venueName: "Venue One",
+      status: "sent",
+      sentAt: "2026-08-10T10:00:00Z",
+    },
+  ];
+  const dedupedReverse = deduplicateCampaignsByVenue(reverseOrder);
+  assertEquals(dedupedReverse.length, 1);
+  assertEquals(dedupedReverse[0]._id, "c2");
+});
+
+Deno.test("runBookGigCli: --replies filters pending replies by weekend and deduplicates campaigns (#998)", async () => {
+  const mockVenues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Matching Venue",
+      city: "Salem",
+      usState: "VA",
+    },
+    {
+      _id: "v2",
+      name: "Mismatched Venue",
+      city: "Roanoke",
+      usState: "VA",
+    },
+    {
+      _id: "v3",
+      name: "Missing Weekend Venue",
+      city: "Lynchburg",
+      usState: "VA",
+    },
+  ];
+
+  const mockFetch: typeof fetch = (input) => {
+    const u = String(input);
+    if (u.includes("/outreach/check-replies")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ checked: 3, matched: 1, classified: 1, bounced: 0 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/replies/pending")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            // Reply 1: Matching target weekend -> included
+            {
+              _id: "p1",
+              venueId: "v1",
+              status: "replied",
+              targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
+              targetDates: "2026-10-16 to 2026-10-18",
+              replySnippet: "Oct 17 is open!",
+            },
+            // Reply 2: Mismatched target weekend (prior month) -> excluded
+            {
+              _id: "p2",
+              venueId: "v2",
+              status: "replied",
+              targetWeekend: { start: "2026-09-11", end: "2026-09-13" },
+              targetDates: "2026-09-11 to 2026-09-13",
+              replySnippet: "September was fun",
+            },
+            // Reply 3: Missing target weekend metadata -> excluded (fails closed)
+            {
+              _id: "p3",
+              venueId: "v3",
+              status: "replied",
+              replySnippet: "Undated reply",
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/report")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            success: true,
+            url: "https://web-jam.com/outreach/report/2026-10-16-to-2026-10-18",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach")) {
+      // Return multiple campaigns for v1 (older and newer) to test deduplication
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              _id: "c1",
+              venueId: "v1",
+              status: "sent",
+              sentAt: "2026-08-01T10:00:00Z",
+              targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
+              targetDates: "2026-10-16 to 2026-10-18",
+            },
+            {
+              _id: "c2",
+              venueId: "v1",
+              status: "replied",
+              sentAt: "2026-08-05T12:00:00Z",
+              targetWeekend: { start: "2026-10-16", end: "2026-10-18" },
+              targetDates: "2026-10-16 to 2026-10-18",
+              replySnippet: "Oct 17 is open!",
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/venue")) {
+      return Promise.resolve(
+        new Response(JSON.stringify(mockVenues), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+
+  const mockOpener = () => Promise.resolve(true);
+
+  const result = await runBookGigCli(
+    ["--replies", "Oct 16-18 2026", "--no-open"],
+    mockFetch,
+    mockOpener,
+  );
+
+  assertEquals(result.mode, "replies");
+  // 1. Pending replies filtering: only p1 included, p2 (mismatched) and p3 (missing metadata) excluded
+  const pending = result.repliesTracking?.pendingReplies || [];
+  assertEquals(pending.length, 1);
+  assertEquals(pending[0]._id, "p1");
+  assertEquals(pending[0].venueName, "Matching Venue");
+
+  // 2. Campaigns deduplication: v1 had c1 and c2; only c2 (latest sentAt) is preserved
+  const campaigns = result.repliesTracking?.campaigns || [];
+  assertEquals(campaigns.length, 1);
+  assertEquals(campaigns[0]._id, "c2");
+  assertEquals(campaigns[0].sentAt, "2026-08-05T12:00:00Z");
+});
+
+Deno.test("renderDarkHtml: places sortable candidates table as first section beneath header (#998)", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const candidates: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      contactName: "Brewmaster Bob",
+      email: "bob@oldesalem.com",
+    },
+  ];
+
+  const campaigns: OutreachCampaignRecord[] = [
+    {
+      _id: "c1",
+      venueId: "v1",
+      venueName: "Olde Salem Brewing",
+      status: "replied",
+      sentAt: "2026-08-10T10:00:00Z",
+      replySnippet: "We would love to host you!",
+    },
+  ];
+
+  const result: BookGigResult = {
+    mode: "replies",
+    weekend,
+    candidates,
+    density: { count: 1, isSparse: false },
+    pitches: [],
+    repliesTracking: {
+      checkReplies: { checked: 1, matched: 1, classified: 1, bounced: 0 },
+      pendingReplies: [campaigns[0]],
+      campaigns,
+      targetWeekend: weekend,
+    },
+  };
+
+  const html = renderDarkHtml(result);
+
+  // Assert candidates section exists with id="candidates-table"
+  assertStringIncludes(html, 'id="candidates-table"');
+  assertStringIncludes(html, "📊 Eligible Candidates");
+  assertStringIncludes(html, "⚠️ Pending Reply Reviews");
+  assertStringIncludes(html, "Live Outreach Campaigns");
+
+  // Assert section ordering within <main>:
+  // candidatesSectionHtml must be rendered before pendingSectionHtml and campaignsSectionHtml
+  const candidatesIndex = html.indexOf('id="candidates-table"');
+  const pendingIndex = html.indexOf("⚠️ Pending Reply Reviews");
+  const campaignsIndex = html.indexOf("Live Outreach Campaigns");
+
+  assert(candidatesIndex !== -1, "Candidates section should be present");
+  assert(pendingIndex !== -1, "Pending reply reviews section should be present");
+  assert(campaignsIndex !== -1, "Campaigns section should be present");
+
+  assert(
+    candidatesIndex < pendingIndex,
+    `Candidates table (${candidatesIndex}) must appear before Pending Reviews (${pendingIndex})`,
+  );
+  assert(
+    candidatesIndex < campaignsIndex,
+    `Candidates table (${candidatesIndex}) must appear before Campaigns (${campaignsIndex})`,
+  );
+});
+
+Deno.test("parseLocation: treats 'all', 'all locations', and 'everywhere' (case-insensitive) as all-locations (#1104)", () => {
+  const loc1 = parseLocation("all");
+  assertEquals(loc1?.allLocations, true);
+  assertEquals(loc1?.cities, undefined);
+  assertEquals(loc1?.city, undefined);
+
+  const loc2 = parseLocation("all locations");
+  assertEquals(loc2?.allLocations, true);
+  assertEquals(loc2?.cities, undefined);
+
+  const loc3 = parseLocation("everywhere");
+  assertEquals(loc3?.allLocations, true);
+  assertEquals(loc3?.cities, undefined);
+
+  // Case-insensitivity
+  assertEquals(parseLocation("ALL")?.allLocations, true);
+  assertEquals(parseLocation("All Locations")?.allLocations, true);
+  assertEquals(parseLocation("Everywhere")?.allLocations, true);
+  assertEquals(parseLocation("ALL LOCATIONS")?.allLocations, true);
+});
+
+Deno.test("parseBookGigArgs: recognizes --all, --all-locations, and all location string (#1104)", () => {
+  const res1 = parseBookGigArgs(["Oct 16-18", "--all"]);
+  assertEquals(res1.location?.allLocations, true);
+  assertEquals(res1.weekend?.start, "2026-10-16");
+
+  const res2 = parseBookGigArgs(["Oct 16-18", "--all-locations"]);
+  assertEquals(res2.location?.allLocations, true);
+  assertEquals(res2.weekend?.start, "2026-10-16");
+
+  const res3 = parseBookGigArgs(["Oct 16-18 2026", "all"]);
+  assertEquals(res3.location?.allLocations, true);
+  assertEquals(res3.weekend?.start, "2026-10-16");
+
+  const res4 = parseBookGigArgs(["all"]);
+  assertEquals(res4.location?.allLocations, true);
+
+  const res5 = parseBookGigArgs(["--all"]);
+  assertEquals(res5.location?.allLocations, true);
+});
+
+Deno.test("METRO_SURROUNDING: charlotte contains Tega Cay (#1104)", () => {
+  assert(METRO_SURROUNDING["charlotte"].includes("Tega Cay"));
+});
+
+Deno.test("filterAndRankCandidates: bypasses city/metro filtering when location.allLocations is true (#1104)", () => {
+  const venues: CandidateVenue[] = [
+    {
+      _id: "v1",
+      name: "Roanoke Venue",
+      city: "Roanoke",
+      usState: "VA",
+      email: "rke@test.com",
+    },
+    {
+      _id: "v2",
+      name: "Charlotte Venue",
+      city: "Charlotte",
+      usState: "NC",
+      email: "clt@test.com",
+    },
+    {
+      _id: "v3",
+      name: "Rock Hill Venue",
+      city: "Rock Hill",
+      usState: "SC",
+      email: "rh@test.com",
+    },
+    {
+      _id: "v4",
+      name: "Tega Cay Venue",
+      city: "Tega Cay",
+      usState: "SC",
+      email: "tc@test.com",
+    },
+  ];
+
+  const loc = parseLocation("all")!;
+  const filtered = filterAndRankCandidates(venues, loc);
+  const pitchable = filtered.filter(isPitchableCandidate);
+
+  assertEquals(pitchable.length, 4);
+  assertEquals(filtered.every((v) => !v.isExcluded), true);
+  assertEquals(filtered.some((v) => v.exclusionReason === "outside-target-area"), false);
+});
+
+Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion badges when out-of-area (#1104)", () => {
+  const venues: CandidateVenue[] = [
+    {
+      _id: "garrison",
+      name: "The Garrison",
+      city: "Tega Cay",
+      usState: "SC",
+      email: "booking@thegarrison.com",
+      isExcluded: true,
+      statusBadge: "[Cooldown Active: Sent Sep 13]",
+      exclusionReason: "cooldown",
+      reason: {
+        statusBadge: "[Cooldown Active: Sent Sep 13]",
+        exclusionReason: "cooldown",
+      },
+    },
+    {
+      _id: "hold-venue",
+      name: "Hold Venue",
+      city: "Charlotte",
+      usState: "NC",
+      email: "booking@hold.com",
+      isExcluded: true,
+      statusBadge: "[Seasonal Hold: Jan 2027]",
+      exclusionReason: "seasonal-hold",
+      reason: {
+        statusBadge: "[Seasonal Hold: Jan 2027]",
+        exclusionReason: "seasonal-hold",
+      },
+    },
+    {
+      _id: "direct-chat-venue",
+      name: "Chat Venue",
+      city: "Gastonia",
+      usState: "NC",
+      email: "booking@chat.com",
+      isExcluded: true,
+      statusBadge: "[Direct Chat Active]",
+      exclusionReason: "direct-chat",
+      reason: {
+        statusBadge: "[Direct Chat Active]",
+        exclusionReason: "direct-chat",
+      },
+    },
+    {
+      _id: "spacing-venue",
+      name: "Spacing Venue",
+      city: "Concord",
+      usState: "NC",
+      email: "booking@spacing.com",
+      isExcluded: true,
+      statusBadge: "[Gig Spacing: Nov 15 Show]",
+      exclusionReason: "gig-spacing",
+      reason: {
+        statusBadge: "[Gig Spacing: Nov 15 Show]",
+        exclusionReason: "gig-spacing",
+      },
+    },
+    {
+      _id: "in-area-venue",
+      name: "Waterman's Grill",
+      city: "Lynchburg",
+      usState: "VA",
+      email: "booking@watermans.com",
+      isExcluded: false,
+    },
+    {
+      _id: "out-of-area-eligible",
+      name: "Eligible Faraway Venue",
+      city: "Raleigh",
+      usState: "NC",
+      email: "booking@raleigh.com",
+      isExcluded: false,
+    },
+  ];
+
+  // Explicit multi-city filter targeting Lynchburg, VA and Rock Hill, SC (cross-state, no uniform state filter)
+  const loc = parseLocation("Lynchburg, Rock Hill")!;
+  const filtered = filterAndRankCandidates(venues, loc);
+
+  const garrison = filtered.find((v) => v._id === "garrison")!;
+  assertEquals(garrison.isExcluded, true);
+  assertEquals(garrison.exclusionReason, "cooldown");
+  assertEquals(garrison.statusBadge, "[Cooldown Active: Sent Sep 13]");
+  assertEquals(garrison.reason?.exclusionReason, "cooldown");
+  assertEquals(garrison.reason?.statusBadge, "[Cooldown Active: Sent Sep 13]");
+
+  const hold = filtered.find((v) => v._id === "hold-venue")!;
+  assertEquals(hold.isExcluded, true);
+  assertEquals(hold.exclusionReason, "seasonal-hold");
+  assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.reason?.exclusionReason, "seasonal-hold");
+  assertEquals(hold.reason?.statusBadge, "[Seasonal Hold: Jan 2027]");
+
+  const chat = filtered.find((v) => v._id === "direct-chat-venue")!;
+  assertEquals(chat.isExcluded, true);
+  assertEquals(chat.exclusionReason, "direct-chat");
+  assertEquals(chat.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.reason?.exclusionReason, "direct-chat");
+  assertEquals(chat.reason?.statusBadge, "[Direct Chat Active]");
+
+  const spacing = filtered.find((v) => v._id === "spacing-venue")!;
+  assertEquals(spacing.isExcluded, true);
+  assertEquals(spacing.exclusionReason, "gig-spacing");
+  assertEquals(spacing.statusBadge, "[Gig Spacing: Nov 15 Show]");
+  assertEquals(spacing.reason?.exclusionReason, "gig-spacing");
+  assertEquals(spacing.reason?.statusBadge, "[Gig Spacing: Nov 15 Show]");
+
+  const inArea = filtered.find((v) => v._id === "in-area-venue")!;
+  assertEquals(inArea.isExcluded, false);
+  assertEquals(isPitchableCandidate(inArea), true);
+
+  const outOfArea = filtered.find((v) => v._id === "out-of-area-eligible")!;
+  assertEquals(outOfArea.isExcluded, true);
+  assertEquals(outOfArea.exclusionReason, "outside-target-area");
+  assertEquals(outOfArea.statusBadge, "[Outside Target Area]");
+});
+
+Deno.test("formatMonthDayYear: formats date string or Date object with 4-digit year (#1103)", () => {
+  assertEquals(formatMonthDayYear("2026-12-12"), "Dec 12, 2026");
+  assertEquals(formatMonthDayYear("2026-05-09"), "May 9, 2026");
+  assertEquals(formatMonthDayYear("Dec 12, 2026"), "Dec 12, 2026");
+});
+
+Deno.test("formatExcludedAuditSummary: returns None when empty (#1103)", () => {
+  assertEquals(formatExcludedAuditSummary([]), "Excluded Candidate Audit Summary: None");
+});
+
+Deno.test("formatExcludedAuditSummary: groups excluded candidates across all canonical categories (#1103)", () => {
+  const excludedVenues: CandidateVenue[] = [
+    {
+      _id: "lwb",
+      name: "Long Way Brewing",
+      city: "Radford",
+      usState: "VA",
+      email: "booking@longway.com",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+      conflictingGigDate: "2026-12-12",
+      statusBadge: "[Gig Spacing: Dec 12, 2026 Show]",
+    },
+    {
+      _id: "5pts",
+      name: "5 Points Music Sanctuary",
+      city: "Roanoke",
+      usState: "VA",
+      email: "info@5pointsmusic.com",
+      isExcluded: true,
+      exclusionReason: "gig-spacing",
+      conflictingGigDate: "2026-11-15",
+      statusBadge: "[Gig Spacing: Nov 15, 2026 Show]",
+    },
+    {
+      _id: "garrison",
+      name: "The Garrison",
+      city: "Tega Cay",
+      usState: "SC",
+      email: "booking@thegarrison.com",
+      isExcluded: true,
+      exclusionReason: "cooldown",
+      statusBadge: "[Cooldown Active: Sent Sep 13]",
+    },
+    {
+      _id: "osb",
+      name: "Olde Salem Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@oldesalem.com",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+      statusBadge: "[Seasonal Hold: Jan 2027]",
+    },
+    {
+      _id: "chat",
+      name: "Twin Creeks Brewing",
+      city: "Vinton",
+      usState: "VA",
+      email: "info@twincreeks.com",
+      isExcluded: true,
+      exclusionReason: "direct-chat",
+      statusBadge: "[Direct Chat Active]",
+    },
+    {
+      _id: "no-email",
+      name: "Mystery Tavern",
+      city: "Roanoke",
+      usState: "VA",
+      email: "",
+      isExcluded: true,
+      exclusionReason: "no-booking-email",
+      statusBadge: "[No Booking Email]",
+    },
+    {
+      _id: "parkway",
+      name: "Parkway Brewing",
+      city: "Salem",
+      usState: "VA",
+      email: "booking@parkway.com",
+      isExcluded: true,
+      exclusionReason: "outside-target-area",
+      statusBadge: "[Outside Target Area]",
+    },
+    {
+      _id: "beales",
+      name: "Beale's Brewery",
+      city: "Bedford",
+      usState: "VA",
+      email: "info@beales.com",
+      isExcluded: true,
+      exclusionReason: "outside-target-area",
+      statusBadge: "[Outside Target Area]",
+    },
+    {
+      _id: "raleigh",
+      name: "Raleigh Pour House",
+      city: "Raleigh",
+      usState: "NC",
+      email: "info@raleighpour.com",
+      isExcluded: true,
+      exclusionReason: "out-of-state",
+      statusBadge: "[Out of State]",
+    },
+  ];
+
+  const summary = formatExcludedAuditSummary(excludedVenues);
+
+  // Asserts total count in header
+  assertStringIncludes(summary, "Excluded Candidate Audit Summary (9 total):");
+
+  // Asserts Gig Spacing Conflicts section with dates and correct venue names (prevents misattribution)
+  assertStringIncludes(summary, "• Gig Spacing Conflicts (2):");
+  assertStringIncludes(summary, "- 5 Points Music Sanctuary (Nov 15, 2026 Show)");
+  assertStringIncludes(summary, "- Long Way Brewing (Dec 12, 2026 Show)");
+
+  // Asserts Active Cooldowns
+  assertStringIncludes(summary, "• Active Cooldowns (1):");
+  assertStringIncludes(summary, "- The Garrison (Sent Sep 13)");
+
+  // Asserts Seasonal Holds
+  assertStringIncludes(summary, "• Seasonal Holds (1):");
+  assertStringIncludes(summary, "- Olde Salem Brewing (Jan 2027)");
+
+  // Asserts Direct Chat Active
+  assertStringIncludes(summary, "• Direct Chat Active (1):");
+  assertStringIncludes(summary, "- Twin Creeks Brewing (Direct Chat Active)");
+
+  // Asserts No Booking Email
+  assertStringIncludes(summary, "• No Booking Email (1):");
+  assertStringIncludes(summary, "- Mystery Tavern (No Booking Email)");
+
+  // Asserts Outside Target Area with alphabetical ordering (Beale's before Parkway)
+  assertStringIncludes(summary, "• Outside Target Area (2):");
+  assertStringIncludes(summary, "- Beale's Brewery (Bedford, VA)");
+  assertStringIncludes(summary, "- Parkway Brewing (Salem, VA)");
+  const bealesIdx = summary.indexOf("Beale's Brewery");
+  const parkwayIdx = summary.indexOf("Parkway Brewing");
+  assert(bealesIdx !== -1 && parkwayIdx !== -1 && bealesIdx < parkwayIdx);
+
+  // Asserts Out of State
+  assertStringIncludes(summary, "• Out of State (1):");
+  assertStringIncludes(summary, "- Raleigh Pour House (Raleigh, NC)");
+});
+
+Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion reason, never by an old send date or a missing email (#1103)", () => {
+  const now = new Date("2026-09-22T12:00:00Z");
+  const summary = formatExcludedAuditSummary([
+    {
+      _id: "hold",
+      name: "Durty Bull Brewing Company",
+      email: "booking@durtybull.com",
+      isExcluded: true,
+      exclusionReason: "seasonal-hold",
+      statusBadge: "[Seasonal Hold: Jan 2027]",
+      sentAt: "2026-07-24T12:00:00Z",
+    },
+    {
+      _id: "far",
+      name: "Far Away Tavern",
+      city: "Asheville",
+      usState: "NC",
+      email: "",
+      isExcluded: true,
+      exclusionReason: "outside-target-area",
+      statusBadge: "[Outside Target Area]",
+      sentAt: "2026-03-01T12:00:00Z",
+    },
+    {
+      _id: "badge-only",
+      name: "Badge Only Brewing",
+      email: "booking@badgeonly.com",
+      isExcluded: true,
+      statusBadge: "[Seasonal Hold: Feb 2027]",
+      lastSentDate: "2026-09-20T12:00:00Z",
+    },
+    {
+      _id: "old-send",
+      name: "Old Send Hall",
+      email: "booking@oldsend.com",
+      isExcluded: true,
+      resumeBooking: "2027-01-15T00:00:00Z",
+      sentAt: "2026-07-24T12:00:00Z",
+    },
+    {
+      _id: "recent-send",
+      name: "Recent Send Hall",
+      email: "booking@recentsend.com",
+      isExcluded: true,
+      sentAt: "2026-09-20T12:00:00Z",
+    },
+  ], now);
+
+  assertEquals(
+    summary,
+    [
+      "Excluded Candidate Audit Summary (5 total):",
+      "  • Active Cooldowns (1):",
+      "    - Recent Send Hall (Sent Sep 20)",
+      "  • Seasonal Holds (3):",
+      "    - Badge Only Brewing (Feb 2027)",
+      "    - Durty Bull Brewing Company (Jan 2027)",
+      "    - Old Send Hall (Jan 2027)",
+      "  • Outside Target Area (1):",
+      "    - Far Away Tavern (Asheville, NC)",
+    ].join("\n"),
+  );
 });

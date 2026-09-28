@@ -381,6 +381,46 @@ export function formatMonthDay(d: string | Date): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}`;
 }
 
+/**
+ * Format a Date or ISO string as "MMM D, YYYY", e.g. "Dec 12, 2026"
+ */
+export function formatMonthDayYear(d: string | Date): string {
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  if (typeof d === "string") {
+    const trimmed = d.trim().replace(/^Sent\s+/i, "");
+    if (/^[A-Za-z]{3}\s+\d{1,2},\s+\d{4}$/.test(trimmed)) return trimmed;
+    const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (match) {
+      const year = match[1];
+      const monthIdx = parseInt(match[2], 10) - 1;
+      const day = parseInt(match[3], 10);
+      if (months[monthIdx]) return `${months[monthIdx]} ${day}, ${year}`;
+    }
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      return `${months[parsed.getUTCMonth()]} ${parsed.getUTCDate()}, ${parsed.getUTCFullYear()}`;
+    }
+    return trimmed;
+  }
+  if (d instanceof Date && !Number.isNaN(d.getTime())) {
+    return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+  }
+  return String(d);
+}
+
 export function badgeCssToExclusionReason(cssClass: string): ExclusionReason | undefined {
   switch (cssClass) {
     case "badge-seasonal-hold":
@@ -598,9 +638,27 @@ export function identifyCandidateBadge(
   }
 
   // 5. Eligible: Returning or New
-  if (v.reason?.lastGigDate) {
+  if (v.reason?.lastGigDate && v.reason.lastGigDate !== "never") {
+    let gigYear: number | undefined;
+    if ((v.reason.lastGigDate as unknown) instanceof Date) {
+      gigYear = ((v.reason.lastGigDate as unknown) as Date).getUTCFullYear();
+    } else if (typeof v.reason.lastGigDate === "string") {
+      const match = v.reason.lastGigDate.match(/^(\d{4})/);
+      if (match) {
+        gigYear = parseInt(match[1], 10);
+      } else {
+        const parsed = new Date(v.reason.lastGigDate);
+        if (!Number.isNaN(parsed.getTime())) {
+          gigYear = parsed.getUTCFullYear();
+        }
+      }
+    }
+    const refYear = referenceDate.getUTCFullYear();
+    const formatted = gigYear && gigYear !== refYear
+      ? formatMonthDayYear(v.reason.lastGigDate)
+      : formatMonthDay(v.reason.lastGigDate);
     return {
-      badge: `Returning · Last: ${formatMonthDay(v.reason.lastGigDate)}`,
+      badge: `Returning · Last: ${formatted}`,
       cssClass: "badge-returning",
       isExcluded: false,
     };
@@ -674,6 +732,11 @@ export function filterAndRankCandidates(
           : {}),
       },
     };
+
+    if (targetLoc.allLocations) {
+      exactMatches.push(vCopy);
+      continue;
+    }
 
     const vCity = (vCopy.city || "").toLowerCase().trim();
     const vAddr = (vCopy.address || "").toLowerCase();
@@ -749,15 +812,27 @@ export function filterAndRankCandidates(
     }
 
     // 5. Fall-through: venue does not match target or surrounding areas
+    const hasPreExistingExclusion = Boolean(
+      (vCopy.isExcluded || vCopy.exclusionReason) &&
+        vCopy.exclusionReason !== "outside-target-area" &&
+        vCopy.exclusionReason !== "out-of-state" &&
+        vCopy.statusBadge !== "[Outside Target Area]" &&
+        vCopy.statusBadge !== "[Out of State]",
+    );
+
     const outsideAreaVenue: CandidateVenue = {
       ...vCopy,
       isExcluded: true,
-      exclusionReason: "outside-target-area",
-      statusBadge: "[Outside Target Area]",
+      exclusionReason: hasPreExistingExclusion ? vCopy.exclusionReason : "outside-target-area",
+      statusBadge: hasPreExistingExclusion ? vCopy.statusBadge : "[Outside Target Area]",
       reason: {
         ...vCopy.reason,
-        exclusionReason: "outside-target-area",
-        statusBadge: "[Outside Target Area]",
+        exclusionReason: hasPreExistingExclusion
+          ? (vCopy.reason?.exclusionReason || vCopy.exclusionReason)
+          : "outside-target-area",
+        statusBadge: hasPreExistingExclusion
+          ? (vCopy.reason?.statusBadge || vCopy.statusBadge)
+          : "[Outside Target Area]",
       },
     };
     excludedMatches.push(outsideAreaVenue);
@@ -952,4 +1027,222 @@ export function formatCandidateBreakdown(candidates: CandidateVenue[]): string {
   }
 
   return `Backend returned ${b.total} total venues evaluated (${parts.join(", ")}).`;
+}
+
+const RECORDED_REASON_CATEGORY: Record<string, string> = {
+  "gig-spacing": "Gig Spacing Conflicts",
+  "cooldown": "Active Cooldowns",
+  "seasonal-hold": "Seasonal Holds",
+  "direct-chat": "Direct Chat Active",
+  "no-booking-email": "No Booking Email",
+  "outside-target-area": "Outside Target Area",
+  "out-of-state": "Out of State",
+};
+
+const BADGE_CATEGORY: Array<[string, string]> = [
+  ["Gig Spacing", "Gig Spacing Conflicts"],
+  ["Spacing:", "Gig Spacing Conflicts"],
+  ["Cooldown", "Active Cooldowns"],
+  ["Seasonal Hold", "Seasonal Holds"],
+  ["Hold:", "Seasonal Holds"],
+  ["Direct Chat", "Direct Chat Active"],
+  ["No Booking Email", "No Booking Email"],
+  ["Outside Target Area", "Outside Target Area"],
+  ["Out of State", "Out of State"],
+];
+
+const COOLDOWN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The audit category for an excluded venue. Its recorded exclusion reason decides, then its status
+ * badge — the two the candidate table printed beside this summary shows — and only when neither
+ * names a category do its date fields, so the summary never files a venue differently from the
+ * table: a seasonal hold pitched months ago stays a seasonal hold, not an active cooldown. A bare
+ * `sentAt` counts as a cooldown only inside the same 7-day window identifyCandidateBadge uses.
+ */
+function excludedCategory(c: CandidateVenue, nowMs: number): string {
+  for (const recorded of [c.exclusionReason, c.reason?.exclusionReason]) {
+    if (recorded && RECORDED_REASON_CATEGORY[recorded]) return RECORDED_REASON_CATEGORY[recorded];
+  }
+  for (const badge of [c.statusBadge, c.reason?.statusBadge, c.reason?.exclusionReason]) {
+    if (!badge) continue;
+    const hit = BADGE_CATEGORY.find(([text]) => badge.includes(text));
+    if (hit) return hit[1];
+  }
+  if (c.conflictingGigDate) return "Gig Spacing Conflicts";
+  const sentAt = c.sentAt ? new Date(c.sentAt).getTime() : NaN;
+  const sentInWindow = !Number.isNaN(sentAt) && nowMs - sentAt >= 0 &&
+    nowMs - sentAt <= COOLDOWN_WINDOW_MS;
+  if (c.cooldownSentDate || c.cooldownRepliedDate || c.lastSentDate || sentInWindow) {
+    return "Active Cooldowns";
+  }
+  if (c.resumeBooking || c.bookedThrough) return "Seasonal Holds";
+  if (c.activeDirectChat || c.reason?.activeDirectChat) return "Direct Chat Active";
+  if (!c.email || !c.email.trim()) return "No Booking Email";
+  return "Other Excluded";
+}
+
+function classifyExcludedCandidate(
+  c: CandidateVenue,
+  nowMs: number,
+): { category: string; line: string } {
+  const badge = c.statusBadge || "";
+  const category = excludedCategory(c, nowMs);
+
+  // 1. Gig Spacing Conflicts
+  if (category === "Gig Spacing Conflicts") {
+    let detail = "";
+    if (c.conflictingGigDate) {
+      detail = `${formatMonthDayYear(c.conflictingGigDate)} Show`;
+    } else if (c.reason?.lastGigDate) {
+      detail = `${formatMonthDayYear(c.reason.lastGigDate)} Show`;
+    } else if (badge.includes("Gig Spacing:")) {
+      detail = badge.replace(/^\[Gig Spacing:\s*/i, "").replace(/\]$/, "").trim();
+    } else if (c.reason?.spacingNote) {
+      detail = c.reason.spacingNote;
+    } else {
+      detail = "Gig Spacing Conflict";
+    }
+    return {
+      category: "Gig Spacing Conflicts",
+      line: `${c.name} (${detail})`,
+    };
+  }
+
+  // 2. Active Cooldowns
+  if (category === "Active Cooldowns") {
+    let detail = "";
+    if (badge.includes("Cooldown Active:")) {
+      detail = badge.replace(/^\[Cooldown Active:\s*/i, "").replace(/\]$/, "").trim();
+    } else if (c.cooldownRepliedDate || c.reason?.cooldownRepliedDate) {
+      const d = c.cooldownRepliedDate || c.reason?.cooldownRepliedDate;
+      detail = `Replied ${formatMonthDay(d!)}`;
+    } else if (c.cooldownSentDate || c.reason?.cooldownSentDate || c.lastSentDate || c.sentAt) {
+      const d = c.cooldownSentDate || c.reason?.cooldownSentDate || c.lastSentDate || c.sentAt;
+      detail = `Sent ${formatMonthDay(d!)}`;
+    } else {
+      detail = "Cooldown Active";
+    }
+    return {
+      category: "Active Cooldowns",
+      line: `${c.name} (${detail})`,
+    };
+  }
+
+  // 3. Seasonal Holds
+  if (category === "Seasonal Holds") {
+    let detail = "";
+    if (badge.includes("Seasonal Hold:")) {
+      detail = badge.replace(/^\[Seasonal Hold:\s*/i, "").replace(/\]$/, "").trim();
+    } else if (c.resumeBooking || c.reason?.resumeBooking) {
+      const d = c.resumeBooking || c.reason?.resumeBooking;
+      detail = formatMonthYear(d!);
+    } else if (c.bookedThrough || c.reason?.bookedThrough) {
+      const d = c.bookedThrough || c.reason?.bookedThrough;
+      detail = `Booked through ${formatMonthYear(d!)}`;
+    } else {
+      detail = "Seasonal Hold";
+    }
+    return {
+      category: "Seasonal Holds",
+      line: `${c.name} (${detail})`,
+    };
+  }
+
+  // 4. Direct Chat Active
+  if (category === "Direct Chat Active") {
+    return {
+      category: "Direct Chat Active",
+      line: `${c.name} (Direct Chat Active)`,
+    };
+  }
+
+  // 5. No Booking Email
+  if (category === "No Booking Email") {
+    return {
+      category: "No Booking Email",
+      line: `${c.name} (No Booking Email)`,
+    };
+  }
+
+  // 6. Outside Target Area
+  if (category === "Outside Target Area") {
+    const loc = c.city ? `${c.city}${c.usState ? `, ${c.usState}` : ""}` : "Outside Target Area";
+    return {
+      category: "Outside Target Area",
+      line: `${c.name} (${loc})`,
+    };
+  }
+
+  // 7. Out of State
+  if (category === "Out of State") {
+    const loc = c.city ? `${c.city}${c.usState ? `, ${c.usState}` : ""}` : "Out of State";
+    return {
+      category: "Out of State",
+      line: `${c.name} (${loc})`,
+    };
+  }
+
+  // 8. Other Excluded
+  return {
+    category: "Other Excluded",
+    line: `${c.name} (${c.statusBadge || c.exclusionReason || "Excluded"})`,
+  };
+}
+
+/**
+ * Formats a deterministic categorized audit summary of excluded candidate venues.
+ * Groups venues into distinct canonical categories (Gig Spacing Conflicts, Active Cooldowns,
+ * Seasonal Holds, Direct Chat Active, No Booking Email, Outside Target Area, Out of State)
+ * and lists venue names alongside their specific exclusion notes or dates.
+ */
+export function formatExcludedAuditSummary(
+  excludedCandidates: CandidateVenue[],
+  now: Date = new Date(),
+): string {
+  if (!excludedCandidates || excludedCandidates.length === 0) {
+    return "Excluded Candidate Audit Summary: None";
+  }
+
+  const categoryOrder = [
+    "Gig Spacing Conflicts",
+    "Active Cooldowns",
+    "Seasonal Holds",
+    "Direct Chat Active",
+    "No Booking Email",
+    "Outside Target Area",
+    "Out of State",
+    "Other Excluded",
+  ];
+
+  const grouped = new Map<string, string[]>();
+  for (const cat of categoryOrder) {
+    grouped.set(cat, []);
+  }
+
+  for (const c of excludedCandidates) {
+    const { category, line } = classifyExcludedCandidate(c, now.getTime());
+    const list = grouped.get(category);
+    if (list) {
+      list.push(line);
+    } else {
+      grouped.set(category, [line]);
+    }
+  }
+
+  const lines: string[] = [
+    `Excluded Candidate Audit Summary (${excludedCandidates.length} total):`,
+  ];
+
+  for (const cat of categoryOrder) {
+    const items = grouped.get(cat);
+    if (!items || items.length === 0) continue;
+    items.sort((a, b) => a.localeCompare(b));
+    lines.push(`  • ${cat} (${items.length}):`);
+    for (const item of items) {
+      lines.push(`    - ${item}`);
+    }
+  }
+
+  return lines.join("\n");
 }

@@ -32,7 +32,10 @@ export function loadHumanOnlyCredentials(yamlPath: string): HumanOnlyCredential[
       } else if (trimmed.startsWith("identifier:")) {
         current.identifier = trimmed.slice("identifier:".length).trim().replace(/^["']|["']$/g, "");
       } else if (trimmed.startsWith("description:")) {
-        current.description = trimmed.slice("description:".length).trim().replace(/^["']|["']$/g, "");
+        current.description = trimmed.slice("description:".length).trim().replace(
+          /^["']|["']$/g,
+          "",
+        );
       }
     }
     if (current.identifier) {
@@ -52,13 +55,22 @@ export function isDocOrMarkdown(filePath: string, cmd: string): boolean {
     if (filePathLower.endsWith(".md") || filePathLower.endsWith(".txt")) {
       return true;
     }
-    if (filePathLower.includes("/docs/") || filePathLower.startsWith("docs/") || filePathLower.includes("docs/")) {
+    if (
+      filePathLower.includes("/docs/") || filePathLower.startsWith("docs/") ||
+      filePathLower.includes("docs/")
+    ) {
       return true;
     }
-    if (filePathLower.includes("/skills/") || filePathLower.startsWith("skills/") || filePathLower.includes("skills/")) {
+    if (
+      filePathLower.includes("/skills/") || filePathLower.startsWith("skills/") ||
+      filePathLower.includes("skills/")
+    ) {
       return true;
     }
-    if (filePathLower.includes("/test/") || filePathLower.startsWith("test/") || filePathLower.includes("test/")) {
+    if (
+      filePathLower.includes("/test/") || filePathLower.startsWith("test/") ||
+      filePathLower.includes("test/")
+    ) {
       return true;
     }
     if (
@@ -85,7 +97,8 @@ export function isDocOrMarkdown(filePath: string, cmd: string): boolean {
       }
     }
     if (
-      /\b(agents\.md|claude\.md|josh-manual-controls\.md|cross-ai-rules\.md|human-only-credentials\.yaml)\b/.test(cmdLower)
+      /\b(agents\.md|claude\.md|josh-manual-controls\.md|cross-ai-rules\.md|human-only-credentials\.yaml)\b/
+        .test(cmdLower)
     ) {
       if (!/\.(bashrc|zshrc|env)\b/.test(cmdLower)) {
         return true;
@@ -115,7 +128,8 @@ export function isBlockedContext(targetFile: string, cmd: string, identifier: st
     }
     if (
       base !== "human-only-credentials.yaml" &&
-      (base.endsWith(".json") || base.endsWith(".yaml") || base.endsWith(".yml") || base.endsWith(".toml"))
+      (base.endsWith(".json") || base.endsWith(".yaml") || base.endsWith(".yml") ||
+        base.endsWith(".toml"))
     ) {
       return true;
     }

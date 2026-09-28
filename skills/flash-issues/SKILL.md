@@ -33,6 +33,7 @@ Instead:
 1. Launch exactly **one** subagent based on host surface:
    - **Claude Code surface:** `Agent(subagent_type: "general-purpose", model: "haiku")`
    - **Antigravity (`agy`) surface:** `invoke_subagent(TypeName: "self", Role: "Flash Issues Runner", Model: "inherit")`
+   - **Codex surface:** execute `deno task flash-issues` directly (no subagent dispatch needed)
    passing the self-contained prompt in "Dispatch prompt template" below verbatim.
 2. Wait for the subagent to execute `deno task flash-issues` and return its report.
 3. Relay that report to Josh essentially as-is: counts, what got newly
@@ -47,11 +48,12 @@ Never run the `gh` scans, triage, or file write yourself in the invoking
 session "to save a round trip" — that's the exact expensive-token-burn this
 defect fix exists to close off.
 
-## Dispatch prompt template (pass verbatim to the `Agent` / `invoke_subagent` tool)
+## Dispatch prompt template (pass verbatim to the subagent dispatch prompt)
 
 Fill in nothing — this prompt is complete as written. Pass it as the `prompt` argument:
 - **Claude Code surface:** `Agent(subagent_type: "general-purpose", model: "haiku", prompt: ...)`
 - **Antigravity (`agy`) surface:** `invoke_subagent(TypeName: "self", Role: "Flash Issues Runner", Model: "inherit", Prompt: ...)`
+- **Codex surface:** execute `deno task flash-issues` directly
 
 ````
 You are running the deterministic Flash worklist regeneration task.

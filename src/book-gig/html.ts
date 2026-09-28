@@ -19,6 +19,11 @@ function escapeHtml(str: string): string {
     .replace(/'/g, "&#039;");
 }
 
+// Injected dark-mode style block prepended to each preview iframe's srcdoc so drafts
+// render deterministically with a dark background, light text, and styled links (D-71, #999).
+export const DRAFT_PREVIEW_DARK_STYLE =
+  "<style>html, body { background-color: #1e1e1e; color: #f0f0f0; } a { color: #4fc3f7; }</style>";
+
 export const SORTING_SCRIPT = `
   if (typeof initTableSorting === "function" || (typeof window !== "undefined" && typeof window.initTableSorting === "function")) {
     // Already initialized via /outreach/table-sort.js
@@ -188,7 +193,7 @@ function renderPitchCard(p: PitchEmail, idx: number): string {
   // is available at all.
   const bodyMarkup = p.htmlBody && p.htmlBody.trim()
     ? [
-      `    <iframe class="pitch-body-frame" id="${cardId}" title="Draft email for ${safeVenue}" sandbox="allow-same-origin" srcdoc="${
+      `    <iframe class="pitch-body-frame" id="${cardId}" title="Draft email for ${safeVenue}" sandbox="allow-same-origin" srcdoc="${DRAFT_PREVIEW_DARK_STYLE}${
         escapeHtml(p.htmlBody)
       }" onload="this.style.height = (this.contentWindow.document.body.scrollHeight + 24) + 'px';"></iframe>`,
       '    <pre class="pitch-body-raw" id="' + plainTextId + '" style="display: none;">' +
@@ -283,7 +288,9 @@ export function renderDarkHtml(result: BookGigResult): string {
 
   let locText = "All Regional Metros (~3.5h drive)";
   if (result.location) {
-    if (result.location.cities && result.location.cities.length > 1) {
+    if (result.location.allLocations) {
+      locText = "All Locations";
+    } else if (result.location.cities && result.location.cities.length > 1) {
       const list = result.location.cities.join(", ");
       locText = result.location.includeSurrounding ? `${list} (+ surrounding)` : list;
     } else if (result.location.city) {
@@ -507,7 +514,7 @@ export function renderDarkHtml(result: BookGigResult): string {
     }).join("\n");
 
     candidatesSectionHtml = `
-      <section class="section-block">
+      <section class="section-block" id="candidates-table">
         <h2 class="section-title">📊 Eligible Candidates</h2>
         <div class="table-wrap">
           <table class="candidate-table">
@@ -1028,8 +1035,8 @@ export function renderDarkHtml(result: BookGigResult): string {
       min-height: 200px;
       border: 1px solid var(--border);
       border-radius: 8px;
-      background-color: #ffffff;
-      color-scheme: light;
+      background-color: var(--bg-surface);
+      color-scheme: dark;
     }
 
     footer {
@@ -1087,10 +1094,10 @@ export function renderDarkHtml(result: BookGigResult): string {
     </header>
 
     <main>
+      ${candidatesSectionHtml}
       ${pendingSectionHtml}
       ${campaignsSectionHtml}
       ${batchSectionHtml}
-      ${candidatesSectionHtml}
       ${pitchesSectionHtml}
     </main>
 

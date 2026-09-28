@@ -149,6 +149,15 @@ function assertDeny(res: RunResult) {
   assertEquals(parsed.hookSpecificOutput.permissionDecisionReason.length > 0, true);
 }
 
+/** Same as assertDeny, plus an exact-text check on the reason — used by the
+ * session-mismatch-vs-also-expired coverage below (web-jam-tools: refusal message fix). */
+function assertDenyReason(res: RunResult, expectedReason: string) {
+  assertEquals(res.code, 0, res.stderr);
+  const parsed = JSON.parse(res.stdout);
+  assertEquals(parsed.hookSpecificOutput.permissionDecision, "deny");
+  assertEquals(parsed.hookSpecificOutput.permissionDecisionReason, expectedReason);
+}
+
 function assertPass(res: RunResult) {
   assertEquals(res.code, 0, res.stderr);
   assertEquals(res.stdout.trim(), "");
@@ -213,6 +222,54 @@ Deno.test("issue_write create with a token from ANOTHER session does not apply a
         tokenPath,
       );
       assertDeny(res);
+    },
+  );
+});
+
+// A token from another session that is still UNEXPIRED keeps the plain session-mismatch
+// message unchanged — only the also-expired case (below) gets the extra detail.
+Deno.test("issue_write create with a token from ANOTHER session (still unexpired) reports only the session mismatch", async () => {
+  await withTokenFile(
+    {
+      session_id: "session-OTHER",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: futureIso(),
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        issueWriteCreate("Fix the flux capacitor", "session-A"),
+        tokenPath,
+      );
+      assertDenyReason(
+        res,
+        "Approval token belongs to a different session and does not apply here.",
+      );
+    },
+  );
+});
+
+// A token from another session that is ALSO already expired must name the expiry in the
+// refusal, rather than reporting only the session mismatch and hiding the real second cause
+// (the token could never have been used here even from the right session).
+Deno.test("issue_write create with a token from ANOTHER session that is ALSO expired names the expiry in the refusal", async () => {
+  const expiredAt = pastIso();
+  await withTokenFile(
+    {
+      session_id: "session-OTHER",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Fix the flux capacitor"],
+      expires_at: expiredAt,
+    },
+    async (tokenPath) => {
+      const res = await runHook(
+        issueWriteCreate("Fix the flux capacitor", "session-A"),
+        tokenPath,
+      );
+      assertDenyReason(
+        res,
+        `Approval token belongs to a different session and does not apply here. It is also already expired (expires_at: ${expiredAt}).`,
+      );
     },
   );
 });

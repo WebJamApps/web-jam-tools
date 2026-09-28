@@ -30,11 +30,13 @@ export const VERB_PATTERNS: VerbMatch[] = [
   },
   {
     verb: "gh issue comment",
-    guardedEquivalent: "deno task post-issue-comment --repo <owner/repo> --issue <n> --body-file <path>",
+    guardedEquivalent:
+      "deno task post-issue-comment --repo <owner/repo> --issue <n> --body-file <path>",
   },
   {
     verb: "gh issue edit",
-    guardedEquivalent: "deno task edit-issue --repo <owner/repo> --issue <n> [gh issue edit flags...]",
+    guardedEquivalent:
+      "deno task edit-issue --repo <owner/repo> --issue <n> [gh issue edit flags...]",
   },
 ];
 
@@ -46,9 +48,9 @@ export function checkRawGhWrite(cmd: string): string | null {
       return [
         `BLOCKED (raw gh write guard): \`${verb}\` is denied.`,
         "The four GitHub write verbs this repo gates (gh pr review, gh pr comment, gh issue " +
-          "comment, gh issue edit) are only reachable through their guarded `deno task` " +
-          "commands, so a dispatched subagent — with no human present to answer a permission " +
-          "prompt — completes its own write instead of dead-ending (web-jam-tools#685).",
+        "comment, gh issue edit) are only reachable through their guarded `deno task` " +
+        "commands, so a dispatched subagent — with no human present to answer a permission " +
+        "prompt — completes its own write instead of dead-ending (web-jam-tools#685).",
         `Use instead: ${guardedEquivalent}`,
       ].join("\n");
     }

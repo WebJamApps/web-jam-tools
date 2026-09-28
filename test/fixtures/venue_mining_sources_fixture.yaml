@@ -2,77 +2,27 @@ metros:
   - slug: locked-metro
     label: Locked Metro VA
     driveTier: "<1.5h"
-    publication:
-      name: SceneThink Calendar
-      url: http://mock.com/locked/search.json
-      api: http://mock.com/locked/search.json
-      type: scenethink
-    lastSwept: "2026-09-10"
-    coverageArea:
-      - roanoke
-      - salem
 
   - slug: stale-metro
     label: Stale Metro VA
     driveTier: "<1.5h"
-    publication:
-      name: SceneThink Calendar
-      url: http://mock.com/stale/search.json
-      api: http://mock.com/stale/search.json
-      type: scenethink
-    lastSwept: "2025-01-01"
-    coverageArea:
-      - roanoke
-      - salem
 
   - slug: null-metro
     label: Null Metro VA
     driveTier: "<1.5h"
-    publication:
-      name: SceneThink Calendar
-      url: http://mock.com/null/search.json
-      api: http://mock.com/null/search.json
-      type: scenethink
-    lastSwept: null
-    coverageArea:
-      - roanoke
-      - salem
 
   - slug: unparseable-metro
     label: Unparseable Metro VA
     driveTier: "<1.5h"
-    publication:
-      name: SceneThink Calendar
-      url: http://mock.com/unparseable/search.json
-      api: http://mock.com/unparseable/search.json
-      type: scenethink
-    lastSwept: "not-a-valid-date"
-    coverageArea:
-      - roanoke
-      - salem
 
   - slug: unsupported-metro
     label: Unsupported Metro VA
     driveTier: "<1.5h"
-    publication:
-      name: HTML Calendar
-      url: http://mock.com/unsupported
-      api: http://mock.com/unsupported
-      type: html
-    lastSwept: null
 
   - slug: missing-type-metro
     label: Missing Type Metro VA
     driveTier: "<1.5h"
-    publication:
-      name: Missing Type Calendar
-      url: http://mock.com/missing-type
-    lastSwept: null
 
   - slug: roanoke-salem
     label: Roanoke / Salem VA
     driveTier: "<1.5h"
-    publication:
-      name: The Roanoke Rambler
-      url: https://www.roanokerambler.com
-    lastSwept: "2026-07-02"

@@ -136,23 +136,37 @@ export async function defaultFetchSubIssues(
   ]);
 
   if (result.code !== 0) {
-    return [];
+    throw new Error(
+      `Failed to fetch sub-issues for ${repo}#${epicNumber}: ${
+        result.stderr.trim() || `exit code ${result.code}`
+      }`,
+    );
   }
 
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(result.stdout) as Array<{
-      number: number;
-      repository?: { full_name?: string };
-    }>;
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed.map((item) => ({
-      repo: item.repository?.full_name || repo,
-      number: item.number,
-    }));
-  } catch {
-    return [];
+    parsed = JSON.parse(result.stdout);
+  } catch (err) {
+    throw new Error(
+      `Failed to parse sub-issues JSON for ${repo}#${epicNumber}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error(
+      `Expected array of sub-issues for ${repo}#${epicNumber}, got ${typeof parsed}`,
+    );
+  }
+
+  return parsed.map((item) => {
+    const obj = item as { number: number; repository?: { full_name?: string } };
+    return {
+      repo: obj.repository?.full_name || repo,
+      number: obj.number,
+    };
+  });
 }
 
 /**
@@ -1154,6 +1168,8 @@ export async function scanStaleBodies(
     );
   }
 
+  const epicChildErrors = new Map<string, string>();
+
   let targets: IssueTarget[] = [];
   if (
     options.issues &&
@@ -1172,17 +1188,20 @@ export async function scanStaleBodies(
       try {
         const subs = await fetchSubIssues(epic.repo, epic.number);
         subIssueTargets.push(...subs);
-      } catch {
-        // Non-fatal
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        epicChildErrors.set(
+          `${epic.repo}#${epic.number}`,
+          msg,
+        );
       }
     }
 
-    let combined: IssueTarget[] = [];
-    if (extracted.issues.length > 0 || subIssueTargets.length > 0) {
-      combined = [...extracted.issues, ...subIssueTargets];
-    } else {
-      combined = [...extracted.epics];
-    }
+    const combined: IssueTarget[] = [
+      ...extracted.epics,
+      ...extracted.issues,
+      ...subIssueTargets,
+    ];
 
     const seen = new Set<string>();
     for (const t of combined) {
@@ -1197,6 +1216,9 @@ export async function scanStaleBodies(
   const reports: IssueStalenessReport[] = [];
 
   for (const target of targets) {
+    const key = `${target.repo}#${target.number}`;
+    const childErr = epicChildErrors.get(key);
+
     try {
       const issueData = await fetchIssue(target.repo, target.number);
       const report = await analyzeIssueStaleness(
@@ -1206,20 +1228,34 @@ export async function scanStaleBodies(
         docContent,
         options,
       );
+      if (childErr) {
+        report.reasons.push({
+          type: "fetch-error",
+          message: childErr,
+        });
+        report.status = "STALE";
+      }
       reports.push(report);
     } catch (err) {
+      const reasons: StalenessReason[] = [
+        {
+          type: "fetch-error",
+          message: `Failed to fetch issue ${target.repo}#${target.number}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        },
+      ];
+      if (childErr) {
+        reasons.push({
+          type: "fetch-error",
+          message: childErr,
+        });
+      }
       reports.push({
         repo: target.repo,
         number: target.number,
         status: "STALE",
-        reasons: [
-          {
-            type: "fetch-error",
-            message: `Failed to fetch issue ${target.repo}#${target.number}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          },
-        ],
+        reasons,
       });
     }
   }

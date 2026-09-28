@@ -10,6 +10,7 @@
  */
 import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
 import { findUnresolvableIssuePointers } from "./detect_unresolvable_issue_pointers.ts";
+import { findDeferredVerifications } from "./detect_deferred_verifications.ts";
 import {
   checkDuplicateTitle,
   type CommandRunner,
@@ -19,6 +20,8 @@ import {
 
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 const MCP_ISSUE_WRITE_RE = /^mcp__.*__issue_write$/;
+const INVALID_MCP_BODY_DENY =
+  "DENY:the issue_write body is not a string (invalid body payload), so it can't be checked. Pass the body as a string.";
 
 export function loadModelLabels(modelLabelsPath: string): Set<string> {
   const text = Deno.readTextFileSync(modelLabelsPath);
@@ -302,8 +305,33 @@ export function extractDedupOverride(
   return { candidate, reason };
 }
 
-export function extractBodyValue(args: string[]): string | null {
+export interface ExtractedBody {
+  body: string | null;
+  readError?: string;
+}
+
+/**
+ * A relative `--body-file` path is resolved against the hook payload's `cwd`
+ * (web-jam-tools#1167). Paths the shell would expand (`$VAR`, `$(…)`, `~`)
+ * are left as typed, so they stay unreadable here.
+ */
+function resolveBodyFilePath(filepath: string, cwd?: string): string {
+  if (!cwd || filepath.startsWith("/") || filepath.startsWith("~") || filepath.includes("$")) {
+    return filepath;
+  }
+  return `${cwd.replace(/\/+$/, "")}/${filepath}`;
+}
+
+export function extractBodyDetails(args: string[], cwd?: string): ExtractedBody {
   const bodyParts: string[] = [];
+  let readError: string | undefined;
+  const readBodyFile = (filepath: string) => {
+    try {
+      bodyParts.push(Deno.readTextFileSync(resolveBodyFilePath(filepath, cwd)));
+    } catch {
+      readError = `could not read body file '${filepath}'`;
+    }
+  };
   let j = 0;
   while (j < args.length) {
     const a = args[j];
@@ -323,40 +351,32 @@ export function extractBodyValue(args: string[]): string | null {
       continue;
     } else if (a === "--body-file" || a === "-F") {
       if (j + 1 < args.length) {
-        const filepath = args[j + 1];
-        try {
-          bodyParts.push(Deno.readTextFileSync(filepath));
-        } catch {
-          // file read failure ignored
-        }
+        readBodyFile(args[j + 1]);
         j += 2;
         continue;
       }
     } else if (a.startsWith("--body-file=")) {
-      const filepath = a.slice("--body-file=".length);
-      try {
-        bodyParts.push(Deno.readTextFileSync(filepath));
-      } catch {
-        // ignored
-      }
+      readBodyFile(a.slice("--body-file=".length));
       j += 1;
       continue;
     } else if (a.startsWith("-F=")) {
-      const filepath = a.slice("-F=".length);
-      try {
-        bodyParts.push(Deno.readTextFileSync(filepath));
-      } catch {
-        // ignored
-      }
+      readBodyFile(a.slice("-F=".length));
       j += 1;
       continue;
     }
     j += 1;
   }
-  return bodyParts.length ? bodyParts.join("\n") : null;
+  return {
+    body: bodyParts.length ? bodyParts.join("\n") : null,
+    readError,
+  };
 }
 
-export function isEpicType(toolInput: Record<string, any>, tokens?: string[]): boolean {
+export function extractBodyValue(args: string[]): string | null {
+  return extractBodyDetails(args).body;
+}
+
+export function isEpicType(toolInput: Record<string, unknown>, tokens?: string[]): boolean {
   if (!toolInput || typeof toolInput !== "object") toolInput = {};
   for (const key of ["type", "issue_type", "type_name"]) {
     const val = toolInput[key];
@@ -398,6 +418,74 @@ export function isEpicType(toolInput: Record<string, any>, tokens?: string[]): b
     }
   }
   return false;
+}
+
+export function hasNeedsDesignLabel(
+  toolInput: Record<string, unknown>,
+  tokens?: string[],
+): boolean {
+  if (!toolInput || typeof toolInput !== "object") toolInput = {};
+  const labels = toolInput.labels;
+  if (Array.isArray(labels)) {
+    if (
+      labels.some((lbl) =>
+        typeof lbl === "string" &&
+        lbl.replace(/^['"]|['"]$/g, "").trim().toLowerCase() === "needs design"
+      )
+    ) {
+      return true;
+    }
+  }
+
+  if (tokens) {
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (["--label", "-l", "--add-label"].includes(tok)) {
+        if (i + 1 < tokens.length) {
+          const val = tokens[i + 1].replace(/^['"]|['"]$/g, "");
+          const parts = val.split(",").map((p) =>
+            p.replace(/^['"]|['"]$/g, "").trim().toLowerCase()
+          );
+          if (parts.includes("needs design")) return true;
+        }
+      }
+      for (const flag of ["--label=", "-l=", "--add-label="]) {
+        if (tok.startsWith(flag)) {
+          const val = tok.slice(flag.length).replace(/^['"]|['"]$/g, "");
+          const parts = val.split(",").map((p) =>
+            p.replace(/^['"]|['"]$/g, "").trim().toLowerCase()
+          );
+          if (parts.includes("needs design")) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The body checks a non-Epic issue create must pass: no unresolvable pointer
+ * phrase, and — unless it carries `Needs Design` — no deferred verification.
+ * Returns the refusal reason, or null when the body is clean. Shared with
+ * `src/create-issue/lib.ts` so `deno task create-issue` refuses with the same
+ * wording (web-jam-tools#1167).
+ */
+export function findIssueCreateBodyViolation(body: string, needsDesign: boolean): string | null {
+  const pointers = findUnresolvableIssuePointers(body);
+  if (pointers.length) {
+    return `unresolvable pointer phrase '${
+      pointers[0]
+    }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
+  }
+  if (!needsDesign) {
+    const deferred = findDeferredVerifications(body);
+    if (deferred.length) {
+      return `deferred verification phrase '${
+        deferred[0]
+      }' in issue body. Resolve the verification before filing: rewrite the sentence as the settled fact, or present the question to Josh as a numbered decision.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -501,14 +589,16 @@ async function runDuplicateCheck(createArgs: string[], runner: CommandRunner): P
  */
 async function scanIssueCommandSegments(
   segments: string[],
-  toolInput: Record<string, any>,
+  toolInput: Record<string, unknown>,
   modelLabelsPath: string,
   cmdForMessage: string,
   runner: CommandRunner,
+  cwd?: string,
 ): Promise<string> {
   for (const segment of segments) {
     const scTokens = stripLeadingAssignments(splitShellTokens(segment));
-    const createArgs = findGhIssueCreateArgs(scTokens) ?? findCreateIssueScriptArgs(scTokens);
+    const rawCreateArgs = findGhIssueCreateArgs(scTokens);
+    const createArgs = rawCreateArgs ?? findCreateIssueScriptArgs(scTokens);
     if (createArgs !== null) {
       const typeVal = extractTypeValue(createArgs);
       if (!typeVal || !VALID_NATIVE_TYPES_LOWER.has(typeVal.toLowerCase())) {
@@ -527,18 +617,25 @@ async function scanIssueCommandSegments(
       const escalationReason = extractEscalationReason(createArgs);
       const res = decide(labels, modelLabels, escalationReason, cmdForMessage, "cli");
       if (res !== "PASS") return res;
-      const body = extractBodyValue(createArgs);
-      if (body && !isEpicType(toolInput, createArgs)) {
-        const pointers = findUnresolvableIssuePointers(body);
-        if (pointers.length) {
-          return `DENY:unresolvable pointer phrase '${
-            pointers[0]
-          }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
-        }
+      const { body, readError } = extractBodyDetails(createArgs, cwd);
+      // An unreadable body fails closed on raw `gh issue create`. On the
+      // create-issue script path the task reads the expanded path and runs
+      // the same body checks itself (web-jam-tools#1167), so only the body
+      // checks are skipped here; the duplicate search below still runs.
+      if (readError && rawCreateArgs !== null) {
+        return `DENY:couldn't read the issue body (${readError}), so it can't be checked. Pass a literal path to --body-file, or use deno task create-issue.`;
+      }
+      const bodyNote = readError ? "PASS: body checked by create-issue itself" : "PASS";
+      if (!readError && body && !isEpicType(toolInput, createArgs)) {
+        const violation = findIssueCreateBodyViolation(
+          body,
+          hasNeedsDesignLabel(toolInput, createArgs),
+        );
+        if (violation) return `DENY:${violation}`;
       }
       const dedupRes = await runDuplicateCheck(createArgs, runner);
       if (dedupRes !== "PASS") return dedupRes;
-      return "PASS";
+      return bodyNote;
     }
 
     const editArgs = findGhIssueEditArgs(scTokens);
@@ -546,7 +643,10 @@ async function scanIssueCommandSegments(
       if (isEpicType(toolInput, scTokens)) {
         return "PASS";
       }
-      const body = extractBodyValue(editArgs);
+      const { body, readError } = extractBodyDetails(editArgs, cwd);
+      if (readError) {
+        return `DENY:couldn't read the issue body (${readError}), so it can't be checked. Pass a literal path to --body-file, or use deno task edit-issue.`;
+      }
       if (body) {
         const pointers = findUnresolvableIssuePointers(body);
         if (pointers.length) {
@@ -567,7 +667,7 @@ export async function checkModelLabelOnIssueCreate(
   modelLabelsPath: string,
   runner: CommandRunner = runGhCommand,
 ): Promise<string> {
-  let payload: Record<string, any>;
+  let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(inputJson);
   } catch {
@@ -577,7 +677,7 @@ export async function checkModelLabelOnIssueCreate(
   const toolName = String(payload.tool_name || "");
   const toolInputRaw = payload.tool_input || {};
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
-    ? (toolInputRaw as Record<string, any>)
+    ? (toolInputRaw as Record<string, unknown>)
     : {};
 
   if (
@@ -586,10 +686,18 @@ export async function checkModelLabelOnIssueCreate(
   ) {
     const cmd = String(toolInput.command || "").trim();
     if (!cmd) return "PASS";
+    const cwd = typeof payload.cwd === "string" && payload.cwd ? payload.cwd : undefined;
 
     const { segments, unterminated } = splitOnOperators(cmd);
     if (!unterminated) {
-      return await scanIssueCommandSegments(segments, toolInput, modelLabelsPath, cmd, runner);
+      return await scanIssueCommandSegments(
+        segments,
+        toolInput,
+        modelLabelsPath,
+        cmd,
+        runner,
+        cwd,
+      );
     }
 
     // Ambiguous parse (web-jam-tools#813): a heredoc body redirected into a
@@ -619,6 +727,7 @@ export async function checkModelLabelOnIssueCreate(
         modelLabelsPath,
         cmd,
         runner,
+        cwd,
       );
     }
 
@@ -637,8 +746,12 @@ export async function checkModelLabelOnIssueCreate(
     const method = toolInput.method;
     if (method === "update" || method === "edit") {
       if (isEpicType(toolInput)) return "PASS";
-      const body = toolInput.body;
-      if (typeof body === "string" && body) {
+      const rawBody = toolInput.body;
+      if (rawBody !== undefined && typeof rawBody !== "string") {
+        return INVALID_MCP_BODY_DENY;
+      }
+      const body = typeof rawBody === "string" ? rawBody : "";
+      if (body) {
         const pointers = findUnresolvableIssuePointers(body);
         if (pointers.length) {
           return `DENY:unresolvable pointer phrase '${
@@ -679,14 +792,14 @@ export async function checkModelLabelOnIssueCreate(
     const escalationReason = rawEscalation ? rawEscalation.trim() : null;
     const res = decide(rawLabels as string[], modelLabels, escalationReason, undefined, "mcp");
     if (res !== "PASS") return res;
-    const body = toolInput.body;
-    if (typeof body === "string" && body && !isEpicType(toolInput)) {
-      const pointers = findUnresolvableIssuePointers(body);
-      if (pointers.length) {
-        return `DENY:unresolvable pointer phrase '${
-          pointers[0]
-        }' in issue body. Every non-Epic issue body must stand alone without pointer phrases referring to comments or epics.`;
-      }
+    const rawBody = toolInput.body;
+    if (rawBody !== undefined && typeof rawBody !== "string") {
+      return INVALID_MCP_BODY_DENY;
+    }
+    const body = typeof rawBody === "string" ? rawBody : "";
+    if (body && !isEpicType(toolInput)) {
+      const violation = findIssueCreateBodyViolation(body, hasNeedsDesignLabel(toolInput));
+      if (violation) return `DENY:${violation}`;
     }
     const mcpTitle = typeof toolInput.title === "string" ? toolInput.title : null;
     const mcpOwner = typeof toolInput.owner === "string" ? toolInput.owner : null;

@@ -22,8 +22,11 @@
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
+  antigravityBrainRoot,
   authorizeWrite,
   buildApprovalToken,
+  isAntigravitySubagentConversation,
+  resolveAntigravityWriteContext,
   resolveClaudeCodeWriteContext,
   writeApprovalToken,
   writeApprovalTokenSync,
@@ -34,6 +37,7 @@ import {
   FILE_ISSUE_INVOCATION_RE,
   filingSkillInvoked,
   nonFilingSlashCommandInvoked,
+  stripUserRequestWrapper,
   tailIsCurrentlySidechain,
 } from "../hooks/lib/check_token_write_authorization.ts";
 import type { TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
@@ -272,6 +276,102 @@ Deno.test("writeApprovalTokenSync: writes token synchronously", async () => {
   }
 });
 
+// --- Per-session token storage (web-jam-tools#1158) ---
+//
+// scripts/write_issue_approval_token: store one approval token per session so concurrent sessions
+// stop overwriting each other. Every test below that exercises the DEFAULT (no --token-path, no
+// ISSUE_APPROVAL_TOKEN_PATH) storage location points HOME at a temp directory first, so nothing here
+// ever reads, writes, or deletes anything under the real ~/.claude/state/.
+
+/** Points HOME at `home` and clears ISSUE_APPROVAL_TOKEN_PATH for the duration of `fn`, restoring
+ * both afterward — the in-process equivalent of runHookWithHome() below for functions
+ * (writeApprovalToken/writeApprovalTokenSync) called directly rather than through a subprocess. */
+async function withHomeAndNoOverride(
+  fn: (home: string) => Promise<void> | void,
+): Promise<void> {
+  const homeDir = await Deno.makeTempDir();
+  const prevHome = Deno.env.get("HOME");
+  const prevOverride = Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+  Deno.env.set("HOME", homeDir);
+  try {
+    await fn(homeDir);
+  } finally {
+    if (prevHome === undefined) Deno.env.delete("HOME");
+    else Deno.env.set("HOME", prevHome);
+    if (prevOverride === undefined) Deno.env.delete("ISSUE_APPROVAL_TOKEN_PATH");
+    else Deno.env.set("ISSUE_APPROVAL_TOKEN_PATH", prevOverride);
+    await Deno.remove(homeDir, { recursive: true });
+  }
+}
+
+Deno.test("buildApprovalToken: throws when sessionId contains '..' (path traversal)", () => {
+  assertThrows(
+    () => buildApprovalToken({ sessionId: "../evil", repo: "web-jam-tools", titles: ["T1"] }),
+    Error,
+    "not safe to use as a filename",
+  );
+});
+
+Deno.test("buildApprovalToken: throws when sessionId contains a path separator", () => {
+  assertThrows(
+    () => buildApprovalToken({ sessionId: "a/b", repo: "web-jam-tools", titles: ["T1"] }),
+    Error,
+    "not safe to use as a filename",
+  );
+  assertThrows(
+    () => buildApprovalToken({ sessionId: "a\\b", repo: "web-jam-tools", titles: ["T1"] }),
+    Error,
+    "not safe to use as a filename",
+  );
+});
+
+Deno.test("writeApprovalToken: with no tokenPath and no ISSUE_APPROVAL_TOKEN_PATH override, writes to the per-session default directory under HOME", async () => {
+  await withHomeAndNoOverride(async (homeDir) => {
+    const { token, path } = await writeApprovalToken({
+      sessionId: "session-default-dir",
+      repo: "web-jam-tools",
+      titles: ["Default dir title"],
+    });
+    assertEquals(
+      path,
+      `${homeDir}/.claude/state/issue-approval-tokens/session-default-dir.json`,
+    );
+    const loaded = loadToken(path);
+    assertEquals(loaded, token);
+  });
+});
+
+Deno.test("writeApprovalToken: deletes an expired token file from another session in the same default directory, but leaves an unexpired one in place", async () => {
+  await withHomeAndNoOverride(async () => {
+    const { path: expiredPath } = await writeApprovalToken({
+      sessionId: "session-expired",
+      repo: "web-jam-tools",
+      titles: ["Old title"],
+      expiresAt: new Date(Date.now() - 3600_000).toISOString(),
+    });
+    const exists = (p: string) => Deno.stat(p).then(() => true).catch(() => false);
+    assertEquals(await exists(expiredPath), true);
+
+    // The next write (a different session) sweeps the now-expired file.
+    const { path: liveOtherPath } = await writeApprovalToken({
+      sessionId: "session-live-other",
+      repo: "web-jam-tools",
+      titles: ["Live other title"],
+    });
+    assertEquals(await exists(expiredPath), false);
+    assertEquals(await exists(liveOtherPath), true);
+
+    // A further write must not disturb the still-unexpired file left behind above.
+    await writeApprovalToken({
+      sessionId: "session-triggering-sweep",
+      repo: "web-jam-tools",
+      titles: ["Triggering title"],
+    });
+    assertEquals(await exists(liveOtherPath), true);
+  });
+});
+
 // --- CLI execution tests ---
 
 Deno.test("CLI: writes token via repeated --title arguments", async () => {
@@ -373,6 +473,27 @@ Deno.test("CLI: fails with exit code 1 when required arguments are missing (auth
     );
     assertEquals(res.code, 1);
     assert(res.stderr.includes("sessionId is required"));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI: fails with exit code 1 when session id is path-unsafe ('../evil')", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const authEnv = await writeAuthorizingTranscriptFixture(dir, "/file-issue do the thing");
+    const res = await runCli([
+      "--session-id",
+      "../evil",
+      "--repo",
+      "web-jam-tools",
+      "--title",
+      "Some title",
+    ], envWith({ ...authEnv, HOME: dir })); // HOME pinned to the temp dir as a safety net — this call
+    // must never reach the point of computing a real path at all, but pinning HOME means it couldn't
+    // touch ~/.claude/state/ even if it did.
+    assertEquals(res.code, 1);
+    assert(res.stderr.includes("not safe to use as a filename"));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -1291,6 +1412,165 @@ Deno.test("Round-trip: written token DENIES when session ID does not match", asy
   }
 });
 
+// --- Per-session hook regression tests (web-jam-tools#1158) ---
+//
+// Every test above that exercises the hook sets ISSUE_APPROVAL_TOKEN_PATH, which keeps its
+// pre-existing single-file override meaning untouched by this change. These tests instead point HOME
+// at a temp dir and leave ISSUE_APPROVAL_TOKEN_PATH unset, so the hook resolves each call's token
+// file from its own session id — this is the actual regression: on the pre-#1158 code, two concurrent
+// sessions shared one file and the second write silently clobbered the first session's approval.
+
+/** Like runHook() above, but drives the real per-session default path instead of the
+ * ISSUE_APPROVAL_TOKEN_PATH single-file override: sets HOME to `home` and ensures
+ * ISSUE_APPROVAL_TOKEN_PATH is NOT inherited into the child process. */
+async function runHookWithHome(
+  payload: Record<string, unknown>,
+  home: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const input = JSON.stringify(payload);
+  const env: Record<string, string> = { ...Deno.env.toObject(), HOME: home };
+  delete env["ISSUE_APPROVAL_TOKEN_PATH"];
+  const cmd = new Deno.Command("bash", {
+    args: [HOOK_PATH],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+    env,
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(new TextEncoder().encode(input));
+  await writer.close();
+  const { code, stdout, stderr } = await child.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
+}
+
+Deno.test("Two-session regression (web-jam-tools#1158): concurrent sessions A and B each pass the hook for their own approved title", async () => {
+  await withHomeAndNoOverride(async (homeDir) => {
+    await writeApprovalToken({
+      sessionId: "session-A",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Title A"],
+    });
+    await writeApprovalToken({
+      sessionId: "session-B",
+      repo: "WebJamApps/web-jam-tools",
+      titles: ["Title B"],
+    });
+
+    const resA = await runHookWithHome({
+      session_id: "session-A",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Title A",
+      },
+    }, homeDir);
+    assertEquals(resA.code, 0, resA.stderr);
+    assertEquals(JSON.parse(resA.stdout).hookSpecificOutput.permissionDecision, "allow");
+
+    const resB = await runHookWithHome({
+      session_id: "session-B",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Title B",
+      },
+    }, homeDir);
+    assertEquals(resB.code, 0, resB.stderr);
+    assertEquals(JSON.parse(resB.stdout).hookSpecificOutput.permissionDecision, "allow");
+
+    // Cross-check: session A's token must not accidentally cover session B's title, or vice versa —
+    // this is what the pre-#1158 shared single file could never guarantee.
+    const resACrossTitle = await runHookWithHome({
+      session_id: "session-A",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Title B",
+      },
+    }, homeDir);
+    assertEquals(JSON.parse(resACrossTitle.stdout).hookSpecificOutput.permissionDecision, "deny");
+  });
+});
+
+Deno.test("Hook (per-session default, no override): DENIES (fails closed) when session id is path-unsafe", async () => {
+  const homeDir = await Deno.makeTempDir();
+  try {
+    const res = await runHookWithHome({
+      session_id: "../evil",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Any title",
+      },
+    }, homeDir);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout);
+    assertEquals(parsed.hookSpecificOutput.permissionDecision, "deny");
+    assert(
+      parsed.hookSpecificOutput.permissionDecisionReason.includes("not safe to use as a filename"),
+    );
+  } finally {
+    await Deno.remove(homeDir, { recursive: true });
+  }
+});
+
+Deno.test("Hook (per-session default, no override): DENIES (fails closed) when no session id is provided at all", async () => {
+  const homeDir = await Deno.makeTempDir();
+  try {
+    const res = await runHookWithHome({
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Any title",
+      },
+    }, homeDir);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout);
+    assertEquals(parsed.hookSpecificOutput.permissionDecision, "deny");
+    assert(parsed.hookSpecificOutput.permissionDecisionReason.includes("No session id"));
+  } finally {
+    await Deno.remove(homeDir, { recursive: true });
+  }
+});
+
+Deno.test("Hook (per-session default, no override): DENIES (fails closed) with a clear reason when the session has no token file at all", async () => {
+  const homeDir = await Deno.makeTempDir();
+  try {
+    const res = await runHookWithHome({
+      session_id: "session-with-no-token",
+      tool_name: "mcp__claude_ai_GitHub_MCP__issue_write",
+      tool_input: {
+        method: "create",
+        owner: "WebJamApps",
+        repo: "web-jam-tools",
+        title: "Any title",
+      },
+    }, homeDir);
+    assertEquals(res.code, 0, res.stderr);
+    const parsed = JSON.parse(res.stdout);
+    assertEquals(parsed.hookSpecificOutput.permissionDecision, "deny");
+    assert(parsed.hookSpecificOutput.permissionDecisionReason.includes("No approval token found"));
+  } finally {
+    await Deno.remove(homeDir, { recursive: true });
+  }
+});
+
 // --- Fix for two real refusals hit on 2026-09-12: replace the exact-phrase list with a regex ---
 //
 // "create an issue for JaMmusic then for the work you want to dispatch to Flash" was refused before
@@ -1514,5 +1794,244 @@ Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md's description
       `SKILL.md's worked example "${phrase}" must be recognized as a file-issue invocation by ` +
         `FILE_ISSUE_INVOCATION_RE, or the two have drifted apart`,
     );
+  }
+});
+
+// --- Antigravity USER_REQUEST wrapper & plugin prefix tests ---
+
+Deno.test("stripUserRequestWrapper: unwraps Antigravity USER_REQUEST block", () => {
+  assertEquals(
+    stripUserRequestWrapper("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    "/webjam-tasks:file-issue",
+  );
+  assertEquals(
+    stripUserRequestWrapper(
+      "<USER_REQUEST>\nfile an issue for book-gig\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nsome metadata\n</ADDITIONAL_METADATA>",
+    ),
+    "file an issue for book-gig",
+  );
+  assertEquals(
+    stripUserRequestWrapper("plain prompt text without wrapper"),
+    "plain prompt text without wrapper",
+  );
+});
+
+Deno.test("filingSkillInvoked: recognizes plugin-prefixed slash commands and USER_REQUEST wrappers", () => {
+  assertEquals(filingSkillInvoked("/webjam-tasks:file-issue"), "file-issue");
+  assertEquals(filingSkillInvoked("/webjam-tasks:design-issue"), "design-issue");
+  assertEquals(
+    filingSkillInvoked("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    "file-issue",
+  );
+  assertEquals(
+    filingSkillInvoked("<USER_REQUEST>\n/webjam-tasks:design-issue\n</USER_REQUEST>"),
+    "design-issue",
+  );
+  assertEquals(
+    filingSkillInvoked(
+      "<USER_REQUEST>\nplease create a new issue for book-gig\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>",
+    ),
+    "file-issue",
+  );
+});
+
+Deno.test("nonFilingSlashCommandInvoked: recognizes plugin-prefixed slash commands and USER_REQUEST wrappers", () => {
+  assertEquals(nonFilingSlashCommandInvoked("/webjam-tasks:work-issue 123"), "/work-issue");
+  assertEquals(nonFilingSlashCommandInvoked("/webjam-tasks:book-gig"), "/book-gig");
+  assertEquals(
+    nonFilingSlashCommandInvoked("<USER_REQUEST>\n/webjam-tasks:work-issue 123\n</USER_REQUEST>"),
+    "/work-issue",
+  );
+  assertEquals(
+    nonFilingSlashCommandInvoked("<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>"),
+    null,
+  );
+});
+
+Deno.test("checkTokenWriteAuthorization: authorizes when Antigravity USER_REQUEST carries /webjam-tasks:file-issue", () => {
+  const agyEntry: TranscriptEntry = {
+    type: "USER_INPUT",
+    source: "USER_EXPLICIT",
+    step_index: 0,
+    conversationId: "test-conversation-id",
+    content:
+      "<USER_REQUEST>\n/webjam-tasks:file-issue\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>",
+  };
+
+  const res = checkTokenWriteAuthorization({
+    entries: [agyEntry],
+    ownConversationId: "test-conversation-id",
+    isSubagentInvocation: false,
+  });
+
+  assertEquals(res.ok, true);
+  assertEquals(res.skill, "file-issue");
+});
+
+// --- Antigravity subagent detection from the surface's own spawn record ---
+
+const AGY_PARENT = "11111111-1111-4111-8111-111111111111";
+const AGY_CHILD = "22222222-2222-4222-8222-222222222222";
+
+/** Builds `<tmp>/brain/<id>/.system_generated/logs/transcript_full.jsonl` for each conversation,
+ * and the parent's spawn record for the child when `withSpawnRecord` is set. */
+async function makeAgyBrain(
+  prompts: Record<string, string>,
+  withSpawnRecord: boolean,
+): Promise<{ root: string; brain: string; transcript: (id: string) => string }> {
+  const root = await Deno.makeTempDir();
+  const brain = `${root}/brain`;
+  const transcript = (id: string) => `${brain}/${id}/.system_generated/logs/transcript_full.jsonl`;
+  for (const [id, prompt] of Object.entries(prompts)) {
+    await Deno.mkdir(`${brain}/${id}/.system_generated/logs`, { recursive: true });
+    await Deno.writeTextFile(
+      transcript(id),
+      JSON.stringify({
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        step_index: 0,
+        content: `<USER_REQUEST>\n${prompt}\n</USER_REQUEST>`,
+      }) + "\n",
+    );
+  }
+  if (withSpawnRecord) {
+    await Deno.mkdir(`${brain}/${AGY_PARENT}/.system_generated/subagents`, { recursive: true });
+    await Deno.writeTextFile(
+      `${brain}/${AGY_PARENT}/.system_generated/subagents/${AGY_CHILD}.json`,
+      JSON.stringify({ conversationId: AGY_CHILD, state: "SUBAGENT_STATE_ALIVE" }),
+    );
+  }
+  return { root, brain, transcript };
+}
+
+Deno.test("antigravityBrainRoot: returns the brain directory of an Antigravity transcript path, null otherwise", () => {
+  assertEquals(
+    antigravityBrainRoot(
+      `/home/j/.gemini/antigravity-cli/brain/${AGY_CHILD}/.system_generated/logs/transcript_full.jsonl`,
+    ),
+    "/home/j/.gemini/antigravity-cli/brain",
+  );
+  assertEquals(antigravityBrainRoot("/home/j/.claude/projects/-home-j/abc.jsonl"), null);
+  assertEquals(antigravityBrainRoot(""), null);
+});
+
+Deno.test("isAntigravitySubagentConversation: true when a parent's spawn record names the conversation", async () => {
+  const { root, brain } = await makeAgyBrain({ [AGY_PARENT]: "hi", [AGY_CHILD]: "task" }, true);
+  try {
+    assertEquals(await isAntigravitySubagentConversation(brain, AGY_CHILD), true);
+    assertEquals(await isAntigravitySubagentConversation(brain, AGY_PARENT), false);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("isAntigravitySubagentConversation: null (could not look) for an unreadable brain directory or empty id", async () => {
+  assertEquals(
+    await isAntigravitySubagentConversation("/definitely/not/a/brain/dir", AGY_CHILD),
+    null,
+  );
+  const { root, brain } = await makeAgyBrain({ [AGY_PARENT]: "hi" }, false);
+  try {
+    assertEquals(await isAntigravitySubagentConversation(brain, ""), null);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+for (
+  const prompt of [
+    "/file-issue for the audit summary",
+    "/webjam-tasks:file-issue for the audit summary",
+    "/design-issue web-jam-tools#1108",
+    "File an issue for the audit summary",
+  ]
+) {
+  Deno.test(`authorizeWrite: refuses an Antigravity subagent whose parent-composed prompt reads "${prompt}"`, async () => {
+    const { root, transcript } = await makeAgyBrain(
+      { [AGY_PARENT]: "hi", [AGY_CHILD]: prompt },
+      true,
+    );
+    try {
+      const result = await authorizeWrite({
+        sessionId: "",
+        transcriptPath: transcript(AGY_CHILD),
+        conversationId: AGY_CHILD,
+      });
+      assertEquals(result.ok, false);
+      assert(result.reason?.includes("subagent"));
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+}
+
+Deno.test("authorizeWrite: authorizes a main Antigravity conversation whose own turn invoked /file-issue", async () => {
+  const { root, transcript } = await makeAgyBrain(
+    { [AGY_PARENT]: "/webjam-tasks:file-issue", [AGY_CHILD]: "task" },
+    true,
+  );
+  try {
+    const result = await authorizeWrite({
+      sessionId: "",
+      transcriptPath: transcript(AGY_PARENT),
+      conversationId: AGY_PARENT,
+    });
+    assertEquals(result.ok, true);
+    assertEquals(result.skill, "file-issue");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("resolveAntigravityWriteContext: marks the recorded conversation a subagent from its spawn record", async () => {
+  const { root, transcript } = await makeAgyBrain(
+    { [AGY_PARENT]: "hi", [AGY_CHILD]: "/file-issue x" },
+    true,
+  );
+  const recordPath = `${root}/agy-hook-invocations.jsonl`;
+  const original = Deno.env.get("AGY_HOOK_RECORD_PATH");
+  try {
+    for (const [id, expected] of [[AGY_CHILD, true], [AGY_PARENT, false]] as const) {
+      await Deno.writeTextFile(
+        recordPath,
+        JSON.stringify({ conversationId: id, transcriptPath: transcript(id) }) + "\n",
+      );
+      Deno.env.set("AGY_HOOK_RECORD_PATH", recordPath);
+      const ctx = await resolveAntigravityWriteContext();
+      assertEquals(ctx?.ownConversationId, id);
+      assertEquals(ctx?.isSubagentInvocation, expected);
+    }
+  } finally {
+    if (original === undefined) Deno.env.delete("AGY_HOOK_RECORD_PATH");
+    else Deno.env.set("AGY_HOOK_RECORD_PATH", original);
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("resolveAntigravityWriteContext: fails closed when the recorded transcript is outside the brain layout", async () => {
+  const root = await Deno.makeTempDir();
+  const transcriptPath = `${root}/elsewhere.jsonl`;
+  await Deno.writeTextFile(
+    transcriptPath,
+    JSON.stringify({
+      type: "USER_INPUT",
+      content: "<USER_REQUEST>\n/file-issue\n</USER_REQUEST>",
+    }) +
+      "\n",
+  );
+  const recordPath = `${root}/agy-hook-invocations.jsonl`;
+  await Deno.writeTextFile(
+    recordPath,
+    JSON.stringify({ conversationId: AGY_PARENT, transcriptPath }) + "\n",
+  );
+  const original = Deno.env.get("AGY_HOOK_RECORD_PATH");
+  try {
+    Deno.env.set("AGY_HOOK_RECORD_PATH", recordPath);
+    const ctx = await resolveAntigravityWriteContext();
+    assertEquals(ctx?.isSubagentInvocation, true);
+  } finally {
+    if (original === undefined) Deno.env.delete("AGY_HOOK_RECORD_PATH");
+    else Deno.env.set("AGY_HOOK_RECORD_PATH", original);
+    await Deno.remove(root, { recursive: true });
   }
 });

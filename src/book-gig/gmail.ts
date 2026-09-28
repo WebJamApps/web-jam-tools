@@ -44,10 +44,12 @@ export function mergeWeekendRuns(
 ): BookGigResult {
   // 1. Candidate Venues: deduplicate by venueId / _id
   const candidateMap = new Map<string, CandidateVenue>();
-  for (const c of existing.candidates || []) {
-    const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
-    if (id) {
-      candidateMap.set(id, { ...c, _id: c._id || id });
+  if (!current.location?.allLocations) {
+    for (const c of existing.candidates || []) {
+      const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
+      if (id) {
+        candidateMap.set(id, { ...c, _id: c._id || id });
+      }
     }
   }
   for (const c of current.candidates || []) {
@@ -63,21 +65,40 @@ export function mergeWeekendRuns(
   const mergedCandidates = Array.from(candidateMap.values());
 
   // 2. Pitch Cards: deduplicate by venueId
+  // Excluded or on-hold venues must NEVER have pitch cards (decision D-44 / D-50 / D-54).
   const pitchMap = new Map<string, PitchEmail>();
-  for (const p of existing.pitches || []) {
-    const id = p.venueId || p.venueName;
-    if (id) {
-      pitchMap.set(id, { ...p, venueId: p.venueId || id });
+  if (!current.location?.allLocations) {
+    for (const p of existing.pitches || []) {
+      const id = p.venueId || p.venueName;
+      if (id) {
+        const c = candidateMap.get(id);
+        if (c?.isExcluded) {
+          continue;
+        }
+        pitchMap.set(id, { ...p, venueId: p.venueId || id });
+      }
     }
   }
   for (const p of current.pitches || []) {
     const id = p.venueId || p.venueName;
     if (id) {
+      const c = candidateMap.get(id);
+      if (c?.isExcluded) {
+        continue;
+      }
       if (pitchMap.has(id)) {
         pitchMap.set(id, { ...pitchMap.get(id)!, ...p, venueId: id });
       } else {
         pitchMap.set(id, { ...p, venueId: id });
       }
+    }
+  }
+
+  // Purge any pitch for any candidate marked excluded in candidateMap
+  for (const [id, c] of candidateMap.entries()) {
+    if (c.isExcluded) {
+      pitchMap.delete(id);
+      if (c.name) pitchMap.delete(c.name);
     }
   }
   const mergedPitches = Array.from(pitchMap.values());

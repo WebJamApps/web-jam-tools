@@ -3,7 +3,8 @@
  */
 
 import {
-  defaultTokenPath,
+  type ApprovalToken,
+  defaultTokenDir,
   isExpired,
   loadToken,
 } from "../../hooks/lib/check_issue_approval_token.ts";
@@ -12,6 +13,7 @@ import {
   type CommandRunner as DedupCommandRunner,
   formatCandidates,
 } from "../../hooks/lib/detect_duplicate_issue.ts";
+import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_on_issue_create.ts";
 
 export interface CreateIssueOptions {
   repo?: string;
@@ -174,13 +176,34 @@ export interface ApprovalCheckResult {
  * Deliberately does NOT check `session_id` the way
  * hooks/lib/check_issue_approval_token.ts's `decide()` does for the MCP/Bash
  * hook path: a bare CLI invocation carries no session context to compare
- * against, so repo + title + expiry is all there is to verify here.
+ * against.
+ *
+ * web-jam-tools#1158: with no session context, this can't read one session's
+ * own token file — instead it scans every `*.json` file in the per-session
+ * token directory and proceeds on any unexpired one that names this repo and
+ * title. `ISSUE_APPROVAL_TOKEN_PATH` (or an explicit `tokenPath` argument, the
+ * same override mechanism) keeps its pre-existing single-file meaning: when
+ * set, that exact file is read exactly as before, with no directory scan —
+ * the existing tests below depend on this.
  */
 export function checkApprovalToken(
   repoFull: string,
   title: string,
-  tokenPath: string = defaultTokenPath(),
+  tokenPath?: string,
   nowMs: number = Date.now(),
+): ApprovalCheckResult {
+  const override = tokenPath || Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  if (override) {
+    return checkApprovalTokenSingleFile(repoFull, title, override, nowMs);
+  }
+  return checkApprovalTokenDirectory(repoFull, title, defaultTokenDir(), nowMs);
+}
+
+function checkApprovalTokenSingleFile(
+  repoFull: string,
+  title: string,
+  tokenPath: string,
+  nowMs: number,
 ): ApprovalCheckResult {
   const token = loadToken(tokenPath);
   if (!token) {
@@ -190,6 +213,58 @@ export function checkApprovalToken(
         `No approval token found at ${tokenPath}. Get Josh's explicit approval for this plan first (via /design-issue's plan gate), or ask him directly.`,
     };
   }
+  return checkLoadedToken(token, repoFull, title, nowMs);
+}
+
+/**
+ * Scans every `*.json` file directly in `dir` (no recursion) for one that is unexpired and names
+ * `repoFull` + `title`. A single malformed or unrelated file is skipped, not treated as a refusal —
+ * only "no matching file at all" or "every matching file expired" refuses. A missing or unlistable
+ * directory fails closed (web-jam-tools#1158 acceptance criteria).
+ */
+function checkApprovalTokenDirectory(
+  repoFull: string,
+  title: string,
+  dir: string,
+  nowMs: number,
+): ApprovalCheckResult {
+  let entries: Deno.DirEntry[];
+  try {
+    entries = [...Deno.readDirSync(dir)];
+  } catch {
+    return {
+      ok: false,
+      reason:
+        `No approval token directory found at ${dir}. Get Josh's explicit approval for this plan first (via /design-issue's plan gate), or ask him directly.`,
+    };
+  }
+
+  let sawExpiredMatch = false;
+  for (const entry of entries) {
+    if (!entry.isFile || !entry.name.endsWith(".json")) continue;
+    const token = loadToken(`${dir}/${entry.name}`);
+    if (!token) continue; // unreadable or malformed — skip, don't refuse the whole check on it
+    if (token.repo !== repoFull || !token.titles.includes(title)) continue;
+    if (!isExpired(token, nowMs)) {
+      return { ok: true };
+    }
+    sawExpiredMatch = true;
+  }
+
+  return {
+    ok: false,
+    reason: sawExpiredMatch
+      ? `Every approval token in ${dir} matching ${repoFull} / "${title}" has expired.`
+      : `"${title}" is not among the titles approved by any live token in ${dir}.`,
+  };
+}
+
+function checkLoadedToken(
+  token: ApprovalToken,
+  repoFull: string,
+  title: string,
+  nowMs: number,
+): ApprovalCheckResult {
   if (isExpired(token, nowMs)) {
     return { ok: false, reason: `Approval token expired at ${token.expires_at}.` };
   }
@@ -467,6 +542,21 @@ export async function createIssueAndVerify(
     throw new Error("Missing required argument --body-file");
   }
 
+  // Body checks (web-jam-tools#1167) — the hook can't read a body file whose
+  // path the shell has yet to expand, and agy has no hooks at all, so this
+  // task checks the file it actually reads, before any GitHub call. Same
+  // exemptions as the hook: an Epic skips them, `Needs Design` skips the
+  // deferred-verification check.
+  const fileBody = await deps.readFileText(options.bodyFile);
+  const lowerLabels = (options.labels || []).map((l) => l.trim().toLowerCase());
+  const isEpic = options.type?.trim().toLowerCase() === "epic" || lowerLabels.includes("epic");
+  if (!isEpic) {
+    const violation = findIssueCreateBodyViolation(fileBody, lowerLabels.includes("needs design"));
+    if (violation) {
+      throw new Error(`Refused to file issue — ${violation}`);
+    }
+  }
+
   const repoInfo = normalizeRepo(options.repo);
 
   // Parse requested blockers (if any)
@@ -540,7 +630,7 @@ export async function createIssueAndVerify(
     );
   }
 
-  let bodyText = await deps.readFileText(options.bodyFile);
+  let bodyText = fileBody;
   if (options.dedupOverrideReason && options.dedupOverrideReason.trim()) {
     const candidateNote = options.dedupOverride ? ` (considered ${options.dedupOverride})` : "";
     bodyText +=

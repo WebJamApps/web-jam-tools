@@ -1,9 +1,10 @@
-# venue-mining run log
+# venue-mining run log (archived)
 
-Append-only record of every /venue-mining sweep. Each wrap-up PR adds its run
-entry here (newest at the bottom) in the same PR that updates `sources.yaml`.
-Original spec + runs 1–3 discussion lived on web-jam-tools#126 (closed 2026-07-03
-when the log moved here); the living procedure is `SKILL.md` next to this file.
+> **Note**: This file is archived as of web-jam-tools#1045. All ongoing sweep
+> history, publication metadata, cooldown tracking, and run notes are recorded in
+> the backend database via `deno task venue-mining:record-sweep` and queried via
+> `GET /venue-mining/sweep`. Runs 1–5 are preserved below for historical context.
+> The living procedure is `SKILL.md` next to this file.
 
 ## Run 1 — roanoke (2026-07-02, seed: Dan Carrell, pre-skill)
 

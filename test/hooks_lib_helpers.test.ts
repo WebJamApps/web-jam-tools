@@ -12,6 +12,10 @@ import {
   stripCodeAndQuotes,
 } from "../hooks/lib/detect_unresolvable_issue_pointers.ts";
 import {
+  findDeferredVerifications,
+  stripBlockquotes,
+} from "../hooks/lib/detect_deferred_verifications.ts";
+import {
   extractEntryText,
   selectLastAssistantEntry,
 } from "../hooks/lib/select_transcript_entry.ts";
@@ -123,6 +127,19 @@ Deno.test("detect_unresolvable_issue_pointers helper", () => {
   const cleanText = "This issue stands alone without pointer phrases.";
   assertEquals(findUnresolvableIssuePointers(cleanText), []);
   assertEquals(stripCodeAndQuotes('"quote" `code`').trim(), "");
+});
+
+Deno.test("detect_deferred_verifications helper", () => {
+  const text = "This must be verified before removal.";
+  const deferred = findDeferredVerifications(text);
+  assertEquals(deferred, ["must be verified before removal"]);
+
+  const cleanText = "dead too, verified against `scripts/install-skills.sh`";
+  assertEquals(findDeferredVerifications(cleanText), []);
+
+  const bq = "> needs to be verified\n";
+  assertEquals(stripBlockquotes(bq).trim(), "");
+  assertEquals(findDeferredVerifications(bq), []);
 });
 
 Deno.test("select_transcript_entry helper", () => {

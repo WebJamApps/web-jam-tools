@@ -9,6 +9,7 @@
 import { assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
+  computeTablePagination,
   parseInlineMarkdown,
   renderDesignDoc,
   renderDesignDocFile,
@@ -248,7 +249,7 @@ function makeRowsTable(rowCount: number): string {
   return `# Pagination Test\n\n## Big Table\n\n${header}${rows}\n`;
 }
 
-Deno.test("Table pagination: a table with more than 10 rows emits the pagination script/CSS and every row is still present in the DOM", () => {
+Deno.test("Table pagination: a table with more than 5 rows emits the pagination script/CSS and every row is still present in the DOM", () => {
   const html = renderDesignDoc(makeRowsTable(25));
   const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
 
@@ -257,11 +258,13 @@ Deno.test("Table pagination: a table with more than 10 rows emits the pagination
   const bodyRowCount = (mainContent.match(/<td>v\d+<\/td>/g) ?? []).length;
   assertEquals(bodyRowCount, 25);
 
-  // The pagination script and its CSS classes are present.
+  // The pagination script, size selector, and its CSS classes are present.
   assertStringIncludes(html, "table-pager");
   assertStringIncludes(html, ".table-pager-btn");
   assertStringIncludes(html, "table-pager-hidden-row");
-  assertStringIncludes(html, "PAGE_SIZE");
+  assertStringIncludes(html, "table-pager-size");
+  assertStringIncludes(html, "DEFAULT_PAGE_SIZE = 5");
+  assertStringIncludes(html, 'var sizeOptions = ["5", "10", "25", "All"];');
   assertStringIncludes(html, "@media print {");
 
   // A print stylesheet forces any JS-hidden row back to visible.
@@ -271,12 +274,158 @@ Deno.test("Table pagination: a table with more than 10 rows emits the pagination
   );
 });
 
-Deno.test("Table pagination: the pagination initializer only activates on tables with more than 10 rows", () => {
-  const html = renderDesignDoc(makeRowsTable(10));
+Deno.test("Table pagination: the pagination initializer only activates on tables with more than 5 rows", () => {
+  const html = renderDesignDoc(makeRowsTable(5));
   // The script text itself is always emitted (it's a static asset embedded
   // once per page), so this is a source-level pin on the runtime guard that
-  // keeps it a no-op for <=10 row tables, not a DOM assertion.
-  assertStringIncludes(html, "if (rows.length <= PAGE_SIZE) return;");
+  // keeps it a no-op for <=5 row tables, not a DOM assertion.
+  assertStringIncludes(html, "if (rows.length <= DEFAULT_PAGE_SIZE) return;");
+});
+
+Deno.test("Sticky header and scrolling wrapper: thead cells are styled with position: sticky and table-wrapper has max-height and overflow scrolling", () => {
+  const html = renderDesignDoc(makeRowsTable(10));
+  assertStringIncludes(html, "thead th {");
+  assertStringIncludes(html, "position: sticky;");
+  assertStringIncludes(html, "top: 0;");
+  assertStringIncludes(html, "z-index: 2;");
+  assertStringIncludes(html, "background-color: var(--toc-bg);");
+  assertStringIncludes(
+    html,
+    "box-shadow: inset 0 1px 0 var(--border-color), inset 0 -1px 0 var(--border-color);",
+  );
+
+  assertStringIncludes(html, ".table-wrapper {");
+  assertStringIncludes(html, "max-height: 70vh;");
+  assertStringIncludes(html, "overflow-y: auto;");
+});
+
+Deno.test("Table pagination: page navigation and position range format (e.g. '6-10 of 38')", () => {
+  const html = renderDesignDoc(makeRowsTable(40));
+  // Verifies the position format `<start>-<end> of <total>` emitted in the pager logic
+  assertStringIncludes(
+    html,
+    'status.textContent = startDisplay + "-" + endDisplay + " of " + rows.length;',
+  );
+  assertStringIncludes(html, "Rows per page: ");
+});
+
+Deno.test("computeTablePagination: calculates correct ranges and boundary states for 40 rows with pageSize 5", () => {
+  // Page 1
+  const page1 = computeTablePagination(40, 1, 5);
+  assertEquals(page1.startDisplay, 1);
+  assertEquals(page1.endDisplay, 5);
+  assertEquals(page1.totalPages, 8);
+  assertEquals(page1.statusText, "1-5 of 40");
+  assertEquals(page1.prevDisabled, true);
+  assertEquals(page1.nextDisabled, false);
+
+  // Page 2
+  const page2 = computeTablePagination(40, 2, 5);
+  assertEquals(page2.startDisplay, 6);
+  assertEquals(page2.endDisplay, 10);
+  assertEquals(page2.totalPages, 8);
+  assertEquals(page2.statusText, "6-10 of 40");
+  assertEquals(page2.prevDisabled, false);
+  assertEquals(page2.nextDisabled, false);
+
+  // Page 8
+  const page8 = computeTablePagination(40, 8, 5);
+  assertEquals(page8.startDisplay, 36);
+  assertEquals(page8.endDisplay, 40);
+  assertEquals(page8.totalPages, 8);
+  assertEquals(page8.statusText, "36-40 of 40");
+  assertEquals(page8.prevDisabled, false);
+  assertEquals(page8.nextDisabled, true);
+});
+
+Deno.test("computeTablePagination: handles remainder page calculation for 38 rows with pageSize 5", () => {
+  const page8 = computeTablePagination(38, 8, 5);
+  assertEquals(page8.startDisplay, 36);
+  assertEquals(page8.endDisplay, 38);
+  assertEquals(page8.statusText, "36-38 of 38");
+  assertEquals(page8.nextDisabled, true);
+});
+
+Deno.test("computeTablePagination: calculates correct ranges for 40 rows with pageSize 25", () => {
+  // Page 1
+  const page1 = computeTablePagination(40, 1, 25);
+  assertEquals(page1.startDisplay, 1);
+  assertEquals(page1.endDisplay, 25);
+  assertEquals(page1.statusText, "1-25 of 40");
+  assertEquals(page1.prevDisabled, true);
+  assertEquals(page1.nextDisabled, false);
+
+  // Page 2
+  const page2 = computeTablePagination(40, 2, 25);
+  assertEquals(page2.startDisplay, 26);
+  assertEquals(page2.endDisplay, 40);
+  assertEquals(page2.statusText, "26-40 of 40");
+  assertEquals(page2.prevDisabled, false);
+  assertEquals(page2.nextDisabled, true);
+});
+
+Deno.test("computeTablePagination: handles pageSize 'all'", () => {
+  const state = computeTablePagination(40, 1, "all");
+  assertEquals(state.isAll, true);
+  assertEquals(state.totalPages, 1);
+  assertEquals(state.currentPage, 1);
+  assertEquals(state.startDisplay, 1);
+  assertEquals(state.endDisplay, 40);
+  assertEquals(state.statusText, "1-40 of 40");
+  assertEquals(state.prevDisabled, true);
+  assertEquals(state.nextDisabled, true);
+});
+
+Deno.test("computeTablePagination: handles page clamping and edge cases", () => {
+  // Requested page 0 or negative clamps to page 1
+  const clampedZero = computeTablePagination(40, 0, 5);
+  assertEquals(clampedZero.currentPage, 1);
+  const clampedNeg = computeTablePagination(40, -5, 5);
+  assertEquals(clampedNeg.currentPage, 1);
+
+  // Requested page 99 with 8 total pages clamps to page 8
+  const clampedHigh = computeTablePagination(40, 99, 5);
+  assertEquals(clampedHigh.currentPage, 8);
+
+  // 0 total rows returns "0 of 0", both prev and next disabled
+  const empty = computeTablePagination(0, 1, 5);
+  assertEquals(empty.statusText, "0 of 0");
+  assertEquals(empty.prevDisabled, true);
+  assertEquals(empty.nextDisabled, true);
+});
+
+Deno.test("Table degradation without JavaScript: all rows present in HTML without display:none", () => {
+  const md = `# Multi-Table Threshold Test
+
+## Small Table (3 rows)
+| A | B |
+|---|---|
+| 1 | 2 |
+| 3 | 4 |
+| 5 | 6 |
+
+## Large Table (7 rows)
+| X | Y |
+|---|---|
+| a | 1 |
+| b | 2 |
+| c | 3 |
+| d | 4 |
+| e | 5 |
+| f | 6 |
+| g | 7 |
+`;
+  const html = renderDesignDoc(md);
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  // Verify all rows are emitted in static HTML
+  const totalRows = (mainContent.match(/<tr>/g) ?? []).length;
+  // 2 header rows + 3 small rows + 7 large rows = 12 <tr> tags
+  assertEquals(totalRows, 12);
+
+  // Verify no rows carry display:none server-side
+  assertFalse(mainContent.includes('style="display:none"'));
+  assertFalse(mainContent.includes('style="display: none"'));
 });
 
 Deno.test("AC5: Section navigation includes collapse and restore controls", () => {
@@ -453,4 +602,51 @@ Deno.test("renderDesignDocFile reads markdown file and writes HTML", () => {
   } finally {
     Deno.removeSync(tempDir, { recursive: true });
   }
+});
+
+Deno.test("renderDesignDoc handles blockquotes, lists, hr, h4, and duplicate heading slugs", () => {
+  const md = `# General Markdown Features
+
+## Duplicate
+First instance
+
+## Duplicate
+Second instance
+
+---
+
+#### Level 4 Heading
+
+> A blockquote line
+> Second blockquote line
+
+- Bullet 1
+- Bullet 2
+
+1. Numbered 1
+2. Numbered 2
+`;
+  const html = renderDesignDoc(md);
+  const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
+
+  // Slug deduplication: duplicate-1
+  assertStringIncludes(html, 'href="#duplicate"');
+  assertStringIncludes(html, 'href="#duplicate-1"');
+  assertStringIncludes(mainContent, '<h2 id="duplicate-1">Duplicate</h2>');
+
+  // Horizontal rule
+  assertStringIncludes(mainContent, "<hr>");
+
+  // Heading level 4
+  assertStringIncludes(mainContent, "<h4>Level 4 Heading</h4>");
+
+  // Blockquote
+  assertStringIncludes(
+    mainContent,
+    "<blockquote>A blockquote line<br>\nSecond blockquote line</blockquote>",
+  );
+
+  // Lists
+  assertStringIncludes(mainContent, "<ul>\n  <li>Bullet 1</li>\n  <li>Bullet 2</li>\n</ul>");
+  assertStringIncludes(mainContent, "<ol>\n  <li>Numbered 1</li>\n  <li>Numbered 2</li>\n</ol>");
 });

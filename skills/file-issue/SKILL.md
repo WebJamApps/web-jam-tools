@@ -61,7 +61,7 @@ that's what following this skill prevents.
    This enforced check is a title-similarity heuristic (`skills/design-issue/SKILL.md`-adjacent
    wording still gets flagged, unrelated wording does not) — it is not a substitute for actually
    reading the candidate. Also run `gh issue list --repo WebJamApps/<repo> --state all --search
-   "<keywords>"` (or `mcp__*__search_issues`) with a couple of keyword variants yourself before
+   "<keywords>"` with a couple of keyword variants yourself before
    creating anything, since the enforced check only searches OPEN issues by title and a CLOSED
    near-duplicate or a same-topic issue with very different wording won't trip it. If an OPEN issue
    matches, use or update that open issue. However, if a matching issue is CLOSED, do NOT modify,
@@ -137,7 +137,7 @@ that's what following this skill prevents.
 10. **Set Native Priority Field via MCP or `create-issue.ts`, Never via `gh issue create` / `gh issue edit` — Then Verify It by Reading It Back.** Set the native `Priority` field (`Urgent`,
     `High`, `Medium`, `Low`) via GitHub MCP `issue_write` → `issue_fields` (or `set_issue_field`, or `scripts/create-issue.ts --priority <Level>`). `gh issue create`
     and `gh issue edit` cannot set native fields; never attempt to set native Priority through them. `scripts/create-issue.ts` sets it with a `gh api graphql` `updateIssueFieldValue` mutation, then re-reads the issue and exits with an error on a Priority mismatch — so a successful `create-issue.ts --priority` run is already verified and needs no second read-back. **Reading the field:** a `gh api graphql` query for it fails under the pinned `GH_TOKEN` (`INSUFFICIENT_SCOPES ... requires ... read:project`); that error means the wrong tool was used, not that Priority is unverifiable. The REST read `gh api repos/<owner>/<repo>/issues/<n> --jq '.issue_field_values'` works under that same token on both surfaces, as does the GitHub MCP read below. (On Claude Code the claude.ai GitHub connector authenticates separately from the pinned token; on agy the `github` MCP server runs on the pinned `GH_TOKEN` itself.)
-    - **A write response is never confirmation.** After the `issue_write` call, read back the filed issue's Priority — `mcp__*__issue_read` (on Claude Code `mcp__claude_ai_GitHub_MCP__issue_read`) for the one issue this run filed, `mcp__*__list_issues` (`fields: ["number","title","field_values"]`; on Claude Code `mcp__claude_ai_GitHub_MCP__list_issues`), or the REST read above — and compare it against the value set. Only that read confirms the field landed.
+    - **A write response is never confirmation.** After creating the issue, read back the filed issue's Priority using the REST read `gh api repos/<owner>/<repo>/issues/<n> --jq '.issue_field_values'` (or on Claude Code, `mcp__claude_ai_GitHub_MCP__issue_read` for the one issue this run filed, or `mcp__claude_ai_GitHub_MCP__list_issues` with `fields: ["number","title","field_values"]`), and compare it against the value set. Only that read confirms the field landed.
     - **Missing or mismatched → set, then re-read.** If the read-back shows Priority missing or different from what was intended, set it again and re-read to confirm before reporting.
     - **Report it, don't report success over it.** A missing or mismatched Priority is reported to Josh explicitly — citing the issue as `repo#number "title"` with the expected and actual values — and the run does not report the filing as complete while it is unverified.
     - **A failed read-back is reported, not silently dropped or turned into a question.** If the read-back itself cannot be performed (the MCP call errors, times out, or returns unparseable data), say so plainly, name what could not be checked, and do not report success.
@@ -176,6 +176,11 @@ that's what following this skill prevents.
     - **Written for a Project Manager Audience**: Issue titles must be professional, concise, action-oriented, and immediately clear to project managers, developers, and stakeholder agents reviewing issues in milestone boards or queues. Avoid vague, generic, or overly terse titles (e.g. avoid bare "fix bug" or "clean up"); state clearly what capability, fix, or requirement is delivered.
     - **Skill or Feature Scope Prefix**: Where applicable, prefix the title with the specific skill, component, module, or feature path being touched followed by a colon (e.g. `skills/file-issue: ...`, `skills/pr-review: ...`, `model/venue: ...`, `src/uptime: ...`, `venue-mining: ...`, `book-gig: ...`).
     - **Link/Cite Parent Epic**: When an issue is planned or filed as a sub-issue/child of an Epic, cite the parent Epic by `repo#number "title"` in the issue body (e.g. `## Context` / `Parent Epic: <repo#number "title">`) and link it natively via `--parent <epic_num>` (or GraphQL `addSubIssue`).
+18. **An Issue Body May Never Defer a Verification.**
+    - No "this must be checked before removal", no "assumed but not confirmed", no "verify against X first".
+    - If a fact can be established by reading a file, running a command, or checking history, it is established before the issue is called ready and before Josh is asked to dispatch it — "I could not confirm this" is not a finding, it is unfinished work.
+    - The only thing that may stay open is something genuinely needing Josh's own knowledge or a credential the agent lacks, and that is presented as a numbered decision, never parked in a body someone else will execute.
+    - This rule is enforced by a hook, citing web-jam-tools#1115 "hooks: refuse at issue create a body that defers a verification".
 
 ## Citation format (every reference, every time)
 
@@ -196,6 +201,36 @@ gh pr view 263 --repo WebJamApps/<repo> --json title -q .title
 ```
 
 ## How to file it
+
+Before the first issue write of a filing run, state how many permission prompts filing will raise and that switching the session's permission mode for the filing silences them, for the duration, persisting nothing.
+
+**Step 0 — write the approval token before calling `create-issue`.** `deno task create-issue` is
+gated by `hooks/lib/check_issue_approval_token.ts`, which requires a valid approval token at
+`$HOME/.claude/state/issue-approval-tokens/<session-id>.json` matching the current session id, the target repo,
+the exact issue title(s), and an unexpired `expires_at`. Nothing writes that token automatically —
+run the sanctioned writer yourself, before `deno task create-issue`:
+
+```sh
+deno run --allow-env --allow-read --allow-write scripts/write_issue_approval_token.ts \
+  --session-id "<session-id>" \
+  --repo "WebJamApps/<repo>" \
+  --title "Short, specific title"
+```
+
+Pass one `--title` per issue being filed in this run (repeat the flag). **Each `--title` here must
+match the `--title` passed to `deno task create-issue` below EXACTLY** — the token binds the
+titles, so any mismatch (even punctuation or casing) means the create-issue call is denied even
+though a token exists.
+
+The writer authorizes itself off `hooks/lib/check_token_write_authorization.ts`'s check that the
+most recent own-session, non-sidechain user turn invoked `/file-issue` or `/design-issue` — run it
+outside that context (a different session, or after other turns intervened) and it refuses. That
+refusal is the gate working as designed, not a bug to route around: get Josh's fresh `/file-issue`
+(or `/design-issue`) invocation first rather than looking for a workaround.
+
+Running this writer step is not a bypass of the approval gate: `hooks/lib/check_issue_approval_token.ts`
+still independently validates session, repo, title, and expiry at `deno task create-issue` time,
+exactly as before this step existed.
 
 Always use `scripts/create-issue.ts` (or `deno task create-issue`):
 
@@ -237,7 +272,7 @@ deno task create-issue \
 ## If the hook denies the call
 
 The denial message names what's wrong (missing/invalid native issue type, no model label,
-multiple model labels, unresolvable pointer phrases, or unparseable command) and lists valid native
+multiple model labels, unresolvable pointer phrases, a deferred verification, or unparseable command) and lists valid native
 types or model labels straight from `skills/fix-labels/model-labels.json`. Fix the `--type` and
 `--label` flags (or the MCP `type` and `labels` fields) per the message and retry — there is no
 bypass, and there shouldn't be one: the hook exists to enforce executable, properly categorized issues.

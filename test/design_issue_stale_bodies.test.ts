@@ -2,7 +2,7 @@
 //
 // Unit tests for stale bodies scanner and staleness rules.
 
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
   analyzeIssueStaleness,
@@ -731,6 +731,14 @@ Endpoints: GET and DELETE /outreach/report/:weekend
       return Promise.resolve([{ repo: "WebJamApps/web-jam-back", number: 1052 }]);
     },
     fetchIssue: (repo, num) => {
+      if (num === 875) {
+        return Promise.resolve({
+          number: 875,
+          title: "book-gig phase 2 (Epic)",
+          body:
+            `## What this builds\n1. Phase 2.\n\n## Design reference\n- Document: \`/path/to/doc.md\`\n`,
+        });
+      }
       assertEquals(repo, "WebJamApps/web-jam-back");
       assertEquals(num, 1052);
       return Promise.resolve(staleSubIssue);
@@ -739,11 +747,15 @@ Endpoints: GET and DELETE /outreach/report/:weekend
   });
 
   assertEquals(exitCode, 0);
+  assertStringIncludes(
+    logs[0],
+    'Issue WebJamApps/web-jam-tools#875 "book-gig phase 2 (Epic)": IN SYNC',
+  );
   assertStringIncludes(logs[0], "Issue WebJamApps/web-jam-back#1052");
   assertStringIncludes(logs[0], "STALE");
   assertStringIncludes(logs[0], "[verb-reconciliation]");
   assertStringIncludes(logs[0], "DELETE");
-  assertStringIncludes(logs[0], "Summary: 0 issue(s) in sync, 1 issue(s) stale.");
+  assertStringIncludes(logs[0], "Summary: 1 issue(s) in sync, 1 issue(s) stale.");
 });
 
 Deno.test("runStaleBodiesCli <doc.md> reports zero sub-issue violations when all child sub-issues match decisions", async () => {
@@ -788,6 +800,14 @@ Endpoints: GET and DELETE /outreach/report/:weekend
       return Promise.resolve([{ repo: "WebJamApps/web-jam-back", number: 1052 }]);
     },
     fetchIssue: (_repo, num) => {
+      if (num === 875) {
+        return Promise.resolve({
+          number: 875,
+          title: "book-gig phase 2 (Epic)",
+          body:
+            `## What this builds\n1. Phase 2.\n\n## Design reference\n- Document: \`/path/to/doc.md\`\n`,
+        });
+      }
       assertEquals(num, 1052);
       return Promise.resolve(reconciledSubIssue);
     },
@@ -795,10 +815,14 @@ Endpoints: GET and DELETE /outreach/report/:weekend
   });
 
   assertEquals(exitCode, 0);
+  assertStringIncludes(
+    logs[0],
+    'Issue WebJamApps/web-jam-tools#875 "book-gig phase 2 (Epic)": IN SYNC',
+  );
   assertStringIncludes(logs[0], "Issue WebJamApps/web-jam-back#1052");
   assertStringIncludes(logs[0], "IN SYNC");
   assertStringIncludes(logs[0], "Decisions & Verbs: In sync");
-  assertStringIncludes(logs[0], "Summary: 1 issue(s) in sync, 0 issue(s) stale.");
+  assertStringIncludes(logs[0], "Summary: 2 issue(s) in sync, 0 issue(s) stale.");
 });
 
 Deno.test(
@@ -861,3 +885,335 @@ Deno.test(
     assertEquals(decsAppendixB[0].id, "5");
   },
 );
+
+Deno.test("scanStaleBodies: Epic with sub-issues checks Epic and every child, detecting stale Epic body", async () => {
+  const doc = `
+# Feature Design Doc
+
+## Revision History
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-09-01 | [book-gig phase 2](https://github.com/WebJamApps/web-jam-tools/issues/737) | Initial |
+`;
+
+  const staleEpicIssue: IssueData = {
+    number: 737,
+    title: "book-gig phase 2 (Epic)",
+    body: `## What this builds
+1. Epic container.
+
+## Design reference
+- Document: \`/path/to/doc.md\`
+
+## Open Questions
+- What should the reconnect backoff interval be?
+`,
+  };
+
+  const inSyncChild1: IssueData = {
+    number: 885,
+    title: "child sub-issue 1",
+    body: `Child of [web-jam-tools#737](https://github.com/WebJamApps/web-jam-tools/issues/737)
+
+## What this builds
+1. First child.
+`,
+  };
+
+  const inSyncChild2: IssueData = {
+    number: 888,
+    title: "child sub-issue 2",
+    body: `Child of [web-jam-tools#737](https://github.com/WebJamApps/web-jam-tools/issues/737)
+
+## What this builds
+1. Second child.
+`,
+  };
+
+  const result = await scanStaleBodies({
+    docPath: "/path/to/doc.md",
+    readFile: () => Promise.resolve(doc),
+    fileExists: () => Promise.resolve(true),
+    fetchSubIssues: (_repo, epicNum) => {
+      assertEquals(epicNum, 737);
+      return Promise.resolve([
+        { repo: "WebJamApps/web-jam-tools", number: 885 },
+        { repo: "WebJamApps/web-jam-tools", number: 888 },
+      ]);
+    },
+    fetchIssue: (_repo, num) => {
+      if (num === 737) return Promise.resolve(staleEpicIssue);
+      if (num === 885) return Promise.resolve(inSyncChild1);
+      if (num === 888) return Promise.resolve(inSyncChild2);
+      throw new Error(`Unexpected issue number: ${num}`);
+    },
+  });
+
+  assertEquals(result.summary.total, 3);
+  assertEquals(result.summary.inSync, 2);
+  assertEquals(result.summary.stale, 1);
+
+  const epicReport = result.issues.find((i) => i.number === 737);
+  assertEquals(epicReport?.status, "STALE");
+  assertEquals(epicReport?.reasons.some((r) => r.type === "open-questions"), true);
+
+  const child1Report = result.issues.find((i) => i.number === 885);
+  assertEquals(child1Report?.status, "IN SYNC");
+
+  const child2Report = result.issues.find((i) => i.number === 888);
+  assertEquals(child2Report?.status, "IN SYNC");
+
+  const formatted = formatStaleBodiesReport(result);
+  assertStringIncludes(
+    formatted,
+    'Issue WebJamApps/web-jam-tools#737 "book-gig phase 2 (Epic)": STALE',
+  );
+  assertStringIncludes(formatted, "[open-questions]");
+  assertStringIncludes(
+    formatted,
+    'Issue WebJamApps/web-jam-tools#885 "child sub-issue 1": IN SYNC',
+  );
+  assertStringIncludes(
+    formatted,
+    'Issue WebJamApps/web-jam-tools#888 "child sub-issue 2": IN SYNC',
+  );
+  assertStringIncludes(formatted, "Summary: 2 issue(s) in sync, 1 issue(s) stale.");
+});
+
+Deno.test("scanStaleBodies: Epic with table-linked issues checks Epic and table-linked issues", async () => {
+  const doc = `
+# Feature Design Doc
+
+## Revision History
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-09-01 | [book-gig phase 2](https://github.com/WebJamApps/web-jam-tools/issues/737) | Initial |
+
+## The Filed Issues
+| # | Title | Issue Link | Model Tier |
+|---|---|---|---|
+| 1 | Table Issue | [web-jam-back#1052](https://github.com/WebJamApps/web-jam-back/issues/1052) | Flash High |
+`;
+
+  const inSyncEpic: IssueData = {
+    number: 737,
+    title: "book-gig phase 2 (Epic)",
+    body: `## What this builds\n1. Epic.\n\n## Design reference\n- Document: \`/path/to/doc.md\`\n`,
+  };
+
+  const inSyncTableIssue: IssueData = {
+    number: 1052,
+    title: "Table Issue",
+    body:
+      `Part of [web-jam-tools#737](https://github.com/WebJamApps/web-jam-tools/issues/737)\n\n## What this builds\n1. Feature.\n`,
+  };
+
+  const result = await scanStaleBodies({
+    docPath: "/path/to/doc.md",
+    readFile: () => Promise.resolve(doc),
+    fileExists: () => Promise.resolve(true),
+    fetchSubIssues: () => Promise.resolve([]),
+    fetchIssue: (_repo, num) => {
+      if (num === 737) return Promise.resolve(inSyncEpic);
+      if (num === 1052) return Promise.resolve(inSyncTableIssue);
+      throw new Error(`Unexpected issue number: ${num}`);
+    },
+  });
+
+  assertEquals(result.summary.total, 2);
+  assertEquals(result.summary.inSync, 2);
+  assertEquals(result.summary.stale, 0);
+
+  assertEquals(result.issues.some((i) => i.number === 737 && i.status === "IN SYNC"), true);
+  assertEquals(
+    result.issues.some((i) =>
+      i.number === 1052 && i.repo === "WebJamApps/web-jam-back" && i.status === "IN SYNC"
+    ),
+    true,
+  );
+});
+
+Deno.test("scanStaleBodies: Epic with neither sub-issues nor table-linked issues checks Epic alone", async () => {
+  const doc = `
+# Feature Design Doc
+
+## Revision History
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-09-01 | [book-gig phase 2](https://github.com/WebJamApps/web-jam-tools/issues/737) | Initial |
+`;
+
+  const inSyncEpic: IssueData = {
+    number: 737,
+    title: "book-gig phase 2 (Epic)",
+    body: `## What this builds\n1. Epic.\n\n## Design reference\n- Document: \`/path/to/doc.md\`\n`,
+  };
+
+  const result = await scanStaleBodies({
+    docPath: "/path/to/doc.md",
+    readFile: () => Promise.resolve(doc),
+    fileExists: () => Promise.resolve(true),
+    fetchSubIssues: () => Promise.resolve([]),
+    fetchIssue: (_repo, num) => {
+      if (num === 737) return Promise.resolve(inSyncEpic);
+      throw new Error(`Unexpected issue number: ${num}`);
+    },
+  });
+
+  assertEquals(result.summary.total, 1);
+  assertEquals(result.summary.inSync, 1);
+  assertEquals(result.summary.stale, 0);
+  assertEquals(result.issues[0].number, 737);
+  assertEquals(result.issues[0].status, "IN SYNC");
+});
+
+Deno.test("scanStaleBodies: unreadable Epic body proceeds and reports failure in output alongside children", async () => {
+  const doc = `
+# Feature Design Doc
+
+## Revision History
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-09-01 | [book-gig phase 2](https://github.com/WebJamApps/web-jam-tools/issues/737) | Initial |
+`;
+
+  const inSyncChild: IssueData = {
+    number: 885,
+    title: "child sub-issue 1",
+    body:
+      `Child of [web-jam-tools#737](https://github.com/WebJamApps/web-jam-tools/issues/737)\n\n## What this builds\n1. First child.\n`,
+  };
+
+  const result = await scanStaleBodies({
+    docPath: "/path/to/doc.md",
+    readFile: () => Promise.resolve(doc),
+    fileExists: () => Promise.resolve(true),
+    fetchSubIssues: (_repo, epicNum) => {
+      assertEquals(epicNum, 737);
+      return Promise.resolve([{ repo: "WebJamApps/web-jam-tools", number: 885 }]);
+    },
+    fetchIssue: (_repo, num) => {
+      if (num === 737) {
+        return Promise.reject(new Error("GitHub API rate limit exceeded (HTTP 403)"));
+      }
+      if (num === 885) {
+        return Promise.resolve(inSyncChild);
+      }
+      throw new Error(`Unexpected issue number: ${num}`);
+    },
+  });
+
+  // Proceeds past the unreadable Epic and checks child 885
+  assertEquals(result.summary.total, 2);
+  assertEquals(result.summary.stale, 1);
+  assertEquals(result.summary.inSync, 1);
+
+  const epicReport = result.issues.find((i) => i.number === 737);
+  assertEquals(epicReport?.status, "STALE");
+  assertEquals(epicReport?.reasons[0].type, "fetch-error");
+  assertStringIncludes(epicReport?.reasons[0].message ?? "", "HTTP 403");
+
+  const childReport = result.issues.find((i) => i.number === 885);
+  assertEquals(childReport?.status, "IN SYNC");
+
+  const formatted = formatStaleBodiesReport(result);
+  assertStringIncludes(formatted, "Issue WebJamApps/web-jam-tools#737: STALE");
+  assertStringIncludes(
+    formatted,
+    "[fetch-error] Failed to fetch issue WebJamApps/web-jam-tools#737",
+  );
+  assertStringIncludes(
+    formatted,
+    'Issue WebJamApps/web-jam-tools#885 "child sub-issue 1": IN SYNC',
+  );
+  assertStringIncludes(formatted, "Summary: 1 issue(s) in sync, 1 issue(s) stale.");
+});
+
+Deno.test("scanStaleBodies: unreadable Epic child set proceeds and reports failure in output", async () => {
+  const doc = `
+# Feature Design Doc
+
+## Revision History
+| Version | Date | Epic / Issue | Summary |
+|---|---|---|---|
+| 1.0.0 | 2026-09-01 | [book-gig phase 2](https://github.com/WebJamApps/web-jam-tools/issues/737) | Initial |
+`;
+
+  const inSyncEpic: IssueData = {
+    number: 737,
+    title: "book-gig phase 2 (Epic)",
+    body: `## What this builds\n1. Epic.\n\n## Design reference\n- Document: \`/path/to/doc.md\`\n`,
+  };
+
+  const result = await scanStaleBodies({
+    docPath: "/path/to/doc.md",
+    readFile: () => Promise.resolve(doc),
+    fileExists: () => Promise.resolve(true),
+    fetchSubIssues: () => {
+      return Promise.reject(new Error("Network timeout contacting GitHub GraphQL API"));
+    },
+    fetchIssue: (_repo, num) => {
+      if (num === 737) return Promise.resolve(inSyncEpic);
+      throw new Error(`Unexpected issue number: ${num}`);
+    },
+  });
+
+  // Proceeds and reports failure under the Epic
+  assertEquals(result.summary.total, 1);
+  assertEquals(result.summary.stale, 1);
+  assertEquals(result.summary.inSync, 0);
+
+  const epicReport = result.issues.find((i) => i.number === 737);
+  assertEquals(epicReport?.status, "STALE");
+  assertEquals(epicReport?.reasons.some((r) => r.type === "fetch-error"), true);
+  assertStringIncludes(epicReport?.reasons[0].message ?? "", "Network timeout");
+
+  const formatted = formatStaleBodiesReport(result);
+  assertStringIncludes(
+    formatted,
+    'Issue WebJamApps/web-jam-tools#737 "book-gig phase 2 (Epic)": STALE',
+  );
+  assertStringIncludes(formatted, "[fetch-error]");
+  assertStringIncludes(formatted, "Summary: 0 issue(s) in sync, 1 issue(s) stale.");
+});
+
+Deno.test("defaultFetchSubIssues throws on non-zero runner exit code and invalid JSON", async () => {
+  const failingRunner: CommandRunner = () =>
+    Promise.resolve({
+      code: 1,
+      stdout: "",
+      stderr: "HTTP 404: Not Found",
+    });
+
+  await assertRejects(
+    () => defaultFetchSubIssues("WebJamApps/web-jam-tools", 737, failingRunner),
+    Error,
+    "Failed to fetch sub-issues for WebJamApps/web-jam-tools#737: HTTP 404: Not Found",
+  );
+
+  const invalidJsonRunner: CommandRunner = () =>
+    Promise.resolve({
+      code: 0,
+      stdout: "<html>502 Bad Gateway</html>",
+      stderr: "",
+    });
+
+  await assertRejects(
+    () => defaultFetchSubIssues("WebJamApps/web-jam-tools", 737, invalidJsonRunner),
+    Error,
+    "Failed to parse sub-issues JSON for WebJamApps/web-jam-tools#737",
+  );
+
+  const nonArrayRunner: CommandRunner = () =>
+    Promise.resolve({
+      code: 0,
+      stdout: JSON.stringify({ error: "not found" }),
+      stderr: "",
+    });
+
+  await assertRejects(
+    () => defaultFetchSubIssues("WebJamApps/web-jam-tools", 737, nonArrayRunner),
+    Error,
+    "Expected array of sub-issues for WebJamApps/web-jam-tools#737, got object",
+  );
+});

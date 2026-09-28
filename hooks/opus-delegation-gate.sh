@@ -23,11 +23,13 @@
 #       Opus and the human prompt that spawned it contains "opus edit ok", asks for an Opus
 #       subagent, or asks Opus to do the work (D-8, e.g. "use Opus to fix it"). An undeterminable
 #       model or spawning prompt refuses.
-#     - Main-thread call: allow when the session model is not Opus, when Josh's latest HUMAN prompt
-#       contains "opus edit ok" or asks Opus to do the work (D-8), or when the most recent slash
-#       command he typed is /work-issue on an issue labeled Opus (D-7; the label is read with gh and
-#       reused for ten minutes). Any other label, no issue named, or a failed lookup gives no
-#       approval, so Opus must delegate.
+#     - Main-thread call: allow when the session model is not Opus, when Josh has approved Opus
+#       edits anywhere earlier in the SESSION — a human prompt containing "opus edit ok" or asking
+#       Opus to do the work (D-8) — and has not since withdrawn it with "opus edit off", or when the
+#       most recent slash command he typed is /work-issue on an issue labeled Opus (D-7; the label is
+#       read with gh and reused for ten minutes). Any other label, no issue named, or a failed lookup
+#       gives no approval, so Opus must delegate. His approval is session-scoped rather than
+#       per-turn: it is not discarded by whatever he happens to type next.
 #     Only prompts Josh actually sent (origin.kind "human", not isMeta) count, so a task
 #     notification neither grants approval nor cancels it.
 #   Step 5: Otherwise refuse (deny) with JSON naming the target file and the reason. A main-thread
@@ -166,7 +168,8 @@ Repository code must not be edited directly on Opus — implementation work belo
 To delegate:
   • Backend / contained coding work: spawn a subagent with model: \"sonnet\" (or Haiku)
   • Frontend / UI work: delegate to Flash via agy (/work-issue or Antigravity)
-To override for this turn only, include the exact phrase: opus edit ok"
+To authorize Opus edits for the rest of this session, include the exact phrase: opus edit ok
+(that approval then holds until you withdraw it with: opus edit off)"
   if [ -n "$why" ]; then
     reason="$reason
 ($why)"

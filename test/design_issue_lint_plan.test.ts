@@ -7,14 +7,25 @@
 // cells, deno.json task registration, and the four repo-wide gates. One test per acceptance-
 // criteria case (13 cases, web-jam-tools#796).
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import * as path from "@std/path";
 import { parsePlanTable } from "../src/design-issue/plan_table.ts";
 import {
+  checkGate1ApprovalRecord,
+  checkNeedsDesignRemovals,
+  findNarrowedDirective,
+  type IssueBodyFetcher,
   lintPlanTableFile,
+  parseNeedsDesignRemovals,
   type PlanTableViolation,
   runLintPlanCli,
   validatePlanTable,
 } from "../src/design-issue/lint_plan.ts";
+import {
+  approveGate1Record,
+  getGate1RecordPath,
+  openGate1Record,
+} from "../src/design-issue/gate1_record.ts";
 import type { Schema } from "../src/fix-labels/diff.ts";
 import { ACTIVE_REPOS } from "../src/flash-issues/types.ts";
 import denoJson from "../deno.json" with { type: "json" };
@@ -376,45 +387,484 @@ Deno.test("runLintPlanCli: missing path argument exits with 1", async () => {
 });
 
 Deno.test("runLintPlanCli: non-existent document file exits with 1", async () => {
-  const code = await runLintPlanCli(["/tmp/non-existent-plan-doc-12345.md"]);
-  assertEquals(code, 1);
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const fakeDoc = `${tmpDir}/fake-design.md`;
+    await Deno.writeTextFile(fakeDoc, "# Design\n");
+    const code = await runLintPlanCli([
+      "/tmp/non-existent-plan-doc-12345.md",
+      "--design-doc",
+      fakeDoc,
+      "--state-dir",
+      tmpDir,
+    ]);
+    assertEquals(code, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
 });
 
 Deno.test("runLintPlanCli: valid document passes with exit code 0", async () => {
-  const tmpFile = await Deno.makeTempFile({ suffix: ".md" });
+  const tmpDir = await Deno.makeTempDir();
   try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Canonical Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+
     const doc = planTableDoc([
       EPIC_ROW,
       childRow({ epicChild: "Epic #1" }),
       "| 3 | Manual verification: confirm validator output in Google Chrome | Epic #1 | Josh | Medium | web-jam-tools | none | Josh confirms he reviewed it |",
     ]);
-    await Deno.writeTextFile(tmpFile, doc);
+    await Deno.writeTextFile(planFile, doc);
 
-    const code = await runLintPlanCli([tmpFile]);
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Gate 1 approved by Josh.", { stateDir: tmpDir });
+
+    const code = await runLintPlanCli([
+      planFile,
+      "--design-doc",
+      designDoc,
+      "--state-dir",
+      tmpDir,
+    ]);
     assertEquals(code, 0);
 
-    const jsonCode = await runLintPlanCli(["--doc", tmpFile, "--json"]);
+    const jsonCode = await runLintPlanCli([
+      "--doc",
+      planFile,
+      "--design-doc",
+      designDoc,
+      "--state-dir",
+      tmpDir,
+      "--json",
+    ]);
     assertEquals(jsonCode, 0);
   } finally {
-    await Deno.remove(tmpFile);
+    await Deno.remove(tmpDir, { recursive: true });
   }
 });
 
 Deno.test("runLintPlanCli: document with violations exits with code 1", async () => {
-  const tmpFile = await Deno.makeTempFile({ suffix: ".md" });
+  const tmpDir = await Deno.makeTempDir();
   try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Canonical Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+
     const doc = planTableDoc([
       EPIC_ROW,
       childRow({ tier: "Flash-High" }),
     ]);
-    await Deno.writeTextFile(tmpFile, doc);
+    await Deno.writeTextFile(planFile, doc);
 
-    const code = await runLintPlanCli([tmpFile]);
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Gate 1 approved by Josh.", { stateDir: tmpDir });
+
+    const code = await runLintPlanCli([
+      planFile,
+      "--design-doc",
+      designDoc,
+      "--state-dir",
+      tmpDir,
+    ]);
     assertEquals(code, 1);
 
-    const jsonCode = await runLintPlanCli(["--json", tmpFile]);
+    const jsonCode = await runLintPlanCli([
+      "--json",
+      planFile,
+      "--design-doc",
+      designDoc,
+      "--state-dir",
+      tmpDir,
+    ]);
     assertEquals(jsonCode, 1);
   } finally {
-    await Deno.remove(tmpFile);
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+// --- Needs Design removals: "Not resolved" must not narrow the issue's own directive
+// (web-jam-tools#1131). The fixtures reproduce the Gate 2 plan that parked part of
+// web-jam-tools#485 "new skill record-song" as "not resolved" instead of designing it. ---
+
+const ISSUE_485_BODY = "new skill record-song\n" +
+  "knows how to use reaper mcp\n" +
+  "knows how to setup things based on previous recordings\n";
+const NARROWED_FIXTURE =
+  new URL("./fixtures/design-issue/plan-needs-design-narrowed.md", import.meta.url).pathname;
+const RESOLVED_FIXTURE =
+  new URL("./fixtures/design-issue/plan-needs-design-resolved.md", import.meta.url).pathname;
+
+function stubBodies(bodies: Record<string, string>): IssueBodyFetcher {
+  return (repo, number) => {
+    const body = bodies[`${repo}#${number}`];
+    return body === undefined
+      ? Promise.reject(new Error(`no such issue ${repo}#${number}`))
+      : Promise.resolve(body);
+  };
+}
+
+function removalsDoc(item: string): string {
+  return `${planTableDoc([EPIC_ROW])}\n## Needs Design label removals\n\n1. ${item}\n`;
+}
+
+Deno.test("#1131: parseNeedsDesignRemovals reads the issue and its Not resolved part", async () => {
+  const removals = parseNeedsDesignRemovals(await Deno.readTextFile(NARROWED_FIXTURE));
+  assertEquals(removals.length, 1);
+  assertEquals(removals[0].repo, "web-jam-tools");
+  assertEquals(removals[0].number, 485);
+  assertEquals(
+    removals[0].notResolved?.startsWith('"setup things based on previous recordings" is limited'),
+    true,
+  );
+});
+
+Deno.test("#1131: parseNeedsDesignRemovals joins a wrapped item and stops at the next heading", () => {
+  const removals = parseNeedsDesignRemovals(
+    "## Needs Design label removals\n\n" +
+      '1. WebJamApps/JaMmusic#12 "t" — done.\n   Not resolved: the Android\n   surface. Remove the label?\n' +
+      "\n## Dependency chain\n\n1. web-jam-tools#9 not a removal. Not resolved: x\n",
+  );
+  assertEquals(removals.length, 1);
+  assertEquals(removals[0].repo, "WebJamApps/JaMmusic");
+  assertEquals(removals[0].notResolved, "the Android surface.");
+});
+
+Deno.test("#1131: refuses a removal whose Not resolved part quotes the issue's directive line", async () => {
+  const result = await lintPlanTableFile(NARROWED_FIXTURE, {
+    schema: TEST_SCHEMA,
+    fetchIssueBody: stubBodies({ "web-jam-tools#485": ISSUE_485_BODY }),
+  });
+  assertEquals(result.valid, false);
+  const [v] = findRule(result.violations, "needs-design-directive-narrowed");
+  assertEquals(v.line, 11);
+  assertStringIncludes(v.message, "web-jam-tools#485");
+  assertStringIncludes(v.message, '"knows how to setup things based on previous recordings"');
+});
+
+Deno.test("#1131: refuses a removal that narrows a directive line without quoting it", async () => {
+  const violations = await checkNeedsDesignRemovals(
+    removalsDoc(
+      'web-jam-tools#485 "new skill record-song" — done. Not resolved: setup things based on ' +
+        "previous recordings covers track layout only. Remove the label?",
+    ),
+    stubBodies({ "web-jam-tools#485": ISSUE_485_BODY }),
+  );
+  assertEquals(violations.length, 1);
+  assertEquals(violations[0].rule, "needs-design-directive-narrowed");
+});
+
+Deno.test("#1131: passes the same plan when Not resolved says nothing", async () => {
+  let fetched = 0;
+  const result = await lintPlanTableFile(RESOLVED_FIXTURE, {
+    schema: TEST_SCHEMA,
+    fetchIssueBody: () => {
+      fetched++;
+      return Promise.resolve(ISSUE_485_BODY);
+    },
+  });
+  assertEquals(result.violations, []);
+  assertEquals(fetched, 0);
+});
+
+Deno.test("#1131: passes a Not resolved part that names nothing from the issue's directive", async () => {
+  const violations = await checkNeedsDesignRemovals(
+    removalsDoc(
+      'web-jam-tools#485 "new skill record-song" — done. Not resolved: the agy surface\'s ' +
+        "REAPER bridge, which a later design run owns. Remove the label?",
+    ),
+    stubBodies({ "web-jam-tools#485": ISSUE_485_BODY }),
+  );
+  assertEquals(violations, []);
+});
+
+Deno.test("#1131: fails closed, naming the issue, when its body cannot be read", async () => {
+  const violations = await checkNeedsDesignRemovals(
+    removalsDoc('web-jam-tools#485 "new skill record-song" — done. Not resolved: something.'),
+    () => Promise.reject(new Error("HTTP 401: Bad credentials")),
+  );
+  assertEquals(violations.length, 1);
+  assertEquals(violations[0].rule, "needs-design-issue-unreadable");
+  assertStringIncludes(violations[0].message, "web-jam-tools#485");
+  assertStringIncludes(violations[0].message, "Bad credentials");
+});
+
+Deno.test("#1131: findNarrowedDirective ignores quotes shorter than three words", () => {
+  assertEquals(findNarrowedDirective('the "reaper mcp" bridge is deferred', ISSUE_485_BODY), null);
+});
+
+// --- Gate 1 approval verification before Gate 2 (web-jam-tools#1156) ---
+
+Deno.test("AC1 (#1156): passes ONLY when Gate 1 disk record shows an approved, unchanged design doc; prints Gate 1 approval recorded line", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n\nContent.\n";
+    await Deno.writeTextFile(designDoc, designContent);
+
+    const doc = planTableDoc([
+      EPIC_ROW,
+      childRow({ epicChild: "Epic #1" }),
+      "| 3 | Manual verification: test in browser | Epic #1 | Josh | Medium | web-jam-tools | none | Josh confirms review |",
+    ]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    const replyText = "Approved with no changes.";
+    await approveGate1Record(designDoc, replyText, { stateDir: tmpDir });
+
+    const logs: string[] = [];
+    const errLogs: string[] = [];
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        log: (msg) => logs.push(msg),
+        errorLog: (msg) => errLogs.push(msg),
+        schema: TEST_SCHEMA,
+      },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(errLogs.length, 0);
+    const hasApprovalLine = logs.some((l) =>
+      l.startsWith("Gate 1 approval recorded ") && l.endsWith(`: "${replyText}"`)
+    );
+    assertEquals(hasApprovalLine, true);
+    assertEquals(logs.some((l) => l.includes("[design:lint-plan] PASS:")), true);
+
+    // Direct checkGate1ApprovalRecord check
+    const gate1Result = await checkGate1ApprovalRecord(designDoc, { stateDir: tmpDir });
+    assertEquals(gate1Result.valid, true);
+    assertEquals(gate1Result.status, "approved");
+    assertEquals(gate1Result.reply, replyText);
+    assertStringIncludes(gate1Result.approvalLine ?? "", replyText);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC2 (#1156): refuses when --design-doc is omitted", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    const logs: string[] = [];
+    const errLogs: string[] = [];
+    const code = await runLintPlanCli([planFile], {
+      log: (msg) => logs.push(msg),
+      errorLog: (msg) => errLogs.push(msg),
+      schema: TEST_SCHEMA,
+    });
+
+    assertEquals(code, 1);
+    assertEquals(
+      errLogs.some((l) => l.includes("Error: Missing required --design-doc argument.")),
+      true,
+    );
+
+    // Direct checkGate1ApprovalRecord check
+    const gate1Result = await checkGate1ApprovalRecord(undefined);
+    assertEquals(gate1Result.valid, false);
+    assertStringIncludes(gate1Result.error ?? "", "Missing required --design-doc argument");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC3 (#1156): refuses when no record exists for the document", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/unpresented-design.md`;
+    await Deno.writeTextFile(designDoc, "# Unpresented\n");
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    const logs: string[] = [];
+    const errLogs: string[] = [];
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        log: (msg) => logs.push(msg),
+        errorLog: (msg) => errLogs.push(msg),
+        schema: TEST_SCHEMA,
+      },
+    );
+
+    assertEquals(code, 1);
+    assertEquals(errLogs.some((l) => l.includes("No Gate 1 record exists for")), true);
+
+    // Direct checkGate1ApprovalRecord check
+    const gate1Result = await checkGate1ApprovalRecord(designDoc, { stateDir: tmpDir });
+    assertEquals(gate1Result.valid, false);
+    assertEquals(gate1Result.status, "not presented");
+    assertStringIncludes(gate1Result.error ?? "", "No Gate 1 record exists for");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC4 (#1156): refuses when record is open but never approved", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/open-design.md`;
+    const designContent = "# Open Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+
+    const logs: string[] = [];
+    const errLogs: string[] = [];
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        log: (msg) => logs.push(msg),
+        errorLog: (msg) => errLogs.push(msg),
+        schema: TEST_SCHEMA,
+      },
+    );
+
+    assertEquals(code, 1);
+    assertEquals(
+      errLogs.some((l) => l.includes("is open but has not been approved yet")),
+      true,
+    );
+
+    // Direct checkGate1ApprovalRecord check
+    const gate1Result = await checkGate1ApprovalRecord(designDoc, { stateDir: tmpDir });
+    assertEquals(gate1Result.valid, false);
+    assertEquals(gate1Result.status, "open");
+    assertStringIncludes(gate1Result.error ?? "", "is open but has not been approved yet");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC5 (#1156): refuses when document changed since approval (fingerprint mismatch)", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design Initial\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved initially.", { stateDir: tmpDir });
+
+    // Modify the design doc content
+    await Deno.writeTextFile(designDoc, "# Approved Design Modified After Gate 1\n");
+
+    const logs: string[] = [];
+    const errLogs: string[] = [];
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        log: (msg) => logs.push(msg),
+        errorLog: (msg) => errLogs.push(msg),
+        schema: TEST_SCHEMA,
+      },
+    );
+
+    assertEquals(code, 1);
+    assertEquals(
+      errLogs.some((l) => l.includes("has changed since Gate 1 approval")),
+      true,
+    );
+
+    // Direct checkGate1ApprovalRecord check
+    const gate1Result = await checkGate1ApprovalRecord(designDoc, { stateDir: tmpDir });
+    assertEquals(gate1Result.valid, false);
+    assertEquals(gate1Result.status, "changed since approval");
+    assertStringIncludes(gate1Result.error ?? "", "has changed since Gate 1 approval");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC6 (#1156): refuses when record file cannot be read", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    await Deno.writeTextFile(designDoc, "# Design Doc\n");
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    // Write a corrupt (unparseable) record file
+    const absDocPath = path.resolve(designDoc);
+    const recordPath = getGate1RecordPath(absDocPath, tmpDir);
+    await Deno.writeTextFile(recordPath, "INVALID_CORRUPT_JSON{{{");
+
+    const logs: string[] = [];
+    const errLogs: string[] = [];
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        log: (msg) => logs.push(msg),
+        errorLog: (msg) => errLogs.push(msg),
+        schema: TEST_SCHEMA,
+      },
+    );
+
+    assertEquals(code, 1);
+    assertEquals(
+      errLogs.some((l) =>
+        l.includes("Cannot parse Gate 1 record") || l.includes("Cannot read Gate 1 record")
+      ),
+      true,
+    );
+
+    // Direct checkGate1ApprovalRecord check
+    const gate1Result = await checkGate1ApprovalRecord(designDoc, { stateDir: tmpDir });
+    assertEquals(gate1Result.valid, false);
+    assertStringIncludes(gate1Result.error ?? "", "Cannot parse Gate 1 record");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC7 (#1156): refuses when design document cannot be read", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    const nonExistentDesignDoc = `${tmpDir}/non-existent-doc-9999.md`;
+
+    const logs: string[] = [];
+    const errLogs: string[] = [];
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", nonExistentDesignDoc, "--state-dir", tmpDir],
+      {
+        log: (msg) => logs.push(msg),
+        errorLog: (msg) => errLogs.push(msg),
+        schema: TEST_SCHEMA,
+      },
+    );
+
+    assertEquals(code, 1);
+    assertEquals(
+      errLogs.some((l) => l.includes("Cannot read design document at")),
+      true,
+    );
+
+    // Direct checkGate1ApprovalRecord check
+    const gate1Result = await checkGate1ApprovalRecord(nonExistentDesignDoc, { stateDir: tmpDir });
+    assertEquals(gate1Result.valid, false);
+    assertStringIncludes(gate1Result.error ?? "", "Cannot read design document at");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
   }
 });

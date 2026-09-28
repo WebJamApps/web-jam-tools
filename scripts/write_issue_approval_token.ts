@@ -9,8 +9,16 @@
  *     "expires_at": "<ISO 8601 timestamp>"
  *   }
  *
- * Default token path: $HOME/.claude/state/issue-approval-token.json
- * Supports path override via ISSUE_APPROVAL_TOKEN_PATH env var or --token-path flag.
+ * Default token path: $HOME/.claude/state/issue-approval-tokens/<session-id>.json — one file per
+ * session (web-jam-tools#1158), so two sessions writing approval at the same time never overwrite
+ * each other. Refuses to write, and exits non-zero, when the session id is empty or unsafe to use as
+ * a filename (contains "/", "\", or "..").
+ * Supports path override via ISSUE_APPROVAL_TOKEN_PATH env var or --token-path flag — either one
+ * keeps its pre-existing meaning: a single fixed file, ignoring the session id entirely.
+ * Each write also deletes any EXPIRED token file left behind by another session in the same default
+ * directory; unexpired files from other sessions are never touched. This cleanup only runs when
+ * writing to the default per-session directory (not under a --token-path/ISSUE_APPROVAL_TOKEN_PATH
+ * override, which names a single file rather than a directory of sessions).
  *
  * web-jam-tools#808: the CLI invocation below refuses to write at all unless
  * hooks/lib/check_token_write_authorization.ts's decision 21 check passes — the most recent
@@ -31,8 +39,18 @@
 
 import { dirname } from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
-import { type ApprovalToken, defaultTokenPath } from "../hooks/lib/check_issue_approval_token.ts";
-import { loadTranscript, type TranscriptEntry } from "../hooks/lib/select_transcript_entry.ts";
+import {
+  type ApprovalToken,
+  defaultTokenPath,
+  isExpired,
+  isSafeSessionId,
+  loadToken,
+} from "../hooks/lib/check_issue_approval_token.ts";
+import {
+  conversationIdFromTranscriptPath,
+  loadTranscript,
+  type TranscriptEntry,
+} from "../hooks/lib/select_transcript_entry.ts";
 import {
   checkTokenWriteAuthorization,
   tailIsCurrentlySidechain,
@@ -56,6 +74,13 @@ export function buildApprovalToken(options: WriteApprovalTokenOptions): Approval
   const sessionId = options.sessionId?.trim();
   if (!sessionId) {
     throw new Error("sessionId is required and cannot be empty");
+  }
+  if (!isSafeSessionId(sessionId)) {
+    throw new Error(
+      `sessionId is not safe to use as a filename (must not contain "/", "\\", or ".."): ${
+        JSON.stringify(sessionId)
+      }`,
+    );
   }
 
   let repo = options.repo?.trim();
@@ -93,18 +118,80 @@ export function buildApprovalToken(options: WriteApprovalTokenOptions): Approval
 }
 
 /**
+ * Deletes every EXPIRED `*.json` file in `dir` other than `keepPath` (web-jam-tools#1158). Unexpired
+ * files — including another session's live approval — are never touched. Best-effort: an unreadable
+ * or malformed file is left alone (not deleted, not treated as an error), and a missing/unlistable
+ * directory is a silent no-op — this sweep piggybacks on a successful write, it never blocks one.
+ */
+async function sweepExpiredTokenFiles(
+  dir: string,
+  keepPath: string,
+  nowMs: number,
+): Promise<void> {
+  let entries: Deno.DirEntry[];
+  try {
+    entries = [];
+    for await (const entry of Deno.readDir(dir)) entries.push(entry);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile || !entry.name.endsWith(".json")) continue;
+    const filePath = `${dir}/${entry.name}`;
+    if (filePath === keepPath) continue;
+    const otherToken = loadToken(filePath);
+    if (!otherToken) continue;
+    if (isExpired(otherToken, nowMs)) {
+      try {
+        await Deno.remove(filePath);
+      } catch {
+        // best-effort cleanup — a failed delete never blocks the write that triggered it
+      }
+    }
+  }
+}
+
+/** Synchronous counterpart of sweepExpiredTokenFiles(), same contract. */
+function sweepExpiredTokenFilesSync(dir: string, keepPath: string, nowMs: number): void {
+  let entries: Deno.DirEntry[];
+  try {
+    entries = [...Deno.readDirSync(dir)];
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile || !entry.name.endsWith(".json")) continue;
+    const filePath = `${dir}/${entry.name}`;
+    if (filePath === keepPath) continue;
+    const otherToken = loadToken(filePath);
+    if (!otherToken) continue;
+    if (isExpired(otherToken, nowMs)) {
+      try {
+        Deno.removeSync(filePath);
+      } catch {
+        // best-effort cleanup — a failed delete never blocks the write that triggered it
+      }
+    }
+  }
+}
+
+/**
  * Writes the approval token to disk asynchronously.
  */
 export async function writeApprovalToken(
   options: WriteApprovalTokenOptions,
 ): Promise<{ token: ApprovalToken; path: string }> {
   const token = buildApprovalToken(options);
-  const path = options.tokenPath || defaultTokenPath();
+  const path = options.tokenPath || defaultTokenPath(token.session_id);
   const dir = dirname(path);
   if (dir && dir !== ".") {
     await Deno.mkdir(dir, { recursive: true });
   }
   await Deno.writeTextFile(path, JSON.stringify(token, null, 2) + "\n");
+  const usingSessionDir = !options.tokenPath && !Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  if (usingSessionDir) {
+    await sweepExpiredTokenFiles(dir, path, Date.now());
+  }
   return { token, path };
 }
 
@@ -115,12 +202,16 @@ export function writeApprovalTokenSync(
   options: WriteApprovalTokenOptions,
 ): { token: ApprovalToken; path: string } {
   const token = buildApprovalToken(options);
-  const path = options.tokenPath || defaultTokenPath();
+  const path = options.tokenPath || defaultTokenPath(token.session_id);
   const dir = dirname(path);
   if (dir && dir !== ".") {
     Deno.mkdirSync(dir, { recursive: true });
   }
   Deno.writeTextFileSync(path, JSON.stringify(token, null, 2) + "\n");
+  const usingSessionDir = !options.tokenPath && !Deno.env.get("ISSUE_APPROVAL_TOKEN_PATH");
+  if (usingSessionDir) {
+    sweepExpiredTokenFilesSync(dir, path, Date.now());
+  }
   return { token, path };
 }
 
@@ -189,13 +280,14 @@ export async function resolveClaudeCodeWriteContext(
  *
  * Known limitation, stated rather than silently assumed away: this is a shared, cross-session log.
  * Under genuine concurrent agy activity the last line could belong to a different session's call
- * instead, and Antigravity's own transcript shape carries no in-band signal distinguishing a
- * subagent's turn from a person's (web-jam-tools#841 non-goals) — so unlike
- * resolveClaudeCodeWriteContext, this cannot compute isSubagentInvocation directly and always
- * returns false for it. However, on Antigravity each subagent runs in an isolated conversation with
- * its own unique conversationId and its own separate transcript containing only the dispatched
- * prompt, so checkTokenWriteAuthorization's own-conversation filter and bounded scan deny the write
- * in practice without needing a shared-transcript sidechain flag.
+ * instead.
+ *
+ * Antigravity's transcript carries no in-band signal distinguishing a subagent's turn from a
+ * person's: a subagent's opening prompt, composed by its parent, is filed as USER_INPUT /
+ * USER_EXPLICIT inside the same `<USER_REQUEST>` wrapper as a person's turn, so a prompt opening
+ * "File an issue for …" would otherwise authorize a token the subagent wrote for itself.
+ * isSubagentInvocation is therefore decided from outside the transcript, by
+ * isAntigravitySubagentConversation().
  */
 export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteContext | null> {
   const recordPath = Deno.env.get("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
@@ -224,9 +316,71 @@ export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteCon
     } catch {
       return null;
     }
-    return { entries, ownConversationId: conversationId, isSubagentInvocation: false };
+    return {
+      entries,
+      ownConversationId: conversationId,
+      isSubagentInvocation: await antigravityTranscriptIsSubagent(transcriptPath, conversationId),
+    };
   }
   return null;
+}
+
+/**
+ * Antigravity records every subagent it starts at
+ * `<brain>/<parent conversationId>/.system_generated/subagents/<child conversationId>.json`. The
+ * surface writes that file itself when it spawns the subagent, before the subagent's first tool
+ * call, so a conversation is a subagent exactly when another conversation's subagents directory
+ * names it.
+ *
+ * Returns null when the brain directory cannot be read, which callers treat as a subagent: "could
+ * not look" must never pass as "not a subagent".
+ */
+export async function isAntigravitySubagentConversation(
+  brainRoot: string,
+  conversationId: string,
+): Promise<boolean | null> {
+  if (!conversationId) return null;
+  try {
+    for await (const entry of Deno.readDir(brainRoot)) {
+      if (!entry.isDirectory || entry.name === conversationId) continue;
+      try {
+        await Deno.stat(
+          `${brainRoot}/${entry.name}/.system_generated/subagents/${conversationId}.json`,
+        );
+        return true;
+      } catch (err) {
+        if (err instanceof Deno.errors.NotFound) continue;
+        return null;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return false;
+}
+
+/** The brain directory an Antigravity transcript path sits under, or null when it is not one. */
+export function antigravityBrainRoot(transcriptPath: string): string | null {
+  const match = transcriptPath.match(/^(.*\/brain)\/[^/]+\//);
+  return match ? match[1] : null;
+}
+
+/**
+ * True when the Antigravity conversation behind this transcript is a subagent, or when that cannot
+ * be established — a path outside the brain layout, or an unreadable brain directory, fails closed.
+ */
+async function antigravityTranscriptIsSubagent(
+  transcriptPath: string,
+  conversationId: string,
+): Promise<boolean> {
+  const brainRoot = antigravityBrainRoot(transcriptPath);
+  if (!brainRoot) return true;
+  const ids = new Set([conversationId, conversationIdFromTranscriptPath(transcriptPath)]);
+  for (const id of ids) {
+    if (!id) continue;
+    if ((await isAntigravitySubagentConversation(brainRoot, id)) !== false) return true;
+  }
+  return false;
 }
 
 /**
@@ -247,10 +401,13 @@ export async function resolveWriteContext(
       entries = [];
     }
     const ownConversationId = options.conversationId || options.sessionId || null;
+    const isAntigravityTranscript = antigravityBrainRoot(options.transcriptPath) !== null;
     return {
       entries,
       ownConversationId,
-      isSubagentInvocation: tailIsCurrentlySidechain(entries),
+      isSubagentInvocation: tailIsCurrentlySidechain(entries) ||
+        (isAntigravityTranscript &&
+          await antigravityTranscriptIsSubagent(options.transcriptPath, ownConversationId || "")),
     };
   }
 
@@ -308,7 +465,7 @@ Options:
   --titles-file <path>      Path to file with titles (one per line or JSON array)
   --ttl-hours <hours>       Token TTL in hours (default: 4)
   --expires-at <iso>        Explicit expiration ISO 8601 timestamp
-  -p, --token-path <path>   Override token output path (defaults to $ISSUE_APPROVAL_TOKEN_PATH or ~/.claude/state/issue-approval-token.json)
+  -p, --token-path <path>   Override token output path (defaults to $ISSUE_APPROVAL_TOKEN_PATH or ~/.claude/state/issue-approval-tokens/<session-id>.json)
   --json                    Output written token as JSON to stdout
   -h, --help                Show this help message
 `,

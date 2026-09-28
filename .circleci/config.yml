@@ -48,7 +48,7 @@ jobs:
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
               | sudo sh -s -- -b /usr/local/bin v0.71.0
             # Semgrep (via pipx)
-            sudo apt-get update -y && sudo apt-get install -y pipx xz-utils
+            sudo apt-get update -y && sudo apt-get install -y pipx xz-utils tmux
             pipx install semgrep
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
             # shellcheck (pinned) — static binary, no apt version pin available
@@ -70,7 +70,7 @@ jobs:
           name: Tool versions
           command: |
             deno --version && node -v && npm -v && trivy --version && semgrep --version
-            shellcheck --version && gitleaks version
+            shellcheck --version && gitleaks version && tmux -V
       - restore_cache:
           keys:
             - deno-deps-v1-{{ checksum "deno.json" }}-{{ checksum "deno.lock" }}
