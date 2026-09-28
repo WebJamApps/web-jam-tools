@@ -2,13 +2,36 @@
 // Unit tests for surface-scoped tool lint check (web-jam-tools#1145).
 
 import { assert, assertEquals } from "@std/assert";
-import * as path from "@std/path";
 import {
   isSkillExempt,
   lintSkillContent,
   lintSkillFile,
   runLintSkillSurfaces,
 } from "../scripts/lint-skill-surfaces.ts";
+
+// Resolve from this file, not the cwd, so the suite passes from any directory.
+const REPO_ROOT = new URL("..", import.meta.url).pathname;
+const repoPath = (rel: string): string => `${REPO_ROOT}${rel}`;
+
+Deno.test("lintSkillContent: a ~/.claude/ path on the line does not scope an mcp__ reference", () => {
+  const content = `# s
+
+Run \`mcp__reaper__transport_get_state\`, then log it under ~/.claude/state.
+`;
+  const result = lintSkillContent(content, "skills/s/SKILL.md");
+  assertEquals(result.valid, false);
+  assertEquals(result.violations[0].toolName, "mcp__reaper__transport_get_state");
+});
+
+Deno.test("runLintSkillSurfaces: the default run over every skill passes", async () => {
+  const summary = await runLintSkillSurfaces(undefined, REPO_ROOT);
+  assertEquals(
+    summary.totalViolations,
+    0,
+    JSON.stringify(summary.results.flatMap((r) => r.violations), null, 2),
+  );
+  assertEquals(summary.exemptFiles, 1);
+});
 
 Deno.test("lintSkillContent: fixture naming mcp__reaper__transport_get_state with no surface-specific note fails", () => {
   const content = `# record-song
@@ -68,10 +91,11 @@ Deno.test("isSkillExempt: skills/handle-gmails/SKILL.md is exempt", () => {
   assertEquals(isSkillExempt("skills/handle-gmails/SKILL.md"), true);
   assertEquals(isSkillExempt("/path/to/skills/handle-gmails/SKILL.md"), true);
   assertEquals(isSkillExempt("skills/design-issue/SKILL.md"), false);
+  assertEquals(isSkillExempt("skills/handle-gmails-v2/SKILL.md"), false);
 });
 
 Deno.test("lintSkillFile: handle-gmails is skipped/exempted, not flagged", async () => {
-  const filePath = path.resolve("skills/handle-gmails/SKILL.md");
+  const filePath = repoPath("skills/handle-gmails/SKILL.md");
   const result = await lintSkillFile(filePath);
   assertEquals(result.exempt, true);
   assertEquals(result.valid, true);
@@ -88,7 +112,7 @@ Deno.test("lintSkillFile: all five rewritten skills pass the check", async () =>
   ];
 
   for (const skillRelPath of targetSkills) {
-    const fullPath = path.resolve(skillRelPath);
+    const fullPath = repoPath(skillRelPath);
     const result = await lintSkillFile(fullPath);
     assertEquals(
       result.valid,
@@ -109,7 +133,7 @@ Deno.test("runLintSkillSurfaces: batch run against the five rewritten skills pas
     "skills/flash-issues/SKILL.md",
     "skills/memory-cleanup/SKILL.md",
     "skills/drive-cleanup/SKILL.md",
-  ].map((p) => path.resolve(p));
+  ].map((p) => repoPath(p));
 
   const summary = await runLintSkillSurfaces(targetSkills);
   assertEquals(summary.valid, true);

@@ -122,7 +122,9 @@ web-jam-tools#51), so execute trashes / moves / mirror pushes via the **exact `r
 commands the pre-pass emitted** rather than remote Drive API calls — fewer
 round-trips, and the paths/IDs are already resolved. **Bridge-file text merges into the
 Dropbox queue files stay with the model** (queue lines must stay unambiguous and wrapped at
-120 cols — see the bridge steps below).
+120 cols — see the bridge steps below). If `gdrive:` is ever read-only, fall back to
+the Drive MCP tools for execution (on Claude Code, `mcp__google-drive__*`) and note it in the
+run summary.
 
 ### Bridge actions (`for-opus-*.txt`, legacy `claude-opus-tasks-*.txt`)
 

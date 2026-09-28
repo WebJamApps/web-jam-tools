@@ -33,7 +33,9 @@ export interface SurfaceLintSummary {
  * enclosing block carries an explicit surface indicator.
  */
 export const SURFACE_INDICATORS: RegExp[] = [
-  /\bclaude(?:\s+code)?\b/i,
+  // Surface phrasing only — a bare "claude" (e.g. a ~/.claude/ path) scopes nothing.
+  /\b(?:on|in)\s+claude\s+code\b/i,
+  /\bclaude\s+code[\s-](?:surface|only)\b/i,
   /\bclaude-only\b/i,
   /\(laptop only\)/i,
   /\blaptop\s*—/i,
@@ -53,12 +55,8 @@ export const AGENT_TOOL_REGEX =
  */
 export function isSkillExempt(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, "/");
-  return (
-    normalized.endsWith("skills/handle-gmails/SKILL.md") ||
-    normalized.endsWith("/handle-gmails/SKILL.md") ||
-    normalized === "skills/handle-gmails/SKILL.md" ||
-    normalized.includes("handle-gmails")
-  );
+  return normalized === "skills/handle-gmails/SKILL.md" ||
+    normalized.endsWith("/skills/handle-gmails/SKILL.md");
 }
 
 /**

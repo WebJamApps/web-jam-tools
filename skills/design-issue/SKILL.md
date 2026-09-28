@@ -232,7 +232,7 @@ These are properties of the skill, written as explicit refusals:
 
 ## Both Surfaces Parity Rule
 
-Everything this skill designs works on both Claude Code and agy/Antigravity. A mechanism fails this rule when it depends on something only one surface has: a Claude Code hook, because agy-native hooks do not fire; Claude Code's memory directory, which agy does not have; or an `mcp__*` tool. The surface-neutral paths are this repository's `deno task` entries, the `gh` CLI, and CI. Where a mechanism cannot be made surface-neutral, the skill says so plainly and stops for discussion, rather than designing a one-surface mechanism and calling it done.
+Everything this skill designs works on both Claude Code and agy/Antigravity. A mechanism fails this rule when it depends on something only one surface has: a Claude Code hook, because agy-native hooks do not fire; Claude Code's memory directory, which agy does not have; or a Claude Code-only `mcp__*` tool. The surface-neutral paths are this repository's `deno task` entries, the `gh` CLI, and CI. Where a mechanism cannot be made surface-neutral, the skill says so plainly and stops for discussion, rather than designing a one-surface mechanism and calling it done.
 
 **Every design document carries a `## Both surfaces` section**, stating for each mechanism it designs how that mechanism works on each surface. `deno task design:lint-doc` fails a document that omits it.
 
