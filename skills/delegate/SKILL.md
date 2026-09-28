@@ -145,15 +145,13 @@ the subagent has to self-police.
 
 ### PR-review dispatch nudge (parent-side, before dispatching)
 
-> Before dispatching a subagent to run `/pr-review` (e.g. the Flash-reviews-Sonnet /
-> Sonnet-reviews-Flash cross-model pairing), know that the subagent **cannot** post
-> its finished review itself — on Claude Code, Agent-tool subagents don't inherit this session's
-> `permissions.allow` list and dead-end on `gh pr review --comment` with no human
-> present to approve it (harness limitation, not a WebJamApps settings gap; see
-> `skills/pr-review/SKILL.md` Step 3 for the citations). The subagent will write
-> the finished review to a scratch file and hand you back its path — **you** (the
-> orchestrating session) post it via `gh pr review --comment --body-file <path>`
-> once it reports back. Don't wait on the subagent in the meantime.
+> A subagent dispatched to run `/pr-review` (e.g. the Flash-reviews-Sonnet /
+> Sonnet-reviews-Flash cross-model pairing) posts its own finished review with
+> `deno task post-pr-review` — no handoff back to you, and you never re-post it.
+> That task is a `permissions.allow` capability, so a subagent with no human present
+> completes the post; the raw `gh` review verb is what dead-ends, and
+> `hooks/block-raw-gh-write.sh` denies it on every surface. See
+> `skills/pr-review/SKILL.md` Step 3. Don't wait on the subagent in the meantime.
 
 ### Coupling nudge (parent-side, before dispatching)
 
