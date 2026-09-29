@@ -29,7 +29,9 @@ async function run(
     args,
     stdout: "piped",
     stderr: "piped",
-    env: env ? { ...Deno.env.toObject(), ...env } : undefined,
+    // Default the laptop-window step to a stub so an SSH_CONNECTION inherited from the
+    // caller can never open a real gnome-terminal window.
+    env: { ...Deno.env.toObject(), AGENTS_LAPTOP_WINDOW_CMD: "true", ...(env ?? {}) },
   });
   const { code, stdout, stderr } = await command.output();
   return {
@@ -65,6 +67,7 @@ Deno.test("agents.sh creates session 'agents' with tabs claude, codex, agy (indi
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, `agents.sh failed: ${res.stdout}\n${res.stderr}`);
 
@@ -136,6 +139,7 @@ Deno.test("agents.sh turns off automatic-rename so tab names stay fixed", async 
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0);
 
@@ -189,6 +193,7 @@ Deno.test("agents.sh second run attaches to existing session without creating a 
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res1.code, 0);
 
@@ -196,6 +201,7 @@ Deno.test("agents.sh second run attaches to existing session without creating a 
     const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName], {
       TMUX_TMPDIR: tmpDir,
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res2.code, 0, `Second run failed: ${res2.stdout}\n${res2.stderr}`);
 
@@ -225,6 +231,7 @@ Deno.test("agents.sh started twice at the same moment never fails with duplicate
         AGENTS_CODEX_CMD: "sleep 60",
         AGENTS_AGY_CMD: "sleep 60",
         AGENTS_UPDATE_CMD: "true",
+        AGENTS_LAPTOP_WINDOW_CMD: "true",
       };
       const [first, second] = await Promise.all([
         run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env),
@@ -263,6 +270,7 @@ Deno.test("agents.sh drops a tab to a plain shell when its agent exits instead o
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0);
 
@@ -317,6 +325,7 @@ Deno.test("agents run through its ~/.local/bin symlink passes the repo's claude-
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
 
@@ -349,6 +358,7 @@ Deno.test("agents started over SSH starts every tab without SSH_* variables, so 
       AGENTS_CODEX_CMD: probe("codex"),
       AGENTS_AGY_CMD: probe("agy"),
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
 
@@ -375,6 +385,7 @@ Deno.test("agents.sh supports -S socket path and --no-attach", async () => {
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
 
@@ -415,6 +426,7 @@ Deno.test("agents.sh runs the update command before the new session exists, and 
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: updateCmd,
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     };
     const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
     assertEquals(res1.code, 0, res1.stderr);
@@ -435,6 +447,7 @@ Deno.test("agents.sh still creates the session and exits 0, with a warning, when
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "exit 1",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
     assert(res.stderr.includes("warning: update-all failed"), `no warning in: ${res.stderr}`);
@@ -442,5 +455,184 @@ Deno.test("agents.sh still creates the session and exits 0, with a warning, when
       TMUX_TMPDIR: tmpDir,
     });
     assertEquals(has.code, 0);
+  });
+});
+
+// ---- Laptop window over SSH (web-jam-tools#1128) ----
+
+const SSH_ENV = { SSH_CONNECTION: "192.0.2.1 50000 192.0.2.2 22" };
+
+function stubEnv(tmpDir: string, windowCmd: string, extra: Record<string, string> = {}) {
+  return {
+    TMUX_TMPDIR: tmpDir,
+    AGENTS_CLAUDE_CMD: "sleep 60",
+    AGENTS_CODEX_CMD: "sleep 60",
+    AGENTS_AGY_CMD: "sleep 60",
+    AGENTS_UPDATE_CMD: "true",
+    AGENTS_LAPTOP_WINDOW_CMD: windowCmd,
+    ...extra,
+  };
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await Deno.stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+Deno.test("agents.sh over SSH opens the laptop window when it creates the session", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const marker = `${tmpDir}/window-ran.txt`;
+    const res = await run(
+      "bash",
+      [AGENTS_SCRIPT, "-L", socketName, "--no-attach"],
+      stubEnv(tmpDir, `touch "${marker}"`, SSH_ENV),
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assert(await exists(marker), "laptop-window stub did not run");
+  });
+});
+
+Deno.test("agents.sh runs the laptop-window command without SSH_* variables so the window is not counted as an SSH client", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const marker = `${tmpDir}/window-env.txt`;
+    const cmd =
+      `echo "\${SSH_CONNECTION:-none}:\${SSH_CLIENT:-none}:\${SSH_TTY:-none}" > "${marker}"`;
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      ...stubEnv(tmpDir, cmd, SSH_ENV),
+      SSH_CLIENT: "192.0.2.1 50000 22",
+      SSH_TTY: "/dev/pts/9",
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals((await Deno.readTextFile(marker)).trim(), "none:none:none");
+  });
+});
+
+Deno.test("agents.sh over SSH opens the laptop window when the session exists with no attached clients", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const marker = `${tmpDir}/window-ran.txt`;
+    const first = await run(
+      "bash",
+      [AGENTS_SCRIPT, "-L", socketName, "--no-attach"],
+      stubEnv(tmpDir, "true"),
+    );
+    assertEquals(first.code, 0, first.stderr);
+    assert(!(await exists(marker)));
+    const res = await run(
+      "bash",
+      [AGENTS_SCRIPT, "-L", socketName, "--no-attach"],
+      stubEnv(tmpDir, `touch "${marker}"`, SSH_ENV),
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assert(await exists(marker), "laptop-window stub did not run on the attach path");
+  });
+});
+
+Deno.test("agents.sh without SSH_CONNECTION does not open the laptop window", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const marker = `${tmpDir}/window-ran.txt`;
+    const res = await run(
+      "bash",
+      ["-c", `unset SSH_CONNECTION; exec bash "${AGENTS_SCRIPT}" -L ${socketName} --no-attach`],
+      stubEnv(tmpDir, `touch "${marker}"`),
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assert(!(await exists(marker)), "laptop-window stub ran without SSH_CONNECTION");
+  });
+});
+
+Deno.test("agents.sh exits 0 and prints nothing when the laptop-window command fails", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const res = await run(
+      "bash",
+      [AGENTS_SCRIPT, "-L", socketName, "--no-attach"],
+      stubEnv(tmpDir, "exit 1", SSH_ENV),
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stderr, "");
+  });
+});
+
+async function attachClient(socketName: string, tmpDir: string, ssh: boolean) {
+  const proc = new Deno.Command("script", {
+    args: ["-qc", `tmux -L ${socketName} attach -t agents`, "/dev/null"],
+    stdin: "piped",
+    stdout: "null",
+    stderr: "null",
+    env: { ...Deno.env.toObject(), TMUX_TMPDIR: tmpDir, TERM: "xterm", ...(ssh ? SSH_ENV : {}) },
+    clearEnv: false,
+  });
+  // Deno cannot unset an inherited variable through `env`, so strip it through `env -u`.
+  const wrapped = ssh ? proc : new Deno.Command("env", {
+    args: [
+      "-u",
+      "SSH_CONNECTION",
+      "script",
+      "-qc",
+      `tmux -L ${socketName} attach -t agents`,
+      "/dev/null",
+    ],
+    stdin: "piped",
+    stdout: "null",
+    stderr: "null",
+    env: { ...Deno.env.toObject(), TMUX_TMPDIR: tmpDir, TERM: "xterm" },
+  });
+  const child = wrapped.spawn();
+  for (let i = 0; i < 50; i++) {
+    const l = await run("tmux", ["-L", socketName, "list-clients", "-t", "agents"], {
+      TMUX_TMPDIR: tmpDir,
+    });
+    if (l.stdout.trim()) return child;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  child.kill();
+  throw new Error("throwaway tmux client never attached");
+}
+
+Deno.test("agents.sh skips the laptop window when a non-SSH tmux client is attached, and opens it when only an SSH client is", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const first = await run(
+      "bash",
+      [AGENTS_SCRIPT, "-L", socketName, "--no-attach"],
+      stubEnv(tmpDir, "true"),
+    );
+    assertEquals(first.code, 0, first.stderr);
+
+    const sshClient = await attachClient(socketName, tmpDir, true);
+    try {
+      const marker = `${tmpDir}/ssh-only.txt`;
+      const res = await run(
+        "bash",
+        [AGENTS_SCRIPT, "-L", socketName, "--no-attach"],
+        stubEnv(tmpDir, `touch "${marker}"`, SSH_ENV),
+      );
+      assertEquals(res.code, 0, res.stderr);
+      assert(await exists(marker), "stub should run when only an SSH client is attached");
+    } finally {
+      try {
+        sshClient.kill();
+      } catch { /* already gone */ }
+      await run("tmux", ["-L", socketName, "detach-client", "-a"], { TMUX_TMPDIR: tmpDir });
+    }
+    await new Promise((r) => setTimeout(r, 300));
+
+    const laptopClient = await attachClient(socketName, tmpDir, false);
+    try {
+      const marker = `${tmpDir}/laptop-present.txt`;
+      const res = await run(
+        "bash",
+        [AGENTS_SCRIPT, "-L", socketName, "--no-attach"],
+        stubEnv(tmpDir, `touch "${marker}"`, SSH_ENV),
+      );
+      assertEquals(res.code, 0, res.stderr);
+      assert(!(await exists(marker)), "stub ran although a laptop client is attached");
+    } finally {
+      try {
+        laptopClient.kill();
+      } catch { /* already gone */ }
+    }
   });
 });
