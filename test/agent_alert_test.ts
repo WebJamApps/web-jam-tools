@@ -34,7 +34,9 @@ async function run(
     stdin: "null",
     stdout: "piped",
     stderr: "piped",
-    env: env ? { ...Deno.env.toObject(), ...env } : undefined,
+    // Default the laptop-window step to a stub so an SSH_CONNECTION inherited from the
+    // caller can never open a real gnome-terminal window.
+    env: { ...Deno.env.toObject(), AGENTS_LAPTOP_WINDOW_CMD: "true", ...(env ?? {}) },
   });
   const { code, stdout, stderr } = await command.output();
   return {
@@ -623,6 +625,7 @@ Deno.test(
         AGENTS_CODEX_CMD: "true",
         AGENTS_AGY_CMD: "sleep 60",
         AGENTS_UPDATE_CMD: "true",
+        AGENTS_LAPTOP_WINDOW_CMD: "true",
         HOME: tmpDir,
       });
       assertEquals(initRes.code, 0, `agents.sh failed: ${initRes.stderr}`);

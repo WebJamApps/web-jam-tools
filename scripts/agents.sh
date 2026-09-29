@@ -15,6 +15,18 @@
 # does not run when the session already exists and the command only attaches.
 # Override the command with AGENTS_UPDATE_CMD.
 #
+# When `agents` is typed over SSH (SSH_CONNECTION is set) and no laptop-screen
+# window is showing the session, it also opens a gnome-terminal window on the laptop
+# screen attached to the session, both when it creates the session and when it only
+# attaches (web-jam-tools#1128). A tmux client counts as a laptop-screen window when
+# its process environment has no SSH_CONNECTION. The display comes from
+# `systemctl --user show-environment`. The window is a convenience: if nobody is
+# logged in to the desktop or anything fails, it is skipped silently and never
+# changes the exit code. Override the window step with AGENTS_LAPTOP_WINDOW_CMD
+# (run via `bash -c` instead of gnome-terminal; tests use it so no real window opens).
+# Nothing here starts the agents on login or boot; the session starts only when
+# `agents` is typed.
+#
 # Design reference:
 #   ~/Dropbox/web-jam-llms/Operations/agent-remote-access-design-2026-09-26.md
 #   ("The `agents` command").
@@ -70,8 +82,56 @@ UPDATE_CMD="${AGENTS_UPDATE_CMD:-$REPO_DIR/scripts/update-all.sh}"
 # behaves the same wherever `agents` was typed.
 TAB_ENV="unset SSH_CLIENT SSH_CONNECTION SSH_TTY;"
 
+# True (exit 0) when a tmux client attached to the session was not started over SSH,
+# i.e. a window on the laptop screen is already showing it.
+laptop_client_present() {
+  local pid client_env
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    client_env=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null) || continue
+    case $'\n'"$client_env" in
+      *$'\n'SSH_CONNECTION=*) ;;
+      *) return 0 ;;
+    esac
+  done < <(tmux "${TMUX_ARGS[@]}" list-clients -t "$SESSION" -F '#{client_pid}' 2>/dev/null || true)
+  return 1
+}
+
+# Open the session in a terminal window on the laptop screen. Best effort: every
+# failure is swallowed and it never blocks, prints, or returns non-zero.
+open_laptop_window() {
+  if [ -n "${AGENTS_LAPTOP_WINDOW_CMD:-}" ]; then
+    timeout 10 bash -c "$AGENTS_LAPTOP_WINDOW_CMD" >/dev/null 2>&1 || true
+    return 0
+  fi
+  local env_out display xauth
+  env_out=$(timeout 5 systemctl --user show-environment 2>/dev/null) || return 0
+  display=$(printf '%s\n' "$env_out" | sed -n 's/^DISPLAY=//p' | head -n 1) || return 0
+  [ -n "$display" ] || return 0
+  xauth=$(printf '%s\n' "$env_out" | sed -n 's/^XAUTHORITY=//p' | head -n 1) || xauth=""
+  (
+    export DISPLAY="$display"
+    if [ -n "$xauth" ]; then export XAUTHORITY="$xauth"; fi
+    if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+      export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    fi
+    timeout 10 gnome-terminal -- tmux "${TMUX_ARGS[@]}" attach-session -t "$SESSION" >/dev/null 2>&1 || true
+  ) >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+  return 0
+}
+
+# Over SSH with no laptop-screen window showing the session, open one.
+maybe_open_laptop_window() {
+  [ -n "${SSH_CONNECTION:-}" ] || return 0
+  laptop_client_present && return 0
+  open_laptop_window || true
+  return 0
+}
+
 # Attach to the session (or switch to it from inside tmux), then exit.
 attach_and_exit() {
+  maybe_open_laptop_window || true
   if [ "$DO_ATTACH" = "1" ]; then
     if { [ -t 0 ] && [ "${TERM:-dumb}" != "dumb" ]; } || [ "${AGENTS_FORCE_ATTACH:-0}" = "1" ]; then
       if [ -n "${TMUX:-}" ] && [ ${#TMUX_ARGS[@]} -eq 0 ]; then
