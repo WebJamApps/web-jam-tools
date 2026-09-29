@@ -496,6 +496,21 @@ Deno.test("agents.sh over SSH opens the laptop window when it creates the sessio
   });
 });
 
+Deno.test("agents.sh runs the laptop-window command without SSH_* variables so the window is not counted as an SSH client", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const marker = `${tmpDir}/window-env.txt`;
+    const cmd =
+      `echo "\${SSH_CONNECTION:-none}:\${SSH_CLIENT:-none}:\${SSH_TTY:-none}" > "${marker}"`;
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      ...stubEnv(tmpDir, cmd, SSH_ENV),
+      SSH_CLIENT: "192.0.2.1 50000 22",
+      SSH_TTY: "/dev/pts/9",
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals((await Deno.readTextFile(marker)).trim(), "none:none:none");
+  });
+});
+
 Deno.test("agents.sh over SSH opens the laptop window when the session exists with no attached clients", async () => {
   await withThrowawayTmux(async (socketName, tmpDir) => {
     const marker = `${tmpDir}/window-ran.txt`;

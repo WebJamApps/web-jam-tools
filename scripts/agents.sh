@@ -101,7 +101,8 @@ laptop_client_present() {
 # failure is swallowed and it never blocks, prints, or returns non-zero.
 open_laptop_window() {
   if [ -n "${AGENTS_LAPTOP_WINDOW_CMD:-}" ]; then
-    timeout 10 bash -c "$AGENTS_LAPTOP_WINDOW_CMD" >/dev/null 2>&1 || true
+    # The window must not look like an SSH client to laptop_client_present.
+    (unset SSH_CONNECTION SSH_CLIENT SSH_TTY; timeout 10 bash -c "$AGENTS_LAPTOP_WINDOW_CMD") >/dev/null 2>&1 || true
     return 0
   fi
   local env_out display xauth
@@ -110,6 +111,9 @@ open_laptop_window() {
   [ -n "$display" ] || return 0
   xauth=$(printf '%s\n' "$env_out" | sed -n 's/^XAUTHORITY=//p' | head -n 1) || xauth=""
   (
+    # gnome-terminal passes its environment to the new window; without this the
+    # laptop window's tmux client would look like an SSH client.
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
     export DISPLAY="$display"
     if [ -n "$xauth" ]; then export XAUTHORITY="$xauth"; fi
     if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
