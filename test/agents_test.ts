@@ -6,7 +6,8 @@
 // 3. Tab names stay fixed (automatic-rename is off).
 // 4. A second run attaches instead of creating a second session.
 // 5. A tab drops to a plain shell prompt when its agent exits instead of closing.
-// 6. CLI flags (-L, -S, --no-attach, --help, unknown args) behave correctly.
+// 6. The update command runs before a new session is created, never on attach, and a failure only warns.
+// 7. CLI flags (-L, -S, --no-attach, --help, unknown args) behave correctly.
 
 import { assert, assertEquals } from "@std/assert";
 
@@ -63,6 +64,7 @@ Deno.test("agents.sh creates session 'agents' with tabs claude, codex, agy (indi
       AGENTS_CLAUDE_CMD: "sleep 60",
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
     });
     assertEquals(res.code, 0, `agents.sh failed: ${res.stdout}\n${res.stderr}`);
 
@@ -133,6 +135,7 @@ Deno.test("agents.sh turns off automatic-rename so tab names stay fixed", async 
       AGENTS_CLAUDE_CMD: "sleep 60",
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
     });
     assertEquals(res.code, 0);
 
@@ -185,12 +188,14 @@ Deno.test("agents.sh second run attaches to existing session without creating a 
       AGENTS_CLAUDE_CMD: "sleep 60",
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
     });
     assertEquals(res1.code, 0);
 
     // Second run targets the same socket
     const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName], {
       TMUX_TMPDIR: tmpDir,
+      AGENTS_UPDATE_CMD: "true",
     });
     assertEquals(res2.code, 0, `Second run failed: ${res2.stdout}\n${res2.stderr}`);
 
@@ -219,6 +224,7 @@ Deno.test("agents.sh started twice at the same moment never fails with duplicate
         AGENTS_CLAUDE_CMD: "sleep 60",
         AGENTS_CODEX_CMD: "sleep 60",
         AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_UPDATE_CMD: "true",
       };
       const [first, second] = await Promise.all([
         run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env),
@@ -256,6 +262,7 @@ Deno.test("agents.sh drops a tab to a plain shell when its agent exits instead o
       AGENTS_CLAUDE_CMD: "sh -c 'exit 0'",
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
     });
     assertEquals(res.code, 0);
 
@@ -309,6 +316,7 @@ Deno.test("agents run through its ~/.local/bin symlink passes the repo's claude-
       PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
 
@@ -340,6 +348,7 @@ Deno.test("agents started over SSH starts every tab without SSH_* variables, so 
       AGENTS_CLAUDE_CMD: probe("claude"),
       AGENTS_CODEX_CMD: probe("codex"),
       AGENTS_AGY_CMD: probe("agy"),
+      AGENTS_UPDATE_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
 
@@ -365,6 +374,7 @@ Deno.test("agents.sh supports -S socket path and --no-attach", async () => {
       AGENTS_CLAUDE_CMD: "sleep 60",
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
 
@@ -391,4 +401,46 @@ Deno.test("agents.sh refuses unknown arguments", async () => {
   const res = await run("bash", [AGENTS_SCRIPT, "--invalid-flag"]);
   assertEquals(res.code, 1);
   assert(res.stderr.includes("error: unknown argument: --invalid-flag"));
+});
+
+Deno.test("agents.sh runs the update command before the new session exists, and not when it only attaches", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const marker = `${tmpDir}/update-ran.txt`;
+    // Records whether the `agents` session existed at the moment the update ran.
+    const updateCmd = `sh -c 'if tmux -L ${socketName} has-session -t agents 2>/dev/null; ` +
+      `then echo session-existed; else echo no-session-yet; fi >> "${marker}"'`;
+    const env = {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: updateCmd,
+    };
+    const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+    assertEquals(res1.code, 0, res1.stderr);
+    assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), ["no-session-yet"]);
+
+    // Second run only attaches, so the update command must not run again.
+    const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+    assertEquals(res2.code, 0, res2.stderr);
+    assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), ["no-session-yet"]);
+  });
+});
+
+Deno.test("agents.sh still creates the session and exits 0, with a warning, when the update command fails", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "exit 1",
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stderr.includes("warning: update-all failed"), `no warning in: ${res.stderr}`);
+    const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
+      TMUX_TMPDIR: tmpDir,
+    });
+    assertEquals(has.code, 0);
+  });
 });
