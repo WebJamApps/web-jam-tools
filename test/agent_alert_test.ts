@@ -622,6 +622,7 @@ Deno.test(
         AGENTS_CLAUDE_CMD: "sleep 60",
         AGENTS_CODEX_CMD: "true",
         AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_UPDATE_CMD: "true",
         HOME: tmpDir,
       });
       assertEquals(initRes.code, 0, `agents.sh failed: ${initRes.stderr}`);

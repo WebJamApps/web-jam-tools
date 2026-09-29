@@ -9,6 +9,12 @@
 # Josh last typed on. When an agent exits, its tab drops to a normal shell
 # prompt instead of closing.
 #
+# Before it creates a new session, it runs scripts/update-all.sh in the foreground
+# (output visible in the terminal) so Claude Code, agy and Codex start on their
+# latest versions. A failed update prints a warning and the agents start anyway. It
+# does not run when the session already exists and the command only attaches.
+# Override the command with AGENTS_UPDATE_CMD.
+#
 # Design reference:
 #   ~/Dropbox/web-jam-llms/Operations/agent-remote-access-design-2026-09-26.md
 #   ("The `agents` command").
@@ -57,6 +63,7 @@ CLAUDE_CMD="${AGENTS_CLAUDE_CMD:-claude --settings $CLAUDE_SETTINGS}"
 # shellcheck disable=SC2016 # false positive, see above
 CODEX_CMD="${AGENTS_CODEX_CMD:-codex -c 'hooks.PermissionRequest=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$HOME/.claude/hooks/agent-alert.sh codex\"}]}]' -c 'notify=[\"$HOME/.claude/hooks/agent-alert.sh\", \"codex\"]'}"
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
+UPDATE_CMD="${AGENTS_UPDATE_CMD:-$REPO_DIR/scripts/update-all.sh}"
 # agy skips the laptop's login keyring whenever any SSH_* variable is set, so a
 # session started over SSH (tablet or phone) made agy ask to log in again
 # (measured 2026-09-28, agy 1.2.12). Every tab starts without them, so the session
@@ -80,6 +87,12 @@ attach_and_exit() {
 # If session already exists, attach to it. Never create a second session.
 if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
   attach_and_exit
+fi
+
+# Update the agents right before creating a new session (not when only attaching).
+# A failed update must never stop the agents from starting.
+if ! bash -c "$UPDATE_CMD"; then
+  echo "warning: update-all failed; starting the agents on the versions already installed" >&2
 fi
 
 # Create session with tab 1: claude in Josh's home folder.
