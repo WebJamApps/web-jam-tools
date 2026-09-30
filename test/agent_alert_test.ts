@@ -190,7 +190,7 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
     // Verify Priority header is included
     assert(await pathExists(curlArgsOut), "curl args should have been captured");
     const args = await Deno.readTextFile(curlArgsOut);
-    assert(args.includes('-H Priority: high'), 'curl should include Priority: high header');
+    assert(args.includes("-H Priority: high"), "curl should include Priority: high header");
 
     // The generated ntfy topic file is private to the user.
     const topicInfo = await Deno.stat(`${tmpDir}/.config/agent-alerts/ntfy-topic`);
