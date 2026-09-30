@@ -179,6 +179,8 @@ ROSTER=(
   # roster with no honest value to pass. Replaces "Claude Opus 4.8".
   "Claude Opus"
   "Claude Fable 5"
+  # Codex CLI running GPT-6 Luna — trial lane for Haiku-tier work (Josh, 2026-09-30).
+  "GPT-6 Luna"
 )
 
 author_roster_check() {

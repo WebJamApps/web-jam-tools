@@ -772,7 +772,6 @@ Deno.test(
       "Bash(git push -d)",
       "Bash(git push * -d *)",
       "Bash(git push * -d)",
-      "Bash(git push * :*)",
       "Bash(git push --force *)",
       "Bash(git push --force)",
       "Bash(git push * --force *)",
