@@ -25,6 +25,7 @@ export function merge(settingsPath: string, args: string[]): number {
   let allowPatterns: string[] = [];
   let statusLineArgs: string[] = [];
   let defaultModeArgs: string[] = [];
+  let autoModeArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
   // web-jam-tools#432 finding 9: a SessionStart or SessionEnd entry in agy's
@@ -72,6 +73,7 @@ export function merge(settingsPath: string, args: string[]): number {
         "--allow",
         "--status-line",
         "--default-mode",
+        "--auto-mode",
       ],
       rest,
     );
@@ -95,6 +97,7 @@ export function merge(settingsPath: string, args: string[]): number {
     allowPatterns = sections["--allow"] || [];
     statusLineArgs = sections["--status-line"] || [];
     defaultModeArgs = sections["--default-mode"] || [];
+    autoModeArgs = sections["--auto-mode"] || [];
   }
 
   const passedLifecycle = [
@@ -474,6 +477,29 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
+  // autoMode merge: the whole object is owned by this installer. One JSON
+  // string argument; installed when absent, replaced when it differs (key
+  // order ignored, array order significant). Only touched when --auto-mode
+  // was passed, so agy's hooks.json is unaffected.
+  let autoModeAdded = false;
+  let autoModeChanged = false;
+  if (autoModeArgs.length > 0) {
+    let desiredAutoMode: unknown;
+    try {
+      desiredAutoMode = JSON.parse(autoModeArgs[0]);
+    } catch (e) {
+      console.error(`error: --auto-mode value is not valid JSON: ${e}`);
+      return 1;
+    }
+    if (data.autoMode === undefined) {
+      autoModeAdded = true;
+      data.autoMode = desiredAutoMode;
+    } else if (canonicalJson(data.autoMode) !== canonicalJson(desiredAutoMode)) {
+      autoModeChanged = true;
+      data.autoMode = desiredAutoMode;
+    }
+  }
+
   // Secret-scan gate: check all strings in permissions and hooks for credentials
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
@@ -552,7 +578,9 @@ export function merge(settingsPath: string, args: string[]): number {
     statusLineAdded ||
     statusLineChanged ||
     defaultModeAdded ||
-    defaultModeChanged;
+    defaultModeChanged ||
+    autoModeAdded ||
+    autoModeChanged;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -648,6 +676,12 @@ export function merge(settingsPath: string, args: string[]): number {
             defaultModeArgs[0]
           }${defaultModePrevValue ? `, has ${defaultModePrevValue}` : ""})`,
         );
+      }
+      if (autoModeAdded) {
+        console.error(`${targetFilename}: missing autoMode section`);
+      }
+      if (autoModeChanged) {
+        console.error(`${targetFilename}: autoMode differs from the versioned config`);
       }
       return 1;
     }
@@ -764,8 +798,22 @@ export function merge(settingsPath: string, args: string[]): number {
       `${targetFilename}: updated permissions.defaultMode to ${defaultModeArgs[0]}`,
     );
   }
+  if (autoModeAdded) {
+    console.log(`${targetFilename}: added autoMode section`);
+  }
+  if (autoModeChanged) {
+    console.log(`${targetFilename}: updated autoMode to the versioned config`);
+  }
 
   return 0;
+}
+
+/** JSON.stringify with object keys sorted, so key order never counts as drift. */
+function canonicalJson(v: unknown): string {
+  return JSON.stringify(v, (_k, val) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : val);
 }
 
 function tryExistsSync(p: string): boolean {

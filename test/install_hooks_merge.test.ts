@@ -1687,3 +1687,78 @@ Deno.test(
     );
   },
 );
+
+// --- --auto-mode: whole-object autoMode section ---
+
+// deno-lint-ignore no-explicit-any
+const readAny = async (p: string): Promise<any> => JSON.parse(await Deno.readTextFile(p));
+
+const AUTO_MODE = {
+  environment: ["**Trusted repo**: every git repo under /home/joshua/WebJamApps/"],
+  allow: ["$defaults", "Agent PR branches: plain pushes are ordinary delegated work."],
+  soft_deny: ["$defaults", "Bash(rclone purge*)"],
+};
+const AUTO_MODE_ARGS = ["--auto-mode", JSON.stringify(AUTO_MODE)];
+
+Deno.test("--auto-mode installs autoMode when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, AUTO_MODE_ARGS);
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("added autoMode section"));
+    assertEquals((await readAny(path)).autoMode, AUTO_MODE);
+  });
+});
+
+Deno.test("a second --auto-mode run is a no-op and writes no second backup", async () => {
+  await withTempSettings({}, async (path) => {
+    assertEquals((await runMerge(path, AUTO_MODE_ARGS)).code, 0);
+    const second = await runMerge(path, AUTO_MODE_ARGS);
+    assertEquals(second.code, 0, second.stderr);
+    assert(second.stdout.includes("already up to date (no-op)"));
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const backups = [...Deno.readDirSync(dir)].filter((e) => e.name.includes(".bak-"));
+    assertEquals(backups.length, 1);
+  });
+});
+
+Deno.test("--auto-mode leaves every other key alone and replaces a differing autoMode", async () => {
+  await withTempSettings(
+    {
+      permissions: { allow: ["Bash(ls:*)"], defaultMode: "auto" },
+      model: "opus",
+      autoMode: { environment: ["stale"] },
+    },
+    async (path) => {
+      const res = await runMerge(path, AUTO_MODE_ARGS);
+      assertEquals(res.code, 0, res.stderr);
+      assert(res.stdout.includes("updated autoMode"));
+      const data = await readAny(path);
+      assertEquals(data.autoMode, AUTO_MODE);
+      assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
+      assertEquals(data.permissions?.defaultMode, "auto");
+      assertEquals(data.model, "opus");
+    },
+  );
+});
+
+Deno.test("--check with --auto-mode flags a missing or differing autoMode and passes when equal", async () => {
+  await withTempSettings({}, async (path) => {
+    const missing = await runMerge(path, ["--check", ...AUTO_MODE_ARGS]);
+    assertEquals(missing.code, 1);
+    assert(missing.stderr.includes("missing autoMode section"));
+    await Deno.writeTextFile(path, JSON.stringify({ autoMode: { allow: ["x"] } }));
+    const differs = await runMerge(path, ["--check", ...AUTO_MODE_ARGS]);
+    assertEquals(differs.code, 1);
+    assert(differs.stderr.includes("autoMode differs"));
+    // --check never writes.
+    assertEquals((await readAny(path)).autoMode, { allow: ["x"] });
+    // Key order alone is not drift.
+    const reordered = {
+      soft_deny: AUTO_MODE.soft_deny,
+      allow: AUTO_MODE.allow,
+      environment: AUTO_MODE.environment,
+    };
+    await Deno.writeTextFile(path, JSON.stringify({ autoMode: reordered }));
+    assertEquals((await runMerge(path, ["--check", ...AUTO_MODE_ARGS])).code, 0);
+  });
+});

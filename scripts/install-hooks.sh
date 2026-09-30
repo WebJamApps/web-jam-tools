@@ -33,6 +33,10 @@
 #    dispatched subagents (~93k and ~62k tokens, zero output) before nothing
 #    pinned the mode (web-jam-tools#705).
 #
+#    Also installs the whole "autoMode" object (AUTO_MODE_JSON below) into
+#    ~/.claude/settings.json, replacing it when it differs; --check reports
+#    drift. Claude Code only.
+#
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
@@ -771,6 +775,54 @@ merge_agy_stop_args=("$ALERT_AGY_COMMAND")
 # to the $SETTINGS_PATH invocations below, never to $AGY_HOOKS_PATH.
 merge_default_mode_args=("$DEFAULT_MODE")
 
+# --- autoMode (web-jam-tools#1189 follow-up) ---
+# The "autoMode" section of Claude Code's settings.json (auto-mode classifier:
+# environment prose, allow, soft_deny; "$defaults" keeps the built-in rules).
+# Installed as ONE whole object: replaced when it differs, no other key
+# touched. Claude Code ONLY, like statusLine/defaultMode: passed solely to the
+# $SETTINGS_PATH invocations, never to agy's hooks.json. Quoted heredoc, so
+# "$defaults" is never expanded by the shell.
+read -r -d '' AUTO_MODE_JSON <<'AUTO_MODE_JSON_EOF' || true
+{
+  "soft_deny": [
+    "$defaults",
+    "Bash(heroku apps:destroy*)",
+    "Bash(rclone purge*)"
+  ],
+  "environment": [
+    "### Org-wide",
+    "**Organization**: None configured",
+    "**Cloud provider(s)**: None configured",
+    "**Repository visibility**: Not queryable here (no origin remote on this checkout — repo path /home/joshua has no remotes and 0 tracked files); assume private until confirmed",
+    "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
+    "**Secrets management**: None configured",
+    "**Default / protected branches**: Not queryable here (origin/HEAD unset, no remotes)",
+    "**CI/CD deploy targets**: None configured",
+    "**Network posture**: None configured",
+    "**Source control**: The trusted repo and its remote(s) only (no additional orgs configured) — as scoped by the Trusted repo and Repository visibility entries above",
+    "**Trusted internal domains**: None configured",
+    "**Trusted cloud buckets**: None configured — the bucket names found in config (my_bucket, my-bucket, bucket, bucket-name, etc.) are generic/placeholder-shaped names spread across many files but not corroborated by any usage/transcript evidence, so none are adopted",
+    "**Key internal services**: None configured",
+    "**Internal package registry**: None configured",
+    "**Sensitive data locations & audiences**: any file or store holding personal data, confidential business data, credentials, regulated data, or similarly sensitive material; preserve exact handles when known and share only with audiences cleared at the [named+specifics] bar; this home directory contains many .env/.env.example/credentials files across WebJamApps/* and Dropbox/* project checkouts — treat all as sensitive",
+    "**Data retention / declassification**: None configured",
+    "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment (hyphen/underscore/dot-delimited — e.g. matches `prod-db`, not `producer`); note tsconfig.prod.json and scripts/smoke-prod-socket.mjs paths exist under several WebJamApps/* checkouts",
+    "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
+    "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
+    "### User-specific",
+    "**Primary use of Claude Code**: software development — multi-repo work across WebJamApps (JaMmusic, CollegeLutheran, AppersonAuto, web-jam-back, web-jam-tools, WebJamSocketCluster, TimShermanMusic) plus AI/model-routing operations (Opus/Sonnet/Haiku/Flash/agy delegation)",
+    "**Trusted repo**: every git repo under /home/joshua/WebJamApps/ (GitHub org WebJamApps) and every worktree of them under /tmp/. Sessions start in /home/joshua and routinely work across these repos.",
+    "**Org-specific CLIs**: deno, heroku, agy, gio, gh, rclone, deployctl (seen in this project's usage and/or shell history)",
+    "**routine under**: no <user>/ prefix qualifiers found in evidence"
+  ],
+  "allow": [
+    "$defaults",
+    "Agent PR branches: creating worktrees on, committing to, and plain (non-force) pushing to any non-main/dev branch of a WebJamApps repo, including another agent's open PR branch (agy/*, claude/*, codex/*, fix/*), is ordinary delegated work."
+  ]
+}
+AUTO_MODE_JSON_EOF
+merge_auto_mode_args=("$AUTO_MODE_JSON")
+
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432, matcher-by-
 # -own-tool-names regression fixed by web-jam-tools#1036) ---
 #
@@ -881,7 +933,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}"; then
     DRIFT=1
   fi
 
@@ -1017,7 +1069,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 
