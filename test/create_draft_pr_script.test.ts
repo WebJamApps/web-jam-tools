@@ -120,6 +120,29 @@ async function runScript(
   };
 }
 
+// Variant that doesn't add --dry-run, for testing actual gh invocations
+async function runScriptWithoutDryRun(
+  cwd: string,
+  rawArgs: string[],
+  env: Record<string, string> = {},
+): Promise<RunResult> {
+  const args = await toFileFlags(rawArgs);
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH, ...args],
+    cwd,
+    env,
+    clearEnv: false,
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
+}
+
 function baseArgs(
   overrides: Partial<Record<"author" | "summary" | "testPlan" | "evidence", string>> = {},
 ) {
@@ -1003,4 +1026,136 @@ Deno.test("--base with empty string is rejected with error", async () => {
   const res = await runScript(repoDir, [...baseArgs(), "--base", ""], {}, { raw: true });
   assertEquals(res.code, 1);
   assertMatch(res.stderr, /--base cannot be empty/);
+});
+
+// --- --base passed through to gh pr create/edit tests ---
+
+async function makeMockGhWithArgCapture() {
+  const dir = await Deno.makeTempDir({ prefix: "mock-gh-args-" });
+  const argsLogPath = `${dir}/gh-invocations.txt`;
+
+  const scriptContent = `#!/usr/bin/env bash
+# Log all invocations to a file for inspection
+{
+  echo "=== gh invocation ==="
+  for arg in "$@"; do
+    echo "$arg"
+  done
+  echo "=== end ==="
+} >> "${argsLogPath}"
+
+# Respond to queries that the script might make
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  echo "WebJamApps/web-jam-tools"
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "state" ]; then
+      echo "OPEN"
+      exit 0
+    elif [ "$arg" = "title" ]; then
+      echo "Test Issue"
+      exit 0
+    elif [ "$arg" = "labels" ]; then
+      echo ""
+      exit 0
+    fi
+  done
+fi
+if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+  echo "https://github.com/WebJamApps/web-jam-tools/pull/9999"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  echo "https://github.com/WebJamApps/web-jam-tools/pull/9999"
+  exit 0
+fi
+exit 0
+`;
+
+  const ghPath = `${dir}/gh`;
+  await Deno.writeTextFile(ghPath, scriptContent);
+  await Deno.chmod(ghPath, 0o755);
+  return { dir, argsLogPath };
+}
+
+Deno.test("--base some-branch is passed through to gh pr create call", async () => {
+  const { dir, argsLogPath } = await makeMockGhWithArgCapture();
+
+  // Create a mock git that succeeds for git push but delegates other commands to real git
+  const gitMockDir = await Deno.makeTempDir({ prefix: "mock-git-" });
+  const realGitPath = "/usr/bin/git";
+  const gitScriptContent = `#!/usr/bin/env bash
+if [ "$1" = "push" ]; then
+  # Mock git push to succeed without actually doing anything
+  exit 0
+fi
+# Delegate all other git commands to real git
+${realGitPath} "$@"
+`;
+  const gitPath = `${gitMockDir}/git`;
+  await Deno.writeTextFile(gitPath, gitScriptContent);
+  await Deno.chmod(gitPath, 0o755);
+
+  const env = {
+    PATH: `${dir}:${gitMockDir}:${Deno.env.get("PATH")}`,
+  };
+
+  // Create the parent-feature-branch in the fixture repo so --base validation passes
+  await new Deno.Command("git", {
+    args: ["branch", "parent-feature-branch"],
+    cwd: repoDir,
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+
+  const res = await runScriptWithoutDryRun(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--base",
+      "parent-feature-branch",
+      "--issue",
+      "999",
+    ],
+    env,
+  );
+
+  // Read the invocation log if it was created
+  let invocationsText = "";
+  try {
+    invocationsText = await Deno.readTextFile(argsLogPath);
+  } catch (_e) {
+    // File doesn't exist; gh was not invoked
+  }
+
+  await Deno.remove(dir, { recursive: true });
+  await Deno.remove(gitMockDir, { recursive: true });
+
+  // Check that gh pr create was invoked with --base parent-feature-branch
+  const invocations = invocationsText.split("=== gh invocation ===\n");
+  let foundBaseInCreate = false;
+  for (let i = 0; i < invocations.length; i++) {
+    const invocation = invocations[i].trim();
+    if (invocation.includes("pr") && invocation.includes("create")) {
+      // This is a pr create call; check if --base and parent-feature-branch are present
+      if (
+        invocation.includes("--base") &&
+        invocation.includes("parent-feature-branch")
+      ) {
+        foundBaseInCreate = true;
+        break;
+      }
+    }
+  }
+
+  assertEquals(
+    foundBaseInCreate,
+    true,
+    `--base parent-feature-branch not found in gh pr create invocation. Script code: ${res.code}, stderr: ${res.stderr}\n\nLog:\n${invocationsText}`,
+  );
 });
