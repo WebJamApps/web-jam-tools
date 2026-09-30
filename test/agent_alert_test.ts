@@ -85,15 +85,22 @@ if [ -n "\${FAKE_CURL_EXIT_CODE:-}" ]; then
   exit "\$FAKE_CURL_EXIT_CODE"
 fi
 BODY=""
+HEADERS=""
 while [ $# -gt 0 ]; do
   if [ "$1" = "-d" ]; then
     shift
     BODY="$1"
+  elif [ "$1" = "-H" ]; then
+    shift
+    HEADERS="\${HEADERS} -H $1"
   fi
   shift
 done
-if [ -n "$BODY" ] && [ -n "\${CURL_OUT:-}" ]; then
+if [ -n "\${CURL_OUT:-}" ]; then
   printf "%s" "$BODY" > "$CURL_OUT"
+fi
+if [ -n "\${CURL_ARGS_OUT:-}" ]; then
+  printf "%s" "\${HEADERS# }" > "$CURL_ARGS_OUT"
 fi
 exit 0
 `,
@@ -151,6 +158,7 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
     assert(paneId.length > 0, "expected valid pane ID");
 
     const curlOut = `${tmpDir}/curl_alert.txt`;
+    const curlArgsOut = `${tmpDir}/curl_args.txt`;
     const res = await run(
       "bash",
       [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
@@ -160,6 +168,7 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
         TMUX_TMPDIR: tmpDir,
         PATH: `${fakeBinDir}:${Deno.env.get("PATH") ?? ""}`,
         CURL_OUT: curlOut,
+        CURL_ARGS_OUT: curlArgsOut,
         HOME: tmpDir,
       },
     );
@@ -177,6 +186,11 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
     assert(await pathExists(curlOut), "curl should have been called");
     const body = await Deno.readTextFile(curlOut);
     assertEquals(body, "Codex is waiting for you");
+
+    // Verify Priority header is included
+    assert(await pathExists(curlArgsOut), "curl args should have been captured");
+    const args = await Deno.readTextFile(curlArgsOut);
+    assert(args.includes('-H Priority: high'), 'curl should include Priority: high header');
 
     // The generated ntfy topic file is private to the user.
     const topicInfo = await Deno.stat(`${tmpDir}/.config/agent-alerts/ntfy-topic`);
