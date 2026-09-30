@@ -254,9 +254,6 @@ DENY_RULES=(
   'Bash(git push * -d *)'
   'Bash(git push * -d)'
 
-  # git push <remote> :<branch>  (empty-source colon refspec — also deletes)
-  'Bash(git push * :*)'
-
   # git push --force / -f  — plain force stays DENIED, always. It overwrites
   # whatever arrived on the remote since your last fetch, with no check.
   # NOTE: --force-with-lease is deliberately NOT here — it moved to ASK_RULES
@@ -408,7 +405,8 @@ ASK_RULES=(
   # the remote moved after your last fetch — the case where a force push
   # destroys someone else's work is structurally prevented. Plain --force
   # remains in DENY_RULES above with no prompt and no exception, as do branch
-  # deletion, empty-source refspecs, --mirror and --prune.
+  # deletion, --mirror and --prune. Empty-source colon refspecs are caught by
+  # the merge/deploy guard hook because Claude Code deny rules cannot express them.
   #
   # Origin: 2026-08-13, a rebase of a feature branch behind an open PR could
   # not be published at all — the deny rule blocked the push and no
