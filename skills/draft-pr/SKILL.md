@@ -13,11 +13,12 @@ running the shared script, which is the single source of truth for PR creation (
 the full invocation under "How to run it" — `--summary` and `--test-plan` are
 **required**; `--test-evidence` is optional and normally omitted).
 
-It **always** produces a draft PR based on `dev` and an attribution footer — neither
-can be overridden. By default the PR **closes the issue on merge** (`Closes #N`); pass
+It **always** produces a draft PR based on `dev` (or another branch with `--base`) and an attribution footer — the
+draft state and footer cannot be overridden. By default the PR **closes the issue on merge** (`Closes #N`); pass
 `--part-of` only when the issue must stay open (a partial PR, a standing run-log/epic
 issue like a venue-mining run log, or a hook issue that must remain open until installed
-and confirmed firing — see `docs/cross-ai-rules.md`).
+and confirmed firing — see `docs/cross-ai-rules.md`). Use `--base <parent-branch>` for stacked PRs where the
+head branch is based on another PR's branch instead of dev.
 
 Post-merge manual steps are governed by the POST-MERGE MANUAL STEPS rule in
 `docs/cross-ai-rules.md` — read it there rather than relying on a summary here.

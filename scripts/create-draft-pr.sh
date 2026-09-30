@@ -8,7 +8,7 @@
 #
 # Hard invariants — NO flag can override them:
 #   * the PR is ALWAYS a draft;
-#   * the PR is ALWAYS based on `dev`;
+#   * the PR is ALWAYS based on a branch (defaulting to `dev` when --base is omitted);
 #   * the body ALWAYS ends with an attribution footer naming the tool + model.
 # When an issue is resolved (from the branch name or --issue), the PR CLOSES it on
 # merge (`Closes #N`); pass --part-of for a partial PR or a standing run-log/epic
@@ -18,7 +18,7 @@
 # Josh alone reviews and flips draft -> ready on GitHub.
 #
 # Usage:
-#   create-draft-pr.sh --author "<tool> — <model>" [--issue N] [--title TEXT] [--part-of] [--no-close] [--dry-run] \
+#   create-draft-pr.sh --author "<tool> — <model>" [--base BRANCH] [--issue N] [--title TEXT] [--part-of] [--no-close] [--dry-run] \
 #       [--update] \
 #       [--no-close-reason TEXT | --no-close-reason-file PATH] \
 #       [--summary TEXT | --summary-file PATH] \
@@ -37,6 +37,9 @@
 #                   entirely (see below) — headless/scripted callers that already
 #                   know the exact model should set it instead of trusting the
 #                   model to self-report correctly.
+#   --base          Optional PR base branch. Defaults to "dev" if omitted. Must not be empty.
+#                   Use for stacked PRs where the head branch is based on another PR's
+#                   branch instead of dev.
 #   --no-close      Opt-in flag: DON'T close the issue on merge (emits `Refs #N — <reason>`).
 #                   Use when an issue has post-merge acceptance criteria that can only be
 #                   verified after merge.
@@ -194,6 +197,7 @@ author_roster_check() {
 }
 
 AUTHOR=""
+BASE="dev"
 ISSUE=""
 TITLE=""
 SUMMARY=""
@@ -248,10 +252,11 @@ while [ $# -gt 0 ]; do
         shift 1
       fi
       ;;
-    --author|--issue|--title|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file|--no-close-reason|--no-close-reason-file)
+    --author|--base|--issue|--title|--summary|--test-plan|--test-evidence|--screenshots|--summary-file|--test-plan-file|--test-evidence-file|--no-close-reason|--no-close-reason-file)
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
       case "$1" in
         --author)              AUTHOR="$2" ;;
+        --base)                BASE="$2" ;;
         --issue)               ISSUE="$2" ;;
         --title)               TITLE="$2" ;;
         --summary)             SUMMARY="$2"; HAS_SUMMARY=1 ;;
@@ -286,6 +291,12 @@ if [ -z "$AUTHOR" ]; then
 fi
 author_roster_check "$AUTHOR"
 
+# --- validate: base branch not empty ---
+if [ -z "$BASE" ]; then
+  echo "ERROR: --base cannot be empty (defaults to 'dev' when omitted)." >&2
+  exit 1
+fi
+
 # --- must be inside a git repo ---
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "ERROR: not inside a git repository." >&2
@@ -294,7 +305,7 @@ fi
 
 # --- never open a PR from dev/main ---
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$BRANCH" = "dev" ] || [ "$BRANCH" = "main" ]; then
+if [ "$BRANCH" = "$BASE" ] || [ "$BRANCH" = "main" ]; then
   echo "ERROR: refusing to open a PR from '$BRANCH' — switch to a feature branch." >&2
   exit 1
 fi
@@ -306,10 +317,10 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-# --- the repo must have a `dev` branch; never fall back to main ---
-if ! git show-ref --verify --quiet refs/heads/dev \
-   && ! git show-ref --verify --quiet refs/remotes/origin/dev; then
-  echo "ERROR: no 'dev' branch in this repo — refusing (never falls back to main)." >&2
+# --- the repo must have the base branch ---
+if ! git show-ref --verify --quiet refs/heads/"$BASE" \
+   && ! git show-ref --verify --quiet refs/remotes/origin/"$BASE"; then
+  echo "ERROR: no '$BASE' branch in this repo." >&2
   exit 1
 fi
 
@@ -741,29 +752,29 @@ if [ "$UPDATE" -eq 1 ]; then
   echo ""
   echo "Draft PR updated: $PR_URL"
   if [ -z "$ISSUE" ]; then
-    echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+    echo "  base: $BASE | state: draft | no issue | by: $AUTHOR"
   elif [ "$NO_CLOSE" -eq 1 ]; then
-    echo "  base: dev | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $BASE | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
-    echo "  base: dev | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $BASE | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else
-    echo "  base: dev | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $BASE | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
   fi
   echo "Josh reviews the diff and flips draft -> ready on GitHub."
 else
-  echo "Opening draft PR (base dev)${ISSUE:+ for issue #$ISSUE}..."
-  PR_URL="$(gh pr create --draft --base dev --title "$PR_TITLE" --body "$BODY")"
+  echo "Opening draft PR (base $BASE)${ISSUE:+ for issue #$ISSUE}..."
+  PR_URL="$(gh pr create --draft --base "$BASE" --title "$PR_TITLE" --body "$BODY")"
 
   echo ""
   echo "Draft PR opened: $PR_URL"
   if [ -z "$ISSUE" ]; then
-    echo "  base: dev | state: draft | no issue | by: $AUTHOR"
+    echo "  base: $BASE | state: draft | no issue | by: $AUTHOR"
   elif [ "$NO_CLOSE" -eq 1 ]; then
-    echo "  base: dev | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $BASE | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
-    echo "  base: dev | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $BASE | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else
-    echo "  base: dev | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $BASE | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
   fi
   echo "Josh reviews the diff and flips draft -> ready on GitHub."
 fi

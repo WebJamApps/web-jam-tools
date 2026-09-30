@@ -990,3 +990,17 @@ Deno.test("refuses and fails closed when fetching issue labels fails (via gh err
     /ERROR: failed to fetch labels for issue #634 \(via gh\): API rate limit exceeded/,
   );
 });
+
+// --- --base option tests ---
+
+Deno.test("--base defaults to dev when omitted (passes validation)", async () => {
+  const res = await runScript(repoDir, baseArgs());
+  assertEquals(res.code, 0, res.stderr);
+  assertMatch(res.stdout, /=== DRY RUN/);
+});
+
+Deno.test("--base with empty string is rejected with error", async () => {
+  const res = await runScript(repoDir, [...baseArgs(), "--base", ""], {}, { raw: true });
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /--base cannot be empty/);
+});
