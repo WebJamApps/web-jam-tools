@@ -229,10 +229,12 @@ skill.
   permitted and unchanged — this rule narrows that standing post-merge cleanup habit to local
   branches only, it does not remove it or require re-approval for it. Enforced by three independent
   layers: a harness `permissions.deny` block on the ways `git push`/`git branch` can delete or
-  clobber a remote ref (`--delete`/`-d`, empty-source colon refspecs, plain `--force`/`-f`,
+  clobber a remote ref (`--delete`/`-d`, plain `--force`/`-f`,
   `--mirror`, `--prune`, and `git branch -D`/`--delete --force`
   against a `remotes/` ref — installed via `scripts/install-hooks.sh` in this repo; note
-  `--force-with-lease` is `ask` rather than `deny`, per the paragraph above), a GitHub
+  `--force-with-lease` is `ask` rather than `deny`, per the paragraph above). The colon-refspec
+  form (`git push origin :branch`) is caught by the merge/deploy guard hook because a Claude Code
+  deny rule cannot express it. A GitHub
   ruleset restricting deletions on the branches agents create (`claude/**`, `agy/**`, `dev`, `main`
   — Josh-only UI work, see web-jam-tools#308 "Remote branches can be deleted by an agent with no
   authorization — advisory guard does not block (3 layers: deny rules, GitHub ruleset, HARD

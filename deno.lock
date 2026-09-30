@@ -12,7 +12,7 @@
     "npm:cheerio@^1.2.0": "1.2.0",
     "npm:docx@^9.7.2": "9.7.2",
     "npm:jscpd@*": "5.0.16",
-    "npm:nodemailer@^9.1.0": "9.1.1",
+    "npm:nodemailer@^10.0.6": "10.0.12",
     "npm:playwright@1.63.0": "1.63.0",
     "npm:playwright@^1.63.0": "1.63.0"
   },
@@ -246,8 +246,8 @@
       "integrity": "sha512-3wVS3i51pE2pi1k5FFL/95BGfVS0kSsvDVuGXHOtxox/TywUmtgq+3qiTOTbs9J7KfHaXPiN171k/A6dBnaXFw==",
       "bin": true
     },
-    "nodemailer@9.1.1": {
-      "integrity": "sha512-izw9mVKFix6YSnC9eLgV6g1opl9DUlRio9ZNcq+Wu9Ujn2UwF+8Nl0B8nz22kEC+CTZCvinkxwJ0DeFbb6NwcQ=="
+    "nodemailer@10.0.12": {
+      "integrity": "sha512-PQ46oNbNMuH/Sno7B5IWIU9etytwrO0xdTFvWXpIQFRXhBAXtzD48243AS+BCbQQTPD8y3fqUrgLn0tSo77gvg=="
     },
     "nth-check@2.1.1": {
       "integrity": "sha512-lqjrjmaOoAnWfMmBPL+XNnynZh2+swxiX3WUE0s4yEHI6m+AwrK2UZOimIRl3X/4QctVqS8AiZjFqyOGrMXb/w==",
