@@ -27,6 +27,7 @@ import {
   getCandidateBreakdown,
   identifyCandidateBadge,
   isPitchableCandidate,
+  normalizeEligibleBadge,
   renderCandidateTable,
 } from "../src/book-gig/candidates.ts";
 import {
@@ -3743,9 +3744,47 @@ Deno.test("identifyCandidateBadge: handles eligible returning and new venues (#8
     },
   };
   const expiredBadge = identifyCandidateBadge(expiredHoldCandidate, refDate);
-  assertEquals(expiredBadge.badge, "clear — nearest gig ~3.5 mo away");
+  assertEquals(expiredBadge.badge, "Sending — nearest gig ~3.5 mo away");
   assertEquals(expiredBadge.cssClass, "badge-eligible");
   assertEquals(expiredBadge.isExcluded, false);
+});
+
+Deno.test("normalizeEligibleBadge & identifyCandidateBadge: maps 'clear — ...' to 'Sending — ...' (#1196)", () => {
+  assertEquals(
+    normalizeEligibleBadge("clear — nearest gig ~2.2 mo away"),
+    "Sending — nearest gig ~2.2 mo away",
+  );
+  assertEquals(
+    normalizeEligibleBadge("clear - nearest gig ~4.1 mo away"),
+    "Sending — nearest gig ~4.1 mo away",
+  );
+  assertEquals(normalizeEligibleBadge("clear"), "Sending");
+  assertEquals(normalizeEligibleBadge("CLEAR"), "Sending");
+  assertEquals(normalizeEligibleBadge("no gigs yet"), "no gigs yet");
+  assertEquals(normalizeEligibleBadge("New"), "New");
+
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+  const venueWithSpacingNote: CandidateVenue = {
+    _id: "v-clear",
+    name: "Clear Venue",
+    reason: {
+      spacingNote: "clear — nearest gig ~2.2 mo away",
+    },
+  };
+  const badge = identifyCandidateBadge(venueWithSpacingNote, refDate);
+  assertEquals(badge.badge, "Sending — nearest gig ~2.2 mo away");
+  assertEquals(badge.cssClass, "badge-eligible");
+  assertEquals(badge.isExcluded, false);
+
+  const venueWithClearStatusBadge: CandidateVenue = {
+    _id: "v-clear-sb",
+    name: "Clear Status Badge Venue",
+    statusBadge: "clear — nearest gig ~18.8 mo away",
+  };
+  const badgeSb = identifyCandidateBadge(venueWithClearStatusBadge, refDate);
+  assertEquals(badgeSb.badge, "Sending — nearest gig ~18.8 mo away");
+  assertEquals(badgeSb.cssClass, "badge-eligible");
+  assertEquals(badgeSb.isExcluded, false);
 });
 
 Deno.test("filterAndRankCandidates: populates granular status badges and reasoning on candidate venues (#879)", () => {

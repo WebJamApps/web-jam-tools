@@ -7,7 +7,7 @@ import type {
   OutreachCampaignRecord,
   PitchEmail,
 } from "./types.ts";
-import { identifyCandidateBadge } from "./candidates.ts";
+import { identifyCandidateBadge, normalizeEligibleBadge } from "./candidates.ts";
 import type { WeekendRunData } from "./gmail.ts";
 
 function escapeHtml(str: string): string {
@@ -499,7 +499,7 @@ export function renderDarkHtml(result: BookGigResult): string {
         : "—";
       const pay = escapeHtml(formatPay(c.payAmount));
       const badgeInfo = identifyCandidateBadge(c);
-      const badgeText = escapeHtml(c.statusBadge || badgeInfo.badge);
+      const badgeText = escapeHtml(normalizeEligibleBadge(c.statusBadge || badgeInfo.badge));
       return `
         <tr data-venue-id="${escapeHtml(c._id)}">
           <td class="num-col">${idx + 1}</td>

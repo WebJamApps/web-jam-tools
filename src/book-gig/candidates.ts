@@ -475,6 +475,19 @@ export function badgeCssToExclusionReason(cssClass: string): ExclusionReason | u
 }
 
 /**
+ * Normalizes an eligible candidate spacing badge from legacy 'clear — ...' to 'Sending — ...'.
+ */
+export function normalizeEligibleBadge(badge: string): string {
+  if (/^clear\s*[—–-]\s*/i.test(badge)) {
+    return badge.replace(/^clear\s*[—–-]\s*/i, "Sending — ");
+  }
+  if (/^clear$/i.test(badge.trim())) {
+    return "Sending";
+  }
+  return badge;
+}
+
+/**
  * Identify eligibility status badge and exclusion reasoning for a candidate venue
  */
 export function identifyCandidateBadge(
@@ -511,7 +524,7 @@ export function identifyCandidateBadge(
     if (sb.startsWith("Returning")) {
       return { badge: sb, cssClass: "badge-returning", isExcluded: false };
     }
-    return { badge: sb, cssClass: "badge-eligible", isExcluded: false };
+    return { badge: normalizeEligibleBadge(sb), cssClass: "badge-eligible", isExcluded: false };
   }
 
   if (v.exclusionReason === "no-booking-email") {
@@ -715,7 +728,7 @@ export function identifyCandidateBadge(
   }
 
   return {
-    badge: v.reason?.spacingNote || "New",
+    badge: normalizeEligibleBadge(v.reason?.spacingNote || "New"),
     cssClass: "badge-eligible",
     isExcluded: false,
   };
@@ -756,7 +769,7 @@ export function filterAndRankCandidates(
     const badgeInfo = identifyCandidateBadge(v, refDate, targetWeekend);
     let isExcludedVenue = Boolean(v.isExcluded || badgeInfo.isExcluded);
     let reasonFromBadge = badgeCssToExclusionReason(badgeInfo.cssClass);
-    let resolvedStatusBadge = v.statusBadge || badgeInfo.badge;
+    let resolvedStatusBadge = normalizeEligibleBadge(v.statusBadge || badgeInfo.badge);
 
     // Check no-booking-email: in-area or non-excluded venues missing email
     if (!isExcludedVenue && (!v.email || !v.email.trim())) {
@@ -950,10 +963,11 @@ export function renderCandidateTable(
     const email = (c.email || "—").slice(0, 24).padEnd(24);
 
     const badgeInfo = identifyCandidateBadge(c, refDate);
-    let rawBadge = c.statusBadge || badgeInfo.badge;
+    let rawBadge = normalizeEligibleBadge(c.statusBadge || badgeInfo.badge);
     if (
       (c.isExcluded || !isPitchableCandidate(c)) &&
-      (rawBadge === "New" || rawBadge.startsWith("Clear") || rawBadge.startsWith("Returning") ||
+      (rawBadge === "New" || rawBadge.startsWith("Clear") || rawBadge.startsWith("Sending") ||
+        rawBadge.startsWith("Returning") ||
         rawBadge === "no gigs yet")
     ) {
       rawBadge = (badgeInfo.isExcluded && badgeInfo.badge)
