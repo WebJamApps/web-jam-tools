@@ -757,8 +757,8 @@ Deno.test("verifyPitchAgainstTemplate: an upcoming pitch showing a real date is 
   );
 });
 
-Deno.test("verifyPitchAgainstTemplate: a backend-declared upcoming pitch matches the stored upcoming template", () => {
-  // The local stage resolves to cold here (no nextGig, not booked), but the backend declared upcoming.
+Deno.test("verifyPitchAgainstTemplate: a pitch declared cold still matches the stored upcoming template through the three-stage candidate list", () => {
+  // The pitch is declared cold, but all three stages are candidates in findDeclaredTemplates, so the stored upcoming template still matches.
   const venue = upcomingVenue({ nextGig: { datetime: "2099-10-17T23:00:00.000Z" } });
   const rendered = renderPitch(venue, WEEKEND, {}, UPCOMING_TEMPLATES);
   const declaredCold: PitchEmail = { ...rendered, templateStage: "cold" };

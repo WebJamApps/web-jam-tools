@@ -665,9 +665,10 @@ function substituteNonCustomBodyTokens(
 }
 
 // The stored templates a rendered pitch may legitimately have come from, declared stage first.
-// The backend decides the stage itself (booked venue or a replied/booked outreach → returning,
-// and a returning request with no returning variant falls back to cold), which the local
-// gig-history prediction cannot reproduce — so all three stages of the declared type are candidates.
+// The backend decides the stage itself from linked gigs (past gig gives returning, else
+// upcoming gig gives upcoming, else cold, with returning/upcoming requests falling back to
+// cold when unauthored), which the local gig-history prediction cannot reproduce — so all
+// three stages of the declared type are candidates.
 function findDeclaredTemplates(pitch: PitchEmail, templates: EmailTemplate[]): EmailTemplate[] {
   const type = pitch.templateType as TemplateVenueType | undefined;
   if (!type) return [];
