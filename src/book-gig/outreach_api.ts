@@ -62,57 +62,266 @@ export function buildHeaders(token?: string): Record<string, string> {
   return headers;
 }
 
+export interface UnsentVenue {
+  venueId: string;
+  venueName: string;
+}
+
+export type BatchDispatchStage = "preflight" | "send";
+
+export class BatchDispatchError extends Error {
+  /** Everything confirmed sent or skipped before the refusal (empty for a pre-flight refusal). */
+  readonly partialResult: BatchDispatchResult;
+  readonly status?: number;
+  readonly stage: BatchDispatchStage;
+  /** 1-based number of the send call that failed (0 for the pre-flight). */
+  readonly callNumber: number;
+  /** Every venue not confirmed sent or skipped, by name. */
+  readonly unsentVenues: UnsentVenue[];
+  readonly dispatchId?: string;
+
+  constructor(
+    message: string,
+    partialResult: BatchDispatchResult,
+    context: {
+      status?: number;
+      stage: BatchDispatchStage;
+      callNumber: number;
+      unsentVenues: UnsentVenue[];
+      dispatchId?: string;
+    },
+  ) {
+    super(message);
+    this.name = "BatchDispatchError";
+    this.partialResult = partialResult;
+    this.status = context.status;
+    this.stage = context.stage;
+    this.callNumber = context.callNumber;
+    this.unsentVenues = context.unsentVenues;
+    this.dispatchId = context.dispatchId;
+  }
+}
+
+/** Running totals reported after each POST /outreach/batch call. */
+export interface DispatchProgress {
+  callNumber: number;
+  /** Emails sent so far, across all calls. */
+  sent: number;
+  /** Venues skipped so far, across all calls. */
+  skipped: number;
+  /** Venues the backend says are still unsent. */
+  remaining: number;
+}
+
 export interface DispatchBatchOptions extends BackendConfigOptions {
   weekend: TargetWeekend;
   venueIds: string[];
+  /** Optional venueId -> venue name map, used to name unsent venues on a refusal. */
+  venueNames?: Record<string, string>;
   templateType?: string;
   bookingPeriod?: string;
+  onProgress?: (progress: DispatchProgress) => void;
+}
+
+async function readRefusalText(res: Response): Promise<string> {
+  let text = "";
+  try {
+    text = await res.text();
+  } catch {
+    text = res.statusText || "";
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed.message === "string") return parsed.message;
+  } catch {
+    // not JSON; use the raw text
+  }
+  return text;
+}
+
+function recordVenueId(record: unknown): string | undefined {
+  if (record && typeof record === "object") {
+    const id = (record as { venueId?: unknown }).venueId;
+    if (typeof id === "string") return id;
+  }
+  return undefined;
 }
 
 /**
- * Dispatch batch outreach pitches to approved candidate venue IDs via POST /outreach/batch
+ * Dispatch batch outreach pitches to approved candidate venue IDs.
+ *
+ * Two steps (design Step 6, D-74/D-75/D-76): one POST /outreach/batch/preflight for the whole
+ * remaining set (checks both approval gates, sends nothing, returns a dispatch id), then repeated
+ * POST /outreach/batch calls carrying only that dispatch id until the reply's `remaining` is 0.
+ * The venue list is never sliced on the client. A refusal on the pre-flight sends nothing; a
+ * refusal on any send call stops the loop at once. Either way a BatchDispatchError carries what was
+ * sent and names every unsent venue.
  */
 export async function dispatchBatchOutreach(
   options: DispatchBatchOptions,
   fetchFn: typeof fetch = fetch,
 ): Promise<BatchDispatchResult> {
-  const { baseUrl, token } = await resolveBackendConfig(options);
-  const url = `${baseUrl}/outreach/batch`;
+  if (!Array.isArray(options.venueIds) || options.venueIds.length === 0) {
+    return { requested: 0, sent: 0, skipped: [], records: [] };
+  }
 
-  const payload = {
-    venueIds: options.venueIds,
-    targetDates: options.weekend.label || `${options.weekend.start} to ${options.weekend.end}`,
-    targetWeekend: {
-      start: options.weekend.start,
-      end: options.weekend.end,
-    },
-    templateType: options.templateType,
-    bookingPeriod: options.bookingPeriod || resolveBookingPeriod(options.weekend),
+  const { baseUrl, token } = await resolveBackendConfig(options);
+  const bookingPeriod = options.bookingPeriod || resolveBookingPeriod(options.weekend);
+  const targetDates = options.weekend.label || `${options.weekend.start} to ${options.weekend.end}`;
+
+  const aggregate: BatchDispatchResult = {
+    requested: options.venueIds.length,
+    sent: 0,
+    skipped: [],
+    records: [],
   };
 
+  const unsentVenues = (): UnsentVenue[] => {
+    const handled = new Set<string>();
+    for (const s of aggregate.skipped) if (s.venueId) handled.add(s.venueId);
+    for (const r of aggregate.records) {
+      const id = recordVenueId(r);
+      if (id) handled.add(id);
+    }
+    return options.venueIds
+      .filter((id) => !handled.has(id))
+      .map((id) => ({ venueId: id, venueName: options.venueNames?.[id] || id }));
+  };
+  const unsentNames = () => unsentVenues().map((v) => v.venueName).join(", ");
+
+  const fail = (
+    msg: string,
+    context: {
+      status?: number;
+      stage: BatchDispatchStage;
+      callNumber: number;
+      dispatchId?: string;
+    },
+  ): never => {
+    console.error(`[book-gig] Error dispatching outreach batch: ${msg}`);
+    throw new BatchDispatchError(msg, aggregate, { ...context, unsentVenues: unsentVenues() });
+  };
+
+  // Step 1: pre-flight the whole remaining set. Nothing is sent by this call.
+  const preflightPayload = {
+    venueIds: options.venueIds,
+    targetDates,
+    targetWeekend: { start: options.weekend.start, end: options.weekend.end },
+    templateType: options.templateType,
+    bookingPeriod,
+  };
+  let preflightRes: Response;
   try {
-    const res = await fetchFn(url, {
+    preflightRes = await fetchFn(`${baseUrl}/outreach/batch/preflight`, {
       method: "POST",
       headers: buildHeaders(token),
-      body: JSON.stringify(payload),
+      body: JSON.stringify(preflightPayload),
     });
+  } catch (err) {
+    return fail(
+      `Outreach batch pre-flight network error: ${
+        (err as Error).message
+      }. Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { stage: "preflight", callNumber: 0 },
+    );
+  }
+  if (!preflightRes.ok) {
+    const reason = await readRefusalText(preflightRes);
+    return fail(
+      `Outreach batch pre-flight refused with HTTP ${preflightRes.status}: ${reason}. ` +
+        `Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { status: preflightRes.status, stage: "preflight", callNumber: 0 },
+    );
+  }
+  let dispatchId: string | undefined;
+  try {
+    const data = await preflightRes.json();
+    if (typeof data?.dispatchId === "string" && data.dispatchId.trim()) {
+      dispatchId = data.dispatchId.trim();
+    }
+  } catch {
+    // handled below: no usable dispatch id
+  }
+  if (!dispatchId) {
+    return fail(
+      `Outreach batch pre-flight returned no dispatchId. Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { status: preflightRes.status, stage: "preflight", callNumber: 0 },
+    );
+  }
 
+  // Step 2: repeat the send call, carrying only the dispatch id, until nothing remains.
+  let callNumber = 0;
+  let lastRemaining = Infinity;
+  while (true) {
+    callNumber++;
+    const ctx = { stage: "send" as const, callNumber, dispatchId };
+    let res: Response;
+    try {
+      res = await fetchFn(`${baseUrl}/outreach/batch`, {
+        method: "POST",
+        headers: buildHeaders(token),
+        body: JSON.stringify({ dispatchId }),
+      });
+    } catch (err) {
+      return fail(
+        `Outreach batch send call ${callNumber} network error: ${(err as Error).message}. ` +
+          `Sent so far: ${aggregate.sent}. The reply to this call was lost, so venues it may have ` +
+          `emailed are listed as unsent; check the outreach records before re-running. ` +
+          `Unsent venues: ${unsentNames()}.`,
+        ctx,
+      );
+    }
     if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Outreach batch dispatch returned HTTP ${res.status}: ${errText}`);
+      const reason = await readRefusalText(res);
+      return fail(
+        `Outreach batch send call ${callNumber} refused with HTTP ${res.status}: ${reason}. ` +
+          `Sent before the refusal: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
+    }
+    let data: Record<string, unknown>;
+    try {
+      data = await res.json();
+    } catch (err) {
+      return fail(
+        `Outreach batch send call ${callNumber} response unparseable: ${(err as Error).message}. ` +
+          `Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
     }
 
-    const data = await res.json();
-    return {
-      requested: data.requested ?? options.venueIds.length,
-      sent: data.sent ?? 0,
-      skipped: data.skipped ?? [],
-      records: data.records ?? [],
-    };
-  } catch (err) {
-    console.error(`[book-gig] Error dispatching outreach batch: ${(err as Error).message}`);
-    throw err;
+    aggregate.sent += typeof data.sent === "number" ? data.sent : 0;
+    if (Array.isArray(data.skipped)) {
+      aggregate.skipped.push(...(data.skipped as BatchDispatchResult["skipped"]));
+    }
+    if (Array.isArray(data.records)) {
+      aggregate.records.push(...(data.records as BatchDispatchResult["records"]));
+    }
+    if (typeof data.remaining !== "number") {
+      return fail(
+        `Outreach batch send call ${callNumber} reply has no numeric "remaining" count. ` +
+          `Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
+    }
+    options.onProgress?.({
+      callNumber,
+      sent: aggregate.sent,
+      skipped: aggregate.skipped.length,
+      remaining: data.remaining,
+    });
+    if (data.remaining <= 0) break;
+    if (data.remaining >= lastRemaining) {
+      return fail(
+        `Outreach batch send call ${callNumber} made no progress (${data.remaining} still remaining). ` +
+          `Stopping instead of looping. Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
+    }
+    lastRemaining = data.remaining;
   }
+
+  return aggregate;
 }
 
 /**

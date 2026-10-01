@@ -39,13 +39,16 @@ import {
 } from "../src/book-gig/pitch.ts";
 import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
 import {
+  BatchDispatchError,
   checkGmailReplies,
+  DEFAULT_BACKEND_URL,
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
   fetchPendingReplies,
   fetchTemplates,
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
+import type { DispatchProgress } from "../src/book-gig/outreach_api.ts";
 import {
   DRAFT_PREVIEW_DARK_STYLE,
   extractRunDataFromHtml,
@@ -1735,60 +1738,497 @@ Deno.test("formatPay: handles positive, negative, zero, non-finite, and nullish 
   assertEquals(formatPay(null), "—");
 });
 
-Deno.test("dispatchBatchOutreach: sends POST /outreach/batch with correct payload and headers", async () => {
-  const weekend: TargetWeekend = {
-    start: "2026-10-16",
-    end: "2026-10-18",
-    rawText: "Oct 16-18 2026",
-    label: "October 16–18, 2026",
-    year: 2026,
-    month: 10,
-    days: [16, 17, 18],
+// --- web-jam-tools#1107: pre-flight + dispatch-id dispatch --------------------------------------
+// The mocks below follow the contract read from web-jam-back origin/dev
+// (src/model/outreach/outreach-controller.ts, preflightBatch / sendDispatchBatch):
+//   POST /outreach/batch/preflight -> 200 { dispatchId, venueCount } | 403/500 { message }
+//   POST /outreach/batch { dispatchId } -> 200 { sent, skipped[{venueId,venueName,reason}], records[], remaining }
+//                                          | 403 { message, unsentVenues } | 404 / 500 { message }
+
+const DISPATCH_WEEKEND: TargetWeekend = {
+  start: "2026-10-16",
+  end: "2026-10-18",
+  rawText: "Oct 16-18 2026",
+  label: "October 16–18, 2026",
+  year: 2026,
+  month: 10,
+  days: [16, 17, 18],
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+interface DispatchMockCall {
+  url: string;
+  body: Record<string, unknown>;
+  auth: string;
+}
+
+/**
+ * Mock backend: a pre-flight reply, then one scripted reply per POST /outreach/batch call.
+ * A scripted reply is a Response, or an Error to simulate a dropped connection.
+ */
+function makeDispatchMock(
+  preflight: Response | Error,
+  sendReplies: (Response | Error)[],
+): { fetchFn: typeof fetch; calls: DispatchMockCall[]; sendCalls: () => DispatchMockCall[] } {
+  const calls: DispatchMockCall[] = [];
+  let sendIndex = 0;
+  const fetchFn: typeof fetch = (url, init) => {
+    const u = String(url);
+    calls.push({
+      url: u,
+      body: JSON.parse(String(init?.body || "{}")),
+      auth: (init?.headers as Record<string, string>)?.["Authorization"] || "",
+    });
+    let reply: Response | Error;
+    if (u.endsWith("/outreach/batch/preflight")) {
+      reply = preflight;
+    } else if (u.endsWith("/outreach/batch")) {
+      reply = sendReplies[sendIndex++] ??
+        new Error("test mock: unexpected extra POST /outreach/batch call");
+    } else {
+      reply = new Error(`test mock: unexpected URL ${u}`);
+    }
+    return reply instanceof Error ? Promise.reject(reply) : Promise.resolve(reply);
   };
-
-  let capturedUrl = "";
-  let capturedBody: Record<string, unknown> = {};
-  let capturedAuth = "";
-
-  const mockFetch: typeof fetch = (url, init) => {
-    capturedUrl = String(url);
-    capturedBody = JSON.parse(String(init?.body || "{}"));
-    capturedAuth = (init?.headers as Record<string, string>)?.["Authorization"] || "";
-
-    return Promise.resolve(
-      new Response(
-        JSON.stringify({
-          requested: 2,
-          sent: 2,
-          skipped: [],
-          records: [{ _id: "rec1" }, { _id: "rec2" }],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
+  return {
+    fetchFn,
+    calls,
+    sendCalls: () => calls.filter((c) => c.url.endsWith("/outreach/batch")),
   };
+}
+
+function sendReply(venueIds: string[], remaining: number, skippedIds: string[] = []): Response {
+  const sentIds = venueIds.filter((id) => !skippedIds.includes(id));
+  return jsonResponse({
+    sent: sentIds.length,
+    skipped: skippedIds.map((id) => ({
+      venueId: id,
+      venueName: `Name of ${id}`,
+      reason: "opt-out",
+    })),
+    records: sentIds.map((id) => ({ _id: `rec-${id}`, venueId: id })),
+    remaining,
+  });
+}
+
+function namesFor(ids: string[]): Record<string, string> {
+  return Object.fromEntries(ids.map((id) => [id, `Name of ${id}`]));
+}
+
+Deno.test("dispatchBatchOutreach: pre-flight once with the whole set, then sends carry only the dispatchId", async () => {
+  const mock = makeDispatchMock(
+    jsonResponse({ dispatchId: "disp-1", venueCount: 2 }),
+    [sendReply(["v1", "v2"], 0)],
+  );
 
   const res = await dispatchBatchOutreach(
     {
-      weekend,
+      weekend: DISPATCH_WEEKEND,
       venueIds: ["v1", "v2"],
       backendUrl: "https://test.local",
       token: "secret-token",
     },
-    mockFetch,
+    mock.fetchFn,
   );
 
-  assertEquals(capturedUrl, "https://test.local/outreach/batch");
-  assertEquals(capturedAuth, "Bearer secret-token");
-  assertEquals(capturedBody.venueIds, ["v1", "v2"]);
-  assertEquals(capturedBody.targetDates, "October 16–18, 2026");
-  assertEquals(capturedBody.bookingPeriod, "October 2026");
-  assertEquals(capturedBody.targetWeekend, { start: "2026-10-16", end: "2026-10-18" });
-  assertEquals(res.sent, 2);
+  assertEquals(mock.calls.length, 2);
+  assertEquals(mock.calls[0].url, "https://test.local/outreach/batch/preflight");
+  assertEquals(mock.calls[0].auth, "Bearer secret-token");
+  assertEquals(mock.calls[0].body.venueIds, ["v1", "v2"]);
+  assertEquals(mock.calls[0].body.targetDates, "October 16–18, 2026");
+  assertEquals(mock.calls[0].body.bookingPeriod, "October 2026");
+  assertEquals(mock.calls[0].body.targetWeekend, { start: "2026-10-16", end: "2026-10-18" });
+  assertEquals(mock.calls[1].url, "https://test.local/outreach/batch");
+  assertEquals(mock.calls[1].auth, "Bearer secret-token");
+  // The send call carries the dispatch id and nothing that chooses venues.
+  assertEquals(mock.calls[1].body, { dispatchId: "disp-1" });
   assertEquals(res.requested, 2);
+  assertEquals(res.sent, 2);
+});
+
+Deno.test("dispatchBatchOutreach: pre-flights 60 venues once, repeats the send call until remaining is 0, and aggregates", async () => {
+  const venueIds = Array.from({ length: 60 }, (_, i) => `venue-${i + 1}`);
+  const mock = makeDispatchMock(
+    jsonResponse({ dispatchId: "disp-60", venueCount: 60 }),
+    [
+      // call 1: 25 sent, 1 skipped -> 34 remain
+      sendReply(venueIds.slice(0, 26), 34, ["venue-1"]),
+      // call 2: 20 sent -> 14 remain
+      sendReply(venueIds.slice(26, 46), 14),
+      // call 3: the last 14 -> 0 remain
+      sendReply(venueIds.slice(46), 0),
+    ],
+  );
+  const progress: DispatchProgress[] = [];
+
+  const res = await dispatchBatchOutreach(
+    {
+      weekend: DISPATCH_WEEKEND,
+      venueIds,
+      onProgress: (p) => progress.push(p),
+    },
+    mock.fetchFn,
+  );
+
+  // One pre-flight carrying all 60 ids (no client-side slicing), then exactly 3 send calls.
+  assertEquals(mock.calls.length, 4);
+  assertEquals((mock.calls[0].body.venueIds as string[]).length, 60);
+  assertEquals(mock.sendCalls().length, 3);
+  for (const call of mock.sendCalls()) {
+    assertEquals(call.body, { dispatchId: "disp-60" });
+  }
+
+  assertEquals(progress, [
+    { callNumber: 1, sent: 25, skipped: 1, remaining: 34 },
+    { callNumber: 2, sent: 45, skipped: 1, remaining: 14 },
+    { callNumber: 3, sent: 59, skipped: 1, remaining: 0 },
+  ]);
+  assertEquals(res.requested, 60);
+  assertEquals(res.sent, 59);
+  assertEquals(res.skipped.length, 1);
+  assertEquals(res.skipped[0].venueId, "venue-1");
+  assertEquals(res.records.length, 59);
+});
+
+Deno.test("dispatchBatchOutreach: a refusal on the second send call stops the loop and reports sent and unsent venues separately by name", async () => {
+  const venueIds = ["v1", "v2", "v3", "v4", "v5"];
+  const mock = makeDispatchMock(
+    jsonResponse({ dispatchId: "disp-x", venueCount: 5 }),
+    [
+      sendReply(["v1", "v2"], 3),
+      jsonResponse({
+        message:
+          "dispatch refused: approval records changed since preflight check. Unsent venues: Name of v3, Name of v4, Name of v5",
+        unsentVenues: ["Name of v3", "Name of v4", "Name of v5"],
+      }, 403),
+      // A third send reply is scripted so a loop that failed to stop would be caught below.
+      sendReply(["v3", "v4", "v5"], 0),
+    ],
+  );
+
+  const err = await assertRejects(
+    () =>
+      dispatchBatchOutreach(
+        { weekend: DISPATCH_WEEKEND, venueIds, venueNames: namesFor(venueIds) },
+        mock.fetchFn,
+      ),
+    BatchDispatchError,
+  );
+
+  // Pre-flight + 2 send calls; the loop stopped at the refusal.
+  assertEquals(mock.sendCalls().length, 2);
+  assertEquals(err.stage, "send");
+  assertEquals(err.status, 403);
+  assertEquals(err.callNumber, 2);
+  assertEquals(err.dispatchId, "disp-x");
+  // Sent venues stay reported as sent...
+  assertEquals(err.partialResult.sent, 2);
+  assertEquals(
+    err.partialResult.records.map((r) => (r as { venueId: string }).venueId),
+    ["v1", "v2"],
+  );
+  // ...and every unsent venue is named, separately.
+  assertEquals(err.unsentVenues.map((v) => v.venueName), [
+    "Name of v3",
+    "Name of v4",
+    "Name of v5",
+  ]);
+  assertStringIncludes(err.message, "HTTP 403");
+  assertStringIncludes(err.message, "approval records changed");
+  assertStringIncludes(err.message, "Sent before the refusal: 2");
+  assertStringIncludes(err.message, "Unsent venues: Name of v3, Name of v4, Name of v5.");
+});
+
+Deno.test("dispatchBatchOutreach: a skipped venue is not reported as unsent, and a dropped connection mid-loop stops it", async () => {
+  const venueIds = ["v1", "v2", "v3"];
+  const mock = makeDispatchMock(
+    jsonResponse({ dispatchId: "disp-n", venueCount: 3 }),
+    [sendReply(["v1", "v2"], 1, ["v2"]), new Error("Connection reset by peer")],
+  );
+
+  const err = await assertRejects(
+    () =>
+      dispatchBatchOutreach(
+        { weekend: DISPATCH_WEEKEND, venueIds, venueNames: namesFor(venueIds) },
+        mock.fetchFn,
+      ),
+    BatchDispatchError,
+  );
+
+  assertEquals(mock.sendCalls().length, 2);
+  assertEquals(err.stage, "send");
+  assertEquals(err.status, undefined);
+  assertEquals(err.callNumber, 2);
+  assertEquals(err.partialResult.sent, 1);
+  assertEquals(err.unsentVenues.map((v) => v.venueName), ["Name of v3"]);
+  assertStringIncludes(err.message, "send call 2 network error");
+  assertStringIncludes(err.message, "Connection reset by peer");
+});
+
+Deno.test("dispatchBatchOutreach: a pre-flight refusal (403 or 500) makes zero POST /outreach/batch calls and sends nothing", async () => {
+  const venueIds = ["v1", "v2", "v3"];
+  for (const status of [403, 500]) {
+    const mock = makeDispatchMock(
+      jsonResponse({
+        message: "dispatch refused: Gate 1 venue-set approval does not match batch venueIds",
+      }, status),
+      [sendReply(venueIds, 0)],
+    );
+
+    const err = await assertRejects(
+      () =>
+        dispatchBatchOutreach(
+          { weekend: DISPATCH_WEEKEND, venueIds, venueNames: namesFor(venueIds) },
+          mock.fetchFn,
+        ),
+      BatchDispatchError,
+    );
+
+    assertEquals(mock.sendCalls().length, 0, `no send call after a ${status} pre-flight`);
+    assertEquals(mock.calls.length, 1);
+    assertEquals(err.stage, "preflight");
+    assertEquals(err.status, status);
+    assertEquals(err.partialResult.sent, 0);
+    assertEquals(err.unsentVenues.map((v) => v.venueName), [
+      "Name of v1",
+      "Name of v2",
+      "Name of v3",
+    ]);
+    assertStringIncludes(err.message, `HTTP ${status}`);
+    assertStringIncludes(err.message, "Gate 1 venue-set approval does not match");
+    assertStringIncludes(err.message, "Nothing was sent");
+  }
+});
+
+Deno.test("dispatchBatchOutreach: pre-flight network failure or missing dispatchId sends nothing", async () => {
+  const venueIds = ["v1"];
+
+  const down = makeDispatchMock(new Error("ECONNREFUSED"), [sendReply(venueIds, 0)]);
+  const netErr = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, down.fetchFn),
+    BatchDispatchError,
+  );
+  assertEquals(down.sendCalls().length, 0);
+  assertEquals(netErr.stage, "preflight");
+  assertStringIncludes(netErr.message, "pre-flight network error");
+
+  const noId = makeDispatchMock(jsonResponse({ venueCount: 1 }), [sendReply(venueIds, 0)]);
+  const idErr = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, noId.fetchFn),
+    BatchDispatchError,
+  );
+  assertEquals(noId.sendCalls().length, 0);
+  assertStringIncludes(idErr.message, "returned no dispatchId");
+
+  const badJson = makeDispatchMock(new Response("not json", { status: 200 }), []);
+  await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, badJson.fetchFn),
+    BatchDispatchError,
+    "returned no dispatchId",
+  );
+});
+
+Deno.test("dispatchBatchOutreach: empty venueIds returns a zero result without any fetch", async () => {
+  const mock = makeDispatchMock(jsonResponse({ dispatchId: "x" }), []);
+  const res = await dispatchBatchOutreach(
+    { weekend: DISPATCH_WEEKEND, venueIds: [] },
+    mock.fetchFn,
+  );
+  assertEquals(mock.calls.length, 0);
+  assertEquals(res, { requested: 0, sent: 0, skipped: [], records: [] });
+});
+
+Deno.test("dispatchBatchOutreach: fails closed on a reply without a numeric remaining, or one that makes no progress", async () => {
+  const venueIds = ["v1", "v2", "v3"];
+
+  const noRemaining = makeDispatchMock(
+    jsonResponse({ dispatchId: "d" }),
+    [jsonResponse({ sent: 1, skipped: [], records: [{ venueId: "v1" }] })],
+  );
+  const err1 = await assertRejects(
+    () =>
+      dispatchBatchOutreach(
+        { weekend: DISPATCH_WEEKEND, venueIds, venueNames: namesFor(venueIds) },
+        noRemaining.fetchFn,
+      ),
+    BatchDispatchError,
+  );
+  assertEquals(noRemaining.sendCalls().length, 1);
+  assertStringIncludes(err1.message, 'no numeric "remaining"');
+  assertEquals(err1.unsentVenues.map((v) => v.venueName), ["Name of v2", "Name of v3"]);
+
+  // remaining stays at 2 after a second call: stop rather than loop forever.
+  const stuck = makeDispatchMock(
+    jsonResponse({ dispatchId: "d" }),
+    [sendReply(["v1"], 2), sendReply([], 2), sendReply([], 2)],
+  );
+  const err2 = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, stuck.fetchFn),
+    BatchDispatchError,
+  );
+  assertEquals(stuck.sendCalls().length, 2);
+  assertStringIncludes(err2.message, "made no progress");
+});
+
+Deno.test("dispatchBatchOutreach: unparseable send reply and a text/plain refusal body are reported", async () => {
+  const venueIds = ["v1", "v2"];
+  const bad = makeDispatchMock(
+    jsonResponse({ dispatchId: "d" }),
+    [new Response("<html>gateway</html>", { status: 200 })],
+  );
+  const err1 = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, bad.fetchFn),
+    BatchDispatchError,
+  );
+  assertStringIncludes(err1.message, "response unparseable");
+
+  const plain = makeDispatchMock(
+    jsonResponse({ dispatchId: "d" }),
+    [new Response("Service Unavailable", { status: 503 })],
+  );
+  const err2 = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, plain.fetchFn),
+    BatchDispatchError,
+  );
+  assertEquals(err2.status, 503);
+  assertStringIncludes(err2.message, "Service Unavailable");
+  // Unnamed venues fall back to their ids.
+  assertEquals(err2.unsentVenues.map((v) => v.venueName), ["v1", "v2"]);
+});
+
+function makeCliDispatchFetch(
+  venues: { _id: string; name: string; email: string }[],
+  batchHandler: (url: string, body: Record<string, unknown>) => Response,
+): { fetchFn: typeof fetch; batchUrls: string[]; reportPosts: Record<string, unknown>[] } {
+  const batchUrls: string[] = [];
+  const reportPosts: Record<string, unknown>[] = [];
+  const fetchFn: typeof fetch = (url, init) => {
+    const u = String(url);
+    if (u.includes("/venue/candidates") || u.includes("/outreach/candidates")) {
+      return Promise.resolve(jsonResponse(venues));
+    }
+    if (u.includes("/outreach/preview")) {
+      const w: TargetWeekend = DISPATCH_WEEKEND;
+      return Promise.resolve(jsonResponse(venues.map((v) => {
+        const p = renderPitch(v, w);
+        return {
+          venueId: v._id,
+          venueName: v.name,
+          to: v.email,
+          subject: p.subject,
+          body: p.htmlBody || p.body,
+        };
+      })));
+    }
+    if (u.includes("/template")) return Promise.resolve(jsonResponse([]));
+    if (u.includes("/outreach/batch")) {
+      batchUrls.push(u);
+      return Promise.resolve(batchHandler(u, JSON.parse(String(init?.body || "{}"))));
+    }
+    if (u.includes("/outreach/report")) {
+      // GET of a prior report: none stored yet, so the run starts fresh.
+      if (init?.method !== "POST") return Promise.resolve(new Response("", { status: 404 }));
+      reportPosts.push(JSON.parse(String(init?.body || "{}")));
+      return Promise.resolve(jsonResponse({ success: true, url: "https://web-jam.com/report/1" }));
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+  return { fetchFn, batchUrls, reportPosts };
+}
+
+function cliVenues(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    _id: `v-${i + 1}`,
+    name: `Venue ${i + 1}`,
+    email: `booking${i + 1}@venue.com`,
+    city: "Salem",
+    usState: "VA",
+    outreachEligible: true,
+  }));
+}
+
+Deno.test("runBookGigCli --send: a refusal on a later send call publishes the partial result to the report, then rethrows with unsent venues named", async () => {
+  const venues = cliVenues(4);
+  let sendCalls = 0;
+  const { fetchFn, batchUrls, reportPosts } = makeCliDispatchFetch(venues, (u) => {
+    if (u.endsWith("/outreach/batch/preflight")) {
+      return jsonResponse({ dispatchId: "disp-cli", venueCount: 4 });
+    }
+    sendCalls++;
+    if (sendCalls === 1) return sendReply(["v-1", "v-2"], 2);
+    return jsonResponse({ message: "dispatch refused: approval records changed" }, 403);
+  });
+
+  const err = await assertRejects(
+    () =>
+      runBookGigCli(
+        ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts", "--no-open"],
+        fetchFn,
+        () => Promise.resolve(true),
+      ),
+    BatchDispatchError,
+  );
+
+  assertEquals(batchUrls.length, 3); // pre-flight + 2 send calls; the loop stopped at the refusal
+  assertEquals(err.callNumber, 2);
+  assertEquals(err.status, 403);
+  assertEquals(err.partialResult.sent, 2);
+  assertEquals(err.unsentVenues.map((v) => v.venueName), ["Venue 3", "Venue 4"]);
+  // The partial result reached the published report before the error was rethrown.
+  assertEquals(reportPosts.length > 0, true);
+  assertStringIncludes(JSON.stringify(reportPosts), "dispatched");
+});
+
+Deno.test("runBookGigCli --send: a pre-flight refusal makes no send call and publishes no report", async () => {
+  const venues = cliVenues(3);
+  const { fetchFn, batchUrls, reportPosts } = makeCliDispatchFetch(
+    venues,
+    () => jsonResponse({ message: "dispatch refused: Gate 2 fingerprint mismatch" }, 403),
+  );
+
+  const err = await assertRejects(
+    () =>
+      runBookGigCli(
+        ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts", "--no-open"],
+        fetchFn,
+        () => Promise.resolve(true),
+      ),
+    BatchDispatchError,
+  );
+
+  assertEquals(batchUrls, [`${DEFAULT_BACKEND_URL}/outreach/batch/preflight`]);
+  assertEquals(err.stage, "preflight");
+  assertEquals(err.partialResult.sent, 0);
+  assertEquals(err.unsentVenues.map((v) => v.venueName), ["Venue 1", "Venue 2", "Venue 3"]);
+  assertEquals(reportPosts.length, 0);
+});
+
+Deno.test("runBookGigCli --send: success repeats send calls until remaining is 0 and returns the aggregate", async () => {
+  const venues = cliVenues(3);
+  let sendCalls = 0;
+  const { fetchFn, batchUrls } = makeCliDispatchFetch(venues, (u) => {
+    if (u.endsWith("/outreach/batch/preflight")) {
+      return jsonResponse({ dispatchId: "disp-ok", venueCount: 3 });
+    }
+    sendCalls++;
+    return sendCalls === 1 ? sendReply(["v-1", "v-2"], 1) : sendReply(["v-3"], 0);
+  });
+
+  const result = await runBookGigCli(
+    ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts", "--no-open"],
+    fetchFn,
+    () => Promise.resolve(true),
+  );
+
+  assertEquals(batchUrls.length, 3);
+  assertEquals(result.batchDispatch?.sent, 3);
+  assertEquals(result.batchDispatch?.requested, 3);
 });
 
 Deno.test("checkGmailReplies, fetchPendingReplies, fetchOutreachCampaigns, and fetchVenueMap: mocked backend API interactions", async () => {
@@ -1961,14 +2401,22 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
         }),
       );
     }
+    if (u.endsWith("/outreach/batch/preflight")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ dispatchId: "disp-mock", venueCount: 1 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
     if (u.includes("/outreach/batch")) {
       return Promise.resolve(
         new Response(
           JSON.stringify({
-            requested: 1,
             sent: 1,
             skipped: [],
-            records: [{ _id: "outreach1" }],
+            records: [{ _id: "outreach1", venueId: "v1" }],
+            remaining: 0,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -2244,16 +2692,27 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
         }),
       );
     }
-    if (u.includes("/outreach/batch")) {
+    if (u.endsWith("/outreach/batch/preflight")) {
       const body = JSON.parse(String(init?.body || "{}"));
       lastDispatchedIds = body.venueIds;
       return Promise.resolve(
         new Response(
+          JSON.stringify({ dispatchId: "disp-mock", venueCount: body.venueIds.length }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/batch")) {
+      return Promise.resolve(
+        new Response(
           JSON.stringify({
-            requested: body.venueIds.length,
-            sent: body.venueIds.length,
+            sent: lastDispatchedIds.length,
             skipped: [],
-            records: body.venueIds.map((id: string) => ({ _id: `outreach_${id}` })),
+            records: lastDispatchedIds.map((id: string) => ({
+              _id: `outreach_${id}`,
+              venueId: id,
+            })),
+            remaining: 0,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -2339,16 +2798,27 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
         }),
       );
     }
-    if (u.includes("/outreach/batch")) {
+    if (u.endsWith("/outreach/batch/preflight")) {
       const body = JSON.parse(String(init?.body || "{}"));
       lastDispatchedIds = body.venueIds;
       return Promise.resolve(
         new Response(
+          JSON.stringify({ dispatchId: "disp-mock", venueCount: body.venueIds.length }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/batch")) {
+      return Promise.resolve(
+        new Response(
           JSON.stringify({
-            requested: body.venueIds.length,
-            sent: body.venueIds.length,
+            sent: lastDispatchedIds.length,
             skipped: [],
-            records: body.venueIds.map((id: string) => ({ _id: `outreach_${id}` })),
+            records: lastDispatchedIds.map((id: string) => ({
+              _id: `outreach_${id}`,
+              venueId: id,
+            })),
+            remaining: 0,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
