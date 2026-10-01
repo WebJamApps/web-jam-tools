@@ -656,6 +656,23 @@ Deno.test("parseBookGigArgs: promotes mode to gate2 when --tweak-venue is passed
   assertEquals(parsed.tweaks?.[0].customBody, "Custom draft text");
 });
 
+Deno.test("parseBookGigArgs: parses multiple --tweak-venue arguments into tweaks array", () => {
+  const parsed = parseBookGigArgs([
+    "March 19-21 2027",
+    "--tweak-venue=2 Witches Winery & Brewing Co.",
+    "--custom-intro=Hi Ethan, looking forward to Jan 9!",
+    "--tweak-venue=Durty Bull Brewing Company",
+    "--custom-intro=Hi Ham, looking forward to Nov 15!",
+  ]);
+
+  assertEquals(parsed.mode, "gate2");
+  assertEquals(parsed.tweaks?.length, 2);
+  assertEquals(parsed.tweaks?.[0].venueName, "2 Witches Winery & Brewing Co.");
+  assertEquals(parsed.tweaks?.[0].customIntro, "Hi Ethan, looking forward to Jan 9!");
+  assertEquals(parsed.tweaks?.[1].venueName, "Durty Bull Brewing Company");
+  assertEquals(parsed.tweaks?.[1].customIntro, "Hi Ham, looking forward to Nov 15!");
+});
+
 function mockPreviewResponse(
   candidates: CandidateVenue[],
   weekend: TargetWeekend,
