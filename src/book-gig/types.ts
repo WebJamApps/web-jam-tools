@@ -32,7 +32,7 @@ export type TemplateVenueType =
   | "MidRangeCafeBar"
   | "OnlineForm";
 
-export type TemplateStage = "cold" | "returning";
+export type TemplateStage = "cold" | "returning" | "upcoming";
 
 export interface EmailTemplate {
   _id?: string;
