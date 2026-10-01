@@ -35,6 +35,7 @@ import {
   DEFAULT_TEMPLATES,
   htmlToPlainText,
   renderPitch,
+  resolveVenueStage,
   validateVoiceRules,
   verifyPitchAgainstTemplate,
 } from "../src/book-gig/pitch.ts";
@@ -5751,4 +5752,81 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       "    - Far Away Tavern (Asheville, NC)",
     ].join("\n"),
   );
+});
+
+Deno.test("resolveVenueStage: returns returning for venue with upcoming linked gig (nextGig) (#1196)", () => {
+  const venue: CandidateVenue = {
+    _id: "v-upcoming",
+    name: "2 Witches Winery & Brewing Co.",
+    nextGig: {
+      _id: "gig-2witches",
+      datetime: "2027-01-10T00:00:38.886Z",
+      venueId: "v-upcoming",
+    },
+  };
+  assertEquals(resolveVenueStage(venue), "returning");
+});
+
+Deno.test("resolveVenueStage: returns returning for venue with bookingStatus booked (#1196)", () => {
+  const venue: CandidateVenue = {
+    _id: "v-booked",
+    name: "2 Witches Winery & Brewing Co.",
+    bookingStatus: "booked",
+  };
+  assertEquals(resolveVenueStage(venue), "returning");
+});
+
+Deno.test("fetchCandidates: enriches candidate pool with bookingStatus and nextGig from active venue pool (#1196)", async () => {
+  const candidateFromOutreach: CandidateVenue = {
+    _id: "v-2witches",
+    name: "2 Witches Winery & Brewing Co.",
+    email: "ethan@2witcheswinebrew.com",
+    bookingStatus: "booking", // raw default from /outreach/candidates
+  };
+
+  const activeVenueRecord: CandidateVenue = {
+    _id: "v-2witches",
+    name: "2 Witches Winery & Brewing Co.",
+    email: "ethan@2witcheswinebrew.com",
+    bookingStatus: "booked", // derived by /venue from upcoming gig
+    nextGig: {
+      _id: "gig-1",
+      datetime: "2027-01-10T00:00:38.886Z",
+      venueId: "v-2witches",
+    },
+    distanceKm: 92.5,
+  };
+
+  const mockFetch: typeof fetch = (input: string | URL | Request) => {
+    const url = input.toString();
+    if (url.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(JSON.stringify([candidateFromOutreach]), { status: 200 }),
+      );
+    }
+    if (url.includes("/venue?status=active")) {
+      return Promise.resolve(new Response(JSON.stringify([activeVenueRecord]), { status: 200 }));
+    }
+    if (url.includes("/outreach?status=")) {
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+  };
+
+  const weekend: TargetWeekend = {
+    start: "2027-03-19",
+    end: "2027-03-21",
+    rawText: "March 19-21, 2027",
+    label: "March 19–21, 2027",
+    year: 2027,
+    month: 3,
+    days: [19, 20, 21],
+  };
+
+  const results = await fetchCandidates({ weekend }, mockFetch);
+  const enriched = results.find((c) => c._id === "v-2witches");
+  assertEquals(enriched?.bookingStatus, "booked");
+  assertEquals(enriched?.nextGig?._id, "gig-1");
+  assertEquals(enriched?.distanceKm, 92.5);
+  assertEquals(resolveVenueStage(enriched!), "returning");
 });

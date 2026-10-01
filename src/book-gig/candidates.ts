@@ -112,6 +112,26 @@ export async function fetchCandidates(
         for (const v of venues) {
           if (v && v._id) allVenuesMap.set(String(v._id), v as CandidateVenue);
         }
+
+        // Enrich existing candidates with venue details (bookingStatus, nextGig, lastGig, distanceKm)
+        for (const c of candidates) {
+          const v = allVenuesMap.get(String(c._id));
+          if (v) {
+            if (v.bookingStatus && v.bookingStatus !== "booking") {
+              c.bookingStatus = v.bookingStatus;
+            }
+            if (v.nextGig && !c.nextGig) {
+              c.nextGig = v.nextGig;
+            }
+            if (v.lastGig && !c.lastGig) {
+              c.lastGig = v.lastGig;
+            }
+            if (typeof v.distanceKm === "number" && c.distanceKm === undefined) {
+              c.distanceKm = v.distanceKm;
+            }
+          }
+        }
+
         const candidateIds = new Set(candidates.map((c) => String(c._id)));
         const nowMs = Date.now();
         const weekendStartMs = new Date(options.weekend.start).getTime();
