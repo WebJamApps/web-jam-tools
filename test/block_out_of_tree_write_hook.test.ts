@@ -323,3 +323,100 @@ Deno.test("hook header comment contains required agy coverage limit statement", 
     assert(content.includes("web-jam-tools#432"));
   }
 });
+
+// --- Codex apply_patch tests (web-jam-tools#1138) ---
+
+// When tests run in an isolated worktree under /tmp, relative path "../outside.txt"
+// resolves to /tmp/... which is allowlisted. NON_TMP_CWD ensures relative path tests
+// run against a non-/tmp repo directory (e.g. main clone in ~/WebJamApps/web-jam-tools).
+const NON_TMP_CWD = (Deno.cwd().startsWith("/tmp") || Deno.cwd().startsWith("/var/tmp"))
+  ? (Deno.env.get("HOME") ? `${Deno.env.get("HOME")}/WebJamApps/web-jam-tools` : undefined)
+  : undefined;
+
+Deno.test("apply_patch: in-tree add is allowed (exit code 0)", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: "*** Add File: probe.txt\n+hello world\n",
+    },
+  });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("apply_patch: relative out-of-tree path is denied (exit code 2)", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: "*** Delete File: ../outside.txt\n-old line\n",
+    },
+  }, NON_TMP_CWD);
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED (out-of-tree write guard)"));
+  assert(res.stderr.includes("../outside.txt"));
+});
+
+Deno.test("apply_patch: absolute out-of-tree path is denied (exit code 2)", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: "*** Update File: /etc/probe.txt\n--- a/f\n+++ b/f\n",
+    },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED (out-of-tree write guard)"));
+  assert(res.stderr.includes("/etc/probe.txt"));
+});
+
+Deno.test("apply_patch: write to /tmp path is allowed (allowlisted)", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: "*** Update File: /tmp/x/probe.txt\n--- a/f\n+++ b/f\n",
+    },
+  });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("apply_patch: two files in one patch where second is out of tree is denied", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: `*** Add File: in-tree.txt
++content
+*** Update File: /etc/out-of-tree.txt
+--- a/f
++++ b/f
+`,
+    },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED (out-of-tree write guard)"));
+  assert(res.stderr.includes("/etc/out-of-tree.txt"));
+});
+
+Deno.test("apply_patch: two files in one patch with relative out-of-tree path is denied", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: `*** Add File: in-tree.txt
++content
+*** Delete File: ../outside.txt
+-old
+`,
+    },
+  }, NON_TMP_CWD);
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED (out-of-tree write guard)"));
+  assert(res.stderr.includes("../outside.txt"));
+});
+
+Deno.test("apply_patch: malformed patch with no parseable file path is refused (fails closed)", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: "not a patch text",
+    },
+  });
+  assertEquals(res.code, 2);
+  assert(res.stderr.includes("BLOCKED (out-of-tree write guard)"));
+});

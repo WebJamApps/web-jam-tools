@@ -185,3 +185,72 @@ Deno.test("ordinary ls command passes through allowed", async () => {
   });
   assertEquals(res.code, 0, res.stderr);
 });
+
+// --- Codex apply_patch tests (web-jam-tools#1138) ---
+
+Deno.test("apply_patch: in-tree doc containing credential is allowed (exit code 0)", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: `*** Add File: docs/probe.txt
++Profile for ${HUMAN_CREDENTIAL}
+`,
+    },
+  });
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("apply_patch: moving to credential path (.ssh) containing human credential is blocked", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: `*** Update File: a.txt
+*** Move to: /home/joshua/.ssh/b
++export ACCOUNT=${HUMAN_CREDENTIAL}
+`,
+    },
+  });
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("apply_patch: writing to .env containing human credential is blocked", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: `*** Add File: /home/joshua/project/.env
++USER_EMAIL=${HUMAN_CREDENTIAL}
+`,
+    },
+  });
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("apply_patch: two files in one patch where second targets credential path is blocked", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: `*** Add File: docs/notes.md
++some documentation
+*** Move to: /home/joshua/.ssh/b
++${HUMAN_CREDENTIAL}
+`,
+    },
+  });
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+});
+
+Deno.test("apply_patch: malformed patch with no parseable file path is refused (fails closed)", async () => {
+  const res = await runHook({
+    tool_name: "apply_patch",
+    tool_input: {
+      command: "not a patch text",
+    },
+  });
+  assertEquals(res.code, 2);
+  if (!res.stderr.includes("BLOCKED (human-only-credentials guard)")) {
+    throw new Error(`expected BLOCKED message in stderr, got: ${res.stderr}`);
+  }
+});

@@ -833,3 +833,110 @@ Deno.test("Bash: a real write chained onto a read-only invocation is still refus
     }
   });
 });
+
+// --- Codex apply_patch tests (web-jam-tools#1138) ---
+
+function applyPatchPayload(
+  command: string,
+  transcript_path: string,
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    tool_name: "apply_patch",
+    tool_input: { command },
+    cwd: REPO_DIR,
+    transcript_path,
+    ...extra,
+  };
+}
+
+Deno.test("apply_patch: in-repo patch by unauthorized Opus session is denied", async () => {
+  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    const res = await runHook(
+      applyPatchPayload(`*** Add File: ${IN_REPO_FILE}\n+test\n`, transcript_path),
+    );
+    assertEquals(res.code, 0);
+    assertDenied(res.stdout, [
+      IN_REPO_FILE,
+      "apply_patch targeting",
+      "opus edit ok",
+    ]);
+  });
+});
+
+Deno.test("apply_patch: in-repo patch by approved Opus session ('opus edit ok') is allowed", async () => {
+  await withTranscript(
+    [
+      userTurn("opus edit ok, apply the patch"),
+      assistantTurn("claude-opus-5"),
+    ],
+    async (transcript_path) => {
+      const res = await runHook(
+        applyPatchPayload(`*** Add File: ${IN_REPO_FILE}\n+test\n`, transcript_path),
+      );
+      assertAllowed(res);
+    },
+  );
+});
+
+Deno.test("apply_patch: in-repo patch by Sonnet session is allowed", async () => {
+  await withTranscript(
+    [userTurn("please apply patch"), assistantTurn("claude-sonnet-4-6")],
+    async (transcript_path) => {
+      const res = await runHook(
+        applyPatchPayload(`*** Add File: ${IN_REPO_FILE}\n+test\n`, transcript_path),
+      );
+      assertAllowed(res);
+    },
+  );
+});
+
+Deno.test("apply_patch: patch with out-of-tree files only is allowed on unauthorized Opus", async () => {
+  const outside = await Deno.makeTempDir();
+  try {
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        applyPatchPayload(
+          `*** Update File: ${outside}/notes.md\n--- a/notes\n+++ b/notes\n`,
+          transcript_path,
+        ),
+      );
+      assertAllowed(res);
+    });
+  } finally {
+    await Deno.remove(outside, { recursive: true });
+  }
+});
+
+Deno.test("apply_patch: two files in one patch where one is in-repo is denied on unauthorized Opus", async () => {
+  const outside = await Deno.makeTempDir();
+  try {
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const patch = `*** Add File: ${outside}/out-of-tree.txt
++outside
+*** Update File: ${IN_REPO_FILE}
+--- a/f
++++ b/f
+`;
+      const res = await runHook(applyPatchPayload(patch, transcript_path));
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout, [
+        IN_REPO_FILE,
+        "apply_patch targeting",
+        "opus edit ok",
+      ]);
+    });
+  } finally {
+    await Deno.remove(outside, { recursive: true });
+  }
+});
+
+Deno.test("apply_patch: patch with no parseable file path is refused (fails closed)", async () => {
+  await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+    const res = await runHook(
+      applyPatchPayload("malformed patch without header lines\n", transcript_path),
+    );
+    assertEquals(res.code, 0);
+    assertDenied(res.stdout, ["no file path could be parsed"]);
+  });
+});

@@ -10,6 +10,7 @@
  */
 
 import * as path from "jsr:@std/path@^1.0.0";
+import { parseApplyPatchFilePaths } from "./parse_apply_patch.ts";
 
 export interface HumanOnlyCredential {
   name: string;
@@ -120,7 +121,13 @@ export function isBlockedContext(targetFile: string, cmd: string, identifier: st
   if (targetLower) {
     const parts = targetLower.split("/");
     const base = parts[parts.length - 1];
-    if ([".bashrc", ".zshrc", ".bash_profile", ".profile"].includes(base)) {
+    if (
+      parts.includes(".ssh") ||
+      targetLower.includes("/.ssh/") ||
+      targetLower.startsWith(".ssh/") ||
+      targetLower.endsWith("/.ssh") ||
+      [".bashrc", ".zshrc", ".bash_profile", ".profile"].includes(base)
+    ) {
       return true;
     }
     if (base === ".env" || base.startsWith(".env.")) {
@@ -162,6 +169,10 @@ export function isBlockedContext(targetFile: string, cmd: string, identifier: st
     const parts = targetLower.split("/");
     const base = parts[parts.length - 1];
     if (
+      parts.includes(".ssh") ||
+      targetLower.includes("/.ssh/") ||
+      targetLower.startsWith(".ssh/") ||
+      targetLower.endsWith("/.ssh") ||
       [".bashrc", ".zshrc", ".bash_profile", ".profile"].includes(base) ||
       base === ".env" ||
       base.startsWith(".env.") ||
@@ -210,6 +221,7 @@ export function main(): void {
     Deno.exit(0);
   }
 
+  const toolName = String(data.tool_name ?? data.name ?? "").trim();
   const toolInputRaw = data.tool_input ?? data.input ?? data.arguments ?? {};
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)
@@ -231,6 +243,17 @@ export function main(): void {
     content = JSON.stringify(toolInput.ReplacementChunks);
   }
 
+  let patchPaths: string[] | null = null;
+  if (toolName === "apply_patch") {
+    patchPaths = parseApplyPatchFilePaths(cmd);
+    if (patchPaths.length === 0) {
+      console.error(
+        "BLOCKED (human-only-credentials guard): apply_patch contains no parseable file paths (malformed or unrecognized patch text).",
+      );
+      Deno.exit(2);
+    }
+  }
+
   const blob = `${cmd}\n${filePath}\n${content}\n${JSON.stringify(toolInput)}`;
   const blobLower = blob.toLowerCase();
 
@@ -240,19 +263,22 @@ export function main(): void {
     if (!ident) continue;
 
     if (blobLower.includes(ident.toLowerCase())) {
-      if (isDocOrMarkdown(filePath, cmd)) {
-        continue;
-      }
+      const filesToCheck = patchPaths ?? [filePath];
+      for (const targetFile of filesToCheck) {
+        if (isDocOrMarkdown(targetFile, patchPaths ? "" : cmd)) {
+          continue;
+        }
 
-      if (isBlockedContext(filePath, cmd, ident)) {
-        console.error(
-          `BLOCKED (human-only-credentials guard): attempted to export or store registered human-only credential '${ident}' (${name}).`,
-        );
-        console.error(
-          "Human-consumed credentials belong in KeePass only and must not be stored in environment files, shell profiles, or configuration files.",
-        );
-        console.error("(rule: web-jam-tools#344 — human-only-credentials-register)");
-        Deno.exit(2);
+        if (isBlockedContext(targetFile, cmd, ident)) {
+          console.error(
+            `BLOCKED (human-only-credentials guard): attempted to export or store registered human-only credential '${ident}' (${name}).`,
+          );
+          console.error(
+            "Human-consumed credentials belong in KeePass only and must not be stored in environment files, shell profiles, or configuration files.",
+          );
+          console.error("(rule: web-jam-tools#344 — human-only-credentials-register)");
+          Deno.exit(2);
+        }
       }
     }
   }
