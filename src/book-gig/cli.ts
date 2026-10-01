@@ -9,7 +9,7 @@ import {
   isPitchableCandidate,
   renderCandidateTable,
 } from "./candidates.ts";
-export { BATCH_CHUNK_SIZE, formatExcludedAuditSummary, isPitchableCandidate, renderCandidateTable };
+export { formatExcludedAuditSummary, isPitchableCandidate, renderCandidateTable };
 import {
   renderPitchesFromBackend,
   verificationOptionsFromTweaks,
@@ -20,7 +20,6 @@ import { executeLinkGig } from "./venue_link.ts";
 import { executeVenueHold } from "./cooldown.ts";
 import { Gate2ReviewSession, isExplicitWholeBatchApproval } from "./gate2.ts";
 import {
-  BATCH_CHUNK_SIZE,
   BatchDispatchError,
   checkGmailReplies,
   dispatchBatchOutreach,
@@ -897,8 +896,9 @@ export async function runBookGigCli(
   }
   console.log(`✅ Every rendered email verified against its stored template — no divergence.`);
   let batchDispatch: BatchDispatchResult | undefined;
+  let dispatchError: BatchDispatchError | undefined;
 
-  // 6. If in --send mode, dispatch batch outreach via POST /outreach/batch
+  // 6. If in --send mode, pre-flight the whole batch, then dispatch it via POST /outreach/batch
   if (isSendMode) {
     let eligibleVenues = candidates.filter(isPitchableCandidate);
 
@@ -923,18 +923,23 @@ export async function runBookGigCli(
       );
       batchDispatch = { requested: 0, sent: 0, skipped: [], records: [] };
     } else {
-      console.log(`\nDispatching batch outreach to ${venueIds.length} candidate venue(s)...`);
+      console.log(
+        `\nChecking the whole batch of ${venueIds.length} candidate venue(s) before sending ` +
+          `(pre-flight), then dispatching until none remain...`,
+      );
+      const venueNames: Record<string, string> = {};
+      for (const c of eligibleVenues) venueNames[c._id] = c.name;
       try {
         batchDispatch = await dispatchBatchOutreach(
           {
             weekend,
             venueIds,
-            onChunkProgress: (chunkIndex, totalChunks, chunkSize) => {
-              if (totalChunks > 1) {
-                console.log(
-                  `  → Dispatching chunk ${chunkIndex}/${totalChunks} (${chunkSize} venue(s))...`,
-                );
-              }
+            venueNames,
+            onProgress: (p) => {
+              console.log(
+                `  → Send call ${p.callNumber}: ${p.sent} sent so far, ` +
+                  `${p.skipped} skipped so far, ${p.remaining} remaining`,
+              );
             },
           },
           fetchFn,
@@ -958,18 +963,30 @@ export async function runBookGigCli(
           `📧 Each pitch CC'd Josh & Maria (joshua.v.sherman@gmail.com, chemmariasherman@gmail.com).`,
         );
       } catch (err) {
-        if (err instanceof BatchDispatchError) {
-          batchDispatch = err.partialResult;
-          console.error(`\n❌ Batch dispatch halted: ${err.message}`);
-          if (batchDispatch && batchDispatch.sent > 0) {
-            console.log(`\n📤 Partial Dispatch Summary:`);
-            console.log(`  • Successfully Dispatched: ${batchDispatch.sent}`);
-            console.log(`  • Skipped: ${batchDispatch.skipped.length}`);
-          }
-        } else {
+        if (!(err instanceof BatchDispatchError)) {
           console.error(`❌ Batch dispatch failed: ${(err as Error).message}`);
+          throw err;
         }
-        throw err;
+        // A send-call refusal ends the dispatch (design: "What dispatch refuses"). Emails already
+        // sent stay sent, so the partial result goes into the published report (step 7) before the
+        // error is rethrown at the end; the report is the durable record of what went out.
+        console.error(`\n❌ Batch dispatch halted: ${err.message}`);
+        if (err.stage === "preflight") {
+          // The pre-flight sends nothing, so there is no partial result to record.
+          console.log(
+            `\n📤 Pre-flight refused. Nothing was sent. Unsent venues (${err.unsentVenues.length}):`,
+          );
+          for (const v of err.unsentVenues) console.log(`    - ${v.venueName}`);
+          throw err;
+        }
+        dispatchError = err;
+        batchDispatch = err.partialResult;
+        console.log(
+          `\n📤 Dispatch stopped. Emails sent before the stop: ${err.partialResult.sent}`,
+        );
+        console.log(`  • Skipped: ${err.partialResult.skipped.length}`);
+        console.log(`  • Unsent venues (${err.unsentVenues.length}):`);
+        for (const v of err.unsentVenues) console.log(`    - ${v.venueName}`);
       }
     }
   }
@@ -990,11 +1007,23 @@ export async function runBookGigCli(
 
   // 7. Publish the merged report to web-jam-back (the sole durable copy) and open the
   // disposable scratch HTML in Chrome for immediate review.
-  const published = await publishAndOpenReport(
-    result,
-    { noOpen: parsed.noOpen, openBrowser: openBrowserImpl },
-    fetchFn,
-  );
+  let published: Awaited<ReturnType<typeof publishAndOpenReport>>;
+  try {
+    published = await publishAndOpenReport(
+      result,
+      { noOpen: parsed.noOpen, openBrowser: openBrowserImpl },
+      fetchFn,
+    );
+  } catch (publishErr) {
+    // The dispatch refusal is the primary failure; do not let a failed publish mask it.
+    if (dispatchError) {
+      console.error(
+        `❌ Could not publish the partial-dispatch report: ${(publishErr as Error).message}`,
+      );
+      throw dispatchError;
+    }
+    throw publishErr;
+  }
   const finalResult = published.result;
   if (finalResult.reportUrl) {
     console.log(`🌐 Live web-jam.com Report URL: ${finalResult.reportUrl}`);
@@ -1012,6 +1041,7 @@ export async function runBookGigCli(
     }
   }
 
+  if (dispatchError) throw dispatchError;
   return finalResult;
 }
 

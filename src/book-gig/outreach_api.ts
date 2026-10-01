@@ -62,160 +62,266 @@ export function buildHeaders(token?: string): Record<string, string> {
   return headers;
 }
 
-export const BATCH_CHUNK_SIZE = 25;
+export interface UnsentVenue {
+  venueId: string;
+  venueName: string;
+}
+
+export type BatchDispatchStage = "preflight" | "send";
 
 export class BatchDispatchError extends Error {
+  /** Everything confirmed sent or skipped before the refusal (empty for a pre-flight refusal). */
   readonly partialResult: BatchDispatchResult;
   readonly status?: number;
-  readonly chunkIndex: number;
-  readonly totalChunks: number;
+  readonly stage: BatchDispatchStage;
+  /** 1-based number of the send call that failed (0 for the pre-flight). */
+  readonly callNumber: number;
+  /** Every venue not confirmed sent or skipped, by name. */
+  readonly unsentVenues: UnsentVenue[];
+  readonly dispatchId?: string;
 
   constructor(
     message: string,
     partialResult: BatchDispatchResult,
-    context: { status?: number; chunkIndex: number; totalChunks: number },
+    context: {
+      status?: number;
+      stage: BatchDispatchStage;
+      callNumber: number;
+      unsentVenues: UnsentVenue[];
+      dispatchId?: string;
+    },
   ) {
     super(message);
     this.name = "BatchDispatchError";
     this.partialResult = partialResult;
     this.status = context.status;
-    this.chunkIndex = context.chunkIndex;
-    this.totalChunks = context.totalChunks;
+    this.stage = context.stage;
+    this.callNumber = context.callNumber;
+    this.unsentVenues = context.unsentVenues;
+    this.dispatchId = context.dispatchId;
   }
+}
+
+/** Running totals reported after each POST /outreach/batch call. */
+export interface DispatchProgress {
+  callNumber: number;
+  /** Emails sent so far, across all calls. */
+  sent: number;
+  /** Venues skipped so far, across all calls. */
+  skipped: number;
+  /** Venues the backend says are still unsent. */
+  remaining: number;
 }
 
 export interface DispatchBatchOptions extends BackendConfigOptions {
   weekend: TargetWeekend;
   venueIds: string[];
+  /** Optional venueId -> venue name map, used to name unsent venues on a refusal. */
+  venueNames?: Record<string, string>;
   templateType?: string;
   bookingPeriod?: string;
-  chunkSize?: number;
-  onChunkProgress?: (chunkIndex: number, totalChunks: number, chunkSize: number) => void;
+  onProgress?: (progress: DispatchProgress) => void;
+}
+
+async function readRefusalText(res: Response): Promise<string> {
+  let text = "";
+  try {
+    text = await res.text();
+  } catch {
+    text = res.statusText || "";
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed.message === "string") return parsed.message;
+  } catch {
+    // not JSON; use the raw text
+  }
+  return text;
+}
+
+function recordVenueId(record: unknown): string | undefined {
+  if (record && typeof record === "object") {
+    const id = (record as { venueId?: unknown }).venueId;
+    if (typeof id === "string") return id;
+  }
+  return undefined;
 }
 
 /**
- * Dispatch batch outreach pitches to approved candidate venue IDs via POST /outreach/batch
- * in sequential chunks (default BATCH_CHUNK_SIZE = 25) to avoid Heroku 30s timeouts.
+ * Dispatch batch outreach pitches to approved candidate venue IDs.
+ *
+ * Two steps (design Step 6, D-74/D-75/D-76): one POST /outreach/batch/preflight for the whole
+ * remaining set (checks both approval gates, sends nothing, returns a dispatch id), then repeated
+ * POST /outreach/batch calls carrying only that dispatch id until the reply's `remaining` is 0.
+ * The venue list is never sliced on the client. A refusal on the pre-flight sends nothing; a
+ * refusal on any send call stops the loop at once. Either way a BatchDispatchError carries what was
+ * sent and names every unsent venue.
  */
 export async function dispatchBatchOutreach(
   options: DispatchBatchOptions,
   fetchFn: typeof fetch = fetch,
 ): Promise<BatchDispatchResult> {
   if (!Array.isArray(options.venueIds) || options.venueIds.length === 0) {
-    return {
-      requested: 0,
-      sent: 0,
-      skipped: [],
-      records: [],
-    };
+    return { requested: 0, sent: 0, skipped: [], records: [] };
   }
 
   const { baseUrl, token } = await resolveBackendConfig(options);
-  const url = `${baseUrl}/outreach/batch`;
+  const bookingPeriod = options.bookingPeriod || resolveBookingPeriod(options.weekend);
+  const targetDates = options.weekend.label || `${options.weekend.start} to ${options.weekend.end}`;
 
-  const chunkSize = options.chunkSize && options.chunkSize > 0
-    ? options.chunkSize
-    : BATCH_CHUNK_SIZE;
-
-  const chunks: string[][] = [];
-  for (let i = 0; i < options.venueIds.length; i += chunkSize) {
-    chunks.push(options.venueIds.slice(i, i + chunkSize));
-  }
-
-  const aggregateResult: BatchDispatchResult = {
-    requested: 0,
+  const aggregate: BatchDispatchResult = {
+    requested: options.venueIds.length,
     sent: 0,
     skipped: [],
     records: [],
   };
 
-  const bookingPeriod = options.bookingPeriod || resolveBookingPeriod(options.weekend);
-  const targetDates = options.weekend.label || `${options.weekend.start} to ${options.weekend.end}`;
+  const unsentVenues = (): UnsentVenue[] => {
+    const handled = new Set<string>();
+    for (const s of aggregate.skipped) if (s.venueId) handled.add(s.venueId);
+    for (const r of aggregate.records) {
+      const id = recordVenueId(r);
+      if (id) handled.add(id);
+    }
+    return options.venueIds
+      .filter((id) => !handled.has(id))
+      .map((id) => ({ venueId: id, venueName: options.venueNames?.[id] || id }));
+  };
+  const unsentNames = () => unsentVenues().map((v) => v.venueName).join(", ");
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunkIndex = i + 1;
-    const chunk = chunks[i];
+  const fail = (
+    msg: string,
+    context: {
+      status?: number;
+      stage: BatchDispatchStage;
+      callNumber: number;
+      dispatchId?: string;
+    },
+  ): never => {
+    console.error(`[book-gig] Error dispatching outreach batch: ${msg}`);
+    throw new BatchDispatchError(msg, aggregate, { ...context, unsentVenues: unsentVenues() });
+  };
 
-    options.onChunkProgress?.(chunkIndex, chunks.length, chunk.length);
+  // Step 1: pre-flight the whole remaining set. Nothing is sent by this call.
+  const preflightPayload = {
+    venueIds: options.venueIds,
+    targetDates,
+    targetWeekend: { start: options.weekend.start, end: options.weekend.end },
+    templateType: options.templateType,
+    bookingPeriod,
+  };
+  let preflightRes: Response;
+  try {
+    preflightRes = await fetchFn(`${baseUrl}/outreach/batch/preflight`, {
+      method: "POST",
+      headers: buildHeaders(token),
+      body: JSON.stringify(preflightPayload),
+    });
+  } catch (err) {
+    return fail(
+      `Outreach batch pre-flight network error: ${
+        (err as Error).message
+      }. Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { stage: "preflight", callNumber: 0 },
+    );
+  }
+  if (!preflightRes.ok) {
+    const reason = await readRefusalText(preflightRes);
+    return fail(
+      `Outreach batch pre-flight refused with HTTP ${preflightRes.status}: ${reason}. ` +
+        `Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { status: preflightRes.status, stage: "preflight", callNumber: 0 },
+    );
+  }
+  let dispatchId: string | undefined;
+  try {
+    const data = await preflightRes.json();
+    if (typeof data?.dispatchId === "string" && data.dispatchId.trim()) {
+      dispatchId = data.dispatchId.trim();
+    }
+  } catch {
+    // handled below: no usable dispatch id
+  }
+  if (!dispatchId) {
+    return fail(
+      `Outreach batch pre-flight returned no dispatchId. Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { status: preflightRes.status, stage: "preflight", callNumber: 0 },
+    );
+  }
 
-    const payload = {
-      venueIds: chunk,
-      targetDates,
-      targetWeekend: {
-        start: options.weekend.start,
-        end: options.weekend.end,
-      },
-      templateType: options.templateType,
-      bookingPeriod,
-    };
-
+  // Step 2: repeat the send call, carrying only the dispatch id, until nothing remains.
+  let callNumber = 0;
+  let lastRemaining = Infinity;
+  while (true) {
+    callNumber++;
+    const ctx = { stage: "send" as const, callNumber, dispatchId };
     let res: Response;
     try {
-      res = await fetchFn(url, {
+      res = await fetchFn(`${baseUrl}/outreach/batch`, {
         method: "POST",
         headers: buildHeaders(token),
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ dispatchId }),
       });
     } catch (err) {
-      const msg = `Outreach batch dispatch network error on chunk ${chunkIndex}/${chunks.length} ` +
-        `(${chunk.length} venue(s)): ${
-          (err as Error).message
-        }. Previously sent: ${aggregateResult.sent} venue(s).`;
-      console.error(`[book-gig] Error dispatching outreach batch: ${msg}`);
-      throw new BatchDispatchError(msg, aggregateResult, {
-        chunkIndex,
-        totalChunks: chunks.length,
-      });
-    }
-
-    if (!res.ok) {
-      let errText = "";
-      try {
-        errText = await res.text();
-      } catch {
-        errText = res.statusText || "";
-      }
-      const msg =
-        `Outreach batch dispatch returned HTTP ${res.status} on chunk ${chunkIndex}/${chunks.length} ` +
-        `(${chunk.length} venue(s)): ${errText}. Previously sent: ${aggregateResult.sent} venue(s).`;
-      console.error(
-        `[book-gig] Error dispatching outreach batch chunk ${chunkIndex}/${chunks.length}: ${msg}`,
+      return fail(
+        `Outreach batch send call ${callNumber} network error: ${(err as Error).message}. ` +
+          `Sent so far: ${aggregate.sent}. The reply to this call was lost, so venues it may have ` +
+          `emailed are listed as unsent; check the outreach records before re-running. ` +
+          `Unsent venues: ${unsentNames()}.`,
+        ctx,
       );
-      throw new BatchDispatchError(msg, aggregateResult, {
-        status: res.status,
-        chunkIndex,
-        totalChunks: chunks.length,
-      });
     }
-
+    if (!res.ok) {
+      const reason = await readRefusalText(res);
+      return fail(
+        `Outreach batch send call ${callNumber} refused with HTTP ${res.status}: ${reason}. ` +
+          `Sent before the refusal: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
+    }
     let data: Record<string, unknown>;
     try {
       data = await res.json();
     } catch (err) {
-      const msg =
-        `Outreach batch dispatch response unparseable on chunk ${chunkIndex}/${chunks.length} ` +
-        `(${chunk.length} venue(s)): ${
-          (err as Error).message
-        }. Previously sent: ${aggregateResult.sent} venue(s).`;
-      console.error(`[book-gig] Error dispatching outreach batch: ${msg}`);
-      throw new BatchDispatchError(msg, aggregateResult, {
-        status: res.status,
-        chunkIndex,
-        totalChunks: chunks.length,
-      });
+      return fail(
+        `Outreach batch send call ${callNumber} response unparseable: ${(err as Error).message}. ` +
+          `Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
     }
 
-    aggregateResult.requested += typeof data.requested === "number" ? data.requested : chunk.length;
-    aggregateResult.sent += typeof data.sent === "number" ? data.sent : 0;
+    aggregate.sent += typeof data.sent === "number" ? data.sent : 0;
     if (Array.isArray(data.skipped)) {
-      aggregateResult.skipped.push(...(data.skipped as BatchDispatchResult["skipped"]));
+      aggregate.skipped.push(...(data.skipped as BatchDispatchResult["skipped"]));
     }
     if (Array.isArray(data.records)) {
-      aggregateResult.records.push(...(data.records as BatchDispatchResult["records"]));
+      aggregate.records.push(...(data.records as BatchDispatchResult["records"]));
     }
+    if (typeof data.remaining !== "number") {
+      return fail(
+        `Outreach batch send call ${callNumber} reply has no numeric "remaining" count. ` +
+          `Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
+    }
+    options.onProgress?.({
+      callNumber,
+      sent: aggregate.sent,
+      skipped: aggregate.skipped.length,
+      remaining: data.remaining,
+    });
+    if (data.remaining <= 0) break;
+    if (data.remaining >= lastRemaining) {
+      return fail(
+        `Outreach batch send call ${callNumber} made no progress (${data.remaining} still remaining). ` +
+          `Stopping instead of looping. Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
+    }
+    lastRemaining = data.remaining;
   }
 
-  return aggregateResult;
+  return aggregate;
 }
 
 /**

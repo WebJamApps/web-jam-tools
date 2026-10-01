@@ -202,15 +202,23 @@ Deno.test("runBookGigCli: dispatches successfully when --send is invoked with ba
         );
       }
 
-      if (urlStr.includes("/outreach/batch")) {
-        batchEndpointCalled = true;
+      if (urlStr.endsWith("/outreach/batch/preflight")) {
         if (init?.body) {
           const payload = JSON.parse(init.body as string);
           dispatchedVenueIds = payload.venueIds || [];
         }
         return Promise.resolve(
+          new Response(JSON.stringify({ dispatchId: "disp-mock", venueCount: 1 }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (urlStr.includes("/outreach/batch")) {
+        batchEndpointCalled = true;
+        return Promise.resolve(
           new Response(
-            JSON.stringify({ requested: 1, sent: 1, skipped: [], records: [] }),
+            JSON.stringify({ sent: 1, skipped: [], records: [], remaining: 0 }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           ),
         );
@@ -279,11 +287,19 @@ Deno.test("runBookGigCli: dispatches successfully with affirmative --confirm-dra
           );
         }
 
+        if (urlStr.endsWith("/outreach/batch/preflight")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ dispatchId: "disp-mock", venueCount: 1 }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+        }
         if (urlStr.includes("/outreach/batch")) {
           batchEndpointCalled = true;
           return Promise.resolve(
             new Response(
-              JSON.stringify({ requested: 1, sent: 1, skipped: [], records: [] }),
+              JSON.stringify({ sent: 1, skipped: [], records: [], remaining: 0 }),
               { status: 200, headers: { "Content-Type": "application/json" } },
             ),
           );
