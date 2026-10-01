@@ -91,6 +91,16 @@ export interface CandidateVenue {
     venueId?: string;
     [key: string]: unknown;
   } | null;
+  nextGig?: {
+    _id?: string;
+    date?: string;
+    datetime?: string | Date;
+    time?: string;
+    location?: string;
+    venue?: string;
+    venueId?: string;
+    [key: string]: unknown;
+  } | null;
   gigInterval?: number;
   payAmount?: number;
   resumeBooking?: string | Date | null;
@@ -120,8 +130,11 @@ export interface CandidateVenue {
     activeDirectChat?: boolean;
     statusBadge?: string;
     exclusionReason?: ExclusionReason | string;
+    targetWeekend?: TargetWeekend | { start: string; end: string } | Date | null;
   };
+  targetWeekend?: TargetWeekend | { start: string; end: string } | Date | null;
   distanceMiles?: number;
+  distanceKm?: number;
 }
 
 export interface PitchEmail {
