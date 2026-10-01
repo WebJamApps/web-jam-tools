@@ -388,7 +388,9 @@ export async function runBookGigCli(
     // 1. Fetch eligible candidates from web-jam-back
     console.log(`Fetching candidate venues from backend...`);
     const rawCandidates = await fetchCandidates({ weekend }, fetchFn);
-    const candidates = filterAndRankCandidates(rawCandidates, location);
+    const candidates = filterAndRankCandidates(rawCandidates, location, {
+      targetWeekend: weekend,
+    });
     const density = assessDensity(candidates, location);
 
     // 2. Resolve approved venue IDs
@@ -512,7 +514,9 @@ export async function runBookGigCli(
     // 1. Fetch eligible candidates from web-jam-back
     console.log(`Fetching candidate venues from backend...`);
     const rawCandidates = await fetchCandidates({ weekend }, fetchFn);
-    const candidates = filterAndRankCandidates(rawCandidates, location);
+    const candidates = filterAndRankCandidates(rawCandidates, location, {
+      targetWeekend: weekend,
+    });
     const density = assessDensity(candidates, location);
 
     // 2. Resolve eligible venues
@@ -834,7 +838,9 @@ export async function runBookGigCli(
   const rawCandidates = await fetchCandidates({ weekend }, fetchFn);
 
   // 2. Filter & rank by location
-  const candidates = filterAndRankCandidates(rawCandidates, location);
+  const candidates = filterAndRankCandidates(rawCandidates, location, {
+    targetWeekend: weekend,
+  });
   const density = assessDensity(candidates, location);
   console.log(formatCandidateBreakdown(candidates));
 

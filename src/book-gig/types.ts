@@ -120,7 +120,9 @@ export interface CandidateVenue {
     activeDirectChat?: boolean;
     statusBadge?: string;
     exclusionReason?: ExclusionReason | string;
+    targetWeekend?: TargetWeekend | { start: string; end: string } | Date | null;
   };
+  targetWeekend?: TargetWeekend | { start: string; end: string } | Date | null;
   distanceMiles?: number;
 }
 

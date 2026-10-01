@@ -3516,7 +3516,7 @@ Deno.test("formatMonthYear & formatMonthDay: correctly formats dates for badges"
   assertEquals(formatMonthDay("2026-10-10"), "Oct 10");
 });
 
-Deno.test("identifyCandidateBadge: identifies Seasonal Hold for future resumeBooking (#879)", () => {
+Deno.test("identifyCandidateBadge: identifies Contact Hold for future resumeBooking and Booked Through (#879, #1196)", () => {
   const refDate = new Date("2026-10-01T00:00:00.000Z");
 
   const venue: CandidateVenue = {
@@ -3526,20 +3526,26 @@ Deno.test("identifyCandidateBadge: identifies Seasonal Hold for future resumeBoo
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(badge.badge, "[Contact Hold: Until Jan 2027]");
   assertEquals(badge.cssClass, "badge-seasonal-hold");
   assertEquals(badge.isExcluded, true);
 
-  // Fallback to bookedThrough
+  // Fallback to bookedThrough (compared against refDate when no targetWeekend provided)
   const venueBt: CandidateVenue = {
     _id: "v2",
     name: "Wintergreen Resort",
     bookedThrough: "2027-02-15",
   };
   const badgeBt = identifyCandidateBadge(venueBt, refDate);
-  assertEquals(badgeBt.badge, "[Seasonal Hold: Feb 2027]");
+  assertEquals(badgeBt.badge, "[Booked Through: Feb 2027]");
   assertEquals(badgeBt.cssClass, "badge-seasonal-hold");
   assertEquals(badgeBt.isExcluded, true);
+
+  // BookedThrough before target weekend is NOT excluded (#1196)
+  const targetWeekend = { start: "2027-03-19", end: "2027-03-21" };
+  const badgeEligible = identifyCandidateBadge(venueBt, refDate, targetWeekend);
+  assertEquals(badgeEligible.isExcluded, false);
+  assertEquals(badgeEligible.badge, "New");
 });
 
 Deno.test("identifyCandidateBadge: identifies Gig Spacing exclusion for ±2 month window (#879)", () => {
@@ -3805,9 +3811,9 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   assertEquals(filtered.length, 7);
 
   const hold = filtered.find((v) => v._id === "v1")!;
-  assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.statusBadge, "[Contact Hold: Until Jan 2027]");
   assertEquals(hold.isExcluded, true);
-  assertEquals(hold.reason?.exclusionReason, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.reason?.exclusionReason, "[Contact Hold: Until Jan 2027]");
 
   const spacing = filtered.find((v) => v._id === "v2")!;
   assertEquals(spacing.statusBadge, "[Gig Spacing: Nov 20 Show]");
@@ -3916,14 +3922,14 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
   // 1. Terminal candidate table (uncolored check)
   const terminalPlain = renderCandidateTable(candidates, { color: false, referenceDate: refDate });
   assertStringIncludes(terminalPlain, "Spacing Status");
-  assertStringIncludes(terminalPlain, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(terminalPlain, "[Contact Hold: Until Jan 2027]");
   assertStringIncludes(terminalPlain, "[Gig Spacing: Nov 20 Show]");
   assertStringIncludes(terminalPlain, "[Direct Chat Active]");
   assertStringIncludes(terminalPlain, "[Cooldown Active: Sent Sep 28]");
 
   // 2. Terminal candidate table (colored check)
   const terminalColored = renderCandidateTable(candidates, { color: true, referenceDate: refDate });
-  assertStringIncludes(terminalColored, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(terminalColored, "[Contact Hold: Until Jan 2027]");
   assertStringIncludes(terminalColored, "\x1b[36m"); // Cyan
   assertStringIncludes(terminalColored, "[Gig Spacing: Nov 20 Show]");
   assertStringIncludes(terminalColored, "\x1b[31m"); // Red
@@ -3957,7 +3963,7 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
 
   // Status badges and CSS classes in HTML
   assertStringIncludes(html, "badge-seasonal-hold");
-  assertStringIncludes(html, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(html, "[Contact Hold: Until Jan 2027]");
   assertStringIncludes(html, "badge-gig-spacing");
   assertStringIncludes(html, "[Gig Spacing: Nov 20 Show]");
   assertStringIncludes(html, "badge-direct-chat");
@@ -4172,12 +4178,12 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assertEquals(newBadge.cssClass, "badge-eligible");
   assertEquals(newBadge.isExcluded, false);
 
-  // 3. Seasonal Hold venue
+  // 3. Contact Hold / Seasonal Hold venue
   const seasonalHold = candidates.find((c) => c._id === "venue-seasonal-hold");
   assert(seasonalHold !== undefined);
   assertEquals(seasonalHold.isExcluded, true);
   const seasonalBadge = identifyCandidateBadge(seasonalHold);
-  assertStringIncludes(seasonalBadge.badge, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(seasonalBadge.badge, "[Contact Hold: Until Jan 2027]");
   assertEquals(seasonalBadge.cssClass, "badge-seasonal-hold");
   assertEquals(seasonalBadge.isExcluded, true);
 
@@ -4221,7 +4227,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   const renderedTable = renderCandidateTable(candidates, { color: false });
   assertStringIncludes(renderedTable, "Returning · Last: Jun 15");
   assertStringIncludes(renderedTable, "no gigs yet");
-  assertStringIncludes(renderedTable, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(renderedTable, "[Contact Hold: Until Jan 2027]");
   assertStringIncludes(renderedTable, "[Direct Chat Active]");
   assertStringIncludes(renderedTable, "[Gig Spacing: Nov 20 Show]");
   assertStringIncludes(renderedTable, "[Cooldown Active: Sent");
@@ -4797,7 +4803,7 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertEquals(isPitchableCandidate(seasonalHold), false);
   assertEquals(seasonalHold.isExcluded, true);
   assertEquals(seasonalHold.exclusionReason, "seasonal-hold");
-  assertStringIncludes(seasonalHold.statusBadge!, "Seasonal Hold");
+  assertStringIncludes(seasonalHold.statusBadge!, "Contact Hold");
 
   const gigSpacing = candidates.find((c) => c._id === "v-gig-spacing")!;
   assertEquals(isPitchableCandidate(gigSpacing), false);
@@ -4864,7 +4870,7 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertStringIncludes(excludedTable, "[Out of State]");
   assertStringIncludes(excludedTable, "[Outside Target Area]");
   assertStringIncludes(excludedTable, "[No Booking Email]");
-  assertStringIncludes(excludedTable, "[Seasonal Hold: Apr 2027]");
+  assertStringIncludes(excludedTable, "[Contact Hold: Until Apr 2027]");
   assertStringIncludes(excludedTable, "[Gig Spacing: Nov 15 Show]");
   assertStringIncludes(excludedTable, "[Direct Chat Active]");
   assertStringIncludes(excludedTable, "[Cooldown Active: Sent Oct 14]");
