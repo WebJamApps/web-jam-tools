@@ -538,6 +538,65 @@ Deno.test("in-repo write by Haiku main session is allowed", async () => {
   );
 });
 
+Deno.test("in-repo write by gpt-6-luna main session is allowed (web-jam-tools#1140)", async () => {
+  await withTranscript(
+    [userTurn("please edit code"), assistantTurn("gpt-6-luna")],
+    async (transcript_path) => {
+      const res = await runHook({
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertAllowed(res);
+    },
+  );
+});
+
+Deno.test("in-repo write by gpt-6-sol main session is allowed (web-jam-tools#1140)", async () => {
+  await withTranscript(
+    [userTurn("please edit code"), assistantTurn("gpt-6-sol")],
+    async (transcript_path) => {
+      const res = await runHook({
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertAllowed(res);
+    },
+  );
+});
+
+Deno.test("in-repo write by gpt-6-astra main session is allowed (web-jam-tools#1140)", async () => {
+  await withTranscript(
+    [userTurn("please edit code"), assistantTurn("gpt-6-astra")],
+    async (transcript_path) => {
+      const res = await runHook({
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertAllowed(res);
+    },
+  );
+});
+
+Deno.test("in-repo write by claude-opus-5-5 main session without escape phrase is denied (web-jam-tools#1140)", async () => {
+  await withTranscript(
+    [
+      userTurn("please edit this file directly"),
+      assistantTurn("claude-opus-5-5"),
+    ],
+    async (transcript_path) => {
+      const res = await runHook({
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout, [
+        IN_REPO_FILE,
+        "Repository code must not be edited directly on Opus",
+      ]);
+    },
+  );
+});
+
 // --- Step 6: Escape phrase 'opus edit ok' present in latest user message ---
 
 Deno.test("Opus session is allowed when latest user message contains 'opus edit ok'", async () => {
