@@ -2,6 +2,7 @@
 
 import { assertEquals } from "@std/assert";
 import { type Deps, run } from "../scripts/post-pr-comment.ts";
+import { REVIEW_SUMMARY_HEADER } from "../scripts/gh-write/guard.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
@@ -99,4 +100,41 @@ Deno.test("post-pr-comment: builds gh argv with bare pr id and --repo flag (regr
     "--body-file",
     "/tmp/example-comment.md",
   ]);
+});
+
+Deno.test("post-pr-comment: a body carrying the review header but no reviewer line is REFUSED", async () => {
+  let called = false;
+  const code = await run(
+    ARGS,
+    fakeDeps({
+      readFileText: () => Promise.resolve(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n`),
+      runCmd: () => {
+        called = true;
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 1);
+  assertEquals(called, false);
+});
+
+Deno.test("post-pr-comment: a body carrying the review header and a reviewer line is ALLOWED", async () => {
+  const code = await run(
+    [...ARGS, "--dry-run"],
+    fakeDeps({
+      readFileText: () =>
+        Promise.resolve(
+          `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — Claude Opus 5.5\n`,
+        ),
+    }),
+  );
+  assertEquals(code, 0);
+});
+
+Deno.test("post-pr-comment: a plain comment (no review header) with no reviewer line is unchanged and ALLOWED", async () => {
+  const code = await run(
+    ARGS,
+    fakeDeps({ readFileText: () => Promise.resolve("Fixed by someone: plain comment") }),
+  );
+  assertEquals(code, 0);
 });
