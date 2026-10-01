@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash Medium/Haiku; Flash High reviews Sonnet/Flash Medium/Haiku; Opus reviews Flash High/Sonnet on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
+description: Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash High/Flash Medium/Haiku; Flash High reviews Flash Medium/Haiku; Opus reviews Sonnet/Flash High on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
 metadata:
   version: v2
   publisher: josh
@@ -16,23 +16,25 @@ Cross-model review ensures fresh perspective and catches model-specific blind sp
 
 Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work).
 
-**Tier order (weakest to strongest): Haiku → Flash Med → Sonnet → Flash High → Opus.** Flash High
-sits **above** Sonnet: on contamination-resistant long-horizon coding (DeepSWE v1.1) Gemini 3.8 Flash
-at high effort scores 73.7% against Sonnet 5's 54%, effectively matching Opus 5's 74%. Opus stays at
-the top because that parity does not extend to abstract, multi-step unguided agent work
-(Terminal-Bench 4.0), which is exactly what a review of a large or ambiguous diff is.
+**Tier order (weakest to strongest): Haiku → Flash Med → Flash High → Sonnet → Opus.** Josh ruled
+on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
+is the basis for this order. (Superseded history: on 2026-09-05 Flash High was ranked above Sonnet 5
+on contamination-resistant long-horizon coding, DeepSWE v1.1, where Gemini 3.8 Flash at high effort
+scored 73.7% against Sonnet 5's 54%. That ranking no longer stands.) Opus stays at the top because
+abstract, multi-step unguided agent work (Terminal-Bench 4.0) is exactly what a review of a large or
+ambiguous diff is.
 
 ### Cross-Model Review Pairing Matrix
 
 | Reviewer | Reviews |
 |---|---|
-| Sonnet | Flash Medium, Haiku |
-| Flash High | Sonnet, Flash Medium, Haiku |
-| Opus | Flash High, Sonnet |
+| Sonnet | Flash High, Flash Medium, Haiku |
+| Flash High | Flash Medium, Haiku |
+| Opus | Sonnet, Flash High |
 
 **Ceiling rule (never a schedule):**
-The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Flash
-High or Sonnet PR happens only when Josh deems that specific PR critical enough for an Opus review —
+The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Sonnet
+or Flash High PR happens only when Josh deems that specific PR critical enough for an Opus review —
 his decision, per PR, not automatic. Nothing in this skill or its auto-detect mode may auto-dispatch
 an Opus review off this matrix.
 
@@ -42,13 +44,13 @@ an Opus review off this matrix.
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list in [`skills/flash-issues/SKILL.md`](../flash-issues/SKILL.md) under "Scope — all eight active repos, exactly these slugs").
   - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
-    - **Sonnet (`Claude Code — Sonnet 5`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5`. It no longer matches `Gemini Flash (High)` PRs — Flash High now outranks it.
-    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Claude Sonnet 5`, `Gemini Flash (Medium)`, or `Claude Haiku 4.5`.
+    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash (High)`, `Gemini Flash (Medium)` or `Claude Haiku 4.5`.
+    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
     - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
     - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`. These roster spellings are deliberately unversioned — they identify the PR's author tier, not the model checkpoint that ran, so they stay as written here even as the underlying Gemini version moves:
       - `Gemini Flash (High)` (e.g. `Antigravity — Gemini Flash (High)` / `agy — Gemini Flash (High)`)
       - `Gemini Flash (Medium)` (e.g. `Antigravity — Gemini Flash (Medium)` / `agy — Gemini Flash (Medium)`)
-      - `Claude Sonnet 5` (e.g. `Claude Code — Sonnet 5` / `Claude Code — Claude Sonnet 5`)
+      - `Claude Sonnet 5.5` (e.g. `Claude Code — Sonnet 5.5` / `Claude Code — Claude Sonnet 5.5`)
       - `Claude Haiku 4.5` (e.g. `Claude Code — Haiku 4.5` / `Claude Code — Claude Haiku 4.5`)
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
     - Compares the commit SHA of the newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`) against the PR's current head commit SHA (`commits | last | .oid`).

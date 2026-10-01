@@ -66,7 +66,7 @@ labels:
     modelTier: true
   - name: Sonnet
     hex: "1D76DB"
-    description: "Coding that needs a Claude-side capability Flash High lacks; no longer the default coder tier, which now ranks below Flash High"
+    description: "Coding that needs a Claude-side capability Flash High lacks; ranks above Flash High but is not the default coder tier (a cost decision)"
     repos: all
     modelTier: true
   - name: Opus
@@ -108,7 +108,7 @@ labels:
     modelTier: true
   - name: Flash High
     hex: "E67E22"
-    description: "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; ranks above Sonnet"
+    description: "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; the default lane, billed to Google rather than the constrained Anthropic budget"
     repos: all
     modelTier: true
 
