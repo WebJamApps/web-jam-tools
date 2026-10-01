@@ -683,3 +683,98 @@ Deno.test("verifyPitchAgainstTemplate: accepts a faithful render whose template 
   ]);
   assertNotEquals(divergedViolation, null);
 });
+
+const UPCOMING_TEMPLATE: EmailTemplate = {
+  type: "PubFestivalBrewery",
+  stage: "upcoming",
+  subject: "Looking forward to [Next Gig Date] at [Venue Name]",
+  introHtml:
+    `<p>Hi [Contact Name],</p>\n<p>We can't wait to play [Venue Name] on [Next Gig Date].</p>`,
+  bodyHtml: `[Custom Body]\n<p>Is [Target Dates] open for [Booking Period] too?</p>`,
+};
+
+const UPCOMING_TEMPLATES: EmailTemplate[] = [...TEMPLATES, UPCOMING_TEMPLATE];
+
+function upcomingVenue(overrides: Partial<CandidateVenue> = {}): CandidateVenue {
+  return {
+    _id: "venue-upcoming-1",
+    name: "The Debut Hall",
+    email: "booking@debuthall.example",
+    venueType: "PubFestivalBrewery",
+    contactName: "Dana",
+    nextGig: { datetime: "2099-10-17T23:00:00.000Z" },
+    ...overrides,
+  };
+}
+
+Deno.test("verifyPitchAgainstTemplate: a faithful upcoming render passes and an altered date is refused", () => {
+  const venue = upcomingVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, UPCOMING_TEMPLATES);
+  assertEquals(pitch.templateStage, "upcoming");
+  assertStringIncludes(pitch.subject, "Saturday, October 17");
+  assertEquals(verifyPitchAgainstTemplate(pitch, venue, WEEKEND, {}, UPCOMING_TEMPLATES), null);
+
+  const alteredSubject: PitchEmail = {
+    ...pitch,
+    subject: pitch.subject.replace("Saturday, October 17", "Friday, October 16"),
+  };
+  assertNotEquals(
+    verifyPitchAgainstTemplate(alteredSubject, venue, WEEKEND, {}, UPCOMING_TEMPLATES),
+    null,
+  );
+
+  const alteredBody: PitchEmail = {
+    ...pitch,
+    htmlBody: (pitch.htmlBody ?? "").replace("Saturday, October 17", "Friday, October 16"),
+  };
+  assertNotEquals(
+    verifyPitchAgainstTemplate(alteredBody, venue, WEEKEND, {}, UPCOMING_TEMPLATES),
+    null,
+  );
+});
+
+Deno.test("verifyPitchAgainstTemplate: an upcoming pitch showing a real date is refused when the candidate has no nextGig.datetime", () => {
+  const withDate = upcomingVenue();
+  const pitch = renderPitch(withDate, WEEKEND, {}, UPCOMING_TEMPLATES);
+
+  const noDatetime = upcomingVenue({ nextGig: { date: "2099-10-17" } });
+  assertNotEquals(
+    verifyPitchAgainstTemplate(pitch, noDatetime, WEEKEND, {}, UPCOMING_TEMPLATES),
+    null,
+  );
+  const noNextGig = upcomingVenue({ nextGig: null, bookingStatus: "booked" });
+  assertNotEquals(
+    verifyPitchAgainstTemplate(pitch, noNextGig, WEEKEND, {}, UPCOMING_TEMPLATES),
+    null,
+  );
+
+  // A pitch rendered with the fallback text for an unknown date does verify against that venue.
+  const fallbackPitch = renderPitch(noNextGig, WEEKEND, {}, UPCOMING_TEMPLATES);
+  assertStringIncludes(fallbackPitch.subject, "our upcoming show");
+  assertEquals(
+    verifyPitchAgainstTemplate(fallbackPitch, noNextGig, WEEKEND, {}, UPCOMING_TEMPLATES),
+    null,
+  );
+});
+
+Deno.test("verifyPitchAgainstTemplate: a pitch declared cold still matches the stored upcoming template through the three-stage candidate list", () => {
+  // The pitch is declared cold, but all three stages are candidates in findDeclaredTemplates, so the stored upcoming template still matches.
+  const venue = upcomingVenue({ nextGig: { datetime: "2099-10-17T23:00:00.000Z" } });
+  const rendered = renderPitch(venue, WEEKEND, {}, UPCOMING_TEMPLATES);
+  const declaredCold: PitchEmail = { ...rendered, templateStage: "cold" };
+  // Declared stage first, but all three stages are candidates, so the upcoming template still matches.
+  assertEquals(
+    verifyPitchAgainstTemplate(declaredCold, venue, WEEKEND, {}, UPCOMING_TEMPLATES),
+    null,
+  );
+});
+
+Deno.test("verifyPitchAgainstTemplate: an upcoming pitch is still refused with no stored template for its type", () => {
+  const venue = upcomingVenue();
+  const pitch = renderPitch(venue, WEEKEND, {}, UPCOMING_TEMPLATES);
+  const orphan: PitchEmail = { ...pitch, templateType: undefined };
+  assertNotEquals(
+    verifyPitchAgainstTemplate(orphan, venue, WEEKEND, {}, UPCOMING_TEMPLATES),
+    null,
+  );
+});

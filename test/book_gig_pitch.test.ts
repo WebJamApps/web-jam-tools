@@ -3,12 +3,14 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
   detectConversationContext,
+  formatNextGigDate,
   renderPitch,
+  resolveIntroHtml,
   resolveVenueStage,
   synthesizeCustomBodyHook,
   validateVoiceRules,
 } from "../src/book-gig/pitch.ts";
-import type { CandidateVenue, TargetWeekend } from "../src/book-gig/types.ts";
+import type { CandidateVenue, EmailTemplate, TargetWeekend } from "../src/book-gig/types.ts";
 
 Deno.test("resolveVenueStage: resolves to cold when relationshipStage is set but no linked past gig exists", () => {
   // Venue with relationshipStage: "returning" but reason.lastGigDate unset
@@ -609,4 +611,130 @@ Deno.test("renderPitch: generates distinct type-appropriate returning phrasing f
     "It's Josh from \"Josh and Maria\" — Maria and I really enjoyed our last show at Corner Cafe, and we'd love to come back.",
   );
   assertEquals(validateVoiceRules(cafePitch.body).valid, true);
+});
+
+Deno.test("resolveVenueStage: nextGig.datetime with no past-gig evidence resolves to upcoming", () => {
+  const venue: CandidateVenue = {
+    _id: "u1",
+    name: "Debut Venue",
+    nextGig: { datetime: "2099-10-17T23:00:00.000Z" },
+  };
+  assertEquals(resolveVenueStage(venue), "upcoming");
+  assertEquals(
+    resolveVenueStage({ _id: "u1b", name: "Date Only", nextGig: { date: "2099-10-17" } }),
+    "upcoming",
+  );
+});
+
+Deno.test("resolveVenueStage: bookingStatus booked with no past-gig evidence resolves to upcoming", () => {
+  const venue: CandidateVenue = { _id: "u2", name: "Booked Venue", bookingStatus: "booked" };
+  assertEquals(resolveVenueStage(venue), "upcoming");
+});
+
+Deno.test("resolveVenueStage: past-gig evidence beats upcoming-gig evidence", () => {
+  const withLastAndNext: CandidateVenue = {
+    _id: "u3",
+    name: "Both Venue",
+    lastGig: { datetime: "2025-05-10T23:00:00.000Z" },
+    nextGig: { datetime: "2099-10-17T23:00:00.000Z" },
+  };
+  assertEquals(resolveVenueStage(withLastAndNext), "returning");
+
+  const bookedWithHistory: CandidateVenue = {
+    _id: "u4",
+    name: "Booked And Played",
+    bookingStatus: "booked",
+    reason: { lastGigDate: "2025-05-10" },
+  };
+  assertEquals(resolveVenueStage(bookedWithHistory), "returning");
+  assertEquals(
+    resolveVenueStage({ _id: "u5", name: "Option", bookingStatus: "booked" }, {
+      isReturningVenue: true,
+    }),
+    "returning",
+  );
+});
+
+Deno.test("resolveVenueStage: a nextGig with neither datetime nor date and no booking stays cold", () => {
+  assertEquals(resolveVenueStage({ _id: "u6", name: "Empty Next", nextGig: {} }), "cold");
+});
+
+const UPCOMING_TEMPLATE: EmailTemplate = {
+  type: "PubFestivalBrewery",
+  stage: "upcoming",
+  subject: "See you [Next Gig Date] at [Venue Name]",
+  introHtml: `<p>Hi [Contact Name],</p>\n<p>We are looking forward to [Next Gig Date].</p>`,
+  bodyHtml: `<p>Is [Target Dates] open too?</p>`,
+};
+
+const UPCOMING_WEEKEND: TargetWeekend = {
+  start: "2026-10-16",
+  end: "2026-10-18",
+  rawText: "Oct 16-18 2026",
+  label: "October 16–18, 2026",
+  year: 2026,
+  month: 10,
+  days: [16, 17, 18],
+};
+
+Deno.test("formatNextGigDate: formats in America/New_York like the backend", () => {
+  const v: CandidateVenue = {
+    _id: "n1",
+    name: "N",
+    nextGig: { datetime: "2099-10-17T23:00:00.000Z" },
+  };
+  assertEquals(formatNextGigDate(v), "Saturday, October 17");
+  assertEquals(
+    formatNextGigDate({
+      _id: "n2",
+      name: "N",
+      nextGig: { datetime: new Date("2099-10-17T23:00:00.000Z") },
+    }),
+    "Saturday, October 17",
+  );
+});
+
+Deno.test("formatNextGigDate: falls back when the datetime is missing, date-only, or invalid", () => {
+  assertEquals(formatNextGigDate({ _id: "n3", name: "N" }), "our upcoming show");
+  assertEquals(
+    formatNextGigDate({ _id: "n4", name: "N", nextGig: { date: "2099-10-17" } }),
+    "our upcoming show",
+  );
+  assertEquals(
+    formatNextGigDate({ _id: "n5", name: "N", nextGig: { datetime: "not-a-date" } }),
+    "our upcoming show",
+  );
+});
+
+Deno.test("renderPitch: [Next Gig Date] renders the date, or the fallback, and never the literal token", () => {
+  const withDate: CandidateVenue = {
+    _id: "r1",
+    name: "Debut Room",
+    venueType: "PubFestivalBrewery",
+    contactName: "Pat",
+    nextGig: { datetime: "2099-10-17T23:00:00.000Z" },
+  };
+  const pitch = renderPitch(withDate, UPCOMING_WEEKEND, {}, [UPCOMING_TEMPLATE]);
+  assertEquals(pitch.templateStage, "upcoming");
+  assertStringIncludes(pitch.subject, "See you Saturday, October 17 at Debut Room");
+  assertStringIncludes(pitch.body, "Saturday, October 17");
+  assertEquals(pitch.body.includes("[Next Gig Date]"), false);
+  assertEquals(pitch.subject.includes("[Next Gig Date]"), false);
+
+  const noDate: CandidateVenue = { ...withDate, _id: "r2", nextGig: null, bookingStatus: "booked" };
+  const fallback = renderPitch(noDate, UPCOMING_WEEKEND, {}, [UPCOMING_TEMPLATE]);
+  assertStringIncludes(fallback.subject, "See you our upcoming show at Debut Room");
+  assertStringIncludes(fallback.body, "our upcoming show");
+  assertEquals(fallback.body.includes("[Next Gig Date]"), false);
+});
+
+Deno.test("resolveIntroHtml: upcoming gets the same conversation intros as cold, never the returning ones", () => {
+  for (const ctx of ["phone", "in-person", "general", null] as const) {
+    const upcoming = resolveIntroHtml(UPCOMING_TEMPLATE, "upcoming", ctx);
+    const cold = resolveIntroHtml(UPCOMING_TEMPLATE, "cold", ctx);
+    assertEquals(upcoming, cold);
+    if (ctx) {
+      assertEquals(upcoming === resolveIntroHtml(UPCOMING_TEMPLATE, "returning", ctx), false);
+    }
+  }
 });
