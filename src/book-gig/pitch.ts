@@ -302,7 +302,6 @@ export function resolveVenueStage(
   if (venue.bookingStatus === "booked") return "returning";
   if (venue.reason?.lastGigDate && venue.reason.lastGigDate !== "never") return "returning";
   if (venue.lastGig && (venue.lastGig.datetime || venue.lastGig.date)) return "returning";
-  if (venue.nextGig && (venue.nextGig.datetime || venue.nextGig.date)) return "returning";
   if (
     venue.priorGigs &&
     (Array.isArray(venue.priorGigs) ? venue.priorGigs.length > 0 : Boolean(venue.priorGigs))

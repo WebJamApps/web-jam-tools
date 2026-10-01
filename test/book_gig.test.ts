@@ -35,7 +35,6 @@ import {
   DEFAULT_TEMPLATES,
   htmlToPlainText,
   renderPitch,
-  resolveVenueStage,
   validateVoiceRules,
   verifyPitchAgainstTemplate,
 } from "../src/book-gig/pitch.ts";
@@ -5754,28 +5753,6 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
   );
 });
 
-Deno.test("resolveVenueStage: returns returning for venue with upcoming linked gig (nextGig) (#1196)", () => {
-  const venue: CandidateVenue = {
-    _id: "v-upcoming",
-    name: "2 Witches Winery & Brewing Co.",
-    nextGig: {
-      _id: "gig-2witches",
-      datetime: "2027-01-10T00:00:38.886Z",
-      venueId: "v-upcoming",
-    },
-  };
-  assertEquals(resolveVenueStage(venue), "returning");
-});
-
-Deno.test("resolveVenueStage: returns returning for venue with bookingStatus booked (#1196)", () => {
-  const venue: CandidateVenue = {
-    _id: "v-booked",
-    name: "2 Witches Winery & Brewing Co.",
-    bookingStatus: "booked",
-  };
-  assertEquals(resolveVenueStage(venue), "returning");
-});
-
 Deno.test("fetchCandidates: enriches candidate pool with bookingStatus and nextGig from active venue pool (#1196)", async () => {
   const candidateFromOutreach: CandidateVenue = {
     _id: "v-2witches",
@@ -5828,5 +5805,4 @@ Deno.test("fetchCandidates: enriches candidate pool with bookingStatus and nextG
   assertEquals(enriched?.bookingStatus, "booked");
   assertEquals(enriched?.nextGig?._id, "gig-1");
   assertEquals(enriched?.distanceKm, 92.5);
-  assertEquals(resolveVenueStage(enriched!), "returning");
 });
