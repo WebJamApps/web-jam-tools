@@ -299,7 +299,6 @@ export function resolveVenueStage(
   options?: RenderPitchOptions,
 ): TemplateStage {
   if (options?.isReturningVenue) return "returning";
-  if (venue.bookingStatus === "booked") return "returning";
   if (venue.reason?.lastGigDate && venue.reason.lastGigDate !== "never") return "returning";
   if (venue.lastGig && (venue.lastGig.datetime || venue.lastGig.date)) return "returning";
   if (
@@ -308,6 +307,9 @@ export function resolveVenueStage(
   ) {
     return "returning";
   }
+  // No past-gig evidence: a booked venue or a dated next gig is the debut-gig "upcoming" stage.
+  if (venue.nextGig && (venue.nextGig.datetime || venue.nextGig.date)) return "upcoming";
+  if (venue.bookingStatus === "booked") return "upcoming";
   return "cold";
 }
 

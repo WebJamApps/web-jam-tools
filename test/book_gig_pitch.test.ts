@@ -610,3 +610,49 @@ Deno.test("renderPitch: generates distinct type-appropriate returning phrasing f
   );
   assertEquals(validateVoiceRules(cafePitch.body).valid, true);
 });
+
+Deno.test("resolveVenueStage: nextGig.datetime with no past-gig evidence resolves to upcoming", () => {
+  const venue: CandidateVenue = {
+    _id: "u1",
+    name: "Debut Venue",
+    nextGig: { datetime: "2099-10-17T23:00:00.000Z" },
+  };
+  assertEquals(resolveVenueStage(venue), "upcoming");
+  assertEquals(
+    resolveVenueStage({ _id: "u1b", name: "Date Only", nextGig: { date: "2099-10-17" } }),
+    "upcoming",
+  );
+});
+
+Deno.test("resolveVenueStage: bookingStatus booked with no past-gig evidence resolves to upcoming", () => {
+  const venue: CandidateVenue = { _id: "u2", name: "Booked Venue", bookingStatus: "booked" };
+  assertEquals(resolveVenueStage(venue), "upcoming");
+});
+
+Deno.test("resolveVenueStage: past-gig evidence beats upcoming-gig evidence", () => {
+  const withLastAndNext: CandidateVenue = {
+    _id: "u3",
+    name: "Both Venue",
+    lastGig: { datetime: "2025-05-10T23:00:00.000Z" },
+    nextGig: { datetime: "2099-10-17T23:00:00.000Z" },
+  };
+  assertEquals(resolveVenueStage(withLastAndNext), "returning");
+
+  const bookedWithHistory: CandidateVenue = {
+    _id: "u4",
+    name: "Booked And Played",
+    bookingStatus: "booked",
+    reason: { lastGigDate: "2025-05-10" },
+  };
+  assertEquals(resolveVenueStage(bookedWithHistory), "returning");
+  assertEquals(
+    resolveVenueStage({ _id: "u5", name: "Option", bookingStatus: "booked" }, {
+      isReturningVenue: true,
+    }),
+    "returning",
+  );
+});
+
+Deno.test("resolveVenueStage: a nextGig with neither datetime nor date and no booking stays cold", () => {
+  assertEquals(resolveVenueStage({ _id: "u6", name: "Empty Next", nextGig: {} }), "cold");
+});
