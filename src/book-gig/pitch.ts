@@ -370,6 +370,26 @@ export function synthesizeCustomBodyHook(
   return "";
 }
 
+const NEXT_GIG_FALLBACK = "our upcoming show";
+
+/**
+ * Value of the [Next Gig Date] token. Mirrors web-jam-back: en-US weekday, long month and day in
+ * America/New_York (e.g. "Saturday, October 17"), or "our upcoming show" when no datetime is known.
+ * Never guesses a date from `nextGig.date` alone.
+ */
+export function formatNextGigDate(venue: CandidateVenue): string {
+  const raw = venue.nextGig?.datetime;
+  if (!raw) return NEXT_GIG_FALLBACK;
+  const d = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(d.getTime())) return NEXT_GIG_FALLBACK;
+  return d.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    timeZone: "America/New_York",
+  });
+}
+
 function substituteTokens(
   templateText: string,
   tokens: {
@@ -377,6 +397,7 @@ function substituteTokens(
     venueName: string;
     targetDates: string;
     bookingPeriod: string;
+    nextGigDate: string;
     customBody?: string;
   },
 ): string {
@@ -407,6 +428,9 @@ function substituteTokens(
 
   // 5. Replace [Booking Period]
   result = result.replace(/\[Booking Period\]/gi, tokens.bookingPeriod);
+
+  // 6. Replace [Next Gig Date]
+  result = result.replace(/\[Next Gig Date\]/gi, () => tokens.nextGigDate);
 
   return result;
 }
@@ -462,6 +486,7 @@ export function renderPitch(
     venueName: venue.name,
     targetDates: weekend.label,
     bookingPeriod,
+    nextGigDate: formatNextGigDate(venue),
     customBody,
   };
 
@@ -630,6 +655,7 @@ function substituteNonCustomBodyTokens(
     venueName: string;
     targetDates: string;
     bookingPeriod: string;
+    nextGigDate: string;
   },
 ): string {
   // Protect "[Custom Body]" from substituteTokens' own custom-body handling so every other
@@ -641,14 +667,13 @@ function substituteNonCustomBodyTokens(
 // The stored templates a rendered pitch may legitimately have come from, declared stage first.
 // The backend decides the stage itself (booked venue or a replied/booked outreach → returning,
 // and a returning request with no returning variant falls back to cold), which the local
-// gig-history prediction cannot reproduce — so both stages of the declared type are candidates.
+// gig-history prediction cannot reproduce — so all three stages of the declared type are candidates.
 function findDeclaredTemplates(pitch: PitchEmail, templates: EmailTemplate[]): EmailTemplate[] {
   const type = pitch.templateType as TemplateVenueType | undefined;
   if (!type) return [];
   const declared: TemplateStage = (pitch.templateStage as TemplateStage) || "cold";
-  const stages: TemplateStage[] = declared === "returning"
-    ? ["returning", "cold"]
-    : ["cold", "returning"];
+  const all: TemplateStage[] = ["cold", "returning", "upcoming"];
+  const stages: TemplateStage[] = [declared, ...all.filter((st) => st !== declared)];
   const pool = templates && templates.length > 0 ? templates : DEFAULT_TEMPLATES;
   const found: EmailTemplate[] = [];
   for (const stage of stages) {
@@ -773,6 +798,7 @@ function divergenceFromTemplate(
     venueName: venue.name || pitch.venueName,
     targetDates: weekend.label,
     bookingPeriod,
+    nextGigDate: formatNextGigDate(venue),
   };
 
   // The backend fills a missing contact name with "there"; the local renderer drops it.
