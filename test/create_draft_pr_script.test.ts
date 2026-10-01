@@ -1028,6 +1028,79 @@ Deno.test("--base with empty string is rejected with error", async () => {
   assertMatch(res.stderr, /--base cannot be empty/);
 });
 
+Deno.test("--base main is rejected with error", async () => {
+  const res = await runScript(repoDir, [...baseArgs(), "--base", "main"], {}, { raw: true });
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /--base cannot be 'main'/);
+});
+
+Deno.test("--base with non-existent branch is rejected with error", async () => {
+  const res = await runScript(repoDir, [...baseArgs(), "--base", "does-not-exist"], {}, {
+    raw: true,
+  });
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /no 'does-not-exist' branch in this repo/);
+});
+
+Deno.test("opening a PR from dev is refused even when --base is specified", async () => {
+  await new Deno.Command("git", {
+    args: ["checkout", "dev"],
+    cwd: repoDir,
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+
+  await new Deno.Command("git", {
+    args: ["branch", "-f", "target-feature-branch"],
+    cwd: repoDir,
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+
+  const res = await runScript(
+    repoDir,
+    [...baseArgs(), "--base", "target-feature-branch"],
+    {},
+    { raw: true },
+  );
+
+  await new Deno.Command("git", {
+    args: ["checkout", "scratch-branch"],
+    cwd: repoDir,
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /refusing to open a PR from 'dev'/);
+});
+
+Deno.test("opening a PR when current branch matches --base is refused", async () => {
+  await new Deno.Command("git", {
+    args: ["checkout", "-b", "same-base-branch"],
+    cwd: repoDir,
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+
+  const res = await runScript(
+    repoDir,
+    [...baseArgs(), "--base", "same-base-branch"],
+    {},
+    { raw: true },
+  );
+
+  await new Deno.Command("git", {
+    args: ["checkout", "scratch-branch"],
+    cwd: repoDir,
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /refusing to open a PR from 'same-base-branch' to itself/);
+});
+
 // --- --base passed through to gh pr create/edit tests ---
 
 async function makeMockGhWithArgCapture() {
@@ -1157,5 +1230,76 @@ ${realGitPath} "$@"
     foundBaseInCreate,
     true,
     `--base parent-feature-branch not found in gh pr create invocation. Script code: ${res.code}, stderr: ${res.stderr}\n\nLog:\n${invocationsText}`,
+  );
+});
+
+Deno.test("--update --base new-base passes --base through to gh pr edit call", async () => {
+  const { dir, argsLogPath } = await makeMockGhWithArgCapture();
+
+  const gitMockDir = await Deno.makeTempDir({ prefix: "mock-git-" });
+  const realGitPath = "/usr/bin/git";
+  const gitScriptContent = `#!/usr/bin/env bash
+if [ "$1" = "push" ]; then
+  exit 0
+fi
+${realGitPath} "$@"
+`;
+  const gitPath = `${gitMockDir}/git`;
+  await Deno.writeTextFile(gitPath, gitScriptContent);
+  await Deno.chmod(gitPath, 0o755);
+
+  const env = {
+    PATH: `${dir}:${gitMockDir}:${Deno.env.get("PATH")}`,
+  };
+
+  await new Deno.Command("git", {
+    args: ["branch", "-f", "new-parent-branch"],
+    cwd: repoDir,
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+
+  const res = await runScriptWithoutDryRun(
+    repoDir,
+    [
+      ...baseArgs(),
+      "--update",
+      "--base",
+      "new-parent-branch",
+      "--issue",
+      "999",
+    ],
+    env,
+  );
+
+  let invocationsText = "";
+  try {
+    invocationsText = await Deno.readTextFile(argsLogPath);
+  } catch (_e) {
+    // File doesn't exist
+  }
+
+  await Deno.remove(dir, { recursive: true });
+  await Deno.remove(gitMockDir, { recursive: true });
+
+  const invocations = invocationsText.split("=== gh invocation ===\n");
+  let foundBaseInEdit = false;
+  for (let i = 0; i < invocations.length; i++) {
+    const invocation = invocations[i].trim();
+    if (invocation.includes("pr") && invocation.includes("edit")) {
+      if (
+        invocation.includes("--base") &&
+        invocation.includes("new-parent-branch")
+      ) {
+        foundBaseInEdit = true;
+        break;
+      }
+    }
+  }
+
+  assertEquals(
+    foundBaseInEdit,
+    true,
+    `--base new-parent-branch not found in gh pr edit invocation. Script code: ${res.code}, stderr: ${res.stderr}\n\nLog:\n${invocationsText}`,
   );
 });

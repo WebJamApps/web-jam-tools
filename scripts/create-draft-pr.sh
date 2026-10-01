@@ -200,6 +200,7 @@ author_roster_check() {
 
 AUTHOR=""
 BASE="dev"
+HAS_BASE=0
 ISSUE=""
 TITLE=""
 SUMMARY=""
@@ -258,7 +259,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "ERROR: $1 requires a value." >&2; exit 1; }
       case "$1" in
         --author)              AUTHOR="$2" ;;
-        --base)                BASE="$2" ;;
+        --base)                BASE="$2"; HAS_BASE=1 ;;
         --issue)               ISSUE="$2" ;;
         --title)               TITLE="$2" ;;
         --summary)             SUMMARY="$2"; HAS_SUMMARY=1 ;;
@@ -293,9 +294,13 @@ if [ -z "$AUTHOR" ]; then
 fi
 author_roster_check "$AUTHOR"
 
-# --- validate: base branch not empty ---
+# --- validate: base branch not empty and not main ---
 if [ -z "$BASE" ]; then
   echo "ERROR: --base cannot be empty (defaults to 'dev' when omitted)." >&2
+  exit 1
+fi
+if [ "$BASE" = "main" ]; then
+  echo "ERROR: --base cannot be 'main' (PRs must target dev or a feature branch)." >&2
   exit 1
 fi
 
@@ -307,8 +312,12 @@ fi
 
 # --- never open a PR from dev/main ---
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$BRANCH" = "$BASE" ] || [ "$BRANCH" = "main" ]; then
+if [ "$BRANCH" = "dev" ] || [ "$BRANCH" = "main" ]; then
   echo "ERROR: refusing to open a PR from '$BRANCH' — switch to a feature branch." >&2
+  exit 1
+fi
+if [ "$BRANCH" = "$BASE" ]; then
+  echo "ERROR: refusing to open a PR from '$BRANCH' to itself." >&2
   exit 1
 fi
 
@@ -748,19 +757,24 @@ if [ "$UPDATE" -eq 1 ]; then
   fi
 
   echo "Updating draft PR #$PR_NUMBER body..."
-  gh pr edit "$PR_NUMBER" --body "$BODY"
+  if [ "$HAS_BASE" -eq 1 ]; then
+    gh pr edit "$PR_NUMBER" --body "$BODY" --base "$BASE"
+  else
+    gh pr edit "$PR_NUMBER" --body "$BODY"
+  fi
   PR_URL="$(gh pr view "$PR_NUMBER" --json url --jq .url)"
+  PR_BASE="$(gh pr view "$PR_NUMBER" --json baseRefName --jq -r .baseRefName 2>/dev/null || echo "$BASE")"
 
   echo ""
   echo "Draft PR updated: $PR_URL"
   if [ -z "$ISSUE" ]; then
-    echo "  base: $BASE | state: draft | no issue | by: $AUTHOR"
+    echo "  base: $PR_BASE | state: draft | no issue | by: $AUTHOR"
   elif [ "$NO_CLOSE" -eq 1 ]; then
-    echo "  base: $BASE | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $PR_BASE | state: draft | refs: $FORMATTED_ISSUE | by: $AUTHOR"
   elif [ "$PART_OF" -eq 1 ]; then
-    echo "  base: $BASE | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $PR_BASE | state: draft | part of: $FORMATTED_ISSUE | by: $AUTHOR"
   else
-    echo "  base: $BASE | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
+    echo "  base: $PR_BASE | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
   fi
   echo "Josh reviews the diff and flips draft -> ready on GitHub."
 else
