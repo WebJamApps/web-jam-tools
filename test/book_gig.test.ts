@@ -281,7 +281,7 @@ Deno.test("filterAndRankCandidates: prioritizes matching location and retains re
   const parkway = filtered.find((v) => v.name === "Parkway Brewing")!;
   assertEquals(parkway.isExcluded, true);
   assertEquals(parkway.exclusionReason, "outside-target-area");
-  assertEquals(parkway.statusBadge, "[Outside Target Area]");
+  assertEquals(parkway.statusBadge, "Outside Target Area");
 });
 
 Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metros", () => {
@@ -334,7 +334,7 @@ Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metro
   const salem = filtered.find((v) => v.city === "Salem")!;
   assertEquals(salem.isExcluded, true);
   assertEquals(salem.exclusionReason, "out-of-state");
-  assertEquals(salem.statusBadge, "[Out of State]");
+  assertEquals(salem.statusBadge, "Out of State");
 });
 
 Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and exclusion of non-target metros", () => {
@@ -1064,7 +1064,7 @@ Deno.test("mergeWeekendRuns: purges pitch cards for venues that became excluded 
       {
         ...venueOnHold,
         isExcluded: true,
-        statusBadge: "[Seasonal Hold: Mar 2027]",
+        statusBadge: "Seasonal Hold: Mar 2027",
         exclusionReason: "seasonal-hold",
       },
     ],
@@ -2785,7 +2785,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
       usState: "VA",
       email: "hold@brewery.com",
       isExcluded: true,
-      statusBadge: "[Seasonal Hold: Jan 2027]",
+      statusBadge: "Seasonal Hold: Jan 2027",
     },
   ];
   const mockFetchWithExcluded: typeof fetch = (url, init) => {
@@ -3526,7 +3526,7 @@ Deno.test("identifyCandidateBadge: identifies Contact Hold for future resumeBook
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Contact Hold: Until Jan 2027]");
+  assertEquals(badge.badge, "Contact Hold: Until Jan 2027");
   assertEquals(badge.cssClass, "badge-seasonal-hold");
   assertEquals(badge.isExcluded, true);
 
@@ -3537,7 +3537,7 @@ Deno.test("identifyCandidateBadge: identifies Contact Hold for future resumeBook
     bookedThrough: "2027-02-15",
   };
   const badgeBt = identifyCandidateBadge(venueBt, refDate);
-  assertEquals(badgeBt.badge, "[Booked Through: Feb 2027]");
+  assertEquals(badgeBt.badge, "Booked Through: Feb 2027");
   assertEquals(badgeBt.cssClass, "badge-seasonal-hold");
   assertEquals(badgeBt.isExcluded, true);
 
@@ -3558,7 +3558,7 @@ Deno.test("identifyCandidateBadge: identifies Gig Spacing exclusion for ±2 mont
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(badge.badge, "Gig Spacing: Nov 20 Show");
   assertEquals(badge.cssClass, "badge-gig-spacing");
   assertEquals(badge.isExcluded, true);
 
@@ -3569,7 +3569,7 @@ Deno.test("identifyCandidateBadge: identifies Gig Spacing exclusion for ±2 mont
     reason: { spacingNote: "Gig on 2026-09-15 Show" },
   };
   const badgeNote = identifyCandidateBadge(venueNote, refDate);
-  assertEquals(badgeNote.badge, "[Gig Spacing: Sep 15 Show]");
+  assertEquals(badgeNote.badge, "Gig Spacing: Sep 15 Show");
   assertEquals(badgeNote.cssClass, "badge-gig-spacing");
   assertEquals(badgeNote.isExcluded, true);
 });
@@ -3585,7 +3585,7 @@ Deno.test("identifyCandidateBadge: identifies Direct Chat Active for outreachEli
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Direct Chat Active]");
+  assertEquals(badge.badge, "Direct Chat Active");
   assertEquals(badge.cssClass, "badge-direct-chat");
   assertEquals(badge.isExcluded, true);
 
@@ -3596,12 +3596,12 @@ Deno.test("identifyCandidateBadge: identifies Direct Chat Active for outreachEli
     notes: "Chatting directly about holiday showcase",
   };
   const badgePrior = identifyCandidateBadge(venuePrior, refDate);
-  assertEquals(badgePrior.badge, "[Direct Chat Active]");
+  assertEquals(badgePrior.badge, "Direct Chat Active");
   assertEquals(badgePrior.cssClass, "badge-direct-chat");
   assertEquals(badgePrior.isExcluded, true);
 });
 
-Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligible: false and no direct chat notes is NOT badged [Direct Chat Active] (#879)", () => {
+Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligible: false and no direct chat notes is NOT badged Direct Chat Active (#879)", () => {
   const refDate = new Date("2026-10-01T00:00:00.000Z");
 
   const unvettedVenue: CandidateVenue = {
@@ -3611,7 +3611,7 @@ Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligi
     notes: "Needs liquor license verification before booking",
   };
   const badgeUnvetted = identifyCandidateBadge(unvettedVenue, refDate);
-  assertNotEquals(badgeUnvetted.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeUnvetted.badge, "Direct Chat Active");
   assertNotEquals(badgeUnvetted.cssClass, "badge-direct-chat");
 
   const declinedVenue: CandidateVenue = {
@@ -3621,7 +3621,7 @@ Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligi
     notes: "Permanently declined live music events",
   };
   const badgeDeclined = identifyCandidateBadge(declinedVenue, refDate);
-  assertNotEquals(badgeDeclined.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeDeclined.badge, "Direct Chat Active");
   assertNotEquals(badgeDeclined.cssClass, "badge-direct-chat");
 
   const emptyNotesVenue: CandidateVenue = {
@@ -3630,7 +3630,7 @@ Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligi
     outreachEligible: false,
   };
   const badgeEmpty = identifyCandidateBadge(emptyNotesVenue, refDate);
-  assertNotEquals(badgeEmpty.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeEmpty.badge, "Direct Chat Active");
   assertNotEquals(badgeEmpty.cssClass, "badge-direct-chat");
 });
 
@@ -3644,7 +3644,7 @@ Deno.test("identifyCandidateBadge: identifies Cooldown Active for replied pitche
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Cooldown Active: Replied Oct 12]");
+  assertEquals(badge.badge, "Cooldown Active: Replied Oct 12");
   assertEquals(badge.cssClass, "badge-cooldown");
   assertEquals(badge.isExcluded, true);
 });
@@ -3660,7 +3660,7 @@ Deno.test("identifyCandidateBadge: identifies Cooldown Active for pitches sent w
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Cooldown Active: Sent Oct 10]");
+  assertEquals(badge.badge, "Cooldown Active: Sent Oct 10");
   assertEquals(badge.cssClass, "badge-cooldown");
   assertEquals(badge.isExcluded, true);
 
@@ -3671,7 +3671,7 @@ Deno.test("identifyCandidateBadge: identifies Cooldown Active for pitches sent w
     sentAt: "2026-10-12T10:00:00.000Z",
   };
   const badgeSentAt = identifyCandidateBadge(venueSentAt, refDate);
-  assertEquals(badgeSentAt.badge, "[Cooldown Active: Sent Oct 12]");
+  assertEquals(badgeSentAt.badge, "Cooldown Active: Sent Oct 12");
   assertEquals(badgeSentAt.cssClass, "badge-cooldown");
   assertEquals(badgeSentAt.isExcluded, true);
 });
@@ -3811,22 +3811,22 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   assertEquals(filtered.length, 7);
 
   const hold = filtered.find((v) => v._id === "v1")!;
-  assertEquals(hold.statusBadge, "[Contact Hold: Until Jan 2027]");
+  assertEquals(hold.statusBadge, "Contact Hold: Until Jan 2027");
   assertEquals(hold.isExcluded, true);
-  assertEquals(hold.reason?.exclusionReason, "[Contact Hold: Until Jan 2027]");
+  assertEquals(hold.reason?.exclusionReason, "Contact Hold: Until Jan 2027");
 
   const spacing = filtered.find((v) => v._id === "v2")!;
-  assertEquals(spacing.statusBadge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(spacing.statusBadge, "Gig Spacing: Nov 20 Show");
   assertEquals(spacing.isExcluded, true);
-  assertEquals(spacing.reason?.exclusionReason, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(spacing.reason?.exclusionReason, "Gig Spacing: Nov 20 Show");
 
   const chat = filtered.find((v) => v._id === "v3")!;
-  assertEquals(chat.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.statusBadge, "Direct Chat Active");
   assertEquals(chat.isExcluded, true);
-  assertEquals(chat.reason?.exclusionReason, "[Direct Chat Active]");
+  assertEquals(chat.reason?.exclusionReason, "Direct Chat Active");
 
   const cooldown = filtered.find((v) => v._id === "v4")!;
-  assertEquals(cooldown.statusBadge, "[Cooldown Active: Sent Sep 28]");
+  assertEquals(cooldown.statusBadge, "Cooldown Active: Sent Sep 28");
   assertEquals(cooldown.isExcluded, true);
 
   const returning = filtered.find((v) => v._id === "v5")!;
@@ -3838,7 +3838,7 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   assertEquals(fresh.isExcluded, false);
 
   const noEmail = filtered.find((v) => v._id === "v7")!;
-  assertEquals(noEmail.statusBadge, "[No Booking Email]");
+  assertEquals(noEmail.statusBadge, "No Booking Email");
   assertEquals(noEmail.isExcluded, true);
   assertEquals(noEmail.exclusionReason, "no-booking-email");
 });
@@ -3922,20 +3922,20 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
   // 1. Terminal candidate table (uncolored check)
   const terminalPlain = renderCandidateTable(candidates, { color: false, referenceDate: refDate });
   assertStringIncludes(terminalPlain, "Spacing Status");
-  assertStringIncludes(terminalPlain, "[Contact Hold: Until Jan 2027]");
-  assertStringIncludes(terminalPlain, "[Gig Spacing: Nov 20 Show]");
-  assertStringIncludes(terminalPlain, "[Direct Chat Active]");
-  assertStringIncludes(terminalPlain, "[Cooldown Active: Sent Sep 28]");
+  assertStringIncludes(terminalPlain, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(terminalPlain, "Gig Spacing: Nov 20 Show");
+  assertStringIncludes(terminalPlain, "Direct Chat Active");
+  assertStringIncludes(terminalPlain, "Cooldown Active: Sent Sep 28");
 
   // 2. Terminal candidate table (colored check)
   const terminalColored = renderCandidateTable(candidates, { color: true, referenceDate: refDate });
-  assertStringIncludes(terminalColored, "[Contact Hold: Until Jan 2027]");
+  assertStringIncludes(terminalColored, "Contact Hold: Until Jan 2027");
   assertStringIncludes(terminalColored, "\x1b[36m"); // Cyan
-  assertStringIncludes(terminalColored, "[Gig Spacing: Nov 20 Show]");
+  assertStringIncludes(terminalColored, "Gig Spacing: Nov 20 Show");
   assertStringIncludes(terminalColored, "\x1b[31m"); // Red
-  assertStringIncludes(terminalColored, "[Direct Chat Active]");
+  assertStringIncludes(terminalColored, "Direct Chat Active");
   assertStringIncludes(terminalColored, "\x1b[35m"); // Magenta
-  assertStringIncludes(terminalColored, "[Cooldown Active: Sent Sep 28]");
+  assertStringIncludes(terminalColored, "Cooldown Active: Sent Sep 28");
   assertStringIncludes(terminalColored, "\x1b[34m"); // Blue
 
   // Empty table check
@@ -3963,13 +3963,13 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
 
   // Status badges and CSS classes in HTML
   assertStringIncludes(html, "badge-seasonal-hold");
-  assertStringIncludes(html, "[Contact Hold: Until Jan 2027]");
+  assertStringIncludes(html, "Contact Hold: Until Jan 2027");
   assertStringIncludes(html, "badge-gig-spacing");
-  assertStringIncludes(html, "[Gig Spacing: Nov 20 Show]");
+  assertStringIncludes(html, "Gig Spacing: Nov 20 Show");
   assertStringIncludes(html, "badge-direct-chat");
-  assertStringIncludes(html, "[Direct Chat Active]");
+  assertStringIncludes(html, "Direct Chat Active");
   assertStringIncludes(html, "badge-cooldown");
-  assertStringIncludes(html, "[Cooldown Active: Sent Sep 28]");
+  assertStringIncludes(html, "Cooldown Active: Sent Sep 28");
 });
 
 Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and cooldown venues alongside genuine /outreach/candidates response", async () => {
@@ -4183,7 +4183,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(seasonalHold !== undefined);
   assertEquals(seasonalHold.isExcluded, true);
   const seasonalBadge = identifyCandidateBadge(seasonalHold);
-  assertStringIncludes(seasonalBadge.badge, "[Contact Hold: Until Jan 2027]");
+  assertStringIncludes(seasonalBadge.badge, "Contact Hold: Until Jan 2027");
   assertEquals(seasonalBadge.cssClass, "badge-seasonal-hold");
   assertEquals(seasonalBadge.isExcluded, true);
 
@@ -4192,7 +4192,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(directChat !== undefined);
   assertEquals(directChat.isExcluded, true);
   const directChatBadge = identifyCandidateBadge(directChat);
-  assertEquals(directChatBadge.badge, "[Direct Chat Active]");
+  assertEquals(directChatBadge.badge, "Direct Chat Active");
   assertEquals(directChatBadge.cssClass, "badge-direct-chat");
   assertEquals(directChatBadge.isExcluded, true);
 
@@ -4201,7 +4201,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(gigSpacing !== undefined);
   assertEquals(gigSpacing.isExcluded, true);
   const gigSpacingBadge = identifyCandidateBadge(gigSpacing);
-  assertEquals(gigSpacingBadge.badge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(gigSpacingBadge.badge, "Gig Spacing: Nov 20 Show");
   assertEquals(gigSpacingBadge.cssClass, "badge-gig-spacing");
   assertEquals(gigSpacingBadge.isExcluded, true);
 
@@ -4210,7 +4210,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(cooldown !== undefined);
   assertEquals(cooldown.isExcluded, true);
   const cooldownBadge = identifyCandidateBadge(cooldown);
-  assertStringIncludes(cooldownBadge.badge, "[Cooldown Active: Sent");
+  assertStringIncludes(cooldownBadge.badge, "Cooldown Active: Sent");
   assertEquals(cooldownBadge.cssClass, "badge-cooldown");
   assertEquals(cooldownBadge.isExcluded, true);
 
@@ -4219,7 +4219,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(cooldownReplied !== undefined);
   assertEquals(cooldownReplied.isExcluded, true);
   const cooldownRepliedBadge = identifyCandidateBadge(cooldownReplied);
-  assertStringIncludes(cooldownRepliedBadge.badge, "[Cooldown Active: Replied");
+  assertStringIncludes(cooldownRepliedBadge.badge, "Cooldown Active: Replied");
   assertEquals(cooldownRepliedBadge.cssClass, "badge-cooldown");
   assertEquals(cooldownRepliedBadge.isExcluded, true);
 
@@ -4227,11 +4227,11 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   const renderedTable = renderCandidateTable(candidates, { color: false });
   assertStringIncludes(renderedTable, "Returning · Last: Jun 15");
   assertStringIncludes(renderedTable, "no gigs yet");
-  assertStringIncludes(renderedTable, "[Contact Hold: Until Jan 2027]");
-  assertStringIncludes(renderedTable, "[Direct Chat Active]");
-  assertStringIncludes(renderedTable, "[Gig Spacing: Nov 20 Show]");
-  assertStringIncludes(renderedTable, "[Cooldown Active: Sent");
-  assertStringIncludes(renderedTable, "[Cooldown Active: Replied");
+  assertStringIncludes(renderedTable, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(renderedTable, "Direct Chat Active");
+  assertStringIncludes(renderedTable, "Gig Spacing: Nov 20 Show");
+  assertStringIncludes(renderedTable, "Cooldown Active: Sent");
+  assertStringIncludes(renderedTable, "Cooldown Active: Replied");
 
   // Verify assessDensity counts ONLY the 2 eligible candidates
   const density = assessDensity(candidates);
@@ -4606,7 +4606,7 @@ Deno.test("runBookGigCli: logs evaluated vs pitchable discovery counts and print
     assertStringIncludes(excludedSection, "Seasonal Hold Farm");
     assertStringIncludes(excludedSection, "Spacing Conflict Venue");
     assertStringIncludes(excludedSection, "No Email Cafe");
-    assertStringIncludes(excludedSection, "[No Booking Email]");
+    assertStringIncludes(excludedSection, "No Booking Email");
     assert(
       !excludedSection.includes("Eligible Brewery"),
       "Eligible Brewery must not be in excluded table",
@@ -4785,19 +4785,19 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertEquals(isPitchableCandidate(outOfState), false);
   assertEquals(outOfState.isExcluded, true);
   assertEquals(outOfState.exclusionReason, "out-of-state");
-  assertEquals(outOfState.statusBadge, "[Out of State]");
+  assertEquals(outOfState.statusBadge, "Out of State");
 
   const outsideArea = candidates.find((c) => c._id === "v-outside-area")!;
   assertEquals(isPitchableCandidate(outsideArea), false);
   assertEquals(outsideArea.isExcluded, true);
   assertEquals(outsideArea.exclusionReason, "outside-target-area");
-  assertEquals(outsideArea.statusBadge, "[Outside Target Area]");
+  assertEquals(outsideArea.statusBadge, "Outside Target Area");
 
   const noEmail = candidates.find((c) => c._id === "v-no-email")!;
   assertEquals(isPitchableCandidate(noEmail), false);
   assertEquals(noEmail.isExcluded, true);
   assertEquals(noEmail.exclusionReason, "no-booking-email");
-  assertEquals(noEmail.statusBadge, "[No Booking Email]");
+  assertEquals(noEmail.statusBadge, "No Booking Email");
 
   const seasonalHold = candidates.find((c) => c._id === "v-seasonal-hold")!;
   assertEquals(isPitchableCandidate(seasonalHold), false);
@@ -4815,7 +4815,7 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertEquals(isPitchableCandidate(directChat), false);
   assertEquals(directChat.isExcluded, true);
   assertEquals(directChat.exclusionReason, "direct-chat");
-  assertEquals(directChat.statusBadge, "[Direct Chat Active]");
+  assertEquals(directChat.statusBadge, "Direct Chat Active");
 
   const cooldown = candidates.find((c) => c._id === "v-cooldown")!;
   assertEquals(isPitchableCandidate(cooldown), false);
@@ -4867,13 +4867,13 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertStringIncludes(excludedTable, "Roanoke Cafe");
   assertStringIncludes(excludedTable, "Salem Taphouse");
 
-  assertStringIncludes(excludedTable, "[Out of State]");
-  assertStringIncludes(excludedTable, "[Outside Target Area]");
-  assertStringIncludes(excludedTable, "[No Booking Email]");
-  assertStringIncludes(excludedTable, "[Contact Hold: Until Apr 2027]");
-  assertStringIncludes(excludedTable, "[Gig Spacing: Nov 15 Show]");
-  assertStringIncludes(excludedTable, "[Direct Chat Active]");
-  assertStringIncludes(excludedTable, "[Cooldown Active: Sent Oct 14]");
+  assertStringIncludes(excludedTable, "Out of State");
+  assertStringIncludes(excludedTable, "Outside Target Area");
+  assertStringIncludes(excludedTable, "No Booking Email");
+  assertStringIncludes(excludedTable, "Contact Hold: Until Apr 2027");
+  assertStringIncludes(excludedTable, "Gig Spacing: Nov 15 Show");
+  assertStringIncludes(excludedTable, "Direct Chat Active");
+  assertStringIncludes(excludedTable, "Cooldown Active: Sent Oct 14");
   assert(!excludedTable.includes("New"), "Excluded table must never display 'New'");
 
   // 8. CLI integration with mocked fetchFn prints the reconciled discovery breakdown log
@@ -5396,10 +5396,10 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
       usState: "SC",
       email: "booking@thegarrison.com",
       isExcluded: true,
-      statusBadge: "[Cooldown Active: Sent Sep 13]",
+      statusBadge: "Cooldown Active: Sent Sep 13",
       exclusionReason: "cooldown",
       reason: {
-        statusBadge: "[Cooldown Active: Sent Sep 13]",
+        statusBadge: "Cooldown Active: Sent Sep 13",
         exclusionReason: "cooldown",
       },
     },
@@ -5410,10 +5410,10 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
       usState: "NC",
       email: "booking@hold.com",
       isExcluded: true,
-      statusBadge: "[Seasonal Hold: Jan 2027]",
+      statusBadge: "Seasonal Hold: Jan 2027",
       exclusionReason: "seasonal-hold",
       reason: {
-        statusBadge: "[Seasonal Hold: Jan 2027]",
+        statusBadge: "Seasonal Hold: Jan 2027",
         exclusionReason: "seasonal-hold",
       },
     },
@@ -5424,10 +5424,10 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
       usState: "NC",
       email: "booking@chat.com",
       isExcluded: true,
-      statusBadge: "[Direct Chat Active]",
+      statusBadge: "Direct Chat Active",
       exclusionReason: "direct-chat",
       reason: {
-        statusBadge: "[Direct Chat Active]",
+        statusBadge: "Direct Chat Active",
         exclusionReason: "direct-chat",
       },
     },
@@ -5438,10 +5438,10 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
       usState: "NC",
       email: "booking@spacing.com",
       isExcluded: true,
-      statusBadge: "[Gig Spacing: Nov 15 Show]",
+      statusBadge: "Gig Spacing: Nov 15 Show",
       exclusionReason: "gig-spacing",
       reason: {
-        statusBadge: "[Gig Spacing: Nov 15 Show]",
+        statusBadge: "Gig Spacing: Nov 15 Show",
         exclusionReason: "gig-spacing",
       },
     },
@@ -5470,30 +5470,30 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
   const garrison = filtered.find((v) => v._id === "garrison")!;
   assertEquals(garrison.isExcluded, true);
   assertEquals(garrison.exclusionReason, "cooldown");
-  assertEquals(garrison.statusBadge, "[Cooldown Active: Sent Sep 13]");
+  assertEquals(garrison.statusBadge, "Cooldown Active: Sent Sep 13");
   assertEquals(garrison.reason?.exclusionReason, "cooldown");
-  assertEquals(garrison.reason?.statusBadge, "[Cooldown Active: Sent Sep 13]");
+  assertEquals(garrison.reason?.statusBadge, "Cooldown Active: Sent Sep 13");
 
   const hold = filtered.find((v) => v._id === "hold-venue")!;
   assertEquals(hold.isExcluded, true);
   assertEquals(hold.exclusionReason, "seasonal-hold");
-  assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.statusBadge, "Seasonal Hold: Jan 2027");
   assertEquals(hold.reason?.exclusionReason, "seasonal-hold");
-  assertEquals(hold.reason?.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.reason?.statusBadge, "Seasonal Hold: Jan 2027");
 
   const chat = filtered.find((v) => v._id === "direct-chat-venue")!;
   assertEquals(chat.isExcluded, true);
   assertEquals(chat.exclusionReason, "direct-chat");
-  assertEquals(chat.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.statusBadge, "Direct Chat Active");
   assertEquals(chat.reason?.exclusionReason, "direct-chat");
-  assertEquals(chat.reason?.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.reason?.statusBadge, "Direct Chat Active");
 
   const spacing = filtered.find((v) => v._id === "spacing-venue")!;
   assertEquals(spacing.isExcluded, true);
   assertEquals(spacing.exclusionReason, "gig-spacing");
-  assertEquals(spacing.statusBadge, "[Gig Spacing: Nov 15 Show]");
+  assertEquals(spacing.statusBadge, "Gig Spacing: Nov 15 Show");
   assertEquals(spacing.reason?.exclusionReason, "gig-spacing");
-  assertEquals(spacing.reason?.statusBadge, "[Gig Spacing: Nov 15 Show]");
+  assertEquals(spacing.reason?.statusBadge, "Gig Spacing: Nov 15 Show");
 
   const inArea = filtered.find((v) => v._id === "in-area-venue")!;
   assertEquals(inArea.isExcluded, false);
@@ -5502,7 +5502,7 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
   const outOfArea = filtered.find((v) => v._id === "out-of-area-eligible")!;
   assertEquals(outOfArea.isExcluded, true);
   assertEquals(outOfArea.exclusionReason, "outside-target-area");
-  assertEquals(outOfArea.statusBadge, "[Outside Target Area]");
+  assertEquals(outOfArea.statusBadge, "Outside Target Area");
 });
 
 Deno.test("formatMonthDayYear: formats date string or Date object with 4-digit year (#1103)", () => {
@@ -5526,7 +5526,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       isExcluded: true,
       exclusionReason: "gig-spacing",
       conflictingGigDate: "2026-12-12",
-      statusBadge: "[Gig Spacing: Dec 12, 2026 Show]",
+      statusBadge: "Gig Spacing: Dec 12, 2026 Show",
     },
     {
       _id: "5pts",
@@ -5537,7 +5537,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       isExcluded: true,
       exclusionReason: "gig-spacing",
       conflictingGigDate: "2026-11-15",
-      statusBadge: "[Gig Spacing: Nov 15, 2026 Show]",
+      statusBadge: "Gig Spacing: Nov 15, 2026 Show",
     },
     {
       _id: "garrison",
@@ -5547,7 +5547,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "booking@thegarrison.com",
       isExcluded: true,
       exclusionReason: "cooldown",
-      statusBadge: "[Cooldown Active: Sent Sep 13]",
+      statusBadge: "Cooldown Active: Sent Sep 13",
     },
     {
       _id: "osb",
@@ -5557,7 +5557,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "booking@oldesalem.com",
       isExcluded: true,
       exclusionReason: "seasonal-hold",
-      statusBadge: "[Seasonal Hold: Jan 2027]",
+      statusBadge: "Seasonal Hold: Jan 2027",
     },
     {
       _id: "chat",
@@ -5567,7 +5567,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "info@twincreeks.com",
       isExcluded: true,
       exclusionReason: "direct-chat",
-      statusBadge: "[Direct Chat Active]",
+      statusBadge: "Direct Chat Active",
     },
     {
       _id: "no-email",
@@ -5577,7 +5577,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "",
       isExcluded: true,
       exclusionReason: "no-booking-email",
-      statusBadge: "[No Booking Email]",
+      statusBadge: "No Booking Email",
     },
     {
       _id: "parkway",
@@ -5587,7 +5587,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "booking@parkway.com",
       isExcluded: true,
       exclusionReason: "outside-target-area",
-      statusBadge: "[Outside Target Area]",
+      statusBadge: "Outside Target Area",
     },
     {
       _id: "beales",
@@ -5597,7 +5597,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "info@beales.com",
       isExcluded: true,
       exclusionReason: "outside-target-area",
-      statusBadge: "[Outside Target Area]",
+      statusBadge: "Outside Target Area",
     },
     {
       _id: "raleigh",
@@ -5607,7 +5607,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "info@raleighpour.com",
       isExcluded: true,
       exclusionReason: "out-of-state",
-      statusBadge: "[Out of State]",
+      statusBadge: "Out of State",
     },
   ];
 
@@ -5659,7 +5659,7 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       email: "booking@durtybull.com",
       isExcluded: true,
       exclusionReason: "seasonal-hold",
-      statusBadge: "[Seasonal Hold: Jan 2027]",
+      statusBadge: "Seasonal Hold: Jan 2027",
       sentAt: "2026-07-24T12:00:00Z",
     },
     {
@@ -5670,7 +5670,7 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       email: "",
       isExcluded: true,
       exclusionReason: "outside-target-area",
-      statusBadge: "[Outside Target Area]",
+      statusBadge: "Outside Target Area",
       sentAt: "2026-03-01T12:00:00Z",
     },
     {
@@ -5678,7 +5678,7 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       name: "Badge Only Brewing",
       email: "booking@badgeonly.com",
       isExcluded: true,
-      statusBadge: "[Seasonal Hold: Feb 2027]",
+      statusBadge: "Seasonal Hold: Feb 2027",
       lastSentDate: "2026-09-20T12:00:00Z",
     },
     {
