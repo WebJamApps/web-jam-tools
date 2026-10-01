@@ -353,7 +353,7 @@ Setup:
 
 Rules:
 - Commit incrementally with clear messages ending exactly:
-    Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 - Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode per that subsection's recipe), keep it
@@ -369,7 +369,7 @@ Rules:
   a shared BE/FE contract.
 - To finalize the checkpoint PR at the end, run:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --update \
-      --author "Claude Code — Sonnet 5" \
+      --author "Claude Code — Sonnet 5.5" \
       --summary "<bulleted, filled in by you>" \
       --test-plan "<exercise-the-change steps, not just suite invocations —
         web-jam-tools#152: UI -> exact manual steps; backend/API -> runnable
@@ -381,7 +381,7 @@ Rules:
   step.
 
 <Mandatory PR attribution & conventions block from above, filled in for
-"Claude Code — Sonnet 5">
+"Claude Code — Sonnet 5.5">
 
 Report back:
 - Summary of what changed, bulleted
