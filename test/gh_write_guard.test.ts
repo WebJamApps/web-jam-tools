@@ -4,6 +4,7 @@ import { assertEquals } from "@std/assert";
 import {
   checkNoCredentialLiteral,
   checkNotEmpty,
+  checkReviewerLine,
   checkReviewSummaryHeader,
   isAlreadyReviewedAtHeadSha,
   REVIEW_SUMMARY_HEADER,
@@ -61,6 +62,68 @@ Deno.test("runFormGuards refuses empty before checking the header (empty-body ch
   const res = runFormGuards("   ", { requireReviewHeader: true });
   assertEquals(res.ok, false);
   assertEquals(res.error?.includes("empty"), true);
+});
+
+Deno.test("checkReviewerLine allows a well-formed reviewer line", () => {
+  const body =
+    `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — Claude Opus 5.5\n`;
+  assertEquals(checkReviewerLine(body).ok, true);
+  assertEquals(
+    checkReviewerLine("🤖 Reviewed by Antigravity — Gemini Flash (High)").ok,
+    true,
+  );
+});
+
+Deno.test("checkReviewerLine refuses an absent line, with the exact refusal text", () => {
+  const res = checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n`);
+  assertEquals(res.ok, false);
+  assertEquals(
+    res.error?.startsWith(
+      'refusing to post: review body is missing the "🤖 Reviewed by <tool> — <model>" line',
+    ),
+    true,
+  );
+});
+
+Deno.test("checkReviewerLine refuses each malformed shape", () => {
+  const bad = [
+    "🤖 Reviewed by",
+    "🤖 Reviewed by ",
+    "🤖 Reviewed by Claude Code",
+    "🤖 Reviewed by Claude Code - Claude Opus",
+    "🤖 Reviewed by Claude Code — ",
+    "🤖 Reviewed by — Claude Opus",
+    "🤖 Reviewed by Claude Code —Claude Opus",
+    "some text 🤖 Reviewed by Claude Code — Claude Opus",
+  ];
+  for (const line of bad) {
+    assertEquals(checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n${line}\n`).ok, false, line);
+  }
+});
+
+Deno.test("runFormGuards without requireReviewerLine allows a body with no reviewer line", () => {
+  assertEquals(
+    runFormGuards(`${REVIEW_SUMMARY_HEADER}\nfine`, { requireReviewHeader: true }).ok,
+    true,
+  );
+});
+
+Deno.test("runFormGuards with requireReviewerLine refuses a body with no reviewer line and allows one with it", () => {
+  const without = runFormGuards(`${REVIEW_SUMMARY_HEADER}\nfine`, { requireReviewerLine: true });
+  assertEquals(without.ok, false);
+  const withLine = runFormGuards(
+    `${REVIEW_SUMMARY_HEADER}\nfine\n\n🤖 Reviewed by Claude Code — Claude Opus 5.5`,
+    { requireReviewHeader: true, requireReviewerLine: true },
+  );
+  assertEquals(withLine.ok, true);
+});
+
+Deno.test("runFormGuards runs the reviewer-line check after the header check", () => {
+  const res = runFormGuards("no header, no line", {
+    requireReviewHeader: true,
+    requireReviewerLine: true,
+  });
+  assertEquals(res.error?.includes(REVIEW_SUMMARY_HEADER), true);
 });
 
 Deno.test("isAlreadyReviewedAtHeadSha skips when last review SHA equals head SHA", async () => {
