@@ -2,6 +2,7 @@
 // Generalized venue-mining sweeper supporting any city/metro area.
 import { parse as parseYaml } from "@std/yaml";
 import { parseArgs } from "@std/cli/parse-args";
+import * as cheerio from "cheerio";
 import { buildHeaders, fetchVenueMap, resolveBackendConfig } from "../book-gig/outreach_api.ts";
 
 export interface HarvestedEvent {
@@ -65,6 +66,7 @@ export interface SweepHistoryRecord {
 export interface SweepOptions {
   metro?: string;
   url?: string;
+  type?: string;
   city?: string;
   state?: string;
   pageLimit?: number;
@@ -527,6 +529,226 @@ export async function fetchSceneThinkEvents(
   return Array.from(venuesMap.values());
 }
 
+export function parseDateHeader(header: string): string {
+  const m = header.match(/([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+  if (!m) return "";
+  const months: Record<string, string> = {
+    January: "01",
+    February: "02",
+    March: "03",
+    April: "04",
+    May: "05",
+    June: "06",
+    July: "07",
+    August: "08",
+    September: "09",
+    October: "10",
+    November: "11",
+    December: "12",
+  };
+  const month = months[m[1]];
+  if (!month) return "";
+  const day = m[2].padStart(2, "0");
+  const year = m[3];
+  return `${year}-${month}-${day}`;
+}
+
+function cleanHtmlText(text: string): string {
+  return text
+    .replace(/\s+/g, " ")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .trim();
+}
+
+/**
+ * Parses Charlotte on the Cheap's events markup (both card and table event formats)
+ * into the canonical HarvestedVenue[] shape.
+ */
+export function parseCharlotteOnTheCheapHtml(
+  html: string,
+  sinceDate?: string | Date | null,
+): HarvestedVenue[] {
+  const $ = cheerio.load(html);
+  const venuesMap = new Map<string, HarvestedVenue>();
+  let currentDate = "";
+
+  const rawSince = sinceDate instanceof Date
+    ? (Number.isNaN(sinceDate.getTime()) ? null : sinceDate.toISOString().slice(0, 10))
+    : (typeof sinceDate === "string" && !Number.isNaN(new Date(sinceDate).getTime())
+      ? sinceDate.slice(0, 10)
+      : null);
+
+  const addEvent = (title: string, rawLoc: string, date: string) => {
+    if (!title || !rawLoc) return;
+    const rawLocLower = rawLoc.toLowerCase();
+    if (
+      rawLocLower === "various locations" ||
+      rawLocLower.includes("participating locations") ||
+      rawLocLower === "charlotte" ||
+      rawLocLower === "virtual" ||
+      rawLocLower.includes("online event")
+    ) {
+      return;
+    }
+
+    if (rawSince && date && date <= rawSince) {
+      return;
+    }
+
+    let name = rawLoc;
+    let city = "Charlotte";
+    let state = "NC";
+
+    const stMatch = name.match(/,\s*([A-Z]{2})$/);
+    if (stMatch) {
+      state = stMatch[1];
+      name = name.slice(0, stMatch.index).trim();
+    }
+
+    const commaIdx = name.lastIndexOf(",");
+    if (commaIdx > 0) {
+      const possibleCity = name.slice(commaIdx + 1).trim();
+      const possibleVenue = name.slice(0, commaIdx).trim();
+      if (possibleCity.length >= 3 && !/\d/.test(possibleCity)) {
+        city = possibleCity;
+        name = possibleVenue;
+      }
+    }
+
+    const nameKey = name.toLowerCase().replace(/['’]/g, "").trim();
+    if (!nameKey) return;
+
+    if (!venuesMap.has(nameKey)) {
+      venuesMap.set(nameKey, {
+        name,
+        city,
+        state,
+        eventCount: 0,
+        events: [],
+      });
+    }
+
+    const existing = venuesMap.get(nameKey)!;
+    existing.eventCount++;
+    if (existing.events.length < 5) {
+      existing.events.push({
+        title: title || "Live Event",
+        date,
+      });
+    }
+  };
+
+  $("h2.lotc-event, div.row.event").each((_, el) => {
+    if ($(el).is("h2.lotc-event")) {
+      currentDate = parseDateHeader($(el).text().trim());
+    } else if ($(el).is("div.row.event")) {
+      const table = $(el).find("table.table-events");
+      if (table.length > 0) {
+        table.find("tbody tr").each((_, tr) => {
+          const tds = $(tr).find("td");
+          if (tds.length >= 4) {
+            const title = cleanHtmlText(
+              $(tds[0]).find("a").text() || $(tds[0]).text(),
+            );
+            const rawLoc = cleanHtmlText($(tds[3]).text());
+            addEvent(title, rawLoc, currentDate);
+          }
+        });
+      } else {
+        const title = cleanHtmlText(
+          $(el).find("h3 a").text() || $(el).find("h3").text(),
+        );
+        const meta = $(el).find("p.meta").text();
+        const parts = meta.split("|").map((p) => cleanHtmlText(p)).filter(Boolean);
+        const rawLoc = parts.length > 0 ? parts[parts.length - 1] : "";
+        addEvent(title, rawLoc, currentDate);
+      }
+    }
+  });
+
+  return Array.from(venuesMap.values());
+}
+
+/**
+ * Fetches and parses Charlotte on the Cheap events calendar into HarvestedVenue[] shape.
+ */
+export async function fetchCharlotteOnTheCheapEvents(
+  sourceUrl: string,
+  fetchFn: typeof fetch = fetch,
+  pageLimit?: number,
+  sinceDate?: string | Date | null,
+): Promise<HarvestedVenue[]> {
+  if (pageLimit !== undefined && pageLimit > 1) {
+    console.warn(
+      `Charlotte on the Cheap: only the first events page is read; --pages ${pageLimit} has no effect.`,
+    );
+  }
+  let targetUrl = sourceUrl;
+  try {
+    const parsed = new URL(sourceUrl);
+    if (!parsed.pathname || parsed.pathname === "/") {
+      parsed.pathname = "/events/";
+      targetUrl = parsed.toString();
+    }
+  } catch {
+    // If not a valid URL, leave targetUrl unchanged
+  }
+
+  let res: Response;
+  try {
+    res = await fetchFn(targetUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+  } catch (err) {
+    throw new Error(`Failed to fetch events from '${targetUrl}': ${(err as Error).message}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`HTTP error ${res.status} fetching events from '${targetUrl}'`);
+  }
+
+  const html = await res.text();
+  return parseCharlotteOnTheCheapHtml(html, sinceDate);
+}
+
+export type EventParserFn = (
+  sourceUrl: string,
+  fetchFn?: typeof fetch,
+  pageLimit?: number,
+  sinceDate?: string | Date | null,
+) => Promise<HarvestedVenue[]>;
+
+export const EVENT_PARSER_REGISTRY: Record<string, EventParserFn> = {
+  scenethink: fetchSceneThinkEvents,
+  charlotteonthecheap: fetchCharlotteOnTheCheapEvents,
+  "charlotte-on-the-cheap": fetchCharlotteOnTheCheapEvents,
+};
+
+/** Names every registered parser type, for errors that refuse an unsupported one. */
+function supportedTypesNote(): string {
+  return `Supported types: ${Object.keys(EVENT_PARSER_REGISTRY).join(", ")}.`;
+}
+
+export function registerEventParser(type: string, parser: EventParserFn): void {
+  EVENT_PARSER_REGISTRY[type.toLowerCase().trim()] = parser;
+}
+
+export function getEventParser(
+  sourceType: string,
+  sourceUrl?: string,
+): EventParserFn | undefined {
+  const normType = sourceType.toLowerCase().trim();
+  if (normType in EVENT_PARSER_REGISTRY) {
+    return EVENT_PARSER_REGISTRY[normType];
+  }
+  // The live sweep history records the `charlotte` metro's Charlotte on the Cheap publication as
+  // the generic `type: "html"`, so that record reaches this parser by its URL. Every other
+  // `html` publication (e.g. Visit Damascus) still has no parser and is refused.
+  if (normType === "html" && sourceUrl && /charlotteonthecheap\.com/i.test(sourceUrl)) {
+    return fetchCharlotteOnTheCheapEvents;
+  }
+  return undefined;
+}
+
 export async function harvestEvents(
   sourceUrl: string,
   sourceType: string = "scenethink",
@@ -534,12 +756,13 @@ export async function harvestEvents(
   pageLimit?: number,
   sinceDate?: string | Date | null,
 ): Promise<HarvestedVenue[]> {
-  if (sourceType !== "scenethink") {
+  const parser = getEventParser(sourceType, sourceUrl);
+  if (!parser) {
     throw new Error(
-      `Unsupported publication type '${sourceType}'. Only 'scenethink' is supported.`,
+      `Unsupported publication type '${sourceType}'. ${supportedTypesNote()}`,
     );
   }
-  return await fetchSceneThinkEvents(sourceUrl, fetchFn, pageLimit, sinceDate);
+  return await parser(sourceUrl, fetchFn, pageLimit, sinceDate);
 }
 
 export async function runSweep(options: SweepOptions): Promise<SweepResult> {
@@ -556,7 +779,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
   }
 
   let sourceUrl = options.url;
-  let sourceType = "scenethink";
+  let sourceType = options.type || "scenethink";
   let publication: MetroPublication | undefined;
   let lastSwept: string | Date | null = null;
   let activeCoverageArea: string[] | undefined = options.coverageArea;
@@ -589,18 +812,21 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     }
 
     if (!sourceUrl && newestRecord?.publication) {
-      if (!newestRecord.publication.type) {
+      const effectiveType = options.type || newestRecord.publication.type;
+      if (!effectiveType) {
         throw new Error(
-          `Metro '${targetMetro.slug}' has publication '${newestRecord.publication.name}' with missing type. Only 'scenethink' is supported.`,
+          `Metro '${targetMetro.slug}' has publication '${newestRecord.publication.name}' with missing type. Pass --type to choose a parser. ${supportedTypesNote()}`,
         );
       }
-      if (newestRecord.publication.type !== "scenethink") {
+      const candidateUrl = newestRecord.publication.api || newestRecord.publication.url;
+      const parser = getEventParser(effectiveType, candidateUrl);
+      if (!parser) {
         throw new Error(
-          `Metro '${targetMetro.slug}' has unsupported publication type '${newestRecord.publication.type}'. Only 'scenethink' is supported.`,
+          `Metro '${targetMetro.slug}' has unsupported publication type '${effectiveType}'. ${supportedTypesNote()}`,
         );
       }
-      sourceUrl = newestRecord.publication.api || newestRecord.publication.url;
-      sourceType = newestRecord.publication.type;
+      sourceUrl = candidateUrl;
+      sourceType = effectiveType;
       publication = newestRecord.publication;
     }
 
@@ -737,6 +963,7 @@ Examples:
 Options:
   -m, --metro <slug|name>     Target metro slug or name from sources.yaml
   -u, --url <url>             Direct calendar or API endpoint URL to sweep
+  -t, --type <type>           Publication format type (e.g. scenethink, charlotteonthecheap)
   -c, --city <name>           Filter venues to target city
   -s, --state <code>          Filter venues to 2-letter state code (e.g. VA, NC, WV)
   -p, --pages <n>             Limit number of calendar pages to sweep
@@ -763,6 +990,7 @@ if (import.meta.main) {
     string: [
       "metro",
       "url",
+      "type",
       "city",
       "state",
       "pages",
@@ -777,6 +1005,7 @@ if (import.meta.main) {
       h: "help",
       m: "metro",
       u: "url",
+      t: "type",
       c: "city",
       s: "state",
       p: "pages",
@@ -834,6 +1063,7 @@ if (import.meta.main) {
     const result = await runSweep({
       metro: metroArg,
       url: flags.url,
+      type: flags.type,
       city: flags.city,
       state: flags.state,
       pageLimit,
