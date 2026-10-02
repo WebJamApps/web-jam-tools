@@ -77,28 +77,37 @@ Deno.test("agents.sh creates session 'agents' with tabs claude, codex, agy (indi
     });
     assertEquals(hasSession.code, 0, "session 'agents' should exist");
 
-    // Verify windows: index, name, pane_current_path
-    const listWindows = await run(
-      "tmux",
-      [
-        "-L",
-        socketName,
-        "list-windows",
-        "-t",
-        "agents",
-        "-F",
-        "#{window_index}:#{window_name}:#{pane_current_path}",
-      ],
-      { TMUX_TMPDIR: tmpDir },
-    );
-    assertEquals(listWindows.code, 0);
+    // Verify windows: index, name, pane_current_path.
+    // A pane just created with `-c "$HOME"` briefly reports the directory the
+    // tmux server was started from, until its process has changed directory.
+    // Poll until the paths settle (bounded), then assert, so a read that lands
+    // in that window does not fail the test.
     const homeDir = Deno.env.get("HOME")!;
     const expectedWindows = [
       `1:claude:${homeDir}`,
       `2:codex:${homeDir}`,
       `3:agy:${homeDir}`,
     ];
-    const actualWindows = listWindows.stdout.trim().split("\n");
+    let actualWindows: string[] = [];
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const listWindows = await run(
+        "tmux",
+        [
+          "-L",
+          socketName,
+          "list-windows",
+          "-t",
+          "agents",
+          "-F",
+          "#{window_index}:#{window_name}:#{pane_current_path}",
+        ],
+        { TMUX_TMPDIR: tmpDir },
+      );
+      assertEquals(listWindows.code, 0);
+      actualWindows = listWindows.stdout.trim().split("\n");
+      if (actualWindows.join("\n") === expectedWindows.join("\n")) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     assertEquals(actualWindows, expectedWindows);
 
     // Verify active window is tab 1 (claude)
