@@ -21,7 +21,7 @@ function docWithPremisesTable(tableBlock: string): string {
 A description of the feature.
 
 ## Both surfaces
-Parity details.
+Parity details across Claude Code, agy, and Codex.
 
 ## Load-bearing premises
 ${tableBlock}

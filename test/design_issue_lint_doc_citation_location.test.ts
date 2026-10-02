@@ -26,9 +26,9 @@ function doc(body: string): string {
 Text.
 
 ## Both surfaces
-| Mechanism | Claude Code | agy |
-|---|---|---|
-| Runner | deno task | identical |
+| Mechanism | Claude Code | agy | Codex |
+|---|---|---|---|
+| Runner | deno task | identical | identical |
 
 ## Load-bearing premises
 | Premise | Proof | Proved |
