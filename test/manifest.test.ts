@@ -85,6 +85,8 @@ const EXPECTED_HOOK_SCRIPTS = [
   // carries a credential-shaped LITERAL, before it can be approved and
   // persisted verbatim into permissions.allow.
   "block-secret-literals.sh",
+  // Codex-only SessionStart check — Codex owns REAPER startup policy.
+  "codex-reaper-startup-check.sh",
   "feature-branch-guard.sh",
   "fmt-push-guard.sh",
   "gh-api-guard.sh",
@@ -222,6 +224,9 @@ Deno.test(
   async () => {
     const installerContent = Deno.readTextFileSync(INSTALL_HOOKS_PATH);
     const directHookScripts = extractDirectCommandHookScripts(installerContent);
+    // Codex's dedicated registration uses a stable path and WJT_SURFACE env
+    // assignment, outside the Claude/agy arrays parsed by that helper.
+    directHookScripts.add("codex-reaper-startup-check.sh");
     const trackedModes = await getGitTrackedModes(REPO_DIR);
 
     const nonExecutable: string[] = [];

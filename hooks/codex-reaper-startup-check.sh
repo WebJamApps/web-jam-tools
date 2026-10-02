@@ -10,6 +10,12 @@
 # Always exits 0.
 set -euo pipefail
 
+# The Codex installer sets this on its SessionStart command. A direct call from
+# another surface must not edit Codex's configuration.
+if [ "${WJT_SURFACE:-}" != "codex" ]; then
+  exit 0
+fi
+
 HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 DENO_BIN="${DENO_BIN:-}"
