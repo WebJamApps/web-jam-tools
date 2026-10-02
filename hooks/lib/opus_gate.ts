@@ -47,6 +47,7 @@ import {
 } from "./select_transcript_entry.ts";
 import { slashCommandFromInvocationWrapper } from "./check_token_write_authorization.ts";
 import { bashWriteTargets } from "./bash_write_targets.ts";
+import { parseApplyPatchFilePaths } from "./parse_apply_patch.ts";
 
 export const ESCAPE_PHRASE = "opus edit ok";
 
@@ -322,6 +323,23 @@ export function checkWriteTarget(payload: GatePayload): WriteTargetCheck {
   const toolInput = payload.tool_input && typeof payload.tool_input === "object"
     ? payload.tool_input as Record<string, unknown>
     : {};
+
+  if (toolName === "apply_patch") {
+    const patchText = typeof toolInput.command === "string" ? toolInput.command : "";
+    const paths = parseApplyPatchFilePaths(patchText);
+    if (paths.length === 0) {
+      return {
+        determinable: false,
+        note:
+          "apply_patch contains no parseable file paths (malformed or unrecognized patch text).",
+      };
+    }
+    return {
+      determinable: true,
+      target: paths[0],
+      targets: paths,
+    };
+  }
 
   if (toolName === "Bash" || ("command" in toolInput && typeof toolInput.command === "string")) {
     const command = typeof toolInput.command === "string" ? toolInput.command : "";
@@ -796,7 +814,15 @@ export function decide(
   try {
     const targetCheck = checkWriteTarget(payload);
     const agentId = typeof payload.agent_id === "string" ? payload.agent_id : "";
+    const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "";
     if (!targetCheck.determinable) {
+      if (toolName === "apply_patch") {
+        return deny(
+          agentId ? "subagent" : "main",
+          targetCheck.note ??
+            "apply_patch contains no parseable file paths (malformed or unrecognized patch text).",
+        );
+      }
       return allow(
         agentId ? "subagent" : "main",
         targetCheck.note ?? "Write target could not be determined.",

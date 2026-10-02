@@ -67,6 +67,13 @@ fi
 # --field, --input). -F is not matched separately: $norm_cmd is already lowercased, so
 # -F can never appear in it.
 if printf '%s' "$norm_cmd" | grep -Eq '(-x|--method) +(post|put|patch)|(-xpost|-xput|-xpatch|--method=post|--method=put|--method=patch)|(^|[[:space:]])-f([[:space:]=$]|$)|--field|--raw-field|--input'; then
+  # On Codex (WJT_SURFACE=codex), Codex treats an exit-0 JSON deny/ask as a failed hook
+  # and runs the command anyway. Codex's own rules file marks every `gh api` command
+  # `prompt`, so Codex itself asks Josh (and an unattended run refuses). Exit 0 with no
+  # JSON reply here to let Codex's prompt rule handle the ask (web-jam-tools#1140).
+  if [ "${WJT_SURFACE:-}" = "codex" ]; then
+    exit 0
+  fi
   jq -cn '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:"gh api state-changing command requires user confirmation"}}'
   exit 0
 fi
