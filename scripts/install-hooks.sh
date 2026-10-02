@@ -35,7 +35,9 @@
 #
 #    Also installs the whole "autoMode" object (AUTO_MODE_JSON below) into
 #    ~/.claude/settings.json, replacing it when it differs; --check reports
-#    drift. Claude Code only.
+#    drift. Its path-bearing entries are built from $HOME and this checkout's
+#    parent directory at install time, so the object is correct for the
+#    machine the installer runs on. Claude Code only.
 #
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
@@ -782,6 +784,14 @@ merge_default_mode_args=("$DEFAULT_MODE")
 # touched. Claude Code ONLY, like statusLine/defaultMode: passed solely to the
 # $SETTINGS_PATH invocations, never to agy's hooks.json. Quoted heredoc, so
 # "$defaults" is never expanded by the shell.
+#
+# Because the object is replaced as a whole, it must be true of the machine
+# the installer runs on. The two placeholders are filled in below the heredoc:
+#   __HOME__       $HOME
+#   __REPOS_DIR__  the directory holding this checkout (~/WebJamApps on
+#                  Josh's laptop), i.e. the parent of $REPO_DIR
+# To change autoMode, edit this block and re-run the installer; a hand edit
+# to settings.json is reported by --check and overwritten by the next run.
 read -r -d '' AUTO_MODE_JSON <<'AUTO_MODE_JSON_EOF' || true
 {
   "soft_deny": [
@@ -793,7 +803,7 @@ read -r -d '' AUTO_MODE_JSON <<'AUTO_MODE_JSON_EOF' || true
     "### Org-wide",
     "**Organization**: None configured",
     "**Cloud provider(s)**: None configured",
-    "**Repository visibility**: Not queryable here (no origin remote on this checkout — repo path /home/joshua has no remotes and 0 tracked files); assume private until confirmed",
+    "**Repository visibility**: Not queryable here (no origin remote on this checkout — repo path __HOME__ has no remotes and 0 tracked files); assume private until confirmed",
     "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
     "**Secrets management**: None configured",
     "**Default / protected branches**: Not queryable here (origin/HEAD unset, no remotes)",
@@ -811,7 +821,7 @@ read -r -d '' AUTO_MODE_JSON <<'AUTO_MODE_JSON_EOF' || true
     "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
     "### User-specific",
     "**Primary use of Claude Code**: software development — multi-repo work across WebJamApps (JaMmusic, CollegeLutheran, AppersonAuto, web-jam-back, web-jam-tools, WebJamSocketCluster, TimShermanMusic) plus AI/model-routing operations (Opus/Sonnet/Haiku/Flash/agy delegation)",
-    "**Trusted repo**: every git repo under /home/joshua/WebJamApps/ (GitHub org WebJamApps) and every worktree of them under /tmp/. Sessions start in /home/joshua and routinely work across these repos.",
+    "**Trusted repo**: every git repo under __REPOS_DIR__/ (GitHub org WebJamApps) and every worktree of them under /tmp/. Sessions start in __HOME__ and routinely work across these repos.",
     "**Org-specific CLIs**: deno, heroku, agy, gio, gh, rclone, deployctl (seen in this project's usage and/or shell history)",
     "**routine under**: no <user>/ prefix qualifiers found in evidence"
   ],
@@ -821,6 +831,16 @@ read -r -d '' AUTO_MODE_JSON <<'AUTO_MODE_JSON_EOF' || true
   ]
 }
 AUTO_MODE_JSON_EOF
+# Escape a path for use inside a JSON string (backslash, then double quote).
+json_escape_path() {
+  local s="${1//\\/\\\\}"
+  printf '%s' "${s//\"/\\\"}"
+}
+AUTO_MODE_HOME="$(json_escape_path "$HOME")"
+AUTO_MODE_REPOS_DIR="$(json_escape_path "$(dirname "$REPO_DIR")")"
+# The replacement is quoted so a "&" in a path stays literal (bash >= 5.2).
+AUTO_MODE_JSON=${AUTO_MODE_JSON//__HOME__/"$AUTO_MODE_HOME"}
+AUTO_MODE_JSON=${AUTO_MODE_JSON//__REPOS_DIR__/"$AUTO_MODE_REPOS_DIR"}
 merge_auto_mode_args=("$AUTO_MODE_JSON")
 
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432, matcher-by-

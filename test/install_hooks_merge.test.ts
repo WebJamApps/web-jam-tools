@@ -1690,8 +1690,13 @@ Deno.test(
 
 // --- --auto-mode: whole-object autoMode section ---
 
-// deno-lint-ignore no-explicit-any
-const readAny = async (p: string): Promise<any> => JSON.parse(await Deno.readTextFile(p));
+interface SettingsWithAutoMode {
+  autoMode?: unknown;
+  permissions?: { allow?: string[]; defaultMode?: string };
+  model?: string;
+}
+const readSettings = async (p: string): Promise<SettingsWithAutoMode> =>
+  JSON.parse(await Deno.readTextFile(p));
 
 const AUTO_MODE = {
   environment: ["**Trusted repo**: every git repo under /home/joshua/WebJamApps/"],
@@ -1705,7 +1710,7 @@ Deno.test("--auto-mode installs autoMode when absent", async () => {
     const res = await runMerge(path, AUTO_MODE_ARGS);
     assertEquals(res.code, 0, res.stderr);
     assert(res.stdout.includes("added autoMode section"));
-    assertEquals((await readAny(path)).autoMode, AUTO_MODE);
+    assertEquals((await readSettings(path)).autoMode, AUTO_MODE);
   });
 });
 
@@ -1732,7 +1737,7 @@ Deno.test("--auto-mode leaves every other key alone and replaces a differing aut
       const res = await runMerge(path, AUTO_MODE_ARGS);
       assertEquals(res.code, 0, res.stderr);
       assert(res.stdout.includes("updated autoMode"));
-      const data = await readAny(path);
+      const data = await readSettings(path);
       assertEquals(data.autoMode, AUTO_MODE);
       assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
       assertEquals(data.permissions?.defaultMode, "auto");
@@ -1751,7 +1756,7 @@ Deno.test("--check with --auto-mode flags a missing or differing autoMode and pa
     assertEquals(differs.code, 1);
     assert(differs.stderr.includes("autoMode differs"));
     // --check never writes.
-    assertEquals((await readAny(path)).autoMode, { allow: ["x"] });
+    assertEquals((await readSettings(path)).autoMode, { allow: ["x"] });
     // Key order alone is not drift.
     const reordered = {
       soft_deny: AUTO_MODE.soft_deny,
@@ -1760,5 +1765,93 @@ Deno.test("--check with --auto-mode flags a missing or differing autoMode and pa
     };
     await Deno.writeTextFile(path, JSON.stringify({ autoMode: reordered }));
     assertEquals((await runMerge(path, ["--check", ...AUTO_MODE_ARGS])).code, 0);
+  });
+});
+
+// A hand edit is how autoMode has been changed so far, and a replace discards
+// it, so both --check and the replace have to name what differs.
+const HAND_EDITED_AUTO_MODE = {
+  environment: AUTO_MODE.environment,
+  allow: ["$defaults", "hand edit"],
+  extra: true,
+};
+const AUTO_MODE_DIFF_LINES = [
+  'autoMode.allow: entry not in the versioned config: "hand edit"',
+  'autoMode.allow: versioned entry missing: "Agent PR branches: plain pushes are ordinary delegated work."',
+  "autoMode.extra: key is not in the versioned config",
+  "autoMode.soft_deny: key is missing",
+];
+
+Deno.test("--check with --auto-mode names the keys and entries that differ", async () => {
+  await withTempSettings({ autoMode: HAND_EDITED_AUTO_MODE }, async (path) => {
+    const res = await runMerge(path, ["--check", ...AUTO_MODE_ARGS]);
+    assertEquals(res.code, 1);
+    for (const line of AUTO_MODE_DIFF_LINES) {
+      assert(res.stderr.includes(line), `missing "${line}" in:\n${res.stderr}`);
+    }
+    assert(!res.stderr.includes("autoMode.environment"), res.stderr);
+  });
+});
+
+Deno.test("replacing a differing autoMode prints what the replaced value had", async () => {
+  await withTempSettings({ autoMode: HAND_EDITED_AUTO_MODE }, async (path) => {
+    const res = await runMerge(path, AUTO_MODE_ARGS);
+    assertEquals(res.code, 0, res.stderr);
+    for (const line of AUTO_MODE_DIFF_LINES) {
+      assert(res.stdout.includes(line), `missing "${line}" in:\n${res.stdout}`);
+    }
+    assertEquals((await readSettings(path)).autoMode, AUTO_MODE);
+  });
+});
+
+Deno.test("the autoMode drift report covers reordered lists, non-list values, long entries and a non-object", async () => {
+  const longEntry = "x".repeat(300);
+  await withTempSettings(
+    {
+      autoMode: {
+        environment: "not a list",
+        allow: [...AUTO_MODE.allow].reverse(),
+        soft_deny: [...AUTO_MODE.soft_deny, longEntry],
+      },
+    },
+    async (path) => {
+      const res = await runMerge(path, ["--check", ...AUTO_MODE_ARGS]);
+      assertEquals(res.code, 1);
+      assert(res.stderr.includes("autoMode.environment: value differs"), res.stderr);
+      assert(
+        res.stderr.includes("autoMode.allow: same entries in a different order or count"),
+        res.stderr,
+      );
+      assert(
+        res.stderr.includes(
+          `autoMode.soft_deny: entry not in the versioned config: "${"x".repeat(116)}...`,
+        ),
+        res.stderr,
+      );
+      assert(!res.stderr.includes(longEntry), "a long entry must be cut short");
+
+      await Deno.writeTextFile(path, JSON.stringify({ autoMode: "on" }));
+      const notObject = await runMerge(path, ["--check", ...AUTO_MODE_ARGS]);
+      assertEquals(notObject.code, 1);
+      assert(
+        notObject.stderr.includes("autoMode: the installed value is not an object"),
+        notObject.stderr,
+      );
+    },
+  );
+});
+
+Deno.test("secret-scan gate refuses an autoMode that carries a credential literal", async () => {
+  // Varied per-segment, as in the permissions fixture above.
+  const jwtSecret = "eyJ" + variedFakeBody(20, 63) + "." + variedFakeBody(20, 64) + "." +
+    variedFakeBody(20, 65);
+  const withSecret = { ...AUTO_MODE, environment: [`token ${jwtSecret}`] };
+  await withTempSettings({ model: "opus" }, async (path) => {
+    const res = await runMerge(path, ["--auto-mode", JSON.stringify(withSecret)]);
+    assertEquals(res.code, 1);
+    assert(res.stderr.includes("SECRET DETECTED"), res.stderr);
+    assert(res.stderr.includes("autoMode.environment[0]: JWT token"), res.stderr);
+    assert(!res.stderr.includes(jwtSecret), "secret value must not be printed");
+    assertEquals(await readSettings(path), { model: "opus" });
   });
 });
