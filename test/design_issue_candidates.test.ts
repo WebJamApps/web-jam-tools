@@ -10,7 +10,7 @@ import {
   scanNeedsDesignCandidates,
 } from "../src/design-issue/candidates.ts";
 import { runCli } from "../src/design-issue/cli.ts";
-import type { CommandResult, CommandRunner } from "../src/flash-issues/types.ts";
+import type { CommandResult, CommandRunner } from "../src/shared/repos.ts";
 
 function createMockRunner(
   handlers: Record<string, { code?: number; stdout?: string; stderr?: string; error?: Error }>,

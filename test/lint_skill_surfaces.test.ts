@@ -102,11 +102,10 @@ Deno.test("lintSkillFile: handle-gmails is skipped/exempted, not flagged", async
   assertEquals(result.violations.length, 0);
 });
 
-Deno.test("lintSkillFile: all five rewritten skills pass the check", async () => {
+Deno.test("lintSkillFile: all four rewritten skills pass the check", async () => {
   const targetSkills = [
     "skills/design-issue/SKILL.md",
     "skills/file-issue/SKILL.md",
-    "skills/flash-issues/SKILL.md",
     "skills/memory-cleanup/SKILL.md",
     "skills/drive-cleanup/SKILL.md",
   ];
@@ -126,11 +125,10 @@ Deno.test("lintSkillFile: all five rewritten skills pass the check", async () =>
   }
 });
 
-Deno.test("runLintSkillSurfaces: batch run against the five rewritten skills passes", async () => {
+Deno.test("runLintSkillSurfaces: batch run against the four rewritten skills passes", async () => {
   const targetSkills = [
     "skills/design-issue/SKILL.md",
     "skills/file-issue/SKILL.md",
-    "skills/flash-issues/SKILL.md",
     "skills/memory-cleanup/SKILL.md",
     "skills/drive-cleanup/SKILL.md",
   ].map((p) => repoPath(p));

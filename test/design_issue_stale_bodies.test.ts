@@ -23,7 +23,7 @@ import {
   scanStaleBodies,
 } from "../src/design-issue/stale_bodies.ts";
 import { runCli } from "../src/design-issue/cli.ts";
-import type { CommandRunner } from "../src/flash-issues/types.ts";
+import type { CommandRunner } from "../src/shared/repos.ts";
 
 const FIXTURES_DIR = new URL("./fixtures/design-issue", import.meta.url).pathname;
 const FIXTURE_DESIGN_DOC = path.join(FIXTURES_DIR, "fixture-design.md");

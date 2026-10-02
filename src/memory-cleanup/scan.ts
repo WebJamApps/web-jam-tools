@@ -22,7 +22,7 @@ import {
   scanMemoryDirectory,
   type SkippedMemoryFile,
 } from "../memory-index/generator.ts";
-import { ACTIVE_REPOS, REPO_OWNER } from "../flash-issues/types.ts";
+import { ACTIVE_REPOS, REPO_OWNER } from "../shared/repos.ts";
 
 // --- gh command plumbing (injectable so tests never hit the network) ---
 

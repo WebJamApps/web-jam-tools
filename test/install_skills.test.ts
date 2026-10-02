@@ -548,7 +548,6 @@ Deno.test("installSkills installs all skills, migrates legacy backups, and prune
     "drive-cleanup",
     "file-issue",
     "fix-labels",
-    "flash-issues",
     "handle-gmails",
     "memory-cleanup",
     "pr-review",

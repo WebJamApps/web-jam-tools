@@ -7,7 +7,7 @@ import {
   type CommandResult,
   type CommandRunner,
   REPO_OWNER,
-} from "../flash-issues/types.ts";
+} from "../shared/repos.ts";
 import {
   DesignDocResolutionRefusal,
   type ExistingDesignDocMatch,

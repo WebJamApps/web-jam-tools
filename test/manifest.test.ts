@@ -37,7 +37,6 @@ const EXPECTED_SKILL_DIRS = [
   "drive-cleanup",
   "file-issue",
   "fix-labels",
-  "flash-issues",
   "handle-gmails",
   "memory-cleanup",
   "pr-review",
@@ -84,7 +83,6 @@ const EXPECTED_HOOK_SCRIPTS = [
   // persisted verbatim into permissions.allow.
   "block-secret-literals.sh",
   "feature-branch-guard.sh",
-  "flash-issues-reminder.sh",
   "fmt-push-guard.sh",
   "gh-api-guard.sh",
   "haiku-only-gmail-gate.sh",
