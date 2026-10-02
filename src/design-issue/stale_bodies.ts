@@ -518,7 +518,7 @@ export async function checkDesignReference(
 
   // Match naked markdown file paths
   const nakedMatches = sectionContent.matchAll(
-    /(?:file:\/\/)?((?:~|\/|[A-Za-z0-9_.\-\/]+)\/[A-Za-z0-9_.\-]+\.md)/gi,
+    /(?:file:\/\/)?((?:~(?:\/[A-Za-z0-9_.\-]+)*|\/|[A-Za-z0-9_.\-\/]+)\/[A-Za-z0-9_.\-]+\.md)/gi,
   );
   for (const m of nakedMatches) {
     candidatePaths.push(m[1].trim());
@@ -554,7 +554,7 @@ export async function checkDesignReference(
       const exists = await fileExists(candidateExpanded);
       if (!exists) {
         fileMissing = true;
-        missingPath = candidate;
+        missingPath = candidate.startsWith("~/") ? candidateExpanded : candidate;
       }
     } else {
       mismatchedPath = candidate;
