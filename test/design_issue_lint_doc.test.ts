@@ -344,31 +344,35 @@ A description of the feature.
   assertEquals(result.valid, true);
 });
 
-Deno.test("lintDesignDoc: codex-integration-design-2026-09-23.md passes Both surfaces check", async () => {
-  const codexDocPath =
-    "/home/joshua/Dropbox/web-jam-llms/Token_Savings/codex-integration-design-2026-09-23.md";
-  let content = "";
-  try {
-    content = await Deno.readTextFile(codexDocPath);
-  } catch {
-    // Skipped if ~/Dropbox is unmounted (e.g. CI)
-  }
+Deno.test("lintDesignDoc checks each '## Both surfaces' table against its own header", () => {
+  const doc = `# Feature Design
 
-  if (content) {
-    const result = await lintDesignDocFile(codexDocPath);
-    const bothSurfacesViolations = result.violations.filter(
-      (v) => v.rule === "require-both-surfaces-section" || v.rule === "require-both-surfaces-codex",
-    );
-    assertEquals(bothSurfacesViolations, []);
+## What it is
+A description of the feature.
 
-    const datedResult = await lintDesignDocFile(codexDocPath, {
-      nowImpl: () => new Date("2026-09-24T12:00:00Z"),
-    });
-    assertEquals(datedResult.valid, true);
-    assertEquals(datedResult.violations, []);
-  } else {
-    // Verbatim excerpt for CI environments
-    const excerptDoc = `# ChatGPT and Codex Integration — Design
+## Both surfaces
+| Mechanism | Claude Code | Codex |
+|---|---|---|
+| Runner | deno task | identical |
+
+| Mechanism | Claude Code | agy |
+|---|---|---|
+| Hooks | settings.json | hooks.json |
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| The runner exists | Verified | ${TODAY} |
+`;
+
+  const result = lintDesignDoc(doc, "test.md");
+  const violations = result.violations.filter((v) => v.rule === "require-both-surfaces-codex");
+  assertEquals(violations.length, 1);
+  assertEquals(violations[0].message.includes("lacks a 'Codex' column"), true);
+});
+
+Deno.test("lintDesignDoc: verbatim Both surfaces excerpt of the Codex integration design passes", () => {
+  const excerptDoc = `# ChatGPT and Codex Integration — Design
 
 ## What it is
 Design for integration of Codex into WebJamApps workflows.
@@ -386,13 +390,12 @@ Every design document states, for each mechanism it designs, how it works on Cla
 |---|---|---|
 | Codex CLI is installed | Verified | ${TODAY} |
 `;
-    const result = lintDesignDoc(excerptDoc, "codex-integration-design.md");
-    const bothSurfacesViolations = result.violations.filter(
-      (v) => v.rule === "require-both-surfaces-section" || v.rule === "require-both-surfaces-codex",
-    );
-    assertEquals(bothSurfacesViolations, []);
-    assertEquals(result.valid, true);
-  }
+  const result = lintDesignDoc(excerptDoc, "codex-integration-design.md");
+  const bothSurfacesViolations = result.violations.filter(
+    (v) => v.rule === "require-both-surfaces-section" || v.rule === "require-both-surfaces-codex",
+  );
+  assertEquals(bothSurfacesViolations, []);
+  assertEquals(result.valid, true);
 });
 
 Deno.test("lintDesignDocFile throws when path is missing or empty", async () => {

@@ -1009,44 +1009,53 @@ function validateBothSurfacesSection(
   headingLineNum: number,
 ): LintViolation[] {
   const violations: LintViolation[] = [];
-  const tableLines = bothSurfacesLines.filter((entry) => entry.line.trim().startsWith("|"));
+  // Each run of consecutive table lines is its own table, checked against its own header row.
+  const tables: Array<Array<{ line: string; lineNum: number }>> = [];
+  let current: Array<{ line: string; lineNum: number }> = [];
+  for (const entry of bothSurfacesLines) {
+    if (entry.line.trim().startsWith("|")) {
+      current.push(entry);
+    } else if (current.length > 0) {
+      tables.push(current);
+      current = [];
+    }
+  }
+  if (current.length > 0) tables.push(current);
 
-  if (tableLines.length > 0) {
+  let sawHeader = false;
+  for (const tableLines of tables) {
     const rows = tableLines
       .map((entry) => ({ ...entry, cells: splitTableRow(entry.line) }))
       .filter((entry) => entry.cells.length > 0);
     const headerRow = rows.find((r) => !isTableSeparatorRow(r.cells));
+    if (!headerRow) continue;
+    sawHeader = true;
 
-    if (headerRow) {
-      const codexColIdx = headerRow.cells.findIndex((c) =>
-        /\bcodex\b/i.test(stripCellDecoration(c))
-      );
-
-      if (codexColIdx === -1) {
+    const codexColIdx = headerRow.cells.findIndex((c) => /\bcodex\b/i.test(stripCellDecoration(c)));
+    if (codexColIdx === -1) {
+      violations.push({
+        rule: "require-both-surfaces-codex",
+        message: "Design document's '## Both surfaces' table lacks a 'Codex' column",
+        line: headerRow.lineNum,
+        lineContent: headerRow.line,
+      });
+      continue;
+    }
+    for (const row of rows) {
+      if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
+      const codexCell = stripCellDecoration(row.cells[codexColIdx] ?? "");
+      if (codexCell === "") {
         violations.push({
           rule: "require-both-surfaces-codex",
-          message: "Design document's '## Both surfaces' table lacks a 'Codex' column",
-          line: headerRow.lineNum,
-          lineContent: headerRow.line,
+          message:
+            `Design document's '## Both surfaces' table row at line ${row.lineNum} has an empty Codex entry: "${row.line.trim()}"`,
+          line: row.lineNum,
+          lineContent: row.line,
         });
-      } else {
-        for (const row of rows) {
-          if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
-          const codexCell = stripCellDecoration(row.cells[codexColIdx] ?? "");
-          if (codexCell === "") {
-            violations.push({
-              rule: "require-both-surfaces-codex",
-              message:
-                `Design document's '## Both surfaces' table row at line ${row.lineNum} has an empty Codex entry: "${row.line.trim()}"`,
-              line: row.lineNum,
-              lineContent: row.line,
-            });
-          }
-        }
       }
-      return violations;
     }
   }
+  if (sawHeader) return violations;
 
   // Prose check (when no table with a header row is present)
   const hasCodexProse = bothSurfacesLines.some((entry) => /\bcodex\b/i.test(entry.line));
