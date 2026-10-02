@@ -5,7 +5,7 @@
  * Guarded CLI over `gh pr comment`. hooks/block-raw-gh-write.sh denies the
  * raw form on both agent surfaces; this is the only route to it.
  */
-import { runFormGuards } from "./gh-write/guard.ts";
+import { REVIEW_SUMMARY_HEADER, runFormGuards } from "./gh-write/guard.ts";
 import { type RunCmd, runWithRetry } from "./gh-write/gh_runner.ts";
 
 export interface Options {
@@ -43,7 +43,11 @@ export async function run(args: string[], deps: Deps): Promise<number> {
   }
 
   const body = await deps.readFileText(opts.bodyFile);
-  const formResult = runFormGuards(body);
+  const formResult = runFormGuards(body, {
+    // A body carrying the review header is a Step 4 follow-up review; any other
+    // comment (e.g. a "Fixed by" note) is posted exactly as before.
+    requireReviewerLine: body.includes(REVIEW_SUMMARY_HEADER),
+  });
   if (!formResult.ok) {
     console.error(formResult.error);
     return 1;

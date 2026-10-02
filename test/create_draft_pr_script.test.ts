@@ -225,6 +225,17 @@ Deno.test("roster match is by substring: 'Claude Code — Haiku 4.5' passes", as
   assertEquals(res.code, 0, res.stderr);
 });
 
+Deno.test("roster: 'Claude Code — Sonnet 5.5' passes", async () => {
+  const res = await runScript(repoDir, baseArgs({ author: "Claude Code — Sonnet 5.5" }));
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("roster: plain 'Claude Code — Sonnet 5' is refused now that Sonnet 5.5 is the current model", async () => {
+  const res = await runScript(repoDir, baseArgs({ author: "Claude Code — Sonnet 5" }));
+  assertEquals(res.code, 1);
+  assertMatch(res.stderr, /does not name a model on the roster/);
+});
+
 // --- FORCED_PR_AUTHOR override (handle-agy-tasks.sh mechanism) ---
 
 Deno.test("FORCED_PR_AUTHOR overrides a bad --author and wins", async () => {
