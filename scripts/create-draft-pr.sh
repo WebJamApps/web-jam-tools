@@ -26,7 +26,7 @@
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
 #   --author        REQUIRED. e.g. "Claude Code — Opus", "agy — Gemini Flash
-#                   (Medium)", "Claude Code — Sonnet 5". Lands in the footer so Josh can track per-model
+#                   (Medium)", "Claude Code — Sonnet 5.5". Lands in the footer so Josh can track per-model
 #                   quality. MUST name a model on the ROSTER list maintained near
 #                   the top of this script (web-jam-tools#190) — models routinely
 #                   confabulate their own checkpoint name (JaMmusic#1212: a Gemini
@@ -166,12 +166,12 @@ usage() {
 # The actual, currently-running WebJamApps model roster. Easy to extend: add a
 # line. Entries print verbatim in refusal messages; matching against --author
 # strips a leading "Claude " (see author_roster_check) because the caller
-# format is "<tool> — <model>" (e.g. "Claude Code — Sonnet 5" — the tool name
+# format is "<tool> — <model>" (e.g. "Claude Code — Sonnet 5.5" — the tool name
 # already says "Claude", so the model half doesn't repeat it).
 ROSTER=(
   "Gemini Flash (Medium)"
   "Gemini Flash (High)"
-  "Claude Sonnet 5"
+  "Claude Sonnet 5.5"
   "Claude Haiku 4.5"
   # Unversioned on purpose (Josh, 2026-07-26): the roster exists to stop a
   # model confabulating its checkpoint, and Opus ships new checkpoints faster

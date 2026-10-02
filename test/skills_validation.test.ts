@@ -1027,40 +1027,46 @@ Deno.test("skills/work-issue/SKILL.md contains external-only deliverables workfl
 
 // --- Tier-order pin (web-jam-tools#922) ---
 //
-// Flash High ranks ABOVE Sonnet as of 2026-09-05. This ordering is load-bearing
-// in three separate places — the pr-review pairing matrix, the work-issue model
-// chain, and the delegate skill's escalation direction — and a routine doc sweep
-// that "tidies" any one of them back to the old Sonnet-over-Flash ordering would
-// silently re-route work onto the constrained Anthropic budget with no CI signal.
+// Sonnet 5.5 ranks ABOVE Flash High as of Josh's 2026-10-01 ruling (it was the other
+// way round from 2026-09-05). The tier order is load-bearing in the pr-review pairing
+// matrix and the delegate skill's escalation direction, and a routine doc sweep that
+// "tidies" either back to the superseded Flash-High-over-Sonnet ordering would
+// silently change who may review whose PR with no CI signal. The work-issue agy
+// chain ranks Flash High above Sonnet 4.6 (Thinking), a different model, and is unchanged.
 // Pinned here, in the one existing home for skill-rule pins, rather than in three
 // separate files (AGENTS.md: "Duplicate Pin-Test Locations for the Same Rule").
 
-Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Flash High above Sonnet", async () => {
+Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Sonnet above Flash High", async () => {
   const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
 
   assertStringIncludes(
     text,
-    "**Tier order (weakest to strongest): Haiku → Flash Med → Sonnet → Flash High → Opus.**",
+    "**Tier order (weakest to strongest): Haiku → Flash Med → Flash High → Sonnet → Opus.**",
   );
 
-  // The matrix rows themselves, in order: Sonnet reviews strictly below it,
-  // Flash High may review Sonnet, Opus may review both.
-  assertStringIncludes(text, "| Sonnet | Flash Medium, Haiku |");
-  assertStringIncludes(text, "| Flash High | Sonnet, Flash Medium, Haiku |");
-  assertStringIncludes(text, "| Opus | Flash High, Sonnet |");
+  // The matrix rows themselves, weakest reviewer first: Flash High reviews
+  // strictly below it, Sonnet may review Flash High, Opus may review both.
+  assertStringIncludes(text, "| Flash High | Flash Medium, Haiku |");
+  assertStringIncludes(text, "| Sonnet | Flash High, Flash Medium, Haiku |");
+  assertStringIncludes(text, "| Opus | Sonnet, Flash High |");
 
-  const sonnetRow = text.indexOf("| Sonnet | Flash Medium, Haiku |");
-  const flashHighRow = text.indexOf("| Flash High | Sonnet, Flash Medium, Haiku |");
-  const opusRow = text.indexOf("| Opus | Flash High, Sonnet |");
+  const flashHighRow = text.indexOf("| Flash High | Flash Medium, Haiku |");
+  const sonnetRow = text.indexOf("| Sonnet | Flash High, Flash Medium, Haiku |");
+  const opusRow = text.indexOf("| Opus | Sonnet, Flash High |");
   assert(
-    sonnetRow < flashHighRow && flashHighRow < opusRow,
-    "matrix rows must run weakest reviewer to strongest: Sonnet, then Flash High, then Opus",
+    flashHighRow !== -1 && sonnetRow !== -1 && opusRow !== -1 && flashHighRow < sonnetRow &&
+      sonnetRow < opusRow,
+    "matrix rows must run weakest reviewer first: Flash High, Sonnet, Opus",
   );
 
-  // The old ordering must not survive anywhere in the file.
+  // The superseded rows must not survive anywhere in the file.
   assertFalse(
-    text.includes("| Sonnet | Flash High, Flash Medium, Haiku |"),
-    "the superseded row granting Sonnet review of Flash High work must be gone",
+    text.includes("| Flash High | Sonnet, Flash Medium, Haiku |"),
+    "the superseded row granting Flash High review of Sonnet work must be gone",
+  );
+  assertFalse(
+    text.includes("| Sonnet | Flash Medium, Haiku |"),
+    "the superseded row denying Sonnet review of Flash High work must be gone",
   );
 });
 
@@ -1087,20 +1093,20 @@ Deno.test("skills/work-issue/SKILL.md model chain ranks Gemini 3.8 Flash (High) 
   );
 });
 
-Deno.test("skills/delegate/SKILL.md no longer escalates Flash High up to Sonnet", async () => {
+Deno.test("skills/delegate/SKILL.md escalates Flash Med to Flash High to Sonnet to Opus", async () => {
   const text = await Deno.readTextFile("skills/delegate/SKILL.md");
 
   assertStringIncludes(
     text,
-    "- **Delegating up (`Flash Med` → `Flash High` → `Opus`)**:",
+    "- **Delegating up (`Flash Med` → `Flash High` → `Sonnet` → `Opus`)**:",
   );
   assertStringIncludes(
     text,
-    "Haiku → Flash Med → Sonnet → Flash High → Opus",
+    "Haiku → Flash Med → Flash High → Sonnet → Opus",
   );
   assertFalse(
-    text.includes("**Delegating up (`Flash Med` → `Flash High` / `Sonnet` / `Opus`)**"),
-    "the superseded escalation ladder placing Sonnet above Flash High must be gone",
+    text.includes("`Sonnet` is **not** a rung above `Flash High`"),
+    "the superseded sentence denying Sonnet a rung above Flash High must be gone",
   );
 });
 

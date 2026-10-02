@@ -57,9 +57,62 @@ export function checkReviewSummaryHeader(body: string): GuardResult {
   return { ok: true };
 }
 
+/**
+ * A reviewer line stands alone on its own line: "🤖 Reviewed by <tool> — <model>",
+ * with an em dash and one space on each side, and a non-empty tool and model.
+ * web-jam-tools#1193.
+ */
+const REVIEWER_LINE = /^🤖 Reviewed by (\S.*?) — (\S.*?)\s*$/u;
+
+/**
+ * Checks whether a tool or model string is invalid: empty, an angle-bracket
+ * placeholder (e.g. "<tool>" or "<model>"), or consisting solely of dash punctuation.
+ */
+function isInvalidToolOrModel(val: string): boolean {
+  const trimmed = val.trim();
+  if (!trimmed) return true;
+  if (/^<.*>$/.test(trimmed)) return true;
+  if (/^[\s\p{Pd}]+$/u.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Refuses a review body with no well-formed "🤖 Reviewed by <tool> — <model>"
+ * line, so a posted review always says which agent and model wrote it. A
+ * pure function of the body text: it has no way to fail on its own, so there
+ * is no "cannot be determined" outcome. It checks the line is present and
+ * well-formed on the last non-empty line — never that the named model is the
+ * one really running.
+ */
+export function checkReviewerLine(body: string): GuardResult {
+  const lines = body.trimEnd().split(/\r?\n/);
+  const lastLine = lines[lines.length - 1] ?? "";
+  const match = lastLine.match(REVIEWER_LINE);
+  if (!match) {
+    return {
+      ok: false,
+      error:
+        'refusing to post: review body is missing the "🤖 Reviewed by <tool> — <model>" line — ' +
+        "the reviewing model must name itself (the agent tool and the model actually running the review) on the last line.",
+    };
+  }
+  const [, tool, model] = match;
+  if (isInvalidToolOrModel(tool) || isInvalidToolOrModel(model)) {
+    return {
+      ok: false,
+      error:
+        'refusing to post: review body is missing the "🤖 Reviewed by <tool> — <model>" line — ' +
+        "the reviewing model must name itself (the agent tool and the model actually running the review) on the last line.",
+    };
+  }
+  return { ok: true };
+}
+
 export interface FormGuardOptions {
   /** Only true for the review verb — the header check binds it alone. */
   requireReviewHeader?: boolean;
+  /** True for the review verb and for a comment carrying the review header. */
+  requireReviewerLine?: boolean;
 }
 
 /** Runs the guards that bind every verb, then any verb-specific ones. */
@@ -73,6 +126,11 @@ export function runFormGuards(body: string, opts: FormGuardOptions = {}): GuardR
   if (opts.requireReviewHeader) {
     const hasHeader = checkReviewSummaryHeader(body);
     if (!hasHeader.ok) return hasHeader;
+  }
+
+  if (opts.requireReviewerLine) {
+    const hasReviewer = checkReviewerLine(body);
+    if (!hasReviewer.ok) return hasReviewer;
   }
 
   return { ok: true };

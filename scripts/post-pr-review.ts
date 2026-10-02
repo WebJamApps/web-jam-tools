@@ -77,7 +77,7 @@ export async function run(args: string[], deps: Deps): Promise<number> {
   }
 
   const body = await deps.readFileText(opts.bodyFile);
-  const formResult = runFormGuards(body, { requireReviewHeader: true });
+  const formResult = runFormGuards(body, { requireReviewHeader: true, requireReviewerLine: true });
   if (!formResult.ok) {
     console.error(formResult.error);
     return 1;

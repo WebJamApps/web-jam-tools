@@ -84,7 +84,7 @@ Strict rules:
 Josh defaults to **`Flash High`** (`Gemini Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
 - **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session is **forbidden** from executing file edits or running test suites directly for tasks/issues labeled `Flash Med` or `Haiku`. It MUST automatically delegate contained coding tasks (`handle-agy-tasks.sh` targeting Flash Med, or `invoke_subagent` where `Model: "flash"` runs as `gemini-3.8-flash-tiered` and passes the model guard, or `Model: "inherit"`) as its very first tool call. Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
 - **Exception — trivial edits**: the primary session may make the edit directly, without `invoke_subagent`, only when **all** of these hold: it touches **one file**; it changes **no behaviour** (documentation, comment, or a single config value); and it is **under ~20 changed lines**. The session must say, in the same turn, that it is taking the exception and why. "I already have the context", "it would be faster", and "writing the brief costs as much as the work" are **not** exceptions — the three conditions above are the whole test. Rationale: delegation pays when the work is bigger than the brief; below that line the session pays to write a self-contained specification, waits for a round trip, then reviews the result, for an edit smaller than the specification. The three conditions are a mechanical proxy for that, chosen because they are auditable from the outside and a cost estimate is not.
-- **Delegating up (`Flash Med` → `Flash High` → `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High` first, and to `Opus` when the work is open-ended design rather than implementation. `Sonnet` is **not** a rung above `Flash High` any more (tier order: Haiku → Flash Med → Sonnet → Flash High → Opus; see `docs/ai-team-playbook.md`) — escalating from `Flash High` to `Sonnet` moves the work *down* a tier and onto the constrained Anthropic budget, so route there only for a named Claude-side capability Flash lacks.
+- **Delegating up (`Flash Med` → `Flash High` → `Sonnet` → `Opus`)**: When running on `Flash Med`, delegate multi-file judgment, complex refactors, or UI design work up to `Flash High` first, then to `Sonnet` where Flash High is not enough (tier order: Haiku → Flash Med → Flash High → Sonnet → Opus; see `docs/ai-team-playbook.md`), and to `Opus` when the work is open-ended design rather than implementation. `Flash High` stays the default implementation lane — it bills to Google rather than the constrained Anthropic budget — so route work to `Sonnet` for a named Claude-side capability Flash lacks, or when Josh routes it there.
 
 **Setting explicit model chains via `AGY_MODELS`:**
 The default fallback chain runs `Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)`. To target a specific tier directly, set `AGY_MODELS`:
@@ -353,7 +353,7 @@ Setup:
 
 Rules:
 - Commit incrementally with clear messages ending exactly:
-    Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 - Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode per that subsection's recipe), keep it
@@ -369,7 +369,7 @@ Rules:
   a shared BE/FE contract.
 - To finalize the checkpoint PR at the end, run:
     ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --update \
-      --author "Claude Code — Sonnet 5" \
+      --author "Claude Code — Sonnet 5.5" \
       --summary "<bulleted, filled in by you>" \
       --test-plan "<exercise-the-change steps, not just suite invocations —
         web-jam-tools#152: UI -> exact manual steps; backend/API -> runnable
@@ -381,7 +381,7 @@ Rules:
   step.
 
 <Mandatory PR attribution & conventions block from above, filled in for
-"Claude Code — Sonnet 5">
+"Claude Code — Sonnet 5.5">
 
 Report back:
 - Summary of what changed, bulleted

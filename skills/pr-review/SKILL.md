@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash Medium/Haiku; Flash High reviews Sonnet/Flash Medium/Haiku; Opus reviews Flash High/Sonnet on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
+description: Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash High/Flash Medium/Haiku; Flash High reviews Flash Medium/Haiku; Opus reviews Sonnet/Flash High on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
 metadata:
   version: v2
   publisher: josh
@@ -16,23 +16,25 @@ Cross-model review ensures fresh perspective and catches model-specific blind sp
 
 Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work).
 
-**Tier order (weakest to strongest): Haiku → Flash Med → Sonnet → Flash High → Opus.** Flash High
-sits **above** Sonnet: on contamination-resistant long-horizon coding (DeepSWE v1.1) Gemini 3.8 Flash
-at high effort scores 73.7% against Sonnet 5's 54%, effectively matching Opus 5's 74%. Opus stays at
-the top because that parity does not extend to abstract, multi-step unguided agent work
-(Terminal-Bench 4.0), which is exactly what a review of a large or ambiguous diff is.
+**Tier order (weakest to strongest): Haiku → Flash Med → Flash High → Sonnet → Opus.** Josh ruled
+on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
+is the basis for this order. (Superseded history: on 2026-09-05 Flash High was ranked above Sonnet 5
+on contamination-resistant long-horizon coding, DeepSWE v1.1, where Gemini 3.8 Flash at high effort
+scored 73.7% against Sonnet 5's 54%. That ranking no longer stands.) Opus stays at the top because
+abstract, multi-step unguided agent work (Terminal-Bench 4.0) is exactly what a review of a large or
+ambiguous diff is.
 
 ### Cross-Model Review Pairing Matrix
 
 | Reviewer | Reviews |
 |---|---|
-| Sonnet | Flash Medium, Haiku |
-| Flash High | Sonnet, Flash Medium, Haiku |
-| Opus | Flash High, Sonnet |
+| Flash High | Flash Medium, Haiku |
+| Sonnet | Flash High, Flash Medium, Haiku |
+| Opus | Sonnet, Flash High |
 
 **Ceiling rule (never a schedule):**
-The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Flash
-High or Sonnet PR happens only when Josh deems that specific PR critical enough for an Opus review —
+The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Sonnet
+or Flash High PR happens only when Josh deems that specific PR critical enough for an Opus review —
 his decision, per PR, not automatic. Nothing in this skill or its auto-detect mode may auto-dispatch
 an Opus review off this matrix.
 
@@ -42,13 +44,14 @@ an Opus review off this matrix.
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list in [`skills/flash-issues/SKILL.md`](../flash-issues/SKILL.md) under "Scope — all eight active repos, exactly these slugs").
   - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
-    - **Sonnet (`Claude Code — Sonnet 5`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5`. It no longer matches `Gemini Flash (High)` PRs — Flash High now outranks it.
-    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Claude Sonnet 5`, `Gemini Flash (Medium)`, or `Claude Haiku 4.5`.
+    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash (High)`, `Gemini Flash (Medium)` or `Claude Haiku 4.5`.
+    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
     - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
+    - Sonnet-authored PRs have no reviewer in auto-detect mode and receive an Opus review only when Josh explicitly names the PR for that review.
     - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`. These roster spellings are deliberately unversioned — they identify the PR's author tier, not the model checkpoint that ran, so they stay as written here even as the underlying Gemini version moves:
       - `Gemini Flash (High)` (e.g. `Antigravity — Gemini Flash (High)` / `agy — Gemini Flash (High)`)
       - `Gemini Flash (Medium)` (e.g. `Antigravity — Gemini Flash (Medium)` / `agy — Gemini Flash (Medium)`)
-      - `Claude Sonnet 5` (e.g. `Claude Code — Sonnet 5` / `Claude Code — Claude Sonnet 5`)
+      - `Claude Sonnet 5.5` (e.g. `Claude Code — Sonnet 5.5` / `Claude Code — Claude Sonnet 5.5`)
       - `Claude Haiku 4.5` (e.g. `Claude Code — Haiku 4.5` / `Claude Code — Claude Haiku 4.5`)
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
     - Compares the commit SHA of the newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`) against the PR's current head commit SHA (`commits | last | .oid`).
@@ -251,8 +254,8 @@ with each other):
    immediately after Step 2 finishes, before CircleCI is checked at all. Its verdict reflects only
    the non-CircleCI findings from Step 2 and never carries a CircleCI row or state.
 2. **CircleCI-failure follow-up** — Step 4, via `deno task post-pr-comment`, and **only when
-   CircleCI resolves failing, or is still unresolved once its poll cap is hit**. It carries only
-   what is new: the `## PR Review Summary` header, the updated verdict line, and the CircleCI
+   CircleCI resolves failing, or is still unresolved once its poll cap is hit**. Apart from the
+   reviewer line that ends every post (Step 3 item 2), it carries only what is new: the `## PR Review Summary` header, the updated verdict line, and the CircleCI
    result — a new Must Fix line naming the failing job and its detail, except for
    `Version bump check (PR branches only)`, which Step 4 item 5's carve-out always reports
    as a Suggestions line instead. It **never** reprints post #1's Checklist Verification, its
@@ -261,9 +264,9 @@ with each other):
 
 **`### 🔵 Nits` never appears in a Step 4 follow-up post.** Nits hold PR/issue-body prose findings,
 which are found in Step 2 and carried entirely by post #1. Step 4's follow-up carries only the
-CircleCI result, and a CircleCI job result is never body prose, so Step 4 has no Nit of its own to
+CircleCI result as findings, and a CircleCI job result is never body prose, so Step 4 has no Nit of its own to
 report and never restates post #1's. That is why the two-item list above, and Step 4 item 5's
-"carry only" list, name Must Fix and Suggestions and stop there.
+list of what the follow-up carries, name Must Fix and Suggestions as its only sections.
 
 **When CircleCI passes there is no second post at all.** The review is complete at one comment, and
 post #1's verdict stands as the final verdict.
@@ -303,6 +306,7 @@ afterward.
      - **Scope, exactly**: this section holds the Step 2 item 11 body-prose class and nothing else. A finding about the code, the tests, or the version field is a Suggestion (or a Must Fix), not a Nit.
      - **Never a merge blocker**: like a Suggestion, a Nit never produces `**🛑 Changes Requested**` on its own, and it is never restated in Step 4's follow-up post. On a re-review, a Nit that has since been edited away is reported once with ✅ under `### Changes Since Last Review`, exactly like any other fixed finding.
      - **Fixed by editing text, not by pushing code**: a Nit is cleared with `gh pr edit --body` or an issue-body edit, which is precisely why it does not share a section with findings that require a commit.
+   - **Reviewer line** (web-jam-tools#1193 "skills/pr-review: name the reviewing agent and model in every review comment, and refuse to post without it"): the **final element of every review post**, after `### 🔵 Nits` (or, in a Step 4 follow-up, after the last section), on a line of its own: `🤖 Reviewed by <tool> — <model>` (an em dash with a space on each side), e.g. `🤖 Reviewed by Claude Code — Claude Opus 5.5` or `🤖 Reviewed by Antigravity — Gemini Flash (High)`. It is not a section and carries no heading. `<tool>` and `<model>` name the agent surface and the model **actually running this review** — never copied from the PR's own `🤖 Work by …` author footer, which names whoever wrote the code. Every agent posts through the same GitHub account, so this line is the only thing that shows who reviewed.
 
    **Example — initial post (post #1), re-review with one remaining blocker and two now-fixed
    findings.** Note that the only thing between the verdict line and `### 🛑 Must Fix Items` is the
@@ -332,10 +336,12 @@ afterward.
 
    ### 🔵 Nits
    - 🔵 The PR body's "How to test locally" block names a worktree path that no longer exists — fix with `gh pr edit --body`; no commit needed.
+
+   🤖 Reviewed by Claude Code — Claude Opus 5.5
    ````
 
    **Example — Step 4's single follow-up for the same PR, once CircleCI resolves failing.** It
-   carries the updated verdict and the CircleCI failure, and nothing else: no Checklist
+   carries the updated verdict, the CircleCI failure and the closing reviewer line, and nothing else: no Checklist
    Verification block, no repeat of post #1's other Must Fix items, and — in this example, since
    the only failing job is not the version-bump job — no Suggestions section either. **There is no
    `### 🔵 Nits` section here, and there never is in a Step 4 follow-up**: post #1 already carried
@@ -352,6 +358,8 @@ afterward.
 
    ### 🛑 Must Fix Items
    - 🛑 CircleCI "Format check" is failing — `deno fmt --check` found unformatted files in `src/uptime/cron.ts`.
+
+   🤖 Reviewed by Claude Code — Claude Opus 5.5
    ````
 
    **Example — the same PR when CircleCI resolves passing.** There is no second post. Post #1 is
@@ -378,7 +386,12 @@ afterward.
    command is the only path left regardless of who is running the skill.
 
    The command itself refuses an empty body, a body carrying a credential-shaped literal, and a
-   review body with no `## PR Review Summary` header, and skips posting outright (no double-post,
+   review body with no `## PR Review Summary` header, and a review body with no well-formed
+   `🤖 Reviewed by <tool> — <model>` line (the line missing, no tool, no model, or a separator
+   other than ` — ` is refused with exit 1 and nothing posted — the reviewing model must name
+   itself; `post-pr-comment` applies the same check to any body carrying the
+   `## PR Review Summary` header, i.e. a Step 4 follow-up, and leaves every other comment alone;
+   web-jam-tools#1193), and skips posting outright (no double-post,
    exit 0) when the PR already carries an automated review at the current head SHA — see
    `scripts/gh-write/guard.ts`. When `--head-sha` is passed and it no longer matches the PR's live
    head — a force-push landed between fetching the diff in Step 1 and this post — the command
@@ -447,8 +460,11 @@ resolves green, the review is already complete and nothing further is posted.
      Items` line each. A concurrently-failing version-bump job does not add a second Must Fix line —
      fold it into the same follow-up as a `### 🟡 Suggestions` line instead, per the carve-out above.
 
-   Carry only the `## PR Review Summary` header, the verdict line, and the applicable section(s)
-   (`### 🛑 Must Fix Items` and/or `### 🟡 Suggestions`), one line per job. `### 🔵 Nits` is not on
+   Carry the `## PR Review Summary` header, the verdict line, the applicable section(s)
+   (`### 🛑 Must Fix Items` and/or `### 🟡 Suggestions`), one line per job, and — as the final line,
+   exactly as in Step 3 item 2 — the reviewer line `🤖 Reviewed by <tool> — <model>`, naming the
+   agent and model running this review, not the PR author's. `deno task post-pr-comment` refuses a
+   body that carries the review header but no reviewer line. `### 🔵 Nits` is not on
    that list and never is — see Step 3's ruling on why a follow-up has no Nit to report:
    - Must Fix line: `🛑 Failing: <job name and failure detail>` if it resolved red, or `🛑 Still
      pending after N minutes — could not confirm passing status, verify manually before merge` if
@@ -456,7 +472,7 @@ resolves green, the review is already complete and nothing further is posted.
      blocking, never as silently passing).
    - Suggestions line (version-bump job only): `🟡 CircleCI "<job name>" is failing — <detail>`.
 
-   **It carries nothing else.** No Checklist Verification block, no `**CircleCI**` row, no
+   **Apart from the reviewer line named above, it carries nothing else.** No Checklist Verification block, no `**CircleCI**` row, no
    `### 🔵 Nits` section, no repeat of post #1's other Must Fix items or Nits, no narration of what
    changed. Post #1 already carries the review; this post exists solely to add the CircleCI
    result(s) that post #1 could not know about.

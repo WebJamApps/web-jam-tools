@@ -73,7 +73,7 @@ that's what following this skill prevents.
     - `Flash Med` — genuinely trivial edits only: a one-line change, a single-field data or typo fix, a link update (an exception case; anything larger goes to `Flash High`).
     - `Flash High` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
     - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
-    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; slightly higher capability than Flash High).
+    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; ranks above Flash High per Josh's 2026-10-01 ruling, though Flash High stays the default lane).
     - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
     - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
       delete-protection only, per `skills/fix-labels/labels.yaml`).
