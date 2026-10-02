@@ -145,6 +145,72 @@ Deno.test("checkDesignReference flags non-existent design document on disk", asy
   assertStringIncludes(reasons[0].message, "does not exist on disk");
 });
 
+const TILDE_DOC_REL = "Dropbox/web-jam-llms/Token_Savings/x-design-2026-10-02.md";
+
+function designRefBody(ref: string): string {
+  return `## What this builds
+1. Build something.
+
+## Design reference
+${ref}
+`;
+}
+
+Deno.test("checkDesignReference reads a ~/ design reference that exists (web-jam-tools#1204)", async () => {
+  const expanded = path.join(Deno.env.get("HOME") ?? "", TILDE_DOC_REL);
+  const checked: string[] = [];
+  const reasons = await checkDesignReference(
+    designRefBody(`~/${TILDE_DOC_REL}`),
+    expanded,
+    (p) => {
+      checked.push(p);
+      return Promise.resolve(true);
+    },
+  );
+  assertEquals(reasons, []);
+  assertEquals(checked, [expanded]);
+});
+
+Deno.test("checkDesignReference accepts the same design reference written absolute (web-jam-tools#1204)", async () => {
+  const expanded = path.join(Deno.env.get("HOME") ?? "", TILDE_DOC_REL);
+  const reasons = await checkDesignReference(
+    designRefBody(expanded),
+    expanded,
+    () => Promise.resolve(true),
+  );
+  assertEquals(reasons, []);
+});
+
+Deno.test("checkDesignReference names the expanded path for a missing ~/ design reference (web-jam-tools#1204)", async () => {
+  const expanded = path.join(Deno.env.get("HOME") ?? "", TILDE_DOC_REL);
+  const reasons = await checkDesignReference(
+    designRefBody(`~/${TILDE_DOC_REL}`),
+    expanded,
+    () => Promise.resolve(false),
+  );
+  assertEquals(reasons.length, 1);
+  assertEquals(reasons[0].type, "design-reference");
+  assertStringIncludes(reasons[0].message, "does not exist on disk");
+  assertStringIncludes(reasons[0].message, `'${expanded}'`);
+});
+
+Deno.test("checkDesignReference resolves a path with no leading ~/ or / against the cwd (web-jam-tools#1204)", async () => {
+  const rel = "Token_Savings/x-design-2026-10-02.md";
+  const checked: string[] = [];
+  const reasons = await checkDesignReference(
+    designRefBody(rel),
+    rel,
+    (p) => {
+      checked.push(p);
+      return Promise.resolve(false);
+    },
+  );
+  assertEquals(checked, [path.resolve(rel)]);
+  assertEquals(reasons.length, 1);
+  assertStringIncludes(reasons[0].message, "does not exist on disk");
+  assertStringIncludes(reasons[0].message, `'${rel}'`);
+});
+
 Deno.test("checkOpenQuestionsAndTbd flags questions, TBD markers, and forks", () => {
   const body = `## What this builds
 1. Build client.
