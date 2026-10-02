@@ -25,6 +25,7 @@ export function merge(settingsPath: string, args: string[]): number {
   let allowPatterns: string[] = [];
   let statusLineArgs: string[] = [];
   let defaultModeArgs: string[] = [];
+  let autoModeArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
   // web-jam-tools#432 finding 9: a SessionStart or SessionEnd entry in agy's
@@ -72,6 +73,7 @@ export function merge(settingsPath: string, args: string[]): number {
         "--allow",
         "--status-line",
         "--default-mode",
+        "--auto-mode",
       ],
       rest,
     );
@@ -95,6 +97,7 @@ export function merge(settingsPath: string, args: string[]): number {
     allowPatterns = sections["--allow"] || [];
     statusLineArgs = sections["--status-line"] || [];
     defaultModeArgs = sections["--default-mode"] || [];
+    autoModeArgs = sections["--auto-mode"] || [];
   }
 
   const passedLifecycle = [
@@ -474,7 +477,34 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
-  // Secret-scan gate: check all strings in permissions and hooks for credentials
+  // autoMode merge: the whole object is owned by this installer. One JSON
+  // string argument; installed when absent, replaced when it differs (key
+  // order ignored, array order significant). Only touched when --auto-mode
+  // was passed, so agy's hooks.json is unaffected.
+  let autoModeAdded = false;
+  let autoModeChanged = false;
+  let autoModeDiff: string[] = [];
+  if (autoModeArgs.length > 0) {
+    let desiredAutoMode: unknown;
+    try {
+      desiredAutoMode = JSON.parse(autoModeArgs[0]);
+    } catch (e) {
+      console.error(`error: --auto-mode value is not valid JSON: ${e}`);
+      return 1;
+    }
+    if (data.autoMode === undefined) {
+      autoModeAdded = true;
+      data.autoMode = desiredAutoMode;
+    } else if (canonicalJson(data.autoMode) !== canonicalJson(desiredAutoMode)) {
+      autoModeChanged = true;
+      // Computed before the replace: a replace discards a hand edit, so the
+      // output has to name it for it to be carried into AUTO_MODE_JSON.
+      autoModeDiff = describeAutoModeDiff(data.autoMode, desiredAutoMode);
+      data.autoMode = desiredAutoMode;
+    }
+  }
+
+  // Secret-scan gate: check all strings in permissions, hooks and autoMode for credentials
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
     for (const section of ["allow", "deny", "ask"]) {
@@ -520,6 +550,13 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
+  forEachString(data.autoMode, "autoMode", (where, value) => {
+    const match = findCredentialLiteral(value);
+    if (match) {
+      secretFindings.push(`${where}: ${match}`);
+    }
+  });
+
   const targetFilename = path.basename(settingsPath);
 
   if (secretFindings.length > 0) {
@@ -552,7 +589,9 @@ export function merge(settingsPath: string, args: string[]): number {
     statusLineAdded ||
     statusLineChanged ||
     defaultModeAdded ||
-    defaultModeChanged;
+    defaultModeChanged ||
+    autoModeAdded ||
+    autoModeChanged;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -648,6 +687,15 @@ export function merge(settingsPath: string, args: string[]): number {
             defaultModeArgs[0]
           }${defaultModePrevValue ? `, has ${defaultModePrevValue}` : ""})`,
         );
+      }
+      if (autoModeAdded) {
+        console.error(`${targetFilename}: missing autoMode section`);
+      }
+      if (autoModeChanged) {
+        console.error(`${targetFilename}: autoMode differs from the versioned config`);
+        for (const line of autoModeDiff) {
+          console.error(`  ${line}`);
+        }
       }
       return 1;
     }
@@ -764,8 +812,97 @@ export function merge(settingsPath: string, args: string[]): number {
       `${targetFilename}: updated permissions.defaultMode to ${defaultModeArgs[0]}`,
     );
   }
+  if (autoModeAdded) {
+    console.log(`${targetFilename}: added autoMode section`);
+  }
+  if (autoModeChanged) {
+    console.log(`${targetFilename}: updated autoMode to the versioned config`);
+    for (const line of autoModeDiff) {
+      console.log(`  ${line}`);
+    }
+  }
 
   return 0;
+}
+
+/** JSON.stringify with object keys sorted, so key order never counts as drift. */
+function canonicalJson(v: unknown): string {
+  return JSON.stringify(v, (_k, val) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : val);
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** One entry as JSON, cut to a length that keeps a drift report readable. */
+function previewEntry(v: unknown): string {
+  const text = JSON.stringify(v);
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+}
+
+/**
+ * Names what differs between the installed autoMode and the versioned one:
+ * the top-level keys that differ and, for list values, the entries only one
+ * side has. The installed value is replaced as a whole, so this is the only
+ * record of a hand edit outside the backup file.
+ */
+function describeAutoModeDiff(installed: unknown, versioned: unknown): string[] {
+  if (!isPlainObject(installed) || !isPlainObject(versioned)) {
+    return ["autoMode: the installed value is not an object"];
+  }
+  const lines: string[] = [];
+  const keys = [...new Set([...Object.keys(installed), ...Object.keys(versioned)])].sort();
+  for (const key of keys) {
+    if (!(key in versioned)) {
+      lines.push(`autoMode.${key}: key is not in the versioned config`);
+      continue;
+    }
+    if (!(key in installed)) {
+      lines.push(`autoMode.${key}: key is missing`);
+      continue;
+    }
+    const have = installed[key];
+    const want = versioned[key];
+    if (canonicalJson(have) === canonicalJson(want)) continue;
+    if (!Array.isArray(have) || !Array.isArray(want)) {
+      lines.push(`autoMode.${key}: value differs`);
+      continue;
+    }
+    const haveSet = new Set(have.map(canonicalJson));
+    const wantSet = new Set(want.map(canonicalJson));
+    const extra = have.filter((e) => !wantSet.has(canonicalJson(e)));
+    const missing = want.filter((e) => !haveSet.has(canonicalJson(e)));
+    for (const e of extra) {
+      lines.push(`autoMode.${key}: entry not in the versioned config: ${previewEntry(e)}`);
+    }
+    for (const e of missing) {
+      lines.push(`autoMode.${key}: versioned entry missing: ${previewEntry(e)}`);
+    }
+    if (extra.length === 0 && missing.length === 0) {
+      lines.push(`autoMode.${key}: same entries in a different order or count`);
+    }
+  }
+  return lines;
+}
+
+/** Calls fn for every string inside v, with a path such as autoMode.allow[1]. */
+function forEachString(
+  v: unknown,
+  where: string,
+  fn: (where: string, value: string) => void,
+): void {
+  if (typeof v === "string") {
+    fn(where, v);
+  } else if (Array.isArray(v)) {
+    v.forEach((e, i) => forEachString(e, `${where}[${i}]`, fn));
+  } else if (isPlainObject(v)) {
+    for (const [k, e] of Object.entries(v)) {
+      forEachString(e, `${where}.${k}`, fn);
+    }
+  }
 }
 
 function tryExistsSync(p: string): boolean {

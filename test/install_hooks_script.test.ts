@@ -1382,3 +1382,75 @@ Deno.test(
     }
   },
 );
+
+// --- versioned autoMode section ---
+
+Deno.test("install-hooks.sh installs the versioned autoMode, is idempotent, keeps other keys, and --check flags drift", async () => {
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  const base = ["--hooks-dir", hooksDir, "--settings-path", settingsPath];
+  try {
+    await Deno.writeTextFile(settingsPath, JSON.stringify({ model: "opus" }));
+    const first = await run("bash", [INSTALL_SCRIPT, ...base]);
+    assertEquals(first.code, 0, first.stdout + first.stderr);
+    const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+    assertEquals(settings.model, "opus");
+    assertEquals(settings.autoMode.allow[0], "$defaults");
+    assertEquals(settings.autoMode.soft_deny[0], "$defaults");
+    assert(settings.autoMode.environment.some((e: string) => e.startsWith("**Trusted repo**")));
+    assert(settings.autoMode.allow.some((e: string) => e.startsWith("Agent PR branches")));
+
+    const second = await run("bash", [INSTALL_SCRIPT, ...base]);
+    assertEquals(second.code, 0, second.stdout + second.stderr);
+    assertEquals(JSON.parse(await Deno.readTextFile(settingsPath)), settings);
+    assertEquals((await run("bash", [INSTALL_SCRIPT, ...base, "--check"])).code, 0);
+
+    settings.autoMode.allow = ["$defaults"];
+    await Deno.writeTextFile(settingsPath, JSON.stringify(settings));
+    const check = await run("bash", [INSTALL_SCRIPT, ...base, "--check"]);
+    assert(check.code !== 0, "expected --check to fail on autoMode drift");
+    assert(check.stderr.includes("autoMode differs"));
+    assert(
+      check.stderr.includes('autoMode.allow: versioned entry missing: "Agent PR branches'),
+      check.stderr,
+    );
+  } finally {
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
+
+// The object is replaced as a whole, so its path-bearing entries have to be
+// true of the machine the installer runs on, not of one laptop.
+Deno.test("install-hooks.sh builds the autoMode paths from HOME and the checkout's parent directory", async () => {
+  const home = await Deno.makeTempDir();
+  const hooksDir = await Deno.makeTempDir();
+  const settingsDir = await Deno.makeTempDir();
+  const settingsPath = `${settingsDir}/settings.json`;
+  try {
+    const res = await run(
+      "bash",
+      [INSTALL_SCRIPT, "--hooks-dir", hooksDir, "--settings-path", settingsPath],
+      { HOME: home },
+    );
+    assertEquals(res.code, 0, res.stdout + res.stderr);
+    const environment: string[] =
+      JSON.parse(await Deno.readTextFile(settingsPath)).autoMode.environment;
+    // REPO_ROOT ends with a slash; the repos directory is its parent.
+    const reposDir = REPO_ROOT.replace(/\/[^/]+\/$/, "");
+    assertEquals(
+      environment.find((e) => e.startsWith("**Trusted repo**")),
+      `**Trusted repo**: every git repo under ${reposDir}/ (GitHub org WebJamApps) and every worktree of them under /tmp/. Sessions start in ${home} and routinely work across these repos.`,
+    );
+    const visibility = environment.find((e) => e.startsWith("**Repository visibility**"));
+    assert(visibility?.includes(`repo path ${home} has no remotes`), visibility);
+    for (const entry of environment) {
+      assert(!entry.includes("__HOME__") && !entry.includes("__REPOS_DIR__"), entry);
+    }
+  } finally {
+    await Deno.remove(home, { recursive: true });
+    await Deno.remove(hooksDir, { recursive: true });
+    await Deno.remove(settingsDir, { recursive: true });
+  }
+});
