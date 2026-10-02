@@ -17,7 +17,7 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
-import type { CommandRunner } from "../flash-issues/types.ts";
+import type { CommandRunner } from "../shared/repos.ts";
 import { defaultCommandRunner } from "./candidates.ts";
 import { expandHome } from "./gate1.ts";
 import { type IssueTarget, parseIssueTarget } from "./stale_bodies.ts";

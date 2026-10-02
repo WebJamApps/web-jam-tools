@@ -5,7 +5,7 @@ import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
 import { expandHome } from "./gate1.ts";
 import { defaultCommandRunner } from "./candidates.ts";
-import type { CommandRunner } from "../flash-issues/types.ts";
+import type { CommandRunner } from "../shared/repos.ts";
 import { parsePlanTable, splitTableRowCells } from "./plan_table.ts";
 
 export interface IssueTarget {

@@ -42,7 +42,7 @@ an Opus review off this matrix.
 
 - **Named mode**: `/pr-review <Repo>#<pr-num>` (e.g. `/pr-review web-jam-tools#363` or `https://github.com/WebJamApps/web-jam-tools/pull/363`).
 - **Auto-detect mode**: `/pr-review` (with no arguments).
-  - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list in [`skills/flash-issues/SKILL.md`](../flash-issues/SKILL.md) under "Scope — all eight active repos, exactly these slugs").
+  - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list: `ACTIVE_REPOS` in [`src/shared/repos.ts`](../../src/shared/repos.ts)).
   - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
     - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash (High)`, `Gemini Flash (Medium)` or `Claude Haiku 4.5`.
     - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.

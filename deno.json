@@ -16,7 +16,6 @@
     "post-issue-comment": "deno run --allow-read --allow-run --allow-env scripts/post-issue-comment.ts",
     "edit-issue": "deno run --allow-read --allow-run --allow-env scripts/edit-issue.ts",
     "unblock-issue": "deno run --allow-read --allow-run --allow-env scripts/unblock-issue.ts",
-    "flash-issues": "deno run -A src/flash-issues/cli.ts",
     "design:gate1": "deno run -A src/design-issue/cli.ts",
     "design:gate1-approve": "deno run -A src/design-issue/cli.ts gate1-approve",
     "design:gate1-status": "deno run -A src/design-issue/cli.ts gate1-status",
