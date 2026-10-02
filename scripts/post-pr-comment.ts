@@ -5,7 +5,8 @@
  * Guarded CLI over `gh pr comment`. hooks/block-raw-gh-write.sh denies the
  * raw form on both agent surfaces; this is the only route to it.
  */
-import { REVIEW_SUMMARY_HEADER, runFormGuards } from "./gh-write/guard.ts";
+import { fromFileUrl } from "@std/path";
+import { extractFooterEntries, REVIEW_SUMMARY_HEADER, runFormGuards } from "./gh-write/guard.ts";
 import { type RunCmd, runWithRetry } from "./gh-write/gh_runner.ts";
 
 export interface Options {
@@ -31,6 +32,7 @@ export interface Deps {
   readFileText: (path: string) => Promise<string>;
   runCmd: RunCmd;
   sleep?: (ms: number) => Promise<void>;
+  createPrScriptPath?: string;
 }
 
 const USAGE = "usage: post-pr-comment --repo <owner/repo> --pr <n> --body-file <path> [--dry-run]";
@@ -51,6 +53,43 @@ export async function run(args: string[], deps: Deps): Promise<number> {
   if (!formResult.ok) {
     console.error(formResult.error);
     return 1;
+  }
+
+  // --- Author roster check for Work-by footers (web-jam-tools#1200) ---
+  const footers = extractFooterEntries(body);
+  if (footers.length > 0) {
+    const probeScript = deps.createPrScriptPath ??
+      fromFileUrl(new URL("./create-draft-pr.sh", import.meta.url));
+
+    for (const footer of footers) {
+      let probeResult: { code: number; stdout: string; stderr: string };
+      try {
+        probeResult = await deps.runCmd([probeScript, "--check-author", footer.author]);
+      } catch (err) {
+        console.error(
+          `refusing to post: roster check could not run: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return 1;
+      }
+
+      if (probeResult.code !== 0) {
+        if (probeResult.stderr.includes("does not name a model on the roster")) {
+          console.error(
+            `refusing to post: footer line '${footer.line}' names a model not on the author roster.`,
+          );
+          console.error(probeResult.stderr.trim());
+          return 1;
+        }
+        console.error(
+          `refusing to post: roster check could not run (create-draft-pr.sh exited with code ${probeResult.code}${
+            probeResult.stderr ? `: ${probeResult.stderr.trim()}` : ""
+          }).`,
+        );
+        return 1;
+      }
+    }
   }
 
   const ghArgs = [

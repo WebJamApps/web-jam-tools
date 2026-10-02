@@ -1314,3 +1314,38 @@ ${realGitPath} "$@"
     `--base new-parent-branch not found in gh pr edit invocation. Script code: ${res.code}, stderr: ${res.stderr}\n\nLog:\n${invocationsText}`,
   );
 });
+
+// --- --check-author probe tests (web-jam-tools#1200) ---
+
+Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6.1 Sol exits 0", async () => {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH, "--check-author", "Codex — GPT-6.1 Sol"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  assertEquals(code, 0, new TextDecoder().decode(stderr));
+  assertMatch(new TextDecoder().decode(stdout), /names a model on the roster/);
+});
+
+Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6 still exits non-zero", async () => {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH, "--check-author", "Codex — GPT-6"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stderr } = await cmd.output();
+  assertEquals(code, 1);
+  assertMatch(new TextDecoder().decode(stderr), /does not name a model on the roster/);
+});
+
+Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6 Astra exits 0", async () => {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH, "--check-author", "Codex — GPT-6 Astra"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  assertEquals(code, 0, new TextDecoder().decode(stderr));
+  assertMatch(new TextDecoder().decode(stdout), /names a model on the roster/);
+});
