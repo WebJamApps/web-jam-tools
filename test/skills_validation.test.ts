@@ -1054,9 +1054,9 @@ Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Sonnet above Flash Hig
   const sonnetRow = text.indexOf("| Sonnet | Flash High, Flash Medium, Haiku |");
   const opusRow = text.indexOf("| Opus | Sonnet, Flash High |");
   assert(
-    sonnetRow !== -1 && flashHighRow !== -1 && opusRow !== -1 && sonnetRow < opusRow &&
-      flashHighRow < opusRow,
-    "matrix rows must keep Opus last",
+    flashHighRow !== -1 && sonnetRow !== -1 && opusRow !== -1 && flashHighRow < sonnetRow &&
+      sonnetRow < opusRow,
+    "matrix rows must run weakest reviewer first: Flash High, Sonnet, Opus",
   );
 
   // The superseded rows must not survive anywhere in the file.
