@@ -59,6 +59,25 @@ const EXPECTED_16_FOLDERS = [
   "web-jam-llc",
 ];
 
+// Fixture Claude settings file so no test depends on the real one of whoever runs them.
+const FIXTURE_DIR = Deno.makeTempDirSync({ prefix: "private-folder-guard-" });
+const FIXTURE_SETTINGS_PATH = path.join(FIXTURE_DIR, "settings.json");
+Deno.writeTextFileSync(
+  FIXTURE_SETTINGS_PATH,
+  JSON.stringify({
+    permissions: {
+      deny: EXPECTED_16_FOLDERS.map((f) => `Read(//home/joshua/Dropbox/${f}/**)`),
+    },
+  }),
+);
+globalThis.addEventListener("unload", () => {
+  try {
+    Deno.removeSync(FIXTURE_DIR, { recursive: true });
+  } catch {
+    // already gone
+  }
+});
+
 interface RunResult {
   code: number;
   stdout: string;
@@ -75,7 +94,7 @@ async function runHook(
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: env ? { ...Deno.env.toObject(), ...env } : undefined,
+    env: { ...Deno.env.toObject(), CLAUDE_SETTINGS_PATH: FIXTURE_SETTINGS_PATH, ...env },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -91,8 +110,8 @@ async function runHook(
 
 // --- 1. Library unit tests ---
 
-Deno.test("getPrivateDropboxFolders extracts all 16 private folders from live settings.json", () => {
-  const result = getPrivateDropboxFolders();
+Deno.test("getPrivateDropboxFolders extracts all 16 private folders from a fixture settings file", () => {
+  const result = getPrivateDropboxFolders(FIXTURE_SETTINGS_PATH);
   assertEquals(result.ok, true, `Expected ok: true, got: ${result.error}`);
   assertEquals(result.folders.length, 16);
   for (const expected of EXPECTED_16_FOLDERS) {
