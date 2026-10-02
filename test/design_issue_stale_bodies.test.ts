@@ -147,6 +147,10 @@ Deno.test("checkDesignReference flags non-existent design document on disk", asy
 
 const TILDE_DOC_REL = "Dropbox/web-jam-llms/Token_Savings/x-design-2026-10-02.md";
 
+function homeDir(): string {
+  return Deno.env.get("HOME") || "/home/joshua";
+}
+
 function designRefBody(ref: string): string {
   return `## What this builds
 1. Build something.
@@ -157,7 +161,7 @@ ${ref}
 }
 
 Deno.test("checkDesignReference reads a ~/ design reference that exists (web-jam-tools#1204)", async () => {
-  const expanded = path.join(Deno.env.get("HOME") ?? "", TILDE_DOC_REL);
+  const expanded = path.join(homeDir(), TILDE_DOC_REL);
   const checked: string[] = [];
   const reasons = await checkDesignReference(
     designRefBody(`~/${TILDE_DOC_REL}`),
@@ -172,7 +176,7 @@ Deno.test("checkDesignReference reads a ~/ design reference that exists (web-jam
 });
 
 Deno.test("checkDesignReference accepts the same design reference written absolute (web-jam-tools#1204)", async () => {
-  const expanded = path.join(Deno.env.get("HOME") ?? "", TILDE_DOC_REL);
+  const expanded = path.join(homeDir(), TILDE_DOC_REL);
   const reasons = await checkDesignReference(
     designRefBody(expanded),
     expanded,
@@ -182,7 +186,7 @@ Deno.test("checkDesignReference accepts the same design reference written absolu
 });
 
 Deno.test("checkDesignReference names the expanded path for a missing ~/ design reference (web-jam-tools#1204)", async () => {
-  const expanded = path.join(Deno.env.get("HOME") ?? "", TILDE_DOC_REL);
+  const expanded = path.join(homeDir(), TILDE_DOC_REL);
   const reasons = await checkDesignReference(
     designRefBody(`~/${TILDE_DOC_REL}`),
     expanded,
