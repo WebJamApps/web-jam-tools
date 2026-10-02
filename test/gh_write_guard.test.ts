@@ -95,10 +95,60 @@ Deno.test("checkReviewerLine refuses each malformed shape", () => {
     "🤖 Reviewed by — Claude Opus",
     "🤖 Reviewed by Claude Code —Claude Opus",
     "some text 🤖 Reviewed by Claude Code — Claude Opus",
+    "🤖 Reviewed by <tool> — <model>",
+    "🤖 Reviewed by — — x",
   ];
   for (const line of bad) {
     assertEquals(checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n${line}\n`).ok, false, line);
   }
+});
+
+Deno.test("checkReviewerLine refuses an angle-bracket placeholder in tool or model", () => {
+  assertEquals(
+    checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by <tool> — <model>\n`)
+      .ok,
+    false,
+  );
+  assertEquals(
+    checkReviewerLine(
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — <model>\n`,
+    ).ok,
+    false,
+  );
+  assertEquals(
+    checkReviewerLine(
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by <tool> — Claude Opus 5.5\n`,
+    ).ok,
+    false,
+  );
+});
+
+Deno.test("checkReviewerLine refuses a tool or model consisting only of dashes", () => {
+  assertEquals(
+    checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by — — x\n`).ok,
+    false,
+  );
+  assertEquals(
+    checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — —\n`)
+      .ok,
+    false,
+  );
+  assertEquals(
+    checkReviewerLine(
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by - — Claude Opus 5.5\n`,
+    ).ok,
+    false,
+  );
+});
+
+Deno.test("checkReviewerLine refuses a reviewer line that is not on the last non-empty line", () => {
+  const buriedInCode =
+    `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n\`\`\`\n🤖 Reviewed by Claude Code — Claude Opus 5.5\n\`\`\`\n`;
+  assertEquals(checkReviewerLine(buriedInCode).ok, false);
+
+  const followedByText =
+    `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — Claude Opus 5.5\n\nSome trailing note\n`;
+  assertEquals(checkReviewerLine(followedByText).ok, false);
 });
 
 Deno.test("runFormGuards without requireReviewerLine allows a body with no reviewer line", () => {
