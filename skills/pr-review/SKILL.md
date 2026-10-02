@@ -28,8 +28,8 @@ ambiguous diff is.
 
 | Reviewer | Reviews |
 |---|---|
-| Sonnet | Flash High, Flash Medium, Haiku |
 | Flash High | Flash Medium, Haiku |
+| Sonnet | Flash High, Flash Medium, Haiku |
 | Opus | Sonnet, Flash High |
 
 **Ceiling rule (never a schedule):**
@@ -47,6 +47,7 @@ an Opus review off this matrix.
     - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash (High)`, `Gemini Flash (Medium)` or `Claude Haiku 4.5`.
     - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
     - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
+    - Sonnet-authored PRs have no reviewer in auto-detect mode and receive an Opus review only when Josh explicitly names the PR for that review.
     - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`. These roster spellings are deliberately unversioned — they identify the PR's author tier, not the model checkpoint that ran, so they stay as written here even as the underlying Gemini version moves:
       - `Gemini Flash (High)` (e.g. `Antigravity — Gemini Flash (High)` / `agy — Gemini Flash (High)`)
       - `Gemini Flash (Medium)` (e.g. `Antigravity — Gemini Flash (Medium)` / `agy — Gemini Flash (Medium)`)
