@@ -15,7 +15,7 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
-import type { CommandResult, CommandRunner } from "../src/flash-issues/types.ts";
+import type { CommandResult, CommandRunner } from "../src/shared/repos.ts";
 import {
   type CitationLookup,
   defaultLookupCitations,

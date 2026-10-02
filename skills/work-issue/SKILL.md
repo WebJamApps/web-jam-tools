@@ -1,6 +1,6 @@
 ---
 name: work-issue
-description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md or flash-issues.md based on agent surface to resolve the next actionable issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
   version: v3
   publisher: josh
@@ -17,8 +17,8 @@ older stateful queue-file mode). There are two ways to arrive at that issue:
 
 - **`/work-issue Repo#123`** (named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the pre-checks below before "## Steps".
 - **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
-  actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku) or `~/Dropbox/web-jam-llms/flash-issues.md` (when invoked via Antigravity / Flash / agy), then hand off
-  to the same flow below. See "## No-argument mode" first.
+  actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku), then hand off
+  to the same flow below. Under Antigravity (Flash / agy) there is no worklist: stop and ask Josh to name an issue. See "## No-argument mode" first.
 
 **Whichever route got you here, three pre-checks run before any branch is created or any code is
 written**, and they run for a named issue and an auto-picked one alike:
@@ -107,7 +107,7 @@ Use this when the user types `/work-issue` with no argument, or says "work-issue
 
 Determine which worklist file to read based on your agent surface:
 - **Claude Code (Haiku session)**: Read `~/Dropbox/web-jam-llms/haiku-issues.md`.
-- **Antigravity (Flash / agy session)**: Read `~/Dropbox/web-jam-llms/flash-issues.md`.
+- **Antigravity (Flash / agy session)**: There is no worklist. Stop and tell Josh: "Name an issue: `/work-issue <Repo>#<issue-num>`." Do not improvise a substitute list.
 
 This mode is **read-only** against the target worklist file — never edit
 that file. It only resolves a concrete `Repo#num`, then continues at step 1 of
@@ -118,7 +118,7 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
 
 1. Select the target worklist file based on the active agent surface:
    - When running under **Claude Code** (Haiku), select `~/Dropbox/web-jam-llms/haiku-issues.md`.
-   - When running under **Antigravity** (Flash / agy), select `~/Dropbox/web-jam-llms/flash-issues.md`.
+   - When running under **Antigravity** (Flash / agy), there is no worklist: stop and tell Josh to name an issue (`/work-issue <Repo>#<issue-num>`).
    Read the selected worklist file. If it's missing, empty, or has no numbered items, stop and tell Josh: "<filename> is missing/empty — run the corresponding worklist skill first." Do not improvise a substitute list.
 2. Parse **only** the numbered runnable list at the top of the file — the
    `N. [Repo#num](...) — title (Model)` lines that appear **above** the
@@ -131,7 +131,7 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
 4. If a candidate passes, that is the pick. Resolve it to `Repo#num` and continue to the pre-checks (Blocked-drift check and Design-sync check) and step 1 of "## Steps" below — i.e. run `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --setup-only <Repo>#<num>` and follow steps 2 onward exactly as written for the named-issue flow.
 5. If you reach the end of the list with no candidate passing (every item is closed, blocked, already in flight, or appears already done), stop and tell Josh: "every item in <filename>'s runnable list is closed, blocked, already in flight, or appears already done — re-run the corresponding worklist skill to refresh it." Do not improvise a substitute list, and do not fall back to the Blocked or Needs-review sections.
 
-Never write to the worklist files (`haiku-issues.md` or `flash-issues.md`) in this mode — they are read-only input.
+Never write to the worklist file (`haiku-issues.md`) in this mode — it is read-only input.
 
 ## Epics — resolve to a child, never implement the epic itself
 
