@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-hooks.sh — make this repo the single source of truth for Claude Code hooks.
+# install-hooks.sh — install this repo's Claude Code, agy, and Codex hooks.
 #
 # 1. For every *.sh under <repo>/hooks/, symlink ~/.claude/hooks/<name> -> it.
 #    Idempotent: already-correct symlinks are left alone. An existing REAL
@@ -39,6 +39,12 @@
 #    parent directory at install time, so the object is correct for the
 #    machine the installer runs on. Claude Code only.
 #
+# 3. Registers the REAPER startup check in Codex's own hooks.json, next to
+#    its active config ($CODEX_HOME or $HOME/.codex). This Codex-only check
+#    uses SessionStart source startup/resume; Claude/agy must not start it.
+#    Existing Codex hooks and trust settings are preserved. Trust is managed
+#    by Codex's /hooks UI, never bypassed or granted by this installer.
+#
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
@@ -56,7 +62,7 @@
 # never removes or reorders any existing permissions.deny entry (hand-added
 # or from a previous run).
 #
-# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--bin-dir PATH] [--force]
+# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--codex-hooks-path PATH] [--bin-dir PATH] [--force]
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
 #                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
 #                           the symlink step without touching the real hooks dir.
@@ -76,6 +82,11 @@
 #                           unless --hooks-dir is ALSO passed (web-jam-tools#273).
 #   --agy-hooks-path PATH  Merge agy hooks into PATH instead of $HOME/.gemini/config/hooks.json
 #                           (also settable via AGY_HOOKS_PATH).
+#   --codex-hooks-path PATH Register the Codex startup check in PATH (also
+#                           settable via CODEX_HOOKS_PATH). Defaults to
+#                           $CODEX_HOME/hooks.json or $HOME/.codex/hooks.json;
+#                           with --settings-path, defaults to codex-hooks.json
+#                           alongside that isolated settings file.
 #   --agents-md-path PATH  Merge rules pointer into PATH instead of $HOME/.agents/AGENTS.md
 #                           (also settable via AGENTS_MD_PATH).
 #   --bin-dir PATH         Symlink CLI scripts into PATH instead of $HOME/.local/bin
@@ -103,6 +114,13 @@ if [ -n "${AGY_HOOKS_PATH:-}" ]; then
   AGY_HOOKS_PATH_EXPLICIT=1
 else
   AGY_HOOKS_PATH="$HOME/.gemini/config/hooks.json"
+fi
+
+CODEX_HOOKS_PATH_EXPLICIT=0
+if [ -n "${CODEX_HOOKS_PATH:-}" ]; then
+  CODEX_HOOKS_PATH_EXPLICIT=1
+else
+  CODEX_HOOKS_PATH="${CODEX_HOME:-$HOME/.codex}/hooks.json"
 fi
 
 AGENTS_MD_PATH_EXPLICIT=0
@@ -633,6 +651,11 @@ while [ $# -gt 0 ]; do
       AGY_HOOKS_PATH_EXPLICIT=1
       shift 2
       ;;
+    --codex-hooks-path)
+      CODEX_HOOKS_PATH="$2"
+      CODEX_HOOKS_PATH_EXPLICIT=1
+      shift 2
+      ;;
     --agents-md-path)
       AGENTS_MD_PATH="$2"
       AGENTS_MD_PATH_EXPLICIT=1
@@ -682,6 +705,10 @@ fi
 
 if [ "$AGY_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
   AGY_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/hooks.json"
+fi
+
+if [ "$CODEX_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  CODEX_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/codex-hooks.json"
 fi
 
 if [ "$AGENTS_MD_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
@@ -911,6 +938,12 @@ merge_deny_args=("${DENY_RULES[@]}")
 merge_ask_args=("${ASK_RULES[@]}")
 merge_allow_args=("${ALLOW_RULES[@]}")
 
+# Codex-only: its SessionStart payload/output contract differs from Claude's
+# and agy's. Register on the real Codex surface, never their lifecycle arrays.
+# Use the stable installed hook location, including --hooks-dir overrides.
+[ -e "$HOOKS_SRC/codex-reaper-startup-check.sh" ] || { echo "error: $HOOKS_SRC/codex-reaper-startup-check.sh not found" >&2; exit 1; }
+CODEX_REAPER_HOOK_DEST="$HOOKS_DEST/codex-reaper-startup-check.sh"
+
 if [ "$CHECK_MODE" = "1" ]; then
   DRIFT=0
   for src in "$HOOKS_SRC"/*.sh; do
@@ -966,6 +999,9 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if ! deno run --allow-read="$CODEX_HOOKS_PATH" "$REPO_DIR/scripts/merge-codex-reaper-hook.ts" "$CODEX_HOOKS_PATH" "$CODEX_REAPER_HOOK_DEST" --check; then
+    DRIFT=1
+  fi
 
   if [ "$DRIFT" -ne 0 ]; then
     echo "error: drift detected" >&2
@@ -1095,3 +1131,6 @@ deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-i
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH"
+
+# The worktree guard above has run before this or any other installer write.
+deno run --allow-read="$CODEX_HOOKS_PATH" --allow-write="$(dirname "$CODEX_HOOKS_PATH")" "$REPO_DIR/scripts/merge-codex-reaper-hook.ts" "$CODEX_HOOKS_PATH" "$CODEX_REAPER_HOOK_DEST"

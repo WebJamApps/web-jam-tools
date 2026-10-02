@@ -31,6 +31,7 @@ import { matcherMatches } from "../hooks/lib/agy_hook_shim.ts";
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const INSTALL_SCRIPT = `${REPO_ROOT}scripts/install-hooks.sh`;
 const MERGE_SCRIPT = `${REPO_ROOT}scripts/merge-hooks-into-settings.ts`;
+const MERGE_CODEX_SCRIPT = `${REPO_ROOT}scripts/merge-codex-reaper-hook.ts`;
 const MERGE_AGENTS_MD_SCRIPT = `${REPO_ROOT}scripts/merge-agents-md-pointer.ts`;
 const STATUS_LINE_SCRIPT = `${REPO_ROOT}scripts/statusline.sh`;
 const AGENT_ALERT_SCRIPT = `${REPO_ROOT}scripts/agent-alert.sh`;
@@ -53,7 +54,8 @@ async function run(
     stdin: stdinText !== undefined ? "piped" : "null",
     stdout: "piped",
     stderr: "piped",
-    env: env ? { ...Deno.env.toObject(), ...env } : undefined,
+    // Never inherit real Codex config overrides into an installer fixture.
+    env: { ...Deno.env.toObject(), CODEX_HOME: "", CODEX_HOOKS_PATH: "", ...env },
   });
 
   if (stdinText !== undefined) {
@@ -491,6 +493,7 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
   await Deno.chmod(`${mainRepo}/scripts/install-hooks.sh`, 0o755);
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
+  await Deno.copyFile(MERGE_CODEX_SCRIPT, `${mainRepo}/scripts/merge-codex-reaper-hook.ts`);
   await Deno.copyFile(MERGE_AGENTS_MD_SCRIPT, `${mainRepo}/scripts/merge-agents-md-pointer.ts`);
   // install-hooks.sh requires scripts/statusline.sh and scripts/agent-alert.sh to exist (web-jam-tools#688, web-jam-tools#1176).
   await Deno.copyFile(STATUS_LINE_SCRIPT, `${mainRepo}/scripts/statusline.sh`);
@@ -556,11 +559,206 @@ Deno.test("refuses to link into the default destination from a git worktree with
         !(await pathExists(`${home}/.claude/hooks`)),
         "guard must refuse before creating anything under the default destination",
       );
+      assert(
+        !(await pathExists(`${settingsDir}/codex-hooks.json`)),
+        "worktree guard must also refuse before writing the Codex registration",
+      );
     } finally {
       await Deno.remove(home, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });
     }
   });
+});
+
+Deno.test("Codex REAPER registration preserves existing hooks, quotes its path, and is idempotent", async () => {
+  const sandbox = await Deno.makeTempDir();
+  const hooksDir = `${sandbox}/hooks with 'apostrophe$literal`;
+  const settingsPath = `${sandbox}/settings.json`;
+  const codexPath = `${sandbox}/codex-hooks.json`;
+  const installedHook = `${hooksDir}/codex-reaper-startup-check.sh`;
+  const command = `WJT_SURFACE=codex '${installedHook.replaceAll("'", "'\\''")}'`;
+  const original = {
+    disableAllHooks: false,
+    metadata: { preserve: true },
+    hooks: {
+      SessionStart: [{
+        matcher: "startup",
+        extra: "keep",
+        hooks: [{ type: "command", command: "echo user-start", timeout: 12 }],
+      }],
+      PreToolUse: [{
+        matcher: "Bash",
+        hooks: [{ type: "command", command: "$HOME/.claude/hooks/user-guard.sh", async: true }],
+      }],
+      Stop: [],
+    },
+  };
+  const base = [INSTALL_SCRIPT, "--hooks-dir", hooksDir, "--settings-path", settingsPath];
+  try {
+    const before = JSON.stringify(original, null, 2) + "\n";
+    await Deno.writeTextFile(codexPath, before);
+    // Retire the old, ineffective Claude registration while installing Codex's.
+    await Deno.writeTextFile(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          SessionStart: [{
+            hooks: [{
+              type: "command",
+              command: "$HOME/.claude/hooks/codex-reaper-startup-check.sh",
+            }],
+          }],
+        },
+      }),
+    );
+    const first = await run("bash", base);
+    assertEquals(first.code, 0, first.stdout + first.stderr);
+    const installed = JSON.parse(await Deno.readTextFile(codexPath));
+    assertEquals(installed, {
+      ...original,
+      hooks: {
+        ...original.hooks,
+        SessionStart: [...original.hooks.SessionStart, {
+          matcher: "startup|resume",
+          hooks: [{ type: "command", command }],
+        }],
+      },
+    });
+    const backups = [...Deno.readDirSync(sandbox)]
+      .filter((entry) => entry.name.startsWith("codex-hooks.json.bak-"));
+    assertEquals(backups.length, 1, "existing Codex config must be backed up before write");
+    assertEquals(await Deno.readTextFile(`${sandbox}/${backups[0].name}`), before);
+    for (const path of [settingsPath, `${sandbox}/hooks.json`]) {
+      assert(
+        !(await Deno.readTextFile(path)).includes("codex-reaper-startup-check.sh"),
+        "Claude and agy must not register this Codex-only SessionStart hook",
+      );
+    }
+    const installedText = await Deno.readTextFile(codexPath);
+    const second = await run("bash", base);
+    assertEquals(second.code, 0, second.stdout + second.stderr);
+    assertEquals(await Deno.readTextFile(codexPath), installedText);
+    assertEquals(
+      [...Deno.readDirSync(sandbox)].filter((entry) =>
+        entry.name.startsWith("codex-hooks.json.bak-")
+      ).length,
+      1,
+      "no-op install must not create another backup",
+    );
+    const check = await run("bash", [...base, "--check"]);
+    assertEquals(check.code, 0, check.stdout + check.stderr);
+
+    // Execute the registered command against a fixture script to verify path
+    // quoting and the Codex surface assignment without launching REAPER.
+    await Deno.remove(installedHook);
+    await Deno.writeTextFile(installedHook, '#!/bin/sh\nprintf "%s" "$WJT_SURFACE"\n');
+    await Deno.chmod(installedHook, 0o755);
+    const invocation = await run("bash", ["-c", command]);
+    assertEquals(invocation.code, 0, invocation.stderr);
+    assertEquals(invocation.stdout, "codex");
+  } finally {
+    await Deno.remove(sandbox, { recursive: true });
+  }
+});
+
+Deno.test("--check detects missing Codex startup registration without changing any file", async () => {
+  const sandbox = await Deno.makeTempDir();
+  const hooksDir = `${sandbox}/hooks`;
+  const settingsPath = `${sandbox}/settings.json`;
+  const codexPath = `${sandbox}/codex-hooks.json`;
+  const base = [INSTALL_SCRIPT, "--hooks-dir", hooksDir, "--settings-path", settingsPath];
+  try {
+    const install = await run("bash", base);
+    assertEquals(install.code, 0, install.stdout + install.stderr);
+    const existing = { custom: "keep", hooks: { SessionStart: [], Stop: [] } };
+    const original = JSON.stringify(existing) + "\n";
+    await Deno.writeTextFile(codexPath, original);
+    const namesBefore = [...Deno.readDirSync(sandbox)].map((entry) => entry.name).sort();
+    const check = await run("bash", [...base, "--check"]);
+    assertEquals(check.code, 1);
+    assert(check.stderr.includes("missing Codex REAPER SessionStart hook"), check.stderr);
+    assertEquals(await Deno.readTextFile(codexPath), original);
+    assertEquals([...Deno.readDirSync(sandbox)].map((entry) => entry.name).sort(), namesBefore);
+
+    await Deno.remove(codexPath);
+    const missing = await run("bash", [...base, "--check"]);
+    assertEquals(missing.code, 1);
+    assert(!(await pathExists(codexPath)), "--check must not create a missing Codex hooks file");
+  } finally {
+    await Deno.remove(sandbox, { recursive: true });
+  }
+});
+
+Deno.test("Codex path flag and environment override take precedence over isolated settings", async () => {
+  const sandbox = await Deno.makeTempDir();
+  const hooksDir = `${sandbox}/hooks`;
+  const settingsPath = `${sandbox}/settings.json`;
+  const envPath = `${sandbox}/custom-env/hooks.json`;
+  const flagPath = `${sandbox}/custom-flag/hooks.json`;
+  const base = [INSTALL_SCRIPT, "--hooks-dir", hooksDir, "--settings-path", settingsPath];
+  try {
+    const envInstall = await run("bash", base, { CODEX_HOOKS_PATH: envPath });
+    assertEquals(envInstall.code, 0, envInstall.stdout + envInstall.stderr);
+    assert(await pathExists(envPath));
+    assert(!(await pathExists(`${sandbox}/codex-hooks.json`)));
+    const envContents = await Deno.readTextFile(envPath);
+    const flagInstall = await run("bash", [...base, "--codex-hooks-path", flagPath], {
+      CODEX_HOOKS_PATH: envPath,
+    });
+    assertEquals(flagInstall.code, 0, flagInstall.stdout + flagInstall.stderr);
+    assert(await pathExists(flagPath));
+    assertEquals(await Deno.readTextFile(envPath), envContents);
+  } finally {
+    await Deno.remove(sandbox, { recursive: true });
+  }
+});
+
+Deno.test("Codex default hooks path follows active CODEX_HOME and falls back to isolated HOME", async () => {
+  const sandbox = await Deno.makeTempDir();
+  const codexHome = `${sandbox}/active-codex`;
+  // Explicit --force permits the real-destination code path in this worktree;
+  // both HOME and CODEX_HOME point into the fixture and never user config.
+  try {
+    const custom = await run("bash", [INSTALL_SCRIPT, "--force"], {
+      HOME: `${sandbox}/home-custom`,
+      CODEX_HOME: codexHome,
+    });
+    assertEquals(custom.code, 0, custom.stdout + custom.stderr);
+    assert(await pathExists(`${codexHome}/hooks.json`));
+    assert(!(await pathExists(`${sandbox}/home-custom/.codex/hooks.json`)));
+    const fallback = await run("bash", [INSTALL_SCRIPT, "--force"], {
+      HOME: `${sandbox}/home-fallback`,
+    });
+    assertEquals(fallback.code, 0, fallback.stdout + fallback.stderr);
+    assert(await pathExists(`${sandbox}/home-fallback/.codex/hooks.json`));
+  } finally {
+    await Deno.remove(sandbox, { recursive: true });
+  }
+});
+
+Deno.test("Codex registration refuses malformed hooks JSON without replacing the original", async () => {
+  const sandbox = await Deno.makeTempDir();
+  const hooksDir = `${sandbox}/hooks`;
+  const settingsPath = `${sandbox}/settings.json`;
+  const codexPath = `${sandbox}/codex-hooks.json`;
+  const base = [INSTALL_SCRIPT, "--hooks-dir", hooksDir, "--settings-path", settingsPath];
+  try {
+    for (const invalid of ["{", "[]", '{"hooks":[]}', '{"hooks":{"SessionStart":{}}}']) {
+      await Deno.writeTextFile(codexPath, invalid);
+      const result = await run("bash", base);
+      assertEquals(result.code, 1, result.stdout + result.stderr);
+      assert(result.stderr.includes("refusing to change"), result.stderr);
+      assertEquals(await Deno.readTextFile(codexPath), invalid);
+      assertEquals(
+        [...Deno.readDirSync(sandbox)].filter((entry) =>
+          entry.name.startsWith("codex-hooks.json.bak-")
+        ).length,
+        0,
+      );
+    }
+  } finally {
+    await Deno.remove(sandbox, { recursive: true });
+  }
 });
 
 Deno.test("--force allows linking into the default destination from a git worktree", async () => {
