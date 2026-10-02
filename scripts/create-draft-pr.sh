@@ -181,6 +181,10 @@ ROSTER=(
   "Claude Fable 5"
   # Codex CLI running GPT-6 Luna — trial lane for Haiku-tier work (Josh, 2026-09-30).
   "GPT-6 Luna"
+  # Codex CLI running GPT-6.1 Sol — default coding and review model on Plus (Josh, 2026-10-02).
+  "GPT-6.1 Sol"
+  # Codex CLI running GPT-6 Astra — reserved for REAPER recording (Josh, 2026-10-02).
+  "GPT-6 Astra"
 )
 
 author_roster_check() {

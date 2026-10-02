@@ -108,6 +108,48 @@ export function checkReviewerLine(body: string): GuardResult {
   return { ok: true };
 }
 
+export interface FooterAuthorEntry {
+  line: string;
+  author: string;
+}
+
+/**
+ * Extracts all "🤖 Work by" footer lines and their author strings from a comment body.
+ *
+ * Matching is by line start only:
+ * - A line starting with `🤖 Work by` is matched.
+ * - Footers quoted in inline backticks or blockquotes do not start the line with `🤖`,
+ *   so they are not extracted.
+ * - Footers inside a fenced code block start the line with `🤖`, so they are extracted.
+ * - A line that is solely `🤖 Work by` (or followed only by whitespace) has an empty author string `""`.
+ * - The author string is not required to contain an em dash.
+ *
+ * web-jam-tools#1200
+ */
+export function extractFooterEntries(body: string): FooterAuthorEntry[] {
+  const entries: FooterAuthorEntry[] = [];
+  const lines = body.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^🤖 Work by(?:\s+(.*))?$/u);
+    if (match) {
+      entries.push({
+        line,
+        author: (match[1] ?? "").trim(),
+      });
+    }
+  }
+  return entries;
+}
+
+/**
+ * Extracts the author strings from all "🤖 Work by" footer lines in a comment body.
+ *
+ * web-jam-tools#1200
+ */
+export function extractFooterAuthors(body: string): string[] {
+  return extractFooterEntries(body).map((entry) => entry.author);
+}
+
 export interface FormGuardOptions {
   /** Only true for the review verb — the header check binds it alone. */
   requireReviewHeader?: boolean;
