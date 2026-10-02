@@ -1,6 +1,6 @@
 // src/shared/repos.ts
 // Shared definitions of the active WebJamApps repos and the `gh` command-runner types used by the
-// design-issue and memory-cleanup tooling. (Moved here from the retired `src/flash-issues/types.ts`.)
+// design-issue and memory-cleanup tooling. (Moved here from the retired scanner's types module.)
 
 export interface CommandResult {
   code: number;

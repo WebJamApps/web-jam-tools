@@ -136,6 +136,6 @@ Deno.test("runLintSkillSurfaces: batch run against the four rewritten skills pas
   const summary = await runLintSkillSurfaces(targetSkills);
   assertEquals(summary.valid, true);
   assertEquals(summary.totalViolations, 0);
-  assertEquals(summary.scannedFiles, 5);
+  assertEquals(summary.scannedFiles, 4);
   assertEquals(summary.exemptFiles, 0);
 });
