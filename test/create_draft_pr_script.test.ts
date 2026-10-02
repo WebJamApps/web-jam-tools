@@ -21,7 +21,7 @@ const RUN_ON_SUMMARY =
   "First I updated the guard logic and then I updated the docs and finally I ran the tests.";
 const PARAPHRASE_EVIDENCE = "All unit tests, lints, and typechecks passed successfully";
 const OFF_ROSTER_AUTHOR = "Gemini 1.5 Pro";
-const VALID_AUTHOR = "Claude Code — Sonnet 5";
+const VALID_AUTHOR = "Claude Code — Sonnet 5.5";
 // web-jam-back#918: this exact "How to test locally" section shipped — running
 // the suite is not exercising the change (web-jam-tools#152).
 const SUITE_ONLY_TEST_PLAN =
@@ -191,7 +191,7 @@ Deno.test("well-formed call (web-jam-back#967-shaped) passes validation unchange
   const res = await runScript(repoDir, baseArgs());
   assertEquals(res.code, 0, res.stderr);
   assertMatch(res.stdout, /=== DRY RUN/);
-  assertMatch(res.stdout, /🤖 Work by Claude Code — Sonnet 5/);
+  assertMatch(res.stdout, /🤖 Work by Claude Code — Sonnet 5.5/);
   assertMatch(res.stdout, /## Test evidence/);
 });
 
@@ -206,7 +206,7 @@ Deno.test("creates/dry-runs a PR cleanly with only --author, --summary, and --te
   ]);
   assertEquals(res.code, 0, res.stderr);
   assertMatch(res.stdout, /=== DRY RUN/);
-  assertMatch(res.stdout, /🤖 Work by Claude Code — Sonnet 5/);
+  assertMatch(res.stdout, /🤖 Work by Claude Code — Sonnet 5.5/);
   assertNotMatch(res.stdout, /## Test evidence/);
 });
 
@@ -340,7 +340,7 @@ Deno.test("--update: a well-formed call passes validation and dry-run labels it 
   const res = await runScript(repoDir, [...baseArgs(), "--update"]);
   assertEquals(res.code, 0, res.stderr);
   assertMatch(res.stdout, /=== DRY RUN \(UPDATE/);
-  assertMatch(res.stdout, /🤖 Work by Claude Code — Sonnet 5/);
+  assertMatch(res.stdout, /🤖 Work by Claude Code — Sonnet 5.5/);
 });
 
 Deno.test("create mode (no --update) still labels dry-run CREATE", async () => {

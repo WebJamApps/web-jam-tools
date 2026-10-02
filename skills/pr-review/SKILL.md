@@ -42,13 +42,13 @@ an Opus review off this matrix.
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list: `ACTIVE_REPOS` in [`src/shared/repos.ts`](../../src/shared/repos.ts)).
   - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
-    - **Sonnet (`Claude Code — Sonnet 5`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5`. It no longer matches `Gemini Flash (High)` PRs — Flash High now outranks it.
-    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Claude Sonnet 5`, `Gemini Flash (Medium)`, or `Claude Haiku 4.5`.
+    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5`. It no longer matches `Gemini Flash (High)` PRs — Flash High now outranks it.
+    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Claude Sonnet 5.5`, `Gemini Flash (Medium)`, or `Claude Haiku 4.5`.
     - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
     - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`. These roster spellings are deliberately unversioned — they identify the PR's author tier, not the model checkpoint that ran, so they stay as written here even as the underlying Gemini version moves:
       - `Gemini Flash (High)` (e.g. `Antigravity — Gemini Flash (High)` / `agy — Gemini Flash (High)`)
       - `Gemini Flash (Medium)` (e.g. `Antigravity — Gemini Flash (Medium)` / `agy — Gemini Flash (Medium)`)
-      - `Claude Sonnet 5` (e.g. `Claude Code — Sonnet 5` / `Claude Code — Claude Sonnet 5`)
+      - `Claude Sonnet 5.5` (e.g. `Claude Code — Sonnet 5.5` / `Claude Code — Claude Sonnet 5.5`)
       - `Claude Haiku 4.5` (e.g. `Claude Code — Haiku 4.5` / `Claude Code — Claude Haiku 4.5`)
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
     - Compares the commit SHA of the newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`) against the PR's current head commit SHA (`commits | last | .oid`).
