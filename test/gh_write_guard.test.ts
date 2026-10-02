@@ -416,6 +416,13 @@ Deno.test("extractFooterAuthors extracts footer inside a fenced code block", () 
   assertEquals(authors, ["Codex — GPT-6"]);
 });
 
+Deno.test("extractFooterEntries matches a footer with leading whitespace and keeps the original line", () => {
+  const body = "- item\n  \u{1F916} Work by Codex \u2014 GPT-6\n> \u{1F916} Work by quoted";
+  assertEquals(extractFooterEntries(body), [
+    { line: "  \u{1F916} Work by Codex \u2014 GPT-6", author: "Codex \u2014 GPT-6" },
+  ]);
+});
+
 Deno.test("extractFooterAuthors does not require an em dash", () => {
   const body = "🤖 Work by SingleAuthorModel";
   const authors = extractFooterAuthors(body);

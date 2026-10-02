@@ -116,8 +116,8 @@ export interface FooterAuthorEntry {
 /**
  * Extracts all "🤖 Work by" footer lines and their author strings from a comment body.
  *
- * Matching is by line start only:
- * - A line starting with `🤖 Work by` is matched.
+ * Matching is by line start only, after any leading whitespace:
+ * - A line whose first non-space characters are `🤖 Work by` is matched.
  * - Footers quoted in inline backticks or blockquotes do not start the line with `🤖`,
  *   so they are not extracted.
  * - Footers inside a fenced code block start the line with `🤖`, so they are extracted.
@@ -130,7 +130,7 @@ export function extractFooterEntries(body: string): FooterAuthorEntry[] {
   const entries: FooterAuthorEntry[] = [];
   const lines = body.split(/\r?\n/);
   for (const line of lines) {
-    const match = line.match(/^🤖 Work by(?:\s+(.*))?$/u);
+    const match = line.match(/^\s*🤖 Work by(?:\s+(.*))?$/u);
     if (match) {
       entries.push({
         line,
