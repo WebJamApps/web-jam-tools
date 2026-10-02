@@ -89,8 +89,9 @@ if [ -z "$TOPIC" ]; then
   echo "$TOPIC" > "$TOPIC_FILE" 2>/dev/null || true
 fi
 
-# Send notification with short timeout, never failing on error or timeout.
+# Send notification with high priority (Firebase push to wake Android from Doze mode)
+# and short timeout, never failing on error or timeout.
 NTFY_SERVER="${NTFY_SERVER:-https://ntfy.sh}"
-curl -s --max-time 3 -d "$MESSAGE" "$NTFY_SERVER/$TOPIC" >/dev/null 2>&1 || true
+curl -s --max-time 3 -H "Priority: high" -d "$MESSAGE" "$NTFY_SERVER/$TOPIC" >/dev/null 2>&1 || true
 
 exit 0
