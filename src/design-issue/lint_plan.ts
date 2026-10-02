@@ -103,9 +103,9 @@ const COL_REPO = PLAN_TABLE_HEADER.indexOf("Repo");
 const COL_TESTS = PLAN_TABLE_HEADER.indexOf("Tests");
 const COL_CLOSES = PLAN_TABLE_HEADER.indexOf("Closes when");
 
-/** The native GitHub Priority field's four levels (`src/shared/repos.ts`'s `Priority` type,
- * `PRIORITY_MAP` in `src/create-issue/lib.ts`). Not read from a config file at runtime -- there is
- * none -- but pinned to the same four literal values used everywhere else a Priority is set. */
+/** The native GitHub Priority field's four levels (`PRIORITY_MAP` in `src/create-issue/lib.ts`).
+ * Not read from a config file at runtime -- there is none -- but pinned to the same four literal
+ * values used everywhere else a Priority is set. */
 const NATIVE_PRIORITY_LEVELS = ["Urgent", "High", "Medium", "Low"] as const;
 
 /** Strings that mean "no value was given" in a plan-table cell. */

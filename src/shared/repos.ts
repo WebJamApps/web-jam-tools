@@ -21,7 +21,4 @@ export const ACTIVE_REPOS = [
   "HenricksonForSalem",
 ] as const;
 
-export type ActiveRepo = (typeof ACTIVE_REPOS)[number];
 export const REPO_OWNER = "WebJamApps";
-
-export type Priority = "Urgent" | "High" | "Medium" | "Low";
