@@ -62,7 +62,7 @@ Deno.test("shouldPruneRule - R-20 frozen strings and worktree wildcards are prun
   assertEquals(resWorktree.reason, "R-20");
 
   const frozenString =
-    "Bash(./scripts/create-draft-pr.sh --author 'Claude Code — Sonnet 5.5' --summary 'Test summary' --test-plan 'npm test' --test-evidence 'green')";
+    "Bash(./scripts/create-draft-pr.sh --author 'Claude Code — Sonnet 5' --summary 'Test summary' --test-plan 'npm test' --test-evidence 'green')";
   const resFrozen = shouldPruneRule(frozenString);
   assertEquals(resFrozen.prune, true);
   assertEquals(resFrozen.reason, "R-20");
