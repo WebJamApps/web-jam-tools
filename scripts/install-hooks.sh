@@ -826,6 +826,12 @@ ALERT_DEST="$HOOKS_DEST/agent-alert.sh"
 ALERT_AGY_COMMAND='$HOME/.claude/hooks/agent-alert.sh agy finished'
 merge_agy_stop_args=("$ALERT_AGY_COMMAND")
 
+# --- agy-prompt-watch.sh (web-jam-tools#1212) ---
+[ -e "$REPO_DIR/scripts/agy-prompt-watch.sh" ] || { echo "error: $REPO_DIR/scripts/agy-prompt-watch.sh not found" >&2; exit 1; }
+AGY_PROMPT_WATCH_DEST="$HOOKS_DEST/agy-prompt-watch.sh"
+# shellcheck disable=SC2016
+AGY_PROMPT_WATCH_COMMAND='$HOME/.claude/hooks/agy-prompt-watch.sh'
+
 # --- permissions.defaultMode (web-jam-tools#705) ---
 # Same Claude-Code-only scoping as merge_status_line_args above: passed only
 # to the $SETTINGS_PATH invocations below, never to $AGY_HOOKS_PATH.
@@ -951,6 +957,8 @@ for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
   [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS/AGY_ONLY_PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
   merge_agy_pre_tool_use_args+=("$(agy_shim_arg PreToolUse "$matcher" "$name")")
 done
+# agy-native: registered directly under matcher ".*" without agy-hook-shim.sh (web-jam-tools#1212).
+merge_agy_pre_tool_use_args+=(".*::$AGY_PROMPT_WATCH_COMMAND")
 
 merge_agy_post_tool_use_args=()
 for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
@@ -1002,6 +1010,11 @@ if [ "$CHECK_MODE" = "1" ]; then
 
   if [ ! -L "$ALERT_DEST" ] || [ "$(readlink -f "$ALERT_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agent-alert.sh")" ]; then
     echo "drift: agent-alert script is not linked at $ALERT_DEST" >&2
+    DRIFT=1
+  fi
+
+  if [ ! -L "$AGY_PROMPT_WATCH_DEST" ] || [ "$(readlink -f "$AGY_PROMPT_WATCH_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agy-prompt-watch.sh")" ]; then
+    echo "drift: agy-prompt-watch script is not linked at $AGY_PROMPT_WATCH_DEST" >&2
     DRIFT=1
   fi
 
@@ -1123,6 +1136,18 @@ elif [ -e "$ALERT_DEST" ] || [ -L "$ALERT_DEST" ]; then
 else
   ln -s "$REPO_DIR/scripts/agent-alert.sh" "$ALERT_DEST"
   echo "agent-alert.sh: linked (new)"
+fi
+
+# --- agy-prompt-watch script symlink (web-jam-tools#1212) ---
+if [ -L "$AGY_PROMPT_WATCH_DEST" ] && [ "$(readlink -f "$AGY_PROMPT_WATCH_DEST")" = "$(readlink -f "$REPO_DIR/scripts/agy-prompt-watch.sh")" ]; then
+  echo "agy-prompt-watch.sh: ok (already linked)"
+elif [ -e "$AGY_PROMPT_WATCH_DEST" ] || [ -L "$AGY_PROMPT_WATCH_DEST" ]; then
+  mv "$AGY_PROMPT_WATCH_DEST" "$AGY_PROMPT_WATCH_DEST.bak-$STAMP"
+  ln -s "$REPO_DIR/scripts/agy-prompt-watch.sh" "$AGY_PROMPT_WATCH_DEST"
+  echo "agy-prompt-watch.sh: linked (previous version backed up to agy-prompt-watch.sh.bak-$STAMP)"
+else
+  ln -s "$REPO_DIR/scripts/agy-prompt-watch.sh" "$AGY_PROMPT_WATCH_DEST"
+  echo "agy-prompt-watch.sh: linked (new)"
 fi
 
 # --- CLI tools symlink (~/.local/bin/agents, web-jam-tools#1174) ---

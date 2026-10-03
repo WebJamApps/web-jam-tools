@@ -29,9 +29,13 @@ async function run(
     args,
     stdout: "piped",
     stderr: "piped",
-    // Default the laptop-window step to a stub so an SSH_CONNECTION inherited from the
-    // caller can never open a real gnome-terminal window.
-    env: { ...Deno.env.toObject(), AGENTS_LAPTOP_WINDOW_CMD: "true", ...(env ?? {}) },
+    // Default the laptop-window step and agy-config check to stubs so tests stay isolated.
+    env: {
+      ...Deno.env.toObject(),
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+      ...(env ?? {}),
+    },
   });
   const { code, stdout, stderr } = await command.output();
   return {
@@ -479,6 +483,7 @@ function stubEnv(tmpDir: string, windowCmd: string, extra: Record<string, string
     AGENTS_AGY_CMD: "sleep 60",
     AGENTS_UPDATE_CMD: "true",
     AGENTS_LAPTOP_WINDOW_CMD: windowCmd,
+    AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
     ...extra,
   };
 }
@@ -714,6 +719,136 @@ Deno.test("agents starts codex with overrides passing prompt moment for Permissi
         `notify=["${home}/.claude/hooks/agent-alert.sh", "codex", "finished"]`,
       ),
       `expected notify override with finished moment in: ${args}`,
+    );
+  });
+});
+
+Deno.test("agents prints warning when agy Tool Permission is not request-review, and stays silent when it is (web-jam-tools#1212)", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    // When Tool Permission is always-proceed, prints warning naming setting and value found.
+    const resWarn = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\talways-proceed\\n'",
+    });
+    assertEquals(resWarn.code, 0, resWarn.stderr);
+    assert(
+      resWarn.stderr.includes(
+        "warning: agy Tool Permission is 'always-proceed' (expected 'request-review')",
+      ),
+      `expected warning about always-proceed in stderr: ${resWarn.stderr}`,
+    );
+
+    // Clean up server to test fresh creation with request-review
+    await run("tmux", ["-L", socketName, "kill-server"], { TMUX_TMPDIR: tmpDir });
+
+    // When Tool Permission is request-review, prints no warning.
+    const resOk = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+    });
+    assertEquals(resOk.code, 0, resOk.stderr);
+    assert(
+      !resOk.stderr.includes("warning: agy Tool Permission"),
+      `expected no Tool Permission warning in stderr: ${resOk.stderr}`,
+    );
+  });
+});
+
+Deno.test("agents prints warning when agy Tool Permission fails, times out, or prints no toolPermission line (web-jam-tools#1212)", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    // Command fails
+    const resFail = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "exit 1",
+    });
+    assertEquals(resFail.code, 0, resFail.stderr);
+    assert(
+      resFail.stderr.includes("warning: agy Tool Permission could not be read"),
+      `expected could-not-be-read warning on exit 1 in: ${resFail.stderr}`,
+    );
+
+    await run("tmux", ["-L", socketName, "kill-server"], { TMUX_TMPDIR: tmpDir });
+
+    // Command prints no toolPermission line
+    const resMissing = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "printf 'otherSetting\\tfoo\\n'",
+    });
+    assertEquals(resMissing.code, 0, resMissing.stderr);
+    assert(
+      resMissing.stderr.includes("warning: agy Tool Permission could not be read"),
+      `expected could-not-be-read warning on missing line in: ${resMissing.stderr}`,
+    );
+
+    await run("tmux", ["-L", socketName, "kill-server"], { TMUX_TMPDIR: tmpDir });
+
+    // Command times out
+    const resTimeout = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "sleep 10",
+    });
+    assertEquals(resTimeout.code, 0, resTimeout.stderr);
+    assert(
+      resTimeout.stderr.includes("warning: agy Tool Permission could not be read"),
+      `expected could-not-be-read warning on timeout in: ${resTimeout.stderr}`,
+    );
+  });
+});
+
+Deno.test("agents does not check agy Tool Permission when only attaching to existing session (web-jam-tools#1212)", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    // Create session with clean config
+    const resCreate = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+    });
+    assertEquals(resCreate.code, 0, resCreate.stderr);
+
+    // Attach to existing session with a failing/warning AGY_CONFIG_CMD
+    const resAttach = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_UPDATE_CMD: "false", // would warn if run
+      AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\talways-proceed\\n'", // would warn if run
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+    });
+    assertEquals(resAttach.code, 0, resAttach.stderr);
+    assert(
+      !resAttach.stderr.includes("warning: agy Tool Permission"),
+      `attach should not check agy Tool Permission: ${resAttach.stderr}`,
+    );
+    assert(
+      !resAttach.stderr.includes("warning: update-all"),
+      `attach should not run update-all: ${resAttach.stderr}`,
     );
   });
 });
