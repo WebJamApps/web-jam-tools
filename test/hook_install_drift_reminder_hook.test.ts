@@ -483,6 +483,28 @@ Deno.test("checkUnregisteredHooks skips codex-* hooks but still reports other un
       await checkUnregisteredHooks(sb.repoDir, "no-such-ref", sb.settingsPath),
       ["hook3.sh"],
     );
+
+    // A codex-* hook explicitly listed in the installer (e.g. SESSION_START_HOOKS)
+    // and missing from settings.json MUST still be reported (the exemption only
+    // applies to hooks/ directory listing, never to installer registration).
+    await Deno.writeTextFile(
+      path.join(sb.repoDir, "scripts/install-hooks.sh"),
+      `SESSION_START_HOOKS=(hook1.sh codex-reaper-startup-check.sh)\nSTOP_HOOKS=()\nPRE_TOOL_USE_HOOKS=(\n  "Bash::hook2.sh"\n)\nAGY_ONLY_PRE_TOOL_USE_HOOKS=(\n)\nPOST_TOOL_USE_HOOKS=(\n)\n`,
+    );
+    await runGit(["add", "scripts/install-hooks.sh"]);
+    await runGit(["commit", "-m", "Add codex hook to installer"]);
+    await runGit(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+
+    // git ls-tree branch
+    assertEquals(
+      await checkUnregisteredHooks(sb.repoDir, "origin/dev", sb.settingsPath),
+      ["codex-reaper-startup-check.sh", "hook3.sh"],
+    );
+    // local-directory fallback branch (ref that git cannot resolve)
+    assertEquals(
+      await checkUnregisteredHooks(sb.repoDir, "no-such-ref", sb.settingsPath),
+      ["codex-reaper-startup-check.sh", "hook3.sh"],
+    );
   } finally {
     await sb.cleanup();
   }
