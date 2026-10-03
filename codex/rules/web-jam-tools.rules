@@ -1,0 +1,15 @@
+# codex/rules/web-jam-tools.rules
+#
+# Codex execution policy rules for web-jam-tools (web-jam-tools#1142).
+# Forbids raw git pushes, branch deletes, gh repo sync, and claude invocations.
+# Prompts for gh api and deno task push --force-with-lease.
+# Leaves plain deno task push and read-only commands untouched (allowed).
+
+prefix_rule(pattern=["git", "push"], decision="forbidden")
+prefix_rule(pattern=["git", "branch", "-D"], decision="forbidden")
+prefix_rule(pattern=["git", "branch", "--delete"], decision="forbidden")
+prefix_rule(pattern=["gh", "repo", "sync"], decision="forbidden")
+prefix_rule(pattern=["claude"], decision="forbidden")
+
+prefix_rule(pattern=["gh", "api"], decision="prompt")
+prefix_rule(pattern=["deno", "task", "push", "--force-with-lease"], decision="prompt")
