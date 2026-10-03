@@ -94,10 +94,12 @@ A decision is not ready to put to Josh until these conditions are met:
 2. **The mechanism is explained** in Josh's terms before the question — every component the question turns on, described plainly, including machinery discovered mid-session that Josh has never seen.
 3. **Every option carries what it actually costs** — what happens in this session, what work it creates, what it collides with, what it risks, and what it gives up.
 4. **The recommendation comes last** — after both the mechanism and the options' costs, never instead of them and never before them.
+5. **No option rests on an unfinished lookup** — every "not verified", "unknown" or "may" in the option list that a cheap check can settle (no spend, no outward action) is settled before the question is sent, starting with the design document's own Load-bearing premises table. The recommendation is chosen by whether an option meets what Josh needs, never by how little it changes.
 
 #### Failure Shapes Ruled Out:
 - **The bare fork:** Two labeled options and an "I lean 1" with nothing under either.
 - **The incomplete set:** Naming two options while a third and better one goes unwritten.
+- **The workaround recommendation:** Recommending "accept it and document it" — an option that leaves a defect in place and gives Josh a habit to remember — while the real fix sits in the list marked "not verified". A defect is reported as a defect, and the fix is checked and brought. "No design change needed" is never a reason to prefer an option.
 - **The unexplained mechanism:** A question resting on machinery Josh has never seen.
 - **The buried premise:** A question whose real subject is a fact discovered mid-answer, presented as an aside rather than the thing being decided.
 - **The bundled question / multi-decision dump:** Asking 2–3 questions at once, appending bonus asks ("…also, want a body note?"), or attaching a backlog dump / trailing list of unresolved threads to a report-back or confirm turn.

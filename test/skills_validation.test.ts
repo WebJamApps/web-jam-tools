@@ -664,6 +664,14 @@ Deno.test("skills/design-issue/SKILL.md contains Decision-Readiness rule", async
   );
   assertStringIncludes(
     text,
+    '5. **No option rests on an unfinished lookup** — every "not verified", "unknown" or "may" in the option list that a cheap check can settle (no spend, no outward action) is settled before the question is sent, starting with the design document\'s own Load-bearing premises table.',
+  );
+  assertStringIncludes(
+    text,
+    '- **The workaround recommendation:** Recommending "accept it and document it" — an option that leaves a defect in place and gives Josh a habit to remember — while the real fix sits in the list marked "not verified".',
+  );
+  assertStringIncludes(
+    text,
     'The test is Josh\'s reply: if it comes back as *"I need more details to decide"* or *"I am confused"*, the question was defective, and the repair belongs in the question rather than in a follow-up patching around it.',
   );
 });
