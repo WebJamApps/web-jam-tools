@@ -1470,6 +1470,140 @@ Deno.test(
   },
 );
 
+Deno.test(
+  "prunes and replaces managed flat hooks with the same script but different arguments (web-jam-tools#1211)",
+  async () => {
+    // 1. Claude settings.json nested shape (mergeFlatHooks)
+    await withTempSettings(
+      {
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "$HOME/.claude/hooks/my-hook.sh old-arg",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      async (path) => {
+        // --check reports drift for the old argument
+        const check = await runMerge(path, [
+          "--check",
+          "--stop",
+          "$HOME/.claude/hooks/my-hook.sh new-arg",
+        ]);
+        assertEquals(check.code, 1);
+        assert(
+          check.stderr.includes(
+            "has retired Stop hook $HOME/.claude/hooks/my-hook.sh old-arg",
+          ),
+          check.stderr,
+        );
+        assert(
+          check.stderr.includes(
+            "missing Stop hook $HOME/.claude/hooks/my-hook.sh new-arg",
+          ),
+          check.stderr,
+        );
+
+        // Merge prunes old argument and replaces with new argument
+        const res = await runMerge(path, [
+          "--stop",
+          "$HOME/.claude/hooks/my-hook.sh new-arg",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed retired Stop hook $HOME/.claude/hooks/my-hook.sh old-arg",
+          ),
+          res.stdout,
+        );
+        assert(
+          res.stdout.includes(
+            "added Stop hook $HOME/.claude/hooks/my-hook.sh new-arg",
+          ),
+          res.stdout,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.hooks.Stop?.length, 1);
+        assertEquals(
+          data.hooks.Stop?.[0].hooks[0].command,
+          "$HOME/.claude/hooks/my-hook.sh new-arg",
+        );
+      },
+    );
+
+    // 2. Agy hooks.json flat shape (mergeAgyFlatHooks)
+    await withTempSettings(
+      {
+        hooks: {
+          Stop: [
+            {
+              type: "command",
+              command: "$HOME/.claude/hooks/my-hook.sh old-arg",
+            },
+          ],
+        },
+      },
+      async (path) => {
+        // --check reports drift for the old argument
+        const check = await runMerge(path, [
+          "--check",
+          "--forbid-lifecycle-hooks",
+          "--stop",
+          "$HOME/.claude/hooks/my-hook.sh new-arg",
+        ]);
+        assertEquals(check.code, 1);
+        assert(
+          check.stderr.includes(
+            "has retired Stop hook $HOME/.claude/hooks/my-hook.sh old-arg",
+          ),
+          check.stderr,
+        );
+        assert(
+          check.stderr.includes(
+            "missing Stop hook $HOME/.claude/hooks/my-hook.sh new-arg",
+          ),
+          check.stderr,
+        );
+
+        // Merge prunes old argument and replaces with new argument
+        const res = await runMerge(path, [
+          "--forbid-lifecycle-hooks",
+          "--stop",
+          "$HOME/.claude/hooks/my-hook.sh new-arg",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed retired Stop hook $HOME/.claude/hooks/my-hook.sh old-arg",
+          ),
+          res.stdout,
+        );
+        assert(
+          res.stdout.includes(
+            "added Stop hook $HOME/.claude/hooks/my-hook.sh new-arg",
+          ),
+          res.stdout,
+        );
+
+        const raw = JSON.parse(await Deno.readTextFile(path));
+        assertEquals(raw.hooks.Stop, [
+          {
+            type: "command",
+            command: "$HOME/.claude/hooks/my-hook.sh new-arg",
+          },
+        ]);
+      },
+    );
+  },
+);
+
 // --- Cross-list retraction: a rule that moved between DENY_RULES and
 // ASK_RULES must not survive as a stale copy in the array it left
 // (web-jam-tools#525) ---
