@@ -51,17 +51,22 @@ labels:
   # --- Model-tier — all 8 repos ---
   # `modelTier: true` is the machine-readable marker for "this is a model
   # label" (web-jam-tools#265). src/fix-labels/generate-model-labels.ts
-  # selects these six entries into the committed sidecar
+  # selects these nine entries into the committed sidecar
   # skills/fix-labels/model-labels.json (`deno task
   # fix-labels:generate-model-labels`, kept honest by
   # test/fix_labels_model_labels_parity.test.ts), which
   # hooks/require-model-label-on-issue-create.sh reads at runtime — that hook
   # is bash/python and the CircleCI image has no PyYAML, so it can't parse
-  # this file directly. No second hardcoded copy of the six names exists
+  # this file directly. No second hardcoded copy of the nine names exists
   # anywhere; regenerate the sidecar after editing modelTier entries here.
   - name: Haiku
     hex: "0E8A16"
     description: "Mechanical tasks: lookups, scans, single-file edits, typo/data fixes, and running test/build checks"
+    repos: all
+    modelTier: true
+  - name: Luna
+    hex: "C5DEF5"
+    description: "GPT-6 Luna at high effort: mechanical one-off fixes, scans, and small contained tasks"
     repos: all
     modelTier: true
   - name: Sonnet
@@ -109,6 +114,16 @@ labels:
   - name: Flash High
     hex: "E67E22"
     description: "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; the default lane, billed to Google rather than the constrained Anthropic budget"
+    repos: all
+    modelTier: true
+  - name: Sol
+    hex: "006B75"
+    description: "Logic- and safety-heavy coding via Codex: GPT-6.1 Sol (gpt-6.1-sol), high effort"
+    repos: all
+    modelTier: true
+  - name: Astra
+    hex: "6F42C1"
+    description: "GPT-6 Astra at high effort; kept for REAPER recording"
     repos: all
     modelTier: true
 

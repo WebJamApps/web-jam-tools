@@ -228,6 +228,27 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     byName.get("Haiku")?.description,
     "Mechanical tasks: lookups, scans, single-file edits, typo/data fixes, and running test/build checks",
   );
+  assertEquals(byName.get("Luna")?.hex, "C5DEF5");
+  assertEquals(byName.get("Luna")?.modelTier, true);
+  assertEquals(
+    byName.get("Luna")?.description,
+    "GPT-6 Luna at high effort: mechanical one-off fixes, scans, and small contained tasks",
+  );
+  assertEquals(byName.get("Luna")?.repos, "all");
+  assertEquals(byName.get("Sol")?.hex, "006B75");
+  assertEquals(byName.get("Sol")?.modelTier, true);
+  assertEquals(
+    byName.get("Sol")?.description,
+    "Logic- and safety-heavy coding via Codex: GPT-6.1 Sol (gpt-6.1-sol), high effort",
+  );
+  assertEquals(byName.get("Sol")?.repos, "all");
+  assertEquals(byName.get("Astra")?.hex, "6F42C1");
+  assertEquals(byName.get("Astra")?.modelTier, true);
+  assertEquals(
+    byName.get("Astra")?.description,
+    "GPT-6 Astra at high effort; kept for REAPER recording",
+  );
+  assertEquals(byName.get("Astra")?.repos, "all");
   assertEquals(byName.get("Sonnet")?.hex, "1D76DB");
   assertEquals(byName.get("Sonnet")?.modelTier, true);
   assertEquals(
@@ -269,11 +290,14 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Flash High")?.repos, "all");
   const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();
   assertEquals(modelTierNames, [
+    "Astra",
     "Fable",
     "Flash High",
     "Flash Med",
     "Haiku",
+    "Luna",
     "Opus",
+    "Sol",
     "Sonnet",
   ]);
   assertEquals(byName.get("parked")?.hex, "C2C2C2");
@@ -382,6 +406,45 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
       ["JaMmusic", "web-jam-back", "WebJamSocketCluster", "web-jam-tools"],
       `expected "${name}" to be scoped to exactly the 4 booking-epic repos`,
     );
+  }
+});
+
+Deno.test("Luna, Sol, Astra: missing labels are proposed with canonical values for every active repo", async () => {
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  const expectedLabels = [
+    {
+      name: "Luna",
+      hex: "C5DEF5",
+      description:
+        "GPT-6 Luna at high effort: mechanical one-off fixes, scans, and small contained tasks",
+    },
+    {
+      name: "Sol",
+      hex: "006B75",
+      description:
+        "Logic- and safety-heavy coding via Codex: GPT-6.1 Sol (gpt-6.1-sol), high effort",
+    },
+    {
+      name: "Astra",
+      hex: "6F42C1",
+      description: "GPT-6 Astra at high effort; kept for REAPER recording",
+    },
+  ];
+
+  for (const repo of allRepos(schema)) {
+    const drift = classifyRepoDrift(schema, repo, []);
+    for (const expected of expectedLabels) {
+      const proposed = findByName(drift, expected.name);
+      assertEquals(
+        [proposed?.kind, proposed?.action, proposed?.hex, proposed?.description],
+        ["missing", "create", expected.hex, expected.description],
+        `expected ${repo} to propose creating ${expected.name} with canonical color and description`,
+      );
+      assert(
+        expected.description.length <= 100,
+        `${expected.name} description exceeds GitHub's cap`,
+      );
+    }
   }
 });
 
