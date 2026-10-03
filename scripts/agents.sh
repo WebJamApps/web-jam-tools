@@ -76,6 +76,7 @@ CLAUDE_CMD="${AGENTS_CLAUDE_CMD:-claude --settings $CLAUDE_SETTINGS}"
 CODEX_CMD="${AGENTS_CODEX_CMD:-codex -c 'hooks.PermissionRequest=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$HOME/.claude/hooks/agent-alert.sh codex prompt\"}]}]' -c 'notify=[\"$HOME/.claude/hooks/agent-alert.sh\", \"codex\", \"finished\"]'}"
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
 UPDATE_CMD="${AGENTS_UPDATE_CMD:-$REPO_DIR/scripts/update-all.sh}"
+AGY_CONFIG_CMD="${AGENTS_AGY_CONFIG_CMD:-agy -p /config}"
 # agy skips the laptop's login keyring whenever any SSH_* variable is set, so a
 # session started over SSH (tablet or phone) made agy ask to log in again
 # (measured 2026-09-28, agy 1.2.12). Every tab starts without them, so the session
@@ -157,6 +158,26 @@ fi
 # A failed update must never stop the agents from starting.
 if ! bash -c "$UPDATE_CMD"; then
   echo "warning: update-all failed; starting the agents on the versions already installed" >&2
+fi
+
+# Check agy's Tool Permission setting before creating a new session (web-jam-tools#1212).
+# agy asks for approvals only under request-review; any other value or failure warns and continues.
+agy_config_out=""
+if agy_config_out=$(timeout 5 bash -c "$AGY_CONFIG_CMD" 2>/dev/null); then
+  tool_perm_line=$(printf '%s\n' "$agy_config_out" | grep -m 1 "^toolPermission" || true)
+  if [ -n "$tool_perm_line" ]; then
+    tool_perm_val=$(printf '%s\n' "$tool_perm_line" | awk -F'\t' '{print $2}')
+    if [ -z "$tool_perm_val" ]; then
+      tool_perm_val=$(printf '%s\n' "$tool_perm_line" | awk '{print $2}')
+    fi
+    if [ "$tool_perm_val" != "request-review" ]; then
+      echo "warning: agy Tool Permission is '$tool_perm_val' (expected 'request-review')" >&2
+    fi
+  else
+    echo "warning: agy Tool Permission could not be read" >&2
+  fi
+else
+  echo "warning: agy Tool Permission could not be read" >&2
 fi
 
 # Create session with tab 1: claude in Josh's home folder.
