@@ -493,7 +493,7 @@ Deno.test("installSkills installs all skills, migrates legacy backups, and prune
   });
 
   assertEquals(result.success, true);
-  assertEquals(result.skillsCount, 15);
+  assertEquals(result.skillsCount, 14);
 
   // Check legacy backups were migrated OUT of claudeDest
   let legacyExistsInClaude = false;
@@ -548,7 +548,6 @@ Deno.test("installSkills installs all skills, migrates legacy backups, and prune
     "drive-cleanup",
     "file-issue",
     "fix-labels",
-    "flash-issues",
     "handle-gmails",
     "memory-cleanup",
     "pr-review",

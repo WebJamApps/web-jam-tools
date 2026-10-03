@@ -37,7 +37,6 @@ const EXPECTED_SKILL_DIRS = [
   "drive-cleanup",
   "file-issue",
   "fix-labels",
-  "flash-issues",
   "handle-gmails",
   "memory-cleanup",
   "pr-review",
@@ -73,6 +72,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // PreToolUse guard (web-jam-tools#511) — denies Write/Edit/NotebookEdit
   // to paths outside the repository working tree.
   "block-out-of-tree-write.sh",
+  // PreToolUse guard (web-jam-tools#1141) — refuses shell command naming any
+  // of the 16 private Dropbox folders.
+  "block-private-folder-read.sh",
   // PreToolUse guard (web-jam-tools#685) — denies the four raw `gh` write
   // verbs (gh pr review/comment, gh issue comment/edit) so a dispatched
   // reviewing subagent can only reach them through the guarded
@@ -83,8 +85,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // carries a credential-shaped LITERAL, before it can be approved and
   // persisted verbatim into permissions.allow.
   "block-secret-literals.sh",
+  // Codex-only SessionStart check — Codex owns REAPER startup policy.
+  "codex-reaper-startup-check.sh",
   "feature-branch-guard.sh",
-  "flash-issues-reminder.sh",
   "fmt-push-guard.sh",
   "gh-api-guard.sh",
   "haiku-only-gmail-gate.sh",
@@ -221,6 +224,9 @@ Deno.test(
   async () => {
     const installerContent = Deno.readTextFileSync(INSTALL_HOOKS_PATH);
     const directHookScripts = extractDirectCommandHookScripts(installerContent);
+    // Codex's dedicated registration uses a stable path and WJT_SURFACE env
+    // assignment, outside the Claude/agy arrays parsed by that helper.
+    directHookScripts.add("codex-reaper-startup-check.sh");
     const trackedModes = await getGitTrackedModes(REPO_DIR);
 
     const nonExecutable: string[] = [];

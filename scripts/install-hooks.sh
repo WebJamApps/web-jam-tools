@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-hooks.sh — make this repo the single source of truth for Claude Code hooks.
+# install-hooks.sh — install this repo's Claude Code, agy, and Codex hooks.
 #
 # 1. For every *.sh under <repo>/hooks/, symlink ~/.claude/hooks/<name> -> it.
 #    Idempotent: already-correct symlinks are left alone. An existing REAL
@@ -33,6 +33,18 @@
 #    dispatched subagents (~93k and ~62k tokens, zero output) before nothing
 #    pinned the mode (web-jam-tools#705).
 #
+#    Also installs the whole "autoMode" object (AUTO_MODE_JSON below) into
+#    ~/.claude/settings.json, replacing it when it differs; --check reports
+#    drift. Its path-bearing entries are built from $HOME and this checkout's
+#    parent directory at install time, so the object is correct for the
+#    machine the installer runs on. Claude Code only.
+#
+# 3. Registers the REAPER startup check in Codex's own hooks.json, next to
+#    its active config ($CODEX_HOME or $HOME/.codex). This Codex-only check
+#    uses SessionStart source startup/resume; Claude/agy must not start it.
+#    Existing Codex hooks and trust settings are preserved. Trust is managed
+#    by Codex's /hooks UI, never bypassed or granted by this installer.
+#
 # Note: settings.json itself is intentionally NOT version-controlled in this
 # public repo (it contains Josh's permission strings); it's backed up
 # privately instead, alongside Claude Code memory (see
@@ -50,7 +62,7 @@
 # never removes or reorders any existing permissions.deny entry (hand-added
 # or from a previous run).
 #
-# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--bin-dir PATH] [--force]
+# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--codex-hooks-path PATH] [--bin-dir PATH] [--force]
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
 #                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
 #                           the symlink step without touching the real hooks dir.
@@ -70,6 +82,11 @@
 #                           unless --hooks-dir is ALSO passed (web-jam-tools#273).
 #   --agy-hooks-path PATH  Merge agy hooks into PATH instead of $HOME/.gemini/config/hooks.json
 #                           (also settable via AGY_HOOKS_PATH).
+#   --codex-hooks-path PATH Register the Codex startup check in PATH (also
+#                           settable via CODEX_HOOKS_PATH). Defaults to
+#                           $CODEX_HOME/hooks.json or $HOME/.codex/hooks.json;
+#                           with --settings-path, defaults to codex-hooks.json
+#                           alongside that isolated settings file.
 #   --agents-md-path PATH  Merge rules pointer into PATH instead of $HOME/.agents/AGENTS.md
 #                           (also settable via AGENTS_MD_PATH).
 #   --bin-dir PATH         Symlink CLI scripts into PATH instead of $HOME/.local/bin
@@ -97,6 +114,13 @@ if [ -n "${AGY_HOOKS_PATH:-}" ]; then
   AGY_HOOKS_PATH_EXPLICIT=1
 else
   AGY_HOOKS_PATH="$HOME/.gemini/config/hooks.json"
+fi
+
+CODEX_HOOKS_PATH_EXPLICIT=0
+if [ -n "${CODEX_HOOKS_PATH:-}" ]; then
+  CODEX_HOOKS_PATH_EXPLICIT=1
+else
+  CODEX_HOOKS_PATH="${CODEX_HOME:-$HOME/.codex}/hooks.json"
 fi
 
 AGENTS_MD_PATH_EXPLICIT=0
@@ -136,7 +160,7 @@ fi
 # each into the literal command string "$HOME/.claude/hooks/<name>" (expanded
 # by the shell that runs the hook, not by this installer — matches the style
 # of the hooks already wired into settings.json).
-SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh flash-issues-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh)
+SESSION_START_HOOKS=(notes-sync-reminder.sh memory-cleanup-reminder.sh backlog-groom-reminder.sh backup-refusal-reminder.sh hook-install-drift-reminder.sh permission-wildcard-drift-reminder.sh)
 
 # SessionEnd hooks this installer keeps registered in settings.json (web-jam-tools#818).
 # Same flat, no-matcher shape as SESSION_START_HOOKS and STOP_HOOKS — SessionEnd
@@ -179,6 +203,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash|mcp__.*__(issue_write|sub_issue_write)::require-approval-token-on-issue-write.sh"
   "Bash::block-raw-gh-write.sh"
   "Bash::block-backend-mutation.sh"
+  "Bash::block-private-folder-read.sh"
 )
 
 # PostToolUse hooks, same "<matcher>::<script>" shape (web-jam-tools#272).
@@ -253,9 +278,6 @@ DENY_RULES=(
   'Bash(git push -d)'
   'Bash(git push * -d *)'
   'Bash(git push * -d)'
-
-  # git push <remote> :<branch>  (empty-source colon refspec — also deletes)
-  'Bash(git push * :*)'
 
   # git push --force / -f  — plain force stays DENIED, always. It overwrites
   # whatever arrived on the remote since your last fetch, with no check.
@@ -408,7 +430,8 @@ ASK_RULES=(
   # the remote moved after your last fetch — the case where a force push
   # destroys someone else's work is structurally prevented. Plain --force
   # remains in DENY_RULES above with no prompt and no exception, as do branch
-  # deletion, empty-source refspecs, --mirror and --prune.
+  # deletion, --mirror and --prune. Empty-source colon refspecs are caught by
+  # the merge/deploy guard hook because Claude Code deny rules cannot express them.
   #
   # Origin: 2026-08-13, a rebase of a feature branch behind an open PR could
   # not be published at all — the deny rule blocked the push and no
@@ -628,6 +651,11 @@ while [ $# -gt 0 ]; do
       AGY_HOOKS_PATH_EXPLICIT=1
       shift 2
       ;;
+    --codex-hooks-path)
+      CODEX_HOOKS_PATH="$2"
+      CODEX_HOOKS_PATH_EXPLICIT=1
+      shift 2
+      ;;
     --agents-md-path)
       AGENTS_MD_PATH="$2"
       AGENTS_MD_PATH_EXPLICIT=1
@@ -677,6 +705,10 @@ fi
 
 if [ "$AGY_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
   AGY_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/hooks.json"
+fi
+
+if [ "$CODEX_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  CODEX_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/codex-hooks.json"
 fi
 
 if [ "$AGENTS_MD_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
@@ -761,10 +793,83 @@ STATUS_LINE_DEST="$HOOKS_DEST/statusline.sh"
 STATUS_LINE_COMMAND="$STATUS_LINE_DEST"
 merge_status_line_args=("$STATUS_LINE_COMMAND")
 
+# --- agent-alert.sh (web-jam-tools#1176) ---
+[ -e "$REPO_DIR/scripts/agent-alert.sh" ] || { echo "error: $REPO_DIR/scripts/agent-alert.sh not found" >&2; exit 1; }
+ALERT_DEST="$HOOKS_DEST/agent-alert.sh"
+# shellcheck disable=SC2016
+ALERT_AGY_COMMAND='$HOME/.claude/hooks/agent-alert.sh agy finished'
+merge_agy_stop_args=("$ALERT_AGY_COMMAND")
+
 # --- permissions.defaultMode (web-jam-tools#705) ---
 # Same Claude-Code-only scoping as merge_status_line_args above: passed only
 # to the $SETTINGS_PATH invocations below, never to $AGY_HOOKS_PATH.
 merge_default_mode_args=("$DEFAULT_MODE")
+
+# --- autoMode (web-jam-tools#1189 follow-up) ---
+# The "autoMode" section of Claude Code's settings.json (auto-mode classifier:
+# environment prose, allow, soft_deny; "$defaults" keeps the built-in rules).
+# Installed as ONE whole object: replaced when it differs, no other key
+# touched. Claude Code ONLY, like statusLine/defaultMode: passed solely to the
+# $SETTINGS_PATH invocations, never to agy's hooks.json. Quoted heredoc, so
+# "$defaults" is never expanded by the shell.
+#
+# Because the object is replaced as a whole, it must be true of the machine
+# the installer runs on. The two placeholders are filled in below the heredoc:
+#   __HOME__       $HOME
+#   __REPOS_DIR__  the directory holding this checkout (~/WebJamApps on
+#                  Josh's laptop), i.e. the parent of $REPO_DIR
+# To change autoMode, edit this block and re-run the installer; a hand edit
+# to settings.json is reported by --check and overwritten by the next run.
+read -r -d '' AUTO_MODE_JSON <<'AUTO_MODE_JSON_EOF' || true
+{
+  "soft_deny": [
+    "$defaults",
+    "Bash(heroku apps:destroy*)",
+    "Bash(rclone purge*)"
+  ],
+  "environment": [
+    "### Org-wide",
+    "**Organization**: None configured",
+    "**Cloud provider(s)**: None configured",
+    "**Repository visibility**: Not queryable here (no origin remote on this checkout — repo path __HOME__ has no remotes and 0 tracked files); assume private until confirmed",
+    "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
+    "**Secrets management**: None configured",
+    "**Default / protected branches**: Not queryable here (origin/HEAD unset, no remotes)",
+    "**CI/CD deploy targets**: None configured",
+    "**Network posture**: None configured",
+    "**Source control**: The trusted repo and its remote(s) only (no additional orgs configured) — as scoped by the Trusted repo and Repository visibility entries above",
+    "**Trusted internal domains**: None configured",
+    "**Trusted cloud buckets**: None configured — the bucket names found in config (my_bucket, my-bucket, bucket, bucket-name, etc.) are generic/placeholder-shaped names spread across many files but not corroborated by any usage/transcript evidence, so none are adopted",
+    "**Key internal services**: None configured",
+    "**Internal package registry**: None configured",
+    "**Sensitive data locations & audiences**: any file or store holding personal data, confidential business data, credentials, regulated data, or similarly sensitive material; preserve exact handles when known and share only with audiences cleared at the [named+specifics] bar; this home directory contains many .env/.env.example/credentials files across WebJamApps/* and Dropbox/* project checkouts — treat all as sensitive",
+    "**Data retention / declassification**: None configured",
+    "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment (hyphen/underscore/dot-delimited — e.g. matches `prod-db`, not `producer`); note tsconfig.prod.json and scripts/smoke-prod-socket.mjs paths exist under several WebJamApps/* checkouts",
+    "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
+    "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
+    "### User-specific",
+    "**Primary use of Claude Code**: software development — multi-repo work across WebJamApps (JaMmusic, CollegeLutheran, AppersonAuto, web-jam-back, web-jam-tools, WebJamSocketCluster, TimShermanMusic) plus AI/model-routing operations (Opus/Sonnet/Haiku/Flash/agy delegation)",
+    "**Trusted repo**: every git repo under __REPOS_DIR__/ (GitHub org WebJamApps) and every worktree of them under /tmp/. Sessions start in __HOME__ and routinely work across these repos.",
+    "**Org-specific CLIs**: deno, heroku, agy, gio, gh, rclone, deployctl (seen in this project's usage and/or shell history)",
+    "**routine under**: no <user>/ prefix qualifiers found in evidence"
+  ],
+  "allow": [
+    "$defaults",
+    "Agent PR branches: creating worktrees on, committing to, and plain (non-force) pushing to any non-main/dev branch of a WebJamApps repo, including another agent's open PR branch (agy/*, claude/*, codex/*, fix/*), is ordinary delegated work."
+  ]
+}
+AUTO_MODE_JSON_EOF
+# Escape a path for use inside a JSON string (backslash, then double quote).
+json_escape_path() {
+  local s="${1//\\/\\\\}"
+  printf '%s' "${s//\"/\\\"}"
+}
+AUTO_MODE_HOME="$(json_escape_path "$HOME")"
+AUTO_MODE_REPOS_DIR="$(json_escape_path "$(dirname "$REPO_DIR")")"
+# The replacement is quoted so a "&" in a path stays literal (bash >= 5.2).
+AUTO_MODE_JSON=${AUTO_MODE_JSON//__HOME__/"$AUTO_MODE_HOME"}
+AUTO_MODE_JSON=${AUTO_MODE_JSON//__REPOS_DIR__/"$AUTO_MODE_REPOS_DIR"}
+merge_auto_mode_args=("$AUTO_MODE_JSON")
 
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432, matcher-by-
 # -own-tool-names regression fixed by web-jam-tools#1036) ---
@@ -833,6 +938,12 @@ merge_deny_args=("${DENY_RULES[@]}")
 merge_ask_args=("${ASK_RULES[@]}")
 merge_allow_args=("${ALLOW_RULES[@]}")
 
+# Codex-only: its SessionStart payload/output contract differs from Claude's
+# and agy's. Register on the real Codex surface, never their lifecycle arrays.
+# Use the stable installed hook location, including --hooks-dir overrides.
+[ -e "$HOOKS_SRC/codex-reaper-startup-check.sh" ] || { echo "error: $HOOKS_SRC/codex-reaper-startup-check.sh not found" >&2; exit 1; }
+CODEX_REAPER_HOOK_DEST="$HOOKS_DEST/codex-reaper-startup-check.sh"
+
 if [ "$CHECK_MODE" = "1" ]; then
   DRIFT=0
   for src in "$HOOKS_SRC"/*.sh; do
@@ -863,6 +974,11 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if [ ! -L "$ALERT_DEST" ] || [ "$(readlink -f "$ALERT_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agent-alert.sh")" ]; then
+    echo "drift: agent-alert script is not linked at $ALERT_DEST" >&2
+    DRIFT=1
+  fi
+
   if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
     AGENTS_DEST="$BIN_DIR/agents"
     if [ ! -L "$AGENTS_DEST" ] || [ "$(readlink -f "$AGENTS_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agents.sh")" ]; then
@@ -871,11 +987,11 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}"; then
     DRIFT=1
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
     DRIFT=1
   fi
 
@@ -883,6 +999,9 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if ! deno run --allow-read="$CODEX_HOOKS_PATH" "$REPO_DIR/scripts/merge-codex-reaper-hook.ts" "$CODEX_HOOKS_PATH" "$CODEX_REAPER_HOOK_DEST" --check; then
+    DRIFT=1
+  fi
 
   if [ "$DRIFT" -ne 0 ]; then
     echo "error: drift detected" >&2
@@ -968,6 +1087,18 @@ else
   echo "statusline.sh: linked (new)"
 fi
 
+# --- Agent-alert script symlink (web-jam-tools#1176) ---
+if [ -L "$ALERT_DEST" ] && [ "$(readlink -f "$ALERT_DEST")" = "$(readlink -f "$REPO_DIR/scripts/agent-alert.sh")" ]; then
+  echo "agent-alert.sh: ok (already linked)"
+elif [ -e "$ALERT_DEST" ] || [ -L "$ALERT_DEST" ]; then
+  mv "$ALERT_DEST" "$ALERT_DEST.bak-$STAMP"
+  ln -s "$REPO_DIR/scripts/agent-alert.sh" "$ALERT_DEST"
+  echo "agent-alert.sh: linked (previous version backed up to agent-alert.sh.bak-$STAMP)"
+else
+  ln -s "$REPO_DIR/scripts/agent-alert.sh" "$ALERT_DEST"
+  echo "agent-alert.sh: linked (new)"
+fi
+
 # --- CLI tools symlink (~/.local/bin/agents, web-jam-tools#1174) ---
 # Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default).
 # Only linked when targeting the real default destination (HOOKS_DEST_IS_DEFAULT=1)
@@ -995,8 +1126,11 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}"
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH"
+
+# The worktree guard above has run before this or any other installer write.
+deno run --allow-read="$CODEX_HOOKS_PATH" --allow-write="$(dirname "$CODEX_HOOKS_PATH")" "$REPO_DIR/scripts/merge-codex-reaper-hook.ts" "$CODEX_HOOKS_PATH" "$CODEX_REAPER_HOOK_DEST"

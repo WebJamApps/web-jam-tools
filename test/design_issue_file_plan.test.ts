@@ -2,8 +2,10 @@
 // Unit tests for `src/design-issue/file_plan.ts` and `deno task design:file-plan` (web-jam-tools#748).
 
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import {
-  filePlan,
+  filePlan as realFilePlan,
+  type FilePlanOptions,
   getIssueDatabaseId,
   linkIssueDependency,
   parsePlanFile,
@@ -13,6 +15,15 @@ import {
 import type { ApprovalCheckResult, ExecDeps, IssueData } from "../src/create-issue/lib.ts";
 
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
+
+// Authored-by footer (web-jam-tools#1205): supply a valid author and a fake
+// roster probe so the tests below stay about their own behavior.
+const filePlan = (options: FilePlanOptions) =>
+  realFilePlan({
+    author: TEST_AUTHOR,
+    ...options,
+    deps: options.deps ? withPassingProbe(options.deps) : options.deps,
+  });
 
 Deno.test("parsePlanJson parses an object with epic and children", () => {
   const json = JSON.stringify({
@@ -308,6 +319,46 @@ Deno.test("filePlan files epic first, then children attached to epic, then links
   // Child 1 is issue #901 with db id 901 * 1000 + 42 = 901042
   assertEquals(depLinkCmd?.includes("-F"), true);
   assertEquals(depLinkCmd?.includes("issue_id=901042"), true);
+
+  // Authored-by footer (web-jam-tools#1205): every filed body ends with the footer.
+  const createCmds = executedCmds.filter((c) => c[1] === "issue" && c[2] === "create");
+  assertEquals(createCmds.length, 3);
+  for (const c of createCmds) {
+    assertEquals(
+      c[c.indexOf("--body") + 1].trimEnd().endsWith(`🤖 Authored by ${TEST_AUTHOR}`),
+      true,
+    );
+  }
+});
+
+Deno.test("filePlan refuses without --author before filing anything", async () => {
+  const executedCmds: string[][] = [];
+  const deps: ExecDeps = {
+    runCmd(cmd: string[]) {
+      executedCmds.push(cmd);
+      return Promise.resolve(
+        cmd[1] === "--check-author"
+          ? {
+            code: 1,
+            stdout: "",
+            stderr: "ERROR: --author '' does not name a model on the roster",
+          }
+          : { code: 0, stdout: "{}", stderr: "" },
+      );
+    },
+    readFileText: (path) => Deno.readTextFile(path),
+  };
+  await assertRejects(
+    () =>
+      realFilePlan({
+        planPath: "test/fixtures/design-issue/fixture-plan.json",
+        deps,
+        approvalCheck: APPROVE_ALL,
+      }),
+    Error,
+    "--author is required",
+  );
+  assertEquals(executedCmds.filter((c) => c[0] === "gh").length, 0);
 });
 
 Deno.test("filePlan enforces Gate 2 approval tokens on epic and child titles", async () => {

@@ -53,9 +53,23 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   let explicitVenue: string | undefined;
   let holdUntil: string | undefined;
   let bookedThroughDate: string | undefined;
-  let tweakVenue: string | undefined;
-  let customBody: string | undefined;
-  let customIntro: string | undefined;
+  const tweaks: VenueTweak[] = [];
+  let currentTweakVenue: string | undefined;
+  let currentCustomBody: string | undefined;
+  let currentCustomIntro: string | undefined;
+
+  const flushTweak = () => {
+    if (currentTweakVenue) {
+      tweaks.push({
+        venueName: currentTweakVenue,
+        customBody: currentCustomBody,
+        customIntro: currentCustomIntro,
+      });
+      currentTweakVenue = undefined;
+      currentCustomBody = undefined;
+      currentCustomIntro = undefined;
+    }
+  };
   let confirmAll = false;
   let recordGate2 = false;
   let approver: string | undefined;
@@ -83,30 +97,32 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
       mode = "gate2";
     } else if (lower === "--tweak-venue" || lower === "--tweak") {
       if (mode === "preview") mode = "gate2";
+      flushTweak();
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         i++;
-        tweakVenue = args[i].trim();
+        currentTweakVenue = args[i].trim();
       }
     } else if (lower.startsWith("--tweak-venue=") || lower.startsWith("--tweak=")) {
       if (mode === "preview") mode = "gate2";
+      flushTweak();
       const eqIdx = arg.indexOf("=");
-      tweakVenue = arg.slice(eqIdx + 1).trim();
+      currentTweakVenue = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--custom-body") {
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         i++;
-        customBody = args[i].trim();
+        currentCustomBody = args[i].trim();
       }
     } else if (lower.startsWith("--custom-body=")) {
       const eqIdx = arg.indexOf("=");
-      customBody = arg.slice(eqIdx + 1).trim();
+      currentCustomBody = arg.slice(eqIdx + 1).trim();
     } else if (lower === "--custom-intro") {
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         i++;
-        customIntro = args[i].trim();
+        currentCustomIntro = args[i].trim();
       }
     } else if (lower.startsWith("--custom-intro=")) {
       const eqIdx = arg.indexOf("=");
-      customIntro = arg.slice(eqIdx + 1).trim();
+      currentCustomIntro = arg.slice(eqIdx + 1).trim();
     } else if (
       lower === "--approve-all" ||
       lower === "--approve-drafts" ||
@@ -245,14 +261,10 @@ export function parseBookGigArgs(args: string[]): ParsedBookGigArgs {
   const resNotes = notes ? notes.trim() : undefined;
   const resBatchId = batchId ? batchId.trim() : undefined;
 
-  const tweaks: VenueTweak[] = [];
-  if (tweakVenue) {
-    tweaks.push({
-      venueName: tweakVenue,
-      customBody,
-      customIntro,
-    });
-  }
+  flushTweak();
+  const tweakVenue = tweaks[0]?.venueName;
+  const customBody = tweaks[0]?.customBody;
+  const customIntro = tweaks[0]?.customIntro;
   const resTweaks = tweaks.length > 0 ? tweaks : undefined;
   const resConfirmAll = confirmAll ? true : undefined;
 

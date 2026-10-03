@@ -50,21 +50,47 @@ export async function fetchCandidates(
         candidates = (data as CandidateVenue[]).map((c) => ({
           ...c,
           isExcluded: c.isExcluded ?? false,
+          targetWeekend: options.weekend,
+          reason: {
+            ...c.reason,
+            targetWeekend: options.weekend,
+          },
         }));
       } else if (data && Array.isArray(data.candidates)) {
         candidates = (data.candidates as CandidateVenue[]).map((c) => ({
           ...c,
           isExcluded: c.isExcluded ?? false,
+          targetWeekend: options.weekend,
+          reason: {
+            ...c.reason,
+            targetWeekend: options.weekend,
+          },
         }));
       }
       if (data && Array.isArray(data.held)) {
         candidates.push(
-          ...(data.held as CandidateVenue[]).map((c) => ({ ...c, isExcluded: true })),
+          ...(data.held as CandidateVenue[]).map((c) => ({
+            ...c,
+            isExcluded: true,
+            targetWeekend: options.weekend,
+            reason: {
+              ...c.reason,
+              targetWeekend: options.weekend,
+            },
+          })),
         );
       }
       if (data && Array.isArray(data.excluded)) {
         candidates.push(
-          ...(data.excluded as CandidateVenue[]).map((c) => ({ ...c, isExcluded: true })),
+          ...(data.excluded as CandidateVenue[]).map((c) => ({
+            ...c,
+            isExcluded: true,
+            targetWeekend: options.weekend,
+            reason: {
+              ...c.reason,
+              targetWeekend: options.weekend,
+            },
+          })),
         );
       }
     } else {
@@ -86,6 +112,26 @@ export async function fetchCandidates(
         for (const v of venues) {
           if (v && v._id) allVenuesMap.set(String(v._id), v as CandidateVenue);
         }
+
+        // Enrich existing candidates with venue details (bookingStatus, nextGig, lastGig, distanceKm)
+        for (const c of candidates) {
+          const v = allVenuesMap.get(String(c._id));
+          if (v) {
+            if (v.bookingStatus && v.bookingStatus !== "booking") {
+              c.bookingStatus = v.bookingStatus;
+            }
+            if (v.nextGig && !c.nextGig) {
+              c.nextGig = v.nextGig;
+            }
+            if (v.lastGig && !c.lastGig) {
+              c.lastGig = v.lastGig;
+            }
+            if (typeof v.distanceKm === "number" && c.distanceKm === undefined) {
+              c.distanceKm = v.distanceKm;
+            }
+          }
+        }
+
         const candidateIds = new Set(candidates.map((c) => String(c._id)));
         const nowMs = Date.now();
         const weekendStartMs = new Date(options.weekend.start).getTime();
@@ -94,19 +140,22 @@ export async function fetchCandidates(
           if (!v || !v._id || candidateIds.has(String(v._id))) continue;
           if (v.status === "archived") continue;
 
-          // 1. Seasonal Hold: active resumeBooking in the future
+          // 1. Contact Hold: active resumeBooking in the future
           if (v.resumeBooking) {
             const rbDate = new Date(v.resumeBooking);
             if (!Number.isNaN(rbDate.getTime()) && rbDate.getTime() > nowMs) {
+              const holdBadge = `Contact Hold: Until ${formatMonthYear(rbDate)}`;
               candidates.push({
                 ...v,
                 isExcluded: true,
-                statusBadge: `[Seasonal Hold: ${formatMonthYear(rbDate)}]`,
+                statusBadge: holdBadge,
                 exclusionReason: "seasonal-hold",
+                targetWeekend: options.weekend,
                 reason: {
                   resumeBooking: v.resumeBooking,
-                  statusBadge: `[Seasonal Hold: ${formatMonthYear(rbDate)}]`,
+                  statusBadge: holdBadge,
                   exclusionReason: "seasonal-hold",
+                  targetWeekend: options.weekend,
                 },
               });
               candidateIds.add(String(v._id));
@@ -114,19 +163,22 @@ export async function fetchCandidates(
             }
           }
 
-          // 1b. Seasonal Hold: bookedThrough on or after weekend start
+          // 1b. Calendar Limit: bookedThrough on or after weekend start
           if (v.bookedThrough) {
             const btDate = new Date(v.bookedThrough);
             if (!Number.isNaN(btDate.getTime()) && btDate.getTime() >= weekendStartMs) {
+              const bookedBadge = `Booked Through: ${formatMonthYear(btDate)}`;
               candidates.push({
                 ...v,
                 isExcluded: true,
-                statusBadge: `[Seasonal Hold: ${formatMonthYear(btDate)}]`,
+                statusBadge: bookedBadge,
                 exclusionReason: "seasonal-hold",
+                targetWeekend: options.weekend,
                 reason: {
                   bookedThrough: v.bookedThrough,
-                  statusBadge: `[Seasonal Hold: ${formatMonthYear(btDate)}]`,
+                  statusBadge: bookedBadge,
                   exclusionReason: "seasonal-hold",
+                  targetWeekend: options.weekend,
                 },
               });
               candidateIds.add(String(v._id));
@@ -141,11 +193,11 @@ export async function fetchCandidates(
             candidates.push({
               ...v,
               isExcluded: true,
-              statusBadge: "[Direct Chat Active]",
+              statusBadge: "Direct Chat Active",
               exclusionReason: "direct-chat",
               reason: {
                 activeDirectChat: true,
-                statusBadge: "[Direct Chat Active]",
+                statusBadge: "Direct Chat Active",
                 exclusionReason: "direct-chat",
               },
             });
@@ -172,14 +224,14 @@ export async function fetchCandidates(
             candidates.push({
               ...v,
               isExcluded: true,
-              statusBadge: `[Gig Spacing: ${gFormatted} Show]`,
+              statusBadge: `Gig Spacing: ${gFormatted} Show`,
               exclusionReason: "gig-spacing",
               conflictingGigDate: conflictingGig.datetime,
               reason: {
                 conflictingGigDate: conflictingGig.datetime,
                 lastGigDate: conflictingGig.datetime,
                 gigIntervalMonths,
-                statusBadge: `[Gig Spacing: ${gFormatted} Show]`,
+                statusBadge: `Gig Spacing: ${gFormatted} Show`,
                 exclusionReason: "gig-spacing",
               },
             });
@@ -243,7 +295,7 @@ export async function fetchCandidates(
         if (matchesWeekend) {
           const formatted = formatMonthDay(actionDate);
           const badgeAction = isReplied ? "Replied" : "Sent";
-          const badgeText = `[Cooldown Active: ${badgeAction} ${formatted}]`;
+          const badgeText = `Cooldown Active: ${badgeAction} ${formatted}`;
           const isoDate = actionDate.toISOString();
 
           const existing = candidates.find((c) => String(c._id) === String(camp.venueId));
@@ -443,15 +495,32 @@ export function badgeCssToExclusionReason(cssClass: string): ExclusionReason | u
 }
 
 /**
+ * Normalizes an eligible candidate spacing badge from legacy 'clear — ...' to 'Sending — ...'.
+ */
+export function normalizeEligibleBadge(badge: string): string {
+  if (/^clear\s*[—–-]\s*/i.test(badge)) {
+    return badge.replace(/^clear\s*[—–-]\s*/i, "Sending — ");
+  }
+  if (/^clear$/i.test(badge.trim())) {
+    return "Sending";
+  }
+  return badge;
+}
+
+/**
  * Identify eligibility status badge and exclusion reasoning for a candidate venue
  */
 export function identifyCandidateBadge(
   v: CandidateVenue,
   referenceDate: Date = new Date(),
+  targetWeekend?: TargetWeekend | { start: string; end: string } | Date,
 ): CandidateBadgeInfo {
   if (v.statusBadge) {
     const sb = v.statusBadge;
-    if (sb.includes("Seasonal Hold") || sb.includes("Hold:")) {
+    if (
+      sb.includes("Seasonal Hold") || sb.includes("Hold:") ||
+      sb.includes("Booked Through:") || sb.includes("Contact Hold:")
+    ) {
       return { badge: sb, cssClass: "badge-seasonal-hold", isExcluded: true };
     }
     if (sb.includes("Gig Spacing") || sb.includes("Spacing:")) {
@@ -475,26 +544,38 @@ export function identifyCandidateBadge(
     if (sb.startsWith("Returning")) {
       return { badge: sb, cssClass: "badge-returning", isExcluded: false };
     }
-    return { badge: sb, cssClass: "badge-eligible", isExcluded: false };
+    return { badge: normalizeEligibleBadge(sb), cssClass: "badge-eligible", isExcluded: false };
   }
 
   if (v.exclusionReason === "no-booking-email") {
-    return { badge: "[No Booking Email]", cssClass: "badge-no-booking-email", isExcluded: true };
+    return { badge: "No Booking Email", cssClass: "badge-no-booking-email", isExcluded: true };
   }
   if (v.exclusionReason === "out-of-state") {
-    return { badge: "[Out of State]", cssClass: "badge-out-of-state", isExcluded: true };
+    return { badge: "Out of State", cssClass: "badge-out-of-state", isExcluded: true };
   }
   if (v.exclusionReason === "outside-target-area") {
     return {
-      badge: "[Outside Target Area]",
+      badge: "Outside Target Area",
       cssClass: "badge-outside-target-area",
       isExcluded: true,
     };
   }
 
   const nowMs = referenceDate.getTime();
+  const weekendOpt = targetWeekend ?? v.targetWeekend ?? v.reason?.targetWeekend;
+  let targetWeekendStartMs: number | undefined;
+  if (weekendOpt) {
+    if (weekendOpt instanceof Date) {
+      targetWeekendStartMs = weekendOpt.getTime();
+    } else if (typeof weekendOpt.start === "string") {
+      const parsedStart = new Date(weekendOpt.start).getTime();
+      if (!Number.isNaN(parsedStart)) {
+        targetWeekendStartMs = parsedStart;
+      }
+    }
+  }
 
-  // 1. Seasonal Hold: venues with active resumeBooking in the future
+  // 1. Contact Hold: venues with active resumeBooking in the future
   const resumeBookingVal = v.resumeBooking ?? v.reason?.resumeBooking;
   if (resumeBookingVal) {
     const rDate = typeof resumeBookingVal === "string"
@@ -502,21 +583,23 @@ export function identifyCandidateBadge(
       : resumeBookingVal;
     if (!Number.isNaN(rDate.getTime()) && rDate.getTime() > nowMs) {
       return {
-        badge: `[Seasonal Hold: ${formatMonthYear(rDate)}]`,
+        badge: `Contact Hold: Until ${formatMonthYear(rDate)}`,
         cssClass: "badge-seasonal-hold",
         isExcluded: true,
       };
     }
   }
 
+  // 1b. Calendar Limit: venues with bookedThrough on or after target weekend
   const bookedThroughVal = v.bookedThrough ?? v.reason?.bookedThrough;
   if (bookedThroughVal) {
     const btDate = typeof bookedThroughVal === "string"
       ? new Date(bookedThroughVal)
       : bookedThroughVal;
-    if (!Number.isNaN(btDate.getTime()) && btDate.getTime() > nowMs) {
+    const comparisonMs = targetWeekendStartMs ?? nowMs;
+    if (!Number.isNaN(btDate.getTime()) && btDate.getTime() >= comparisonMs) {
       return {
-        badge: `[Seasonal Hold: ${formatMonthYear(btDate)}]`,
+        badge: `Booked Through: ${formatMonthYear(btDate)}`,
         cssClass: "badge-seasonal-hold",
         isExcluded: true,
       };
@@ -524,7 +607,7 @@ export function identifyCandidateBadge(
   }
 
   if (v.exclusionReason === "seasonal-hold") {
-    return { badge: "[Seasonal Hold]", cssClass: "badge-seasonal-hold", isExcluded: true };
+    return { badge: "Seasonal Hold", cssClass: "badge-seasonal-hold", isExcluded: true };
   }
 
   // 2. Gig Spacing: venues excluded by the ±2 month gig window
@@ -532,7 +615,7 @@ export function identifyCandidateBadge(
   if (conflictingGigDate) {
     const formatted = formatMonthDay(conflictingGigDate);
     return {
-      badge: `[Gig Spacing: ${formatted} Show]`,
+      badge: `Gig Spacing: ${formatted} Show`,
       cssClass: "badge-gig-spacing",
       isExcluded: true,
     };
@@ -540,7 +623,7 @@ export function identifyCandidateBadge(
   if (v.exclusionReason === "gig-spacing" || v.reason?.exclusionReason?.includes("Gig Spacing")) {
     const formatted = v.reason?.lastGigDate ? formatMonthDay(v.reason.lastGigDate) : "";
     return {
-      badge: formatted ? `[Gig Spacing: ${formatted} Show]` : "[Gig Spacing Show]",
+      badge: formatted ? `Gig Spacing: ${formatted} Show` : "Gig Spacing Show",
       cssClass: "badge-gig-spacing",
       isExcluded: true,
     };
@@ -554,7 +637,7 @@ export function identifyCandidateBadge(
     const match = v.reason.spacingNote.match(/\b([A-Za-z]{3}\s+\d{1,2}|\d{4}-\d{2}-\d{2})\b/);
     const formatted = match ? formatMonthDay(match[1]) : "";
     return {
-      badge: formatted ? `[Gig Spacing: ${formatted} Show]` : `[${v.reason.spacingNote}]`,
+      badge: formatted ? `Gig Spacing: ${formatted} Show` : v.reason.spacingNote,
       cssClass: "badge-gig-spacing",
       isExcluded: true,
     };
@@ -567,7 +650,7 @@ export function identifyCandidateBadge(
   ) {
     const formatted = formatMonthDay(v.reason.lastGigDate);
     return {
-      badge: `[Gig Spacing: ${formatted} Show]`,
+      badge: `Gig Spacing: ${formatted} Show`,
       cssClass: "badge-gig-spacing",
       isExcluded: true,
     };
@@ -585,7 +668,7 @@ export function identifyCandidateBadge(
     (v.outreachEligible === false && hasDirectChatNotes)
   ) {
     return {
-      badge: "[Direct Chat Active]",
+      badge: "Direct Chat Active",
       cssClass: "badge-direct-chat",
       isExcluded: true,
     };
@@ -596,7 +679,7 @@ export function identifyCandidateBadge(
   if (cooldownRepliedVal) {
     const formatted = formatMonthDay(cooldownRepliedVal);
     return {
-      badge: `[Cooldown Active: Replied ${formatted}]`,
+      badge: `Cooldown Active: Replied ${formatted}`,
       cssClass: "badge-cooldown",
       isExcluded: true,
     };
@@ -608,7 +691,7 @@ export function identifyCandidateBadge(
   if (cooldownSentVal) {
     const formatted = formatMonthDay(cooldownSentVal);
     return {
-      badge: `[Cooldown Active: Sent ${formatted}]`,
+      badge: `Cooldown Active: Sent ${formatted}`,
       cssClass: "badge-cooldown",
       isExcluded: true,
     };
@@ -622,7 +705,7 @@ export function identifyCandidateBadge(
       if (diffMs >= 0 && diffMs <= sevenDaysMs) {
         const formatted = formatMonthDay(sentDate);
         return {
-          badge: `[Cooldown Active: Sent ${formatted}]`,
+          badge: `Cooldown Active: Sent ${formatted}`,
           cssClass: "badge-cooldown",
           isExcluded: true,
         };
@@ -631,7 +714,7 @@ export function identifyCandidateBadge(
   }
   if (v.exclusionReason === "cooldown") {
     return {
-      badge: "[Cooldown Active]",
+      badge: "Cooldown Active",
       cssClass: "badge-cooldown",
       isExcluded: true,
     };
@@ -665,7 +748,7 @@ export function identifyCandidateBadge(
   }
 
   return {
-    badge: v.reason?.spacingNote || "New",
+    badge: normalizeEligibleBadge(v.reason?.spacingNote || "New"),
     cssClass: "badge-eligible",
     isExcluded: false,
   };
@@ -677,11 +760,15 @@ export function identifyCandidateBadge(
 export function filterAndRankCandidates(
   candidates: CandidateVenue[],
   location?: TargetLocation,
-  options?: { referenceDate?: Date },
+  options?: {
+    referenceDate?: Date;
+    targetWeekend?: TargetWeekend | { start: string; end: string } | Date;
+  },
 ): CandidateVenue[] {
   if (!candidates || candidates.length === 0) return [];
   const targetLoc = location || getDefaultLocation();
   const refDate = options?.referenceDate ?? new Date();
+  const targetWeekend = options?.targetWeekend;
 
   const targetCities = (targetLoc.cities && targetLoc.cities.length > 0)
     ? targetLoc.cities.map((c) => c.toLowerCase())
@@ -699,16 +786,16 @@ export function filterAndRankCandidates(
 
   for (const v of candidates) {
     // Populate granular status badge and reasoning on shallow-cloned venue (immutability)
-    const badgeInfo = identifyCandidateBadge(v, refDate);
+    const badgeInfo = identifyCandidateBadge(v, refDate, targetWeekend);
     let isExcludedVenue = Boolean(v.isExcluded || badgeInfo.isExcluded);
     let reasonFromBadge = badgeCssToExclusionReason(badgeInfo.cssClass);
-    let resolvedStatusBadge = v.statusBadge || badgeInfo.badge;
+    let resolvedStatusBadge = normalizeEligibleBadge(v.statusBadge || badgeInfo.badge);
 
     // Check no-booking-email: in-area or non-excluded venues missing email
     if (!isExcludedVenue && (!v.email || !v.email.trim())) {
       isExcludedVenue = true;
       reasonFromBadge = "no-booking-email";
-      resolvedStatusBadge = "[No Booking Email]";
+      resolvedStatusBadge = "No Booking Email";
     }
 
     const resolvedExclusionReason = v.exclusionReason ||
@@ -718,15 +805,17 @@ export function filterAndRankCandidates(
       ...v,
       statusBadge: resolvedStatusBadge,
       isExcluded: isExcludedVenue,
+      targetWeekend: v.targetWeekend ?? targetWeekend,
       ...(resolvedExclusionReason ? { exclusionReason: resolvedExclusionReason } : {}),
       reason: {
         ...v.reason,
         statusBadge: resolvedStatusBadge,
+        targetWeekend: v.reason?.targetWeekend ?? targetWeekend,
         ...(isExcludedVenue
           ? {
             exclusionReason: v.reason?.exclusionReason ||
               (resolvedExclusionReason === "no-booking-email"
-                ? "[No Booking Email]"
+                ? "No Booking Email"
                 : badgeInfo.badge),
           }
           : {}),
@@ -754,11 +843,11 @@ export function filterAndRankCandidates(
         ...vCopy,
         isExcluded: true,
         exclusionReason: "out-of-state",
-        statusBadge: "[Out of State]",
+        statusBadge: "Out of State",
         reason: {
           ...vCopy.reason,
           exclusionReason: "out-of-state",
-          statusBadge: "[Out of State]",
+          statusBadge: "Out of State",
         },
       };
       excludedMatches.push(outOfStateVenue);
@@ -816,7 +905,9 @@ export function filterAndRankCandidates(
       (vCopy.isExcluded || vCopy.exclusionReason) &&
         vCopy.exclusionReason !== "outside-target-area" &&
         vCopy.exclusionReason !== "out-of-state" &&
+        vCopy.statusBadge !== "Outside Target Area" &&
         vCopy.statusBadge !== "[Outside Target Area]" &&
+        vCopy.statusBadge !== "Out of State" &&
         vCopy.statusBadge !== "[Out of State]",
     );
 
@@ -824,7 +915,7 @@ export function filterAndRankCandidates(
       ...vCopy,
       isExcluded: true,
       exclusionReason: hasPreExistingExclusion ? vCopy.exclusionReason : "outside-target-area",
-      statusBadge: hasPreExistingExclusion ? vCopy.statusBadge : "[Outside Target Area]",
+      statusBadge: hasPreExistingExclusion ? vCopy.statusBadge : "Outside Target Area",
       reason: {
         ...vCopy.reason,
         exclusionReason: hasPreExistingExclusion
@@ -832,7 +923,7 @@ export function filterAndRankCandidates(
           : "outside-target-area",
         statusBadge: hasPreExistingExclusion
           ? (vCopy.reason?.statusBadge || vCopy.statusBadge)
-          : "[Outside Target Area]",
+          : "Outside Target Area",
       },
     };
     excludedMatches.push(outsideAreaVenue);
@@ -892,14 +983,16 @@ export function renderCandidateTable(
     const email = (c.email || "—").slice(0, 24).padEnd(24);
 
     const badgeInfo = identifyCandidateBadge(c, refDate);
-    let rawBadge = c.statusBadge || badgeInfo.badge;
+    let rawBadge = normalizeEligibleBadge(c.statusBadge || badgeInfo.badge);
     if (
       (c.isExcluded || !isPitchableCandidate(c)) &&
-      (rawBadge === "New" || !rawBadge.startsWith("["))
+      (rawBadge === "New" || rawBadge.startsWith("Clear") || rawBadge.startsWith("Sending") ||
+        rawBadge.startsWith("Returning") ||
+        rawBadge === "no gigs yet")
     ) {
-      rawBadge = badgeInfo.badge.startsWith("[")
+      rawBadge = (badgeInfo.isExcluded && badgeInfo.badge)
         ? badgeInfo.badge
-        : (c.exclusionReason ? `[${c.exclusionReason}]` : "[Excluded]");
+        : (c.exclusionReason || "Excluded");
     }
 
     let badgeCol: string;
@@ -1045,6 +1138,8 @@ const BADGE_CATEGORY: Array<[string, string]> = [
   ["Cooldown", "Active Cooldowns"],
   ["Seasonal Hold", "Seasonal Holds"],
   ["Hold:", "Seasonal Holds"],
+  ["Booked Through:", "Seasonal Holds"],
+  ["Contact Hold:", "Seasonal Holds"],
   ["Direct Chat", "Direct Chat Active"],
   ["No Booking Email", "No Booking Email"],
   ["Outside Target Area", "Outside Target Area"],
@@ -1097,7 +1192,7 @@ function classifyExcludedCandidate(
     } else if (c.reason?.lastGigDate) {
       detail = `${formatMonthDayYear(c.reason.lastGigDate)} Show`;
     } else if (badge.includes("Gig Spacing:")) {
-      detail = badge.replace(/^\[Gig Spacing:\s*/i, "").replace(/\]$/, "").trim();
+      detail = badge.replace(/^\[?Gig Spacing:\s*/i, "").replace(/\]?$/, "").trim();
     } else if (c.reason?.spacingNote) {
       detail = c.reason.spacingNote;
     } else {
@@ -1113,7 +1208,7 @@ function classifyExcludedCandidate(
   if (category === "Active Cooldowns") {
     let detail = "";
     if (badge.includes("Cooldown Active:")) {
-      detail = badge.replace(/^\[Cooldown Active:\s*/i, "").replace(/\]$/, "").trim();
+      detail = badge.replace(/^\[?Cooldown Active:\s*/i, "").replace(/\]?$/, "").trim();
     } else if (c.cooldownRepliedDate || c.reason?.cooldownRepliedDate) {
       const d = c.cooldownRepliedDate || c.reason?.cooldownRepliedDate;
       detail = `Replied ${formatMonthDay(d!)}`;
@@ -1133,7 +1228,11 @@ function classifyExcludedCandidate(
   if (category === "Seasonal Holds") {
     let detail = "";
     if (badge.includes("Seasonal Hold:")) {
-      detail = badge.replace(/^\[Seasonal Hold:\s*/i, "").replace(/\]$/, "").trim();
+      detail = badge.replace(/^\[?Seasonal Hold:\s*/i, "").replace(/\]?$/, "").trim();
+    } else if (badge.includes("Booked Through:")) {
+      detail = badge.replace(/^\[?Booked Through:\s*/i, "").replace(/\]?$/, "").trim();
+    } else if (badge.includes("Contact Hold:")) {
+      detail = badge.replace(/^\[?Contact Hold:\s*(?:Until\s*)?/i, "").replace(/\]?$/, "").trim();
     } else if (c.resumeBooking || c.reason?.resumeBooking) {
       const d = c.resumeBooking || c.reason?.resumeBooking;
       detail = formatMonthYear(d!);

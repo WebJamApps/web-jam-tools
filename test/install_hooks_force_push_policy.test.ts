@@ -11,7 +11,9 @@
 // prompt shows the literal command including the branch and takes his answer
 // per invocation, which is the only layer that can evaluate that condition.
 //
-// Plain `--force` and every remote-deleting shape stay denied outright.
+// Plain `--force` and every remote-deleting shape Claude Code can express
+// stay denied outright. Empty-source colon refspecs are caught by the
+// merge/deploy guard hook because Claude Code deny rules cannot express them.
 //
 // install_hooks_merge.test.ts exercises the merge helper against its own
 // literal lists and says nothing about which array a pattern ships in, so
@@ -61,7 +63,6 @@ Deno.test("plain --force and every remote-deleting shape stay DENIED", async () 
     "git push --force *",
     "git push --force)",
     "git push -f *",
-    "git push * :*",
     "git push --mirror*",
     "git push --prune*",
     "git push -d *",

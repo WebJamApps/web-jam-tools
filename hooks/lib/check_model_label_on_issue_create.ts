@@ -9,6 +9,13 @@
  * guard (web-jam-tools#788 review Must Fix #1).
  */
 import { splitOnOperators, splitShellTokens, stripHeredocs } from "./normalize_command.ts";
+import {
+  checkAuthorOnRoster,
+  defaultProbeScriptPath,
+  findFooter,
+  type ProbeRunner,
+  realProbeRunner,
+} from "./authored_by_footer.ts";
 import { findUnresolvableIssuePointers } from "./detect_unresolvable_issue_pointers.ts";
 import { findDeferredVerifications } from "./detect_deferred_verifications.ts";
 import {
@@ -489,6 +496,30 @@ export function findIssueCreateBodyViolation(body: string, needsDesign: boolean)
 }
 
 /**
+ * Authored-by footer check (web-jam-tools#1205) for a raw `gh issue create` and
+ * a connector `issue_write` create, Epics and `Josh`-labeled issues included.
+ * Returns the DENY line, or null when the body's last non-empty line is a
+ * footer naming a model on the roster. A probe that cannot run is its own
+ * denial, never reported as "not on the roster" and never allowed through.
+ */
+export async function findIssueCreateFooterDenial(
+  body: string,
+  probe: ProbeRunner,
+  probeScriptPath: string = defaultProbeScriptPath(),
+): Promise<string | null> {
+  const footer = findFooter(body);
+  if (footer === null) {
+    return 'DENY:the issue body does not end with a `🤖 Authored by <tool> — <model>` footer as its last non-empty line. File the issue through deno task create-issue --author "<tool — model>", which writes it.';
+  }
+  const check = await checkAuthorOnRoster(footer.author, probe, probeScriptPath);
+  if (check.ok) return null;
+  if (check.reason === "could-not-run") {
+    return `DENY:the author check could not run, so the footer '${footer.line}' can't be verified. ${check.message}`;
+  }
+  return `DENY:the footer '${footer.line}' names a model that is not on the author roster. File the issue through deno task create-issue --author "<tool — model>". ${check.message}`;
+}
+
+/**
  * Model tiers that require an explicit escalation justification (web-jam-tools#709).
  *
  * NOTE: The guard checks ONLY presence of non-empty justification text,
@@ -594,6 +625,7 @@ async function scanIssueCommandSegments(
   cmdForMessage: string,
   runner: CommandRunner,
   cwd?: string,
+  probe: ProbeRunner = realProbeRunner,
 ): Promise<string> {
   for (const segment of segments) {
     const scTokens = stripLeadingAssignments(splitShellTokens(segment));
@@ -623,7 +655,7 @@ async function scanIssueCommandSegments(
       // the same body checks itself (web-jam-tools#1167), so only the body
       // checks are skipped here; the duplicate search below still runs.
       if (readError && rawCreateArgs !== null) {
-        return `DENY:couldn't read the issue body (${readError}), so it can't be checked. Pass a literal path to --body-file, or use deno task create-issue.`;
+        return `DENY:couldn't read the issue body (${readError}), so it can't be checked, and the author check could not run. Pass a literal path to --body-file, or use deno task create-issue.`;
       }
       const bodyNote = readError ? "PASS: body checked by create-issue itself" : "PASS";
       if (!readError && body && !isEpicType(toolInput, createArgs)) {
@@ -635,6 +667,10 @@ async function scanIssueCommandSegments(
       }
       const dedupRes = await runDuplicateCheck(createArgs, runner);
       if (dedupRes !== "PASS") return dedupRes;
+      if (!readError && rawCreateArgs !== null) {
+        const footerDenial = await findIssueCreateFooterDenial(body ?? "", probe);
+        if (footerDenial) return footerDenial;
+      }
       return bodyNote;
     }
 
@@ -666,6 +702,7 @@ export async function checkModelLabelOnIssueCreate(
   inputJson: string,
   modelLabelsPath: string,
   runner: CommandRunner = runGhCommand,
+  probe: ProbeRunner = realProbeRunner,
 ): Promise<string> {
   let payload: Record<string, unknown>;
   try {
@@ -697,6 +734,7 @@ export async function checkModelLabelOnIssueCreate(
         cmd,
         runner,
         cwd,
+        probe,
       );
     }
 
@@ -728,6 +766,7 @@ export async function checkModelLabelOnIssueCreate(
         cmd,
         runner,
         cwd,
+        probe,
       );
     }
 
@@ -794,7 +833,7 @@ export async function checkModelLabelOnIssueCreate(
     if (res !== "PASS") return res;
     const rawBody = toolInput.body;
     if (rawBody !== undefined && typeof rawBody !== "string") {
-      return INVALID_MCP_BODY_DENY;
+      return `${INVALID_MCP_BODY_DENY} The author check could not run.`;
     }
     const body = typeof rawBody === "string" ? rawBody : "";
     if (body && !isEpicType(toolInput)) {
@@ -826,6 +865,8 @@ export async function checkModelLabelOnIssueCreate(
         return `DENY:couldn't search ${dedupRes.repoFull} for duplicate open issues (the search failed — not a duplicate finding). Supply a non-empty 'dedup_override_reason' property to override.`;
       }
     }
+    const mcpFooterDenial = await findIssueCreateFooterDenial(body, probe);
+    if (mcpFooterDenial) return mcpFooterDenial;
     return "PASS";
   }
 

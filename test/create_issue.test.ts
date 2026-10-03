@@ -3,10 +3,12 @@
  */
 
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import {
   ApprovalCheckResult,
   checkApprovalToken,
-  createIssueAndVerify,
+  createIssueAndVerify as realCreateIssueAndVerify,
+  CreateIssueOptions,
   defaultExecDeps,
   ExecDeps,
   IssueData,
@@ -23,6 +25,20 @@ import {
 // path, against createIssueAndVerify() with the argument OMITTED, further
 // down this file.
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
+
+// Authored-by footer (web-jam-tools#1205): the tests below are about other
+// behavior, so this wrapper supplies a valid author and a fake roster probe.
+// Tests of the footer itself call realCreateIssueAndVerify directly.
+const createIssueAndVerify = (
+  options: CreateIssueOptions,
+  deps?: ExecDeps,
+  approvalCheck?: (repoFull: string, title: string) => ApprovalCheckResult,
+) =>
+  realCreateIssueAndVerify(
+    { author: TEST_AUTHOR, ...options },
+    deps ? withPassingProbe(deps) : deps,
+    approvalCheck,
+  );
 
 Deno.test("parseArgs parses all supported CLI flags and formats", () => {
   const args = [
@@ -1453,7 +1469,11 @@ Deno.test("createIssueAndVerify: --dry-run returns description without creating 
   );
 
   assertEquals(createCalled, false);
-  assertEquals(result, 'dry run: would create issue "Dry run task" in WebJamApps/web-jam-tools');
+  assertEquals(
+    result.split("\n")[0],
+    'dry run: would create issue "Dry run task" in WebJamApps/web-jam-tools with body:',
+  );
+  assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true);
 });
 
 // --- Duplicate-search enforcement (web-jam-tools#901) ---
@@ -1691,7 +1711,11 @@ Deno.test("createIssueAndVerify lets a deferred-verification body through with N
     deps,
     APPROVE_ALL,
   );
-  assertEquals(result, 'dry run: would create issue "T" in WebJamApps/web-jam-tools');
+  assertEquals(
+    result.split("\n")[0],
+    'dry run: would create issue "T" in WebJamApps/web-jam-tools with body:',
+  );
+  assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true);
 });
 
 Deno.test("createIssueAndVerify skips both body checks for --type Epic (web-jam-tools#1167)", async () => {
@@ -1703,5 +1727,168 @@ Deno.test("createIssueAndVerify skips both body checks for --type Epic (web-jam-
     deps,
     APPROVE_ALL,
   );
-  assertEquals(result, 'dry run: would create issue "T" in WebJamApps/web-jam-tools');
+  assertEquals(
+    result.split("\n")[0],
+    'dry run: would create issue "T" in WebJamApps/web-jam-tools with body:',
+  );
+  assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true);
+});
+
+// --- Authored-by footer (web-jam-tools#1205) ---
+
+const ROSTER_REFUSAL =
+  "ERROR: --author 'X' does not name a model on the roster (web-jam-tools#190).\n" +
+  "         - Claude Opus\n         - Claude Sonnet 5.5\n";
+
+/** Deps whose roster probe exits with the given result; everything else is recorded. */
+function probeDeps(
+  body: string,
+  probe: { code: number; stderr: string } | "throw",
+): { deps: ExecDeps; calls: string[][] } {
+  const calls: string[][] = [];
+  return {
+    calls,
+    deps: {
+      probeScriptPath: "/fake/create-draft-pr.sh",
+      readFileText: () => Promise.resolve(body),
+      runCmd(cmd: string[]) {
+        if (cmd[0] === "/fake/create-draft-pr.sh") {
+          if (probe === "throw") return Promise.reject(new Error("spawn ENOENT"));
+          return Promise.resolve({ code: probe.code, stdout: "", stderr: probe.stderr });
+        }
+        calls.push(cmd);
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      },
+    },
+  };
+}
+
+Deno.test("createIssueAndVerify writes the Authored-by footer as the last line, after ## Duplicate check", async () => {
+  const { deps } = probeDeps("## What this builds\nBody", { code: 0, stderr: "" });
+  const result = await realCreateIssueAndVerify(
+    {
+      title: "T",
+      bodyFile: "/tmp/b.md",
+      author: "Claude Code — Opus",
+      dedupOverrideReason: "different scope",
+      dryRun: true,
+    },
+    deps,
+    APPROVE_ALL,
+  );
+  assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true, result);
+  assertEquals(result.indexOf("## Duplicate check") < result.indexOf("🤖 Authored by"), true);
+});
+
+Deno.test("createIssueAndVerify: a body already ending in a footer, filed with a duplicate-search override, carries exactly one footer", async () => {
+  const { deps } = probeDeps(
+    "## What this builds\nBody\n\n🤖 Authored by agy — Gemini Flash\n",
+    { code: 0, stderr: "" },
+  );
+  const result = await realCreateIssueAndVerify(
+    {
+      title: "T",
+      bodyFile: "/tmp/b.md",
+      author: "Claude Code — Opus",
+      dedupOverrideReason: "different scope",
+      dryRun: true,
+    },
+    deps,
+    APPROVE_ALL,
+  );
+  assertEquals(result.split("🤖 Authored by").length - 1, 1, result);
+  assertEquals(result.includes("agy — Gemini Flash"), false, result);
+  assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true, result);
+  assertEquals(result.indexOf("## Duplicate check") < result.indexOf("🤖 Authored by"), true);
+});
+
+Deno.test("createIssueAndVerify refuses a missing --author and files nothing", async () => {
+  const { deps, calls } = probeDeps("Body", { code: 1, stderr: ROSTER_REFUSAL });
+  await assertRejects(
+    () => realCreateIssueAndVerify({ title: "T", bodyFile: "/tmp/b.md" }, deps, APPROVE_ALL),
+    Error,
+    "--author is required",
+  );
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("createIssueAndVerify refuses an empty --author and files nothing", async () => {
+  const { deps, calls } = probeDeps("Body", { code: 1, stderr: ROSTER_REFUSAL });
+  await assertRejects(
+    () =>
+      realCreateIssueAndVerify(
+        { title: "T", bodyFile: "/tmp/b.md", author: "  " },
+        deps,
+        APPROVE_ALL,
+      ),
+    Error,
+    "--author is required",
+  );
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("createIssueAndVerify refuses an author not on the roster, names it and lists the roster", async () => {
+  const { deps, calls } = probeDeps("Body", {
+    code: 1,
+    stderr: ROSTER_REFUSAL.replace("'X'", "'Codex — GPT-6'"),
+  });
+  const err = await assertRejects(() =>
+    realCreateIssueAndVerify(
+      { title: "T", bodyFile: "/tmp/b.md", author: "Codex — GPT-6" },
+      deps,
+      APPROVE_ALL,
+    )
+  );
+  assertStringIncludes((err as Error).message, "Codex — GPT-6");
+  assertStringIncludes((err as Error).message, "Claude Sonnet 5.5");
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("createIssueAndVerify: a probe that cannot run refuses with a different message than not-on-roster", async () => {
+  const messages: string[] = [];
+  for (
+    const probe of ["throw", { code: 127, stderr: "bash: not found" }] as const
+  ) {
+    const { deps, calls } = probeDeps("Body", probe);
+    const err = await assertRejects(() =>
+      realCreateIssueAndVerify(
+        { title: "T", bodyFile: "/tmp/b.md", author: "Claude Code — Opus" },
+        deps,
+        APPROVE_ALL,
+      )
+    );
+    messages.push((err as Error).message);
+    assertStringIncludes((err as Error).message, "roster check could not run");
+    assertEquals(calls.length, 0);
+  }
+  const { deps } = probeDeps("Body", { code: 1, stderr: ROSTER_REFUSAL });
+  const notOnRoster = await assertRejects(() =>
+    realCreateIssueAndVerify(
+      { title: "T", bodyFile: "/tmp/b.md", author: "X" },
+      deps,
+      APPROVE_ALL,
+    )
+  );
+  for (const m of messages) assertEquals(m === (notOnRoster as Error).message, false);
+  assertEquals((notOnRoster as Error).message.includes("could not run"), false);
+});
+
+Deno.test("createIssueAndVerify: a body already ending in a footer gets exactly one, naming --author", async () => {
+  const { deps } = probeDeps("Body\n\n🤖 Authored by agy — Gemini Flash\n", {
+    code: 0,
+    stderr: "",
+  });
+  const result = await realCreateIssueAndVerify(
+    { title: "T", bodyFile: "/tmp/b.md", author: "Claude Code — Opus", dryRun: true },
+    deps,
+    APPROVE_ALL,
+  );
+  assertEquals(result.split("🤖 Authored by").length - 1, 1);
+  assertEquals(result.includes("Gemini Flash"), false);
+  assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true);
+});
+
+Deno.test("parseArgs reads --author in both forms", () => {
+  assertEquals(parseArgs(["--author", "Claude Code — Opus"]).author, "Claude Code — Opus");
+  assertEquals(parseArgs(["--author=Claude Code — Opus"]).author, "Claude Code — Opus");
 });

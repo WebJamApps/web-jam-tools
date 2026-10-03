@@ -449,5 +449,5 @@ Deno.test("filterAndRankCandidates: with no location argument returns candidates
   const pickle = filtered.find((v) => v.name === "The Wooden Pickle")!;
   assertEquals(pickle.isExcluded, true);
   assertEquals(pickle.exclusionReason, "outside-target-area");
-  assertEquals(pickle.statusBadge, "[Outside Target Area]");
+  assertEquals(pickle.statusBadge, "Outside Target Area");
 });

@@ -27,7 +27,7 @@ import {
   openGate1Record,
 } from "../src/design-issue/gate1_record.ts";
 import type { Schema } from "../src/fix-labels/diff.ts";
-import { ACTIVE_REPOS } from "../src/flash-issues/types.ts";
+import { ACTIVE_REPOS } from "../src/shared/repos.ts";
 import denoJson from "../deno.json" with { type: "json" };
 
 const HEADER_LINE =

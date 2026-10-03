@@ -18,7 +18,7 @@
 //     `skills/design-issue/SKILL.md` "Manual Steps & Verification Pairs") is not `modelTier: true`
 //     in the schema, so it is looked up by name and added to the allowed tier set only when it is
 //     actually present in `labels.yaml`.
-//   - Repos: `ACTIVE_REPOS` in `../flash-issues/types.ts` -- read-only, that module is never
+//   - Repos: `ACTIVE_REPOS` in `../shared/repos.ts` -- read-only, that module is never
 //     modified here.
 
 import * as path from "@std/path";
@@ -29,7 +29,7 @@ import {
   loadSchema,
   type Schema,
 } from "../fix-labels/diff.ts";
-import { ACTIVE_REPOS } from "../flash-issues/types.ts";
+import { ACTIVE_REPOS } from "../shared/repos.ts";
 import { expandHome } from "./gate1.ts";
 import { type Gate1StatusResult, type Gate1StatusType, getGate1Status } from "./gate1_record.ts";
 import {
@@ -103,9 +103,9 @@ const COL_REPO = PLAN_TABLE_HEADER.indexOf("Repo");
 const COL_TESTS = PLAN_TABLE_HEADER.indexOf("Tests");
 const COL_CLOSES = PLAN_TABLE_HEADER.indexOf("Closes when");
 
-/** The native GitHub Priority field's four levels (`src/flash-issues/types.ts`'s `Priority` type,
- * `PRIORITY_MAP` in `src/create-issue/lib.ts`). Not read from a config file at runtime -- there is
- * none -- but pinned to the same four literal values used everywhere else a Priority is set. */
+/** The native GitHub Priority field's four levels (`PRIORITY_MAP` in `src/create-issue/lib.ts`).
+ * Not read from a config file at runtime -- there is none -- but pinned to the same four literal
+ * values used everywhere else a Priority is set. */
 const NATIVE_PRIORITY_LEVELS = ["Urgent", "High", "Medium", "Low"] as const;
 
 /** Strings that mean "no value was given" in a plan-table cell. */
@@ -770,7 +770,7 @@ Validates the Gate 2 plan table's cell values in a design document:
   - verifies Gate 1 approval record on disk for --design-doc <doc.md>
   - missing values (empty, whitespace-only, "-"/"—"/"N/A")
   - unknown model tiers (against skills/fix-labels/labels.yaml)
-  - unknown repos (against ACTIVE_REPOS in src/flash-issues/types.ts)
+  - unknown repos (against ACTIVE_REPOS in src/shared/repos.ts)
   - personal-name title prefixes ("Josh:", "Josh -", ...)
   - out-of-range priorities (Urgent/High/Medium/Low only)
   - a Josh-labeled manual row with no paired agent row

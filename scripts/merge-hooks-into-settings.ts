@@ -25,15 +25,17 @@ export function merge(settingsPath: string, args: string[]): number {
   let allowPatterns: string[] = [];
   let statusLineArgs: string[] = [];
   let defaultModeArgs: string[] = [];
+  let autoModeArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
-  // web-jam-tools#432 finding 9: a Stop, SessionEnd, or SessionStart entry in agy's
+  // web-jam-tools#432 finding 9: a SessionStart or SessionEnd entry in agy's
   // hooks.json silently disables the ENTIRE hooks config on that surface —
   // not just that event, every PreToolUse guard included. install-hooks.sh
   // passes --forbid-lifecycle-hooks on every invocation targeting agy's
-  // hooks file, so a future change that accidentally adds a --stop, --session-end, or
+  // hooks file, so a future change that accidentally adds a --session-end or
   // head/SessionStart argument to that call is refused here rather than
-  // silently landing and disarming every guard on the Flash surface.
+  // silently landing and disarming every guard on the Flash surface. Stop is
+  // allowed on that target only in agy's flat shape (see mergeAgyFlatHooks).
   const forbidLifecycleHooks = args.includes("--forbid-lifecycle-hooks");
   const filteredArgs = args.filter((a) => a !== "--check" && a !== "--forbid-lifecycle-hooks");
 
@@ -71,6 +73,7 @@ export function merge(settingsPath: string, args: string[]): number {
         "--allow",
         "--status-line",
         "--default-mode",
+        "--auto-mode",
       ],
       rest,
     );
@@ -94,11 +97,11 @@ export function merge(settingsPath: string, args: string[]): number {
     allowPatterns = sections["--allow"] || [];
     statusLineArgs = sections["--status-line"] || [];
     defaultModeArgs = sections["--default-mode"] || [];
+    autoModeArgs = sections["--auto-mode"] || [];
   }
 
   const passedLifecycle = [
     sessionStartCmds.length > 0 ? "SessionStart" : "",
-    stopCmds.length > 0 ? "Stop" : "",
     sessionEndCmds.length > 0 ? "SessionEnd" : "",
   ].filter(Boolean).join(" or ");
 
@@ -106,9 +109,11 @@ export function merge(settingsPath: string, args: string[]): number {
     console.error(
       `error: refusing to write ${path.basename(settingsPath)} — a ${passedLifecycle} ` +
         "entry was passed for a target invoked with --forbid-lifecycle-hooks. On agy, " +
-        "registering ANY lifecycle event silently disables the entire hooks config — not just " +
-        "that event, every PreToolUse guard included (web-jam-tools#432 finding 9, " +
-        "verified 2026-08-07). Remove the --stop/--session-end/head SessionStart args from this call.",
+        "registering SessionStart or SessionEnd silently disables the entire hooks config — not just " +
+        "that event, every PreToolUse guard included (web-jam-tools#432 finding 9). " +
+        "Stop is allowed there only as a flat { type, command } entry, which this " +
+        "script writes (measured 2026-09-28, agy 1.2.12). Remove the --session-end/head " +
+        "SessionStart args from this call.",
     );
     return 1;
   }
@@ -179,7 +184,6 @@ export function merge(settingsPath: string, args: string[]): number {
       hooks[kind] = [];
     }
     const bucket: Array<{ hooks: Array<{ type: string; command: string }> }> = hooks[kind];
-    const desiredScripts = new Set(cmds.map((c) => extractScriptPath(c)));
     const desiredCmds = new Set(cmds);
 
     const added: string[] = [];
@@ -191,9 +195,8 @@ export function merge(settingsPath: string, args: string[]): number {
       const remainingHooks: Array<{ type: string; command: string }> = [];
       for (const h of entry.hooks) {
         if (h && h.command) {
-          const sp = extractScriptPath(h.command);
           if (isManagedHook(h.command)) {
-            if (desiredCmds.has(h.command) || desiredScripts.has(sp)) {
+            if (desiredCmds.has(h.command)) {
               remainingHooks.push(h);
             } else {
               pruned.push(h.command);
@@ -226,8 +229,59 @@ export function merge(settingsPath: string, args: string[]): number {
     return [added, pruned];
   }
 
+  // agy rejects its WHOLE hooks file when a Stop entry uses Claude Code's nested
+  // { hooks: [{ type, command }] } shape — "Failed to parse hooks file …: invalid
+  // hook "hooks": command hook must specify 'command'" — so every PreToolUse guard
+  // goes silent. A flat { type, command } Stop entry loads, fires, and leaves the
+  // guards firing. Measured 2026-09-28 on agy 1.2.12 (web-jam-tools#1176); this is
+  // what web-jam-tools#432 finding 9 observed. Any nested entry found is flattened.
+  function mergeAgyFlatHooks(kind: string, cmds: string[]): [string[], string[], number] {
+    const current: unknown[] = Array.isArray(hooks[kind]) ? hooks[kind] : [];
+    const entries: Array<{ type: string; command: string }> = [];
+    let reshaped = 0;
+    for (const entry of current) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as { command?: unknown; hooks?: unknown };
+      if (Array.isArray(e.hooks)) {
+        reshaped++;
+        for (const h of e.hooks as Array<{ command?: unknown }>) {
+          if (h && typeof h.command === "string") {
+            entries.push({ type: "command", command: h.command });
+          }
+        }
+      } else if (typeof e.command === "string") {
+        entries.push({ type: "command", command: e.command });
+      }
+    }
+
+    const desiredCmds = new Set(cmds);
+    const pruned: string[] = [];
+    const kept = entries.filter((e) => {
+      if (!isManagedHook(e.command)) return true;
+      if (desiredCmds.has(e.command)) {
+        return true;
+      }
+      pruned.push(e.command);
+      return false;
+    });
+
+    const existing = new Set(kept.map((e) => e.command));
+    const added: string[] = [];
+    for (const cmd of cmds) {
+      if (!existing.has(cmd)) {
+        kept.push({ type: "command", command: cmd });
+        existing.add(cmd);
+        added.push(cmd);
+      }
+    }
+    hooks[kind] = kept;
+    return [added, pruned, reshaped];
+  }
+
   const [addedSession, prunedSession] = mergeFlatHooks("SessionStart", sessionStartCmds);
-  const [addedStop, prunedStop] = mergeFlatHooks("Stop", stopCmds);
+  const [addedStop, prunedStop, reshapedStop] = forbidLifecycleHooks
+    ? mergeAgyFlatHooks("Stop", stopCmds)
+    : [...mergeFlatHooks("Stop", stopCmds), 0];
   const [addedSessionEnd, prunedSessionEnd] = mergeFlatHooks("SessionEnd", sessionEndCmds);
 
   function mergeMatcherHooks(
@@ -319,7 +373,10 @@ export function merge(settingsPath: string, args: string[]): number {
     postToolUsePairs,
   );
 
-  function mergePermissionsList(sectionName: "deny" | "ask" | "allow", patterns: string[]): string[] {
+  function mergePermissionsList(
+    sectionName: "deny" | "ask" | "allow",
+    patterns: string[],
+  ): string[] {
     if (patterns.length === 0) return [];
     if (!data.permissions || typeof data.permissions !== "object") {
       data.permissions = {};
@@ -417,7 +474,34 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
-  // Secret-scan gate: check all strings in permissions and hooks for credentials
+  // autoMode merge: the whole object is owned by this installer. One JSON
+  // string argument; installed when absent, replaced when it differs (key
+  // order ignored, array order significant). Only touched when --auto-mode
+  // was passed, so agy's hooks.json is unaffected.
+  let autoModeAdded = false;
+  let autoModeChanged = false;
+  let autoModeDiff: string[] = [];
+  if (autoModeArgs.length > 0) {
+    let desiredAutoMode: unknown;
+    try {
+      desiredAutoMode = JSON.parse(autoModeArgs[0]);
+    } catch (e) {
+      console.error(`error: --auto-mode value is not valid JSON: ${e}`);
+      return 1;
+    }
+    if (data.autoMode === undefined) {
+      autoModeAdded = true;
+      data.autoMode = desiredAutoMode;
+    } else if (canonicalJson(data.autoMode) !== canonicalJson(desiredAutoMode)) {
+      autoModeChanged = true;
+      // Computed before the replace: a replace discards a hand edit, so the
+      // output has to name it for it to be carried into AUTO_MODE_JSON.
+      autoModeDiff = describeAutoModeDiff(data.autoMode, desiredAutoMode);
+      data.autoMode = desiredAutoMode;
+    }
+  }
+
+  // Secret-scan gate: check all strings in permissions, hooks and autoMode for credentials
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
     for (const section of ["allow", "deny", "ask"]) {
@@ -440,6 +524,13 @@ export function merge(settingsPath: string, args: string[]): number {
       if (Array.isArray(bucket)) {
         for (let b = 0; b < bucket.length; b++) {
           const entry = bucket[b];
+          if (entry && typeof entry.command === "string") {
+            // agy's flat Stop entry shape (see mergeAgyFlatHooks).
+            const match = findCredentialLiteral(entry.command);
+            if (match) {
+              secretFindings.push(`hooks.${kind}[${b}]: ${match}`);
+            }
+          }
           if (entry && Array.isArray(entry.hooks)) {
             for (let h = 0; h < entry.hooks.length; h++) {
               const cmd = entry.hooks[h]?.command;
@@ -456,6 +547,13 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
+  forEachString(data.autoMode, "autoMode", (where, value) => {
+    const match = findCredentialLiteral(value);
+    if (match) {
+      secretFindings.push(`${where}: ${match}`);
+    }
+  });
+
   const targetFilename = path.basename(settingsPath);
 
   if (secretFindings.length > 0) {
@@ -471,6 +569,7 @@ export function merge(settingsPath: string, args: string[]): number {
     prunedSession.length > 0 ||
     addedStop.length > 0 ||
     prunedStop.length > 0 ||
+    reshapedStop > 0 ||
     addedSessionEnd.length > 0 ||
     prunedSessionEnd.length > 0 ||
     addedPreToolUse.length > 0 ||
@@ -487,7 +586,9 @@ export function merge(settingsPath: string, args: string[]): number {
     statusLineAdded ||
     statusLineChanged ||
     defaultModeAdded ||
-    defaultModeChanged;
+    defaultModeChanged ||
+    autoModeAdded ||
+    autoModeChanged;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -505,6 +606,13 @@ export function merge(settingsPath: string, args: string[]): number {
       }
       for (const cmd of prunedStop) {
         console.error(`${targetFilename}: has retired Stop hook ${cmd}`);
+      }
+      if (reshapedStop > 0) {
+        console.error(
+          `${targetFilename}: has ${reshapedStop} nested Stop entr${
+            reshapedStop === 1 ? "y" : "ies"
+          } agy rejects — the whole hooks file fails to load`,
+        );
       }
       for (const cmd of addedSessionEnd) {
         console.error(`${targetFilename}: missing SessionEnd hook ${cmd}`);
@@ -577,6 +685,15 @@ export function merge(settingsPath: string, args: string[]): number {
           }${defaultModePrevValue ? `, has ${defaultModePrevValue}` : ""})`,
         );
       }
+      if (autoModeAdded) {
+        console.error(`${targetFilename}: missing autoMode section`);
+      }
+      if (autoModeChanged) {
+        console.error(`${targetFilename}: autoMode differs from the versioned config`);
+        for (const line of autoModeDiff) {
+          console.error(`  ${line}`);
+        }
+      }
       return 1;
     }
     console.log(
@@ -625,6 +742,9 @@ export function merge(settingsPath: string, args: string[]): number {
   for (const cmd of addedStop) console.log(`${targetFilename}: added Stop hook ${cmd}`);
   for (const cmd of prunedStop) {
     console.log(`${targetFilename}: removed retired Stop hook ${cmd}`);
+  }
+  if (reshapedStop > 0) {
+    console.log(`${targetFilename}: flattened ${reshapedStop} nested Stop entries agy rejects`);
   }
   for (const cmd of addedSessionEnd) console.log(`${targetFilename}: added SessionEnd hook ${cmd}`);
   for (const cmd of prunedSessionEnd) {
@@ -689,8 +809,97 @@ export function merge(settingsPath: string, args: string[]): number {
       `${targetFilename}: updated permissions.defaultMode to ${defaultModeArgs[0]}`,
     );
   }
+  if (autoModeAdded) {
+    console.log(`${targetFilename}: added autoMode section`);
+  }
+  if (autoModeChanged) {
+    console.log(`${targetFilename}: updated autoMode to the versioned config`);
+    for (const line of autoModeDiff) {
+      console.log(`  ${line}`);
+    }
+  }
 
   return 0;
+}
+
+/** JSON.stringify with object keys sorted, so key order never counts as drift. */
+function canonicalJson(v: unknown): string {
+  return JSON.stringify(v, (_k, val) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : val);
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** One entry as JSON, cut to a length that keeps a drift report readable. */
+function previewEntry(v: unknown): string {
+  const text = JSON.stringify(v);
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+}
+
+/**
+ * Names what differs between the installed autoMode and the versioned one:
+ * the top-level keys that differ and, for list values, the entries only one
+ * side has. The installed value is replaced as a whole, so this is the only
+ * record of a hand edit outside the backup file.
+ */
+function describeAutoModeDiff(installed: unknown, versioned: unknown): string[] {
+  if (!isPlainObject(installed) || !isPlainObject(versioned)) {
+    return ["autoMode: the installed value is not an object"];
+  }
+  const lines: string[] = [];
+  const keys = [...new Set([...Object.keys(installed), ...Object.keys(versioned)])].sort();
+  for (const key of keys) {
+    if (!(key in versioned)) {
+      lines.push(`autoMode.${key}: key is not in the versioned config`);
+      continue;
+    }
+    if (!(key in installed)) {
+      lines.push(`autoMode.${key}: key is missing`);
+      continue;
+    }
+    const have = installed[key];
+    const want = versioned[key];
+    if (canonicalJson(have) === canonicalJson(want)) continue;
+    if (!Array.isArray(have) || !Array.isArray(want)) {
+      lines.push(`autoMode.${key}: value differs`);
+      continue;
+    }
+    const haveSet = new Set(have.map(canonicalJson));
+    const wantSet = new Set(want.map(canonicalJson));
+    const extra = have.filter((e) => !wantSet.has(canonicalJson(e)));
+    const missing = want.filter((e) => !haveSet.has(canonicalJson(e)));
+    for (const e of extra) {
+      lines.push(`autoMode.${key}: entry not in the versioned config: ${previewEntry(e)}`);
+    }
+    for (const e of missing) {
+      lines.push(`autoMode.${key}: versioned entry missing: ${previewEntry(e)}`);
+    }
+    if (extra.length === 0 && missing.length === 0) {
+      lines.push(`autoMode.${key}: same entries in a different order or count`);
+    }
+  }
+  return lines;
+}
+
+/** Calls fn for every string inside v, with a path such as autoMode.allow[1]. */
+function forEachString(
+  v: unknown,
+  where: string,
+  fn: (where: string, value: string) => void,
+): void {
+  if (typeof v === "string") {
+    fn(where, v);
+  } else if (Array.isArray(v)) {
+    v.forEach((e, i) => forEachString(e, `${where}[${i}]`, fn));
+  } else if (isPlainObject(v)) {
+    for (const [k, e] of Object.entries(v)) {
+      forEachString(e, `${where}.${k}`, fn);
+    }
+  }
 }
 
 function tryExistsSync(p: string): boolean {

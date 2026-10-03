@@ -254,6 +254,33 @@ analogous surface, and there is no agy-side equivalent to gate. This is a
 deliberate, Josh-approved single-surface exception to the usual rule that
 hook/skill changes ship to both surfaces.
 
+### `autoMode` (managed by `install-hooks.sh`)
+
+The `autoMode` section of `~/.claude/settings.json` holds what Claude Code's
+auto-mode classifier reads: the `environment` prose, the `allow` list and the
+`soft_deny` list. `scripts/install-hooks.sh` owns the whole object. Its
+content is the `AUTO_MODE_JSON` block in that script.
+
+- **It is replaced as a whole.** A run installs the object when it is absent
+  and replaces it when it differs; no other key in `settings.json` is
+  touched. Object key order is ignored; the order of entries in a list
+  counts. This differs from the permissions lists, which are additive.
+- **Change it in `AUTO_MODE_JSON`, not in `settings.json`.** A hand edit to
+  `settings.json` is reported by `--check` and overwritten by the next run.
+  The previous file is kept as the usual `.bak-` backup.
+- **The drift report names what differs.** Both `--check` and a replacing run
+  list each top-level key that differs and, for a list, each entry only one
+  side has, so a hand edit can be carried into `AUTO_MODE_JSON` first.
+- **Paths are filled in at install time.** `__HOME__` in the block becomes
+  `$HOME`, and `__REPOS_DIR__` becomes the directory that holds the
+  `web-jam-tools` checkout the installer runs from (`~/WebJamApps` on Josh's
+  laptop). The installed object is therefore correct on any machine.
+- **Its strings are secret-scanned** with the same credential-literal check
+  as `permissions` and `hooks`; a match refuses the write.
+
+**Claude Code ONLY**, like `statusLine` and `permissions.defaultMode`: it is
+never merged into agy's `hooks.json`.
+
 ## Example scraping / data utilities
 
 These scripts target a specific Wix-hosted site and were built as one-offs

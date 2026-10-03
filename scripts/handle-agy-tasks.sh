@@ -393,12 +393,12 @@ fi
 # issue citation (`#<digits>`) directly adjacent (only markdown/emoji
 # decoration and/or the repo-name prefix may sit between them — see the
 # tightened carve-out regex below). When dispatch is driven by
-# skills/work-issue/SKILL.md or the flash-issues scanner, the skill layer
+# skills/work-issue/SKILL.md, the skill layer
 # already validates native blockers via the GitHub API before this script
 # ever runs, so this guard's job for that specific case is done there. This
 # script is ALSO invoked directly — this PR's own "How to test locally" does
-# exactly that, and /flash-issues exists so Josh can drive agy himself when
-# Claude is out of tokens — and previously nothing upstream validated the
+# exactly that, and Josh runs it himself when Claude is out of tokens — and
+# previously nothing upstream validated the
 # dependency on that path, so an issue whose blocker was genuinely still OPEN
 # could dispatch here. That gap is now closed, durably, by the native
 # `blocked_by` dependency guard above (web-jam-tools#847), which runs before

@@ -73,7 +73,7 @@ that's what following this skill prevents.
     - `Flash Med` — genuinely trivial edits only: a one-line change, a single-field data or typo fix, a link update (an exception case; anything larger goes to `Flash High`).
     - `Flash High` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
     - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
-    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; slightly higher capability than Flash High).
+    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; ranks above Flash High per Josh's 2026-10-01 ruling, though Flash High stays the default lane).
     - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
     - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
       delete-protection only, per `skills/fix-labels/labels.yaml`).
@@ -130,7 +130,7 @@ that's what following this skill prevents.
    clarification before implementation, apply the canonical `Needs Design` status label alongside the chosen
    model label and native type.
 7. **Closed Issues Are Immutable.** Never modify, reopen, add comments to, or add new requirements to a closed GitHub issue. Closed issues represent finished state. When new scope, follow-up findings, or modifications arise for a closed issue, file a net-new issue citing the closed issue (repo + number + title) instead.
-8. **Prompt for a Milestone Before Filing.** Check the repo's open Milestones (`gh api repos/WebJamApps/<repo>/milestones` or `gh milestone list`) before creating the issue. Select one deliberately if a fitting Milestone exists. If no open Milestone fits the issue, explicitly note so in chat or in the issue body ("no fitting milestone — leaving unassigned") rather than silently omitting it. Note: This is a skill-level nudge, not a hook gate — `hooks/require-model-label-on-issue-create.sh` continues to enforce model label + native Type.
+8. **Prompt for a Milestone Before Filing.** Check the repo's open Milestones (`gh api repos/WebJamApps/<repo>/milestones` or `gh milestone list`) before creating the issue. Select one deliberately if a fitting Milestone exists. If no open Milestone fits the issue, explicitly note so in chat or in the issue body ("no fitting milestone — leaving unassigned") rather than silently omitting it. Note: This is a skill-level nudge, not a hook gate — `hooks/require-model-label-on-issue-create.sh` continues to enforce model label + native Type. For venue-mining, book-gig and outreach work the milestone is `gig-outreach`, in every repo: there is no `venue-mining` milestone, and it is never created again, even if `/fix-labels` offers to (Josh, 2026-09-17: "please remove the 'venue-mining' milestone, i am just using gig-outreach").
 9. **Deliverable-First Body Shape (What this builds).** Open the issue body directly with a section
    titled `## What this builds` carrying a 1-2 sentence description of what is being built, immediately
    followed by a numbered list of what it does — no history preamble, conversation background, or past context.
@@ -244,7 +244,8 @@ deno task create-issue \
   --milestone "v1.2" \
   --priority High \
   --parent 437 \
-  --blocked-by 436
+  --blocked-by 436 \
+  --author "<your tool> — <your model>"
 ```
 
 `scripts/create-issue.ts` standardizes issue creation across all repos:
@@ -268,6 +269,7 @@ deno task create-issue \
 - Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model label freely; the hook only checks that exactly one *model* label is present, not that it's the only label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
 - Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
 - Attach parent issue link via `scripts/create-issue.ts --parent <parent_issue_number>`.
+- Pass your own tool and model as `--author "<tool> — <model>"` (for example `--author "Claude Code — Opus"` or `--author "agy — Gemini Flash"`) on every `deno task create-issue` call, and on every `deno task edit-issue` call that replaces the body with `--body` or `--body-file`. The task checks the author against the author roster in `scripts/create-draft-pr.sh` (the same check `create-draft-pr.sh` and `deno task post-pr-comment` run) and ends the body with one footer line, `🤖 Authored by <tool> — <model>`, naming the model that wrote the content. A missing author, one not on the roster, or a roster check that cannot run refuses the call and files or edits nothing. The footer names who wrote the content, so after you rewrite a body it names you in place of the earlier author. A raw `gh issue create` or a connector `issue_write` create is denied by the issue-create hook unless its body already ends with that footer, so file through `deno task create-issue`.
 
 ## If the hook denies the call
 

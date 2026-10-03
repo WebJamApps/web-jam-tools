@@ -45,7 +45,7 @@ running model** — before scanning any repo:
 - **If the model IS Haiku:** proceed with the flow below.
 
 This skill runs **interactively, directly on the session — it does NOT dispatch a subagent.** Unlike
-`flash-issues` (which dispatches to Sonnet), `/fix-labels` is cheap enough at Haiku scale to run
+skills that dispatch to a pricier subagent, `/fix-labels` is cheap enough at Haiku scale to run
 inline, and its approve/veto-per-label flow needs a live conversation with Josh anyway.
 
 Optional, implementer's discretion, not required for this issue: a hard `PreToolUse` hook mirroring

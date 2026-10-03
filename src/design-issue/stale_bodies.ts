@@ -5,7 +5,7 @@ import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
 import { expandHome } from "./gate1.ts";
 import { defaultCommandRunner } from "./candidates.ts";
-import type { CommandRunner } from "../flash-issues/types.ts";
+import type { CommandRunner } from "../shared/repos.ts";
 import { parsePlanTable, splitTableRowCells } from "./plan_table.ts";
 
 export interface IssueTarget {
@@ -518,7 +518,7 @@ export async function checkDesignReference(
 
   // Match naked markdown file paths
   const nakedMatches = sectionContent.matchAll(
-    /(?:file:\/\/)?((?:~|\/|[A-Za-z0-9_.\-\/]+)\/[A-Za-z0-9_.\-]+\.md)/gi,
+    /(?:file:\/\/)?((?:~(?:\/[A-Za-z0-9_.\-]+)*|\/|[A-Za-z0-9_.\-\/]+)\/[A-Za-z0-9_.\-]+\.md)/gi,
   );
   for (const m of nakedMatches) {
     candidatePaths.push(m[1].trim());
@@ -554,7 +554,7 @@ export async function checkDesignReference(
       const exists = await fileExists(candidateExpanded);
       if (!exists) {
         fileMissing = true;
-        missingPath = candidate;
+        missingPath = candidate.startsWith("~/") ? candidateExpanded : candidate;
       }
     } else {
       mismatchedPath = candidate;

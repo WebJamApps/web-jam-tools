@@ -24,7 +24,6 @@ Deno.test("extractDirectCommandHookScripts extracts Claude and agy direct comman
   // Must include Claude Code SessionStart hooks
   assert(direct.has("notes-sync-reminder.sh"));
   assert(direct.has("memory-cleanup-reminder.sh"));
-  assert(direct.has("flash-issues-reminder.sh"));
   assert(direct.has("backlog-groom-reminder.sh"));
   assert(direct.has("backup-refusal-reminder.sh"));
   assert(direct.has("hook-install-drift-reminder.sh"));
@@ -53,6 +52,7 @@ Deno.test("extractDirectCommandHookScripts extracts Claude and agy direct comman
   assert(direct.has("opus-delegation-gate.sh"));
   assert(direct.has("require-approval-token-on-issue-write.sh"));
   assert(direct.has("block-backend-mutation.sh"));
+  assert(direct.has("block-private-folder-read.sh"));
   assert(direct.has("scan-output-for-secrets.sh"));
 
   // Must include agy direct command wrapper

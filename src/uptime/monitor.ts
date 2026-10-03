@@ -1,4 +1,4 @@
-import nodemailer from "npm:nodemailer@^9.1.0";
+import nodemailer from "npm:nodemailer@^10.0.6";
 
 export interface UptimeCheckConfig {
   name: string;

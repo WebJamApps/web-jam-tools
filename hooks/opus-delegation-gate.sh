@@ -94,6 +94,7 @@ in_git_tree() {
 tool_name="$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 command_text="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 via_bash=""
+via_apply_patch=""
 
 if [ "$tool_name" = "Bash" ]; then
   # Bash: a command that writes files is judged exactly like an Edit/Write to each of them. hooks/lib/bash_write_targets.ts lists the targets and documents the shapes and known gaps.
@@ -126,6 +127,38 @@ if [ "$tool_name" = "Bash" ]; then
   if [ -z "$target_path" ]; then
     exit 0
   fi
+elif [ "$tool_name" = "apply_patch" ]; then
+  via_apply_patch="1"
+
+  agy_model="$(printf '%s' "$input" | jq -r '.modelName // empty' 2>/dev/null || true)"
+  if [ -n "$agy_model" ] && ! printf '%s' "$agy_model" | grep -qi 'opus'; then
+    exit 0
+  fi
+
+  patch_paths=()
+  parse_error=""
+  parsed_output="$(printf '%s' "$input" | deno run --no-config "$HOOK_DIR/lib/parse_apply_patch.ts" 2>&1)" || parse_error="$parsed_output"
+  while IFS= read -r line; do
+    [ -n "$line" ] && patch_paths+=("$line")
+  done <<< "$parsed_output"
+
+  if [ -n "$parse_error" ] || [ ${#patch_paths[@]} -eq 0 ]; then
+    reason="⛔ Opus delegation gate: refused apply_patch command because no file path could be parsed from patch headers (malformed or unrecognized patch text)."
+    jq -cn --arg r "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+    exit 0
+  fi
+
+  target_path=""
+  for candidate in "${patch_paths[@]}"; do
+    if [ "$(in_git_tree "$candidate")" = "true" ]; then
+      target_path="$candidate"
+      break
+    fi
+  done
+
+  if [ -z "$target_path" ]; then
+    exit 0
+  fi
 else
   # Step 2: No target path in tool input?
   target_path="$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // empty' 2>/dev/null || true)"
@@ -153,6 +186,8 @@ fi
 what="write to '$target_path'"
 if [ -n "$via_bash" ]; then
   what="Bash command that writes to '$target_path' (a file write through Bash is gated like Edit/Write)"
+elif [ -n "$via_apply_patch" ]; then
+  what="apply_patch targeting '$target_path'"
 fi
 
 if [ "$kind" = "subagent" ]; then

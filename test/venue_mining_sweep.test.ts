@@ -1,8 +1,16 @@
 // test/venue_mining_sweep.test.ts
-import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import {
   checkCooldown,
   dedupeVenues,
+  EVENT_PARSER_REGISTRY,
+  fetchCharlotteOnTheCheapEvents,
   fetchSceneThinkEvents,
   fetchSweepHistory,
   type HarvestedVenue,
@@ -14,13 +22,21 @@ import {
   listMetros,
   loadSourcesRegistry,
   NON_MUSIC_ENTITY_KEYWORDS,
+  parseCharlotteOnTheCheapHtml,
+  parseDateHeader,
   parseStateFromLabel,
+  registerEventParser,
   resolveMetro,
   runSweep,
 } from "../src/venue-mining/sweep.ts";
 
 const FIXTURE_SOURCES = new URL(
   "./fixtures/venue_mining_sources_fixture.yaml",
+  import.meta.url,
+).pathname;
+
+const FIXTURE_COTC_HTML = new URL(
+  "./fixtures/charlotte_on_the_cheap_events.html",
   import.meta.url,
 ).pathname;
 
@@ -115,6 +131,18 @@ const FIXTURE_SWEEP_RECORDS: Record<string, unknown[]> = {
         url: "https://www.roanokerambler.com",
       },
       venuesCreatedCount: 14,
+    },
+  ],
+  "charlotte": [
+    {
+      metroSlug: "charlotte",
+      sweptAt: null,
+      publication: {
+        name: "Charlotte on the Cheap",
+        url: "https://www.charlotteonthecheap.com",
+        type: "html",
+      },
+      venuesCreatedCount: 0,
     },
   ],
 };
@@ -775,6 +803,41 @@ Deno.test("harvestEvents and runSweep reject publication type other than sceneth
   );
 });
 
+Deno.test("runSweep --type overrides the metro's publication type and errors name that type", async () => {
+  // An unregistered --type is named in the refusal, not the metro's recorded type ('html').
+  const err = await assertRejects(
+    () =>
+      runSweep({
+        metro: "unsupported-metro",
+        type: "bogus",
+        sourcesPath: FIXTURE_SOURCES,
+        force: true,
+        noDedup: true,
+        fetchFn: createMockFetch(),
+      }),
+    Error,
+    "unsupported publication type 'bogus'",
+  );
+  assertStringIncludes(err.message, "Supported types: scenethink, charlotteonthecheap");
+  assertEquals(err.message.includes("Only 'scenethink' is supported"), false);
+
+  // --type supplies a type for a publication recorded without one, so the missing-type
+  // refusal no longer fires; the supplied type is what gets checked.
+  await assertRejects(
+    () =>
+      runSweep({
+        metro: "missing-type-metro",
+        type: "bogus",
+        sourcesPath: FIXTURE_SOURCES,
+        force: true,
+        noDedup: true,
+        fetchFn: createMockFetch(),
+      }),
+    Error,
+    "unsupported publication type 'bogus'",
+  );
+});
+
 Deno.test("runSweep raises not-found error for unknown metro", async () => {
   await assertRejects(
     () =>
@@ -1019,5 +1082,158 @@ Deno.test("runSweep rejects large halls and theaters from candidates", async () 
       "sourceType",
       "sourceUrl",
     ],
+  );
+});
+
+Deno.test("parseDateHeader converts various human date headers to ISO YYYY-MM-DD", () => {
+  assertEquals(parseDateHeader("Today: Thursday, September 24, 2026"), "2026-09-24");
+  assertEquals(parseDateHeader("Tomorrow: Friday, September 25, 2026"), "2026-09-25");
+  assertEquals(parseDateHeader("Saturday, September 26, 2026"), "2026-09-26");
+  assertEquals(parseDateHeader("Sunday, October 4, 2026"), "2026-10-04");
+  assertEquals(parseDateHeader("No date header here"), "");
+});
+
+Deno.test("Charlotte on the Cheap parser returns HarvestedVenue[] against checked-in HTML fixture", async () => {
+  const fixtureHtml = Deno.readTextFileSync(FIXTURE_COTC_HTML);
+  assert(fixtureHtml.length > 0, "fixture HTML must not be empty");
+
+  // Parse HTML directly
+  const venues = parseCharlotteOnTheCheapHtml(fixtureHtml);
+  assert(venues.length > 0, "must harvest venues from fixture");
+
+  // Every venue must satisfy the canonical HarvestedVenue contract
+  for (const v of venues) {
+    assert(v.name && v.name.trim().length > 0, "venue must have non-empty name");
+    assertEquals(v.state, "NC", "Charlotte on the Cheap default state must be NC");
+    assert(v.eventCount >= 1, "venue must have eventCount >= 1");
+    assert(v.events.length >= 1, "venue must have at least 1 event");
+    assert(v.events[0].title.length > 0, "event title must not be empty");
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(v.events[0].date), "event date must be YYYY-MM-DD");
+  }
+
+  // Spot-check notable real venues present in the markup
+  const venueNames = venues.map((v) => v.name);
+  assert(venueNames.includes("Independent Picture House"));
+  assert(venueNames.includes("Pilot Brewing"));
+  assert(venueNames.includes("Camp North End"));
+  assert(venueNames.includes("Gilde Brewery"));
+  assert(venueNames.includes("Cabarrus Brewing Company"));
+  assert(venueNames.includes("NoDa Brewing North End"));
+
+  // Verify sinceDate filtering: exclude events on or before 2026-09-25
+  const sinceFiltered = parseCharlotteOnTheCheapHtml(fixtureHtml, "2026-09-25");
+  // Events on 2026-09-24 and 2026-09-25 are excluded
+  for (const v of sinceFiltered) {
+    for (const ev of v.events) {
+      assert(ev.date > "2026-09-25", `event date ${ev.date} must be strictly after 2026-09-25`);
+    }
+  }
+
+  // Verify fetchCharlotteOnTheCheapEvents end-to-end with mock fetch
+  const mockFetch: typeof fetch = (input) => {
+    const urlStr = input.toString();
+    if (urlStr.includes("charlotteonthecheap.com")) {
+      return Promise.resolve(new Response(fixtureHtml, { status: 200 }));
+    }
+    return Promise.resolve(new Response("Not found", { status: 404 }));
+  };
+
+  const fetchedVenues = await fetchCharlotteOnTheCheapEvents(
+    "https://www.charlotteonthecheap.com",
+    mockFetch,
+  );
+  assertEquals(fetchedVenues.length, venues.length);
+});
+
+Deno.test("harvestEvents dispatches through parser registry and rejects unregistered types", async () => {
+  const fixtureHtml = Deno.readTextFileSync(FIXTURE_COTC_HTML);
+  const mockFetch: typeof fetch = () => Promise.resolve(new Response(fixtureHtml, { status: 200 }));
+
+  assert("scenethink" in EVENT_PARSER_REGISTRY);
+  assert("charlotteonthecheap" in EVENT_PARSER_REGISTRY);
+
+  // 1. Registered charlotteonthecheap type
+  const cotcVenues = await harvestEvents(
+    "https://www.charlotteonthecheap.com",
+    "charlotteonthecheap",
+    mockFetch,
+  );
+  assert(cotcVenues.length > 0);
+
+  // 2. Alias charlotte-on-the-cheap
+  const cotcAliasVenues = await harvestEvents(
+    "https://www.charlotteonthecheap.com",
+    "charlotte-on-the-cheap",
+    mockFetch,
+  );
+  assertEquals(cotcAliasVenues.length, cotcVenues.length);
+
+  // 3. Custom parser registered dynamically (removed afterwards so it never leaks into later tests)
+  registerEventParser("custom-csv", (_url) =>
+    Promise.resolve([
+      {
+        name: "Custom Music Hall",
+        city: "Roanoke",
+        state: "VA",
+        eventCount: 1,
+        events: [{ title: "Folk Gig", date: "2026-10-01" }],
+      },
+    ]));
+  try {
+    const customVenues = await harvestEvents(
+      "https://custom-csv.example/events.csv",
+      "custom-csv",
+      mockFetch,
+    );
+    assertEquals(customVenues.length, 1);
+    assertEquals(customVenues[0].name, "Custom Music Hall");
+  } finally {
+    delete EVENT_PARSER_REGISTRY["custom-csv"];
+  }
+  assertEquals("custom-csv" in EVENT_PARSER_REGISTRY, false);
+
+  // 4. Unregistered type still throws naming the type
+  await assertRejects(
+    () => harvestEvents("https://example.com/events", "unregistered-format"),
+    Error,
+    "Unsupported publication type 'unregistered-format'",
+  );
+});
+
+Deno.test("runSweep harvests registered non-scenethink type through venue-mining:sweep", async () => {
+  const fixtureHtml = Deno.readTextFileSync(FIXTURE_COTC_HTML);
+
+  const mockFetch = createMockFetch({
+    events: (url) => {
+      if (url.includes("charlotteonthecheap.com")) {
+        return new Response(fixtureHtml, { status: 200 });
+      }
+      return new Response("Not found", { status: 404 });
+    },
+  });
+
+  const res = await runSweep({
+    metro: "charlotte",
+    fetchFn: mockFetch,
+    force: true,
+    noDedup: true,
+  });
+
+  assertEquals(res.metro?.slug, "charlotte");
+  assertEquals(res.sourceType, "html");
+  assertEquals(res.publication?.name, "Charlotte on the Cheap");
+  assert(res.rawCount > 0, "raw venues count must be > 0");
+  assert(res.candidates.length > 0, "candidates count must be > 0");
+
+  // Verify an unregistered type passed to runSweep still rejects naming the type
+  await assertRejects(
+    () =>
+      runSweep({
+        url: "https://unknown-calendar.example",
+        type: "unknown-parser-type",
+        fetchFn: mockFetch,
+      }),
+    Error,
+    "Unsupported publication type 'unknown-parser-type'",
   );
 });

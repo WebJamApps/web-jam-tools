@@ -27,6 +27,7 @@ import {
   getCandidateBreakdown,
   identifyCandidateBadge,
   isPitchableCandidate,
+  normalizeEligibleBadge,
   renderCandidateTable,
 } from "../src/book-gig/candidates.ts";
 import {
@@ -39,13 +40,16 @@ import {
 } from "../src/book-gig/pitch.ts";
 import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
 import {
+  BatchDispatchError,
   checkGmailReplies,
+  DEFAULT_BACKEND_URL,
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
   fetchPendingReplies,
   fetchTemplates,
   fetchVenueMap,
 } from "../src/book-gig/outreach_api.ts";
+import type { DispatchProgress } from "../src/book-gig/outreach_api.ts";
 import {
   DRAFT_PREVIEW_DARK_STYLE,
   extractRunDataFromHtml,
@@ -278,7 +282,7 @@ Deno.test("filterAndRankCandidates: prioritizes matching location and retains re
   const parkway = filtered.find((v) => v.name === "Parkway Brewing")!;
   assertEquals(parkway.isExcluded, true);
   assertEquals(parkway.exclusionReason, "outside-target-area");
-  assertEquals(parkway.statusBadge, "[Outside Target Area]");
+  assertEquals(parkway.statusBadge, "Outside Target Area");
 });
 
 Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metros", () => {
@@ -331,7 +335,7 @@ Deno.test("filterAndRankCandidates: dynamic multi-city filtering for NC/SC metro
   const salem = filtered.find((v) => v.city === "Salem")!;
   assertEquals(salem.isExcluded, true);
   assertEquals(salem.exclusionReason, "out-of-state");
-  assertEquals(salem.statusBadge, "[Out of State]");
+  assertEquals(salem.statusBadge, "Out of State");
 });
 
 Deno.test("filterAndRankCandidates: multi-city and surrounding area ranking and exclusion of non-target metros", () => {
@@ -1061,7 +1065,7 @@ Deno.test("mergeWeekendRuns: purges pitch cards for venues that became excluded 
       {
         ...venueOnHold,
         isExcluded: true,
-        statusBadge: "[Seasonal Hold: Mar 2027]",
+        statusBadge: "Seasonal Hold: Mar 2027",
         exclusionReason: "seasonal-hold",
       },
     ],
@@ -1735,60 +1739,497 @@ Deno.test("formatPay: handles positive, negative, zero, non-finite, and nullish 
   assertEquals(formatPay(null), "—");
 });
 
-Deno.test("dispatchBatchOutreach: sends POST /outreach/batch with correct payload and headers", async () => {
-  const weekend: TargetWeekend = {
-    start: "2026-10-16",
-    end: "2026-10-18",
-    rawText: "Oct 16-18 2026",
-    label: "October 16–18, 2026",
-    year: 2026,
-    month: 10,
-    days: [16, 17, 18],
+// --- web-jam-tools#1107: pre-flight + dispatch-id dispatch --------------------------------------
+// The mocks below follow the contract read from web-jam-back origin/dev
+// (src/model/outreach/outreach-controller.ts, preflightBatch / sendDispatchBatch):
+//   POST /outreach/batch/preflight -> 200 { dispatchId, venueCount } | 403/500 { message }
+//   POST /outreach/batch { dispatchId } -> 200 { sent, skipped[{venueId,venueName,reason}], records[], remaining }
+//                                          | 403 { message, unsentVenues } | 404 / 500 { message }
+
+const DISPATCH_WEEKEND: TargetWeekend = {
+  start: "2026-10-16",
+  end: "2026-10-18",
+  rawText: "Oct 16-18 2026",
+  label: "October 16–18, 2026",
+  year: 2026,
+  month: 10,
+  days: [16, 17, 18],
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+interface DispatchMockCall {
+  url: string;
+  body: Record<string, unknown>;
+  auth: string;
+}
+
+/**
+ * Mock backend: a pre-flight reply, then one scripted reply per POST /outreach/batch call.
+ * A scripted reply is a Response, or an Error to simulate a dropped connection.
+ */
+function makeDispatchMock(
+  preflight: Response | Error,
+  sendReplies: (Response | Error)[],
+): { fetchFn: typeof fetch; calls: DispatchMockCall[]; sendCalls: () => DispatchMockCall[] } {
+  const calls: DispatchMockCall[] = [];
+  let sendIndex = 0;
+  const fetchFn: typeof fetch = (url, init) => {
+    const u = String(url);
+    calls.push({
+      url: u,
+      body: JSON.parse(String(init?.body || "{}")),
+      auth: (init?.headers as Record<string, string>)?.["Authorization"] || "",
+    });
+    let reply: Response | Error;
+    if (u.endsWith("/outreach/batch/preflight")) {
+      reply = preflight;
+    } else if (u.endsWith("/outreach/batch")) {
+      reply = sendReplies[sendIndex++] ??
+        new Error("test mock: unexpected extra POST /outreach/batch call");
+    } else {
+      reply = new Error(`test mock: unexpected URL ${u}`);
+    }
+    return reply instanceof Error ? Promise.reject(reply) : Promise.resolve(reply);
   };
-
-  let capturedUrl = "";
-  let capturedBody: Record<string, unknown> = {};
-  let capturedAuth = "";
-
-  const mockFetch: typeof fetch = (url, init) => {
-    capturedUrl = String(url);
-    capturedBody = JSON.parse(String(init?.body || "{}"));
-    capturedAuth = (init?.headers as Record<string, string>)?.["Authorization"] || "";
-
-    return Promise.resolve(
-      new Response(
-        JSON.stringify({
-          requested: 2,
-          sent: 2,
-          skipped: [],
-          records: [{ _id: "rec1" }, { _id: "rec2" }],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
+  return {
+    fetchFn,
+    calls,
+    sendCalls: () => calls.filter((c) => c.url.endsWith("/outreach/batch")),
   };
+}
+
+function sendReply(venueIds: string[], remaining: number, skippedIds: string[] = []): Response {
+  const sentIds = venueIds.filter((id) => !skippedIds.includes(id));
+  return jsonResponse({
+    sent: sentIds.length,
+    skipped: skippedIds.map((id) => ({
+      venueId: id,
+      venueName: `Name of ${id}`,
+      reason: "opt-out",
+    })),
+    records: sentIds.map((id) => ({ _id: `rec-${id}`, venueId: id })),
+    remaining,
+  });
+}
+
+function namesFor(ids: string[]): Record<string, string> {
+  return Object.fromEntries(ids.map((id) => [id, `Name of ${id}`]));
+}
+
+Deno.test("dispatchBatchOutreach: pre-flight once with the whole set, then sends carry only the dispatchId", async () => {
+  const mock = makeDispatchMock(
+    jsonResponse({ dispatchId: "disp-1", venueCount: 2 }),
+    [sendReply(["v1", "v2"], 0)],
+  );
 
   const res = await dispatchBatchOutreach(
     {
-      weekend,
+      weekend: DISPATCH_WEEKEND,
       venueIds: ["v1", "v2"],
       backendUrl: "https://test.local",
       token: "secret-token",
     },
-    mockFetch,
+    mock.fetchFn,
   );
 
-  assertEquals(capturedUrl, "https://test.local/outreach/batch");
-  assertEquals(capturedAuth, "Bearer secret-token");
-  assertEquals(capturedBody.venueIds, ["v1", "v2"]);
-  assertEquals(capturedBody.targetDates, "October 16–18, 2026");
-  assertEquals(capturedBody.bookingPeriod, "October 2026");
-  assertEquals(capturedBody.targetWeekend, { start: "2026-10-16", end: "2026-10-18" });
-  assertEquals(res.sent, 2);
+  assertEquals(mock.calls.length, 2);
+  assertEquals(mock.calls[0].url, "https://test.local/outreach/batch/preflight");
+  assertEquals(mock.calls[0].auth, "Bearer secret-token");
+  assertEquals(mock.calls[0].body.venueIds, ["v1", "v2"]);
+  assertEquals(mock.calls[0].body.targetDates, "October 16–18, 2026");
+  assertEquals(mock.calls[0].body.bookingPeriod, "October 2026");
+  assertEquals(mock.calls[0].body.targetWeekend, { start: "2026-10-16", end: "2026-10-18" });
+  assertEquals(mock.calls[1].url, "https://test.local/outreach/batch");
+  assertEquals(mock.calls[1].auth, "Bearer secret-token");
+  // The send call carries the dispatch id and nothing that chooses venues.
+  assertEquals(mock.calls[1].body, { dispatchId: "disp-1" });
   assertEquals(res.requested, 2);
+  assertEquals(res.sent, 2);
+});
+
+Deno.test("dispatchBatchOutreach: pre-flights 60 venues once, repeats the send call until remaining is 0, and aggregates", async () => {
+  const venueIds = Array.from({ length: 60 }, (_, i) => `venue-${i + 1}`);
+  const mock = makeDispatchMock(
+    jsonResponse({ dispatchId: "disp-60", venueCount: 60 }),
+    [
+      // call 1: 25 sent, 1 skipped -> 34 remain
+      sendReply(venueIds.slice(0, 26), 34, ["venue-1"]),
+      // call 2: 20 sent -> 14 remain
+      sendReply(venueIds.slice(26, 46), 14),
+      // call 3: the last 14 -> 0 remain
+      sendReply(venueIds.slice(46), 0),
+    ],
+  );
+  const progress: DispatchProgress[] = [];
+
+  const res = await dispatchBatchOutreach(
+    {
+      weekend: DISPATCH_WEEKEND,
+      venueIds,
+      onProgress: (p) => progress.push(p),
+    },
+    mock.fetchFn,
+  );
+
+  // One pre-flight carrying all 60 ids (no client-side slicing), then exactly 3 send calls.
+  assertEquals(mock.calls.length, 4);
+  assertEquals((mock.calls[0].body.venueIds as string[]).length, 60);
+  assertEquals(mock.sendCalls().length, 3);
+  for (const call of mock.sendCalls()) {
+    assertEquals(call.body, { dispatchId: "disp-60" });
+  }
+
+  assertEquals(progress, [
+    { callNumber: 1, sent: 25, skipped: 1, remaining: 34 },
+    { callNumber: 2, sent: 45, skipped: 1, remaining: 14 },
+    { callNumber: 3, sent: 59, skipped: 1, remaining: 0 },
+  ]);
+  assertEquals(res.requested, 60);
+  assertEquals(res.sent, 59);
+  assertEquals(res.skipped.length, 1);
+  assertEquals(res.skipped[0].venueId, "venue-1");
+  assertEquals(res.records.length, 59);
+});
+
+Deno.test("dispatchBatchOutreach: a refusal on the second send call stops the loop and reports sent and unsent venues separately by name", async () => {
+  const venueIds = ["v1", "v2", "v3", "v4", "v5"];
+  const mock = makeDispatchMock(
+    jsonResponse({ dispatchId: "disp-x", venueCount: 5 }),
+    [
+      sendReply(["v1", "v2"], 3),
+      jsonResponse({
+        message:
+          "dispatch refused: approval records changed since preflight check. Unsent venues: Name of v3, Name of v4, Name of v5",
+        unsentVenues: ["Name of v3", "Name of v4", "Name of v5"],
+      }, 403),
+      // A third send reply is scripted so a loop that failed to stop would be caught below.
+      sendReply(["v3", "v4", "v5"], 0),
+    ],
+  );
+
+  const err = await assertRejects(
+    () =>
+      dispatchBatchOutreach(
+        { weekend: DISPATCH_WEEKEND, venueIds, venueNames: namesFor(venueIds) },
+        mock.fetchFn,
+      ),
+    BatchDispatchError,
+  );
+
+  // Pre-flight + 2 send calls; the loop stopped at the refusal.
+  assertEquals(mock.sendCalls().length, 2);
+  assertEquals(err.stage, "send");
+  assertEquals(err.status, 403);
+  assertEquals(err.callNumber, 2);
+  assertEquals(err.dispatchId, "disp-x");
+  // Sent venues stay reported as sent...
+  assertEquals(err.partialResult.sent, 2);
+  assertEquals(
+    err.partialResult.records.map((r) => (r as { venueId: string }).venueId),
+    ["v1", "v2"],
+  );
+  // ...and every unsent venue is named, separately.
+  assertEquals(err.unsentVenues.map((v) => v.venueName), [
+    "Name of v3",
+    "Name of v4",
+    "Name of v5",
+  ]);
+  assertStringIncludes(err.message, "HTTP 403");
+  assertStringIncludes(err.message, "approval records changed");
+  assertStringIncludes(err.message, "Sent before the refusal: 2");
+  assertStringIncludes(err.message, "Unsent venues: Name of v3, Name of v4, Name of v5.");
+});
+
+Deno.test("dispatchBatchOutreach: a skipped venue is not reported as unsent, and a dropped connection mid-loop stops it", async () => {
+  const venueIds = ["v1", "v2", "v3"];
+  const mock = makeDispatchMock(
+    jsonResponse({ dispatchId: "disp-n", venueCount: 3 }),
+    [sendReply(["v1", "v2"], 1, ["v2"]), new Error("Connection reset by peer")],
+  );
+
+  const err = await assertRejects(
+    () =>
+      dispatchBatchOutreach(
+        { weekend: DISPATCH_WEEKEND, venueIds, venueNames: namesFor(venueIds) },
+        mock.fetchFn,
+      ),
+    BatchDispatchError,
+  );
+
+  assertEquals(mock.sendCalls().length, 2);
+  assertEquals(err.stage, "send");
+  assertEquals(err.status, undefined);
+  assertEquals(err.callNumber, 2);
+  assertEquals(err.partialResult.sent, 1);
+  assertEquals(err.unsentVenues.map((v) => v.venueName), ["Name of v3"]);
+  assertStringIncludes(err.message, "send call 2 network error");
+  assertStringIncludes(err.message, "Connection reset by peer");
+});
+
+Deno.test("dispatchBatchOutreach: a pre-flight refusal (403 or 500) makes zero POST /outreach/batch calls and sends nothing", async () => {
+  const venueIds = ["v1", "v2", "v3"];
+  for (const status of [403, 500]) {
+    const mock = makeDispatchMock(
+      jsonResponse({
+        message: "dispatch refused: Gate 1 venue-set approval does not match batch venueIds",
+      }, status),
+      [sendReply(venueIds, 0)],
+    );
+
+    const err = await assertRejects(
+      () =>
+        dispatchBatchOutreach(
+          { weekend: DISPATCH_WEEKEND, venueIds, venueNames: namesFor(venueIds) },
+          mock.fetchFn,
+        ),
+      BatchDispatchError,
+    );
+
+    assertEquals(mock.sendCalls().length, 0, `no send call after a ${status} pre-flight`);
+    assertEquals(mock.calls.length, 1);
+    assertEquals(err.stage, "preflight");
+    assertEquals(err.status, status);
+    assertEquals(err.partialResult.sent, 0);
+    assertEquals(err.unsentVenues.map((v) => v.venueName), [
+      "Name of v1",
+      "Name of v2",
+      "Name of v3",
+    ]);
+    assertStringIncludes(err.message, `HTTP ${status}`);
+    assertStringIncludes(err.message, "Gate 1 venue-set approval does not match");
+    assertStringIncludes(err.message, "Nothing was sent");
+  }
+});
+
+Deno.test("dispatchBatchOutreach: pre-flight network failure or missing dispatchId sends nothing", async () => {
+  const venueIds = ["v1"];
+
+  const down = makeDispatchMock(new Error("ECONNREFUSED"), [sendReply(venueIds, 0)]);
+  const netErr = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, down.fetchFn),
+    BatchDispatchError,
+  );
+  assertEquals(down.sendCalls().length, 0);
+  assertEquals(netErr.stage, "preflight");
+  assertStringIncludes(netErr.message, "pre-flight network error");
+
+  const noId = makeDispatchMock(jsonResponse({ venueCount: 1 }), [sendReply(venueIds, 0)]);
+  const idErr = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, noId.fetchFn),
+    BatchDispatchError,
+  );
+  assertEquals(noId.sendCalls().length, 0);
+  assertStringIncludes(idErr.message, "returned no dispatchId");
+
+  const badJson = makeDispatchMock(new Response("not json", { status: 200 }), []);
+  await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, badJson.fetchFn),
+    BatchDispatchError,
+    "returned no dispatchId",
+  );
+});
+
+Deno.test("dispatchBatchOutreach: empty venueIds returns a zero result without any fetch", async () => {
+  const mock = makeDispatchMock(jsonResponse({ dispatchId: "x" }), []);
+  const res = await dispatchBatchOutreach(
+    { weekend: DISPATCH_WEEKEND, venueIds: [] },
+    mock.fetchFn,
+  );
+  assertEquals(mock.calls.length, 0);
+  assertEquals(res, { requested: 0, sent: 0, skipped: [], records: [] });
+});
+
+Deno.test("dispatchBatchOutreach: fails closed on a reply without a numeric remaining, or one that makes no progress", async () => {
+  const venueIds = ["v1", "v2", "v3"];
+
+  const noRemaining = makeDispatchMock(
+    jsonResponse({ dispatchId: "d" }),
+    [jsonResponse({ sent: 1, skipped: [], records: [{ venueId: "v1" }] })],
+  );
+  const err1 = await assertRejects(
+    () =>
+      dispatchBatchOutreach(
+        { weekend: DISPATCH_WEEKEND, venueIds, venueNames: namesFor(venueIds) },
+        noRemaining.fetchFn,
+      ),
+    BatchDispatchError,
+  );
+  assertEquals(noRemaining.sendCalls().length, 1);
+  assertStringIncludes(err1.message, 'no numeric "remaining"');
+  assertEquals(err1.unsentVenues.map((v) => v.venueName), ["Name of v2", "Name of v3"]);
+
+  // remaining stays at 2 after a second call: stop rather than loop forever.
+  const stuck = makeDispatchMock(
+    jsonResponse({ dispatchId: "d" }),
+    [sendReply(["v1"], 2), sendReply([], 2), sendReply([], 2)],
+  );
+  const err2 = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, stuck.fetchFn),
+    BatchDispatchError,
+  );
+  assertEquals(stuck.sendCalls().length, 2);
+  assertStringIncludes(err2.message, "made no progress");
+});
+
+Deno.test("dispatchBatchOutreach: unparseable send reply and a text/plain refusal body are reported", async () => {
+  const venueIds = ["v1", "v2"];
+  const bad = makeDispatchMock(
+    jsonResponse({ dispatchId: "d" }),
+    [new Response("<html>gateway</html>", { status: 200 })],
+  );
+  const err1 = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, bad.fetchFn),
+    BatchDispatchError,
+  );
+  assertStringIncludes(err1.message, "response unparseable");
+
+  const plain = makeDispatchMock(
+    jsonResponse({ dispatchId: "d" }),
+    [new Response("Service Unavailable", { status: 503 })],
+  );
+  const err2 = await assertRejects(
+    () => dispatchBatchOutreach({ weekend: DISPATCH_WEEKEND, venueIds }, plain.fetchFn),
+    BatchDispatchError,
+  );
+  assertEquals(err2.status, 503);
+  assertStringIncludes(err2.message, "Service Unavailable");
+  // Unnamed venues fall back to their ids.
+  assertEquals(err2.unsentVenues.map((v) => v.venueName), ["v1", "v2"]);
+});
+
+function makeCliDispatchFetch(
+  venues: { _id: string; name: string; email: string }[],
+  batchHandler: (url: string, body: Record<string, unknown>) => Response,
+): { fetchFn: typeof fetch; batchUrls: string[]; reportPosts: Record<string, unknown>[] } {
+  const batchUrls: string[] = [];
+  const reportPosts: Record<string, unknown>[] = [];
+  const fetchFn: typeof fetch = (url, init) => {
+    const u = String(url);
+    if (u.includes("/venue/candidates") || u.includes("/outreach/candidates")) {
+      return Promise.resolve(jsonResponse(venues));
+    }
+    if (u.includes("/outreach/preview")) {
+      const w: TargetWeekend = DISPATCH_WEEKEND;
+      return Promise.resolve(jsonResponse(venues.map((v) => {
+        const p = renderPitch(v, w);
+        return {
+          venueId: v._id,
+          venueName: v.name,
+          to: v.email,
+          subject: p.subject,
+          body: p.htmlBody || p.body,
+        };
+      })));
+    }
+    if (u.includes("/template")) return Promise.resolve(jsonResponse([]));
+    if (u.includes("/outreach/batch")) {
+      batchUrls.push(u);
+      return Promise.resolve(batchHandler(u, JSON.parse(String(init?.body || "{}"))));
+    }
+    if (u.includes("/outreach/report")) {
+      // GET of a prior report: none stored yet, so the run starts fresh.
+      if (init?.method !== "POST") return Promise.resolve(new Response("", { status: 404 }));
+      reportPosts.push(JSON.parse(String(init?.body || "{}")));
+      return Promise.resolve(jsonResponse({ success: true, url: "https://web-jam.com/report/1" }));
+    }
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+  return { fetchFn, batchUrls, reportPosts };
+}
+
+function cliVenues(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    _id: `v-${i + 1}`,
+    name: `Venue ${i + 1}`,
+    email: `booking${i + 1}@venue.com`,
+    city: "Salem",
+    usState: "VA",
+    outreachEligible: true,
+  }));
+}
+
+Deno.test("runBookGigCli --send: a refusal on a later send call publishes the partial result to the report, then rethrows with unsent venues named", async () => {
+  const venues = cliVenues(4);
+  let sendCalls = 0;
+  const { fetchFn, batchUrls, reportPosts } = makeCliDispatchFetch(venues, (u) => {
+    if (u.endsWith("/outreach/batch/preflight")) {
+      return jsonResponse({ dispatchId: "disp-cli", venueCount: 4 });
+    }
+    sendCalls++;
+    if (sendCalls === 1) return sendReply(["v-1", "v-2"], 2);
+    return jsonResponse({ message: "dispatch refused: approval records changed" }, 403);
+  });
+
+  const err = await assertRejects(
+    () =>
+      runBookGigCli(
+        ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts", "--no-open"],
+        fetchFn,
+        () => Promise.resolve(true),
+      ),
+    BatchDispatchError,
+  );
+
+  assertEquals(batchUrls.length, 3); // pre-flight + 2 send calls; the loop stopped at the refusal
+  assertEquals(err.callNumber, 2);
+  assertEquals(err.status, 403);
+  assertEquals(err.partialResult.sent, 2);
+  assertEquals(err.unsentVenues.map((v) => v.venueName), ["Venue 3", "Venue 4"]);
+  // The partial result reached the published report before the error was rethrown.
+  assertEquals(reportPosts.length > 0, true);
+  assertStringIncludes(JSON.stringify(reportPosts), "dispatched");
+});
+
+Deno.test("runBookGigCli --send: a pre-flight refusal makes no send call and publishes no report", async () => {
+  const venues = cliVenues(3);
+  const { fetchFn, batchUrls, reportPosts } = makeCliDispatchFetch(
+    venues,
+    () => jsonResponse({ message: "dispatch refused: Gate 2 fingerprint mismatch" }, 403),
+  );
+
+  const err = await assertRejects(
+    () =>
+      runBookGigCli(
+        ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts", "--no-open"],
+        fetchFn,
+        () => Promise.resolve(true),
+      ),
+    BatchDispatchError,
+  );
+
+  assertEquals(batchUrls, [`${DEFAULT_BACKEND_URL}/outreach/batch/preflight`]);
+  assertEquals(err.stage, "preflight");
+  assertEquals(err.partialResult.sent, 0);
+  assertEquals(err.unsentVenues.map((v) => v.venueName), ["Venue 1", "Venue 2", "Venue 3"]);
+  assertEquals(reportPosts.length, 0);
+});
+
+Deno.test("runBookGigCli --send: success repeats send calls until remaining is 0 and returns the aggregate", async () => {
+  const venues = cliVenues(3);
+  let sendCalls = 0;
+  const { fetchFn, batchUrls } = makeCliDispatchFetch(venues, (u) => {
+    if (u.endsWith("/outreach/batch/preflight")) {
+      return jsonResponse({ dispatchId: "disp-ok", venueCount: 3 });
+    }
+    sendCalls++;
+    return sendCalls === 1 ? sendReply(["v-1", "v-2"], 1) : sendReply(["v-3"], 0);
+  });
+
+  const result = await runBookGigCli(
+    ["--send", "Oct 16-18 2026", "Salem, VA", "--confirm-drafts", "--no-open"],
+    fetchFn,
+    () => Promise.resolve(true),
+  );
+
+  assertEquals(batchUrls.length, 3);
+  assertEquals(result.batchDispatch?.sent, 3);
+  assertEquals(result.batchDispatch?.requested, 3);
 });
 
 Deno.test("checkGmailReplies, fetchPendingReplies, fetchOutreachCampaigns, and fetchVenueMap: mocked backend API interactions", async () => {
@@ -1961,14 +2402,22 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
         }),
       );
     }
+    if (u.endsWith("/outreach/batch/preflight")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ dispatchId: "disp-mock", venueCount: 1 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
     if (u.includes("/outreach/batch")) {
       return Promise.resolve(
         new Response(
           JSON.stringify({
-            requested: 1,
             sent: 1,
             skipped: [],
-            records: [{ _id: "outreach1" }],
+            records: [{ _id: "outreach1", venueId: "v1" }],
+            remaining: 0,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -2244,16 +2693,27 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
         }),
       );
     }
-    if (u.includes("/outreach/batch")) {
+    if (u.endsWith("/outreach/batch/preflight")) {
       const body = JSON.parse(String(init?.body || "{}"));
       lastDispatchedIds = body.venueIds;
       return Promise.resolve(
         new Response(
+          JSON.stringify({ dispatchId: "disp-mock", venueCount: body.venueIds.length }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/batch")) {
+      return Promise.resolve(
+        new Response(
           JSON.stringify({
-            requested: body.venueIds.length,
-            sent: body.venueIds.length,
+            sent: lastDispatchedIds.length,
             skipped: [],
-            records: body.venueIds.map((id: string) => ({ _id: `outreach_${id}` })),
+            records: lastDispatchedIds.map((id: string) => ({
+              _id: `outreach_${id}`,
+              venueId: id,
+            })),
+            remaining: 0,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -2326,7 +2786,7 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
       usState: "VA",
       email: "hold@brewery.com",
       isExcluded: true,
-      statusBadge: "[Seasonal Hold: Jan 2027]",
+      statusBadge: "Seasonal Hold: Jan 2027",
     },
   ];
   const mockFetchWithExcluded: typeof fetch = (url, init) => {
@@ -2339,16 +2799,27 @@ Deno.test("runBookGigCli: filters candidates in --send mode when --venues or --s
         }),
       );
     }
-    if (u.includes("/outreach/batch")) {
+    if (u.endsWith("/outreach/batch/preflight")) {
       const body = JSON.parse(String(init?.body || "{}"));
       lastDispatchedIds = body.venueIds;
       return Promise.resolve(
         new Response(
+          JSON.stringify({ dispatchId: "disp-mock", venueCount: body.venueIds.length }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (u.includes("/outreach/batch")) {
+      return Promise.resolve(
+        new Response(
           JSON.stringify({
-            requested: body.venueIds.length,
-            sent: body.venueIds.length,
+            sent: lastDispatchedIds.length,
             skipped: [],
-            records: body.venueIds.map((id: string) => ({ _id: `outreach_${id}` })),
+            records: lastDispatchedIds.map((id: string) => ({
+              _id: `outreach_${id}`,
+              venueId: id,
+            })),
+            remaining: 0,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
@@ -3046,7 +3517,7 @@ Deno.test("formatMonthYear & formatMonthDay: correctly formats dates for badges"
   assertEquals(formatMonthDay("2026-10-10"), "Oct 10");
 });
 
-Deno.test("identifyCandidateBadge: identifies Seasonal Hold for future resumeBooking (#879)", () => {
+Deno.test("identifyCandidateBadge: identifies Contact Hold for future resumeBooking and Booked Through (#879, #1196)", () => {
   const refDate = new Date("2026-10-01T00:00:00.000Z");
 
   const venue: CandidateVenue = {
@@ -3056,20 +3527,26 @@ Deno.test("identifyCandidateBadge: identifies Seasonal Hold for future resumeBoo
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(badge.badge, "Contact Hold: Until Jan 2027");
   assertEquals(badge.cssClass, "badge-seasonal-hold");
   assertEquals(badge.isExcluded, true);
 
-  // Fallback to bookedThrough
+  // Fallback to bookedThrough (compared against refDate when no targetWeekend provided)
   const venueBt: CandidateVenue = {
     _id: "v2",
     name: "Wintergreen Resort",
     bookedThrough: "2027-02-15",
   };
   const badgeBt = identifyCandidateBadge(venueBt, refDate);
-  assertEquals(badgeBt.badge, "[Seasonal Hold: Feb 2027]");
+  assertEquals(badgeBt.badge, "Booked Through: Feb 2027");
   assertEquals(badgeBt.cssClass, "badge-seasonal-hold");
   assertEquals(badgeBt.isExcluded, true);
+
+  // BookedThrough before target weekend is NOT excluded (#1196)
+  const targetWeekend = { start: "2027-03-19", end: "2027-03-21" };
+  const badgeEligible = identifyCandidateBadge(venueBt, refDate, targetWeekend);
+  assertEquals(badgeEligible.isExcluded, false);
+  assertEquals(badgeEligible.badge, "New");
 });
 
 Deno.test("identifyCandidateBadge: identifies Gig Spacing exclusion for ±2 month window (#879)", () => {
@@ -3082,7 +3559,7 @@ Deno.test("identifyCandidateBadge: identifies Gig Spacing exclusion for ±2 mont
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(badge.badge, "Gig Spacing: Nov 20 Show");
   assertEquals(badge.cssClass, "badge-gig-spacing");
   assertEquals(badge.isExcluded, true);
 
@@ -3093,7 +3570,7 @@ Deno.test("identifyCandidateBadge: identifies Gig Spacing exclusion for ±2 mont
     reason: { spacingNote: "Gig on 2026-09-15 Show" },
   };
   const badgeNote = identifyCandidateBadge(venueNote, refDate);
-  assertEquals(badgeNote.badge, "[Gig Spacing: Sep 15 Show]");
+  assertEquals(badgeNote.badge, "Gig Spacing: Sep 15 Show");
   assertEquals(badgeNote.cssClass, "badge-gig-spacing");
   assertEquals(badgeNote.isExcluded, true);
 });
@@ -3109,7 +3586,7 @@ Deno.test("identifyCandidateBadge: identifies Direct Chat Active for outreachEli
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Direct Chat Active]");
+  assertEquals(badge.badge, "Direct Chat Active");
   assertEquals(badge.cssClass, "badge-direct-chat");
   assertEquals(badge.isExcluded, true);
 
@@ -3120,12 +3597,12 @@ Deno.test("identifyCandidateBadge: identifies Direct Chat Active for outreachEli
     notes: "Chatting directly about holiday showcase",
   };
   const badgePrior = identifyCandidateBadge(venuePrior, refDate);
-  assertEquals(badgePrior.badge, "[Direct Chat Active]");
+  assertEquals(badgePrior.badge, "Direct Chat Active");
   assertEquals(badgePrior.cssClass, "badge-direct-chat");
   assertEquals(badgePrior.isExcluded, true);
 });
 
-Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligible: false and no direct chat notes is NOT badged [Direct Chat Active] (#879)", () => {
+Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligible: false and no direct chat notes is NOT badged Direct Chat Active (#879)", () => {
   const refDate = new Date("2026-10-01T00:00:00.000Z");
 
   const unvettedVenue: CandidateVenue = {
@@ -3135,7 +3612,7 @@ Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligi
     notes: "Needs liquor license verification before booking",
   };
   const badgeUnvetted = identifyCandidateBadge(unvettedVenue, refDate);
-  assertNotEquals(badgeUnvetted.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeUnvetted.badge, "Direct Chat Active");
   assertNotEquals(badgeUnvetted.cssClass, "badge-direct-chat");
 
   const declinedVenue: CandidateVenue = {
@@ -3145,7 +3622,7 @@ Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligi
     notes: "Permanently declined live music events",
   };
   const badgeDeclined = identifyCandidateBadge(declinedVenue, refDate);
-  assertNotEquals(badgeDeclined.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeDeclined.badge, "Direct Chat Active");
   assertNotEquals(badgeDeclined.cssClass, "badge-direct-chat");
 
   const emptyNotesVenue: CandidateVenue = {
@@ -3154,7 +3631,7 @@ Deno.test("identifyCandidateBadge: unvetted or declined venue with outreachEligi
     outreachEligible: false,
   };
   const badgeEmpty = identifyCandidateBadge(emptyNotesVenue, refDate);
-  assertNotEquals(badgeEmpty.badge, "[Direct Chat Active]");
+  assertNotEquals(badgeEmpty.badge, "Direct Chat Active");
   assertNotEquals(badgeEmpty.cssClass, "badge-direct-chat");
 });
 
@@ -3168,7 +3645,7 @@ Deno.test("identifyCandidateBadge: identifies Cooldown Active for replied pitche
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Cooldown Active: Replied Oct 12]");
+  assertEquals(badge.badge, "Cooldown Active: Replied Oct 12");
   assertEquals(badge.cssClass, "badge-cooldown");
   assertEquals(badge.isExcluded, true);
 });
@@ -3184,7 +3661,7 @@ Deno.test("identifyCandidateBadge: identifies Cooldown Active for pitches sent w
   };
 
   const badge = identifyCandidateBadge(venue, refDate);
-  assertEquals(badge.badge, "[Cooldown Active: Sent Oct 10]");
+  assertEquals(badge.badge, "Cooldown Active: Sent Oct 10");
   assertEquals(badge.cssClass, "badge-cooldown");
   assertEquals(badge.isExcluded, true);
 
@@ -3195,7 +3672,7 @@ Deno.test("identifyCandidateBadge: identifies Cooldown Active for pitches sent w
     sentAt: "2026-10-12T10:00:00.000Z",
   };
   const badgeSentAt = identifyCandidateBadge(venueSentAt, refDate);
-  assertEquals(badgeSentAt.badge, "[Cooldown Active: Sent Oct 12]");
+  assertEquals(badgeSentAt.badge, "Cooldown Active: Sent Oct 12");
   assertEquals(badgeSentAt.cssClass, "badge-cooldown");
   assertEquals(badgeSentAt.isExcluded, true);
 });
@@ -3267,9 +3744,47 @@ Deno.test("identifyCandidateBadge: handles eligible returning and new venues (#8
     },
   };
   const expiredBadge = identifyCandidateBadge(expiredHoldCandidate, refDate);
-  assertEquals(expiredBadge.badge, "clear — nearest gig ~3.5 mo away");
+  assertEquals(expiredBadge.badge, "Sending — nearest gig ~3.5 mo away");
   assertEquals(expiredBadge.cssClass, "badge-eligible");
   assertEquals(expiredBadge.isExcluded, false);
+});
+
+Deno.test("normalizeEligibleBadge & identifyCandidateBadge: maps 'clear — ...' to 'Sending — ...' (#1196)", () => {
+  assertEquals(
+    normalizeEligibleBadge("clear — nearest gig ~2.2 mo away"),
+    "Sending — nearest gig ~2.2 mo away",
+  );
+  assertEquals(
+    normalizeEligibleBadge("clear - nearest gig ~4.1 mo away"),
+    "Sending — nearest gig ~4.1 mo away",
+  );
+  assertEquals(normalizeEligibleBadge("clear"), "Sending");
+  assertEquals(normalizeEligibleBadge("CLEAR"), "Sending");
+  assertEquals(normalizeEligibleBadge("no gigs yet"), "no gigs yet");
+  assertEquals(normalizeEligibleBadge("New"), "New");
+
+  const refDate = new Date("2026-10-01T00:00:00.000Z");
+  const venueWithSpacingNote: CandidateVenue = {
+    _id: "v-clear",
+    name: "Clear Venue",
+    reason: {
+      spacingNote: "clear — nearest gig ~2.2 mo away",
+    },
+  };
+  const badge = identifyCandidateBadge(venueWithSpacingNote, refDate);
+  assertEquals(badge.badge, "Sending — nearest gig ~2.2 mo away");
+  assertEquals(badge.cssClass, "badge-eligible");
+  assertEquals(badge.isExcluded, false);
+
+  const venueWithClearStatusBadge: CandidateVenue = {
+    _id: "v-clear-sb",
+    name: "Clear Status Badge Venue",
+    statusBadge: "clear — nearest gig ~18.8 mo away",
+  };
+  const badgeSb = identifyCandidateBadge(venueWithClearStatusBadge, refDate);
+  assertEquals(badgeSb.badge, "Sending — nearest gig ~18.8 mo away");
+  assertEquals(badgeSb.cssClass, "badge-eligible");
+  assertEquals(badgeSb.isExcluded, false);
 });
 
 Deno.test("filterAndRankCandidates: populates granular status badges and reasoning on candidate venues (#879)", () => {
@@ -3335,22 +3850,22 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   assertEquals(filtered.length, 7);
 
   const hold = filtered.find((v) => v._id === "v1")!;
-  assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.statusBadge, "Contact Hold: Until Jan 2027");
   assertEquals(hold.isExcluded, true);
-  assertEquals(hold.reason?.exclusionReason, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.reason?.exclusionReason, "Contact Hold: Until Jan 2027");
 
   const spacing = filtered.find((v) => v._id === "v2")!;
-  assertEquals(spacing.statusBadge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(spacing.statusBadge, "Gig Spacing: Nov 20 Show");
   assertEquals(spacing.isExcluded, true);
-  assertEquals(spacing.reason?.exclusionReason, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(spacing.reason?.exclusionReason, "Gig Spacing: Nov 20 Show");
 
   const chat = filtered.find((v) => v._id === "v3")!;
-  assertEquals(chat.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.statusBadge, "Direct Chat Active");
   assertEquals(chat.isExcluded, true);
-  assertEquals(chat.reason?.exclusionReason, "[Direct Chat Active]");
+  assertEquals(chat.reason?.exclusionReason, "Direct Chat Active");
 
   const cooldown = filtered.find((v) => v._id === "v4")!;
-  assertEquals(cooldown.statusBadge, "[Cooldown Active: Sent Sep 28]");
+  assertEquals(cooldown.statusBadge, "Cooldown Active: Sent Sep 28");
   assertEquals(cooldown.isExcluded, true);
 
   const returning = filtered.find((v) => v._id === "v5")!;
@@ -3362,7 +3877,7 @@ Deno.test("filterAndRankCandidates: populates granular status badges and reasoni
   assertEquals(fresh.isExcluded, false);
 
   const noEmail = filtered.find((v) => v._id === "v7")!;
-  assertEquals(noEmail.statusBadge, "[No Booking Email]");
+  assertEquals(noEmail.statusBadge, "No Booking Email");
   assertEquals(noEmail.isExcluded, true);
   assertEquals(noEmail.exclusionReason, "no-booking-email");
 });
@@ -3446,20 +3961,20 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
   // 1. Terminal candidate table (uncolored check)
   const terminalPlain = renderCandidateTable(candidates, { color: false, referenceDate: refDate });
   assertStringIncludes(terminalPlain, "Spacing Status");
-  assertStringIncludes(terminalPlain, "[Seasonal Hold: Jan 2027]");
-  assertStringIncludes(terminalPlain, "[Gig Spacing: Nov 20 Show]");
-  assertStringIncludes(terminalPlain, "[Direct Chat Active]");
-  assertStringIncludes(terminalPlain, "[Cooldown Active: Sent Sep 28]");
+  assertStringIncludes(terminalPlain, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(terminalPlain, "Gig Spacing: Nov 20 Show");
+  assertStringIncludes(terminalPlain, "Direct Chat Active");
+  assertStringIncludes(terminalPlain, "Cooldown Active: Sent Sep 28");
 
   // 2. Terminal candidate table (colored check)
   const terminalColored = renderCandidateTable(candidates, { color: true, referenceDate: refDate });
-  assertStringIncludes(terminalColored, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(terminalColored, "Contact Hold: Until Jan 2027");
   assertStringIncludes(terminalColored, "\x1b[36m"); // Cyan
-  assertStringIncludes(terminalColored, "[Gig Spacing: Nov 20 Show]");
+  assertStringIncludes(terminalColored, "Gig Spacing: Nov 20 Show");
   assertStringIncludes(terminalColored, "\x1b[31m"); // Red
-  assertStringIncludes(terminalColored, "[Direct Chat Active]");
+  assertStringIncludes(terminalColored, "Direct Chat Active");
   assertStringIncludes(terminalColored, "\x1b[35m"); // Magenta
-  assertStringIncludes(terminalColored, "[Cooldown Active: Sent Sep 28]");
+  assertStringIncludes(terminalColored, "Cooldown Active: Sent Sep 28");
   assertStringIncludes(terminalColored, "\x1b[34m"); // Blue
 
   // Empty table check
@@ -3487,13 +4002,13 @@ Deno.test("renderCandidateTable & renderDarkHtml: surfaces granular badges in te
 
   // Status badges and CSS classes in HTML
   assertStringIncludes(html, "badge-seasonal-hold");
-  assertStringIncludes(html, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(html, "Contact Hold: Until Jan 2027");
   assertStringIncludes(html, "badge-gig-spacing");
-  assertStringIncludes(html, "[Gig Spacing: Nov 20 Show]");
+  assertStringIncludes(html, "Gig Spacing: Nov 20 Show");
   assertStringIncludes(html, "badge-direct-chat");
-  assertStringIncludes(html, "[Direct Chat Active]");
+  assertStringIncludes(html, "Direct Chat Active");
   assertStringIncludes(html, "badge-cooldown");
-  assertStringIncludes(html, "[Cooldown Active: Sent Sep 28]");
+  assertStringIncludes(html, "Cooldown Active: Sent Sep 28");
 });
 
 Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and cooldown venues alongside genuine /outreach/candidates response", async () => {
@@ -3702,12 +4217,12 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assertEquals(newBadge.cssClass, "badge-eligible");
   assertEquals(newBadge.isExcluded, false);
 
-  // 3. Seasonal Hold venue
+  // 3. Contact Hold / Seasonal Hold venue
   const seasonalHold = candidates.find((c) => c._id === "venue-seasonal-hold");
   assert(seasonalHold !== undefined);
   assertEquals(seasonalHold.isExcluded, true);
   const seasonalBadge = identifyCandidateBadge(seasonalHold);
-  assertStringIncludes(seasonalBadge.badge, "[Seasonal Hold: Jan 2027]");
+  assertStringIncludes(seasonalBadge.badge, "Contact Hold: Until Jan 2027");
   assertEquals(seasonalBadge.cssClass, "badge-seasonal-hold");
   assertEquals(seasonalBadge.isExcluded, true);
 
@@ -3716,7 +4231,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(directChat !== undefined);
   assertEquals(directChat.isExcluded, true);
   const directChatBadge = identifyCandidateBadge(directChat);
-  assertEquals(directChatBadge.badge, "[Direct Chat Active]");
+  assertEquals(directChatBadge.badge, "Direct Chat Active");
   assertEquals(directChatBadge.cssClass, "badge-direct-chat");
   assertEquals(directChatBadge.isExcluded, true);
 
@@ -3725,7 +4240,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(gigSpacing !== undefined);
   assertEquals(gigSpacing.isExcluded, true);
   const gigSpacingBadge = identifyCandidateBadge(gigSpacing);
-  assertEquals(gigSpacingBadge.badge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(gigSpacingBadge.badge, "Gig Spacing: Nov 20 Show");
   assertEquals(gigSpacingBadge.cssClass, "badge-gig-spacing");
   assertEquals(gigSpacingBadge.isExcluded, true);
 
@@ -3734,7 +4249,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(cooldown !== undefined);
   assertEquals(cooldown.isExcluded, true);
   const cooldownBadge = identifyCandidateBadge(cooldown);
-  assertStringIncludes(cooldownBadge.badge, "[Cooldown Active: Sent");
+  assertStringIncludes(cooldownBadge.badge, "Cooldown Active: Sent");
   assertEquals(cooldownBadge.cssClass, "badge-cooldown");
   assertEquals(cooldownBadge.isExcluded, true);
 
@@ -3743,7 +4258,7 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   assert(cooldownReplied !== undefined);
   assertEquals(cooldownReplied.isExcluded, true);
   const cooldownRepliedBadge = identifyCandidateBadge(cooldownReplied);
-  assertStringIncludes(cooldownRepliedBadge.badge, "[Cooldown Active: Replied");
+  assertStringIncludes(cooldownRepliedBadge.badge, "Cooldown Active: Replied");
   assertEquals(cooldownRepliedBadge.cssClass, "badge-cooldown");
   assertEquals(cooldownRepliedBadge.isExcluded, true);
 
@@ -3751,11 +4266,11 @@ Deno.test("fetchCandidates: surfaces held, spacing-conflict, direct-chat, and co
   const renderedTable = renderCandidateTable(candidates, { color: false });
   assertStringIncludes(renderedTable, "Returning · Last: Jun 15");
   assertStringIncludes(renderedTable, "no gigs yet");
-  assertStringIncludes(renderedTable, "[Seasonal Hold: Jan 2027]");
-  assertStringIncludes(renderedTable, "[Direct Chat Active]");
-  assertStringIncludes(renderedTable, "[Gig Spacing: Nov 20 Show]");
-  assertStringIncludes(renderedTable, "[Cooldown Active: Sent");
-  assertStringIncludes(renderedTable, "[Cooldown Active: Replied");
+  assertStringIncludes(renderedTable, "Contact Hold: Until Jan 2027");
+  assertStringIncludes(renderedTable, "Direct Chat Active");
+  assertStringIncludes(renderedTable, "Gig Spacing: Nov 20 Show");
+  assertStringIncludes(renderedTable, "Cooldown Active: Sent");
+  assertStringIncludes(renderedTable, "Cooldown Active: Replied");
 
   // Verify assessDensity counts ONLY the 2 eligible candidates
   const density = assessDensity(candidates);
@@ -4130,7 +4645,7 @@ Deno.test("runBookGigCli: logs evaluated vs pitchable discovery counts and print
     assertStringIncludes(excludedSection, "Seasonal Hold Farm");
     assertStringIncludes(excludedSection, "Spacing Conflict Venue");
     assertStringIncludes(excludedSection, "No Email Cafe");
-    assertStringIncludes(excludedSection, "[No Booking Email]");
+    assertStringIncludes(excludedSection, "No Booking Email");
     assert(
       !excludedSection.includes("Eligible Brewery"),
       "Eligible Brewery must not be in excluded table",
@@ -4309,25 +4824,25 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertEquals(isPitchableCandidate(outOfState), false);
   assertEquals(outOfState.isExcluded, true);
   assertEquals(outOfState.exclusionReason, "out-of-state");
-  assertEquals(outOfState.statusBadge, "[Out of State]");
+  assertEquals(outOfState.statusBadge, "Out of State");
 
   const outsideArea = candidates.find((c) => c._id === "v-outside-area")!;
   assertEquals(isPitchableCandidate(outsideArea), false);
   assertEquals(outsideArea.isExcluded, true);
   assertEquals(outsideArea.exclusionReason, "outside-target-area");
-  assertEquals(outsideArea.statusBadge, "[Outside Target Area]");
+  assertEquals(outsideArea.statusBadge, "Outside Target Area");
 
   const noEmail = candidates.find((c) => c._id === "v-no-email")!;
   assertEquals(isPitchableCandidate(noEmail), false);
   assertEquals(noEmail.isExcluded, true);
   assertEquals(noEmail.exclusionReason, "no-booking-email");
-  assertEquals(noEmail.statusBadge, "[No Booking Email]");
+  assertEquals(noEmail.statusBadge, "No Booking Email");
 
   const seasonalHold = candidates.find((c) => c._id === "v-seasonal-hold")!;
   assertEquals(isPitchableCandidate(seasonalHold), false);
   assertEquals(seasonalHold.isExcluded, true);
   assertEquals(seasonalHold.exclusionReason, "seasonal-hold");
-  assertStringIncludes(seasonalHold.statusBadge!, "Seasonal Hold");
+  assertStringIncludes(seasonalHold.statusBadge!, "Contact Hold");
 
   const gigSpacing = candidates.find((c) => c._id === "v-gig-spacing")!;
   assertEquals(isPitchableCandidate(gigSpacing), false);
@@ -4339,7 +4854,7 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertEquals(isPitchableCandidate(directChat), false);
   assertEquals(directChat.isExcluded, true);
   assertEquals(directChat.exclusionReason, "direct-chat");
-  assertEquals(directChat.statusBadge, "[Direct Chat Active]");
+  assertEquals(directChat.statusBadge, "Direct Chat Active");
 
   const cooldown = candidates.find((c) => c._id === "v-cooldown")!;
   assertEquals(isPitchableCandidate(cooldown), false);
@@ -4391,13 +4906,13 @@ Deno.test("reconciliation & 7 exclusion reasons: accounts for every backend venu
   assertStringIncludes(excludedTable, "Roanoke Cafe");
   assertStringIncludes(excludedTable, "Salem Taphouse");
 
-  assertStringIncludes(excludedTable, "[Out of State]");
-  assertStringIncludes(excludedTable, "[Outside Target Area]");
-  assertStringIncludes(excludedTable, "[No Booking Email]");
-  assertStringIncludes(excludedTable, "[Seasonal Hold: Apr 2027]");
-  assertStringIncludes(excludedTable, "[Gig Spacing: Nov 15 Show]");
-  assertStringIncludes(excludedTable, "[Direct Chat Active]");
-  assertStringIncludes(excludedTable, "[Cooldown Active: Sent Oct 14]");
+  assertStringIncludes(excludedTable, "Out of State");
+  assertStringIncludes(excludedTable, "Outside Target Area");
+  assertStringIncludes(excludedTable, "No Booking Email");
+  assertStringIncludes(excludedTable, "Contact Hold: Until Apr 2027");
+  assertStringIncludes(excludedTable, "Gig Spacing: Nov 15 Show");
+  assertStringIncludes(excludedTable, "Direct Chat Active");
+  assertStringIncludes(excludedTable, "Cooldown Active: Sent Oct 14");
   assert(!excludedTable.includes("New"), "Excluded table must never display 'New'");
 
   // 8. CLI integration with mocked fetchFn prints the reconciled discovery breakdown log
@@ -4920,10 +5435,10 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
       usState: "SC",
       email: "booking@thegarrison.com",
       isExcluded: true,
-      statusBadge: "[Cooldown Active: Sent Sep 13]",
+      statusBadge: "Cooldown Active: Sent Sep 13",
       exclusionReason: "cooldown",
       reason: {
-        statusBadge: "[Cooldown Active: Sent Sep 13]",
+        statusBadge: "Cooldown Active: Sent Sep 13",
         exclusionReason: "cooldown",
       },
     },
@@ -4934,10 +5449,10 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
       usState: "NC",
       email: "booking@hold.com",
       isExcluded: true,
-      statusBadge: "[Seasonal Hold: Jan 2027]",
+      statusBadge: "Seasonal Hold: Jan 2027",
       exclusionReason: "seasonal-hold",
       reason: {
-        statusBadge: "[Seasonal Hold: Jan 2027]",
+        statusBadge: "Seasonal Hold: Jan 2027",
         exclusionReason: "seasonal-hold",
       },
     },
@@ -4948,10 +5463,10 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
       usState: "NC",
       email: "booking@chat.com",
       isExcluded: true,
-      statusBadge: "[Direct Chat Active]",
+      statusBadge: "Direct Chat Active",
       exclusionReason: "direct-chat",
       reason: {
-        statusBadge: "[Direct Chat Active]",
+        statusBadge: "Direct Chat Active",
         exclusionReason: "direct-chat",
       },
     },
@@ -4962,10 +5477,10 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
       usState: "NC",
       email: "booking@spacing.com",
       isExcluded: true,
-      statusBadge: "[Gig Spacing: Nov 15 Show]",
+      statusBadge: "Gig Spacing: Nov 15 Show",
       exclusionReason: "gig-spacing",
       reason: {
-        statusBadge: "[Gig Spacing: Nov 15 Show]",
+        statusBadge: "Gig Spacing: Nov 15 Show",
         exclusionReason: "gig-spacing",
       },
     },
@@ -4994,30 +5509,30 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
   const garrison = filtered.find((v) => v._id === "garrison")!;
   assertEquals(garrison.isExcluded, true);
   assertEquals(garrison.exclusionReason, "cooldown");
-  assertEquals(garrison.statusBadge, "[Cooldown Active: Sent Sep 13]");
+  assertEquals(garrison.statusBadge, "Cooldown Active: Sent Sep 13");
   assertEquals(garrison.reason?.exclusionReason, "cooldown");
-  assertEquals(garrison.reason?.statusBadge, "[Cooldown Active: Sent Sep 13]");
+  assertEquals(garrison.reason?.statusBadge, "Cooldown Active: Sent Sep 13");
 
   const hold = filtered.find((v) => v._id === "hold-venue")!;
   assertEquals(hold.isExcluded, true);
   assertEquals(hold.exclusionReason, "seasonal-hold");
-  assertEquals(hold.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.statusBadge, "Seasonal Hold: Jan 2027");
   assertEquals(hold.reason?.exclusionReason, "seasonal-hold");
-  assertEquals(hold.reason?.statusBadge, "[Seasonal Hold: Jan 2027]");
+  assertEquals(hold.reason?.statusBadge, "Seasonal Hold: Jan 2027");
 
   const chat = filtered.find((v) => v._id === "direct-chat-venue")!;
   assertEquals(chat.isExcluded, true);
   assertEquals(chat.exclusionReason, "direct-chat");
-  assertEquals(chat.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.statusBadge, "Direct Chat Active");
   assertEquals(chat.reason?.exclusionReason, "direct-chat");
-  assertEquals(chat.reason?.statusBadge, "[Direct Chat Active]");
+  assertEquals(chat.reason?.statusBadge, "Direct Chat Active");
 
   const spacing = filtered.find((v) => v._id === "spacing-venue")!;
   assertEquals(spacing.isExcluded, true);
   assertEquals(spacing.exclusionReason, "gig-spacing");
-  assertEquals(spacing.statusBadge, "[Gig Spacing: Nov 15 Show]");
+  assertEquals(spacing.statusBadge, "Gig Spacing: Nov 15 Show");
   assertEquals(spacing.reason?.exclusionReason, "gig-spacing");
-  assertEquals(spacing.reason?.statusBadge, "[Gig Spacing: Nov 15 Show]");
+  assertEquals(spacing.reason?.statusBadge, "Gig Spacing: Nov 15 Show");
 
   const inArea = filtered.find((v) => v._id === "in-area-venue")!;
   assertEquals(inArea.isExcluded, false);
@@ -5026,7 +5541,7 @@ Deno.test("filterAndRankCandidates: preserves pre-existing cause-based exclusion
   const outOfArea = filtered.find((v) => v._id === "out-of-area-eligible")!;
   assertEquals(outOfArea.isExcluded, true);
   assertEquals(outOfArea.exclusionReason, "outside-target-area");
-  assertEquals(outOfArea.statusBadge, "[Outside Target Area]");
+  assertEquals(outOfArea.statusBadge, "Outside Target Area");
 });
 
 Deno.test("formatMonthDayYear: formats date string or Date object with 4-digit year (#1103)", () => {
@@ -5050,7 +5565,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       isExcluded: true,
       exclusionReason: "gig-spacing",
       conflictingGigDate: "2026-12-12",
-      statusBadge: "[Gig Spacing: Dec 12, 2026 Show]",
+      statusBadge: "Gig Spacing: Dec 12, 2026 Show",
     },
     {
       _id: "5pts",
@@ -5061,7 +5576,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       isExcluded: true,
       exclusionReason: "gig-spacing",
       conflictingGigDate: "2026-11-15",
-      statusBadge: "[Gig Spacing: Nov 15, 2026 Show]",
+      statusBadge: "Gig Spacing: Nov 15, 2026 Show",
     },
     {
       _id: "garrison",
@@ -5071,7 +5586,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "booking@thegarrison.com",
       isExcluded: true,
       exclusionReason: "cooldown",
-      statusBadge: "[Cooldown Active: Sent Sep 13]",
+      statusBadge: "Cooldown Active: Sent Sep 13",
     },
     {
       _id: "osb",
@@ -5081,7 +5596,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "booking@oldesalem.com",
       isExcluded: true,
       exclusionReason: "seasonal-hold",
-      statusBadge: "[Seasonal Hold: Jan 2027]",
+      statusBadge: "Seasonal Hold: Jan 2027",
     },
     {
       _id: "chat",
@@ -5091,7 +5606,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "info@twincreeks.com",
       isExcluded: true,
       exclusionReason: "direct-chat",
-      statusBadge: "[Direct Chat Active]",
+      statusBadge: "Direct Chat Active",
     },
     {
       _id: "no-email",
@@ -5101,7 +5616,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "",
       isExcluded: true,
       exclusionReason: "no-booking-email",
-      statusBadge: "[No Booking Email]",
+      statusBadge: "No Booking Email",
     },
     {
       _id: "parkway",
@@ -5111,7 +5626,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "booking@parkway.com",
       isExcluded: true,
       exclusionReason: "outside-target-area",
-      statusBadge: "[Outside Target Area]",
+      statusBadge: "Outside Target Area",
     },
     {
       _id: "beales",
@@ -5121,7 +5636,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "info@beales.com",
       isExcluded: true,
       exclusionReason: "outside-target-area",
-      statusBadge: "[Outside Target Area]",
+      statusBadge: "Outside Target Area",
     },
     {
       _id: "raleigh",
@@ -5131,7 +5646,7 @@ Deno.test("formatExcludedAuditSummary: groups excluded candidates across all can
       email: "info@raleighpour.com",
       isExcluded: true,
       exclusionReason: "out-of-state",
-      statusBadge: "[Out of State]",
+      statusBadge: "Out of State",
     },
   ];
 
@@ -5183,7 +5698,7 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       email: "booking@durtybull.com",
       isExcluded: true,
       exclusionReason: "seasonal-hold",
-      statusBadge: "[Seasonal Hold: Jan 2027]",
+      statusBadge: "Seasonal Hold: Jan 2027",
       sentAt: "2026-07-24T12:00:00Z",
     },
     {
@@ -5194,7 +5709,7 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       email: "",
       isExcluded: true,
       exclusionReason: "outside-target-area",
-      statusBadge: "[Outside Target Area]",
+      statusBadge: "Outside Target Area",
       sentAt: "2026-03-01T12:00:00Z",
     },
     {
@@ -5202,7 +5717,7 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       name: "Badge Only Brewing",
       email: "booking@badgeonly.com",
       isExcluded: true,
-      statusBadge: "[Seasonal Hold: Feb 2027]",
+      statusBadge: "Seasonal Hold: Feb 2027",
       lastSentDate: "2026-09-20T12:00:00Z",
     },
     {
@@ -5236,4 +5751,58 @@ Deno.test("formatExcludedAuditSummary: files a venue by its recorded exclusion r
       "    - Far Away Tavern (Asheville, NC)",
     ].join("\n"),
   );
+});
+
+Deno.test("fetchCandidates: enriches candidate pool with bookingStatus and nextGig from active venue pool (#1196)", async () => {
+  const candidateFromOutreach: CandidateVenue = {
+    _id: "v-2witches",
+    name: "2 Witches Winery & Brewing Co.",
+    email: "ethan@2witcheswinebrew.com",
+    bookingStatus: "booking", // raw default from /outreach/candidates
+  };
+
+  const activeVenueRecord: CandidateVenue = {
+    _id: "v-2witches",
+    name: "2 Witches Winery & Brewing Co.",
+    email: "ethan@2witcheswinebrew.com",
+    bookingStatus: "booked", // derived by /venue from upcoming gig
+    nextGig: {
+      _id: "gig-1",
+      datetime: "2027-01-10T00:00:38.886Z",
+      venueId: "v-2witches",
+    },
+    distanceKm: 92.5,
+  };
+
+  const mockFetch: typeof fetch = (input: string | URL | Request) => {
+    const url = input.toString();
+    if (url.includes("/outreach/candidates")) {
+      return Promise.resolve(
+        new Response(JSON.stringify([candidateFromOutreach]), { status: 200 }),
+      );
+    }
+    if (url.includes("/venue?status=active")) {
+      return Promise.resolve(new Response(JSON.stringify([activeVenueRecord]), { status: 200 }));
+    }
+    if (url.includes("/outreach?status=")) {
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+  };
+
+  const weekend: TargetWeekend = {
+    start: "2027-03-19",
+    end: "2027-03-21",
+    rawText: "March 19-21, 2027",
+    label: "March 19–21, 2027",
+    year: 2027,
+    month: 3,
+    days: [19, 20, 21],
+  };
+
+  const results = await fetchCandidates({ weekend }, mockFetch);
+  const enriched = results.find((c) => c._id === "v-2witches");
+  assertEquals(enriched?.bookingStatus, "booked");
+  assertEquals(enriched?.nextGig?._id, "gig-1");
+  assertEquals(enriched?.distanceKm, 92.5);
 });

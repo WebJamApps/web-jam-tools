@@ -5,9 +5,12 @@ import { type Deps, run } from "../scripts/post-pr-review.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 import { REVIEW_SUMMARY_HEADER } from "../scripts/gh-write/guard.ts";
 
+const REVIEWER_LINE = "🤖 Reviewed by Claude Code — Claude Sonnet 5.5";
+
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
   return {
-    readFileText: () => Promise.resolve(`${REVIEW_SUMMARY_HEADER}\n**Approved**`),
+    readFileText: () =>
+      Promise.resolve(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n${REVIEWER_LINE}\n`),
     runCmd: () => Promise.resolve({ code: 0, stdout: "{}", stderr: "" }),
     sleep: () => Promise.resolve(),
     ...overrides,
@@ -46,7 +49,8 @@ Deno.test("post-pr-review: a body carrying a credential-shaped literal is REFUSE
   const code = await run(
     ARGS,
     fakeDeps({
-      readFileText: () => Promise.resolve(`${REVIEW_SUMMARY_HEADER}\nleaked: ${fake}`),
+      readFileText: () =>
+        Promise.resolve(`${REVIEW_SUMMARY_HEADER}\nleaked: ${fake}\n\n${REVIEWER_LINE}\n`),
     }),
   );
   assertEquals(code, 1);
@@ -321,4 +325,43 @@ Deno.test("post-pr-review: builds gh argv with bare pr id and --repo flag (regre
     "--body-file",
     "/tmp/example-review.md",
   ]);
+});
+
+Deno.test("post-pr-review: a body with no reviewer line is REFUSED and nothing is posted", async () => {
+  let called = false;
+  const code = await run(
+    ARGS,
+    fakeDeps({
+      readFileText: () => Promise.resolve(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n`),
+      runCmd: () => {
+        called = true;
+        return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+      },
+    }),
+  );
+  assertEquals(code, 1);
+  assertEquals(called, false);
+});
+
+Deno.test("post-pr-review: a malformed reviewer line is REFUSED", async () => {
+  for (
+    const line of [
+      "🤖 Reviewed by",
+      "🤖 Reviewed by Claude Code - Claude Opus",
+      "🤖 Reviewed by Claude Code — ",
+    ]
+  ) {
+    const code = await run(
+      ARGS,
+      fakeDeps({
+        readFileText: () => Promise.resolve(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n${line}\n`),
+      }),
+    );
+    assertEquals(code, 1, line);
+  }
+});
+
+Deno.test("post-pr-review: a body with a reviewer line dry-runs with exit 0", async () => {
+  const code = await run([...ARGS, "--dry-run"], fakeDeps());
+  assertEquals(code, 0);
 });

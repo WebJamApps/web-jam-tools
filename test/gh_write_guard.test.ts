@@ -4,7 +4,10 @@ import { assertEquals } from "@std/assert";
 import {
   checkNoCredentialLiteral,
   checkNotEmpty,
+  checkReviewerLine,
   checkReviewSummaryHeader,
+  extractFooterAuthors,
+  extractFooterEntries,
   isAlreadyReviewedAtHeadSha,
   REVIEW_SUMMARY_HEADER,
   runFormGuards,
@@ -61,6 +64,118 @@ Deno.test("runFormGuards refuses empty before checking the header (empty-body ch
   const res = runFormGuards("   ", { requireReviewHeader: true });
   assertEquals(res.ok, false);
   assertEquals(res.error?.includes("empty"), true);
+});
+
+Deno.test("checkReviewerLine allows a well-formed reviewer line", () => {
+  const body =
+    `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — Claude Opus 5.5\n`;
+  assertEquals(checkReviewerLine(body).ok, true);
+  assertEquals(
+    checkReviewerLine("🤖 Reviewed by Antigravity — Gemini Flash (High)").ok,
+    true,
+  );
+});
+
+Deno.test("checkReviewerLine refuses an absent line, with the exact refusal text", () => {
+  const res = checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n`);
+  assertEquals(res.ok, false);
+  assertEquals(
+    res.error?.startsWith(
+      'refusing to post: review body is missing the "🤖 Reviewed by <tool> — <model>" line',
+    ),
+    true,
+  );
+});
+
+Deno.test("checkReviewerLine refuses each malformed shape", () => {
+  const bad = [
+    "🤖 Reviewed by",
+    "🤖 Reviewed by ",
+    "🤖 Reviewed by Claude Code",
+    "🤖 Reviewed by Claude Code - Claude Opus",
+    "🤖 Reviewed by Claude Code — ",
+    "🤖 Reviewed by — Claude Opus",
+    "🤖 Reviewed by Claude Code —Claude Opus",
+    "some text 🤖 Reviewed by Claude Code — Claude Opus",
+    "🤖 Reviewed by <tool> — <model>",
+    "🤖 Reviewed by — — x",
+  ];
+  for (const line of bad) {
+    assertEquals(checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n${line}\n`).ok, false, line);
+  }
+});
+
+Deno.test("checkReviewerLine refuses an angle-bracket placeholder in tool or model", () => {
+  assertEquals(
+    checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by <tool> — <model>\n`)
+      .ok,
+    false,
+  );
+  assertEquals(
+    checkReviewerLine(
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — <model>\n`,
+    ).ok,
+    false,
+  );
+  assertEquals(
+    checkReviewerLine(
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by <tool> — Claude Opus 5.5\n`,
+    ).ok,
+    false,
+  );
+});
+
+Deno.test("checkReviewerLine refuses a tool or model consisting only of dashes", () => {
+  assertEquals(
+    checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by — — x\n`).ok,
+    false,
+  );
+  assertEquals(
+    checkReviewerLine(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — —\n`)
+      .ok,
+    false,
+  );
+  assertEquals(
+    checkReviewerLine(
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by - — Claude Opus 5.5\n`,
+    ).ok,
+    false,
+  );
+});
+
+Deno.test("checkReviewerLine refuses a reviewer line that is not on the last non-empty line", () => {
+  const buriedInCode =
+    `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n\`\`\`\n🤖 Reviewed by Claude Code — Claude Opus 5.5\n\`\`\`\n`;
+  assertEquals(checkReviewerLine(buriedInCode).ok, false);
+
+  const followedByText =
+    `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Claude Code — Claude Opus 5.5\n\nSome trailing note\n`;
+  assertEquals(checkReviewerLine(followedByText).ok, false);
+});
+
+Deno.test("runFormGuards without requireReviewerLine allows a body with no reviewer line", () => {
+  assertEquals(
+    runFormGuards(`${REVIEW_SUMMARY_HEADER}\nfine`, { requireReviewHeader: true }).ok,
+    true,
+  );
+});
+
+Deno.test("runFormGuards with requireReviewerLine refuses a body with no reviewer line and allows one with it", () => {
+  const without = runFormGuards(`${REVIEW_SUMMARY_HEADER}\nfine`, { requireReviewerLine: true });
+  assertEquals(without.ok, false);
+  const withLine = runFormGuards(
+    `${REVIEW_SUMMARY_HEADER}\nfine\n\n🤖 Reviewed by Claude Code — Claude Opus 5.5`,
+    { requireReviewHeader: true, requireReviewerLine: true },
+  );
+  assertEquals(withLine.ok, true);
+});
+
+Deno.test("runFormGuards runs the reviewer-line check after the header check", () => {
+  const res = runFormGuards("no header, no line", {
+    requireReviewHeader: true,
+    requireReviewerLine: true,
+  });
+  assertEquals(res.error?.includes(REVIEW_SUMMARY_HEADER), true);
 });
 
 Deno.test("isAlreadyReviewedAtHeadSha skips when last review SHA equals head SHA", async () => {
@@ -260,5 +375,75 @@ Deno.test("isAlreadyReviewedAtHeadSha invokes gh with bare pr id and --repo flag
     "1324",
     "--repo",
     "WebJamApps/JaMmusic",
+  ]);
+});
+
+// --- extractFooterAuthors and extractFooterEntries (web-jam-tools#1200) ---
+
+Deno.test("extractFooterAuthors extracts footer author from line starting with 🤖 Work by", () => {
+  const authors = extractFooterAuthors("Fixed in dev.\n\n🤖 Work by Codex — GPT-6\n");
+  assertEquals(authors, ["Codex — GPT-6"]);
+});
+
+Deno.test("extractFooterAuthors returns empty string for bare 🤖 Work by line", () => {
+  const authors = extractFooterAuthors("Fixed in dev.\n\n🤖 Work by\n");
+  assertEquals(authors, [""]);
+
+  const authorsWhitespace = extractFooterAuthors("Fixed in dev.\n\n🤖 Work by   \n");
+  assertEquals(authorsWhitespace, [""]);
+});
+
+Deno.test("extractFooterAuthors ignores footers in blockquotes or inline backticks", () => {
+  const body = [
+    "Quoting a footer in blockquote:",
+    "> 🤖 Work by Codex — GPT-6",
+    "And inline backticks:",
+    "`🤖 Work by Codex — GPT-6`",
+    "Mentioning `🤖 Work by other` in sentence.",
+  ].join("\n");
+  const authors = extractFooterAuthors(body);
+  assertEquals(authors, []);
+});
+
+Deno.test("extractFooterAuthors extracts footer inside a fenced code block", () => {
+  const body = [
+    "Example snippet:",
+    "```sh",
+    "🤖 Work by Codex — GPT-6",
+    "```",
+  ].join("\n");
+  const authors = extractFooterAuthors(body);
+  assertEquals(authors, ["Codex — GPT-6"]);
+});
+
+Deno.test("extractFooterEntries matches a footer with leading whitespace and keeps the original line", () => {
+  const body = "- item\n  \u{1F916} Work by Codex \u2014 GPT-6\n> \u{1F916} Work by quoted";
+  assertEquals(extractFooterEntries(body), [
+    { line: "  \u{1F916} Work by Codex \u2014 GPT-6", author: "Codex \u2014 GPT-6" },
+  ]);
+});
+
+Deno.test("extractFooterAuthors does not require an em dash", () => {
+  const body = "🤖 Work by SingleAuthorModel";
+  const authors = extractFooterAuthors(body);
+  assertEquals(authors, ["SingleAuthorModel"]);
+});
+
+Deno.test("extractFooterAuthors extracts multiple footers in body order", () => {
+  const body = [
+    "Initial attempt:",
+    "🤖 Work by Claude Code — Sonnet 5.5",
+    "Follow-up:",
+    "🤖 Work by Codex — GPT-6",
+  ].join("\n");
+  const authors = extractFooterAuthors(body);
+  assertEquals(authors, ["Claude Code — Sonnet 5.5", "Codex — GPT-6"]);
+});
+
+Deno.test("extractFooterEntries preserves exact original line", () => {
+  const body = "🤖 Work by   Custom Model (high)  ";
+  const entries = extractFooterEntries(body);
+  assertEquals(entries, [
+    { line: "🤖 Work by   Custom Model (high)  ", author: "Custom Model (high)" },
   ]);
 });

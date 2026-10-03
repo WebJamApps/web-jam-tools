@@ -232,7 +232,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Sonnet")?.modelTier, true);
   assertEquals(
     byName.get("Sonnet")?.description,
-    "Coding that needs a Claude-side capability Flash High lacks; no longer the default coder tier, which now ranks below Flash High",
+    "Coding that needs a Claude-side capability Flash High lacks; ranks above Flash High but is not the default coder tier (a cost decision)",
   );
   assertEquals(byName.get("Opus")?.hex, "B392F0");
   assertEquals(byName.get("Opus")?.modelTier, true);
@@ -264,7 +264,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Flash High")?.modelTier, true);
   assertEquals(
     byName.get("Flash High")?.description,
-    "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; ranks above Sonnet",
+    "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; the default lane, billed to Google rather than the constrained Anthropic budget",
   );
   assertEquals(byName.get("Flash High")?.repos, "all");
   const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();

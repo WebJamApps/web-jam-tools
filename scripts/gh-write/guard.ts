@@ -57,9 +57,104 @@ export function checkReviewSummaryHeader(body: string): GuardResult {
   return { ok: true };
 }
 
+/**
+ * A reviewer line stands alone on its own line: "🤖 Reviewed by <tool> — <model>",
+ * with an em dash and one space on each side, and a non-empty tool and model.
+ * web-jam-tools#1193.
+ */
+const REVIEWER_LINE = /^🤖 Reviewed by (\S.*?) — (\S.*?)\s*$/u;
+
+/**
+ * Checks whether a tool or model string is invalid: empty, an angle-bracket
+ * placeholder (e.g. "<tool>" or "<model>"), or consisting solely of dash punctuation.
+ */
+function isInvalidToolOrModel(val: string): boolean {
+  const trimmed = val.trim();
+  if (!trimmed) return true;
+  if (/^<.*>$/.test(trimmed)) return true;
+  if (/^[\s\p{Pd}]+$/u.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Refuses a review body with no well-formed "🤖 Reviewed by <tool> — <model>"
+ * line, so a posted review always says which agent and model wrote it. A
+ * pure function of the body text: it has no way to fail on its own, so there
+ * is no "cannot be determined" outcome. It checks the line is present and
+ * well-formed on the last non-empty line — never that the named model is the
+ * one really running.
+ */
+export function checkReviewerLine(body: string): GuardResult {
+  const lines = body.trimEnd().split(/\r?\n/);
+  const lastLine = lines[lines.length - 1] ?? "";
+  const match = lastLine.match(REVIEWER_LINE);
+  if (!match) {
+    return {
+      ok: false,
+      error:
+        'refusing to post: review body is missing the "🤖 Reviewed by <tool> — <model>" line — ' +
+        "the reviewing model must name itself (the agent tool and the model actually running the review) on the last line.",
+    };
+  }
+  const [, tool, model] = match;
+  if (isInvalidToolOrModel(tool) || isInvalidToolOrModel(model)) {
+    return {
+      ok: false,
+      error:
+        'refusing to post: review body is missing the "🤖 Reviewed by <tool> — <model>" line — ' +
+        "the reviewing model must name itself (the agent tool and the model actually running the review) on the last line.",
+    };
+  }
+  return { ok: true };
+}
+
+export interface FooterAuthorEntry {
+  line: string;
+  author: string;
+}
+
+/**
+ * Extracts all "🤖 Work by" footer lines and their author strings from a comment body.
+ *
+ * Matching is by line start only, after any leading whitespace:
+ * - A line whose first non-space characters are `🤖 Work by` is matched.
+ * - Footers quoted in inline backticks or blockquotes do not start the line with `🤖`,
+ *   so they are not extracted.
+ * - Footers inside a fenced code block start the line with `🤖`, so they are extracted.
+ * - A line that is solely `🤖 Work by` (or followed only by whitespace) has an empty author string `""`.
+ * - The author string is not required to contain an em dash.
+ *
+ * web-jam-tools#1200
+ */
+export function extractFooterEntries(body: string): FooterAuthorEntry[] {
+  const entries: FooterAuthorEntry[] = [];
+  const lines = body.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^\s*🤖 Work by(?:\s+(.*))?$/u);
+    if (match) {
+      entries.push({
+        line,
+        author: (match[1] ?? "").trim(),
+      });
+    }
+  }
+  return entries;
+}
+
+/**
+ * Extracts the author strings from all "🤖 Work by" footer lines in a comment body.
+ *
+ * web-jam-tools#1200
+ */
+export function extractFooterAuthors(body: string): string[] {
+  return extractFooterEntries(body).map((entry) => entry.author);
+}
+
 export interface FormGuardOptions {
   /** Only true for the review verb — the header check binds it alone. */
   requireReviewHeader?: boolean;
+  /** True for the review verb and for a comment carrying the review header. */
+  requireReviewerLine?: boolean;
 }
 
 /** Runs the guards that bind every verb, then any verb-specific ones. */
@@ -73,6 +168,11 @@ export function runFormGuards(body: string, opts: FormGuardOptions = {}): GuardR
   if (opts.requireReviewHeader) {
     const hasHeader = checkReviewSummaryHeader(body);
     if (!hasHeader.ok) return hasHeader;
+  }
+
+  if (opts.requireReviewerLine) {
+    const hasReviewer = checkReviewerLine(body);
+    if (!hasReviewer.ok) return hasReviewer;
   }
 
   return { ok: true };

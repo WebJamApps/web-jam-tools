@@ -5,7 +5,8 @@
  * Guarded CLI over `gh pr comment`. hooks/block-raw-gh-write.sh denies the
  * raw form on both agent surfaces; this is the only route to it.
  */
-import { runFormGuards } from "./gh-write/guard.ts";
+import { probeRoster } from "../hooks/lib/authored_by_footer.ts";
+import { extractFooterEntries, REVIEW_SUMMARY_HEADER, runFormGuards } from "./gh-write/guard.ts";
 import { type RunCmd, runWithRetry } from "./gh-write/gh_runner.ts";
 
 export interface Options {
@@ -31,6 +32,7 @@ export interface Deps {
   readFileText: (path: string) => Promise<string>;
   runCmd: RunCmd;
   sleep?: (ms: number) => Promise<void>;
+  createPrScriptPath?: string;
 }
 
 const USAGE = "usage: post-pr-comment --repo <owner/repo> --pr <n> --body-file <path> [--dry-run]";
@@ -43,10 +45,34 @@ export async function run(args: string[], deps: Deps): Promise<number> {
   }
 
   const body = await deps.readFileText(opts.bodyFile);
-  const formResult = runFormGuards(body);
+  const formResult = runFormGuards(body, {
+    // A body carrying the review header is a Step 4 follow-up review; any other
+    // comment (e.g. a "Fixed by" note) is posted exactly as before.
+    requireReviewerLine: body.includes(REVIEW_SUMMARY_HEADER),
+  });
   if (!formResult.ok) {
     console.error(formResult.error);
     return 1;
+  }
+
+  // --- Author roster check for Work-by footers (web-jam-tools#1200) ---
+  const footers = extractFooterEntries(body);
+  if (footers.length > 0) {
+    for (const footer of footers) {
+      // The probe call and its three-outcome classification live in one place.
+      const probe = await probeRoster(footer.author, deps.runCmd, deps.createPrScriptPath);
+      if (probe.outcome === "not-on-roster") {
+        console.error(
+          `refusing to post: footer line '${footer.line}' names a model not on the author roster.`,
+        );
+        console.error(probe.rosterMessage);
+        return 1;
+      }
+      if (probe.outcome === "could-not-run") {
+        console.error(`refusing to post: ${probe.message}`);
+        return 1;
+      }
+    }
   }
 
   const ghArgs = [

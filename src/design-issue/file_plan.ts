@@ -7,6 +7,7 @@
 // (`createIssueAndVerify`).
 
 import { parseArgs } from "@std/cli/parse-args";
+import { checkAuthorOnRoster } from "../../hooks/lib/authored_by_footer.ts";
 import * as path from "@std/path";
 import {
   type ApprovalCheckResult,
@@ -69,6 +70,8 @@ export interface FilePlanOptions {
   dryRun?: boolean;
   deps?: ExecDeps;
   approvalCheck?: (repoFull: string, title: string) => ApprovalCheckResult;
+  /** `<tool> — <model>` that wrote the plan's issues; required, roster-checked, and written as every body's footer (web-jam-tools#1205). */
+  author?: string;
 }
 
 interface ParsedPlan {
@@ -322,6 +325,12 @@ export async function filePlan(
     }
   }
 
+  // Authored-by footer (web-jam-tools#1205) — refuse before anything is filed.
+  const authorCheck = await checkAuthorOnRoster(options.author, deps.runCmd, deps.probeScriptPath);
+  if (!authorCheck.ok) {
+    throw new Error(`Refused to file plan — ${authorCheck.message}`);
+  }
+
   if (options.dryRun) {
     console.log(`[design:file-plan] Dry run verified: ${allItems.length} issue(s) approved.`);
     return {
@@ -378,6 +387,7 @@ export async function filePlan(
         labels: epicLabels.length > 0 ? epicLabels : undefined,
         milestone: epicMilestone,
         priority: epicItem.priority,
+        author: options.author,
       };
 
       console.log(`[design:file-plan] Filing Epic: "${epicItem.title}" in ${epicRepo.full}...`);
@@ -471,6 +481,7 @@ export async function filePlan(
         milestone: childMilestone,
         priority: childItem.priority,
         parent: parentNumber,
+        author: options.author,
       };
 
       console.log(
@@ -700,7 +711,7 @@ export async function filePlan(
 export async function runFilePlanCli(args: string[]): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["dry-run", "help"],
-    string: ["plan"],
+    string: ["plan", "author"],
     alias: {
       h: "help",
       d: "dry-run",
@@ -735,6 +746,8 @@ Arguments:
 
 Options:
   -p, --plan <path>       Explicit plan JSON file path
+  --author <tool — model> (required) e.g. "Claude Code — Opus"; roster-checked and written as
+                          the "Authored by" footer of every issue filed
   -d, --dry-run           Validate plan format and approval tokens without filing
   -h, --help              Show this help message
 `);
@@ -752,6 +765,7 @@ Options:
     await filePlan({
       planPath,
       dryRun: flags["dry-run"],
+      author: flags.author,
     });
     return 0;
   } catch (err) {
