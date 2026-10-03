@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/agent-alert.sh claude"
+            "command": "$HOME/.claude/hooks/agent-alert.sh claude prompt"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/agent-alert.sh claude"
+            "command": "$HOME/.claude/hooks/agent-alert.sh claude finished"
           }
         ]
       }
