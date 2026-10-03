@@ -6,11 +6,11 @@
 # Leaves plain deno task push and read-only commands untouched (allowed).
 #
 # Known limit: a rule matches only the leading words of a command, so this file
-# is a backstop for the plain and common wrapped forms. It cannot match forms
-# where an arbitrary token comes first (for example `git --git-dir=/x push` or
-# `env X=1 git push`). Forbidding the `git -C` prefix (and -c, --git-dir,
-# --work-tree) also forbids harmless commands such as `git -C /tmp/x status`
-# on Codex; that is the cost of closing `git -C /tmp/x push` in this grammar.
+# is a backstop for the plain and common wrapped forms. A git command carrying a
+# global option before the subcommand (for example `git -C <path> ...`) is
+# deliberately not matched here, by Josh's ruling of 2026-10-03, because the
+# grammar has no wildcard and forbidding the prefix would also refuse harmless
+# commands; those forms are decided by the push-guard hooks, which parse the command.
 
 prefix_rule(pattern=["git", "push"], decision="forbidden")
 prefix_rule(pattern=["git", "branch", "-D"], decision="forbidden")
@@ -18,8 +18,7 @@ prefix_rule(pattern=["git", "branch", "--delete"], decision="forbidden")
 prefix_rule(pattern=["gh", "repo", "sync"], decision="forbidden")
 prefix_rule(pattern=["claude"], decision="forbidden")
 
-# Global git options before the subcommand, and common wrappers.
-prefix_rule(pattern=["git", ["-C", "-c", "--git-dir", "--work-tree"]], decision="forbidden")
+# Common wrappers.
 prefix_rule(pattern=[["env", "command", "sudo"], "git", "push"], decision="forbidden")
 prefix_rule(pattern=["/usr/bin/git", "push"], decision="forbidden")
 prefix_rule(pattern=[["npx", "env", "command"], "claude"], decision="forbidden")

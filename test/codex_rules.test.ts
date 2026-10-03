@@ -25,7 +25,6 @@ const EXPECTED_RULES: PrefixRule[] = [
   { pattern: ["git", "branch", "--delete"], decision: "forbidden" },
   { pattern: ["gh", "repo", "sync"], decision: "forbidden" },
   { pattern: ["claude"], decision: "forbidden" },
-  { pattern: ["git", ["-C", "-c", "--git-dir", "--work-tree"]], decision: "forbidden" },
   { pattern: [["env", "command", "sudo"], "git", "push"], decision: "forbidden" },
   { pattern: ["/usr/bin/git", "push"], decision: "forbidden" },
   { pattern: [["npx", "env", "command"], "claude"], decision: "forbidden" },
@@ -52,10 +51,10 @@ const LITERAL_CASES: Array<{ cmd: string[]; expected: "forbidden" | "prompt" | "
 
 // Review findings and extra cases for web-jam-tools#1142 (PR 1222), plus the regression list.
 const EXTRA_CASES: Array<{ cmd: string[]; expected: "forbidden" | "prompt" | "allowed" }> = [
-  { cmd: ["git", "-C", "/tmp/x", "push"], expected: "forbidden" },
-  { cmd: ["git", "-c", "x=y", "push"], expected: "forbidden" },
-  { cmd: ["git", "--git-dir", "/tmp/x/.git", "push"], expected: "forbidden" },
-  { cmd: ["git", "--work-tree", "/tmp/x", "push"], expected: "forbidden" },
+  { cmd: ["git", "-C", "/tmp/x", "push"], expected: "allowed" },
+  { cmd: ["git", "-c", "x=y", "push"], expected: "allowed" },
+  { cmd: ["git", "--git-dir", "/tmp/x/.git", "push"], expected: "allowed" },
+  { cmd: ["git", "--work-tree", "/tmp/x", "push"], expected: "allowed" },
   { cmd: ["env", "git", "push"], expected: "forbidden" },
   { cmd: ["command", "git", "push"], expected: "forbidden" },
   { cmd: ["/usr/bin/git", "push"], expected: "forbidden" },
@@ -66,8 +65,8 @@ const EXTRA_CASES: Array<{ cmd: string[]; expected: "forbidden" | "prompt" | "al
   { cmd: ["env", "gh", "api", "user"], expected: "prompt" },
   { cmd: ["command", "gh", "api", "user"], expected: "prompt" },
   { cmd: ["/usr/bin/gh", "api", "user"], expected: "prompt" },
-  // Stated consequence of forbidding the `git -C` prefix as a whole.
-  { cmd: ["git", "-C", "/tmp/x", "status"], expected: "forbidden" },
+  // Pinned: global-option forms are deliberately unmatched here (Josh, 2026-10-03); the push-guard hooks decide them.
+  { cmd: ["git", "-C", "/tmp/x", "status"], expected: "allowed" },
   // Regression list.
   { cmd: ["git", "push", "-u", "origin", "some-branch"], expected: "forbidden" },
   { cmd: ["git", "push", "--force-with-lease"], expected: "forbidden" },
