@@ -38,6 +38,7 @@
     "book-gig": "deno run --allow-all src/book-gig/cli.ts",
     "book-gig:convert-touches": "deno run --allow-all src/book-gig/convert_touches.ts",
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
+    "push": "deno run --allow-run=git scripts/push.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
     "coverage": "rm -rf cov_profile && deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile && deno coverage cov_profile",
     "coverage:check": "bash scripts/coverage-check.sh",
