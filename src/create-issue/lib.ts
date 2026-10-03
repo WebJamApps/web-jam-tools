@@ -13,7 +13,11 @@ import {
   type CommandRunner as DedupCommandRunner,
   formatCandidates,
 } from "../../hooks/lib/detect_duplicate_issue.ts";
-import { checkAuthorOnRoster, withFooter } from "../../hooks/lib/authored_by_footer.ts";
+import {
+  checkAuthorOnRoster,
+  stripFooter,
+  withFooter,
+} from "../../hooks/lib/authored_by_footer.ts";
 import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_on_issue_create.ts";
 
 export interface CreateIssueOptions {
@@ -610,14 +614,15 @@ export async function createIssueAndVerify(
     throw new Error(`Refused to file issue — ${authorCheck.message}`);
   }
 
-  let bodyText = fileBody;
+  // A footer the given body already ends with is removed first, so it cannot
+  // be left mid-body once a section is appended below it.
+  let bodyText = stripFooter(fileBody);
   if (options.dedupOverrideReason && options.dedupOverrideReason.trim()) {
     const candidateNote = options.dedupOverride ? ` (considered ${options.dedupOverride})` : "";
     bodyText +=
       `\n\n## Duplicate check\n\nDuplicate search overridden${candidateNote}: ${options.dedupOverrideReason.trim()}\n`;
   }
-  // The footer goes after every section this task adds, and replaces any
-  // footer the given body already ends with.
+  // The footer goes after every section this task adds.
   bodyText = withFooter(bodyText, options.author!);
 
   if (options.dryRun) {

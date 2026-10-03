@@ -44,6 +44,47 @@ export function parseArgs(args: string[]): Options {
   return opts;
 }
 
+export interface BodyFlag {
+  kind: "text" | "file";
+  /** Position of the flag in the argument list. */
+  index: number;
+  /** How many arguments the flag and its value take up (1 or 2). */
+  span: number;
+  /** The body text or the file path; undefined when the flag is last with no value. */
+  value: string | undefined;
+}
+
+/**
+ * Every body-replacing flag in `rest`, in every form `gh issue edit` accepts:
+ * `--body <t>`, `--body=<t>`, `-b <t>`, `-b=<t>`, `-b<t>`, and the same five
+ * for `--body-file` / `-F`. A value that follows a spaced flag is skipped, so
+ * a body whose text is itself `-b` is not read as a second flag.
+ */
+export function findBodyFlags(rest: string[]): BodyFlag[] {
+  const found: BodyFlag[] = [];
+  const attached = (arg: string, short: string) =>
+    arg.startsWith(`${short}=`) ? arg.slice(short.length + 1) : arg.slice(short.length);
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === "--body" || arg === "-b") {
+      found.push({ kind: "text", index: i, span: 2, value: rest[i + 1] });
+      i++;
+    } else if (arg === "--body-file" || arg === "-F") {
+      found.push({ kind: "file", index: i, span: 2, value: rest[i + 1] });
+      i++;
+    } else if (arg.startsWith("--body=")) {
+      found.push({ kind: "text", index: i, span: 1, value: arg.slice("--body=".length) });
+    } else if (arg.startsWith("--body-file=")) {
+      found.push({ kind: "file", index: i, span: 1, value: arg.slice("--body-file=".length) });
+    } else if (arg.startsWith("-b") && !arg.startsWith("--")) {
+      found.push({ kind: "text", index: i, span: 1, value: attached(arg, "-b") });
+    } else if (arg.startsWith("-F") && !arg.startsWith("--")) {
+      found.push({ kind: "file", index: i, span: 1, value: attached(arg, "-F") });
+    }
+  }
+  return found;
+}
+
 export interface Deps {
   readFileText: (path: string) => Promise<string>;
   runCmd: RunCmd;
@@ -53,7 +94,7 @@ export interface Deps {
 }
 
 const USAGE =
-  "usage: edit-issue --repo <owner/repo> --issue <n> [--author <tool — model>] [gh issue edit flags...] [--dry-run]\n  --author is required whenever --body or --body-file replaces the body.";
+  "usage: edit-issue --repo <owner/repo> --issue <n> [--author <tool — model>] [gh issue edit flags...] [--dry-run]\n  --author is required whenever the body is replaced (--body, -b, --body-file or -F, in any form).";
 
 export async function run(args: string[], deps: Deps): Promise<number> {
   const opts = parseArgs(args);
@@ -62,15 +103,23 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     return 1;
   }
 
-  const bodyFileIdx = opts.rest.indexOf("--body-file");
-  const bodyIdx = opts.rest.indexOf("--body");
-  let bodyText: string | undefined;
-  if (bodyFileIdx !== -1 && opts.rest[bodyFileIdx + 1] !== undefined) {
-    bodyText = await deps.readFileText(opts.rest[bodyFileIdx + 1]);
-  } else if (bodyIdx !== -1 && opts.rest[bodyIdx + 1] !== undefined) {
-    bodyText = opts.rest[bodyIdx + 1];
+  const bodyFlags = findBodyFlags(opts.rest);
+  if (bodyFlags.length > 1) {
+    console.error(
+      "refusing to edit: the body is given more than once (--body / -b / --body-file / -F); give it exactly once.",
+    );
+    return 1;
   }
-  if (bodyText !== undefined) {
+  const bodyFlag = bodyFlags[0];
+  let bodyText: string | undefined;
+  if (bodyFlag !== undefined) {
+    if (bodyFlag.value === undefined) {
+      console.error(`refusing to edit: ${opts.rest[bodyFlag.index]} is given with no value.`);
+      return 1;
+    }
+    bodyText = bodyFlag.kind === "file" ? await deps.readFileText(bodyFlag.value) : bodyFlag.value;
+  }
+  if (bodyText !== undefined && bodyFlag !== undefined) {
     const notEmpty = checkNotEmpty(bodyText);
     if (!notEmpty.ok) {
       console.error(notEmpty.error);
@@ -83,11 +132,8 @@ export async function run(args: string[], deps: Deps): Promise<number> {
       return 1;
     }
     bodyText = withFooter(bodyText, opts.author!);
-    if (bodyFileIdx !== -1 && opts.rest[bodyFileIdx + 1] !== undefined) {
-      opts.rest.splice(bodyFileIdx, 2, "--body", bodyText);
-    } else {
-      opts.rest[bodyIdx + 1] = bodyText;
-    }
+    // Whatever form the body arrived in, gh receives it as `--body <text>`.
+    opts.rest.splice(bodyFlag.index, bodyFlag.span, "--body", bodyText);
   }
 
   const credResult = checkNoCredentialLiteral(opts.rest.join(" "));

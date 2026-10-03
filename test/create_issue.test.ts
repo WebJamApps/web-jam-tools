@@ -1780,6 +1780,28 @@ Deno.test("createIssueAndVerify writes the Authored-by footer as the last line, 
   assertEquals(result.indexOf("## Duplicate check") < result.indexOf("🤖 Authored by"), true);
 });
 
+Deno.test("createIssueAndVerify: a body already ending in a footer, filed with a duplicate-search override, carries exactly one footer", async () => {
+  const { deps } = probeDeps(
+    "## What this builds\nBody\n\n🤖 Authored by agy — Gemini Flash\n",
+    { code: 0, stderr: "" },
+  );
+  const result = await realCreateIssueAndVerify(
+    {
+      title: "T",
+      bodyFile: "/tmp/b.md",
+      author: "Claude Code — Opus",
+      dedupOverrideReason: "different scope",
+      dryRun: true,
+    },
+    deps,
+    APPROVE_ALL,
+  );
+  assertEquals(result.split("🤖 Authored by").length - 1, 1, result);
+  assertEquals(result.includes("agy — Gemini Flash"), false, result);
+  assertEquals(result.trimEnd().endsWith("🤖 Authored by Claude Code — Opus"), true, result);
+  assertEquals(result.indexOf("## Duplicate check") < result.indexOf("🤖 Authored by"), true);
+});
+
 Deno.test("createIssueAndVerify refuses a missing --author and files nothing", async () => {
   const { deps, calls } = probeDeps("Body", { code: 1, stderr: ROSTER_REFUSAL });
   await assertRejects(

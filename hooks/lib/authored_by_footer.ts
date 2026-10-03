@@ -58,11 +58,49 @@ export function withFooter(body: string, author: string): string {
   return `${base}${base === "" ? "" : "\n\n"}${FOOTER_PREFIX} ${author.trim()}\n`;
 }
 
+export type RosterProbe =
+  | { outcome: "on-roster" }
+  | { outcome: "not-on-roster"; rosterMessage: string }
+  | { outcome: "could-not-run"; message: string };
+
 /**
- * Checks `author` against the roster through the probe. Three outcomes: on the
- * roster, not on the roster (including missing or empty), or could not be
+ * The one place the `--check-author` probe is run and its result classified
+ * (web-jam-tools#1200, web-jam-tools#1205). Three outcomes: on the roster, not
+ * on the roster (the probe's own roster listing is returned), or could not be
  * determined (probe missing, not runnable, or failing without the roster
- * message). The last is never reported as the second.
+ * message). The last is never reported as the second. Used by
+ * scripts/post-pr-comment.ts for Work-by footers and by checkAuthorOnRoster
+ * below for Authored-by footers.
+ */
+export async function probeRoster(
+  author: string,
+  runCmd: ProbeRunner,
+  probeScriptPath: string = defaultProbeScriptPath(),
+): Promise<RosterProbe> {
+  let result: ProbeResult;
+  try {
+    result = await runCmd([probeScriptPath, "--check-author", author]);
+  } catch (err) {
+    return {
+      outcome: "could-not-run",
+      message: `roster check could not run: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (result.code === 0) return { outcome: "on-roster" };
+  if (result.stderr.includes(NOT_ON_ROSTER_MARKER)) {
+    return { outcome: "not-on-roster", rosterMessage: result.stderr.trim() };
+  }
+  return {
+    outcome: "could-not-run",
+    message: `roster check could not run (create-draft-pr.sh exited with code ${result.code}${
+      result.stderr ? `: ${result.stderr.trim()}` : ""
+    }).`,
+  };
+}
+
+/**
+ * Checks `author` against the roster through probeRoster. A missing or empty
+ * author is reported as not on the roster.
  */
 export async function checkAuthorOnRoster(
   author: string | undefined,
@@ -70,39 +108,24 @@ export async function checkAuthorOnRoster(
   probeScriptPath: string = defaultProbeScriptPath(),
 ): Promise<AuthorCheck> {
   const given = (author ?? "").trim();
-  let result: ProbeResult;
-  try {
-    result = await runCmd([probeScriptPath, "--check-author", given]);
-  } catch (err) {
+  const probe = await probeRoster(given, runCmd, probeScriptPath);
+  if (probe.outcome === "could-not-run") {
+    return { ok: false, reason: "could-not-run", message: `the ${probe.message}` };
+  }
+  if (given === "") {
+    const head = "--author is required (it was missing or empty).";
     return {
       ok: false,
-      reason: "could-not-run",
-      message: `the roster check could not run: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      reason: "not-on-roster",
+      message: probe.outcome === "not-on-roster" ? `${head}\n${probe.rosterMessage}` : head,
     };
   }
-  if (result.code === 0) {
-    return given === ""
-      ? {
-        ok: false,
-        reason: "not-on-roster",
-        message: "--author is required (it was missing or empty).",
-      }
-      : { ok: true };
-  }
-  if (result.stderr.includes(NOT_ON_ROSTER_MARKER)) {
-    const head = given === ""
-      ? "--author is required (it was missing or empty)."
-      : `--author '${given}' does not name a model on the author roster.`;
-    return { ok: false, reason: "not-on-roster", message: `${head}\n${result.stderr.trim()}` };
-  }
+  if (probe.outcome === "on-roster") return { ok: true };
   return {
     ok: false,
-    reason: "could-not-run",
-    message: `the roster check could not run (create-draft-pr.sh exited with code ${result.code}${
-      result.stderr ? `: ${result.stderr.trim()}` : ""
-    }).`,
+    reason: "not-on-roster",
+    message:
+      `--author '${given}' does not name a model on the author roster.\n${probe.rosterMessage}`,
   };
 }
 

@@ -1,7 +1,7 @@
 // edit_issue.test.ts — web-jam-tools#685
 
 import { assertEquals } from "@std/assert";
-import { type Deps, run } from "../scripts/edit-issue.ts";
+import { type Deps, findBodyFlags, run } from "../scripts/edit-issue.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
@@ -205,4 +205,88 @@ Deno.test("edit-issue --add-label with no body flag and no --author succeeds and
   const code = await run([...BASE, "--add-label", "Haiku"], deps);
   assertEquals(code, 0);
   assertEquals(calls.filter((c) => c[0] === PROBE).length, 0);
+});
+
+// Every form the underlying gh command accepts for a body flag (web-jam-tools#1205).
+const TEXT_FORMS: string[][] = [
+  ["--body", "Inline text"],
+  ["--body=Inline text"],
+  ["-b", "Inline text"],
+  ["-b=Inline text"],
+  ["-bInline text"],
+];
+const FILE_FORMS: string[][] = [
+  ["--body-file", "/tmp/b.md"],
+  ["--body-file=/tmp/b.md"],
+  ["-F", "/tmp/b.md"],
+  ["-F=/tmp/b.md"],
+  ["-F/tmp/b.md"],
+];
+
+for (const form of TEXT_FORMS) {
+  Deno.test(`edit-issue ${form.join(" ")}: the body is roster-checked, gains the footer and reaches gh as --body`, async () => {
+    const { deps, calls } = footerDeps("");
+    const code = await run([...BASE, ...form, "--author", "Claude Code — Opus"], deps);
+    assertEquals(code, 0);
+    assertEquals(calls.filter((c) => c[0] === PROBE).length, 1);
+    const gh = calls.find((c) => c[0] === "gh")!;
+    assertEquals(gh.slice(-2), ["--body", "Inline text\n\n🤖 Authored by Claude Code — Opus\n"]);
+    assertEquals(gh.filter((a) => a.startsWith("-b") || a.startsWith("--body=")), []);
+  });
+}
+
+for (const form of FILE_FORMS) {
+  Deno.test(`edit-issue ${form.join(" ")}: the file body is roster-checked, gains the footer and reaches gh as --body`, async () => {
+    const { deps, calls } = footerDeps("## Body\n\n🤖 Authored by agy — Gemini Flash\n");
+    const code = await run([...BASE, "--author", "Claude Code — Opus", ...form], deps);
+    assertEquals(code, 0);
+    assertEquals(calls.filter((c) => c[0] === PROBE).length, 1);
+    const gh = calls.find((c) => c[0] === "gh")!;
+    assertEquals(gh.slice(-2), ["--body", "## Body\n\n🤖 Authored by Claude Code — Opus\n"]);
+    assertEquals(gh.filter((a) => a.startsWith("-F") || a.startsWith("--body-file")), []);
+  });
+}
+
+for (const form of [...TEXT_FORMS, ...FILE_FORMS]) {
+  Deno.test(`edit-issue ${form.join(" ")} with no --author is refused and edits nothing`, async () => {
+    const { deps, calls } = footerDeps("Body", {
+      code: 1,
+      stderr: "ERROR: --author '' does not name a model on the roster",
+    });
+    const code = await run([...BASE, ...form], deps);
+    assertEquals(code, 1);
+    assertEquals(calls.filter((c) => c[0] === "gh").length, 0);
+  });
+}
+
+Deno.test("edit-issue: a body given twice is refused before any probe or edit", async () => {
+  for (
+    const twice of [
+      ["--body", "one", "-b", "two"],
+      ["--body=one", "--body-file", "/tmp/b.md"],
+      ["-F", "/tmp/b.md", "-F/tmp/c.md"],
+    ]
+  ) {
+    const { deps, calls } = footerDeps("Body");
+    const code = await run([...BASE, "--author", "Claude Code — Opus", ...twice], deps);
+    assertEquals(code, 1);
+    assertEquals(calls.length, 0);
+  }
+});
+
+Deno.test("edit-issue: a body flag given last with no value is refused and edits nothing", async () => {
+  for (const flag of ["--body", "-b", "--body-file", "-F"]) {
+    const { deps, calls } = footerDeps("Body");
+    const code = await run([...BASE, "--author", "Claude Code — Opus", flag], deps);
+    assertEquals(code, 1);
+    assertEquals(calls.length, 0);
+  }
+});
+
+Deno.test("findBodyFlags: the value after a spaced flag is never read as a second flag", () => {
+  assertEquals(findBodyFlags(["--body", "-b"]), [{ kind: "text", index: 0, span: 2, value: "-b" }]);
+  assertEquals(findBodyFlags(["--add-label", "Haiku", "-F", "--body=x"]), [
+    { kind: "file", index: 2, span: 2, value: "--body=x" },
+  ]);
+  assertEquals(findBodyFlags(["--add-label", "Haiku", "--title", "T"]), []);
 });
