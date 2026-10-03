@@ -645,3 +645,75 @@ Deno.test("agents.sh skips the laptop window when a non-SSH tmux client is attac
     }
   });
 });
+
+Deno.test("claude-settings.json configures prompt moment for permission_prompt and finished moment for Stop (web-jam-tools#1211)", async () => {
+  const settingsText = await Deno.readTextFile(`${REPO_ROOT}scripts/claude-settings.json`);
+  const settings = JSON.parse(settingsText);
+
+  // Notification (permission_prompt) hook passes prompt moment
+  const notificationHooks = settings.hooks?.Notification;
+  assert(Array.isArray(notificationHooks), "expected hooks.Notification array");
+  const promptEntry = notificationHooks.find((e: { matcher?: string }) =>
+    e.matcher === "permission_prompt"
+  );
+  assert(promptEntry, "expected permission_prompt matcher entry in Notification");
+  assertEquals(
+    promptEntry.hooks?.[0]?.command,
+    "$HOME/.claude/hooks/agent-alert.sh claude prompt",
+  );
+
+  // Stop hook passes finished moment
+  const stopHooks = settings.hooks?.Stop;
+  assert(Array.isArray(stopHooks), "expected hooks.Stop array");
+  assertEquals(
+    stopHooks[0]?.hooks?.[0]?.command,
+    "$HOME/.claude/hooks/agent-alert.sh claude finished",
+  );
+});
+
+Deno.test("agents starts codex with overrides passing prompt moment for PermissionRequest and finished moment for notify (web-jam-tools#1211)", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const binDir = `${tmpDir}/bin`;
+    await Deno.mkdir(binDir);
+    // A fake codex that records the arguments it was started with.
+    const argsOut = `${tmpDir}/codex-args.txt`;
+    await Deno.writeTextFile(
+      `${binDir}/codex`,
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argsOut}"\n`,
+    );
+    await Deno.chmod(`${binDir}/codex`, 0o755);
+
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+    });
+    assertEquals(res.code, 0, res.stderr);
+
+    let args = "";
+    for (let i = 0; i < 30 && !args; i++) {
+      try {
+        args = await Deno.readTextFile(argsOut);
+      } catch {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    const lines = args.trim().split("\n");
+    const home = Deno.env.get("HOME")!;
+    assert(
+      lines.includes("-c") && lines.includes(
+        `hooks.PermissionRequest=[{matcher=".*",hooks=[{type="command",command="${home}/.claude/hooks/agent-alert.sh codex prompt"}]}]`,
+      ),
+      `expected PermissionRequest override with prompt moment in: ${args}`,
+    );
+    assert(
+      lines.includes("-c") && lines.includes(
+        `notify=["${home}/.claude/hooks/agent-alert.sh", "codex", "finished"]`,
+      ),
+      `expected notify override with finished moment in: ${args}`,
+    );
+  });
+});

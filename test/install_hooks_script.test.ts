@@ -160,6 +160,9 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
     assert(agyHooks.hooks.PreToolUse.length > 0, "expected PreToolUse in agy hooks.json");
     assert(agyHooks.hooks.PostToolUse.length > 0, "expected PostToolUse in agy hooks.json");
+    assertEquals(agyHooks.hooks.Stop, [
+      { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy finished" },
+    ]);
     // web-jam-tools#691: agy never gets a statusLine surface.
     assertEquals(agyHooks.statusLine, undefined);
     // web-jam-tools#705: agy has no permission-mode concept at all
@@ -1652,3 +1655,64 @@ Deno.test("install-hooks.sh builds the autoMode paths from HOME and the checkout
     await Deno.remove(settingsDir, { recursive: true });
   }
 });
+
+Deno.test(
+  "install-hooks.sh replaces old agy Stop entry with finished moment, and --check flags old entry as drift (web-jam-tools#1211)",
+  async () => {
+    const sandbox = await Deno.makeTempDir();
+    const hooksDir = `${sandbox}/hooks`;
+    const settingsPath = `${sandbox}/settings.json`;
+    const agyHooksPath = `${sandbox}/hooks.json`;
+    const base = [INSTALL_SCRIPT, "--hooks-dir", hooksDir, "--settings-path", settingsPath];
+    try {
+      // 1. Initial run installs clean config
+      const initial = await run("bash", base);
+      assertEquals(initial.code, 0, initial.stdout + initial.stderr);
+
+      // Verify the new Stop entry was installed
+      let agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+      assertEquals(agyHooks.hooks.Stop, [
+        { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy finished" },
+      ]);
+
+      // --check passes when up to date
+      const checkClean = await run("bash", [...base, "--check"]);
+      assertEquals(checkClean.code, 0, checkClean.stdout + checkClean.stderr);
+
+      // 2. Simulate pre-existing / old Stop entry without finished moment
+      agyHooks.hooks.Stop = [
+        { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy" },
+      ];
+      await Deno.writeTextFile(agyHooksPath, JSON.stringify(agyHooks, null, 2) + "\n");
+
+      // 3. --check must report drift and fail
+      const checkDrift = await run("bash", [...base, "--check"]);
+      assertEquals(checkDrift.code, 1, "expected drift check to fail");
+      assert(
+        checkDrift.stderr.includes(
+          "missing Stop hook $HOME/.claude/hooks/agent-alert.sh agy finished",
+        ),
+        `expected missing new Stop hook warning, got: ${checkDrift.stderr}`,
+      );
+      assert(
+        checkDrift.stderr.includes("has retired Stop hook $HOME/.claude/hooks/agent-alert.sh agy"),
+        `expected retired old Stop hook warning, got: ${checkDrift.stderr}`,
+      );
+
+      // 4. Running install-hooks.sh replaces the old entry with the new one
+      const reInstall = await run("bash", base);
+      assertEquals(reInstall.code, 0, reInstall.stdout + reInstall.stderr);
+
+      agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+      assertEquals(agyHooks.hooks.Stop, [
+        { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy finished" },
+      ]);
+
+      // 5. --check passes again
+      const checkAfter = await run("bash", [...base, "--check"]);
+      assertEquals(checkAfter.code, 0, checkAfter.stdout + checkAfter.stderr);
+    } finally {
+      await Deno.remove(sandbox, { recursive: true });
+    }
+  },
+);

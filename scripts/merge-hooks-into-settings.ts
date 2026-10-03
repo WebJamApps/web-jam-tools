@@ -184,7 +184,6 @@ export function merge(settingsPath: string, args: string[]): number {
       hooks[kind] = [];
     }
     const bucket: Array<{ hooks: Array<{ type: string; command: string }> }> = hooks[kind];
-    const desiredScripts = new Set(cmds.map((c) => extractScriptPath(c)));
     const desiredCmds = new Set(cmds);
 
     const added: string[] = [];
@@ -196,9 +195,8 @@ export function merge(settingsPath: string, args: string[]): number {
       const remainingHooks: Array<{ type: string; command: string }> = [];
       for (const h of entry.hooks) {
         if (h && h.command) {
-          const sp = extractScriptPath(h.command);
           if (isManagedHook(h.command)) {
-            if (desiredCmds.has(h.command) || desiredScripts.has(sp)) {
+            if (desiredCmds.has(h.command)) {
               remainingHooks.push(h);
             } else {
               pruned.push(h.command);
@@ -256,12 +254,11 @@ export function merge(settingsPath: string, args: string[]): number {
       }
     }
 
-    const desiredScripts = new Set(cmds.map((c) => extractScriptPath(c)));
     const desiredCmds = new Set(cmds);
     const pruned: string[] = [];
     const kept = entries.filter((e) => {
       if (!isManagedHook(e.command)) return true;
-      if (desiredCmds.has(e.command) || desiredScripts.has(extractScriptPath(e.command))) {
+      if (desiredCmds.has(e.command)) {
         return true;
       }
       pruned.push(e.command);

@@ -797,7 +797,7 @@ merge_status_line_args=("$STATUS_LINE_COMMAND")
 [ -e "$REPO_DIR/scripts/agent-alert.sh" ] || { echo "error: $REPO_DIR/scripts/agent-alert.sh not found" >&2; exit 1; }
 ALERT_DEST="$HOOKS_DEST/agent-alert.sh"
 # shellcheck disable=SC2016
-ALERT_AGY_COMMAND='$HOME/.claude/hooks/agent-alert.sh agy'
+ALERT_AGY_COMMAND='$HOME/.claude/hooks/agent-alert.sh agy finished'
 merge_agy_stop_args=("$ALERT_AGY_COMMAND")
 
 # --- permissions.defaultMode (web-jam-tools#705) ---

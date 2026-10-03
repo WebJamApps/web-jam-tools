@@ -1,16 +1,18 @@
-// test/agent_alert_test.ts — web-jam-tools#1176
+// test/agent_alert_test.ts — web-jam-tools#1176, web-jam-tools#1211
 //
 // Drives scripts/agent-alert.sh with a fake curl on PATH and a throwaway tmux server (tmux -L).
-// Verifies all 8 acceptance criteria cases and the in-pane exercise check:
-// 1. alerts for session `agents` + tab `codex` + argument `codex` + first input `Run the shell command: touch x`
-// 2. silent with `TMUX_PANE` unset
-// 3. silent in session `other`
-// 4. silent for argument `agy` in tab `claude`
-// 5. silent for Codex first input `Generate a concise, single-line task title of at most 36 characters and under five words`
-// 6. exits 0 when `curl` times out or fails
-// 7. mark clears on tab switch
-// 8. notification body is exactly `Codex is waiting for you`
-// 9. exercises the change itself: run from inside a throwaway agents tmux session's codex tab
+// Verifies all acceptance criteria cases and the in-pane exercise check:
+// 1. alerts for session `agents` + tab `codex` + argument `codex` + moment `prompt`
+// 2. marks tab silently and sends no notification for moment `finished`
+// 3. defaults to `finished`, marks tab, sends no notification, and warns on stderr when moment is missing or unknown
+// 4. silent with `TMUX_PANE` unset
+// 5. silent in session `other`
+// 6. silent for argument `agy` in tab `claude`
+// 7. silent for Codex first input `Generate a concise, single-line task title of at most 36 characters and under five words`
+// 8. exits 0 when `curl` times out or fails
+// 9. mark clears on tab switch
+// 10. notification body is exactly `<Agent> is waiting for you`
+// 11. exercises the change itself: run claude finished and prompt inside agents session claude tab
 
 import { assert, assertEquals } from "@std/assert";
 
@@ -119,7 +121,7 @@ exit 0
   }
 }
 
-Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first input 'Run the shell command: touch x'", async () => {
+Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + moment 'prompt' + first input 'Run the shell command: touch x'", async () => {
   await withThrowawayTmux(async (socketName, tmpDir, fakeBinDir) => {
     // Start agents session with tabs claude (1) and codex (2)
     await run("tmux", [
@@ -161,7 +163,7 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
     const curlArgsOut = `${tmpDir}/curl_args.txt`;
     const res = await run(
       "bash",
-      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
+      [ALERT_SCRIPT, "codex", "prompt", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -202,12 +204,171 @@ Deno.test("alerts for session 'agents' + tab 'codex' + argument 'codex' + first 
   });
 });
 
+Deno.test("marks tab silently and sends no notification for moment 'finished'", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir, fakeBinDir) => {
+    await run("tmux", [
+      "-L",
+      socketName,
+      "new-session",
+      "-d",
+      "-s",
+      "agents",
+      "-n",
+      "claude",
+      "sleep 60",
+    ], { TMUX_TMPDIR: tmpDir });
+    await run("tmux", ["-L", socketName, "set", "-t", "agents", "base-index", "1"], {
+      TMUX_TMPDIR: tmpDir,
+    });
+    await run(
+      "tmux",
+      ["-L", socketName, "new-window", "-t", "agents:2", "-n", "codex", "sleep 60"],
+      { TMUX_TMPDIR: tmpDir },
+    );
+    const paneRes = await run(
+      "tmux",
+      ["-L", socketName, "list-panes", "-t", "agents:codex", "-F", "#{pane_id}"],
+      { TMUX_TMPDIR: tmpDir },
+    );
+    const paneId = paneRes.stdout.trim();
+
+    const curlOut = `${tmpDir}/curl_finished.txt`;
+    const res = await run(
+      "bash",
+      [ALERT_SCRIPT, "codex", "finished", codexNotifyJson("Run the shell command: touch x")],
+      {
+        TMUX_PANE: paneId,
+        TMUX_SOCKET: socketName,
+        TMUX_TMPDIR: tmpDir,
+        PATH: `${fakeBinDir}:${Deno.env.get("PATH") ?? ""}`,
+        CURL_OUT: curlOut,
+        HOME: tmpDir,
+      },
+    );
+    assertEquals(res.code, 0, `agent-alert.sh failed: ${res.stderr}`);
+    assertEquals(res.stderr, "");
+
+    // Verify tab mark in tmux: @waiting is 1
+    const waitingRes = await run(
+      "tmux",
+      ["-L", socketName, "show", "-w", "-t", "agents:codex", "-v", "@waiting"],
+      { TMUX_TMPDIR: tmpDir },
+    );
+    assertEquals(waitingRes.stdout.trim(), "1");
+
+    // Verify notification was NOT sent
+    assert(!(await pathExists(curlOut)), "curl should not have been called for finished moment");
+  });
+});
+
+Deno.test("defaults to 'finished', marks tab, sends no notification, and warns on stderr when moment is missing", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir, fakeBinDir) => {
+    await run("tmux", [
+      "-L",
+      socketName,
+      "new-session",
+      "-d",
+      "-s",
+      "agents",
+      "-n",
+      "codex",
+      "sleep 60",
+    ], { TMUX_TMPDIR: tmpDir });
+    const paneId = (await run(
+      "tmux",
+      ["-L", socketName, "list-panes", "-t", "agents:codex", "-F", "#{pane_id}"],
+      { TMUX_TMPDIR: tmpDir },
+    )).stdout.trim();
+
+    const curlOut = `${tmpDir}/curl_missing.txt`;
+    const res = await run(
+      "bash",
+      [ALERT_SCRIPT, "codex"],
+      {
+        TMUX_PANE: paneId,
+        TMUX_SOCKET: socketName,
+        TMUX_TMPDIR: tmpDir,
+        PATH: `${fakeBinDir}:${Deno.env.get("PATH") ?? ""}`,
+        CURL_OUT: curlOut,
+        HOME: tmpDir,
+      },
+    );
+    assertEquals(res.code, 0);
+    assertEquals(
+      res.stderr,
+      "warning: agent-alert.sh: missing or unknown moment '' (expected 'prompt' or 'finished') — defaulting to finished\n",
+    );
+
+    const waitingRes = await run(
+      "tmux",
+      ["-L", socketName, "show", "-w", "-t", "agents:codex", "-v", "@waiting"],
+      { TMUX_TMPDIR: tmpDir },
+    );
+    assertEquals(waitingRes.stdout.trim(), "1");
+    assert(
+      !(await pathExists(curlOut)),
+      "curl should not have been called when defaulting to finished",
+    );
+  });
+});
+
+Deno.test("defaults to 'finished', marks tab, sends no notification, and warns on stderr when moment is unknown", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir, fakeBinDir) => {
+    await run("tmux", [
+      "-L",
+      socketName,
+      "new-session",
+      "-d",
+      "-s",
+      "agents",
+      "-n",
+      "codex",
+      "sleep 60",
+    ], { TMUX_TMPDIR: tmpDir });
+    const paneId = (await run(
+      "tmux",
+      ["-L", socketName, "list-panes", "-t", "agents:codex", "-F", "#{pane_id}"],
+      { TMUX_TMPDIR: tmpDir },
+    )).stdout.trim();
+
+    const curlOut = `${tmpDir}/curl_unknown.txt`;
+    const res = await run(
+      "bash",
+      [ALERT_SCRIPT, "codex", "unexpected"],
+      {
+        TMUX_PANE: paneId,
+        TMUX_SOCKET: socketName,
+        TMUX_TMPDIR: tmpDir,
+        PATH: `${fakeBinDir}:${Deno.env.get("PATH") ?? ""}`,
+        CURL_OUT: curlOut,
+        HOME: tmpDir,
+      },
+    );
+    assertEquals(res.code, 0);
+    assertEquals(
+      res.stderr,
+      "warning: agent-alert.sh: missing or unknown moment 'unexpected' (expected 'prompt' or 'finished') — defaulting to finished\n",
+    );
+
+    const waitingRes = await run(
+      "tmux",
+      ["-L", socketName, "show", "-w", "-t", "agents:codex", "-v", "@waiting"],
+      { TMUX_TMPDIR: tmpDir },
+    );
+    assertEquals(waitingRes.stdout.trim(), "1");
+    assert(
+      !(await pathExists(curlOut)),
+      "curl should not have been called when defaulting to finished",
+    );
+  });
+});
+
 Deno.test("silent with TMUX_PANE unset", async () => {
   await withThrowawayTmux(async (_socketName, tmpDir, fakeBinDir) => {
     const curlOut = `${tmpDir}/curl_unset.txt`;
     const res = await run(
       "bash",
-      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
+      [ALERT_SCRIPT, "codex", "prompt", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: "",
         PATH: `${fakeBinDir}:${Deno.env.get("PATH") ?? ""}`,
@@ -245,7 +406,7 @@ Deno.test("silent in session 'other'", async () => {
     const curlOut = `${tmpDir}/curl_other.txt`;
     const res = await run(
       "bash",
-      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
+      [ALERT_SCRIPT, "codex", "prompt", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -292,7 +453,7 @@ Deno.test("silent for argument 'agy' in tab 'claude'", async () => {
     const curlOut = `${tmpDir}/curl_mismatch.txt`;
     const res = await run(
       "bash",
-      [ALERT_SCRIPT, "agy"],
+      [ALERT_SCRIPT, "agy", "prompt"],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -339,15 +500,14 @@ Deno.test(
       const paneId = paneRes.stdout.trim();
 
       const curlOut = `${tmpDir}/curl_codex_title.txt`;
-      const res = await run(
+      const titleJson = codexNotifyJson(
+        "Generate a concise, single-line task title of at most 36 characters and under five words",
+      );
+
+      // Verify finished moment is silent
+      const resFinished = await run(
         "bash",
-        [
-          ALERT_SCRIPT,
-          "codex",
-          codexNotifyJson(
-            "Generate a concise, single-line task title of at most 36 characters and under five words",
-          ),
-        ],
+        [ALERT_SCRIPT, "codex", "finished", titleJson],
         {
           TMUX_PANE: paneId,
           TMUX_SOCKET: socketName,
@@ -357,10 +517,39 @@ Deno.test(
           HOME: tmpDir,
         },
       );
-      assertEquals(res.code, 0);
-      assert(!(await pathExists(curlOut)), "should be silent for Codex title-writing step");
+      assertEquals(resFinished.code, 0);
+      assert(
+        !(await pathExists(curlOut)),
+        "should be silent for Codex title-writing step on finished moment",
+      );
 
-      const waitingRes = await run(
+      let waitingRes = await run(
+        "tmux",
+        ["-L", socketName, "show", "-w", "-t", "agents:codex", "-v", "@waiting"],
+        { TMUX_TMPDIR: tmpDir },
+      );
+      assertEquals(waitingRes.stdout.trim(), "");
+
+      // Verify prompt moment is also silent
+      const resPrompt = await run(
+        "bash",
+        [ALERT_SCRIPT, "codex", "prompt", titleJson],
+        {
+          TMUX_PANE: paneId,
+          TMUX_SOCKET: socketName,
+          TMUX_TMPDIR: tmpDir,
+          PATH: `${fakeBinDir}:${Deno.env.get("PATH") ?? ""}`,
+          CURL_OUT: curlOut,
+          HOME: tmpDir,
+        },
+      );
+      assertEquals(resPrompt.code, 0);
+      assert(
+        !(await pathExists(curlOut)),
+        "should be silent for Codex title-writing step on prompt moment",
+      );
+
+      waitingRes = await run(
         "tmux",
         ["-L", socketName, "show", "-w", "-t", "agents:codex", "-v", "@waiting"],
         { TMUX_TMPDIR: tmpDir },
@@ -397,6 +586,7 @@ Deno.test("alerts when the title text is not Codex's first input message", async
       [
         ALERT_SCRIPT,
         "codex",
+        "prompt",
         codexNotifyJson(
           "Run the shell command: touch x",
           "Generate a concise, single-line task title",
@@ -441,7 +631,7 @@ Deno.test("exits 0 when curl times out or fails", async () => {
     // Test curl timeout (exit 28)
     const resTimeout = await run(
       "bash",
-      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
+      [ALERT_SCRIPT, "codex", "prompt", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -456,7 +646,7 @@ Deno.test("exits 0 when curl times out or fails", async () => {
     // Test curl connection failure (exit 7)
     const resFailed = await run(
       "bash",
-      [ALERT_SCRIPT, "codex", codexNotifyJson("Run the shell command: touch x")],
+      [ALERT_SCRIPT, "codex", "prompt", codexNotifyJson("Run the shell command: touch x")],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -536,7 +726,7 @@ Deno.test("mark clears on tab switch", async () => {
   });
 });
 
-Deno.test("notification body is exactly 'Codex is waiting for you'", async () => {
+Deno.test("notification body is exactly '<Agent> is waiting for you'", async () => {
   await withThrowawayTmux(async (socketName, tmpDir, fakeBinDir) => {
     await run("tmux", [
       "-L",
@@ -561,7 +751,7 @@ Deno.test("notification body is exactly 'Codex is waiting for you'", async () =>
     const curlOut = `${tmpDir}/curl_body.txt`;
     const res = await run(
       "bash",
-      [ALERT_SCRIPT, "codex"],
+      [ALERT_SCRIPT, "codex", "prompt"],
       {
         TMUX_PANE: paneId,
         TMUX_SOCKET: socketName,
@@ -591,7 +781,7 @@ Deno.test("notification body is exactly 'Codex is waiting for you'", async () =>
     const claudeCurlOut = `${tmpDir}/curl_claude.txt`;
     await run(
       "bash",
-      [ALERT_SCRIPT, "claude"],
+      [ALERT_SCRIPT, "claude", "prompt"],
       {
         TMUX_PANE: claudePane,
         TMUX_SOCKET: socketName,
@@ -614,7 +804,7 @@ Deno.test("notification body is exactly 'Codex is waiting for you'", async () =>
     const agyCurlOut = `${tmpDir}/curl_agy.txt`;
     await run(
       "bash",
-      [ALERT_SCRIPT, "agy"],
+      [ALERT_SCRIPT, "agy", "prompt"],
       {
         TMUX_PANE: agyPane,
         TMUX_SOCKET: socketName,
@@ -629,14 +819,14 @@ Deno.test("notification body is exactly 'Codex is waiting for you'", async () =>
 });
 
 Deno.test(
-  "exercises the change itself: run scripts/agent-alert.sh codex inside agents session codex tab with fake curl",
+  "exercises the change itself: run scripts/agent-alert.sh claude finished and prompt inside agents session claude tab",
   async () => {
     await withThrowawayTmux(async (socketName, tmpDir, fakeBinDir) => {
-      // Create session using scripts/agents.sh (codex drops to shell immediately)
+      // Create session using scripts/agents.sh (claude drops to shell immediately)
       const initRes = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
         TMUX_TMPDIR: tmpDir,
-        AGENTS_CLAUDE_CMD: "sleep 60",
-        AGENTS_CODEX_CMD: "true",
+        AGENTS_CLAUDE_CMD: "true",
+        AGENTS_CODEX_CMD: "sleep 60",
         AGENTS_AGY_CMD: "sleep 60",
         AGENTS_UPDATE_CMD: "true",
         AGENTS_LAPTOP_WINDOW_CMD: "true",
@@ -644,37 +834,83 @@ Deno.test(
       });
       assertEquals(initRes.code, 0, `agents.sh failed: ${initRes.stderr}`);
 
-      const curlOut = `${tmpDir}/in_pane_curl.txt`;
-      // Run agent-alert.sh codex directly from inside the codex tab
-      const alertCmd =
-        `PATH="${fakeBinDir}:$PATH" CURL_OUT="${curlOut}" HOME="${tmpDir}" bash "${ALERT_SCRIPT}" codex`;
+      // Ensure tab mark is cleared before test
+      await run("tmux", ["-L", socketName, "set", "-w", "-t", "agents:claude", "-u", "@waiting"], {
+        TMUX_TMPDIR: tmpDir,
+      });
+
+      const curlOutFinished = `${tmpDir}/in_pane_curl_finished.txt`;
+      // 1. Run agent-alert.sh claude finished directly from inside the claude tab
+      const finishedCmd =
+        `PATH="${fakeBinDir}:$PATH" CURL_OUT="${curlOutFinished}" HOME="${tmpDir}" bash "${ALERT_SCRIPT}" claude finished; echo finished-done > "${tmpDir}/finished-done.txt"`;
       await run(
         "tmux",
-        ["-L", socketName, "send-keys", "-t", "agents:codex", alertCmd, "C-m"],
+        ["-L", socketName, "send-keys", "-t", "agents:claude", finishedCmd, "C-m"],
         { TMUX_TMPDIR: tmpDir },
       );
 
-      // Wait up to 3 seconds for curlOut to appear
-      let found = false;
+      // Wait up to 3 seconds for finished command to complete
+      let finishedDone = false;
       for (let i = 0; i < 30; i++) {
-        if (await pathExists(curlOut)) {
-          found = true;
+        if (await pathExists(`${tmpDir}/finished-done.txt`)) {
+          finishedDone = true;
           break;
         }
         await new Promise((r) => setTimeout(r, 100));
       }
-      assert(found, "expected fake curl output from inside the codex tab");
+      assert(finishedDone, "expected finished command to complete");
 
-      const body = await Deno.readTextFile(curlOut);
-      assertEquals(body, "Codex is waiting for you");
-
-      // Verify tab is marked in tmux
-      const waitingRes = await run(
+      // Verify tab is marked
+      const waitingFinished = await run(
         "tmux",
-        ["-L", socketName, "show", "-w", "-t", "agents:codex", "-v", "@waiting"],
+        ["-L", socketName, "show", "-w", "-t", "agents:claude", "-v", "@waiting"],
         { TMUX_TMPDIR: tmpDir },
       );
-      assertEquals(waitingRes.stdout.trim(), "1");
+      assertEquals(waitingFinished.stdout.trim(), "1");
+
+      // Verify no ntfy request was sent
+      assert(!(await pathExists(curlOutFinished)), "finished moment must not make ntfy request");
+
+      // Clear the tab mark
+      await run("tmux", ["-L", socketName, "set", "-w", "-t", "agents:claude", "-u", "@waiting"], {
+        TMUX_TMPDIR: tmpDir,
+      });
+
+      // 2. Run agent-alert.sh claude prompt directly from inside the claude tab
+      const curlOutPrompt = `${tmpDir}/in_pane_curl_prompt.txt`;
+      const curlArgsPrompt = `${tmpDir}/in_pane_curl_args_prompt.txt`;
+      const promptCmd =
+        `PATH="${fakeBinDir}:$PATH" CURL_OUT="${curlOutPrompt}" CURL_ARGS_OUT="${curlArgsPrompt}" HOME="${tmpDir}" bash "${ALERT_SCRIPT}" claude prompt`;
+      await run(
+        "tmux",
+        ["-L", socketName, "send-keys", "-t", "agents:claude", promptCmd, "C-m"],
+        { TMUX_TMPDIR: tmpDir },
+      );
+
+      // Wait up to 3 seconds for curlOutPrompt to appear
+      let foundPrompt = false;
+      for (let i = 0; i < 30; i++) {
+        if (await pathExists(curlOutPrompt)) {
+          foundPrompt = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert(foundPrompt, "expected fake curl output from inside the claude tab for prompt moment");
+
+      const body = await Deno.readTextFile(curlOutPrompt);
+      assertEquals(body, "Claude is waiting for you");
+
+      const args = await Deno.readTextFile(curlArgsPrompt);
+      assert(args.includes("-H Priority: high"), "prompt curl must include Priority: high header");
+
+      // Verify tab is marked
+      const waitingPrompt = await run(
+        "tmux",
+        ["-L", socketName, "show", "-w", "-t", "agents:claude", "-v", "@waiting"],
+        { TMUX_TMPDIR: tmpDir },
+      );
+      assertEquals(waitingPrompt.stdout.trim(), "1");
     });
   },
 );

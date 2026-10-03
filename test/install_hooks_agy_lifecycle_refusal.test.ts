@@ -60,12 +60,12 @@ Deno.test("merge-hooks-into-settings.ts permits --stop with --forbid-lifecycle-h
       "--forbid-lifecycle-hooks",
       "--",
       "--stop",
-      "$HOME/.claude/hooks/agent-alert.sh agy",
+      "$HOME/.claude/hooks/agent-alert.sh agy finished",
     ]);
     assertEquals(res.code, 0, res.stderr);
     const data = JSON.parse(await Deno.readTextFile(path));
     assertEquals(data.hooks.Stop, [
-      { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy" },
+      { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy finished" },
     ]);
   } finally {
     await Deno.remove(dir, { recursive: true });
@@ -75,7 +75,7 @@ Deno.test("merge-hooks-into-settings.ts permits --stop with --forbid-lifecycle-h
 Deno.test("merge-hooks-into-settings.ts flattens a nested agy Stop entry, and --check reports it first (web-jam-tools#1176)", async () => {
   const dir = await Deno.makeTempDir();
   const path = `${dir}/agy_hooks.json`;
-  const cmd = "$HOME/.claude/hooks/agent-alert.sh agy";
+  const cmd = "$HOME/.claude/hooks/agent-alert.sh agy finished";
   const mergeArgs = (...extra: string[]) => [
     "run",
     "--allow-read",
@@ -242,7 +242,7 @@ Deno.test("install-hooks.sh passes --stop to agy hooks.json and never passes --s
 });
 
 // --- 3. Behavioural proof: a full sandboxed install-hooks.sh run registers
-// agy's Stop hook ($HOME/.claude/hooks/agent-alert.sh agy) into agy hooks.json,
+// agy's Stop hook ($HOME/.claude/hooks/agent-alert.sh agy finished) into agy hooks.json,
 // writes no SessionStart/SessionEnd, and wraps PreToolUse/PostToolUse commands
 // with the shim ---
 
@@ -265,7 +265,7 @@ Deno.test("a full sandboxed install-hooks.sh run writes agy Stop hook into agy h
 
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
     assertEquals(agyHooks.hooks.Stop, [
-      { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy" },
+      { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy finished" },
     ]);
     assertEquals(agyHooks.hooks.SessionStart ?? [], []);
     assertEquals(agyHooks.hooks.SessionEnd ?? [], []);
