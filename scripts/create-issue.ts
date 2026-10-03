@@ -29,6 +29,9 @@ async function main() {
     console.error(
       "  --dedup-override-reason <why>        (required to clear a duplicate-search deny)",
     );
+    console.error(
+      '  --author <tool — model>   (required) e.g. "Claude Code — Opus"; written as the body footer',
+    );
     console.error("  --dry-run");
     Deno.exit(1);
   }

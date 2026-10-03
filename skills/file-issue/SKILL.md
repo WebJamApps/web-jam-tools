@@ -244,7 +244,8 @@ deno task create-issue \
   --milestone "v1.2" \
   --priority High \
   --parent 437 \
-  --blocked-by 436
+  --blocked-by 436 \
+  --author "<your tool> — <your model>"
 ```
 
 `scripts/create-issue.ts` standardizes issue creation across all repos:
@@ -268,6 +269,7 @@ deno task create-issue \
 - Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model label freely; the hook only checks that exactly one *model* label is present, not that it's the only label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
 - Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
 - Attach parent issue link via `scripts/create-issue.ts --parent <parent_issue_number>`.
+- Pass your own tool and model as `--author "<tool> — <model>"` (for example `--author "Claude Code — Opus"` or `--author "agy — Gemini Flash"`) on every `deno task create-issue` call, and on every `deno task edit-issue` call that replaces the body with `--body` or `--body-file`. The task checks the author against the author roster in `scripts/create-draft-pr.sh` (the same check `create-draft-pr.sh` and `deno task post-pr-comment` run) and ends the body with one footer line, `🤖 Authored by <tool> — <model>`, naming the model that wrote the content. A missing author, one not on the roster, or a roster check that cannot run refuses the call and files or edits nothing. The footer names who wrote the content, so after you rewrite a body it names you in place of the earlier author. A raw `gh issue create` or a connector `issue_write` create is denied by the issue-create hook unless its body already ends with that footer, so file through `deno task create-issue`.
 
 ## If the hook denies the call
 

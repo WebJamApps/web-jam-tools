@@ -12,7 +12,13 @@
  * the design document): every remaining argument value is scanned for a
  * credential-shaped literal, and a `--body`/`--body-file` value specifically
  * is also checked for emptiness.
+ *
+ * `--author "<tool — model>"` is consumed here and never passed to gh
+ * (web-jam-tools#1205). When the edit replaces the body it is required,
+ * roster-checked, and the new body ends with one `🤖 Authored by` footer
+ * naming the editing model in place of any earlier one.
  */
+import { checkAuthorOnRoster, withFooter } from "../hooks/lib/authored_by_footer.ts";
 import { checkNoCredentialLiteral, checkNotEmpty } from "./gh-write/guard.ts";
 import { type RunCmd, runWithRetry } from "./gh-write/gh_runner.ts";
 
@@ -20,6 +26,7 @@ export interface Options {
   repo?: string;
   issue?: number;
   dryRun: boolean;
+  author?: string;
   rest: string[];
 }
 
@@ -30,6 +37,8 @@ export function parseArgs(args: string[]): Options {
     if (arg === "--repo") opts.repo = args[++i];
     else if (arg === "--issue") opts.issue = Number(args[++i]);
     else if (arg === "--dry-run") opts.dryRun = true;
+    else if (arg === "--author") opts.author = args[++i] ?? "";
+    else if (arg.startsWith("--author=")) opts.author = arg.slice("--author=".length);
     else opts.rest.push(arg);
   }
   return opts;
@@ -39,9 +48,12 @@ export interface Deps {
   readFileText: (path: string) => Promise<string>;
   runCmd: RunCmd;
   sleep?: (ms: number) => Promise<void>;
+  /** Overrides the roster probe script path (tests only). */
+  probeScriptPath?: string;
 }
 
-const USAGE = "usage: edit-issue --repo <owner/repo> --issue <n> [gh issue edit flags...] [--dry-run]";
+const USAGE =
+  "usage: edit-issue --repo <owner/repo> --issue <n> [--author <tool — model>] [gh issue edit flags...] [--dry-run]\n  --author is required whenever --body or --body-file replaces the body.";
 
 export async function run(args: string[], deps: Deps): Promise<number> {
   const opts = parseArgs(args);
@@ -63,6 +75,18 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     if (!notEmpty.ok) {
       console.error(notEmpty.error);
       return 1;
+    }
+    // Authored-by footer (web-jam-tools#1205): the replacement body names the editing model.
+    const authorCheck = await checkAuthorOnRoster(opts.author, deps.runCmd, deps.probeScriptPath);
+    if (!authorCheck.ok) {
+      console.error(`refusing to edit: ${authorCheck.message}`);
+      return 1;
+    }
+    bodyText = withFooter(bodyText, opts.author!);
+    if (bodyFileIdx !== -1 && opts.rest[bodyFileIdx + 1] !== undefined) {
+      opts.rest.splice(bodyFileIdx, 2, "--body", bodyText);
+    } else {
+      opts.rest[bodyIdx + 1] = bodyText;
     }
   }
 

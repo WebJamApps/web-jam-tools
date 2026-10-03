@@ -13,6 +13,7 @@ import {
   type CommandRunner as DedupCommandRunner,
   formatCandidates,
 } from "../../hooks/lib/detect_duplicate_issue.ts";
+import { checkAuthorOnRoster, withFooter } from "../../hooks/lib/authored_by_footer.ts";
 import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_on_issue_create.ts";
 
 export interface CreateIssueOptions {
@@ -27,6 +28,8 @@ export interface CreateIssueOptions {
   blockedBy?: string[];
   escalationReason?: string;
   dryRun?: boolean;
+  /** `<tool> — <model>` that wrote the content; checked against the author roster and written as the body's footer (web-jam-tools#1205). */
+  author?: string;
   /** The candidate issue considered for the duplicate-search override (e.g. "web-jam-tools#885"), recorded for the record — not verified against search results. */
   dedupOverride?: string;
   /** Why the filer judges this is not a duplicate. Non-empty text is what actually clears the dedup gate (web-jam-tools#901). */
@@ -66,6 +69,8 @@ export interface ExecDeps {
     stdin?: string,
   ) => Promise<{ code: number; stdout: string; stderr: string }>;
   readFileText: (path: string) => Promise<string>;
+  /** Overrides the roster probe script path (tests only). */
+  probeScriptPath?: string;
 }
 
 export const PRIORITY_MAP: Record<string, { id: number; node_id: string; name: string }> = {
@@ -145,6 +150,10 @@ export function parseArgs(args: string[]): CreateIssueOptions {
       options.dedupOverrideReason = args[++i];
     } else if (arg.startsWith("--dedup-override-reason=")) {
       options.dedupOverrideReason = arg.slice("--dedup-override-reason=".length);
+    } else if (arg === "--author" && i + 1 < args.length) {
+      options.author = args[++i];
+    } else if (arg.startsWith("--author=")) {
+      options.author = arg.slice("--author=".length);
     } else if (arg === "--dry-run") {
       options.dryRun = true;
     }
@@ -594,8 +603,25 @@ export async function createIssueAndVerify(
     }
   }
 
+  // Authored-by footer (web-jam-tools#1205) — checked before the dry-run
+  // branch so a dry run refuses exactly as a real run does.
+  const authorCheck = await checkAuthorOnRoster(options.author, deps.runCmd, deps.probeScriptPath);
+  if (!authorCheck.ok) {
+    throw new Error(`Refused to file issue — ${authorCheck.message}`);
+  }
+
+  let bodyText = fileBody;
+  if (options.dedupOverrideReason && options.dedupOverrideReason.trim()) {
+    const candidateNote = options.dedupOverride ? ` (considered ${options.dedupOverride})` : "";
+    bodyText +=
+      `\n\n## Duplicate check\n\nDuplicate search overridden${candidateNote}: ${options.dedupOverrideReason.trim()}\n`;
+  }
+  // The footer goes after every section this task adds, and replaces any
+  // footer the given body already ends with.
+  bodyText = withFooter(bodyText, options.author!);
+
   if (options.dryRun) {
-    return `dry run: would create issue "${options.title}" in ${repoInfo.full}`;
+    return `dry run: would create issue "${options.title}" in ${repoInfo.full} with body:\n${bodyText}`;
   }
 
   // 0. Gate 2 approval-token check (web-jam-tools#747) — refuses to file
@@ -628,13 +654,6 @@ export async function createIssueAndVerify(
     throw new Error(
       `Refused to file issue — could not search ${dedup.repoFull} for duplicate open issues (the search failed, not a duplicate finding). Re-run with --dedup-override-reason "<why it's safe to proceed>" to override.`,
     );
-  }
-
-  let bodyText = fileBody;
-  if (options.dedupOverrideReason && options.dedupOverrideReason.trim()) {
-    const candidateNote = options.dedupOverride ? ` (considered ${options.dedupOverride})` : "";
-    bodyText +=
-      `\n\n## Duplicate check\n\nDuplicate search overridden${candidateNote}: ${options.dedupOverrideReason.trim()}\n`;
   }
 
   // 1. Create base issue via gh issue create

@@ -1191,3 +1191,19 @@ Deno.test(
     );
   },
 );
+
+Deno.test("skills/file-issue and skills/design-issue tell the session to pass its own tool and model as --author (web-jam-tools#1205)", async () => {
+  for (const skill of ["file-issue", "design-issue"]) {
+    const text = await Deno.readTextFile(`${SKILLS_DIR}${skill}/SKILL.md`);
+    assertEquals(text.includes("--author"), true, `${skill}/SKILL.md must name --author`);
+    assertEquals(
+      text.includes("deno task edit-issue"),
+      true,
+      `${skill}/SKILL.md must cover edit-issue`,
+    );
+  }
+  const fileIssue = await Deno.readTextFile(`${SKILLS_DIR}file-issue/SKILL.md`);
+  assertEquals(fileIssue.includes("🤖 Authored by <tool> — <model>"), true);
+  const designIssue = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  assertEquals(designIssue.includes("deno task design:file-plan"), true);
+});
