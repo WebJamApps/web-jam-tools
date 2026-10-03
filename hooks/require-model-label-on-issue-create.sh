@@ -6,7 +6,9 @@
 #
 # The duplicate-search check (web-jam-tools#901) shells out to `gh issue
 # list` when a create call carries both --repo/repo and --title/title (see
-# hooks/lib/detect_duplicate_issue.ts) — hence --allow-run=gh below.
+# hooks/lib/detect_duplicate_issue.ts) — hence --allow-run=gh below. The
+# Authored-by footer check (web-jam-tools#1205) runs the read-only roster probe
+# scripts/create-draft-pr.sh --check-author, so that one script is allowed too.
 #
 # Intercepts BOTH surfaces (web-jam-tools#747 fixed the registration gap that
 # had left the Bash half of this unreachable — see scripts/install-hooks.sh's
@@ -25,7 +27,7 @@ MODEL_LABELS_JSON="$REPO_DIR/skills/fix-labels/model-labels.json"
 
 input=$(cat)
 
-result=$(printf '%s' "$input" | MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" deno run --no-config --allow-env --allow-read --allow-run=gh "$REPO_DIR/hooks/lib/check_model_label_on_issue_create.ts" 2>/dev/null) || true
+result=$(printf '%s' "$input" | MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" deno run --no-config --allow-env --allow-read --allow-run=gh,"$REPO_DIR/scripts/create-draft-pr.sh" "$REPO_DIR/hooks/lib/check_model_label_on_issue_create.ts" 2>/dev/null) || true
 
 
 if [ -z "$result" ]; then

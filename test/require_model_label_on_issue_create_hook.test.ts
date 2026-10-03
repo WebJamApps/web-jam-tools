@@ -45,6 +45,8 @@ async function runHook(payload: Record<string, unknown>): Promise<RunResult> {
   };
 }
 
+const SIGNED_BODY = "Body.\n\n🤖 Authored by Claude Code — Opus";
+
 function bashCall(command: string): Record<string, unknown> {
   return { tool_name: "Bash", tool_input: { command } };
 }
@@ -66,7 +68,9 @@ function assertBlocked(stderr: string) {
 
 Deno.test("gh issue create without native Type is denied", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label Sonnet`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -80,7 +84,9 @@ Deno.test("gh issue create without native Type is denied", async () => {
 
 Deno.test("gh issue create with invalid native Type is denied", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet --type InvalidType`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label Sonnet --type InvalidType`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -94,59 +100,77 @@ Deno.test("gh issue create with invalid native Type is denied", async () => {
 
 Deno.test("gh issue create with a single --label model label and --type Task is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label "Flash High" --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type Task`,
+    ),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with valid native types (Bug, Feature, Epic) is allowed", async () => {
   const resBug = await runHook(
-    bashCall(`gh issue create --title T --body B --label "Flash High" -t Bug`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" -t Bug`,
+    ),
   );
   assertEquals(resBug.code, 0, resBug.stderr);
 
   const resFeat = await runHook(
-    bashCall(`gh issue create --title T --body B --label "Flash High" --type=Feature`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type=Feature`,
+    ),
   );
   assertEquals(resFeat.code, 0, resFeat.stderr);
 
   const resEpic = await runHook(
-    bashCall(`gh issue create --title T --body B --label "Flash High" -t=Epic`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" -t=Epic`,
+    ),
   );
   assertEquals(resEpic.code, 0, resEpic.stderr);
 });
 
 Deno.test("gh issue create with multiple --label flags (one model label among them) is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label "Flash High" --label bug --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --label bug --type Task`,
+    ),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with -l short flag carrying the model label is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B -l "Flash High" -l bug -t Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" -l "Flash High" -l bug -t Task`,
+    ),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with a comma-separated --label value is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label "Flash High,bug" --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label "Flash High,bug" --type Task`,
+    ),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with --label=value single-token form is allowed", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label="Flash High" --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label="Flash High" --type Task`,
+    ),
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("gh issue create with only Josh label is allowed (Josh carve-out)", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label Josh --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label Josh --type Task`,
+    ),
   );
   assertEquals(res.code, 0, res.stderr);
 });
@@ -154,7 +178,7 @@ Deno.test("gh issue create with only Josh label is allowed (Josh carve-out)", as
 Deno.test("gh issue create with Josh and non-model labels (Josh, Blocked) is allowed (Josh carve-out)", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body B --label Josh --label Blocked --type Task`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label Josh --label Blocked --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -162,7 +186,9 @@ Deno.test("gh issue create with Josh and non-model labels (Josh, Blocked) is all
 
 Deno.test("gh issue create with ZERO model labels and no Josh label is still denied", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label bug --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label bug --type Task`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -170,21 +196,29 @@ Deno.test("gh issue create with ZERO model labels and no Josh label is still den
 
 Deno.test("gh issue create with a non-model label only (enhancement) is denied", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label enhancement --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label enhancement --type Task`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
 
 Deno.test("gh issue create with no --label flag at all is denied", async () => {
-  const res = await runHook(bashCall(`gh issue create --title T --body B --type Task`));
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task`,
+    ),
+  );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
 
 Deno.test("gh issue create with TWO model labels is denied", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label Sonnet --label Opus --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label Sonnet --label Opus --type Task`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -192,7 +226,9 @@ Deno.test("gh issue create with TWO model labels is denied", async () => {
 
 Deno.test("deny message lists the valid model labels", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --label bug --type Task`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label bug --type Task`,
+    ),
   );
   assertEquals(res.code, 2);
   for (const label of ["Haiku", "Sonnet", "Opus", "Fable", "Flash Med", "Flash High"]) {
@@ -203,7 +239,11 @@ Deno.test("deny message lists the valid model labels", async () => {
 });
 
 Deno.test("a --label flag with no value at all is denied (malformed, fail closed)", async () => {
-  const res = await runHook(bashCall(`gh issue create --title T --body B --type Task --label`));
+  const res = await runHook(
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label`,
+    ),
+  );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
@@ -245,7 +285,9 @@ Deno.test("a command with no gh reference at all passes through", async () => {
 
 Deno.test("gh issue create chained after another command (&&) is still gated", async () => {
   const res = await runHook(
-    bashCall(`echo hi && gh issue create --title T --body B --label bug --type Task`),
+    bashCall(
+      `echo hi && gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label bug --type Task`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -255,7 +297,9 @@ Deno.test("gh issue create chained after another command (&&) is still gated", a
 
 Deno.test("gh issue create chained after another command with a NEWLINE (not &&) is still gated", async () => {
   const res = await runHook(
-    bashCall(`echo hi\ngh issue create --title T --body B --label bug --type Task`),
+    bashCall(
+      `echo hi\ngh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label bug --type Task`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -263,7 +307,9 @@ Deno.test("gh issue create chained after another command with a NEWLINE (not &&)
 
 Deno.test("gh issue create chained after another command with a bare & (not &&) is still gated", async () => {
   const res = await runHook(
-    bashCall(`echo hi & gh issue create --title T --body B --label bug --type Task`),
+    bashCall(
+      `echo hi & gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label bug --type Task`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -273,7 +319,9 @@ Deno.test("gh issue create chained after another command with a bare & (not &&) 
 
 Deno.test("subshell-wrapped gh issue create ( ... ) is still gated (parens are segment boundaries)", async () => {
   const res = await runHook(
-    bashCall(`( gh issue create --title T --body B --label bug --type Task )`),
+    bashCall(
+      `( gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label bug --type Task )`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -281,7 +329,9 @@ Deno.test("subshell-wrapped gh issue create ( ... ) is still gated (parens are s
 
 Deno.test("brace-grouped gh issue create { ...; } is still gated (braces are segment boundaries)", async () => {
   const res = await runHook(
-    bashCall(`{ gh issue create --title T --body B --label bug --type Task; }`),
+    bashCall(
+      `{ gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label bug --type Task; }`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -334,6 +384,7 @@ Deno.test("MCP issue_write create with one model label in the array and valid ty
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      body: SIGNED_BODY,
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
@@ -348,6 +399,7 @@ Deno.test("MCP issue_write create with only Josh label is allowed (Josh carve-ou
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      body: SIGNED_BODY,
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
@@ -362,6 +414,7 @@ Deno.test("MCP issue_write create with Josh and non-model labels is allowed (Jos
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      body: SIGNED_BODY,
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
@@ -506,7 +559,7 @@ Deno.test("gh issue create with Issue #342 body fixture (quoted pointer phrases)
     bashCall(
       `gh issue create --title T --body "${
         ISSUE_342_FIXTURE_BODY.replace(/"/g, '\\"')
-      }" --label "Flash High" --type Task`,
+      }\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -515,7 +568,7 @@ Deno.test("gh issue create with Issue #342 body fixture (quoted pointer phrases)
 Deno.test("gh issue create with pointer phrase inside code block/span or quotes is allowed", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "Rule states \`read comment first\` is banned and \\"see the epic\\" is banned." --label "Flash High" --type Task`,
+      `gh issue create --title T --body "Rule states \`read comment first\` is banned and \\"see the epic\\" is banned.\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -767,7 +820,9 @@ Deno.test("direct scripts/create-issue.ts with valid type and model label is all
 
 Deno.test("gh issue create with Sonnet and no escalation reason is denied with helpful escalation prompt", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --type Task --label Sonnet`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sonnet`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -785,7 +840,7 @@ Deno.test("gh issue create with Sonnet and no escalation reason is denied with h
   );
   assertEquals(
     res.stderr.includes(
-      'gh issue create --title T --body B --type Task --label Sonnet --escalation-reason "<why Sonnet is genuinely the right tier>"',
+      'gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sonnet --escalation-reason "<why Sonnet is genuinely the right tier>"',
     ),
     true,
   );
@@ -793,7 +848,9 @@ Deno.test("gh issue create with Sonnet and no escalation reason is denied with h
 
 Deno.test("gh issue create with Opus and no escalation reason is denied with helpful escalation prompt", async () => {
   const res = await runHook(
-    bashCall(`gh issue create --title T --body B --type Task --label Opus`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus`,
+    ),
   );
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
@@ -811,7 +868,7 @@ Deno.test("gh issue create with Opus and no escalation reason is denied with hel
   );
   assertEquals(
     res.stderr.includes(
-      'gh issue create --title T --body B --type Task --label Opus --escalation-reason "<why Opus is genuinely the right tier>"',
+      'gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus --escalation-reason "<why Opus is genuinely the right tier>"',
     ),
     true,
   );
@@ -820,7 +877,7 @@ Deno.test("gh issue create with Opus and no escalation reason is denied with hel
 Deno.test("gh issue create with Sonnet and non-empty --escalation-reason is allowed", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body B --type Task --label Sonnet --escalation-reason "complex multi-file refactoring"`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sonnet --escalation-reason "complex multi-file refactoring"`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -829,7 +886,7 @@ Deno.test("gh issue create with Sonnet and non-empty --escalation-reason is allo
 Deno.test("gh issue create with Opus and non-empty --escalation-reason is allowed", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body B --type Task --label Opus --escalation-reason "architectural spec and tech-lead judgment"`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Opus --escalation-reason "architectural spec and tech-lead judgment"`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -838,7 +895,7 @@ Deno.test("gh issue create with Opus and non-empty --escalation-reason is allowe
 Deno.test("gh issue create with Sonnet and --escalation-reason=value single-token form is allowed", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body B --type Task --label Sonnet --escalation-reason="complex backend rewrite"`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sonnet --escalation-reason="complex backend rewrite"`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -847,7 +904,7 @@ Deno.test("gh issue create with Sonnet and --escalation-reason=value single-toke
 Deno.test("gh issue create with Sonnet and empty --escalation-reason is denied", async () => {
   const resEmpty = await runHook(
     bashCall(
-      `gh issue create --title T --body B --type Task --label Sonnet --escalation-reason ""`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sonnet --escalation-reason ""`,
     ),
   );
   assertEquals(resEmpty.code, 2);
@@ -855,7 +912,7 @@ Deno.test("gh issue create with Sonnet and empty --escalation-reason is denied",
 
   const resWhitespace = await runHook(
     bashCall(
-      `gh issue create --title T --body B --type Task --label Sonnet --escalation-reason "   "`,
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sonnet --escalation-reason "   "`,
     ),
   );
   assertEquals(resWhitespace.code, 2);
@@ -864,17 +921,23 @@ Deno.test("gh issue create with Sonnet and empty --escalation-reason is denied",
 
 Deno.test("gh issue create with Flash High / Flash Med / Haiku requires no escalation reason", async () => {
   const resFH = await runHook(
-    bashCall(`gh issue create --title T --body B --type Task --label "Flash High"`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash High"`,
+    ),
   );
   assertEquals(resFH.code, 0, resFH.stderr);
 
   const resFM = await runHook(
-    bashCall(`gh issue create --title T --body B --type Task --label "Flash Med"`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash Med"`,
+    ),
   );
   assertEquals(resFM.code, 0, resFM.stderr);
 
   const resHaiku = await runHook(
-    bashCall(`gh issue create --title T --body B --type Task --label Haiku`),
+    bashCall(
+      `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Haiku`,
+    ),
   );
   assertEquals(resHaiku.code, 0, resHaiku.stderr);
 });
@@ -929,6 +992,7 @@ Deno.test("MCP issue_write create with Sonnet and escalation_reason is allowed",
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      body: SIGNED_BODY,
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
@@ -944,6 +1008,7 @@ Deno.test("MCP issue_write create with Opus and escalation_reason is allowed", a
   const res = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      body: SIGNED_BODY,
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
@@ -959,6 +1024,7 @@ Deno.test("MCP issue_write create with Flash High / Haiku requires no escalation
   const resFH = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      body: SIGNED_BODY,
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
@@ -971,6 +1037,7 @@ Deno.test("MCP issue_write create with Flash High / Haiku requires no escalation
   const resHaiku = await runHook(
     mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
       method: "create",
+      body: SIGNED_BODY,
       owner: "WebJamApps",
       repo: "web-jam-tools",
       title: "T",
@@ -1122,7 +1189,7 @@ Deno.test("web-jam-tools#813: a heredoc piped to an interpreter is executed code
   const res = await runHook(
     bashCall(
       `bash <<'EOF'\n` +
-        `gh issue create --title "Nobody's title" --body B --type Task\n` +
+        `gh issue create --title "Nobody's title" --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task\n` +
         `EOF`,
     ),
   );
@@ -1138,7 +1205,7 @@ Deno.test("web-jam-tools#813: a data heredoc mention and a real gh issue create 
       `cat > /tmp/notes.md <<'EOF1'\n` +
         `This documents why gh issue create shouldn't be used carelessly.\n` +
         `EOF1\n` +
-        `gh issue create --title T --body B --type Task --label Haiku`,
+        `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --type Task --label Haiku`,
     ),
   );
   // The data body's mention is excluded; the real, valid, outside-heredoc
@@ -1152,7 +1219,7 @@ Deno.test("web-jam-tools#813: a data heredoc mention and a real, invalid gh issu
       `cat > /tmp/notes.md <<'EOF1'\n` +
         `This documents why gh issue create shouldn't be used carelessly.\n` +
         `EOF1\n` +
-        `gh issue create --title T --body B --label Haiku`,
+        `gh issue create --title T --body "B\n\n🤖 Authored by Claude Code — Opus" --label Haiku`,
     ),
   );
   // Same data body as above, but this time the real outer call is missing
@@ -1400,7 +1467,7 @@ Deno.test("web-jam-tools#1115 (case 8): gh issue create with 'verify against `sc
 Deno.test("web-jam-tools#1115 (case 9): gh issue create with 'dead too, verified against `scripts/install-skills.sh`' in body is allowed", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "dead too, verified against \\\`scripts/install-skills.sh\\\`" --label "Flash High" --type Task`,
+      `gh issue create --title T --body "dead too, verified against \\\`scripts/install-skills.sh\\\`\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -1409,7 +1476,7 @@ Deno.test("web-jam-tools#1115 (case 9): gh issue create with 'dead too, verified
 Deno.test("web-jam-tools#1115 (case 10): gh issue create with 'verified by deleting the file and re-running the check' in body is allowed", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "verified by deleting the file and re-running the check" --label "Flash High" --type Task`,
+      `gh issue create --title T --body "verified by deleting the file and re-running the check\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -1420,7 +1487,7 @@ Deno.test("web-jam-tools#1115 (case 11): gh issue create with deferred phrases i
     "Instructions:\\n```sh\\n# must be verified before removal\\n# needs to be verified\\n# should be verified\\n# to be confirmed\\n# not yet confirmed\\n# remains to be\\n# assumed but not confirmed\\n# verify against `scripts/install-skills.sh` before removing\\n```";
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "${body}" --label "Flash High" --type Task`,
+      `gh issue create --title T --body "${body}\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -1431,7 +1498,7 @@ Deno.test("web-jam-tools#1115 (case 12): gh issue create with deferred phrases i
     "> must be verified before removal\\n> needs to be verified\\n> should be verified\\n> to be confirmed\\n> not yet confirmed\\n> remains to be\\n> assumed but not confirmed\\n> verify against `scripts/install-skills.sh` before removing";
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "${body}" --label "Flash High" --type Task`,
+      `gh issue create --title T --body "${body}\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -1440,7 +1507,7 @@ Deno.test("web-jam-tools#1115 (case 12): gh issue create with deferred phrases i
 Deno.test("web-jam-tools#1115 (case 13): gh issue create with native type Epic is allowed regardless of body content", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "This needs to be verified before removal" --label "Flash High" --type Epic`,
+      `gh issue create --title T --body "This needs to be verified before removal\n\n🤖 Authored by Claude Code — Opus" --label "Flash High" --type Epic`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -1449,7 +1516,7 @@ Deno.test("web-jam-tools#1115 (case 13): gh issue create with native type Epic i
 Deno.test("web-jam-tools#1115 (case 14): gh issue create carrying 'Needs Design' label is allowed regardless of body content", async () => {
   const res = await runHook(
     bashCall(
-      `gh issue create --title T --body "This needs to be verified before removal" --label "Flash High,Needs Design" --type Task`,
+      `gh issue create --title T --body "This needs to be verified before removal\n\n🤖 Authored by Claude Code — Opus" --label "Flash High,Needs Design" --type Task`,
     ),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -1502,7 +1569,7 @@ Deno.test("web-jam-tools#1167: a relative --body-file is resolved against the pa
     assertBlocked(res.stderr);
     assertEquals(res.stderr.includes("deferred verification phrase"), true, res.stderr);
 
-    await Deno.writeTextFile(`${dir}/x.md`, "A plain body.");
+    await Deno.writeTextFile(`${dir}/x.md`, "A plain body.\n\n🤖 Authored by Claude Code — Opus");
     const clean = await runHook({
       ...bashCall(`gh issue create --title T --body-file x.md --label "Flash High" --type Task`),
       cwd: dir,
@@ -1554,7 +1621,7 @@ Deno.test("web-jam-tools#1115: MCP issue_write create with Needs Design label is
       title: "T",
       type: "Task",
       labels: ["Flash High", "Needs Design"],
-      body: "The behavior needs to be verified.",
+      body: "The behavior needs to be verified.\n\n🤖 Authored by Claude Code — Opus",
     }),
   );
   assertEquals(res.code, 0, res.stderr);
@@ -1585,3 +1652,39 @@ Deno.test("web-jam-tools#1167: MCP issue_write create or update with a non-strin
   assertBlocked(update.stderr);
   assertEquals(update.stderr.includes("invalid body payload"), true, update.stderr);
 });
+
+// --- Authored-by footer (web-jam-tools#1205), through the real hook script and the real roster probe ---
+
+for (const type of ["Task", "Epic"]) {
+  Deno.test(`Authored-by footer (${type}): raw gh issue create with no footer is blocked; a roster footer is allowed; an off-roster footer is blocked`, async () => {
+    const make = (body: string) =>
+      bashCall(`gh issue create --title T --body "${body}" --label Haiku --type ${type}`);
+    const none = await runHook(make("Body"));
+    assertEquals(none.code, 2);
+    assertBlocked(none.stderr);
+    assertEquals(none.stderr.includes("Authored by"), true, none.stderr);
+
+    const bad = await runHook(make("Body\n\n🤖 Authored by Codex — GPT-6"));
+    assertEquals(bad.code, 2);
+    assertBlocked(bad.stderr);
+    assertEquals(bad.stderr.includes("not on the author roster"), true, bad.stderr);
+
+    const good = await runHook(make("Body\n\n🤖 Authored by Claude Code — Opus"));
+    assertEquals(good.code, 0, good.stderr);
+  });
+
+  Deno.test(`Authored-by footer (${type}): connector issue_write create is blocked without a footer and allowed with one`, async () => {
+    const call = (body: string) =>
+      mcpIssueWrite("mcp__claude_ai_GitHub_MCP__issue_write", {
+        method: "create",
+        body,
+        type,
+        labels: ["Haiku"],
+      });
+    const none = await runHook(call("Body"));
+    assertEquals(none.code, 2);
+    assertBlocked(none.stderr);
+    const good = await runHook(call("Body\n\n🤖 Authored by Claude Code — Opus"));
+    assertEquals(good.code, 0, good.stderr);
+  });
+}

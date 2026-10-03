@@ -269,7 +269,7 @@ Deno.test(
         JSON.stringify({
           tool_input: {
             command:
-              'gh issue create --repo WebJamApps/web-jam-tools --title "test" --body "standalone body text" --type Task --label "Flash High"',
+              'gh issue create --repo WebJamApps/web-jam-tools --title "test" --body "standalone body text\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash High"',
           },
         }),
       );
