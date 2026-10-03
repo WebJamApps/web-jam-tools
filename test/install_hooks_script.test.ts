@@ -35,6 +35,7 @@ const MERGE_CODEX_SCRIPT = `${REPO_ROOT}scripts/merge-codex-reaper-hook.ts`;
 const MERGE_AGENTS_MD_SCRIPT = `${REPO_ROOT}scripts/merge-agents-md-pointer.ts`;
 const STATUS_LINE_SCRIPT = `${REPO_ROOT}scripts/statusline.sh`;
 const AGENT_ALERT_SCRIPT = `${REPO_ROOT}scripts/agent-alert.sh`;
+const AGY_PROMPT_WATCH_SCRIPT = `${REPO_ROOT}scripts/agy-prompt-watch.sh`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
 
 interface RunResult {
@@ -115,7 +116,10 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     // destination as the *.sh hooks (so it gets a stable installed path),
     // but it is NOT a hook and must never appear in shHookNames() (which
     // only lists hooks/*.sh) or be picked up by the hook-registration loops.
-    assertEquals(linked, [...shHookNames(), "agent-alert.sh", "statusline.sh"].sort());
+    assertEquals(
+      linked,
+      [...shHookNames(), "agent-alert.sh", "agy-prompt-watch.sh", "statusline.sh"].sort(),
+    );
     for (const name of linked) {
       const info = await Deno.lstat(`${hooksDir}/${name}`);
       assert(info.isSymlink, `${name} should be a symlink`);
@@ -163,6 +167,16 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     assertEquals(agyHooks.hooks.Stop, [
       { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy finished" },
     ]);
+    // web-jam-tools#1212: agy-prompt-watch.sh is registered under matcher ".*"
+    const preToolHooks = agyHooks.hooks.PreToolUse.flatMap(
+      (e: { hooks?: Array<{ command?: string }> }) => e.hooks ?? [],
+    );
+    assert(
+      preToolHooks.some(
+        (h: { command?: string }) => h.command === "$HOME/.claude/hooks/agy-prompt-watch.sh",
+      ),
+      "expected $HOME/.claude/hooks/agy-prompt-watch.sh in agy PreToolUse hooks",
+    );
     // web-jam-tools#691: agy never gets a statusLine surface.
     assertEquals(agyHooks.statusLine, undefined);
     // web-jam-tools#705: agy has no permission-mode concept at all
@@ -459,7 +473,10 @@ Deno.test("default invocation (no --hooks-dir) still targets $HOME/.claude/hooks
     const linked = [...Deno.readDirSync(hooksDir)].map((e) => e.name).sort();
     // web-jam-tools#691: statusline.sh lands alongside the hooks at the
     // default destination too, but is not itself a hook.
-    assertEquals(linked, [...shHookNames(), "agent-alert.sh", "statusline.sh"].sort());
+    assertEquals(
+      linked,
+      [...shHookNames(), "agent-alert.sh", "agy-prompt-watch.sh", "statusline.sh"].sort(),
+    );
 
     // web-jam-tools#721: a normal, unsandboxed-hooks-dir run must still
     // register statusLine exactly as before — pointed at the default
@@ -498,11 +515,13 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
   await Deno.copyFile(MERGE_CODEX_SCRIPT, `${mainRepo}/scripts/merge-codex-reaper-hook.ts`);
   await Deno.copyFile(MERGE_AGENTS_MD_SCRIPT, `${mainRepo}/scripts/merge-agents-md-pointer.ts`);
-  // install-hooks.sh requires scripts/statusline.sh and scripts/agent-alert.sh to exist (web-jam-tools#688, web-jam-tools#1176).
+  // install-hooks.sh requires scripts/statusline.sh, scripts/agent-alert.sh, and scripts/agy-prompt-watch.sh to exist (web-jam-tools#688, web-jam-tools#1176, web-jam-tools#1212).
   await Deno.copyFile(STATUS_LINE_SCRIPT, `${mainRepo}/scripts/statusline.sh`);
   await Deno.chmod(`${mainRepo}/scripts/statusline.sh`, 0o755);
   await Deno.copyFile(AGENT_ALERT_SCRIPT, `${mainRepo}/scripts/agent-alert.sh`);
   await Deno.chmod(`${mainRepo}/scripts/agent-alert.sh`, 0o755);
+  await Deno.copyFile(AGY_PROMPT_WATCH_SCRIPT, `${mainRepo}/scripts/agy-prompt-watch.sh`);
+  await Deno.chmod(`${mainRepo}/scripts/agy-prompt-watch.sh`, 0o755);
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {
