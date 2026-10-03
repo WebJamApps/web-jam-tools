@@ -432,7 +432,8 @@ export async function checkUnregisteredHooks(
     for (const h of fromInstaller) expectedHooks.add(h);
   }
 
-  // 2. Also check hooks on remoteRef (excluding agy-only hooks)
+  // 2. Also check hooks on remoteRef (excluding agy-only and Codex-only hooks;
+  //    Codex hooks register in the Codex hooks.json, never settings.json)
   const gitLsHooks = await runGit(
     ["ls-tree", "--name-only", remoteRef, "hooks/"],
     repoDir,
@@ -444,6 +445,7 @@ export async function checkUnregisteredHooks(
       const base = path.basename(trimmed);
       if (
         base.startsWith("agy-") ||
+        base.startsWith("codex-") ||
         base === "block-agy-gmail-send-delete.sh"
       ) {
         continue;
@@ -458,6 +460,7 @@ export async function checkUnregisteredHooks(
         if (entry.isFile && entry.name.endsWith(".sh")) {
           if (
             entry.name.startsWith("agy-") ||
+            entry.name.startsWith("codex-") ||
             entry.name === "block-agy-gmail-send-delete.sh"
           ) {
             continue;

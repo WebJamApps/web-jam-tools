@@ -446,6 +446,48 @@ Deno.test("detectDrift reports hooks on origin/dev not registered in settings.js
   }
 });
 
+Deno.test("checkUnregisteredHooks skips codex-* hooks but still reports other unregistered hooks", async () => {
+  const sb = await createSandbox();
+  try {
+    const runGit = async (args: string[]) => {
+      const out = await new Deno.Command("git", {
+        args,
+        cwd: sb.repoDir,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      if (!out.success) {
+        throw new Error(
+          `git ${args.join(" ")} failed: ${new TextDecoder().decode(out.stderr)}`,
+        );
+      }
+    };
+
+    for (const name of ["codex-reaper-startup-check.sh", "hook3.sh"]) {
+      await Deno.writeTextFile(
+        path.join(sb.repoDir, "hooks", name),
+        "#!/bin/bash\nexit 0\n",
+      );
+    }
+    await runGit(["add", "."]);
+    await runGit(["commit", "-m", "Add codex and non-codex hooks"]);
+    await runGit(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+
+    // git ls-tree branch
+    assertEquals(
+      await checkUnregisteredHooks(sb.repoDir, "origin/dev", sb.settingsPath),
+      ["hook3.sh"],
+    );
+    // local-directory fallback branch (ref that git cannot resolve)
+    assertEquals(
+      await checkUnregisteredHooks(sb.repoDir, "no-such-ref", sb.settingsPath),
+      ["hook3.sh"],
+    );
+  } finally {
+    await sb.cleanup();
+  }
+});
+
 // --- Test 4b: statusLine drift (web-jam-tools#691) ---
 //
 // scripts/statusline.sh's installed location is NOT a hooks.<Event>[]
