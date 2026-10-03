@@ -310,3 +310,35 @@ Deno.test("nested-command recursion depth cap exceeded fails CLOSED (blocked), e
   const result = checkDangerousGitDeploy(cmd);
   assertEquals(result.blocked, true);
 });
+
+// --- web-jam-tools#1223: git global options before the subcommand ---
+import { GLOBAL_OPTION_CASES, PLAIN_REGRESSION_CASES } from "./git_global_options_cases.ts";
+
+GLOBAL_OPTION_CASES.forEach((row, n) => {
+  Deno.test(`#1223 row ${n + 1}: ${row[0]}`, () => {
+    assertEquals(checkDangerousGitDeploy(row[0]).blocked, row[1] === 2);
+  });
+});
+
+PLAIN_REGRESSION_CASES.forEach((row) => {
+  Deno.test(`#1223 plain command unchanged: ${row[0]}`, () => {
+    assertEquals(checkDangerousGitDeploy(row[0]).blocked, row[1] === 2);
+  });
+});
+
+Deno.test("#1223 a global-option push is blocked with the same message as its plain twin", () => {
+  assertEquals(
+    checkDangerousGitDeploy("git -C /tmp/x push origin dev"),
+    checkDangerousGitDeploy("git push origin dev"),
+  );
+  assertEquals(
+    checkDangerousGitDeploy("git -C /tmp/x push origin --delete feat"),
+    checkDangerousGitDeploy("git push origin --delete feat"),
+  );
+});
+
+Deno.test("#1223 global option plus force flag message names the plain form", () => {
+  const r = checkDangerousGitDeploy("git -C /tmp/x push --force origin feat");
+  assertEquals(r.blocked, true);
+  assertEquals(r.description?.includes("plain 'git push' form"), true);
+});

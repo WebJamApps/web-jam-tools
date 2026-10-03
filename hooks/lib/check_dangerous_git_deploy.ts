@@ -63,6 +63,7 @@ import {
   resolveThroughWrappers,
   splitOnOperators,
   splitShellTokens,
+  stripGitGlobalOptions,
   stripHeredocs,
 } from "./normalize_command.ts";
 import { isGitPushDeletion } from "./check_irreversible_operations.ts";
@@ -92,6 +93,16 @@ function hasFlagValue(argv: string[], flags: string[], values: string[]): boolea
   return false;
 }
 
+const DANGEROUS_PUSH_FLAGS = new Set([
+  "--force",
+  "-f",
+  "--force-with-lease",
+  "--mirror",
+  "--prune",
+  "--delete",
+  "-d",
+]);
+
 function checkSegment(argv: string[], depth: number): CheckResult {
   const resolved = resolveThroughWrappers(argv);
   if (resolved.kind === "cap-exceeded") {
@@ -104,7 +115,8 @@ function checkSegment(argv: string[], depth: number): CheckResult {
     return checkDangerousGitDeploy(resolved.command, depth + 1);
   }
 
-  const resolvedArgv = resolved.argv;
+  const globalStripped = stripGitGlobalOptions(resolved.argv);
+  const resolvedArgv = globalStripped.argv;
   let i = 0;
   while (i < resolvedArgv.length && ASSIGN_RE.test(resolvedArgv[i])) i++;
   if (i >= resolvedArgv.length) return ok();
@@ -187,6 +199,21 @@ function checkSegment(argv: string[], depth: number): CheckResult {
   if (isGitPushDeletion(resolvedArgv.slice(i))) {
     return block(
       "deleting a remote branch via 'git push' (--delete, -d, or :branch) — deleting a remote branch is Josh's decision.",
+    );
+  }
+
+  // 7) A git global option plus a dangerous push flag (web-jam-tools#1223):
+  //    the deny rules only match the plain form, so this guard owns the
+  //    `git <global option> push --force ...` shape.
+  if (
+    globalStripped.hadGlobalOptions && cmd0 === "git" && rest[0] === "push" &&
+    rest.slice(1).some((a) =>
+      DANGEROUS_PUSH_FLAGS.has(a) || a.startsWith("--force-with-lease=") ||
+      (a.length > 1 && a.startsWith(":"))
+    )
+  ) {
+    return block(
+      "'git' with a global option before 'push' plus a force, mirror, prune or delete flag — run the plain 'git push' form from inside the repository instead.",
     );
   }
 

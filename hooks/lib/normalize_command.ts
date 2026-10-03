@@ -682,3 +682,69 @@ if (import.meta.main) {
     console.log(normalize(cmd));
   }
 }
+
+// Git global options (written between `git` and the subcommand), web-jam-tools#1223.
+const GIT_GLOBAL_OPTS_WITH_VALUE = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--config-env",
+  "--exec-path",
+]);
+const GIT_GLOBAL_OPTS_WITH_EQUALS = [
+  "--git-dir=",
+  "--work-tree=",
+  "--namespace=",
+  "--config-env=",
+  "--exec-path=",
+];
+const GIT_GLOBAL_OPTS_NO_VALUE = new Set([
+  "-p",
+  "--paginate",
+  "-P",
+  "--no-pager",
+  "--no-replace-objects",
+  "--no-lazy-fetch",
+  "--no-optional-locks",
+  "--no-advice",
+  "--bare",
+  "--literal-pathspecs",
+  "--glob-pathspecs",
+  "--noglob-pathspecs",
+  "--icase-pathspecs",
+]);
+
+/**
+ * If `argv` is a `git` invocation (after any `VAR=value` prefixes), drop git's
+ * global options so the subcommand sits at the next index, exactly as in the
+ * plain command. `hadGlobalOptions` says whether any were dropped. An
+ * unrecognised option stops the skipping (the argv is left as-is from there).
+ * Shared by both push guards so they never duplicate this parser.
+ */
+export function stripGitGlobalOptions(
+  argv: string[],
+): { argv: string[]; hadGlobalOptions: boolean } {
+  let i = 0;
+  while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
+  if (i >= argv.length || argv[i].split("/").pop() !== "git") {
+    return { argv, hadGlobalOptions: false };
+  }
+  let j = i + 1;
+  while (j < argv.length) {
+    const t = argv[j];
+    if (GIT_GLOBAL_OPTS_WITH_VALUE.has(t)) {
+      j += 2;
+    } else if (
+      GIT_GLOBAL_OPTS_NO_VALUE.has(t) || GIT_GLOBAL_OPTS_WITH_EQUALS.some((p) => t.startsWith(p))
+    ) {
+      j += 1;
+    } else break;
+  }
+  if (j === i + 1) return { argv, hadGlobalOptions: false };
+  return {
+    argv: [...argv.slice(0, i + 1), ...argv.slice(Math.min(j, argv.length))],
+    hadGlobalOptions: true,
+  };
+}

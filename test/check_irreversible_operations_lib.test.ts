@@ -413,3 +413,25 @@ Deno.test("the SUBSTRING_RULES family ('heroku addons:destroy') still blocks thr
   const result = checkIrreversibleOperation("timeout 30 heroku addons:destroy my-addon");
   assertEquals(result.blocked, true);
 });
+
+// --- web-jam-tools#1223: git global options before the subcommand ---
+import { GLOBAL_OPTION_CASES, PLAIN_REGRESSION_CASES } from "./git_global_options_cases.ts";
+
+GLOBAL_OPTION_CASES.forEach((row, n) => {
+  Deno.test(`#1223 row ${n + 1}: ${row[0]}`, () => {
+    assertEquals(checkIrreversibleOperation(row[0]).blocked, row[2] === 2);
+  });
+});
+
+PLAIN_REGRESSION_CASES.forEach((row) => {
+  Deno.test(`#1223 plain command unchanged: ${row[0]}`, () => {
+    assertEquals(checkIrreversibleOperation(row[0]).blocked, row[2] === 2);
+  });
+});
+
+Deno.test("#1223 a global-option deletion gets the same message as its plain twin", () => {
+  assertEquals(
+    checkIrreversibleOperation("git -C /tmp/x push origin --delete feat"),
+    checkIrreversibleOperation("git push origin --delete feat"),
+  );
+});
