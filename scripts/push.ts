@@ -35,6 +35,16 @@ export function evaluatePush(args: string[], branch: string | null): PushDecisio
     };
   }
 
+  // Refuse branch names git could read as an option (-) or a force marker (+)
+  if (branch.startsWith("+") || branch.startsWith("-")) {
+    return {
+      outcome: "refused",
+      rule: "unsafe-branch-name",
+      reason:
+        "current branch name starts with '+' or '-', which git could read as a force marker or an option (rename the branch)",
+    };
+  }
+
   // Refuse if current branch is dev or main
   if (branch === "dev" || branch === "main") {
     if (args.includes("--force-with-lease")) {
@@ -80,12 +90,11 @@ export function evaluatePush(args: string[], branch: string | null): PushDecisio
   }
 
   // Refuse colon refspec
-  const colonArg = args.find((a) => a.includes(":"));
-  if (colonArg) {
+  if (args.some((a) => a.includes(":"))) {
     return {
       outcome: "refused",
       rule: "colon-refspec",
-      reason: `colon refspec '${colonArg}' is not permitted via 'deno task push'`,
+      reason: "a colon refspec is not permitted via 'deno task push'",
     };
   }
 
@@ -116,39 +125,57 @@ export function evaluatePush(args: string[], branch: string | null): PushDecisio
     outcome: "refused",
     rule: "unaccepted-arguments",
     reason:
-      `'deno task push' accepts only two forms: 'deno task push' and 'deno task push --force-with-lease'. Received: ${
-        args.join(" ")
-      }`,
+      "'deno task push' accepts only two forms: 'deno task push' and 'deno task push --force-with-lease'. Other arguments are not accepted.",
   };
 }
+
+export interface GitResult {
+  code: number;
+  stdout: string;
+}
+
+/** Runs a git command with piped output; injectable so fail-closed paths are testable. */
+export type GitRunner = (args: string[], cwd?: string) => Promise<GitResult>;
+
+/** Spawns the push with the given stdio and returns its exit code; injectable for tests. */
+export type PushSpawner = (
+  args: string[],
+  cwd: string | undefined,
+  stdio: { stdout: "inherit" | "piped"; stderr: "inherit" | "piped" },
+) => Promise<number>;
+
+const defaultGitRunner: GitRunner = async (args, cwd) => {
+  const res = await new Deno.Command("git", {
+    args,
+    cwd,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  return { code: res.code, stdout: new TextDecoder().decode(res.stdout) };
+};
+
+const defaultPushSpawner: PushSpawner = async (args, cwd, stdio) => {
+  const status = await new Deno.Command("git", { args, cwd, ...stdio }).spawn().status;
+  return status.code;
+};
 
 /**
  * Resolves the short name of the currently checked out branch, or null if detached HEAD
  * or not inside a git working tree.
  */
-export async function getCurrentBranch(cwd?: string): Promise<string | null> {
+export async function getCurrentBranch(
+  cwd?: string,
+  run: GitRunner = defaultGitRunner,
+): Promise<string | null> {
   try {
-    const isInsideCmd = new Deno.Command("git", {
-      args: ["rev-parse", "--is-inside-work-tree"],
-      cwd,
-      stdout: "piped",
-      stderr: "piped",
-    });
-    const isInsideRes = await isInsideCmd.output();
-    if (isInsideRes.code !== 0) return null;
-    const isInsideText = new TextDecoder().decode(isInsideRes.stdout).trim();
-    if (isInsideText !== "true") return null;
+    const isInside = await run(["rev-parse", "--is-inside-work-tree"], cwd);
+    if (isInside.code !== 0) return null;
+    if (isInside.stdout.trim() !== "true") return null;
 
-    const symCmd = new Deno.Command("git", {
-      args: ["symbolic-ref", "--quiet", "--short", "HEAD"],
-      cwd,
-      stdout: "piped",
-      stderr: "piped",
-    });
-    const symRes = await symCmd.output();
-    if (symRes.code !== 0) return null;
+    const sym = await run(["symbolic-ref", "--quiet", "--short", "HEAD"], cwd);
+    if (sym.code !== 0) return null;
 
-    const branch = new TextDecoder().decode(symRes.stdout).trim();
+    const branch = sym.stdout.trim();
     if (!branch || branch === "HEAD") return null;
     return branch;
   } catch {
@@ -166,6 +193,7 @@ export async function runPush(
     branch?: string | null;
     stdout?: "inherit" | "piped";
     stderr?: "inherit" | "piped";
+    spawnPush?: PushSpawner;
   },
 ): Promise<number> {
   const branch = options?.branch !== undefined ? options.branch : await getCurrentBranch(cwd);
@@ -177,20 +205,19 @@ export async function runPush(
     return 1;
   }
 
-  const gitArgs = ["push", "-u", "origin", decision.branch!];
+  // Explicit refspec: the branch name can never be read as an option or a force marker.
+  const refspec = `refs/heads/${decision.branch!}:refs/heads/${decision.branch!}`;
+  const gitArgs = ["push", "-u", "origin"];
   if (decision.forceWithLease) {
     gitArgs.push("--force-with-lease");
   }
+  gitArgs.push(refspec);
 
   try {
-    const cmd = new Deno.Command("git", {
-      args: gitArgs,
-      cwd,
+    return await (options?.spawnPush ?? defaultPushSpawner)(gitArgs, cwd, {
       stdout: options?.stdout ?? "inherit",
       stderr: options?.stderr ?? "inherit",
     });
-    const status = await cmd.spawn().status;
-    return status.code;
   } catch (err) {
     console.error(
       `Failed to execute git push: ${err instanceof Error ? err.message : String(err)}`,

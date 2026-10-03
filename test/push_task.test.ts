@@ -18,7 +18,7 @@
  */
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { evaluatePush, getCurrentBranch, runPush } from "../scripts/push.ts";
+import { evaluatePush, getCurrentBranch, type GitRunner, runPush } from "../scripts/push.ts";
 
 const SCRIPT_PATH = new URL("../scripts/push.ts", import.meta.url).pathname;
 
@@ -173,7 +173,7 @@ Deno.test("evaluatePush: origin :probe colon refspec is refused", () => {
   const decision = evaluatePush(["origin", ":probe"], "probe-branch");
   assertEquals(decision.outcome, "refused");
   assertEquals(decision.rule, "colon-refspec");
-  assertStringIncludes(decision.reason, "colon refspec ':probe' is not permitted");
+  assertStringIncludes(decision.reason, "a colon refspec is not permitted");
 });
 
 Deno.test("evaluatePush: --force on probe-branch is refused", () => {
@@ -333,7 +333,7 @@ Deno.test("literal case 7: deno task push origin :probe → refused", async () =
     const res = await runDenoTaskPush(["origin", ":probe"], env.repoDir);
     assertEquals(res.code, 1);
     assertStringIncludes(res.stderr, "Refused (colon-refspec)");
-    assertStringIncludes(res.stderr, "colon refspec ':probe' is not permitted");
+    assertStringIncludes(res.stderr, "a colon refspec is not permitted");
   } finally {
     await env.cleanup();
   }
@@ -420,5 +420,103 @@ Deno.test("getCurrentBranch: returns null outside git repository", async () => {
 
 Deno.test("runPush: returns 1 on refusal", async () => {
   const code = await runPush([], undefined, { branch: "dev", stderr: "piped" });
+  assertEquals(code, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Review-fix tests: unsafe branch names, argument echo, fail-closed paths
+// ---------------------------------------------------------------------------
+
+async function remoteRefs(bareDir: string): Promise<string> {
+  const out = await new Deno.Command("git", {
+    args: ["for-each-ref", "--format=%(refname)"],
+    cwd: bareDir,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  return new TextDecoder().decode(out.stdout).trim();
+}
+
+for (const name of ["+dev", "+main", "+probe", "-dev"]) {
+  Deno.test(`unsafe branch name '${name}' is refused and nothing reaches the remote`, async () => {
+    const decision = evaluatePush([], name);
+    assertEquals(decision.outcome, "refused");
+    assertEquals(decision.rule, "unsafe-branch-name");
+
+    // git itself refuses to create a branch named '-dev', so feed it through runPush.
+    let spawned = false;
+    const code = await runPush([], undefined, {
+      branch: name,
+      stderr: "piped",
+      spawnPush: () => {
+        spawned = true;
+        return Promise.resolve(0);
+      },
+    });
+    assertEquals(code, 1);
+    assertEquals(spawned, false);
+    if (name.startsWith("-")) return;
+
+    const env = await createFixtureRepo();
+    try {
+      const before = await remoteRefs(env.bareDir);
+      await env.git(["checkout", "-q", "-b", name]);
+      const res = await runDenoTaskPush([], env.repoDir);
+      assertEquals(res.code, 1);
+      assertStringIncludes(res.stderr, "Refused (unsafe-branch-name)");
+      assertEquals(await remoteRefs(env.bareDir), before);
+    } finally {
+      await env.cleanup();
+    }
+  });
+}
+
+Deno.test("runPush: pushes an explicit refs/heads refspec", async () => {
+  let seen: string[] = [];
+  const code = await runPush(["--force-with-lease"], undefined, {
+    branch: "probe-branch",
+    spawnPush: (args) => {
+      seen = args;
+      return Promise.resolve(0);
+    },
+  });
+  assertEquals(code, 0);
+  assertEquals(seen, [
+    "push",
+    "-u",
+    "origin",
+    "--force-with-lease",
+    "refs/heads/probe-branch:refs/heads/probe-branch",
+  ]);
+});
+
+Deno.test("refusal messages do not echo the arguments", () => {
+  const secret = "https://user:token@host/repo.git";
+  for (const args of [[secret], ["origin", secret], ["--force-with-lease", secret]]) {
+    const decision = evaluatePush(args, "probe-branch");
+    assertEquals(decision.outcome, "refused");
+    assertEquals(decision.reason.includes("token"), false);
+    assertEquals(decision.reason.includes("user:"), false);
+  }
+});
+
+Deno.test("getCurrentBranch: fails closed when the git runner throws", async () => {
+  const run: GitRunner = () => Promise.reject(new Error("spawn failed"));
+  assertEquals(await getCurrentBranch(undefined, run), null);
+});
+
+Deno.test("getCurrentBranch: fails closed when symbolic-ref exits non-zero", async () => {
+  const run: GitRunner = (args) =>
+    Promise.resolve(
+      args[0] === "rev-parse" ? { code: 0, stdout: "true\n" } : { code: 1, stdout: "" },
+    );
+  assertEquals(await getCurrentBranch(undefined, run), null);
+});
+
+Deno.test("runPush: returns 1 when spawning the push fails", async () => {
+  const code = await runPush([], undefined, {
+    branch: "probe-branch",
+    spawnPush: () => Promise.reject(new Error("spawn failed")),
+  });
   assertEquals(code, 1);
 });
