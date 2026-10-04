@@ -339,6 +339,7 @@ When an issue's deliverables are strictly external documents (such as manual ver
 7. Do **not** switch branches or add dependencies. When lint and tests are green,
    push the feature branch using `deno task push` on every surface (Claude Code, agy, and Codex alike).
    Use the shared config invocation shown below from `REPO_DIR`, even when the target repo has no Deno config or `push` task. Pass the feature worktree's directory explicitly with `--repo-dir "$PWD"`; do not change into the web-jam-tools main clone to push. See `skills/draft-pr/SKILL.md` for the shared push step.
+   All `--force-with-lease` forms require affirmative confirmation in an interactive terminal inside the push script; noninteractive force pushes fail closed. Josh must approve the named branch or PR first, and the terminal prompt must not be answered automatically.
    Any unattended Codex launch of either skill (a scripted `/work-issue` run, or a scripted `/draft-pr` run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
    Finish by opening a draft PR. Push and draft-PR commands:
 

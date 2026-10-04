@@ -4,7 +4,7 @@
  * Tests for `deno task push` / `scripts/push.ts`.
  * Validates the push guard logic and exercises all literal cases:
  *   - `deno task push` → pushes `probe-branch`.
- *   - `deno task push --force-with-lease` → pushes `probe-branch` with `--force-with-lease`.
+ *   - `deno task push --force-with-lease` → requires terminal confirmation.
  *   - current branch `dev`, `deno task push` → refused.
  *   - current branch `main`, `deno task push` → refused.
  *   - `deno task push --delete` → refused.
@@ -18,7 +18,13 @@
  */
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { evaluatePush, getCurrentBranch, type GitRunner, runPush } from "../scripts/push.ts";
+import {
+  confirmForcePush,
+  evaluatePush,
+  getCurrentBranch,
+  type GitRunner,
+  runPush,
+} from "../scripts/push.ts";
 
 const SCRIPT_PATH = new URL("../scripts/push.ts", import.meta.url).pathname;
 const SHARED_CONFIG_PATH = new URL("../deno.json", import.meta.url).pathname;
@@ -120,6 +126,7 @@ async function runDenoTaskPush(
       ...args,
     ],
     cwd,
+    stdin: "null",
     stdout: "piped",
     stderr: "piped",
   });
@@ -309,33 +316,137 @@ Deno.test("literal case 1: deno task push → pushes probe-branch", async () => 
   }
 });
 
-Deno.test("literal case 2: deno task push --force-with-lease → pushes probe-branch with --force-with-lease", async () => {
+for (const form of ["canonical", "repo-dir", "shared-config", "short-config", "direct-script"]) {
+  Deno.test(`force-with-lease ${form} refuses noninteractive confirmation and preserves remote refs`, async () => {
+    const env = await createFixtureRepo();
+    try {
+      assertEquals((await runDenoTaskPush([], env.repoDir)).code, 0);
+      const before = await env.git(["ls-remote", "origin"]);
+      await Deno.writeTextFile(`${env.repoDir}/file.txt`, "rewritten probe content\n");
+      await env.git(["commit", "-q", "--amend", "-am", "rewritten probe commit"]);
+
+      let args = ["task", "push", "--force-with-lease"];
+      if (form === "repo-dir") {
+        args = ["task", "push", "--repo-dir", env.repoDir, "--force-with-lease"];
+      } else if (form === "shared-config" || form === "short-config") {
+        await Deno.remove(`${env.repoDir}/deno.json`);
+        args = [
+          "task",
+          form === "shared-config" ? "--config" : "-c",
+          SHARED_CONFIG_PATH,
+          "push",
+          "--repo-dir",
+          env.repoDir,
+          "--force-with-lease",
+        ];
+      } else if (form === "direct-script") {
+        args = ["run", "--allow-run=git", SCRIPT_PATH, "--force-with-lease"];
+      }
+      // A piped affirmative answer must not substitute for terminal confirmation.
+      const child = new Deno.Command(Deno.execPath(), {
+        args,
+        cwd: env.repoDir,
+        stdin: "piped",
+        stdout: "piped",
+        stderr: "piped",
+      }).spawn();
+      const writer = child.stdin.getWriter();
+      await writer.write(new TextEncoder().encode("y\n"));
+      await writer.close();
+      const res = await child.output();
+      assertEquals(res.code, 1);
+      assertStringIncludes(
+        new TextDecoder().decode(res.stderr),
+        "Refused (force-with-lease-confirmation)",
+      );
+      assertEquals(await env.git(["ls-remote", "origin"]), before);
+    } finally {
+      await env.cleanup();
+    }
+  });
+}
+
+Deno.test("runPush: confirmed force-with-lease can update a rewritten feature branch", async () => {
   const env = await createFixtureRepo();
   try {
-    // Initial push
-    await runDenoTaskPush([], env.repoDir);
-
-    // Make an amend/update commit on probe-branch
-    await Deno.writeTextFile(`${env.repoDir}/file.txt`, "updated probe content\n");
-    await env.git(["commit", "-q", "-am", "amended probe commit"]);
-
-    const res = await runDenoTaskPush(["--force-with-lease"], env.repoDir);
-    assertEquals(res.code, 0, `Expected force-with-lease push to succeed, stderr: ${res.stderr}`);
-
-    const localHead = await env.git(["rev-parse", "probe-branch"]);
-    const remoteCmd = new Deno.Command("git", {
-      args: ["rev-parse", "probe-branch"],
-      cwd: env.bareDir,
+    assertEquals((await runDenoTaskPush([], env.repoDir)).code, 0);
+    await Deno.writeTextFile(`${env.repoDir}/file.txt`, "confirmed rewrite\n");
+    await env.git(["commit", "-q", "--amend", "-am", "confirmed rewrite"]);
+    let confirmedBranch: string | undefined;
+    const code = await runPush(["--force-with-lease"], env.repoDir, {
       stdout: "piped",
       stderr: "piped",
+      confirmForce: (branch) => {
+        confirmedBranch = branch;
+        return true;
+      },
     });
-    const remoteOut = await remoteCmd.output();
-    assertEquals(remoteOut.code, 0);
-    assertEquals(new TextDecoder().decode(remoteOut.stdout).trim(), localHead);
+    assertEquals(confirmedBranch, "probe-branch");
+    assertEquals(code, 0);
+    const remoteHead = await env.git(["ls-remote", "origin", "refs/heads/probe-branch"]);
+    assertEquals(remoteHead.split(/\s+/)[0], await env.git(["rev-parse", "HEAD"]));
   } finally {
     await env.cleanup();
   }
 });
+
+Deno.test("confirmForcePush: only asks in a terminal and requires an affirmative response", () => {
+  let asked = false;
+  assertEquals(
+    confirmForcePush("probe-branch", () => false, () => {
+      asked = true;
+      return true;
+    }),
+    false,
+  );
+  assertEquals(asked, false);
+  assertEquals(confirmForcePush("probe-branch", () => true, () => false), false);
+  assertEquals(
+    confirmForcePush("probe-branch", () => true, (message) => {
+      assertStringIncludes(message, "'probe-branch' to origin with --force-with-lease");
+      return true;
+    }),
+    true,
+  );
+});
+
+Deno.test("runPush: plain pushes and protected-branch refusals never ask for force confirmation", async () => {
+  let confirmations = 0;
+  for (const branch of ["probe-branch", "dev", "main"]) {
+    for (const args of [[], ["--force-with-lease"]]) {
+      if (branch === "probe-branch" && args.length > 0) continue;
+      const code = await runPush(args, undefined, {
+        branch,
+        confirmForce: () => {
+          confirmations++;
+          return true;
+        },
+        spawnPush: () => Promise.resolve(0),
+      });
+      assertEquals(code, branch === "probe-branch" ? 0 : 1);
+    }
+  }
+  assertEquals(confirmations, 0);
+});
+
+for (const outcome of ["declined", "error"]) {
+  Deno.test(`runPush: ${outcome} confirmation never spawns a force push`, async () => {
+    let spawned = false;
+    const code = await runPush(["--force-with-lease"], undefined, {
+      branch: "probe-branch",
+      confirmForce: () => {
+        if (outcome === "error") throw new Error("confirmation unavailable");
+        return false;
+      },
+      spawnPush: () => {
+        spawned = true;
+        return Promise.resolve(0);
+      },
+    });
+    assertEquals(code, 1);
+    assertEquals(spawned, false);
+  });
+}
 
 Deno.test("literal case 3: current branch dev, deno task push → refused", async () => {
   const env = await createFixtureRepo();
@@ -535,6 +646,7 @@ Deno.test("runPush: pushes an explicit refs/heads refspec", async () => {
   let seen: string[] = [];
   const code = await runPush(["--force-with-lease"], undefined, {
     branch: "probe-branch",
+    confirmForce: () => true,
     spawnPush: (args) => {
       seen = args;
       return Promise.resolve(0);

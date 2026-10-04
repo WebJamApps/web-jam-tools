@@ -54,6 +54,9 @@ Josh alone reviews and flips draft → ready on GitHub.
 
 Push the branch through `deno task push` on every surface (Claude Code, agy, and Codex alike).
 Run the shared config invocation below from the target feature worktree. It works even when that repo has no Deno config or `push` task: `--repo-dir "$PWD"` explicitly selects that worktree's Git directory, independently of the shared config location or any inherited task environment. Do not change into the web-jam-tools main clone to push.
+
+Every `--force-with-lease` invocation also requires affirmative confirmation in an interactive terminal inside the push script. Noninteractive force pushes fail closed, including shared-config and `--repo-dir` forms that do not match Codex's command-prefix prompt. Josh must approve the named branch or PR before a force push; do not automate a response to the terminal prompt.
+
 Any unattended Codex launch of either skill (a scripted `/work-issue` run, or a scripted `/draft-pr` run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
 
 Pass your actual model in `--author` so Josh can track per-model quality, and fill
