@@ -40,13 +40,13 @@ When `work-issue` begins an issue (`<Repo>#<num>`):
 2. **Determine Agent Delegation vs Execution**:
    - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
    - Under **Antigravity** (e.g., Flash High interactive session): If the issue is labeled `Flash Med`, automatically delegate execution down to a `Flash Med` subagent.
-   - Under **Codex**: Executes `Luna`, `Sol`, or `Astra` issues directly in the current session.
+   - Under **Codex**: Execute directly when the running model's tier matches the issue's `Luna`, `Sol`, or `Astra` label. If it differs, follow the approval rule below before overruling the label.
    - If the active session tier matches the issue's model label, execute the task directly in the current session.
 3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label rather than delegating down, prompt Josh for explicit approval in chat before executing:
    ```bash
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
-4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents, `--author "Claude Code — Haiku 3.5"` for Haiku subagents, or looked up via session record / `deno task whoami` on Codex).
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents or `--author "Claude Code — Haiku 4.5"` for Haiku subagents). On Codex, read `payload.model` from the latest `turn_context` entry in this session's rollout JSONL under `~/.codex/sessions/`; identify this session by the `session_meta` ID, rather than selecting another session's newest file or the default model in `config.toml`. Find that model's accepted display spelling in `ROSTER` in `scripts/create-draft-pr.sh`, then validate it with `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --check-author "Codex — <roster spelling>"` before passing the same value in `--author`. Do not pass the raw API slug as the display name or substitute another model if the roster probe refuses it.
 
 ## Startability test
 
@@ -283,13 +283,15 @@ When an issue's deliverables are strictly external documents (such as manual ver
 
 3. **Perform Model Label Check & Model Selection:** Before implementing:
    - Perform the **Model Label Check**:
-     1. Read the GitHub issue's model label (`Flash Med`, `Flash High`, `Haiku`, `Sonnet`, `Opus`).
+     1. Read the GitHub issue's model label (`Flash Med`, `Flash High`, `Haiku`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
      2. Compare the issue's model label against the active executing session tier.
      3. If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
      4. Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier.
-   - Classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete.
+   - **Codex**: Keep the matching running model and execute in this session. Do not invoke the agy `/model` switch or use the Claude/Gemini fallback ladder below. A tier mismatch uses the Model Label Check & Approval rule above.
+   - **Claude Code**: Follow the delegation/execution choice in Model Label Check & Approval above.
+   - **Antigravity only**: Classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete. The model chain, classification rules, quota pools, and rate-limit fallback below apply only to Antigravity.
 
-   **Model Chain (Most to least capable):**
+   **Antigravity Model Chain (Most to least capable):**
    1. `Claude Opus 4.6 (Thinking)`
    2. `Gemini 3.8 Flash (High)`
    3. `Claude Sonnet 4.6 (Thinking)`
@@ -309,7 +311,7 @@ When an issue's deliverables are strictly external documents (such as manual ver
    pool, so it is **not** a usable fallback (it's dead whenever Claude is) and is
    excluded from the chain. Failover only ever crosses Claude ↔ Gemini.
 
-   **Classification Rules (in priority order):**
+   **Antigravity Classification Rules (in priority order):**
    * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue`, use it and skip classification.
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
@@ -319,7 +321,7 @@ When an issue's deliverables are strictly external documents (such as manual ver
      * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
    * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
 
-   **Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain. Because Claude and Gemini are the only two pools, this effectively means: if a Claude model is walled, cross to Gemini (and vice versa).
+   **Antigravity Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain. Because Claude and Gemini are the only two pools, this effectively means: if a Claude model is walled, cross to Gemini (and vice versa).
 
 4. Work **entirely inside `REPO_DIR`** (the isolated `/tmp` worktree): cd there first; every file edit,
    command, and commit happens in that directory. Never work in `MAIN_CLONE`, and do not run
@@ -336,11 +338,12 @@ When an issue's deliverables are strictly external documents (such as manual ver
 
 7. Do **not** switch branches or add dependencies. When lint and tests are green,
    push the feature branch using `deno task push` on every surface (Claude Code, agy, and Codex alike).
+   Use the shared config invocation shown below from `REPO_DIR`, even when the target repo has no Deno config or `push` task. Pass the feature worktree's directory explicitly with `--repo-dir "$PWD"`; do not change into the web-jam-tools main clone to push. See `skills/draft-pr/SKILL.md` for the shared push step.
    Any unattended Codex launch of either skill (a scripted `/work-issue` run, or a scripted `/draft-pr` run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
    Finish by opening a draft PR. Push and draft-PR commands:
 
    ```sh
-   deno task push
+   deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"
    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
      --author "<Surface> — <Model>" \
      --summary "<what changed and why>" \

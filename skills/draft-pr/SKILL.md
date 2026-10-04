@@ -53,13 +53,14 @@ Josh alone reviews and flips draft → ready on GitHub.
 ## How to run it
 
 Push the branch through `deno task push` on every surface (Claude Code, agy, and Codex alike).
+Run the shared config invocation below from the target feature worktree. It works even when that repo has no Deno config or `push` task: `--repo-dir "$PWD"` explicitly selects that worktree's Git directory, independently of the shared config location or any inherited task environment. Do not change into the web-jam-tools main clone to push.
 Any unattended Codex launch of either skill (a scripted `/work-issue` run, or a scripted `/draft-pr` run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
 
 Pass your actual model in `--author` so Josh can track per-model quality, and fill
 the body sections via flags:
 
 ```sh
-deno task push
+deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"
 ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
   --author "Claude Code — Opus 4.8" \
   --summary "What changed and why, in 2–4 sentences." \

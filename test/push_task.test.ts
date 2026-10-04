@@ -21,6 +21,7 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import { evaluatePush, getCurrentBranch, type GitRunner, runPush } from "../scripts/push.ts";
 
 const SCRIPT_PATH = new URL("../scripts/push.ts", import.meta.url).pathname;
+const SHARED_CONFIG_PATH = new URL("../deno.json", import.meta.url).pathname;
 
 interface FixtureEnv {
   tempDir: string;
@@ -108,9 +109,16 @@ async function createFixtureRepo(): Promise<FixtureEnv> {
 async function runDenoTaskPush(
   args: string[],
   cwd: string,
+  sharedConfig = false,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["task", "push", ...args],
+    args: [
+      "task",
+      ...(sharedConfig ? ["--config", SHARED_CONFIG_PATH] : []),
+      "push",
+      ...(sharedConfig ? ["--repo-dir", cwd] : []),
+      ...args,
+    ],
     cwd,
     stdout: "piped",
     stderr: "piped",
@@ -226,6 +234,58 @@ Deno.test("evaluatePush: unaccepted extra arguments are refused", () => {
 // ---------------------------------------------------------------------------
 // End-to-end integration tests exercising the 12 literal cases
 // ---------------------------------------------------------------------------
+
+Deno.test("shared push task pushes the caller's Node repository without a Deno config", async () => {
+  const env = await createFixtureRepo();
+  try {
+    await Deno.remove(`${env.repoDir}/deno.json`);
+    await Deno.writeTextFile(`${env.repoDir}/package.json`, '{"scripts":{}}\n');
+    const res = await runDenoTaskPush([], env.repoDir, true);
+    assertEquals(res.code, 0, `Expected shared task to push the caller, stderr: ${res.stderr}`);
+
+    const localHead = await env.git(["rev-parse", "HEAD"]);
+    const remoteHead = await env.git(["ls-remote", "origin", "refs/heads/probe-branch"]);
+    assertEquals(remoteHead.split(/\s+/)[0], localHead);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+Deno.test("shared push task refuses the caller's protected branch without changing its remote", async () => {
+  const env = await createFixtureRepo();
+  try {
+    await env.git(["checkout", "-q", "dev"]);
+    await Deno.remove(`${env.repoDir}/deno.json`);
+    const before = await env.git(["ls-remote", "origin"]);
+    const res = await runDenoTaskPush([], env.repoDir, true);
+    assertEquals(res.code, 1);
+    assertStringIncludes(res.stderr, "cannot push protected branch 'dev'");
+    assertEquals(await env.git(["ls-remote", "origin"]), before);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+Deno.test("explicit repository selection fails closed for missing, empty, or nonexistent directories", async () => {
+  const env = await createFixtureRepo();
+  try {
+    const before = await env.git(["ls-remote", "origin"]);
+    for (
+      const args of [
+        ["--repo-dir"],
+        ["--repo-dir", ""],
+        ["--repo-dir", `${env.tempDir}/missing`],
+      ]
+    ) {
+      const res = await runDenoTaskPush(args, env.repoDir);
+      assertEquals(res.code, 1, `Expected invalid repository selection to refuse: ${res.stderr}`);
+      assertStringIncludes(res.stderr, "Refused (");
+      assertEquals(await env.git(["ls-remote", "origin"]), before);
+    }
+  } finally {
+    await env.cleanup();
+  }
+});
 
 Deno.test("literal case 1: deno task push → pushes probe-branch", async () => {
   const env = await createFixtureRepo();
