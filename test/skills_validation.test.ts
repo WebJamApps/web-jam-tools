@@ -15,7 +15,14 @@
 // Runs automatically as a normal Deno test under test/, picked up by the
 // existing `coverage:check` step — no wiring needed beyond adding this file.
 
-import { assert, assertEquals, assertExists, assertFalse, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertFalse,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { parse as parseYaml } from "@std/yaml";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
@@ -1101,17 +1108,18 @@ Deno.test("skills/work-issue/SKILL.md model chain ranks Gemini 3.8 Flash (High) 
   );
 });
 
-Deno.test("skills/delegate/SKILL.md escalates Flash Med to Flash High to Sonnet to Opus", async () => {
+Deno.test("skills/delegate/SKILL.md escalates coding to Sol or Sonnet and design to Opus", async () => {
   const text = await Deno.readTextFile("skills/delegate/SKILL.md");
 
   assertStringIncludes(
     text,
-    "- **Delegating up (`Flash Med` → `Flash High` → `Sonnet` → `Opus`)**:",
+    "Delegate logic- and safety-heavy coding to `Sol` or `Sonnet`, and open-ended design to `Opus`.",
   );
   assertStringIncludes(
     text,
     "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
   );
+  assertStringIncludes(text, "`Astra` is kept for REAPER recording.");
   assertFalse(
     text.includes("`Sonnet` is **not** a rung above `Flash High`"),
     "the superseded sentence denying Sonnet a rung above Flash High must be gone",
@@ -1125,30 +1133,85 @@ Deno.test("skills/delegate/SKILL.md escalates Flash Med to Flash High to Sonnet 
 // Stated in docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md.
 // Must fail on any other tier-order line in those three files.
 
+const EXPECTED_TIER_ORDER = "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus";
+const TIER_ORDER_FILES = [
+  "docs/ai-team-playbook.md",
+  "skills/delegate/SKILL.md",
+  "skills/pr-review/SKILL.md",
+];
+
+function assertTierOrder(text: string, file: string): void {
+  // Ignore Markdown emphasis and code spans; whitespace may include a wrapped line.
+  // Match every chain of at least three tier names, including the retired Flash levels.
+  const orders = text.replace(/[`*]/g, "").match(
+    /\b(?:Haiku|Luna|Flash(?:\s+(?:Med|Medium|High))?|Sol|Astra|Sonnet|Opus)\b(?:\s*[→=]\s*(?:Haiku|Luna|Flash(?:\s+(?:Med|Medium|High))?|Sol|Astra|Sonnet|Opus)\b){2,}/g,
+  ) ?? [];
+  assert(orders.length > 0, `${file} must state the tier order`);
+  for (const order of orders) {
+    const normalized = order.replace(/\s+/g, " ").replace(/\s*([→=])\s*/g, " $1 ");
+    assertEquals(normalized, EXPECTED_TIER_ORDER, `${file} must state only the current tier order`);
+  }
+}
+
 Deno.test(
   "tier order across docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md states Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
   async () => {
-    const expectedOrder = "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus";
-    const files = [
-      "docs/ai-team-playbook.md",
-      "skills/delegate/SKILL.md",
-      "skills/pr-review/SKILL.md",
-    ];
-
-    for (const file of files) {
+    for (const file of TIER_ORDER_FILES) {
       const text = await Deno.readTextFile(file);
-      assertStringIncludes(
-        text,
-        expectedOrder,
-        `${file} must state the tier order: "${expectedOrder}"`,
-      );
-      assertFalse(
-        text.includes("Haiku → Flash Med → Flash High → Sonnet → Opus"),
-        `${file} must not contain superseded tier order`,
-      );
+      assertTierOrder(text, file);
     }
   },
 );
+
+Deno.test("tier-order check accepts Markdown and whitespace variations of the current order", () => {
+  for (
+    const text of [
+      EXPECTED_TIER_ORDER,
+      "**Tier order: `Haiku`→`Luna` → `Flash` → `Sol`=`Astra` = `Sonnet` → `Opus`.**",
+      "Haiku  → Luna\t→ Flash →\n  Sol = Astra = Sonnet → Opus",
+      `${EXPECTED_TIER_ORDER}\n${EXPECTED_TIER_ORDER}`,
+      `${EXPECTED_TIER_ORDER}\nA workflow hands off Flash → Sonnet.`,
+    ]
+  ) {
+    assertTierOrder(text, "fixture.md");
+  }
+});
+
+Deno.test("tier-order check refuses missing orders", () => {
+  for (const text of ["", "No tier order here.", "Flash → Sonnet"]) {
+    assertThrows(() => assertTierOrder(text, "fixture.md"), Error, "must state the tier order");
+  }
+});
+
+Deno.test("tier-order check rejects any different chain alongside the correct order in each file", async () => {
+  const differentOrders = [
+    "Haiku → Flash → Sonnet → Sol → Opus",
+    "Haiku→Flash Med→Flash High→Sonnet→Opus",
+    "`Haiku`  →  `Flash Med` →\n `Flash High` → `Sonnet` → `Opus`",
+    "Flash Med → Flash High → Sonnet → Opus",
+    "Haiku → Luna → Flash → Sol → Sonnet → Astra → Opus",
+    "Haiku → Luna → Flash → Sol = Astra → Sonnet → Opus",
+    "Haiku → Luna → Flash → Sol = Sonnet = Astra → Opus",
+    "Luna → Flash → Sol = Astra = Sonnet → Opus",
+    `${EXPECTED_TIER_ORDER} → Haiku`,
+  ];
+  for (const file of TIER_ORDER_FILES) {
+    const text = await Deno.readTextFile(file);
+    for (const different of differentOrders) {
+      // The unmodified file still contains the correct line: adding a second order must fail.
+      assertThrows(
+        () => assertTierOrder(`${text}\nTier order: ${different}.`, file),
+        Error,
+        `${file} must state only the current tier order`,
+      );
+    }
+    assertThrows(
+      () => assertTierOrder(text.replace(EXPECTED_TIER_ORDER, differentOrders[0]), file),
+      Error,
+      `${file} must state only the current tier order`,
+    );
+  }
+});
 
 Deno.test(
   "skills/book-gig/SKILL.md defines both approval gates, both refusals, and anti-inference rules",
