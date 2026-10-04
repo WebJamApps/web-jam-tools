@@ -400,19 +400,21 @@ export function merge(settingsPath: string, args: string[]): number {
   const addedDeny = mergePermissionsList("deny", denyPatterns);
   const addedAsk = mergePermissionsList("ask", askPatterns);
   // permissions.allow (web-jam-tools#685, §3a) — purely additive, same shape
-  // as deny/ask, but with no cross-listing check against the other two: an
-  // allow pattern also present in permissions.deny is not a conflict to
-  // resolve here (deny always wins over a matching allow), so unlike
-  // deny/ask there is nothing to reconcile between allow and its siblings.
+  // as deny/ask. Rules owned by DENY_RULES or ASK_RULES are cross-checked and
+  // stripped from permissions.allow below (web-jam-tools#448).
   const addedAllow = mergePermissionsList("allow", allowPatterns);
 
   // A pattern the installer owns via one versioned array (DENY_RULES /
-  // ASK_RULES) must not remain in the OTHER permissions list — a stale copy
-  // there silently overrides the owning array's classification, since a
+  // ASK_RULES) must not remain in another permissions list — a stale copy
+  // there silently overrides or contradicts the owning array's classification, since a
   // pattern present in both permissions.deny and permissions.ask has deny
-  // win (web-jam-tools#525). ownedPatterns is this run's version of the
-  // owning array; otherSection is the list to scan for a stale copy.
-  function findCrossListed(ownedPatterns: string[], otherSection: "deny" | "ask"): string[] {
+  // win (web-jam-tools#525), and a pattern present in permissions.allow
+  // undermines an ask or deny rule (web-jam-tools#448). ownedPatterns is this run's
+  // version of the owning array; otherSection is the list to scan for a stale copy.
+  function findCrossListed(
+    ownedPatterns: string[],
+    otherSection: "deny" | "ask" | "allow",
+  ): string[] {
     if (ownedPatterns.length === 0) return [];
     if (!data.permissions || typeof data.permissions !== "object") return [];
     if (!Array.isArray(data.permissions[otherSection])) return [];
@@ -422,6 +424,8 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const denyOwnedInAsk = findCrossListed(denyPatterns, "ask");
   const askOwnedInDeny = findCrossListed(askPatterns, "deny");
+  const denyOwnedInAllow = findCrossListed(denyPatterns, "allow");
+  const askOwnedInAllow = findCrossListed(askPatterns, "allow");
 
   // statusLine merge (web-jam-tools#688). Unlike every other section above,
   // this is a single scalar value, not a list — data.statusLine in Claude
@@ -583,6 +587,8 @@ export function merge(settingsPath: string, args: string[]): number {
     addedAllow.length > 0 ||
     denyOwnedInAsk.length > 0 ||
     askOwnedInDeny.length > 0 ||
+    denyOwnedInAllow.length > 0 ||
+    askOwnedInAllow.length > 0 ||
     statusLineAdded ||
     statusLineChanged ||
     defaultModeAdded ||
@@ -665,6 +671,16 @@ export function merge(settingsPath: string, args: string[]): number {
           `${targetFilename}: permissions.deny rule ${pattern} is also in permissions.ask (stale copy)`,
         );
       }
+      for (const pattern of denyOwnedInAllow) {
+        console.error(
+          `${targetFilename}: permissions.allow rule ${pattern} is also in permissions.deny (stale copy)`,
+        );
+      }
+      for (const pattern of askOwnedInAllow) {
+        console.error(
+          `${targetFilename}: permissions.allow rule ${pattern} is also in permissions.ask (stale copy)`,
+        );
+      }
       if (statusLineAdded) {
         console.error(`${targetFilename}: missing statusLine ${statusLineArgs[0]}`);
       }
@@ -717,6 +733,14 @@ export function merge(settingsPath: string, args: string[]): number {
   if (askOwnedInDeny.length > 0) {
     const removeSet = new Set(askOwnedInDeny);
     data.permissions.deny = (data.permissions.deny as string[]).filter((p) => !removeSet.has(p));
+  }
+  if (denyOwnedInAllow.length > 0) {
+    const removeSet = new Set(denyOwnedInAllow);
+    data.permissions.allow = (data.permissions.allow as string[]).filter((p) => !removeSet.has(p));
+  }
+  if (askOwnedInAllow.length > 0) {
+    const removeSet = new Set(askOwnedInAllow);
+    data.permissions.allow = (data.permissions.allow as string[]).filter((p) => !removeSet.has(p));
   }
 
   if (tryExistsSync(settingsPath)) {
@@ -795,6 +819,16 @@ export function merge(settingsPath: string, args: string[]): number {
       `${targetFilename}: removed permissions.deny rule ${pattern} (now owned by permissions.ask)`,
     );
   }
+  for (const pattern of denyOwnedInAllow) {
+    console.log(
+      `${targetFilename}: removed permissions.allow rule ${pattern} (now owned by permissions.deny)`,
+    );
+  }
+  for (const pattern of askOwnedInAllow) {
+    console.log(
+      `${targetFilename}: removed permissions.allow rule ${pattern} (now owned by permissions.ask)`,
+    );
+  }
   if (statusLineAdded) {
     console.log(`${targetFilename}: added statusLine ${statusLineArgs[0]}`);
   }
@@ -824,10 +858,13 @@ export function merge(settingsPath: string, args: string[]): number {
 
 /** JSON.stringify with object keys sorted, so key order never counts as drift. */
 function canonicalJson(v: unknown): string {
-  return JSON.stringify(v, (_k, val) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : val);
+  return JSON.stringify(
+    v,
+    (_k, val) =>
+      val && typeof val === "object" && !Array.isArray(val)
+        ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        : val,
+  );
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

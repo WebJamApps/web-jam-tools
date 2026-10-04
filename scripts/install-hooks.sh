@@ -431,6 +431,35 @@ DENY_RULES=(
   # Dropbox MCP mutation denial (web-jam-tools#321)
   'mcp__claude_ai_Dropbox__delete'
   'mcp__claude_ai_Dropbox__move'
+
+  # Local Gmail send denial (R-40, web-jam-tools#448)
+  'mcp__gmail__send_email'
+
+  # Composio connection-management and remote execution denies (R-42, web-jam-tools#448)
+  'mcp__claude_ai_Composio__COMPOSIO_MANAGE_CONNECTIONS'
+  'mcp__claude_ai_Composio__COMPOSIO_REMOTE_BASH_TOOL'
+  'mcp__claude_ai_Composio__COMPOSIO_REMOTE_WORKBENCH'
+
+  # Hosted Gmail connector write tool denies — local server is sanctioned laptop path (R-43 & D-29, web-jam-tools#448)
+  'mcp__claude_ai_Gmail__create_draft'
+  'mcp__claude_ai_Gmail__update_draft'
+  'mcp__claude_ai_Gmail__create_label'
+  'mcp__claude_ai_Gmail__update_label'
+  'mcp__claude_ai_Gmail__label_message'
+  'mcp__claude_ai_Gmail__label_thread'
+  'mcp__claude_ai_Gmail__unlabel_message'
+  'mcp__claude_ai_Gmail__unlabel_thread'
+  'mcp__claude_ai_Gmail__apply_sensitive_message_label'
+  'mcp__claude_ai_Gmail__apply_sensitive_thread_label'
+  'mcp__claude_ai_Gmail__delete_label'
+  'mcp__claude_ai_Gmail__send_message'
+  'mcp__claude_ai_Gmail__forward'
+  'mcp__claude_ai_Gmail__reply'
+
+  # Hosted Google Drive connector write tool denies — local server is sanctioned laptop path (R-43 & D-30, web-jam-tools#448)
+  'mcp__claude_ai_Google_Drive__copy_file'
+  'mcp__claude_ai_Google_Drive__create_file'
+  'mcp__claude_ai_Google_Drive__share_file'
 )
 
 # permissions.ask patterns this installer keeps registered in settings.json
@@ -633,6 +662,9 @@ ASK_RULES=(
   'mcp__claude_ai_GitHub_MCP__update_pull_request'
   'mcp__claude_ai_GitHub_MCP__update_pull_request_branch'
   'mcp__claude_ai_GitHub_MCP__run_secret_scanning'
+
+  # Local Google Drive deleteItem asks — recoverable via Trash (R-39 & D-30, web-jam-tools#448)
+  'mcp__google-drive__deleteItem'
 )
 
 # permissions.allow patterns this installer keeps registered in settings.json
