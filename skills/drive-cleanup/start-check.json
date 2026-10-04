@@ -1,0 +1,4 @@
+{
+  "by_name": "run /drive-cleanup",
+  "on_its_own": "Analyze my Google Drive for duplicates and misplaced files awaiting cleanup"
+}

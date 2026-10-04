@@ -1,0 +1,4 @@
+{
+  "by_name": "open a draft PR with /draft-pr",
+  "on_its_own": "I just finished implementing the feature on this branch, lint and tests are green, please finish the task and open a draft PR"
+}

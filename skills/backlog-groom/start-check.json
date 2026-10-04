@@ -1,0 +1,4 @@
+{
+  "by_name": "run /backlog-groom",
+  "on_its_own": "Please audit all 8 active WebJamApps repos for model-label drift and native dependency drift across GitHub issues"
+}
