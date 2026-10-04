@@ -14,7 +14,7 @@ This skill provides a systematic pipeline for automated cross-model pull request
 
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
 
-Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, and every lower one is rejected, with Sol, Astra and Sonnet on one rung.
+Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. The session must also pass the independent eligibility checks under "Who may never review a PR" below.
 
 **Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
@@ -25,6 +25,8 @@ abstract, multi-step unguided agent work (Terminal-Bench 4.0) is exactly what a 
 ambiguous diff is.
 
 ### Cross-Model Review Pairing Matrix
+
+This matrix is a ceiling for the legacy labels it names; the seven-label default reviewers and eligibility rules below govern reviewer selection.
 
 | Reviewer | Reviews |
 |---|---|

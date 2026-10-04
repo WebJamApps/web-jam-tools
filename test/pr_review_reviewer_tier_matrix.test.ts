@@ -3,10 +3,11 @@
 // Reviewer-tier rule and default reviewers matrix test across all seven model labels:
 // Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus
 //
-// A reviewer on the author's rung or a higher one is accepted; every lower one is rejected.
+// A reviewer on the author's rung or a higher one is accepted, except Opus on Opus;
+// every lower one is rejected. Session eligibility is a separate prerequisite.
 // Sol, Astra, and Sonnet share one rung (rung 4).
 
-import { assert, assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertFalse, assertStringIncludes, assertThrows } from "@std/assert";
 
 export const MODEL_LABELS = [
   "Haiku",
@@ -20,51 +21,90 @@ export const MODEL_LABELS = [
 
 export type ModelLabel = (typeof MODEL_LABELS)[number];
 
-export const MODEL_RUNGS: Record<ModelLabel, number> = {
-  Haiku: 1,
-  Luna: 2,
-  Flash: 3,
-  Sol: 4,
-  Astra: 4,
-  Sonnet: 4,
-  Opus: 5,
-};
+function documentedRungs(text: string): Record<ModelLabel, number> {
+  const order = text.match(/\*\*Tier order \(weakest to strongest\): (.+?)\.\*\*/);
+  assert(order, "skill must document the tier order");
+  const rungs = {} as Record<ModelLabel, number>;
+  for (const [index, rung] of order[1].split("→").entries()) {
+    for (const name of rung.split("=")) {
+      const label = name.trim() as ModelLabel;
+      assert(MODEL_LABELS.includes(label), `unknown model label: ${label}`);
+      assertFalse(label in rungs, `duplicate model label: ${label}`);
+      rungs[label] = index + 1;
+    }
+  }
+  assertEquals(Object.keys(rungs).sort(), [...MODEL_LABELS].sort());
+  return rungs;
+}
 
 /**
  * Reviewer-tier rule: a reviewer on the author's rung or a higher one is accepted;
- * every lower one is rejected. Sol, Astra, and Sonnet share one rung.
+ * every lower one is rejected, as is Opus reviewing Opus. Rungs come from the skill.
  */
-export function isReviewerAccepted(author: ModelLabel, reviewer: ModelLabel): boolean {
-  return MODEL_RUNGS[reviewer] >= MODEL_RUNGS[author];
+function isReviewerAccepted(
+  rungs: Record<ModelLabel, number>,
+  author: ModelLabel,
+  reviewer: ModelLabel,
+): boolean {
+  return !(author === "Opus" && reviewer === "Opus") && rungs[reviewer] >= rungs[author];
 }
 
-export const DEFAULT_REVIEWERS: Record<ModelLabel, string | null> = {
-  Haiku: "Flash",
-  Luna: "Flash",
-  Flash: "Sol",
-  Sol: "Sonnet",
-  Sonnet: "Sol",
-  Astra: null,
-  Opus: null,
+// Independent expected outcomes; never compute these from the rungs being checked.
+const ACCEPTED_REVIEWERS: Record<ModelLabel, readonly ModelLabel[]> = {
+  Haiku: ["Haiku", "Luna", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
+  Luna: ["Luna", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
+  Flash: ["Flash", "Sol", "Astra", "Sonnet", "Opus"],
+  Sol: ["Sol", "Astra", "Sonnet", "Opus"],
+  Astra: ["Sol", "Astra", "Sonnet", "Opus"],
+  Sonnet: ["Sol", "Astra", "Sonnet", "Opus"],
+  Opus: [],
 };
 
-export function getDefaultReviewer(author: ModelLabel): string | null {
-  return DEFAULT_REVIEWERS[author];
+const DEFAULT_REVIEWERS: Record<ModelLabel, string> = {
+  Haiku: "Flash",
+  Luna: "Flash",
+  Flash: "Sol, through `$pr-review` in Codex",
+  Sol: "Sonnet",
+  Sonnet: "Sol, through `$pr-review` in Codex; Opus when Josh names the pull request",
+  Astra: "*(none — no automatic reviewer)*",
+  Opus: "*(none — no automatic reviewer)*",
+};
+
+function documentedDefaults(text: string): Record<ModelLabel, string> {
+  const section = text.split("### Default Reviewers\n")[1]?.split("\n### ")[0];
+  assert(section, "skill must document the default-reviewers table");
+  const defaults = {} as Record<ModelLabel, string>;
+  for (const line of section.split("\n")) {
+    if (!line.startsWith("|")) continue;
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells[0] === "Author" || /^[\s:-]+$/.test(cells[0])) continue;
+    assertEquals(cells.length, 2, "default-reviewer rows must have two cells");
+    for (const name of cells[0].split(",")) {
+      const label = name.trim() as ModelLabel;
+      assert(MODEL_LABELS.includes(label), `unknown author label: ${label}`);
+      assertFalse(label in defaults, `duplicate author label: ${label}`);
+      defaults[label] = cells[1];
+    }
+  }
+  assertEquals(Object.keys(defaults).sort(), [...MODEL_LABELS].sort());
+  return defaults;
 }
 
-Deno.test("reviewer-tier rule: asserts all 49 author/reviewer pairs across the seven labels", () => {
+Deno.test("reviewer-tier rule: checks all 49 pairs against the skill's documented rungs", async () => {
+  const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
+  const rungs = documentedRungs(text);
   assertEquals(MODEL_LABELS.length, 7);
-  assertEquals(MODEL_RUNGS.Sol, MODEL_RUNGS.Astra);
-  assertEquals(MODEL_RUNGS.Astra, MODEL_RUNGS.Sonnet);
-  assertEquals(MODEL_RUNGS.Sol, 4);
+  assertEquals(rungs.Sol, rungs.Astra);
+  assertEquals(rungs.Astra, rungs.Sonnet);
+  assertEquals(rungs.Sol, 4);
 
   let pairCount = 0;
   for (const author of MODEL_LABELS) {
     for (const reviewer of MODEL_LABELS) {
       pairCount++;
-      const expected = MODEL_RUNGS[reviewer] >= MODEL_RUNGS[author];
+      const expected = ACCEPTED_REVIEWERS[author].includes(reviewer);
       assertEquals(
-        isReviewerAccepted(author, reviewer),
+        isReviewerAccepted(rungs, author, reviewer),
         expected,
         `Pair (author: ${author}, reviewer: ${reviewer}) expected accepted=${expected}`,
       );
@@ -72,64 +112,28 @@ Deno.test("reviewer-tier rule: asserts all 49 author/reviewer pairs across the s
   }
   assertEquals(pairCount, 49);
 
-  // Explicit verification per author rung
-  // 1. Haiku author (rung 1): all 7 reviewers accepted
-  for (const reviewer of MODEL_LABELS) {
-    assert(
-      isReviewerAccepted("Haiku", reviewer),
-      `Haiku author should accept reviewer ${reviewer}`,
-    );
-  }
-
-  // 2. Luna author (rung 2): Haiku rejected; Luna, Flash, Sol, Astra, Sonnet, Opus accepted
-  assertFalse(isReviewerAccepted("Luna", "Haiku"));
-  for (const reviewer of ["Luna", "Flash", "Sol", "Astra", "Sonnet", "Opus"] as const) {
-    assert(
-      isReviewerAccepted("Luna", reviewer),
-      `Luna author should accept reviewer ${reviewer}`,
-    );
-  }
-
-  // 3. Flash author (rung 3): Haiku, Luna rejected; Flash, Sol, Astra, Sonnet, Opus accepted
-  assertFalse(isReviewerAccepted("Flash", "Haiku"));
-  assertFalse(isReviewerAccepted("Flash", "Luna"));
-  for (const reviewer of ["Flash", "Sol", "Astra", "Sonnet", "Opus"] as const) {
-    assert(
-      isReviewerAccepted("Flash", reviewer),
-      `Flash author should accept reviewer ${reviewer}`,
-    );
-  }
-
-  // 4. Shared rung authors (Sol, Astra, Sonnet - rung 4):
-  // Haiku, Luna, Flash rejected; Sol, Astra, Sonnet, Opus accepted
-  for (const sharedAuthor of ["Sol", "Astra", "Sonnet"] as const) {
-    assertFalse(isReviewerAccepted(sharedAuthor, "Haiku"));
-    assertFalse(isReviewerAccepted(sharedAuthor, "Luna"));
-    assertFalse(isReviewerAccepted(sharedAuthor, "Flash"));
-    assert(isReviewerAccepted(sharedAuthor, "Sol"));
-    assert(isReviewerAccepted(sharedAuthor, "Astra"));
-    assert(isReviewerAccepted(sharedAuthor, "Sonnet"));
-    assert(isReviewerAccepted(sharedAuthor, "Opus"));
-  }
-
-  // 5. Opus author (rung 5): only Opus accepted, all others rejected
-  for (const lowerReviewer of ["Haiku", "Luna", "Flash", "Sol", "Astra", "Sonnet"] as const) {
-    assertFalse(
-      isReviewerAccepted("Opus", lowerReviewer),
-      `Opus author must reject lower reviewer ${lowerReviewer}`,
-    );
-  }
-  assert(isReviewerAccepted("Opus", "Opus"));
+  // Opus author: every model reviewer is rejected, including another Opus session.
+  assertFalse(isReviewerAccepted(rungs, "Opus", "Opus"));
 });
 
-Deno.test("default reviewers: asserts defaults across all seven model labels", () => {
-  assertEquals(getDefaultReviewer("Haiku"), "Flash");
-  assertEquals(getDefaultReviewer("Luna"), "Flash");
-  assertEquals(getDefaultReviewer("Flash"), "Sol");
-  assertEquals(getDefaultReviewer("Sol"), "Sonnet");
-  assertEquals(getDefaultReviewer("Sonnet"), "Sol");
-  assertEquals(getDefaultReviewer("Astra"), null);
-  assertEquals(getDefaultReviewer("Opus"), null);
+Deno.test("default reviewers: checks the skill's table across all seven model labels", async () => {
+  const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
+  assertEquals(documentedDefaults(text), DEFAULT_REVIEWERS);
+});
+
+Deno.test("reviewer matrices detect changed rungs and default-reviewer table cells", async () => {
+  const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
+  const changedRungs = documentedRungs(text.replace("Haiku → Luna", "Luna → Haiku"));
+  assertThrows(() => assertEquals(isReviewerAccepted(changedRungs, "Haiku", "Luna"), true));
+  for (const [author, defaultCell] of Object.entries(DEFAULT_REVIEWERS)) {
+    const authorsCell = author === "Haiku" || author === "Luna" ? "Haiku, Luna" : author;
+    const changed = text.replace(
+      `| ${authorsCell} | ${defaultCell} |`,
+      `| ${authorsCell} | Opus |`,
+    );
+    assert(changed !== text, `fixture must change the ${author} default-reviewer cell`);
+    assertThrows(() => assertEquals(documentedDefaults(changed), DEFAULT_REVIEWERS));
+  }
 });
 
 Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewers, and Codex/recording rules", async () => {
@@ -138,7 +142,7 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
   // Rule over all seven labels with Sol, Astra, Sonnet on one rung
   assertStringIncludes(
     text,
-    "Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, and every lower one is rejected, with Sol, Astra and Sonnet on one rung.",
+    "Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung.",
   );
 
   // Default reviewers stated in prose and table
