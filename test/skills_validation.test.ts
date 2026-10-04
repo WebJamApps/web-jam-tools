@@ -1049,7 +1049,7 @@ Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Sonnet above Flash Hig
 
   assertStringIncludes(
     text,
-    "**Tier order (weakest to strongest): Haiku → Flash Med → Flash High → Sonnet → Opus.**",
+    "**Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.**",
   );
 
   // The matrix rows themselves, weakest reviewer first: Flash High reviews
@@ -1110,13 +1110,45 @@ Deno.test("skills/delegate/SKILL.md escalates Flash Med to Flash High to Sonnet 
   );
   assertStringIncludes(
     text,
-    "Haiku → Flash Med → Flash High → Sonnet → Opus",
+    "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
   );
   assertFalse(
     text.includes("`Sonnet` is **not** a rung above `Flash High`"),
     "the superseded sentence denying Sonnet a rung above Flash High must be gone",
   );
 });
+
+// --- Tier-order pin across playbook, delegate, and pr-review (web-jam-tools#1134) ---
+//
+// The tier order across all seven model labels is:
+// Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus (Sol, Astra, and Sonnet share a rung).
+// Stated in docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md.
+// Must fail on any other tier-order line in those three files.
+
+Deno.test(
+  "tier order across docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md states Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
+  async () => {
+    const expectedOrder = "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus";
+    const files = [
+      "docs/ai-team-playbook.md",
+      "skills/delegate/SKILL.md",
+      "skills/pr-review/SKILL.md",
+    ];
+
+    for (const file of files) {
+      const text = await Deno.readTextFile(file);
+      assertStringIncludes(
+        text,
+        expectedOrder,
+        `${file} must state the tier order: "${expectedOrder}"`,
+      );
+      assertFalse(
+        text.includes("Haiku → Flash Med → Flash High → Sonnet → Opus"),
+        `${file} must not contain superseded tier order`,
+      );
+    }
+  },
+);
 
 Deno.test(
   "skills/book-gig/SKILL.md defines both approval gates, both refusals, and anti-inference rules",

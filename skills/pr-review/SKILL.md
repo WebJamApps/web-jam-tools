@@ -16,7 +16,7 @@ Cross-model review ensures fresh perspective and catches model-specific blind sp
 
 Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work).
 
-**Tier order (weakest to strongest): Haiku → Flash Med → Flash High → Sonnet → Opus.** Josh ruled
+**Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
 is the basis for this order. (Superseded history: on 2026-09-05 Flash High was ranked above Sonnet 5
 on contamination-resistant long-horizon coding, DeepSWE v1.1, where Gemini 3.8 Flash at high effort

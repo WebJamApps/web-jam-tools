@@ -1,7 +1,7 @@
 # Cross-AI Rules for Josh Sherman's Personal Projects
 
 _See [ai-team-playbook.md](ai-team-playbook.md) for how the team works / who's who (model tiers,
-hand-offs, approval checkpoints). This doc holds the operational rules that apply to ALL of Josh's
+tier order, hand-offs, approval checkpoints). This doc holds the operational rules that apply to ALL of Josh's
 AI team — voice rules, file placement, protected files, canonical task queues, hard operational
 rules, and memory hygiene._
 
