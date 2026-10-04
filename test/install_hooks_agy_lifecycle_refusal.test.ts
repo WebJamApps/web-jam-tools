@@ -274,9 +274,14 @@ Deno.test("a full sandboxed install-hooks.sh run writes agy Stop hook into agy h
 
     const allCommands = [...agyHooks.hooks.PreToolUse, ...agyHooks.hooks.PostToolUse]
       .flatMap((entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command));
+    const shimWrapped = allCommands.filter((c: string) => !c.includes("agy-prompt-watch.sh"));
     assert(
-      allCommands.every((c: string) => c.includes("agy-hook-shim.sh")),
-      "every agy hooks.json PreToolUse/PostToolUse command must be wrapped by agy-hook-shim.sh",
+      shimWrapped.every((c: string) => c.includes("agy-hook-shim.sh")),
+      "every translated PreToolUse/PostToolUse command must be wrapped by agy-hook-shim.sh",
+    );
+    assert(
+      allCommands.some((c: string) => c === "$HOME/.claude/hooks/agy-prompt-watch.sh"),
+      "agy-native agy-prompt-watch.sh must be present directly in agy hooks.json",
     );
 
     // The two agy-only hooks must be present in the wrapped set.
@@ -292,6 +297,7 @@ Deno.test("a full sandboxed install-hooks.sh run writes agy Stop hook into agy h
     assert(claudeCommands.every((c: string) => !c.includes("agy-hook-shim.sh")));
     assert(claudeCommands.every((c: string) => !c.includes("block-agy-gmail-send-delete.sh")));
     assert(claudeCommands.every((c: string) => !c.includes("agy-model-guard.sh")));
+    assert(claudeCommands.every((c: string) => !c.includes("agy-prompt-watch.sh")));
   } finally {
     await Deno.remove(hooksDir, { recursive: true });
     await Deno.remove(settingsDir, { recursive: true });
