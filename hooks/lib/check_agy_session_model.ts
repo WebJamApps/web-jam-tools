@@ -14,18 +14,28 @@
  * hooks/block-agy-non-flash-model.sh.
  */
 import { ALLOWED_SESSION_SLUGS, isAllowedModelSlug } from "./check_agy_model.ts";
+import { checkAndConsumeWorkflowSwitch, type SwitchCheckResult } from "./workflow_switch.ts";
 
 export interface SessionModelResult {
   allowed: boolean;
   reason?: string;
 }
 
-export function checkSessionModel(modelName: string | undefined | null): SessionModelResult {
+export function checkSessionModel(
+  modelName: string | undefined | null,
+  switchChecker?: (guardName: string) => SwitchCheckResult,
+): SessionModelResult {
   if (!modelName) {
     return { allowed: true };
   }
   if (isAllowedModelSlug(modelName)) {
     return { allowed: true };
+  }
+  if (switchChecker) {
+    const sw = switchChecker("agy-model-guard");
+    if (sw.released) {
+      return { allowed: true, reason: sw.reason };
+    }
   }
   const allowedSlugs = ALLOWED_SESSION_SLUGS.join(" or ");
   return {
@@ -58,7 +68,7 @@ if (import.meta.main) {
   } catch {
     modelName = undefined;
   }
-  const result = checkSessionModel(modelName);
+  const result = checkSessionModel(modelName, (guard) => checkAndConsumeWorkflowSwitch(guard));
   if (!result.allowed) {
     console.error(`BLOCKED (agy-model guard): ${result.reason}`);
     Deno.exit(2);

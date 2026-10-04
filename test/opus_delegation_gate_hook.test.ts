@@ -999,3 +999,148 @@ Deno.test("apply_patch: patch with no parseable file path is refused (fails clos
     assertDenied(res.stdout, ["no file path could be parsed"]);
   });
 });
+
+// --- Workflow switch tests (web-jam-tools#1046) ---
+
+Deno.test("workflow switch: unexpired switch naming 'opus-delegation-gate' allows refused Opus Bash write and logs release", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "opus-delegation-gate", expires_at: future }),
+    );
+
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        bashPayload("echo x > src/a.ts", transcript_path),
+        { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+      );
+      assertAllowed(res);
+
+      const log = await Deno.readTextFile(logPath);
+      assert(log.includes("released guard: opus-delegation-gate"));
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("workflow switch: unexpired switch naming 'all workflow guards' allows refused Opus Bash write and logs release", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "all workflow guards", expires_at: future }),
+    );
+
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        bashPayload("echo x > src/a.ts", transcript_path),
+        { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+      );
+      assertAllowed(res);
+
+      const log = await Deno.readTextFile(logPath);
+      assert(log.includes("released guard: opus-delegation-gate"));
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("workflow switch: expired switch naming 'opus-delegation-gate' still refuses Opus Bash write", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "opus-delegation-gate", expires_at: past }),
+    );
+
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        bashPayload("echo x > src/a.ts", transcript_path),
+        { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+      );
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("workflow switch: switch naming different guard still refuses Opus Bash write", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "agy-model-guard", expires_at: future }),
+    );
+
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        bashPayload("echo x > src/a.ts", transcript_path),
+        { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+      );
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("workflow switch: unparseable expiry still refuses Opus Bash write", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "opus-delegation-gate", expires_at: "not-a-valid-date" }),
+    );
+
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        bashPayload("echo x > src/a.ts", transcript_path),
+        { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+      );
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("workflow switch: malformed JSON state file proceeds as absent and refuses Opus Bash write", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    await Deno.writeTextFile(switchPath, "{ broken json content");
+
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        bashPayload("echo x > src/a.ts", transcript_path),
+        { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+      );
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout, ["Bash command that writes to", "opus edit ok"]);
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

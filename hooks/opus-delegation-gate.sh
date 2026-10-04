@@ -173,7 +173,7 @@ else
 fi
 
 # Step 4: One invocation of opus_gate.ts decides the rest.
-gate_json="$(printf '%s' "$input" | deno run --no-config --allow-read --allow-run=timeout --allow-env=OPUS_GATE_CACHE_DIR --allow-write=/tmp "$GATE_LIB" 2>/dev/null || true)"
+gate_json="$(printf '%s' "$input" | deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
 decision="$(printf '%s' "$gate_json" | jq -r '.decision // empty' 2>/dev/null || true)"
 kind="$(printf '%s' "$gate_json" | jq -r '.kind // empty' 2>/dev/null || true)"
 why="$(printf '%s' "$gate_json" | jq -r '.why // empty' 2>/dev/null || true)"

@@ -48,6 +48,7 @@ import {
 import { slashCommandFromInvocationWrapper } from "./check_token_write_authorization.ts";
 import { bashWriteTargets } from "./bash_write_targets.ts";
 import { parseApplyPatchFilePaths } from "./parse_apply_patch.ts";
+import { checkAndConsumeWorkflowSwitch, type SwitchCheckResult } from "./workflow_switch.ts";
 
 export const ESCAPE_PHRASE = "opus edit ok";
 
@@ -810,6 +811,8 @@ export function decide(
   payload: GatePayload,
   read: ReadText = readTextOrNull,
   lookupLabels: LabelLookup = defaultLabelLookup(),
+  switchChecker: (guardName: string) => SwitchCheckResult = (guard) =>
+    checkAndConsumeWorkflowSwitch(guard),
 ): GateDecision {
   try {
     const targetCheck = checkWriteTarget(payload);
@@ -817,6 +820,10 @@ export function decide(
     const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "";
     if (!targetCheck.determinable) {
       if (toolName === "apply_patch") {
+        const switchResult = switchChecker("opus-delegation-gate");
+        if (switchResult.released) {
+          return allow(agentId ? "subagent" : "main", switchResult.reason);
+        }
         return deny(
           agentId ? "subagent" : "main",
           targetCheck.note ??
@@ -832,13 +839,24 @@ export function decide(
     const transcriptPath = typeof payload.transcript_path === "string"
       ? payload.transcript_path
       : "";
+    let decision: GateDecision;
     if (agentId && payload.permission_mode === "auto") {
-      return decideSubagentEdit(agentId, transcriptPath, read);
+      decision = decideSubagentEdit(agentId, transcriptPath, read);
+    } else if (agentId) {
+      // A subagent call outside auto mode keeps its exemption. The shell hook exits before calling this
+      // module in that case; the branch keeps decide() total.
+      return allow("subagent");
+    } else {
+      decision = decideMainThreadEdit(transcriptPath, read, lookupLabels);
     }
-    // A subagent call outside auto mode keeps its exemption. The shell hook exits before calling this
-    // module in that case; the branch keeps decide() total.
-    if (agentId) return allow("subagent");
-    return decideMainThreadEdit(transcriptPath, read, lookupLabels);
+
+    if (decision.decision === "deny") {
+      const switchResult = switchChecker("opus-delegation-gate");
+      if (switchResult.released) {
+        return allow(decision.kind, switchResult.reason);
+      }
+    }
+    return decision;
   } catch (err) {
     return allow(
       "main",
