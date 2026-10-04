@@ -116,28 +116,32 @@ export function installCodex(options: InstallOptions): number {
     const rulesMatch = stat(rulesPath)?.isFile && textOrEmpty(rulesPath) === rules;
     const drift = [...config.drift];
     if (!rulesMatch) drift.push(`rules file ${rulesPath}`);
+    // One wording for a skipped skill, so --check and an install report it the same way.
+    const skippedMessage = (target: string) =>
+      `SKIPPED: ${target}: existing path is not the canonical skill link`;
     for (const skill of skills) {
-      if (!skill.matches) {
-        drift.push(`skill ${skill.target}${skill.conflict ? " (skipped: existing path)" : ""}`);
-      }
+      if (!skill.matches && !skill.conflict) drift.push(`skill ${skill.target}`);
     }
+    const conflicts = skills.filter((skill) => skill.conflict);
     if (options.check) {
       missingHooks.forEach((message) => console.error(`REFUSED: ${message}`));
       drift.forEach((item) => console.error(`DRIFT: ${item}`));
-      if (!drift.length && !missingHooks.length) {
-        console.log("Codex installation is current (no changes)");
-      }
-      return drift.length || missingHooks.length ? 1 : 0;
+      conflicts.forEach((skill) => console.error(skippedMessage(skill.target)));
+      const behind = drift.length || missingHooks.length || conflicts.length;
+      if (!behind) console.log("Codex installation is current (no changes)");
+      return behind ? 1 : 0;
     }
     // All safety-set validation and reads precede the first filesystem write.
     if (missingHooks.length) throw new Error(missingHooks.join("\n"));
-    if (config.drift.length) writeFile(configPath, config.text);
+    // The rules file goes first: config.toml carries the full-access sandbox setting, so it is
+    // never in place without the rules beside it when a write fails part-way.
     if (!rulesMatch) writeFile(rulesPath, rules);
+    if (config.drift.length) writeFile(configPath, config.text);
     let skipped = false;
     for (const skill of skills) {
       if (skill.matches) continue;
       if (skill.conflict) {
-        console.error(`SKIPPED: ${skill.target}: existing path is not the canonical skill link`);
+        console.error(skippedMessage(skill.target));
         skipped = true;
         continue;
       }
