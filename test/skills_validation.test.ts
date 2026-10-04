@@ -1207,3 +1207,21 @@ Deno.test("skills/file-issue and skills/design-issue tell the session to pass it
   const designIssue = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
   assertEquals(designIssue.includes("deno task design:file-plan"), true);
 });
+
+Deno.test("skills/design-issue/SKILL.md pins the Gate 1 record's stored premise rows and design:gate1-adopt (web-jam-tools#1229)", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  for (
+    const sentence of [
+      "The record also holds the document's premise rows as they stood when Josh last approved or adopted them",
+      "`deno task design:gate1` clears the approval but keeps the stored premise rows",
+      "it **refuses** and leaves the file untouched rather than overwriting it",
+      "On approval `deno task design:gate1-approve` stores the document's premise rows as they stand, replacing any stored before.",
+      "**`deno task design:gate1-adopt <doc.md> --reply <text>`** (or `--reply-file <path>`) is for a document Josh approved before premise rows were kept",
+      "It **refuses** when the record already holds premise rows (adoption happens once per document)",
+      "It stores rows and nothing else: it does not approve Gate 1",
+      "`deno task design:gate1-status` also prints how many premise rows are stored, their source and its date.",
+    ]
+  ) {
+    assertStringIncludes(text, sentence);
+  }
+});
