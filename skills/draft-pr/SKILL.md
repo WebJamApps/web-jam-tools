@@ -1,6 +1,6 @@
 ---
 name: draft-pr
-description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
+description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
 metadata:
   version: v1
   publisher: josh
@@ -8,8 +8,9 @@ metadata:
 
 # draft-pr — finish a coding task by opening a draft PR
 
-Never call `gh pr create` directly in a WebJamApps repo. Finish coding tasks by
-running the shared script, which is the single source of truth for PR creation (see
+Never call `gh pr create` directly in a WebJamApps repo. Finish coding tasks across
+Claude Code, agy, and Codex by pushing through `deno task push` and running the
+shared script, which is the single source of truth for PR creation (see
 the full invocation under "How to run it" — `--summary` and `--test-plan` are
 **required**; `--test-evidence` is optional and normally omitted).
 
@@ -38,6 +39,7 @@ Josh alone reviews and flips draft → ready on GitHub.
    **An issue is OPTIONAL** (2026-07-03): with no issue resolvable, the PR simply has no Closes line
    and its title falls back to the last commit subject — NEVER create an issue just to satisfy the script.
 2. Everything is committed (clean working tree) and lint + tests are green.
+   **Push step:** Push your feature branch using `deno task push` on every surface (Claude Code, agy, and Codex alike).
 3. **Version bump:** On the PR's first commit, bump the version once in `deno.json`
    (web-jam-tools) or `package.json` (other repos). The CI "Version bump check" gate
    blocks PRs with no version change from the merge-base with `dev`. Follow-up commits
@@ -50,10 +52,18 @@ Josh alone reviews and flips draft → ready on GitHub.
 
 ## How to run it
 
+Push the branch through `deno task push` on every surface (Claude Code, agy, and Codex alike).
+Run the shared config invocation below from the target feature worktree. It works even when that repo has no Deno config or `push` task: `--repo-dir "$PWD"` explicitly selects that worktree's Git directory, independently of the shared config location or any inherited task environment. Do not change into the web-jam-tools main clone to push.
+
+Every `--force-with-lease` invocation also requires affirmative confirmation in an interactive terminal inside the push script. Noninteractive force pushes fail closed, including shared-config and `--repo-dir` forms that do not match Codex's command-prefix prompt. Josh must approve the named branch or PR before a force push; do not automate a response to the terminal prompt.
+
+Any unattended Codex launch of either skill (a scripted `/work-issue` run, or a scripted `/draft-pr` run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
+
 Pass your actual model in `--author` so Josh can track per-model quality, and fill
 the body sections via flags:
 
-```
+```sh
+deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"
 ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
   --author "Claude Code — Opus 4.8" \
   --summary "What changed and why, in 2–4 sentences." \
@@ -163,6 +173,10 @@ but that issue does not exist or is not OPEN — this is not a requirement that
 a PR have an issue, only that a named one be real and open; or `--part-of` /
 `--no-close` is passed with no resolvable issue. If it refuses, fix the
 underlying condition — do not fall back to `gh pr create`.
+
+## Unattended Codex launches
+
+Any unattended Codex launch of `/work-issue` or `/draft-pr` (a scripted run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
 
 ## Consumed rules
 

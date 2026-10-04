@@ -4,6 +4,9 @@
 # Forbids raw git pushes, branch deletes, gh repo sync, and claude invocations.
 # Prompts for gh api and deno task push --force-with-lease.
 # Leaves plain deno task push and read-only commands untouched (allowed).
+# Shared-config and --repo-dir forms can miss the force-with-lease prefix below;
+# scripts/push.ts independently requires terminal confirmation for every force push
+# and refuses noninteractive force pushes, including those unmatched forms.
 #
 # Known limit: a rule matches only the leading words of a command, so this file
 # is a backstop for the plain and common wrapped forms. A git command carrying a
