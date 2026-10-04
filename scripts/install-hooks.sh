@@ -213,6 +213,7 @@ PRE_TOOL_USE_HOOKS=(
 # it does not depend on knowing how the value got printed.
 POST_TOOL_USE_HOOKS=(
   "Bash::scan-output-for-secrets.sh"
+  "Write|Edit::regenerate-memory-index.sh"
 )
 
 # agy-ONLY PreToolUse hooks (web-jam-tools#432) — never wired into Claude
