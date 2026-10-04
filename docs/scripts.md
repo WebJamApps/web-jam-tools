@@ -4,6 +4,39 @@ Index of utilities in `scripts/`. Run from the repo root unless noted.
 
 ## Workspace utilities
 
+### `install-codex.ts`
+
+Installs the Codex configuration described by web-jam-tools#1143 "scripts: Codex installer for
+hooks, rules file, skills and settings". Run after `scripts/install-hooks.sh` has installed the
+shared hook scripts under `~/.claude/hooks/`.
+
+```sh
+deno task install-codex
+deno task install-codex --check
+deno task install-codex --home /tmp/codex-install-check
+deno task install-codex --help
+```
+
+The installer reads the four shared hook arrays from `scripts/install-hooks.sh`, registers them
+in nested TOML tables with `WJT_SURFACE=codex`, copies the rules file as a regular file, links
+shared skills into `~/.codex/skills/` except `handle-gmails`, and sets the top-level
+`sandbox_mode` to `danger-full-access`. When run from a worktree, skill links point into the
+canonical clone so they survive worktree removal.
+
+Existing settings, unrelated hooks and hook trust values retain their values. The first update
+may reformat TOML and remove comments; subsequent runs leave a current file byte-identical.
+`hooks.json`, `rules/default.rules`, built-in `.system` skills and `~/.agents/` are untouched.
+Hook trust remains a manual Codex prompt.
+
+Invalid TOML, unreadable hook arrays, missing hook scripts or missing rules refuse installation
+before any writes. A conflicting skill path is left in place and reported as skipped, while the
+safety set and other skills are installed; the exit code is nonzero. `--check` writes nothing,
+returns zero when current, and reports each difference or refusal with a nonzero exit code.
+On an empty home it reports missing hook prerequisites alongside the installation drift.
+
+Manual steps are in
+`~/Dropbox/web-jam-llms/Token_Savings/codex-install-manual-steps-2026-09-24.md`.
+
 ### `bootstrap-project.sh`
 
 Scaffolds a new sibling project directory in the WebJamApps workspace with

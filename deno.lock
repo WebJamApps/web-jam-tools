@@ -3,11 +3,13 @@
   "specifiers": {
     "jsr:@std/assert@^1.0.19": "1.0.19",
     "jsr:@std/cli@^1.0.32": "1.0.32",
+    "jsr:@std/collections@^1.1.3": "1.4.0",
     "jsr:@std/fmt@^1.0.10": "1.0.10",
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "jsr:@std/internal@^1.0.14": "1.0.14",
     "jsr:@std/path@1": "1.1.6",
     "jsr:@std/path@^1.1.6": "1.1.6",
+    "jsr:@std/toml@^1.0.11": "1.0.11",
     "jsr:@std/yaml@^1.3.0": "1.3.0",
     "npm:cheerio@^1.2.0": "1.2.0",
     "npm:docx@^9.7.2": "9.7.2",
@@ -30,6 +32,9 @@
         "jsr:@std/internal@^1.0.14"
       ]
     },
+    "@std/collections@1.4.0": {
+      "integrity": "bd7f74966e11de11b1f0420b7e8cb7bb381d8af7872b738443b92050db28c9c0"
+    },
     "@std/fmt@1.0.10": {
       "integrity": "90dfba288802ac6de82fb31d0917eb9e4450b9925b954d5e51fc29ac07419db5"
     },
@@ -40,6 +45,12 @@
       "integrity": "c68485c2a4dfbb5ae3cc74fae4e8c4e5d874cf8a8ed12927917235c758b46cbe",
       "dependencies": [
         "jsr:@std/internal@^1.0.14"
+      ]
+    },
+    "@std/toml@1.0.11": {
+      "integrity": "e084988b872ca4bad6aedfb7350f6eeed0e8ba88e9ee5e1590621c5b5bb8f715",
+      "dependencies": [
+        "jsr:@std/collections"
       ]
     },
     "@std/yaml@1.3.0": {
@@ -437,6 +448,7 @@
       "jsr:@std/assert@^1.0.19",
       "jsr:@std/cli@^1.0.32",
       "jsr:@std/path@^1.1.6",
+      "jsr:@std/toml@^1.0.11",
       "jsr:@std/yaml@^1.3.0",
       "npm:cheerio@^1.2.0",
       "npm:docx@^9.7.2",
