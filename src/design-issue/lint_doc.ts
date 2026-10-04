@@ -367,7 +367,7 @@ function firstNonExemptMatch(
 /** Heading for the section every design document must carry proving its own premises
  * (web-jam-tools#814, enforced here per web-jam-tools#815). Same detection shape as
  * `bothSurfacesHeadingRegex` below. */
-export const loadBearingPremisesHeadingRegex = /^\s*#{1,6}\s+Load-bearing premises\b/i;
+const loadBearingPremisesHeadingRegex = /^\s*#{1,6}\s+Load-bearing premises\b/i;
 
 /** A line self-identifying a cited issue as the one this design run was invoked on — the one
  * concrete convention observed in practice (design-issue-file-issue-design-2026-08-23.md:
@@ -527,7 +527,7 @@ function computeBacktickSpanRanges(line: string): Array<{ start: number; end: nu
 /** A single row of a markdown table, split on unescaped `|` that is not inside a backtick code
  * span and not escaped as `\|`, trimmed, with the leading/trailing empty cells produced by a
  * `| a | b |`-style line dropped. */
-export function splitTableRow(line: string): string[] {
+function splitTableRow(line: string): string[] {
   const trimmed = line.trim();
   const codeSpans = computeBacktickSpanRanges(trimmed);
   const isInCodeSpan = (idx: number) => codeSpans.some((r) => idx >= r.start && idx < r.end);
@@ -570,19 +570,63 @@ export function isTableSeparatorRow(cells: string[]): boolean {
   return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
 }
 
+/** One table row of a document section: its source line, 1-based line number and split cells. */
+export interface TableRow {
+  line: string;
+  lineNum: number;
+  cells: string[];
+}
+
+/** The `## Load-bearing premises` table as read from a document. */
+export interface LoadBearingPremisesTable {
+  headingFound: boolean;
+  rows: TableRow[]; // every table row of the section, header and separator rows included
+  headerRow?: TableRow; // the first row that is not a separator row
+}
+
+/**
+ * Reads the `## Load-bearing premises` table: the section runs from its heading to the next
+ * heading of any level (or end of document), fenced code blocks are skipped, and every line in
+ * it that starts with `|` is a table row. This is the only reader of that table — `lintDesignDoc`
+ * validates what it returns and the Gate 1 record stores what it returns (web-jam-tools#1229), so
+ * the stored rows are always the rows the checker judged.
+ */
+export function readLoadBearingPremisesTable(lines: string[]): LoadBearingPremisesTable {
+  let inCodeBlock = false;
+  let headingFound = false;
+  let inSection = false;
+  const rows: TableRow[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line) || /^\s*~~~/.test(line)) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (inCodeBlock) continue;
+    if (loadBearingPremisesHeadingRegex.test(line)) {
+      headingFound = true;
+      inSection = true;
+    } else if (inSection && /^\s*#{1,6}\s+/.test(line)) {
+      inSection = false;
+    } else if (inSection && line.trim().startsWith("|")) {
+      const cells = splitTableRow(line);
+      if (cells.length > 0) rows.push({ line, lineNum: i + 1, cells });
+    }
+  }
+  return { headingFound, rows, headerRow: rows.find((r) => !isTableSeparatorRow(r.cells)) };
+}
+
 /**
  * Validates the structure of the `## Load-bearing premises` table itself, independent of any
  * column's content: the separator row must sit immediately after the header row and nowhere
  * else, there must be at least one data row, no two data rows may be duplicates of each other,
- * and every data row must carry the same cell count as the header. `rows` is the same
- * `{ line, lineNum, cells }` shape
- * `validateLoadBearingPremisesTable` builds from the collected table lines; `headerRow` is its
- * already-identified header row. Returns violations only — callers decide whether to keep
+ * and every data row must carry the same cell count as the header. `rows` and `headerRow` are
+ * the ones `readLoadBearingPremisesTable` returns. Returns violations only — callers decide whether to keep
  * validating the Proof column after structural violations are found.
  */
-function validateLoadBearingPremisesTableStructure(
-  rows: Array<{ line: string; lineNum: number; cells: string[] }>,
-  headerRow: { line: string; lineNum: number; cells: string[] },
+export function validateLoadBearingPremisesTableStructure(
+  rows: TableRow[],
+  headerRow: TableRow,
 ): LintViolation[] {
   const violations: LintViolation[] = [];
 
@@ -743,7 +787,7 @@ function validateLoadBearingPremisesProvedDates(
 }
 
 /**
- * Validates the `## Load-bearing premises` table collected by the main scan below: checks the
+ * Validates the `## Load-bearing premises` table read by `readLoadBearingPremisesTable`: checks the
  * table's own structure (separator placement, at least one data row, no duplicate rows, no ragged
  * rows — see `validateLoadBearingPremisesTableStructure`), finds the "Proof" column by its header
  * name (case-insensitive) and fails any data row whose Proof cell is empty, "N/A", or hedged, and
@@ -751,15 +795,11 @@ function validateLoadBearingPremisesProvedDates(
  * earlier than `todayIso` (web-jam-tools#1025).
  */
 function validateLoadBearingPremisesTable(
-  tableLines: Array<{ line: string; lineNum: number }>,
+  table: LoadBearingPremisesTable,
   todayIso: string,
 ): LintViolation[] {
   const violations: LintViolation[] = [];
-  const rows = tableLines
-    .map((entry) => ({ ...entry, cells: splitTableRow(entry.line) }))
-    .filter((entry) => entry.cells.length > 0);
-
-  const headerRow = rows.find((r) => !isTableSeparatorRow(r.cells));
+  const { rows, headerRow } = table;
   if (!headerRow) {
     violations.push({
       rule: "load-bearing-premises-unproven-row",
@@ -1118,9 +1158,6 @@ export function lintDesignDoc(
   let inBothSurfacesSection = false;
   let bothSurfacesHeadingLineNum = 0;
   const bothSurfacesLines: Array<{ line: string; lineNum: number }> = [];
-  let loadBearingPremisesFound = false;
-  const loadBearingPremisesTableLines: Array<{ line: string; lineNum: number }> = [];
-  let inLoadBearingPremisesSection = false;
   let sawTargetIssueMarker = false;
   let sawBlockquoteAfterMarker = false;
   let inRevisionHistorySection = false;
@@ -1203,18 +1240,6 @@ export function lintDesignDoc(
       inBothSurfacesSection = false;
     } else if (inBothSurfacesSection) {
       bothSurfacesLines.push({ line, lineNum });
-    }
-
-    // Track the '## Load-bearing premises' section: on, from its heading, until the next
-    // heading of any level (or end of document). Table rows collected while inside it are
-    // validated after this loop by validateLoadBearingPremisesTable.
-    if (loadBearingPremisesHeadingRegex.test(line)) {
-      loadBearingPremisesFound = true;
-      inLoadBearingPremisesSection = true;
-    } else if (inLoadBearingPremisesSection && anyHeadingRegex.test(line)) {
-      inLoadBearingPremisesSection = false;
-    } else if (inLoadBearingPremisesSection && line.trim().startsWith("|")) {
-      loadBearingPremisesTableLines.push({ line, lineNum });
     }
 
     // Track the '## Revision History' section (web-jam-tools#892): on, from its heading, until the
@@ -1365,13 +1390,14 @@ export function lintDesignDoc(
   }
 
   // 8. Check for Load-bearing premises section and validate its Proof column
-  if (!loadBearingPremisesFound) {
+  const premisesTable = readLoadBearingPremisesTable(lines);
+  if (!premisesTable.headingFound) {
     violations.push({
       rule: "require-load-bearing-premises-section",
       message: "Design document lacks required '## Load-bearing premises' section",
     });
   } else {
-    violations.push(...validateLoadBearingPremisesTable(loadBearingPremisesTableLines, todayIso));
+    violations.push(...validateLoadBearingPremisesTable(premisesTable, todayIso));
   }
 
   // 9. Check for a verbatim appendix when the document names a target issue it was invoked on

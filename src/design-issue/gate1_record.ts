@@ -11,10 +11,11 @@ import { expandHome } from "./gate1.ts";
 import {
   isTableSeparatorRow,
   isValidIsoDate,
-  loadBearingPremisesHeadingRegex,
-  splitTableRow,
+  type LoadBearingPremisesTable,
+  readLoadBearingPremisesTable,
   stripCellDecoration,
   toLocalIsoDate,
+  validateLoadBearingPremisesTableStructure,
 } from "./lint_doc.ts";
 
 /** One stored row of the document's `## Load-bearing premises` table. */
@@ -98,37 +99,24 @@ export function getGate1RecordPath(docPath: string, stateDir?: string): string {
   return path.join(dir, `${hash}.json`);
 }
 
-const anyHeadingRegex = /^\s*#{1,6}\s+/;
-
 export interface ParsedPremisesTable {
   headingFound: boolean;
   headerFound: boolean;
   missingColumns: string[]; // of Premise, Proof, Proved
   rows: PremiseRow[];
+  table: LoadBearingPremisesTable; // the table as lint_doc.ts read it
 }
 
 /**
- * Reads the `## Load-bearing premises` table with the same cell splitting lint_doc.ts uses.
- * Columns are matched by header name, never by position. Never throws.
+ * The document's premise rows, taken from the one reader of the `## Load-bearing premises` table
+ * (`readLoadBearingPremisesTable` in lint_doc.ts) so the rows stored are the rows the checker
+ * judged. Columns are matched by header name, never by position. Never throws.
  */
 export function parsePremisesTable(content: string): ParsedPremisesTable {
-  let headingFound = false;
-  let inSection = false;
-  const tableLines: string[] = [];
-  for (const line of content.split(/\r?\n/)) {
-    if (loadBearingPremisesHeadingRegex.test(line)) {
-      headingFound = true;
-      inSection = true;
-    } else if (inSection && anyHeadingRegex.test(line)) {
-      inSection = false;
-    } else if (inSection && line.trim().startsWith("|")) {
-      tableLines.push(line);
-    }
-  }
-  const cellRows = tableLines.map(splitTableRow).filter((c) => c.length > 0);
-  const header = cellRows.find((c) => !isTableSeparatorRow(c));
-  if (!header) return { headingFound, headerFound: false, missingColumns: [], rows: [] };
-  const col = (name: RegExp) => header.findIndex((c) => name.test(stripCellDecoration(c)));
+  const table = readLoadBearingPremisesTable(content.split(/\r?\n/));
+  const { headingFound, headerRow } = table;
+  if (!headerRow) return { headingFound, headerFound: false, missingColumns: [], rows: [], table };
+  const col = (name: RegExp) => headerRow.cells.findIndex((c) => name.test(stripCellDecoration(c)));
   const premiseIdx = col(/^premise$/i);
   const proofIdx = col(/^proof$/i);
   const provedIdx = col(/^proved$/i);
@@ -137,15 +125,15 @@ export function parsePremisesTable(content: string): ParsedPremisesTable {
   if (proofIdx === -1) missingColumns.push("Proof");
   if (provedIdx === -1) missingColumns.push("Proved");
   const rows: PremiseRow[] = [];
-  for (const cells of cellRows) {
-    if (cells === header || isTableSeparatorRow(cells)) continue;
+  for (const row of table.rows) {
+    if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
     rows.push({
-      premise: (premiseIdx === -1 ? "" : cells[premiseIdx] ?? "").trim(),
-      proof: (proofIdx === -1 ? "" : cells[proofIdx] ?? "").trim(),
-      proved: (provedIdx === -1 ? "" : cells[provedIdx] ?? "").trim(),
+      premise: (premiseIdx === -1 ? "" : row.cells[premiseIdx] ?? "").trim(),
+      proof: (proofIdx === -1 ? "" : row.cells[proofIdx] ?? "").trim(),
+      proved: (provedIdx === -1 ? "" : row.cells[provedIdx] ?? "").trim(),
     });
   }
-  return { headingFound, headerFound: true, missingColumns, rows };
+  return { headingFound, headerFound: true, missingColumns, rows, table };
 }
 
 /** Rows stored on approval: the rows as they stand; a document without a table stores none. */
@@ -188,6 +176,17 @@ function premiseRowsForAdoption(content: string, todayIso: string): PremiseRow[]
         `Premise row "${row.premise}" has a Proved date (${date}) later than today (${todayIso}) — refusing to adopt.`,
       );
     }
+  }
+  // The same structure checks design:lint-doc applies to this table: a row whose cell count
+  // differs from the header's, duplicate rows, or a separator row out of place.
+  const structural = validateLoadBearingPremisesTableStructure(
+    parsed.table.rows,
+    parsed.table.headerRow!,
+  );
+  if (structural.length > 0) {
+    throw new Gate1RecordError(
+      `The premises table is malformed: ${structural[0].message} — refusing to adopt.`,
+    );
   }
   return parsed.rows;
 }
@@ -466,6 +465,18 @@ export async function getGate1Status(
 
   const currentFingerprint = computeFingerprint(content);
 
+  // A record created by adoption holds stored rows but the document was never presented, so
+  // there is no open Gate 1 to ask about (same test approveGate1Record refuses on).
+  if (!record.approvedAt && !record.presentedFingerprint) {
+    return {
+      status: "not presented",
+      docPath: absDocPath,
+      recordPath,
+      record,
+      currentFingerprint,
+    };
+  }
+
   if (!record.approvedAt) {
     return {
       status: "open",
@@ -536,7 +547,11 @@ export function formatGate1Status(result: Gate1StatusResult): string[] {
   switch (result.status) {
     case "not presented":
       lines.push("[design:gate1-status] not presented");
-      lines.push(`  No Gate 1 record exists for ${result.docPath}`);
+      lines.push(
+        result.record
+          ? `  The Gate 1 record for ${result.docPath} holds adopted premise rows only; the document has not been presented`
+          : `  No Gate 1 record exists for ${result.docPath}`,
+      );
       break;
     case "open":
       lines.push("[design:gate1-status] open");
@@ -570,6 +585,9 @@ export function formatGate1Status(result: Gate1StatusResult): string[] {
 function formatStoredRowsLine(record?: Gate1Record): string | null {
   if (!record?.premiseRows) return null;
   const source = record.premiseRowsSource ?? "unknown";
-  const date = (record.premiseRowsStoredAt ?? "").slice(0, 10);
+  // The local calendar day, as the Proved-date checks use: a UTC slice shows the next day for
+  // rows stored in the evening.
+  const storedAt = new Date(record.premiseRowsStoredAt ?? "");
+  const date = Number.isNaN(storedAt.getTime()) ? "" : toLocalIsoDate(storedAt);
   return `  Stored premise rows: ${record.premiseRows.length} (source: ${source}, ${date})`;
 }

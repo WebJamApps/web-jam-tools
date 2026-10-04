@@ -18,6 +18,7 @@ import {
   loadGate1Record,
   openGate1Record,
 } from "../src/design-issue/gate1_record.ts";
+import { lintDesignDoc, toLocalIsoDate } from "../src/design-issue/lint_doc.ts";
 import {
   runCli,
   runGate1AdoptCli,
@@ -854,7 +855,7 @@ Deno.test("case n: design:gate1-status on case a's record prints the count 2, th
     });
     assertEquals(code, 0);
     const line = lines.find((l) => l.includes("Stored premise rows"));
-    const today = new Date().toISOString().slice(0, 10);
+    const today = toLocalIsoDate(new Date());
     assertEquals(line, `  Stored premise rows: 2 (source: adoption, ${today})`);
   } finally {
     await Deno.remove(f.tempDir, { recursive: true });
@@ -926,4 +927,172 @@ Deno.test("runCli routes gate1-adopt", async () => {
   } finally {
     await Deno.remove(f.tempDir, { recursive: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// The stored rows are the rows design:lint-doc judges: both read the table through
+// readLoadBearingPremisesTable, which skips fenced code blocks.
+// ---------------------------------------------------------------------------
+
+const FENCE = "```";
+const BOTH_ROWS = [
+  { premise: "P1", proof: "proof one", proved: "2026-09-24" },
+  { premise: "P2", proof: "proof two", proved: "2026-10-02" },
+];
+
+/** The premises the checker reports on, read from its stale-date messages on a later day. */
+function premisesLintJudged(doc: string): string[] {
+  return lintDesignDoc(doc, "/x/doc.md", { nowImpl: () => new Date(2026, 9, 20, 12) }).violations
+    .filter((v) => v.rule === "load-bearing-premises-stale-proof")
+    .map((v) => v.message.match(/\("([^"]+)"\)/)?.[1] ?? "");
+}
+
+Deno.test("a fenced block inside the premises section does not end it: adopt and approve store every row the checker judges", async () => {
+  const doc = [
+    "# Test Design",
+    "",
+    "## Load-bearing premises",
+    "",
+    "| Premise | Proof | Proved |",
+    "|---|---|---|",
+    TWO_ROWS[0],
+    "",
+    `${FENCE}sh`,
+    "# how P2 was checked",
+    "deno --version",
+    FENCE,
+    "",
+    TWO_ROWS[1],
+    "",
+    "## After",
+    "Text.",
+    "",
+  ].join("\n");
+  assertEquals(premisesLintJudged(doc), ["P1", "P2"]);
+  const adopted = await adoptFixture(doc);
+  const approved = await adoptFixture(doc);
+  try {
+    const { record: a } = await adoptGate1Record(adopted.docPath, "adopt it", {
+      stateDir: adopted.stateDir,
+      now: NOW,
+    });
+    assertEquals(a.premiseRows, BOTH_ROWS);
+    await openGate1Record(approved.docPath, doc, { stateDir: approved.stateDir });
+    const { record: b } = await approveGate1Record(approved.docPath, "approved", {
+      stateDir: approved.stateDir,
+    });
+    assertEquals(b.premiseRows, BOTH_ROWS);
+  } finally {
+    await Deno.remove(adopted.tempDir, { recursive: true });
+    await Deno.remove(approved.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("a fenced example table elsewhere in the document is not stored by adopt or approve", async () => {
+  const doc = [
+    "# Test Design",
+    "",
+    "## Format",
+    "",
+    `${FENCE}md`,
+    "## Load-bearing premises",
+    "| Premise | Proof | Proved |",
+    "|---|---|---|",
+    "| EXAMPLE | example proof | 2026-01-01 |",
+    FENCE,
+    "",
+    "## Load-bearing premises",
+    "",
+    "| Premise | Proof | Proved |",
+    "|---|---|---|",
+    TWO_ROWS[0],
+    "",
+    "## After",
+    "Text.",
+    "",
+  ].join("\n");
+  const realRow = [BOTH_ROWS[0]];
+  assertEquals(premisesLintJudged(doc), ["P1"]);
+  const adopted = await adoptFixture(doc);
+  const approved = await adoptFixture(doc);
+  try {
+    const { record: a } = await adoptGate1Record(adopted.docPath, "adopt it", {
+      stateDir: adopted.stateDir,
+      now: NOW,
+    });
+    assertEquals(a.premiseRows, realRow);
+    await openGate1Record(approved.docPath, doc, { stateDir: approved.stateDir });
+    const { record: b } = await approveGate1Record(approved.docPath, "approved", {
+      stateDir: approved.stateDir,
+    });
+    assertEquals(b.premiseRows, realRow);
+  } finally {
+    await Deno.remove(adopted.tempDir, { recursive: true });
+    await Deno.remove(approved.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("adopt refuses a table design:lint-doc calls malformed: an uneven row, duplicate rows, a separator out of place", async () => {
+  const tables: Array<[string[], string]> = [
+    [[TWO_ROWS[0], "| P2 | proof two | 2026-10-02 | extra |"], "has 4 cell(s), expected 3"],
+    [[TWO_ROWS[0], TWO_ROWS[0]], "duplicate rows"],
+    [[TWO_ROWS[0], "|---|---|---|", TWO_ROWS[1]], "not immediately after the header"],
+  ];
+  for (const [rows, message] of tables) {
+    const f = await adoptFixture(premisesDoc(rows));
+    try {
+      const err = await assertRejects(
+        () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+        Gate1RecordError,
+        "The premises table is malformed",
+      );
+      assertEquals(err.message.includes(message), true);
+      await assertRejects(() => Deno.stat(f.recordPath), Deno.errors.NotFound);
+    } finally {
+      await Deno.remove(f.tempDir, { recursive: true });
+    }
+  }
+});
+
+Deno.test("status is 'not presented' for a record created by adoption, and 'open' once the document is presented", async () => {
+  const doc = premisesDoc(TWO_ROWS);
+  const f = await adoptFixture(doc);
+  try {
+    await adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW });
+    const adopted = await getGate1Status(f.docPath, { stateDir: f.stateDir });
+    assertEquals(adopted.status, "not presented");
+    const lines = formatGate1Status(adopted);
+    assertEquals(lines[0], "[design:gate1-status] not presented");
+    assertEquals(lines.some((l) => l.includes("the document has not been presented")), true);
+    assertEquals(lines.some((l) => l.includes("No Gate 1 record exists")), false);
+    assertEquals(lines.at(-1), "  Stored premise rows: 2 (source: adoption, 2026-10-04)");
+
+    await openGate1Record(f.docPath, doc, { stateDir: f.stateDir });
+    const presented = await getGate1Status(f.docPath, { stateDir: f.stateDir });
+    assertEquals(presented.status, "open");
+    assertEquals(
+      formatGate1Status(presented).at(-1),
+      "  Stored premise rows: 2 (source: adoption, 2026-10-04)",
+    );
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("the stored-rows line prints the local calendar day the rows were stored", () => {
+  const lateEvening = new Date(2026, 9, 4, 23, 30, 0); // 2026-10-04 local, any time zone
+  const lines = formatGate1Status({
+    status: "open",
+    docPath: "/d",
+    recordPath: "/r",
+    record: {
+      docPath: "/d",
+      presentedFingerprint: "f",
+      presentedAt: "t",
+      premiseRows: [],
+      premiseRowsSource: "approval",
+      premiseRowsStoredAt: lateEvening.toISOString(),
+    },
+  });
+  assertEquals(lines.at(-1), "  Stored premise rows: 0 (source: approval, 2026-10-04)");
 });
