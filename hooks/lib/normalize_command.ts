@@ -682,3 +682,78 @@ if (import.meta.main) {
     console.log(normalize(cmd));
   }
 }
+
+// Git global options (written between `git` and the subcommand), web-jam-tools#1223.
+const GIT_GLOBAL_OPTS_WITH_VALUE = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--config-env",
+  "--exec-path",
+  "--attr-source",
+  "--shallow-file",
+]);
+const GIT_GLOBAL_OPTS_WITH_EQUALS = [
+  "--git-dir=",
+  "--work-tree=",
+  "--namespace=",
+  "--config-env=",
+  "--exec-path=",
+  "--attr-source=",
+];
+const GIT_GLOBAL_OPTS_NO_VALUE = new Set([
+  "-p",
+  "--paginate",
+  "-P",
+  "--no-pager",
+  "--no-replace-objects",
+  "--no-lazy-fetch",
+  "--no-optional-locks",
+  "--no-advice",
+  "--bare",
+  "--literal-pathspecs",
+  "--no-literal-pathspecs",
+  "--glob-pathspecs",
+  "--noglob-pathspecs",
+  "--icase-pathspecs",
+]);
+
+/**
+ * If `argv` is a `git` invocation (after any `VAR=value` prefixes), drop git's
+ * global options so the subcommand sits at the next index, exactly as in the
+ * plain command. `hadGlobalOptions` says whether any were dropped. An
+ * unrecognised option stops the skipping (the argv is left as-is from there)
+ * and sets `unrecognisedOption`: it is never skipped, because one that takes
+ * a separate value would hide the subcommand behind that value. The caller
+ * decides what an unrecognised option means for its own rule.
+ * Shared by both push guards so they never duplicate this parser.
+ */
+export function stripGitGlobalOptions(
+  argv: string[],
+): { argv: string[]; hadGlobalOptions: boolean; unrecognisedOption: boolean } {
+  let i = 0;
+  while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
+  if (i >= argv.length || argv[i].split("/").pop() !== "git") {
+    return { argv, hadGlobalOptions: false, unrecognisedOption: false };
+  }
+  let j = i + 1;
+  while (j < argv.length) {
+    const t = argv[j];
+    if (GIT_GLOBAL_OPTS_WITH_VALUE.has(t)) {
+      j += 2;
+    } else if (
+      GIT_GLOBAL_OPTS_NO_VALUE.has(t) || GIT_GLOBAL_OPTS_WITH_EQUALS.some((p) => t.startsWith(p))
+    ) {
+      j += 1;
+    } else break;
+  }
+  const unrecognisedOption = j < argv.length && argv[j].startsWith("-");
+  if (j === i + 1) return { argv, hadGlobalOptions: false, unrecognisedOption };
+  return {
+    argv: [...argv.slice(0, i + 1), ...argv.slice(Math.min(j, argv.length))],
+    hadGlobalOptions: true,
+    unrecognisedOption,
+  };
+}

@@ -62,6 +62,7 @@ import {
   resolveThroughWrappers,
   splitOnOperators,
   splitShellTokens,
+  stripGitGlobalOptions,
   stripHeredocs,
 } from "./normalize_command.ts";
 
@@ -158,7 +159,8 @@ function matchesPositionalRule(argv: string[], rule: PositionalRule): boolean {
  * it — the two guards report different user-facing text, but the underlying
  * "is this argv a branch deletion" question is identical.
  */
-export function isGitPushDeletion(argv: string[]): boolean {
+export function isGitPushDeletion(rawArgv: string[]): boolean {
+  const argv = stripGitGlobalOptions(rawArgv).argv;
   let i = 0;
   while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
   if (i >= argv.length) return false;
