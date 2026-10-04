@@ -6,6 +6,7 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import * as path from "@std/path";
 import {
+  adoptGate1Record,
   approveGate1Record,
   computeFingerprint,
   formatGate1Status,
@@ -17,7 +18,12 @@ import {
   loadGate1Record,
   openGate1Record,
 } from "../src/design-issue/gate1_record.ts";
-import { runGate1ApproveCli, runGate1StatusCli } from "../src/design-issue/cli.ts";
+import {
+  runCli,
+  runGate1AdoptCli,
+  runGate1ApproveCli,
+  runGate1StatusCli,
+} from "../src/design-issue/cli.ts";
 
 const MINIMAL_DESIGN_DOC = `# Test Design
 
@@ -463,5 +469,461 @@ Deno.test("runGate1StatusCli logs status and supports --json flag", async () => 
     assertEquals(parsed.docPath, docPath);
   } finally {
     await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// web-jam-tools#1229: premise rows kept in the Gate 1 record, design:gate1-adopt.
+// Cases a to n of the issue, each over a temporary state directory.
+// ---------------------------------------------------------------------------
+
+function premisesDoc(rows: string[], header = "| Premise | Proof | Proved |"): string {
+  const sep = header.replace(/[^|]+/g, "---");
+  return `# Test Design\n\n## Load-bearing premises\n\n${header}\n${sep}\n${
+    rows.join("\n")
+  }\n\n## After\nText.\n`;
+}
+
+const TWO_ROWS = ["| P1 | proof one | 2026-09-24 |", "| P2 | proof two | 2026-10-02 |"];
+const NOW = new Date(2026, 9, 4, 12, 0, 0); // 2026-10-04 local
+
+async function adoptFixture(
+  docText: string,
+  seedRecord?: string,
+): Promise<{ tempDir: string; docPath: string; stateDir: string; recordPath: string }> {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-adopt-" });
+  const docPath = path.join(tempDir, "doc.md");
+  await Deno.writeTextFile(docPath, docText);
+  const stateDir = path.join(tempDir, "state");
+  const recordPath = getGate1RecordPath(docPath, stateDir);
+  if (seedRecord !== undefined) {
+    await Deno.mkdir(stateDir, { recursive: true });
+    await Deno.writeTextFile(recordPath, seedRecord);
+  }
+  return { tempDir, docPath, stateDir, recordPath };
+}
+
+Deno.test("case a: adopt with no record creates one holding exactly the two rows, the reply and the adoption time", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS));
+  try {
+    const { record } = await adoptGate1Record(f.docPath, "adopt it", {
+      stateDir: f.stateDir,
+      now: NOW,
+    });
+    assertEquals(record.premiseRows, [
+      { premise: "P1", proof: "proof one", proved: "2026-09-24" },
+      { premise: "P2", proof: "proof two", proved: "2026-10-02" },
+    ]);
+    assertEquals(record.premiseRowsSource, "adoption");
+    assertEquals(record.premiseRowsAdoptionReply, "adopt it");
+    assertEquals(record.premiseRowsStoredAt, NOW.toISOString());
+    assertEquals(record.approvedAt, undefined);
+    assertEquals(record.reply, undefined);
+    assertEquals(record.approvedFingerprint, undefined);
+    const onDisk = JSON.parse(await Deno.readTextFile(f.recordPath));
+    assertEquals(onDisk.premiseRows.length, 2);
+    assertEquals("approvedAt" in onDisk, false);
+    // The adopted record is not an approval: approve still refuses until presented.
+    await assertRejects(
+      () => approveGate1Record(f.docPath, "yes", { stateDir: f.stateDir }),
+      Gate1RecordError,
+      "never presented",
+    );
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case b: adopt on an approved record without rows stores rows and leaves the approval fields unchanged", async () => {
+  const seed = JSON.stringify(
+    {
+      docPath: "/x/doc.md",
+      presentedFingerprint: "pf",
+      presentedAt: "2026-09-01T00:00:00.000Z",
+      approvedAt: "2026-09-02T00:00:00.000Z",
+      reply: "approved, go",
+      approvedFingerprint: "af",
+    },
+    null,
+    2,
+  ) + "\n";
+  const f = await adoptFixture(premisesDoc(TWO_ROWS), seed);
+  try {
+    const { record } = await adoptGate1Record(f.docPath, "adopt it", {
+      stateDir: f.stateDir,
+      now: NOW,
+    });
+    assertEquals(record.premiseRows?.length, 2);
+    const onDisk = JSON.parse(await Deno.readTextFile(f.recordPath));
+    assertEquals(onDisk.approvedAt, "2026-09-02T00:00:00.000Z");
+    assertEquals(onDisk.reply, "approved, go");
+    assertEquals(onDisk.approvedFingerprint, "af");
+    assertEquals(onDisk.presentedFingerprint, "pf");
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case c: adopt on a record already holding a stored row is refused and the file is byte-identical", async () => {
+  const seed = JSON.stringify({
+    docPath: "/x/doc.md",
+    presentedFingerprint: "pf",
+    presentedAt: "t",
+    premiseRows: [{ premise: "P1", proof: "proof one", proved: "2026-09-24" }],
+    premiseRowsSource: "approval",
+    premiseRowsStoredAt: "2026-09-02T00:00:00.000Z",
+  });
+  const f = await adoptFixture(premisesDoc(TWO_ROWS), seed);
+  try {
+    await assertRejects(
+      () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+      Gate1RecordError,
+      "already holds",
+    );
+    assertEquals(await Deno.readTextFile(f.recordPath), seed);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case d: an empty or blank reply is refused", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS));
+  try {
+    for (const reply of ["", "   "]) {
+      await assertRejects(
+        () => adoptGate1Record(f.docPath, reply, { stateDir: f.stateDir, now: NOW }),
+        Gate1RecordError,
+        "Reply is empty",
+      );
+    }
+    await assertRejects(() => Deno.stat(f.recordPath), Deno.errors.NotFound);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case e: a document with no Load-bearing premises heading is refused", async () => {
+  const f = await adoptFixture(MINIMAL_DESIGN_DOC);
+  try {
+    await assertRejects(
+      () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+      Gate1RecordError,
+      "no '## Load-bearing premises' heading",
+    );
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case f: a premises table with no Proved column is refused", async () => {
+  const f = await adoptFixture(
+    premisesDoc(["| P1 | proof one |"], "| Premise | Proof |"),
+  );
+  try {
+    await assertRejects(
+      () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+      Gate1RecordError,
+      "'Proved' column",
+    );
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case g: a Proved cell that is invalid, empty, text, or a day in the future is refused naming the row", async () => {
+  for (const cell of ["2026-13-40", "", "tomorrow", "2026-10-05"]) {
+    const f = await adoptFixture(
+      premisesDoc(["| P1 | proof one | 2026-09-24 |", `| P9 | proof nine | ${cell} |`]),
+    );
+    try {
+      await assertRejects(
+        () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+        Gate1RecordError,
+        'Premise row "P9"',
+      );
+      await assertRejects(() => Deno.stat(f.recordPath), Deno.errors.NotFound);
+    } finally {
+      await Deno.remove(f.tempDir, { recursive: true });
+    }
+  }
+});
+
+Deno.test("case g: today's date is accepted", async () => {
+  const f = await adoptFixture(premisesDoc(["| P1 | proof one | 2026-10-04 |"]));
+  try {
+    const { record } = await adoptGate1Record(f.docPath, "adopt it", {
+      stateDir: f.stateDir,
+      now: NOW,
+    });
+    assertEquals(record.premiseRows?.length, 1);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("adopt refuses a table with no header, no Premise or Proof column, or no data rows", async () => {
+  const docs: Array<[string, string]> = [
+    ["## Load-bearing premises\n\nNo table here.\n", "has no table"],
+    [premisesDoc(["| P1 | 2026-09-24 |"], "| Premise | Proved |"), "'Proof' column"],
+    [premisesDoc(["| P1 | 2026-09-24 |"], "| Proof | Proved |"), "'Premise' column"],
+    [premisesDoc([]), "no data rows"],
+  ];
+  for (const [doc, message] of docs) {
+    const f = await adoptFixture(doc);
+    try {
+      await assertRejects(
+        () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+        Gate1RecordError,
+        message,
+      );
+    } finally {
+      await Deno.remove(f.tempDir, { recursive: true });
+    }
+  }
+});
+
+Deno.test("case h: adopt on a record file whose content is {not json is refused and the file is byte-identical", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS), "{not json");
+  try {
+    await assertRejects(
+      () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+      Gate1RecordError,
+      "Cannot parse Gate 1 record",
+    );
+    assertEquals(await Deno.readTextFile(f.recordPath), "{not json");
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("a record that is valid JSON but not an object is refused", async () => {
+  for (const seed of ["null", "[1]", '"text"']) {
+    const f = await adoptFixture(premisesDoc(TWO_ROWS), seed);
+    try {
+      await assertRejects(
+        () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+        Gate1RecordError,
+        "not a JSON object",
+      );
+      assertEquals(await Deno.readTextFile(f.recordPath), seed);
+    } finally {
+      await Deno.remove(f.tempDir, { recursive: true });
+    }
+  }
+});
+
+Deno.test("an unreadable record path (a directory) is refused", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS));
+  try {
+    await Deno.mkdir(f.recordPath, { recursive: true });
+    await assertRejects(
+      () => adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir, now: NOW }),
+      Gate1RecordError,
+      "Cannot read Gate 1 record",
+    );
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case i: adopt on a document path that does not exist is refused", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "gate1-adopt-missing-" });
+  try {
+    await assertRejects(
+      () =>
+        adoptGate1Record(path.join(tempDir, "nope.md"), "adopt it", {
+          stateDir: path.join(tempDir, "state"),
+          now: NOW,
+        }),
+      Gate1RecordError,
+      "Cannot read design document",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case j: approve on an open record stores every premise row of the document", async () => {
+  const doc = premisesDoc(TWO_ROWS);
+  const f = await adoptFixture(doc);
+  try {
+    await openGate1Record(f.docPath, doc, { stateDir: f.stateDir });
+    const { record } = await approveGate1Record(f.docPath, "approved", { stateDir: f.stateDir });
+    assertEquals(record.premiseRows, [
+      { premise: "P1", proof: "proof one", proved: "2026-09-24" },
+      { premise: "P2", proof: "proof two", proved: "2026-10-02" },
+    ]);
+    assertEquals(record.premiseRowsSource, "approval");
+    assertEquals(record.premiseRowsStoredAt, record.approvedAt);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case k: present, approve, present again clears approval and keeps the stored rows unchanged", async () => {
+  const doc = premisesDoc(TWO_ROWS);
+  const f = await adoptFixture(doc);
+  try {
+    await openGate1Record(f.docPath, doc, { stateDir: f.stateDir });
+    const { record: approved } = await approveGate1Record(f.docPath, "approved", {
+      stateDir: f.stateDir,
+    });
+    const { record: reopened } = await openGate1Record(f.docPath, doc, {
+      stateDir: f.stateDir,
+    });
+    assertEquals(reopened.approvedAt, undefined);
+    assertEquals(reopened.reply, undefined);
+    assertEquals(reopened.approvedFingerprint, undefined);
+    assertEquals(reopened.premiseRows, approved.premiseRows);
+    assertEquals(reopened.premiseRowsSource, "approval");
+    assertEquals(reopened.premiseRowsStoredAt, approved.premiseRowsStoredAt);
+    const onDisk = await loadGate1Record(f.docPath, { stateDir: f.stateDir });
+    assertEquals(onDisk?.premiseRows, approved.premiseRows);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("re-presenting keeps adopted rows with their source fields and reply", async () => {
+  const doc = premisesDoc(TWO_ROWS);
+  const f = await adoptFixture(doc);
+  try {
+    const { record: adopted } = await adoptGate1Record(f.docPath, "adopt it", {
+      stateDir: f.stateDir,
+      now: NOW,
+    });
+    const { record } = await openGate1Record(f.docPath, doc, { stateDir: f.stateDir });
+    assertEquals(record.premiseRows, adopted.premiseRows);
+    assertEquals(record.premiseRowsSource, "adoption");
+    assertEquals(record.premiseRowsStoredAt, adopted.premiseRowsStoredAt);
+    assertEquals(record.premiseRowsAdoptionReply, "adopt it");
+    // Approving afterwards replaces the adoption source with the approval.
+    const { record: approved } = await approveGate1Record(f.docPath, "ok", {
+      stateDir: f.stateDir,
+    });
+    assertEquals(approved.premiseRowsSource, "approval");
+    assertEquals(approved.premiseRowsAdoptionReply, undefined);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case l: a second approval after a proof text changed stores the document's current rows", async () => {
+  const doc1 = premisesDoc(TWO_ROWS);
+  const doc2 = premisesDoc(["| P1 | proof one, rerun | 2026-10-04 |", TWO_ROWS[1]]);
+  const f = await adoptFixture(doc1);
+  try {
+    await openGate1Record(f.docPath, doc1, { stateDir: f.stateDir });
+    await approveGate1Record(f.docPath, "approved", { stateDir: f.stateDir });
+    await Deno.writeTextFile(f.docPath, doc2);
+    await openGate1Record(f.docPath, doc2, { stateDir: f.stateDir });
+    const { record } = await approveGate1Record(f.docPath, "approved again", {
+      stateDir: f.stateDir,
+    });
+    assertEquals(record.premiseRows, [
+      { premise: "P1", proof: "proof one, rerun", proved: "2026-10-04" },
+      { premise: "P2", proof: "proof two", proved: "2026-10-02" },
+    ]);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case m: openGate1Record on a record whose content is {not json refuses and the file is byte-identical", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS), "{not json");
+  try {
+    await assertRejects(
+      () => openGate1Record(f.docPath, premisesDoc(TWO_ROWS), { stateDir: f.stateDir }),
+      Gate1RecordError,
+      "Cannot parse Gate 1 record",
+    );
+    assertEquals(await Deno.readTextFile(f.recordPath), "{not json");
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("case n: design:gate1-status on case a's record prints the count 2, the word adoption and its date", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS));
+  try {
+    await adoptGate1Record(f.docPath, "adopt it", { stateDir: f.stateDir });
+    const lines: string[] = [];
+    const code = await runGate1StatusCli([f.docPath, "--state-dir", f.stateDir], {
+      log: (m) => lines.push(m),
+      errorLog: () => {},
+    });
+    assertEquals(code, 0);
+    const line = lines.find((l) => l.includes("Stored premise rows"));
+    const today = new Date().toISOString().slice(0, 10);
+    assertEquals(line, `  Stored premise rows: 2 (source: adoption, ${today})`);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("status shows no stored-rows line for a record with no rows, and 'unknown' for a missing source", () => {
+  const base = { status: "open" as const, docPath: "/d", recordPath: "/r" };
+  const none = formatGate1Status({
+    ...base,
+    record: { docPath: "/d", presentedFingerprint: "f", presentedAt: "t" },
+  });
+  assertEquals(none.some((l) => l.includes("Stored premise rows")), false);
+  const odd = formatGate1Status({
+    ...base,
+    record: {
+      docPath: "/d",
+      presentedFingerprint: "f",
+      presentedAt: "t",
+      premiseRows: [],
+    },
+  });
+  assertEquals(odd.at(-1), "  Stored premise rows: 0 (source: unknown, )");
+});
+
+Deno.test("runGate1AdoptCli adopts from --reply, --reply-file, and refuses on bad usage", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS));
+  const out: string[] = [];
+  const err: string[] = [];
+  const io = { log: (m: string) => out.push(m), errorLog: (m: string) => err.push(m) };
+  try {
+    assertEquals(await runGate1AdoptCli(["--help"], io), 0);
+    assertEquals(await runGate1AdoptCli(["--reply", "x"], io), 1); // no doc
+    assertEquals(await runGate1AdoptCli([f.docPath], io), 1); // no reply
+    assertEquals(
+      await runGate1AdoptCli(
+        [f.docPath, "--reply-file", path.join(f.tempDir, "nope.txt"), "--state-dir", f.stateDir],
+        io,
+      ),
+      1,
+    );
+    assertEquals(
+      await runGate1AdoptCli([f.docPath, "--reply", "  ", "--state-dir", f.stateDir], io),
+      1,
+    );
+    const replyFile = path.join(f.tempDir, "reply.txt");
+    await Deno.writeTextFile(replyFile, "adopt it\n");
+    assertEquals(
+      await runGate1AdoptCli([f.docPath, "--reply-file", replyFile, "--state-dir", f.stateDir], io),
+      0,
+    );
+    assertEquals(out.some((l) => l.includes("Adopted 2 premise row(s)")), true);
+    // Case c through the CLI: the second run exits non-zero.
+    assertEquals(
+      await runGate1AdoptCli([f.docPath, "--reply", "again", "--state-dir", f.stateDir], io),
+      1,
+    );
+    assertEquals(err.some((l) => l.includes("already holds")), true);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
+  }
+});
+
+Deno.test("runCli routes gate1-adopt", async () => {
+  const f = await adoptFixture(premisesDoc(TWO_ROWS));
+  try {
+    assertEquals(await runCli(["gate1-adopt", "--help"]), 0);
+    assertEquals(await runCli(["gate1_adopt", "--help"]), 0);
+  } finally {
+    await Deno.remove(f.tempDir, { recursive: true });
   }
 });
