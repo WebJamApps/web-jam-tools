@@ -984,6 +984,20 @@ Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises rule", as
   );
 });
 
+Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching and both refusals", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  for (
+    const fragment of [
+      "**Every premise row carries a `Proved` date; an earlier date passes only on an exact stored-row match.**",
+      "after trimming the white space around each cell; case and internal spacing matter, row order does not, and carried rows never expire",
+      "when a record exists and cannot be read or parsed, the checker refuses and names its path",
+      "`deno task design:gate1` prints the fresh and carried row counts and the date of the approval or adoption",
+      "| pass a premise row dated before the presenting day unless the Gate 1 record holds that exact row from an approval or an adoption |",
+      "| store a document's premise rows as adopted without Josh naming that document |",
+    ]
+  ) assertStringIncludes(text, fragment);
+});
+
 Deno.test("skills/design-issue/SKILL.md contains target-issue-body rule", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
