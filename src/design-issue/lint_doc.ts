@@ -778,13 +778,25 @@ function validateLoadBearingPremisesProvedDates(
     }
 
     if (stripped < todayIso) {
-      const matchesStoredRow = storedRows.some((stored) =>
-        stored.premise.trim() === (row.cells[premiseColIdx] ?? "").trim() &&
-        stored.proof.trim() === (row.cells[proofColIdx] ?? "").trim() &&
-        stored.proved.trim() === rawCell.trim()
-      );
+      // A row is carried only on an exact match of premise, proof and date. A table with no
+      // Premise (or Proof) column has no such cell to compare, and a row stored from that table
+      // holds an empty string there, so without this guard the missing cell would compare equal
+      // and a changed premise would pass on its proof and date alone.
+      const missingColumn = premiseColIdx === -1
+        ? "Premise"
+        : proofColIdx === -1
+        ? "Proof"
+        : undefined;
+      const matchesStoredRow = missingColumn === undefined &&
+        storedRows.some((stored) =>
+          stored.premise.trim() === (row.cells[premiseColIdx] ?? "").trim() &&
+          stored.proof.trim() === (row.cells[proofColIdx] ?? "").trim() &&
+          stored.proved.trim() === rawCell.trim()
+        );
       if (matchesStoredRow) continue;
-      const reason = storedRows.length === 0
+      const reason = missingColumn !== undefined
+        ? `the table has no '${missingColumn}' column, so the row cannot be matched to a stored row`
+        : storedRows.length === 0
         ? "no premise rows are stored in the Gate 1 record"
         : "the premise, proof or Proved date differs from the stored rows";
       violations.push({

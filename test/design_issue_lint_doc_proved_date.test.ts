@@ -179,6 +179,42 @@ const carriedCases: {
   },
 ];
 
+// A table with no Premise column: approval stores each row's premise as an empty string, and
+// the row has no premise cell either, so the two would compare equal and a changed premise would
+// pass on proof and date alone. An earlier-dated row in such a table always fails.
+Deno.test("stored premise case: a table with no Premise column never carries an earlier-dated row", () => {
+  const table = (firstCell: string) =>
+    docWithPremisesTable(
+      [
+        "| Assumption | Proof | Proved |",
+        "|---|---|---|",
+        `| ${firstCell} | proof one | 2026-10-03 |`,
+      ].join("\n"),
+    );
+  // What approval stores for this table: no Premise column, so an empty premise.
+  const premiseRows: PremiseRow[] = [{ premise: "", proof: "proof one", proved: "2026-10-03" }];
+  for (const firstCell of ["The sky is blue", "The sky is GREEN and the sea is dry"]) {
+    const result = lintDesignDoc(table(firstCell), "", { nowImpl: CARRIED_NOW, premiseRows });
+    assertEquals(result.valid, false, firstCell);
+    assertEquals(result.violations.length, 1);
+    assertEquals(result.violations[0].rule, "load-bearing-premises-stale-proof");
+    assertStringIncludes(
+      result.violations[0].message,
+      "the table has no 'Premise' column, so the row cannot be matched to a stored row",
+    );
+  }
+  // Dated the presenting day, the same table still passes: the guard only concerns carried rows.
+  const today = docWithPremisesTable(
+    [
+      "| Assumption | Proof | Proved |",
+      "|---|---|---|",
+      "| The sky is blue | proof one | 2026-10-10 |",
+    ]
+      .join("\n"),
+  );
+  assertEquals(lintDesignDoc(today, "", { nowImpl: CARRIED_NOW, premiseRows }).valid, true);
+});
+
 for (const fixture of carriedCases) {
   Deno.test(`stored premise case ${fixture.name}`, async () => {
     await withPremiseRecord(fixture.rows, fixture.record, async (docPath, stateDir) => {
