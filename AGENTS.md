@@ -16,7 +16,7 @@ rules and do not reconstruct them from memory or from this file.
 ## Read also
 
 - [docs/ai-team-playbook.md](docs/ai-team-playbook.md) — the current AI team, what each tier is best
-  at, how work hands off, and where Josh approves.
+  at, tier order across model labels, how work hands off, and where Josh approves.
 - [docs/cross-ai-rules.md](docs/cross-ai-rules.md) — cross-AI operational rules (voice rules, file
   placement, protected files, canonical task queues, memory hygiene) that apply to every AI on the
   team. Its **FE/BE COUPLING** section covers the backward-compat/expand-contract rule for shared
@@ -189,16 +189,7 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
 
 ## Quota & Token Hygiene
 
-- **Model Tier Order (weakest to strongest): `Haiku` → `Flash Med` → `Flash High` → `Sonnet` →
-  `Opus`.** Josh ruled on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that
-  ruling is the basis for the order. (Superseded history: on 2026-09-05 `Flash High` was ranked above
-  Sonnet 5 on DeepSWE v1.1, 73.7% against 54%. That ranking no longer stands.) `Opus` keeps the top
-  slot: abstract, multi-step unguided agent work (Terminal-Bench 4.0) is what open-ended design and
-  review are. Consequences: reviewer-tier pairing follows this order (`skills/pr-review/SKILL.md`).
-  The order does **not** change routing: contained *and* multi-file implementation work still
-  defaults to `Flash High`, because it is the default lane and bills a separate Google budget
-  rather than the constrained Anthropic one; use `Sonnet` for a named Claude-side capability Flash
-  lacks, or when Josh routes it there.
+- **Model Tier Order:** The one tier order across all model labels is **`Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus`** (Sol, Astra and Sonnet share a rung); see [docs/ai-team-playbook.md](docs/ai-team-playbook.md). Reviewer-tier pairing follows this order (`skills/pr-review/SKILL.md`). The order does **not** decide the default lane for everyday work: that stays a cost decision (Flash bills to Google; Sol and Astra bill to Plus; Sonnet and Opus bill to the constrained Anthropic budget), so Flash High remains the default implementation tier even though Sol, Astra, and Sonnet rank above it.
 - **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a
   rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or
   multi-repo tasks:

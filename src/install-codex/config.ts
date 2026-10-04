@@ -48,6 +48,20 @@ function inPlaceError(reason: string): Error {
 const ANY_HEADER = /^\s*\[/;
 const COMMENT = /^\s*#/;
 
+const GROUP_HEADERS: Record<Event, RegExp> = {
+  SessionStart: /^\s*\[\[\s*hooks\s*\.\s*SessionStart\s*\]\]\s*(?:#.*)?$/,
+  PreToolUse: /^\s*\[\[\s*hooks\s*\.\s*PreToolUse\s*\]\]\s*(?:#.*)?$/,
+  PostToolUse: /^\s*\[\[\s*hooks\s*\.\s*PostToolUse\s*\]\]\s*(?:#.*)?$/,
+  Stop: /^\s*\[\[\s*hooks\s*\.\s*Stop\s*\]\]\s*(?:#.*)?$/,
+};
+
+const HANDLER_HEADERS: Record<Event, RegExp> = {
+  SessionStart: /^\s*\[\[\s*hooks\s*\.\s*SessionStart\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$/,
+  PreToolUse: /^\s*\[\[\s*hooks\s*\.\s*PreToolUse\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$/,
+  PostToolUse: /^\s*\[\[\s*hooks\s*\.\s*PostToolUse\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$/,
+  Stop: /^\s*\[\[\s*hooks\s*\.\s*Stop\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$/,
+};
+
 /** Line ranges [start, end) of the installer's own hook tables for one event. */
 function managedRanges(
   lines: string[],
@@ -55,10 +69,8 @@ function managedRanges(
   groups: Record<string, unknown>[],
   home: string,
 ): [number, number][] {
-  const groupHeader = new RegExp(String.raw`^\s*\[\[\s*hooks\s*\.\s*${event}\s*\]\]\s*(?:#.*)?$`);
-  const handlerHeader = new RegExp(
-    String.raw`^\s*\[\[\s*hooks\s*\.\s*${event}\s*\.\s*hooks\s*\]\]\s*(?:#.*)?$`,
-  );
+  const groupHeader = GROUP_HEADERS[event];
+  const handlerHeader = HANDLER_HEADERS[event];
   const starts = lines.flatMap((line, index) => groupHeader.test(line) ? [index] : []);
   if (starts.length !== groups.length) {
     throw inPlaceError(`hooks.${event} is not written as [[hooks.${event}]] tables`);
