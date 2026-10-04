@@ -14,7 +14,7 @@ This skill provides a systematic pipeline for automated cross-model pull request
 
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
 
-Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work).
+Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, and every lower one is rejected, with Sol, Astra and Sonnet on one rung.
 
 **Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
@@ -31,6 +31,28 @@ ambiguous diff is.
 | Flash High | Flash Medium, Haiku |
 | Sonnet | Flash High, Flash Medium, Haiku |
 | Opus | Sonnet, Flash High |
+
+### Default Reviewers
+
+The default reviewers across the seven model labels:
+
+| Author | Default Reviewer |
+|---|---|
+| Haiku, Luna | Flash |
+| Flash | Sol, through `$pr-review` in Codex |
+| Sol | Sonnet |
+| Sonnet | Sol, through `$pr-review` in Codex; Opus when Josh names the pull request |
+| Astra | *(none — no automatic reviewer)* |
+| Opus | *(none — no automatic reviewer)* |
+
+The default reviewers are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Astra and Opus authors have no automatic reviewer.
+
+### Sol Reviews on Codex & Recording-Day Rules
+
+- Sol reviews of Flash and Sonnet pull requests run through `/pr-review` (typed `$pr-review` in Codex).
+- On a recording day or for any pull request Josh names, Sonnet reviews a Flash pull request instead, and a Sonnet pull request waits for Sol or goes to Opus when Josh names it.
+- Astra is never picked as a reviewer unless Josh names it.
+- An unattended Sol review launch passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`.
 
 **Ceiling rule (never a schedule):**
 The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Sonnet
