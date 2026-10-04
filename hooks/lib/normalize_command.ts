@@ -692,6 +692,8 @@ const GIT_GLOBAL_OPTS_WITH_VALUE = new Set([
   "--namespace",
   "--config-env",
   "--exec-path",
+  "--attr-source",
+  "--shallow-file",
 ]);
 const GIT_GLOBAL_OPTS_WITH_EQUALS = [
   "--git-dir=",
@@ -699,6 +701,7 @@ const GIT_GLOBAL_OPTS_WITH_EQUALS = [
   "--namespace=",
   "--config-env=",
   "--exec-path=",
+  "--attr-source=",
 ];
 const GIT_GLOBAL_OPTS_NO_VALUE = new Set([
   "-p",
@@ -711,6 +714,7 @@ const GIT_GLOBAL_OPTS_NO_VALUE = new Set([
   "--no-advice",
   "--bare",
   "--literal-pathspecs",
+  "--no-literal-pathspecs",
   "--glob-pathspecs",
   "--noglob-pathspecs",
   "--icase-pathspecs",
@@ -720,16 +724,19 @@ const GIT_GLOBAL_OPTS_NO_VALUE = new Set([
  * If `argv` is a `git` invocation (after any `VAR=value` prefixes), drop git's
  * global options so the subcommand sits at the next index, exactly as in the
  * plain command. `hadGlobalOptions` says whether any were dropped. An
- * unrecognised option stops the skipping (the argv is left as-is from there).
+ * unrecognised option stops the skipping (the argv is left as-is from there)
+ * and sets `unrecognisedOption`: it is never skipped, because one that takes
+ * a separate value would hide the subcommand behind that value. The caller
+ * decides what an unrecognised option means for its own rule.
  * Shared by both push guards so they never duplicate this parser.
  */
 export function stripGitGlobalOptions(
   argv: string[],
-): { argv: string[]; hadGlobalOptions: boolean } {
+): { argv: string[]; hadGlobalOptions: boolean; unrecognisedOption: boolean } {
   let i = 0;
   while (i < argv.length && ASSIGN_RE.test(argv[i])) i++;
   if (i >= argv.length || argv[i].split("/").pop() !== "git") {
-    return { argv, hadGlobalOptions: false };
+    return { argv, hadGlobalOptions: false, unrecognisedOption: false };
   }
   let j = i + 1;
   while (j < argv.length) {
@@ -742,9 +749,11 @@ export function stripGitGlobalOptions(
       j += 1;
     } else break;
   }
-  if (j === i + 1) return { argv, hadGlobalOptions: false };
+  const unrecognisedOption = j < argv.length && argv[j].startsWith("-");
+  if (j === i + 1) return { argv, hadGlobalOptions: false, unrecognisedOption };
   return {
     argv: [...argv.slice(0, i + 1), ...argv.slice(Math.min(j, argv.length))],
     hadGlobalOptions: true,
+    unrecognisedOption,
   };
 }

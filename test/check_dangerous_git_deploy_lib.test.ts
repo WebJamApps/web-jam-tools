@@ -342,3 +342,31 @@ Deno.test("#1223 global option plus force flag message names the plain form", ()
   assertEquals(r.blocked, true);
   assertEquals(r.description?.includes("plain 'git push' form"), true);
 });
+
+Deno.test("#1223 a protected branch spelled another way gets the plain push's message", () => {
+  for (const cmd of ["git push origin refs/heads/dev", "git push origin +HEAD:heads/dev"]) {
+    assertEquals(checkDangerousGitDeploy(cmd), checkDangerousGitDeploy("git push origin dev"));
+  }
+});
+
+Deno.test("#1223 an unrecognised option before push names the plain form", () => {
+  const r = checkDangerousGitDeploy("git --made-up-option push origin feat");
+  assertEquals(r.blocked, true);
+  assertEquals(r.description?.includes("unrecognised option before 'push'"), true);
+});
+
+Deno.test("#1223 an alias definition is blocked whichever way it is handed to git", () => {
+  for (
+    const cmd of [
+      "git -c alias.p=push p origin feat",
+      "env GIT_CONFIG_GLOBAL=/tmp/a.cfg git p origin feat",
+      "export GIT_CONFIG_PARAMETERS=x",
+      "GIT_CONFIG_GLOBAL=/tmp/a.cfg bash -c 'git p origin feat'",
+      "git --made-up-option -c alias.p=push p origin feat",
+    ]
+  ) {
+    const r = checkDangerousGitDeploy(cmd);
+    assertEquals(r.blocked, true, cmd);
+    assertEquals(r.description?.includes("defining a git alias"), true, cmd);
+  }
+});
