@@ -1,6 +1,7 @@
 // src/design-issue/cli.ts
 // Multi-command CLI for design-issue tooling:
 // - deno task design:gate1 <doc.md> (web-jam-tools#741)
+// - deno task design:gate1-adopt <doc.md> --reply <text> (web-jam-tools#1229)
 // - deno task design:lint-doc <doc.md> (web-jam-tools#742)
 // - deno task design:lint-runbook <runbook.md> (web-jam-tools#743)
 // - deno task design:candidates (web-jam-tools#745)
@@ -22,7 +23,12 @@ import {
   resolveCanonicalDesignDoc,
   runGate1,
 } from "./gate1.ts";
-import { approveGate1Record, formatGate1Status, getGate1Status } from "./gate1_record.ts";
+import {
+  adoptGate1Record,
+  approveGate1Record,
+  formatGate1Status,
+  getGate1Status,
+} from "./gate1_record.ts";
 import { runLintDocCli } from "./lint_doc.ts";
 import { runLintPlanCli } from "./lint_plan.ts";
 import { runLintRunbookCli } from "./lint_runbook.ts";
@@ -200,6 +206,92 @@ Options:
     return 0;
   } catch (err) {
     errorLog(`[design:gate1-approve] Error: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+}
+
+export interface Gate1AdoptCliOptions {
+  stateDir?: string;
+  log?: (msg: string) => void;
+  errorLog?: (msg: string) => void;
+}
+
+export async function runGate1AdoptCli(
+  args: string[],
+  options?: Gate1AdoptCliOptions,
+): Promise<number> {
+  const log = options?.log ?? console.log;
+  const errorLog = options?.errorLog ?? console.error;
+  const flags = parseArgs(args, {
+    boolean: ["help"],
+    string: ["doc", "reply", "reply-file", "state-dir"],
+    alias: { h: "help" },
+    default: { help: false },
+  });
+
+  if (flags.help) {
+    log(`Usage: deno task design:gate1-adopt <doc.md> --reply <text> [options]
+
+Stores a design document's current premise rows, with the dates they already carry, in its
+Gate 1 record, for a document Josh approved before premise rows were kept. Records Josh's reply
+verbatim. Does NOT approve Gate 1. Refuses when the record already holds premise rows, on an
+empty reply, on a missing or malformed premises table or Proved date, or when the record or
+document cannot be read.
+
+Options:
+  --reply <text>        Josh's reply, verbatim
+  --reply-file <path>   Path to a file containing Josh's reply
+  --doc <path>          Explicit design document path
+  --state-dir <path>    Override Gate 1 state directory
+  -h, --help            Show this help message
+`);
+    return 0;
+  }
+
+  const usage =
+    "Usage: deno task design:gate1-adopt <doc.md> --reply <text> (or --reply-file <path>)";
+  const docPath = flags.doc || (flags._.length > 0 ? String(flags._[0]) : "");
+  if (!docPath) {
+    errorLog("Error: Missing required design document path.");
+    errorLog(usage);
+    return 1;
+  }
+
+  let reply: string;
+  if (flags["reply-file"]) {
+    const replyFilePath = path.resolve(expandHome(String(flags["reply-file"])));
+    try {
+      reply = await Deno.readTextFile(replyFilePath);
+    } catch (err) {
+      errorLog(
+        `[design:gate1-adopt] Error: Cannot read reply file at ${replyFilePath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return 1;
+    }
+  } else if (flags.reply !== undefined) {
+    reply = String(flags.reply);
+  } else {
+    errorLog("Error: Missing required --reply or --reply-file argument.");
+    errorLog(usage);
+    return 1;
+  }
+
+  try {
+    const result = await adoptGate1Record(docPath, reply, {
+      stateDir: flags["state-dir"] || options?.stateDir,
+    });
+    log(
+      `[design:gate1-adopt] Adopted ${
+        result.record.premiseRows?.length ?? 0
+      } premise row(s) for ${result.record.docPath}`,
+    );
+    log(`[design:gate1-adopt] Recorded reply: "${result.record.premiseRowsAdoptionReply}"`);
+    log(`[design:gate1-adopt] Record: ${result.recordPath}`);
+    return 0;
+  } catch (err) {
+    errorLog(`[design:gate1-adopt] Error: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
 }
@@ -403,6 +495,10 @@ export async function runCli(
 
   if (firstArg === "gate1-approve" || firstArg === "gate1_approve") {
     return await runGate1ApproveCli(args.slice(1));
+  }
+
+  if (firstArg === "gate1-adopt" || firstArg === "gate1_adopt") {
+    return await runGate1AdoptCli(args.slice(1));
   }
 
   if (firstArg === "gate1-status" || firstArg === "gate1_status") {
