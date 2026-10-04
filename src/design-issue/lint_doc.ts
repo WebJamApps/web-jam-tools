@@ -4,6 +4,7 @@
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
 import { expandHome } from "./gate1.ts";
+import { loadGate1Record, type PremiseRow } from "./gate1_record.ts";
 
 export interface LintViolation {
   rule: string;
@@ -28,10 +29,12 @@ export interface LintDocOptions {
  * Follows this repo's existing `xImpl` dependency-injection convention (see `screenshotImpl` /
  * `openBrowserImpl` in gate1.ts, `readTextFileImpl` in `resolveCanonicalDesignDoc`): a default
  * production implementation, overridable only by callers (i.e. tests) that pass one explicitly.
- * The CLI and Gate 1 never pass `nowImpl`, so the production path always uses the real clock.
+ * Production uses the real clock; Gate 1 samples it once for validation and presentation counts.
  */
 export interface LintDesignDocOptions {
   nowImpl?: () => Date;
+  premiseRows?: PremiseRow[];
+  stateDir?: string;
 }
 
 /** A half-open character range `[start, end)` on a single line that is a mention (inline code
@@ -734,6 +737,7 @@ function validateLoadBearingPremisesProvedDates(
   rows: Array<{ line: string; lineNum: number; cells: string[] }>,
   headerRow: { line: string; lineNum: number; cells: string[] },
   todayIso: string,
+  storedRows: PremiseRow[],
 ): LintViolation[] {
   const violations: LintViolation[] = [];
 
@@ -750,6 +754,7 @@ function validateLoadBearingPremisesProvedDates(
   }
 
   const premiseColIdx = headerRow.cells.findIndex((c) => /^premise$/i.test(stripCellDecoration(c)));
+  const proofColIdx = headerRow.cells.findIndex((c) => /^proof$/i.test(stripCellDecoration(c)));
 
   for (const row of rows) {
     if (row === headerRow || isTableSeparatorRow(row.cells)) continue;
@@ -773,10 +778,19 @@ function validateLoadBearingPremisesProvedDates(
     }
 
     if (stripped < todayIso) {
+      const matchesStoredRow = storedRows.some((stored) =>
+        stored.premise.trim() === (row.cells[premiseColIdx] ?? "").trim() &&
+        stored.proof.trim() === (row.cells[proofColIdx] ?? "").trim() &&
+        stored.proved.trim() === rawCell.trim()
+      );
+      if (matchesStoredRow) continue;
+      const reason = storedRows.length === 0
+        ? "no premise rows are stored in the Gate 1 record"
+        : "the premise, proof or Proved date differs from the stored rows";
       violations.push({
         rule: "load-bearing-premises-stale-proof",
         message:
-          `Load-bearing premises row at line ${row.lineNum} ("${premiseText}") was proved on ${stripped}, earlier than today (${todayIso}) — a premise proved on an earlier day cannot be asserted as proven today.`,
+          `Load-bearing premises row at line ${row.lineNum} ("${premiseText}") was proved on ${stripped}, earlier than today (${todayIso}) — ${reason}; re-run its proof and date it today.`,
         line: row.lineNum,
         lineContent: row.line,
       });
@@ -792,11 +806,12 @@ function validateLoadBearingPremisesProvedDates(
  * rows — see `validateLoadBearingPremisesTableStructure`), finds the "Proof" column by its header
  * name (case-insensitive) and fails any data row whose Proof cell is empty, "N/A", or hedged, and
  * finds the "Proved" column by header name and fails any row whose date is missing, malformed, or
- * earlier than `todayIso` (web-jam-tools#1025).
+ * earlier than `todayIso` without an exact match in the stored premise rows.
  */
 function validateLoadBearingPremisesTable(
   table: LoadBearingPremisesTable,
   todayIso: string,
+  storedRows: PremiseRow[],
 ): LintViolation[] {
   const violations: LintViolation[] = [];
   const { rows, headerRow } = table;
@@ -863,7 +878,7 @@ function validateLoadBearingPremisesTable(
     }
   }
 
-  violations.push(...validateLoadBearingPremisesProvedDates(rows, headerRow, todayIso));
+  violations.push(...validateLoadBearingPremisesProvedDates(rows, headerRow, todayIso, storedRows));
 
   return violations;
 }
@@ -1128,14 +1143,21 @@ function validateBothSurfacesSection(
  * 9. Fails if a '## Revision History' table is present and lacks a 'Version' or 'Date' column, has
  *    no data rows, carries an unparseable version or date, or lists rows newest-first (web-jam-tools#892).
  * 10. Fails if the '## Load-bearing premises' table has no 'Proved' column, or a row's 'Proved'
- *     date is missing, malformed, or earlier than today — matched by header name, never by
- *     position (web-jam-tools#1025).
+ *     date is missing, malformed, or earlier than today without an exact stored-row match —
+ *     matched by header name, never by position.
  */
 export function toLocalIsoDate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/** The earlier local/UTC calendar day preserves the existing evening-work date rule. */
+export function presentingDay(now: Date): string {
+  const utc = now.toISOString().slice(0, 10);
+  const local = toLocalIsoDate(now);
+  return local < utc ? local : utc;
 }
 
 export function lintDesignDoc(
@@ -1147,11 +1169,9 @@ export function lintDesignDoc(
   const lines = content.split(/\r?\n/);
   const nowImpl = options.nowImpl ?? (() => new Date());
   const now = nowImpl();
-  const todayUtc = now.toISOString().slice(0, 10);
-  const todayLocal = toLocalIsoDate(now);
   // Earliest calendar day of today across local and UTC time, so evening local work
   // (where UTC has already rolled over to tomorrow) does not flag today's local date as stale.
-  const todayIso = todayLocal < todayUtc ? todayLocal : todayUtc;
+  const todayIso = presentingDay(now);
 
   let inCodeBlock = false;
   let hasBothSurfacesSection = false;
@@ -1397,7 +1417,9 @@ export function lintDesignDoc(
       message: "Design document lacks required '## Load-bearing premises' section",
     });
   } else {
-    violations.push(...validateLoadBearingPremisesTable(premisesTable, todayIso));
+    violations.push(
+      ...validateLoadBearingPremisesTable(premisesTable, todayIso, options.premiseRows ?? []),
+    );
   }
 
   // 9. Check for a verbatim appendix when the document names a target issue it was invoked on
@@ -1454,16 +1476,20 @@ export async function lintDesignDocFile(
     throw new Error(`Design document at ${absPath} is empty`);
   }
 
-  return lintDesignDoc(content, absPath, options);
+  const record = await loadGate1Record(absPath, { stateDir: options.stateDir });
+  return lintDesignDoc(content, absPath, { ...options, premiseRows: record?.premiseRows ?? [] });
 }
 
 /**
  * CLI runner for deno task design:lint-doc <doc.md>.
  */
-export async function runLintDocCli(args: string[]): Promise<number> {
+export async function runLintDocCli(
+  args: string[],
+  options: Pick<LintDesignDocOptions, "nowImpl" | "stateDir"> = {},
+): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["help", "json"],
-    string: ["doc"],
+    string: ["doc", "state-dir"],
     alias: {
       h: "help",
       j: "json",
@@ -1488,7 +1514,8 @@ Checks a design document against the skill's body rules:
     column has a cell that is empty, "N/A", or hedged, or its table is structurally malformed
     (separator row missing/misplaced, no data rows, a duplicate row, or a ragged row).
   - Fails if the "## Load-bearing premises" table has no "Proved" column, or a row's Proved date
-    is missing, malformed, or earlier than today (web-jam-tools#1025).
+    is missing or malformed; an earlier date passes only when the premise, proof and date
+    exactly match a stored Gate 1 row. An unreadable record refuses the check.
   - Fails if the document names a target issue it was invoked on but carries no verbatim
     blockquote of that issue's directive lines.
 
@@ -1497,6 +1524,7 @@ Arguments:
 
 Options:
   --doc <path>    Explicit design document path
+  --state-dir <path>  Override Gate 1 state directory
   -j, --json      Output result as JSON
   -h, --help      Show this help message
 `);
@@ -1511,7 +1539,10 @@ Options:
   }
 
   try {
-    const result = await lintDesignDocFile(docPath);
+    const result = await lintDesignDocFile(docPath, {
+      ...options,
+      stateDir: flags["state-dir"] || options.stateDir,
+    });
 
     if (flags.json) {
       console.log(JSON.stringify(result, null, 2));

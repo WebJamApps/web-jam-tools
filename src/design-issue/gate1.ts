@@ -4,9 +4,9 @@
 
 import * as path from "@std/path";
 import { renderDesignDoc } from "../../scripts/render_design_doc.ts";
-import { lintDesignDoc } from "./lint_doc.ts";
+import { lintDesignDoc, presentingDay, stripCellDecoration, toLocalIsoDate } from "./lint_doc.ts";
 import { verifyCitations, type VerifyCitationsResult } from "./verify_citations.ts";
-import { openGate1Record } from "./gate1_record.ts";
+import { loadGate1Record, openGate1Record, parsePremisesTable } from "./gate1_record.ts";
 
 export interface Gate1Options {
   docPath: string;
@@ -25,6 +25,7 @@ export interface Gate1Options {
   verifyCitationsImpl?: (content: string, docPath: string) => Promise<VerifyCitationsResult>;
   stateDir?: string;
   openGate1RecordImpl?: typeof openGate1Record;
+  nowImpl?: () => Date;
 }
 
 export interface Gate1Result {
@@ -34,6 +35,7 @@ export interface Gate1Result {
   screenshotSizeBytes: number;
   opened: boolean;
   recordPath?: string;
+  premiseRows: { fresh: number; carried: number; sourceDate?: string; source?: string };
 }
 
 /**
@@ -225,7 +227,12 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
   // cannot be bypassed by invoking Gate 1 directly instead of running the linter first
   // (web-jam-tools#815). There is no flag to skip this — the whole point is that it can't be
   // walked around.
-  const lintResult = lintDesignDoc(markdownContent, absDocPath);
+  const record = await loadGate1Record(absDocPath, { stateDir: options.stateDir });
+  const now = options.nowImpl?.() ?? new Date();
+  const lintResult = lintDesignDoc(markdownContent, absDocPath, {
+    nowImpl: () => now,
+    premiseRows: record?.premiseRows ?? [],
+  });
   if (!lintResult.valid) {
     const violationLines = lintResult.violations
       .map((v) => `  - [${v.rule}]${v.line ? ` (line ${v.line})` : ""} ${v.message}`)
@@ -304,6 +311,13 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     stateDir: options.stateDir,
   });
 
+  const today = presentingDay(now);
+  const rows = parsePremisesTable(markdownContent).rows;
+  const fresh = rows.filter((row) => stripCellDecoration(row.proved) === today).length;
+  const carried = rows.filter((row) => stripCellDecoration(row.proved) < today).length;
+  const storedAt = new Date(record?.premiseRowsStoredAt ?? record?.approvedAt ?? "");
+  const sourceDate = Number.isNaN(storedAt.getTime()) ? undefined : toLocalIsoDate(storedAt);
+
   return {
     docPath: absDocPath,
     htmlPath,
@@ -311,6 +325,7 @@ export async function runGate1(options: Gate1Options): Promise<Gate1Result> {
     screenshotSizeBytes,
     opened,
     recordPath,
+    premiseRows: { fresh, carried, sourceDate, source: record?.premiseRowsSource },
   };
 }
 

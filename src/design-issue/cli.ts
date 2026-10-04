@@ -51,7 +51,7 @@ export async function runGate1Cli(
 ): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["no-open", "help"],
-    string: ["doc", "screenshot-path"],
+    string: ["doc", "screenshot-path", "state-dir"],
     alias: {
       h: "help",
     },
@@ -74,6 +74,7 @@ Options:
   --doc <path>              Explicit design document path
   --screenshot-path <path>  Override output screenshot file path
   --no-open                 Skip launching Google Chrome
+  --state-dir <path>        Override Gate 1 state directory
   -h, --help                Show this help message
 `);
     return 0;
@@ -95,6 +96,8 @@ Options:
       screenshotImpl: options?.screenshotImpl,
       openBrowserImpl: options?.openBrowserImpl,
       display: options?.display,
+      stateDir: flags["state-dir"] || options?.stateDir,
+      nowImpl: options?.nowImpl,
     });
 
     console.log(`[design:gate1] Rendered HTML: ${result.htmlPath}`);
@@ -107,6 +110,13 @@ Options:
     if (result.recordPath) {
       console.log(`[design:gate1] Gate 1 record opened: ${result.recordPath}`);
     }
+    const rows = result.premiseRows;
+    const source = rows.carried
+      ? ` (from ${rows.source ?? "approval/adoption"} ${rows.sourceDate ?? "date unavailable"})`
+      : "";
+    console.log(
+      `[design:gate1] Premise rows: ${rows.fresh} fresh, ${rows.carried} carried${source}`,
+    );
     return 0;
   } catch (err) {
     console.error(`[design:gate1] Error: ${err instanceof Error ? err.message : String(err)}`);

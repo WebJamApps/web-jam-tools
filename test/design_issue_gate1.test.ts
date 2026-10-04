@@ -31,8 +31,13 @@ import {
   type TopicMatchSource,
 } from "../src/design-issue/gate1.ts";
 import { runCandidatesCli } from "../src/design-issue/candidates.ts";
-import { runCli, runMatchDesignCli } from "../src/design-issue/cli.ts";
-import { approveGate1Record, getGate1Status } from "../src/design-issue/gate1_record.ts";
+import { runCli, runGate1Cli, runMatchDesignCli } from "../src/design-issue/cli.ts";
+import {
+  approveGate1Record,
+  getGate1RecordPath,
+  getGate1Status,
+  loadGate1Record,
+} from "../src/design-issue/gate1_record.ts";
 
 // A minimal document that still satisfies design:lint-doc's required sections (web-jam-tools#815)
 // — used by tests below that are exercising gate1's render/screenshot/browser mechanics, not the
@@ -52,6 +57,61 @@ Identical on Claude Code, agy, and Codex.
 |---|---|---|
 | This is a test fixture, not a real design | Read this file | ${TODAY} |
 `;
+
+Deno.test("stored premise case q: Gate 1 prints 2 fresh, 3 carried and the source approval date", async () => {
+  const temp = await Deno.makeTempDir({ prefix: "gate1-carried-counts-" });
+  const docPath = path.join(temp, "fixture.md");
+  const stateDir = path.join(temp, "state");
+  const rows = [
+    { premise: "P3", proof: "proof three", proved: "2026-10-03" },
+    { premise: "P4", proof: "proof four", proved: "2026-10-03" },
+    { premise: "P5", proof: "proof five", proved: "2026-10-03" },
+  ];
+  const logs: string[] = [];
+  const original = console.log;
+  try {
+    await Deno.mkdir(stateDir);
+    const doc =
+      `# Fixture\n\n## Both surfaces\nClaude Code, agy and Codex.\n\n## Load-bearing premises\n| Premise | Proof | Proved |\n|---|---|---|\n| P1 | proof one | 2026-10-10 |\n| P2 | proof two | 2026-10-10 |\n${
+        rows.map((row) => `| ${row.premise} | ${row.proof} | ${row.proved} |`).join("\n")
+      }\n`;
+    await Deno.writeTextFile(docPath, doc);
+    const recordPath = getGate1RecordPath(docPath, stateDir);
+    for (const source of ["approval", "adoption"]) {
+      await Deno.writeTextFile(
+        recordPath,
+        JSON.stringify({
+          docPath,
+          presentedAt: "2026-10-03T12:00:00Z",
+          presentedFingerprint: "fixture",
+          approvedAt: "2026-10-03T12:00:00Z",
+          approvedFingerprint: "fixture",
+          premiseRows: rows,
+          premiseRowsSource: source,
+          premiseRowsStoredAt: "2026-10-03T12:00:00Z",
+        }),
+      );
+      console.log = (...args: unknown[]) => logs.push(args.join(" "));
+      assertEquals(
+        await runGate1Cli([docPath, "--state-dir", stateDir, "--no-open"], {
+          nowImpl: () => new Date("2026-10-10T12:00:00Z"),
+          screenshotImpl: () => Promise.resolve({ sizeBytes: 1234 }),
+        }),
+        0,
+      );
+      assertStringIncludes(
+        logs.join("\n"),
+        `Premise rows: 2 fresh, 3 carried (from ${source} 2026-10-03)`,
+      );
+      const record = await loadGate1Record(docPath, { stateDir });
+      assertEquals(record?.premiseRows, rows);
+      assertEquals(record?.approvedAt, undefined);
+    }
+  } finally {
+    console.log = original;
+    await Deno.remove(temp, { recursive: true });
+  }
+});
 
 Deno.test("expandHome expands leading tilde to home directory", () => {
   const home = Deno.env.get("HOME") || "/home/joshua";
@@ -481,11 +541,11 @@ Deno.test("defaultScreenshotImpl invokes browser with isolated temporary --user-
   }
 });
 
-Deno.test("defaultScreenshotImpl cleans up temporary --user-data-dir when command execution fails", async () => {
+Deno.test("defaultScreenshotImpl cleans up temporary --user-data-dir when all screenshot methods fail", async () => {
   const tempDir = await Deno.makeTempDir({ prefix: "gate1-test-fail-profile-" });
-  const htmlPath = path.join(tempDir, "test.html");
+  const htmlPath = path.join(tempDir, "missing.html");
   const screenshotPath = path.join(tempDir, "screenshot.png");
-  await Deno.writeTextFile(htmlPath, "<h1>Test</h1>");
+  // A missing input also makes the Playwright fallback fail when it is installed.
 
   let capturedUserDataDir = "";
 

@@ -195,9 +195,19 @@ function premiseRowsForAdoption(content: string, todayIso: string): PremiseRow[]
 async function readExistingRecord(recordPath: string): Promise<Gate1Record | null> {
   let text: string;
   try {
+    const info = await Deno.stat(recordPath);
+    if (info.mode !== null && (info.mode & 0o444) === 0) {
+      throw new Deno.errors.PermissionDenied("record has no read permissions");
+    }
     text = await Deno.readTextFile(recordPath);
   } catch (err) {
-    if (err instanceof Deno.errors.NotFound) return null;
+    if (err instanceof Deno.errors.NotFound) {
+      try {
+        await Deno.lstat(recordPath);
+      } catch (statError) {
+        if (statError instanceof Deno.errors.NotFound) return null;
+      }
+    }
     throw new Gate1RecordError(
       `Cannot read Gate 1 record at ${recordPath}: ${
         err instanceof Error ? err.message : String(err)
@@ -216,6 +226,19 @@ async function readExistingRecord(recordPath: string): Promise<Gate1Record | nul
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Gate1RecordError(`Cannot parse Gate 1 record at ${recordPath}: not a JSON object`);
+  }
+  const rows = (parsed as Gate1Record).premiseRows;
+  if (
+    rows !== undefined &&
+    (!Array.isArray(rows) || rows.some((row) =>
+      row === null || typeof row !== "object" ||
+      typeof row.premise !== "string" || typeof row.proof !== "string" ||
+      typeof row.proved !== "string"
+    ))
+  ) {
+    throw new Gate1RecordError(
+      `Cannot parse Gate 1 record at ${recordPath}: malformed premise rows`,
+    );
   }
   return parsed as Gate1Record;
 }
@@ -524,19 +547,7 @@ export async function loadGate1Record(
   const dir = getGate1StateDir(options?.stateDir);
   const recordPath = getGate1RecordPath(absDocPath, dir);
 
-  try {
-    const text = await Deno.readTextFile(recordPath);
-    return JSON.parse(text) as Gate1Record;
-  } catch (err) {
-    if (err instanceof Deno.errors.NotFound) {
-      return null;
-    }
-    throw new Gate1RecordError(
-      `Cannot read Gate 1 record at ${recordPath}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
+  return await readExistingRecord(recordPath);
 }
 
 /**
