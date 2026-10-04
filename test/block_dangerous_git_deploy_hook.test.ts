@@ -375,3 +375,41 @@ Deno.test("an unterminated quote fails CLOSED (blocked)", async () => {
   assertEquals(res.code, 2);
   assertBlocked(res.stderr);
 });
+
+// --- web-jam-tools#1223: git global options before the subcommand ---
+// Real hook script, full PreToolUse Bash payload, exit code per table row.
+import {
+  GLOBAL_OPTION_CASES as GLOBAL_OPTION_CASES_1223,
+  PLAIN_REGRESSION_CASES as PLAIN_REGRESSION_CASES_1223,
+} from "./git_global_options_cases.ts";
+
+async function exitCodeFor1223(command: string): Promise<number> {
+  const payload = JSON.stringify({
+    tool_name: "Bash",
+    hook_event_name: "PreToolUse",
+    cwd: new URL("..", import.meta.url).pathname,
+    tool_input: { command },
+  });
+  const child = new Deno.Command("bash", {
+    args: [new URL("../hooks/block-dangerous-git-deploy.sh", import.meta.url).pathname],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  }).spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(new TextEncoder().encode(payload));
+  await writer.close();
+  return (await child.output()).code;
+}
+
+GLOBAL_OPTION_CASES_1223.forEach((row, n) => {
+  Deno.test(`#1223 row ${n + 1}: ${row[0]}`, async () => {
+    assertEquals(await exitCodeFor1223(row[0]), row[1]);
+  });
+});
+
+PLAIN_REGRESSION_CASES_1223.forEach((row) => {
+  Deno.test(`#1223 plain command unchanged: ${row[0]}`, async () => {
+    assertEquals(await exitCodeFor1223(row[0]), row[1]);
+  });
+});

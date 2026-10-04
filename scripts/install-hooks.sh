@@ -271,40 +271,64 @@ DEFAULT_MODE="acceptEdits"
 DENY_RULES=(
   # git push --delete / -d <branch>  (explicit remote branch deletion)
   'Bash(git push --delete *)'
+  'Bash(git -C * push --delete *)'
   'Bash(git push --delete)'
+  'Bash(git -C * push --delete)'
   'Bash(git push * --delete *)'
+  'Bash(git -C * push * --delete *)'
   'Bash(git push * --delete)'
+  'Bash(git -C * push * --delete)'
   'Bash(git push -d *)'
+  'Bash(git -C * push -d *)'
   'Bash(git push -d)'
+  'Bash(git -C * push -d)'
   'Bash(git push * -d *)'
+  'Bash(git -C * push * -d *)'
   'Bash(git push * -d)'
+  'Bash(git -C * push * -d)'
 
   # git push --force / -f  — plain force stays DENIED, always. It overwrites
   # whatever arrived on the remote since your last fetch, with no check.
   # NOTE: --force-with-lease is deliberately NOT here — it moved to ASK_RULES
   # below. See the comment there for why.
   'Bash(git push --force *)'
+  'Bash(git -C * push --force *)'
   'Bash(git push --force)'
+  'Bash(git -C * push --force)'
   'Bash(git push * --force *)'
+  'Bash(git -C * push * --force *)'
   'Bash(git push * --force)'
+  'Bash(git -C * push * --force)'
   'Bash(git push -f *)'
+  'Bash(git -C * push -f *)'
   'Bash(git push -f)'
+  'Bash(git -C * push -f)'
   'Bash(git push * -f *)'
+  'Bash(git -C * push * -f *)'
   'Bash(git push * -f)'
+  'Bash(git -C * push * -f)'
 
   # git branch -D / --delete --force against a remotes/ ref (local ref
   # deletion of a REMOTE-tracking branch is out of scope of the local
   # cleanup allowance; plain local branches are untouched by this pattern)
   'Bash(git branch -D remotes/*)'
+  'Bash(git -C * branch -D remotes/*)'
   'Bash(git branch * -D remotes/*)'
+  'Bash(git -C * branch * -D remotes/*)'
   'Bash(git branch --delete --force remotes/*)'
+  'Bash(git -C * branch --delete --force remotes/*)'
   'Bash(git branch * --delete --force remotes/*)'
+  'Bash(git -C * branch * --delete --force remotes/*)'
 
   # git push --mirror / --prune (both can delete remote refs wholesale)
   'Bash(git push --mirror*)'
+  'Bash(git -C * push --mirror*)'
   'Bash(git push * --mirror*)'
+  'Bash(git -C * push * --mirror*)'
   'Bash(git push --prune*)'
+  'Bash(git -C * push --prune*)'
   'Bash(git push * --prune*)'
+  'Bash(git -C * push * --prune*)'
 
   # Laptop Dropbox deny list (web-jam-tools#321)
   'Read(//home/joshua/Dropbox/Apps/**)'
@@ -437,7 +461,9 @@ ASK_RULES=(
   # not be published at all — the deny rule blocked the push and no
   # authorization from Josh could lift it, so the rebase was unlandable.
   'Bash(git push --force-with-lease*)'
+  'Bash(git -C * push --force-with-lease*)'
   'Bash(git push * --force-with-lease*)'
+  'Bash(git -C * push * --force-with-lease*)'
 
   # gh pr (11 write verbs)
   'Bash(gh pr create *)'

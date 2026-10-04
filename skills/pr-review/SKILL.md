@@ -38,6 +38,19 @@ or Flash High PR happens only when Josh deems that specific PR critical enough f
 his decision, per PR, not automatic. Nothing in this skill or its auto-detect mode may auto-dispatch
 an Opus review off this matrix.
 
+**Who may never review a PR (Josh, 2026-10-03):**
+
+- **A session never reviews its own work.** A session that wrote any commit on a PR, or pushed a
+  fix to it, never runs this skill on that PR and never offers to. This holds even when the session
+  was the PR's original reviewer and the fix answers its own findings.
+- **Opus never reviews Opus work.** The matrix has no Opus-reviews-Opus row and none is implied: a
+  different Opus session is not an independent reviewer. A PR that carries an Opus-authored commit
+  — the original work, or a fix Opus pushed onto another model's PR — therefore has no model
+  reviewer, because the tier rule above also rules out every lower tier.
+
+In either case the skill posts nothing, tells Josh in chat that the PR has no eligible model
+reviewer and why, and asks him directly how he wants it checked.
+
 ## Trigger & Invocation
 
 - **Named mode**: `/pr-review <Repo>#<pr-num>` (e.g. `/pr-review web-jam-tools#363` or `https://github.com/WebJamApps/web-jam-tools/pull/363`).
@@ -84,6 +97,13 @@ Remove the worktree when finished. Reviewing without running anything is the nor
 worktree is only needed when a pasted test-evidence block has to be reproduced.
 
 ### Step 1: Fetch PR Details and Context
+
+**Reviewer eligibility is checked first.** Right after item 1's fetch, and before the diff is read,
+apply "Who may never review a PR" above. Stop if this session wrote or pushed any commit on the PR.
+Stop if this session is Opus and any commit names a Claude Opus author or co-author (item 1's
+`commits` list carries each commit's `authors`). On a stop, post no review and tell Josh the PR has
+no eligible model reviewer.
+
 1. Fetch PR details, metadata, mergeability, reviews, and commits:
    ```sh
    gh pr view <pr-num> --repo WebJamApps/<Repo> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits

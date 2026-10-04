@@ -82,3 +82,16 @@ Deno.test("plain --force and every remote-deleting shape stay DENIED", async () 
     "remote-ref deletion must never be downgraded to a prompt",
   );
 });
+
+Deno.test("#1223 every git push/branch rule has a `git -C *` twin and no entry was changed", async () => {
+  const { deny, ask } = await ruleBlocks();
+  for (const block of [deny, ask]) {
+    const entries = [...block.matchAll(/'Bash\(([^)]*)\)'/g)].map((m) => m[1]);
+    const plain = entries.filter((e) => e.startsWith("git push ") || e.startsWith("git branch "));
+    assert(plain.length > 0);
+    for (const e of plain) {
+      const twin = e.replace(/^git /, "git -C * ");
+      assert(entries.includes(twin), `missing twin for Bash(${e}): Bash(${twin})`);
+    }
+  }
+});
