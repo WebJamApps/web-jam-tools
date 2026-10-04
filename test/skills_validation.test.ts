@@ -998,6 +998,20 @@ Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching and 
   ) assertStringIncludes(text, fragment);
 });
 
+Deno.test("skills/design-issue/SKILL.md pins asking for the slash command before the token write", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  for (
+    const fragment of [
+      "**Ask for the slash command before the token write, never after a refusal.**",
+      "only when the most recent slash command Josh typed in the session is `/design-issue` or `/file-issue`",
+      "any other slash command he types afterwards (`/pr-review`, `/work-issue`) cancels the authorization",
+      "the run does not attempt the write: it asks him, as the first line of the reply",
+      "to type `/design-issue file the approved <topic> plan`",
+      "never joined to a command that names `create-issue`",
+    ]
+  ) assertStringIncludes(text, fragment);
+});
+
 Deno.test("skills/design-issue/SKILL.md contains target-issue-body rule", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
