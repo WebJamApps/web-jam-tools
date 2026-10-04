@@ -9,6 +9,11 @@
 # Josh last typed on. When an agent exits, its tab drops to a normal shell
 # prompt instead of closing.
 #
+# When `--restart` is given and the session already exists, it prints one line
+# saying the session is being restarted, ends the existing session, and creates a
+# fresh one with all three tabs before attaching. If the session does not exist,
+# `--restart` behaves like a normal first run.
+#
 # Before it creates a new session, it runs scripts/update-all.sh in the foreground
 # (output visible in the terminal) so Claude Code, agy and Codex start on their
 # latest versions. A failed update prints a warning and the agents start anyway. It
@@ -32,12 +37,14 @@
 #   ("The `agents` command").
 #
 # Usage:
-#   agents [-L socket-name] [-S socket-path] [--no-attach]
+#   agents [-L socket-name] [-S socket-path] [--no-attach] [--restart]
 set -euo pipefail
 
 SESSION="agents"
 TMUX_ARGS=()
 DO_ATTACH=1
+DO_RESTART=0
+inside_target_session=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,8 +57,12 @@ while [ $# -gt 0 ]; do
       DO_ATTACH=0
       shift
       ;;
+    --restart)
+      DO_RESTART=1
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [-L socket] [-S socket-path] [--no-attach]"
+      echo "Usage: $(basename "$0") [-L socket] [-S socket-path] [--no-attach] [--restart]"
       exit 0
       ;;
     *)
@@ -137,6 +148,9 @@ maybe_open_laptop_window() {
 # Attach to the session (or switch to it from inside tmux), then exit.
 attach_and_exit() {
   maybe_open_laptop_window || true
+  if [ "$inside_target_session" -eq 1 ] && [ "$DO_ATTACH" = "1" ]; then
+    open_laptop_window || true
+  fi
   if [ "$DO_ATTACH" = "1" ]; then
     if { [ -t 0 ] && [ "${TERM:-dumb}" != "dumb" ]; } || [ "${AGENTS_FORCE_ATTACH:-0}" = "1" ]; then
       if [ -n "${TMUX:-}" ] && [ ${#TMUX_ARGS[@]} -eq 0 ]; then
@@ -149,9 +163,46 @@ attach_and_exit() {
   exit 0
 }
 
-# If session already exists, attach to it. Never create a second session.
-if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
-  attach_and_exit
+# If session already exists, attach to it unless --restart is requested.
+# If --restart is requested, end the existing session and fall through to create a fresh one.
+# If has-session errors for any reason other than "no session", fail closed.
+has_session_err=""
+if has_session_err=$(tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>&1); then
+  if [ "$DO_RESTART" -eq 1 ]; then
+    echo "Restarting '$SESSION' tmux session..."
+    trap '' HUP
+    if [ -n "${TMUX_PANE:-}" ]; then
+      pane_session=$(tmux "${TMUX_ARGS[@]}" display-message -t "$TMUX_PANE" -p '#{session_name}' 2>/dev/null || true)
+      if [ "$pane_session" = "$SESSION" ]; then
+        inside_target_session=1
+      fi
+    elif [ -n "${TMUX:-}" ]; then
+      pane_session=$(tmux "${TMUX_ARGS[@]}" display-message -p '#{session_name}' 2>/dev/null || true)
+      if [ "$pane_session" = "$SESSION" ]; then
+        inside_target_session=1
+      fi
+    fi
+    tmux "${TMUX_ARGS[@]}" set -s exit-empty off 2>/dev/null || true
+    if ! kill_err=$(tmux "${TMUX_ARGS[@]}" kill-session -t "$SESSION" 2>&1); then
+      tmux "${TMUX_ARGS[@]}" set -s -u exit-empty 2>/dev/null || true
+      echo "error: could not end tmux session '$SESSION': $kill_err" >&2
+      exit 1
+    fi
+    if [ "$inside_target_session" -eq 1 ]; then
+      exec </dev/null >/dev/null 2>&1
+    fi
+  else
+    attach_and_exit
+  fi
+else
+  case "$has_session_err" in
+    *"can't find session"*|*"cant find session"*|*"session not found"*|*"no server running on"*|*"error connecting to "*"No such file or directory"*|*"failed to connect to server"*)
+      ;;
+    *)
+      echo "error: tmux has-session failed: $has_session_err" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 # Update the agents right before creating a new session (not when only attaching).
@@ -186,12 +237,14 @@ fi
 # session between the check above and this line; when it did, attach to that
 # session instead of failing with "duplicate session".
 if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$TAB_ENV $CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
+  tmux "${TMUX_ARGS[@]}" set -s -u exit-empty 2>/dev/null || true
   if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
     attach_and_exit
   fi
   echo "error: could not create tmux session '$SESSION': $new_session_err" >&2
   exit 1
 fi
+tmux "${TMUX_ARGS[@]}" set -s -u exit-empty 2>/dev/null || true
 
 # Ensure the first tab is at index 1 even if global tmux base-index is 0.
 if tmux "${TMUX_ARGS[@]}" list-windows -t "$SESSION" -F "#{window_index}" | grep -q "^0$"; then

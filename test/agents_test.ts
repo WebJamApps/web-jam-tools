@@ -419,6 +419,7 @@ Deno.test("agents.sh --help prints usage and exits 0", async () => {
   assertEquals(res.code, 0);
   assert(res.stdout.includes("Usage:"));
   assert(res.stdout.includes("[-L socket]"));
+  assert(res.stdout.includes("[--restart]"));
 });
 
 Deno.test("agents.sh refuses unknown arguments", async () => {
@@ -851,4 +852,338 @@ Deno.test("agents does not check agy Tool Permission when only attaching to exis
       `attach should not run update-all: ${resAttach.stderr}`,
     );
   });
+});
+
+// ---- Session restart (web-jam-tools#1255) ----
+
+Deno.test(
+  "agents.sh --restart against existing session ends old session and creates fresh session with 3 tabs",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const env = {
+        TMUX_TMPDIR: tmpDir,
+        AGENTS_CLAUDE_CMD: "sleep 60",
+        AGENTS_CODEX_CMD: "sleep 60",
+        AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_UPDATE_CMD: "true",
+        AGENTS_LAPTOP_WINDOW_CMD: "true",
+        AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+      };
+
+      // 1. Initial creation
+      const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(res1.code, 0, res1.stderr);
+
+      const list1 = await run(
+        "tmux",
+        [
+          "-L",
+          socketName,
+          "list-windows",
+          "-t",
+          "agents",
+          "-F",
+          "#{window_index}:#{window_name}:#{window_id}",
+        ],
+        { TMUX_TMPDIR: tmpDir },
+      );
+      assertEquals(list1.code, 0);
+      const oldWindows = list1.stdout.trim().split("\n");
+      assertEquals(oldWindows.map((w) => w.split(":").slice(0, 2).join(":")), [
+        "1:claude",
+        "2:codex",
+        "3:agy",
+      ]);
+      const oldIds = oldWindows.map((w) => w.split(":")[2]);
+
+      // 2. Plain run (no --restart) against existing session only attaches without recreating windows
+      const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(res2.code, 0, res2.stderr);
+      assert(!res2.stdout.includes("Restarting"));
+
+      const list2 = await run(
+        "tmux",
+        [
+          "-L",
+          socketName,
+          "list-windows",
+          "-t",
+          "agents",
+          "-F",
+          "#{window_index}:#{window_name}:#{window_id}",
+        ],
+        { TMUX_TMPDIR: tmpDir },
+      );
+      assertEquals(list2.stdout.trim().split("\n"), oldWindows);
+
+      // 3. Run with --restart against existing session
+      const res3 = await run(
+        "bash",
+        [AGENTS_SCRIPT, "-L", socketName, "--no-attach", "--restart"],
+        env,
+      );
+      assertEquals(res3.code, 0, res3.stderr);
+      assert(res3.stdout.includes("Restarting 'agents' tmux session..."));
+
+      const list3 = await run(
+        "tmux",
+        [
+          "-L",
+          socketName,
+          "list-windows",
+          "-t",
+          "agents",
+          "-F",
+          "#{window_index}:#{window_name}:#{window_id}",
+        ],
+        { TMUX_TMPDIR: tmpDir },
+      );
+      assertEquals(list3.code, 0);
+      const newWindows = list3.stdout.trim().split("\n");
+      assertEquals(newWindows.map((w) => w.split(":").slice(0, 2).join(":")), [
+        "1:claude",
+        "2:codex",
+        "3:agy",
+      ]);
+      const newIds = newWindows.map((w) => w.split(":")[2]);
+      for (const id of newIds) {
+        assert(
+          !oldIds.includes(id),
+          `expected new window ID ${id} to not be in old IDs ${oldIds.join(",")}`,
+        );
+      }
+    });
+  },
+);
+
+Deno.test("agents.sh --restart with no session behaves like a first run", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const env = {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+    };
+
+    const res = await run(
+      "bash",
+      [AGENTS_SCRIPT, "-L", socketName, "--no-attach", "--restart"],
+      env,
+    );
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      !res.stdout.includes("Restarting 'agents' tmux session..."),
+      "should not print restart message on first run",
+    );
+
+    const list = await run(
+      "tmux",
+      ["-L", socketName, "list-windows", "-t", "agents", "-F", "#{window_index}:#{window_name}"],
+      { TMUX_TMPDIR: tmpDir },
+    );
+    assertEquals(list.code, 0);
+    assertEquals(list.stdout.trim().split("\n"), ["1:claude", "2:codex", "3:agy"]);
+  });
+});
+
+Deno.test(
+  "agents.sh --restart typed from inside session survives, ends old session, and creates fresh session",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const runnerScript = `${tmpDir}/run-restart.sh`;
+      const insideMarker = `${tmpDir}/inside.marker`;
+      await Deno.writeTextFile(
+        runnerScript,
+        `#!/usr/bin/env bash
+echo inside-started > "${insideMarker}"
+sleep 0.2
+export AGENTS_CLAUDE_CMD="sleep 60"
+export AGENTS_CODEX_CMD="sleep 60"
+export AGENTS_AGY_CMD="sleep 60"
+export AGENTS_UPDATE_CMD="true"
+export AGENTS_LAPTOP_WINDOW_CMD="true"
+export AGENTS_AGY_CONFIG_CMD="printf 'toolPermission\\trequest-review\\n'"
+exec bash "${AGENTS_SCRIPT}" -L "${socketName}" --no-attach --restart
+`,
+      );
+      await Deno.chmod(runnerScript, 0o755);
+
+      // Start initial session with tab 1 executing runnerScript inside the pane
+      const env = {
+        TMUX_TMPDIR: tmpDir,
+        AGENTS_CLAUDE_CMD: runnerScript,
+        AGENTS_CODEX_CMD: "sleep 60",
+        AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_UPDATE_CMD: "true",
+        AGENTS_LAPTOP_WINDOW_CMD: "true",
+        AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+      };
+      const resInit = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(resInit.code, 0, resInit.stderr);
+
+      // Verify that runnerScript started from inside the pane
+      let sawInside = false;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        if (await exists(insideMarker)) {
+          sawInside = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      assert(sawInside, "expected runnerScript to execute inside pane");
+
+      // Poll until the new session exists with new windows and new window IDs
+      let newWindows: string[] = [];
+      for (let attempt = 0; attempt < 50; attempt++) {
+        await new Promise((r) => setTimeout(r, 100));
+        const list = await run(
+          "tmux",
+          [
+            "-L",
+            socketName,
+            "list-windows",
+            "-t",
+            "agents",
+            "-F",
+            "#{window_index}:#{window_name}:#{window_id}",
+          ],
+          { TMUX_TMPDIR: tmpDir },
+        );
+        if (list.code === 0) {
+          const lines = list.stdout.trim().split("\n");
+          if (
+            lines.length === 3 &&
+            lines[0].startsWith("1:claude") &&
+            lines[1].startsWith("2:codex") &&
+            lines[2].startsWith("3:agy")
+          ) {
+            newWindows = lines;
+            break;
+          }
+        }
+      }
+
+      assert(newWindows.length === 3, "expected 3 new windows after restart from inside pane");
+      assertEquals(newWindows.map((w) => w.split(":").slice(0, 2).join(":")), [
+        "1:claude",
+        "2:codex",
+        "3:agy",
+      ]);
+    });
+  },
+);
+
+Deno.test("agents.sh --restart fails closed if ending the old session fails", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    // Create shim tmux in tmpDir/bin that fails on kill-session
+    const binDir = `${tmpDir}/bin`;
+    await Deno.mkdir(binDir, { recursive: true });
+    const shimPath = `${binDir}/tmux`;
+    await Deno.writeTextFile(
+      shimPath,
+      `#!/usr/bin/env bash
+for arg in "$@"; do
+  if [ "$arg" = "kill-session" ]; then
+    echo "simulated kill-session failure: operation not permitted" >&2
+    exit 1
+  fi
+done
+exec /usr/bin/tmux "$@"
+`,
+    );
+    await Deno.chmod(shimPath, 0o755);
+
+    const env = {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+    };
+
+    // 1. Create the session with normal tmux
+    const resInit = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+    assertEquals(resInit.code, 0, resInit.stderr);
+
+    // 2. Run --restart with shim in PATH so kill-session fails
+    const resRestart = await run("bash", [
+      AGENTS_SCRIPT,
+      "-L",
+      socketName,
+      "--no-attach",
+      "--restart",
+    ], {
+      ...env,
+      PATH: `${binDir}:${Deno.env.get("PATH") || ""}`,
+    });
+    assertEquals(resRestart.code, 1);
+    assert(resRestart.stderr.includes("error: could not end tmux session 'agents'"));
+    assert(resRestart.stderr.includes("simulated kill-session failure"));
+  });
+});
+
+Deno.test(
+  "agents.sh fails closed if tmux has-session errors for a reason other than 'no session'",
+  async () => {
+    const badDir = await Deno.makeTempDir({ prefix: "agents-test-baddir-" });
+    await Deno.chmod(badDir, 0o000);
+    try {
+      const res = await run("bash", [
+        AGENTS_SCRIPT,
+        "-S",
+        `${badDir}/sock`,
+        "--no-attach",
+        "--restart",
+      ]);
+      assertEquals(res.code, 1);
+      assert(
+        res.stderr.includes("error: tmux has-session failed:"),
+        `expected fail-closed error, got: ${res.stderr}`,
+      );
+    } finally {
+      await Deno.chmod(badDir, 0o700);
+      await Deno.remove(badDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test("agents.sh --restart combines with -S socket path and --no-attach", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agents-test-sock-restart-" });
+  const socketPath = `${tmpDir}/custom_socket`;
+  try {
+    const env = {
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
+    };
+
+    const res1 = await run("bash", [AGENTS_SCRIPT, "-S", socketPath, "--no-attach"], env);
+    assertEquals(res1.code, 0, res1.stderr);
+
+    const res2 = await run(
+      "bash",
+      [AGENTS_SCRIPT, "-S", socketPath, "--no-attach", "--restart"],
+      env,
+    );
+    assertEquals(res2.code, 0, res2.stderr);
+    assert(res2.stdout.includes("Restarting 'agents' tmux session..."));
+
+    const has = await run("tmux", ["-S", socketPath, "has-session", "-t", "agents"]);
+    assertEquals(has.code, 0);
+  } finally {
+    await run("tmux", ["-S", socketPath, "kill-server"]);
+    try {
+      await Deno.remove(tmpDir, { recursive: true });
+    } catch {
+      // ignore
+    }
+  }
 });
