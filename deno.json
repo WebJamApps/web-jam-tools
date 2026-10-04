@@ -20,6 +20,7 @@
     "unblock-issue": "deno run --allow-read --allow-run --allow-env scripts/unblock-issue.ts",
     "design:gate1": "deno run -A src/design-issue/cli.ts",
     "design:gate1-approve": "deno run -A src/design-issue/cli.ts gate1-approve",
+    "design:gate1-adopt": "deno run -A src/design-issue/cli.ts gate1-adopt",
     "design:gate1-status": "deno run -A src/design-issue/cli.ts gate1-status",
     "design:match-design": "deno run -A src/design-issue/cli.ts match-design",
     "design:cli": "deno run -A src/design-issue/cli.ts",

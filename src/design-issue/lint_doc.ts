@@ -367,7 +367,7 @@ function firstNonExemptMatch(
 /** Heading for the section every design document must carry proving its own premises
  * (web-jam-tools#814, enforced here per web-jam-tools#815). Same detection shape as
  * `bothSurfacesHeadingRegex` below. */
-const loadBearingPremisesHeadingRegex = /^\s*#{1,6}\s+Load-bearing premises\b/i;
+export const loadBearingPremisesHeadingRegex = /^\s*#{1,6}\s+Load-bearing premises\b/i;
 
 /** A line self-identifying a cited issue as the one this design run was invoked on — the one
  * concrete convention observed in practice (design-issue-file-issue-design-2026-08-23.md:
@@ -475,7 +475,7 @@ const hedgedProofRegexes = [
 /** Strips markdown-only decoration (backticks, quotes, bold/italic markers) and surrounding
  * whitespace from a table cell, for the empty/"N/A" checks — these check the cell's literal
  * content, not whether it happens to be wrapped in emphasis. */
-function stripCellDecoration(cell: string): string {
+export function stripCellDecoration(cell: string): string {
   return cell.replace(/[`*_"'“”‘’]/g, "").trim();
 }
 
@@ -527,7 +527,7 @@ function computeBacktickSpanRanges(line: string): Array<{ start: number; end: nu
 /** A single row of a markdown table, split on unescaped `|` that is not inside a backtick code
  * span and not escaped as `\|`, trimmed, with the leading/trailing empty cells produced by a
  * `| a | b |`-style line dropped. */
-function splitTableRow(line: string): string[] {
+export function splitTableRow(line: string): string[] {
   const trimmed = line.trim();
   const codeSpans = computeBacktickSpanRanges(trimmed);
   const isInCodeSpan = (idx: number) => codeSpans.some((r) => idx >= r.start && idx < r.end);
@@ -566,7 +566,7 @@ function splitTableRow(line: string): string[] {
 
 /** True when every cell in a table row is a separator cell (`---`, `:--`, `--:`, `:-:`) — the
  * row GitHub-Flavored Markdown uses to mark a table's second row and that carries no data. */
-function isTableSeparatorRow(cells: string[]): boolean {
+export function isTableSeparatorRow(cells: string[]): boolean {
   return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
 }
 
@@ -666,7 +666,7 @@ function validateLoadBearingPremisesTableStructure(
 
 /** True when `s` is a syntactically valid `YYYY-MM-DD` date that also parses to a real calendar
  * date (rejects e.g. "2026-02-30"). */
-function isValidIsoDate(s: string): boolean {
+export function isValidIsoDate(s: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const [y, m, d] = s.split("-").map((part) => parseInt(part, 10));
   const parsed = new Date(Date.UTC(y, m - 1, d));
@@ -1091,7 +1091,7 @@ function validateBothSurfacesSection(
  *     date is missing, malformed, or earlier than today — matched by header name, never by
  *     position (web-jam-tools#1025).
  */
-function toLocalIsoDate(d: Date): string {
+export function toLocalIsoDate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
