@@ -1,6 +1,6 @@
 ---
 name: work-issue
-description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a model-labeled coding task under Claude Code, Antigravity, or Codex. Use when the user types /work-issue <Repo>#<issue-num> (named mode; $work-issue on Codex), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity or Codex it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
 metadata:
   version: v3
   publisher: josh
@@ -8,17 +8,17 @@ aliases:
   - next
 ---
 
-# /work-issue — run a model-labeled coding task (Claude Code & Antigravity)
+# /work-issue — run a model-labeled coding task (Claude Code, Antigravity & Codex)
 
-This skill is installed across all agent surfaces (Claude Code, Antigravity/agy) and model tiers (Haiku, Flash, Sonnet, Opus). It delegates the deterministic setup (issue fetch + git branching) to a
+This skill is installed across all agent surfaces (Claude Code, Antigravity/agy, Codex) and model tiers (Haiku, Flash, Sonnet, Opus, Luna, Sol, Astra). It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the pre-checks below before "## Steps".
+- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly (invoked as `$work-issue Repo#123` on Codex). Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`) to determine agent delegation or session execution (valid across Claude Code, Antigravity, and Codex), then run the pre-checks below before "## Steps".
 - **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku), then hand off
-  to the same flow below. Under Antigravity (Flash / agy) there is no worklist: stop and ask Josh to name an issue. See "## No-argument mode" first.
+  to the same flow below. Under Antigravity (Flash / agy) and Codex there is no worklist: stop and ask Josh to name an issue. See "## No-argument mode" first.
 
 **Whichever route got you here, three pre-checks run before any branch is created or any code is
 written**, and they run for a named issue and an auto-picked one alike:
@@ -36,16 +36,17 @@ written**, and they run for a named issue and an auto-picked one alike:
 ## Model Label Check & Approval
 
 When `work-issue` begins an issue (`<Repo>#<num>`):
-1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`).
+1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
 2. **Determine Agent Delegation vs Execution**:
    - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
    - Under **Antigravity** (e.g., Flash High interactive session): If the issue is labeled `Flash Med`, automatically delegate execution down to a `Flash Med` subagent.
+   - Under **Codex**: Executes `Luna`, `Sol`, or `Astra` issues directly in the current session.
    - If the active session tier matches the issue's model label, execute the task directly in the current session.
 3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label rather than delegating down, prompt Josh for explicit approval in chat before executing:
    ```bash
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
-4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents, or `--author "Claude Code — Haiku 3.5"` for Haiku subagents).
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents, `--author "Claude Code — Haiku 3.5"` for Haiku subagents, or looked up via session record / `deno task whoami` on Codex).
 
 ## Startability test
 
@@ -108,6 +109,7 @@ Use this when the user types `/work-issue` with no argument, or says "work-issue
 Determine which worklist file to read based on your agent surface:
 - **Claude Code (Haiku session)**: Read `~/Dropbox/web-jam-llms/haiku-issues.md`.
 - **Antigravity (Flash / agy session)**: There is no worklist. Stop and tell Josh: "Name an issue: `/work-issue <Repo>#<issue-num>`." Do not improvise a substitute list.
+- **Codex ($work-issue session)**: There is no Codex worklist. Stop and tell Josh: "There is no Codex worklist file. Name an issue directly: `$work-issue <Repo>#<number>`." Codex has no to-do file per this Epic's design decision; do not improvise a substitute list, and do not attempt to read `haiku-issues.md` or `flash-issues.md`.
 
 This mode is **read-only** against the target worklist file — never edit
 that file. It only resolves a concrete `Repo#num`, then continues at step 1 of
@@ -119,6 +121,7 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
 1. Select the target worklist file based on the active agent surface:
    - When running under **Claude Code** (Haiku), select `~/Dropbox/web-jam-llms/haiku-issues.md`.
    - When running under **Antigravity** (Flash / agy), there is no worklist: stop and tell Josh to name an issue (`/work-issue <Repo>#<issue-num>`).
+   - When running under **Codex**, there is no worklist: stop and answer that there is no Codex worklist file and ask Josh to name an issue directly (`$work-issue <Repo>#<number>`), per this Epic's design decision that Codex has no to-do file. Do not attempt to read `haiku-issues.md` or `flash-issues.md`.
    Read the selected worklist file. If it's missing, empty, or has no numbered items, stop and tell Josh: "<filename> is missing/empty — run the corresponding worklist skill first." Do not improvise a substitute list.
 2. Parse **only** the numbered runnable list at the top of the file — the
    `N. [Repo#num](...) — title (Model)` lines that appear **above** the
@@ -332,11 +335,12 @@ When an issue's deliverables are strictly external documents (such as manual ver
    repos use `npm run test:lint` and `npm run test:unit`).
 
 7. Do **not** switch branches or add dependencies. When lint and tests are green,
-   finish by opening a draft PR. **Your summary and the real test output go IN THE
-   PR, not only in this chat reply** — pass them as flags so the PR description is
-   complete:
+   push the feature branch using `deno task push` on every surface (Claude Code, agy, and Codex alike).
+   Any unattended Codex launch of either skill (a scripted `/work-issue` run, or a scripted `/draft-pr` run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
+   Finish by opening a draft PR. Push and draft-PR commands:
 
-   ```
+   ```sh
+   deno task push
    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
      --author "<Surface> — <Model>" \
      --summary "<what changed and why>" \
@@ -351,6 +355,10 @@ When an issue's deliverables are strictly external documents (such as manual ver
    on merge (`Closes #N`); pass `--part-of` ONLY when the issue must stay open (`Part of #N`
    for a partial PR, or a standing run-log/epic issue). (`--closes` is a deprecated no-op,
    still accepted.) Never run `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub.
+
+## Unattended Codex launches
+
+Any unattended Codex launch of `/work-issue` or `/draft-pr` (a scripted run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
 
 ## PR body formatting (do this every time)
 
