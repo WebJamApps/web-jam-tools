@@ -4,61 +4,94 @@ Index of utilities in `scripts/`. Run from the repo root unless noted.
 
 ## Workspace utilities
 
+### `install-codex.ts`
+
+Installs the Codex configuration described by web-jam-tools#1143 "scripts: Codex installer for
+hooks, rules file, skills and settings". Run after `scripts/install-hooks.sh` has installed the
+shared hook scripts under `~/.claude/hooks/`.
+
+```sh
+deno task install-codex
+deno task install-codex --check
+deno task install-codex --home /tmp/codex-install-check
+deno task install-codex --help
+```
+
+The installer reads the four shared hook arrays from `scripts/install-hooks.sh`, registers them in
+nested TOML tables with `WJT_SURFACE=codex`, copies the rules file as a regular file, links shared
+skills into `~/.codex/skills/` except `handle-gmails`, and sets the top-level `sandbox_mode` to
+`danger-full-access`. When run from a worktree, skill links point into the canonical clone so they
+survive worktree removal.
+
+`config.toml` is edited in place: only the top-level `sandbox_mode` line and the installer's own
+`[[hooks.<Event>]]` tables change. Every other line, comments included, is kept byte for byte, so
+existing settings, unrelated hooks and hook trust values cannot change. The edit is parsed and
+checked against the values read before anything is written. A run with nothing to change leaves the
+file byte-identical. `hooks.json`, `rules/default.rules`, built-in `.system` skills and `~/.agents/`
+are untouched. Hook trust remains a manual Codex prompt.
+
+Invalid TOML, unreadable hook arrays, missing hook scripts, missing rules, or a `config.toml` whose
+installer hook tables cannot be edited in place (for example written as an inline array) refuse
+installation before any writes. The rules file is written before `config.toml`. A conflicting skill
+path is left in place and reported as skipped, while the safety set and other skills are installed;
+the exit code is nonzero. `--check` writes nothing, returns zero when current, and reports each
+difference or refusal with a nonzero exit code. On an empty home it reports missing hook
+prerequisites alongside the installation drift.
+
+Manual steps are in `~/Dropbox/web-jam-llms/Token_Savings/codex-install-manual-steps-2026-09-24.md`.
+
 ### `bootstrap-project.sh`
 
-Scaffolds a new sibling project directory in the WebJamApps workspace with
-basic README and structure.
+Scaffolds a new sibling project directory in the WebJamApps workspace with basic README and
+structure.
 
 ```bash
 ./scripts/bootstrap-project.sh <project-name>
 ```
 
-> Note: the script currently hard-codes a workspace root path. Edit
-> `ROOT_DIR` near the top of the file to match your machine before use.
+> Note: the script currently hard-codes a workspace root path. Edit `ROOT_DIR` near the top of the
+> file to match your machine before use.
 
 ### `check-env.sh`
 
-Quick health check for the local development environment. Reports Node
-version, rclone Google Drive mount status, GitHub CLI auth, and basic Drive
-visibility.
+Quick health check for the local development environment. Reports Node version, rclone Google Drive
+mount status, GitHub CLI auth, and basic Drive visibility.
 
 ```bash
 ./scripts/check-env.sh
 ```
 
-> Note: contains hard-coded paths that assume the maintainer's home
-> directory layout. Adapt before using on a different machine.
+> Note: contains hard-coded paths that assume the maintainer's home directory layout. Adapt before
+> using on a different machine.
 
 ### `new-agent-worktree.sh`
 
-Creates an isolated git worktree for a WebJamApps sibling repo/branch — the
-setup an agent needs to work on that repo without touching the shared main
-clone. Seeds the gitignored `.env` / `.env.test` from the repo's main clone
-into the new worktree when present (a fresh worktree never inherits
-gitignored files, which otherwise breaks local DB-backed test runs there —
-web-jam-tools#257). Prints the new worktree's absolute path as the last
-line of stdout.
+Creates an isolated git worktree for a WebJamApps sibling repo/branch — the setup an agent needs to
+work on that repo without touching the shared main clone. Seeds the gitignored `.env` / `.env.test`
+from the repo's main clone into the new worktree when present (a fresh worktree never inherits
+gitignored files, which otherwise breaks local DB-backed test runs there — web-jam-tools#257).
+Prints the new worktree's absolute path as the last line of stdout.
 
 ```bash
 scripts/new-agent-worktree.sh <Repo> <branch> [base]
 ```
 
-- `Repo` — sibling directory name under the workspace root (e.g.
-  `WebJamSocketCluster`), must already be a git clone
+- `Repo` — sibling directory name under the workspace root (e.g. `WebJamSocketCluster`), must
+  already be a git clone
 - `branch` — branch name to create for the new worktree
 - `base` — base ref to branch from (default: `dev`)
 
-The worktree is created at `<Repo>/.claude/worktrees/<branch>` (`/` in the
-branch name is flattened to `-`). Set `WEBJAMAPPS_ROOT` to override the
-default workspace root (`/home/joshua/WebJamApps`).
+The worktree is created at `<Repo>/.claude/worktrees/<branch>` (`/` in the branch name is flattened
+to `-`). Set `WEBJAMAPPS_ROOT` to override the default workspace root (`/home/joshua/WebJamApps`).
 
-> Depends on `hooks/block-secret-dumps.sh`'s `cp`/`test` exception
-> (web-jam-tools#257) — without it, an agent working inside the new
-> worktree can't re-seed these files by hand if it ever needs to.
+> Depends on `hooks/block-secret-dumps.sh`'s `cp`/`test` exception (web-jam-tools#257) — without it,
+> an agent working inside the new worktree can't re-seed these files by hand if it ever needs to.
 
 ### `circleci-settings.ts`
 
-Manages the CircleCI project settings standard (`autocancel_builds: true`) across all 8 active WebJamApps projects (web-jam-tools#697). Supports drift checking via `--check` and idempotent application.
+Manages the CircleCI project settings standard (`autocancel_builds: true`) across all 8 active
+WebJamApps projects (web-jam-tools#697). Supports drift checking via `--check` and idempotent
+application.
 
 ```bash
 # Check for configuration drift across all 8 projects
@@ -72,7 +105,8 @@ See [docs/circleci-project-settings.md](circleci-project-settings.md) for full d
 
 ### `install-git-secret-hook.sh`
 
-Installs the push-time secret scanner (`gitleaks` pre-push hook) and shared `.gitleaks.toml` configuration into a target WebJamApps repository (web-jam-tools#658).
+Installs the push-time secret scanner (`gitleaks` pre-push hook) and shared `.gitleaks.toml`
+configuration into a target WebJamApps repository (web-jam-tools#658).
 
 - Auto-detects Node repos (`.husky/pre-push`) vs Deno repos (`.git/hooks/pre-push`).
 - Copies or reconciles the shared `.gitleaks.toml` rules and allowlist.
@@ -91,9 +125,9 @@ bash scripts/install-git-secret-hook.sh --check
 
 ### `reaper-update.sh`
 
-Downloads and installs the latest REAPER version to a specified prefix.
-Detects the currently installed version, compares it to the latest available,
-and updates in place if needed. Preserves user configuration in `~/.config/REAPER`.
+Downloads and installs the latest REAPER version to a specified prefix. Detects the currently
+installed version, compares it to the latest available, and updates in place if needed. Preserves
+user configuration in `~/.config/REAPER`.
 
 **Invocation options (in preference order):**
 
@@ -118,64 +152,63 @@ and updates in place if needed. Preserves user configuration in `~/.config/REAPE
    ```
 
 **Environment variables:**
+
 - `REAPER_PREFIX` (default: `/home/joshua/opt`) — the parent directory where REAPER is installed
 
 Example with custom prefix:
+
 ```bash
 REAPER_PREFIX=/opt reaper-update
 ```
 
-> Safety: the script checks that REAPER is not running before updating and
-> fails if it detects a running process. Quit REAPER before updating.
+> Safety: the script checks that REAPER is not running before updating and fails if it detects a
+> running process. Quit REAPER before updating.
 
 ### `statusline.sh`
 
-Model-aware Claude Code status line (web-jam-tools#688). Reads the
-status-line JSON payload Claude Code writes to stdin, extracts
-`.model.display_name`, and prints a color-coded `[Opus]` / `[Sonnet]` /
-`[Haiku]` badge in front of the existing status line — so a terminal running
-the expensive tier is visually distinguishable from a cheaper one at a
-glance. The match is on the family word in `display_name`, case-insensitive,
-so a version bump (`Opus 5` to `Opus 6`) doesn't break it; an unrecognized
-`display_name` prints uncolored rather than erroring, and a missing
-`.model` key or malformed JSON on stdin both still produce a usable status
-line. The original stdin payload is passed through unmodified to the
-downstream status-line command (`npx -y ccusage statusline` by default) —
-the badge is a prefix, never a replacement.
+Model-aware Claude Code status line (web-jam-tools#688). Reads the status-line JSON payload Claude
+Code writes to stdin, extracts `.model.display_name`, and prints a color-coded `[Opus]` / `[Sonnet]`
+/ `[Haiku]` badge in front of the existing status line — so a terminal running the expensive tier is
+visually distinguishable from a cheaper one at a glance. The match is on the family word in
+`display_name`, case-insensitive, so a version bump (`Opus 5` to `Opus 6`) doesn't break it; an
+unrecognized `display_name` prints uncolored rather than erroring, and a missing `.model` key or
+malformed JSON on stdin both still produce a usable status line. The original stdin payload is
+passed through unmodified to the downstream status-line command (`npx -y ccusage statusline` by
+default) — the badge is a prefix, never a replacement.
 
-Installed automatically by `scripts/install-hooks.sh`, which symlinks
-`scripts/statusline.sh` into the same destination the `*.sh` hooks are
-linked into (honoring `--hooks-dir` / `CLAUDE_HOOKS_DIR`), then merges a
-`statusLine` entry pointing at that stable installed path — never
-`$REPO_DIR/scripts/statusline.sh`, which would break if the repo moved or a
-branch lacking the file were checked out — into `~/.claude/settings.json`
-(Claude Code only — agy has no status-line surface). The script is not a
-hook: it stays out of `HOOKS_SRC` and out of every hook-registration loop,
-so it never gains a `PreToolUse`/`PostToolUse`/`SessionStart`/`Stop` entry.
-`hooks/lib/check_hook_install_drift.ts` covers it anyway — a dead or
-unregistered `statusLine` is reported at SessionStart the same way a dead or
-unregistered hook already is. Not meant to be run standalone in normal use,
-but it can be for manual testing by piping a payload to it:
+Installed automatically by `scripts/install-hooks.sh`, which symlinks `scripts/statusline.sh` into
+the same destination the `*.sh` hooks are linked into (honoring `--hooks-dir` / `CLAUDE_HOOKS_DIR`),
+then merges a `statusLine` entry pointing at that stable installed path — never
+`$REPO_DIR/scripts/statusline.sh`, which would break if the repo moved or a branch lacking the file
+were checked out — into `~/.claude/settings.json` (Claude Code only — agy has no status-line
+surface). The script is not a hook: it stays out of `HOOKS_SRC` and out of every hook-registration
+loop, so it never gains a `PreToolUse`/`PostToolUse`/`SessionStart`/`Stop` entry.
+`hooks/lib/check_hook_install_drift.ts` covers it anyway — a dead or unregistered `statusLine` is
+reported at SessionStart the same way a dead or unregistered hook already is. Not meant to be run
+standalone in normal use, but it can be for manual testing by piping a payload to it:
 
 ```bash
 echo '{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | scripts/statusline.sh
 ```
 
 **Environment variables:**
-- `STATUSLINE_DOWNSTREAM_CMD` (default: `npx -y ccusage statusline`) — the
-  downstream command the captured payload is piped to after the badge.
-  Overriding this is a test-only seam (the real default hits the network,
-  which an automated test must not depend on); leave it unset for normal use.
+
+- `STATUSLINE_DOWNSTREAM_CMD` (default: `npx -y ccusage statusline`) — the downstream command the
+  captured payload is piped to after the badge. Overriding this is a test-only seam (the real
+  default hits the network, which an automated test must not depend on); leave it unset for normal
+  use.
 
 ### `update-all.sh`
 
 Master update script that updates the local AI agent CLIs and DAW tooling in sequence:
+
 1. `claude update` (Anthropic Claude Code CLI)
 2. `agy update` (Google Antigravity CLI)
 3. `codex update` (OpenAI Codex CLI)
 4. `reaper-update` (Cockos REAPER digital audio workstation)
 
-See [docs/local-dev-setup.md](local-dev-setup.md) for full developer environment setup and installation steps on Linux.
+See [docs/local-dev-setup.md](local-dev-setup.md) for full developer environment setup and
+installation steps on Linux.
 
 **Invocation options (in preference order):**
 
@@ -200,102 +233,95 @@ See [docs/local-dev-setup.md](local-dev-setup.md) for full developer environment
    ```
 
 **Options & Flags:**
+
 - `--dry-run` (`-n`): Preview the update commands without executing them.
 - `--fail-on-missing` / `--strict` (`-s`): Treat missing tools as failures (exit 1).
 - `--help` (`-h`): Show usage and installation commands.
 
 **Environment variables:**
+
 - `CLAUDE_BIN`: Path or binary name for Claude CLI (default: `claude`).
 - `AGY_BIN`: Path or binary name for Antigravity CLI (default: `agy`).
 - `CODEX_BIN`: Path or binary name for Codex CLI (default: `codex`).
-- `REAPER_UPDATE_BIN`: Path or command for REAPER updater (default: auto-detected from PATH or `$SCRIPT_DIR/reaper-update.sh`).
+- `REAPER_UPDATE_BIN`: Path or command for REAPER updater (default: auto-detected from PATH or
+  `$SCRIPT_DIR/reaper-update.sh`).
 
 ### `install-hooks.sh` — what actually gets symlinked
 
-`scripts/install-hooks.sh` symlinks `hooks/*.sh` only — `hooks/lib/` is
-never installed, so there is no `~/.claude/hooks/lib/` path on disk. A hook
-script reaches its shared `hooks/lib/*.ts` modules by resolving its own
-symlink back to the canonical clone (`HOOK_DIR=$(cd "$(dirname
+`scripts/install-hooks.sh` symlinks `hooks/*.sh` only — `hooks/lib/` is never installed, so there is
+no `~/.claude/hooks/lib/` path on disk. A hook script reaches its shared `hooks/lib/*.ts` modules by
+resolving its own symlink back to the canonical clone
+(`HOOK_DIR=$(cd "$(dirname
 "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)`), then reading
-`$HOOK_DIR/lib/<module>.ts` from there — agy reaches the same modules
-through those same Claude Code symlinks via `hooks/agy-hook-shim.sh`. That
-means a content-only change to an already-installed hook script, skill
-body, or `hooks/lib/*.ts` module is live on both surfaces the moment `dev`
-is pulled; no install step is needed unless the change is structural (a
-new/renamed/deleted skill or hook, or a changed event/matcher
-registration).
+`$HOOK_DIR/lib/<module>.ts` from there — agy reaches the same modules through those same Claude Code
+symlinks via `hooks/agy-hook-shim.sh`. That means a content-only change to an already-installed hook
+script, skill body, or `hooks/lib/*.ts` module is live on both surfaces the moment `dev` is pulled;
+no install step is needed unless the change is structural (a new/renamed/deleted skill or hook, or a
+changed event/matcher registration).
 
 ### `permissions.defaultMode` (managed by `install-hooks.sh`)
 
-`~/.claude/settings.json` has no `permissions.defaultMode` key by default, so
-a Claude Code session starts in whatever permission mode was last selected
-rather than a deliberate one. When that mode was `auto`,
-`hooks/opus-delegation-gate.sh` refused EVERY Edit/Write/NotebookEdit to a
-git-tracked path — main thread and subagent alike. Since web-jam-tools#965 it
-decides a subagent's edit by that subagent's real model and the message Josh
-typed to spawn it (measured cost before that fix: two dispatched Sonnet subagents refused on
-their first edit, ~93k and ~62k tokens burned for zero output, 2026-08-22 —
-web-jam-tools#705).
+`~/.claude/settings.json` has no `permissions.defaultMode` key by default, so a Claude Code session
+starts in whatever permission mode was last selected rather than a deliberate one. When that mode
+was `auto`, `hooks/opus-delegation-gate.sh` refused EVERY Edit/Write/NotebookEdit to a git-tracked
+path — main thread and subagent alike. Since web-jam-tools#965 it decides a subagent's edit by that
+subagent's real model and the message Josh typed to spawn it (measured cost before that fix: two
+dispatched Sonnet subagents refused on their first edit, ~93k and ~62k tokens burned for zero
+output, 2026-08-22 — web-jam-tools#705).
 
-`scripts/install-hooks.sh` idempotently sets `permissions.defaultMode` to
-`acceptEdits` (the `DEFAULT_MODE` value near the top of the script) in the
-target settings.json, following the same pattern the `DENY_RULES`/
-`ASK_RULES` arrays already use for `permissions.deny`/`permissions.ask` — the
-actual merge is a single-scalar write in
-`scripts/merge-hooks-into-settings.ts`, modeled on the `statusLine` merge
-above but nested under `permissions` as a plain string rather than
-top-level as an object. `--check` reports drift when the installed value is
-absent or differs; a second run is a no-op.
+`scripts/install-hooks.sh` idempotently sets `permissions.defaultMode` to `acceptEdits` (the
+`DEFAULT_MODE` value near the top of the script) in the target settings.json, following the same
+pattern the `DENY_RULES`/ `ASK_RULES` arrays already use for `permissions.deny`/`permissions.ask` —
+the actual merge is a single-scalar write in `scripts/merge-hooks-into-settings.ts`, modeled on the
+`statusLine` merge above but nested under `permissions` as a plain string rather than top-level as
+an object. `--check` reports drift when the installed value is absent or differs; a second run is a
+no-op.
 
-**Claude Code ONLY** — never merged into agy's `hooks.json`. agy has no
-permission-mode concept at all: `docs/agy-hooks.md` records "without
-touching Claude Code's permissions at all (non-goal)" for the closest
-analogous surface, and there is no agy-side equivalent to gate. This is a
-deliberate, Josh-approved single-surface exception to the usual rule that
-hook/skill changes ship to both surfaces.
+**Claude Code ONLY** — never merged into agy's `hooks.json`. agy has no permission-mode concept at
+all: `docs/agy-hooks.md` records "without touching Claude Code's permissions at all (non-goal)" for
+the closest analogous surface, and there is no agy-side equivalent to gate. This is a deliberate,
+Josh-approved single-surface exception to the usual rule that hook/skill changes ship to both
+surfaces.
 
 ### `autoMode` (managed by `install-hooks.sh`)
 
-The `autoMode` section of `~/.claude/settings.json` holds what Claude Code's
-auto-mode classifier reads: the `environment` prose, the `allow` list and the
-`soft_deny` list. `scripts/install-hooks.sh` owns the whole object. Its
-content is the `AUTO_MODE_JSON` block in that script.
+The `autoMode` section of `~/.claude/settings.json` holds what Claude Code's auto-mode classifier
+reads: the `environment` prose, the `allow` list and the `soft_deny` list.
+`scripts/install-hooks.sh` owns the whole object. Its content is the `AUTO_MODE_JSON` block in that
+script.
 
-- **It is replaced as a whole.** A run installs the object when it is absent
-  and replaces it when it differs; no other key in `settings.json` is
-  touched. Object key order is ignored; the order of entries in a list
-  counts. This differs from the permissions lists, which are additive.
-- **Change it in `AUTO_MODE_JSON`, not in `settings.json`.** A hand edit to
-  `settings.json` is reported by `--check` and overwritten by the next run.
-  The previous file is kept as the usual `.bak-` backup.
-- **The drift report names what differs.** Both `--check` and a replacing run
-  list each top-level key that differs and, for a list, each entry only one
-  side has, so a hand edit can be carried into `AUTO_MODE_JSON` first.
-- **Paths are filled in at install time.** `__HOME__` in the block becomes
-  `$HOME`, and `__REPOS_DIR__` becomes the directory that holds the
-  `web-jam-tools` checkout the installer runs from (`~/WebJamApps` on Josh's
-  laptop). The installed object is therefore correct on any machine.
-- **Its strings are secret-scanned** with the same credential-literal check
-  as `permissions` and `hooks`; a match refuses the write.
+- **It is replaced as a whole.** A run installs the object when it is absent and replaces it when it
+  differs; no other key in `settings.json` is touched. Object key order is ignored; the order of
+  entries in a list counts. This differs from the permissions lists, which are additive.
+- **Change it in `AUTO_MODE_JSON`, not in `settings.json`.** A hand edit to `settings.json` is
+  reported by `--check` and overwritten by the next run. The previous file is kept as the usual
+  `.bak-` backup.
+- **The drift report names what differs.** Both `--check` and a replacing run list each top-level
+  key that differs and, for a list, each entry only one side has, so a hand edit can be carried into
+  `AUTO_MODE_JSON` first.
+- **Paths are filled in at install time.** `__HOME__` in the block becomes `$HOME`, and
+  `__REPOS_DIR__` becomes the directory that holds the `web-jam-tools` checkout the installer runs
+  from (`~/WebJamApps` on Josh's laptop). The installed object is therefore correct on any machine.
+- **Its strings are secret-scanned** with the same credential-literal check as `permissions` and
+  `hooks`; a match refuses the write.
 
-**Claude Code ONLY**, like `statusLine` and `permissions.defaultMode`: it is
-never merged into agy's `hooks.json`.
+**Claude Code ONLY**, like `statusLine` and `permissions.defaultMode`: it is never merged into agy's
+`hooks.json`.
 
 ## Example scraping / data utilities
 
-These scripts target a specific Wix-hosted site and were built as one-offs
-for the maintainer's use case. They're committed as **examples of Playwright
-scraping patterns against a Wix site backed by MUI DataGrid**, not as
-general-purpose tools.
+These scripts target a specific Wix-hosted site and were built as one-offs for the maintainer's use
+case. They're committed as **examples of Playwright scraping patterns against a Wix site backed by
+MUI DataGrid**, not as general-purpose tools.
 
-| Script | What it does |
-|---|---|
-| `debug-wix.js` | Dumps the rendered DOM structure of the target site for inspection |
-| `find-pagination.js` | Detects pagination controls on the target site |
-| `scrape-gigs-v2.js` | First-pass scraper that walks pages of gig listings |
-| `scrape-gigs-v3.js` | Newer scraper that handles MUI DataGrid virtualization |
-| `scrape-and-sync.js` | Scrapes listings and writes them out as XLSX |
-| `get-unique-venues.js` | Reads a text list of past gigs and emits unique venue names |
+| Script                 | What it does                                                       |
+| ---------------------- | ------------------------------------------------------------------ |
+| `debug-wix.js`         | Dumps the rendered DOM structure of the target site for inspection |
+| `find-pagination.js`   | Detects pagination controls on the target site                     |
+| `scrape-gigs-v2.js`    | First-pass scraper that walks pages of gig listings                |
+| `scrape-gigs-v3.js`    | Newer scraper that handles MUI DataGrid virtualization             |
+| `scrape-and-sync.js`   | Scrapes listings and writes them out as XLSX                       |
+| `get-unique-venues.js` | Reads a text list of past gigs and emits unique venue names        |
 
 ### Prerequisites
 
@@ -304,6 +330,6 @@ npm install   # installs playwright + xlsx
 npx playwright install chromium
 ```
 
-All of these scripts read from / write to local paths that are hard-coded
-near the top of each file (Dropbox, Google Drive mount, etc.). Edit the
-paths before running, or use them as reference implementations only.
+All of these scripts read from / write to local paths that are hard-coded near the top of each file
+(Dropbox, Google Drive mount, etc.). Edit the paths before running, or use them as reference
+implementations only.
