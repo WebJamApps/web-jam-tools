@@ -13,6 +13,8 @@
 # saying the session is being restarted, ends the existing session, and creates a
 # fresh one with all three tabs before attaching. If the session does not exist,
 # `--restart` behaves like a normal first run.
+# Connected terminals wait in a temporary session while the old agent processes
+# are ended, then switch back to the fresh tabs to pick up installed hooks/skills.
 #
 # Before it creates a new session, it runs scripts/update-all.sh in the foreground
 # (output visible in the terminal) so Claude Code, agy and Codex start on their
@@ -45,6 +47,7 @@ TMUX_ARGS=()
 DO_ATTACH=1
 DO_RESTART=0
 inside_target_session=0
+restart_hold=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -145,12 +148,30 @@ maybe_open_laptop_window() {
   return 0
 }
 
+# Return parked clients before removing the temporary session. Also runs on
+# failure: if the old agents session survived, its clients are switched back.
+# The holding session keeps the server alive without changing exit-empty.
+finish_restart() {
+  [ -n "$restart_hold" ] || return 0
+  local clients client
+  if tmux "${TMUX_ARGS[@]}" has-session -t "=$SESSION" 2>/dev/null; then
+    clients=$(tmux "${TMUX_ARGS[@]}" list-clients -t "=$restart_hold" -F '#{client_name}') || return 1
+    while IFS= read -r client; do
+      [ -n "$client" ] || continue
+      tmux "${TMUX_ARGS[@]}" switch-client -c "$client" -t "=$SESSION" || return 1
+    done <<< "$clients"
+  fi
+  tmux "${TMUX_ARGS[@]}" kill-session -t "=$restart_hold" || return 1
+  restart_hold=""
+}
+
 # Attach to the session (or switch to it from inside tmux), then exit.
 attach_and_exit() {
+  finish_restart
   maybe_open_laptop_window || true
-  if [ "$inside_target_session" -eq 1 ] && [ "$DO_ATTACH" = "1" ]; then
-    open_laptop_window || true
-  fi
+  # The invoking client was switched back by finish_restart. Its old pane and
+  # tty are gone, so don't try to create a second attachment from this process.
+  [ "$inside_target_session" -eq 0 ] || exit 0
   if [ "$DO_ATTACH" = "1" ]; then
     if { [ -t 0 ] && [ "${TERM:-dumb}" != "dumb" ]; } || [ "${AGENTS_FORCE_ATTACH:-0}" = "1" ]; then
       if [ -n "${TMUX:-}" ] && [ ${#TMUX_ARGS[@]} -eq 0 ]; then
@@ -182,9 +203,20 @@ if has_session_err=$(tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>&1); the
         inside_target_session=1
       fi
     fi
-    tmux "${TMUX_ARGS[@]}" set -s exit-empty off 2>/dev/null || true
+    restart_hold="agents-restart-$$"
+    if ! hold_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$restart_hold" -n restarting -c "$HOME" "printf 'Restarting agents; please wait...\\n'; exec sleep 86400" 2>&1); then
+      echo "error: could not prepare tmux restart: $hold_err" >&2
+      exit 1
+    fi
+    trap 'finish_restart || true' EXIT
+    if [ "$DO_ATTACH" = "1" ]; then
+      clients=$(tmux "${TMUX_ARGS[@]}" list-clients -t "=$SESSION" -F '#{client_name}')
+      while IFS= read -r client; do
+        [ -n "$client" ] || continue
+        tmux "${TMUX_ARGS[@]}" switch-client -c "$client" -t "=$restart_hold"
+      done <<< "$clients"
+    fi
     if ! kill_err=$(tmux "${TMUX_ARGS[@]}" kill-session -t "$SESSION" 2>&1); then
-      tmux "${TMUX_ARGS[@]}" set -s -u exit-empty 2>/dev/null || true
       echo "error: could not end tmux session '$SESSION': $kill_err" >&2
       exit 1
     fi
@@ -237,14 +269,12 @@ fi
 # session between the check above and this line; when it did, attach to that
 # session instead of failing with "duplicate session".
 if ! new_session_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$SESSION" -n claude -c "$HOME" "$TAB_ENV $CLAUDE_CMD; exec $USER_SHELL" 2>&1); then
-  tmux "${TMUX_ARGS[@]}" set -s -u exit-empty 2>/dev/null || true
   if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
     attach_and_exit
   fi
   echo "error: could not create tmux session '$SESSION': $new_session_err" >&2
   exit 1
 fi
-tmux "${TMUX_ARGS[@]}" set -s -u exit-empty 2>/dev/null || true
 
 # Ensure the first tab is at index 1 even if global tmux base-index is 0.
 if tmux "${TMUX_ARGS[@]}" list-windows -t "$SESSION" -F "#{window_index}" | grep -q "^0$"; then
