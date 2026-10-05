@@ -1,0 +1,33 @@
+{
+  "memoryIndex": {
+    "lowMark": 6500,
+    "overMark": 7500
+  },
+  "globalClaudeMd": {
+    "lowMark": 6500,
+    "overMark": 7500
+  },
+  "mainRules": {
+    "lowMark": 14300,
+    "overMark": 20000
+  },
+  "crossAiRules": {
+    "lowMark": 18900,
+    "overMark": 24000
+  },
+  "jammusicRules": {
+    "lowMark": 9700,
+    "overMark": 14000
+  },
+  "otherRepoRules": {
+    "overMark": 10000
+  },
+  "skillDescription": {
+    "lowMark": 300,
+    "overMark": 300,
+    "maxCharacters": 300
+  },
+  "bundledSkills": {
+    "totalCount": 30
+  }
+}

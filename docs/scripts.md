@@ -53,6 +53,14 @@ prerequisites alongside the installation drift.
 
 Manual steps are in `~/Dropbox/web-jam-llms/Token_Savings/codex-install-manual-steps-2026-09-24.md`.
 
+### `session-load-report.ts`
+
+Emits the session load report at Claude Code startup in tab 1 of `agents` (web-jam-tools#1234). Reads the size of every session-load part from disk across Claude Code, agy, and Codex against the canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
+
+```sh
+deno run --allow-read --allow-env scripts/session-load-report.ts
+```
+
 ### `bootstrap-project.sh`
 
 Scaffolds a new sibling project directory in the WebJamApps workspace with basic README and
