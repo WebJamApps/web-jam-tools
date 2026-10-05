@@ -10,19 +10,32 @@ function between(content: string, from: string, to: string): string {
   return content.slice(start, end);
 }
 
-Deno.test("skills/pr-review/SKILL.md says a session never reviews its own work and Opus never reviews Opus", async () => {
+Deno.test("review eligibility permits model escalation in the same session and preserves Opus restriction", async () => {
   const pairing = between(
     await Deno.readTextFile(SKILL_MD_PATH),
     "## Purpose & Model Pairing",
     "## Trigger & Invocation",
   );
 
-  assertStringIncludes(pairing, "**Who may never review a PR (Josh, 2026-10-03):**");
-  assertStringIncludes(pairing, "**A session never reviews its own work.**");
-  assertStringIncludes(pairing, "never runs this skill on that PR and never offers to");
+  assertStringIncludes(
+    pairing,
+    "**A session must not review its own work using the same or a lower model.**",
+  );
+  assertStringIncludes(
+    pairing,
+    "**Astra may review Sol-authored work, including a Sol fix in the same session.**",
+  );
+  assertStringIncludes(pairing, "Check all authors on the PR, not just its original footer.");
+  assertStringIncludes(
+    pairing,
+    "**Use the active model's identity, not the earlier author's identity.**",
+  );
+  assertStringIncludes(pairing, "never infer the active model from conversation history");
+  assertStringIncludes(pairing, "When the active model is eligible, perform the review directly.");
+  assertStringIncludes(pairing, "propose or launch delegation unless Josh requests it");
   assertStringIncludes(pairing, "**Opus never reviews Opus work.**");
   assertStringIncludes(pairing, "a\n  different Opus session is not an independent reviewer");
-  assertStringIncludes(pairing, "asks him directly how he wants it checked");
+  assert(!pairing.includes("**A session never reviews its own work.**"));
 });
 
 Deno.test("skills/pr-review/SKILL.md Step 1 checks reviewer eligibility before the diff is read", async () => {
@@ -30,8 +43,10 @@ Deno.test("skills/pr-review/SKILL.md Step 1 checks reviewer eligibility before t
 
   assertStringIncludes(step1, "**Reviewer eligibility is checked first.**");
   assertStringIncludes(step1, "before the diff is read");
-  assertStringIncludes(step1, "Stop if this session wrote or pushed any commit on the PR.");
+  assertStringIncludes(step1, "Continue when Astra reviews a Sol fix, even in the same session.");
+  assertStringIncludes(step1, "model restriction; session continuity alone never blocks review.");
   assertStringIncludes(step1, "names a Claude Opus author or co-author");
+  assert(!step1.includes("Stop if this session wrote or pushed any commit on the PR."));
   assert(
     step1.indexOf("**Reviewer eligibility is checked first.**") <
       step1.indexOf("1. Fetch PR details"),

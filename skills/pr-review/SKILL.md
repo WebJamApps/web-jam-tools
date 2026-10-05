@@ -14,7 +14,7 @@ This skill provides a systematic pipeline for automated cross-model pull request
 
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
 
-Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. The session must also pass the independent eligibility checks under "Who may never review a PR" below.
+Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. Also apply the model-based eligibility rules below, including the explicit Sol-to-Astra escalation within a session.
 
 **Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
@@ -62,18 +62,29 @@ or Flash High PR happens only when Josh deems that specific PR critical enough f
 his decision, per PR, not automatic. Nothing in this skill or its auto-detect mode may auto-dispatch
 an Opus review off this matrix.
 
-**Who may never review a PR (Josh, 2026-10-03):**
+**Reviewer eligibility follows the model, not session continuity (Josh, 2026-10-05):**
 
-- **A session never reviews its own work.** A session that wrote any commit on a PR, or pushed a
-  fix to it, never runs this skill on that PR and never offers to. This holds even when the session
-  was the PR's original reviewer and the fix answers its own findings.
+- **A session must not review its own work using the same or a lower model.** Inspect the model
+  that authored each commit, including fixes, and compare it with the model currently reviewing.
+  A switch to a higher model permits review in the same session; writing or pushing a commit
+  earlier in the conversation is not by itself a reason to refuse.
+- **Astra may review Sol-authored work, including a Sol fix in the same session.** This is Josh's
+  explicit permitted model escalation for review, even though Sol and Astra share a scheduling
+  rung in the general tier table. Sol must not review its own Sol fix, and switching to a lower
+  model does not make that work eligible. Check all authors on the PR, not just its original footer.
+- **Use the active model's identity, not the earlier author's identity.** A Sol attribution on
+  a prior commit does not mean the current reviewer is Sol. Use current session model information
+  and Josh's explicit model correction; never infer the active model from conversation history.
+  When the active model is eligible, perform the review directly. Do not require a fresh session,
+  ask for redundant permission, or propose or launch delegation unless Josh requests it.
 - **Opus never reviews Opus work.** The matrix has no Opus-reviews-Opus row and none is implied: a
   different Opus session is not an independent reviewer. A PR that carries an Opus-authored commit
   — the original work, or a fix Opus pushed onto another model's PR — therefore has no model
   reviewer, because the tier rule above also rules out every lower tier.
 
-In either case the skill posts nothing, tells Josh in chat that the PR has no eligible model
-reviewer and why, and asks him directly how he wants it checked.
+If the active model is ineligible, post nothing, identify that model and the authorship that
+blocks it, and ask Josh how he wants it checked unless he has already supplied that direction.
+Do not claim the PR has no eligible model reviewer merely because the active model is ineligible.
 
 ## Trigger & Invocation
 
@@ -123,10 +134,12 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
 ### Step 1: Fetch PR Details and Context
 
 **Reviewer eligibility is checked first.** Right after item 1's fetch, and before the diff is read,
-apply "Who may never review a PR" above. Stop if this session wrote or pushed any commit on the PR.
-Stop if this session is Opus and any commit names a Claude Opus author or co-author (item 1's
-`commits` list carries each commit's `authors`). On a stop, post no review and tell Josh the PR has
-no eligible model reviewer.
+apply the model-based eligibility rules above. Identify the active reviewer model and each commit's
+authoring model (item 1's `commits` list carries each commit's `authors`; also inspect attribution
+in the PR and known fix history). Stop if the active model would review its own work using the same
+or a lower model. Continue when Astra reviews a Sol fix, even in the same session. Stop if any
+commit names a Claude Opus author or co-author. On a stop, post no review and explain the actual
+model restriction; session continuity alone never blocks review.
 
 1. Fetch PR details, metadata, mergeability, reviews, and commits:
    ```sh
