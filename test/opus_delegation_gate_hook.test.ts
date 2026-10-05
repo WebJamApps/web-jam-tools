@@ -1144,3 +1144,55 @@ Deno.test("workflow switch: malformed JSON state file proceeds as absent and ref
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("workflow switch: unexpired switch naming 'opus-delegation-gate' allows unparseable apply_patch and logs release", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "opus-delegation-gate", expires_at: future }),
+    );
+
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        applyPatchPayload("malformed patch without header lines\n", transcript_path),
+        { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+      );
+      assertAllowed(res);
+
+      const log = await Deno.readTextFile(logPath);
+      assert(log.includes("released guard: opus-delegation-gate"));
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("workflow switch: expired switch naming 'opus-delegation-gate' still refuses unparseable apply_patch", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "opus-delegation-gate", expires_at: past }),
+    );
+
+    await withTranscript(UNAUTHORIZED_OPUS, async (transcript_path) => {
+      const res = await runHook(
+        applyPatchPayload("malformed patch without header lines\n", transcript_path),
+        { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+      );
+      assertEquals(res.code, 0);
+      assertDenied(res.stdout, [
+        "refused apply_patch command because no file path could be parsed",
+      ]);
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
