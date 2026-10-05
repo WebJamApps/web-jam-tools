@@ -1,6 +1,6 @@
 ---
 name: venue-mining
-description: Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".
+description: Mine net-new live-music venues for the gig-outreach DB by sweeping local events publications, artist histories, or venue sites, creating verified records. Use when discovering new live-music venues, running metro sweeps, or enriching venue contact details.
 ---
 
 # venue-mining
@@ -292,3 +292,7 @@ Locate the associated outreach record for the venue (or target booking cycle) an
 
 Every field except `phone` is expected; `phone` may be null if not found. The `address`
 field is mandatory.
+
+## Description Detail & Triggers
+
+Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".

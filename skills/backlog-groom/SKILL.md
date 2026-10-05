@@ -1,6 +1,6 @@
 ---
 name: backlog-groom
-description: Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, milestone coverage drift, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.
+description: Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues, milestone coverage drift, and stale issues. Use when auditing repository backlogs for drift, stale issues, or spec quality across WebJamApps.
 ---
 
 # backlog-groom — cross-repo backlog health audit
@@ -107,3 +107,7 @@ If no drift is found across all repos, report that the backlog is 100% clean.
 - Accept selective approvals (e.g., "approve 1, 2", "all except 3", "yes to all").
 - Execute ONLY approved actions on GitHub via `gh issue edit --milestone "<name>"`, `gh issue edit`, `gh label`, etc.
 - Never touch unapproved items.
+
+## Description Detail & Triggers
+
+Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, milestone coverage drift, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.

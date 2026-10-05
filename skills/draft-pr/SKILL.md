@@ -1,6 +1,6 @@
 ---
 name: draft-pr
-description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
+description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge. Use to finish any coding task in a WebJamApps repo across Claude Code, agy, or Codex after tests pass, instead of calling `gh pr create` directly.
 metadata:
   version: v1
   publisher: josh
@@ -226,3 +226,7 @@ the same next version — re-read `origin/dev` and take the next free one when C
 gate complains.
 
 **How to apply:** Bump once when the PR's first commit lands. On later pushes to the same branch/PR, leave the version unchanged (the hook reminder is satisfied by the already-bumped version). Only bump again for a genuinely separate PR. If a PR has already over-bumped, reset it to a single bump (correcting an unmerged version is fine — not a published downgrade). Relates to the never-commit-to-dev and git-feature-branch-and-semver rules.
+
+## Description Detail & Triggers
+
+Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.

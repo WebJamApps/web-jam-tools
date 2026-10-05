@@ -1,6 +1,6 @@
 ---
 name: memory-cleanup
-description: Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.
+description: Cross-agent memory hygiene audit that scans memory surfaces for staleness, dead links, and closed issue drift, reporting findings and waiting for approval. Use when auditing memory surfaces, cleaning up agent memory, or when a session-start memory cleanup reminder appears.
 ---
 
 # memory-cleanup
@@ -237,3 +237,9 @@ Only after approval, and only for approved rows:
 - `~/.claude/CLAUDE.md` + `/home/joshua/WebJamApps/web-jam-tools/docs/cross-ai-rules.md` — the two standing rules (completion-reflection; save-redirection during dispatch) this sweep backstops.
 - `/drive-cleanup` — owns all Google Drive execution (surface #8 defers to it).
 - `scripts/backup-claude-memory.sh` — what protects these memory surfaces.
+
+## Description Detail & Triggers
+
+```
+Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.
+```

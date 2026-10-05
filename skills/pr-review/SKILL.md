@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash High/Flash Medium/Haiku; Flash High reviews Flash Medium/Haiku; Opus reviews Sonnet/Flash High on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
+description: Cross-model PR review pipeline auditing diffs against acceptance criteria, scope, semver bump, test evidence, and guardrails, posting feedback via post-pr-review. Use when reviewing a pull request or checking open PRs across WebJamApps repositories.
 metadata:
   version: v2
   publisher: josh
@@ -599,3 +599,7 @@ This binds the reviewing model AND the session relaying the review to Josh:
 - Size is not a reason to defer. "One line" and "no behavioural effect" are arguments for fixing it now, because it is cheap, not for postponing it.
 
 The reviewing model reports; it does not apply the fix itself. It names the defect, says plainly that it blocks merge, and the fix goes back to the PR's own lane on the PR's own branch.
+
+## Description Detail & Triggers
+
+Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash High/Flash Medium/Haiku; Flash High reviews Flash Medium/Haiku; Opus reviews Sonnet/Flash High on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).

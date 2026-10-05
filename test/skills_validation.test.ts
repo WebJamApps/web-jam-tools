@@ -58,6 +58,17 @@ Deno.test("skills/ directory has at least one skill", () => {
   assert(skillDirs.length > 0, "expected at least one skills/*/ directory");
 });
 
+/**
+ * Asserts that a skill description is 300 characters or less.
+ * web-jam-tools#1239: Caps each of Josh's own skill descriptions at 300 characters.
+ */
+export function assertSkillDescriptionLength(description: string, skillName = "fixture"): void {
+  assert(
+    description.length <= 300,
+    `skills/${skillName}/SKILL.md: frontmatter "description" must be 300 characters or less (got ${description.length} chars)`,
+  );
+}
+
 for (const dirName of skillDirs) {
   Deno.test(`skills/${dirName}/SKILL.md has valid frontmatter`, async () => {
     const skillMdPath = `${SKILLS_DIR}${dirName}/SKILL.md`;
@@ -82,6 +93,7 @@ for (const dirName of skillDirs) {
       typeof frontmatter.description === "string" && frontmatter.description.trim().length > 0,
       `skills/${dirName}/SKILL.md: frontmatter "description" must be a non-empty string`,
     );
+    assertSkillDescriptionLength(frontmatter.description, dirName);
     assertEquals(
       frontmatter.name,
       dirName,
@@ -89,6 +101,68 @@ for (const dirName of skillDirs) {
     );
   });
 }
+
+Deno.test("skill description length validator passes at 300 characters and fails at 301 (web-jam-tools#1239)", () => {
+  assertSkillDescriptionLength("a".repeat(300), "fixture-300");
+  assertThrows(
+    () => assertSkillDescriptionLength("a".repeat(301), "fixture-301"),
+    Error,
+    "must be 300 characters or less (got 301 chars)",
+  );
+});
+
+Deno.test("every text span removed from a shortened skill description appears word for word in the skill body (web-jam-tools#1239)", async () => {
+  const MOVED_DESCRIPTION_SPANS: Record<string, string[]> = {
+    "backlog-groom": [
+      "Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, milestone coverage drift, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.",
+    ],
+    "book-gig": [
+      'filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, record Gate 1 venue-set approval, hold Gate 2 draft copy review loop and record fingerprints (--record-gate2), dispatch approved batches (--send --confirm-drafts), and track venue replies (--replies). Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".',
+    ],
+    "delegate": [
+      'Does NOT decide which tier a task belongs to (that routing table lives in docs/ai-team-playbook.md, migrating from global CLAUDE.md per web-jam-tools#115) — this skill only fires once a tier is chosen, so the mechanics of the handoff are never skipped. Triggered when a Fable/Opus session is about to do mechanical or contained-coding work itself, or Josh/the session says "delegate" or "hand off".',
+    ],
+    "draft-pr": [
+      '(Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you\'ve completed a coding task on a feature branch.',
+    ],
+    "drive-cleanup": [
+      "Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.",
+    ],
+    "file-issue": [
+      'File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when a message opens with a filing verb (file, create, open, draft, make, add, log, raise, write), optionally behind a leading affirmation (yes/yeah/yep/ok/okay/sure, optional comma), optionally behind please/pls or can/could/would/will you (please), and optionally go ahead and, followed by up to three short filler words (a, an, the, new, another, quick, separate, follow-up) and then issue, ticket, bug, or bug report (singular or plural) — for example "file an issue", "please create a new issue", "can you open a ticket", "yes file the new issue", or "file the issues" — or when a task needs a tracking issue instead of just being done inline.',
+    ],
+    "fix-labels": [
+      "Recurring GitHub issue-label AND topic-milestone drift-detector across the active WebJamApps repos. Computes label drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, and milestone-name drift (missing / misspelled / non-canonical) the same way (`deno task fix-labels:milestone-diff`). Waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports \"no changes\"; re-run anytime to catch drift that accumulates over time.",
+    ],
+    "handle-gmails": [
+      'Runs on TWO surfaces — laptop Haiku (Claude Code, local mcp__gmail__ tools + local files; MUST be on the Haiku model — the skill refuses to run on a pricier model) and phone Sonnet (Claude app, mcp__claude_ai_Gmail__ tools, no filesystem). Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Per-sender auto-archive rules in rules.yaml (laptop only). Daily-handled log in log/<YYYY-MM-DD>.md (laptop only, auto-pruned after 7 days). Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar. Also invoke if a session-start hook reminder appears noting today hasn\'t been handled.',
+    ],
+    "memory-cleanup": [
+      "Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says \"clean up memory\", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.",
+    ],
+    "pr-review": [
+      "where reviewer tier is never below author tier (Sonnet reviews Flash High/Flash Medium/Haiku; Flash High reviews Flash Medium/Haiku; Opus reviews Sonnet/Flash High on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).",
+    ],
+    "venue-mining": [
+      'Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".',
+    ],
+    "work-issue": [
+      'Start a model-labeled coding task under Claude Code, Antigravity, or Codex. Use when the user types /work-issue <Repo>#<issue-num> (named mode; $work-issue on Codex), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity or Codex it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.',
+    ],
+  };
+
+  assertEquals(Object.keys(MOVED_DESCRIPTION_SPANS).length, 12);
+  for (const [skillName, spans] of Object.entries(MOVED_DESCRIPTION_SPANS)) {
+    const text = await Deno.readTextFile(`${SKILLS_DIR}${skillName}/SKILL.md`);
+    for (const span of spans) {
+      assertStringIncludes(
+        text,
+        span,
+        `skills/${skillName}/SKILL.md must contain moved description text word-for-word`,
+      );
+    }
+  }
+});
 
 Deno.test("skills/venue-mining/sources.yaml parses with the expected top-level shape", async () => {
   const sourcesPath = `${SKILLS_DIR}venue-mining/sources.yaml`;

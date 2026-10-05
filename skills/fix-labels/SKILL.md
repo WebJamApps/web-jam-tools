@@ -1,6 +1,6 @@
 ---
 name: fix-labels
-description: Recurring GitHub issue-label AND topic-milestone drift-detector across the active WebJamApps repos. Computes label drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, and milestone-name drift (missing / misspelled / non-canonical) the same way (`deno task fix-labels:milestone-diff`). Waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports "no changes"; re-run anytime to catch drift that accumulates over time.
+description: Audit and fix GitHub issue-label and milestone drift across WebJamApps repos by diffing against labels.yaml, waiting for approval before applying changes. Use when auditing or repairing label drift, missing labels, or milestone naming across repositories.
 ---
 
 # fix-labels — canonical GitHub label + topic-milestone drift-detector
@@ -299,3 +299,7 @@ milestone already exists must be surfaced, not swallowed.
   deliberate step — web-jam-tools#299 "Delete replaced labels org-wide, after migration" — not
   something this skill's normal per-label approve/apply flow should be used to bulk-drive.
 - Never edits code, comments on issues, or touches anything besides `gh label`/milestone state.
+
+## Description Detail & Triggers
+
+Recurring GitHub issue-label AND topic-milestone drift-detector across the active WebJamApps repos. Computes label drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, and milestone-name drift (missing / misspelled / non-canonical) the same way (`deno task fix-labels:milestone-diff`). Waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports "no changes"; re-run anytime to catch drift that accumulates over time.

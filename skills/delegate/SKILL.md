@@ -1,6 +1,6 @@
 ---
 name: delegate
-description: Local dispatch mechanics for handing work to a cheaper tier — the exact commands to hand a frontend/UI task to Flash via agy/Antigravity, and self-contained subagent prompt templates for Haiku/Sonnet/Opus. Does NOT decide which tier a task belongs to (that routing table lives in docs/ai-team-playbook.md, migrating from global CLAUDE.md per web-jam-tools#115) — this skill only fires once a tier is chosen, so the mechanics of the handoff are never skipped. Triggered when a Fable/Opus session is about to do mechanical or contained-coding work itself, or Josh/the session says "delegate" or "hand off".
+description: Local dispatch mechanics for handing work to a cheaper tier — commands to hand frontend/UI tasks to Flash via agy, and subagent prompt templates for Haiku/Sonnet/Opus. Use when handing work to a cheaper tier or when a session delegates mechanical coding to a subagent.
 ---
 
 # delegate — dispatch mechanics (not routing)
@@ -452,3 +452,7 @@ Report back:
 - Don't invent a version-bump command — WebJamApps repos bump `package.json`
   "version" (or `deno.json` for web-jam-tools) by hand, once per PR (see the
   `one-semver-bump-per-pr` memory).
+
+## Description Detail & Triggers
+
+Local dispatch mechanics for handing work to a cheaper tier — the exact commands to hand a frontend/UI task to Flash via agy/Antigravity, and self-contained subagent prompt templates for Haiku/Sonnet/Opus. Does NOT decide which tier a task belongs to (that routing table lives in docs/ai-team-playbook.md, migrating from global CLAUDE.md per web-jam-tools#115) — this skill only fires once a tier is chosen, so the mechanics of the handoff are never skipped. Triggered when a Fable/Opus session is about to do mechanical or contained-coding work itself, or Josh/the session says "delegate" or "hand off".
