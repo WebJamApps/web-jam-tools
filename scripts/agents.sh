@@ -9,6 +9,13 @@
 # Josh last typed on. When an agent exits, its tab drops to a normal shell
 # prompt instead of closing.
 #
+# When `--restart` is given and the session already exists, it prints one line
+# saying the session is being restarted, ends the existing session, and creates a
+# fresh one with all three tabs before attaching. If the session does not exist,
+# `--restart` behaves like a normal first run.
+# Connected terminals wait in a temporary session while the old agent processes
+# are ended, then switch back to the fresh tabs to pick up installed hooks/skills.
+#
 # Before it creates a new session, it runs scripts/update-all.sh in the foreground
 # (output visible in the terminal) so Claude Code, agy and Codex start on their
 # latest versions. A failed update prints a warning and the agents start anyway. It
@@ -32,12 +39,15 @@
 #   ("The `agents` command").
 #
 # Usage:
-#   agents [-L socket-name] [-S socket-path] [--no-attach]
+#   agents [-L socket-name] [-S socket-path] [--no-attach] [--restart]
 set -euo pipefail
 
 SESSION="agents"
 TMUX_ARGS=()
 DO_ATTACH=1
+DO_RESTART=0
+inside_target_session=0
+restart_hold=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,8 +60,12 @@ while [ $# -gt 0 ]; do
       DO_ATTACH=0
       shift
       ;;
+    --restart)
+      DO_RESTART=1
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [-L socket] [-S socket-path] [--no-attach]"
+      echo "Usage: $(basename "$0") [-L socket] [-S socket-path] [--no-attach] [--restart]"
       exit 0
       ;;
     *)
@@ -134,9 +148,30 @@ maybe_open_laptop_window() {
   return 0
 }
 
+# Return parked clients before removing the temporary session. Also runs on
+# failure: if the old agents session survived, its clients are switched back.
+# The holding session keeps the server alive without changing exit-empty.
+finish_restart() {
+  [ -n "$restart_hold" ] || return 0
+  local clients client
+  if tmux "${TMUX_ARGS[@]}" has-session -t "=$SESSION" 2>/dev/null; then
+    clients=$(tmux "${TMUX_ARGS[@]}" list-clients -t "=$restart_hold" -F '#{client_name}') || return 1
+    while IFS= read -r client; do
+      [ -n "$client" ] || continue
+      tmux "${TMUX_ARGS[@]}" switch-client -c "$client" -t "=$SESSION" || return 1
+    done <<< "$clients"
+  fi
+  tmux "${TMUX_ARGS[@]}" kill-session -t "=$restart_hold" || return 1
+  restart_hold=""
+}
+
 # Attach to the session (or switch to it from inside tmux), then exit.
 attach_and_exit() {
+  finish_restart
   maybe_open_laptop_window || true
+  # The invoking client was switched back by finish_restart. Its old pane and
+  # tty are gone, so don't try to create a second attachment from this process.
+  [ "$inside_target_session" -eq 0 ] || exit 0
   if [ "$DO_ATTACH" = "1" ]; then
     if { [ -t 0 ] && [ "${TERM:-dumb}" != "dumb" ]; } || [ "${AGENTS_FORCE_ATTACH:-0}" = "1" ]; then
       if [ -n "${TMUX:-}" ] && [ ${#TMUX_ARGS[@]} -eq 0 ]; then
@@ -149,9 +184,57 @@ attach_and_exit() {
   exit 0
 }
 
-# If session already exists, attach to it. Never create a second session.
-if tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>/dev/null; then
-  attach_and_exit
+# If session already exists, attach to it unless --restart is requested.
+# If --restart is requested, end the existing session and fall through to create a fresh one.
+# If has-session errors for any reason other than "no session", fail closed.
+has_session_err=""
+if has_session_err=$(tmux "${TMUX_ARGS[@]}" has-session -t "$SESSION" 2>&1); then
+  if [ "$DO_RESTART" -eq 1 ]; then
+    echo "Restarting '$SESSION' tmux session..."
+    trap '' HUP
+    if [ -n "${TMUX_PANE:-}" ]; then
+      pane_session=$(tmux "${TMUX_ARGS[@]}" display-message -t "$TMUX_PANE" -p '#{session_name}' 2>/dev/null || true)
+      if [ "$pane_session" = "$SESSION" ]; then
+        inside_target_session=1
+      fi
+    elif [ -n "${TMUX:-}" ]; then
+      pane_session=$(tmux "${TMUX_ARGS[@]}" display-message -p '#{session_name}' 2>/dev/null || true)
+      if [ "$pane_session" = "$SESSION" ]; then
+        inside_target_session=1
+      fi
+    fi
+    restart_hold="agents-restart-$$"
+    if ! hold_err=$(tmux "${TMUX_ARGS[@]}" new-session -d -s "$restart_hold" -n restarting -c "$HOME" "printf 'Restarting agents; please wait...\\n'; exec sleep 86400" 2>&1); then
+      echo "error: could not prepare tmux restart: $hold_err" >&2
+      exit 1
+    fi
+    trap 'finish_restart || true' EXIT
+    if [ "$DO_ATTACH" = "1" ]; then
+      clients=$(tmux "${TMUX_ARGS[@]}" list-clients -t "=$SESSION" -F '#{client_name}')
+      while IFS= read -r client; do
+        [ -n "$client" ] || continue
+        tmux "${TMUX_ARGS[@]}" switch-client -c "$client" -t "=$restart_hold"
+      done <<< "$clients"
+    fi
+    if ! kill_err=$(tmux "${TMUX_ARGS[@]}" kill-session -t "$SESSION" 2>&1); then
+      echo "error: could not end tmux session '$SESSION': $kill_err" >&2
+      exit 1
+    fi
+    if [ "$inside_target_session" -eq 1 ]; then
+      exec </dev/null >/dev/null 2>&1
+    fi
+  else
+    attach_and_exit
+  fi
+else
+  case "$has_session_err" in
+    *"can't find session"*|*"cant find session"*|*"session not found"*|*"no server running on"*|*"error connecting to "*"No such file or directory"*|*"failed to connect to server"*)
+      ;;
+    *)
+      echo "error: tmux has-session failed: $has_session_err" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 # Update the agents right before creating a new session (not when only attaching).
