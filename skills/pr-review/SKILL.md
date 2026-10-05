@@ -154,15 +154,16 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
 apply the named-model eligibility rules under "Purpose & Model Pairing" above:
 - Establish the active named model and all models responsible for implementation and fixes on the PR
   (from current surface/session model information, Josh's explicit model selection or correction,
-  conversation history, and item 1's `commits` list which carries each commit's `authors`). Never
-  infer the active reviewer model from the PR author's footer or an earlier commit attribution.
+  conversation history, and item 1's `commits` list which carries each commit's `authors`).
+  Never infer the active reviewer model from the PR author's footer or an earlier commit attribution.
 - Stop if the active model contributed implementation or pushed any fix to the PR (a model never
   reviews its own contribution; versions, reasoning effort, or switching away and back do not bypass
   this). A switch to a higher eligible model within the conversation may review earlier work by
   another model.
 - Permit Astra to review Sol-authored work, including a Sol fix from this same conversation, when
-  Astra has not contributed implementation or fixes. Stop if the PR carries Astra contributions
-  (implementation or fixes) and the active model is not Opus (Opus or Josh reviews Astra's work).
+  Astra has not contributed implementation or fixes.
+- Stop if the PR carries Astra contributions (implementation or fixes) and the active model is not Opus
+  (Opus or Josh reviews Astra's work).
 - Stop if any commit names an Opus author or co-author (Opus never reviews Opus work; Josh reviews).
 - Stop if the active model ranks below any contributor's tier (tier rule).
 - Stop and ask Josh if contributor or active model identity cannot be established (fail closed; do
