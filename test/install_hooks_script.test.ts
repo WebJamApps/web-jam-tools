@@ -153,12 +153,6 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       "expected statusline.sh to be installed at the stable hooksDir path",
     );
 
-    // web-jam-tools#705: permissions.defaultMode is pinned to "acceptEdits"
-    // in the Claude Code settings.json so a session never lands in "auto"
-    // mode, where hooks/opus-delegation-gate.sh refused every
-    // Edit/Write/NotebookEdit until web-jam-tools#965.
-    assertEquals(settings.permissions?.defaultMode, "acceptEdits");
-
     // web-jam-tools#345: agy hooks.json is also created and populated
     const agyHooksPath = `${settingsDir}/hooks.json`;
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
@@ -874,7 +868,7 @@ Deno.test("--hooks-dir is exempt from the worktree guard (no --force needed)", a
 const REALISTIC_SETTINGS_JSON = JSON.stringify(
   {
     statusLine: { type: "command", command: "/home/fakeuser/.claude/hooks/statusline.sh" },
-    permissions: { deny: ["Bash(git push --force *)"], defaultMode: "acceptEdits" },
+    permissions: { deny: ["Bash(git push --force *)"] },
     hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] },
   },
   null,
@@ -2087,6 +2081,177 @@ Deno.test(
           "permissions.allow rule mcp__google-drive__updatePermission is also in permissions.ask (stale copy)",
         ),
         checkRes.stderr,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+// --- web-jam-tools#1232: installer stops setting Claude Code defaultMode ---
+
+Deno.test(
+  "install-hooks.sh preserves permissions.defaultMode auto and --check reports no defaultMode drift",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Criterion 1: initial settings has permissions.defaultMode = "auto"
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({ permissions: { defaultMode: "auto" } }, null, 2),
+      );
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Verify defaultMode is preserved as "auto"
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.permissions?.defaultMode, "auto");
+
+      // Criterion 4: --check prints no line about permissions.defaultMode and causes no drift error
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+      assert(
+        !checkRes.stdout.includes("defaultMode"),
+        `check stdout must not mention defaultMode: ${checkRes.stdout}`,
+      );
+      assert(
+        !checkRes.stderr.includes("defaultMode"),
+        `check stderr must not mention defaultMode: ${checkRes.stderr}`,
+      );
+      assert(
+        !checkRes.stderr.includes("drift detected"),
+        `check must not detect drift: ${checkRes.stderr}`,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh preserves permissions.defaultMode acceptEdits and --check reports no defaultMode drift",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Criterion 2: initial settings has permissions.defaultMode = "acceptEdits"
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({ permissions: { defaultMode: "acceptEdits" } }, null, 2),
+      );
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Verify defaultMode is preserved as "acceptEdits"
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.permissions?.defaultMode, "acceptEdits");
+
+      // Criterion 4: --check prints no line about permissions.defaultMode and causes no drift error
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+      assert(
+        !checkRes.stdout.includes("defaultMode"),
+        `check stdout must not mention defaultMode: ${checkRes.stdout}`,
+      );
+      assert(
+        !checkRes.stderr.includes("defaultMode"),
+        `check stderr must not mention defaultMode: ${checkRes.stderr}`,
+      );
+      assert(
+        !checkRes.stderr.includes("drift detected"),
+        `check must not detect drift: ${checkRes.stderr}`,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh preserves settings with no permissions.defaultMode key and --check reports no defaultMode drift",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Criterion 3: initial settings has no permissions.defaultMode key
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({}, null, 2),
+      );
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Verify no permissions.defaultMode key was added
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.permissions?.defaultMode, undefined);
+      assert(
+        !("defaultMode" in (settings.permissions ?? {})),
+        "permissions object must not have defaultMode key",
+      );
+
+      // Criterion 4: --check prints no line about permissions.defaultMode and causes no drift error
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+      assert(
+        !checkRes.stdout.includes("defaultMode"),
+        `check stdout must not mention defaultMode: ${checkRes.stdout}`,
+      );
+      assert(
+        !checkRes.stderr.includes("defaultMode"),
+        `check stderr must not mention defaultMode: ${checkRes.stderr}`,
+      );
+      assert(
+        !checkRes.stderr.includes("drift detected"),
+        `check must not detect drift: ${checkRes.stderr}`,
       );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
