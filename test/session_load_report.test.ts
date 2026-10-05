@@ -400,6 +400,68 @@ Deno.test("Single tool OVER displays other tools as ok in multiline report", asy
   }
 });
 
+Deno.test("report accurately detects memoryIndex, other repo rules, and codex skill descriptions over mark", async () => {
+  const limits = await loadLimits(LIMITS_PATH);
+  const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
+
+  try {
+    // 1. Fallback projects memory directory (not -home-joshua)
+    const customProjectMemoryDir = join(
+      homeDir,
+      ".claude/projects/custom-project/memory",
+    );
+    await Deno.mkdir(customProjectMemoryDir, { recursive: true });
+    const memDelta = 250;
+    await Deno.writeTextFile(
+      join(customProjectMemoryDir, "MEMORY.md"),
+      "x".repeat(limits.memoryIndex.overMark + memDelta),
+    );
+
+    // 2. Other repo over mark (e.g. AppersonAuto)
+    const otherRepoDelta = 500;
+    await Deno.mkdir(join(webJamAppsDir, "AppersonAuto"), { recursive: true });
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "AppersonAuto/AGENTS.md"),
+      "x".repeat(limits.otherRepoRules.overMark + otherRepoDelta),
+    );
+
+    // 3. Codex skill with description over mark, plus fallback frontmatter parsing
+    const codexOverSkillDir = join(homeDir, ".codex/skills/over-skill");
+    await Deno.mkdir(codexOverSkillDir, { recursive: true });
+    const longDesc = "y".repeat(limits.skillDescription.overMark + 50);
+    await Deno.writeTextFile(
+      join(codexOverSkillDir, "SKILL.md"),
+      `---\nname: @invalid:yaml:syntax\ndescription: ${longDesc}\n---\nBody`,
+    );
+
+    // Also a skill with no frontmatter at all to exercise no-match
+    const noFrontmatterSkillDir = join(homeDir, ".codex/skills/no-fm-skill");
+    await Deno.mkdir(noFrontmatterSkillDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(noFrontmatterSkillDir, "SKILL.md"),
+      "No frontmatter at all here",
+    );
+
+    const result = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+
+    assert(result.isOver);
+    assert(result.tools.claudeCode.isOver);
+    assert(result.tools.agy.isOver);
+    assert(result.tools.codex.isOver);
+    assert(result.tools.claudeCode.items.some((i) => i.includes("memory index")));
+    assert(result.tools.claudeCode.items.some((i) => i.includes("AppersonAuto rules")));
+    assert(result.tools.agy.items.some((i) => i.includes("AppersonAuto rules")));
+    assert(result.tools.codex.items.some((i) => i.includes("AppersonAuto rules")));
+    assert(result.tools.codex.items.some((i) => i.includes("skill descriptions")));
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("scripts/session-load-report.ts prints valid JSON systemMessage and exits 0", async () => {
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
@@ -436,6 +498,17 @@ Deno.test("Manual verification runbook conforms to format requirements", async (
     Deno.env.get("HOME") || "/home/joshua",
     "Dropbox/web-jam-llms/Token_Savings/standing-preamble-manual-steps-2026-10-03.md",
   );
+
+  try {
+    const stat = await Deno.stat(runbookPath);
+    if (!stat.isFile) return;
+  } catch (err) {
+    if (err instanceof Deno.errors.NotFound) {
+      // In CI or environments without Dropbox mounted, skip checking the external runbook
+      return;
+    }
+    throw err;
+  }
 
   const result = await lintRunbookFile(runbookPath);
   assertEquals(
