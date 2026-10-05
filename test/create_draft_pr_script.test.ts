@@ -14,6 +14,32 @@ import { assertEquals, assertMatch, assertNotMatch } from "@std/assert";
 
 const SCRIPT_PATH = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
 
+Deno.test("--list-roster is read-only and needs no git repository", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt-roster-probe-" });
+  try {
+    // A git invocation is both recorded and refused, even if its failure is ignored.
+    const marker = `${dir}/git-called`;
+    await Deno.writeTextFile(`${dir}/git`, `#!/bin/sh\ntouch '${marker}'\nexit 99\n`);
+    await Deno.chmod(`${dir}/git`, 0o755);
+    const result = await new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--list-roster"],
+      cwd: dir,
+      env: { PATH: `${dir}:${Deno.env.get("PATH")}` },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(result.code, 0);
+    assertEquals(new TextDecoder().decode(result.stderr), "");
+    const entries = new TextDecoder().decode(result.stdout).trimEnd().split("\n");
+    for (const entry of ["GPT-6 Luna", "GPT-6.1 Sol", "GPT-6 Astra"]) {
+      assertEquals(entries.includes(entry), true);
+    }
+    assertEquals(Array.from(Deno.readDirSync(dir)).map((entry) => entry.name), ["git"]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 const VALID_SUMMARY = "- Add X so Y works\n- Refactor Z to stop duplicating W";
 const VALID_TEST_PLAN = "Run `deno task test`. Expect green.";
 const VALID_EVIDENCE = "```\nok | 42 passed | 0 failed\n```";
