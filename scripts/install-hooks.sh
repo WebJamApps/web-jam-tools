@@ -194,6 +194,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::block-raw-gh-write.sh"
   "Bash::block-backend-mutation.sh"
   "Bash::block-private-folder-read.sh"
+  "Bash|(?:mcp__.*__)?(issue_write|pull_request_review_write|add_comment_to_pending_review|add_reply_to_pull_request_comment|update_issue_comment|add_issue_comment)::check-issue-citation-on-write.sh"
 )
 
 # PostToolUse hooks, same "<matcher>::<script>" shape (web-jam-tools#272).
