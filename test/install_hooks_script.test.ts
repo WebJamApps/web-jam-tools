@@ -235,6 +235,37 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       }) as its real matcher, got: ${secretLiteralsCmd}`,
     );
 
+    // web-jam-tools#1236: regenerate-memory-index.sh registered in PostToolUse
+    const postToolEntries = settings.hooks.PostToolUse.flatMap(
+      (entry: { matcher?: string; hooks?: Array<{ command?: string }> }) =>
+        (entry.hooks ?? []).map((h) => ({ matcher: entry.matcher, command: h.command })),
+    );
+    const memoryIndexEntry = postToolEntries.find(
+      (e: { command?: string }) => e.command === "$HOME/.claude/hooks/regenerate-memory-index.sh",
+    );
+    assert(
+      memoryIndexEntry,
+      "expected Claude Code settings.json to register regenerate-memory-index.sh in PostToolUse",
+    );
+    assertEquals(memoryIndexEntry.matcher, "Write|Edit");
+
+    const allAgyPostToolUseCmds: string[] = agyHooks.hooks.PostToolUse.flatMap(
+      (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command),
+    );
+    const memoryIndexAgyCmd = allAgyPostToolUseCmds.find((c) =>
+      c.includes("regenerate-memory-index.sh")
+    );
+    assert(
+      memoryIndexAgyCmd,
+      "expected an agy-side shim-wrapped entry for regenerate-memory-index.sh",
+    );
+    assert(
+      memoryIndexAgyCmd!.includes(btoa("Write|Edit")),
+      `expected regenerate-memory-index.sh agy entry to carry base64("Write|Edit") (${
+        btoa("Write|Edit")
+      }), got: ${memoryIndexAgyCmd}`,
+    );
+
     // Claude Code's own settings.json registrations (a completely separate
     // merge invocation, $SETTINGS_PATH not $AGY_HOOKS_PATH) must be
     // UNCHANGED by this fix — still keyed by the real, per-hook matcher,
