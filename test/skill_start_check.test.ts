@@ -1,8 +1,9 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { join } from "@std/path";
 import {
   type AgyCommandExecutor,
   type CheckResult,
+  defaultAgyCommandExecutor,
   formatCheckResult,
   loadStartCheckPrompts,
   matchAgyOutput,
@@ -386,4 +387,199 @@ Deno.test("runSkillStartCheck - orchestrator with mock runners", async () => {
     "agy: sheet-music (by name): PASS",
     "agy: sheet-music (on its own): PASS",
   ]);
+});
+
+Deno.test("regression: differing installed and candidate descriptions prove candidate is exercised and installed links preserved", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "candidate-scope-test-" });
+  try {
+    const installedClaudeDir = join(tempDir, "installed-claude", "fixture-skill");
+    const installedAgyDir = join(tempDir, "installed-agy", "fixture-skill");
+    const candidateSkillsDir = join(tempDir, "candidate-skills");
+    const candidateSkillDir = join(candidateSkillsDir, "fixture-skill");
+    const claudeLinksDir = join(tempDir, "claude-links");
+    const agyLinksDir = join(tempDir, "agy-links");
+
+    await Deno.mkdir(installedClaudeDir, { recursive: true });
+    await Deno.mkdir(installedAgyDir, { recursive: true });
+    await Deno.mkdir(candidateSkillDir, { recursive: true });
+    await Deno.mkdir(claudeLinksDir, { recursive: true });
+    await Deno.mkdir(agyLinksDir, { recursive: true });
+
+    await Deno.writeTextFile(
+      join(installedClaudeDir, "SKILL.md"),
+      "---\nname: fixture-skill\ndescription: OLD_INSTALLED_CLAUDE_DESC\n---\n# fixture-skill\n",
+    );
+    await Deno.writeTextFile(
+      join(installedAgyDir, "SKILL.md"),
+      "---\nname: fixture-skill\ndescription: OLD_INSTALLED_AGY_DESC\n---\n# fixture-skill\n",
+    );
+    await Deno.writeTextFile(
+      join(candidateSkillDir, "SKILL.md"),
+      "---\nname: fixture-skill\ndescription: NEW_CANDIDATE_DESC\n---\n# fixture-skill\n",
+    );
+    await Deno.writeTextFile(
+      join(candidateSkillDir, "start-check.json"),
+      JSON.stringify({ by_name: "/fixture-skill", on_its_own: "do new candidate thing" }),
+    );
+
+    const claudeLink = join(claudeLinksDir, "fixture-skill");
+    const agyLink = join(agyLinksDir, "fixture-skill");
+    await Deno.symlink(installedClaudeDir, claudeLink);
+    await Deno.symlink(installedAgyDir, agyLink);
+
+    // Verify initial installed links point to old installed copies
+    assertEquals(await Deno.readLink(claudeLink), installedClaudeDir);
+    assertEquals(await Deno.readLink(agyLink), installedAgyDir);
+
+    let claudeReadDuringRun = "";
+    const mockClaudeCommander: TmuxCommander = {
+      startSession: (_s, _sess, _w, _c) => {
+        // Inspect the skill loaded in claudeLinksDir during session execution
+        claudeReadDuringRun = Deno.readTextFileSync(join(claudeLink, "SKILL.md"));
+        return Promise.resolve({ success: true });
+      },
+      capturePane: (_s, _sess) =>
+        Promise.resolve({
+          success: true,
+          output: "● Skill(fixture-skill)\n────────────────────",
+        }),
+      sendKeys: (_s, _sess, _k, _lit) => Promise.resolve({ success: true }),
+      killServer: (_s) => Promise.resolve(),
+      sleep: (_ms) => Promise.resolve(),
+    };
+
+    const claudeRes = await runClaudeCheck("fixture-skill", "on_its_own", "prompt", {
+      skillsDir: candidateSkillsDir,
+      claudeSkillsDir: claudeLinksDir,
+      commander: mockClaudeCommander,
+      timeoutMs: 500,
+    });
+
+    assertEquals(claudeRes.outcome, "PASS");
+    // Proves candidate skill was exercised
+    assertStringIncludes(claudeReadDuringRun, "NEW_CANDIDATE_DESC");
+    // Proves user's installed link was restored
+    assertEquals(await Deno.readLink(claudeLink), installedClaudeDir);
+
+    let agyReadDuringRun = "";
+    const mockAgyExecutor: AgyCommandExecutor = {
+      run: (_p, _t, _opts) => {
+        // Inspect the skill loaded in agyLinksDir during executor run
+        agyReadDuringRun = Deno.readTextFileSync(join(agyLink, "SKILL.md"));
+        return Promise.resolve({
+          success: true,
+          code: 0,
+          stdout: "# fixture-skill\noutput",
+          stderr: "",
+        });
+      },
+    };
+
+    const agyRes = await runAgyCheck(
+      "fixture-skill",
+      "on_its_own",
+      "prompt",
+      "# fixture-skill",
+      {
+        skillsDir: candidateSkillsDir,
+        agySkillsDir: agyLinksDir,
+        executor: mockAgyExecutor,
+        timeoutMs: 500,
+      },
+    );
+
+    assertEquals(agyRes.outcome, "PASS");
+    // Proves candidate skill was exercised
+    assertStringIncludes(agyReadDuringRun, "NEW_CANDIDATE_DESC");
+    // Proves user's installed link was restored
+    assertEquals(await Deno.readLink(agyLink), installedAgyDir);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("regression: refuses when installed skill path is a non-symlink directory (loaded version differs)", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "candidate-scope-refuse-" });
+  try {
+    const candidateSkillsDir = join(tempDir, "candidate-skills");
+    const candidateSkillDir = join(candidateSkillsDir, "fixture-skill");
+    const fakeSkillsDir = join(tempDir, "installed-skills");
+    const nonSymlinkSkill = join(fakeSkillsDir, "fixture-skill");
+
+    await Deno.mkdir(candidateSkillDir, { recursive: true });
+    await Deno.mkdir(nonSymlinkSkill, { recursive: true });
+
+    await Deno.writeTextFile(
+      join(candidateSkillDir, "SKILL.md"),
+      "---\nname: fixture-skill\ndescription: CANDIDATE\n---\n# fixture-skill\n",
+    );
+    await Deno.writeTextFile(
+      join(nonSymlinkSkill, "SKILL.md"),
+      "---\nname: fixture-skill\ndescription: INSTALLED_NON_SYMLINK\n---\n# fixture-skill\n",
+    );
+
+    const claudeRes = await runClaudeCheck("fixture-skill", "by_name", "prompt", {
+      skillsDir: candidateSkillsDir,
+      claudeSkillsDir: fakeSkillsDir,
+      timeoutMs: 500,
+    });
+    assertEquals(claudeRes.outcome, "FAIL");
+    assertStringIncludes(claudeRes.reason ?? "", "not a symlink");
+
+    const agyRes = await runAgyCheck(
+      "fixture-skill",
+      "by_name",
+      "prompt",
+      "# fixture-skill",
+      {
+        skillsDir: candidateSkillsDir,
+        agySkillsDir: fakeSkillsDir,
+        timeoutMs: 500,
+      },
+    );
+    assertEquals(agyRes.outcome, "FAIL");
+    assertStringIncludes(agyRes.reason ?? "", "not a symlink");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("regression: agy subprocess timeout terminates ignored SIGTERM and cleans up retained output pipes", async () => {
+  const fakeAgyScript = await Deno.makeTempFile({
+    prefix: "fake-agy-timeout-",
+    suffix: ".sh",
+  });
+  await Deno.writeTextFile(
+    fakeAgyScript,
+    `#!/usr/bin/env bash
+trap '' TERM
+(sleep 10 >/dev/null 2>&1 &)
+sleep 5
+`,
+  );
+  await Deno.chmod(fakeAgyScript, 0o755);
+
+  try {
+    const start = Date.now();
+    const res = await defaultAgyCommandExecutor.run("fixture prompt", 100, {
+      agyPath: fakeAgyScript,
+    });
+    const elapsed = Date.now() - start;
+
+    assertEquals(res.timedOut, true);
+    assertEquals(res.success, false);
+    assertEquals(res.code, -1);
+    assertStringIncludes(res.stderr, "Timed out after 100ms");
+    // Verify bounded escalation: must return in < 1500ms, not after sleep 5 (5000ms) or sleep 10 (10000ms)
+    assert(
+      elapsed < 1500,
+      `Expected timeout escalation < 1500ms, took ${elapsed}ms`,
+    );
+    assert(
+      elapsed >= 100,
+      `Expected elapsed >= 100ms, took ${elapsed}ms`,
+    );
+  } finally {
+    await Deno.remove(fakeAgyScript).catch(() => {});
+  }
 });

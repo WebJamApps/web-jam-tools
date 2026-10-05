@@ -1,4 +1,4 @@
-import { join } from "@std/path";
+import { dirname, join } from "@std/path";
 import { type ClaudeRunnerOptions, runClaudeCheck } from "./claude_runner.ts";
 import { type AgyRunnerOptions, runAgyCheck } from "./agy_runner.ts";
 import { loadStartCheckPrompts, readSkillFirstHeading } from "./prompts.ts";
@@ -24,13 +24,15 @@ export async function runSkillStartCheck(
 ): Promise<{ results: CheckResult[]; allPassed: boolean; formattedLines: string[] }> {
   const toolTarget: ToolTarget = options.tool ?? "all";
   const skillsDir = options.skillsDir ?? join(Deno.cwd(), "skills");
+  const workDir = options.workDir ?? dirname(skillsDir);
 
   const prompts = await loadStartCheckPrompts(skillsDir, skillName);
   const results: CheckResult[] = [];
 
   if (toolTarget === "claude" || toolTarget === "all") {
     const claudeOpts: ClaudeRunnerOptions = {
-      workDir: options.workDir,
+      workDir,
+      skillsDir,
       timeoutMs: options.claudeTimeoutMs ?? options.timeoutMs,
       ...options.claudeOptions,
     };
@@ -49,6 +51,8 @@ export async function runSkillStartCheck(
   if (toolTarget === "agy" || toolTarget === "all") {
     const firstHeading = await readSkillFirstHeading(skillsDir, skillName);
     const agyOpts: AgyRunnerOptions = {
+      workDir,
+      skillsDir,
       timeoutMs: options.agyTimeoutMs ?? options.timeoutMs,
       ...options.agyOptions,
     };

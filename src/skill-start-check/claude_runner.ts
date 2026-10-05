@@ -1,3 +1,5 @@
+import { dirname, join } from "@std/path";
+import { withCandidateSkill } from "./candidate.ts";
 import { matchClaudeScreen } from "./matchers.ts";
 import type { CheckMode, CheckResult } from "./types.ts";
 
@@ -112,6 +114,8 @@ export const defaultTmuxCommander: TmuxCommander = {
 
 export interface ClaudeRunnerOptions {
   workDir?: string;
+  skillsDir?: string;
+  claudeSkillsDir?: string;
   timeoutMs?: number;
   tmuxSocket?: string;
   commander?: TmuxCommander;
@@ -122,7 +126,7 @@ export interface ClaudeRunnerOptions {
  *
  * Requirements:
  * - Starts `claude --model haiku --settings <temporary settings file>`
- * - Inside a throwaway tmux server (`tmux -L <name>`) started in `~/WebJamApps/web-jam-tools`
+ * - Inside a throwaway tmux server (`tmux -L <name>`) started in `workDir`
  * - Prompt text and Enter key are sent as two separate `send-keys` calls
  * - Matchers: `● Skill(<name>)` or `Use skill "<name>"?` -> PASS
  * - Timeout without matching -> FAIL
@@ -136,159 +140,184 @@ export async function runClaudeCheck(
 ): Promise<CheckResult> {
   const commander = options.commander ?? defaultTmuxCommander;
   const timeoutMs = options.timeoutMs ?? 30000;
-  const workDir = options.workDir ?? "/home/joshua/WebJamApps/web-jam-tools";
+  const workDir = options.workDir ??
+    (options.skillsDir ? dirname(options.skillsDir) : "/home/joshua/WebJamApps/web-jam-tools");
   const socket = options.tmuxSocket ??
     `skill-start-claude-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 
-  let settingsFile = "";
-  try {
-    settingsFile = await Deno.makeTempFile({
-      prefix: "claude-start-check-",
-      suffix: ".json",
-    });
-    await Deno.writeTextFile(settingsFile, "{}");
-  } catch (err) {
-    return {
-      tool: "claude",
-      skillName,
-      mode,
-      outcome: "FAIL",
-      reason: `Failed to create temporary settings file: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    };
+  const executeSession = async (): Promise<CheckResult> => {
+    let settingsFile = "";
+    try {
+      settingsFile = await Deno.makeTempFile({
+        prefix: "claude-start-check-",
+        suffix: ".json",
+      });
+      await Deno.writeTextFile(settingsFile, "{}");
+    } catch (err) {
+      return {
+        tool: "claude",
+        skillName,
+        mode,
+        outcome: "FAIL",
+        reason: `Failed to create temporary settings file: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+
+    try {
+      const claudeCmd = `claude --model haiku --settings "${settingsFile}"`;
+      const startRes = await commander.startSession(socket, "check", workDir, claudeCmd);
+      if (!startRes.success) {
+        return {
+          tool: "claude",
+          skillName,
+          mode,
+          outcome: "FAIL",
+          reason: `tmux failed to start claude session: ${startRes.stderr ?? "unknown error"}`,
+        };
+      }
+
+      // Wait for Claude Code to initialize and render input prompt
+      const initDeadline = Date.now() + 10000;
+      let initialized = false;
+      while (Date.now() < initDeadline) {
+        await commander.sleep(300);
+        const pane = await commander.capturePane(socket, "check");
+        if (!pane.success) {
+          return {
+            tool: "claude",
+            skillName,
+            mode,
+            outcome: "FAIL",
+            reason: `tmux capture-pane failed during startup: ${pane.stderr ?? "session exited"}`,
+          };
+        }
+        if (pane.output.includes("Stop and wait for limit to reset")) {
+          return {
+            tool: "claude",
+            skillName,
+            mode,
+            outcome: "FAIL",
+            reason: "Claude Code usage/rate limit reached",
+          };
+        }
+        if (
+          pane.output.includes("❯") ||
+          pane.output.includes('Try "') ||
+          pane.output.includes("manual mode on") ||
+          pane.output.includes("──────")
+        ) {
+          initialized = true;
+          break;
+        }
+      }
+
+      if (!initialized) {
+        return {
+          tool: "claude",
+          skillName,
+          mode,
+          outcome: "FAIL",
+          reason: "Claude Code failed to initialize or display prompt within 10s",
+        };
+      }
+
+      // Send prompt text and Enter key as two separate send-keys calls
+      const sendPromptRes = await commander.sendKeys(socket, "check", prompt, true);
+      if (!sendPromptRes.success) {
+        return {
+          tool: "claude",
+          skillName,
+          mode,
+          outcome: "FAIL",
+          reason: `Failed to send prompt text to tmux: ${sendPromptRes.stderr ?? "unknown error"}`,
+        };
+      }
+      await commander.sleep(150);
+      const sendEnterRes = await commander.sendKeys(socket, "check", "Enter", false);
+      if (!sendEnterRes.success) {
+        return {
+          tool: "claude",
+          skillName,
+          mode,
+          outcome: "FAIL",
+          reason: `Failed to send Enter key to tmux: ${sendEnterRes.stderr ?? "unknown error"}`,
+        };
+      }
+
+      // Poll the screen until match or timeout
+      const pollDeadline = Date.now() + timeoutMs;
+      while (Date.now() < pollDeadline) {
+        await commander.sleep(500);
+        const pane = await commander.capturePane(socket, "check");
+        if (!pane.success) {
+          return {
+            tool: "claude",
+            skillName,
+            mode,
+            outcome: "FAIL",
+            reason: `tmux capture-pane failed: ${pane.stderr ?? "session exited prematurely"}`,
+          };
+        }
+
+        const match = matchClaudeScreen(pane.output, skillName);
+        if (match.matched) {
+          return {
+            tool: "claude",
+            skillName,
+            mode,
+            outcome: "PASS",
+            detail: match.matchedString,
+          };
+        }
+
+        if (pane.output.includes("Stop and wait for limit to reset")) {
+          return {
+            tool: "claude",
+            skillName,
+            mode,
+            outcome: "FAIL",
+            reason: "Claude Code usage/rate limit reached during run",
+          };
+        }
+      }
+
+      return {
+        tool: "claude",
+        skillName,
+        mode,
+        outcome: "FAIL",
+        reason:
+          `Neither '● Skill(${skillName})' nor 'Use skill "${skillName}"?' appeared within ${timeoutMs}ms`,
+      };
+    } finally {
+      await commander.killServer(socket);
+      if (settingsFile) {
+        await Deno.remove(settingsFile).catch(() => {});
+      }
+    }
+  };
+
+  if (options.skillsDir) {
+    const claudeSkillsDir = options.claudeSkillsDir ??
+      join(Deno.env.get("HOME") ?? "", ".claude", "skills");
+    try {
+      return await withCandidateSkill({
+        skillName,
+        candidateSkillsDir: options.skillsDir,
+        installedSkillsDir: claudeSkillsDir,
+      }, executeSession);
+    } catch (err) {
+      return {
+        tool: "claude",
+        skillName,
+        mode,
+        outcome: "FAIL",
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
-  try {
-    const claudeCmd = `claude --model haiku --settings "${settingsFile}"`;
-    const startRes = await commander.startSession(socket, "check", workDir, claudeCmd);
-    if (!startRes.success) {
-      return {
-        tool: "claude",
-        skillName,
-        mode,
-        outcome: "FAIL",
-        reason: `tmux failed to start claude session: ${startRes.stderr ?? "unknown error"}`,
-      };
-    }
-
-    // Wait for Claude Code to initialize and render input prompt
-    const initDeadline = Date.now() + 10000;
-    let initialized = false;
-    while (Date.now() < initDeadline) {
-      await commander.sleep(300);
-      const pane = await commander.capturePane(socket, "check");
-      if (!pane.success) {
-        return {
-          tool: "claude",
-          skillName,
-          mode,
-          outcome: "FAIL",
-          reason: `tmux capture-pane failed during startup: ${pane.stderr ?? "session exited"}`,
-        };
-      }
-      if (pane.output.includes("Stop and wait for limit to reset")) {
-        return {
-          tool: "claude",
-          skillName,
-          mode,
-          outcome: "FAIL",
-          reason: "Claude Code usage/rate limit reached",
-        };
-      }
-      if (
-        pane.output.includes("❯") ||
-        pane.output.includes('Try "') ||
-        pane.output.includes("manual mode on") ||
-        pane.output.includes("──────")
-      ) {
-        initialized = true;
-        break;
-      }
-    }
-
-    if (!initialized) {
-      return {
-        tool: "claude",
-        skillName,
-        mode,
-        outcome: "FAIL",
-        reason: "Claude Code failed to initialize or display prompt within 10s",
-      };
-    }
-
-    // Send prompt text and Enter key as two separate send-keys calls
-    const sendPromptRes = await commander.sendKeys(socket, "check", prompt, true);
-    if (!sendPromptRes.success) {
-      return {
-        tool: "claude",
-        skillName,
-        mode,
-        outcome: "FAIL",
-        reason: `Failed to send prompt text to tmux: ${sendPromptRes.stderr ?? "unknown error"}`,
-      };
-    }
-    await commander.sleep(150);
-    const sendEnterRes = await commander.sendKeys(socket, "check", "Enter", false);
-    if (!sendEnterRes.success) {
-      return {
-        tool: "claude",
-        skillName,
-        mode,
-        outcome: "FAIL",
-        reason: `Failed to send Enter key to tmux: ${sendEnterRes.stderr ?? "unknown error"}`,
-      };
-    }
-
-    // Poll the screen until match or timeout
-    const pollDeadline = Date.now() + timeoutMs;
-    while (Date.now() < pollDeadline) {
-      await commander.sleep(500);
-      const pane = await commander.capturePane(socket, "check");
-      if (!pane.success) {
-        return {
-          tool: "claude",
-          skillName,
-          mode,
-          outcome: "FAIL",
-          reason: `tmux capture-pane failed: ${pane.stderr ?? "session exited prematurely"}`,
-        };
-      }
-
-      const match = matchClaudeScreen(pane.output, skillName);
-      if (match.matched) {
-        return {
-          tool: "claude",
-          skillName,
-          mode,
-          outcome: "PASS",
-          detail: match.matchedString,
-        };
-      }
-
-      if (pane.output.includes("Stop and wait for limit to reset")) {
-        return {
-          tool: "claude",
-          skillName,
-          mode,
-          outcome: "FAIL",
-          reason: "Claude Code usage/rate limit reached during run",
-        };
-      }
-    }
-
-    return {
-      tool: "claude",
-      skillName,
-      mode,
-      outcome: "FAIL",
-      reason:
-        `Neither '● Skill(${skillName})' nor 'Use skill "${skillName}"?' appeared within ${timeoutMs}ms`,
-    };
-  } finally {
-    await commander.killServer(socket);
-    if (settingsFile) {
-      await Deno.remove(settingsFile).catch(() => {});
-    }
-  }
+  return await executeSession();
 }
