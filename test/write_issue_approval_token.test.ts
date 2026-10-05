@@ -1750,11 +1750,11 @@ Deno.test("checkTokenWriteAuthorization: three-outcome coverage — holds, does 
 //
 // A regex's contract isn't "every literal phrase is traceable" the way the old array's was — it's
 // "matches this shape". So the drift check ties the two artifacts together differently: (1) every
-// filing verb SKILL.md's frontmatter description documents must actually be one the regex recognizes,
-// and (2) every worked example phrase the description quotes must actually be recognized by the
+// filing verb SKILL.md documents must actually be one the regex recognizes,
+// and (2) every worked example phrase the documentation quotes must actually be recognized by the
 // regex. Either half failing means the doc comment and the code have drifted apart.
 
-Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md's description stay tied together (web-jam-tools#973-followup)", async () => {
+Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md stay tied together (web-jam-tools#973-followup, #1239)", async () => {
   const skillMdPath = new URL(
     "../skills/file-issue/SKILL.md",
     import.meta.url,
@@ -1763,12 +1763,17 @@ Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md's description
   const descriptionLine = skillMd.split("\n").find((line) => line.startsWith("description:"));
   assert(descriptionLine, "skills/file-issue/SKILL.md must have a frontmatter description: line");
 
+  // In web-jam-tools#1239 (standing-preamble-design-2026-08-08.md), skill descriptions are capped
+  // at 300 characters, and lists of trigger phrases / worked examples moved to the skill body
+  // (under "## Description Detail & Triggers"). Look for the trigger text in the file.
+  const triggersText = skillMd;
+
   // 1. Every filing verb SKILL.md documents must be an alternative FILE_ISSUE_INVOCATION_RE
   // actually recognizes.
-  const verbListMatch = descriptionLine!.match(/filing verb \(([^)]+)\)/);
+  const verbListMatch = triggersText.match(/filing verb \(([^)]+)\)/);
   assert(
     verbListMatch,
-    "skills/file-issue/SKILL.md's description must enumerate the recognized filing verbs in " +
+    "skills/file-issue/SKILL.md must enumerate the recognized filing verbs in " +
       '"filing verb (...)" form',
   );
   const documentedVerbs = verbListMatch![1].split(",").map((v) => v.trim());
@@ -1781,11 +1786,16 @@ Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md's description
     );
   }
 
-  // 2. Every worked example phrase the description quotes must actually be recognized.
-  const quotedExamples = [...descriptionLine!.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  // 2. Every worked example phrase in the trigger documentation must actually be recognized.
+  const triggerSectionMatch = triggersText.match(/filing verb [^—]+— for example ([^—]+) —/);
+  assert(
+    triggerSectionMatch,
+    "skills/file-issue/SKILL.md must contain the worked example trigger phrases",
+  );
+  const quotedExamples = [...triggerSectionMatch[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
   assert(
     quotedExamples.length >= 3,
-    "skills/file-issue/SKILL.md's description must quote worked example phrases",
+    "skills/file-issue/SKILL.md must quote worked example phrases",
   );
   for (const phrase of quotedExamples) {
     assertEquals(

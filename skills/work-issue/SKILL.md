@@ -1,6 +1,6 @@
 ---
 name: work-issue
-description: Start a model-labeled coding task under Claude Code, Antigravity, or Codex. Use when the user types /work-issue <Repo>#<issue-num> (named mode; $work-issue on Codex), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity or Codex it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a model-labeled coding task by fetching the GitHub issue, setting up a fresh branch off dev, and implementing it in that repository. Use when starting work on a GitHub issue, picking the next task, or when told to work on an issue or start the next task.
 metadata:
   version: v3
   publisher: josh
@@ -394,3 +394,7 @@ Expect: lint + unit green." \
 ok | 42 passed | 0 failed
 ```"
 `````
+
+## Description Detail & Triggers
+
+Start a model-labeled coding task under Claude Code, Antigravity, or Codex. Use when the user types /work-issue <Repo>#<issue-num> (named mode; $work-issue on Codex), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity or Codex it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
