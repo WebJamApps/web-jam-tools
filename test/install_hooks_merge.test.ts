@@ -1759,18 +1759,25 @@ Deno.test(
 );
 
 Deno.test(
-  "a pattern moved to --ask is removed from permissions.allow on install (R-39, web-jam-tools#448)",
+  "a pattern moved to --ask is removed from permissions.allow on install (R-39, R-43, web-jam-tools#448)",
   async () => {
     await withTempSettings(
       {
         permissions: {
-          allow: ["mcp__google-drive__deleteItem", "mcp__google-drive__listFolder"],
+          allow: [
+            "mcp__google-drive__deleteItem",
+            "mcp__google-drive__addPermission",
+            "mcp__google-drive__updatePermission",
+            "mcp__google-drive__listFolder",
+          ],
         },
       },
       async (path) => {
         const res = await runMerge(path, [
           "--ask",
           "mcp__google-drive__deleteItem",
+          "mcp__google-drive__addPermission",
+          "mcp__google-drive__updatePermission",
         ]);
         assertEquals(res.code, 0, res.stderr);
         assert(
@@ -1779,10 +1786,26 @@ Deno.test(
           ),
           res.stdout,
         );
+        assert(
+          res.stdout.includes(
+            "removed permissions.allow rule mcp__google-drive__addPermission (now owned by permissions.ask)",
+          ),
+          res.stdout,
+        );
+        assert(
+          res.stdout.includes(
+            "removed permissions.allow rule mcp__google-drive__updatePermission (now owned by permissions.ask)",
+          ),
+          res.stdout,
+        );
 
         const data = await readJson(path);
         assertEquals(data.permissions?.allow, ["mcp__google-drive__listFolder"]);
-        assertEquals(data.permissions?.ask, ["mcp__google-drive__deleteItem"]);
+        assertEquals(data.permissions?.ask, [
+          "mcp__google-drive__deleteItem",
+          "mcp__google-drive__addPermission",
+          "mcp__google-drive__updatePermission",
+        ]);
       },
     );
   },
@@ -1824,7 +1847,12 @@ Deno.test(
     await withTempSettings(
       {
         permissions: {
-          allow: ["mcp__google-drive__deleteItem", "mcp__gmail__send_email"],
+          allow: [
+            "mcp__google-drive__deleteItem",
+            "mcp__google-drive__addPermission",
+            "mcp__google-drive__updatePermission",
+            "mcp__gmail__send_email",
+          ],
         },
       },
       async (path) => {
@@ -1832,6 +1860,8 @@ Deno.test(
           "--check",
           "--ask",
           "mcp__google-drive__deleteItem",
+          "mcp__google-drive__addPermission",
+          "mcp__google-drive__updatePermission",
           "--deny",
           "mcp__gmail__send_email",
         ]);
@@ -1839,6 +1869,18 @@ Deno.test(
         assert(
           checkRes.stderr.includes(
             "permissions.allow rule mcp__google-drive__deleteItem is also in permissions.ask (stale copy)",
+          ),
+          checkRes.stderr,
+        );
+        assert(
+          checkRes.stderr.includes(
+            "permissions.allow rule mcp__google-drive__addPermission is also in permissions.ask (stale copy)",
+          ),
+          checkRes.stderr,
+        );
+        assert(
+          checkRes.stderr.includes(
+            "permissions.allow rule mcp__google-drive__updatePermission is also in permissions.ask (stale copy)",
           ),
           checkRes.stderr,
         );

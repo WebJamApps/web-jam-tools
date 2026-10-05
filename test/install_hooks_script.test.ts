@@ -1758,15 +1758,23 @@ Deno.test(
       const deny: string[] = settings.permissions?.deny ?? [];
       const ask: string[] = settings.permissions?.ask ?? [];
 
-      // R-39: mcp__google-drive__deleteItem asks (recoverable via Drive Trash)
-      assert(
-        ask.includes("mcp__google-drive__deleteItem"),
-        "mcp__google-drive__deleteItem must be in permissions.ask",
-      );
-      assert(
-        !deny.includes("mcp__google-drive__deleteItem"),
-        "mcp__google-drive__deleteItem must not be denied",
-      );
+      // R-39 & R-43 (D-30): local Google Drive deleteItem, addPermission, and updatePermission ask
+      for (
+        const driveAskTool of [
+          "mcp__google-drive__deleteItem",
+          "mcp__google-drive__addPermission",
+          "mcp__google-drive__updatePermission",
+        ]
+      ) {
+        assert(
+          ask.includes(driveAskTool),
+          `${driveAskTool} must be in permissions.ask`,
+        );
+        assert(
+          !deny.includes(driveAskTool),
+          `${driveAskTool} must not be denied`,
+        );
+      }
       // R-39 control tests: read/list operations are not in ask or deny
       for (
         const allowedTool of [
@@ -1890,17 +1898,19 @@ Deno.test(
 );
 
 Deno.test(
-  "install-hooks.sh strips deleteItem and denied tools from permissions.allow (R-39, R-40, web-jam-tools#448)",
+  "install-hooks.sh strips deleteItem, addPermission, updatePermission, and denied tools from permissions.allow (R-39, R-40, R-43, web-jam-tools#448)",
   async () => {
     const hooksDir = await Deno.makeTempDir();
     const settingsDir = await Deno.makeTempDir();
     const settingsPath = `${settingsDir}/settings.json`;
     try {
-      // Pre-populate settings.json with deleteItem and send_email in permissions.allow
+      // Pre-populate settings.json with Drive ask tools and send_email in permissions.allow
       const initialSettings = {
         permissions: {
           allow: [
             "mcp__google-drive__deleteItem",
+            "mcp__google-drive__addPermission",
+            "mcp__google-drive__updatePermission",
             "mcp__gmail__send_email",
             "mcp__google-drive__listFolder",
           ],
@@ -1924,6 +1934,18 @@ Deno.test(
       );
       assert(
         installRes.stdout.includes(
+          "removed permissions.allow rule mcp__google-drive__addPermission (now owned by permissions.ask)",
+        ),
+        installRes.stdout,
+      );
+      assert(
+        installRes.stdout.includes(
+          "removed permissions.allow rule mcp__google-drive__updatePermission (now owned by permissions.ask)",
+        ),
+        installRes.stdout,
+      );
+      assert(
+        installRes.stdout.includes(
           "removed permissions.allow rule mcp__gmail__send_email (now owned by permissions.deny)",
         ),
         installRes.stdout,
@@ -1933,6 +1955,14 @@ Deno.test(
       assert(
         !settings.permissions.allow.includes("mcp__google-drive__deleteItem"),
         "mcp__google-drive__deleteItem must be stripped from permissions.allow",
+      );
+      assert(
+        !settings.permissions.allow.includes("mcp__google-drive__addPermission"),
+        "mcp__google-drive__addPermission must be stripped from permissions.allow",
+      );
+      assert(
+        !settings.permissions.allow.includes("mcp__google-drive__updatePermission"),
+        "mcp__google-drive__updatePermission must be stripped from permissions.allow",
       );
       assert(
         !settings.permissions.allow.includes("mcp__gmail__send_email"),
@@ -1945,6 +1975,14 @@ Deno.test(
       assert(
         settings.permissions.ask.includes("mcp__google-drive__deleteItem"),
         "mcp__google-drive__deleteItem must be in permissions.ask",
+      );
+      assert(
+        settings.permissions.ask.includes("mcp__google-drive__addPermission"),
+        "mcp__google-drive__addPermission must be in permissions.ask",
+      );
+      assert(
+        settings.permissions.ask.includes("mcp__google-drive__updatePermission"),
+        "mcp__google-drive__updatePermission must be in permissions.ask",
       );
       assert(
         settings.permissions.deny.includes("mcp__gmail__send_email"),
@@ -1961,6 +1999,64 @@ Deno.test(
         "--check",
       ]);
       assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift and exits non-zero when permissions.allow contains Drive permission tools (R-43, web-jam-tools#448)",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // First install cleanly into an empty settings file
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({ permissions: { allow: [] } }, null, 2),
+      );
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Now contaminate permissions.allow with addPermission and updatePermission
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      settings.permissions.allow.push(
+        "mcp__google-drive__addPermission",
+        "mcp__google-drive__updatePermission",
+      );
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings, null, 2));
+
+      // Run install-hooks.sh --check and verify it catches the stale allow rules
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 1, "check must exit 1 on drift");
+      assert(
+        checkRes.stderr.includes(
+          "permissions.allow rule mcp__google-drive__addPermission is also in permissions.ask (stale copy)",
+        ),
+        checkRes.stderr,
+      );
+      assert(
+        checkRes.stderr.includes(
+          "permissions.allow rule mcp__google-drive__updatePermission is also in permissions.ask (stale copy)",
+        ),
+        checkRes.stderr,
+      );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });

@@ -663,8 +663,10 @@ ASK_RULES=(
   'mcp__claude_ai_GitHub_MCP__update_pull_request_branch'
   'mcp__claude_ai_GitHub_MCP__run_secret_scanning'
 
-  # Local Google Drive deleteItem asks — recoverable via Trash (R-39 & D-30, web-jam-tools#448)
+  # Local Google Drive asks — deleteItem recoverable via Trash, sharing/permission changes (R-39, R-43 & D-30, web-jam-tools#448)
   'mcp__google-drive__deleteItem'
+  'mcp__google-drive__addPermission'
+  'mcp__google-drive__updatePermission'
 )
 
 # permissions.allow patterns this installer keeps registered in settings.json
