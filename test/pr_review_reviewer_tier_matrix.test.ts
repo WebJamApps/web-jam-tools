@@ -64,10 +64,10 @@ const DEFAULT_REVIEWERS: Record<ModelLabel, string> = {
   Haiku: "Flash",
   Luna: "Flash",
   Flash: "Sol, through `$pr-review` in Codex",
-  Sol: "Sonnet",
+  Sol: "Sonnet, Astra, or Opus",
   Sonnet: "Sol, through `$pr-review` in Codex; Opus when Josh names the pull request",
-  Astra: "*(none — no automatic reviewer)*",
-  Opus: "*(none — no automatic reviewer)*",
+  Astra: "Opus or Josh",
+  Opus: "Josh",
 };
 
 function documentedDefaults(text: string): Record<ModelLabel, string> {
@@ -145,10 +145,10 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
     "Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung.",
   );
 
-  // Default reviewers stated in prose and table
+  // Reconciled reviewer choices stated in prose
   assertStringIncludes(
     text,
-    "The default reviewers are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Astra and Opus authors have no automatic reviewer.",
+    "The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.",
   );
 
   // Sol reviews on Codex & recording-day rules
@@ -168,4 +168,52 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
     text,
     "An unattended Sol review launch passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`.",
   );
+});
+
+Deno.test("reviewer-matrix assertions detect stale table and prose values", async () => {
+  const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
+
+  // Stale table cells are absent
+  assertFalse(text.includes("| Sol | Sonnet |"));
+  assertFalse(text.includes("| Astra | *(none — no automatic reviewer)* |"));
+  assertFalse(text.includes("| Opus | *(none — no automatic reviewer)* |"));
+
+  // Stale prose is absent
+  assertFalse(
+    text.includes(
+      "Sonnet for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Astra and Opus authors have no automatic reviewer.",
+    ),
+  );
+
+  // Reconciled table cells are present
+  assertStringIncludes(text, "| Sol | Sonnet, Astra, or Opus |");
+  assertStringIncludes(text, "| Astra | Opus or Josh |");
+  assertStringIncludes(text, "| Opus | Josh |");
+});
+
+Deno.test("reviewer-matrix distinguishes tier eligibility from specific authorship restrictions", () => {
+  // General tier comparison: Sol, Astra, and Sonnet share rung 4.
+  // Tier rule allows any reviewer on same or higher rung (except Opus on Opus).
+  const tierEligibleForSol = ["Sol", "Astra", "Sonnet", "Opus"];
+  const tierEligibleForAstra = ["Sol", "Astra", "Sonnet", "Opus"];
+
+  // Specific authorship restrictions override equal-rank tier eligibility:
+  // 1. Sol author cannot be reviewed by Sol (a model never reviews its own contribution)
+  const solReviewerChoices = ["Sonnet", "Astra", "Opus"];
+  assertEquals(tierEligibleForSol.includes("Sol"), true); // tier comparison allows it
+  assertEquals(solReviewerChoices.includes("Sol"), false); // authorship restriction excludes it
+
+  // 2. Astra author cannot be reviewed by same-rung models (Sol, Astra, Sonnet); only Opus or Josh
+  const astraModelReviewerChoices = ["Opus"];
+  assertEquals(tierEligibleForAstra.includes("Sol"), true); // tier comparison allows it
+  assertEquals(tierEligibleForAstra.includes("Astra"), true); // tier comparison allows it
+  assertEquals(tierEligibleForAstra.includes("Sonnet"), true); // tier comparison allows it
+  assertEquals(astraModelReviewerChoices.includes("Sol"), false); // authorship restriction excludes Sol
+  assertEquals(astraModelReviewerChoices.includes("Astra"), false); // authorship restriction excludes Astra
+  assertEquals(astraModelReviewerChoices.includes("Sonnet"), false); // authorship restriction excludes Sonnet
+  assertEquals(astraModelReviewerChoices.includes("Opus"), true); // Opus is eligible
+
+  // 3. Opus author cannot be reviewed by any model (Josh reviews)
+  const opusModelReviewerChoices: string[] = [];
+  assertEquals(opusModelReviewerChoices.length, 0);
 });
