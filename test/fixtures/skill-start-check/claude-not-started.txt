@@ -1,0 +1,6 @@
+                     tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scroll
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Tell me a joke about music
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Why did the musician get locked out of the studio? Because the key was in the wrong mode.

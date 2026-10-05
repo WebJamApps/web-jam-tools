@@ -1,0 +1,4 @@
+{
+  "by_name": "run /handle-gmails",
+  "on_its_own": "Process my inbox and triage my unread Gmail messages one by one"
+}
