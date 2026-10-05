@@ -1759,6 +1759,143 @@ Deno.test(
 );
 
 Deno.test(
+  "a pattern moved to --ask is removed from permissions.allow on install (R-39, R-43, web-jam-tools#448)",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          allow: [
+            "mcp__google-drive__deleteItem",
+            "mcp__google-drive__addPermission",
+            "mcp__google-drive__updatePermission",
+            "mcp__google-drive__listFolder",
+          ],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--ask",
+          "mcp__google-drive__deleteItem",
+          "mcp__google-drive__addPermission",
+          "mcp__google-drive__updatePermission",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed permissions.allow rule mcp__google-drive__deleteItem (now owned by permissions.ask)",
+          ),
+          res.stdout,
+        );
+        assert(
+          res.stdout.includes(
+            "removed permissions.allow rule mcp__google-drive__addPermission (now owned by permissions.ask)",
+          ),
+          res.stdout,
+        );
+        assert(
+          res.stdout.includes(
+            "removed permissions.allow rule mcp__google-drive__updatePermission (now owned by permissions.ask)",
+          ),
+          res.stdout,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.allow, ["mcp__google-drive__listFolder"]);
+        assertEquals(data.permissions?.ask, [
+          "mcp__google-drive__deleteItem",
+          "mcp__google-drive__addPermission",
+          "mcp__google-drive__updatePermission",
+        ]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "a pattern moved to --deny is removed from permissions.allow on install (R-40, web-jam-tools#448)",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          allow: ["mcp__gmail__send_email", "mcp__gmail__read_email"],
+        },
+      },
+      async (path) => {
+        const res = await runMerge(path, [
+          "--deny",
+          "mcp__gmail__send_email",
+        ]);
+        assertEquals(res.code, 0, res.stderr);
+        assert(
+          res.stdout.includes(
+            "removed permissions.allow rule mcp__gmail__send_email (now owned by permissions.deny)",
+          ),
+          res.stdout,
+        );
+
+        const data = await readJson(path);
+        assertEquals(data.permissions?.allow, ["mcp__gmail__read_email"]);
+        assertEquals(data.permissions?.deny, ["mcp__gmail__send_email"]);
+      },
+    );
+  },
+);
+
+Deno.test(
+  "--check reports a pattern present in both permissions.allow and permissions.ask or permissions.deny as drift (web-jam-tools#448)",
+  async () => {
+    await withTempSettings(
+      {
+        permissions: {
+          allow: [
+            "mcp__google-drive__deleteItem",
+            "mcp__google-drive__addPermission",
+            "mcp__google-drive__updatePermission",
+            "mcp__gmail__send_email",
+          ],
+        },
+      },
+      async (path) => {
+        const checkRes = await runMerge(path, [
+          "--check",
+          "--ask",
+          "mcp__google-drive__deleteItem",
+          "mcp__google-drive__addPermission",
+          "mcp__google-drive__updatePermission",
+          "--deny",
+          "mcp__gmail__send_email",
+        ]);
+        assertEquals(checkRes.code, 1);
+        assert(
+          checkRes.stderr.includes(
+            "permissions.allow rule mcp__google-drive__deleteItem is also in permissions.ask (stale copy)",
+          ),
+          checkRes.stderr,
+        );
+        assert(
+          checkRes.stderr.includes(
+            "permissions.allow rule mcp__google-drive__addPermission is also in permissions.ask (stale copy)",
+          ),
+          checkRes.stderr,
+        );
+        assert(
+          checkRes.stderr.includes(
+            "permissions.allow rule mcp__google-drive__updatePermission is also in permissions.ask (stale copy)",
+          ),
+          checkRes.stderr,
+        );
+        assert(
+          checkRes.stderr.includes(
+            "permissions.allow rule mcp__gmail__send_email is also in permissions.deny (stale copy)",
+          ),
+          checkRes.stderr,
+        );
+      },
+    );
+  },
+);
+
+Deno.test(
   "--check mode in merge-hooks-into-settings.ts reports drift on stale/retired hook entries",
   async () => {
     await withTempSettings(
