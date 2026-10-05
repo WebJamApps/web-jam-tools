@@ -15,6 +15,8 @@
 # `--restart` behaves like a normal first run.
 # Connected terminals wait in a temporary session while the old agent processes
 # are ended, then switch back to the fresh tabs to pick up installed hooks/skills.
+# A laptop restart reuses an attached laptop terminal and returns the invoking
+# terminal to its shell; SSH callers still attach to the restarted session.
 #
 # Before it creates a new session, it runs scripts/update-all.sh in the foreground
 # (output visible in the terminal) so Claude Code, agy and Codex start on their
@@ -172,6 +174,11 @@ attach_and_exit() {
   # The invoking client was switched back by finish_restart. Its old pane and
   # tty are gone, so don't try to create a second attachment from this process.
   [ "$inside_target_session" -eq 0 ] || exit 0
+  # A restart from a second laptop terminal should leave tmux in the original
+  # terminal. Remote callers still need their own attachment to use the session.
+  if [ "$DO_RESTART" -eq 1 ] && [ -z "${SSH_CONNECTION:-}" ] && laptop_client_present; then
+    exit 0
+  fi
   if [ "$DO_ATTACH" = "1" ]; then
     if { [ -t 0 ] && [ "${TERM:-dumb}" != "dumb" ]; } || [ "${AGENTS_FORCE_ATTACH:-0}" = "1" ]; then
       if [ -n "${TMUX:-}" ] && [ ${#TMUX_ARGS[@]} -eq 0 ]; then

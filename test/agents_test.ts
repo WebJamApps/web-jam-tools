@@ -856,6 +856,122 @@ Deno.test("agents does not check agy Tool Permission when only attaching to exis
 
 // ---- Session restart (web-jam-tools#1255) ----
 
+for (
+  const scenario of [
+    {
+      name: "local restart reuses the existing laptop terminal",
+      laptop: true,
+      ssh: false,
+      attaches: false,
+    },
+    {
+      name: "SSH restart reuses the laptop terminal and attaches the remote caller",
+      laptop: true,
+      ssh: true,
+      attaches: true,
+    },
+    {
+      name: "local restart attaches when no laptop terminal is open",
+      laptop: false,
+      ssh: false,
+      attaches: true,
+    },
+  ]
+) {
+  Deno.test(`agents.sh ${scenario.name}`, async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const attachmentMarker = `${tmpDir}/caller-attached`;
+      const windowMarker = `${tmpDir}/window-opened`;
+      const env = stubEnv(tmpDir, `touch '${windowMarker}'`);
+      const initial = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(initial.code, 0, initial.stderr);
+      const client = scenario.laptop ? await attachClient(socketName, tmpDir, false) : undefined;
+      try {
+        const before = await run("tmux", [
+          "-L",
+          socketName,
+          "list-clients",
+          "-t",
+          "agents",
+          "-F",
+          "#{client_pid}",
+        ], env);
+        assertEquals(before.code, 0);
+        const binDir = `${tmpDir}/bin`;
+        await Deno.mkdir(binDir);
+        await Deno.writeTextFile(
+          `${binDir}/tmux`,
+          `#!/usr/bin/env bash
+for arg in "$@"; do
+  if [ "$arg" = "attach-session" ]; then
+    touch '${attachmentMarker}'
+    exit 0
+  fi
+done
+exec /usr/bin/tmux "$@"
+`,
+        );
+        await Deno.chmod(`${binDir}/tmux`, 0o755);
+        const restarted = await run("env", [
+          "-u",
+          "SSH_CONNECTION",
+          "-u",
+          "TMUX",
+          "-u",
+          "TMUX_PANE",
+          ...(scenario.ssh ? [`SSH_CONNECTION=${SSH_ENV.SSH_CONNECTION}`] : []),
+          "bash",
+          AGENTS_SCRIPT,
+          "-L",
+          socketName,
+          "--restart",
+        ], {
+          ...env,
+          AGENTS_FORCE_ATTACH: "1",
+          PATH: `${binDir}:${Deno.env.get("PATH") || ""}`,
+        });
+        assertEquals(restarted.code, 0, restarted.stderr);
+        assert(restarted.stdout.includes("Restarting 'agents' tmux session..."));
+        assertEquals(
+          await exists(attachmentMarker),
+          scenario.attaches,
+          "the caller should attach only when another laptop terminal is not being reused or the caller is remote",
+        );
+        assert(!await exists(windowMarker), "restart must not launch another laptop window");
+        const after = await run("tmux", [
+          "-L",
+          socketName,
+          "list-clients",
+          "-t",
+          "agents",
+          "-F",
+          "#{client_pid}",
+        ], env);
+        assertEquals(after.code, 0);
+        assertEquals(after.stdout, before.stdout, "the original laptop client must stay attached");
+        const windows = await run("tmux", [
+          "-L",
+          socketName,
+          "list-windows",
+          "-t",
+          "agents",
+          "-F",
+          "#{window_name}",
+        ], env);
+        assertEquals(windows.stdout.trim().split("\n"), ["claude", "codex", "agy"]);
+      } finally {
+        if (client) {
+          await run("tmux", ["-L", socketName, "detach-client", "-a"], env);
+          try {
+            client.kill();
+          } catch { /* already detached */ }
+          await client.status;
+        }
+      }
+    });
+  });
+}
+
 Deno.test(
   "agents.sh --restart against existing session ends old session and creates fresh session with 3 tabs",
   async () => {
