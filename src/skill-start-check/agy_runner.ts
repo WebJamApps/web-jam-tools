@@ -17,109 +17,74 @@ export interface AgyCommandExecutor {
   }>;
 }
 
-async function readStream(readable: ReadableStream<Uint8Array>): Promise<string> {
+function captureStream(readable: ReadableStream<Uint8Array>) {
   const reader = readable.getReader();
-  const chunks: Uint8Array[] = [];
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-    }
-  } catch {
-    // Pipe closed or cancelled
-  } finally {
+  const output = (async () => {
+    const chunks: Uint8Array[] = [];
     try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+    } finally {
       reader.releaseLock();
-    } catch {
-      // Ignore release error
+    }
+    const total = chunks.reduce((acc, c) => acc + c.length, 0);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return new TextDecoder().decode(bytes);
+  })();
+  return { output, cancel: () => readable.locked ? reader.cancel() : Promise.resolve() };
+}
+
+async function signalGroup(child: Deno.ChildProcess, signal: "SIGTERM" | "SIGKILL") {
+  // setsid isolates this check's descendants from the caller's process group.
+  const result = await new Deno.Command("kill", {
+    args: ["-s", signal, "--", `-${child.pid}`],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  if (!result.success) {
+    try {
+      child.kill(signal);
+    } catch (err) {
+      if (!(err instanceof Deno.errors.NotFound) && !(err instanceof TypeError)) throw err;
     }
   }
-  const total = chunks.reduce((acc, c) => acc + c.length, 0);
-  const res = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) {
-    res.set(c, offset);
-    offset += c.length;
-  }
-  return new TextDecoder().decode(res);
 }
 
 export const defaultAgyCommandExecutor: AgyCommandExecutor = {
-  async run(prompt: string, timeoutMs: number, options?: { workDir?: string; agyPath?: string }) {
-    const agyBin = options?.agyPath ?? "agy";
-    const cmd = new Deno.Command(agyBin, {
-      args: ["-p", prompt],
-      cwd: options?.workDir,
-      stdin: "null",
-      stdout: "piped",
-      stderr: "piped",
-    });
+  async run(prompt, timeoutMs, options) {
     let child: Deno.ChildProcess;
     try {
-      child = cmd.spawn();
+      child = new Deno.Command("setsid", {
+        args: [options?.agyPath ?? "agy", "-p", prompt],
+        cwd: options?.workDir,
+        stdin: "null",
+        stdout: "piped",
+        stderr: "piped",
+      }).spawn();
     } catch (err) {
-      return {
-        success: false,
-        code: -1,
-        stdout: "",
-        stderr: err instanceof Error ? err.message : String(err),
-      };
+      return { success: false, code: -1, stdout: "", stderr: String(err) };
     }
-
+    const stdout = captureStream(child.stdout);
+    const stderr = captureStream(child.stderr);
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
-      timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), timeoutMs);
     });
-
-    const executionPromise = Promise.all([
-      readStream(child.stdout),
-      readStream(child.stderr),
-      child.status,
-    ]).then(([stdout, stderr, status]) => ({
-      timedOut: false as const,
-      stdout,
-      stderr,
-      code: status.code,
-      success: status.success,
-    }));
-
-    const res = await Promise.race([executionPromise, timeoutPromise]);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
-
-    if (res.timedOut) {
-      // Pipe cleanup: cancel streams so readers unblock and pipes close
-      await Promise.allSettled([
-        child.stdout.cancel(),
-        child.stderr.cancel(),
-      ]);
-
-      // Bounded termination escalation:
-      // 1. Send SIGTERM
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // Child already exited
+    const execution = Promise.all([stdout.output, stderr.output, child.status]);
+    try {
+      const result = await Promise.race([execution, timeout]);
+      if (result) {
+        const [out, err, status] = result;
+        return { success: status.success, code: status.code, stdout: out, stderr: err };
       }
-
-      // Grace period before escalating to SIGKILL
-      const graceMs = 100;
-      const exited = await Promise.race([
-        child.status.then(() => true).catch(() => true),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), graceMs)),
-      ]);
-
-      // 2. Escalate to SIGKILL if still running
-      if (!exited) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Child already exited
-        }
-      }
-
       return {
         success: false,
         code: -1,
@@ -127,14 +92,21 @@ export const defaultAgyCommandExecutor: AgyCommandExecutor = {
         stderr: `Timed out after ${timeoutMs}ms`,
         timedOut: true,
       };
+    } catch (err) {
+      return { success: false, code: -1, stdout: "", stderr: String(err) };
+    } finally {
+      clearTimeout(timer);
+      // Cancel through the readers that hold the stream locks, then reap the
+      // entire isolated group even if its leader exited before its descendants.
+      await Promise.allSettled([stdout.cancel(), stderr.cancel()]);
+      try {
+        await signalGroup(child, "SIGTERM");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } finally {
+        await signalGroup(child, "SIGKILL");
+        await Promise.allSettled([stdout.output, stderr.output, child.status]);
+      }
     }
-
-    return {
-      success: res.success,
-      code: res.code,
-      stdout: res.stdout,
-      stderr: res.stderr,
-    };
   },
 };
 

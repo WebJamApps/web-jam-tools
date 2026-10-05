@@ -12,6 +12,11 @@ Proves a skill still starts after its description or listing changes, on Claude 
 deno task skill-start-check <skill-name> [--tool claude|agy|all]
 ```
 
+The check reads the installed skill without changing its links. If its instructions or resources
+differ from the candidate, it refuses rather than reporting a result for the installed copy. The
+harness-only `start-check.json` is excluded from that comparison. agy checks require Linux
+`setsid` and `kill` to terminate the check's process group and its descendants on timeout.
+
 ### `install-codex.ts`
 
 Installs the Codex configuration described by web-jam-tools#1143 "scripts: Codex installer for
