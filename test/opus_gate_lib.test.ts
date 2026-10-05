@@ -830,14 +830,20 @@ Deno.test("checker throws proceeds by workflow default (allow)", () => {
 
 // --- CLI ---
 
-async function runCli(stdin: string): Promise<Record<string, unknown>> {
+async function runCli(
+  stdin: string,
+  env: Record<string, string> = {},
+): Promise<Record<string, unknown>> {
   const child = new Deno.Command("deno", {
     args: [
       "run",
       "--no-config",
       "--allow-read",
+      "--allow-env",
+      "--allow-write",
       new URL("../hooks/lib/opus_gate.ts", import.meta.url).pathname,
     ],
+    env,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -861,6 +867,73 @@ Deno.test("CLI: prints a decision for a payload and allows by workflow default o
     const unreadable = await runCli("not json");
     assertEquals(unreadable.decision, "allow");
     assert(typeof unreadable.why === "string" && unreadable.why.length > 0);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// --- Workflow switch unit tests (web-jam-tools#1046) ---
+
+Deno.test("decide: switchChecker releasing allows an otherwise-denied edit", () => {
+  const read: ReadText = (p) =>
+    p === "sess.jsonl" ? jsonl([human("no phrase"), assistant("claude-opus-5")]) : null;
+
+  const releasedChecker = (guard: string) => ({
+    released: guard === "opus-delegation-gate",
+    reason: "Released by test switch.",
+  });
+
+  const res = decide(
+    { transcript_path: "sess.jsonl", tool_name: "Edit", tool_input: { file_path: "src/a.ts" } },
+    read,
+    () => null,
+    releasedChecker,
+  );
+  assertEquals(res.decision, "allow");
+  assertEquals(res.why, "Released by test switch.");
+
+  const unreleasedChecker = (_guard: string) => ({ released: false });
+  const deniedRes = decide(
+    { transcript_path: "sess.jsonl", tool_name: "Edit", tool_input: { file_path: "src/a.ts" } },
+    read,
+    () => null,
+    unreleasedChecker,
+  );
+  assertEquals(deniedRes.decision, "deny");
+});
+
+Deno.test("CLI: unexpired switch releases otherwise-denied payload and logs release", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const transcript = `${dir}/sess.jsonl`;
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    await Deno.writeTextFile(
+      transcript,
+      jsonl([human("no approval"), assistant("claude-opus-5")]),
+    );
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({
+        guard: "opus-delegation-gate",
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      }),
+    );
+
+    const payload = JSON.stringify({
+      transcript_path: transcript,
+      tool_name: "Edit",
+      tool_input: { file_path: "src/a.ts" },
+    });
+    const res = await runCli(payload, {
+      WORKFLOW_SWITCH_PATH: switchPath,
+      WORKFLOW_SWITCH_LOG_PATH: logPath,
+    });
+    assertEquals(res.decision, "allow");
+    assert(typeof res.why === "string" && res.why.includes("opus-delegation-gate"));
+
+    const log = await Deno.readTextFile(logPath);
+    assert(log.includes("released guard: opus-delegation-gate"));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
