@@ -27,6 +27,14 @@ import { parse as parseYaml } from "@std/yaml";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
 
+Deno.test("cross-AI rules require Codex to look up its running model", async () => {
+  const rules = await Deno.readTextFile(new URL("../docs/cross-ai-rules.md", import.meta.url));
+  assertStringIncludes(
+    rules,
+    "On Codex, run `deno task whoami` whenever you need your own model — when Josh asks which model you are, and before `$pr-review` applies the reviewer rule — and never answer from your own context or from `~/.codex/config.toml`.",
+  );
+});
+
 /** Split a SKILL.md's contents into { frontmatter, body }. */
 function extractFrontmatter(text: string): string {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);

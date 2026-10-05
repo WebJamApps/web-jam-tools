@@ -79,6 +79,7 @@ skill.
 
 ## OPERATIONAL HARD RULES (apply to any AI taking action on Josh's behalf)
 
+- **CODEX RUNNING MODEL:** On Codex, run `deno task whoami` whenever you need your own model — when Josh asks which model you are, and before `$pr-review` applies the reviewer rule — and never answer from your own context or from `~/.codex/config.toml`.
 - CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
 - EMAIL: always DRAFT, never send. Save as Gmail draft for Josh's review.
 - **EMAIL SEND CARVE-OUT — `/book-gig` gated batch dispatch only:** The single named

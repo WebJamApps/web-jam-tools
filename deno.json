@@ -4,6 +4,7 @@
   "version": "1.38.107",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
+    "whoami": "bash -c 'exec deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME --allow-read=.,\"${CODEX_HOME:-$HOME/.codex}/sessions\" --allow-run=bash scripts/whoami.ts'",
     "skill-start-check": "deno run --allow-run=tmux,claude,agy,setsid,kill --allow-read=.,skills,/tmp,$HOME/WebJamApps/web-jam-tools,$HOME/.claude/skills,$HOME/.gemini/config/plugins/webjam-tasks/skills --allow-write=/tmp --allow-env=HOME,TMPDIR,PATH,USER scripts/skill-start-check.ts",
     "reaper:start": "deno run --allow-read --allow-write --allow-env --allow-run scripts/reaper-start.ts",
     "reaper:done": "deno run --allow-read --allow-write --allow-env --allow-run scripts/reaper-done.ts",

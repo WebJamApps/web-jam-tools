@@ -251,6 +251,10 @@ while [ $# -gt 0 ]; do
       author_roster_check "$2"
       echo "OK: '$2' names a model on the roster."
       exit 0 ;;
+    --list-roster)
+      # Read-only source for the running-model lookup; no git access or writes.
+      printf '%s\n' "${ROSTER[@]}"
+      exit 0 ;;
     --closes)
       if [ $# -ge 2 ] && [[ "$2" != --* ]]; then
         ISSUE="$2"
