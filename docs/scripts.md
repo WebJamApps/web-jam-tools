@@ -272,29 +272,12 @@ script, skill body, or `hooks/lib/*.ts` module is live on both surfaces the mome
 no install step is needed unless the change is structural (a new/renamed/deleted skill or hook, or a
 changed event/matcher registration).
 
-### `permissions.defaultMode` (managed by `install-hooks.sh`)
+### `permissions.defaultMode`
 
-`~/.claude/settings.json` has no `permissions.defaultMode` key by default, so a Claude Code session
-starts in whatever permission mode was last selected rather than a deliberate one. When that mode
-was `auto`, `hooks/opus-delegation-gate.sh` refused EVERY Edit/Write/NotebookEdit to a git-tracked
-path — main thread and subagent alike. Since web-jam-tools#965 it decides a subagent's edit by that
-subagent's real model and the message Josh typed to spawn it (measured cost before that fix: two
-dispatched Sonnet subagents refused on their first edit, ~93k and ~62k tokens burned for zero
-output, 2026-08-22 — web-jam-tools#705).
-
-`scripts/install-hooks.sh` idempotently sets `permissions.defaultMode` to `acceptEdits` (the
-`DEFAULT_MODE` value near the top of the script) in the target settings.json, following the same
-pattern the `DENY_RULES`/ `ASK_RULES` arrays already use for `permissions.deny`/`permissions.ask` —
-the actual merge is a single-scalar write in `scripts/merge-hooks-into-settings.ts`, modeled on the
-`statusLine` merge above but nested under `permissions` as a plain string rather than top-level as
-an object. `--check` reports drift when the installed value is absent or differs; a second run is a
-no-op.
-
-**Claude Code ONLY** — never merged into agy's `hooks.json`. agy has no permission-mode concept at
-all: `docs/agy-hooks.md` records "without touching Claude Code's permissions at all (non-goal)" for
-the closest analogous surface, and there is no agy-side equivalent to gate. This is a deliberate,
-Josh-approved single-surface exception to the usual rule that hook/skill changes ship to both
-surfaces.
+The installer does not manage Claude Code's permission mode (`permissions.defaultMode` in
+`~/.claude/settings.json`). Whatever mode is configured by the user remains untouched. A Sonnet or
+Haiku subagent may edit in `auto` mode because `hooks/opus-delegation-gate.sh` judges a subagent by
+its model rather than blocking edits based on auto mode (web-jam-tools#965, web-jam-tools#1232).
 
 ### `autoMode` (managed by `install-hooks.sh`)
 
@@ -318,7 +301,7 @@ script.
 - **Its strings are secret-scanned** with the same credential-literal check as `permissions` and
   `hooks`; a match refuses the write.
 
-**Claude Code ONLY**, like `statusLine` and `permissions.defaultMode`: it is never merged into agy's
+**Claude Code ONLY**, like `statusLine`: it is never merged into agy's
 `hooks.json`.
 
 ## Example scraping / data utilities

@@ -24,7 +24,6 @@ export function merge(settingsPath: string, args: string[]): number {
   let askPatterns: string[] = [];
   let allowPatterns: string[] = [];
   let statusLineArgs: string[] = [];
-  let defaultModeArgs: string[] = [];
   let autoModeArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
@@ -72,7 +71,6 @@ export function merge(settingsPath: string, args: string[]): number {
         "--ask",
         "--allow",
         "--status-line",
-        "--default-mode",
         "--auto-mode",
       ],
       rest,
@@ -96,7 +94,6 @@ export function merge(settingsPath: string, args: string[]): number {
     askPatterns = sections["--ask"] || [];
     allowPatterns = sections["--allow"] || [];
     statusLineArgs = sections["--status-line"] || [];
-    defaultModeArgs = sections["--default-mode"] || [];
     autoModeArgs = sections["--auto-mode"] || [];
   }
 
@@ -451,33 +448,6 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
-  // permissions.defaultMode merge (web-jam-tools#705). Same single-scalar
-  // shape as statusLine above, but nested under permissions instead of
-  // top-level — Claude Code's settings.json stores it as a plain string
-  // (e.g. "acceptEdits"), not an object. Only touched when --default-mode
-  // was actually passed, so a target invoked without it (agy's hooks.json —
-  // agy has no permission-mode concept at all, docs/agy-hooks.md) is
-  // completely unaffected: no key added, no drift ever reported,
-  // byte-identical output.
-  let defaultModeAdded = false;
-  let defaultModeChanged = false;
-  let defaultModePrevValue: string | undefined;
-  if (defaultModeArgs.length > 0) {
-    const desiredMode = defaultModeArgs[0];
-    if (!data.permissions || typeof data.permissions !== "object") {
-      data.permissions = {};
-    }
-    const current = data.permissions.defaultMode;
-    if (current === undefined) {
-      defaultModeAdded = true;
-      data.permissions.defaultMode = desiredMode;
-    } else if (current !== desiredMode) {
-      defaultModeChanged = true;
-      defaultModePrevValue = typeof current === "string" ? current : undefined;
-      data.permissions.defaultMode = desiredMode;
-    }
-  }
-
   // autoMode merge: the whole object is owned by this installer. One JSON
   // string argument; installed when absent, replaced when it differs (key
   // order ignored, array order significant). Only touched when --auto-mode
@@ -591,8 +561,6 @@ export function merge(settingsPath: string, args: string[]): number {
     askOwnedInAllow.length > 0 ||
     statusLineAdded ||
     statusLineChanged ||
-    defaultModeAdded ||
-    defaultModeChanged ||
     autoModeAdded ||
     autoModeChanged;
 
@@ -689,16 +657,6 @@ export function merge(settingsPath: string, args: string[]): number {
           `${targetFilename}: statusLine differs from desired (want ${statusLineArgs[0]}${
             statusLinePrevCommand ? `, has ${statusLinePrevCommand}` : ""
           })`,
-        );
-      }
-      if (defaultModeAdded) {
-        console.error(`${targetFilename}: missing permissions.defaultMode ${defaultModeArgs[0]}`);
-      }
-      if (defaultModeChanged) {
-        console.error(
-          `${targetFilename}: permissions.defaultMode differs from desired (want ${
-            defaultModeArgs[0]
-          }${defaultModePrevValue ? `, has ${defaultModePrevValue}` : ""})`,
         );
       }
       if (autoModeAdded) {
@@ -834,14 +792,6 @@ export function merge(settingsPath: string, args: string[]): number {
   }
   if (statusLineChanged) {
     console.log(`${targetFilename}: updated statusLine to ${statusLineArgs[0]}`);
-  }
-  if (defaultModeAdded) {
-    console.log(`${targetFilename}: added permissions.defaultMode ${defaultModeArgs[0]}`);
-  }
-  if (defaultModeChanged) {
-    console.log(
-      `${targetFilename}: updated permissions.defaultMode to ${defaultModeArgs[0]}`,
-    );
   }
   if (autoModeAdded) {
     console.log(`${targetFilename}: added autoMode section`);
