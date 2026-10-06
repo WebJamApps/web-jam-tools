@@ -6,7 +6,13 @@
  * raw form on both agent surfaces; this is the only route to it.
  */
 import { probeRoster } from "../hooks/lib/authored_by_footer.ts";
-import { extractFooterEntries, REVIEW_SUMMARY_HEADER, runFormGuards } from "./gh-write/guard.ts";
+import {
+  extractFooterEntries,
+  REVIEW_SUMMARY_HEADER,
+  rewriteSigningLines,
+  runFormGuards,
+} from "./gh-write/guard.ts";
+import type { RunningModelOptions } from "../src/shared/codex_running_model.ts";
 import { type RunCmd, runWithRetry } from "./gh-write/gh_runner.ts";
 
 export interface Options {
@@ -29,6 +35,7 @@ export function parseArgs(args: string[]): Options {
 }
 
 export interface Deps {
+  signing?: RunningModelOptions;
   readFileText: (path: string) => Promise<string>;
   runCmd: RunCmd;
   sleep?: (ms: number) => Promise<void>;
@@ -44,7 +51,14 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     return 1;
   }
 
-  const body = await deps.readFileText(opts.bodyFile);
+  const originalBody = await deps.readFileText(opts.bodyFile);
+  let body: string;
+  try {
+    body = await rewriteSigningLines(originalBody, deps.signing);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
   const formResult = runFormGuards(body, {
     // A body carrying the review header is a Step 4 follow-up review; any other
     // comment (e.g. a "Fixed by" note) is posted exactly as before.
@@ -82,8 +96,7 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     String(opts.pr),
     "--repo",
     opts.repo,
-    "--body-file",
-    opts.bodyFile,
+    ...(body === originalBody ? ["--body-file", opts.bodyFile] : ["--body", body]),
   ];
 
   if (opts.dryRun) {
@@ -101,9 +114,17 @@ export async function run(args: string[], deps: Deps): Promise<number> {
 }
 
 async function realRunCmd(cmd: string[]) {
-  const command = new Deno.Command(cmd[0], { args: cmd.slice(1), stdout: "piped", stderr: "piped" });
+  const command = new Deno.Command(cmd[0], {
+    args: cmd.slice(1),
+    stdout: "piped",
+    stderr: "piped",
+  });
   const { code, stdout, stderr } = await command.output();
-  return { code, stdout: new TextDecoder().decode(stdout), stderr: new TextDecoder().decode(stderr) };
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
 }
 
 if (import.meta.main) {

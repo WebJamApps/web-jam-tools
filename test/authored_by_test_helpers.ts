@@ -3,6 +3,8 @@
  * The probe is `create-draft-pr.sh --check-author <author>`; tests fake it so
  * no test starts a real subprocess for the roster check.
  */
+import type { RunningModelOptions } from "../src/shared/codex_running_model.ts";
+
 export const TEST_AUTHOR = "Claude Code — Opus";
 
 export interface ProbeResult {
@@ -18,11 +20,15 @@ export function isProbeCall(cmd: string[]): boolean {
 
 /** Wraps a deps object so roster-probe calls are answered "on the roster" and not forwarded. */
 export function withPassingProbe<
-  T extends { runCmd: (cmd: string[], stdin?: string) => Promise<ProbeResult> },
+  T extends {
+    runCmd: (cmd: string[], stdin?: string) => Promise<ProbeResult>;
+    signing?: RunningModelOptions;
+  },
 >(deps: T): T {
   const inner = deps.runCmd;
   return {
     ...deps,
+    signing: deps.signing ?? { env: () => undefined },
     runCmd: (cmd: string[], stdin?: string) =>
       isProbeCall(cmd)
         ? Promise.resolve({

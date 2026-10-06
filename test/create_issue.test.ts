@@ -5,6 +5,11 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import {
+  LUNA_SIGNATURE,
+  SIGNING_SESSION_ID,
+  withSigningFixture,
+} from "./support/codex_signing_fixture.ts";
+import {
   ApprovalCheckResult,
   checkApprovalToken,
   createIssueAndVerify as realCreateIssueAndVerify,
@@ -26,6 +31,43 @@ import {
 // down this file.
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
 
+Deno.test("signing issue k: dry run replaces the typed author with Luna", () =>
+  withSigningFixture(async (signing) => {
+    const { deps, calls } = probeDeps("## What this builds\nBody", { code: 0, stderr: "" });
+    deps.signing = signing;
+    const result = await realCreateIssueAndVerify(
+      {
+        title: "Signing fixture",
+        bodyFile: "/tmp/b.md",
+        author: "Codex — GPT-6.1 Sol",
+        dryRun: true,
+      },
+      deps,
+      APPROVE_ALL,
+    );
+    assertEquals(result.trimEnd().endsWith(`🤖 Authored by ${LUNA_SIGNATURE}`), true);
+    assertEquals(result.includes("🤖 Authored by Codex — GPT-6.1 Sol"), false);
+    assertEquals(calls.some((cmd) => cmd.includes("create") || cmd.includes("graphql")), false);
+  }));
+
+Deno.test("signing issue n: missing session refuses before any GitHub call", () =>
+  withSigningFixture(async (signing, _env, sessionPath) => {
+    const { deps, calls } = probeDeps("Body", { code: 0, stderr: "" });
+    deps.signing = signing;
+    await Deno.remove(sessionPath);
+    await assertRejects(
+      () =>
+        realCreateIssueAndVerify(
+          { title: "Signing fixture", bodyFile: "/tmp/b.md", author: LUNA_SIGNATURE },
+          deps,
+          APPROVE_ALL,
+        ),
+      Error,
+      SIGNING_SESSION_ID,
+    );
+    assertEquals(calls, []);
+  }));
+
 // Authored-by footer (web-jam-tools#1205): the tests below are about other
 // behavior, so this wrapper supplies a valid author and a fake roster probe.
 // Tests of the footer itself call realCreateIssueAndVerify directly.
@@ -36,7 +78,7 @@ const createIssueAndVerify = (
 ) =>
   realCreateIssueAndVerify(
     { author: TEST_AUTHOR, ...options },
-    deps ? withPassingProbe(deps) : deps,
+    withPassingProbe(deps ?? defaultExecDeps),
     approvalCheck,
   );
 
@@ -1750,6 +1792,7 @@ function probeDeps(
     calls,
     deps: {
       probeScriptPath: "/fake/create-draft-pr.sh",
+      signing: { env: () => undefined },
       readFileText: () => Promise.resolve(body),
       runCmd(cmd: string[]) {
         if (cmd[0] === "/fake/create-draft-pr.sh") {

@@ -1,9 +1,75 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { join } from "@std/path";
-import { readAuthorRoster, type RunningModelOptions } from "../src/shared/codex_running_model.ts";
+import {
+  readAuthorRoster,
+  resolveSigningAuthor,
+  type RunningModelOptions,
+} from "../src/shared/codex_running_model.ts";
+import {
+  LUNA_SIGNATURE,
+  SIGNING_SESSION_ID,
+  withSigningFixture,
+} from "./support/codex_signing_fixture.ts";
 import { runWhoami } from "../scripts/whoami.ts";
 
 const SESSION_ID = "01a10611-a947-7b00-87b3-414e9e2085eb";
+for (const author of ["Codex — GPT-6.1 Sol", undefined]) {
+  Deno.test(`signing a/b: lookup replaces ${author ?? "missing author"}`, () =>
+    withSigningFixture(async (options) => {
+      assertEquals(await resolveSigningAuthor(author, options), LUNA_SIGNATURE);
+    }));
+}
+
+for (const id of [undefined, ""]) {
+  Deno.test(`signing c/i: ${id === undefined ? "unset" : "empty"} session preserves typed author`, async () => {
+    const options = {
+      env: () => id,
+      readRoster: () => Promise.reject(new Error("must not look up")),
+    };
+    assertEquals(await resolveSigningAuthor("Claude Code — Opus", options), "Claude Code — Opus");
+    assertEquals(await resolveSigningAuthor(undefined, options), undefined);
+  });
+}
+
+for (const author of [undefined, "Codex — GPT-6.1 Sol"]) {
+  Deno.test(`signing f/g: forced author with lookup refuses ${author ?? "no typed name"}`, () =>
+    withSigningFixture(async (options, env) => {
+      env.FORCED_PR_AUTHOR = "agy — Gemini Flash (High)";
+      await assertRejects(
+        () => resolveSigningAuthor(author, options),
+        Error,
+        "CODEX_THREAD_ID and FORCED_PR_AUTHOR",
+      );
+    }));
+}
+
+Deno.test("signing h: missing session refuses despite a valid typed name", () =>
+  withSigningFixture(async (options, _env, sessionPath) => {
+    await Deno.remove(sessionPath);
+    await assertRejects(
+      () => resolveSigningAuthor(LUNA_SIGNATURE, options),
+      Error,
+      SIGNING_SESSION_ID,
+    );
+  }));
+
+Deno.test("whoami signing bridge supplies lookup with no typed author and reports conflicts", () =>
+  withSigningFixture(async (options, env) => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    assertEquals(
+      await runWhoami({ ...options, signing: true }, (s) => output.push(s), (s) => errors.push(s)),
+      0,
+    );
+    assertEquals(output, [LUNA_SIGNATURE]);
+    env.FORCED_PR_AUTHOR = "agy — Gemini Flash (High)";
+    assertEquals(
+      await runWhoami({ ...options, signing: true }, (s) => output.push(s), (s) => errors.push(s)),
+      1,
+    );
+    assertEquals(output, [LUNA_SIGNATURE]);
+    assertStringIncludes(errors[0], "CODEX_THREAD_ID and FORCED_PR_AUTHOR");
+  }));
 const FILE_NAME = `rollout-2026-10-04T04-39-43-${SESSION_ID}.jsonl`;
 const LUNA_TURN = '{"type":"turn_context","payload":{"model":"gpt-6-luna"}}';
 

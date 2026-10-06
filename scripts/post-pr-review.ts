@@ -15,8 +15,10 @@
  */
 import {
   isAlreadyReviewedAtHeadSha,
+  rewriteSigningLines,
   runFormGuards,
 } from "./gh-write/guard.ts";
+import type { RunningModelOptions } from "../src/shared/codex_running_model.ts";
 import { type RunCmd, runWithRetry } from "./gh-write/gh_runner.ts";
 
 export interface Options {
@@ -53,6 +55,7 @@ export function parseArgs(args: string[]): Options {
 }
 
 export interface Deps {
+  signing?: RunningModelOptions;
   readFileText: (path: string) => Promise<string>;
   runCmd: RunCmd;
   sleep?: (ms: number) => Promise<void>;
@@ -76,7 +79,14 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     return 1;
   }
 
-  const body = await deps.readFileText(opts.bodyFile);
+  const originalBody = await deps.readFileText(opts.bodyFile);
+  let body: string;
+  try {
+    body = await rewriteSigningLines(originalBody, deps.signing, true);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
   const formResult = runFormGuards(body, { requireReviewHeader: true, requireReviewerLine: true });
   if (!formResult.ok) {
     console.error(formResult.error);
@@ -101,8 +111,7 @@ export async function run(args: string[], deps: Deps): Promise<number> {
     "--repo",
     opts.repo,
     "--comment",
-    "--body-file",
-    opts.bodyFile,
+    ...(body === originalBody ? ["--body-file", opts.bodyFile] : ["--body", body]),
   ];
 
   if (opts.dryRun) {
@@ -120,9 +129,17 @@ export async function run(args: string[], deps: Deps): Promise<number> {
 }
 
 async function realRunCmd(cmd: string[]) {
-  const command = new Deno.Command(cmd[0], { args: cmd.slice(1), stdout: "piped", stderr: "piped" });
+  const command = new Deno.Command(cmd[0], {
+    args: cmd.slice(1),
+    stdout: "piped",
+    stderr: "piped",
+  });
   const { code, stdout, stderr } = await command.output();
-  return { code, stdout: new TextDecoder().decode(stdout), stderr: new TextDecoder().decode(stderr) };
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
 }
 
 if (import.meta.main) {

@@ -4,11 +4,13 @@ import { assertEquals } from "@std/assert";
 import { type Deps, run } from "../scripts/post-pr-review.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 import { REVIEW_SUMMARY_HEADER } from "../scripts/gh-write/guard.ts";
+import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 
 const REVIEWER_LINE = "🤖 Reviewed by Claude Code — Claude Sonnet 5.5";
 
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
   return {
+    signing: { env: () => undefined },
     readFileText: () =>
       Promise.resolve(`${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n${REVIEWER_LINE}\n`),
     runCmd: () => Promise.resolve({ code: 0, stdout: "{}", stderr: "" }),
@@ -25,6 +27,84 @@ const ARGS = [
   "--body-file",
   "/tmp/example-review.md",
 ];
+
+Deno.test("signing review u: only the closing reviewer line becomes Luna before posting", () =>
+  withSigningFixture(async (signing) => {
+    const body =
+      `${REVIEW_SUMMARY_HEADER}\r\n**Approved**\r\n🤖 Reviewed by Claude Code — Opus\r\nNotes\r\n\r\n🤖 Reviewed by Codex — GPT-6.1 Sol\r\n\r\n`;
+    const expected = body.replace(
+      "🤖 Reviewed by Codex — GPT-6.1 Sol",
+      `🤖 Reviewed by ${LUNA_SIGNATURE}`,
+    );
+    const calls: string[][] = [];
+    assertEquals(
+      await run(
+        ARGS,
+        fakeDeps({
+          signing,
+          readFileText: () => Promise.resolve(body),
+          runCmd: (cmd) => {
+            calls.push(cmd);
+            return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+          },
+        }),
+      ),
+      0,
+    );
+    const post = calls.find((cmd) => cmd[1] === "pr" && cmd[2] === "review")!;
+    assertEquals(post[post.indexOf("--body") + 1], expected);
+    assertEquals(post.includes("--body-file"), false);
+  }));
+
+Deno.test("signing review: missing session refuses before any GitHub call", () =>
+  withSigningFixture(async (signing, _env, sessionPath) => {
+    await Deno.remove(sessionPath);
+    const calls: string[][] = [];
+    assertEquals(
+      await run(
+        ARGS,
+        fakeDeps({
+          signing,
+          runCmd: (cmd) => {
+            calls.push(cmd);
+            return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+          },
+        }),
+      ),
+      1,
+    );
+    assertEquals(calls, []);
+  }));
+
+Deno.test("signing review v: unset session preserves the original review file", async () => {
+  const calls: string[][] = [];
+  assertEquals(
+    await run(
+      ARGS,
+      fakeDeps({
+        readFileText: () =>
+          Promise.resolve(
+            `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Codex — GPT-6.1 Sol\n`,
+          ),
+        signing: {
+          env: () => undefined,
+          readRoster: () => {
+            throw new Error("must not look up");
+          },
+        },
+        runCmd: (cmd) => {
+          calls.push(cmd);
+          return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+        },
+      }),
+    ),
+    0,
+  );
+  assertEquals(calls.find((cmd) => cmd[2] === "review")!.slice(-2), [
+    "--body-file",
+    "/tmp/example-review.md",
+  ]);
+});
 
 Deno.test("post-pr-review: missing required args prints usage and exits 1", async () => {
   const code = await run([], fakeDeps());

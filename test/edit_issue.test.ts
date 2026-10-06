@@ -1,11 +1,13 @@
 // edit_issue.test.ts — web-jam-tools#685
 
 import { assertEquals } from "@std/assert";
+import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 import { type Deps, findBodyFlags, run } from "../scripts/edit-issue.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
   return {
+    signing: { env: () => undefined },
     readFileText: () => Promise.resolve("some body text"),
     runCmd: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
     sleep: () => Promise.resolve(),
@@ -109,6 +111,33 @@ Deno.test("edit-issue: builds gh argv with bare issue id and --repo flag (regres
 // --- Authored-by footer (web-jam-tools#1205) ---
 
 const BASE = ["--repo", "WebJamApps/web-jam-tools", "--issue", "685"];
+
+Deno.test("signing edit l: dry run prints the looked-up Luna footer", () =>
+  withSigningFixture(async (signing) => {
+    const { deps, calls } = footerDeps("## Body\nContent");
+    deps.signing = signing;
+    const output: string[] = [];
+    const log = console.log;
+    console.log = (...values: unknown[]) => output.push(values.join(" "));
+    try {
+      assertEquals(
+        await run([
+          ...BASE,
+          "--author",
+          "Codex — GPT-6.1 Sol",
+          "--body-file",
+          "/tmp/b.md",
+          "--dry-run",
+        ], deps),
+        0,
+      );
+    } finally {
+      console.log = log;
+    }
+    assertEquals(output.join("\n").includes(`🤖 Authored by ${LUNA_SIGNATURE}`), true);
+    assertEquals(output.join("\n").includes("🤖 Authored by Codex — GPT-6.1 Sol"), false);
+    assertEquals(calls.some((cmd) => cmd[0] === "gh"), false);
+  }));
 const PROBE = "/fake/create-draft-pr.sh";
 
 /** Deps whose roster probe returns `probe`; every other command is recorded in `calls`. */
