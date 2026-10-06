@@ -23,7 +23,8 @@ async function runHookScript(
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env,
+    // CI's Bash startup file can prepend real binaries ahead of the test fixtures.
+    env: { ...env, BASH_ENV: "" },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -199,6 +200,29 @@ Deno.test("checker subprocess failures and invalid results allow with diagnostic
       assertStringIncludes(diagnostic, "citation check could not run");
       assertStringIncludes(diagnostic, "proceeding");
     }
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("hook subprocess ignores Bash startup files that override test fixtures", async () => {
+  const directory = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(`${directory}/deno`, "#!/bin/sh\nexit 1\n");
+    await Deno.chmod(`${directory}/deno`, 0o755);
+    const startupFile = `${directory}/bash-env.sh`;
+    await Deno.writeTextFile(
+      startupFile,
+      "export PATH=/usr/bin:/bin\nprintf 'unexpected Bash startup file\\n' >&2\nexit 99\n",
+    );
+
+    const result = await runHookScript("{}", {
+      PATH: `${directory}:${Deno.env.get("PATH")}`,
+      BASH_ENV: startupFile,
+    });
+    assertEquals(result.code, 0);
+    assertStringIncludes(hookDiagnostic(result), "checker exited 1");
+    assertEquals(result.stderr.includes("unexpected Bash startup file"), false);
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
