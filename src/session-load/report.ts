@@ -47,6 +47,8 @@ export interface ConnectorInfo {
 export interface SessionLoadReportOptions {
   /** Home directory (defaults to $HOME or /home/joshua). */
   homeDir?: string;
+  /** Optional project directory for project-scoped configurations (defaults to homeDir). */
+  projectDir?: string;
   /** WebJamApps parent directory holding repo checkouts (defaults to $HOME/WebJamApps). */
   webJamAppsDir?: string;
   /** Path to Claude Code settings.json (defaults to $HOME/.claude/settings.json). */
@@ -216,31 +218,193 @@ async function inspectBundledSkills(
   }
 }
 
-/** Inspects Claude Code MCP connectors in ~/.claude.json. */
-async function inspectClaudeConnectors(
+/**
+ * Measures the listing footprint (in UTF-8 bytes) of a Claude Code MCP server.
+ * Per standing-preamble-design-2026-08-08.md, connector listings contribute
+ * tool names and server instructions to the session load, rather than launcher
+ * configuration (command, args, env, type, etc.).
+ */
+export function measureClaudeServerListingContent(
+  serverName: string,
+  config: unknown,
+): number {
+  const encoder = new TextEncoder();
+  let bytes = encoder.encode(serverName).length;
+  if (!config || typeof config !== "object") {
+    return bytes;
+  }
+  const rec = config as Record<string, unknown>;
+
+  // Instructions / descriptions
+  for (const field of ["instructions", "serverInstructions", "description"]) {
+    const val = rec[field];
+    if (typeof val === "string") {
+      bytes += encoder.encode(val).length;
+    }
+  }
+
+  // Tools: array of names/objects, or map of toolName -> definition
+  const tools = rec.tools ?? rec.toolNames;
+  if (Array.isArray(tools)) {
+    for (const tool of tools) {
+      if (typeof tool === "string") {
+        bytes += encoder.encode(tool).length;
+      } else if (tool && typeof tool === "object") {
+        const t = tool as Record<string, unknown>;
+        if (typeof t.name === "string") {
+          bytes += encoder.encode(t.name).length;
+        }
+        if (typeof t.description === "string") {
+          bytes += encoder.encode(t.description).length;
+        }
+      }
+    }
+  } else if (tools && typeof tools === "object") {
+    for (
+      const [toolName, toolDef] of Object.entries(
+        tools as Record<string, unknown>,
+      )
+    ) {
+      bytes += encoder.encode(toolName).length;
+      if (toolDef && typeof toolDef === "object" && toolDef !== null) {
+        const t = toolDef as Record<string, unknown>;
+        if (typeof t.description === "string") {
+          bytes += encoder.encode(t.description).length;
+        }
+      }
+    }
+  }
+
+  // Prompts (if any)
+  if (Array.isArray(rec.prompts)) {
+    for (const prompt of rec.prompts) {
+      if (typeof prompt === "string") {
+        bytes += encoder.encode(prompt).length;
+      } else if (prompt && typeof prompt === "object") {
+        const p = prompt as Record<string, unknown>;
+        if (typeof p.name === "string") {
+          bytes += encoder.encode(p.name).length;
+        }
+        if (typeof p.description === "string") {
+          bytes += encoder.encode(p.description).length;
+        }
+      }
+    }
+  }
+
+  // Resources (if any)
+  if (Array.isArray(rec.resources)) {
+    for (const res of rec.resources) {
+      if (typeof res === "string") {
+        bytes += encoder.encode(res).length;
+      } else if (res && typeof res === "object") {
+        const r = res as Record<string, unknown>;
+        if (typeof r.name === "string") {
+          bytes += encoder.encode(r.name).length;
+        }
+        if (typeof r.uri === "string") {
+          bytes += encoder.encode(r.uri).length;
+        }
+      }
+    }
+  }
+
+  return bytes;
+}
+
+/**
+ * Inspects Claude Code MCP connectors in ~/.claude.json.
+ * Reads effective connector sources: root mcpServers merged with
+ * project-scoped mcpServers for candidate paths (including homeDir).
+ * Measures listing content size (tool names and server instructions)
+ * while excluding launcher configuration.
+ */
+export async function inspectClaudeConnectors(
   claudeMcpPath: string,
+  candidateProjectPaths: string[] = [],
 ): Promise<ConnectorInfo> {
   try {
     const text = await Deno.readTextFile(claudeMcpPath);
     const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") {
+      return { count: 0, sizeBytes: 0 };
+    }
+
+    const effectiveServers: Record<string, unknown> = {};
+
+    // 1. Root mcpServers
     if (
-      parsed &&
       typeof parsed.mcpServers === "object" &&
       parsed.mcpServers !== null
     ) {
-      const servers = parsed.mcpServers as Record<string, unknown>;
-      const count = Object.keys(servers).length;
-      const sizeBytes = new TextEncoder().encode(JSON.stringify(servers)).length;
-      return { count, sizeBytes };
+      Object.assign(effectiveServers, parsed.mcpServers);
     }
+
+    // 2. Project-scoped mcpServers
+    if (
+      typeof parsed.projects === "object" &&
+      parsed.projects !== null
+    ) {
+      const projects = parsed.projects as Record<string, unknown>;
+      for (const projPath of candidateProjectPaths) {
+        if (!projPath) continue;
+        const normalized = projPath.replace(/\/+$/, "");
+        const proj = projects[projPath] ??
+          projects[normalized] ??
+          projects[`${normalized}/`];
+        if (proj && typeof proj === "object" && proj !== null) {
+          const projServers = (proj as Record<string, unknown>).mcpServers;
+          if (
+            projServers && typeof projServers === "object" &&
+            projServers !== null
+          ) {
+            Object.assign(effectiveServers, projServers);
+          }
+        }
+      }
+    }
+
+    const count = Object.keys(effectiveServers).length;
+    let sizeBytes = 0;
+    for (const [serverName, config] of Object.entries(effectiveServers)) {
+      sizeBytes += measureClaudeServerListingContent(serverName, config);
+    }
+
+    return { count, sizeBytes };
   } catch {
     // missing or unreadable
   }
   return { count: 0, sizeBytes: 0 };
 }
 
+/** Recursively measures file content size in a directory. */
+export async function measureDirectoryContentSize(
+  dirPath: string,
+): Promise<number> {
+  let size = 0;
+  try {
+    for await (const entry of Deno.readDir(dirPath)) {
+      if (entry.name.startsWith(".")) continue;
+      const fullPath = join(dirPath, entry.name);
+      try {
+        const stat = await Deno.stat(fullPath);
+        if (stat.isFile) {
+          size += stat.size;
+        } else if (stat.isDirectory) {
+          size += await measureDirectoryContentSize(fullPath);
+        }
+      } catch {
+        // unreadable entry
+      }
+    }
+  } catch {
+    // unreadable dir
+  }
+  return size;
+}
+
 /** Inspects agy MCP connectors under ~/.gemini/antigravity-cli/mcp. */
-async function inspectAgyConnectors(
+export async function inspectAgyConnectors(
   agyMcpDir: string,
 ): Promise<ConnectorInfo> {
   let count = 0;
@@ -248,18 +412,18 @@ async function inspectAgyConnectors(
   try {
     for await (const entry of Deno.readDir(agyMcpDir)) {
       if (entry.name.startsWith(".")) continue;
-      if (!entry.isDirectory) continue;
-      count++;
-      const subDir = join(agyMcpDir, entry.name);
+      const fullPath = join(agyMcpDir, entry.name);
       try {
-        for await (const file of Deno.readDir(subDir)) {
-          if (file.isFile) {
-            const stat = await Deno.stat(join(subDir, file.name));
-            sizeBytes += stat.size;
-          }
+        const stat = await Deno.stat(fullPath);
+        if (stat.isDirectory) {
+          count++;
+          sizeBytes += await measureDirectoryContentSize(fullPath);
+        } else if (stat.isFile) {
+          count++;
+          sizeBytes += stat.size;
         }
       } catch {
-        // unreadable subdir
+        // unreadable entry
       }
     }
   } catch {
@@ -268,8 +432,8 @@ async function inspectAgyConnectors(
   return { count, sizeBytes };
 }
 
-/** Inspects Codex MCP connectors. */
-async function inspectCodexConnectors(
+/** Inspects Codex MCP connectors under ~/.codex/mcp. */
+export async function inspectCodexConnectors(
   codexMcpDir: string,
 ): Promise<ConnectorInfo> {
   let count = 0;
@@ -277,10 +441,18 @@ async function inspectCodexConnectors(
   try {
     for await (const entry of Deno.readDir(codexMcpDir)) {
       if (entry.name.startsWith(".")) continue;
-      if (entry.isDirectory || entry.isFile) {
-        count++;
-        const stat = await Deno.stat(join(codexMcpDir, entry.name));
-        sizeBytes += stat.size;
+      const fullPath = join(codexMcpDir, entry.name);
+      try {
+        const stat = await Deno.stat(fullPath);
+        if (stat.isFile) {
+          count++;
+          sizeBytes += stat.size;
+        } else if (stat.isDirectory) {
+          count++;
+          sizeBytes += await measureDirectoryContentSize(fullPath);
+        }
+      } catch {
+        // unreadable entry
       }
     }
   } catch {
@@ -290,7 +462,7 @@ async function inspectCodexConnectors(
 }
 
 /** Counts agy Google-bundled skills in ~/.gemini/skills. */
-async function inspectAgyGoogleBundledSkills(
+export async function inspectAgyGoogleBundledSkills(
   googleSkillsDir: string,
 ): Promise<number> {
   let count = 0;
@@ -420,7 +592,17 @@ export async function computeSessionLoadReport(
   );
 
   // Connectors and platform-bundled skills inspection (report-only)
-  const claudeConnectors = await inspectClaudeConnectors(claudeMcpPath);
+  const candidateProjectPaths = [homeDir];
+  if (
+    options.projectDir &&
+    !candidateProjectPaths.includes(options.projectDir)
+  ) {
+    candidateProjectPaths.push(options.projectDir);
+  }
+  const claudeConnectors = await inspectClaudeConnectors(
+    claudeMcpPath,
+    candidateProjectPaths,
+  );
   const agyConnectors = await inspectAgyConnectors(agyMcpDir);
   const codexConnectors = await inspectCodexConnectors(codexMcpDir);
   const agyGoogleSkillsCount = await inspectAgyGoogleBundledSkills(

@@ -6,7 +6,10 @@ import { join } from "@std/path";
 import {
   computeSessionLoadReport,
   generateSessionLoadReport,
+  inspectClaudeConnectors,
+  inspectCodexConnectors,
   loadLimits,
+  measureClaudeServerListingContent,
 } from "../src/session-load/report.ts";
 import { lintRunbookFile } from "../src/design-issue/lint_runbook.ts";
 
@@ -642,16 +645,28 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
     // 2. Add Claude MCP servers in ~/.claude.json
     const claudeMcpPath = join(homeDir, ".claude.json");
     const mcpServers = {
-      "google-drive": { command: "node" },
-      "reaper": { command: "reaper-mcp" },
+      "google-drive": {
+        command: "node",
+        args: ["/path/to/server.js"],
+        env: { TOKEN: "secret-token" },
+        instructions: "Google Drive storage operations.",
+        tools: ["read_file", "search_files"],
+      },
+      "reaper": {
+        command: "reaper-mcp",
+        args: [],
+        env: {},
+        instructions: "Control Reaper DAW playback.",
+      },
     };
     await Deno.writeTextFile(
       claudeMcpPath,
       JSON.stringify({ mcpServers }),
     );
-    const claudeMcpExpectedBytes = new TextEncoder().encode(
-      JSON.stringify(mcpServers),
-    ).length;
+    let claudeMcpExpectedBytes = 0;
+    for (const [name, config] of Object.entries(mcpServers)) {
+      claudeMcpExpectedBytes += measureClaudeServerListingContent(name, config);
+    }
 
     // 3. Add agy MCP connectors under ~/.gemini/antigravity-cli/mcp
     const agyMcpDir = join(homeDir, ".gemini/antigravity-cli/mcp");
@@ -667,7 +682,21 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
     );
     const agyMcpExpectedBytes = 200 + 300;
 
-    // 4. Add agy Google-bundled skills in ~/.gemini/skills
+    // 4. Add nonempty Codex MCP connectors under ~/.codex/mcp
+    const codexMcpDir = join(homeDir, ".codex/mcp");
+    await Deno.mkdir(join(codexMcpDir, "github"), { recursive: true });
+    await Deno.writeTextFile(
+      join(codexMcpDir, "github/instructions.md"),
+      "x".repeat(350),
+    );
+    await Deno.mkdir(join(codexMcpDir, "memory"), { recursive: true });
+    await Deno.writeTextFile(
+      join(codexMcpDir, "memory/schema.json"),
+      "y".repeat(150),
+    );
+    const codexMcpExpectedBytes = 350 + 150;
+
+    // 5. Add agy Google-bundled skills in ~/.gemini/skills
     const agyGoogleSkillsDir = join(homeDir, ".gemini/skills");
     for (let i = 0; i < 5; i++) {
       await Deno.mkdir(join(agyGoogleSkillsDir, `g-skill-${i}`), {
@@ -675,7 +704,7 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       });
     }
 
-    // 5. Test clean state: all parts strictly under low mark
+    // 6. Test clean state: all parts strictly under low mark
     const lowDelta = 100;
     await Deno.writeTextFile(
       join(homeDir, ".claude/CLAUDE.md"),
@@ -717,6 +746,7 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       limitsPath: LIMITS_PATH,
       claudeMcpPath,
       agyMcpDir,
+      codexMcpDir,
       agyGoogleSkillsDir,
     });
 
@@ -727,13 +757,17 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       "Session load: Claude Code ok · agy ok · Codex ok",
     );
     assertEquals(cleanResult.connectors.claudeCode.count, 2);
-    assertEquals(cleanResult.connectors.claudeCode.sizeBytes, claudeMcpExpectedBytes);
+    assertEquals(
+      cleanResult.connectors.claudeCode.sizeBytes,
+      claudeMcpExpectedBytes,
+    );
     assertEquals(cleanResult.connectors.agy.count, 2);
     assertEquals(cleanResult.connectors.agy.sizeBytes, agyMcpExpectedBytes);
-    assertEquals(cleanResult.connectors.codex.count, 0);
+    assertEquals(cleanResult.connectors.codex.count, 2);
+    assertEquals(cleanResult.connectors.codex.sizeBytes, codexMcpExpectedBytes);
     assertEquals(cleanResult.googleBundledSkills.agy, 5);
 
-    // 6. Test OVER state: make main rules over mark
+    // 7. Test OVER state: make main rules over mark
     const mainRulesExcess = 1000;
     await Deno.writeTextFile(
       join(webJamAppsDir, "web-jam-tools/AGENTS.md"),
@@ -746,6 +780,7 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       limitsPath: LIMITS_PATH,
       claudeMcpPath,
       agyMcpDir,
+      codexMcpDir,
       agyGoogleSkillsDir,
     });
 
@@ -768,6 +803,177 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       overResult.tools.agy.items.some((i) => i.includes(`connectors ${agyMcpExpectedBytes}`)),
       `agy should report connector bytes when over: ${overResult.tools.agy.items.join(" · ")}`,
     );
+    assert(
+      overResult.tools.codex.items.some((i) => i.includes(`connectors ${codexMcpExpectedBytes}`)),
+      `Codex should report connector bytes when over: ${overResult.tools.codex.items.join(" · ")}`,
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("Claude Code connectors: collects project-scoped servers under projects[homeDir].mcpServers when root mcpServers is empty", async () => {
+  const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
+  try {
+    const claudeMcpPath = join(homeDir, ".claude.json");
+    const projectServerConfig = {
+      command: "node",
+      args: ["/tmp/scoped.js"],
+      env: { SCOPED_ENV: "123" },
+      instructions: "Scoped project server instructions.",
+      tools: ["scoped_tool"],
+    };
+    await Deno.writeTextFile(
+      claudeMcpPath,
+      JSON.stringify({
+        projects: {
+          [homeDir]: {
+            mcpServers: {
+              "project-only-server": projectServerConfig,
+            },
+          },
+        },
+      }),
+    );
+
+    const expectedBytes = measureClaudeServerListingContent(
+      "project-only-server",
+      projectServerConfig,
+    );
+
+    const result = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+      claudeMcpPath,
+    });
+
+    assertEquals(result.connectors.claudeCode.count, 1);
+    assertEquals(result.connectors.claudeCode.sizeBytes, expectedBytes);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("Claude Code connectors: distinguishes listing content from launcher configuration, ignoring command/args/env mutations", async () => {
+  const tempDir = await Deno.makeTempDir();
+  try {
+    const claudeMcpPath = join(tempDir, ".claude.json");
+
+    // 1. Base server with listing content and compact launcher config
+    const baseServer = {
+      command: "node",
+      args: ["app.js"],
+      env: { FOO: "bar" },
+      instructions: "Core server operations.",
+      tools: ["read_data", "write_data"],
+    };
+    await Deno.writeTextFile(
+      claudeMcpPath,
+      JSON.stringify({ mcpServers: { "test-server": baseServer } }),
+    );
+
+    const baseResult = await inspectClaudeConnectors(claudeMcpPath, [tempDir]);
+    assertEquals(baseResult.count, 1);
+    const expectedBaseBytes = measureClaudeServerListingContent(
+      "test-server",
+      baseServer,
+    );
+    assertEquals(baseResult.sizeBytes, expectedBaseBytes);
+
+    // 2. Massively inflate launcher config (command path, 200 args, 15KB env)
+    const inflatedLauncherServer = {
+      command: "/opt/custom/environments/deeply/nested/runtime/bin/python3.12",
+      args: Array(200).fill("--verbose-extended-flag-parameter-long-switch"),
+      env: {
+        VERY_LONG_AUTH_TOKEN: "a".repeat(8000),
+        ADDITIONAL_METADATA_VARIABLE: "b".repeat(7000),
+      },
+      instructions: "Core server operations.",
+      tools: ["read_data", "write_data"],
+    };
+    await Deno.writeTextFile(
+      claudeMcpPath,
+      JSON.stringify({ mcpServers: { "test-server": inflatedLauncherServer } }),
+    );
+
+    const inflatedResult = await inspectClaudeConnectors(claudeMcpPath, [
+      tempDir,
+    ]);
+    assertEquals(inflatedResult.count, 1);
+    // Listing size MUST remain strictly unchanged despite launcher inflation
+    assertEquals(inflatedResult.sizeBytes, baseResult.sizeBytes);
+
+    // 3. Mutate listing content (add a tool and append to instructions)
+    const addedInstruction = " Also supports batch exports.";
+    const addedTool = "export_data";
+    const mutatedListingServer = {
+      ...inflatedLauncherServer,
+      instructions: baseServer.instructions + addedInstruction,
+      tools: [...baseServer.tools, addedTool],
+    };
+    await Deno.writeTextFile(
+      claudeMcpPath,
+      JSON.stringify({ mcpServers: { "test-server": mutatedListingServer } }),
+    );
+
+    const mutatedResult = await inspectClaudeConnectors(claudeMcpPath, [
+      tempDir,
+    ]);
+    assertEquals(mutatedResult.count, 1);
+    const expectedAddedBytes = new TextEncoder().encode(addedInstruction).length +
+      new TextEncoder().encode(addedTool).length;
+    assertEquals(
+      mutatedResult.sizeBytes,
+      baseResult.sizeBytes + expectedAddedBytes,
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("Codex connectors: measures recursive file content size, and changing payload size in files proportionally updates sizeBytes", async () => {
+  const tempDir = await Deno.makeTempDir();
+  try {
+    const codexMcpDir = join(tempDir, ".codex/mcp");
+    const exampleDir = join(codexMcpDir, "example");
+    await Deno.mkdir(exampleDir, { recursive: true });
+
+    // 1. Initial 100-byte instructions.md file
+    const instructionsPath = join(exampleDir, "instructions.md");
+    await Deno.writeTextFile(instructionsPath, "a".repeat(100));
+
+    const initial = await inspectCodexConnectors(codexMcpDir);
+    assertEquals(initial.count, 1);
+    assertEquals(initial.sizeBytes, 100);
+
+    // 2. Grow instructions.md to 8,000 bytes
+    await Deno.writeTextFile(instructionsPath, "b".repeat(8000));
+
+    const grown = await inspectCodexConnectors(codexMcpDir);
+    assertEquals(grown.count, 1);
+    assertEquals(grown.sizeBytes, 8000);
+
+    // 3. Add nested subdirectory with another payload file
+    const nestedDir = join(exampleDir, "schemas");
+    await Deno.mkdir(nestedDir, { recursive: true });
+    await Deno.writeTextFile(join(nestedDir, "schema.json"), "c".repeat(500));
+
+    const withNested = await inspectCodexConnectors(codexMcpDir);
+    assertEquals(withNested.count, 1);
+    assertEquals(withNested.sizeBytes, 8500);
+
+    // 4. Add second connector entry
+    const secondDir = join(codexMcpDir, "second-connector");
+    await Deno.mkdir(secondDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(secondDir, "instructions.md"),
+      "d".repeat(250),
+    );
+
+    const twoConnectors = await inspectCodexConnectors(codexMcpDir);
+    assertEquals(twoConnectors.count, 2);
+    assertEquals(twoConnectors.sizeBytes, 8750);
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
