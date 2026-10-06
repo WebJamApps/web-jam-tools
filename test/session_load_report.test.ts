@@ -9,7 +9,6 @@ import {
   inspectClaudeConnectors,
   inspectCodexConnectors,
   loadLimits,
-  measureClaudeServerListingContent,
 } from "../src/session-load/report.ts";
 import { lintRunbookFile } from "../src/design-issue/lint_runbook.ts";
 
@@ -663,10 +662,7 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       claudeMcpPath,
       JSON.stringify({ mcpServers }),
     );
-    let claudeMcpExpectedBytes = 0;
-    for (const [name, config] of Object.entries(mcpServers)) {
-      claudeMcpExpectedBytes += measureClaudeServerListingContent(name, config);
-    }
+    const claudeMcpExpectedBytes = null;
 
     // 3. Add agy MCP connectors under ~/.gemini/antigravity-cli/mcp
     const agyMcpDir = join(homeDir, ".gemini/antigravity-cli/mcp");
@@ -786,10 +782,8 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
 
     assertEquals(overResult.isOver, true);
     assert(
-      overResult.tools.claudeCode.items.some((i) =>
-        i.includes(`connectors ${claudeMcpExpectedBytes}`)
-      ),
-      `Claude Code should report connector bytes when over: ${
+      overResult.tools.claudeCode.items.some((i) => i.includes("connectors listing unavailable")),
+      `Claude Code should report the unavailable connector measurement when over: ${
         overResult.tools.claudeCode.items.join(" · ")
       }`,
     );
@@ -836,10 +830,7 @@ Deno.test("Claude Code connectors: collects project-scoped servers under project
       }),
     );
 
-    const expectedBytes = measureClaudeServerListingContent(
-      "project-only-server",
-      projectServerConfig,
-    );
+    const expectedBytes = null;
 
     const result = await computeSessionLoadReport({
       homeDir,
@@ -873,19 +864,19 @@ Deno.test("Claude Code connectors: safely counts a server named __proto__", asyn
     assertEquals(result.count, 1);
     assertEquals(
       result.sizeBytes,
-      measureClaudeServerListingContent("__proto__", serverConfig),
+      null,
     );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
 });
 
-Deno.test("Claude Code connectors: distinguishes listing content from launcher configuration, ignoring command/args/env mutations", async () => {
+Deno.test("Claude Code connectors: launcher fields never pretend to be discovered listing content", async () => {
   const tempDir = await Deno.makeTempDir();
   try {
     const claudeMcpPath = join(tempDir, ".claude.json");
 
-    // 1. Base server with listing content and compact launcher config
+    // 1. Synthetic listing fields in launcher config cannot provide a measurement
     const baseServer = {
       command: "node",
       args: ["app.js"],
@@ -900,10 +891,7 @@ Deno.test("Claude Code connectors: distinguishes listing content from launcher c
 
     const baseResult = await inspectClaudeConnectors(claudeMcpPath, [tempDir]);
     assertEquals(baseResult.count, 1);
-    const expectedBaseBytes = measureClaudeServerListingContent(
-      "test-server",
-      baseServer,
-    );
+    const expectedBaseBytes = null;
     assertEquals(baseResult.sizeBytes, expectedBaseBytes);
 
     // 2. Massively inflate launcher config (command path, 200 args, 15KB env)
@@ -926,10 +914,10 @@ Deno.test("Claude Code connectors: distinguishes listing content from launcher c
       tempDir,
     ]);
     assertEquals(inflatedResult.count, 1);
-    // Listing size MUST remain strictly unchanged despite launcher inflation
+    // A missing listing remains unavailable despite launcher inflation
     assertEquals(inflatedResult.sizeBytes, baseResult.sizeBytes);
 
-    // 3. Mutate listing content (add a tool and append to instructions)
+    // 3. Even synthetic listing fields in configuration are not discovered content
     const addedInstruction = " Also supports batch exports.";
     const addedTool = "export_data";
     const mutatedListingServer = {
@@ -946,12 +934,7 @@ Deno.test("Claude Code connectors: distinguishes listing content from launcher c
       tempDir,
     ]);
     assertEquals(mutatedResult.count, 1);
-    const expectedAddedBytes = new TextEncoder().encode(addedInstruction).length +
-      new TextEncoder().encode(addedTool).length;
-    assertEquals(
-      mutatedResult.sizeBytes,
-      baseResult.sizeBytes + expectedAddedBytes,
-    );
+    assertEquals(mutatedResult.sizeBytes, null);
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }

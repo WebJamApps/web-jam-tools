@@ -5,6 +5,9 @@
 import { join } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import { ACTIVE_REPOS } from "../shared/repos.ts";
+import { type ConnectorInfo, inspectClaudeConnectors } from "./claude_connectors.ts";
+export { inspectClaudeConnectors } from "./claude_connectors.ts";
+export type { ConnectorInfo } from "./claude_connectors.ts";
 
 export interface PartLimit {
   lowMark?: number;
@@ -39,11 +42,6 @@ export interface SessionLoadLimits {
   googleBundledSkills?: ReportOnlyLimit;
 }
 
-export interface ConnectorInfo {
-  count: number;
-  sizeBytes: number;
-}
-
 export interface SessionLoadReportOptions {
   /** Home directory (defaults to $HOME or /home/joshua). */
   homeDir?: string;
@@ -67,6 +65,8 @@ export interface SessionLoadReportOptions {
   globalClaudeMdPath?: string;
   /** Path to Claude Code MCP config (defaults to $HOME/.claude.json). */
   claudeMcpPath?: string;
+  /** Native discovery cache (defaults to $HOME/.claude/mcp-discovery-cache). */
+  claudeDiscoveryDir?: string;
   /** Directory holding agy MCP connectors (defaults to $HOME/.gemini/antigravity-cli/mcp). */
   agyMcpDir?: string;
   /** Directory holding Codex MCP connectors (defaults to $HOME/.codex/mcp). */
@@ -216,171 +216,6 @@ async function inspectBundledSkills(
     // Settings file missing or unparseable: all bundled skills load full descriptions
     return totalCount;
   }
-}
-
-/**
- * Measures the listing footprint (in UTF-8 bytes) of a Claude Code MCP server.
- * Per standing-preamble-design-2026-08-08.md, connector listings contribute
- * tool names and server instructions to the session load, rather than launcher
- * configuration (command, args, env, type, etc.).
- */
-export function measureClaudeServerListingContent(
-  serverName: string,
-  config: unknown,
-): number {
-  const encoder = new TextEncoder();
-  let bytes = encoder.encode(serverName).length;
-  if (!config || typeof config !== "object") {
-    return bytes;
-  }
-  const rec = config as Record<string, unknown>;
-
-  // Instructions / descriptions
-  for (const field of ["instructions", "serverInstructions", "description"]) {
-    const val = rec[field];
-    if (typeof val === "string") {
-      bytes += encoder.encode(val).length;
-    }
-  }
-
-  // Tools: array of names/objects, or map of toolName -> definition
-  const tools = rec.tools ?? rec.toolNames;
-  if (Array.isArray(tools)) {
-    for (const tool of tools) {
-      if (typeof tool === "string") {
-        bytes += encoder.encode(tool).length;
-      } else if (tool && typeof tool === "object") {
-        const t = tool as Record<string, unknown>;
-        if (typeof t.name === "string") {
-          bytes += encoder.encode(t.name).length;
-        }
-        if (typeof t.description === "string") {
-          bytes += encoder.encode(t.description).length;
-        }
-      }
-    }
-  } else if (tools && typeof tools === "object") {
-    for (
-      const [toolName, toolDef] of Object.entries(
-        tools as Record<string, unknown>,
-      )
-    ) {
-      bytes += encoder.encode(toolName).length;
-      if (toolDef && typeof toolDef === "object" && toolDef !== null) {
-        const t = toolDef as Record<string, unknown>;
-        if (typeof t.description === "string") {
-          bytes += encoder.encode(t.description).length;
-        }
-      }
-    }
-  }
-
-  // Prompts (if any)
-  if (Array.isArray(rec.prompts)) {
-    for (const prompt of rec.prompts) {
-      if (typeof prompt === "string") {
-        bytes += encoder.encode(prompt).length;
-      } else if (prompt && typeof prompt === "object") {
-        const p = prompt as Record<string, unknown>;
-        if (typeof p.name === "string") {
-          bytes += encoder.encode(p.name).length;
-        }
-        if (typeof p.description === "string") {
-          bytes += encoder.encode(p.description).length;
-        }
-      }
-    }
-  }
-
-  // Resources (if any)
-  if (Array.isArray(rec.resources)) {
-    for (const res of rec.resources) {
-      if (typeof res === "string") {
-        bytes += encoder.encode(res).length;
-      } else if (res && typeof res === "object") {
-        const r = res as Record<string, unknown>;
-        if (typeof r.name === "string") {
-          bytes += encoder.encode(r.name).length;
-        }
-        if (typeof r.uri === "string") {
-          bytes += encoder.encode(r.uri).length;
-        }
-      }
-    }
-  }
-
-  return bytes;
-}
-
-/**
- * Inspects Claude Code MCP connectors in ~/.claude.json.
- * Reads effective connector sources: root mcpServers merged with
- * project-scoped mcpServers for candidate paths (including homeDir).
- * Measures listing content size (tool names and server instructions)
- * while excluding launcher configuration.
- */
-export async function inspectClaudeConnectors(
-  claudeMcpPath: string,
-  candidateProjectPaths: string[] = [],
-): Promise<ConnectorInfo> {
-  try {
-    const text = await Deno.readTextFile(claudeMcpPath);
-    const parsed = JSON.parse(text) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== "object") {
-      return { count: 0, sizeBytes: 0 };
-    }
-
-    const effectiveServers = new Map<string, unknown>();
-
-    const mergeServers = (servers: object) => {
-      for (const [serverName, config] of Object.entries(servers)) {
-        effectiveServers.set(serverName, config);
-      }
-    };
-
-    // 1. Root mcpServers
-    if (
-      typeof parsed.mcpServers === "object" &&
-      parsed.mcpServers !== null
-    ) {
-      mergeServers(parsed.mcpServers);
-    }
-
-    // 2. Project-scoped mcpServers
-    if (
-      typeof parsed.projects === "object" &&
-      parsed.projects !== null
-    ) {
-      const projects = parsed.projects as Record<string, unknown>;
-      for (const projPath of candidateProjectPaths) {
-        if (!projPath) continue;
-        const normalized = projPath.replace(/\/+$/, "");
-        const proj = projects[projPath] ??
-          projects[normalized] ??
-          projects[`${normalized}/`];
-        if (proj && typeof proj === "object" && proj !== null) {
-          const projServers = (proj as Record<string, unknown>).mcpServers;
-          if (
-            projServers && typeof projServers === "object" &&
-            projServers !== null
-          ) {
-            mergeServers(projServers);
-          }
-        }
-      }
-    }
-
-    const count = effectiveServers.size;
-    let sizeBytes = 0;
-    for (const [serverName, config] of effectiveServers) {
-      sizeBytes += measureClaudeServerListingContent(serverName, config);
-    }
-
-    return { count, sizeBytes };
-  } catch {
-    // missing or unreadable
-  }
-  return { count: 0, sizeBytes: 0 };
 }
 
 /** Recursively measures file content size in a directory. */
@@ -608,6 +443,7 @@ export async function computeSessionLoadReport(
   const claudeConnectors = await inspectClaudeConnectors(
     claudeMcpPath,
     candidateProjectPaths,
+    options.claudeDiscoveryDir || join(homeDir, ".claude/mcp-discovery-cache"),
   );
   const agyConnectors = await inspectAgyConnectors(agyMcpDir);
   const codexConnectors = await inspectCodexConnectors(codexMcpDir);
@@ -656,8 +492,19 @@ export async function computeSessionLoadReport(
   }
 
   const claudeOver = claudeItems.length > 0;
-  if (claudeOver && claudeConnectors.sizeBytes > 0) {
-    claudeItems.push(`connectors ${formatNumber(claudeConnectors.sizeBytes)}`);
+  if (claudeOver) {
+    if (claudeConnectors.sizeBytes === null) {
+      claudeItems.push("connectors listing unavailable");
+      if (claudeConnectors.cachedToolNameBytes !== undefined) {
+        claudeItems.push(
+          `cached connector tool names ${
+            formatNumber(claudeConnectors.cachedToolNameBytes)
+          } bytes (partial)`,
+        );
+      }
+    } else if (claudeConnectors.sizeBytes > 0) {
+      claudeItems.push(`connectors ${formatNumber(claudeConnectors.sizeBytes)}`);
+    }
   }
 
   // Build items for agy
@@ -694,7 +541,7 @@ export async function computeSessionLoadReport(
         : `${agyGoogleSkillsCount} Google-bundled skills`;
       agyItems.push(label);
     }
-    if (agyConnectors.sizeBytes > 0) {
+    if (agyConnectors.sizeBytes !== null && agyConnectors.sizeBytes > 0) {
       agyItems.push(`connectors ${formatNumber(agyConnectors.sizeBytes)}`);
     }
   }
@@ -730,7 +577,7 @@ export async function computeSessionLoadReport(
   }
 
   const codexOver = codexItems.length > 0;
-  if (codexOver && codexConnectors.sizeBytes > 0) {
+  if (codexOver && codexConnectors.sizeBytes !== null && codexConnectors.sizeBytes > 0) {
     codexItems.push(`connectors ${formatNumber(codexConnectors.sizeBytes)}`);
   }
 
