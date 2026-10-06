@@ -401,6 +401,47 @@ Deno.test(
         matcherMatches(approvalTokenMatcher, "mcp__claude_ai_GitHub_MCP__sub_issue_write"),
         `expected require-approval-token-on-issue-write.sh's matcher (${approvalTokenMatcher}) to still fire for mcp__*__sub_issue_write`,
       );
+
+      const citationMatcher = matcherFor("check-issue-citation-on-write.sh");
+      assert(
+        matcherMatches(citationMatcher, "Bash"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for Bash`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__issue_write"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__issue_write`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__pull_request_review_write"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__pull_request_review_write`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__add_comment_to_pending_review"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__add_comment_to_pending_review`,
+      );
+      assert(
+        matcherMatches(
+          citationMatcher,
+          "mcp__claude_ai_GitHub_MCP__add_reply_to_pull_request_comment",
+        ),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__add_reply_to_pull_request_comment`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__update_issue_comment"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__update_issue_comment`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__add_issue_comment"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__add_issue_comment`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "issue_write"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for bare issue_write`,
+      );
+      assert(
+        !matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__get_file_contents"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to not fire for get_file_contents`,
+      );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });

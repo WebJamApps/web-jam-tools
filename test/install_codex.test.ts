@@ -95,7 +95,7 @@ function capture(run: () => number): { code: number; output: string } {
   }
 }
 
-Deno.test("fresh home: exact 28 nested registrations, matcher fidelity, sandbox and regular rules", () => {
+Deno.test("fresh home: exact 29 nested registrations, matcher fidelity, sandbox and regular rules", () => {
   fixture((home, repo) => {
     assertEquals(installCodex({ home, repo }), 0);
     const text = Deno.readTextFileSync(join(home, ".codex/config.toml"));
@@ -129,6 +129,10 @@ Deno.test("fresh home: exact 28 nested registrations, matcher fidelity, sandbox 
         ["Bash", "block-raw-gh-write.sh"],
         ["Bash", "block-backend-mutation.sh"],
         ["Bash", "block-private-folder-read.sh"],
+        [
+          "Bash|(?:mcp__.*__)?(issue_write|pull_request_review_write|add_comment_to_pending_review|add_reply_to_pull_request_comment|update_issue_comment|add_issue_comment)",
+          "check-issue-citation-on-write.sh",
+        ],
       ],
       PostToolUse: [
         ["Bash", "scan-output-for-secrets.sh"],
@@ -369,7 +373,7 @@ Deno.test("literal array reader rejects shell expansion, malformed entries and m
       HOOKS.replace("PRE_TOOL_USE_HOOKS=(", "PRE_TOOL_USE_HOOKS=(\n# comment"),
       "/tmp/home",
     ).PreToolUse.length,
-    18,
+    19,
   );
 });
 

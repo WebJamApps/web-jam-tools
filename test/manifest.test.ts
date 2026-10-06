@@ -85,6 +85,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // carries a credential-shaped LITERAL, before it can be approved and
   // persisted verbatim into permissions.allow.
   "block-secret-literals.sh",
+  // PreToolUse guard (web-jam-tools#1056) — checks issue citations in bodies
+  // written to GitHub via CLI and MCP.
+  "check-issue-citation-on-write.sh",
   // Codex-only SessionStart check — Codex owns REAPER startup policy.
   "codex-reaper-startup-check.sh",
   "feature-branch-guard.sh",
