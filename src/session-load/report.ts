@@ -330,14 +330,20 @@ export async function inspectClaudeConnectors(
       return { count: 0, sizeBytes: 0 };
     }
 
-    const effectiveServers: Record<string, unknown> = {};
+    const effectiveServers = new Map<string, unknown>();
+
+    const mergeServers = (servers: object) => {
+      for (const [serverName, config] of Object.entries(servers)) {
+        effectiveServers.set(serverName, config);
+      }
+    };
 
     // 1. Root mcpServers
     if (
       typeof parsed.mcpServers === "object" &&
       parsed.mcpServers !== null
     ) {
-      Object.assign(effectiveServers, parsed.mcpServers);
+      mergeServers(parsed.mcpServers);
     }
 
     // 2. Project-scoped mcpServers
@@ -358,15 +364,15 @@ export async function inspectClaudeConnectors(
             projServers && typeof projServers === "object" &&
             projServers !== null
           ) {
-            Object.assign(effectiveServers, projServers);
+            mergeServers(projServers);
           }
         }
       }
     }
 
-    const count = Object.keys(effectiveServers).length;
+    const count = effectiveServers.size;
     let sizeBytes = 0;
-    for (const [serverName, config] of Object.entries(effectiveServers)) {
+    for (const [serverName, config] of effectiveServers) {
       sizeBytes += measureClaudeServerListingContent(serverName, config);
     }
 

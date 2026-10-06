@@ -855,6 +855,31 @@ Deno.test("Claude Code connectors: collects project-scoped servers under project
   }
 });
 
+Deno.test("Claude Code connectors: safely counts a server named __proto__", async () => {
+  const tempDir = await Deno.makeTempDir();
+  try {
+    const claudeMcpPath = join(tempDir, ".claude.json");
+    const serverConfig = {
+      instructions: "Prototype-key server instructions.",
+      tools: ["safe_tool"],
+    };
+    await Deno.writeTextFile(
+      claudeMcpPath,
+      `{"mcpServers":{"__proto__":${JSON.stringify(serverConfig)}}}`,
+    );
+
+    const result = await inspectClaudeConnectors(claudeMcpPath);
+
+    assertEquals(result.count, 1);
+    assertEquals(
+      result.sizeBytes,
+      measureClaudeServerListingContent("__proto__", serverConfig),
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("Claude Code connectors: distinguishes listing content from launcher configuration, ignoring command/args/env mutations", async () => {
   const tempDir = await Deno.makeTempDir();
   try {
