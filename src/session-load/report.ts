@@ -17,8 +17,13 @@ export interface SkillDescriptionLimit {
   maxCharacters?: number;
 }
 
+export interface ReportOnlyLimit {
+  reportOnly?: boolean;
+}
+
 export interface BundledSkillsLimit {
   totalCount: number;
+  skills?: string[];
 }
 
 export interface SessionLoadLimits {
@@ -30,6 +35,13 @@ export interface SessionLoadLimits {
   otherRepoRules: PartLimit;
   skillDescription: SkillDescriptionLimit;
   bundledSkills: BundledSkillsLimit;
+  connectors?: ReportOnlyLimit;
+  googleBundledSkills?: ReportOnlyLimit;
+}
+
+export interface ConnectorInfo {
+  count: number;
+  sizeBytes: number;
 }
 
 export interface SessionLoadReportOptions {
@@ -51,11 +63,21 @@ export interface SessionLoadReportOptions {
   memoryIndexPath?: string;
   /** Path to global CLAUDE.md (defaults to $HOME/.claude/CLAUDE.md). */
   globalClaudeMdPath?: string;
+  /** Path to Claude Code MCP config (defaults to $HOME/.claude.json). */
+  claudeMcpPath?: string;
+  /** Directory holding agy MCP connectors (defaults to $HOME/.gemini/antigravity-cli/mcp). */
+  agyMcpDir?: string;
+  /** Directory holding Codex MCP connectors (defaults to $HOME/.codex/mcp). */
+  codexMcpDir?: string;
+  /** Directory holding agy Google-bundled skills (defaults to $HOME/.gemini/skills). */
+  agyGoogleSkillsDir?: string;
 }
 
 export interface ToolReportResult {
   isOver: boolean;
   items: string[];
+  connectors: ConnectorInfo;
+  googleBundledSkillsCount?: number;
 }
 
 export interface SessionLoadReportResult {
@@ -65,6 +87,14 @@ export interface SessionLoadReportResult {
     claudeCode: ToolReportResult;
     agy: ToolReportResult;
     codex: ToolReportResult;
+  };
+  connectors: {
+    claudeCode: ConnectorInfo;
+    agy: ConnectorInfo;
+    codex: ConnectorInfo;
+  };
+  googleBundledSkills: {
+    agy: number;
   };
 }
 
@@ -143,32 +173,138 @@ async function inspectSkillsDirectory(
   return { installedCount, overCount };
 }
 
-/** Counts bundled skills that are not set to name-only in Claude settings. */
+/** Counts bundled skills that are not set to name-only in Claude settings, matching by identity. */
 async function inspectBundledSkills(
   claudeSettingsPath: string,
-  totalBundledCount: number,
+  bundledLimit: BundledSkillsLimit,
 ): Promise<number> {
-  let namesOnlyCount = 0;
+  const targetSkills = bundledLimit.skills ?? [];
+  const totalCount = bundledLimit.totalCount;
+
   try {
     const text = await Deno.readTextFile(claudeSettingsPath);
     const settings = JSON.parse(text) as Record<string, unknown>;
-    if (
-      settings &&
-      typeof settings.skillOverrides === "object" &&
-      settings.skillOverrides !== null
-    ) {
-      const overrides = settings.skillOverrides as Record<string, unknown>;
-      for (const val of Object.values(overrides)) {
-        if (val === "name-only") {
-          namesOnlyCount++;
+    const overrides = (settings &&
+        typeof settings.skillOverrides === "object" &&
+        settings.skillOverrides !== null)
+      ? (settings.skillOverrides as Record<string, unknown>)
+      : {};
+
+    if (targetSkills.length > 0) {
+      let overCount = 0;
+      for (const skill of targetSkills) {
+        const val = overrides[skill] ??
+          overrides[`anthropic-skills:${skill}`] ??
+          overrides[`claude-ai:${skill}`];
+        if (val !== "name-only") {
+          overCount++;
         }
+      }
+      return overCount;
+    }
+
+    let namesOnlyCount = 0;
+    for (const val of Object.values(overrides)) {
+      if (val === "name-only") {
+        namesOnlyCount++;
+      }
+    }
+    return Math.max(0, totalCount - namesOnlyCount);
+  } catch {
+    // Settings file missing or unparseable: all bundled skills load full descriptions
+    return totalCount;
+  }
+}
+
+/** Inspects Claude Code MCP connectors in ~/.claude.json. */
+async function inspectClaudeConnectors(
+  claudeMcpPath: string,
+): Promise<ConnectorInfo> {
+  try {
+    const text = await Deno.readTextFile(claudeMcpPath);
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (
+      parsed &&
+      typeof parsed.mcpServers === "object" &&
+      parsed.mcpServers !== null
+    ) {
+      const servers = parsed.mcpServers as Record<string, unknown>;
+      const count = Object.keys(servers).length;
+      const sizeBytes = new TextEncoder().encode(JSON.stringify(servers)).length;
+      return { count, sizeBytes };
+    }
+  } catch {
+    // missing or unreadable
+  }
+  return { count: 0, sizeBytes: 0 };
+}
+
+/** Inspects agy MCP connectors under ~/.gemini/antigravity-cli/mcp. */
+async function inspectAgyConnectors(
+  agyMcpDir: string,
+): Promise<ConnectorInfo> {
+  let count = 0;
+  let sizeBytes = 0;
+  try {
+    for await (const entry of Deno.readDir(agyMcpDir)) {
+      if (entry.name.startsWith(".")) continue;
+      if (!entry.isDirectory) continue;
+      count++;
+      const subDir = join(agyMcpDir, entry.name);
+      try {
+        for await (const file of Deno.readDir(subDir)) {
+          if (file.isFile) {
+            const stat = await Deno.stat(join(subDir, file.name));
+            sizeBytes += stat.size;
+          }
+        }
+      } catch {
+        // unreadable subdir
       }
     }
   } catch {
-    // Settings file missing or unparseable
+    // missing dir
   }
+  return { count, sizeBytes };
+}
 
-  return Math.max(0, totalBundledCount - namesOnlyCount);
+/** Inspects Codex MCP connectors. */
+async function inspectCodexConnectors(
+  codexMcpDir: string,
+): Promise<ConnectorInfo> {
+  let count = 0;
+  let sizeBytes = 0;
+  try {
+    for await (const entry of Deno.readDir(codexMcpDir)) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.isDirectory || entry.isFile) {
+        count++;
+        const stat = await Deno.stat(join(codexMcpDir, entry.name));
+        sizeBytes += stat.size;
+      }
+    }
+  } catch {
+    // missing dir
+  }
+  return { count, sizeBytes };
+}
+
+/** Counts agy Google-bundled skills in ~/.gemini/skills. */
+async function inspectAgyGoogleBundledSkills(
+  googleSkillsDir: string,
+): Promise<number> {
+  let count = 0;
+  try {
+    for await (const entry of Deno.readDir(googleSkillsDir)) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.isDirectory) {
+        count++;
+      }
+    }
+  } catch {
+    // missing
+  }
+  return count;
 }
 
 /**
@@ -239,6 +375,13 @@ export async function computeSessionLoadReport(
   const codexSkillsDir = options.codexSkillsDir ||
     join(homeDir, ".codex/skills");
 
+  const claudeMcpPath = options.claudeMcpPath || join(homeDir, ".claude.json");
+  const agyMcpDir = options.agyMcpDir ||
+    join(homeDir, ".gemini/antigravity-cli/mcp");
+  const codexMcpDir = options.codexMcpDir || join(homeDir, ".codex/mcp");
+  const agyGoogleSkillsDir = options.agyGoogleSkillsDir ||
+    join(homeDir, ".gemini/skills");
+
   // Read sizes
   const globalClaudeMdSize = await getFileSize(globalClaudeMdPath);
   const memoryIndexSize = await getFileSize(memoryIndexPath);
@@ -273,7 +416,15 @@ export async function computeSessionLoadReport(
 
   const bundledSkillsOver = await inspectBundledSkills(
     claudeSettingsPath,
-    limits.bundledSkills.totalCount,
+    limits.bundledSkills,
+  );
+
+  // Connectors and platform-bundled skills inspection (report-only)
+  const claudeConnectors = await inspectClaudeConnectors(claudeMcpPath);
+  const agyConnectors = await inspectAgyConnectors(agyMcpDir);
+  const codexConnectors = await inspectCodexConnectors(codexMcpDir);
+  const agyGoogleSkillsCount = await inspectAgyGoogleBundledSkills(
+    agyGoogleSkillsDir,
   );
 
   // Build items for Claude Code
@@ -310,7 +461,15 @@ export async function computeSessionLoadReport(
     claudeItems.push(`${claudeSkills.overCount} skill descriptions`);
   }
   if (bundledSkillsOver > 0) {
-    claudeItems.push(`${bundledSkillsOver} bundled skills`);
+    const label = bundledSkillsOver === 1
+      ? "1 bundled skill"
+      : `${bundledSkillsOver} bundled skills`;
+    claudeItems.push(label);
+  }
+
+  const claudeOver = claudeItems.length > 0;
+  if (claudeOver && claudeConnectors.sizeBytes > 0) {
+    claudeItems.push(`connectors ${formatNumber(claudeConnectors.sizeBytes)}`);
   }
 
   // Build items for agy
@@ -337,6 +496,19 @@ export async function computeSessionLoadReport(
   }
   if (agySkills.overCount > 0) {
     agyItems.push(`${agySkills.overCount} skill descriptions`);
+  }
+
+  const agyOver = agyItems.length > 0;
+  if (agyOver) {
+    if (agyGoogleSkillsCount > 0) {
+      const label = agyGoogleSkillsCount === 1
+        ? "1 Google-bundled skill"
+        : `${agyGoogleSkillsCount} Google-bundled skills`;
+      agyItems.push(label);
+    }
+    if (agyConnectors.sizeBytes > 0) {
+      agyItems.push(`connectors ${formatNumber(agyConnectors.sizeBytes)}`);
+    }
   }
 
   // Build items for Codex
@@ -369,9 +541,10 @@ export async function computeSessionLoadReport(
     codexItems.push(`${codexSkills.overCount} skill descriptions`);
   }
 
-  const claudeOver = claudeItems.length > 0;
-  const agyOver = agyItems.length > 0;
   const codexOver = codexItems.length > 0;
+  if (codexOver && codexConnectors.sizeBytes > 0) {
+    codexItems.push(`connectors ${formatNumber(codexConnectors.sizeBytes)}`);
+  }
 
   const anyOver = claudeOver || agyOver || codexOver;
 
@@ -400,9 +573,30 @@ export async function computeSessionLoadReport(
     text,
     isOver: anyOver,
     tools: {
-      claudeCode: { isOver: claudeOver, items: claudeItems },
-      agy: { isOver: agyOver, items: agyItems },
-      codex: { isOver: codexOver, items: codexItems },
+      claudeCode: {
+        isOver: claudeOver,
+        items: claudeItems,
+        connectors: claudeConnectors,
+      },
+      agy: {
+        isOver: agyOver,
+        items: agyItems,
+        connectors: agyConnectors,
+        googleBundledSkillsCount: agyGoogleSkillsCount,
+      },
+      codex: {
+        isOver: codexOver,
+        items: codexItems,
+        connectors: codexConnectors,
+      },
+    },
+    connectors: {
+      claudeCode: claudeConnectors,
+      agy: agyConnectors,
+      codex: codexConnectors,
+    },
+    googleBundledSkills: {
+      agy: agyGoogleSkillsCount,
     },
   };
 }

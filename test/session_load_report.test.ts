@@ -100,14 +100,19 @@ Deno.test("SessionStart hook exists in scripts/claude-settings.json and nowhere 
     Deno.env.get("HOME") || "/home/joshua",
     ".claude/settings.json",
   );
+  let homeSettingsText: string | null = null;
   try {
-    const text = await Deno.readTextFile(homeSettingsPath);
+    homeSettingsText = await Deno.readTextFile(homeSettingsPath);
+  } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) {
+      throw err;
+    }
+  }
+  if (homeSettingsText !== null) {
     assert(
-      !text.includes("session-load-report"),
+      !homeSettingsText.includes("session-load-report"),
       "~/.claude/settings.json must NOT contain session-load-report",
     );
-  } catch {
-    // Missing settings is acceptable
   }
 
   // Must not be in install-hooks.sh
@@ -124,14 +129,19 @@ Deno.test("SessionStart hook exists in scripts/claude-settings.json and nowhere 
     Deno.env.get("HOME") || "/home/joshua",
     ".gemini/config/hooks.json",
   );
+  let agyHooksText: string | null = null;
   try {
-    const text = await Deno.readTextFile(agyHooksPath);
+    agyHooksText = await Deno.readTextFile(agyHooksPath);
+  } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) {
+      throw err;
+    }
+  }
+  if (agyHooksText !== null) {
     assert(
-      !text.includes("session-load-report"),
+      !agyHooksText.includes("session-load-report"),
       "agy hooks.json must NOT register session-load-report",
     );
-  } catch {
-    // Missing is fine
   }
 
   // scripts/agents.sh passes scripts/claude-settings.json to tab 1
@@ -151,8 +161,8 @@ Deno.test("All parts under low mark produce one-line ok format across Claude Cod
   try {
     // Configure Claude settings with all bundled skills names-only
     const skillOverrides: Record<string, string> = {};
-    for (let i = 0; i < limits.bundledSkills.totalCount; i++) {
-      skillOverrides[`skill_${i}`] = "name-only";
+    for (const skill of limits.bundledSkills.skills ?? []) {
+      skillOverrides[skill] = "name-only";
     }
     await Deno.writeTextFile(
       join(homeDir, ".claude/settings.json"),
@@ -215,8 +225,8 @@ Deno.test("Parts inside cushion (between lowMark and overMark) do not trigger OV
 
   try {
     const skillOverrides: Record<string, string> = {};
-    for (let i = 0; i < limits.bundledSkills.totalCount; i++) {
-      skillOverrides[`skill_${i}`] = "name-only";
+    for (const skill of limits.bundledSkills.skills ?? []) {
+      skillOverrides[skill] = "name-only";
     }
     await Deno.writeTextFile(
       join(homeDir, ".claude/settings.json"),
@@ -360,8 +370,8 @@ Deno.test("Single tool OVER displays other tools as ok in multiline report", asy
   try {
     // Bundled skills all ok
     const skillOverrides: Record<string, string> = {};
-    for (let i = 0; i < limits.bundledSkills.totalCount; i++) {
-      skillOverrides[`skill_${i}`] = "name-only";
+    for (const skill of limits.bundledSkills.skills ?? []) {
+      skillOverrides[skill] = "name-only";
     }
     await Deno.writeTextFile(
       join(homeDir, ".claude/settings.json"),
@@ -516,4 +526,249 @@ Deno.test("Manual verification runbook conforms to format requirements", async (
     true,
     `Runbook has violations: ${JSON.stringify(result.violations)}`,
   );
+});
+
+Deno.test("bundled skill overrides: unrelated overrides do not suppress warning, and 1 returning to full size reports exact excess", async () => {
+  const limits = await loadLimits(LIMITS_PATH);
+  const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
+
+  try {
+    // 1. Settings containing 50 unrelated name-only overrides
+    const unrelatedOverrides: Record<string, string> = {};
+    for (let i = 0; i < 50; i++) {
+      unrelatedOverrides[`unrelated_custom_skill_${i}`] = "name-only";
+    }
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/settings.json"),
+      JSON.stringify({ skillOverrides: unrelatedOverrides }),
+    );
+
+    let result = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+
+    assert(result.isOver);
+    assert(result.tools.claudeCode.isOver);
+    assert(
+      result.tools.claudeCode.items.some((item) => item.includes("30 bundled skills")),
+      `Expected '30 bundled skills' but got: ${result.tools.claudeCode.items.join(" · ")}`,
+    );
+
+    // 2. Settings where 29 bundled skills are name-only and 1 returns to full size ("on")
+    const almostAllOverrides: Record<string, string> = {};
+    const bundledSkills = limits.bundledSkills.skills ?? [];
+    for (let i = 0; i < bundledSkills.length - 1; i++) {
+      almostAllOverrides[bundledSkills[i]] = "name-only";
+    }
+    const returnedSkill = bundledSkills[bundledSkills.length - 1];
+    almostAllOverrides[returnedSkill] = "on";
+
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/settings.json"),
+      JSON.stringify({ skillOverrides: almostAllOverrides }),
+    );
+
+    result = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+
+    assert(result.isOver);
+    assert(result.tools.claudeCode.isOver);
+    assert(
+      result.tools.claudeCode.items.some((item) => item.includes("1 bundled skill")),
+      `Expected '1 bundled skill' but got: ${result.tools.claudeCode.items.join(" · ")}`,
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("forbidden registration in global Claude settings or agy hooks fails assertion outside try-catch", async () => {
+  const tempDir = await Deno.makeTempDir();
+  try {
+    const forbiddenSettingsPath = join(tempDir, "settings.json");
+    await Deno.writeTextFile(
+      forbiddenSettingsPath,
+      JSON.stringify({ hooks: { SessionStart: [{ command: "scripts/session-load-report.ts" }] } }),
+    );
+
+    let homeSettingsText: string | null = null;
+    try {
+      homeSettingsText = await Deno.readTextFile(forbiddenSettingsPath);
+    } catch (err) {
+      if (!(err instanceof Deno.errors.NotFound)) {
+        throw err;
+      }
+    }
+
+    let assertionFailed = false;
+    try {
+      assert(
+        !homeSettingsText!.includes("session-load-report"),
+        "settings.json must NOT contain session-load-report",
+      );
+    } catch {
+      assertionFailed = true;
+    }
+
+    assert(
+      assertionFailed,
+      "Assertion must fail when forbidden settings file contains session-load-report",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("report-only connectors and agy Google-bundled skills are measured, exposed in result, and rendered when over without imposing limits", async () => {
+  const limits = await loadLimits(LIMITS_PATH);
+  const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
+
+  try {
+    // 1. Configure all bundled skills as name-only
+    const skillOverrides: Record<string, string> = {};
+    for (const skill of limits.bundledSkills.skills ?? []) {
+      skillOverrides[skill] = "name-only";
+    }
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/settings.json"),
+      JSON.stringify({ skillOverrides }),
+    );
+
+    // 2. Add Claude MCP servers in ~/.claude.json
+    const claudeMcpPath = join(homeDir, ".claude.json");
+    const mcpServers = {
+      "google-drive": { command: "node" },
+      "reaper": { command: "reaper-mcp" },
+    };
+    await Deno.writeTextFile(
+      claudeMcpPath,
+      JSON.stringify({ mcpServers }),
+    );
+    const claudeMcpExpectedBytes = new TextEncoder().encode(
+      JSON.stringify(mcpServers),
+    ).length;
+
+    // 3. Add agy MCP connectors under ~/.gemini/antigravity-cli/mcp
+    const agyMcpDir = join(homeDir, ".gemini/antigravity-cli/mcp");
+    await Deno.mkdir(join(agyMcpDir, "github"), { recursive: true });
+    await Deno.mkdir(join(agyMcpDir, "playwright"), { recursive: true });
+    await Deno.writeTextFile(
+      join(agyMcpDir, "github/schema.json"),
+      "{}".repeat(100),
+    );
+    await Deno.writeTextFile(
+      join(agyMcpDir, "playwright/instructions.md"),
+      "x".repeat(300),
+    );
+    const agyMcpExpectedBytes = 200 + 300;
+
+    // 4. Add agy Google-bundled skills in ~/.gemini/skills
+    const agyGoogleSkillsDir = join(homeDir, ".gemini/skills");
+    for (let i = 0; i < 5; i++) {
+      await Deno.mkdir(join(agyGoogleSkillsDir, `g-skill-${i}`), {
+        recursive: true,
+      });
+    }
+
+    // 5. Test clean state: all parts strictly under low mark
+    const lowDelta = 100;
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/CLAUDE.md"),
+      "x".repeat(limits.globalClaudeMd.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/projects/-home-joshua/memory/MEMORY.md"),
+      "x".repeat(limits.memoryIndex.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "web-jam-tools/AGENTS.md"),
+      "x".repeat(limits.mainRules.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "web-jam-tools/docs/cross-ai-rules.md"),
+      "x".repeat(limits.crossAiRules.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "JaMmusic/AGENTS.md"),
+      "x".repeat(limits.jammusicRules.lowMark! - lowDelta),
+    );
+
+    const compliantSkillContent =
+      `---\nname: test-skill\ndescription: A short description.\n---\nBody`;
+    for (
+      const dir of [
+        join(homeDir, ".claude/skills/test-skill"),
+        join(homeDir, ".gemini/config/plugins/webjam-tasks/skills/test-skill"),
+        join(homeDir, ".codex/skills/test-skill"),
+      ]
+    ) {
+      await Deno.mkdir(dir, { recursive: true });
+      await Deno.writeTextFile(join(dir, "SKILL.md"), compliantSkillContent);
+    }
+
+    const cleanResult = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+      claudeMcpPath,
+      agyMcpDir,
+      agyGoogleSkillsDir,
+    });
+
+    // Having connectors and Google-bundled skills MUST NOT trigger OVER
+    assertEquals(cleanResult.isOver, false);
+    assertEquals(
+      cleanResult.text,
+      "Session load: Claude Code ok · agy ok · Codex ok",
+    );
+    assertEquals(cleanResult.connectors.claudeCode.count, 2);
+    assertEquals(cleanResult.connectors.claudeCode.sizeBytes, claudeMcpExpectedBytes);
+    assertEquals(cleanResult.connectors.agy.count, 2);
+    assertEquals(cleanResult.connectors.agy.sizeBytes, agyMcpExpectedBytes);
+    assertEquals(cleanResult.connectors.codex.count, 0);
+    assertEquals(cleanResult.googleBundledSkills.agy, 5);
+
+    // 6. Test OVER state: make main rules over mark
+    const mainRulesExcess = 1000;
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "web-jam-tools/AGENTS.md"),
+      "x".repeat(limits.mainRules.overMark + mainRulesExcess),
+    );
+
+    const overResult = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+      claudeMcpPath,
+      agyMcpDir,
+      agyGoogleSkillsDir,
+    });
+
+    assertEquals(overResult.isOver, true);
+    assert(
+      overResult.tools.claudeCode.items.some((i) =>
+        i.includes(`connectors ${claudeMcpExpectedBytes}`)
+      ),
+      `Claude Code should report connector bytes when over: ${
+        overResult.tools.claudeCode.items.join(" · ")
+      }`,
+    );
+    assert(
+      overResult.tools.agy.items.some((i) => i.includes("5 Google-bundled skills")),
+      `agy should report Google-bundled skills when over: ${
+        overResult.tools.agy.items.join(" · ")
+      }`,
+    );
+    assert(
+      overResult.tools.agy.items.some((i) => i.includes(`connectors ${agyMcpExpectedBytes}`)),
+      `agy should report connector bytes when over: ${overResult.tools.agy.items.join(" · ")}`,
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
 });
