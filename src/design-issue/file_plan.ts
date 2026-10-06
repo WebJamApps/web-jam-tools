@@ -7,7 +7,8 @@
 // (`createIssueAndVerify`).
 
 import { parseArgs } from "@std/cli/parse-args";
-import { checkAuthorOnRoster } from "../../hooks/lib/authored_by_footer.ts";
+import { checkAuthorOnRoster, withFooter } from "../../hooks/lib/authored_by_footer.ts";
+import { isCodexSession, resolveSigningAuthor } from "../shared/codex_running_model.ts";
 import * as path from "@std/path";
 import {
   type ApprovalCheckResult,
@@ -242,6 +243,7 @@ export async function filePlan(
 ): Promise<FilePlanResult> {
   const plan = await parsePlanFile(options.planPath);
   const deps = options.deps || defaultExecDeps;
+  options = { ...options, author: await resolveSigningAuthor(options.author, deps.signing) };
   const approvalCheck = options.approvalCheck ||
     ((repoFull, title) => checkApprovalToken(repoFull, title));
 
@@ -333,6 +335,15 @@ export async function filePlan(
 
   if (options.dryRun) {
     console.log(`[design:file-plan] Dry run verified: ${allItems.length} issue(s) approved.`);
+    if (isCodexSession(deps.signing)) {
+      for (const { item } of allItems) {
+        const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
+        const body = bodyPath
+          ? await deps.readFileText(path.resolve(expandHome(bodyPath)))
+          : item.body ?? `## What this builds\n\n${item.title}\n`;
+        console.log(withFooter(body, options.author!));
+      }
+    }
     return {
       epic: plan.epic
         ? {
@@ -746,8 +757,9 @@ Arguments:
 
 Options:
   -p, --plan <path>       Explicit plan JSON file path
-  --author <tool — model> (required) e.g. "Claude Code — Opus"; roster-checked and written as
+  --author <tool — model> (required outside Codex) e.g. "Claude Code — Opus"; roster-checked and written as
                           the "Authored by" footer of every issue filed
+                          Codex looks up the running model instead of using this value
   -d, --dry-run           Validate plan format and approval tokens without filing
   -h, --help              Show this help message
 `);

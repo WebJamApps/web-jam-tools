@@ -11,8 +11,113 @@
 // all fire before any gh call, so this keeps the suite network-free.
 
 import { assertEquals, assertMatch, assertNotMatch } from "@std/assert";
+import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 
 const SCRIPT_PATH = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
+
+for (
+  const [name, author, forced, expected] of [
+    ["c/i: empty Codex session keeps Opus", "Claude Code — Opus", "", "Claude Code — Opus"],
+    [
+      "d: forced High replaces typed Medium",
+      "agy — Gemini Flash (Medium)",
+      "agy — Gemini Flash (High)",
+      "agy — Gemini Flash (High)",
+    ],
+    ["e: forced author alone", undefined, "agy — Gemini Flash (High)", "agy — Gemini Flash (High)"],
+    ["j: no author source", undefined, "", undefined],
+  ] as const
+) {
+  Deno.test(`signing PR ${name}`, async () => {
+    const dir = await makeFixtureRepo();
+    try {
+      const args = baseArgs();
+      args.splice(0, 2, ...(author ? ["--author", author] : []));
+      const result = await runScript(dir, args, { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: forced });
+      assertEquals(result.code, expected ? 0 : 1, result.stderr);
+      if (expected) assertEquals(result.stdout.includes(`🤖 Work by ${expected}`), true);
+      else assertEquals(result.stderr.includes("--author is required"), true);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
+
+Deno.test("signing PR: update mode also uses the running model", () =>
+  withSigningFixture(async (_options, env) => {
+    const dir = await makeFixtureRepo();
+    try {
+      const result = await runScript(dir, [
+        ...baseArgs({ author: "Codex — GPT-6 Astra" }),
+        "--update",
+      ], env);
+      assertEquals(result.code, 0, result.stderr);
+      assertEquals(result.stdout.includes(`🤖 Work by ${LUNA_SIGNATURE}`), true);
+      assertEquals(result.stdout.includes("UPDATE"), true);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  }));
+
+Deno.test("signing PR: roster probes remain read-only with conflicting Codex surfaces", async () => {
+  for (const args of [["--list-roster"], ["--check-author", "Claude Code — Opus"]]) {
+    const result = await new Deno.Command("bash", {
+      args: [SCRIPT_PATH, ...args],
+      cwd: "/tmp",
+      env: { CODEX_THREAD_ID: "missing-session", FORCED_PR_AUTHOR: "agy — Gemini Flash (High)" },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
+  }
+});
+
+for (const author of ["Codex — GPT-6.1 Sol", undefined]) {
+  Deno.test(`signing PR a/b: dry run uses lookup with ${author ?? "no typed author"}`, () =>
+    withSigningFixture(async (_options, env) => {
+      const dir = await makeFixtureRepo();
+      try {
+        const args = baseArgs();
+        args.splice(0, 2, ...(author ? ["--author", author] : []));
+        const result = await runScript(dir, args, env);
+        assertEquals(result.code, 0, result.stderr);
+        assertEquals(result.stdout.includes(`🤖 Work by ${LUNA_SIGNATURE}`), true);
+        assertEquals(result.stdout.includes("🤖 Work by Codex — GPT-6.1 Sol"), false);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    }));
+}
+
+for (const author of [undefined, "Codex — GPT-6.1 Sol"]) {
+  Deno.test(`signing PR f/g: simultaneous Codex and forced author refuse ${author ?? "no typed author"}`, () =>
+    withSigningFixture(async (_options, env) => {
+      const dir = await makeFixtureRepo();
+      try {
+        env.FORCED_PR_AUTHOR = "agy — Gemini Flash (High)";
+        const args = baseArgs();
+        args.splice(0, 2, ...(author ? ["--author", author] : []));
+        const result = await runScriptWithoutDryRun(dir, args, env);
+        assertEquals(result.code, 1);
+        assertEquals(result.stderr.includes("CODEX_THREAD_ID and FORCED_PR_AUTHOR"), true);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    }));
+}
+
+Deno.test("signing PR h: missing session refuses before push even with roster author", () =>
+  withSigningFixture(async (_options, env, sessionPath) => {
+    const dir = await makeFixtureRepo();
+    try {
+      await Deno.remove(sessionPath);
+      const result = await runScriptWithoutDryRun(dir, baseArgs({ author: LUNA_SIGNATURE }), env);
+      assertEquals(result.code, 1);
+      assertEquals(result.stderr.includes(env.CODEX_THREAD_ID), true);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  }));
 
 Deno.test("--list-roster is read-only and needs no git repository", async () => {
   const dir = await Deno.makeTempDir({ prefix: "wjt-roster-probe-" });
@@ -133,7 +238,7 @@ async function runScript(
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, ...args, "--dry-run"],
     cwd,
-    env,
+    env: { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: "", ...env },
     clearEnv: false,
     stdout: "piped",
     stderr: "piped",
@@ -156,7 +261,7 @@ async function runScriptWithoutDryRun(
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, ...args],
     cwd,
-    env,
+    env: { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: "", ...env },
     clearEnv: false,
     stdout: "piped",
     stderr: "piped",

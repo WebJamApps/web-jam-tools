@@ -19,6 +19,10 @@
  * naming the editing model in place of any earlier one.
  */
 import { checkAuthorOnRoster, withFooter } from "../hooks/lib/authored_by_footer.ts";
+import {
+  resolveSigningAuthor,
+  type RunningModelOptions,
+} from "../src/shared/codex_running_model.ts";
 import { checkNoCredentialLiteral, checkNotEmpty } from "./gh-write/guard.ts";
 import { type RunCmd, runWithRetry } from "./gh-write/gh_runner.ts";
 
@@ -86,6 +90,7 @@ export function findBodyFlags(rest: string[]): BodyFlag[] {
 }
 
 export interface Deps {
+  signing?: RunningModelOptions;
   readFileText: (path: string) => Promise<string>;
   runCmd: RunCmd;
   sleep?: (ms: number) => Promise<void>;
@@ -94,7 +99,7 @@ export interface Deps {
 }
 
 const USAGE =
-  "usage: edit-issue --repo <owner/repo> --issue <n> [--author <tool — model>] [gh issue edit flags...] [--dry-run]\n  --author is required whenever the body is replaced (--body, -b, --body-file or -F, in any form).";
+  "usage: edit-issue --repo <owner/repo> --issue <n> [--author <tool — model>] [gh issue edit flags...] [--dry-run]\n  Outside Codex, --author is required whenever the body is replaced (--body, -b, --body-file or -F, in any form). Codex looks up the running model.";
 
 export async function run(args: string[], deps: Deps): Promise<number> {
   const opts = parseArgs(args);
@@ -126,6 +131,12 @@ export async function run(args: string[], deps: Deps): Promise<number> {
       return 1;
     }
     // Authored-by footer (web-jam-tools#1205): the replacement body names the editing model.
+    try {
+      opts.author = await resolveSigningAuthor(opts.author, deps.signing);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
     const authorCheck = await checkAuthorOnRoster(opts.author, deps.runCmd, deps.probeScriptPath);
     if (!authorCheck.ok) {
       console.error(`refusing to edit: ${authorCheck.message}`);
@@ -159,9 +170,17 @@ export async function run(args: string[], deps: Deps): Promise<number> {
 }
 
 async function realRunCmd(cmd: string[]) {
-  const command = new Deno.Command(cmd[0], { args: cmd.slice(1), stdout: "piped", stderr: "piped" });
+  const command = new Deno.Command(cmd[0], {
+    args: cmd.slice(1),
+    stdout: "piped",
+    stderr: "piped",
+  });
   const { code, stdout, stderr } = await command.output();
-  return { code, stdout: new TextDecoder().decode(stdout), stderr: new TextDecoder().decode(stderr) };
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
 }
 
 if (import.meta.main) {

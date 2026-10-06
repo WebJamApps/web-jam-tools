@@ -4,9 +4,11 @@ import { assertEquals, assertMatch, assertNotMatch } from "@std/assert";
 import { type Deps, run } from "../scripts/post-pr-comment.ts";
 import { REVIEW_SUMMARY_HEADER } from "../scripts/gh-write/guard.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
+import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
   return {
+    signing: { env: () => undefined },
     readFileText: () => Promise.resolve("thanks, looks good"),
     runCmd: () => Promise.resolve({ code: 0, stdout: "", stderr: "" }),
     sleep: () => Promise.resolve(),
@@ -22,6 +24,131 @@ const ARGS = [
   "--body-file",
   "/tmp/example-comment.md",
 ];
+
+for (
+  const [name, body, expected] of [
+    [
+      "o: work footer",
+      "Notes\r\n\r\n🤖 Work by Codex — GPT-6.1 Sol\r\n",
+      `Notes\r\n\r\n🤖 Work by ${LUNA_SIGNATURE}\r\n`,
+    ],
+    [
+      "p: off-roster name",
+      "Notes\n\n🤖 Work by Codex — GPT-6\n",
+      `Notes\n\n🤖 Work by ${LUNA_SIGNATURE}\n`,
+    ],
+    [
+      "q: two work footers",
+      "🤖 Work by Codex — GPT-6.1 Sol\nDetails\n  🤖 Work by Codex — GPT-6\n",
+      `🤖 Work by ${LUNA_SIGNATURE}\nDetails\n  🤖 Work by ${LUNA_SIGNATURE}\n`,
+    ],
+    [
+      "r: review summary",
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by Codex — GPT-6.1 Sol\n`,
+      `${REVIEW_SUMMARY_HEADER}\n**Approved**\n\n🤖 Reviewed by ${LUNA_SIGNATURE}\n`,
+    ],
+  ] as const
+) {
+  Deno.test(`signing comment ${name}: rewrites before guards and sends the new body`, () =>
+    withSigningFixture(async (signing) => {
+      const calls: string[][] = [];
+      const code = await run(
+        ARGS,
+        fakeDeps({
+          signing,
+          readFileText: () => Promise.resolve(body),
+          runCmd: (cmd) => {
+            calls.push(cmd);
+            return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+          },
+        }),
+      );
+      assertEquals(code, 0);
+      const post = calls.find((cmd) => cmd[0] === "gh")!;
+      assertEquals(post[post.indexOf("--body") + 1], expected);
+      assertEquals(post.includes("--body-file"), false);
+      for (const probe of calls.filter((cmd) => cmd[1] === "--check-author")) {
+        assertEquals(probe[2], LUNA_SIGNATURE);
+      }
+    }));
+}
+
+Deno.test("signing comment s: unsigned text stays byte exact without consulting the session", async () => {
+  const body = "Notes\r\nNo signature here.\r\n";
+  const calls: string[][] = [];
+  assertEquals(
+    await run(
+      ARGS,
+      fakeDeps({
+        signing: {
+          env: () => {
+            throw new Error("must not look up");
+          },
+          readRoster: () => {
+            throw new Error("must not look up");
+          },
+        },
+        readFileText: () => Promise.resolve(body),
+        runCmd: (cmd) => {
+          calls.push(cmd);
+          return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+        },
+      }),
+    ),
+    0,
+  );
+  assertEquals(calls[0].slice(-2), ["--body-file", "/tmp/example-comment.md"]);
+});
+
+Deno.test("signing comment v: unset session preserves signature text and the file transport", async () => {
+  const body = "Notes\n\n🤖 Work by Codex — GPT-6.1 Sol\n";
+  const calls: string[][] = [];
+  assertEquals(
+    await run(
+      ARGS,
+      fakeDeps({
+        readFileText: () => Promise.resolve(body),
+        signing: {
+          env: () => undefined,
+          readRoster: () => {
+            throw new Error("must not look up");
+          },
+        },
+        runCmd: (cmd) => {
+          calls.push(cmd);
+          return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+        },
+      }),
+    ),
+    0,
+  );
+  assertEquals(calls.find((cmd) => cmd[0] === "gh")!.slice(-2), [
+    "--body-file",
+    "/tmp/example-comment.md",
+  ]);
+  assertEquals(calls.find((cmd) => cmd[1] === "--check-author")![2], "Codex — GPT-6.1 Sol");
+});
+
+Deno.test("signing comment t: missing session prevents posting even with a roster name", () =>
+  withSigningFixture(async (signing, _env, sessionPath) => {
+    await Deno.remove(sessionPath);
+    const calls: string[][] = [];
+    assertEquals(
+      await run(
+        ARGS,
+        fakeDeps({
+          signing,
+          readFileText: () => Promise.resolve(`Notes\n🤖 Work by ${LUNA_SIGNATURE}`),
+          runCmd: (cmd) => {
+            calls.push(cmd);
+            return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+          },
+        }),
+      ),
+      1,
+    );
+    assertEquals(calls, []);
+  }));
 
 Deno.test("post-pr-comment: missing required args prints usage and exits 1", async () => {
   const code = await run([], fakeDeps());

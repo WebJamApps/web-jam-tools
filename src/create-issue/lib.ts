@@ -19,6 +19,7 @@ import {
   withFooter,
 } from "../../hooks/lib/authored_by_footer.ts";
 import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_on_issue_create.ts";
+import { resolveSigningAuthor, type RunningModelOptions } from "../shared/codex_running_model.ts";
 
 export interface CreateIssueOptions {
   repo?: string;
@@ -68,6 +69,7 @@ export interface IssueData {
 }
 
 export interface ExecDeps {
+  signing?: RunningModelOptions;
   runCmd: (
     cmd: string[],
     stdin?: string,
@@ -554,6 +556,7 @@ export async function createIssueAndVerify(
   if (!options.bodyFile) {
     throw new Error("Missing required argument --body-file");
   }
+  options = { ...options, author: await resolveSigningAuthor(options.author, deps.signing) };
 
   // Body checks (web-jam-tools#1167) — the hook can't read a body file whose
   // path the shell has yet to expand, and agy has no hooks at all, so this

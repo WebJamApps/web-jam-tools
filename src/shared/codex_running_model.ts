@@ -5,6 +5,24 @@ export interface RunningModelOptions {
   readRoster?: () => Promise<string[]>;
 }
 
+/** Whether the supplied environment identifies a Codex session. */
+export function isCodexSession(options: RunningModelOptions = {}): boolean {
+  return Boolean((options.env ?? ((name: string) => Deno.env.get(name)))("CODEX_THREAD_ID"));
+}
+
+/** Use the running Codex model for signatures; other surfaces keep their typed author. */
+export async function resolveSigningAuthor(
+  typedAuthor: string | undefined,
+  options: RunningModelOptions = {},
+): Promise<string | undefined> {
+  const env = options.env ?? ((name: string) => Deno.env.get(name));
+  if (!isCodexSession({ env })) return typedAuthor;
+  if (env("FORCED_PR_AUTHOR")) {
+    throw new Error("Refusing to sign: CODEX_THREAD_ID and FORCED_PR_AUTHOR are both set");
+  }
+  return await codexRunningModel({ ...options, env });
+}
+
 /** Read the sole author roster through its side-effect-free shell probe. */
 export async function readAuthorRoster(): Promise<string[]> {
   const script = new URL("../../scripts/create-draft-pr.sh", import.meta.url).pathname;
