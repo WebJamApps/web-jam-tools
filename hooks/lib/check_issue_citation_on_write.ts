@@ -92,7 +92,7 @@ export function isTargetTaskOrScript(tokens: string[]): boolean {
 
   if (cmdBase === "deno") {
     if (tokens.length >= 3 && tokens[1] === "task") {
-      return TARGET_TASK_NAMES.has(tokens[2]);
+      return TARGET_TASK_NAMES.has(parseTaskInvocation(tokens).name ?? "");
     }
     if (tokens.length >= 2 && tokens[1] === "run") {
       for (let i = 2; i < tokens.length; i++) {
@@ -113,6 +113,98 @@ export function isTargetTaskOrScript(tokens: string[]): boolean {
   }
 
   return false;
+}
+
+const TASK_VALUE_FLAGS = new Set([
+  "--config",
+  "-c",
+  "--cwd",
+  "--filter",
+  "-f",
+  "--jobs",
+  "--concurrency",
+  "-j",
+]);
+
+/** Runner flags end at the task name; later flags belong to the publishing task. */
+function parseTaskInvocation(tokens: string[]): {
+  name?: string;
+  args: string[];
+  cwd?: string;
+  config?: string;
+} {
+  const result: { name?: string; args: string[]; cwd?: string; config?: string } = { args: [] };
+  for (let i = 2; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "--") {
+      result.name = tokens[++i];
+      result.args = tokens.slice(i + 1);
+      break;
+    }
+    if (!token.startsWith("-")) {
+      result.name = token;
+      result.args = tokens.slice(i + 1);
+      break;
+    }
+    const equal = token.indexOf("=");
+    const flag = equal < 0 ? token : token.slice(0, equal);
+    const value = equal >= 0
+      ? token.slice(equal + 1)
+      : TASK_VALUE_FLAGS.has(flag)
+      ? tokens[++i]
+      : undefined;
+    if (flag === "--cwd") result.cwd = value;
+    if (flag === "--config" || flag === "-c") result.config = value;
+  }
+  return result;
+}
+
+/** Deno tasks default to the configuration directory unless --cwd overrides it. */
+function taskWorkingDirectory(tokens: string[], cwd?: string): string | undefined {
+  const task = parseTaskInvocation(tokens);
+  if (task.cwd) return resolveBodyFilePath(task.cwd, cwd);
+  if (task.config) {
+    const configPath = resolveBodyFilePath(task.config, cwd);
+    return configPath.slice(0, configPath.lastIndexOf("/")) || ".";
+  }
+  if (!cwd) return undefined;
+  let directory = cwd.replace(/\/+$/, "") || "/";
+  while (true) {
+    for (const filename of ["deno.json", "deno.jsonc", "package.json"]) {
+      try {
+        if (Deno.statSync(`${directory}/${filename}`).isFile) return directory;
+      } catch (err) {
+        if (!(err instanceof Deno.errors.NotFound)) throw err;
+      }
+    }
+    const parent = directory.slice(0, directory.lastIndexOf("/")) || "/";
+    if (parent === directory) return cwd;
+    directory = parent;
+  }
+}
+
+/** Normalize URL citations to the shared detector's repo#number input format. */
+function findBareWriteRefs(body: string): string[] {
+  const urls = new Map<string, string>();
+  const normalized = body
+    .replace(
+      /\[([^\]\n]+)\]\((https:\/\/github\.com\/[^/\s]+\/([\w.-]+)\/(?:issues|pull)\/(\d+))\)/g,
+      (_match, label: string, url: string, repo: string, number: string) => {
+        const token = `${repo}#${number}`;
+        urls.set(token, url);
+        // A URL used as its own label supplies no title.
+        return label === url ? token : `${token} "${label.replaceAll('"', "'")}"`;
+      },
+    )
+    .replace(
+      /https:\/\/github\.com\/[^/\s]+\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:[?#][^\s<>)]*)?/g,
+      (url: string, repo: string, number: string) => {
+        const token = `${repo}#${number}`;
+        urls.set(token, url);
+        return token;
+      },
+    );
+  return findBareIssueRefs(normalized).map((token) => urls.get(token) ?? token);
 }
 
 export function isTargetGhWriteCommand(tokens: string[]): boolean {
@@ -143,9 +235,14 @@ export function extractBodyDetails(args: string[], cwd?: string): ExtractedBodyD
 
   const readBodyFile = (filepath: string) => {
     try {
+      if (!cwd && !filepath.startsWith("/") && !filepath.startsWith("~/")) {
+        throw new Error("command working directory is unknown");
+      }
       bodyParts.push(Deno.readTextFileSync(resolveBodyFilePath(filepath, cwd)));
-    } catch {
-      readError = `could not read body file '${filepath}'`;
+    } catch (err) {
+      readError = `could not read body file '${filepath}': ${
+        err instanceof Error ? err.message : String(err)
+      }`;
     }
   };
 
@@ -219,6 +316,8 @@ export function scanBashCommandSegments(
 ): ScanResult {
   const offendersSet = new Set<string>();
   const readErrors: string[] = [];
+  let effectiveCwd = cwd;
+  let previousCwd: string | undefined;
 
   for (const segment of segments) {
     const rawTokens = splitShellTokens(segment);
@@ -226,14 +325,44 @@ export function scanBashCommandSegments(
     const tokens = stripLeadingAssignments(rawTokens);
     if (tokens.length === 0) continue;
 
+    if (tokens[0] === "cd") {
+      const destination = tokens[1] === "--" ? tokens[2] : tokens[1];
+      try {
+        const nextCwd = destination === "-" ? previousCwd : resolveBodyFilePath(
+          destination || Deno.env.get("HOME") || "",
+          effectiveCwd,
+        );
+        if (!nextCwd || nextCwd.includes("$") || !Deno.statSync(nextCwd).isDirectory) {
+          throw new Error("directory cannot be determined");
+        }
+        previousCwd = effectiveCwd;
+        effectiveCwd = nextCwd;
+      } catch {
+        effectiveCwd = undefined;
+        readErrors.push("could not determine working directory after cd");
+      }
+      continue;
+    }
+
     if (isTargetGhWriteCommand(tokens)) {
-      const details = extractBodyDetails(tokens, cwd);
+      const isTask = tokens[0].split("/").pop() === "deno" && tokens[1] === "task";
+      let bodyCwd = effectiveCwd;
+      try {
+        if (isTask) bodyCwd = taskWorkingDirectory(tokens, effectiveCwd);
+      } catch (err) {
+        bodyCwd = undefined;
+        readErrors.push(`could not determine task working directory: ${err}`);
+      }
+      const details = extractBodyDetails(
+        isTask ? parseTaskInvocation(tokens).args : tokens,
+        bodyCwd,
+      );
       if (details.readError) {
         readErrors.push(details.readError);
       }
       if (details.body) {
         try {
-          for (const tok of findBareIssueRefs(details.body)) {
+          for (const tok of findBareWriteRefs(details.body)) {
             offendersSet.add(tok);
           }
         } catch (err) {
@@ -254,7 +383,11 @@ export function checkIssueCitationOnWrite(inputJson: string): string {
   try {
     payload = JSON.parse(inputJson);
   } catch {
-    return "PASS";
+    return "PASS: hook payload could not be parsed as JSON";
+  }
+
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return "PASS: hook payload is not an object";
   }
 
   const toolCall = payload.toolCall && typeof payload.toolCall === "object"
@@ -262,6 +395,9 @@ export function checkIssueCitationOnWrite(inputJson: string): string {
     : undefined;
   const toolName = String(payload.tool_name || toolCall?.name || "");
   const toolInputRaw = payload.tool_input || toolCall?.args || {};
+  if (typeof toolInputRaw !== "object" || toolInputRaw === null || Array.isArray(toolInputRaw)) {
+    return "PASS: tool input is not an object";
+  }
   const toolInput = typeof toolInputRaw === "object" && toolInputRaw !== null
     ? (toolInputRaw as Record<string, unknown>)
     : {};
@@ -312,7 +448,7 @@ export function checkIssueCitationOnWrite(inputJson: string): string {
         return "PASS: tool_input.body is not a string";
       }
       try {
-        for (const tok of findBareIssueRefs(rawBody)) {
+        for (const tok of findBareWriteRefs(rawBody)) {
           offendersSet.add(tok);
         }
       } catch (err) {
@@ -325,7 +461,7 @@ export function checkIssueCitationOnWrite(inputJson: string): string {
       for (const item of rawComments) {
         if (item && typeof item === "object" && typeof item.body === "string") {
           try {
-            for (const tok of findBareIssueRefs(item.body)) {
+            for (const tok of findBareWriteRefs(item.body)) {
               offendersSet.add(tok);
             }
           } catch (err) {

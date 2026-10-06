@@ -16,12 +16,14 @@ const HOOK_SCRIPT_PATH = new URL(
 
 async function runHookScript(
   inputJson: string,
+  env?: Record<string, string>,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const cmd = new Deno.Command("bash", {
     args: [HOOK_SCRIPT_PATH],
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
+    env,
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -48,6 +50,149 @@ Deno.test("isTargetGhCli matches targeted gh write commands", () => {
   assertEquals(isTargetGhCli(["gh", "issue", "list"]), false);
   assertEquals(isTargetGhCli(["gh", "pr", "checkout", "123"]), false);
   assertEquals(isTargetGhCli(["git", "commit", "-m", "gh issue comment"]), false);
+});
+
+Deno.test("Deno runner options identify only the task name and inspect its body", () => {
+  for (
+    const options of [
+      "--quiet",
+      "-q",
+      "--config /tmp/deno.json",
+      "--config=/tmp/deno.json",
+      "-c /tmp/deno.json --quiet",
+      "--cwd /tmp",
+      "--cwd=/tmp",
+      "--filter tools --jobs 1",
+      "--if-present --",
+    ]
+  ) {
+    const result = checkIssueCitationOnWrite(JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: `deno task ${options} post-pr-comment --body 'See #45'` },
+    }));
+    assertStringIncludes(result, "DENY:", options);
+  }
+  assertEquals(
+    isTargetTaskOrScript(["deno", "task", "--config", "post-pr-comment", "test"]),
+    false,
+  );
+  assertEquals(isTargetTaskOrScript(["deno", "task", "test", "post-pr-comment"]), false);
+});
+
+Deno.test("body files follow cd, task --cwd, and the task configuration directory", async () => {
+  const root = await Deno.makeTempDir();
+  const child = `${root}/child`;
+  await Deno.mkdir(child);
+  for (const directory of [root, child]) {
+    await Deno.writeTextFile(`${directory}/deno.json`, '{"tasks":{"post-pr-comment":"echo"}}');
+  }
+  try {
+    const commands = [
+      "cd child && gh pr comment 1 --body-file comment.md",
+      "cd -- child && deno task --quiet post-pr-comment --body-file comment.md",
+      "deno task --cwd child post-pr-comment --body-file comment.md",
+      "deno task --cwd=child post-pr-comment --body-file=comment.md",
+      "deno task --config child/deno.json post-pr-comment --body-file comment.md",
+      "deno task -c child/deno.json --cwd child post-pr-comment --body-file comment.md",
+      "cd child && cd .. && cd child && gh issue comment 1 -F comment.md",
+    ];
+    for (const bareInChild of [true, false]) {
+      await Deno.writeTextFile(`${root}/comment.md`, bareInChild ? "clean" : "See #99");
+      await Deno.writeTextFile(`${child}/comment.md`, bareInChild ? "See #45" : "clean");
+      for (const command of commands) {
+        const result = checkIssueCitationOnWrite(JSON.stringify({
+          tool_name: "Bash",
+          cwd: root,
+          tool_input: { command },
+        }));
+        if (bareInChild) assertStringIncludes(result, "- #45", command);
+        else assertEquals(result, "PASS", command);
+      }
+    }
+    // A task's flags after its name must not be mistaken for runner options.
+    await Deno.writeTextFile(`${root}/comment.md`, "See #99");
+    const result = checkIssueCitationOnWrite(JSON.stringify({
+      tool_name: "Bash",
+      cwd: root,
+      tool_input: { command: "deno task post-pr-comment --cwd child --body-file comment.md" },
+    }));
+    assertStringIncludes(result, "- #99");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("unknown directories report skipped file reads instead of inspecting another file", () => {
+  const result = checkIssueCitationOnWrite(JSON.stringify({
+    tool_name: "Bash",
+    cwd: "/tmp",
+    tool_input: { command: "cd $UNKNOWN && gh issue comment 1 --body-file comment.md" },
+  }));
+  assertStringIncludes(result, "PASS:");
+  assertStringIncludes(result, "could not determine working directory");
+  assertStringIncludes(result, "could not read body file");
+});
+
+Deno.test("GitHub URLs use the shared citation rules for CLI bodies and MCP review comments", () => {
+  for (const kind of ["issues", "pull"]) {
+    const url = `https://github.com/WebJamApps/web-jam-tools/${kind}/45`;
+    for (
+      const [body, deny] of [
+        [`See ${url}`, true],
+        [`See ${url}#issuecomment-123`, true],
+        [`See [${url}](${url})`, true],
+        [`See ${url} "Real title"`, false],
+        [`See [Real title](${url})`, false],
+        [`See [web-jam-tools#45 "Real title"](${url})`, false],
+        [`Example: \`${url}\``, false],
+        [`\`\`\`\n${url}\n\`\`\``, false],
+      ] as const
+    ) {
+      const inputs = [
+        { tool_name: "Bash", tool_input: { command: `gh pr comment 1 --body '${body}'` } },
+        { tool_name: "issue_write", tool_input: { body } },
+        { tool_name: "pull_request_review_write", tool_input: { comments: [{ body }] } },
+      ];
+      for (const input of inputs) {
+        const result = checkIssueCitationOnWrite(JSON.stringify(input));
+        if (deny) {
+          assertStringIncludes(result, "DENY:", body);
+          assertStringIncludes(result, url, body);
+        } else assertEquals(result, "PASS", body);
+      }
+    }
+  }
+});
+
+Deno.test("invalid hook payloads allow with a diagnostic in the checker and shell", async () => {
+  for (const input of ["{invalid", "null", "[]", '"text"', "123", '{"tool_input":42}']) {
+    assertStringIncludes(checkIssueCitationOnWrite(input), "PASS:");
+    const result = await runHookScript(input);
+    assertEquals(result.code, 0);
+    const output = JSON.parse(result.stdout);
+    assertStringIncludes(output.hookSpecificOutput.additionalContext, "issue-citation guard:");
+    assertEquals(result.stderr, "");
+  }
+});
+
+Deno.test("checker subprocess failures and invalid results allow with diagnostic context", async () => {
+  const directory = await Deno.makeTempDir();
+  try {
+    for (const script of ["exit 1", "echo PASS; exit 1", "exit 0", "echo UNKNOWN"]) {
+      await Deno.writeTextFile(`${directory}/deno`, `#!/bin/sh\n${script}\n`);
+      await Deno.chmod(`${directory}/deno`, 0o755);
+      const result = await runHookScript("{}", { PATH: `${directory}:${Deno.env.get("PATH")}` });
+      assertEquals(result.code, 0);
+      const output = JSON.parse(result.stdout);
+      assertStringIncludes(
+        output.hookSpecificOutput.additionalContext,
+        "citation check could not run",
+      );
+      assertStringIncludes(output.hookSpecificOutput.additionalContext, "proceeding");
+    }
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
 });
 
 Deno.test("isTargetTaskOrScript matches guarded tasks and script invocations", () => {

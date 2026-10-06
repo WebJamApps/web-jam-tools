@@ -14,19 +14,26 @@ CHECKER="$REPO_DIR/hooks/lib/check_issue_citation_on_write.ts"
 
 input=$(cat)
 
-result=$(printf '%s' "$input" | deno run --no-config --allow-env --allow-read "$CHECKER" 2>/dev/null) || true
+status=0
+result=$(printf '%s' "$input" | deno run --no-config --allow-env --allow-read "$CHECKER" 2>/dev/null) || status=$?
 
-if [ -z "$result" ]; then
-  exit 0
+if [ "$status" -ne 0 ]; then
+  result="PASS: citation check could not run (checker exited $status); proceeding"
+elif [ -z "$result" ]; then
+  result="PASS: citation check could not run (checker returned no result); proceeding"
 fi
+
+emit_note() {
+  local note="issue-citation guard: $1"
+  jq -cn --arg note "$note" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $note}}' 2>/dev/null || printf '%s\n' "$note" >&2
+}
 
 case "$result" in
   PASS)
     exit 0
     ;;
   PASS:*)
-    note="issue-citation guard: ${result#PASS: }"
-    jq -cn --arg note "$note" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $note}}' 2>/dev/null || true
+    emit_note "${result#PASS: }"
     exit 0
     ;;
   DENY:*)
@@ -34,6 +41,7 @@ case "$result" in
     exit 2
     ;;
   *)
+    emit_note "citation check could not run (unrecognized checker result); proceeding"
     exit 0
     ;;
 esac
