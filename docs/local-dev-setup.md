@@ -76,10 +76,22 @@ The Antigravity CLI binary lives in `~/.local/bin/agy`.
    ```bash
    agy install
    ```
+4. **Configure Tool Permission (`request-review`):**
+   By default, agy installs with `toolPermission` set to `always-proceed`. To ensure agy requests confirmation before executing unapproved commands and to enable prompt monitoring in multi-agent sessions (`agents` warns if this setting is not `request-review`):
+   - Launch an interactive session:
+     ```bash
+     agy
+     ```
+   - Type `/config` and press `Enter`.
+   - Type `Tool Perm` to filter settings, then press `Enter`.
+   - Use the arrow keys (`Up`/`Down`) to move the `>` cursor to `request-review` and press `Enter` to save.
+   - Press `Escape` twice to exit settings.
 
 **Verification:**
 ```bash
 agy --version
+agy -p "/config" | grep "toolPermission"
+# Expected output: toolPermission	request-review
 ```
 
 **Manual update:**
