@@ -37,6 +37,18 @@ async function runHookScript(
   };
 }
 
+function hookDiagnostic(result: { stdout: string; stderr: string }): string {
+  if (result.stdout.trim()) {
+    try {
+      const output = JSON.parse(result.stdout);
+      return output.hookSpecificOutput.additionalContext;
+    } catch {
+      return `${result.stdout}\n${result.stderr}`;
+    }
+  }
+  return result.stderr;
+}
+
 Deno.test("isTargetGhCli matches targeted gh write commands", () => {
   assertEquals(isTargetGhCli(["gh", "issue", "comment", "123", "--body", "text"]), true);
   assertEquals(isTargetGhCli(["gh", "issue", "create", "--body", "text"]), true);
@@ -183,13 +195,28 @@ Deno.test("checker subprocess failures and invalid results allow with diagnostic
       await Deno.chmod(`${directory}/deno`, 0o755);
       const result = await runHookScript("{}", { PATH: `${directory}:${Deno.env.get("PATH")}` });
       assertEquals(result.code, 0);
-      const output = JSON.parse(result.stdout);
-      assertStringIncludes(
-        output.hookSpecificOutput.additionalContext,
-        "citation check could not run",
-      );
-      assertStringIncludes(output.hookSpecificOutput.additionalContext, "proceeding");
+      const diagnostic = hookDiagnostic(result);
+      assertStringIncludes(diagnostic, "citation check could not run");
+      assertStringIncludes(diagnostic, "proceeding");
     }
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("checker failure falls back to stderr when jq is unavailable", async () => {
+  const directory = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(`${directory}/deno`, "#!/bin/sh\nexit 1\n");
+    await Deno.writeTextFile(`${directory}/jq`, "#!/bin/sh\nexit 127\n");
+    await Deno.chmod(`${directory}/deno`, 0o755);
+    await Deno.chmod(`${directory}/jq`, 0o755);
+
+    const result = await runHookScript("{}", { PATH: `${directory}:${Deno.env.get("PATH")}` });
+    assertEquals(result.code, 0);
+    assertEquals(result.stdout, "");
+    assertStringIncludes(hookDiagnostic(result), "issue-citation guard:");
+    assertStringIncludes(hookDiagnostic(result), "citation check could not run");
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
