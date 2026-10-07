@@ -316,7 +316,7 @@ When an issue's deliverables are strictly external documents (such as manual ver
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:
-     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini 3.8 Flash (High)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
+     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit) → Luna or Haiku, via a handoff since Luna and Haiku are outside agy's picker; simple image/PDF reads → `Gemini 3.1 Pro (High)` (the media override still applies).
      * *Ordinary Coding*: → `Gemini 3.8 Flash (High)`. This is the tier that moved: ordinary contained coding used to route to `Claude Sonnet 4.6 (Thinking)`, and Flash is now the default lane because it bills to Google rather than the constrained Anthropic budget. Route to Sonnet only when the task needs a Claude-side capability Flash lacks, and say which one.
      * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
    * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
