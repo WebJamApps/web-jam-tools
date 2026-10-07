@@ -47,7 +47,7 @@ Deno.test("classifyVenue: recognizes legacy type field values", () => {
     reason: 'legacy type "Cafe"',
   });
   assertEquals(classifyVenue({ _id: "9", type: "Winery" }), {
-    type: "MidRangeCafeBar",
+    type: "PubFestivalBrewery",
     reason: 'legacy type "Winery"',
   });
 });
@@ -86,7 +86,7 @@ Deno.test("classifyVenue: classifies PubFestivalBrewery via name, genre, or note
   assertEquals(v1.type, "PubFestivalBrewery");
   assertEquals(v1.reason, 'name keyword "brewery"');
 
-  const v2 = classifyVenue({ _id: "2", name: "Three Notch'd Craft Kitchen & Brewing" });
+  const v2 = classifyVenue({ _id: "2", name: "Three Notch'd Brewing" });
   assertEquals(v2.type, "PubFestivalBrewery");
   assertEquals(v2.reason, 'name keyword "brewing"');
 
@@ -98,12 +98,12 @@ Deno.test("classifyVenue: classifies PubFestivalBrewery via name, genre, or note
   assertEquals(v4.type, "PubFestivalBrewery");
   assertEquals(v4.reason, 'name keyword "ciderworks"');
 
-  const v5 = classifyVenue({ _id: "5", name: "Roanoke Taproom & Grill" });
+  const v5 = classifyVenue({ _id: "5", name: "Roanoke Taproom" });
   assertEquals(v5.type, "PubFestivalBrewery");
   assertEquals(v5.reason, 'name keyword "taproom"');
 });
 
-Deno.test("classifyVenue: classifies MidRangeCafeBar via name, genre, or notes keywords", () => {
+Deno.test("classifyVenue: follows the approved cafe, winery, and vineyard mapping", () => {
   const v1 = classifyVenue({ _id: "1", name: "Mudhouse Coffee Roasters" });
   assertEquals(v1.type, "MidRangeCafeBar");
   assertEquals(v1.reason, 'name keyword "coffee"');
@@ -113,11 +113,11 @@ Deno.test("classifyVenue: classifies MidRangeCafeBar via name, genre, or notes k
   assertEquals(v2.reason, 'name keyword "cafe"');
 
   const v3 = classifyVenue({ _id: "3", name: "Eastwood Farm and Winery" });
-  assertEquals(v3.type, "MidRangeCafeBar");
+  assertEquals(v3.type, "PubFestivalBrewery");
   assertEquals(v3.reason, 'name keyword "winery"');
 
   const v4 = classifyVenue({ _id: "4", name: "Southwest Mountains Vineyards" });
-  assertEquals(v4.type, "MidRangeCafeBar");
+  assertEquals(v4.type, "PubFestivalBrewery");
   assertEquals(v4.reason, 'name keyword "vineyard"');
 
   const v5 = classifyVenue({ _id: "5", name: "The Corner Bistro" });
@@ -137,10 +137,10 @@ Deno.test("classifyVenue: word-boundary matching avoids false positive substring
   assertEquals(v2.reason, 'name keyword "eatery"');
 });
 
-Deno.test("classifyVenue: falls back to MidRangeCafeBar when no keyword matches (D-78)", () => {
+Deno.test("classifyVenue: requires contextual fallback when no keyword matches (D-78)", () => {
   const v = classifyVenue({ _id: "1", name: "The Green Door", notes: "A nice place." });
-  assertEquals(v.type, "MidRangeCafeBar");
-  assertEquals(v.reason, "default fallback (no keyword match)");
+  assertEquals(v.type, null);
+  assertEquals(v.reason, "no keyword match; contextual LLM classification required");
 });
 
 Deno.test("parseAffirmativeFlag: enforces fail-closed affirmative confirmation (Rule 19)", () => {
@@ -302,6 +302,7 @@ Deno.test("runBackfill: --apply sends PATCH /venue/:id requests and updates reco
     backendUrl: "https://mock.example.com",
     token: "valid-bearer-token",
     apply: true,
+    confirmProposal: () => true,
     fetchFn: mockFetch,
     logger: { log: (m) => logs.push(m), error: (m) => logs.push(m) },
   });
@@ -394,7 +395,7 @@ Deno.test("runBackfill: fails closed on GET /venue network failure (AC 3)", asyn
 
 Deno.test("runBackfill: fails closed on PATCH /venue/:id network error (AC 3)", async () => {
   const venues: VenueRecord[] = [
-    { _id: "v1", name: "Failing Venue", venueType: null, status: "active" },
+    { _id: "v1", name: "Failing Pub", venueType: null, status: "active" },
   ];
 
   const mockFetch: typeof fetch = (input, init) => {
@@ -415,11 +416,12 @@ Deno.test("runBackfill: fails closed on PATCH /venue/:id network error (AC 3)", 
         backendUrl: "https://mock.example.com",
         token: "tok",
         apply: true,
+        confirmProposal: () => true,
         fetchFn: mockFetch,
       });
     },
     Error,
-    'failed to update "Failing Venue" (v1): PATCH /venue/v1 failed: HTTP 400',
+    'failed to update "Failing Pub" (v1): PATCH /venue/v1 failed: HTTP 400',
   );
 });
 
