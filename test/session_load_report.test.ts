@@ -57,21 +57,33 @@ Deno.test("limits live strictly in src/session-load/limits.json and are not rest
     limits.jammusicRules.lowMark,
     limits.jammusicRules.overMark,
     limits.otherRepoRules.overMark,
-  ];
+  ].filter((num): num is number => num !== undefined);
 
   const filesToCheck = [
     join(REPO_ROOT, "src/session-load/report.ts"),
     join(REPO_ROOT, "scripts/session-load-report.ts"),
     new URL(import.meta.url).pathname,
+    join(REPO_ROOT, "src/memory-index/generator.ts"),
+    join(REPO_ROOT, "test/memory_index.test.ts"),
   ];
 
-  for (const file of filesToCheck) {
+  // The skill description cap is a small number that collides with fixture sizes elsewhere,
+  // so it is checked only in the file that enforces the cap.
+  const checks: Array<{ file: string; numbers: number[] }> = [
+    ...filesToCheck.map((file) => ({ file, numbers: numbersToCheck })),
+    {
+      file: join(REPO_ROOT, "test/skills_validation.test.ts"),
+      numbers: [limits.skillDescription.overMark],
+    },
+  ];
+
+  for (const { file, numbers } of checks) {
     const text = await Deno.readTextFile(file);
-    for (const num of numbersToCheck) {
+    for (const num of numbers) {
       // Regex matching the number as a numeric token (excluding numbers in comments or regex)
       const regex = new RegExp(`\\b${num}\\b`);
       assert(
-        !regex.test(text),
+        !regex.test(text) && !text.includes(num.toLocaleString("en-US")),
         `File ${file} restates limit number ${num}; limits must live only in limits.json`,
       );
     }
@@ -153,6 +165,10 @@ Deno.test("SessionStart hook exists in scripts/claude-settings.json and nowhere 
   assert(
     agentsSh.includes('CLAUDE_SETTINGS="$REPO_DIR/scripts/claude-settings.json"'),
     "scripts/agents.sh must define CLAUDE_SETTINGS pointing to scripts/claude-settings.json",
+  );
+  assert(
+    !agentsSh.includes("session-load-report"),
+    "scripts/agents.sh must NOT register session-load-report",
   );
 });
 

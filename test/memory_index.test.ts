@@ -10,6 +10,7 @@ import {
   scanMemoryDirectory,
 } from "../src/memory-index/generator.ts";
 import { runCli } from "../src/memory-index/cli.ts";
+import { loadLimits } from "../src/session-load/report.ts";
 
 Deno.test("parseMemoryFile: parses valid frontmatter", () => {
   const content = `---
@@ -331,8 +332,10 @@ Deno.test("runCli: --check mode reports skips and returns exit code 1 even when 
 
 // P1-6 budget check: Derived budget function (Design 1C):
 //   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
-// Evaluates to ~6.7KB currently; 7,500 bytes is the hard upper bound limit.
-Deno.test("real memory directory index generation budget check (<= 7500 bytes)", async () => {
+// Evaluates to ~6.7KB currently; the hard upper bound is the `memoryIndex` over mark in
+// src/session-load/limits.json.
+Deno.test("real memory directory index generation budget check (memoryIndex over mark)", async () => {
+  const { overMark } = (await loadLimits()).memoryIndex;
   const realDir = "/home/joshua/.claude/projects/-home-joshua/memory";
   try {
     const stat = await Deno.stat(realDir);
@@ -347,7 +350,7 @@ Deno.test("real memory directory index generation budget check (<= 7500 bytes)",
   const byteCount = new TextEncoder().encode(output).length;
 
   assert(
-    byteCount <= 7500,
-    `Memory index size (${byteCount} bytes) exceeds budget of 7,500 bytes`,
+    byteCount <= overMark,
+    `Memory index size (${byteCount} bytes) exceeds budget of ${overMark} bytes`,
   );
 });

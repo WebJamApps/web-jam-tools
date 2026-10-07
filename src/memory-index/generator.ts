@@ -28,7 +28,8 @@ export interface MemoryDirectoryScanResult {
 /**
  * Derived budget function (Design 1C):
  *   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
- * Evaluates to ~6.2KB currently; hard budget is 6,500 bytes.
+ * Evaluates to ~6.2KB currently; the budget is the `memoryIndex` entry in
+ * src/session-load/limits.json.
  */
 
 export function parseMemoryFile(

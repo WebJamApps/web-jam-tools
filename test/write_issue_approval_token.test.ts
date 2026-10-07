@@ -1764,7 +1764,7 @@ Deno.test("FILE_ISSUE_INVOCATION_RE and skills/file-issue/SKILL.md stay tied tog
   assert(descriptionLine, "skills/file-issue/SKILL.md must have a frontmatter description: line");
 
   // In web-jam-tools#1239 (standing-preamble-design-2026-08-08.md), skill descriptions are capped
-  // at 300 characters, and lists of trigger phrases / worked examples moved to the skill body
+  // (src/session-load/limits.json), and lists of trigger phrases / worked examples moved to the skill body
   // (under "## Description Detail & Triggers"). Look for the trigger text in the file.
   const triggersText = skillMd;
 
