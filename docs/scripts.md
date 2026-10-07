@@ -6,8 +6,7 @@ Index of utilities in `scripts/`. Run from the repo root unless noted.
 
 ### `skill-start-check.ts`
 
-Proves a skill still starts after its description or listing changes, on Claude Code and agy
-(web-jam-tools#1237).
+Proves a skill still starts after its description or listing changes, on Claude Code and agy (web-jam-tools#1237).
 
 ```sh
 deno task skill-start-check <skill-name> [--tool claude|agy|all]
@@ -15,8 +14,8 @@ deno task skill-start-check <skill-name> [--tool claude|agy|all]
 
 The check reads the installed skill without changing its links. If its instructions or resources
 differ from the candidate, it refuses rather than reporting a result for the installed copy. The
-harness-only `start-check.json` is excluded from that comparison. agy checks require Linux `setsid`
-and `kill` to terminate the check's process group and its descendants on timeout.
+harness-only `start-check.json` is excluded from that comparison. agy checks require Linux
+`setsid` and `kill` to terminate the check's process group and its descendants on timeout.
 
 ### `install-codex.ts`
 
@@ -56,16 +55,15 @@ Manual steps are in `~/Dropbox/web-jam-llms/Token_Savings/codex-install-manual-s
 
 ### `session-load-report.ts`
 
-Claude connector configuration supplies server identities, not discovered tool listings. The report
-reads native discovery entries from `~/.claude/mcp-discovery-cache` where available. Missing,
-sealed, or unreadable entries produce an unavailable measurement (`sizeBytes: null`), rather than an
-invented byte total. Readable v1 entries provide cached tool-name bytes separately; they omit server
-instructions, so those bytes are explicitly partial. The report makes no connector request and does
-not read credential keys to decrypt caches.
+Claude connector configuration supplies server identities, not discovered tool
+listings. The report reads native discovery entries from
+`~/.claude/mcp-discovery-cache` where available. Missing, sealed, or unreadable
+entries produce an unavailable measurement (`sizeBytes: null`), rather than an
+invented byte total. Readable v1 entries provide cached tool-name bytes separately;
+they omit server instructions, so those bytes are explicitly partial. The report
+makes no connector request and does not read credential keys to decrypt caches.
 
-Emits the session load report at Claude Code startup in tab 1 of `agents` (web-jam-tools#1234).
-Reads the size of every session-load part from disk across Claude Code, agy, and Codex against the
-canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
+Emits the session load report at Claude Code startup in tab 1 of `agents` (web-jam-tools#1234). Reads the size of every session-load part from disk across Claude Code, agy, and Codex against the canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
 
 ```sh
 deno run --allow-read --allow-env scripts/session-load-report.ts
@@ -319,7 +317,8 @@ script.
 - **Its strings are secret-scanned** with the same credential-literal check as `permissions` and
   `hooks`; a match refuses the write.
 
-**Claude Code ONLY**, like `statusLine`: it is never merged into agy's `hooks.json`.
+**Claude Code ONLY**, like `statusLine`: it is never merged into agy's
+`hooks.json`.
 
 ### `skillOverrides` (managed by `install-hooks.sh`)
 
