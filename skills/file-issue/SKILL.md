@@ -78,6 +78,16 @@ that's what following this skill prevents.
     - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
       delete-protection only, per `skills/fix-labels/labels.yaml`).
 
+   **A prompt that hands filing to another agent never names the label.** A session that sends a
+   subagent to file an issue tells it to choose the label under this rule, and names the default
+   working tier as the one to depart from only with a reason; it does not write a tier into the
+   prompt. The model that performs the filing and the tier the issue is routed to are unrelated:
+   filing is mechanical work, while the label is set by the work the issue describes. A tier is
+   named in such a prompt only where the escalation is justified, with the reason beside it — a
+   real reason is always sufficient, and the more expensive tiers stay fully available. The rows
+   of the Gate 2 plan table are that case: Josh rules on each row's tier with the plan, so the
+   filing agent applies the tier the row carries.
+
    **Tier is not a function of diff size.** The bullets above describe the *kind* of thinking a
    task needs, not how many files it touches. A one-file, twenty-line change can be `Opus` work,
    and a ten-file change can be `Flash High` work. Before settling on a tier, ask what the task
