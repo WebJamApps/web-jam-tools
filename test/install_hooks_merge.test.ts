@@ -2002,3 +2002,166 @@ Deno.test("secret-scan gate refuses an autoMode that carries a credential litera
     assertEquals(await readSettings(path), { model: "opus" });
   });
 });
+
+// --- --skill-overrides: whole-object skillOverrides section (web-jam-tools#1240) ---
+
+interface SettingsWithSkillOverrides {
+  skillOverrides?: unknown;
+  permissions?: { allow?: string[]; defaultMode?: string };
+  model?: string;
+}
+const readSettingsWithSkillOverrides = async (p: string): Promise<SettingsWithSkillOverrides> =>
+  JSON.parse(await Deno.readTextFile(p));
+
+const SAMPLE_SKILL_OVERRIDES = {
+  "anthropic-skills:pdf": "name-only",
+  "keybindings-help": "name-only",
+};
+const SAMPLE_SKILL_OVERRIDES_ARGS = ["--skill-overrides", JSON.stringify(SAMPLE_SKILL_OVERRIDES)];
+
+Deno.test("--skill-overrides installs skillOverrides when absent", async () => {
+  await withTempSettings(undefined, async (path) => {
+    const res = await runMerge(path, SAMPLE_SKILL_OVERRIDES_ARGS);
+    assertEquals(res.code, 0, res.stderr);
+    assert(res.stdout.includes("added skillOverrides section"));
+    assertEquals(
+      (await readSettingsWithSkillOverrides(path)).skillOverrides,
+      SAMPLE_SKILL_OVERRIDES,
+    );
+  });
+});
+
+Deno.test("a second --skill-overrides run is a no-op and writes no second backup", async () => {
+  await withTempSettings({}, async (path) => {
+    assertEquals((await runMerge(path, SAMPLE_SKILL_OVERRIDES_ARGS)).code, 0);
+    const second = await runMerge(path, SAMPLE_SKILL_OVERRIDES_ARGS);
+    assertEquals(second.code, 0, second.stderr);
+    assert(second.stdout.includes("already up to date (no-op)"));
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const backups = [...Deno.readDirSync(dir)].filter((e) => e.name.includes(".bak-"));
+    assertEquals(backups.length, 1);
+  });
+});
+
+Deno.test("--skill-overrides leaves every other key alone and replaces a differing skillOverrides", async () => {
+  await withTempSettings(
+    {
+      permissions: { allow: ["Bash(ls:*)"], defaultMode: "auto" },
+      model: "opus",
+      skillOverrides: { "keybindings-help": "full" },
+    },
+    async (path) => {
+      const res = await runMerge(path, SAMPLE_SKILL_OVERRIDES_ARGS);
+      assertEquals(res.code, 0, res.stderr);
+      assert(res.stdout.includes("updated skillOverrides"));
+      const data = await readSettingsWithSkillOverrides(path);
+      assertEquals(data.skillOverrides, SAMPLE_SKILL_OVERRIDES);
+      assertEquals(data.permissions?.allow, ["Bash(ls:*)"]);
+      assertEquals(data.permissions?.defaultMode, "auto");
+      assertEquals(data.model, "opus");
+    },
+  );
+});
+
+Deno.test("--check with --skill-overrides flags a missing or differing skillOverrides and passes when equal", async () => {
+  await withTempSettings({}, async (path) => {
+    const missing = await runMerge(path, ["--check", ...SAMPLE_SKILL_OVERRIDES_ARGS]);
+    assertEquals(missing.code, 1);
+    assert(missing.stderr.includes("missing skillOverrides section"));
+    await Deno.writeTextFile(
+      path,
+      JSON.stringify({ skillOverrides: { "keybindings-help": "name-only" } }),
+    );
+    const differs = await runMerge(path, ["--check", ...SAMPLE_SKILL_OVERRIDES_ARGS]);
+    assertEquals(differs.code, 1);
+    assert(differs.stderr.includes("skillOverrides differs"));
+    // --check never writes.
+    assertEquals((await readSettingsWithSkillOverrides(path)).skillOverrides, {
+      "keybindings-help": "name-only",
+    });
+    // Key order alone is not drift.
+    const reordered = {
+      "keybindings-help": "name-only",
+      "anthropic-skills:pdf": "name-only",
+    };
+    await Deno.writeTextFile(path, JSON.stringify({ skillOverrides: reordered }));
+    assertEquals((await runMerge(path, ["--check", ...SAMPLE_SKILL_OVERRIDES_ARGS])).code, 0);
+  });
+});
+
+const HAND_EDITED_SKILL_OVERRIDES = {
+  "anthropic-skills:pdf": "name-only",
+  "keybindings-help": "full",
+  "extra-skill": "name-only",
+};
+const SKILL_OVERRIDES_DIFF_LINES = [
+  "skillOverrides.extra-skill: key is not in the versioned config",
+  "skillOverrides.keybindings-help: value differs",
+];
+
+Deno.test("--check with --skill-overrides names the keys and entries that differ", async () => {
+  await withTempSettings({ skillOverrides: HAND_EDITED_SKILL_OVERRIDES }, async (path) => {
+    const res = await runMerge(path, ["--check", ...SAMPLE_SKILL_OVERRIDES_ARGS]);
+    assertEquals(res.code, 1);
+    for (const line of SKILL_OVERRIDES_DIFF_LINES) {
+      assert(res.stderr.includes(line), `missing "${line}" in:\n${res.stderr}`);
+    }
+    assert(!res.stderr.includes("anthropic-skills:pdf"), res.stderr);
+  });
+});
+
+Deno.test("replacing a differing skillOverrides prints what the replaced value had", async () => {
+  await withTempSettings({ skillOverrides: HAND_EDITED_SKILL_OVERRIDES }, async (path) => {
+    const res = await runMerge(path, SAMPLE_SKILL_OVERRIDES_ARGS);
+    assertEquals(res.code, 0, res.stderr);
+    for (const line of SKILL_OVERRIDES_DIFF_LINES) {
+      assert(res.stdout.includes(line), `missing "${line}" in:\n${res.stdout}`);
+    }
+    assertEquals(
+      (await readSettingsWithSkillOverrides(path)).skillOverrides,
+      SAMPLE_SKILL_OVERRIDES,
+    );
+  });
+});
+
+Deno.test("the skillOverrides drift report covers non-object and missing keys", async () => {
+  await withTempSettings(
+    {
+      skillOverrides: "not-an-object",
+    },
+    async (path) => {
+      const res = await runMerge(path, ["--check", ...SAMPLE_SKILL_OVERRIDES_ARGS]);
+      assertEquals(res.code, 1);
+      assert(
+        res.stderr.includes("skillOverrides: the installed value is not an object"),
+        res.stderr,
+      );
+
+      await Deno.writeTextFile(path, JSON.stringify({ skillOverrides: {} }));
+      const missing = await runMerge(path, ["--check", ...SAMPLE_SKILL_OVERRIDES_ARGS]);
+      assertEquals(missing.code, 1);
+      assert(
+        missing.stderr.includes("skillOverrides.anthropic-skills:pdf: key is missing"),
+        missing.stderr,
+      );
+      assert(
+        missing.stderr.includes("skillOverrides.keybindings-help: key is missing"),
+        missing.stderr,
+      );
+    },
+  );
+});
+
+Deno.test("secret-scan gate refuses a skillOverrides that carries a credential literal", async () => {
+  const jwtSecret = "eyJ" + variedFakeBody(20, 63) + "." + variedFakeBody(20, 64) + "." +
+    variedFakeBody(20, 65);
+  const withSecret = { ...SAMPLE_SKILL_OVERRIDES, "bad-skill": jwtSecret };
+  await withTempSettings({ model: "opus" }, async (path) => {
+    const res = await runMerge(path, ["--skill-overrides", JSON.stringify(withSecret)]);
+    assertEquals(res.code, 1);
+    assert(res.stderr.includes("SECRET DETECTED"), res.stderr);
+    assert(res.stderr.includes("skillOverrides.bad-skill: JWT token"), res.stderr);
+    assert(!res.stderr.includes(jwtSecret), "secret value must not be printed");
+    assertEquals(await readSettingsWithSkillOverrides(path), { model: "opus" });
+  });
+});

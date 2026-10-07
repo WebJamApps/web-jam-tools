@@ -320,6 +320,25 @@ script.
 **Claude Code ONLY**, like `statusLine`: it is never merged into agy's
 `hooks.json`.
 
+### `skillOverrides` (managed by `install-hooks.sh`)
+
+The `skillOverrides` section of `~/.claude/settings.json` holds overrides for Claude Code bundled
+skills. `scripts/install-hooks.sh` sets the 30 skills bundled with Claude Code (13 document skills
+named `anthropic-skills:<name>` and 17 built-in skills) to `name-only`, so their descriptions stop
+loading at every session open while every skill stays listed and callable by name
+(web-jam-tools#1240). Its content is the `SKILL_OVERRIDES_JSON` block in `scripts/install-hooks.sh`.
+
+- **It is replaced as a whole.** A run installs the object when it is absent and replaces it when it
+  differs; no other key in `settings.json` is touched.
+- **Change it in `SKILL_OVERRIDES_JSON`, not in `settings.json`.** A hand edit to `settings.json` is
+  reported by `--check` and overwritten by the next run.
+- **The drift report names what differs.** Both `--check` and a replacing run list each key that
+  differs or is missing.
+- **Its strings are secret-scanned** with the same credential-literal check as `permissions` and
+  `hooks`; a match refuses the write.
+
+**Claude Code ONLY**: it is never merged into agy's `hooks.json`.
+
 ## Example scraping / data utilities
 
 These scripts target a specific Wix-hosted site and were built as one-offs for the maintainer's use
