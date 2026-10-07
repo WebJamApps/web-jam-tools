@@ -19,12 +19,12 @@ for (
   const [name, author, forced, expected] of [
     ["c/i: empty Codex session keeps Opus", "Claude Code — Opus", "", "Claude Code — Opus"],
     [
-      "d: forced High replaces typed Medium",
-      "agy — Gemini Flash (Medium)",
-      "agy — Gemini Flash (High)",
-      "agy — Gemini Flash (High)",
+      "d: forced Flash replaces typed Opus",
+      "Claude Code — Opus",
+      "agy — Gemini Flash",
+      "agy — Gemini Flash",
     ],
-    ["e: forced author alone", undefined, "agy — Gemini Flash (High)", "agy — Gemini Flash (High)"],
+    ["e: forced author alone", undefined, "agy — Gemini Flash", "agy — Gemini Flash"],
     ["j: no author source", undefined, "", undefined],
   ] as const
 ) {
@@ -301,7 +301,7 @@ Deno.test("replay #1212 defect 1: off-roster author is refused", async () => {
   const res = await runScript(repoDir, baseArgs({ author: OFF_ROSTER_AUTHOR }));
   assertEquals(res.code, 1);
   assertMatch(res.stderr, /does not name a model on the roster/);
-  assertMatch(res.stderr, /Gemini Flash \(Medium\)/); // valid list printed
+  assertMatch(res.stderr, /- Gemini Flash\n/); // valid list printed
 });
 
 Deno.test("paraphrased test-evidence passes without requiring test-runner output format", async () => {
@@ -346,9 +346,22 @@ Deno.test("creates/dry-runs a PR cleanly with only --author, --summary, and --te
 Deno.test("roster match is by substring: agy's full model name passes", async () => {
   const res = await runScript(
     repoDir,
-    baseArgs({ author: "agy — Gemini Flash (Medium)" }),
+    baseArgs({ author: "agy — Gemini Flash" }),
   );
   assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("roster: an author signed `Gemini Flash (High)` still passes (web-jam-tools#1202)", async () => {
+  const res = await runScript(repoDir, baseArgs({ author: "agy — Gemini Flash (High)" }));
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("roster: the retired medium level is refused in any letter case (web-jam-tools#1202)", async () => {
+  for (const author of ["agy — Gemini Flash (Medium)", "agy — gemini FLASH (medium)"]) {
+    const res = await runScript(repoDir, baseArgs({ author }));
+    assertEquals(res.code, 1, author);
+    assertMatch(res.stderr, /does not name a model on the roster/);
+  }
 });
 
 Deno.test("roster match is by substring: 'Claude Code — Haiku 4.5' passes", async () => {
@@ -1065,7 +1078,7 @@ Deno.test("refuses Closes #N when issue is labeled Josh without --part-of or --n
   const mockGhDir = await makeMockGh({
     ownerRepo: "WebJamApps/web-jam-tools",
     issueTitle: "Manual verification: run book-gig live pilot",
-    issueLabels: ["Josh", "Flash High"],
+    issueLabels: ["Josh", "Flash"],
   });
   const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
   const res = await runScript(
@@ -1090,7 +1103,7 @@ Deno.test("accepts --part-of when issue is labeled Josh and emits Part of #N (we
   const mockGhDir = await makeMockGh({
     ownerRepo: "WebJamApps/web-jam-tools",
     issueTitle: "Manual verification: run book-gig live pilot",
-    issueLabels: ["Josh", "Flash High"],
+    issueLabels: ["Josh", "Flash"],
   });
   const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
   const res = await runScript(
@@ -1113,7 +1126,7 @@ Deno.test("accepts --no-close when issue is labeled Josh and emits Refs #N (web-
   const mockGhDir = await makeMockGh({
     ownerRepo: "WebJamApps/web-jam-tools",
     issueTitle: "Manual verification: run book-gig live pilot",
-    issueLabels: ["Josh", "Flash High"],
+    issueLabels: ["Josh", "Flash"],
   });
   const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
   const res = await runScript(
@@ -1480,3 +1493,23 @@ Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6 Astra exits 0", as
   assertEquals(code, 0, new TextDecoder().decode(stderr));
   assertMatch(new TextDecoder().decode(stdout), /names a model on the roster/);
 });
+
+// --- web-jam-tools#1202: one Flash level, the medium level is refused ---
+
+for (
+  const [author, code] of [
+    ["Antigravity — Gemini Flash (Medium)", 1],
+    ["Antigravity — gemini flash (MEDIUM)", 1],
+    ["Antigravity — Gemini Flash", 0],
+    ["Antigravity — Gemini Flash (High)", 0],
+  ] as const
+) {
+  Deno.test(`create-draft-pr.sh --check-author: ${author} exits ${code}`, async () => {
+    const out = await new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check-author", author],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(out.code, code, new TextDecoder().decode(out.stderr));
+  });
+}

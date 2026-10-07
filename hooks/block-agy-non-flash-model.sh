@@ -3,7 +3,7 @@
 # Flash models only (3.7 floor or newer). Design: web-jam-tools#267 ("agy flash
 # default model fix", approved by Josh 2026-07-25; web-jam-tools#549).
 #
-# Rationale: agy's own configured default has drifted before (Flash High
+# Rationale: agy's own configured default has drifted before (Flash
 # instead of the intended cheaper Medium), and nothing stopped an ad hoc
 # `agy --model claude-opus-4-6-thinking` (or similar) from burning
 # Claude/Gemini-Pro-priced quota on what's supposed to be the cheap Flash
@@ -13,7 +13,7 @@
 #
 # ALLOWED:
 #   - a bare `agy` call with no --model flag (falls through to agy's own
-#     configured default — separately pinned to Flash High in
+#     configured default — separately pinned to Flash in
 #     ~/.gemini/antigravity-cli/settings.json, a laptop-local step outside
 #     this hook's / this repo's reach, web-jam-tools#267 item 2, web-jam-tools#549).
 #   - `--model` (or `--model=`) equal to a Flash model (3.7 floor or newer)

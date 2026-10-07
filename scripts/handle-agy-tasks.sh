@@ -160,22 +160,22 @@ agy_env_args() {
 }
 
 # Model chain (Antigravity PAID account — Josh's prepaid Google
-# credit): Gemini Flash High is the default lane; Flash (Medium)
-# is the rate-limit fallback (3.1 Pro removed as too expensive). Claude models are deliberately
+# credit): Gemini Flash (high effort only) is the default lane; the medium level is retired
+# (web-jam-tools#1202) and 3.1 Pro was removed as too expensive. Claude models are deliberately
 # NOT in the default chain (they drain the credit fastest — the old
 # most-capable-first order was a free-tier assumption). Override with:
 #   AGY_MODELS="Model A|Model B" handle-agy-tasks.sh    (pipe-separated; the
 # names contain spaces, so pipes — not spaces — separate them).
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)')
+DEFAULT_MODELS=$(deno run --allow-env "$SCRIPT_DIR/../hooks/lib/check_agy_model.ts" --default-models 2>/dev/null || echo 'Gemini 3.8 Flash (High)')
 IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- PR author spelling for the running model (web-jam-tools#912) ----------
 # The model chain's display names are VERSION-QUALIFIED — they come from
-# hooks/lib/check_agy_model.ts's ALLOWED_AGY_MODELS, whose entries also have to
+# hooks/lib/check_agy_model.ts's DEFAULT_AGY_CHAIN, whose entries also have to
 # produce the `--model` slug, so each display name carries a version token
 # ("Gemini <N.N> Flash (High)"). create-draft-pr.sh's ROSTER, by contrast, is
-# deliberately UNVERSIONED ("Gemini Flash (High)" — Josh, 2026-07-26: pinning a
+# deliberately UNVERSIONED ("Gemini Flash" — Josh, 2026-07-26: pinning a
 # version only produced a stale roster), and author_roster_check() SUBSTRING-
 # matches the author against it. A version token sitting between "Gemini" and
 # "Flash" breaks that substring, so "agy — <versioned name>" can NEVER clear
@@ -197,7 +197,10 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 # a PR opened with `gh pr create` (no footer, or any other author) still fails.
 pr_author_for_model() {
   local model="$1"
-  printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /')"
+  # Gemini Flash runs at high effort only, so the effort suffix is dropped too: the roster
+  # names the model, "Gemini Flash" (web-jam-tools#1202). A "(Medium)" suffix is kept so the
+  # roster refuses it.
+  printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /; s/[[:space:]]+\(High\)$//')"
 }
 
 # Fail fast when a model in the chain cannot produce a roster-valid author:
@@ -950,7 +953,7 @@ if [ "$HEADLESS" -eq 1 ]; then
       ROUNDS=$((ROUNDS + 1))
       echo ">>> round $ROUNDS/$AGY_MAX_ROUNDS — model: $m"
       # --print-timeout: agy's default 5m kills long silent work stretches in -p
-      # mode (bit us on JaMmusic#1162 — Flash Medium thinks slowly; run died twice).
+      # mode (bit us on JaMmusic#1162 — Flash thinks slowly; run died twice).
       agy_env_args
       if ! env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$m" --dangerously-skip-permissions --print-timeout 60m -p "$TURN_PROMPT"; then
         # web-jam-tools#187 — one same-model retry on ANY non-zero exit (not

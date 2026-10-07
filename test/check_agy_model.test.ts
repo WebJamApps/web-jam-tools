@@ -9,6 +9,7 @@ import {
   ALLOWED_AGY_MODELS,
   ALLOWED_SESSION_SLUGS,
   checkAgyModel,
+  DEFAULT_AGY_CHAIN,
   deriveSessionSlugs,
   isAllowedModelSlug,
 } from "../hooks/lib/check_agy_model.ts";
@@ -150,6 +151,7 @@ Deno.test("check_agy_model.ts CLI --default-models preserves default chain displ
   const { code, stdout } = await cmd.output();
   assertEquals(code, 0);
   const outStr = new TextDecoder().decode(stdout).trim();
-  assertEquals(outStr, ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"));
-  assertEquals(outStr, "Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)");
+  assertEquals(outStr, DEFAULT_AGY_CHAIN.map((m) => m.displayName).join("|"));
+  // web-jam-tools#1202: Gemini Flash runs at high effort only, so the medium level is not dispatched on.
+  assertEquals(outStr, "Gemini 3.8 Flash (High)");
 });

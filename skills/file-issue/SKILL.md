@@ -70,10 +70,9 @@ that's what following this skill prevents.
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
    model label, because the label was going to be "added later."    Decide the label as part of
     deciding what the issue IS — before you write the body — from:
-    - `Flash Med` — genuinely trivial edits only: a one-line change, a single-field data or typo fix, a link update (an exception case; anything larger goes to `Flash High`).
-    - `Flash High` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
+    - `Flash` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
     - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
-    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; ranks above Flash High per Josh's 2026-10-01 ruling, though Flash High stays the default lane).
+    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; ranks above Flash per Josh's 2026-10-01 ruling, though Flash stays the default lane).
     - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
     - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
       delete-protection only, per `skills/fix-labels/labels.yaml`).
@@ -90,7 +89,7 @@ that's what following this skill prevents.
 
    **Tier is not a function of diff size.** The bullets above describe the *kind* of thinking a
    task needs, not how many files it touches. A one-file, twenty-line change can be `Opus` work,
-   and a ten-file change can be `Flash High` work. Before settling on a tier, ask what the task
+   and a ten-file change can be `Flash` work. Before settling on a tier, ask what the task
    would **fail** on rather than how big it is. If the hard part is any of these, it is `Opus`
    work however small the diff:
     - **Coherence across a long document** — the change must stay consistent with rules stated
@@ -177,7 +176,7 @@ that's what following this skill prevents.
       2. When the condition does not hold (e.g. invalid, denied, or unmatched).
       3. When the deliverable is unable to determine which of the first two applies because the lookup errors, the API times out, the file is missing, or the field is absent.
     - For that third case, the issue specification and acceptance criteria must explicitly use the vocabulary of whether the system **refuses** (fails closed) or **proceeds** (fails open).
-    - **Model Tier Floor**: Any issue where a guarded condition is sourced from a network call, a filesystem read, or any source that can fail independently of the input being guarded has a `Flash High` floor — the default tier, never below it. This is a minimum floor, not a ceiling: if the guard requires adversarial correctness against subtle bypasses or complex tech-lead judgment, the `Opus` routing in item 2 continues to apply on its own terms.
+    - **Model Tier Floor**: Any issue where a guarded condition is sourced from a network call, a filesystem read, or any source that can fail independently of the input being guarded has a `Flash` floor — the default tier, never below it. This is a minimum floor, not a ceiling: if the guard requires adversarial correctness against subtle bypasses or complex tech-lead judgment, the `Opus` routing in item 2 continues to apply on its own terms.
 16. **Guardrail and Rules Edits Must Be Purely Additive.**
     - Edits to shared guardrails, rules, or skill instructions in `AGENTS.md`, `docs/cross-ai-rules.md`, or a skill body (`skills/*/SKILL.md`) must be **purely additive** unless the issue explicitly specifies the retirement, replacement, or deletion of existing rules.
     - Pre-existing rule bullets, rationale, and instructions must never be silently removed, truncated, or clobbered when appending new guidelines.

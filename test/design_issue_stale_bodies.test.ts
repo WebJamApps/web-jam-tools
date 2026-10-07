@@ -584,12 +584,12 @@ Deno.test("extractDocumentIssueTargets extracts plan table rows, issue tables, a
 ## Proposed Plan Table
 | # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |
 |---|---|---|---|---|---|---|---|
-| 1 | [#888](https://github.com/WebJamApps/web-jam-tools/issues/888) | Epic #737 | Flash High | Medium | web-jam-tools | npm test | PR merges |
+| 1 | [#888](https://github.com/WebJamApps/web-jam-tools/issues/888) | Epic #737 | Flash | Medium | web-jam-tools | npm test | PR merges |
 
 ### The Filed Issues
 | # | Title | Issue Link | Model Tier |
 |---|---|---|---|
-| **20** | Endpoint task | [web-jam-back#1052](https://github.com/WebJamApps/web-jam-back/issues/1052) | Flash High |
+| **20** | Endpoint task | [web-jam-back#1052](https://github.com/WebJamApps/web-jam-back/issues/1052) | Flash |
 
 Part of https://github.com/WebJamApps/web-jam-tools/issues/875
 `;
@@ -1062,7 +1062,7 @@ Deno.test("scanStaleBodies: Epic with table-linked issues checks Epic and table-
 ## The Filed Issues
 | # | Title | Issue Link | Model Tier |
 |---|---|---|---|
-| 1 | Table Issue | [web-jam-back#1052](https://github.com/WebJamApps/web-jam-back/issues/1052) | Flash High |
+| 1 | Table Issue | [web-jam-back#1052](https://github.com/WebJamApps/web-jam-back/issues/1052) | Flash |
 `;
 
   const inSyncEpic: IssueData = {

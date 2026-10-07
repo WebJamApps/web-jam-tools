@@ -14,6 +14,16 @@ export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
 ];
 
 /**
+ * The chain `handle-agy-tasks.sh` dispatches on. Gemini Flash runs at high effort only, so the
+ * medium slug stays in ALLOWED_AGY_MODELS (the session guard still recognises it) but is not a
+ * dispatch model: a PR signed `Gemini Flash (Medium)` is refused by create-draft-pr.sh's roster
+ * (web-jam-tools#1202).
+ */
+export const DEFAULT_AGY_CHAIN: readonly AgyModelSpec[] = ALLOWED_AGY_MODELS.filter((m) =>
+  m.slug.endsWith("-flash-high")
+);
+
+/**
  * Derives the runtime session slugs by combining the explicit AGY models
  * with the corresponding -tiered variant derived from each model version,
  * keeping the tiered slug in lockstep whenever ALLOWED_AGY_MODELS migrates.
@@ -128,7 +138,7 @@ export function checkAgyModel(cmd: string): string {
 if (import.meta.main) {
   const arg = Deno.args[0] || "";
   if (arg === "--default-models") {
-    console.log(ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"));
+    console.log(DEFAULT_AGY_CHAIN.map((m) => m.displayName).join("|"));
   } else if (arg === "--allowed-slugs") {
     console.log(ALLOWED_SESSION_SLUGS.join(" or "));
   } else {

@@ -46,7 +46,7 @@ export const WORKED_CONVERSATION_SEQUENCES: readonly WorkedSequence[] = [
     outcome: "ineligible",
   },
   {
-    sequence: "Flash Medium writes → Flash High selected in that conversation",
+    sequence: "Flash writes → another Flash session selected in that conversation",
     expectedResult: "No different-model exception",
     outcome: "ineligible",
   },

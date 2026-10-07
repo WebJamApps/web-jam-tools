@@ -250,12 +250,10 @@ skill.
      on the user's computer and are 100% safe from rate limit interruptions.
   2. Google does NOT broadcast an advance warning gauge prior to hitting temporary hourly rate
      limits (`429 Rate Limit Exceeded`).
-  3. Use **`Flash Med`** for routine, high-volume REAPER operations (`transport_play`,
-     `transport_stop`, `track_create`, volume/pan tweaks, clip splits) to preserve hourly token
-     headroom.
-  4. Reserve **`Flash High`** for complex multi-track creative mixing, sidechain routing, and
-     intricate composition passes.
-  5. Always execute a project save (`project_save`) before running large multi-step automated
+  3. Use **`Flash`** (at high effort) for REAPER operations, routine (`transport_play`,
+     `transport_stop`, `track_create`, volume/pan tweaks, clip splits) and complex (multi-track
+     creative mixing, sidechain routing, intricate composition passes) alike.
+  4. Always execute a project save (`project_save`) before running large multi-step automated
      sequences.
 - **MAIN BRANCH PRs MUST ORIGINATE FROM DEV:** Across all 8 active WebJamApps repos, any PR
   targeting `main` must originate from `dev` as its head branch (`dev` → `main`). Feature branches

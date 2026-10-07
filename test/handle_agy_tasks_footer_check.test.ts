@@ -26,14 +26,14 @@
 // comment says. It is also not where the defect lived.
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { ALLOWED_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
+import { DEFAULT_AGY_CHAIN } from "../hooks/lib/check_agy_model.ts";
 
 const SCRIPT_PATH = new URL("../scripts/handle-agy-tasks.sh", import.meta.url).pathname;
 const CREATE_PR_PATH = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
 
 const VERSIONED_HIGH = "Gemini 3.8 Flash (High)";
 const VERSIONED_MEDIUM = "Gemini 3.8 Flash (Medium)";
-const ROSTER_HIGH_AUTHOR = "agy — Gemini Flash (High)";
+const ROSTER_HIGH_AUTHOR = "agy — Gemini Flash";
 const ROSTER_HIGH_FOOTER = `🤖 Work by ${ROSTER_HIGH_AUTHOR}`;
 
 // `gh pr view <n> -R <repo> --json body -q .body` -> the body under test.
@@ -164,20 +164,23 @@ Deno.test("the raw versioned model name is exactly what create-draft-pr.sh refus
 
 Deno.test("pr_author_for_model strips the version token from the model display name", async () => {
   assertEquals(await derivedAuthor(VERSIONED_HIGH), ROSTER_HIGH_AUTHOR);
+  // The retired medium level keeps its suffix, so the roster refuses it (web-jam-tools#1202).
   assertEquals(await derivedAuthor(VERSIONED_MEDIUM), "agy — Gemini Flash (Medium)");
+  assertEquals(await rosterAccepts(await derivedAuthor(VERSIONED_MEDIUM)), false);
 });
 
 Deno.test("pr_author_for_model is idempotent on an already-unversioned name", async () => {
   // Dispatches that pass AGY_MODELS with the unversioned spelling — the ones
   // that never alarmed — must keep behaving identically.
   assertEquals(await derivedAuthor("Gemini Flash (High)"), ROSTER_HIGH_AUTHOR);
+  assertEquals(await derivedAuthor("Gemini Flash"), ROSTER_HIGH_AUTHOR);
 });
 
 Deno.test("every model in the default chain yields an author the roster accepts", async () => {
   // The structural impossibility that caused web-jam-tools#912 was that the
   // default chain and the roster disagreed and nothing checked. This is that
   // check, run against both real sources.
-  for (const spec of ALLOWED_AGY_MODELS) {
+  for (const spec of DEFAULT_AGY_CHAIN) {
     const author = await derivedAuthor(spec.displayName);
     assertEquals(
       await rosterAccepts(author),

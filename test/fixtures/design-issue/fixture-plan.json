@@ -17,7 +17,7 @@
       "body": "## What this builds\n\nCell validators for Gate 2 plan table linting.\n\n## Acceptance criteria\n\n1. Unit tests pass covering cell validators.",
       "type": "Task",
       "priority": "High",
-      "tier": "Flash High",
+      "tier": "Flash",
       "repo": "web-jam-tools",
       "milestone": "token-savings"
     },
@@ -27,7 +27,7 @@
       "body": "## What this builds\n\nValidation rules for Tests column in plan table.\n\n## Acceptance criteria\n\n1. Unit tests pass covering Tests column validation.",
       "type": "Task",
       "priority": "High",
-      "tier": "Flash High",
+      "tier": "Flash",
       "repo": "web-jam-tools",
       "milestone": "token-savings",
       "blocked_by": [1]

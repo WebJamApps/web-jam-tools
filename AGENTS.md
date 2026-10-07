@@ -201,7 +201,7 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
 
 ## Quota & Token Hygiene
 
-- **Model Tier Order:** The one tier order across all model labels is **`Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus`** (Sol, Astra and Sonnet share a rung); see [docs/ai-team-playbook.md](docs/ai-team-playbook.md). Reviewer-tier pairing follows this order (`skills/pr-review/SKILL.md`). The order does **not** decide the default lane for everyday work: that stays a cost decision (Flash bills to Google; Sol and Astra bill to Plus; Sonnet and Opus bill to the constrained Anthropic budget), so Flash High remains the default implementation tier even though Sol, Astra, and Sonnet rank above it.
+- **Model Tier Order:** The one tier order across all model labels is **`Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus`** (Sol, Astra and Sonnet share a rung); see [docs/ai-team-playbook.md](docs/ai-team-playbook.md). Reviewer-tier pairing follows this order (`skills/pr-review/SKILL.md`). The order does **not** decide the default lane for everyday work: that stays a cost decision (Flash bills to Google; Sol and Astra bill to Plus; Sonnet and Opus bill to the constrained Anthropic budget), so Flash remains the default implementation tier even though Sol, Astra, and Sonnet rank above it.
 - **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a
   rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or
   multi-repo tasks:
@@ -210,14 +210,12 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
   - Redirect large multi-line summaries, test plans, and evidence to temporary files in /tmp/
     (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling
     `create-draft-pr.sh`.
-  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Flash Med` or `Haiku`)
-    when operating interactively on `Flash High`.
-  - **Automatic Flash Med Subagent Handoff on "Go":** Once requirements and implementation steps are
-    aligned interactively on `Flash High`, the primary session is **forbidden** from executing file
-    edits or running test suites directly for tasks/issues labeled `Flash Med` (or `Haiku`). Upon
-    receiving user approval ("go", "proceed", "start"), the primary session's very first tool call
-    MUST be `invoke_subagent` (model `flash`) to delegate contained execution work (coding, running
-    test suites, branch/PR creation) down to a `Flash Med` subagent.
+  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Haiku`, or a `Flash`
+    subagent at the same level) when operating interactively on `Flash`.
+  - **Handoff on "Go":** Once requirements and implementation steps are aligned interactively on
+    `Flash`, and Josh says go ("go", "proceed", "start"), an agy session on Flash does the work
+    itself or hands it to a subagent at the same level (`invoke_subagent`, model `flash`) for
+    contained execution work (coding, running test suites, branch/PR creation).
   - **Exception — trivial edits.** The primary session may make the edit directly, without
     `invoke_subagent`, only when **all** of these hold: it touches **one file**; it changes **no
     behaviour** (documentation, comment, or a single config value); and it is **under ~20 changed
@@ -230,8 +228,7 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
     chosen because they are auditable from the outside and a cost estimate is not.
   - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct
     the subagent to pass `--author` matching its actual model tier (e.g.
-    `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents) when calling
-    `create-draft-pr.sh`.
+    `--author "Claude Code — Haiku 4.5"` for Haiku subagents) when calling `create-draft-pr.sh`.
 
 ## System Setup
 
