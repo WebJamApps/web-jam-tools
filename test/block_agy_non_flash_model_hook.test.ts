@@ -51,9 +51,10 @@ Deno.test("agy -i 'prompt' with no --model is allowed", async () => {
 
 // --- allowed: Flash models at 3.7 floor or newer ---
 
-Deno.test("agy --model gemini-3.8-flash-medium is allowed", async () => {
+Deno.test("agy --model gemini-3.8-flash-medium is blocked (the medium level is retired, web-jam-tools#1202)", async () => {
   const res = await runHook("agy --model gemini-3.8-flash-medium");
-  assertEquals(res.code, 0, res.stderr);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
 });
 
 Deno.test("agy --model gemini-3.8-flash-high is allowed", async () => {
@@ -66,9 +67,9 @@ Deno.test("agy --model=gemini-3.8-flash-high (single-token form) is allowed", as
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("agy --model gemini-3.8-flash-medium --dangerously-skip-permissions -p 'x' is allowed", async () => {
+Deno.test("agy --model gemini-3.8-flash-high --dangerously-skip-permissions -p 'x' is allowed", async () => {
   const res = await runHook(
-    `agy --model gemini-3.8-flash-medium --dangerously-skip-permissions -p "reply with: ok"`,
+    `agy --model gemini-3.8-flash-high --dangerously-skip-permissions -p "reply with: ok"`,
   );
   assertEquals(res.code, 0, res.stderr);
 });
@@ -87,16 +88,15 @@ Deno.test("Flash 3.7 models are allowed (>= 3.7 floor)", async () => {
   const res37 = await runHook("agy --model gemini-3.7-flash-high"); // 3.7 floor
   assertEquals(res37.code, 0, res37.stderr);
 
-  const res37Med = await runHook("agy --model gemini-3.7-flash-medium"); // 3.7 floor
-  assertEquals(res37Med.code, 0, res37Med.stderr);
-
   const res37Tiered = await runHook("agy --model gemini-3.7-flash-tiered"); // 3.7 floor
   assertEquals(res37Tiered.code, 0, res37Tiered.stderr);
 });
 
-Deno.test("future Flash 4.0 models (>= 3.7 floor) are allowed", async () => {
-  const res40 = await runHook("agy --model gemini-4.0-flash-medium");
+Deno.test("future Flash 4.0 models (>= 3.7 floor) are allowed at high effort, not medium", async () => {
+  const res40 = await runHook("agy --model gemini-4.0-flash-high");
   assertEquals(res40.code, 0, res40.stderr);
+  const res40Med = await runHook("agy --model gemini-4.0-flash-medium");
+  assertEquals(res40Med.code, 2);
 });
 
 // --- blocked: models below the 3.7 floor and non-Flash slugs ---
@@ -185,7 +185,6 @@ Deno.test("block message names permitted slugs", async () => {
   for (
     const slug of [
       "gemini-3.8-flash-high",
-      "gemini-3.8-flash-medium",
       "gemini-3.8-flash-tiered",
     ]
   ) {
@@ -193,6 +192,7 @@ Deno.test("block message names permitted slugs", async () => {
       throw new Error(`expected block message to name ${slug}, got: ${res.stderr}`);
     }
   }
+  assertEquals(res.stderr.includes("flash-medium"), false, res.stderr);
 });
 
 // --- blocked: AGY_MODELS= env prefix bypassing --model ---
@@ -223,14 +223,22 @@ Deno.test("AGY_MODELS with one good and one bad slug (pipe-separated) is blocked
 
 // --- allowed: AGY_MODELS= env prefix naming only permitted slugs ---
 
-Deno.test("AGY_MODELS=gemini-3.8-flash-medium agy is allowed", async () => {
-  const res = await runHook("AGY_MODELS=gemini-3.8-flash-medium agy");
+Deno.test("AGY_MODELS=gemini-3.8-flash-high agy is allowed", async () => {
+  const res = await runHook("AGY_MODELS=gemini-3.8-flash-high agy");
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("AGY_MODELS='gemini-3.8-flash-high|gemini-3.8-flash-medium' agy is allowed (pipe-separated, both permitted)", async () => {
-  const res = await runHook("AGY_MODELS='gemini-3.8-flash-high|gemini-3.8-flash-medium' agy");
-  assertEquals(res.code, 0, res.stderr);
+Deno.test("AGY_MODELS naming the retired medium slug is blocked, alone or beside high (web-jam-tools#1202)", async () => {
+  for (
+    const value of [
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-high|gemini-3.8-flash-medium",
+    ]
+  ) {
+    const res = await runHook(`AGY_MODELS='${value}' agy`);
+    assertEquals(res.code, 2, value);
+    assertBlocked(res.stderr);
+  }
 });
 
 // --- out of scope: wrapper scripts that merely mention/invoke agy internally ---

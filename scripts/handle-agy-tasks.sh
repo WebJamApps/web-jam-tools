@@ -172,7 +172,7 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 
 # --- PR author spelling for the running model (web-jam-tools#912) ----------
 # The model chain's display names are VERSION-QUALIFIED — they come from
-# hooks/lib/check_agy_model.ts's DEFAULT_AGY_CHAIN, whose entries also have to
+# hooks/lib/check_agy_model.ts's ALLOWED_AGY_MODELS, whose entries also have to
 # produce the `--model` slug, so each display name carries a version token
 # ("Gemini <N.N> Flash (High)"). create-draft-pr.sh's ROSTER, by contrast, is
 # deliberately UNVERSIONED ("Gemini Flash" — Josh, 2026-07-26: pinning a

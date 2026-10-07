@@ -26,7 +26,7 @@
 // comment says. It is also not where the defect lived.
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { DEFAULT_AGY_CHAIN } from "../hooks/lib/check_agy_model.ts";
+import { ALLOWED_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
 
 const SCRIPT_PATH = new URL("../scripts/handle-agy-tasks.sh", import.meta.url).pathname;
 const CREATE_PR_PATH = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
@@ -180,7 +180,7 @@ Deno.test("every model in the default chain yields an author the roster accepts"
   // The structural impossibility that caused web-jam-tools#912 was that the
   // default chain and the roster disagreed and nothing checked. This is that
   // check, run against both real sources.
-  for (const spec of DEFAULT_AGY_CHAIN) {
+  for (const spec of ALLOWED_AGY_MODELS) {
     const author = await derivedAuthor(spec.displayName);
     assertEquals(
       await rosterAccepts(author),

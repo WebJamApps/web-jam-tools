@@ -8,7 +8,7 @@
 // passed to scripts/handle-agy-tasks.sh.
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { ALLOWED_AGY_MODELS, DEFAULT_AGY_CHAIN } from "../hooks/lib/check_agy_model.ts";
+import { ALLOWED_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
 
 const DELEGATE_SKILL_PATH = new URL("../skills/delegate/SKILL.md", import.meta.url).pathname;
 const HANDLE_AGY_TASKS_PATH = new URL("../scripts/handle-agy-tasks.sh", import.meta.url).pathname;
@@ -83,14 +83,14 @@ Deno.test("skills/delegate/SKILL.md documents only valid AGY_MODELS matching ALL
   validateAgyModelsDeclarations(declarations, "skills/delegate/SKILL.md");
 });
 
-Deno.test("scripts/handle-agy-tasks.sh fallback literal matches DEFAULT_AGY_CHAIN", async () => {
+Deno.test("scripts/handle-agy-tasks.sh fallback literal matches ALLOWED_AGY_MODELS", async () => {
   const content = await Deno.readTextFile(HANDLE_AGY_TASKS_PATH);
   const fallbackLiteral = extractHandleAgyTasksFallbackLiteral(content);
   validateAgyModelsDeclarations([fallbackLiteral], "scripts/handle-agy-tasks.sh");
   assertEquals(
     fallbackLiteral,
-    DEFAULT_AGY_CHAIN.map((m) => m.displayName).join("|"),
-    "scripts/handle-agy-tasks.sh fallback literal must match DEFAULT_AGY_CHAIN exactly",
+    ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"),
+    "scripts/handle-agy-tasks.sh fallback literal must match ALLOWED_AGY_MODELS exactly",
   );
 });
 

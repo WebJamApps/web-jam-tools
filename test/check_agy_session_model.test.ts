@@ -46,9 +46,7 @@ Deno.test("checkSessionModel: Outcome 1 - gemini-3.8-flash-tiered and Flash mode
   assertEquals(checkSessionModel("gemini-3.8-flash-tiered"), { allowed: true });
   assertEquals(checkSessionModel("gemini-3.7-flash-tiered"), { allowed: true });
   assertEquals(checkSessionModel("gemini-3.8-flash-high"), { allowed: true });
-  assertEquals(checkSessionModel("gemini-3.8-flash-medium"), { allowed: true });
   assertEquals(checkSessionModel("gemini-3.7-flash-high"), { allowed: true });
-  assertEquals(checkSessionModel("gemini-3.7-flash-medium"), { allowed: true });
 });
 
 // --- Outcome 2: condition does not hold (denied models) ---

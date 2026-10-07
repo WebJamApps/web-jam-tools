@@ -592,7 +592,7 @@ Deno.test("runShim: synthetic subagent-shaped payload captures all fields and pr
       stepIdx: 3,
       artifactDirectoryPath: "/tmp/artifacts-subagent",
       workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
-      modelName: "gemini-3.8-flash-medium",
+      modelName: "gemini-3.8-flash-high",
       subagentType: "research",
       parentConversationId: "main-conv-001",
       error: undefined,
@@ -616,7 +616,7 @@ Deno.test("runShim: synthetic subagent-shaped payload captures all fields and pr
     assertEquals(record.conversationId, "subagent-conv-456");
     assertEquals(record.parentConversationId, "main-conv-001");
     assertEquals(record.subagentType, "research");
-    assertEquals(record.modelName, "gemini-3.8-flash-medium");
+    assertEquals(record.modelName, "gemini-3.8-flash-high");
     assertEquals(record.stepIdx, 3);
   } finally {
     await Deno.remove(tempPath);

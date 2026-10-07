@@ -10,18 +10,7 @@ export interface AgyModelSpec {
 
 export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
   { slug: "gemini-3.8-flash-high", displayName: "Gemini 3.8 Flash (High)" },
-  { slug: "gemini-3.8-flash-medium", displayName: "Gemini 3.8 Flash (Medium)" },
 ];
-
-/**
- * The chain `handle-agy-tasks.sh` dispatches on. Gemini Flash runs at high effort only, so the
- * medium slug stays in ALLOWED_AGY_MODELS (the session guard still recognises it) but is not a
- * dispatch model: a PR signed `Gemini Flash (Medium)` is refused by create-draft-pr.sh's roster
- * (web-jam-tools#1202).
- */
-export const DEFAULT_AGY_CHAIN: readonly AgyModelSpec[] = ALLOWED_AGY_MODELS.filter((m) =>
-  m.slug.endsWith("-flash-high")
-);
 
 /**
  * Derives the runtime session slugs by combining the explicit AGY models
@@ -46,7 +35,7 @@ export function deriveSessionSlugs(models: readonly AgyModelSpec[]): readonly st
 export const ALLOWED_SESSION_SLUGS: readonly string[] = deriveSessionSlugs(ALLOWED_AGY_MODELS);
 
 export function isAllowedModelSlug(slug: string): boolean {
-  const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(medium|high|tiered)$/);
+  const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(high|tiered)$/);
   if (!match) return false;
   const versionStr = match[1];
   const parts = versionStr.split(".").map((p) => parseInt(p, 10));
@@ -138,7 +127,7 @@ export function checkAgyModel(cmd: string): string {
 if (import.meta.main) {
   const arg = Deno.args[0] || "";
   if (arg === "--default-models") {
-    console.log(DEFAULT_AGY_CHAIN.map((m) => m.displayName).join("|"));
+    console.log(ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"));
   } else if (arg === "--allowed-slugs") {
     console.log(ALLOWED_SESSION_SLUGS.join(" or "));
   } else {
