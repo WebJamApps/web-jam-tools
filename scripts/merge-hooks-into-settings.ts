@@ -25,6 +25,7 @@ export function merge(settingsPath: string, args: string[]): number {
   let allowPatterns: string[] = [];
   let statusLineArgs: string[] = [];
   let autoModeArgs: string[] = [];
+  let skillOverridesArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
   // web-jam-tools#432 finding 9: a SessionStart or SessionEnd entry in agy's
@@ -72,6 +73,7 @@ export function merge(settingsPath: string, args: string[]): number {
         "--allow",
         "--status-line",
         "--auto-mode",
+        "--skill-overrides",
       ],
       rest,
     );
@@ -95,6 +97,7 @@ export function merge(settingsPath: string, args: string[]): number {
     allowPatterns = sections["--allow"] || [];
     statusLineArgs = sections["--status-line"] || [];
     autoModeArgs = sections["--auto-mode"] || [];
+    skillOverridesArgs = sections["--skill-overrides"] || [];
   }
 
   const passedLifecycle = [
@@ -475,7 +478,34 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
-  // Secret-scan gate: check all strings in permissions, hooks and autoMode for credentials
+  // skillOverrides merge (web-jam-tools#1240): the whole object is owned by this installer.
+  // One JSON string argument; installed when absent, replaced when it differs (key
+  // order ignored). Only touched when --skill-overrides was passed, so agy's hooks.json
+  // is unaffected.
+  let skillOverridesAdded = false;
+  let skillOverridesChanged = false;
+  let skillOverridesDiff: string[] = [];
+  if (skillOverridesArgs.length > 0) {
+    let desiredSkillOverrides: unknown;
+    try {
+      desiredSkillOverrides = JSON.parse(skillOverridesArgs[0]);
+    } catch (e) {
+      console.error(`error: --skill-overrides value is not valid JSON: ${e}`);
+      return 1;
+    }
+    if (data.skillOverrides === undefined) {
+      skillOverridesAdded = true;
+      data.skillOverrides = desiredSkillOverrides;
+    } else if (canonicalJson(data.skillOverrides) !== canonicalJson(desiredSkillOverrides)) {
+      skillOverridesChanged = true;
+      // Computed before the replace: a replace discards a hand edit, so the
+      // output has to name it for it to be carried into SKILL_OVERRIDES_JSON.
+      skillOverridesDiff = describeSkillOverridesDiff(data.skillOverrides, desiredSkillOverrides);
+      data.skillOverrides = desiredSkillOverrides;
+    }
+  }
+
+  // Secret-scan gate: check all strings in permissions, hooks, autoMode and skillOverrides for credentials
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
     for (const section of ["allow", "deny", "ask"]) {
@@ -528,6 +558,13 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   });
 
+  forEachString(data.skillOverrides, "skillOverrides", (where, value) => {
+    const match = findCredentialLiteral(value);
+    if (match) {
+      secretFindings.push(`${where}: ${match}`);
+    }
+  });
+
   const targetFilename = path.basename(settingsPath);
 
   if (secretFindings.length > 0) {
@@ -562,7 +599,9 @@ export function merge(settingsPath: string, args: string[]): number {
     statusLineAdded ||
     statusLineChanged ||
     autoModeAdded ||
-    autoModeChanged;
+    autoModeChanged ||
+    skillOverridesAdded ||
+    skillOverridesChanged;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -665,6 +704,15 @@ export function merge(settingsPath: string, args: string[]): number {
       if (autoModeChanged) {
         console.error(`${targetFilename}: autoMode differs from the versioned config`);
         for (const line of autoModeDiff) {
+          console.error(`  ${line}`);
+        }
+      }
+      if (skillOverridesAdded) {
+        console.error(`${targetFilename}: missing skillOverrides section`);
+      }
+      if (skillOverridesChanged) {
+        console.error(`${targetFilename}: skillOverrides differs from the versioned config`);
+        for (const line of skillOverridesDiff) {
           console.error(`  ${line}`);
         }
       }
@@ -802,6 +850,15 @@ export function merge(settingsPath: string, args: string[]): number {
       console.log(`  ${line}`);
     }
   }
+  if (skillOverridesAdded) {
+    console.log(`${targetFilename}: added skillOverrides section`);
+  }
+  if (skillOverridesChanged) {
+    console.log(`${targetFilename}: updated skillOverrides to the versioned config`);
+    for (const line of skillOverridesDiff) {
+      console.log(`  ${line}`);
+    }
+  }
 
   return 0;
 }
@@ -867,6 +924,34 @@ function describeAutoModeDiff(installed: unknown, versioned: unknown): string[] 
     }
     if (extra.length === 0 && missing.length === 0) {
       lines.push(`autoMode.${key}: same entries in a different order or count`);
+    }
+  }
+  return lines;
+}
+
+/**
+ * Names what differs between the installed skillOverrides and the versioned
+ * one: keys missing, keys not in versioned config, or values that differ.
+ */
+function describeSkillOverridesDiff(installed: unknown, versioned: unknown): string[] {
+  if (!isPlainObject(installed) || !isPlainObject(versioned)) {
+    return ["skillOverrides: the installed value is not an object"];
+  }
+  const lines: string[] = [];
+  const keys = [...new Set([...Object.keys(installed), ...Object.keys(versioned)])].sort();
+  for (const key of keys) {
+    if (!(key in versioned)) {
+      lines.push(`skillOverrides.${key}: key is not in the versioned config`);
+      continue;
+    }
+    if (!(key in installed)) {
+      lines.push(`skillOverrides.${key}: key is missing`);
+      continue;
+    }
+    const have = installed[key];
+    const want = versioned[key];
+    if (canonicalJson(have) !== canonicalJson(want)) {
+      lines.push(`skillOverrides.${key}: value differs`);
     }
   }
   return lines;

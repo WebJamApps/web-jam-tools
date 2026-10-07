@@ -29,6 +29,11 @@
 #    parent directory at install time, so the object is correct for the
 #    machine the installer runs on. Claude Code only.
 #
+#    Also installs the whole "skillOverrides" object (SKILL_OVERRIDES_JSON
+#    below) into ~/.claude/settings.json, setting the 30 bundled Claude Code
+#    skills to names only, replacing it when it differs; --check reports
+#    drift. Claude Code only (web-jam-tools#1240).
+#
 # 3. Registers the REAPER startup check in Codex's own hooks.json, next to
 #    its active config ($CODEX_HOME or $HOME/.codex). This Codex-only check
 #    uses SessionStart source startup/resume; Claude/agy must not start it.
@@ -901,6 +906,46 @@ AUTO_MODE_JSON=${AUTO_MODE_JSON//__HOME__/"$AUTO_MODE_HOME"}
 AUTO_MODE_JSON=${AUTO_MODE_JSON//__REPOS_DIR__/"$AUTO_MODE_REPOS_DIR"}
 merge_auto_mode_args=("$AUTO_MODE_JSON")
 
+# skillOverrides (web-jam-tools#1240) — sets the 30 skills bundled with
+# Claude Code (13 document skills and 17 built-in ones) to names only, so
+# their descriptions stop loading at every session open while remaining listed
+# and callable by name. Claude Code ONLY: agy and Codex have no such setting.
+read -r -d '' SKILL_OVERRIDES_JSON <<'SKILL_OVERRIDES_JSON_EOF' || true
+{
+  "anthropic-skills:built-in-browser": "name-only",
+  "anthropic-skills:chrome-browser": "name-only",
+  "anthropic-skills:computer-use": "name-only",
+  "anthropic-skills:deep-research": "name-only",
+  "anthropic-skills:docs": "name-only",
+  "anthropic-skills:docx": "name-only",
+  "anthropic-skills:google-workspace": "name-only",
+  "anthropic-skills:import-memory": "name-only",
+  "anthropic-skills:morning": "name-only",
+  "anthropic-skills:pdf": "name-only",
+  "anthropic-skills:pptx": "name-only",
+  "anthropic-skills:skill-creator": "name-only",
+  "anthropic-skills:xlsx": "name-only",
+  "artifact-capabilities": "name-only",
+  "artifact-design": "name-only",
+  "artifact-diagramming": "name-only",
+  "claude-api": "name-only",
+  "claude-in-chrome": "name-only",
+  "code-review": "name-only",
+  "dataviz": "name-only",
+  "fewer-permission-prompts": "name-only",
+  "init": "name-only",
+  "keybindings-help": "name-only",
+  "loop": "name-only",
+  "plugin-authoring": "name-only",
+  "run": "name-only",
+  "schedule": "name-only",
+  "security-review": "name-only",
+  "simplify": "name-only",
+  "update-config": "name-only"
+}
+SKILL_OVERRIDES_JSON_EOF
+merge_skill_overrides_args=("$SKILL_OVERRIDES_JSON")
+
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432, matcher-by-
 # -own-tool-names regression fixed by web-jam-tools#1036) ---
 #
@@ -1024,7 +1069,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}"; then
     DRIFT=1
   fi
 
@@ -1175,7 +1220,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 

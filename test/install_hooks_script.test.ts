@@ -178,6 +178,13 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     // either — this installer never passes --default-mode to the
     // $AGY_HOOKS_PATH invocation.
     assertEquals(agyHooks.permissions?.defaultMode, undefined);
+    // web-jam-tools#1240: agy never gets a skillOverrides surface.
+    assertEquals(agyHooks.skillOverrides, undefined);
+    // web-jam-tools#1240: settings.json gets the 30 bundled skills set to name-only
+    assertEquals(Object.keys(settings.skillOverrides).length, 30);
+    for (const [k, v] of Object.entries(settings.skillOverrides)) {
+      assertEquals(v, "name-only", `expected skillOverride ${k} to be name-only`);
+    }
 
     // web-jam-tools#1036: agy filters hooks.json entries by testing the
     // registered matcher against its OWN native tool names (e.g.
@@ -1740,6 +1747,69 @@ Deno.test("install-hooks.sh builds the autoMode paths from HOME and the checkout
     await Deno.remove(settingsDir, { recursive: true });
   }
 });
+
+// --- versioned skillOverrides section (web-jam-tools#1240) ---
+
+Deno.test(
+  "install-hooks.sh installs the versioned skillOverrides (30 entries name-only), is idempotent, keeps other keys, and --check flags drift",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agyHooksPath = `${settingsDir}/hooks.json`;
+    const base = ["--hooks-dir", hooksDir, "--settings-path", settingsPath];
+    try {
+      await Deno.writeTextFile(settingsPath, JSON.stringify({ model: "opus" }));
+      const first = await run("bash", [INSTALL_SCRIPT, ...base]);
+      assertEquals(first.code, 0, first.stdout + first.stderr);
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.model, "opus");
+      assert(settings.skillOverrides && typeof settings.skillOverrides === "object");
+      const keys = Object.keys(settings.skillOverrides).sort();
+      assertEquals(keys.length, 30);
+      for (const key of keys) {
+        assertEquals(settings.skillOverrides[key], "name-only");
+      }
+      // Verify both document skills and built-in skills are present
+      assert(keys.includes("anthropic-skills:pdf"));
+      assert(keys.includes("keybindings-help"));
+
+      // agy surface: no skillOverrides written
+      const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+      assertEquals(agyHooks.skillOverrides, undefined);
+
+      // Second run is idempotent (no-op)
+      const second = await run("bash", [INSTALL_SCRIPT, ...base]);
+      assertEquals(second.code, 0, second.stdout + second.stderr);
+      assertEquals(JSON.parse(await Deno.readTextFile(settingsPath)), settings);
+      assertEquals((await run("bash", [INSTALL_SCRIPT, ...base, "--check"])).code, 0);
+
+      // Drift check when an entry is edited
+      settings.skillOverrides["keybindings-help"] = "full";
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings));
+      const checkDiff = await run("bash", [INSTALL_SCRIPT, ...base, "--check"]);
+      assert(checkDiff.code !== 0, "expected --check to fail on skillOverrides value drift");
+      assert(checkDiff.stderr.includes("skillOverrides differs"), checkDiff.stderr);
+      assert(
+        checkDiff.stderr.includes("skillOverrides.keybindings-help: value differs"),
+        checkDiff.stderr,
+      );
+
+      // Drift check when an entry is missing
+      delete settings.skillOverrides["anthropic-skills:pdf"];
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings));
+      const checkMissing = await run("bash", [INSTALL_SCRIPT, ...base, "--check"]);
+      assert(checkMissing.code !== 0, "expected --check to fail on missing skillOverrides entry");
+      assert(
+        checkMissing.stderr.includes("skillOverrides.anthropic-skills:pdf: key is missing"),
+        checkMissing.stderr,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
 
 Deno.test(
   "install-hooks.sh replaces old agy Stop entry with finished moment, and --check flags old entry as drift (web-jam-tools#1211)",
