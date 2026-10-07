@@ -82,15 +82,42 @@ The sweep process never edits `sources.yaml`.
    Google Business. **If a venue has no usable address after exhausting these sources,
    skip it and report it to Josh** (see Skipped Venues below). Note evidence counts
    (dates sampled, acts) and record how each email was discovered (source attribution).
+   - **Automated `venueType` classification (D-78):** In `skills/venue-mining/` (and
+     supporting helper modules `venue-mining-core.ts` / `verify.ts`), automatically classify
+     each candidate into one of the three backend `venueType` enums:
+     - `PubFestivalBrewery`: matches names, publication descriptions, or website copy
+       containing `Brewery`, `Brewing`, `Beer`, `Cider`, `Cidery`, `Tavern`, `Pub`,
+       `Festival`, `Alehouse`, `Distillery`, `Winery`, `Vineyard`, `Taproom`, or `Saloon`.
+     - `MidRangeCafeBar`: matches names, descriptions, or website copy containing
+       `Cafe`, `Café`, `Coffee`, `Bistro`, `Bar & Grill`, `Grill`, `Restaurant`, `Lounge`,
+       `Kitchen`, `Diner`, `Pizzeria`, or `Bakery`.
+     - `Originals`: matches dedicated music halls, acoustic stages, listening rooms,
+       or songwriter-focused venues (`Listening Room`, `Music Hall`, `Acoustic Stage`,
+       `Originals`, `Songwriter`).
+     - **Contextual LLM Fallback:** If keyword rules match multiple categories or zero
+       categories, use contextual LLM inference with venue name, scraped about/bio text,
+       and event calendar genre context to select the most appropriate enum.
 5. **Propose in chat** — ONE compact evidence table including: venue name, city,
-   state, address, email, email source, phone, website. Josh approves a subset. Keep it
-   phone-readable: short lines, no walls of text. Show addresses exactly as
+   state, type (`venueType`), address, email, email source, phone, website. Josh approves a subset.
+   Keep it phone-readable: short lines, no walls of text. Show addresses exactly as
    sourced (backend normalizes them). The **Email Source** column records how each
    email was found (e.g. `Google Maps website`, `Publication link`, `Venue website`,
-   `Probed domain (<domain>)`, or `None (phone only)`).
+   `Probed domain (<domain>)`, or `None (phone only)`). The **Type** column renders the
+   inferred `venueType` in a dedicated column for review and inline adjustment before
+   saving (D-78):
+
+   | # | Venue Name | City, ST | Type | Booking Email | Phone | Status |
+   |---|---|---|---|---|---|---|
+   | 1 | Twin Creeks Brewing | Vinton, VA | `PubFestivalBrewery` | booking@twincreeksbrewing.com | (540) 266-7999 | Ready |
+   | 2 | Sweet Donkey Coffee | Roanoke, VA | `MidRangeCafeBar` | music@sweetdonkeycoffee.com | (540) 581-1100 | Ready |
+
 6. **Create** — ONE batched script call doing all `POST /venue` upserts
    (single permission click). Every create: provenance in `notes` (publication,
-   sweep date, issue ref) + `outreachEligible` per the email rule below.
+   sweep date, issue ref) + `outreachEligible` per the email rule below + vetted or
+   edited `venueType` (`PubFestivalBrewery`, `MidRangeCafeBar`, `Originals`). Including
+   `venueType` at inception ensures newly created venues with verified emails land directly
+   in the `Pitch-Ready` filter queue on `https://web-jam.com/admin/venues` rather than the
+   `Needs Type` queue.
    **Every venue MUST have a street address.** A proposed venue without an
    address is NOT created — no placeholder, no "TBD". The backend requires it
    and uses it to dedupe records. When confirming creation, show the
@@ -274,7 +301,7 @@ Locate the associated outreach record for the venue (or target booking cycle) an
     `/outreach/*` or `/outreach/:id`. Direct dispatch (`POST /outreach/batch`, `POST /outreach/pitch`,
     and pitch generation) remains strictly blocked during venue-mining tasks.
 
-## POST /venue example payload (with required address)
+## POST /venue example payload (with required address and venueType)
 
 ```json
 {
@@ -285,13 +312,14 @@ Locate the associated outreach record for the venue (or target booking cycle) an
   "email": "events@starrhill.com",
   "phone": "+1-540-555-0123",
   "website": "https://starrhill.com",
+  "venueType": "PubFestivalBrewery",
   "outreachEligible": true,
   "notes": "First sweep of Roanoke Rambler, 2026-07-19. Issue wjt#208."
 }
 ```
 
 Every field except `phone` is expected; `phone` may be null if not found. The `address`
-field is mandatory.
+and `venueType` fields are mandatory.
 
 ## Description Detail & Triggers
 
