@@ -24,6 +24,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import { parse as parseYaml } from "@std/yaml";
+import { loadLimits } from "../src/session-load/report.ts";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
 
@@ -58,14 +59,17 @@ Deno.test("skills/ directory has at least one skill", () => {
   assert(skillDirs.length > 0, "expected at least one skills/*/ directory");
 });
 
+const MAX_DESCRIPTION_CHARS = (await loadLimits()).skillDescription.overMark;
+
 /**
- * Asserts that a skill description is 300 characters or less.
- * web-jam-tools#1239: Caps each of Josh's own skill descriptions at 300 characters.
+ * Asserts that a skill description is within the `skillDescription` cap.
+ * web-jam-tools#1239: Caps each of Josh's own skill descriptions; the cap lives in
+ * src/session-load/limits.json.
  */
 export function assertSkillDescriptionLength(description: string, skillName = "fixture"): void {
   assert(
-    description.length <= 300,
-    `skills/${skillName}/SKILL.md: frontmatter "description" must be 300 characters or less (got ${description.length} chars)`,
+    description.length <= MAX_DESCRIPTION_CHARS,
+    `skills/${skillName}/SKILL.md: frontmatter "description" must be ${MAX_DESCRIPTION_CHARS} characters or less (got ${description.length} chars)`,
   );
 }
 
@@ -102,12 +106,12 @@ for (const dirName of skillDirs) {
   });
 }
 
-Deno.test("skill description length validator passes at 300 characters and fails at 301 (web-jam-tools#1239)", () => {
-  assertSkillDescriptionLength("a".repeat(300), "fixture-300");
+Deno.test("skill description length validator passes at the cap and fails one character over (web-jam-tools#1239)", () => {
+  assertSkillDescriptionLength("a".repeat(MAX_DESCRIPTION_CHARS), "fixture-at-cap");
   assertThrows(
-    () => assertSkillDescriptionLength("a".repeat(301), "fixture-301"),
+    () => assertSkillDescriptionLength("a".repeat(MAX_DESCRIPTION_CHARS + 1), "fixture-over-cap"),
     Error,
-    "must be 300 characters or less (got 301 chars)",
+    `must be ${MAX_DESCRIPTION_CHARS} characters or less (got ${MAX_DESCRIPTION_CHARS + 1} chars)`,
   );
 });
 
