@@ -33,7 +33,7 @@ graph TD
 
 ### Steps
 
-1. **Inspect Source Scans**: Read and visually inspect all supplied scanned PDF files in Dropbox using `view_file` (Flash multimodal vision).
+1. **Inspect Source Scans**: Read and visually inspect all supplied scanned PDF files in Dropbox with the surface's native image reading: on Claude Code, the `Read` tool, which views PDFs and images directly; on agy / Antigravity, `view_file` (Flash multimodal vision).
 2. **Extract & Consolidate Musical Content**:
    - Extract title, songwriter/composer credits, copyright year, and tempo.
    - Detect Capo position (e.g. `Capo 2`) and base guitar chord shapes (e.g. `E`, `D`, `A`).
