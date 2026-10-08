@@ -145,9 +145,7 @@ export function markGuardRaw(raw: string): string {
 
 function appendMerged(keeperRaw: string, absorbSlug: string, absorbed: Memory): string {
   const description = absorbed.description ? `${absorbed.description}\n\n` : "";
-  return `${keeperRaw.trimEnd()}\n\n## Merged from [[${absorbSlug}]]\n\n${description}${
-    absorbed.body.trim()
-  }\n`;
+  return `${keeperRaw.trimEnd()}\n\n## Merged from [[${absorbSlug}]]\n\n${description}${absorbed.body.trim()}\n`;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -221,7 +219,11 @@ async function partLines(
   for (const repo of ACTIVE_REPOS) {
     if (repo === "web-jam-tools" || repo === "JaMmusic") continue;
     lines.push(
-      partLine(`${repo} rules`, await fileSize(join(apps, repo, "AGENTS.md")), limits.otherRepoRules),
+      partLine(
+        `${repo} rules`,
+        await fileSize(join(apps, repo, "AGENTS.md")),
+        limits.otherRepoRules,
+      ),
     );
   }
   const session = await computeSessionLoadReport({ ...report, memoryIndexPath: indexPath });
@@ -347,7 +349,9 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
   for (const { slug, reason, evidence } of plan.removals ?? []) {
     const memory = await claim(slug);
     if (!memory) continue;
-    const detail = `${reason === "hook-enforced" ? "a hook enforces it" : "already said elsewhere"}: ${evidence}`;
+    const detail = `${
+      reason === "hook-enforced" ? "a hook enforces it" : "already said elsewhere"
+    }: ${evidence}`;
     if (!approved.has(slug)) {
       rows.push({ status: "waiting", slug, detail });
       continue;
@@ -405,7 +409,9 @@ export async function runCli(args: string[]): Promise<number> {
     ? join(dirname(planPath), plan.skills_dir)
     : plan.skills_dir;
   const skillsDir = resolve(
-    expandHome(flags["skills-dir"] || planSkills || new URL("../../skills", import.meta.url).pathname),
+    expandHome(
+      flags["skills-dir"] || planSkills || new URL("../../skills", import.meta.url).pathname,
+    ),
   );
 
   const result = await runLowMark({

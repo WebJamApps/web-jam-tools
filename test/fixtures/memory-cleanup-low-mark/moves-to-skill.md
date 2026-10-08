@@ -5,4 +5,4 @@ metadata:
   type: feedback
 ---
 
-Run the demo skill   before   every release.
+Run the demo skill before every release.

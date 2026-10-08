@@ -1,7 +1,7 @@
 ---
 name: never-delete
 description: "Deletion guard"
-metadata: 
+metadata:
   type: feedback
   guard: true
 ---
