@@ -1,0 +1,9 @@
+{
+  "skills_dir": "skills",
+  "merges": [{ "keep": "keep-live", "absorb": ["keep-duplicate"] }],
+  "moves": [{ "slug": "moves-to-skill", "target_skill": "demo-skill" }],
+  "removals": [
+    { "slug": "hook-covered", "reason": "hook-enforced", "evidence": "block-irreversible-operations hook" },
+    { "slug": "never-delete", "reason": "already-said", "evidence": "CLAUDE.md rule 2" }
+  ]
+}
