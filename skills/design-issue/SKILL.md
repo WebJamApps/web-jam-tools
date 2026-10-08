@@ -100,6 +100,7 @@ A decision is not ready to put to Josh until these conditions are met:
 3. **Every option carries what it actually costs** — what happens in this session, what work it creates, what it collides with, what it risks, and what it gives up.
 4. **The recommendation comes last** — after both the mechanism and the options' costs, never instead of them and never before them.
 5. **No option rests on an unfinished lookup** — every "not verified", "unknown" or "may" in the option list that a cheap check can settle (no spend, no outward action) is settled before the question is sent, starting with the design document's own Load-bearing premises table. The recommendation is chosen by whether an option meets what Josh needs, never by how little it changes.
+6. **Each decision is laid out in full and delivered in pieces.** A decision put to Josh carries every option with all of its pros and cons, its costs, the work it creates, what is not yet known, and the run's own recommendation with its reasoning. It is delivered as a series of messages, never one long message: first the background and the facts, then one option per message, then the recommendation, waiting for his word between pieces and saying up front how many pieces there are. When he asks which option the run recommends, it answers at once with a short comparison. A decision raised again is presented in full again, never as a one-line re-ask.
 
 #### Failure Shapes Ruled Out:
 - **The bare fork:** Two labeled options and an "I lean 1" with nothing under either.
