@@ -1,13 +1,13 @@
 // test/design_issue_sized_for_sonnet_rule.test.ts — web-jam-tools#793
 //
 // Tests that skills/design-issue/SKILL.md defines the Sized for Sonnet subsection
-// immediately after Sized for Flash High, along with its matching refusal table entry.
+// immediately after Sized for Flash, along with its matching refusal table entry.
 
 import { assert, assertStringIncludes } from "@std/assert";
 
 const SKILL_MD_PATH = new URL("../skills/design-issue/SKILL.md", import.meta.url).pathname;
 
-Deno.test("skills/design-issue/SKILL.md defines the Sized by Case List, Not Diff rule immediately after Sized for Flash High", async () => {
+Deno.test("skills/design-issue/SKILL.md defines the Sized by Case List, Not Diff rule immediately after Sized for Flash", async () => {
   let content: string;
   try {
     content = await Deno.readTextFile(SKILL_MD_PATH);
@@ -17,17 +17,17 @@ Deno.test("skills/design-issue/SKILL.md defines the Sized by Case List, Not Diff
 
   assert(content.length > 0, "skills/design-issue/SKILL.md is empty");
 
-  // Verify section order: Sized for Flash High -> Sized for Sonnet -> Closeable, Always
-  const flashHighIndex = content.indexOf("### Sized for Flash High");
+  // Verify section order: Sized for Flash -> Sized for Sonnet -> Closeable, Always
+  const flashHighIndex = content.indexOf("### Sized for Flash");
   const sonnetIndex = content.indexOf("### Sized by Case List, Not Diff");
   const closeableIndex = content.indexOf("### Closeable, Always");
 
-  assert(flashHighIndex !== -1, "Missing ### Sized for Flash High section");
+  assert(flashHighIndex !== -1, "Missing ### Sized for Flash section");
   assert(sonnetIndex !== -1, "Missing ### Sized by Case List, Not Diff section");
   assert(closeableIndex !== -1, "Missing ### Closeable, Always section");
   assert(
     flashHighIndex < sonnetIndex && sonnetIndex < closeableIndex,
-    "### Sized by Case List, Not Diff must appear immediately after ### Sized for Flash High and before ### Closeable, Always",
+    "### Sized by Case List, Not Diff must appear immediately after ### Sized for Flash and before ### Closeable, Always",
   );
 
   // Key requirement 1: Lead heading / principle
@@ -39,7 +39,7 @@ Deno.test("skills/design-issue/SKILL.md defines the Sized by Case List, Not Diff
   // Key requirement 2: Citation and default tier
   assertStringIncludes(
     content,
-    'Work matching the guard/hook/regex/matcher/filter/permission-pattern trigger list (`web-jam-tools#427 "Route guard/matcher work to Sonnet, make its review execute rather than read, prove it in CI, enforce citations on GitHub writes, and stop Opus designing other lanes\' fixes — A1 through A6"`) stays at the `Flash High` default.',
+    'Work matching the guard/hook/regex/matcher/filter/permission-pattern trigger list (`web-jam-tools#427 "Route guard/matcher work to Sonnet, make its review execute rather than read, prove it in CI, enforce citations on GitHub writes, and stop Opus designing other lanes\' fixes — A1 through A6"`) stays at the `Flash` default.',
   );
 
   // Key requirement 3: Enumerated closed case list requirement
@@ -70,7 +70,7 @@ Deno.test("skills/design-issue/SKILL.md contains matching refusal table entry fo
   );
   assertStringIncludes(
     content,
-    'trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized by its case list, not its diff, and stays at the `Flash High` default; a case list counts as closed only when every entry is a literal input string, never a category; vague criteria like "handle edge cases" and category-named criteria both fail in review — a category is an unclosed list wearing the shape of a closed one; issues must enumerate every adversarial input case as a literal string, or, where a category cannot be reduced to such a finite set at design time, be filed as `Opus`, naming the category that resisted enumeration |',
+    'trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized by its case list, not its diff, and stays at the `Flash` default; a case list counts as closed only when every entry is a literal input string, never a category; vague criteria like "handle edge cases" and category-named criteria both fail in review — a category is an unclosed list wearing the shape of a closed one; issues must enumerate every adversarial input case as a literal string, or, where a category cannot be reduced to such a finite set at design time, be filed as `Opus`, naming the category that resisted enumeration |',
   );
 });
 
@@ -153,7 +153,7 @@ Deno.test("skills/design-issue/SKILL.md contains the resolver key space sizing r
   // Key requirement 4: Sonnet floor for irreversible external writes
   assertStringIncludes(
     content,
-    "A tier floor of **`Flash High`** — the default tier, never below it — applies whenever a wrong resolution causes an irreversible external write — a GitHub edge, an email, a payment — rather than a local error",
+    "A tier floor of **`Flash`** — the default tier, never below it — applies whenever a wrong resolution causes an irreversible external write — a GitHub edge, an email, a payment — rather than a local error",
   );
 
   // Key requirement 5: Opus routing via 'cannot be pinned down' condition

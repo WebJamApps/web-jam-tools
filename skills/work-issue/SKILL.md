@@ -15,7 +15,7 @@ shell script, then you (the agent) do the actual coding inside this same session
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly (invoked as `$work-issue Repo#123` on Codex). Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`) to determine agent delegation or session execution (valid across Claude Code, Antigravity, and Codex), then run the pre-checks below before "## Steps".
+- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly (invoked as `$work-issue Repo#123` on Codex). Read the GitHub issue's model tier label (`Haiku`, `Flash`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`) to determine agent delegation or session execution (valid across Claude Code, Antigravity, and Codex), then run the pre-checks below before "## Steps".
 - **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku), then hand off
   to the same flow below. Under Antigravity (Flash / agy) and Codex there is no worklist: stop and ask Josh to name an issue. See "## No-argument mode" first.
@@ -36,17 +36,17 @@ written**, and they run for a named issue and an auto-picked one alike:
 ## Model Label Check & Approval
 
 When `work-issue` begins an issue (`<Repo>#<num>`):
-1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
+1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
 2. **Determine Agent Delegation vs Execution**:
    - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
-   - Under **Antigravity** (e.g., Flash High interactive session): If the issue is labeled `Flash Med`, automatically delegate execution down to a `Flash Med` subagent.
+   - Under **Antigravity** (e.g., Flash interactive session): If the issue is labeled `Flash`, execute it in the session or hand it to a subagent at the same level.
    - Under **Codex**: Execute directly when the running model's tier matches the issue's `Luna`, `Sol`, or `Astra` label. If it differs, follow the approval rule below before overruling the label.
    - If the active session tier matches the issue's model label, execute the task directly in the current session.
 3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label rather than delegating down, prompt Josh for explicit approval in chat before executing:
    ```bash
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
-4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents or `--author "Claude Code — Haiku 4.5"` for Haiku subagents). On Codex, read `payload.model` from the latest `turn_context` entry in this session's rollout JSONL under `~/.codex/sessions/`; identify this session by the `session_meta` ID, rather than selecting another session's newest file or the default model in `config.toml`. Find that model's accepted display spelling in `ROSTER` in `scripts/create-draft-pr.sh`, then validate it with `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --check-author "Codex — <roster spelling>"` before passing the same value in `--author`. Do not pass the raw API slug as the display name or substitute another model if the roster probe refuses it.
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash"` for Flash subagents or `--author "Claude Code — Haiku 4.5"` for Haiku subagents). On Codex, read `payload.model` from the latest `turn_context` entry in this session's rollout JSONL under `~/.codex/sessions/`; identify this session by the `session_meta` ID, rather than selecting another session's newest file or the default model in `config.toml`. Find that model's accepted display spelling in `ROSTER` in `scripts/create-draft-pr.sh`, then validate it with `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --check-author "Codex — <roster spelling>"` before passing the same value in `--author`. Do not pass the raw API slug as the display name or substitute another model if the roster probe refuses it.
 
 ## Startability test
 
@@ -283,7 +283,7 @@ When an issue's deliverables are strictly external documents (such as manual ver
 
 3. **Perform Model Label Check & Model Selection:** Before implementing:
    - Perform the **Model Label Check**:
-     1. Read the GitHub issue's model label (`Flash Med`, `Flash High`, `Haiku`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
+     1. Read the GitHub issue's model label (`Flash`, `Haiku`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
      2. Compare the issue's model label against the active executing session tier.
      3. If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
      4. Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier.
@@ -300,7 +300,7 @@ When an issue's deliverables are strictly external documents (such as manual ver
    `Gemini 3.8 Flash (High)` sits above `Claude Sonnet 4.6 (Thinking)` on this agy fallback ladder.
    That is a different, older model from the current Claude Sonnet 5.5, which Josh ruled on
    2026-10-01 ranks above Gemini 3.8 Flash (High); this ladder is unchanged by that ruling.
-   (Dated history, superseded for Sonnet 5.5: on 2026-09-05 DeepSWE v1.1 scored Flash High 73.7%
+   (Dated history, superseded for Sonnet 5.5: on 2026-09-05 DeepSWE v1.1 scored Flash 73.7%
    against Sonnet 5's 54%.) Flash also bills a separate Google budget rather than the
    constrained Anthropic one. Opus keeps the top slot because abstract, multi-step unguided agent
    work (Terminal-Bench 4.0) is what open-ended design and review are. Model names here are the exact
@@ -316,8 +316,8 @@ When an issue's deliverables are strictly external documents (such as manual ver
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:
-     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini 3.8 Flash (Medium)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
-     * *Ordinary Coding*: → `Gemini 3.8 Flash (High)`. This is the tier that moved: ordinary contained coding used to route to `Claude Sonnet 4.6 (Thinking)`, and Flash High is now the default lane because it bills to Google rather than the constrained Anthropic budget. Route to Sonnet only when the task needs a Claude-side capability Flash lacks, and say which one.
+     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit) → Luna or Haiku, via a handoff since Luna and Haiku are outside agy's picker; simple image/PDF reads → `Gemini 3.1 Pro (High)` (the media override still applies).
+     * *Ordinary Coding*: → `Gemini 3.8 Flash (High)`. This is the tier that moved: ordinary contained coding used to route to `Claude Sonnet 4.6 (Thinking)`, and Flash is now the default lane because it bills to Google rather than the constrained Anthropic budget. Route to Sonnet only when the task needs a Claude-side capability Flash lacks, and say which one.
      * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
    * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
 

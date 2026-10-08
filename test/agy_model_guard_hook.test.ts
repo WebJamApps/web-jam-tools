@@ -63,10 +63,10 @@ async function runViaShim(payload: unknown): Promise<{ decision: string; reason?
 
 Deno.test("checkSessionModel: allowed Flash slugs pass", () => {
   assert(checkSessionModel("gemini-3.8-flash-high").allowed);
-  assert(checkSessionModel("gemini-3.8-flash-medium").allowed);
   assert(checkSessionModel("gemini-3.8-flash-tiered").allowed);
   assert(checkSessionModel("gemini-3.7-flash-high").allowed); // 3.7 floor
-  assert(checkSessionModel("gemini-3.7-flash-medium").allowed); // 3.7 floor
+  assert(!checkSessionModel("gemini-3.8-flash-medium").allowed); // retired, web-jam-tools#1202
+  assert(!checkSessionModel("gemini-3.7-flash-medium").allowed);
   assert(checkSessionModel("gemini-3.7-flash-tiered").allowed); // 3.7 floor
 });
 
@@ -125,7 +125,7 @@ Deno.test(
   async () => {
     const verdict = await runViaShim({
       toolCall: { name: "run_command", args: { CommandLine: "ls" } },
-      modelName: "gemini-3.8-flash-medium",
+      modelName: "gemini-3.8-flash-high",
     });
     assertEquals(verdict.decision, "allow");
   },

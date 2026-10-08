@@ -18,7 +18,7 @@ Reviewer tier is **never below author tier** (a weaker model never reviews a str
 
 **Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
-is the basis for this order. (Superseded history: on 2026-09-05 Flash High was ranked above Sonnet 5
+is the basis for this order. (Superseded history: on 2026-09-05 Flash was ranked above Sonnet 5
 on contamination-resistant long-horizon coding, DeepSWE v1.1, where Gemini 3.8 Flash at high effort
 scored 73.7% against Sonnet 5's 54%. That ranking no longer stands.) Opus stays at the top because
 abstract, multi-step unguided agent work (Terminal-Bench 4.0) is exactly what a review of a large or
@@ -30,9 +30,9 @@ This matrix is a ceiling for the legacy labels it names; the seven-label default
 
 | Reviewer | Reviews |
 |---|---|
-| Flash High | Flash Medium, Haiku |
-| Sonnet | Flash High, Flash Medium, Haiku |
-| Opus | Sonnet, Flash High |
+| Flash | Haiku |
+| Sonnet | Flash, Haiku |
+| Opus | Sonnet, Flash |
 
 ### Default Reviewers
 
@@ -58,13 +58,13 @@ The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash autho
 
 **Ceiling rule (never a schedule):**
 The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Sonnet
-or Flash High PR happens only when Josh deems that specific PR critical enough for an Opus review —
+or Flash PR happens only when Josh deems that specific PR critical enough for an Opus review —
 his decision, per PR, not automatic. Nothing in this skill or its auto-detect mode may auto-dispatch
 an Opus review off this matrix.
 
 ### Named-Model Eligibility & Contributions within a Conversation
 
-A named model is the model identity, such as Sol, Astra, Sonnet, or Opus. Versions and reasoning-effort settings within one named model do not create a different identity. Flash Medium and Flash High share the Flash identity for the self-review comparison; their existing reviewer-tier constraints still apply. Surface names and session IDs do not establish a model change.
+A named model is the model identity, such as Sol, Astra, Sonnet, or Opus. Versions and reasoning-effort settings within one named model do not create a different identity. Every Flash session shares the Flash identity for the self-review comparison; the reviewer-tier constraints still apply. Surface names and session IDs do not establish a model change.
 
 **Contributions within a conversation:**
 - **A model never reviews its own contribution.** The restriction follows the named model that wrote or pushed the implementation or fix, rather than disqualifying every model that uses the conversation. A switch to a higher model permits review in the same session; writing or pushing a commit earlier in the conversation is not by itself a reason to refuse. Merely reading the code, discussing it, or posting a review does not count as writing a fix.
@@ -92,7 +92,7 @@ The skill's worked cases cover these concrete sequences and required results:
 | Sol writes → Sol review requested | The writing model does not review its own contribution |
 | Sol writes → another Sol version selected | No different-model exception |
 | Sol writes → Sol reasoning effort changed | No different-model exception |
-| Flash Medium writes → Flash High selected in that conversation | No different-model exception |
+| Flash writes → another Flash session selected in that conversation | No different-model exception |
 | Sol writes → Astra reviews without fixing → Astra reviews a new eligible head | Reviewing alone does not disqualify Astra |
 | Sol writes → Astra fixes → Sol, Sonnet, or another Astra session selected | Josh or Opus must review Astra's changes |
 | Sol writes → Astra fixes → Josh names Opus for review | An eligible Opus reviewer reviews the PR |
@@ -109,13 +109,12 @@ The skill's worked cases cover these concrete sequences and required results:
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list: `ACTIVE_REPOS` in [`src/shared/repos.ts`](../../src/shared/repos.ts)).
   - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
-    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash (High)`, `Gemini Flash (Medium)` or `Claude Haiku 4.5`.
-    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
+    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash` or `Claude Haiku 4.5`.
+    - **Flash (`Gemini Flash`)**: matches PRs authored by `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
     - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
     - Sonnet-authored PRs have no reviewer in auto-detect mode and receive an Opus review only when Josh explicitly names the PR for that review.
     - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`. These roster spellings are deliberately unversioned — they identify the PR's author tier, not the model checkpoint that ran, so they stay as written here even as the underlying Gemini version moves:
-      - `Gemini Flash (High)` (e.g. `Antigravity — Gemini Flash (High)` / `agy — Gemini Flash (High)`)
-      - `Gemini Flash (Medium)` (e.g. `Antigravity — Gemini Flash (Medium)` / `agy — Gemini Flash (Medium)`)
+      - `Gemini Flash` (e.g. `Antigravity — Gemini Flash` / `agy — Gemini Flash`). A pull request signed `Gemini Flash (High)` before the medium level was retired keeps its footer and is read as a Flash author.
       - `Claude Sonnet 5.5` (e.g. `Claude Code — Sonnet 5.5` / `Claude Code — Claude Sonnet 5.5`)
       - `Claude Haiku 4.5` (e.g. `Claude Code — Haiku 4.5` / `Claude Code — Claude Haiku 4.5`)
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
@@ -602,4 +601,4 @@ The reviewing model reports; it does not apply the fix itself. It names the defe
 
 ## Description Detail & Triggers
 
-Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash High/Flash Medium/Haiku; Flash High reviews Flash Medium/Haiku; Opus reviews Sonnet/Flash High on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
+Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).

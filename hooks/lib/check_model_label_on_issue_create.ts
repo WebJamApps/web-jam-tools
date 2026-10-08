@@ -554,12 +554,12 @@ export function decide(
     const reason = escalationReason?.trim();
     if (!reason) {
       if (mode === "mcp") {
-        return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nFlash High is the default model tier for implementation work and bills a separate Google budget, whereas ${matchedTier} bills the constrained Anthropic budget.\nTo proceed with ${matchedTier}, supply an 'escalation_reason' property (e.g. escalation_reason: "<why ${matchedTier} is genuinely the right tier>") in the tool input.`;
+        return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nFlash is the default model tier for implementation work and bills a separate Google budget, whereas ${matchedTier} bills the constrained Anthropic budget.\nTo proceed with ${matchedTier}, supply an 'escalation_reason' property (e.g. escalation_reason: "<why ${matchedTier} is genuinely the right tier>") in the tool input.`;
       }
       const commandToRun = cmd?.trim()
         ? `${cmd.trim()} --escalation-reason "<why ${matchedTier} is genuinely the right tier>"`
         : `gh issue create ... --label ${matchedTier} --escalation-reason "<why ${matchedTier} is genuinely the right tier>"`;
-      return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nFlash High is the default model tier for implementation work and bills a separate Google budget, whereas ${matchedTier} bills the constrained Anthropic budget.\nTo proceed with ${matchedTier}, re-run with an escalation reason:\n${commandToRun}`;
+      return `DENY:Creating an issue labeled '${matchedTier}' requires an explicit escalation justification.\nFlash is the default model tier for implementation work and bills a separate Google budget, whereas ${matchedTier} bills the constrained Anthropic budget.\nTo proceed with ${matchedTier}, re-run with an escalation reason:\n${commandToRun}`;
     }
   }
 

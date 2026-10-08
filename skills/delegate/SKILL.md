@@ -23,7 +23,7 @@ table — this skill does not repeat it), use the matching section below.
 Flash work is executed by the Antigravity CLI (`agy`) via the wrapper script
 `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh`. Dispatch is
 **GitHub-issues-only** — the task must already exist as a GitHub issue labeled
-`Flash High` or `Flash Med` before you dispatch it. (A queue-file entry point — appending a line to
+`Flash` before you dispatch it. (A queue-file entry point — appending a line to
 `~/Dropbox/web-jam-llms/agy-tasks.txt` — used to exist as a shortcut for quick
 tasks with no issue; Josh retired it and deleted the file, since it let a
 session dispatch work with no durable record — see web-jam-tools#249. A quick
@@ -81,26 +81,21 @@ Strict rules:
 ```
 
 **Default Tier & Bidirectional Delegation Flexibility:**
-Josh defaults to **`Flash High`** (`Gemini Flash (High)`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
-- **Automatic Delegation on "Go" (`Flash High` → `Flash Med`)**: When discussing an issue interactively on `Flash High`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the `Flash High` session is **forbidden** from executing file edits or running test suites directly for tasks/issues labeled `Flash Med` or `Haiku`. It MUST automatically delegate contained coding tasks (`handle-agy-tasks.sh` targeting Flash Med, or `invoke_subagent` where `Model: "flash"` runs as `gemini-3.8-flash-tiered` and passes the model guard, or `Model: "inherit"`) as its very first tool call. Do NOT wait for Josh to explicitly ask for delegation — initiate subagent handoff automatically upon approval.
-- **Exception — trivial edits**: the primary session may make the edit directly, without `invoke_subagent`, only when **all** of these hold: it touches **one file**; it changes **no behaviour** (documentation, comment, or a single config value); and it is **under ~20 changed lines**. The session must say, in the same turn, that it is taking the exception and why. "I already have the context", "it would be faster", and "writing the brief costs as much as the work" are **not** exceptions — the three conditions above are the whole test. Rationale: delegation pays when the work is bigger than the brief; below that line the session pays to write a self-contained specification, waits for a round trip, then reviews the result, for an edit smaller than the specification. The three conditions are a mechanical proxy for that, chosen because they are auditable from the outside and a cost estimate is not.
+Josh defaults to **`Flash`** (`Gemini Flash`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
+- **Handoff on "Go" (`Flash` → `Flash`)**: When discussing an issue interactively on `Flash`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the session does the work itself or hands contained coding tasks to a subagent at the same level (`handle-agy-tasks.sh`, or `invoke_subagent` where `Model: "flash"` runs as `gemini-3.8-flash-tiered` and passes the model guard, or `Model: "inherit"`). Trivial edits go to Luna or Haiku (a `Haiku` subagent, or a Luna handoff since Luna is outside agy's picker).
 - **Delegating up** (tier order: Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus; see `docs/ai-team-playbook.md`): Delegate logic- and safety-heavy coding to `Sol` or `Sonnet`, and open-ended design to `Opus`. `Flash` handles everyday coding on Google's allowance; `Astra` is kept for REAPER recording.
 
 **Setting explicit model chains via `AGY_MODELS`:**
-The default fallback chain runs `Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)`. To target a specific tier directly, set `AGY_MODELS`:
+The default fallback chain runs `Gemini 3.8 Flash (High)`. To target a specific tier directly, set `AGY_MODELS`:
 
 ```sh
-# Force Flash High default:
+# Force Flash default:
 AGY_MODELS='Gemini 3.8 Flash (High)' \
-  ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
-
-# Force Flash Med delegation:
-AGY_MODELS='Gemini 3.8 Flash (Medium)' \
   ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless "<Repo>#<issue-num>"
 ```
 
 The value is pipe-separated (model names contain spaces, so pipes — not spaces —
-separate them; a single name needs no pipe). HFS#26 was labeled Flash High but ran on Medium when `AGY_MODELS` was omitted, 2026-07-09.
+separate them; a single name needs no pipe). HFS#26 was labeled Flash but ran on Medium when `AGY_MODELS` was omitted, 2026-07-09 (the medium level is since retired).
 
 These model names are **load-bearing, not decorative**: they must match `ALLOWED_AGY_MODELS`'s `displayName` values (defined in `hooks/lib/check_agy_model.ts`) exactly, version token included, and must never be version-scrubbed.
 

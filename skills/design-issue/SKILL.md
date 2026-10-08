@@ -18,7 +18,7 @@ Design work does not happen in plain chat. The moment a conversation turns into 
 
 ## Workflow Phases
 
-### Phase 1 — Design (Opus / Flash High for simple Bug or Task)
+### Phase 1 — Design (Opus / Flash for simple Bug or Task)
 
 With no argument, the skill scans all 8 active repos for open issues labeled `Needs Design` and offers them as candidates. Josh picks; the skill never picks for him.
 
@@ -124,9 +124,9 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 - Confirm the passage makes each point exactly once, contains no duplicate conclusions, and still argues in one consistent direction.
 - A patch applied without reading its neighboring paragraphs is not done.
 
-### Phase 2 — The Issue Plan (Opus / Flash High)
+### Phase 2 — The Issue Plan (Opus / Flash)
 
-7. **Propose the plan table**, applying the epic heuristic and the Flash High size checklist:
+7. **Propose the plan table**, applying the epic heuristic and the Flash size checklist:
 
    | # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |
    |---|---|---|---|---|---|---|---|
@@ -155,9 +155,9 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 
    **This token gates issue *creation* and sub-issue *linking* (`scripts/create-issue.ts`, or on Claude Code the GitHub MCP `sub_issue_write` `add` method) only — it does not cover editing an existing issue** (`hooks/require-approval-token-on-issue-write.sh` explicitly excludes issue edit methods and a Bash `gh issue edit` call; see that hook's own header comment). Editing an existing issue — the stale-body rewrite in rule 11, or a `Needs Design` label removal — goes through `deno task edit-issue`, never a raw `gh issue edit`: a *separate* hook, `hooks/block-raw-gh-write.sh`, blocks the raw command outright and redirects to that task, independent of whether an approval token is present.
 
-### Phase 3 — Filing (Sonnet subagent / Flash High session)
+### Phase 3 — Filing (Sonnet subagent / Flash session)
 
-Filing delegates to a subagent only when delegating moves the work down a tier (Opus design hands off to a Sonnet subagent; agy already on Flash High files directly itself with no self-delegation). The subagent or session receives the approved plan table and the design document path. It files and reports; it builds nothing.
+Filing delegates to a subagent only when delegating moves the work down a tier (Opus design hands off to a Sonnet subagent; agy already on Flash files directly itself with no self-delegation). The subagent or session receives the approved plan table and the design document path. It files and reports; it builds nothing.
 
 13. **File in plan order — the epic first, then each child** — invoking `/file-issue` once per issue so the filing rules and their enforcing hook apply to every one. Before the first issue write of the filing run, state how many permission prompts filing will raise and that switching the session's permission mode for the filing silences them, for the duration, persisting nothing. Attach each child to its parent as it goes (and cite the parent Epic in the child issue body); the ordering is forced by the parent/child link.
 
@@ -234,7 +234,7 @@ These are properties of the skill, written as explicit refusals:
 | combine artifact/doc/UI review and live procedure walkthroughs into a single manual issue | inspecting rendered artifacts in Google Chrome and executing live procedures with learners or external parties are distinct verification surfaces with different gates and acceptance criteria |
 | hand Josh a step with no script, no exact click path, or no numbered runbook | every manual step handed to Josh (in chat or issue, pre- or post-Gate 1) requires a numbered runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` |
 | design a mechanism that works on only one agent surface (Claude Code or agy/Antigravity) without stopping for discussion | everything designed must work on both surfaces; surface-neutral paths are deno task, gh CLI, and CI; fails when depending on Claude-only hooks, Claude memory, or mcp__* tools |
-| file a trigger-list issue without an enumerated closed case list of literal input strings — including a list that enumerates categories (e.g. "piped to an interpreter") instead of the strings a matcher will see | trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized by its case list, not its diff, and stays at the `Flash High` default; a case list counts as closed only when every entry is a literal input string, never a category; vague criteria like "handle edge cases" and category-named criteria both fail in review — a category is an unclosed list wearing the shape of a closed one; issues must enumerate every adversarial input case as a literal string, or, where a category cannot be reduced to such a finite set at design time, be filed as `Opus`, naming the category that resisted enumeration |
+| file a trigger-list issue without an enumerated closed case list of literal input strings — including a list that enumerates categories (e.g. "piped to an interpreter") instead of the strings a matcher will see | trigger-list work (guards, hooks, regex, matchers, filters, permission patterns) is sized by its case list, not its diff, and stays at the `Flash` default; a case list counts as closed only when every entry is a literal input string, never a category; vague criteria like "handle edge cases" and category-named criteria both fail in review — a category is an unclosed list wearing the shape of a closed one; issues must enumerate every adversarial input case as a literal string, or, where a category cannot be reduced to such a finite set at design time, be filed as `Opus`, naming the category that resisted enumeration |
 | narrate its own revision history in prose — "what changed", "why this was withdrawn", "an earlier version said", a changelog, before/after framing | the document states the current design as though it had always been the design; superseded reasoning lives only in the decision-record appendix. Metadata about document revisions lives exclusively in the `## Revision History` table (web-jam-tools#892) |
 | record the skill's own workflow state in the body — a Status line, a gate/approval state, "nothing filed", "design complete" | that describes where the skill's process has got to, not the system being designed; gate state lives in the conversation and in the issues the run produces |
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
@@ -265,9 +265,9 @@ Never propose an epic that is only a container. The heuristic test is whether th
 
 The heuristic only proposes. The plan table is the gate, so a wrong call is caught there.
 
-### Sized for Flash High
+### Sized for Flash
 
-Non-epic issues default to **`Flash High`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count. An issue is Flash-High-sized when all of these hold:
+Non-epic issues default to **`Flash`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count. An issue is Flash-sized when all of these hold:
 
 - one repo;
 - one layer — frontend or backend, not both;
@@ -279,11 +279,11 @@ Anything over the line is split into multiple issues, and **every split carries 
 
 ### Sized by Case List, Not Diff
 
-**Trigger-list work is sized by its case list, not its diff.** Work matching the guard/hook/regex/matcher/filter/permission-pattern trigger list (`web-jam-tools#427 "Route guard/matcher work to Sonnet, make its review execute rather than read, prove it in CI, enforce citations on GitHub writes, and stop Opus designing other lanes' fixes — A1 through A6"`) stays at the `Flash High` default. The raise to `Sonnet` this rule once carried stays retired: `Flash High` is the default lane and bills to Google rather than the constrained Anthropic budget. (`Sonnet` has ranked above `Flash High` again since Josh's 2026-10-01 ruling, so whether to restore the raise is his separate call; this rule's routing is unchanged.) It only counts as correctly sized once its acceptance criteria enumerate every adversarial input case the fix has to handle — not the phrase "handle edge cases," the actual list. Where that list splits along tested behaviors, file one issue per behavior, each with its own closed case list. Where the fix is a single, non-decomposable change whose case list cannot be pinned down at design time, file it `Opus`-labeled instead, and say why it could not be split.
+**Trigger-list work is sized by its case list, not its diff.** Work matching the guard/hook/regex/matcher/filter/permission-pattern trigger list (`web-jam-tools#427 "Route guard/matcher work to Sonnet, make its review execute rather than read, prove it in CI, enforce citations on GitHub writes, and stop Opus designing other lanes' fixes — A1 through A6"`) stays at the `Flash` default. The raise to `Sonnet` this rule once carried stays retired: `Flash` is the default lane and bills to Google rather than the constrained Anthropic budget. (`Sonnet` has ranked above `Flash` again since Josh's 2026-10-01 ruling, so whether to restore the raise is his separate call; this rule's routing is unchanged.) It only counts as correctly sized once its acceptance criteria enumerate every adversarial input case the fix has to handle — not the phrase "handle edge cases," the actual list. Where that list splits along tested behaviors, file one issue per behavior, each with its own closed case list. Where the fix is a single, non-decomposable change whose case list cannot be pinned down at design time, file it `Opus`-labeled instead, and say why it could not be split.
 
 **A case list counts as closed only when it enumerates input strings, never categories.** The rule above tests that a list exists; this one tests that the list is finite. For matcher work the defect is always the case nobody thought of, so a criterion naming a category — "piped to an interpreter", "redirected to a file", "a quoted delimiter" — is an unclosed list wearing the shape of a closed one, and satisfies the sizing rule while proving nothing. Every case a trigger-list issue claims to cover is written as the literal input the matcher will see (`/bin/bash`, `source /dev/stdin`, `cat >> /home/j/bash-x.md`), and where a category cannot be reduced to a finite set of such strings at design time, that is the "cannot be pinned down" condition in the rule above: the issue is filed `Opus`-labeled, naming the category that could not be enumerated. A category may still be stated, but only as the heading over its enumerated strings — never as a case in its own right.
 
-**Resolver work is sized by its key space: acceptance criteria must enumerate key sources and every pairwise collision.** The rules above test whether a list of matcher inputs is finite; this one tests whether a set of resolver key sources is complete. When a deliverable resolves a reference to a target through any lookup keyed by author-supplied values — registry, index, symbol table, alias resolver — the design run must enumerate the complete set of key sources the format admits (for example, `web-jam-tools#748` admitted exactly four: 1-based position, explicit `id`, title, external `repo#N` citation). The acceptance criteria must state the collision behaviour for **every unordered pair** of those key sources, plus each source against itself (four sources yield six pairs and four self-collisions). A tier floor of **`Flash High`** — the default tier, never below it — applies whenever a wrong resolution causes an irreversible external write — a GitHub edge, an email, a payment — rather than a local error, because that failure is silent and durable and review reaches it only by constructing the collision. Where the key-source set cannot be closed at design time, that is the "cannot be pinned down" condition in the trigger-list rule above: the issue is filed **`Opus`**-labeled, naming the open key space that could not be enumerated.
+**Resolver work is sized by its key space: acceptance criteria must enumerate key sources and every pairwise collision.** The rules above test whether a list of matcher inputs is finite; this one tests whether a set of resolver key sources is complete. When a deliverable resolves a reference to a target through any lookup keyed by author-supplied values — registry, index, symbol table, alias resolver — the design run must enumerate the complete set of key sources the format admits (for example, `web-jam-tools#748` admitted exactly four: 1-based position, explicit `id`, title, external `repo#N` citation). The acceptance criteria must state the collision behaviour for **every unordered pair** of those key sources, plus each source against itself (four sources yield six pairs and four self-collisions). A tier floor of **`Flash`** — the default tier, never below it — applies whenever a wrong resolution causes an irreversible external write — a GitHub edge, an email, a payment — rather than a local error, because that failure is silent and durable and review reaches it only by constructing the collision. Where the key-source set cannot be closed at design time, that is the "cannot be pinned down" condition in the trigger-list rule above: the issue is filed **`Opus`**-labeled, naming the open key space that could not be enumerated.
 
 **What in these three rules is about capability, and what is not.** The tier each rule names is the only part that tracks model capability, and it is the only part a change to the tier order touches. The enumeration discipline is tier-neutral and unchanged: a case list is closed only when every entry is a literal input string, a resolver's key sources and every pairwise collision are enumerated, and neither requirement gets easier because a stronger model is running. The `Opus` escalations are not capability raises either — they fire on a specific, checkable condition, that the case list or key space could not be closed at design time, which is a statement about the problem rather than about who is implementing it. The resolver floor is about consequence: a wrong resolution that causes an irreversible external write fails silently and durably, so that work is held at the default tier and never routed below it.
 
@@ -352,9 +352,9 @@ Never prefix issue titles or runbook document titles with a personal name (e.g. 
 
 | | Issue A — the agent's | Issue B — the manual verification pair |
 |---|---|---|
-| **Scriptable** | `Flash High`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
-| **UI / Doc Review** | `Flash High`. Investigate the live UI or generate documentation/artifacts and write the inspection instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` — exact click path or document inspection steps in Google Chrome. Closes when the doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he inspected them in Google Chrome. |
-| **Live Procedure / Walkthrough** | `Flash High`. Author the procedure walkthrough guide / instructional runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md`. Closes when the runbook exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he executed the live demonstration/walkthrough with the learner or external party. |
+| **Scriptable** | `Flash`. Build `<path>` script and write the run instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` — exact literal commands, directory, what each step proves, expected result, and why he is running it. Closes when the script merges and doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path (`~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md`), never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he ran it. |
+| **UI / Doc Review** | `Flash`. Investigate the live UI or generate documentation/artifacts and write the inspection instruction to `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md` — exact click path or document inspection steps in Google Chrome. Closes when the doc exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he inspected them in Google Chrome. |
+| **Live Procedure / Walkthrough** | `Flash`. Author the procedure walkthrough guide / instructional runbook at `~/Dropbox/web-jam-llms/<Theme>/<topic>-manual-steps-<YYYY-MM-DD>.md`. Closes when the runbook exists. | `Josh` label. Titled "Manual verification: <action>" (never prefixed with "Josh:"). **Points at** that path, never restates it, explains WHY, and says STOP if the path cannot be read. Closes when he confirms he executed the live demonstration/walkthrough with the learner or external party. |
 
 Artifact/doc review and live procedure walkthroughs are distinct pairs and must NEVER be collapsed into a single composite pair or issue. Issue B is always linked via native GitHub dependency (`--blocked-by <issue_num>`) on issue A, without the redundant `Blocked` label (the `Blocked` label is reserved exclusively for external non-GitHub blockers; web-jam-tools#725). A step that can be neither scripted nor performed in a UI is the one case that is a lone `Josh` issue.
 
@@ -442,19 +442,19 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 
 | Phase / Scope | Tier | Why |
 |---|---|---|
-| Simple `Bug` or `Task` Design | Flash High | Contained judgment about one repo's own behavior; cost-effective default |
+| Simple `Bug` or `Task` Design | Flash | Contained judgment about one repo's own behavior; cost-effective default |
 | Complex Design (`Feature`, `Epic`, multi-repo, multi-issue, or arguable scope) | Opus | Architectural reasoning and deep system judgment; the reason the skill exists |
 | Filing (Opus design run) | Sonnet subagent | Mechanical, but bodies must be self-contained and correctly cited |
-| Filing (agy / Flash High design run) | Flash High (session) | Already on Flash High — files directly itself (no self-delegation to save a cold start) |
+| Filing (agy / Flash design run) | Flash (session) | Already on Flash — files directly itself (no self-delegation to save a cold start) |
 
 ### Design Tiers
-- **`Flash High` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.
+- **`Flash` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.
 - **`Opus` keeps everything else:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, and any `Bug` or `Task` whose scope is arguable.
 
 ### Delegation Rules for Filing
 - Filing delegates to a subagent **only when delegating moves the work down a tier**.
 - An **Opus** design session hands filing to a **Sonnet** subagent.
-- An **agy** session already running on **Flash High** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.
+- An **agy** session already running on **Flash** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.
 
 ---
 

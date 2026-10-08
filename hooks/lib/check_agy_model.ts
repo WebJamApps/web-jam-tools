@@ -10,7 +10,6 @@ export interface AgyModelSpec {
 
 export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [
   { slug: "gemini-3.8-flash-high", displayName: "Gemini 3.8 Flash (High)" },
-  { slug: "gemini-3.8-flash-medium", displayName: "Gemini 3.8 Flash (Medium)" },
 ];
 
 /**
@@ -36,7 +35,7 @@ export function deriveSessionSlugs(models: readonly AgyModelSpec[]): readonly st
 export const ALLOWED_SESSION_SLUGS: readonly string[] = deriveSessionSlugs(ALLOWED_AGY_MODELS);
 
 export function isAllowedModelSlug(slug: string): boolean {
-  const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(medium|high|tiered)$/);
+  const match = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-(high|tiered)$/);
   if (!match) return false;
   const versionStr = match[1];
   const parts = versionStr.split(".").map((p) => parseInt(p, 10));

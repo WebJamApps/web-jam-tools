@@ -50,8 +50,7 @@ const TEST_SCHEMA: Schema = {
     { name: "Haiku", hex: "0E8A16", repos: "all", modelTier: true },
     { name: "Sonnet", hex: "1D76DB", repos: "all", modelTier: true },
     { name: "Opus", hex: "B392F0", repos: "all", modelTier: true },
-    { name: "Flash Med", hex: "FBCA04", repos: "all", modelTier: true },
-    { name: "Flash High", hex: "E67E22", repos: "all", modelTier: true },
+    { name: "Flash", hex: "E67E22", repos: "all", modelTier: true },
     { name: "Josh", hex: "795548", repos: "all" },
   ],
 };
@@ -82,7 +81,7 @@ function childRow(overrides: Partial<{
   const c = {
     title: "Add cell validators for design:lint-plan",
     epicChild: "Epic #1",
-    tier: "Flash High",
+    tier: "Flash",
     priority: "High",
     repo: "web-jam-tools",
     tests: "Unit tests, one per acceptance criterion",
@@ -149,7 +148,7 @@ Deno.test("validatePlanTable: an omitted schema skips tier validation entirely (
 // --- 3. Markdown-wrapped tier still validates ---
 
 Deno.test("AC3: a tier wrapped in backticks or bold still validates correctly", () => {
-  const cases = ["`Flash High`", "**Flash High**", "**`Flash High`**", "_Flash High_"];
+  const cases = ["`Flash`", "**Flash**", "**`Flash`**", "_Flash_"];
   for (const tier of cases) {
     const doc = planTableDoc([EPIC_ROW, childRow({ tier })]);
     const violations = validate(doc);

@@ -25,8 +25,8 @@
 #       [--test-plan TEXT | --test-plan-file PATH] \
 #       [--test-evidence TEXT | --test-evidence-file PATH] [--screenshots TEXT]
 #
-#   --author        Required outside Codex. e.g. "Claude Code — Opus", "agy — Gemini Flash
-#                   (Medium)", "Claude Code — Sonnet 5.5". Lands in the footer so Josh can track per-model
+#   --author        Required outside Codex. e.g. "Claude Code — Opus", "agy — Gemini Flash",
+#                   "Claude Code — Sonnet 5.5". Lands in the footer so Josh can track per-model
 #                   quality. MUST name a model on the ROSTER list maintained near
 #                   the top of this script (web-jam-tools#190) — models routinely
 #                   confabulate their own checkpoint name (JaMmusic#1212: a Gemini
@@ -174,8 +174,7 @@ usage() {
 # format is "<tool> — <model>" (e.g. "Claude Code — Sonnet 5.5" — the tool name
 # already says "Claude", so the model half doesn't repeat it).
 ROSTER=(
-  "Gemini Flash (Medium)"
-  "Gemini Flash (High)"
+  "Gemini Flash"
   "Claude Sonnet 5.5"
   "Claude Haiku 4.5"
   # Unversioned on purpose (Josh, 2026-07-26): the roster exists to stop a
@@ -194,6 +193,15 @@ ROSTER=(
 
 author_roster_check() {
   local author="$1" entry needle
+  # The bare "Gemini Flash" entry would also substring-match the retired medium level, so an
+  # author naming it is refused before the match runs (web-jam-tools#1202).
+  if printf '%s' "$author" | grep -qiF "Gemini Flash (Medium)"; then
+    echo "ERROR: --author '$author' does not name a model on the roster (web-jam-tools#190)." >&2
+    echo "       The medium Flash level is retired; Gemini Flash runs at high effort only." >&2
+    echo "       Valid models:" >&2
+    printf '         - %s\n' "${ROSTER[@]}" >&2
+    exit 1
+  fi
   for entry in "${ROSTER[@]}"; do
     needle="${entry#Claude }"
     if printf '%s' "$author" | grep -qF "$needle"; then

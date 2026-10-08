@@ -71,7 +71,7 @@ labels:
     modelTier: true
   - name: Sonnet
     hex: "1D76DB"
-    description: "Coding that needs a Claude-side capability Flash High lacks; ranks above Flash High but is not the default coder tier (a cost decision)"
+    description: "Coding that needs a Claude-side capability Flash lacks; ranks above Flash but is not the default coder tier (a cost decision)"
     repos: all
     modelTier: true
   - name: Opus
@@ -96,24 +96,18 @@ labels:
     # change, so this entry (and its neverDelete protection) is unchanged.
     neverDelete: true
 
-  # --- Model-tier — Flash High/Med all 8 repos ---
-  # Josh's call (2026-07-31): Flash High is at Sonnet quality, and Flash
-  # Medium is a viable substitute for Haiku, so both must be routable in
-  # every repo, not just the 5 front-end ones — he wants routing
-  # flexibility. This widened `Flash High` and `Flash Med` from
-  # `repos: frontend` to `repos: all` (web-jam-tools, no issue — Flash High
-  # had been wrongly proposed for REMOVE in web-jam-back and
-  # WebJamSocketCluster, where web-jam-back#991 "Remove PUT /venue/:id once
-  # all callers use PATCH" already carries it live).
-  # Josh retired Flash Low on 2026-08-02.
-  - name: Flash Med
-    hex: "FBCA04"
-    description: "Mechanical work, documentation cleanup, single-file edits, and routine execution tasks across all repos"
-    repos: all
-    modelTier: true
-  - name: Flash High
+  # --- Model-tier — Flash, all 8 repos ---
+  # Josh's call (2026-07-31): Flash is at Sonnet quality, so it must be
+  # routable in every repo, not just the 5 front-end ones. Josh retired
+  # Flash Low on 2026-08-02. The medium level was retired and the high level
+  # renamed `Flash` (web-jam-tools#1202): Gemini Flash runs at high effort
+  # only, so the label names the model and leaves the effort to the playbook.
+  # The alias makes /fix-labels propose a rename in place, so every issue
+  # carrying the old label keeps it.
+  - name: Flash
     hex: "E67E22"
     description: "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; the default lane, billed to Google rather than the constrained Anthropic budget"
+    aliases: ["Flash High"]
     repos: all
     modelTier: true
   - name: Sol

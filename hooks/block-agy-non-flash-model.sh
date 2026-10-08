@@ -3,8 +3,7 @@
 # Flash models only (3.7 floor or newer). Design: web-jam-tools#267 ("agy flash
 # default model fix", approved by Josh 2026-07-25; web-jam-tools#549).
 #
-# Rationale: agy's own configured default has drifted before (Flash High
-# instead of the intended cheaper Medium), and nothing stopped an ad hoc
+# Rationale: agy's own configured default has drifted before, and nothing stopped an ad hoc
 # `agy --model claude-opus-4-6-thinking` (or similar) from burning
 # Claude/Gemini-Pro-priced quota on what's supposed to be the cheap Flash
 # lane. Config-and-docs alone was rejected in the design discussion because
@@ -13,11 +12,12 @@
 #
 # ALLOWED:
 #   - a bare `agy` call with no --model flag (falls through to agy's own
-#     configured default — separately pinned to Flash High in
+#     configured default — separately pinned to Flash in
 #     ~/.gemini/antigravity-cli/settings.json, a laptop-local step outside
 #     this hook's / this repo's reach, web-jam-tools#267 item 2, web-jam-tools#549).
 #   - `--model` (or `--model=`) equal to a Flash model (3.7 floor or newer)
-#     (e.g. gemini-3.8-flash-high, gemini-3.8-flash-medium, gemini-3.8-flash-tiered).
+#     (e.g. gemini-3.8-flash-high, gemini-3.8-flash-tiered). The medium level is retired
+#     (web-jam-tools#1202): Gemini Flash runs at high effort only.
 #
 # BLOCKED:
 #   - any other --model value (notably claude-sonnet-4-6,
@@ -48,7 +48,7 @@ result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
-ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-medium or gemini-3.8-flash-tiered")
+ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-tiered")
 
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2
