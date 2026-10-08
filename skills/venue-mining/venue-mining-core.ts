@@ -50,11 +50,46 @@ export interface VenueTypeInferenceOptions {
   contextualResolver?: (candidate: MinedVenueCandidate) => CanonicalVenueType | null;
 }
 
+/**
+ * Validates whether an address string represents a usable physical street address.
+ * Rejects empty values, placeholder strings (TBD, N/A, None, Pending, Unknown),
+ * PO Boxes (P.O. Box, Post Office Box), and generic downtown descriptors per Rule 21 and SKILL.md.
+ */
+export function isUsableStreetAddress(address: unknown): boolean {
+  if (typeof address !== "string") {
+    return false;
+  }
+  const trimmed = address.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  // Reject placeholder strings
+  const placeholderPattern = /^(?:tbd|n\/?a|none|unknown|pending|null|-)$/i;
+  if (placeholderPattern.test(trimmed)) {
+    return false;
+  }
+
+  // Reject PO Box / Post Office Box
+  const poBoxPattern = /\b(?:P\.?O\.?\s*Box|Post\s*Office\s*Box)\b/i;
+  if (poBoxPattern.test(trimmed)) {
+    return false;
+  }
+
+  // Reject generic downtown strings without street number/name
+  const downtownPattern = /^downtown\s+[a-z\s,.-]+$/i;
+  if (downtownPattern.test(trimmed)) {
+    return false;
+  }
+
+  return true;
+}
+
 export interface VenueTypeInferenceResult {
-  venueType: CanonicalVenueType;
+  venueType?: CanonicalVenueType;
   reason: string;
   isFallback: boolean;
-  confidence: "high" | "contextual" | "fallback";
+  confidence: "high" | "contextual" | "fallback" | "unresolved";
 }
 
 export interface CreateVenuePayload {
@@ -148,12 +183,13 @@ export function inferVenueType(
     };
   }
 
-  // 5. Default hospitality fallback: MidRangeCafeBar
+  // 5. Unresolved when ambiguous or unmatched without contextual resolution (D-78)
   return {
-    venueType: "MidRangeCafeBar",
-    reason: `default fallback (MidRangeCafeBar): ${match.reason}`,
-    isFallback: true,
-    confidence: "fallback",
+    venueType: undefined,
+    reason:
+      `unresolved venueType (requires contextual resolution or human review): ${match.reason}`,
+    isFallback: false,
+    confidence: "unresolved",
   };
 }
 
@@ -171,7 +207,11 @@ export function formatProposalTable(
     return "_No candidates to propose._";
   }
 
-  if (options?.detailed) {
+  // Detailed mode includes full evidence columns (Address, Email Source, Website)
+  // Defaults to true per Step 5 evidence table requirements unless explicitly set to false
+  const isDetailed = options?.detailed !== false;
+
+  if (isDetailed) {
     const header =
       "| # | Venue Name | City, ST | Address | Type | Booking Email | Email Source | Phone | Website | Status |\n" +
       "|---|---|---|---|---|---|---|---|---|---|";
@@ -234,10 +274,24 @@ export function buildCreateVenuePayload(
     );
   }
 
+  if (!isUsableStreetAddress(address)) {
+    throw new Error(
+      `Cannot build venue payload for "${name}": valid physical street address is required per Rule 21 and SKILL.md (received "${address}").`,
+    );
+  }
+
   const rawType = candidate.venueType;
-  const venueType: CanonicalVenueType = (rawType && isCanonicalVenueType(rawType))
+  const inferred = (rawType && isCanonicalVenueType(rawType))
     ? rawType
     : inferVenueType(candidate).venueType;
+
+  if (!inferred || !isCanonicalVenueType(inferred)) {
+    throw new Error(
+      `Cannot build venue payload for "${name}": 'venueType' is required and could not be resolved. Specify venueType or resolve ambiguity.`,
+    );
+  }
+
+  const venueType: CanonicalVenueType = inferred;
 
   const payload: CreateVenuePayload = {
     name,

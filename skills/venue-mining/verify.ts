@@ -6,6 +6,7 @@ import {
   formatProposalTable,
   inferVenueType,
   isCanonicalVenueType,
+  isUsableStreetAddress,
   type MinedVenueCandidate,
   type VenueTypeInferenceOptions,
   type VenueTypeInferenceResult,
@@ -16,7 +17,7 @@ export type VenueVerificationStatus = "ready" | "skipped_missing_address" | "unf
 export interface VerifiedVenueResult {
   status: VenueVerificationStatus;
   candidate: MinedVenueCandidate;
-  venueType: CanonicalVenueType;
+  venueType?: CanonicalVenueType;
   inferenceResult: VenueTypeInferenceResult;
   outreachEligible: boolean;
   skippedReason?: string;
@@ -64,8 +65,11 @@ export function checkSizeFit(candidate: MinedVenueCandidate): { fit: boolean; re
 
 /**
  * Determines outreach eligibility based on email source and inbox type per SKILL.md.
- * - Published link (Google Maps, publication, venue website): viable email -> true.
- * - Probed domain: true only if candidate notes/context confirm identity, else false.
+ * - Probed domain: evaluated first. True only if affirmative venue identity evidence exists
+ *   (e.g. candidate.identityConfirmed, explicit approval, or notes confirming identity);
+ *   otherwise false (requires verified venue identity). Domains containing "website" cannot bypass.
+ * - Published link (Google Maps, Google Places, publication, venue website): viable email -> true.
+ * - Unknown provenance: false (requires verified source evidence rather than email presence alone).
  * - Wrong-purpose inbox (catering@, private-parties@, weddings@) or no email -> false.
  */
 export function determineOutreachEligibility(
@@ -89,9 +93,37 @@ export function determineOutreachEligibility(
     return { outreachEligible: false, reason: "Wrong-purpose inbox" };
   }
 
-  const emailSource = (candidate.emailSource || "").toLowerCase();
+  const emailSource = (candidate.emailSource || "").trim().toLowerCase();
+  if (!emailSource) {
+    return {
+      outreachEligible: false,
+      reason: "Missing email source provenance requires verified source evidence",
+    };
+  }
+
+  // 1. Probed domain provenance must be evaluated BEFORE generic "website" substring matching.
+  // Probed domains require affirmative venue identity evidence or explicit approval before enabling outreach.
+  if (emailSource.includes("probed")) {
+    const notes = (candidate.notes || "").toLowerCase();
+    const isIdentified = Boolean(candidate.identityConfirmed) ||
+      Boolean(candidate.approved) ||
+      notes.includes("identity-confirmed") ||
+      notes.includes("identity confirmed") ||
+      notes.includes("name+city match") ||
+      notes.includes("explicit-approval") ||
+      notes.includes("explicitly approved");
+    return {
+      outreachEligible: isIdentified,
+      reason: isIdentified
+        ? "Probed domain with confirmed identity"
+        : "Probed domain requires verified venue identity",
+    };
+  }
+
+  // 2. Published link sources
   if (
     emailSource.includes("google maps") ||
+    emailSource.includes("google places") ||
     emailSource.includes("publication") ||
     emailSource.includes("venue website") ||
     emailSource.includes("website")
@@ -99,19 +131,11 @@ export function determineOutreachEligibility(
     return { outreachEligible: true, reason: "Published link source" };
   }
 
-  if (emailSource.includes("probed")) {
-    const isIdentified = (candidate.notes || "").includes("identity-confirmed") ||
-      (candidate.notes || "").includes("name+city match");
-    return {
-      outreachEligible: isIdentified,
-      reason: isIdentified
-        ? "Probed domain with confirmed identity"
-        : "Probed domain requires manual review",
-    };
-  }
-
-  // Default to true if email is present and not disqualified
-  return { outreachEligible: true, reason: "Viable booking email found" };
+  // 3. Unknown or unverified provenance must require verified source evidence
+  return {
+    outreachEligible: false,
+    reason: "Unverified email source provenance requires verified source evidence",
+  };
 }
 
 /**
@@ -139,11 +163,11 @@ export function verifyAndEnrichVenue(
     };
   }
 
-  const address = (candidate.address || candidate.streetAddress || "").trim();
+  const rawAddress = (candidate.address || candidate.streetAddress || "").trim();
   const inference = inferVenueType(candidate, options);
   const eligibility = determineOutreachEligibility(candidate);
 
-  if (!address) {
+  if (!isUsableStreetAddress(rawAddress)) {
     return {
       status: "skipped_missing_address",
       candidate: {
@@ -155,9 +179,13 @@ export function verifyAndEnrichVenue(
       venueType: inference.venueType,
       inferenceResult: inference,
       outreachEligible: eligibility.outreachEligible,
-      skippedReason: "No usable street address found after exhausting sources",
+      skippedReason: rawAddress
+        ? `Unusable street address ("${rawAddress}" is a placeholder or PO Box; physical address required)`
+        : "No usable street address found after exhausting sources",
     };
   }
+
+  const address = rawAddress;
 
   let notes = (candidate.notes || "").trim();
   if (options?.sweepProvenance && !notes.includes(options.sweepProvenance)) {
@@ -206,7 +234,7 @@ export function verifyAndEnrichCandidates(
     }
   }
 
-  const proposalTable = formatProposalTable(ready);
+  const proposalTable = formatProposalTable(ready, { detailed: true });
 
   return {
     total: candidates.length,

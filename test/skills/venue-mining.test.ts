@@ -3,6 +3,8 @@
 // Step 5 proposal table rendering, and Step 6 POST /venue payload generation.
 // References: Decision D-78 in ~/Dropbox/web-jam-llms/gig-outreach/gig-outreach-design-2026-09-18.md
 import { assertEquals, assertMatch, assertThrows } from "@std/assert";
+import { join } from "@std/path";
+import { installSkills } from "../../src/install-skills/lib.ts";
 import {
   buildCreateVenuePayload,
   CANONICAL_VENUE_TYPES,
@@ -10,6 +12,7 @@ import {
   formatProposalTable,
   inferVenueType,
   isCanonicalVenueType,
+  isUsableStreetAddress,
   type MinedVenueCandidate,
 } from "../../skills/venue-mining/venue-mining-core.ts";
 import {
@@ -31,6 +34,41 @@ Deno.test("CANONICAL_VENUE_TYPES contains the three backend enums", () => {
   assertEquals(isCanonicalVenueType("Unknown"), false);
   assertEquals(isCanonicalVenueType(null), false);
   assertEquals(isCanonicalVenueType(undefined), false);
+});
+
+Deno.test("isUsableStreetAddress validates physical addresses and rejects placeholders or PO boxes", () => {
+  // Valid physical addresses
+  assertEquals(isUsableStreetAddress("111 S Pollard St"), true);
+  assertEquals(isUsableStreetAddress("2108 Broadway Ave SW"), true);
+  assertEquals(isUsableStreetAddress("20 W Main St, Salem, VA 24153"), true);
+
+  // Missing or non-string
+  assertEquals(isUsableStreetAddress(""), false);
+  assertEquals(isUsableStreetAddress("   "), false);
+  assertEquals(isUsableStreetAddress(null), false);
+  assertEquals(isUsableStreetAddress(undefined), false);
+  assertEquals(isUsableStreetAddress(123), false);
+
+  // Placeholders
+  assertEquals(isUsableStreetAddress("TBD"), false);
+  assertEquals(isUsableStreetAddress("tbd"), false);
+  assertEquals(isUsableStreetAddress("N/A"), false);
+  assertEquals(isUsableStreetAddress("n/a"), false);
+  assertEquals(isUsableStreetAddress("NA"), false);
+  assertEquals(isUsableStreetAddress("None"), false);
+  assertEquals(isUsableStreetAddress("unknown"), false);
+  assertEquals(isUsableStreetAddress("pending"), false);
+  assertEquals(isUsableStreetAddress("-"), false);
+
+  // PO Boxes
+  assertEquals(isUsableStreetAddress("PO Box 42"), false);
+  assertEquals(isUsableStreetAddress("P.O. Box 123"), false);
+  assertEquals(isUsableStreetAddress("P.O. Box 123, Roanoke, VA"), false);
+  assertEquals(isUsableStreetAddress("Post Office Box 789"), false);
+
+  // Downtown without street address
+  assertEquals(isUsableStreetAddress("Downtown Roanoke"), false);
+  assertEquals(isUsableStreetAddress("downtown Salem, VA"), false);
 });
 
 Deno.test("Step 4 heuristic rules: infers PubFestivalBrewery from name keywords", () => {
@@ -173,14 +211,14 @@ Deno.test("Step 4 fallback handling: ambiguous / competing categories trigger fa
   assertEquals(configuredResult.confidence, "fallback");
   assertEquals(configuredResult.isFallback, true);
 
-  // 3. Default fallback: MidRangeCafeBar
-  const defaultResult = inferVenueType({ name: "Brewery and Cafe" });
-  assertEquals(defaultResult.venueType, "MidRangeCafeBar");
-  assertEquals(defaultResult.confidence, "fallback");
-  assertEquals(defaultResult.isFallback, true);
+  // 3. Ambiguous without resolver or fallback remains unresolved (D-78)
+  const unresolvedResult = inferVenueType({ name: "Brewery and Cafe" });
+  assertEquals(unresolvedResult.venueType, undefined);
+  assertEquals(unresolvedResult.confidence, "unresolved");
+  assertEquals(unresolvedResult.isFallback, false);
 });
 
-Deno.test("Step 4 fallback handling: unmatched venue names trigger fallback", () => {
+Deno.test("Step 4 fallback handling: unmatched venue names remain unresolved without resolver", () => {
   const unmatchedCandidate: MinedVenueCandidate = {
     name: "The Dark Room Studio",
   };
@@ -188,10 +226,10 @@ Deno.test("Step 4 fallback handling: unmatched venue names trigger fallback", ()
   assertEquals(match.type, null);
   assertMatch(match.reason, /no keyword match/i);
 
-  const defaultResult = inferVenueType(unmatchedCandidate);
-  assertEquals(defaultResult.venueType, "MidRangeCafeBar");
-  assertEquals(defaultResult.confidence, "fallback");
-  assertEquals(defaultResult.isFallback, true);
+  const unresolvedResult = inferVenueType(unmatchedCandidate);
+  assertEquals(unresolvedResult.venueType, undefined);
+  assertEquals(unresolvedResult.confidence, "unresolved");
+  assertEquals(unresolvedResult.isFallback, false);
 });
 
 Deno.test("Step 5 proposal table: renders inferred venueType in dedicated column", () => {
@@ -218,7 +256,7 @@ Deno.test("Step 5 proposal table: renders inferred venueType in dedicated column
     },
   ];
 
-  const table = formatProposalTable(candidates);
+  const table = formatProposalTable(candidates, { detailed: false });
 
   // Checks header column
   assertMatch(
@@ -236,7 +274,7 @@ Deno.test("Step 5 proposal table: renders inferred venueType in dedicated column
   );
 });
 
-Deno.test("Step 5 proposal table: detailed mode includes address and email source", () => {
+Deno.test("Step 5 proposal table: detailed mode includes address and email source by default", () => {
   const candidates: MinedVenueCandidate[] = [
     {
       name: "Twin Creeks Brewing",
@@ -252,7 +290,7 @@ Deno.test("Step 5 proposal table: detailed mode includes address and email sourc
     },
   ];
 
-  const detailedTable = formatProposalTable(candidates, { detailed: true });
+  const detailedTable = formatProposalTable(candidates);
   assertMatch(
     detailedTable,
     /\| # \| Venue Name \| City, ST \| Address \| Type \| Booking Email \| Email Source \| Phone \| Website \| Status \|/,
@@ -302,7 +340,7 @@ Deno.test("Step 6 buildCreateVenuePayload: infers venueType if not pre-set", () 
   assertEquals(payload.venueType, "MidRangeCafeBar");
 });
 
-Deno.test("Step 6 buildCreateVenuePayload: throws when required fields are missing", () => {
+Deno.test("Step 6 buildCreateVenuePayload: throws when required fields are missing or invalid", () => {
   // Missing name
   assertThrows(
     () =>
@@ -338,6 +376,67 @@ Deno.test("Step 6 buildCreateVenuePayload: throws when required fields are missi
     Error,
     "street address is required",
   );
+
+  // Placeholder street address rejected
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({ name: "The Pub", city: "Roanoke", usState: "VA", address: "TBD" }),
+    Error,
+    "valid physical street address is required",
+  );
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({ name: "The Pub", city: "Roanoke", usState: "VA", address: "N/A" }),
+    Error,
+    "valid physical street address is required",
+  );
+
+  // PO Box rejected
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({
+        name: "The Pub",
+        city: "Roanoke",
+        usState: "VA",
+        address: "PO Box 42",
+      }),
+    Error,
+    "valid physical street address is required",
+  );
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({
+        name: "The Pub",
+        city: "Roanoke",
+        usState: "VA",
+        address: "P.O. Box 100",
+      }),
+    Error,
+    "valid physical street address is required",
+  );
+
+  // Unresolved venueType throws without silent fallback (D-78)
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({
+        name: "The Dark Room Studio",
+        city: "Roanoke",
+        usState: "VA",
+        address: "123 Main St",
+      }),
+    Error,
+    "venueType' is required and could not be resolved",
+  );
+
+  // Preserves explicit venueType even on name without keyword match
+  const explicitPayload = buildCreateVenuePayload({
+    name: "The Dark Room Studio",
+    city: "Roanoke",
+    usState: "VA",
+    address: "123 Main St",
+    venueType: "Originals",
+  });
+  assertEquals(explicitPayload.venueType, "Originals");
 });
 
 Deno.test("Candidate verification pipeline: checkSizeFit rejects unfit venues", () => {
@@ -390,6 +489,42 @@ Deno.test("Candidate verification pipeline: determineOutreachEligibility rules",
     true,
   );
 
+  // Probed domain containing "website" without identity evidence MUST NOT bypass gate
+  const probedWithWebsite = determineOutreachEligibility({
+    name: "Cafe Website",
+    email: "booking@cafewebsite.com",
+    emailSource: "Probed domain (cafewebsite.com)",
+  });
+  assertEquals(probedWithWebsite.outreachEligible, false);
+  assertEquals(probedWithWebsite.reason, "Probed domain requires verified venue identity");
+
+  // Probed domain containing "website" with identity evidence -> true
+  const probedWebsiteConfirmed = determineOutreachEligibility({
+    name: "Cafe Website",
+    email: "booking@cafewebsite.com",
+    emailSource: "Probed domain (cafewebsite.com)",
+    notes: "name+city match confirmed",
+  });
+  assertEquals(probedWebsiteConfirmed.outreachEligible, true);
+  assertEquals(probedWebsiteConfirmed.reason, "Probed domain with confirmed identity");
+
+  // Unknown or unverified email provenance -> false
+  const unverified = determineOutreachEligibility({
+    name: "Unknown Provenance",
+    email: "music@unknown.com",
+    emailSource: "unverified-scrape",
+  });
+  assertEquals(unverified.outreachEligible, false);
+  assertMatch(unverified.reason, /requires verified source evidence/i);
+
+  // Missing emailSource -> false
+  const missingSource = determineOutreachEligibility({
+    name: "No Source",
+    email: "music@nosource.com",
+  });
+  assertEquals(missingSource.outreachEligible, false);
+  assertMatch(missingSource.reason, /requires verified source evidence/i);
+
   // No email -> false
   assertEquals(
     determineOutreachEligibility({
@@ -426,6 +561,32 @@ Deno.test("Candidate verification pipeline: verifyAndEnrichVenue separates ready
   assertEquals(missingAddressResult.candidate.status, "Missing Address");
   assertMatch(missingAddressResult.skippedReason || "", /street address/i);
 
+  // Placeholder address candidate ("TBD") -> skipped_missing_address
+  const tbdResult = verifyAndEnrichVenue({
+    name: "Twin Creeks Brewing",
+    city: "Vinton",
+    usState: "VA",
+    address: "TBD",
+    email: "booking@twincreeksbrewing.com",
+    emailSource: "Venue website",
+  });
+  assertEquals(tbdResult.status, "skipped_missing_address");
+  assertEquals(tbdResult.candidate.status, "Missing Address");
+  assertMatch(tbdResult.skippedReason || "", /placeholder or PO Box/i);
+
+  // PO Box address candidate -> skipped_missing_address
+  const poBoxResult = verifyAndEnrichVenue({
+    name: "Twin Creeks Brewing",
+    city: "Vinton",
+    usState: "VA",
+    address: "PO Box 42",
+    email: "booking@twincreeksbrewing.com",
+    emailSource: "Venue website",
+  });
+  assertEquals(poBoxResult.status, "skipped_missing_address");
+  assertEquals(poBoxResult.candidate.status, "Missing Address");
+  assertMatch(poBoxResult.skippedReason || "", /placeholder or PO Box/i);
+
   // Unfit size candidate -> unfit_size
   const unfitResult = verifyAndEnrichVenue({
     name: "Roanoke Civic Center",
@@ -433,6 +594,19 @@ Deno.test("Candidate verification pipeline: verifyAndEnrichVenue separates ready
   });
   assertEquals(unfitResult.status, "unfit_size");
   assertEquals(unfitResult.candidate.status, "Unfit Size");
+
+  // Unmatched venueType with valid address is marked Ready with undefined venueType
+  const unmatchedReady = verifyAndEnrichVenue({
+    name: "The Dark Room Studio",
+    city: "Roanoke",
+    usState: "VA",
+    address: "123 Main St",
+    email: "info@darkroomstudio.com",
+    emailSource: "Venue website",
+  });
+  assertEquals(unmatchedReady.status, "ready");
+  assertEquals(unmatchedReady.venueType, undefined);
+  assertEquals(unmatchedReady.candidate.status, "Ready");
 });
 
 Deno.test("Candidate verification pipeline: verifyAndEnrichCandidates batch processing", () => {
@@ -444,6 +618,7 @@ Deno.test("Candidate verification pipeline: verifyAndEnrichCandidates batch proc
       address: "111 S Pollard St",
       email: "booking@twincreeksbrewing.com",
       emailSource: "Venue website",
+      website: "https://twincreeksbrewing.com",
     },
     {
       name: "Sweet Donkey Coffee",
@@ -471,30 +646,52 @@ Deno.test("Candidate verification pipeline: verifyAndEnrichCandidates batch proc
   assertMatch(result.proposalTable, /`PubFestivalBrewery`/);
   assertMatch(result.proposalTable, /Sweet Donkey Coffee/);
   assertMatch(result.proposalTable, /`MidRangeCafeBar`/);
+
+  // Evidence columns required by Step 5
+  assertMatch(result.proposalTable, /Address/);
+  assertMatch(result.proposalTable, /Email Source/);
+  assertMatch(result.proposalTable, /Website/);
+  assertMatch(result.proposalTable, /111 S Pollard St/);
+  assertMatch(result.proposalTable, /Venue website/);
+  assertMatch(result.proposalTable, /https:\/\/twincreeksbrewing\.com/);
 });
 
-Deno.test("Acceptance Criterion 5: skill symlinks resolve across Claude Code and agy surfaces", () => {
-  const home = Deno.env.get("HOME");
-  if (!home) return;
-
-  const claudeSymlink = `${home}/.claude/skills/venue-mining`;
-  const agySymlink = `${home}/.gemini/config/plugins/webjam-tasks/skills/venue-mining`;
-
+Deno.test("Acceptance Criterion 5: skill symlinks install and resolve across Claude Code and agy surfaces in isolation", async () => {
+  const repoDir = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+  const tempDir = await Deno.makeTempDir({ prefix: "venue_mining_symlink_test_" });
   try {
+    const claudeDest = join(tempDir, "claude-skills");
+    const agyDest = join(tempDir, "agy-skills");
+    const claudeBackupDest = join(tempDir, "claude-backups");
+    const agyBackupDest = join(tempDir, "agy-backups");
+
+    await installSkills({
+      repoDir,
+      claudeDest,
+      agyDest,
+      claudeBackupDest,
+      agyBackupDest,
+      allowNonCanonical: true,
+      allowUnsafeForTesting: true,
+      quiet: true,
+    });
+
+    const claudeSymlink = join(claudeDest, "venue-mining");
     const claudeStat = Deno.lstatSync(claudeSymlink);
     assertEquals(claudeStat.isSymlink, true, `Expected ${claudeSymlink} to be a symlink`);
     const claudeTarget = Deno.readLinkSync(claudeSymlink);
     assertMatch(claudeTarget, /skills\/venue-mining/);
-  } catch (err: unknown) {
-    throw new Error(`Claude Code skill symlink check failed: ${err}`);
-  }
 
-  try {
+    const agySymlink = join(agyDest, "venue-mining");
     const agyStat = Deno.lstatSync(agySymlink);
     assertEquals(agyStat.isSymlink, true, `Expected ${agySymlink} to be a symlink`);
     const agyTarget = Deno.readLinkSync(agySymlink);
     assertMatch(agyTarget, /skills\/venue-mining/);
-  } catch (err: unknown) {
-    throw new Error(`agy/Antigravity skill symlink check failed: ${err}`);
+  } finally {
+    try {
+      await Deno.remove(tempDir, { recursive: true });
+    } catch {
+      // ignore cleanup errors
+    }
   }
 });
