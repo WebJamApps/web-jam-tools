@@ -504,6 +504,12 @@ target list, deployment steps, and verification procedures.
   paths. Uncovered HTTP endpoints lower module line coverage and can cause overall repository
   coverage to drop below CircleCI's strict 90% line-coverage threshold
   (`[coverage] FAIL: all-files line coverage < 90% threshold`).
+- **Uptime Test Endpoint Protection & Exact Secret Key Matching**: Test endpoints on the uptime
+  monitoring service (`/test-check` and `/test-heartbeat`) must strictly guard execution against an
+  exact matching `x-test-key` HTTP header configured via `UPTIME_TEST_KEY`. Any missing, empty, or
+  mismatched header, query parameter fallback (`?key=...`), case variation, or execution attempt
+  when `UPTIME_TEST_KEY` is unset or empty must fail closed with HTTP 404 Not Found and perform no
+  action.
 
 ## Language & Runtime Standardization
 
