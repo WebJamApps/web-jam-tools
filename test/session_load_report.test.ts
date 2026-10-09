@@ -6,8 +6,6 @@ import { join } from "@std/path";
 import {
   computeSessionLoadReport,
   generateSessionLoadReport,
-  inspectClaudeConnectors,
-  inspectCodexConnectors,
   loadLimits,
 } from "../src/session-load/report.ts";
 import { lintRunbookFile } from "../src/design-issue/lint_runbook.ts";
@@ -642,7 +640,7 @@ Deno.test("forbidden registration in global Claude settings or agy hooks fails a
   }
 });
 
-Deno.test("report-only connectors and agy Google-bundled skills are measured, exposed in result, and rendered when over without imposing limits", async () => {
+Deno.test("with connectors set up for Claude Code, agy and Codex and Google-bundled skills present for agy, the OVER shape carries neither item", async () => {
   const limits = await loadLimits(LIMITS_PATH);
   const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
 
@@ -678,7 +676,6 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       claudeMcpPath,
       JSON.stringify({ mcpServers }),
     );
-    const claudeMcpExpectedBytes = null;
 
     // 3. Add agy MCP connectors under ~/.gemini/antigravity-cli/mcp
     const agyMcpDir = join(homeDir, ".gemini/antigravity-cli/mcp");
@@ -692,7 +689,6 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       join(agyMcpDir, "playwright/instructions.md"),
       "x".repeat(300),
     );
-    const agyMcpExpectedBytes = 200 + 300;
 
     // 4. Add nonempty Codex MCP connectors under ~/.codex/mcp
     const codexMcpDir = join(homeDir, ".codex/mcp");
@@ -706,7 +702,6 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       join(codexMcpDir, "memory/schema.json"),
       "y".repeat(150),
     );
-    const codexMcpExpectedBytes = 350 + 150;
 
     // 5. Add agy Google-bundled skills in ~/.gemini/skills
     const agyGoogleSkillsDir = join(homeDir, ".gemini/skills");
@@ -756,10 +751,6 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       homeDir,
       webJamAppsDir,
       limitsPath: LIMITS_PATH,
-      claudeMcpPath,
-      agyMcpDir,
-      codexMcpDir,
-      agyGoogleSkillsDir,
     });
 
     // Having connectors and Google-bundled skills MUST NOT trigger OVER
@@ -768,18 +759,8 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       cleanResult.text,
       "Session load: Claude Code ok · agy ok · Codex ok",
     );
-    assertEquals(cleanResult.connectors.claudeCode.count, 2);
-    assertEquals(
-      cleanResult.connectors.claudeCode.sizeBytes,
-      claudeMcpExpectedBytes,
-    );
-    assertEquals(cleanResult.connectors.agy.count, 2);
-    assertEquals(cleanResult.connectors.agy.sizeBytes, agyMcpExpectedBytes);
-    assertEquals(cleanResult.connectors.codex.count, 2);
-    assertEquals(cleanResult.connectors.codex.sizeBytes, codexMcpExpectedBytes);
-    assertEquals(cleanResult.googleBundledSkills.agy, 5);
 
-    // 7. Test OVER state: make main rules over mark
+    // 7. Test OVER state: make main rules over mark (triggers OVER for Claude Code, agy, and Codex)
     const mainRulesExcess = 1000;
     await Deno.writeTextFile(
       join(webJamAppsDir, "web-jam-tools/AGENTS.md"),
@@ -790,214 +771,47 @@ Deno.test("report-only connectors and agy Google-bundled skills are measured, ex
       homeDir,
       webJamAppsDir,
       limitsPath: LIMITS_PATH,
-      claudeMcpPath,
-      agyMcpDir,
-      codexMcpDir,
-      agyGoogleSkillsDir,
     });
 
     assertEquals(overResult.isOver, true);
+
+    // Assert the OVER shape carries neither connector nor Google-bundled skills
     assert(
-      overResult.tools.claudeCode.items.some((i) => i.includes("connectors listing unavailable")),
-      `Claude Code should report the unavailable connector measurement when over: ${
+      !/connector/i.test(overResult.text),
+      `Report text must not mention connectors: ${overResult.text}`,
+    );
+    assert(
+      !/google-bundled/i.test(overResult.text),
+      `Report text must not mention Google-bundled skills: ${overResult.text}`,
+    );
+
+    // Check each tool's items specifically
+    assert(
+      !overResult.tools.claudeCode.items.some((i) => /connector|google-bundled/i.test(i)),
+      `Claude Code items must not carry connector or Google-bundled items: ${
         overResult.tools.claudeCode.items.join(" · ")
       }`,
     );
     assert(
-      overResult.tools.agy.items.some((i) => i.includes("5 Google-bundled skills")),
-      `agy should report Google-bundled skills when over: ${
+      !overResult.tools.agy.items.some((i) => /connector|google-bundled/i.test(i)),
+      `agy items must not carry connector or Google-bundled items: ${
         overResult.tools.agy.items.join(" · ")
       }`,
     );
     assert(
-      overResult.tools.agy.items.some((i) => i.includes(`connectors ${agyMcpExpectedBytes}`)),
-      `agy should report connector bytes when over: ${overResult.tools.agy.items.join(" · ")}`,
-    );
-    assert(
-      overResult.tools.codex.items.some((i) => i.includes(`connectors ${codexMcpExpectedBytes}`)),
-      `Codex should report connector bytes when over: ${overResult.tools.codex.items.join(" · ")}`,
-    );
-  } finally {
-    await Deno.remove(tempDir, { recursive: true });
-  }
-});
-
-Deno.test("Claude Code connectors: collects project-scoped servers under projects[homeDir].mcpServers when root mcpServers is empty", async () => {
-  const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
-  try {
-    const claudeMcpPath = join(homeDir, ".claude.json");
-    const projectServerConfig = {
-      command: "node",
-      args: ["/tmp/scoped.js"],
-      env: { SCOPED_ENV: "123" },
-      instructions: "Scoped project server instructions.",
-      tools: ["scoped_tool"],
-    };
-    await Deno.writeTextFile(
-      claudeMcpPath,
-      JSON.stringify({
-        projects: {
-          [homeDir]: {
-            mcpServers: {
-              "project-only-server": projectServerConfig,
-            },
-          },
-        },
-      }),
+      !overResult.tools.codex.items.some((i) => /connector|google-bundled/i.test(i)),
+      `Codex items must not carry connector or Google-bundled items: ${
+        overResult.tools.codex.items.join(" · ")
+      }`,
     );
 
-    const expectedBytes = null;
-
-    const result = await computeSessionLoadReport({
-      homeDir,
-      webJamAppsDir,
-      limitsPath: LIMITS_PATH,
-      claudeMcpPath,
-    });
-
-    assertEquals(result.connectors.claudeCode.count, 1);
-    assertEquals(result.connectors.claudeCode.sizeBytes, expectedBytes);
-  } finally {
-    await Deno.remove(tempDir, { recursive: true });
-  }
-});
-
-Deno.test("Claude Code connectors: safely counts a server named __proto__", async () => {
-  const tempDir = await Deno.makeTempDir();
-  try {
-    const claudeMcpPath = join(tempDir, ".claude.json");
-    const serverConfig = {
-      instructions: "Prototype-key server instructions.",
-      tools: ["safe_tool"],
-    };
-    await Deno.writeTextFile(
-      claudeMcpPath,
-      `{"mcpServers":{"__proto__":${JSON.stringify(serverConfig)}}}`,
-    );
-
-    const result = await inspectClaudeConnectors(claudeMcpPath);
-
-    assertEquals(result.count, 1);
-    assertEquals(
-      result.sizeBytes,
-      null,
-    );
-  } finally {
-    await Deno.remove(tempDir, { recursive: true });
-  }
-});
-
-Deno.test("Claude Code connectors: launcher fields never pretend to be discovered listing content", async () => {
-  const tempDir = await Deno.makeTempDir();
-  try {
-    const claudeMcpPath = join(tempDir, ".claude.json");
-
-    // 1. Synthetic listing fields in launcher config cannot provide a measurement
-    const baseServer = {
-      command: "node",
-      args: ["app.js"],
-      env: { FOO: "bar" },
-      instructions: "Core server operations.",
-      tools: ["read_data", "write_data"],
-    };
-    await Deno.writeTextFile(
-      claudeMcpPath,
-      JSON.stringify({ mcpServers: { "test-server": baseServer } }),
-    );
-
-    const baseResult = await inspectClaudeConnectors(claudeMcpPath, [tempDir]);
-    assertEquals(baseResult.count, 1);
-    const expectedBaseBytes = null;
-    assertEquals(baseResult.sizeBytes, expectedBaseBytes);
-
-    // 2. Massively inflate launcher config (command path, 200 args, 15KB env)
-    const inflatedLauncherServer = {
-      command: "/opt/custom/environments/deeply/nested/runtime/bin/python3.12",
-      args: Array(200).fill("--verbose-extended-flag-parameter-long-switch"),
-      env: {
-        VERY_LONG_AUTH_TOKEN: "a".repeat(8000),
-        ADDITIONAL_METADATA_VARIABLE: "b".repeat(7000),
-      },
-      instructions: "Core server operations.",
-      tools: ["read_data", "write_data"],
-    };
-    await Deno.writeTextFile(
-      claudeMcpPath,
-      JSON.stringify({ mcpServers: { "test-server": inflatedLauncherServer } }),
-    );
-
-    const inflatedResult = await inspectClaudeConnectors(claudeMcpPath, [
-      tempDir,
-    ]);
-    assertEquals(inflatedResult.count, 1);
-    // A missing listing remains unavailable despite launcher inflation
-    assertEquals(inflatedResult.sizeBytes, baseResult.sizeBytes);
-
-    // 3. Even synthetic listing fields in configuration are not discovered content
-    const addedInstruction = " Also supports batch exports.";
-    const addedTool = "export_data";
-    const mutatedListingServer = {
-      ...inflatedLauncherServer,
-      instructions: baseServer.instructions + addedInstruction,
-      tools: [...baseServer.tools, addedTool],
-    };
-    await Deno.writeTextFile(
-      claudeMcpPath,
-      JSON.stringify({ mcpServers: { "test-server": mutatedListingServer } }),
-    );
-
-    const mutatedResult = await inspectClaudeConnectors(claudeMcpPath, [
-      tempDir,
-    ]);
-    assertEquals(mutatedResult.count, 1);
-    assertEquals(mutatedResult.sizeBytes, null);
-  } finally {
-    await Deno.remove(tempDir, { recursive: true });
-  }
-});
-
-Deno.test("Codex connectors: measures recursive file content size, and changing payload size in files proportionally updates sizeBytes", async () => {
-  const tempDir = await Deno.makeTempDir();
-  try {
-    const codexMcpDir = join(tempDir, ".codex/mcp");
-    const exampleDir = join(codexMcpDir, "example");
-    await Deno.mkdir(exampleDir, { recursive: true });
-
-    // 1. Initial 100-byte instructions.md file
-    const instructionsPath = join(exampleDir, "instructions.md");
-    await Deno.writeTextFile(instructionsPath, "a".repeat(100));
-
-    const initial = await inspectCodexConnectors(codexMcpDir);
-    assertEquals(initial.count, 1);
-    assertEquals(initial.sizeBytes, 100);
-
-    // 2. Grow instructions.md to 8,000 bytes
-    await Deno.writeTextFile(instructionsPath, "b".repeat(8000));
-
-    const grown = await inspectCodexConnectors(codexMcpDir);
-    assertEquals(grown.count, 1);
-    assertEquals(grown.sizeBytes, 8000);
-
-    // 3. Add nested subdirectory with another payload file
-    const nestedDir = join(exampleDir, "schemas");
-    await Deno.mkdir(nestedDir, { recursive: true });
-    await Deno.writeTextFile(join(nestedDir, "schema.json"), "c".repeat(500));
-
-    const withNested = await inspectCodexConnectors(codexMcpDir);
-    assertEquals(withNested.count, 1);
-    assertEquals(withNested.sizeBytes, 8500);
-
-    // 4. Add second connector entry
-    const secondDir = join(codexMcpDir, "second-connector");
-    await Deno.mkdir(secondDir, { recursive: true });
-    await Deno.writeTextFile(
-      join(secondDir, "instructions.md"),
-      "d".repeat(250),
-    );
-
-    const twoConnectors = await inspectCodexConnectors(codexMcpDir);
-    assertEquals(twoConnectors.count, 2);
-    assertEquals(twoConnectors.sizeBytes, 8750);
+    // Verify lines match the design document shape
+    const lines = overResult.text.split("\n");
+    assertEquals(lines[0], "Session load");
+    assertEquals(lines[1], "Claude Code  OVER  main rules +1,000");
+    assertEquals(lines[2], "agy          OVER  main rules +1,000");
+    assertEquals(lines[3], "Codex        OVER  main rules +1,000");
+    assertEquals(lines[4], "Run /memory-cleanup to cut.");
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
