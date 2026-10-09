@@ -681,15 +681,22 @@ target list, deployment steps, and verification procedures.
   eligibility where probed domains require affirmative venue identity verification (D-49/SKILL.md),
   always check probed domain provenance (`probed`) BEFORE generic published source matching
   (`website`). A probed domain containing "website" (e.g. `cafewebsite.com` or `thepub.website`)
-  must never bypass identity verification or trigger `outreachEligible: true`. Candidates with
-  unverified or missing email source provenance must fail closed and require verified source
-  evidence.
+  must never bypass identity verification or trigger `outreachEligible: true`. Identity verification
+  must require explicit, typed affirmative boolean evidence (`identityConfirmed === true` or
+  `approved === true`) rather than bare truthiness or untyped values (such as `"false"` or `false`),
+  and must never derive approval from unrestricted prose substrings in notes (such as
+  `"not explicitly approved"` or `"identity confirmed: no; name+city match failed"` matching
+  positive phrases). Candidates with unverified, missing, or negative provenance/identity must fail
+  closed with `outreachEligible: false` and require verified source evidence.
 - **Strict Physical Address Validation & Placeholder Rejection**: In candidate verification and
   ingestion pipelines, never accept bare non-empty strings as valid physical addresses. Address
   validators must explicitly reject placeholder values (`TBD`, `N/A`, `None`, `Pending`, `Unknown`,
-  `-`), PO Boxes (`PO Box`, `P.O. Box`, `Post Office Box`), and generic downtown strings without
-  street numbers/names. Candidates lacking a drivable physical street address must be routed to the
-  skipped pool with reasons reported to the user.
+  `-`), all PO Box variations (including whitespace between initials such as `P. O. Box 42`,
+  `P.O. Box`, `PO Box`, `Post Office Box`), and generic downtown-only locations (including bare
+  `Downtown` and variations with city/state/ZIP suffixes such as `Downtown Roanoke, VA 24011`
+  without physical street numbers/names). Candidates lacking a drivable physical street address must
+  be routed to the skipped pool with reasons reported to the user, and payload builders must fail
+  closed.
 - **No Silent Default Classification in Categorization Pipelines**: When classifying candidates into
   canonical categories (such as `venueType` under D-78), never silently assign a default category
   (e.g. `MidRangeCafeBar`) when keyword matching encounters ambiguous, competing, or zero matches
