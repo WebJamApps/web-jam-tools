@@ -105,9 +105,7 @@ export function parsePlanInput(content: string): ApprovedPlan {
     try {
       parsed = parseYaml(content);
     } catch (e) {
-      throw new Error(
-        `Failed to parse plan file as JSON or YAML: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      throw new Error(`Failed to parse plan file as JSON or YAML: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -117,11 +115,7 @@ export function parsePlanInput(content: string): ApprovedPlan {
 
   if (typeof parsed === "object" && parsed !== null) {
     const obj = parsed as Record<string, unknown>;
-    const rules = Array.isArray(obj.rules)
-      ? (obj.rules as PlanRule[])
-      : Array.isArray(obj.plan)
-      ? (obj.plan as PlanRule[])
-      : [];
+    const rules = Array.isArray(obj.rules) ? (obj.rules as PlanRule[]) : Array.isArray(obj.plan) ? (obj.plan as PlanRule[]) : [];
     return {
       design_doc: typeof obj.design_doc === "string" ? obj.design_doc : undefined,
       memory_dir: typeof obj.memory_dir === "string" ? obj.memory_dir : undefined,
@@ -129,9 +123,7 @@ export function parsePlanInput(content: string): ApprovedPlan {
     };
   }
 
-  throw new Error(
-    "Plan file must be a JSON/YAML object with a 'rules' array or an array of rules.",
-  );
+  throw new Error("Plan file must be a JSON/YAML object with a 'rules' array or an array of rules.");
 }
 
 /**
@@ -211,10 +203,7 @@ export function stripSlugsFromMemoryMd(content: string, removedSlugs: Set<string
     }
 
     // Single slug line
-    if (
-      trimmed && !trimmed.startsWith("#") && !trimmed.startsWith("-") && !trimmed.startsWith("*") &&
-      !trimmed.includes(" ")
-    ) {
+    if (trimmed && !trimmed.startsWith("#") && !trimmed.startsWith("-") && !trimmed.startsWith("*") && !trimmed.includes(" ")) {
       if (removedSlugs.has(trimmed)) {
         continue; // Strip single slug line
       }
@@ -288,10 +277,7 @@ ${endTag}
       // Verify immediately
       const newStartIndex = content.indexOf(startTag);
       const newEndIndex = content.indexOf(endTag);
-      const newlyCaptured = content.slice(newStartIndex + startTag.length, newEndIndex).replace(
-        /^\r?\n/,
-        "",
-      ).replace(/\r?\n$/, "");
+      const newlyCaptured = content.slice(newStartIndex + startTag.length, newEndIndex).replace(/^\r?\n/, "").replace(/\r?\n$/, "");
       const newlyCapturedBytes = new TextEncoder().encode(newlyCaptured);
 
       if (newlyCapturedBytes.length !== sourceBytes.length || newlyCaptured !== sourceContent) {
@@ -322,9 +308,7 @@ export async function runConsumeMemoryRules(options: {
   try {
     rawPlan = await Deno.readTextFile(options.planPath);
   } catch (e) {
-    throw new Error(
-      `Unreadable plan file '${options.planPath}': ${e instanceof Error ? e.message : String(e)}`,
-    );
+    throw new Error(`Unreadable plan file '${options.planPath}': ${e instanceof Error ? e.message : String(e)}`);
   }
 
   const plan = parsePlanInput(rawPlan);
@@ -347,9 +331,7 @@ export async function runConsumeMemoryRules(options: {
       );
     }
     if (!validDispositions.has(rule.disposition)) {
-      throw new Error(
-        `Invalid disposition '${rule.disposition}' for rule '${rule.slug}'. Must be one of: consume, delete, split-or-stay, stay.`,
-      );
+      throw new Error(`Invalid disposition '${rule.disposition}' for rule '${rule.slug}'. Must be one of: consume, delete, split-or-stay, stay.`);
     }
   }
 
@@ -360,11 +342,7 @@ export async function runConsumeMemoryRules(options: {
       throw new Error(`Memory directory path '${memoryDir}' is not a directory.`);
     }
   } catch (e) {
-    throw new Error(
-      `Memory directory '${memoryDir}' is inaccessible or does not exist: ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
+    throw new Error(`Memory directory '${memoryDir}' is inaccessible or does not exist: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   // Collect rules by disposition
@@ -378,9 +356,7 @@ export async function runConsumeMemoryRules(options: {
     try {
       await Deno.stat(fileSlugPath);
     } catch {
-      throw new Error(
-        `Slug '${rule.slug}' in approved plan is absent from memory directory at '${fileSlugPath}'.`,
-      );
+      throw new Error(`Slug '${rule.slug}' in approved plan is absent from memory directory at '${fileSlugPath}'.`);
     }
   }
 
@@ -388,25 +364,17 @@ export async function runConsumeMemoryRules(options: {
   let designDocContent = "";
   if (consumeRules.length > 0) {
     if (!designDocPath) {
-      throw new Error(
-        "Plan contains 'consume' rules but no design document path was provided via plan or --design-doc.",
-      );
+      throw new Error("Plan contains 'consume' rules but no design document path was provided via plan or --design-doc.");
     }
     try {
       designDocContent = await Deno.readTextFile(designDocPath);
     } catch (e) {
-      throw new Error(
-        `Design document '${designDocPath}' is unreadable or missing: ${
-          e instanceof Error ? e.message : String(e)
-        }`,
-      );
+      throw new Error(`Design document '${designDocPath}' is unreadable or missing: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
   // Read source content for consume rules
-  const consumedRulesWithContent: Array<
-    { slug: string; target_skill?: string; sourceContent: string }
-  > = [];
+  const consumedRulesWithContent: Array<{ slug: string; target_skill?: string; sourceContent: string }> = [];
   for (const rule of consumeRules) {
     const filePath = join(memoryDir, `${rule.slug}.md`);
     const sourceContent = await Deno.readTextFile(filePath);
@@ -420,10 +388,7 @@ export async function runConsumeMemoryRules(options: {
   // 4. Capture & byte-verify rules
   let updatedDesignDocContent = designDocContent;
   if (consumedRulesWithContent.length > 0) {
-    const captureResult = captureAndVerifyRulesInDesignDoc(
-      designDocContent,
-      consumedRulesWithContent,
-    );
+    const captureResult = captureAndVerifyRulesInDesignDoc(designDocContent, consumedRulesWithContent);
     updatedDesignDocContent = captureResult.updatedContent;
   }
 
@@ -433,11 +398,7 @@ export async function runConsumeMemoryRules(options: {
   // 6. Build summary
   const summaryLines: string[] = [];
   summaryLines.push("=== MEMORY CONSUME/DELETE SURGERY ===");
-  summaryLines.push(
-    `Mode: ${
-      dryRun ? "DRY RUN (default - no files modified)" : "EXECUTE (deleting and writing changes)"
-    }`,
-  );
+  summaryLines.push(`Mode: ${dryRun ? "DRY RUN (default - no files modified)" : "EXECUTE (deleting and writing changes)"}`);
   summaryLines.push(`Memory directory: ${memoryDir}`);
   if (designDocPath) summaryLines.push(`Design document: ${designDocPath}`);
   summaryLines.push("");
@@ -445,11 +406,7 @@ export async function runConsumeMemoryRules(options: {
   summaryLines.push("Plan breakdown:");
   summaryLines.push(`  - Consumed: ${consumeRules.length}`);
   summaryLines.push(`  - Deleted: ${deleteRules.length}`);
-  summaryLines.push(
-    `  - Untouched (stay/split-or-stay): ${
-      plan.rules.length - consumeRules.length - deleteRules.length
-    }`,
-  );
+  summaryLines.push(`  - Untouched (stay/split-or-stay): ${plan.rules.length - consumeRules.length - deleteRules.length}`);
   summaryLines.push("");
 
   if (consumeRules.length > 0) {
@@ -494,9 +451,7 @@ export async function runConsumeMemoryRules(options: {
       await Deno.writeTextFile(memoryMdPath, updatedMemoryMd);
       summaryLines.push(`Updated ${memoryMdPath} (stripped ${removedSlugs.size} slugs).`);
     } catch {
-      summaryLines.push(
-        `Note: MEMORY.md at '${memoryMdPath}' was not found or unreadable; skipped index update.`,
-      );
+      summaryLines.push(`Note: MEMORY.md at '${memoryMdPath}' was not found or unreadable; skipped index update.`);
     }
 
     // Move files to trash
