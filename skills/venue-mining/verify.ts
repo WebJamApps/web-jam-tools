@@ -65,9 +65,10 @@ export function checkSizeFit(candidate: MinedVenueCandidate): { fit: boolean; re
 
 /**
  * Determines outreach eligibility based on email source and inbox type per SKILL.md.
- * - Probed domain: evaluated first. True only if affirmative venue identity evidence exists
- *   (e.g. candidate.identityConfirmed, explicit approval, or notes confirming identity);
- *   otherwise false (requires verified venue identity). Domains containing "website" cannot bypass.
+ * - Probed domain: evaluated first. True only if explicit affirmative venue identity
+ *   or approval evidence exists (candidate.identityConfirmed === true or candidate.approved === true);
+ *   never derived from unrestricted prose substrings. Otherwise false (requires verified venue identity).
+ *   Domains containing "website" cannot bypass.
  * - Published link (Google Maps, Google Places, publication, venue website): viable email -> true.
  * - Unknown provenance: false (requires verified source evidence rather than email presence alone).
  * - Wrong-purpose inbox (catering@, private-parties@, weddings@) or no email -> false.
@@ -102,16 +103,12 @@ export function determineOutreachEligibility(
   }
 
   // 1. Probed domain provenance must be evaluated BEFORE generic "website" substring matching.
-  // Probed domains require affirmative venue identity evidence or explicit approval before enabling outreach.
+  // Probed domains require explicit affirmative venue identity evidence (identityConfirmed === true)
+  // or explicit approval (approved === true) before enabling outreach per D-49.
+  // Never derive approval from unrestricted prose substrings or truthiness of untyped/falsy values.
   if (emailSource.includes("probed")) {
-    const notes = (candidate.notes || "").toLowerCase();
-    const isIdentified = Boolean(candidate.identityConfirmed) ||
-      Boolean(candidate.approved) ||
-      notes.includes("identity-confirmed") ||
-      notes.includes("identity confirmed") ||
-      notes.includes("name+city match") ||
-      notes.includes("explicit-approval") ||
-      notes.includes("explicitly approved");
+    const isIdentified = candidate.identityConfirmed === true ||
+      candidate.approved === true;
     return {
       outreachEligible: isIdentified,
       reason: isIdentified
@@ -180,7 +177,7 @@ export function verifyAndEnrichVenue(
       inferenceResult: inference,
       outreachEligible: eligibility.outreachEligible,
       skippedReason: rawAddress
-        ? `Unusable street address ("${rawAddress}" is a placeholder or PO Box; physical address required)`
+        ? `Unusable street address ("${rawAddress}" is a placeholder or PO Box, or generic downtown location; physical address required)`
         : "No usable street address found after exhausting sources",
     };
   }

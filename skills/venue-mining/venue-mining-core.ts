@@ -37,6 +37,8 @@ export interface MinedVenueCandidate {
   venueType?: CanonicalVenueType | string | null;
   outreachEligible?: boolean;
   status?: string;
+  identityConfirmed?: boolean;
+  approved?: boolean;
   [key: string]: unknown;
 }
 
@@ -70,14 +72,14 @@ export function isUsableStreetAddress(address: unknown): boolean {
     return false;
   }
 
-  // Reject PO Box / Post Office Box
-  const poBoxPattern = /\b(?:P\.?O\.?\s*Box|Post\s*Office\s*Box)\b/i;
+  // Reject PO Box / Post Office Box (including variations with spaces like "P. O. Box 42")
+  const poBoxPattern = /\b(?:P\.?\s*O\.?\s*(?:Box|B\b)|Post\s*Office\s*Box)\b/i;
   if (poBoxPattern.test(trimmed)) {
     return false;
   }
 
-  // Reject generic downtown strings without street number/name
-  const downtownPattern = /^downtown\s+[a-z\s,.-]+$/i;
+  // Reject generic downtown strings without street number/name (including bare "Downtown" and city/state/ZIP suffixes)
+  const downtownPattern = /^downtown(?:\s*[,.-]?\s*[\w\s,().-]*)$/i;
   if (downtownPattern.test(trimmed)) {
     return false;
   }
@@ -293,13 +295,23 @@ export function buildCreateVenuePayload(
 
   const venueType: CanonicalVenueType = inferred;
 
+  let outreachEligible = Boolean(candidate.outreachEligible);
+  const emailSource = (candidate.emailSource || "").trim().toLowerCase();
+  if (
+    emailSource.includes("probed") &&
+    candidate.identityConfirmed !== true &&
+    candidate.approved !== true
+  ) {
+    outreachEligible = false;
+  }
+
   const payload: CreateVenuePayload = {
     name,
     city,
     usState,
     address,
     venueType,
-    outreachEligible: Boolean(candidate.outreachEligible),
+    outreachEligible,
     notes: (candidate.notes || "").trim(),
   };
 

@@ -60,15 +60,23 @@ Deno.test("isUsableStreetAddress validates physical addresses and rejects placeh
   assertEquals(isUsableStreetAddress("pending"), false);
   assertEquals(isUsableStreetAddress("-"), false);
 
-  // PO Boxes
+  // PO Boxes (including whitespace variations)
   assertEquals(isUsableStreetAddress("PO Box 42"), false);
   assertEquals(isUsableStreetAddress("P.O. Box 123"), false);
+  assertEquals(isUsableStreetAddress("P. O. Box 42"), false);
+  assertEquals(isUsableStreetAddress("P. O. Box 42, Roanoke, VA 24011"), false);
+  assertEquals(isUsableStreetAddress("P O Box 10"), false);
   assertEquals(isUsableStreetAddress("P.O. Box 123, Roanoke, VA"), false);
   assertEquals(isUsableStreetAddress("Post Office Box 789"), false);
 
-  // Downtown without street address
+  // Downtown without street address (bare and with city/state/ZIP suffixes)
+  assertEquals(isUsableStreetAddress("Downtown"), false);
+  assertEquals(isUsableStreetAddress("downtown"), false);
   assertEquals(isUsableStreetAddress("Downtown Roanoke"), false);
   assertEquals(isUsableStreetAddress("downtown Salem, VA"), false);
+  assertEquals(isUsableStreetAddress("Downtown Roanoke, VA 24011"), false);
+  assertEquals(isUsableStreetAddress("Downtown, Roanoke, VA 24011"), false);
+  assertEquals(isUsableStreetAddress("downtown Salem, VA 24153"), false);
 });
 
 Deno.test("Step 4 heuristic rules: infers PubFestivalBrewery from name keywords", () => {
@@ -391,7 +399,7 @@ Deno.test("Step 6 buildCreateVenuePayload: throws when required fields are missi
     "valid physical street address is required",
   );
 
-  // PO Box rejected
+  // PO Box rejected (including whitespace variations)
   assertThrows(
     () =>
       buildCreateVenuePayload({
@@ -410,6 +418,52 @@ Deno.test("Step 6 buildCreateVenuePayload: throws when required fields are missi
         city: "Roanoke",
         usState: "VA",
         address: "P.O. Box 100",
+      }),
+    Error,
+    "valid physical street address is required",
+  );
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({
+        name: "The Pub",
+        city: "Roanoke",
+        usState: "VA",
+        address: "P. O. Box 42",
+      }),
+    Error,
+    "valid physical street address is required",
+  );
+
+  // Downtown without street address rejected (bare and with city/state/ZIP)
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({
+        name: "The Pub",
+        city: "Roanoke",
+        usState: "VA",
+        address: "Downtown",
+      }),
+    Error,
+    "valid physical street address is required",
+  );
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({
+        name: "The Pub",
+        city: "Roanoke",
+        usState: "VA",
+        address: "Downtown Roanoke, VA 24011",
+      }),
+    Error,
+    "valid physical street address is required",
+  );
+  assertThrows(
+    () =>
+      buildCreateVenuePayload({
+        name: "The Pub",
+        city: "Roanoke",
+        usState: "VA",
+        address: "Downtown, Roanoke, VA 24011",
       }),
     Error,
     "valid physical street address is required",
@@ -478,15 +532,91 @@ Deno.test("Candidate verification pipeline: determineOutreachEligibility rules",
     false,
   );
 
-  // Probed domain with confirmed identity in notes -> true
+  // Probed domain with explicit affirmative identityConfirmed: true -> true
   assertEquals(
     determineOutreachEligibility({
       name: "Roanoke Taproom",
       email: "info@roanoketaproom.beer",
       emailSource: "Probed domain (roanoketaproom.beer)",
-      notes: "identity-confirmed via address match",
+      identityConfirmed: true,
     }).outreachEligible,
     true,
+  );
+
+  // Probed domain with explicit affirmative approved: true -> true
+  assertEquals(
+    determineOutreachEligibility({
+      name: "Roanoke Taproom",
+      email: "info@roanoketaproom.beer",
+      emailSource: "Probed domain (roanoketaproom.beer)",
+      approved: true,
+    }).outreachEligible,
+    true,
+  );
+
+  // Negative evidence regressions: untyped "false", boolean false, and prose substrings MUST NOT enable outreach (D-49)
+  assertEquals(
+    determineOutreachEligibility({
+      name: "Roanoke Taproom",
+      email: "info@roanoketaproom.beer",
+      emailSource: "Probed domain (roanoketaproom.beer)",
+      identityConfirmed: "false" as unknown as boolean,
+    }).outreachEligible,
+    false,
+  );
+  assertEquals(
+    determineOutreachEligibility({
+      name: "Roanoke Taproom",
+      email: "info@roanoketaproom.beer",
+      emailSource: "Probed domain (roanoketaproom.beer)",
+      approved: "false" as unknown as boolean,
+    }).outreachEligible,
+    false,
+  );
+  assertEquals(
+    determineOutreachEligibility({
+      name: "Roanoke Taproom",
+      email: "info@roanoketaproom.beer",
+      emailSource: "Probed domain (roanoketaproom.beer)",
+      identityConfirmed: false,
+    }).outreachEligible,
+    false,
+  );
+  assertEquals(
+    determineOutreachEligibility({
+      name: "Roanoke Taproom",
+      email: "info@roanoketaproom.beer",
+      emailSource: "Probed domain (roanoketaproom.beer)",
+      approved: false,
+    }).outreachEligible,
+    false,
+  );
+  assertEquals(
+    determineOutreachEligibility({
+      name: "Roanoke Taproom",
+      email: "info@roanoketaproom.beer",
+      emailSource: "Probed domain (roanoketaproom.beer)",
+      notes: "not explicitly approved",
+    }).outreachEligible,
+    false,
+  );
+  assertEquals(
+    determineOutreachEligibility({
+      name: "Roanoke Taproom",
+      email: "info@roanoketaproom.beer",
+      emailSource: "Probed domain (roanoketaproom.beer)",
+      notes: "identity confirmed: no; name+city match failed",
+    }).outreachEligible,
+    false,
+  );
+  assertEquals(
+    determineOutreachEligibility({
+      name: "Roanoke Taproom",
+      email: "info@roanoketaproom.beer",
+      emailSource: "Probed domain (roanoketaproom.beer)",
+      notes: "identity confirmed via address match", // prose notes alone without identityConfirmed: true do not enable outreach
+    }).outreachEligible,
+    false,
   );
 
   // Probed domain containing "website" without identity evidence MUST NOT bypass gate
@@ -498,12 +628,12 @@ Deno.test("Candidate verification pipeline: determineOutreachEligibility rules",
   assertEquals(probedWithWebsite.outreachEligible, false);
   assertEquals(probedWithWebsite.reason, "Probed domain requires verified venue identity");
 
-  // Probed domain containing "website" with identity evidence -> true
+  // Probed domain containing "website" with affirmative identity evidence -> true
   const probedWebsiteConfirmed = determineOutreachEligibility({
     name: "Cafe Website",
     email: "booking@cafewebsite.com",
     emailSource: "Probed domain (cafewebsite.com)",
-    notes: "name+city match confirmed",
+    identityConfirmed: true,
   });
   assertEquals(probedWebsiteConfirmed.outreachEligible, true);
   assertEquals(probedWebsiteConfirmed.reason, "Probed domain with confirmed identity");
@@ -586,6 +716,64 @@ Deno.test("Candidate verification pipeline: verifyAndEnrichVenue separates ready
   assertEquals(poBoxResult.status, "skipped_missing_address");
   assertEquals(poBoxResult.candidate.status, "Missing Address");
   assertMatch(poBoxResult.skippedReason || "", /placeholder or PO Box/i);
+
+  // PO Box with whitespace between initials -> skipped_missing_address
+  const poBoxWhitespaceResult = verifyAndEnrichVenue({
+    name: "Twin Creeks Brewing",
+    city: "Vinton",
+    usState: "VA",
+    address: "P. O. Box 42",
+    email: "booking@twincreeksbrewing.com",
+    emailSource: "Venue website",
+  });
+  assertEquals(poBoxWhitespaceResult.status, "skipped_missing_address");
+  assertEquals(poBoxWhitespaceResult.candidate.status, "Missing Address");
+  assertMatch(poBoxWhitespaceResult.skippedReason || "", /placeholder or PO Box/i);
+
+  // Bare "Downtown" address candidate -> skipped_missing_address
+  const bareDowntownResult = verifyAndEnrichVenue({
+    name: "Twin Creeks Brewing",
+    city: "Vinton",
+    usState: "VA",
+    address: "Downtown",
+    email: "booking@twincreeksbrewing.com",
+    emailSource: "Venue website",
+  });
+  assertEquals(bareDowntownResult.status, "skipped_missing_address");
+  assertEquals(bareDowntownResult.candidate.status, "Missing Address");
+  assertMatch(bareDowntownResult.skippedReason || "", /generic downtown/i);
+
+  // Downtown with city/state/ZIP -> skipped_missing_address
+  const downtownZipResult = verifyAndEnrichVenue({
+    name: "Twin Creeks Brewing",
+    city: "Roanoke",
+    usState: "VA",
+    address: "Downtown Roanoke, VA 24011",
+    email: "booking@twincreeksbrewing.com",
+    emailSource: "Venue website",
+  });
+  assertEquals(downtownZipResult.status, "skipped_missing_address");
+  assertEquals(downtownZipResult.candidate.status, "Missing Address");
+  assertMatch(downtownZipResult.skippedReason || "", /generic downtown/i);
+
+  // Probed domain with negative identity evidence: becomes ready with address, but outreachEligible remains false
+  const probedNegativeResult = verifyAndEnrichVenue({
+    name: "Probed Cafe",
+    city: "Roanoke",
+    usState: "VA",
+    address: "123 Main St",
+    email: "info@probedcafe.com",
+    emailSource: "Probed domain (probedcafe.com)",
+    identityConfirmed: "false" as unknown as boolean,
+    notes: "not explicitly approved; identity confirmed: no; name+city match failed",
+  });
+  assertEquals(probedNegativeResult.status, "ready");
+  assertEquals(probedNegativeResult.outreachEligible, false);
+  assertEquals(probedNegativeResult.candidate.outreachEligible, false);
+
+  // Passing that enriched candidate through buildCreateVenuePayload retains outreachEligible: false
+  const probedNegativePayload = buildCreateVenuePayload(probedNegativeResult.candidate);
+  assertEquals(probedNegativePayload.outreachEligible, false);
 
   // Unfit size candidate -> unfit_size
   const unfitResult = verifyAndEnrichVenue({
