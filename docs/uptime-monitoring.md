@@ -19,8 +19,13 @@ Uptime monitoring for WebJam LLC production websites is managed via Deno Deploy 
    - **Daily 8:00 AM Heartbeat (`0 12 * * *`)**: Evaluates all 5 targets every morning at 8:00 AM EDT (12:00 UTC) and sends a positive status confirmation email (`[Uptime Monitor] Daily Heartbeat: All 5 Production Services Healthy`) to `joshua.v.sherman@gmail.com` and `chemmariasherman@gmail.com` confirming the monitor is active and all services are up.
 
 2. **Alert Recipients & Credentials**:
-   - Environment variables: `GMAIL_USER` and `GMAIL_APP_PASSWORD`.
+   - Environment variables: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and `UPTIME_TEST_KEY`.
    - Alert recipients: `joshua.v.sherman@gmail.com`, `chemmariasherman@gmail.com`.
+
+3. **Test Endpoints & Secret Key Protection**:
+   - `/test-check` and `/test-heartbeat` test endpoints allow manual triggering of check and heartbeat routines.
+   - Both test endpoints are closed to the public and require the `x-test-key` HTTP header exactly matching the secret key configured in the `UPTIME_TEST_KEY` setting.
+   - Requests without `x-test-key`, with an incorrect key, or when `UPTIME_TEST_KEY` is unset or empty answer `404 Not Found` and perform no action.
 
 ## Commands & Local Usage
 
@@ -40,7 +45,7 @@ deno task monitor:cron
      ```sh
      deno deploy . --config deno.uptime.json --prod --token "$DENO_DEPLOY_TOKEN" --non-interactive --json
      ```
-   - **One-time Secret Setup (Dashboard)**: Under Deno Deploy Project Settings -> Environment Variables for `web-jam-uptime`, add `GMAIL_USER` and `GMAIL_APP_PASSWORD`.
+   - **One-time Secret Setup (Dashboard)**: Under Deno Deploy Project Settings -> Environment Variables for `web-jam-uptime`, add `GMAIL_USER`, `GMAIL_APP_PASSWORD`, and `UPTIME_TEST_KEY`.
 
 2. **Verifying Live Operation**:
    - Check the **Cron** tab in the Deno Deploy dashboard (`console.deno.com` / `dash.deno.com`) to view live executions and 30-minute / daily 8:00 AM schedule status.

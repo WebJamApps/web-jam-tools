@@ -51,24 +51,36 @@ export async function handleHttpReq(
   runCronCheckFn = runCronCheck,
 ): Promise<Response> {
   const url = new URL(req.url);
-  if (url.pathname === "/test-heartbeat") {
-    try {
-      await runDailyHeartbeatFn();
-      return new Response("Heartbeat email dispatched successfully!", { status: 200 });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return new Response(`Heartbeat email failed: ${msg}`, { status: 500 });
+
+  if (url.pathname === "/test-heartbeat" || url.pathname === "/test-check") {
+    const testKeySetting = Deno.env.get("UPTIME_TEST_KEY");
+    const reqKey = req.headers.get("x-test-key");
+
+    if (!testKeySetting || !reqKey || reqKey !== testKeySetting) {
+      return new Response("Not Found", { status: 404 });
+    }
+
+    if (url.pathname === "/test-heartbeat") {
+      try {
+        await runDailyHeartbeatFn();
+        return new Response("Heartbeat email dispatched successfully!", { status: 200 });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return new Response(`Heartbeat email failed: ${msg}`, { status: 500 });
+      }
+    }
+
+    if (url.pathname === "/test-check") {
+      try {
+        await runCronCheckFn();
+        return new Response("Uptime check completed successfully!", { status: 200 });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return new Response(`Uptime check failed: ${msg}`, { status: 500 });
+      }
     }
   }
-  if (url.pathname === "/test-check") {
-    try {
-      await runCronCheckFn();
-      return new Response("Uptime check completed successfully!", { status: 200 });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return new Response(`Uptime check failed: ${msg}`, { status: 500 });
-    }
-  }
+
   return new Response("WebJam Uptime Monitor active 24/7");
 }
 
