@@ -3,7 +3,11 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
-import { capturedRuleEndMarker, isValidSlug } from "../../scripts/consume_memory_rules.ts";
+import {
+  capturedRuleEndMarker,
+  isValidSlug,
+  parseCapturedRuleMarker,
+} from "../../scripts/consume_memory_rules.ts";
 import { expandHome } from "./gate1.ts";
 import { loadGate1Record, type PremiseRow } from "./gate1_record.ts";
 
@@ -1176,14 +1180,16 @@ export function presentingDay(now: Date): string {
 /**
  * Finds captured memory rule blocks (web-jam-tools#1317). Returns the document lines with every
  * line of a well-formed block blanked (line numbers unchanged) plus one violation per malformed
- * marker. Malformed markers exempt nothing (fail closed).
+ * marker. Malformed markers exempt nothing (fail closed): a block holding a malformed marker is
+ * not blanked. The first whole-line END marker with the block's slug closes it, as in
+ * captureAndVerifyRulesInDesignDoc; markers inside a fenced code block are not markers.
  */
 function blankCapturedRuleBlocks(
   rawLines: string[],
 ): { lines: string[]; violations: LintViolation[] } {
   const lines = [...rawLines];
   const violations: LintViolation[] = [];
-  const markerRegex = /^<!-- (START|END)_CAPTURED_RULE:(.*) -->\s*$/;
+  const isFence = (line: string) => /^\s*```/.test(line) || /^\s*~~~/.test(line);
   const malformed = (i: number, why: string) =>
     violations.push({
       rule: "captured-rule-block-malformed",
@@ -1194,44 +1200,47 @@ function blankCapturedRuleBlocks(
   let inFence = false;
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i];
-    if (/^\s*```/.test(line) || /^\s*~~~/.test(line)) {
+    if (isFence(line)) {
       inFence = !inFence;
       continue;
     }
     if (inFence) continue;
-    const m = markerRegex.exec(line);
-    if (!m) continue;
-    const slug = m[2];
-    if (!isValidSlug(slug)) {
+    const marker = parseCapturedRuleMarker(line);
+    if (!marker) continue;
+    if (!isValidSlug(marker.slug)) {
       malformed(i, "invalid slug");
       continue;
     }
-    if (m[1] === "END") {
+    if (marker.kind === "END") {
       malformed(i, "END marker with no open block");
       continue;
     }
-    const endMarker = capturedRuleEndMarker(slug);
-    let end = -1;
-    for (let j = i + 1; j < rawLines.length; j++) {
-      if (rawLines[j].trimEnd() === endMarker) {
-        end = j;
-        break;
-      }
-    }
+    const endMarker = capturedRuleEndMarker(marker.slug);
+    const end = rawLines.findIndex((l, j) => j > i && l.trimEnd() === endMarker);
     if (end === -1) {
       malformed(i, "START marker with no later END marker of the same slug");
       continue;
     }
-    let nested = false;
+    // Inspect every marker inside the block; any malformed one leaves the whole block linted.
+    let innerFence = false;
+    let clean = true;
     for (let j = i + 1; j < end; j++) {
-      const n = markerRegex.exec(rawLines[j]);
-      if (n && n[1] === "START" && isValidSlug(n[2])) {
+      if (isFence(rawLines[j])) {
+        innerFence = !innerFence;
+        continue;
+      }
+      if (innerFence) continue;
+      const inner = parseCapturedRuleMarker(rawLines[j]);
+      if (!inner) continue;
+      if (!isValidSlug(inner.slug)) {
+        malformed(j, "invalid slug");
+        clean = false;
+      } else if (inner.kind === "START") {
         malformed(j, "START marker while another block is open");
-        nested = true;
-        break;
+        clean = false;
       }
     }
-    if (!nested) {
+    if (clean) {
       for (let j = i; j <= end; j++) lines[j] = "";
     }
     i = end;

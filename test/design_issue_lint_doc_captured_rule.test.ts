@@ -6,7 +6,12 @@
 
 import { assertEquals } from "@std/assert";
 import { lintDesignDoc } from "../src/design-issue/lint_doc.ts";
-import { captureAndVerifyRulesInDesignDoc } from "../scripts/consume_memory_rules.ts";
+import {
+  captureAndVerifyRulesInDesignDoc,
+  capturedRuleEndMarker,
+  capturedRuleStartMarker,
+  parseCapturedRuleMarker,
+} from "../scripts/consume_memory_rules.ts";
 
 const START = "<!-- START_CAPTURED_RULE:my-rule -->";
 const END = "<!-- END_CAPTURED_RULE:my-rule -->";
@@ -90,6 +95,55 @@ Deno.test("START while another block is open is malformed and exempts nothing", 
   const content = doc(`${START}\n<!-- START_CAPTURED_RULE:inner -->\n${CITE}\n${END}`);
   assertEquals(count(content, MALFORMED), 1);
   assertEquals(count(content, CITATION_RULE), 1);
+});
+
+Deno.test("invalid-slug START inside an open block is reported and the block stays linted", () => {
+  const content = doc(`${START}\n<!-- START_CAPTURED_RULE:../bad -->\n${CITE}\n${END}`);
+  assertEquals(count(content, MALFORMED), 1);
+  assertEquals(count(content, CITATION_RULE), 1);
+});
+
+Deno.test("invalid-slug END inside an open block is reported and the block stays linted", () => {
+  const content = doc(`${START}\n${CITE}\n<!-- END_CAPTURED_RULE:../bad -->\n${END}`);
+  assertEquals(count(content, MALFORMED), 1);
+  assertEquals(count(content, CITATION_RULE), 1);
+});
+
+Deno.test("two nested START markers report one violation each", () => {
+  const content = doc(
+    `${START}\n<!-- START_CAPTURED_RULE:a -->\n<!-- START_CAPTURED_RULE:b -->\n${CITE}\n${END}`,
+  );
+  assertEquals(count(content, MALFORMED), 2);
+  assertEquals(count(content, CITATION_RULE), 1);
+});
+
+Deno.test("a fenced START example inside a block is text, not a nested marker", () => {
+  const content = doc(
+    `${START}\n\`\`\`\n<!-- START_CAPTURED_RULE:example -->\n\`\`\`\n${CITE}\n${END}`,
+  );
+  assertEquals(count(content, MALFORMED), 0);
+  assertEquals(count(content, CITATION_RULE), 0);
+});
+
+Deno.test("a fenced invalid-slug marker inside a block is text, not a marker", () => {
+  const content = doc(
+    `${START}\n~~~\n<!-- END_CAPTURED_RULE:../bad -->\n~~~\n${CITE}\n${END}`,
+  );
+  assertEquals(count(content, MALFORMED), 0);
+  assertEquals(count(content, CITATION_RULE), 0);
+});
+
+Deno.test("parseCapturedRuleMarker recognises exactly what the writer's builders produce", () => {
+  assertEquals(parseCapturedRuleMarker(capturedRuleStartMarker("my-rule")), {
+    kind: "START",
+    slug: "my-rule",
+  });
+  assertEquals(parseCapturedRuleMarker(`${capturedRuleEndMarker("my-rule")}  `), {
+    kind: "END",
+    slug: "my-rule",
+  });
+  assertEquals(parseCapturedRuleMarker(`x ${capturedRuleStartMarker("my-rule")}`), null);
+  assertEquals(parseCapturedRuleMarker("plain text"), null);
 });
 
 Deno.test("whole-line marker with an invalid slug is malformed", () => {
