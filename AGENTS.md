@@ -624,8 +624,8 @@ target list, deployment steps, and verification procedures.
   un-overridden bundled skills.
 - **Limit-Enforced Session Load Part Coverage**: When reporting multi-tool session load footprints
   across surfaces (Claude Code, agy, Codex), report only parts that have an explicit limit configured
-  per the design document. Unbounded extensions without limits (such as MCP connectors or
-  platform-bundled skills) must not be inspected or reported in the tab 1 session-load report.
+  per the design document. Unbounded extensions without limits (such as MCP connectors or agy's
+  Google-bundled skills) must not be inspected or reported in the tab 1 session-load report.
 - **Registration Isolation Assertion Discipline**: In tests verifying that hooks or startup scripts
   are NOT registered in global settings or unauthorized surfaces, never wrap assertion checks in
   blanket `try/catch` blocks that swallow assertion errors. Catch only `Deno.errors.NotFound`, run
