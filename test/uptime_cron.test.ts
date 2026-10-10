@@ -61,16 +61,7 @@ Deno.test("runDailyHeartbeatCheck dispatches daily status email", async () => {
 });
 
 function makeRequest(url: string, headers?: Record<string, string>): Request {
-  const req = new Request(url);
-  if (headers) {
-    const map = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
-    Object.defineProperty(req, "headers", {
-      value: {
-        get: (name: string) => map.get(name.toLowerCase()) ?? null,
-      },
-    });
-  }
-  return req;
+  return new Request(url, headers ? { headers } : undefined);
 }
 
 Deno.test("handleHttpReq responds to /test-heartbeat endpoint when authenticated", async () => {
@@ -211,10 +202,24 @@ Deno.test("handleHttpReq test endpoints authentication closed list", async () =>
       assertEquals(ran, false);
     }
 
-    // Case 5: x-test-key: s3cret-key with a trailing space: 404, nothing runs.
+    // Case 5 note: Per HTTP/Fetch spec, Request and Headers normalize header
+    // values by stripping leading and trailing whitespace ("s3cret-key " normalizes
+    // to "s3cret-key"), meaning a trailing space cannot reach the handler over HTTP.
+    // Document this normalization on real Request and assert separately on an
+    // unnormalized stub that trailing space fails exact matching and yields 404.
     {
-      const req = makeRequest(`https://example.com${endpoint}`, { "x-test-key": "s3cret-key " });
-      const { status, ran } = await execute(req, "s3cret-key");
+      const realReq = makeRequest(`https://example.com${endpoint}`, {
+        "x-test-key": "s3cret-key ",
+      });
+      assertEquals(realReq.headers.get("x-test-key"), "s3cret-key");
+
+      const stubReq = new Request(`https://example.com${endpoint}`);
+      Object.defineProperty(stubReq, "headers", {
+        value: {
+          get: (name: string) => name.toLowerCase() === "x-test-key" ? "s3cret-key " : null,
+        },
+      });
+      const { status, ran } = await execute(stubReq, "s3cret-key");
       assertEquals(status, 404);
       assertEquals(ran, false);
     }

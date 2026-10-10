@@ -45,6 +45,21 @@ if (typeof Deno !== "undefined" && typeof Deno.cron === "function") {
   });
 }
 
+async function timingSafeEqual(a: string, b: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [digestA, digestB] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(a)),
+    crypto.subtle.digest("SHA-256", encoder.encode(b)),
+  ]);
+  const viewA = new Uint8Array(digestA);
+  const viewB = new Uint8Array(digestB);
+  let diff = 0;
+  for (let i = 0; i < viewA.length; i++) {
+    diff |= viewA[i] ^ viewB[i];
+  }
+  return diff === 0;
+}
+
 export async function handleHttpReq(
   req: Request,
   runDailyHeartbeatFn = runDailyHeartbeatCheck,
@@ -56,7 +71,7 @@ export async function handleHttpReq(
     const testKeySetting = Deno.env.get("UPTIME_TEST_KEY");
     const reqKey = req.headers.get("x-test-key");
 
-    if (!testKeySetting || !reqKey || reqKey !== testKeySetting) {
+    if (!testKeySetting || !reqKey || !(await timingSafeEqual(reqKey, testKeySetting))) {
       return new Response("Not Found", { status: 404 });
     }
 
