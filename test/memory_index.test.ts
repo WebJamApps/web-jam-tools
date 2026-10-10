@@ -354,3 +354,23 @@ Deno.test("real memory directory index generation budget check (memoryIndex over
     `Memory index size (${byteCount} bytes) exceeds budget of ${overMark} bytes`,
   );
 });
+
+Deno.test("memory-index --protect keeps a named done checkpoint out of the archive", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "memory-index-protect-" });
+  const checkpoint = (slug: string) =>
+    `---\nname: ${slug}\ndescription: d\nmetadata:\n  type: project\n  status: done\n---\n\nBody.\n`;
+  await Deno.writeTextFile(
+    join(dir, "session-checkpoint-kept.md"),
+    checkpoint("session-checkpoint-kept"),
+  );
+  await Deno.writeTextFile(
+    join(dir, "session-checkpoint-gone.md"),
+    checkpoint("session-checkpoint-gone"),
+  );
+
+  await runCli(["--dir", dir, "--protect", "session-checkpoint-kept"]);
+
+  await Deno.stat(join(dir, "session-checkpoint-kept.md"));
+  await Deno.stat(join(dir, "archive", "session-checkpoint-gone.md"));
+  assertEquals(await runCli(["--dir", dir, "--protect", "session-checkpoint-kept", "--check"]), 0);
+});

@@ -350,3 +350,37 @@ async function exists(path: string): Promise<boolean> {
     return false;
   }
 }
+
+Deno.test("a classified guard on a done checkpoint stays put when its mark cannot be written and an unrelated merge regenerates the index", async () => {
+  const checkpoint =
+    `---\nname: gate\ndescription: d\nmetadata:\n  type: project\n  status: done\n  guard: false\n---\n\nBody.\n`;
+  const { dir, home } = await sandbox({
+    "session-checkpoint-gate.md": checkpoint,
+    "keeper.md": memory("keeper", "Keeper."),
+    "dupe.md": memory("dupe", "Dupe."),
+  });
+  const gatePath = join(dir, "session-checkpoint-gate.md");
+  await Deno.chmod(gatePath, 0o444);
+  try {
+    const result = await run(dir, home, {
+      guards: [{ slug: "session-checkpoint-gate", kind: "approval-gate" }],
+      merges: [{ keep: "keeper", absorb: ["dupe"] }],
+    });
+    assert(result.rows.some((r) => r.status === "merged"));
+    assert(
+      result.rows.some((r) =>
+        r.slug === "session-checkpoint-gate" && r.status === "refused" &&
+        /not marked/.test(r.detail)
+      ),
+    );
+    assert(await exists(gatePath));
+    assert(!(await exists(join(dir, "archive", "session-checkpoint-gate.md"))));
+    assert(!result.rows.some((r) => r.status === "archived"));
+    assertStringIncludes(
+      await Deno.readTextFile(join(dir, "MEMORY.md")),
+      "session-checkpoint-gate",
+    );
+  } finally {
+    await Deno.chmod(gatePath, 0o644);
+  }
+});

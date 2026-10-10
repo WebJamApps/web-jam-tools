@@ -21,7 +21,8 @@ function expandHome(path: string): string {
 export async function runCli(args: string[]): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["check", "help"],
-    string: ["dir"],
+    string: ["dir", "protect"],
+    collect: ["protect"],
     default: {
       check: false,
       help: false,
@@ -29,14 +30,16 @@ export async function runCli(args: string[]): Promise<number> {
   });
 
   if (flags.help) {
-    console.log("Usage: deno task memory-index [--check] [--dir <path>]");
+    console.log("Usage: deno task memory-index [--check] [--dir <path>] [--protect <slug>]...");
     console.log("Generates MEMORY.md for the target memory directory.");
+    console.log("--protect <slug> keeps that memory out of the done-checkpoint archive.");
     return 0;
   }
 
   const defaultDir = "~/.claude/projects/-home-joshua/memory";
   const targetDir = expandHome(flags.dir || defaultDir);
 
+  const protectedSlugs = new Set<string>(flags.protect);
   const { entries, skipped } = await scanMemoryDirectory(targetDir);
 
   for (const skip of skipped) {
@@ -45,7 +48,7 @@ export async function runCli(args: string[]): Promise<number> {
 
   if (flags.check) {
     // In check mode: do not modify disk. Simulate filtering out done checkpoints.
-    const activeEntries = entries.filter((e) => !isArchivable(e));
+    const activeEntries = entries.filter((e) => !isArchivable(e, protectedSlugs));
     const expected = generateMemoryIndex(activeEntries);
     const expectedBytes = new TextEncoder().encode(expected).length;
 
@@ -74,7 +77,11 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   // Write mode
-  const { remaining, archivedCount } = await archiveDoneCheckpoints(targetDir, entries);
+  const { remaining, archivedCount } = await archiveDoneCheckpoints(
+    targetDir,
+    entries,
+    protectedSlugs,
+  );
   const newContent = generateMemoryIndex(remaining);
   const memoryMdPath = join(targetDir, "MEMORY.md");
   await Deno.writeTextFile(memoryMdPath, newContent);

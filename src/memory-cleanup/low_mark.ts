@@ -449,8 +449,13 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
 
   if (changed && !dryRun) {
     const before = await memoryFiles(dir);
-    await regenerateMemoryIndex(["--dir", dir]);
-    // The index run archives completed checkpoints itself (never a guard rule); name each one.
+    // Every classified guard is kept out of the index run's archive, marked on disk or not.
+    await regenerateMemoryIndex([
+      "--dir",
+      dir,
+      ...[...guards].flatMap((slug) => ["--protect", slug]),
+    ]);
+    // The index run archives other completed checkpoints itself; name each one.
     const after = new Set(await memoryFiles(dir));
     for (const file of before) {
       if (after.has(file)) continue;

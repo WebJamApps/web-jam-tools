@@ -114,20 +114,22 @@ export async function scanMemoryDirectory(dirPath: string): Promise<MemoryDirect
 }
 
 /** A completed checkpoint is archived by the index run unless it is a guard rule. */
-export function isArchivable(entry: MemoryEntry): boolean {
-  return entry.isCheckpoint && entry.status === "done" && !entry.guard;
+export function isArchivable(entry: MemoryEntry, protectedSlugs?: ReadonlySet<string>): boolean {
+  return entry.isCheckpoint && entry.status === "done" && !entry.guard &&
+    !protectedSlugs?.has(entry.slug);
 }
 
 export async function archiveDoneCheckpoints(
   dirPath: string,
   entries: MemoryEntry[],
+  protectedSlugs?: ReadonlySet<string>,
 ): Promise<{ remaining: MemoryEntry[]; archivedCount: number }> {
   const remaining: MemoryEntry[] = [];
   let archivedCount = 0;
   const archiveDir = join(dirPath, "archive");
 
   for (const entry of entries) {
-    if (isArchivable(entry)) {
+    if (isArchivable(entry, protectedSlugs)) {
       await Deno.mkdir(archiveDir, { recursive: true });
       const oldPath = join(dirPath, entry.filename);
       const newPath = join(archiveDir, entry.filename);
