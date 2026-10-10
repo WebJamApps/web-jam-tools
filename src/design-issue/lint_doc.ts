@@ -1231,7 +1231,7 @@ function blankCapturedRuleBlocks(
     // Inspect every marker inside the block; any malformed one leaves the whole block linted.
     let innerFence = false;
     let clean = true;
-    const nestedSlugs = new Set<string>();
+    const nestedOpen = new Map<string, number>();
     for (let j = i + 1; j < end; j++) {
       if (isFence(rawLines[j])) {
         innerFence = !innerFence;
@@ -1245,11 +1245,16 @@ function blankCapturedRuleBlocks(
         clean = false;
       } else if (inner.kind === "START") {
         malformed(j, "START marker while another block is open");
-        nestedSlugs.add(inner.slug);
+        nestedOpen.set(inner.slug, (nestedOpen.get(inner.slug) ?? 0) + 1);
         clean = false;
-      } else if (inner.kind === "END" && !nestedSlugs.has(inner.slug)) {
-        malformed(j, "END marker with no open block");
-        clean = false;
+      } else if (inner.kind === "END") {
+        const open = nestedOpen.get(inner.slug) ?? 0;
+        if (open > 0) {
+          nestedOpen.set(inner.slug, open - 1);
+        } else {
+          malformed(j, "END marker with no open block");
+          clean = false;
+        }
       }
     }
     if (clean) {

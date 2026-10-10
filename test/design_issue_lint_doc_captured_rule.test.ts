@@ -132,6 +132,15 @@ Deno.test("a properly closed inner pair inside a malformed outer block reports o
   assertEquals(count(content, CITATION_RULE), 1);
 });
 
+Deno.test("a duplicate END after a nested pair has closed is reported", () => {
+  const inner = "<!-- START_CAPTURED_RULE:inner -->";
+  const innerEnd = "<!-- END_CAPTURED_RULE:inner -->";
+  const content = doc(`${START}\n${inner}\n${innerEnd}\n${innerEnd}\n${CITE}\n${END}`);
+  // the inner START, and the second inner END that has no open block
+  assertEquals(count(content, MALFORMED), 2);
+  assertEquals(count(content, CITATION_RULE), 1);
+});
+
 Deno.test("two nested START markers report one violation each", () => {
   const content = doc(
     `${START}\n<!-- START_CAPTURED_RULE:a -->\n<!-- START_CAPTURED_RULE:b -->\n${CITE}\n${END}`,
