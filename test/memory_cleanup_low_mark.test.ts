@@ -274,8 +274,9 @@ Deno.test("index regeneration: a guarded done checkpoint stays, an unguarded one
   assert(!result.rows.some((r) => r.slug === "session-checkpoint-guard"));
 });
 
-Deno.test("part sizes: every surface's skill descriptions and the bundled skills are listed, below and above their limits", async () => {
+Deno.test("part sizes: each installed skill description is listed with its own size, below and above its limit", async () => {
   const limits = await loadLimits();
+  const over = limits.skillDescription.overMark + 5;
   const { dir, home } = await sandbox({ "a.md": memory("a", "text") });
   const skill = (root: string, name: string, length: number) =>
     Deno.mkdir(join(root, name), { recursive: true }).then(() =>
@@ -287,16 +288,58 @@ Deno.test("part sizes: every surface's skill descriptions and the bundled skills
   const claude = join(home, ".claude/skills");
   const agy = join(home, ".gemini/config/plugins/webjam-tasks/skills");
   await skill(claude, "short", 20);
-  await skill(agy, "long", limits.skillDescription.overMark + 5);
+  await skill(claude, "medium", 150);
+  await skill(agy, "long", over);
 
   const text = (await run(dir, home, {})).partLines.join("\n");
   const line = (name: string) => text.split("\n").find((l) => l.includes(name)) ?? "";
-  assertStringIncludes(line("Claude Code skills"), "20");
-  assertStringIncludes(line("Claude Code skills"), "ok");
-  assertStringIncludes(line("agy skills"), "OVER");
-  assertStringIncludes(line("Codex skills"), "ok");
+  const short = line("Claude Code skills: short");
+  const medium = line("Claude Code skills: medium");
+  assertStringIncludes(short, " 20 ");
+  assertStringIncludes(short, "ok");
+  assertStringIncludes(medium, " 150 ");
+  assertStringIncludes(medium, "ok");
+  assertStringIncludes(line("agy skills: long"), String(over));
+  assertStringIncludes(line("agy skills: long"), "OVER");
+  assertStringIncludes(line("Codex skills"), "no skills installed");
   assertStringIncludes(line("Claude Code bundled"), "OVER");
   assertStringIncludes(line("Claude Code bundled"), String(limits.bundledSkills.totalCount));
+});
+
+Deno.test("a guard whose marking fails stays protected from merge, move and approved removal", async () => {
+  const scalar = `---\nname: odd\ndescription: d\nmetadata: invalid-scalar\n---\n\nOdd.\n`;
+  const { dir, home } = await sandbox({
+    "odd.md": scalar,
+    "keeper.md": memory("keeper", "Keeper."),
+  });
+  await Deno.writeTextFile(join(dir, "skills", "demo-skill", "SKILL.md"), "Odd.");
+  const result = await run(dir, home, {
+    guards: [{ slug: "odd", kind: "approval-gate" }],
+    merges: [{ keep: "keeper", absorb: ["odd"] }],
+    moves: [{ slug: "odd", target_skill: "demo-skill" }],
+    removals: [{ slug: "odd", reason: "already-said", evidence: "x" }],
+  }, { approved: ["odd"] });
+
+  assert(result.rows.every((r) => r.status === "refused"));
+  assertEquals(result.rows.filter((r) => r.slug === "odd").length, 4);
+  assertEquals(await Deno.readTextFile(join(dir, "odd.md")), scalar);
+  assert(!(await exists(join(dir, "archive", "odd.md"))));
+});
+
+Deno.test("unterminated frontmatter is unreadable: never marked, merged, moved or removed", async () => {
+  const open = `---\nname: open\nmetadata:\n  guard: true\n\nNo closing delimiter.\n`;
+  const { dir, home } = await sandbox({ "open.md": open, "keeper.md": memory("keeper", "K.") });
+  const plain = await run(dir, home, {
+    merges: [{ keep: "keeper", absorb: ["open"] }],
+    removals: [{ slug: "open", reason: "already-said", evidence: "x" }],
+  }, { approved: ["open"] });
+  assert(plain.rows.every((r) => r.status === "refused"));
+  assertEquals(await Deno.readTextFile(join(dir, "open.md")), open);
+
+  const marked = await run(dir, home, { guards: [{ slug: "open", kind: "deletion-guard" }] });
+  assert(marked.rows.every((r) => r.status === "refused"));
+  assertEquals(await Deno.readTextFile(join(dir, "open.md")), open);
+  assertEquals(markGuardRaw("body only\n").startsWith("---\nmetadata:\n  guard: true"), true);
 });
 
 async function exists(path: string): Promise<boolean> {

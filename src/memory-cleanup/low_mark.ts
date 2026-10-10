@@ -93,11 +93,13 @@ interface Memory {
 }
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+const OPENS_FRONTMATTER = /^---[ \t]*(?:\r?\n|$)/;
 
 /** The parsed frontmatter, `{}` when there is none, or `null` when it cannot be parsed. */
 function readFrontmatter(raw: string): Record<string, unknown> | null {
   const match = raw.match(FRONTMATTER);
-  if (!match) return {};
+  // A header that opens with `---` but never closes is a broken block, not "no frontmatter".
+  if (!match) return OPENS_FRONTMATTER.test(raw) ? null : {};
   try {
     const parsed = parseYaml(match[1]);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
@@ -146,10 +148,10 @@ export function appearsWordForWord(haystack: string, needle: string): boolean {
  * Throws when the frontmatter cannot be parsed or `metadata` is not a mapping.
  */
 export function markGuardRaw(raw: string): string {
-  const match = raw.match(FRONTMATTER);
-  if (!match) return `---\nmetadata:\n  guard: true\n---\n${raw}`;
   const fm = readFrontmatter(raw);
   if (fm === null) throw new Error("frontmatter cannot be parsed");
+  const match = raw.match(FRONTMATTER);
+  if (!match) return `---\nmetadata:\n  guard: true\n---\n${raw}`;
   const current = fm.metadata ?? {};
   if (typeof current !== "object" || Array.isArray(current)) {
     throw new Error("frontmatter metadata is not a mapping");
@@ -276,11 +278,10 @@ async function skillLines(
   const lines: string[] = [];
   for (const [name, path] of surfaces) {
     const found = await inspectSkillsDirectory(path, max);
-    lines.push(
-      `${
-        partLine(name, found.longest, limits.skillDescription)
-      }  (longest of ${found.installedCount} skills, ${found.overCount} over)`,
-    );
+    if (found.skills.length === 0) lines.push(`  ${name}: no skills installed`);
+    for (const skill of found.skills) {
+      lines.push(partLine(`${name}: ${skill.name}`, skill.size, limits.skillDescription));
+    }
   }
   const bundled = await inspectBundledSkills(
     report.claudeSettingsPath ?? join(home, ".claude/settings.json"),
@@ -350,11 +351,12 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
       refuse(slug, "memory file not found");
       continue;
     }
+    // A classified guard stays protected for every later row, even when marking it fails.
+    guards.add(slug);
     if (memory.unreadable) {
       refuse(slug, "frontmatter cannot be parsed: not marked, left untouched");
       continue;
     }
-    guards.add(slug);
     if (memory.guard) continue;
     try {
       const marked = markGuardRaw(memory.raw);
@@ -364,7 +366,6 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
       }
       if (!dryRun) await Deno.writeTextFile(memory.path, marked);
     } catch (error) {
-      guards.delete(slug);
       refuse(slug, `not marked: ${(error as Error).message}`);
       continue;
     }
