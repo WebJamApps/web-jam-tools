@@ -146,12 +146,21 @@ function extractSkillDescription(text: string): string | null {
 }
 
 /** Inspects a skills folder for count and descriptions exceeding limit. */
-async function inspectSkillsDirectory(
+export async function inspectSkillsDirectory(
   dirPath: string,
   maxDescriptionChars: number,
-): Promise<{ installedCount: number; overCount: number }> {
+): Promise<
+  {
+    installedCount: number;
+    overCount: number;
+    longest: number;
+    skills: { name: string; size: number }[];
+  }
+> {
   let installedCount = 0;
   let overCount = 0;
+  let longest = 0;
+  const skills: { name: string; size: number }[] = [];
 
   try {
     for await (const entry of Deno.readDir(dirPath)) {
@@ -161,6 +170,8 @@ async function inspectSkillsDirectory(
         const text = await Deno.readTextFile(skillMdPath);
         installedCount++;
         const desc = extractSkillDescription(text);
+        if (desc && desc.length > longest) longest = desc.length;
+        skills.push({ name: entry.name, size: desc?.length ?? 0 });
         if (desc && desc.length > maxDescriptionChars) {
           overCount++;
         }
@@ -172,11 +183,12 @@ async function inspectSkillsDirectory(
     // Directory missing or unreadable
   }
 
-  return { installedCount, overCount };
+  skills.sort((a, b) => a.name.localeCompare(b.name));
+  return { installedCount, overCount, longest, skills };
 }
 
 /** Counts bundled skills that are not set to name-only in Claude settings, matching by identity. */
-async function inspectBundledSkills(
+export async function inspectBundledSkills(
   claudeSettingsPath: string,
   bundledLimit: BundledSkillsLimit,
 ): Promise<number> {

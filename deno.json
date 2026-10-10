@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.38.121",
+  "version": "1.39.1",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "whoami": "bash -c 'exec deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME --allow-read=.,\"${CODEX_HOME:-$HOME/.codex}/sessions\" --allow-run=bash scripts/whoami.ts'",
@@ -73,6 +73,7 @@
     "fix-labels:generate-model-labels": "deno run --allow-read=skills/fix-labels/labels.yaml --allow-write=skills/fix-labels/model-labels.json src/fix-labels/generate-model-labels.ts",
     "sweep:redundant-blocked-labels": "deno run --allow-run=gh scripts/sweep_redundant_blocked_labels.ts",
     "memory-index": "deno run --allow-read --allow-write --allow-env src/memory-index/cli.ts",
+    "memory-cleanup:run": "deno run --allow-read --allow-write --allow-env src/memory-cleanup/low_mark.ts",
     "memory-cleanup:scan": "deno run --allow-read --allow-run=gh --allow-env=HOME src/memory-cleanup/cli.ts",
     "memory:consume": "bash scripts/consume-memory-rules.sh",
     "update:all": "bash scripts/update-all.sh",

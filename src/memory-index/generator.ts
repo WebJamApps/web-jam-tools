@@ -11,6 +11,8 @@ export interface MemoryEntry {
   status?: string;
   description: string;
   isCheckpoint: boolean;
+  /** `metadata.guard: true` — a guard rule is never archived by the index run. */
+  guard?: boolean;
 }
 
 export interface SkippedMemoryFile {
@@ -67,6 +69,7 @@ export function parseMemoryFile(
       status,
       description,
       isCheckpoint,
+      guard: metadata.guard === true,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message.split("\n")[0].trim() : String(err);
@@ -110,16 +113,23 @@ export async function scanMemoryDirectory(dirPath: string): Promise<MemoryDirect
   return { entries, skipped };
 }
 
+/** A completed checkpoint is archived by the index run unless it is a guard rule. */
+export function isArchivable(entry: MemoryEntry, protectedSlugs?: ReadonlySet<string>): boolean {
+  return entry.isCheckpoint && entry.status === "done" && !entry.guard &&
+    !protectedSlugs?.has(entry.slug);
+}
+
 export async function archiveDoneCheckpoints(
   dirPath: string,
   entries: MemoryEntry[],
+  protectedSlugs?: ReadonlySet<string>,
 ): Promise<{ remaining: MemoryEntry[]; archivedCount: number }> {
   const remaining: MemoryEntry[] = [];
   let archivedCount = 0;
   const archiveDir = join(dirPath, "archive");
 
   for (const entry of entries) {
-    if (entry.isCheckpoint && entry.status === "done") {
+    if (isArchivable(entry, protectedSlugs)) {
       await Deno.mkdir(archiveDir, { recursive: true });
       const oldPath = join(dirPath, entry.filename);
       const newPath = join(archiveDir, entry.filename);
