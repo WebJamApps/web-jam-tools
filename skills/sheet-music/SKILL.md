@@ -19,7 +19,7 @@ The `sheet-music` skill converts scanned lead sheet PDFs in Dropbox into clean, 
 
 ```mermaid
 graph TD
-    A["Invoke /sheet-music <Dropbox-path(s)...>"] --> B["Inspect Scans via Multimodal view_file"]
+    A["Invoke /sheet-music <Dropbox-path(s)...>"] --> B["Inspect Scans (Claude Code: Read, agy: view_file)"]
     B --> C["Extract Metadata, Chords, Lyrics & Performance Annotations"]
     C --> D{"Guitar Capo Used?"}
     D -- Yes --> E["Dual-Tier Mode: Capo Guitar Bold over Sounding Bass Italic"]
