@@ -325,6 +325,12 @@ Deno.test("Helper agent: holds nothing Josh typed, message folder names starting
       JSON.stringify({
         recipient: helperId,
         sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
       }),
     );
 
@@ -345,6 +351,257 @@ Deno.test("Helper agent: holds nothing Josh typed and has no message folder -> n
     await Deno.writeTextFile(
       helperTranscript,
       JSON.stringify({ type: "PLANNER_RESPONSE", content: "Running" }) + "\n",
+    );
+
+    const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.outcome, "not_open");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper agent: ordinary inter-agent message (send_message) without invoke_subagent -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-ordinary-msg-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "helper-conv-456";
+
+    // Setup parent with /pr-review
+    const parentDir = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentDir, { recursive: true });
+    const parentTranscript = join(parentDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      parentTranscript,
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({
+          type: "GENERIC",
+          content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
+        }),
+      ].join("\n"),
+    );
+
+    // Setup helper with ordinary send_message
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Helper running pwd" }) + "\n",
+    );
+
+    const msgFile = join(helperMessages, "msg-ordinary.json");
+    await Deno.writeTextFile(
+      msgFile,
+      JSON.stringify({
+        recipient: helperId,
+        sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "send_message" },
+          },
+        },
+      }),
+    );
+
+    const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.outcome, "not_open");
+
+    const hookRes = handlePreToolUse(
+      {
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+        transcriptPath: helperTranscript,
+        conversationId: helperId,
+      },
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(hookRes.decision, "allow");
+    assertEquals(hookRes.overwrite, undefined, "Ordinary message must NOT trigger command rewrite");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper agent: incidental prose mention of helper ID in parent transcript -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-incidental-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "helper-conv-456";
+
+    // Setup parent with /pr-review and incidental prose mention in assistant content
+    const parentDir = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentDir, { recursive: true });
+    const parentTranscript = join(parentDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      parentTranscript,
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({
+          type: "PLANNER_RESPONSE",
+          content: `I will check conversation ${helperId} for updates later.`,
+        }),
+      ].join("\n"),
+    );
+
+    // Setup helper with valid invoke_subagent message pointing to parent
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Helper running" }) + "\n",
+    );
+
+    const msgFile = join(helperMessages, "msg-1.json");
+    await Deno.writeTextFile(
+      msgFile,
+      JSON.stringify({
+        recipient: helperId,
+        sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
+    );
+
+    const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.outcome, "not_open");
+
+    const hookRes = handlePreToolUse(
+      {
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+        transcriptPath: helperTranscript,
+        conversationId: helperId,
+      },
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(hookRes.decision, "allow");
+    assertEquals(hookRes.overwrite, undefined, "Incidental prose mention must NOT trigger rewrite");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper agent: competing message senders claiming different parent IDs -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-competing-" });
+  try {
+    const parentA = "parent-conv-aaa";
+    const parentB = "parent-conv-bbb";
+    const helperId = "helper-conv-456";
+
+    // Setup both parents
+    for (const pId of [parentA, parentB]) {
+      const pDir = join(tmpDir, pId, ".system_generated", "logs");
+      await Deno.mkdir(pDir, { recursive: true });
+      await Deno.writeTextFile(
+        join(pDir, "transcript.jsonl"),
+        [
+          JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }),
+          JSON.stringify({
+            type: "GENERIC",
+            content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
+          }),
+        ].join("\n"),
+      );
+    }
+
+    // Setup helper with TWO competing invoke_subagent messages from different senders
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Running" }) + "\n",
+    );
+
+    await Deno.writeTextFile(
+      join(helperMessages, "msg-a.json"),
+      JSON.stringify({
+        recipient: helperId,
+        sender: parentA,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentA,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
+    );
+    await Deno.writeTextFile(
+      join(helperMessages, "msg-b.json"),
+      JSON.stringify({
+        recipient: helperId,
+        sender: parentB,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentB,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
+    );
+
+    const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.outcome, "not_open");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper agent: message with mismatched recipient -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-recipient-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "helper-conv-456";
+
+    const parentDir = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(parentDir, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }),
+        JSON.stringify({
+          type: "GENERIC",
+          content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
+        }),
+      ].join("\n"),
+    );
+
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Running" }) + "\n",
+    );
+
+    // Mismatched recipient:
+    await Deno.writeTextFile(
+      join(helperMessages, "msg-mismatch.json"),
+      JSON.stringify({
+        recipient: "different-helper-789",
+        sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
     );
 
     const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
@@ -378,8 +635,8 @@ Deno.test("Helper agent: four steps up to the conversation Josh typed in -> not 
       if (i < convs.length - 1) {
         // Parent lists child
         content += JSON.stringify({
-          type: "PLANNER_RESPONSE",
-          content: `Subagent: ${convs[i + 1]}`,
+          type: "GENERIC",
+          content: `Created the following subagents:\n{"conversationId": "${convs[i + 1]}"}`,
         }) + "\n";
       }
       await Deno.writeTextFile(tPath, content);
@@ -393,6 +650,12 @@ Deno.test("Helper agent: four steps up to the conversation Josh typed in -> not 
           JSON.stringify({
             recipient: id,
             sender: convs[i - 1],
+            sourceMetadata: {
+              tool: {
+                conversationId: convs[i - 1],
+                toolCall: { name: "invoke_subagent" },
+              },
+            },
           }),
         );
       }
@@ -622,7 +885,10 @@ Deno.test("handlePreToolUse: commands and hook answers closed cases", async () =
 // 5. End-to-end integration test of hooks/agy-skill-run-hook.sh
 // ---------------------------------------------------------------------------
 
-async function runHookScript(payload: unknown): Promise<{
+async function runHookScript(
+  payload: unknown,
+  env: Record<string, string> = {},
+): Promise<{
   code: number;
   stdout: string;
   stderr: string;
@@ -630,6 +896,7 @@ async function runHookScript(payload: unknown): Promise<{
 }> {
   const cmd = new Deno.Command("bash", {
     args: [HOOK_SCRIPT_PATH],
+    env,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -652,6 +919,15 @@ async function runHookScript(payload: unknown): Promise<{
 Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites open command and exits 0", async () => {
   const tmpDir = await Deno.makeTempDir({ prefix: "agy-e2e-" });
   try {
+    const pluginSkillsDir = join(tmpDir, "plugin-skills");
+    const userSkillsDir = join(tmpDir, "user-skills");
+    await Deno.mkdir(join(pluginSkillsDir, "work-issue"), { recursive: true });
+    await Deno.mkdir(userSkillsDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(pluginSkillsDir, "work-issue", "SKILL.md"),
+      "# work-issue skill\n",
+    );
+
     const tPath = join(tmpDir, "transcript.jsonl");
     await Deno.writeTextFile(
       tPath,
@@ -668,12 +944,97 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites open command and exits 0", 
       transcriptPath: tPath,
     };
 
-    const res = await runHookScript(payload);
+    const res = await runHookScript(payload, {
+      AGY_PLUGIN_SKILLS_DIR: pluginSkillsDir,
+      AGY_USER_SKILLS_DIR: userSkillsDir,
+    });
     assertEquals(res.code, 0);
     assertEquals(res.parsed.decision, "allow");
     assertEquals(
       res.parsed.overwrite?.CommandLine,
       "/home/joshua/.claude/hooks/agy-skill-run.sh 'git -C /tmp/agy-worktrees/x status --short'",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites helper subagent command when parent opened skill run", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-e2e-helper-" });
+  try {
+    const pluginSkillsDir = join(tmpDir, "plugin-skills");
+    const userSkillsDir = join(tmpDir, "user-skills");
+    await Deno.mkdir(join(pluginSkillsDir, "work-issue"), { recursive: true });
+    await Deno.mkdir(userSkillsDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(pluginSkillsDir, "work-issue", "SKILL.md"),
+      "# work-issue skill\n",
+    );
+
+    const parentId = "parent-conv-999";
+    const helperId = "helper-conv-888";
+
+    // Setup parent directory
+    const parentDir = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentDir, { recursive: true });
+    const parentTranscript = join(parentDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      parentTranscript,
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }),
+        JSON.stringify({
+          type: "GENERIC",
+          content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
+        }),
+      ].join("\n"),
+    );
+
+    // Setup helper directory
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Helper running command" }) + "\n",
+    );
+
+    const msgFile = join(helperMessages, "msg.json");
+    await Deno.writeTextFile(
+      msgFile,
+      JSON.stringify({
+        recipient: helperId,
+        sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
+    );
+
+    const payload = {
+      toolCall: {
+        name: "run_command",
+        args: {
+          CommandLine: "git status",
+        },
+      },
+      transcriptPath: helperTranscript,
+      conversationId: helperId,
+    };
+
+    const res = await runHookScript(payload, {
+      AGY_PLUGIN_SKILLS_DIR: pluginSkillsDir,
+      AGY_USER_SKILLS_DIR: userSkillsDir,
+    });
+    assertEquals(res.code, 0);
+    assertEquals(res.parsed.decision, "allow");
+    assertEquals(
+      res.parsed.overwrite?.CommandLine,
+      "/home/joshua/.claude/hooks/agy-skill-run.sh 'git status'",
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });

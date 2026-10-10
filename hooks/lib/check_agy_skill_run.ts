@@ -17,10 +17,22 @@ import { basename, dirname, join } from "node:path";
 export const INSTALLED_SCRIPT_PATH = "/home/joshua/.claude/hooks/agy-skill-run.sh";
 export const SCRIPT_DENY_TARGET = ".claude/hooks/agy-skill-run.sh";
 
-export const DEFAULT_PLUGIN_SKILLS_DIR = `${
-  Deno.env.get("HOME") ?? "/home/joshua"
-}/.gemini/config/plugins/webjam-tasks/skills`;
-export const DEFAULT_USER_SKILLS_DIR = `${Deno.env.get("HOME") ?? "/home/joshua"}/.gemini/skills`;
+export function getDefaultPluginSkillsDir(): string {
+  return (
+    Deno.env.get("AGY_PLUGIN_SKILLS_DIR") ??
+      `${Deno.env.get("HOME") ?? "/home/joshua"}/.gemini/config/plugins/webjam-tasks/skills`
+  );
+}
+
+export function getDefaultUserSkillsDir(): string {
+  return (
+    Deno.env.get("AGY_USER_SKILLS_DIR") ??
+      `${Deno.env.get("HOME") ?? "/home/joshua"}/.gemini/skills`
+  );
+}
+
+export const DEFAULT_PLUGIN_SKILLS_DIR = getDefaultPluginSkillsDir();
+export const DEFAULT_USER_SKILLS_DIR = getDefaultUserSkillsDir();
 
 /**
  * Rewrites a shell command to be executed via the installed agy-skill-run script.
@@ -42,8 +54,8 @@ export function containsInstalledScriptPath(command: string): boolean {
  * Scans directories for installed skills that contain a SKILL.md file.
  */
 export function getInstalledSkills(
-  pluginDir = DEFAULT_PLUGIN_SKILLS_DIR,
-  userDir = DEFAULT_USER_SKILLS_DIR,
+  pluginDir = getDefaultPluginSkillsDir(),
+  userDir = getDefaultUserSkillsDir(),
 ): { pluginSkills: Set<string>; userSkills: Set<string> } {
   const pluginSkills = new Set<string>();
   const userSkills = new Set<string>();
@@ -133,10 +145,11 @@ export interface TranscriptReadResult {
   validJson: boolean;
   rawText: string;
   userMessages: string[];
+  entries: Record<string, unknown>[];
 }
 
 /**
- * Reads a transcript file and extracts messages typed by Josh.
+ * Reads a transcript file and extracts messages typed by Josh and structured entries.
  * Returns canRead: false on missing/unreadable file, validJson: false on syntax error.
  */
 export function readTranscript(transcriptPath: string): TranscriptReadResult {
@@ -144,11 +157,12 @@ export function readTranscript(transcriptPath: string): TranscriptReadResult {
   try {
     rawText = Deno.readTextFileSync(transcriptPath);
   } catch {
-    return { canRead: false, validJson: false, rawText: "", userMessages: [] };
+    return { canRead: false, validJson: false, rawText: "", userMessages: [], entries: [] };
   }
 
   const lines = rawText.split("\n");
   const userMessages: string[] = [];
+  const entries: Record<string, unknown>[] = [];
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -156,8 +170,9 @@ export function readTranscript(transcriptPath: string): TranscriptReadResult {
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(trimmed);
+      entries.push(parsed);
     } catch {
-      return { canRead: true, validJson: false, rawText, userMessages: [] };
+      return { canRead: true, validJson: false, rawText, userMessages: [], entries: [] };
     }
 
     if (
@@ -197,7 +212,7 @@ export function readTranscript(transcriptPath: string): TranscriptReadResult {
     }
   }
 
-  return { canRead: true, validJson: true, rawText, userMessages };
+  return { canRead: true, validJson: true, rawText, userMessages, entries };
 }
 
 /**
@@ -232,8 +247,84 @@ export function getMessagesDir(transcriptPath: string): string {
   return join(dir, "messages");
 }
 
+export function getConversationIdFromTranscriptPath(transcriptPath: string): string | undefined {
+  const parts = transcriptPath.split("/");
+  const brainIdx = parts.lastIndexOf("brain");
+  if (brainIdx !== -1 && brainIdx + 1 < parts.length) {
+    return parts[brainIdx + 1];
+  }
+  const sysIdx = parts.lastIndexOf(".system_generated");
+  if (sysIdx > 0) {
+    return parts[sysIdx - 1];
+  }
+  return undefined;
+}
+
+/**
+ * Validates whether a parsed message JSON is an authentic helper-creation message
+ * directed to the specified conversationId.
+ */
+export function isHelperCreationMessage(
+  parsed: unknown,
+  conversationId?: string,
+): { valid: boolean; parentId?: string } {
+  if (!parsed || typeof parsed !== "object") {
+    return { valid: false };
+  }
+  const obj = parsed as {
+    recipient?: unknown;
+    sender?: unknown;
+    sourceMetadata?: {
+      tool?: {
+        conversationId?: unknown;
+        toolCall?: { name?: unknown };
+      };
+    };
+  };
+
+  // Must be targeted to this conversation if conversationId is specified
+  if (conversationId && typeof obj.recipient === "string") {
+    if (obj.recipient !== conversationId) {
+      return { valid: false };
+    }
+  }
+
+  // Must be an invoke_subagent creation message
+  const toolName = obj.sourceMetadata?.tool?.toolCall?.name;
+  if (toolName !== "invoke_subagent") {
+    return { valid: false };
+  }
+
+  const toolConvId = obj.sourceMetadata?.tool?.conversationId;
+  const sender = obj.sender;
+
+  let resolvedParentId: string | undefined;
+  if (typeof toolConvId === "string" && toolConvId) {
+    resolvedParentId = toolConvId;
+  }
+
+  if (typeof sender === "string" && sender && sender !== "system") {
+    const senderId = sender.split("/")[0];
+    if (resolvedParentId && senderId !== resolvedParentId) {
+      // Sender and tool.conversationId contradict each other
+      return { valid: false };
+    }
+    if (!resolvedParentId) {
+      resolvedParentId = senderId;
+    }
+  }
+
+  if (!resolvedParentId || (conversationId && resolvedParentId === conversationId)) {
+    return { valid: false };
+  }
+
+  return { valid: true, parentId: resolvedParentId };
+}
+
 /**
  * Looks for the parent conversation in the messages directory.
+ * Requires a verified helper-creation message (invoke_subagent) addressed to this helper.
+ * If multiple conflicting parent IDs are found (competing senders), refuses by returning null.
  */
 export function findParentConversation(
   transcriptPath: string,
@@ -241,34 +332,39 @@ export function findParentConversation(
 ): { parentId: string } | null {
   const messagesDir = getMessagesDir(transcriptPath);
   try {
+    const parentIds = new Set<string>();
+
     for (const entry of Deno.readDirSync(messagesDir)) {
       if (entry.isFile && entry.name.endsWith(".json")) {
         const msgPath = join(messagesDir, entry.name);
         try {
           const content = Deno.readTextFileSync(msgPath);
           const parsed = JSON.parse(content);
-          const toolConvId = (parsed as {
-            sourceMetadata?: { tool?: { conversationId?: unknown } };
-          })?.sourceMetadata?.tool?.conversationId;
-          if (typeof toolConvId === "string" && toolConvId && toolConvId !== conversationId) {
-            return { parentId: toolConvId };
-          }
-          const sender = (parsed as { sender?: unknown })?.sender;
-          if (typeof sender === "string" && sender && sender !== "system") {
-            const senderId = sender.split("/")[0];
-            if (senderId && senderId !== conversationId) {
-              return { parentId: senderId };
-            }
+          const check = isHelperCreationMessage(parsed, conversationId);
+          if (check.valid && check.parentId) {
+            parentIds.add(check.parentId);
           }
         } catch {
           // ignore unparseable message file
         }
       }
     }
+
+    if (parentIds.size === 0) {
+      return null;
+    }
+
+    // Competing senders claiming different parent IDs -> ambiguous / refuse
+    if (parentIds.size > 1) {
+      return null;
+    }
+
+    const [parentId] = parentIds;
+    return { parentId };
   } catch {
     // messagesDir does not exist or is unreadable
+    return null;
   }
-  return null;
 }
 
 /**
@@ -296,6 +392,72 @@ export function resolveTranscriptPath(currentTranscriptPath: string, parentId: s
   return join(baseDir, parentId, basename(currentTranscriptPath));
 }
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Validates whether a parent transcript entry is an authentic helper-creation result
+ * confirming the launch of childId, rather than an incidental prose mention.
+ */
+export function isHelperCreationResult(
+  entry: Record<string, unknown>,
+  childId: string,
+): boolean {
+  if (!entry || typeof entry !== "object" || !childId) {
+    return false;
+  }
+  // User messages can never be helper-creation results
+  if (
+    entry.type === "USER_INPUT" ||
+    entry.source === "USER_EXPLICIT" ||
+    entry.role === "user" ||
+    entry.type === "user"
+  ) {
+    return false;
+  }
+
+  const content = typeof entry.content === "string" ? entry.content : "";
+  if (!content.includes(childId)) {
+    return false;
+  }
+
+  // Check 1: Explicit agy subagent creation header with conversationId JSON
+  const subagentHeaderRegex = /created\s+(the\s+following\s+)?subagents?/i;
+  const conversationIdRegex = new RegExp(
+    `["']?conversationId["']?\\s*:\\s*["']${escapeRegex(childId)}["']`,
+  );
+
+  if (subagentHeaderRegex.test(content) && conversationIdRegex.test(content)) {
+    return true;
+  }
+
+  // Check 2: Parsed JSON in content with conversationId === childId in subagent context
+  const jsonMatches = content.match(/\{[\s\S]*?\}/g);
+  if (jsonMatches) {
+    for (const jm of jsonMatches) {
+      try {
+        const parsed = JSON.parse(jm);
+        if (parsed && typeof parsed === "object" && parsed.conversationId === childId) {
+          if (
+            subagentHeaderRegex.test(content) ||
+            content.toLowerCase().includes("subagent") ||
+            entry.type === "TOOL_RESPONSE" ||
+            entry.type === "GENERIC" ||
+            entry.source === "MODEL"
+          ) {
+            return true;
+          }
+        }
+      } catch {
+        // ignore non-json block
+      }
+    }
+  }
+
+  return false;
+}
+
 export type SkillRunCheckResult =
   | { outcome: "open" }
   | { outcome: "not_open" }
@@ -315,7 +477,7 @@ export function isSkillRunOpen(
   }
 
   let currentTranscript = transcriptPath;
-  let currentId = conversationId ?? "";
+  let currentId = conversationId ?? getConversationIdFromTranscriptPath(transcriptPath) ?? "";
   let stepsUp = 0;
   const MAX_STEPS_UP = 3;
 
@@ -338,7 +500,7 @@ export function isSkillRunOpen(
 
     const parentInfo = findParentConversation(currentTranscript, currentId);
     if (!parentInfo) {
-      // Holds nothing Josh typed and has no message folder.
+      // Holds nothing Josh typed and has no verified helper creation message.
       return { outcome: "not_open" };
     }
 
@@ -348,8 +510,11 @@ export function isSkillRunOpen(
       return { outcome: "cannot_tell" };
     }
 
-    // That conversation's record must list the child helper.
-    if (!parentTranscriptData.rawText.includes(currentId)) {
+    // That conversation's record must list the child helper in an authentic creation result.
+    const hasCreationResult = parentTranscriptData.entries.some((entry) =>
+      isHelperCreationResult(entry, currentId)
+    );
+    if (!hasCreationResult) {
       return { outcome: "not_open" };
     }
 
