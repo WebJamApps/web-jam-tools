@@ -1,6 +1,6 @@
 ---
 name: file-issue
-description: File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when a message opens with a filing verb (file, create, open, draft, make, add, log, raise, write), optionally behind a leading affirmation (yes/yeah/yep/ok/okay/sure, optional comma), optionally behind please/pls or can/could/would/will you (please), and optionally go ahead and, followed by up to three short filler words (a, an, the, new, another, quick, separate, follow-up) and then issue, ticket, bug, or bug report (singular or plural) — for example "file an issue", "please create a new issue", "can you open a ticket", "yes file the new issue", or "file the issues" — or when a task needs a tracking issue instead of just being done inline.
+description: File a GitHub issue the WebJamApps way — deliverable-first body shape, model label, cited references, and closeable acceptance criteria instead of calling `gh issue create` directly. Use when filing, creating, or drafting a new issue, bug report, or ticket that needs tracking.
 metadata:
   version: v1
   publisher: josh
@@ -14,11 +14,15 @@ metadata:
 
 This is mechanical-with-light-judgment (search for duplicates, write acceptance criteria that
 close cleanly, pick one label from the model-tier list in `skills/fix-labels/labels.yaml`) — run it
-on **Sonnet**, the cheapest tier that
-reliably gets the judgment calls right. It is not hard-gated to a single model the way `/fix-labels`
+on the cheapest tier that reliably gets the judgment calls right, per surface:
+
+- **Claude Code:** **Sonnet**. Don't default to Opus/Fable for a fresh `/file-issue` invocation.
+- **agy / Antigravity:** **Flash**. Don't switch to a Claude model for a fresh `/file-issue` invocation.
+
+It is not hard-gated to a single model the way `/fix-labels`
 and `/handle-gmails` are (this skill is the quality layer, not the floor — see "Why a skill AND a
 hook" below); if you're running on a pricier model because you're mid-conversation, finish the
-issue rather than switching, but don't default to Opus/Fable for a fresh `/file-issue` invocation.
+issue rather than switching.
 
 ## Why a skill AND a hook
 
@@ -70,17 +74,26 @@ that's what following this skill prevents.
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
    model label, because the label was going to be "added later."    Decide the label as part of
     deciding what the issue IS — before you write the body — from:
-    - `Flash Med` — genuinely trivial edits only: a one-line change, a single-field data or typo fix, a link update (an exception case; anything larger goes to `Flash High`).
-    - `Flash High` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
+    - `Flash` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
     - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
-    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; ranks above Flash High per Josh's 2026-10-01 ruling, though Flash High stays the default lane).
+    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; ranks above Flash per Josh's 2026-10-01 ruling, though Flash stays the default lane).
     - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
     - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
       delete-protection only, per `skills/fix-labels/labels.yaml`).
 
+   **A prompt that hands filing to another agent never names the label.** A session that sends a
+   subagent to file an issue tells it to choose the label under this rule, and names the default
+   working tier as the one to depart from only with a reason; it does not write a tier into the
+   prompt. The model that performs the filing and the tier the issue is routed to are unrelated:
+   filing is mechanical work, while the label is set by the work the issue describes. A tier is
+   named in such a prompt only where the escalation is justified, with the reason beside it — a
+   real reason is always sufficient, and the more expensive tiers stay fully available. The rows
+   of the Gate 2 plan table are that case: Josh rules on each row's tier with the plan, so the
+   filing agent applies the tier the row carries.
+
    **Tier is not a function of diff size.** The bullets above describe the *kind* of thinking a
    task needs, not how many files it touches. A one-file, twenty-line change can be `Opus` work,
-   and a ten-file change can be `Flash High` work. Before settling on a tier, ask what the task
+   and a ten-file change can be `Flash` work. Before settling on a tier, ask what the task
    would **fail** on rather than how big it is. If the hard part is any of these, it is `Opus`
    work however small the diff:
     - **Coherence across a long document** — the change must stay consistent with rules stated
@@ -167,7 +180,7 @@ that's what following this skill prevents.
       2. When the condition does not hold (e.g. invalid, denied, or unmatched).
       3. When the deliverable is unable to determine which of the first two applies because the lookup errors, the API times out, the file is missing, or the field is absent.
     - For that third case, the issue specification and acceptance criteria must explicitly use the vocabulary of whether the system **refuses** (fails closed) or **proceeds** (fails open).
-    - **Model Tier Floor**: Any issue where a guarded condition is sourced from a network call, a filesystem read, or any source that can fail independently of the input being guarded has a `Flash High` floor — the default tier, never below it. This is a minimum floor, not a ceiling: if the guard requires adversarial correctness against subtle bypasses or complex tech-lead judgment, the `Opus` routing in item 2 continues to apply on its own terms.
+    - **Model Tier Floor**: Any issue where a guarded condition is sourced from a network call, a filesystem read, or any source that can fail independently of the input being guarded has a `Flash` floor — the default tier, never below it. This is a minimum floor, not a ceiling: if the guard requires adversarial correctness against subtle bypasses or complex tech-lead judgment, the `Opus` routing in item 2 continues to apply on its own terms.
 16. **Guardrail and Rules Edits Must Be Purely Additive.**
     - Edits to shared guardrails, rules, or skill instructions in `AGENTS.md`, `docs/cross-ai-rules.md`, or a skill body (`skills/*/SKILL.md`) must be **purely additive** unless the issue explicitly specifies the retirement, replacement, or deletion of existing rules.
     - Pre-existing rule bullets, rationale, and instructions must never be silently removed, truncated, or clobbered when appending new guidelines.
@@ -297,4 +310,8 @@ Every artifact Josh reads — issue **title AND body**, PR **title AND descripti
 - Before handing an issue to a subagent, re-read its body and confirm it matches the current decision; if it doesn't, fix the body FIRST, then dispatch.
 
 **Origin (2026-07-29, the milestone migration):** the design moved topics from a native `Area` issue field to Milestones. Opus amended the design via a comment and renamed WebJamApps/web-jam-tools#301, but left the issue BODY still specifying "read the native `Area` field" with `field.Area:` search qualifiers and an acceptance criterion "correctly derives Area from the native Area field". Josh: *"we decided on Milestone this is NOT ACCURATE !"* The body was then rewritten. Same session, same root defect: relying on a supplement instead of correcting the source.
+
+## Description Detail & Triggers
+
+File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when a message opens with a filing verb (file, create, open, draft, make, add, log, raise, write), optionally behind a leading affirmation (yes/yeah/yep/ok/okay/sure, optional comma), optionally behind please/pls or can/could/would/will you (please), and optionally go ahead and, followed by up to three short filler words (a, an, the, new, another, quick, separate, follow-up) and then issue, ticket, bug, or bug report (singular or plural) — for example "file an issue", "please create a new issue", "can you open a ticket", "yes file the new issue", or "file the issues" — or when a task needs a tracking issue instead of just being done inline.
 

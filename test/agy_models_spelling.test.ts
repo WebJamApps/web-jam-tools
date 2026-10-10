@@ -77,8 +77,8 @@ Deno.test("skills/delegate/SKILL.md documents only valid AGY_MODELS matching ALL
   const content = await Deno.readTextFile(DELEGATE_SKILL_PATH);
   const declarations = extractAgyModelsDeclarations(content);
   assert(
-    declarations.length >= 3,
-    `Expected at least 3 AGY_MODELS declarations in skills/delegate/SKILL.md, found ${declarations.length}`,
+    declarations.length >= 1,
+    `Expected at least 1 AGY_MODELS declaration in skills/delegate/SKILL.md, found ${declarations.length}`,
   );
   validateAgyModelsDeclarations(declarations, "skills/delegate/SKILL.md");
 });
@@ -90,7 +90,7 @@ Deno.test("scripts/handle-agy-tasks.sh fallback literal matches ALLOWED_AGY_MODE
   assertEquals(
     fallbackLiteral,
     ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"),
-    "scripts/handle-agy-tasks.sh fallback literal must match ALLOWED_AGY_MODELS default chain exactly",
+    "scripts/handle-agy-tasks.sh fallback literal must match ALLOWED_AGY_MODELS exactly",
   );
 });
 

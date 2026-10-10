@@ -15,10 +15,26 @@
 // Runs automatically as a normal Deno test under test/, picked up by the
 // existing `coverage:check` step — no wiring needed beyond adding this file.
 
-import { assert, assertEquals, assertExists, assertFalse, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertFalse,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import { parse as parseYaml } from "@std/yaml";
+import { loadLimits } from "../src/session-load/report.ts";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
+
+Deno.test("cross-AI rules require Codex to look up its running model", async () => {
+  const rules = await Deno.readTextFile(new URL("../docs/cross-ai-rules.md", import.meta.url));
+  assertStringIncludes(
+    rules,
+    "On Codex, run `deno task whoami` whenever you need your own model — when Josh asks which model you are, and before `$pr-review` applies the reviewer rule — and never answer from your own context or from `~/.codex/config.toml`.",
+  );
+});
 
 /** Split a SKILL.md's contents into { frontmatter, body }. */
 function extractFrontmatter(text: string): string {
@@ -42,6 +58,20 @@ const skillDirs = listSkillDirs();
 Deno.test("skills/ directory has at least one skill", () => {
   assert(skillDirs.length > 0, "expected at least one skills/*/ directory");
 });
+
+const MAX_DESCRIPTION_CHARS = (await loadLimits()).skillDescription.overMark;
+
+/**
+ * Asserts that a skill description is within the `skillDescription` cap.
+ * web-jam-tools#1239: Caps each of Josh's own skill descriptions; the cap lives in
+ * src/session-load/limits.json.
+ */
+export function assertSkillDescriptionLength(description: string, skillName = "fixture"): void {
+  assert(
+    description.length <= MAX_DESCRIPTION_CHARS,
+    `skills/${skillName}/SKILL.md: frontmatter "description" must be ${MAX_DESCRIPTION_CHARS} characters or less (got ${description.length} chars)`,
+  );
+}
 
 for (const dirName of skillDirs) {
   Deno.test(`skills/${dirName}/SKILL.md has valid frontmatter`, async () => {
@@ -67,6 +97,7 @@ for (const dirName of skillDirs) {
       typeof frontmatter.description === "string" && frontmatter.description.trim().length > 0,
       `skills/${dirName}/SKILL.md: frontmatter "description" must be a non-empty string`,
     );
+    assertSkillDescriptionLength(frontmatter.description, dirName);
     assertEquals(
       frontmatter.name,
       dirName,
@@ -74,6 +105,68 @@ for (const dirName of skillDirs) {
     );
   });
 }
+
+Deno.test("skill description length validator passes at the cap and fails one character over (web-jam-tools#1239)", () => {
+  assertSkillDescriptionLength("a".repeat(MAX_DESCRIPTION_CHARS), "fixture-at-cap");
+  assertThrows(
+    () => assertSkillDescriptionLength("a".repeat(MAX_DESCRIPTION_CHARS + 1), "fixture-over-cap"),
+    Error,
+    `must be ${MAX_DESCRIPTION_CHARS} characters or less (got ${MAX_DESCRIPTION_CHARS + 1} chars)`,
+  );
+});
+
+Deno.test("every text span removed from a shortened skill description appears word for word in the skill body (web-jam-tools#1239)", async () => {
+  const MOVED_DESCRIPTION_SPANS: Record<string, string[]> = {
+    "backlog-groom": [
+      "Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, milestone coverage drift, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.",
+    ],
+    "book-gig": [
+      'filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, record Gate 1 venue-set approval, hold Gate 2 draft copy review loop and record fingerprints (--record-gate2), dispatch approved batches (--send --confirm-drafts), and track venue replies (--replies). Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".',
+    ],
+    "delegate": [
+      'Does NOT decide which tier a task belongs to (that routing table lives in docs/ai-team-playbook.md, migrating from global CLAUDE.md per web-jam-tools#115) — this skill only fires once a tier is chosen, so the mechanics of the handoff are never skipped. Triggered when a Fable/Opus session is about to do mechanical or contained-coding work itself, or Josh/the session says "delegate" or "hand off".',
+    ],
+    "draft-pr": [
+      '(Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you\'ve completed a coding task on a feature branch.',
+    ],
+    "drive-cleanup": [
+      "Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.",
+    ],
+    "file-issue": [
+      'File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when a message opens with a filing verb (file, create, open, draft, make, add, log, raise, write), optionally behind a leading affirmation (yes/yeah/yep/ok/okay/sure, optional comma), optionally behind please/pls or can/could/would/will you (please), and optionally go ahead and, followed by up to three short filler words (a, an, the, new, another, quick, separate, follow-up) and then issue, ticket, bug, or bug report (singular or plural) — for example "file an issue", "please create a new issue", "can you open a ticket", "yes file the new issue", or "file the issues" — or when a task needs a tracking issue instead of just being done inline.',
+    ],
+    "fix-labels": [
+      "Recurring GitHub issue-label AND topic-milestone drift-detector across the active WebJamApps repos. Computes label drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, and milestone-name drift (missing / misspelled / non-canonical) the same way (`deno task fix-labels:milestone-diff`). Waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports \"no changes\"; re-run anytime to catch drift that accumulates over time.",
+    ],
+    "handle-gmails": [
+      'Runs on TWO surfaces — laptop Haiku (Claude Code, local mcp__gmail__ tools + local files; MUST be on the Haiku model — the skill refuses to run on a pricier model) and phone Sonnet (Claude app, mcp__claude_ai_Gmail__ tools, no filesystem). Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Per-sender auto-archive rules in rules.yaml (laptop only). Daily-handled log in log/<YYYY-MM-DD>.md (laptop only, auto-pruned after 7 days). Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar. Also invoke if a session-start hook reminder appears noting today hasn\'t been handled.',
+    ],
+    "memory-cleanup": [
+      "Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says \"clean up memory\", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.",
+    ],
+    "pr-review": [
+      "where reviewer tier is never below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).",
+    ],
+    "venue-mining": [
+      'Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".',
+    ],
+    "work-issue": [
+      'Start a model-labeled coding task under Claude Code, Antigravity, or Codex. Use when the user types /work-issue <Repo>#<issue-num> (named mode; $work-issue on Codex), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity or Codex it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.',
+    ],
+  };
+
+  assertEquals(Object.keys(MOVED_DESCRIPTION_SPANS).length, 12);
+  for (const [skillName, spans] of Object.entries(MOVED_DESCRIPTION_SPANS)) {
+    const text = await Deno.readTextFile(`${SKILLS_DIR}${skillName}/SKILL.md`);
+    for (const span of spans) {
+      assertStringIncludes(
+        text,
+        span,
+        `skills/${skillName}/SKILL.md must contain moved description text word-for-word`,
+      );
+    }
+  }
+});
 
 Deno.test("skills/venue-mining/sources.yaml parses with the expected top-level shape", async () => {
   const sourcesPath = `${SKILLS_DIR}venue-mining/sources.yaml`;
@@ -157,8 +250,8 @@ Deno.test("skills/file-issue/SKILL.md contains the three-outcomes guard rule, po
     "skills/file-issue/SKILL.md item 15 must use the vocabulary of whether the system refuses or proceeds",
   );
   assert(
-    text.includes("`Flash High` floor"),
-    "skills/file-issue/SKILL.md item 15 must specify the Flash High floor",
+    text.includes("`Flash` floor"),
+    "skills/file-issue/SKILL.md item 15 must specify the Flash floor",
   );
 
   // Item 16: Guardrail and Rules Edits Must Be Purely Additive
@@ -611,14 +704,14 @@ Deno.test("skills/design-issue/SKILL.md contains absolute standing rule that ski
   );
 });
 
-Deno.test("skills/design-issue/SKILL.md contains Sized for Flash High rule", async () => {
+Deno.test("skills/design-issue/SKILL.md contains Sized for Flash rule", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
-  assertStringIncludes(text, "### Sized for Flash High");
+  assertStringIncludes(text, "### Sized for Flash");
   assertStringIncludes(
     text,
-    "Non-epic issues default to **`Flash High`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
+    "Non-epic issues default to **`Flash`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
   );
   assertStringIncludes(text, "- one repo;");
   assertStringIncludes(text, "- one layer — frontend or backend, not both;");
@@ -919,7 +1012,7 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
   assertStringIncludes(text, "### Design Tiers");
   assertStringIncludes(
     text,
-    "- **`Flash High` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.",
+    "- **`Flash` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.",
   );
   assertStringIncludes(
     text,
@@ -936,7 +1029,7 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
   );
   assertStringIncludes(
     text,
-    "- An **agy** session already running on **Flash High** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.",
+    "- An **agy** session already running on **Flash** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.",
   );
 });
 
@@ -975,6 +1068,34 @@ Deno.test("skills/design-issue/SKILL.md contains load-bearing-premises rule", as
     text,
     "The document checker fails a document that omits the section, and fails any row whose proof is empty or hedged.",
   );
+});
+
+Deno.test("skills/design-issue/SKILL.md pins exact carried premise matching and both refusals", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  for (
+    const fragment of [
+      "**Every premise row carries a `Proved` date; an earlier date passes only on an exact stored-row match.**",
+      "after trimming the white space around each cell; case and internal spacing matter, row order does not, and carried rows never expire",
+      "when a record exists and cannot be read or parsed, the checker refuses and names its path",
+      "`deno task design:gate1` prints the fresh and carried row counts and the date of the approval or adoption",
+      "| pass a premise row dated before the presenting day unless the Gate 1 record holds that exact row from an approval or an adoption |",
+      "| store a document's premise rows as adopted without Josh naming that document |",
+    ]
+  ) assertStringIncludes(text, fragment);
+});
+
+Deno.test("skills/design-issue/SKILL.md pins asking for the slash command before the token write", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  for (
+    const fragment of [
+      "**Ask for the slash command before the token write, never after a refusal.**",
+      "only when the most recent slash command Josh typed in the session is `/design-issue` or `/file-issue`",
+      "any other slash command he types afterwards (`/pr-review`, `/work-issue`) cancels the authorization",
+      "the run does not attempt the write: it asks him, as the first line of the reply",
+      "to type `/design-issue file the approved <topic> plan`",
+      "never joined to a command that names `create-issue`",
+    ]
+  ) assertStringIncludes(text, fragment);
 });
 
 Deno.test("skills/design-issue/SKILL.md contains target-issue-body rule", async () => {
@@ -1035,47 +1156,57 @@ Deno.test("skills/work-issue/SKILL.md contains external-only deliverables workfl
 
 // --- Tier-order pin (web-jam-tools#922) ---
 //
-// Sonnet 5.5 ranks ABOVE Flash High as of Josh's 2026-10-01 ruling (it was the other
+// Sonnet 5.5 ranks ABOVE Flash as of Josh's 2026-10-01 ruling (it was the other
 // way round from 2026-09-05). The tier order is load-bearing in the pr-review pairing
 // matrix and the delegate skill's escalation direction, and a routine doc sweep that
 // "tidies" either back to the superseded Flash-High-over-Sonnet ordering would
 // silently change who may review whose PR with no CI signal. The work-issue agy
-// chain ranks Flash High above Sonnet 4.6 (Thinking), a different model, and is unchanged.
+// chain ranks Flash above Sonnet 4.6 (Thinking), a different model, and is unchanged.
 // Pinned here, in the one existing home for skill-rule pins, rather than in three
 // separate files (AGENTS.md: "Duplicate Pin-Test Locations for the Same Rule").
 
-Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Sonnet above Flash High", async () => {
+Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Sonnet above Flash", async () => {
   const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
 
   assertStringIncludes(
     text,
-    "**Tier order (weakest to strongest): Haiku → Flash Med → Flash High → Sonnet → Opus.**",
+    "**Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.**",
   );
 
-  // The matrix rows themselves, weakest reviewer first: Flash High reviews
-  // strictly below it, Sonnet may review Flash High, Opus may review both.
-  assertStringIncludes(text, "| Flash High | Flash Medium, Haiku |");
-  assertStringIncludes(text, "| Sonnet | Flash High, Flash Medium, Haiku |");
-  assertStringIncludes(text, "| Opus | Sonnet, Flash High |");
+  // The matrix rows themselves, weakest reviewer first: Flash reviews
+  // strictly below it, Sonnet may review Flash, Opus may review both.
+  assertStringIncludes(text, "| Flash | Haiku |");
+  assertStringIncludes(text, "| Sonnet | Flash, Haiku |");
+  assertStringIncludes(text, "| Opus | Sonnet, Flash |");
 
-  const flashHighRow = text.indexOf("| Flash High | Flash Medium, Haiku |");
-  const sonnetRow = text.indexOf("| Sonnet | Flash High, Flash Medium, Haiku |");
-  const opusRow = text.indexOf("| Opus | Sonnet, Flash High |");
+  const flashHighRow = text.indexOf("| Flash | Haiku |");
+  const sonnetRow = text.indexOf("| Sonnet | Flash, Haiku |");
+  const opusRow = text.indexOf("| Opus | Sonnet, Flash |");
   assert(
     flashHighRow !== -1 && sonnetRow !== -1 && opusRow !== -1 && flashHighRow < sonnetRow &&
       sonnetRow < opusRow,
-    "matrix rows must run weakest reviewer first: Flash High, Sonnet, Opus",
+    "matrix rows must run weakest reviewer first: Flash, Sonnet, Opus",
   );
 
   // The superseded rows must not survive anywhere in the file.
   assertFalse(
-    text.includes("| Flash High | Sonnet, Flash Medium, Haiku |"),
-    "the superseded row granting Flash High review of Sonnet work must be gone",
+    text.includes("| Flash | Sonnet, Haiku |"),
+    "the superseded row granting Flash review of Sonnet work must be gone",
   );
   assertFalse(
-    text.includes("| Sonnet | Flash Medium, Haiku |"),
-    "the superseded row denying Sonnet review of Flash High work must be gone",
+    text.includes("| Sonnet | Haiku |"),
+    "the superseded row denying Sonnet review of Flash work must be gone",
   );
+});
+
+Deno.test("skills/pr-review/SKILL.md names Gemini Flash as the Flash author and reads a Gemini Flash (High) footer as Flash (web-jam-tools#1202)", async () => {
+  const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
+  assertStringIncludes(text, "- `Gemini Flash` (e.g. `Antigravity — Gemini Flash`");
+  assertStringIncludes(
+    text,
+    "A pull request signed `Gemini Flash (High)` before the medium level was retired keeps its footer and is read as a Flash author.",
+  );
+  assertFalse(text.includes("Gemini Flash (Medium)"), "the medium author spelling must be gone");
 });
 
 Deno.test("skills/work-issue/SKILL.md model chain ranks Gemini 3.8 Flash (High) above Sonnet", async () => {
@@ -1091,7 +1222,7 @@ Deno.test("skills/work-issue/SKILL.md model chain ranks Gemini 3.8 Flash (High) 
     "Gemini 3.8 Flash (High) must sit above Claude Sonnet 4.6 (Thinking) on the model chain",
   );
 
-  // Ordinary coding routes to Flash High, not Sonnet.
+  // Ordinary coding routes to Flash, not Sonnet.
   assertStringIncludes(text, "* *Ordinary Coding*: → `Gemini 3.8 Flash (High)`.");
 
   // Version tokens are load-bearing in this picker list and must not be scrubbed.
@@ -1101,21 +1232,109 @@ Deno.test("skills/work-issue/SKILL.md model chain ranks Gemini 3.8 Flash (High) 
   );
 });
 
-Deno.test("skills/delegate/SKILL.md escalates Flash Med to Flash High to Sonnet to Opus", async () => {
+Deno.test("skills/delegate/SKILL.md escalates coding to Sol or Sonnet and design to Opus", async () => {
   const text = await Deno.readTextFile("skills/delegate/SKILL.md");
 
   assertStringIncludes(
     text,
-    "- **Delegating up (`Flash Med` → `Flash High` → `Sonnet` → `Opus`)**:",
+    "Delegate logic- and safety-heavy coding to `Sol` or `Sonnet`, and open-ended design to `Opus`.",
   );
   assertStringIncludes(
     text,
-    "Haiku → Flash Med → Flash High → Sonnet → Opus",
+    "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
   );
+  assertStringIncludes(text, "`Astra` is kept for REAPER recording.");
   assertFalse(
-    text.includes("`Sonnet` is **not** a rung above `Flash High`"),
-    "the superseded sentence denying Sonnet a rung above Flash High must be gone",
+    text.includes("`Sonnet` is **not** a rung above `Flash`"),
+    "the superseded sentence denying Sonnet a rung above Flash must be gone",
   );
+});
+
+// --- Tier-order pin across playbook, delegate, and pr-review (web-jam-tools#1134) ---
+//
+// The tier order across all seven model labels is:
+// Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus (Sol, Astra, and Sonnet share a rung).
+// Stated in docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md.
+// Must fail on any other tier-order line in those three files.
+
+const EXPECTED_TIER_ORDER = "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus";
+const TIER_ORDER_FILES = [
+  "docs/ai-team-playbook.md",
+  "skills/delegate/SKILL.md",
+  "skills/pr-review/SKILL.md",
+];
+
+function assertTierOrder(text: string, file: string): void {
+  // Ignore Markdown emphasis and code spans; whitespace may include a wrapped line.
+  // Match every chain of at least three tier names, including the retired Flash levels.
+  const orders = text.replace(/[`*]/g, "").match(
+    /\b(?:Haiku|Luna|Flash(?:\s+(?:Med|Medium|High))?|Sol|Astra|Sonnet|Opus)\b(?:\s*[→=]\s*(?:Haiku|Luna|Flash(?:\s+(?:Med|Medium|High))?|Sol|Astra|Sonnet|Opus)\b){2,}/g,
+  ) ?? [];
+  assert(orders.length > 0, `${file} must state the tier order`);
+  for (const order of orders) {
+    const normalized = order.replace(/\s+/g, " ").replace(/\s*([→=])\s*/g, " $1 ");
+    assertEquals(normalized, EXPECTED_TIER_ORDER, `${file} must state only the current tier order`);
+  }
+}
+
+Deno.test(
+  "tier order across docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md states Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
+  async () => {
+    for (const file of TIER_ORDER_FILES) {
+      const text = await Deno.readTextFile(file);
+      assertTierOrder(text, file);
+    }
+  },
+);
+
+Deno.test("tier-order check accepts Markdown and whitespace variations of the current order", () => {
+  for (
+    const text of [
+      EXPECTED_TIER_ORDER,
+      "**Tier order: `Haiku`→`Luna` → `Flash` → `Sol`=`Astra` = `Sonnet` → `Opus`.**",
+      "Haiku  → Luna\t→ Flash →\n  Sol = Astra = Sonnet → Opus",
+      `${EXPECTED_TIER_ORDER}\n${EXPECTED_TIER_ORDER}`,
+      `${EXPECTED_TIER_ORDER}\nA workflow hands off Flash → Sonnet.`,
+    ]
+  ) {
+    assertTierOrder(text, "fixture.md");
+  }
+});
+
+Deno.test("tier-order check refuses missing orders", () => {
+  for (const text of ["", "No tier order here.", "Flash → Sonnet"]) {
+    assertThrows(() => assertTierOrder(text, "fixture.md"), Error, "must state the tier order");
+  }
+});
+
+Deno.test("tier-order check rejects any different chain alongside the correct order in each file", async () => {
+  const differentOrders = [
+    "Haiku → Flash → Sonnet → Sol → Opus",
+    "Haiku→Flash Med→Flash→Sonnet→Opus",
+    "`Haiku`  →  `Flash Med` →\n `Flash` → `Sonnet` → `Opus`",
+    "Flash Med → Flash → Sonnet → Opus",
+    "Haiku → Luna → Flash → Sol → Sonnet → Astra → Opus",
+    "Haiku → Luna → Flash → Sol = Astra → Sonnet → Opus",
+    "Haiku → Luna → Flash → Sol = Sonnet = Astra → Opus",
+    "Luna → Flash → Sol = Astra = Sonnet → Opus",
+    `${EXPECTED_TIER_ORDER} → Haiku`,
+  ];
+  for (const file of TIER_ORDER_FILES) {
+    const text = await Deno.readTextFile(file);
+    for (const different of differentOrders) {
+      // The unmodified file still contains the correct line: adding a second order must fail.
+      assertThrows(
+        () => assertTierOrder(`${text}\nTier order: ${different}.`, file),
+        Error,
+        `${file} must state only the current tier order`,
+      );
+    }
+    assertThrows(
+      () => assertTierOrder(text.replace(EXPECTED_TIER_ORDER, differentOrders[0]), file),
+      Error,
+      `${file} must state only the current tier order`,
+    );
+  }
 });
 
 Deno.test(
@@ -1206,4 +1425,22 @@ Deno.test("skills/file-issue and skills/design-issue tell the session to pass it
   assertEquals(fileIssue.includes("🤖 Authored by <tool> — <model>"), true);
   const designIssue = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
   assertEquals(designIssue.includes("deno task design:file-plan"), true);
+});
+
+Deno.test("skills/design-issue/SKILL.md pins the Gate 1 record's stored premise rows and design:gate1-adopt (web-jam-tools#1229)", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  for (
+    const sentence of [
+      "The record also holds the document's premise rows as they stood when Josh last approved or adopted them",
+      "`deno task design:gate1` clears the approval but keeps the stored premise rows",
+      "it **refuses** and leaves the file untouched rather than overwriting it",
+      "On approval `deno task design:gate1-approve` stores the document's premise rows as they stand, replacing any stored before.",
+      "**`deno task design:gate1-adopt <doc.md> --reply <text>`** (or `--reply-file <path>`) is for a document Josh approved before premise rows were kept",
+      "It **refuses** when the record already holds premise rows (adoption happens once per document)",
+      "It stores rows and nothing else: it does not approve Gate 1",
+      "`deno task design:gate1-status` also prints how many premise rows are stored, their source and its date.",
+    ]
+  ) {
+    assertStringIncludes(text, sentence);
+  }
 });

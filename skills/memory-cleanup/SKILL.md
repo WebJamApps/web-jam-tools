@@ -1,6 +1,6 @@
 ---
 name: memory-cleanup
-description: Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.
+description: Cross-agent memory hygiene audit that scans memory surfaces for staleness, dead links, and closed issue drift, reporting findings and waiting for approval. Use when auditing memory surfaces, cleaning up agent memory, or when a session-start memory cleanup reminder appears.
 ---
 
 # memory-cleanup
@@ -9,6 +9,11 @@ A three-phase memory housekeeper for Josh's multi-agent workspace. **Always do a
 three phases in order. Never skip Phase 2 (approval). Never auto-execute without
 Josh's explicit yes.** The skill is invoked manually; the session-start hook only
 *reminds* — it never runs the skill.
+
+**Two workflows live in this file.** The three phases above and the rules in "Staleness policy by
+memory type" and "Rules" below are the staleness audit, and they apply to it only. The last section,
+"Session-load cleanup", is a separate workflow with its own approval and merge rules, stated in that
+section; the staleness audit's approval and no-merge rules do not apply to its rows.
 
 Master copy: `skills/memory-cleanup/SKILL.md` in `web-jam-tools`. Installed locally
 as a file-level symlink at `~/.claude/skills/memory-cleanup/SKILL.md`. Runtime state
@@ -226,6 +231,38 @@ Only after approval, and only for approved rows:
 - **Stamp on every approved run**, even a zero-action one, so the daily reminder clears.
 - **Every surface gets a verdict.** Phase 2's report must include a `checked — clean` / `checked — N findings` / `NOT CHECKED` line for all 12 surfaces (see Phase 2 §3). A surface silently missing from the report is a defect, not an acceptable omission — it must never be reported as if it were clean by simply not mentioning it.
 
+## Session-load cleanup
+
+Run this when the tab 1 session-load report says the memory index is over, or when Josh asks to
+bring memories back to the low mark. The memory steps act on Claude Code's memory folder only,
+`~/.claude/projects/-home-joshua/memory/`; agy and Codex have no memory index. One run covers all
+three tools' parts, and the after-run list reports every part's size against its limit. The
+requirements are in `~/Dropbox/web-jam-llms/Token_Savings/standing-preamble-design-2026-08-08.md`,
+"What `/memory-cleanup` does" and "What it refuses to do".
+
+**Who does what.** You make the judgments and write them to a plan file; the script does the file
+work and the checks. The plan file is JSON: `merges` (`keep`, `absorb`), `moves` (`slug`,
+`target_skill`), `removals` (`slug`, `reason` of `hook-enforced` or `already-said`, `evidence`) and
+`guards` (`slug`, `kind` of `approval-gate`, `deletion-guard`, `credential-rule` or
+`spending-rule`). A move needs the memory's text to be in the target skill's `SKILL.md` first.
+
+1. Write the plan file, then run the script with `--dry-run` and show Josh the after-run list:
+   `deno task --config ~/WebJamApps/web-jam-tools/deno.json memory-cleanup:run --dry-run --plan <plan file>`
+2. Merges and moves need no approval in this workflow, because neither loses text (the verbatim-preservation
+   policy): a merge keeps the full text of both memories in the surviving file, whatever their `metadata.type`
+   (including `user` and `feedback`), and a move happens only when the script finds the memory's text in the
+   skill word for word. A move whose text is not found REFUSES and the memory stays where it is.
+3. A removal because a hook now enforces the memory, or because `CLAUDE.md` or a skill already says it
+   in different words, waits for Josh's yes on that row. Run it again with `--approve <slug>` for each
+   row he approves; a row without his yes leaves the file untouched.
+4. A guard rule (frontmatter `metadata.guard: true`) is never offered, merged, moved or removed. List
+   each memory you mark as one of the four kinds above; the after-run list names each new mark.
+5. Removal is a move to `memory/archive/`, never a delete. After a real run the script regenerates the
+   memory index with `deno task memory-index`.
+6. Print the script's after-run list for Josh: what was merged, moved or archived, what waits for his
+   yes, and every part's size against its limit. The limits are read from
+   `src/session-load/limits.json`; never restate a limit number.
+
 ## Triggering
 
 - Manual: type `/memory-cleanup`, or say "clean up memory" / "memory hygiene".
@@ -237,3 +274,9 @@ Only after approval, and only for approved rows:
 - `~/.claude/CLAUDE.md` + `/home/joshua/WebJamApps/web-jam-tools/docs/cross-ai-rules.md` — the two standing rules (completion-reflection; save-redirection during dispatch) this sweep backstops.
 - `/drive-cleanup` — owns all Google Drive execution (surface #8 defers to it).
 - `scripts/backup-claude-memory.sh` — what protects these memory surfaces.
+
+## Description Detail & Triggers
+
+```
+Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.
+```

@@ -17,9 +17,13 @@ interface RunResult {
   stderr: string;
 }
 
-async function runSessionModelCli(input: string): Promise<RunResult> {
+async function runSessionModelCli(
+  input: string,
+  env: Record<string, string> = {},
+): Promise<RunResult> {
   const cmd = new Deno.Command("deno", {
-    args: ["run", "--no-config", "--allow-read", "--allow-env", SCRIPT_PATH],
+    args: ["run", "--no-config", "--allow-read", "--allow-env", "--allow-write", SCRIPT_PATH],
+    env,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -42,9 +46,7 @@ Deno.test("checkSessionModel: Outcome 1 - gemini-3.8-flash-tiered and Flash mode
   assertEquals(checkSessionModel("gemini-3.8-flash-tiered"), { allowed: true });
   assertEquals(checkSessionModel("gemini-3.7-flash-tiered"), { allowed: true });
   assertEquals(checkSessionModel("gemini-3.8-flash-high"), { allowed: true });
-  assertEquals(checkSessionModel("gemini-3.8-flash-medium"), { allowed: true });
   assertEquals(checkSessionModel("gemini-3.7-flash-high"), { allowed: true });
-  assertEquals(checkSessionModel("gemini-3.7-flash-medium"), { allowed: true });
 });
 
 // --- Outcome 2: condition does not hold (denied models) ---
@@ -111,4 +113,138 @@ Deno.test("CLI stdin Outcome 3: empty modelName or unparseable input exits 0", a
 
   const unparseableRes = await runSessionModelCli("not-json");
   assertEquals(unparseableRes.code, 0);
+});
+
+// --- Workflow switch tests (web-jam-tools#1046) ---
+
+Deno.test("CLI stdin with unexpired workflow switch naming 'agy-model-guard' exits 0 and logs release", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "agy-model-guard", expires_at: future }),
+    );
+
+    const res = await runSessionModelCli(
+      JSON.stringify({ modelName: "gemini-3.6-flash-tiered" }),
+      { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+    );
+    assertEquals(res.code, 0);
+    assertEquals(res.stderr, "");
+
+    const log = await Deno.readTextFile(logPath);
+    assert(log.includes("released guard: agy-model-guard"));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI stdin with unexpired workflow switch naming 'all workflow guards' exits 0 and logs release", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "all workflow guards", expires_at: future }),
+    );
+
+    const res = await runSessionModelCli(
+      JSON.stringify({ modelName: "gemini-3.6-flash-tiered" }),
+      { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+    );
+    assertEquals(res.code, 0);
+
+    const log = await Deno.readTextFile(logPath);
+    assert(log.includes("released guard: agy-model-guard"));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI stdin with expired workflow switch naming 'agy-model-guard' still exits 2 with BLOCKED message", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "agy-model-guard", expires_at: past }),
+    );
+
+    const res = await runSessionModelCli(
+      JSON.stringify({ modelName: "gemini-3.6-flash-tiered" }),
+      { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+    );
+    assertEquals(res.code, 2);
+    assert(res.stderr.includes("BLOCKED (agy-model guard)"));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI stdin with workflow switch naming different guard still exits 2 with BLOCKED message", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "opus-delegation-gate", expires_at: future }),
+    );
+
+    const res = await runSessionModelCli(
+      JSON.stringify({ modelName: "gemini-3.6-flash-tiered" }),
+      { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+    );
+    assertEquals(res.code, 2);
+    assert(res.stderr.includes("BLOCKED (agy-model guard)"));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI stdin with unparseable expiry still exits 2 with BLOCKED message", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    await Deno.writeTextFile(
+      switchPath,
+      JSON.stringify({ guard: "agy-model-guard", expires_at: "not-a-date" }),
+    );
+
+    const res = await runSessionModelCli(
+      JSON.stringify({ modelName: "gemini-3.6-flash-tiered" }),
+      { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+    );
+    assertEquals(res.code, 2);
+    assert(res.stderr.includes("BLOCKED (agy-model guard)"));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI stdin with malformed JSON state file proceeds as absent and exits 2 with BLOCKED message", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const switchPath = `${dir}/switch.json`;
+    const logPath = `${dir}/switch.log`;
+    await Deno.writeTextFile(switchPath, "{ malformed json: true");
+
+    const res = await runSessionModelCli(
+      JSON.stringify({ modelName: "gemini-3.6-flash-tiered" }),
+      { WORKFLOW_SWITCH_PATH: switchPath, WORKFLOW_SWITCH_LOG_PATH: logPath },
+    );
+    assertEquals(res.code, 2);
+    assert(res.stderr.includes("BLOCKED (agy-model guard)"));
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });

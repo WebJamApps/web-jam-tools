@@ -527,7 +527,7 @@ Deno.test("Bash deno task create-issue with an approved title is silently passed
     async (tokenPath) => {
       const res = await runHook(
         bashCall(
-          `deno task create-issue --title "Fix the flux capacitor" --body-file /tmp/b.md --type Task --label "Flash High"`,
+          `deno task create-issue --title "Fix the flux capacitor" --body-file /tmp/b.md --type Task --label "Flash"`,
         ),
         tokenPath,
       );

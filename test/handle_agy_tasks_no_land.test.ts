@@ -27,7 +27,7 @@ if [ "\${1:-}" = "pr" ] && [ "\${2:-}" = "view" ]; then
   # write: its ROSTER is unversioned, so it refuses a version-qualified author
   # outright. This fixture previously carried the version-qualified spelling,
   # which no real PR body can ever have.
-  echo "Closes #686\\n\\n🤖 Work by agy — Gemini Flash (High)"
+  echo "Closes #686\\n\\n🤖 Work by agy — Gemini Flash"
   exit 0
 fi
 if [ "\${1:-}" = "api" ]; then

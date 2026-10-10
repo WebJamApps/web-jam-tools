@@ -1,6 +1,6 @@
 ---
 name: backlog-groom
-description: Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, milestone coverage drift, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.
+description: Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues, milestone coverage drift, and stale issues. Use when auditing repository backlogs for drift, stale issues, or spec quality across WebJamApps.
 ---
 
 # backlog-groom — cross-repo backlog health audit
@@ -11,7 +11,8 @@ Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, de
 
 ## Execution Model
 
-- **Delegated Scan & Analysis:** Step 1 (Scan & Collect) and Step 2 (Analyze & Categorize) MUST be delegated to a single subagent running on **Flash Med** or **Haiku** to conserve token quota.
+- **Delegated Scan & Analysis:** Step 1 (Scan & Collect) and Step 2 (Analyze & Categorize) MUST be delegated to a single subagent running on **Flash** or **Haiku** to conserve token quota.
+- **Per-surface delegation:** On Claude Code, dispatch that subagent with `Agent(model: "haiku")`. On agy / Antigravity, dispatch it with `invoke_subagent(TypeName: "self", Role: "Backlog Groom Scanner", Model: "inherit")` on Flash.
 - **Report & Summary Output:** The delegated subagent performs all cross-repo `gh` lookup calls, writes the detailed report to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, and returns ONLY the final findings table, per-repo untyped summary ratios, and per-repo missing milestone summary ratios back to the primary session.
 - **Primary Session Presentation:** The primary session renders the findings table to Josh and handles interactive approval and execution.
 
@@ -31,8 +32,8 @@ Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, de
 The audit inspects every open issue across all 8 repositories against six core categories:
 
 ### 1. Model-Label Drift
-- **Missing Model Label:** Issue has no model-tier label (`Haiku`, `Sonnet`, `Opus`, `Fable`, `Flash`, `Flash Med`, `Flash High`, `Flash Low`) assigned.
-- **Multiple Model Labels:** Issue carries more than one model-tier label simultaneously (e.g. both `Sonnet` and `Flash Med`).
+- **Missing Model Label:** Issue has no model-tier label (`Haiku`, `Sonnet`, `Opus`, `Fable`, `Flash`, `Flash Low`) assigned.
+- **Multiple Model Labels:** Issue carries more than one model-tier label simultaneously (e.g. both `Sonnet` and `Flash`).
 - **Retired / Deprecated Labels:** Issue carries retired or non-canonical model labels (e.g. old `Flash-lane`, `GPT-4`, `Claude-2` or mismatched tier spellings).
 
 ### 2. Native Dependencies & Blocked Label Drift
@@ -82,7 +83,7 @@ The audit inspects every open issue across all 8 repositories against six core c
 
 ### Step 2: Analyze & Categorize (Delegated to Subagent)
 1. Evaluate each issue against the 6 audit categories above.
-2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash High`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
+2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
 
 ### Step 3: Write Report File (Delegated to Subagent)
@@ -93,7 +94,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
-| 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash High` label |
+| 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash` label |
 | 2 | JaMmusic | #1243 | Dependency Drift | Labeled `Blocked` & body says "do not start", but blocker web-jam-back#990 "Add PATCH /venue/:id (the honest verb for our partial-merge update)" is CLOSED | Remove `Blocked` label & reconcile body (note web-jam-back#990 closed; preserve deploy step) |
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |
@@ -107,3 +108,7 @@ If no drift is found across all repos, report that the backlog is 100% clean.
 - Accept selective approvals (e.g., "approve 1, 2", "all except 3", "yes to all").
 - Execute ONLY approved actions on GitHub via `gh issue edit --milestone "<name>"`, `gh issue edit`, `gh label`, etc.
 - Never touch unapproved items.
+
+## Description Detail & Triggers
+
+Audit all 8 active WebJamApps repos for model-label drift, native dependency & Blocked label drift, executable issue spec quality, untyped issues & native Epic type desync, milestone coverage drift, and stale/duplicate/completed issues. Writes report to ~/Dropbox/web-jam-llms/backlog-groom-report.md, presents findings as a table, and WAITS for Josh's explicit per-item approval before making any GitHub edits.

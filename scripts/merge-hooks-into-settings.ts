@@ -24,8 +24,8 @@ export function merge(settingsPath: string, args: string[]): number {
   let askPatterns: string[] = [];
   let allowPatterns: string[] = [];
   let statusLineArgs: string[] = [];
-  let defaultModeArgs: string[] = [];
   let autoModeArgs: string[] = [];
+  let skillOverridesArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
   // web-jam-tools#432 finding 9: a SessionStart or SessionEnd entry in agy's
@@ -72,8 +72,8 @@ export function merge(settingsPath: string, args: string[]): number {
         "--ask",
         "--allow",
         "--status-line",
-        "--default-mode",
         "--auto-mode",
+        "--skill-overrides",
       ],
       rest,
     );
@@ -96,8 +96,8 @@ export function merge(settingsPath: string, args: string[]): number {
     askPatterns = sections["--ask"] || [];
     allowPatterns = sections["--allow"] || [];
     statusLineArgs = sections["--status-line"] || [];
-    defaultModeArgs = sections["--default-mode"] || [];
     autoModeArgs = sections["--auto-mode"] || [];
+    skillOverridesArgs = sections["--skill-overrides"] || [];
   }
 
   const passedLifecycle = [
@@ -400,19 +400,21 @@ export function merge(settingsPath: string, args: string[]): number {
   const addedDeny = mergePermissionsList("deny", denyPatterns);
   const addedAsk = mergePermissionsList("ask", askPatterns);
   // permissions.allow (web-jam-tools#685, §3a) — purely additive, same shape
-  // as deny/ask, but with no cross-listing check against the other two: an
-  // allow pattern also present in permissions.deny is not a conflict to
-  // resolve here (deny always wins over a matching allow), so unlike
-  // deny/ask there is nothing to reconcile between allow and its siblings.
+  // as deny/ask. Rules owned by DENY_RULES or ASK_RULES are cross-checked and
+  // stripped from permissions.allow below (web-jam-tools#448).
   const addedAllow = mergePermissionsList("allow", allowPatterns);
 
   // A pattern the installer owns via one versioned array (DENY_RULES /
-  // ASK_RULES) must not remain in the OTHER permissions list — a stale copy
-  // there silently overrides the owning array's classification, since a
+  // ASK_RULES) must not remain in another permissions list — a stale copy
+  // there silently overrides or contradicts the owning array's classification, since a
   // pattern present in both permissions.deny and permissions.ask has deny
-  // win (web-jam-tools#525). ownedPatterns is this run's version of the
-  // owning array; otherSection is the list to scan for a stale copy.
-  function findCrossListed(ownedPatterns: string[], otherSection: "deny" | "ask"): string[] {
+  // win (web-jam-tools#525), and a pattern present in permissions.allow
+  // undermines an ask or deny rule (web-jam-tools#448). ownedPatterns is this run's
+  // version of the owning array; otherSection is the list to scan for a stale copy.
+  function findCrossListed(
+    ownedPatterns: string[],
+    otherSection: "deny" | "ask" | "allow",
+  ): string[] {
     if (ownedPatterns.length === 0) return [];
     if (!data.permissions || typeof data.permissions !== "object") return [];
     if (!Array.isArray(data.permissions[otherSection])) return [];
@@ -422,6 +424,8 @@ export function merge(settingsPath: string, args: string[]): number {
 
   const denyOwnedInAsk = findCrossListed(denyPatterns, "ask");
   const askOwnedInDeny = findCrossListed(askPatterns, "deny");
+  const denyOwnedInAllow = findCrossListed(denyPatterns, "allow");
+  const askOwnedInAllow = findCrossListed(askPatterns, "allow");
 
   // statusLine merge (web-jam-tools#688). Unlike every other section above,
   // this is a single scalar value, not a list — data.statusLine in Claude
@@ -444,33 +448,6 @@ export function merge(settingsPath: string, args: string[]): number {
       statusLineChanged = true;
       statusLinePrevCommand = currentIsWellFormed ? current.command : undefined;
       data.statusLine = { type: "command", command: desiredCommand };
-    }
-  }
-
-  // permissions.defaultMode merge (web-jam-tools#705). Same single-scalar
-  // shape as statusLine above, but nested under permissions instead of
-  // top-level — Claude Code's settings.json stores it as a plain string
-  // (e.g. "acceptEdits"), not an object. Only touched when --default-mode
-  // was actually passed, so a target invoked without it (agy's hooks.json —
-  // agy has no permission-mode concept at all, docs/agy-hooks.md) is
-  // completely unaffected: no key added, no drift ever reported,
-  // byte-identical output.
-  let defaultModeAdded = false;
-  let defaultModeChanged = false;
-  let defaultModePrevValue: string | undefined;
-  if (defaultModeArgs.length > 0) {
-    const desiredMode = defaultModeArgs[0];
-    if (!data.permissions || typeof data.permissions !== "object") {
-      data.permissions = {};
-    }
-    const current = data.permissions.defaultMode;
-    if (current === undefined) {
-      defaultModeAdded = true;
-      data.permissions.defaultMode = desiredMode;
-    } else if (current !== desiredMode) {
-      defaultModeChanged = true;
-      defaultModePrevValue = typeof current === "string" ? current : undefined;
-      data.permissions.defaultMode = desiredMode;
     }
   }
 
@@ -501,7 +478,34 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
-  // Secret-scan gate: check all strings in permissions, hooks and autoMode for credentials
+  // skillOverrides merge (web-jam-tools#1240): the whole object is owned by this installer.
+  // One JSON string argument; installed when absent, replaced when it differs (key
+  // order ignored). Only touched when --skill-overrides was passed, so agy's hooks.json
+  // is unaffected.
+  let skillOverridesAdded = false;
+  let skillOverridesChanged = false;
+  let skillOverridesDiff: string[] = [];
+  if (skillOverridesArgs.length > 0) {
+    let desiredSkillOverrides: unknown;
+    try {
+      desiredSkillOverrides = JSON.parse(skillOverridesArgs[0]);
+    } catch (e) {
+      console.error(`error: --skill-overrides value is not valid JSON: ${e}`);
+      return 1;
+    }
+    if (data.skillOverrides === undefined) {
+      skillOverridesAdded = true;
+      data.skillOverrides = desiredSkillOverrides;
+    } else if (canonicalJson(data.skillOverrides) !== canonicalJson(desiredSkillOverrides)) {
+      skillOverridesChanged = true;
+      // Computed before the replace: a replace discards a hand edit, so the
+      // output has to name it for it to be carried into SKILL_OVERRIDES_JSON.
+      skillOverridesDiff = describeSkillOverridesDiff(data.skillOverrides, desiredSkillOverrides);
+      data.skillOverrides = desiredSkillOverrides;
+    }
+  }
+
+  // Secret-scan gate: check all strings in permissions, hooks, autoMode and skillOverrides for credentials
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
     for (const section of ["allow", "deny", "ask"]) {
@@ -554,6 +558,13 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   });
 
+  forEachString(data.skillOverrides, "skillOverrides", (where, value) => {
+    const match = findCredentialLiteral(value);
+    if (match) {
+      secretFindings.push(`${where}: ${match}`);
+    }
+  });
+
   const targetFilename = path.basename(settingsPath);
 
   if (secretFindings.length > 0) {
@@ -583,12 +594,14 @@ export function merge(settingsPath: string, args: string[]): number {
     addedAllow.length > 0 ||
     denyOwnedInAsk.length > 0 ||
     askOwnedInDeny.length > 0 ||
+    denyOwnedInAllow.length > 0 ||
+    askOwnedInAllow.length > 0 ||
     statusLineAdded ||
     statusLineChanged ||
-    defaultModeAdded ||
-    defaultModeChanged ||
     autoModeAdded ||
-    autoModeChanged;
+    autoModeChanged ||
+    skillOverridesAdded ||
+    skillOverridesChanged;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -665,6 +678,16 @@ export function merge(settingsPath: string, args: string[]): number {
           `${targetFilename}: permissions.deny rule ${pattern} is also in permissions.ask (stale copy)`,
         );
       }
+      for (const pattern of denyOwnedInAllow) {
+        console.error(
+          `${targetFilename}: permissions.allow rule ${pattern} is also in permissions.deny (stale copy)`,
+        );
+      }
+      for (const pattern of askOwnedInAllow) {
+        console.error(
+          `${targetFilename}: permissions.allow rule ${pattern} is also in permissions.ask (stale copy)`,
+        );
+      }
       if (statusLineAdded) {
         console.error(`${targetFilename}: missing statusLine ${statusLineArgs[0]}`);
       }
@@ -675,22 +698,21 @@ export function merge(settingsPath: string, args: string[]): number {
           })`,
         );
       }
-      if (defaultModeAdded) {
-        console.error(`${targetFilename}: missing permissions.defaultMode ${defaultModeArgs[0]}`);
-      }
-      if (defaultModeChanged) {
-        console.error(
-          `${targetFilename}: permissions.defaultMode differs from desired (want ${
-            defaultModeArgs[0]
-          }${defaultModePrevValue ? `, has ${defaultModePrevValue}` : ""})`,
-        );
-      }
       if (autoModeAdded) {
         console.error(`${targetFilename}: missing autoMode section`);
       }
       if (autoModeChanged) {
         console.error(`${targetFilename}: autoMode differs from the versioned config`);
         for (const line of autoModeDiff) {
+          console.error(`  ${line}`);
+        }
+      }
+      if (skillOverridesAdded) {
+        console.error(`${targetFilename}: missing skillOverrides section`);
+      }
+      if (skillOverridesChanged) {
+        console.error(`${targetFilename}: skillOverrides differs from the versioned config`);
+        for (const line of skillOverridesDiff) {
           console.error(`  ${line}`);
         }
       }
@@ -717,6 +739,14 @@ export function merge(settingsPath: string, args: string[]): number {
   if (askOwnedInDeny.length > 0) {
     const removeSet = new Set(askOwnedInDeny);
     data.permissions.deny = (data.permissions.deny as string[]).filter((p) => !removeSet.has(p));
+  }
+  if (denyOwnedInAllow.length > 0) {
+    const removeSet = new Set(denyOwnedInAllow);
+    data.permissions.allow = (data.permissions.allow as string[]).filter((p) => !removeSet.has(p));
+  }
+  if (askOwnedInAllow.length > 0) {
+    const removeSet = new Set(askOwnedInAllow);
+    data.permissions.allow = (data.permissions.allow as string[]).filter((p) => !removeSet.has(p));
   }
 
   if (tryExistsSync(settingsPath)) {
@@ -795,19 +825,21 @@ export function merge(settingsPath: string, args: string[]): number {
       `${targetFilename}: removed permissions.deny rule ${pattern} (now owned by permissions.ask)`,
     );
   }
+  for (const pattern of denyOwnedInAllow) {
+    console.log(
+      `${targetFilename}: removed permissions.allow rule ${pattern} (now owned by permissions.deny)`,
+    );
+  }
+  for (const pattern of askOwnedInAllow) {
+    console.log(
+      `${targetFilename}: removed permissions.allow rule ${pattern} (now owned by permissions.ask)`,
+    );
+  }
   if (statusLineAdded) {
     console.log(`${targetFilename}: added statusLine ${statusLineArgs[0]}`);
   }
   if (statusLineChanged) {
     console.log(`${targetFilename}: updated statusLine to ${statusLineArgs[0]}`);
-  }
-  if (defaultModeAdded) {
-    console.log(`${targetFilename}: added permissions.defaultMode ${defaultModeArgs[0]}`);
-  }
-  if (defaultModeChanged) {
-    console.log(
-      `${targetFilename}: updated permissions.defaultMode to ${defaultModeArgs[0]}`,
-    );
   }
   if (autoModeAdded) {
     console.log(`${targetFilename}: added autoMode section`);
@@ -818,16 +850,28 @@ export function merge(settingsPath: string, args: string[]): number {
       console.log(`  ${line}`);
     }
   }
+  if (skillOverridesAdded) {
+    console.log(`${targetFilename}: added skillOverrides section`);
+  }
+  if (skillOverridesChanged) {
+    console.log(`${targetFilename}: updated skillOverrides to the versioned config`);
+    for (const line of skillOverridesDiff) {
+      console.log(`  ${line}`);
+    }
+  }
 
   return 0;
 }
 
 /** JSON.stringify with object keys sorted, so key order never counts as drift. */
 function canonicalJson(v: unknown): string {
-  return JSON.stringify(v, (_k, val) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : val);
+  return JSON.stringify(
+    v,
+    (_k, val) =>
+      val && typeof val === "object" && !Array.isArray(val)
+        ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        : val,
+  );
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -880,6 +924,34 @@ function describeAutoModeDiff(installed: unknown, versioned: unknown): string[] 
     }
     if (extra.length === 0 && missing.length === 0) {
       lines.push(`autoMode.${key}: same entries in a different order or count`);
+    }
+  }
+  return lines;
+}
+
+/**
+ * Names what differs between the installed skillOverrides and the versioned
+ * one: keys missing, keys not in versioned config, or values that differ.
+ */
+function describeSkillOverridesDiff(installed: unknown, versioned: unknown): string[] {
+  if (!isPlainObject(installed) || !isPlainObject(versioned)) {
+    return ["skillOverrides: the installed value is not an object"];
+  }
+  const lines: string[] = [];
+  const keys = [...new Set([...Object.keys(installed), ...Object.keys(versioned)])].sort();
+  for (const key of keys) {
+    if (!(key in versioned)) {
+      lines.push(`skillOverrides.${key}: key is not in the versioned config`);
+      continue;
+    }
+    if (!(key in installed)) {
+      lines.push(`skillOverrides.${key}: key is missing`);
+      continue;
+    }
+    const have = installed[key];
+    const want = versioned[key];
+    if (canonicalJson(have) !== canonicalJson(want)) {
+      lines.push(`skillOverrides.${key}: value differs`);
     }
   }
   return lines;

@@ -1,6 +1,6 @@
 ---
 name: handle-gmails
-description: Process Josh's Gmail inbox one message at a time, newest first. Suggest action (archive / delete / draft reply / label / mark important / mark spam / unsubscribe / next). Pause for approval before executing. Runs on TWO surfaces — laptop Haiku (Claude Code, local mcp__gmail__ tools + local files; MUST be on the Haiku model — the skill refuses to run on a pricier model) and phone Sonnet (Claude app, mcp__claude_ai_Gmail__ tools, no filesystem). Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Per-sender auto-archive rules in rules.yaml (laptop only). Daily-handled log in log/<YYYY-MM-DD>.md (laptop only, auto-pruned after 7 days). Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar. Also invoke if a session-start hook reminder appears noting today hasn't been handled.
+description: Process Josh's Gmail inbox one message at a time, newest first, suggesting actions (archive, delete, draft reply, label) and pausing for approval. Use when triaging or processing Gmail inbox messages, or when a session-start reminder notes inbox processing is pending.
 ---
 
 # handle-gmails
@@ -69,7 +69,7 @@ On the phone, the `mcp__claude_ai_Gmail__*` tools operate on **threads and label
 | Action | Laptop — `mcp__gmail__*` | Phone — `mcp__claude_ai_Gmail__*` |
 |---|---|---|
 | `archive` | `modify_email` removing `INBOX`. Don't mark read if it was unread. | `unlabel_thread` removing `INBOX`. |
-| `delete` | `delete_email` (moves to Trash). | `label_thread` (or `label_message`) adding `TRASH` — moves it to Trash. (`TRASH` is a supported system label; there's just no dedicated delete tool.) |
+| `delete` (move to Trash) | `modify_email` with `addLabelIds: ["TRASH"]` — moves the message to Trash without permanently deleting it. | `label_thread` (or `label_message`) adding `TRASH` — moves it to Trash. (`TRASH` is a supported system label; there's just no dedicated delete tool.) |
 | `draft reply` | `draft_email` with `inReplyTo` + `threadId` from the source message. **Print the draft for Josh's review before saving.** | `create_draft` referencing the thread. **Print the draft for Josh's review before saving.** |
 | `label <name>` | `get_or_create_label` then `modify_email` adding the label. | `list_labels` (or `create_label` if missing) then `label_thread` adding it. |
 | `mark important` | `modify_email` adding `IMPORTANT`. | `label_thread` adding `IMPORTANT`. |
@@ -134,3 +134,7 @@ A single line: today's date in `YYYY-MM-DD` (Eastern time). Updated at the end o
 - **Always print draft replies BEFORE saving.** Josh reviews; he doesn't want unreviewed Gmail drafts in his account.
 - **Never read or process emails from joshua.v.sherman+banking@ or any banking/healthcare/legal sender categories without explicit Josh prompt.** Skip with "this looks like a sensitive sender — leaving for manual review."
 - **Don't handle web.jam.adm@gmail.com.** That account is manual (per Josh's choice 2026-05-20). If anything routes there, tell Josh and stop.
+
+## Description Detail & Triggers
+
+Process Josh's Gmail inbox one message at a time, newest first. Suggest action (archive / delete / draft reply / label / mark important / mark spam / unsubscribe / next). Pause for approval before executing. Runs on TWO surfaces — laptop Haiku (Claude Code, local mcp__gmail__ tools + local files; MUST be on the Haiku model — the skill refuses to run on a pricier model) and phone Sonnet (Claude app, mcp__claude_ai_Gmail__ tools, no filesystem). Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Per-sender auto-archive rules in rules.yaml (laptop only). Daily-handled log in log/<YYYY-MM-DD>.md (laptop only, auto-pruned after 7 days). Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar. Also invoke if a session-start hook reminder appears noting today hasn't been handled.

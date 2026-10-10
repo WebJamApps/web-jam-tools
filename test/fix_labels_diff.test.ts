@@ -228,11 +228,32 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     byName.get("Haiku")?.description,
     "Mechanical tasks: lookups, scans, single-file edits, typo/data fixes, and running test/build checks",
   );
+  assertEquals(byName.get("Luna")?.hex, "C5DEF5");
+  assertEquals(byName.get("Luna")?.modelTier, true);
+  assertEquals(
+    byName.get("Luna")?.description,
+    "GPT-6 Luna at high effort: mechanical one-off fixes, scans, and small contained tasks",
+  );
+  assertEquals(byName.get("Luna")?.repos, "all");
+  assertEquals(byName.get("Sol")?.hex, "006B75");
+  assertEquals(byName.get("Sol")?.modelTier, true);
+  assertEquals(
+    byName.get("Sol")?.description,
+    "Logic- and safety-heavy coding via Codex: GPT-6.1 Sol (gpt-6.1-sol), high effort",
+  );
+  assertEquals(byName.get("Sol")?.repos, "all");
+  assertEquals(byName.get("Astra")?.hex, "6F42C1");
+  assertEquals(byName.get("Astra")?.modelTier, true);
+  assertEquals(
+    byName.get("Astra")?.description,
+    "GPT-6 Astra at high effort; kept for REAPER recording",
+  );
+  assertEquals(byName.get("Astra")?.repos, "all");
   assertEquals(byName.get("Sonnet")?.hex, "1D76DB");
   assertEquals(byName.get("Sonnet")?.modelTier, true);
   assertEquals(
     byName.get("Sonnet")?.description,
-    "Coding that needs a Claude-side capability Flash High lacks; ranks above Flash High but is not the default coder tier (a cost decision)",
+    "Coding that needs a Claude-side capability Flash lacks; ranks above Flash but is not the default coder tier (a cost decision)",
   );
   assertEquals(byName.get("Opus")?.hex, "B392F0");
   assertEquals(byName.get("Opus")?.modelTier, true);
@@ -247,33 +268,30 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     byName.get("Fable")?.description,
     "Fable 5 remains the superior model for deep reasoning, structural planning, and long-context retention - currently unavailable",
   );
-  assertEquals(byName.get("Flash Med")?.hex, "FBCA04");
-  assertEquals(byName.get("Flash Med")?.modelTier, true);
+  // web-jam-tools#1202: the medium level is retired, and `Flash` carries the old
+  // `Flash High` label as an alias so it is renamed in place.
+  assertEquals(byName.get("Flash Med"), undefined);
+  assertEquals(byName.get("Flash")?.aliases, ["Flash High"]);
+  // Josh's call, 2026-07-31: Flash is routable in all 8 active repos, not just
+  // the 5 front-end ones — see the comment above the `labels:` entries in
+  // skills/fix-labels/labels.yaml. Assert this explicitly so a future agent
+  // can't quietly re-narrow Flash back to `frontend`.
+  assertEquals(byName.get("Flash")?.hex, "E67E22");
+  assertEquals(byName.get("Flash")?.modelTier, true);
   assertEquals(
-    byName.get("Flash Med")?.description,
-    "Mechanical work, documentation cleanup, single-file edits, and routine execution tasks across all repos",
-  );
-  // Josh's call, 2026-07-31: Flash High and Flash Med are routable in all
-  // 8 active repos, not just the 5 front-end ones — see the comment above
-  // the `labels:` entries in skills/fix-labels/labels.yaml. Flash Low stays
-  // frontend-only pending Josh's open decision on its use case. Assert this
-  // explicitly so a future agent can't quietly re-narrow Flash High/Med
-  // back to `frontend`.
-  assertEquals(byName.get("Flash Med")?.repos, "all");
-  assertEquals(byName.get("Flash High")?.hex, "E67E22");
-  assertEquals(byName.get("Flash High")?.modelTier, true);
-  assertEquals(
-    byName.get("Flash High")?.description,
+    byName.get("Flash")?.description,
     "Default implementation tier: full-stack coding, multi-file refactoring, complex backend/system work, and interactive work across all repos; the default lane, billed to Google rather than the constrained Anthropic budget",
   );
-  assertEquals(byName.get("Flash High")?.repos, "all");
+  assertEquals(byName.get("Flash")?.repos, "all");
   const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();
   assertEquals(modelTierNames, [
+    "Astra",
     "Fable",
-    "Flash High",
-    "Flash Med",
+    "Flash",
     "Haiku",
+    "Luna",
     "Opus",
+    "Sol",
     "Sonnet",
   ]);
   assertEquals(byName.get("parked")?.hex, "C2C2C2");
@@ -385,6 +403,45 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   }
 });
 
+Deno.test("Luna, Sol, Astra: missing labels are proposed with canonical values for every active repo", async () => {
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  const expectedLabels = [
+    {
+      name: "Luna",
+      hex: "C5DEF5",
+      description:
+        "GPT-6 Luna at high effort: mechanical one-off fixes, scans, and small contained tasks",
+    },
+    {
+      name: "Sol",
+      hex: "006B75",
+      description:
+        "Logic- and safety-heavy coding via Codex: GPT-6.1 Sol (gpt-6.1-sol), high effort",
+    },
+    {
+      name: "Astra",
+      hex: "6F42C1",
+      description: "GPT-6 Astra at high effort; kept for REAPER recording",
+    },
+  ];
+
+  for (const repo of allRepos(schema)) {
+    const drift = classifyRepoDrift(schema, repo, []);
+    for (const expected of expectedLabels) {
+      const proposed = findByName(drift, expected.name);
+      assertEquals(
+        [proposed?.kind, proposed?.action, proposed?.hex, proposed?.description],
+        ["missing", "create", expected.hex, expected.description],
+        `expected ${repo} to propose creating ${expected.name} with canonical color and description`,
+      );
+      assert(
+        expected.description.length <= 100,
+        `${expected.name} description exceeds GitHub's cap`,
+      );
+    }
+  }
+});
+
 Deno.test("web-jam-tools#300: a pruned priority label still present on GitHub is now a non-canonical delete candidate", async () => {
   const schema = await loadSchema(LABELS_YAML_PATH);
   const actual: ActualLabel[] = [
@@ -457,59 +514,55 @@ Deno.test("web-jam-tools#329: `Blocked` is scoped `repos: all`, so it is never a
   }
 });
 
-Deno.test("web-jam-tools 2026-07-31: `Flash High` and `Flash Med` are scoped `repos: all`, so they are never wrong-repo removal candidates in web-jam-back or WebJamSocketCluster", async () => {
+Deno.test("web-jam-tools 2026-07-31: `Flash` is scoped `repos: all`, so it is never a wrong-repo removal candidate in web-jam-back or WebJamSocketCluster", async () => {
   // Regression test for the standing trap described on the dispatch that
-  // widened these two labels: `Flash High` had been `repos: frontend`,
+  // widened this label: `Flash` had been `repos: frontend`,
   // so `deno task fix-labels:diff` kept proposing REMOVE for it in
   // web-jam-back and WebJamSocketCluster, where web-jam-back#991 "Remove
   // PUT /venue/:id once all callers use PATCH" legitimately carries it.
   const schema = await loadSchema(LABELS_YAML_PATH);
-  const fhDesc = schema.labels.find((l) => l.name === "Flash High")?.description ?? "";
-  const fmDesc = schema.labels.find((l) => l.name === "Flash Med")?.description ?? "";
+  const fhDesc = schema.labels.find((l) => l.name === "Flash")?.description ?? "";
   for (const repo of ["web-jam-back", "WebJamSocketCluster"]) {
     const actual: ActualLabel[] = [
-      { name: "Flash High", color: "E67E22", description: fhDesc },
-      { name: "Flash Med", color: "FBCA04", description: fmDesc },
+      { name: "Flash", color: "E67E22", description: fhDesc },
     ];
     const drift = classifyRepoDrift(schema, repo, actual);
     assertEquals(
-      findByName(drift, "Flash High"),
+      findByName(drift, "Flash"),
       undefined,
-      `expected no Flash High drift (esp. no wrong-repo) in ${repo}`,
-    );
-    assertEquals(
-      findByName(drift, "Flash Med"),
-      undefined,
-      `expected no Flash Med drift (esp. no wrong-repo) in ${repo}`,
+      `expected no Flash drift (esp. no wrong-repo) in ${repo}`,
     );
   }
 });
 
-Deno.test("real defect 3: TimShermanMusic single 'Flash' — split proposes BOTH Flash Med and Flash High, deletes old Flash", async () => {
+Deno.test("web-jam-tools#1202: a repo carrying `Flash High` and `Flash Med` gets a rename to `Flash` and a delete of `Flash Med`, and no create of `Flash`", async () => {
   const schema = await loadSchema(LABELS_YAML_PATH);
-  const actual: ActualLabel[] = [{ name: "Flash", color: "cccccc" }];
+  const actual: ActualLabel[] = [
+    { name: "Flash High", color: "E67E22" },
+    { name: "Flash Med", color: "FBCA04" },
+  ];
   const drift = classifyRepoDrift(schema, "TimShermanMusic", actual);
 
-  const flashMed = findByName(drift, "Flash Med");
-  assertEquals(flashMed?.kind, "missing");
-  assertEquals(flashMed?.action, "create");
-
-  const flashHigh = findByName(drift, "Flash High");
-  assertEquals(flashHigh?.kind, "missing");
-  assertEquals(flashHigh?.action, "create");
-
   const flash = findByName(drift, "Flash");
-  assertEquals(flash?.kind, "non-canonical");
-  assertEquals(flash?.action, "delete");
+  assertEquals(flash?.kind, "misnamed");
+  assertEquals(flash?.action, "rename");
+  assertEquals(flash?.fromName, "Flash High");
+  assertEquals(drift.filter((d) => d.name === "Flash" && d.action === "create"), []);
+  // The renamed label does not also surface as its own delete line.
+  assertEquals(drift.filter((d) => d.name === "Flash High"), []);
+
+  const flashMed = findByName(drift, "Flash Med");
+  assertEquals(flashMed?.kind, "non-canonical");
+  assertEquals(flashMed?.action, "delete");
 });
 
-Deno.test("real defect 4: 'Flash High' at #D93F0B (the Fable color) is flagged MISCOLORED in every front-end repo", async () => {
+Deno.test("real defect 4: 'Flash' at #D93F0B (the Fable color) is flagged MISCOLORED in every front-end repo", async () => {
   const schema = await loadSchema(LABELS_YAML_PATH);
   for (const repo of schema.repoClasses.frontend) {
-    const actual: ActualLabel[] = [{ name: "Flash High", color: "D93F0B" }];
+    const actual: ActualLabel[] = [{ name: "Flash", color: "D93F0B" }];
     const drift = classifyRepoDrift(schema, repo, actual);
-    const item = findByName(drift, "Flash High");
-    assertEquals(item?.kind, "miscolored", `expected Flash High miscolored in ${repo}`);
+    const item = findByName(drift, "Flash");
+    assertEquals(item?.kind, "miscolored", `expected Flash miscolored in ${repo}`);
     assertEquals(item?.fromHex, "D93F0B");
     assertEquals(item?.hex, "E67E22");
   }
@@ -577,7 +630,7 @@ Deno.test("formatReport: matches the SKILL.md report-format line shapes (all 5 a
       {
         kind: "miscolored",
         action: "recolor",
-        name: "Flash High",
+        name: "Flash",
         hex: "E67E22",
         fromHex: "D93F0B",
       },
@@ -589,7 +642,7 @@ Deno.test("formatReport: matches the SKILL.md report-format line shapes (all 5 a
         description: "Mechanical tasks: lookups...",
         fromDescription: "",
       },
-      { kind: "wrong-repo", action: "remove", name: "Flash Med", blastRadius: 5 },
+      { kind: "wrong-repo", action: "remove", name: "Flash Low", blastRadius: 5 },
       { kind: "non-canonical", action: "delete", name: "codex", blastRadius: 2 },
     ],
   };
@@ -598,7 +651,7 @@ Deno.test("formatReport: matches the SKILL.md report-format line shapes (all 5 a
   assert(
     report.includes("- RENAME `TOP PRIORITY` → `Top Priority` (color also updates to #000000)"),
   );
-  assert(report.includes("- RECOLOR `Flash High` #D93F0B → #E67E22 — miscolored"));
+  assert(report.includes("- RECOLOR `Flash` #D93F0B → #E67E22 — miscolored"));
   assert(
     report.includes(
       '- REDESCRIBE `Haiku` "" → "Mechanical tasks: lookups..." — description drift',
@@ -606,7 +659,7 @@ Deno.test("formatReport: matches the SKILL.md report-format line shapes (all 5 a
   );
   assert(
     report.includes(
-      "- REMOVE `Flash Med` — wrong-repo (not canonical for this repo) — 5 open issues carry this label",
+      "- REMOVE `Flash Low` — wrong-repo (not canonical for this repo) — 5 open issues carry this label",
     ),
   );
   assert(report.includes("- DELETE `codex` — non-canonical — 2 open issues carry this label"));

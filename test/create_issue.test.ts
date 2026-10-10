@@ -5,6 +5,11 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import {
+  LUNA_SIGNATURE,
+  SIGNING_SESSION_ID,
+  withSigningFixture,
+} from "./support/codex_signing_fixture.ts";
+import {
   ApprovalCheckResult,
   checkApprovalToken,
   createIssueAndVerify as realCreateIssueAndVerify,
@@ -26,6 +31,43 @@ import {
 // down this file.
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
 
+Deno.test("signing issue k: dry run replaces the typed author with Luna", () =>
+  withSigningFixture(async (signing) => {
+    const { deps, calls } = probeDeps("## What this builds\nBody", { code: 0, stderr: "" });
+    deps.signing = signing;
+    const result = await realCreateIssueAndVerify(
+      {
+        title: "Signing fixture",
+        bodyFile: "/tmp/b.md",
+        author: "Codex — GPT-6.1 Sol",
+        dryRun: true,
+      },
+      deps,
+      APPROVE_ALL,
+    );
+    assertEquals(result.trimEnd().endsWith(`🤖 Authored by ${LUNA_SIGNATURE}`), true);
+    assertEquals(result.includes("🤖 Authored by Codex — GPT-6.1 Sol"), false);
+    assertEquals(calls.some((cmd) => cmd.includes("create") || cmd.includes("graphql")), false);
+  }));
+
+Deno.test("signing issue n: missing session refuses before any GitHub call", () =>
+  withSigningFixture(async (signing, _env, sessionPath) => {
+    const { deps, calls } = probeDeps("Body", { code: 0, stderr: "" });
+    deps.signing = signing;
+    await Deno.remove(sessionPath);
+    await assertRejects(
+      () =>
+        realCreateIssueAndVerify(
+          { title: "Signing fixture", bodyFile: "/tmp/b.md", author: LUNA_SIGNATURE },
+          deps,
+          APPROVE_ALL,
+        ),
+      Error,
+      SIGNING_SESSION_ID,
+    );
+    assertEquals(calls, []);
+  }));
+
 // Authored-by footer (web-jam-tools#1205): the tests below are about other
 // behavior, so this wrapper supplies a valid author and a fake roster probe.
 // Tests of the footer itself call realCreateIssueAndVerify directly.
@@ -36,7 +78,7 @@ const createIssueAndVerify = (
 ) =>
   realCreateIssueAndVerify(
     { author: TEST_AUTHOR, ...options },
-    deps ? withPassingProbe(deps) : deps,
+    withPassingProbe(deps ?? defaultExecDeps),
     approvalCheck,
   );
 
@@ -51,7 +93,7 @@ Deno.test("parseArgs parses all supported CLI flags and formats", () => {
     "-t",
     "Bug",
     "-l",
-    "Flash High, Blocked",
+    "Flash, Blocked",
     "-m",
     "v1.2",
     "--priority",
@@ -67,7 +109,7 @@ Deno.test("parseArgs parses all supported CLI flags and formats", () => {
   assertEquals(parsed.title, "Fix everything");
   assertEquals(parsed.bodyFile, "/tmp/body.md");
   assertEquals(parsed.type, "Bug");
-  assertEquals(parsed.labels, ["Flash High", "Blocked"]);
+  assertEquals(parsed.labels, ["Flash", "Blocked"]);
   assertEquals(parsed.milestone, "v1.2");
   assertEquals(parsed.priority, "High");
   assertEquals(parsed.parent, 437);
@@ -121,7 +163,7 @@ Deno.test("verifyIssueAttributes passes when all requested attributes match", ()
   const actual: IssueData = {
     number: 514,
     title: "Add create-issue script",
-    labels: [{ name: "Flash High" }, { name: "Task" }],
+    labels: [{ name: "Flash" }, { name: "Task" }],
     type: { name: "Task" },
     milestone: { title: "token-savings", number: 13 },
     issue_field_values: [
@@ -137,7 +179,7 @@ Deno.test("verifyIssueAttributes passes when all requested attributes match", ()
     title: "Add create-issue script",
     bodyFile: "/tmp/b.md",
     type: "Task",
-    labels: ["Flash High"],
+    labels: ["Flash"],
     milestone: "token-savings",
     priority: "High",
     parent: 437,
@@ -205,12 +247,12 @@ Deno.test("verifyIssueAttributes fails when requested label is missing", () => {
   const actual: IssueData = {
     number: 10,
     title: "Test",
-    labels: [{ name: "Flash High" }],
+    labels: [{ name: "Flash" }],
   };
   const requested = {
     title: "Test",
     bodyFile: "/tmp/b.md",
-    labels: ["Flash High", "Needs Design"],
+    labels: ["Flash", "Needs Design"],
   };
 
   const res = verifyIssueAttributes(actual, requested);
@@ -331,7 +373,7 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
         const mockIssue: IssueData = {
           number: 515,
           title: "My New Issue",
-          labels: [{ name: "Flash High" }],
+          labels: [{ name: "Flash" }],
           type: { name: "Task" },
           milestone: { title: "token-savings" },
           parent: { number: 437 },
@@ -357,7 +399,7 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
     title: "My New Issue",
     bodyFile: "/tmp/body.md",
     type: "Task",
-    labels: ["Flash High"],
+    labels: ["Flash"],
     milestone: "token-savings",
     priority: "High",
     parent: 437,
@@ -1673,7 +1715,7 @@ Deno.test("createIssueAndVerify refuses a deferred-verification body before any 
   await assertRejects(
     () =>
       createIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Flash High"] },
+        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Flash"] },
         deps,
         APPROVE_ALL,
       ),
@@ -1688,7 +1730,7 @@ Deno.test("createIssueAndVerify refuses an unresolvable-pointer body before any 
   await assertRejects(
     () =>
       createIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Flash High"] },
+        { title: "T", bodyFile: "/tmp/b.md", type: "Task", labels: ["Flash"] },
         deps,
         APPROVE_ALL,
       ),
@@ -1705,7 +1747,7 @@ Deno.test("createIssueAndVerify lets a deferred-verification body through with N
       title: "T",
       bodyFile: "/tmp/b.md",
       type: "Task",
-      labels: ["Flash High", "Needs Design"],
+      labels: ["Flash", "Needs Design"],
       dryRun: true,
     },
     deps,
@@ -1723,7 +1765,7 @@ Deno.test("createIssueAndVerify skips both body checks for --type Epic (web-jam-
     "See the epic. The old helper is assumed but not confirmed unused.",
   );
   const result = await createIssueAndVerify(
-    { title: "T", bodyFile: "/tmp/b.md", type: "Epic", labels: ["Flash High"], dryRun: true },
+    { title: "T", bodyFile: "/tmp/b.md", type: "Epic", labels: ["Flash"], dryRun: true },
     deps,
     APPROVE_ALL,
   );
@@ -1750,6 +1792,7 @@ function probeDeps(
     calls,
     deps: {
       probeScriptPath: "/fake/create-draft-pr.sh",
+      signing: { env: () => undefined },
       readFileText: () => Promise.resolve(body),
       runCmd(cmd: string[]) {
         if (cmd[0] === "/fake/create-draft-pr.sh") {

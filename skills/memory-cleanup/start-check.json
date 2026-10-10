@@ -1,0 +1,4 @@
+{
+  "by_name": "run /memory-cleanup",
+  "on_its_own": "Audit our cross-agent memory surfaces for staleness, dead links, and finished checkpoints"
+}

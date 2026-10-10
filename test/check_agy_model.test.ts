@@ -19,12 +19,12 @@ Deno.test("isAllowedModelSlug: accepts valid Flash slugs including -tiered at or
   // Current generation (3.8)
   assert(isAllowedModelSlug("gemini-3.8-flash-tiered"));
   assert(isAllowedModelSlug("gemini-3.8-flash-high"));
-  assert(isAllowedModelSlug("gemini-3.8-flash-medium"));
+  assert(!isAllowedModelSlug("gemini-3.8-flash-medium")); // retired, web-jam-tools#1202
 
   // Floor generation (3.7)
   assert(isAllowedModelSlug("gemini-3.7-flash-tiered"));
   assert(isAllowedModelSlug("gemini-3.7-flash-high"));
-  assert(isAllowedModelSlug("gemini-3.7-flash-medium"));
+  assert(!isAllowedModelSlug("gemini-3.7-flash-medium"));
 
   // Future major / minor versions
   assert(isAllowedModelSlug("gemini-3.9-flash-tiered"));
@@ -117,12 +117,10 @@ Deno.test("ALLOWED_SESSION_SLUGS derives -tiered slug matching ALLOWED_AGY_MODEL
 Deno.test("deriveSessionSlugs: derives tiered slug in lockstep with model versions on migration", () => {
   const syntheticModels = [
     { slug: "gemini-3.9-flash-high", displayName: "Gemini 3.9 Flash (High)" },
-    { slug: "gemini-3.9-flash-medium", displayName: "Gemini 3.9 Flash (Medium)" },
   ];
   const slugs = deriveSessionSlugs(syntheticModels);
   assertEquals(slugs, [
     "gemini-3.9-flash-high",
-    "gemini-3.9-flash-medium",
     "gemini-3.9-flash-tiered",
   ]);
 });
@@ -138,7 +136,7 @@ Deno.test("check_agy_model.ts CLI --allowed-slugs includes gemini-3.8-flash-tier
   const outStr = new TextDecoder().decode(stdout).trim();
   assert(outStr.includes("gemini-3.8-flash-tiered"));
   assert(outStr.includes("gemini-3.8-flash-high"));
-  assert(outStr.includes("gemini-3.8-flash-medium"));
+  assert(!outStr.includes("gemini-3.8-flash-medium"));
 });
 
 Deno.test("check_agy_model.ts CLI --default-models preserves default chain display names", async () => {
@@ -151,5 +149,6 @@ Deno.test("check_agy_model.ts CLI --default-models preserves default chain displ
   assertEquals(code, 0);
   const outStr = new TextDecoder().decode(stdout).trim();
   assertEquals(outStr, ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"));
-  assertEquals(outStr, "Gemini 3.8 Flash (High)|Gemini 3.8 Flash (Medium)");
+  // web-jam-tools#1202: Gemini Flash runs at high effort only, so the medium level is not dispatched on.
+  assertEquals(outStr, "Gemini 3.8 Flash (High)");
 });

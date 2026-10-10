@@ -1,6 +1,6 @@
 ---
 name: work-issue
-description: Start a model-labeled coding task under Claude Code or Antigravity. Use when the user types /work-issue <Repo>#<issue-num> (named mode), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.
+description: Start a model-labeled coding task by fetching the GitHub issue, setting up a fresh branch off dev, and implementing it in that repository. Use when starting work on a GitHub issue, picking the next task, or when told to work on an issue or start the next task.
 metadata:
   version: v3
   publisher: josh
@@ -8,17 +8,17 @@ aliases:
   - next
 ---
 
-# /work-issue — run a model-labeled coding task (Claude Code & Antigravity)
+# /work-issue — run a model-labeled coding task (Claude Code, Antigravity & Codex)
 
-This skill is installed across all agent surfaces (Claude Code, Antigravity/agy) and model tiers (Haiku, Flash, Sonnet, Opus). It delegates the deterministic setup (issue fetch + git branching) to a
+This skill is installed across all agent surfaces (Claude Code, Antigravity/agy, Codex) and model tiers (Haiku, Flash, Sonnet, Opus, Luna, Sol, Astra). It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly. Read the GitHub issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`) to determine agent delegation or session execution (valid for both Claude Code and Antigravity), then run the pre-checks below before "## Steps".
+- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly (invoked as `$work-issue Repo#123` on Codex). Read the GitHub issue's model tier label (`Haiku`, `Flash`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`) to determine agent delegation or session execution (valid across Claude Code, Antigravity, and Codex), then run the pre-checks below before "## Steps".
 - **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku), then hand off
-  to the same flow below. Under Antigravity (Flash / agy) there is no worklist: stop and ask Josh to name an issue. See "## No-argument mode" first.
+  to the same flow below. Under Antigravity (Flash / agy) and Codex there is no worklist: stop and ask Josh to name an issue. See "## No-argument mode" first.
 
 **Whichever route got you here, three pre-checks run before any branch is created or any code is
 written**, and they run for a named issue and an auto-picked one alike:
@@ -36,16 +36,17 @@ written**, and they run for a named issue and an auto-picked one alike:
 ## Model Label Check & Approval
 
 When `work-issue` begins an issue (`<Repo>#<num>`):
-1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash Med`, `Flash High`, `Sonnet`, `Opus`).
+1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
 2. **Determine Agent Delegation vs Execution**:
    - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
-   - Under **Antigravity** (e.g., Flash High interactive session): If the issue is labeled `Flash Med`, automatically delegate execution down to a `Flash Med` subagent.
+   - Under **Antigravity** (e.g., Flash interactive session): If the issue is labeled `Flash`, execute it in the session or hand it to a subagent at the same level.
+   - Under **Codex**: Execute directly when the running model's tier matches the issue's `Luna`, `Sol`, or `Astra` label. If it differs, follow the approval rule below before overruling the label.
    - If the active session tier matches the issue's model label, execute the task directly in the current session.
 3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label rather than delegating down, prompt Josh for explicit approval in chat before executing:
    ```bash
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
-4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash (Medium)"` for Flash Med subagents, or `--author "Claude Code — Haiku 3.5"` for Haiku subagents).
+4. **Ensure author alignment**: Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier (e.g., `--author "Antigravity — Gemini Flash"` for Flash subagents or `--author "Claude Code — Haiku 4.5"` for Haiku subagents). On Codex, read `payload.model` from the latest `turn_context` entry in this session's rollout JSONL under `~/.codex/sessions/`; identify this session by the `session_meta` ID, rather than selecting another session's newest file or the default model in `config.toml`. Find that model's accepted display spelling in `ROSTER` in `scripts/create-draft-pr.sh`, then validate it with `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --check-author "Codex — <roster spelling>"` before passing the same value in `--author`. Do not pass the raw API slug as the display name or substitute another model if the roster probe refuses it.
 
 ## Startability test
 
@@ -108,6 +109,7 @@ Use this when the user types `/work-issue` with no argument, or says "work-issue
 Determine which worklist file to read based on your agent surface:
 - **Claude Code (Haiku session)**: Read `~/Dropbox/web-jam-llms/haiku-issues.md`.
 - **Antigravity (Flash / agy session)**: There is no worklist. Stop and tell Josh: "Name an issue: `/work-issue <Repo>#<issue-num>`." Do not improvise a substitute list.
+- **Codex ($work-issue session)**: There is no Codex worklist. Stop and tell Josh: "There is no Codex worklist file. Name an issue directly: `$work-issue <Repo>#<number>`." Codex has no to-do file per this Epic's design decision; do not improvise a substitute list, and do not attempt to read `haiku-issues.md` or `flash-issues.md`.
 
 This mode is **read-only** against the target worklist file — never edit
 that file. It only resolves a concrete `Repo#num`, then continues at step 1 of
@@ -119,6 +121,7 @@ there on (setup, model selection, coding, PR) is identical and unmodified.
 1. Select the target worklist file based on the active agent surface:
    - When running under **Claude Code** (Haiku), select `~/Dropbox/web-jam-llms/haiku-issues.md`.
    - When running under **Antigravity** (Flash / agy), there is no worklist: stop and tell Josh to name an issue (`/work-issue <Repo>#<issue-num>`).
+   - When running under **Codex**, there is no worklist: stop and answer that there is no Codex worklist file and ask Josh to name an issue directly (`$work-issue <Repo>#<number>`), per this Epic's design decision that Codex has no to-do file. Do not attempt to read `haiku-issues.md` or `flash-issues.md`.
    Read the selected worklist file. If it's missing, empty, or has no numbered items, stop and tell Josh: "<filename> is missing/empty — run the corresponding worklist skill first." Do not improvise a substitute list.
 2. Parse **only** the numbered runnable list at the top of the file — the
    `N. [Repo#num](...) — title (Model)` lines that appear **above** the
@@ -280,13 +283,15 @@ When an issue's deliverables are strictly external documents (such as manual ver
 
 3. **Perform Model Label Check & Model Selection:** Before implementing:
    - Perform the **Model Label Check**:
-     1. Read the GitHub issue's model label (`Flash Med`, `Flash High`, `Haiku`, `Sonnet`, `Opus`).
+     1. Read the GitHub issue's model label (`Flash`, `Haiku`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
      2. Compare the issue's model label against the active executing session tier.
      3. If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
      4. Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier.
-   - Classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete.
+   - **Codex**: Keep the matching running model and execute in this session. Do not invoke the agy `/model` switch or use the Claude/Gemini fallback ladder below. A tier mismatch uses the Model Label Check & Approval rule above.
+   - **Claude Code**: Follow the delegation/execution choice in Model Label Check & Approval above.
+   - **Antigravity only**: Classify the task to determine the most cost-effective model that can succeed. Switch to it by outputting the slash command exactly like `/model "Model Name"` on a new line and wait for the switch to complete. The model chain, classification rules, quota pools, and rate-limit fallback below apply only to Antigravity.
 
-   **Model Chain (Most to least capable):**
+   **Antigravity Model Chain (Most to least capable):**
    1. `Claude Opus 4.6 (Thinking)`
    2. `Gemini 3.8 Flash (High)`
    3. `Claude Sonnet 4.6 (Thinking)`
@@ -295,7 +300,7 @@ When an issue's deliverables are strictly external documents (such as manual ver
    `Gemini 3.8 Flash (High)` sits above `Claude Sonnet 4.6 (Thinking)` on this agy fallback ladder.
    That is a different, older model from the current Claude Sonnet 5.5, which Josh ruled on
    2026-10-01 ranks above Gemini 3.8 Flash (High); this ladder is unchanged by that ruling.
-   (Dated history, superseded for Sonnet 5.5: on 2026-09-05 DeepSWE v1.1 scored Flash High 73.7%
+   (Dated history, superseded for Sonnet 5.5: on 2026-09-05 DeepSWE v1.1 scored Flash 73.7%
    against Sonnet 5's 54%.) Flash also bills a separate Google budget rather than the
    constrained Anthropic one. Opus keeps the top slot because abstract, multi-step unguided agent
    work (Terminal-Bench 4.0) is what open-ended design and review are. Model names here are the exact
@@ -306,17 +311,17 @@ When an issue's deliverables are strictly external documents (such as manual ver
    pool, so it is **not** a usable fallback (it's dead whenever Claude is) and is
    excluded from the chain. Failover only ever crosses Claude ↔ Gemini.
 
-   **Classification Rules (in priority order):**
+   **Antigravity Classification Rules (in priority order):**
    * **Explicit Override**: If the user passed an explicit model name when invoking `/work-issue`, use it and skip classification.
    * **Task-Line Tag**: If the TASK PROMPT contains an explicit tag (e.g., `[media]`, `[junior]`, `[simple]`) or a model name, this tag wins.
    * **Hard Media Override**: If the task involves audio/video files (`.mp3`, `.wav`, `.m4a`, `.mp4`, `.mov`, `.webm`, etc.), it **MUST** go to `Gemini 3.1 Pro (High)`. Claude cannot ingest these. (*Note: `.svg` is NOT media, it is XML/markup, so it rides the difficulty ladder.*)
    * **Difficulty Routing**:
-     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit, simple image/PDF read) → `Gemini 3.8 Flash (Medium)` (or `Gemini 3.1 Pro (High)` for image/PDF reads).
-     * *Ordinary Coding*: → `Gemini 3.8 Flash (High)`. This is the tier that moved: ordinary contained coding used to route to `Claude Sonnet 4.6 (Thinking)`, and Flash High is now the default lane because it bills to Google rather than the constrained Anthropic budget. Route to Sonnet only when the task needs a Claude-side capability Flash lacks, and say which one.
+     * *Trivial / Junior-dev*: (rename, one-liner, simple mechanical edit) → Luna or Haiku, via a handoff since Luna and Haiku are outside agy's picker; simple image/PDF reads → `Gemini 3.1 Pro (High)` (the media override still applies).
+     * *Ordinary Coding*: → `Gemini 3.8 Flash (High)`. This is the tier that moved: ordinary contained coding used to route to `Claude Sonnet 4.6 (Thinking)`, and Flash is now the default lane because it bills to Google rather than the constrained Anthropic budget. Route to Sonnet only when the task needs a Claude-side capability Flash lacks, and say which one.
      * *Complex / Multi-file / Real Judgment*: (including complex SVG/diagram tasks) → `Claude Opus 4.6 (Thinking)`.
    * **Tie-breaker**: If classification is genuinely ambiguous, default to `Claude Opus 4.6 (Thinking)`.
 
-   **Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain. Because Claude and Gemini are the only two pools, this effectively means: if a Claude model is walled, cross to Gemini (and vice versa).
+   **Antigravity Rate-limit Fallback**: If the switch to your chosen model fails (e.g., rate limit), fall back to the next-capable available model in the chain. Because Claude and Gemini are the only two pools, this effectively means: if a Claude model is walled, cross to Gemini (and vice versa).
 
 4. Work **entirely inside `REPO_DIR`** (the isolated `/tmp` worktree): cd there first; every file edit,
    command, and commit happens in that directory. Never work in `MAIN_CLONE`, and do not run
@@ -332,11 +337,14 @@ When an issue's deliverables are strictly external documents (such as manual ver
    repos use `npm run test:lint` and `npm run test:unit`).
 
 7. Do **not** switch branches or add dependencies. When lint and tests are green,
-   finish by opening a draft PR. **Your summary and the real test output go IN THE
-   PR, not only in this chat reply** — pass them as flags so the PR description is
-   complete:
+   push the feature branch using `deno task push` on every surface (Claude Code, agy, and Codex alike).
+   Use the shared config invocation shown below from `REPO_DIR`, even when the target repo has no Deno config or `push` task. Pass the feature worktree's directory explicitly with `--repo-dir "$PWD"`; do not change into the web-jam-tools main clone to push. See `skills/draft-pr/SKILL.md` for the shared push step.
+   All `--force-with-lease` forms require affirmative confirmation in an interactive terminal inside the push script; noninteractive force pushes fail closed. Josh must approve the named branch or PR first, and the terminal prompt must not be answered automatically.
+   Any unattended Codex launch of either skill (a scripted `/work-issue` run, or a scripted `/draft-pr` run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
+   Finish by opening a draft PR. Push and draft-PR commands:
 
-   ```
+   ```sh
+   deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"
    ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
      --author "<Surface> — <Model>" \
      --summary "<what changed and why>" \
@@ -351,6 +359,10 @@ When an issue's deliverables are strictly external documents (such as manual ver
    on merge (`Closes #N`); pass `--part-of` ONLY when the issue must stay open (`Part of #N`
    for a partial PR, or a standing run-log/epic issue). (`--closes` is a deprecated no-op,
    still accepted.) Never run `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub.
+
+## Unattended Codex launches
+
+Any unattended Codex launch of `/work-issue` or `/draft-pr` (a scripted run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
 
 ## PR body formatting (do this every time)
 
@@ -382,3 +394,7 @@ Expect: lint + unit green." \
 ok | 42 passed | 0 failed
 ```"
 `````
+
+## Description Detail & Triggers
+
+Start a model-labeled coding task under Claude Code, Antigravity, or Codex. Use when the user types /work-issue <Repo>#<issue-num> (named mode; $work-issue on Codex), or /work-issue with no argument (auto-pick mode, reads ~/Dropbox/web-jam-llms/haiku-issues.md under Claude Code to resolve the next actionable issue; under Antigravity or Codex it stops and asks Josh to name an issue), or says "work-issue", "next", "next task", or "start the next task". An Epic resolves to its startable children for Josh to choose from rather than being implemented directly. Before any code is written, checks the issue against the requirements document it cites and stops to report if the two disagree. Fetches the target GitHub issue, sets up a fresh git branch off dev, and implements it in that repo.

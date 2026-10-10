@@ -5,6 +5,10 @@
  * Pushes only the current feature branch, accepting exactly two forms:
  *   1. deno task push
  *   2. deno task push --force-with-lease
+ * From a repo without this task, load the shared config and pass --repo-dir
+ * before the push flags to select that repo explicitly.
+ * Every --force-with-lease push requires terminal confirmation; noninteractive
+ * invocations fail closed, regardless of task/config/argument ordering.
  *
  * Refuses protected branches (dev, main), plain --force / -f, --delete / -d,
  * colon refspecs (:branch), and fails closed if the branch cannot be determined
@@ -159,6 +163,16 @@ const defaultPushSpawner: PushSpawner = async (args, cwd, stdio) => {
   return status.code;
 };
 
+/** Require a terminal and affirmative confirmation before any force-with-lease push. */
+export function confirmForcePush(
+  branch: string,
+  isTerminal: () => boolean = () => Deno.stdin.isTerminal(),
+  ask: (message: string) => boolean = globalThis.confirm,
+): boolean {
+  return isTerminal() &&
+    ask(`Force-push feature branch '${branch}' to origin with --force-with-lease?`);
+}
+
 /**
  * Resolves the short name of the currently checked out branch, or null if detached HEAD
  * or not inside a git working tree.
@@ -194,6 +208,7 @@ export async function runPush(
     stdout?: "inherit" | "piped";
     stderr?: "inherit" | "piped";
     spawnPush?: PushSpawner;
+    confirmForce?: (branch: string) => boolean;
   },
 ): Promise<number> {
   const branch = options?.branch !== undefined ? options.branch : await getCurrentBranch(cwd);
@@ -214,6 +229,12 @@ export async function runPush(
   gitArgs.push(refspec);
 
   try {
+    if (decision.forceWithLease && !(options?.confirmForce ?? confirmForcePush)(decision.branch!)) {
+      console.error(
+        "Refused (force-with-lease-confirmation): --force-with-lease requires affirmative confirmation in an interactive terminal",
+      );
+      return 1;
+    }
     return await (options?.spawnPush ?? defaultPushSpawner)(gitArgs, cwd, {
       stdout: options?.stdout ?? "inherit",
       stderr: options?.stderr ?? "inherit",
@@ -227,6 +248,16 @@ export async function runPush(
 }
 
 if (import.meta.main) {
-  const exitCode = await runPush(Deno.args);
+  const args = [...Deno.args];
+  let cwd: string | undefined;
+  if (args[0] === "--repo-dir") {
+    args.shift();
+    cwd = args.shift();
+    if (!cwd || cwd.startsWith("--")) {
+      console.error("Refused (missing-repo-dir): --repo-dir requires a repository directory");
+      Deno.exit(1);
+    }
+  }
+  const exitCode = await runPush(args, cwd);
   Deno.exit(exitCode);
 }

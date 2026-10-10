@@ -1,0 +1,6 @@
+# sheet-music — Lead Sheet Transcription & Docx Reformatting
+
+The `sheet-music` skill converts scanned lead sheet PDFs in Dropbox into clean, professional Word (`.docx`) lead sheets stored back in Dropbox.
+Processing scanned PDF file: ~/Dropbox/joshandmariamusic/Mission/Narthex.pdf...
+Transcribing lyrics and chord alignment.
+Output saved to: ~/Dropbox/joshandmariamusic/Mission/Narthex.docx

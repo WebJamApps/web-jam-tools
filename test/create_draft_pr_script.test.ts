@@ -11,8 +11,139 @@
 // all fire before any gh call, so this keeps the suite network-free.
 
 import { assertEquals, assertMatch, assertNotMatch } from "@std/assert";
+import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 
 const SCRIPT_PATH = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
+
+for (
+  const [name, author, forced, expected] of [
+    ["c/i: empty Codex session keeps Opus", "Claude Code — Opus", "", "Claude Code — Opus"],
+    [
+      "d: forced Flash replaces typed Opus",
+      "Claude Code — Opus",
+      "agy — Gemini Flash",
+      "agy — Gemini Flash",
+    ],
+    ["e: forced author alone", undefined, "agy — Gemini Flash", "agy — Gemini Flash"],
+    ["j: no author source", undefined, "", undefined],
+  ] as const
+) {
+  Deno.test(`signing PR ${name}`, async () => {
+    const dir = await makeFixtureRepo();
+    try {
+      const args = baseArgs();
+      args.splice(0, 2, ...(author ? ["--author", author] : []));
+      const result = await runScript(dir, args, { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: forced });
+      assertEquals(result.code, expected ? 0 : 1, result.stderr);
+      if (expected) assertEquals(result.stdout.includes(`🤖 Work by ${expected}`), true);
+      else assertEquals(result.stderr.includes("--author is required"), true);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
+
+Deno.test("signing PR: update mode also uses the running model", () =>
+  withSigningFixture(async (_options, env) => {
+    const dir = await makeFixtureRepo();
+    try {
+      const result = await runScript(dir, [
+        ...baseArgs({ author: "Codex — GPT-6 Astra" }),
+        "--update",
+      ], env);
+      assertEquals(result.code, 0, result.stderr);
+      assertEquals(result.stdout.includes(`🤖 Work by ${LUNA_SIGNATURE}`), true);
+      assertEquals(result.stdout.includes("UPDATE"), true);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  }));
+
+Deno.test("signing PR: roster probes remain read-only with conflicting Codex surfaces", async () => {
+  for (const args of [["--list-roster"], ["--check-author", "Claude Code — Opus"]]) {
+    const result = await new Deno.Command("bash", {
+      args: [SCRIPT_PATH, ...args],
+      cwd: "/tmp",
+      env: { CODEX_THREAD_ID: "missing-session", FORCED_PR_AUTHOR: "agy — Gemini Flash (High)" },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
+  }
+});
+
+for (const author of ["Codex — GPT-6.1 Sol", undefined]) {
+  Deno.test(`signing PR a/b: dry run uses lookup with ${author ?? "no typed author"}`, () =>
+    withSigningFixture(async (_options, env) => {
+      const dir = await makeFixtureRepo();
+      try {
+        const args = baseArgs();
+        args.splice(0, 2, ...(author ? ["--author", author] : []));
+        const result = await runScript(dir, args, env);
+        assertEquals(result.code, 0, result.stderr);
+        assertEquals(result.stdout.includes(`🤖 Work by ${LUNA_SIGNATURE}`), true);
+        assertEquals(result.stdout.includes("🤖 Work by Codex — GPT-6.1 Sol"), false);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    }));
+}
+
+for (const author of [undefined, "Codex — GPT-6.1 Sol"]) {
+  Deno.test(`signing PR f/g: simultaneous Codex and forced author refuse ${author ?? "no typed author"}`, () =>
+    withSigningFixture(async (_options, env) => {
+      const dir = await makeFixtureRepo();
+      try {
+        env.FORCED_PR_AUTHOR = "agy — Gemini Flash (High)";
+        const args = baseArgs();
+        args.splice(0, 2, ...(author ? ["--author", author] : []));
+        const result = await runScriptWithoutDryRun(dir, args, env);
+        assertEquals(result.code, 1);
+        assertEquals(result.stderr.includes("CODEX_THREAD_ID and FORCED_PR_AUTHOR"), true);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    }));
+}
+
+Deno.test("signing PR h: missing session refuses before push even with roster author", () =>
+  withSigningFixture(async (_options, env, sessionPath) => {
+    const dir = await makeFixtureRepo();
+    try {
+      await Deno.remove(sessionPath);
+      const result = await runScriptWithoutDryRun(dir, baseArgs({ author: LUNA_SIGNATURE }), env);
+      assertEquals(result.code, 1);
+      assertEquals(result.stderr.includes(env.CODEX_THREAD_ID), true);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  }));
+
+Deno.test("--list-roster is read-only and needs no git repository", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "wjt-roster-probe-" });
+  try {
+    // A git invocation is both recorded and refused, even if its failure is ignored.
+    const marker = `${dir}/git-called`;
+    await Deno.writeTextFile(`${dir}/git`, `#!/bin/sh\ntouch '${marker}'\nexit 99\n`);
+    await Deno.chmod(`${dir}/git`, 0o755);
+    const result = await new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--list-roster"],
+      cwd: dir,
+      env: { PATH: `${dir}:${Deno.env.get("PATH")}` },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(result.code, 0);
+    assertEquals(new TextDecoder().decode(result.stderr), "");
+    const entries = new TextDecoder().decode(result.stdout).trimEnd().split("\n");
+    for (const entry of ["GPT-6 Luna", "GPT-6.1 Sol", "GPT-6 Astra"]) {
+      assertEquals(entries.includes(entry), true);
+    }
+    assertEquals(Array.from(Deno.readDirSync(dir)).map((entry) => entry.name), ["git"]);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
 
 const VALID_SUMMARY = "- Add X so Y works\n- Refactor Z to stop duplicating W";
 const VALID_TEST_PLAN = "Run `deno task test`. Expect green.";
@@ -107,7 +238,7 @@ async function runScript(
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, ...args, "--dry-run"],
     cwd,
-    env,
+    env: { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: "", ...env },
     clearEnv: false,
     stdout: "piped",
     stderr: "piped",
@@ -130,7 +261,7 @@ async function runScriptWithoutDryRun(
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, ...args],
     cwd,
-    env,
+    env: { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: "", ...env },
     clearEnv: false,
     stdout: "piped",
     stderr: "piped",
@@ -170,7 +301,7 @@ Deno.test("replay #1212 defect 1: off-roster author is refused", async () => {
   const res = await runScript(repoDir, baseArgs({ author: OFF_ROSTER_AUTHOR }));
   assertEquals(res.code, 1);
   assertMatch(res.stderr, /does not name a model on the roster/);
-  assertMatch(res.stderr, /Gemini Flash \(Medium\)/); // valid list printed
+  assertMatch(res.stderr, /- Gemini Flash\n/); // valid list printed
 });
 
 Deno.test("paraphrased test-evidence passes without requiring test-runner output format", async () => {
@@ -215,9 +346,22 @@ Deno.test("creates/dry-runs a PR cleanly with only --author, --summary, and --te
 Deno.test("roster match is by substring: agy's full model name passes", async () => {
   const res = await runScript(
     repoDir,
-    baseArgs({ author: "agy — Gemini Flash (Medium)" }),
+    baseArgs({ author: "agy — Gemini Flash" }),
   );
   assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("roster: an author signed `Gemini Flash (High)` still passes (web-jam-tools#1202)", async () => {
+  const res = await runScript(repoDir, baseArgs({ author: "agy — Gemini Flash (High)" }));
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("roster: the retired medium level is refused in any letter case (web-jam-tools#1202)", async () => {
+  for (const author of ["agy — Gemini Flash (Medium)", "agy — gemini FLASH (medium)"]) {
+    const res = await runScript(repoDir, baseArgs({ author }));
+    assertEquals(res.code, 1, author);
+    assertMatch(res.stderr, /does not name a model on the roster/);
+  }
 });
 
 Deno.test("roster match is by substring: 'Claude Code — Haiku 4.5' passes", async () => {
@@ -934,7 +1078,7 @@ Deno.test("refuses Closes #N when issue is labeled Josh without --part-of or --n
   const mockGhDir = await makeMockGh({
     ownerRepo: "WebJamApps/web-jam-tools",
     issueTitle: "Manual verification: run book-gig live pilot",
-    issueLabels: ["Josh", "Flash High"],
+    issueLabels: ["Josh", "Flash"],
   });
   const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
   const res = await runScript(
@@ -959,7 +1103,7 @@ Deno.test("accepts --part-of when issue is labeled Josh and emits Part of #N (we
   const mockGhDir = await makeMockGh({
     ownerRepo: "WebJamApps/web-jam-tools",
     issueTitle: "Manual verification: run book-gig live pilot",
-    issueLabels: ["Josh", "Flash High"],
+    issueLabels: ["Josh", "Flash"],
   });
   const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
   const res = await runScript(
@@ -982,7 +1126,7 @@ Deno.test("accepts --no-close when issue is labeled Josh and emits Refs #N (web-
   const mockGhDir = await makeMockGh({
     ownerRepo: "WebJamApps/web-jam-tools",
     issueTitle: "Manual verification: run book-gig live pilot",
-    issueLabels: ["Josh", "Flash High"],
+    issueLabels: ["Josh", "Flash"],
   });
   const env = { PATH: `${mockGhDir}:${Deno.env.get("PATH")}` };
   const res = await runScript(
@@ -1349,3 +1493,23 @@ Deno.test("create-draft-pr.sh --check-author: Codex — GPT-6 Astra exits 0", as
   assertEquals(code, 0, new TextDecoder().decode(stderr));
   assertMatch(new TextDecoder().decode(stdout), /names a model on the roster/);
 });
+
+// --- web-jam-tools#1202: one Flash level, the medium level is refused ---
+
+for (
+  const [author, code] of [
+    ["Antigravity — Gemini Flash (Medium)", 1],
+    ["Antigravity — gemini flash (MEDIUM)", 1],
+    ["Antigravity — Gemini Flash", 0],
+    ["Antigravity — Gemini Flash (High)", 0],
+  ] as const
+) {
+  Deno.test(`create-draft-pr.sh --check-author: ${author} exits ${code}`, async () => {
+    const out = await new Deno.Command("bash", {
+      args: [SCRIPT_PATH, "--check-author", author],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(out.code, code, new TextDecoder().decode(out.stderr));
+  });
+}

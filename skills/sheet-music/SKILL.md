@@ -19,7 +19,7 @@ The `sheet-music` skill converts scanned lead sheet PDFs in Dropbox into clean, 
 
 ```mermaid
 graph TD
-    A["Invoke /sheet-music <Dropbox-path(s)...>"] --> B["Inspect Scans via Multimodal view_file"]
+    A["Invoke /sheet-music <Dropbox-path(s)...>"] --> B["Inspect Scans (Claude Code: Read, agy: view_file)"]
     B --> C["Extract Metadata, Chords, Lyrics & Performance Annotations"]
     C --> D{"Guitar Capo Used?"}
     D -- Yes --> E["Dual-Tier Mode: Capo Guitar Bold over Sounding Bass Italic"]
@@ -33,7 +33,7 @@ graph TD
 
 ### Steps
 
-1. **Inspect Source Scans**: Read and visually inspect all supplied scanned PDF files in Dropbox using `view_file` (Flash High multimodal vision).
+1. **Inspect Source Scans**: Read and visually inspect all supplied scanned PDF files in Dropbox with the surface's native image reading: on Claude Code, the `Read` tool, which views PDFs and images directly; on agy / Antigravity, `view_file` (Flash multimodal vision).
 2. **Extract & Consolidate Musical Content**:
    - Extract title, songwriter/composer credits, copyright year, and tempo.
    - Detect Capo position (e.g. `Capo 2`) and base guitar chord shapes (e.g. `E`, `D`, `A`).

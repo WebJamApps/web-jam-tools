@@ -30,7 +30,7 @@ async function main() {
       "  --dedup-override-reason <why>        (required to clear a duplicate-search deny)",
     );
     console.error(
-      '  --author <tool — model>   (required) e.g. "Claude Code — Opus"; written as the body footer',
+      '  --author <tool — model>   (required outside Codex) e.g. "Claude Code — Opus"; Codex looks up the running model',
     );
     console.error("  --dry-run");
     Deno.exit(1);

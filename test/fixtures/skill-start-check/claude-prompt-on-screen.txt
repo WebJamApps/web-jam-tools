@@ -1,0 +1,6 @@
+                     tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scroll
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Transcribe and reformat this scanned lead sheet PDF ~/Dropbox/joshandmariamusic/Mission/Narthex.pdf into a Word docx
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Use skill "sheet-music"? (y/n)

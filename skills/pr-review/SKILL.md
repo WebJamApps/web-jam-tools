@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash High/Flash Medium/Haiku; Flash High reviews Flash Medium/Haiku; Opus reviews Sonnet/Flash High on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).
+description: Cross-model PR review pipeline auditing diffs against acceptance criteria, scope, semver bump, test evidence, and guardrails, posting feedback via post-pr-review. Use when reviewing a pull request or checking open PRs across WebJamApps repositories.
 metadata:
   version: v2
   publisher: josh
@@ -14,11 +14,11 @@ This skill provides a systematic pipeline for automated cross-model pull request
 
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
 
-Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work).
+Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. Equal rank does not override a more specific eligibility rule (e.g. Sol does not review Sol; Opus or Josh reviews Astra). Reviewer eligibility depends on the named model, its contributions, and the reviewer-tier rules. A conversation can contain implementation by one model and review by another. Switching to an eligible different model allows the review to run in that conversation without requiring delegation. Astra may review Sol-authored work, including a Sol fix from the same conversation, if Astra has not contributed implementation or fixes. The reviewer must also pass the independent named-model eligibility checks below.
 
-**Tier order (weakest to strongest): Haiku → Flash Med → Flash High → Sonnet → Opus.** Josh ruled
+**Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
-is the basis for this order. (Superseded history: on 2026-09-05 Flash High was ranked above Sonnet 5
+is the basis for this order. (Superseded history: on 2026-09-05 Flash was ranked above Sonnet 5
 on contamination-resistant long-horizon coding, DeepSWE v1.1, where Gemini 3.8 Flash at high effort
 scored 73.7% against Sonnet 5's 54%. That ranking no longer stands.) Opus stays at the top because
 abstract, multi-step unguided agent work (Terminal-Bench 4.0) is exactly what a review of a large or
@@ -26,31 +26,95 @@ ambiguous diff is.
 
 ### Cross-Model Review Pairing Matrix
 
+This matrix is a ceiling for the legacy labels it names; the seven-label default reviewers and eligibility rules below govern reviewer selection.
+
 | Reviewer | Reviews |
 |---|---|
-| Flash High | Flash Medium, Haiku |
-| Sonnet | Flash High, Flash Medium, Haiku |
-| Opus | Sonnet, Flash High |
+| Flash | Haiku |
+| Sonnet | Flash, Haiku |
+| Opus | Sonnet, Flash |
+
+### Default Reviewers
+
+The default reviewers across the seven model labels:
+
+| Author | Default Reviewer |
+|---|---|
+| Haiku, Luna | Flash |
+| Flash | Sol, through `$pr-review` in Codex |
+| Sol | Sonnet, Astra, or Opus |
+| Sonnet | Sol, through `$pr-review` in Codex; Opus when Josh names the pull request |
+| Astra | Opus or Josh |
+| Opus | Josh |
+
+The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.
+
+### Sol Reviews on Codex & Recording-Day Rules
+
+- Sol reviews of Flash and Sonnet pull requests run through `/pr-review` (typed `$pr-review` in Codex).
+- On a recording day or for any pull request Josh names, Sonnet reviews a Flash pull request instead, and a Sonnet pull request waits for Sol or goes to Opus when Josh names it.
+- Astra is never picked as a reviewer unless Josh names it.
+- An unattended Sol review launch passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`.
 
 **Ceiling rule (never a schedule):**
 The matrix is a **ceiling on who MAY review whose work, never a schedule.** Opus reviewing a Sonnet
-or Flash High PR happens only when Josh deems that specific PR critical enough for an Opus review —
+or Flash PR happens only when Josh deems that specific PR critical enough for an Opus review —
 his decision, per PR, not automatic. Nothing in this skill or its auto-detect mode may auto-dispatch
 an Opus review off this matrix.
+
+### Named-Model Eligibility & Contributions within a Conversation
+
+A named model is the model identity, such as Sol, Astra, Sonnet, or Opus. Versions and reasoning-effort settings within one named model do not create a different identity. Every Flash session shares the Flash identity for the self-review comparison; the reviewer-tier constraints still apply. Surface names and session IDs do not establish a model change.
+
+**Contributions within a conversation:**
+- **A model never reviews its own contribution.** The restriction follows the named model that wrote or pushed the implementation or fix, rather than disqualifying every model that uses the conversation. A switch to a higher model permits review in the same session; writing or pushing a commit earlier in the conversation is not by itself a reason to refuse. Merely reading the code, discussing it, or posting a review does not count as writing a fix.
+- **Astra may review Sol-authored work, including a Sol fix in the same session.** This is Josh's explicit permitted model escalation even though Sol and Astra share a scheduling rung. Astra may review directly in that conversation if Astra has not contributed implementation or fixes. Sol must not review its own Sol fix, and switching to a lower model does not make that work eligible. Check every author on the PR, not just its original footer.
+- **Versions and reasoning effort:** A model that writes or pushes a fix cannot review that contribution simply by changing its version, reasoning effort, or switching away and back. Preserve the contribution history when determining eligibility; do not assume only the last active model matters. Separate sessions remain subject to the reviewer choices and tier rules; a new session does not bypass restrictions on Astra or Opus work.
+- **Opus or Josh reviews Astra's work, including Astra's fixes to Sol's code.** Returning to Sol, selecting Sonnet at the same tier, or opening another Astra session does not replace that reviewer choice. An eligible Opus reviewer can review the resulting PR when Josh names it.
+- **Opus never reviews Opus work.** The matrix has no Opus-reviews-Opus row and none is implied: a different Opus session is not an independent reviewer. If Opus itself authors a commit or fix on the PR, the PR has no model reviewer, because the tier rule also rules out every lower tier; Josh reviews it.
+
+**Establishing identity and authorship:**
+Use the active model information supplied by the surface, this conversation's model history, and explicit model-selection statements from Josh. A Sol attribution on an earlier commit does not mean the current reviewer is Sol: use the active session's model and Josh's explicit correction; never infer active identity from the earlier author. Identify contributions from the conversation and PR attribution, including fix commits. A PR's original author footer alone is insufficient when another model has added fixes. On Codex, the established lookup is this session's latest `turn_context.payload.model` in its rollout JSONL, identified by `session_meta.id`. Claude Code and Antigravity use their active model information and conversation history; Josh's explicit identification can resolve a missing model name.
+
+**Three eligibility outcomes:**
+1. **Proceeding when eligible**: When the current model is eligible, perform the requested review directly in this conversation without requiring a fresh session, redundant permission, or delegation.
+2. **Refusing when ineligible**: When the current model is ineligible, post nothing, explain the applicable rule to Josh in chat, and leave reviewer selection to Josh.
+3. **Refusing (failing closed) when undetermined**: If the current identity or a relevant contributor cannot be established, state exactly what is missing and ask Josh. Do not guess, claim no eligible reviewer exists merely because this model is ineligible, or create a subagent to get around the uncertainty.
+
+### Worked Conversation Sequences
+
+The skill's worked cases cover these concrete sequences and required results:
+
+| Conversation sequence | Required result |
+|---|---|
+| Sol writes → Josh selects Astra → review requested | Astra reviews directly in the conversation if it has not contributed implementation |
+| Sol writes → Josh selects Sonnet or Opus → review requested | The selected eligible model reviews Sol's work |
+| Sol writes → Sol review requested | The writing model does not review its own contribution |
+| Sol writes → another Sol version selected | No different-model exception |
+| Sol writes → Sol reasoning effort changed | No different-model exception |
+| Flash writes → another Flash session selected in that conversation | No different-model exception |
+| Sol writes → Astra reviews without fixing → Astra reviews a new eligible head | Reviewing alone does not disqualify Astra |
+| Sol writes → Astra fixes → Sol, Sonnet, or another Astra session selected | Josh or Opus must review Astra's changes |
+| Sol writes → Astra fixes → Josh names Opus for review | An eligible Opus reviewer reviews the PR |
+| Astra writes the original implementation → reviewer selected | Opus or Josh reviews it |
+| Opus writes or fixes → another Opus session selected | No model reviewer; Josh reviews |
+| Sonnet writes → Flash selected | Refuse because the reviewer tier is lower |
+| Sol writes → Astra selected → same head already reviewed | Apply the existing duplicate-review rule |
+| Contributor identity cannot be established | Explain the missing information and ask Josh; do not guess or delegate automatically |
 
 ## Trigger & Invocation
 
 - **Named mode**: `/pr-review <Repo>#<pr-num>` (e.g. `/pr-review web-jam-tools#363` or `https://github.com/WebJamApps/web-jam-tools/pull/363`).
+- **Model-switch in same conversation**: Switching to an eligible different model allows the review to run directly in that conversation without requiring delegation. When the new model is eligible (e.g. Sol writes → Josh switches to Astra → `/pr-review`), it performs the review in place. When ineligible, it explains the applicable rule and leaves reviewer selection to Josh.
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list: `ACTIVE_REPOS` in [`src/shared/repos.ts`](../../src/shared/repos.ts)).
   - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
-    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash (High)`, `Gemini Flash (Medium)` or `Claude Haiku 4.5`.
-    - **Flash High (`Gemini Flash (High)`)**: matches PRs authored by `Gemini Flash (Medium)` or `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
+    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash` or `Claude Haiku 4.5`.
+    - **Flash (`Gemini Flash`)**: matches PRs authored by `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
     - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
     - Sonnet-authored PRs have no reviewer in auto-detect mode and receive an Opus review only when Josh explicitly names the PR for that review.
     - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`. These roster spellings are deliberately unversioned — they identify the PR's author tier, not the model checkpoint that ran, so they stay as written here even as the underlying Gemini version moves:
-      - `Gemini Flash (High)` (e.g. `Antigravity — Gemini Flash (High)` / `agy — Gemini Flash (High)`)
-      - `Gemini Flash (Medium)` (e.g. `Antigravity — Gemini Flash (Medium)` / `agy — Gemini Flash (Medium)`)
+      - `Gemini Flash` (e.g. `Antigravity — Gemini Flash` / `agy — Gemini Flash`). A pull request signed `Gemini Flash (High)` before the medium level was retired keeps its footer and is read as a Flash author.
       - `Claude Sonnet 5.5` (e.g. `Claude Code — Sonnet 5.5` / `Claude Code — Claude Sonnet 5.5`)
       - `Claude Haiku 4.5` (e.g. `Claude Code — Haiku 4.5` / `Claude Code — Claude Haiku 4.5`)
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
@@ -84,6 +148,28 @@ Remove the worktree when finished. Reviewing without running anything is the nor
 worktree is only needed when a pasted test-evidence block has to be reproduced.
 
 ### Step 1: Fetch PR Details and Context
+
+**Reviewer eligibility is checked first.** Right after item 1's fetch, and before the diff is read,
+apply the named-model eligibility rules under "Purpose & Model Pairing" above:
+- Establish the active named model and all models responsible for implementation and fixes on the PR
+  (from current surface/session model information, Josh's explicit model selection or correction,
+  conversation history, and item 1's `commits` list which carries each commit's `authors`).
+  Never infer the active reviewer model from the PR author's footer or an earlier commit attribution.
+- Stop if the active model contributed implementation or pushed any fix to the PR (a model never
+  reviews its own contribution; versions, reasoning effort, or switching away and back do not bypass
+  this). A switch to a higher eligible model within the conversation may review earlier work by
+  another model.
+- Permit Astra to review Sol-authored work, including a Sol fix from this same conversation, when
+  Astra has not contributed implementation or fixes.
+- Stop if the PR carries Astra contributions (implementation or fixes) and the active model is not Opus
+  (Opus or Josh reviews Astra's work).
+- Stop if any commit names an Opus author or co-author (Opus never reviews Opus work; Josh reviews).
+- Stop if the active model ranks below any contributor's tier (tier rule).
+- Stop and ask Josh if contributor or active model identity cannot be established (fail closed; do
+  not guess or delegate automatically).
+On a stop, post no review, tell Josh why the current model is ineligible or what information is
+missing, and leave reviewer selection to Josh. Session continuity alone never blocks review.
+
 1. Fetch PR details, metadata, mergeability, reviews, and commits:
    ```sh
    gh pr view <pr-num> --repo WebJamApps/<Repo> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits
@@ -512,3 +598,7 @@ This binds the reviewing model AND the session relaying the review to Josh:
 - Size is not a reason to defer. "One line" and "no behavioural effect" are arguments for fixing it now, because it is cheap, not for postponing it.
 
 The reviewing model reports; it does not apply the fix itself. It names the defect, says plainly that it blocks merge, and the fix goes back to the PR's own lane on the PR's own branch.
+
+## Description Detail & Triggers
+
+Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).

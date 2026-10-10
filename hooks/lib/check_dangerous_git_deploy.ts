@@ -63,6 +63,7 @@ import {
   resolveThroughWrappers,
   splitOnOperators,
   splitShellTokens,
+  stripGitGlobalOptions,
   stripHeredocs,
 } from "./normalize_command.ts";
 import { isGitPushDeletion } from "./check_irreversible_operations.ts";
@@ -92,7 +93,67 @@ function hasFlagValue(argv: string[], flags: string[], values: string[]): boolea
   return false;
 }
 
+const DANGEROUS_PUSH_FLAGS = new Set([
+  "--force",
+  "-f",
+  "--force-with-lease",
+  "--mirror",
+  "--prune",
+  "--delete",
+  "-d",
+]);
+
+// Config keys that define a git alias or pull in a config file that can
+// (web-jam-tools#1223). Git reads section names without regard to case.
+const ALIAS_CONFIG_PREFIXES = ["alias.", "include.", "includeif."];
+
+function isAliasConfigKey(value: string): boolean {
+  const lower = value.toLowerCase();
+  return ALIAS_CONFIG_PREFIXES.some((p) => lower.startsWith(p));
+}
+
+const GIT_CONFIG_FILE_ENV_RE = /^GIT_CONFIG_(?:GLOBAL|SYSTEM|PARAMETERS)=/;
+const GIT_CONFIG_KEY_ENV_RE = /^GIT_CONFIG_KEY_\d+=(.*)$/s;
+
+const ALIAS_BLOCK_MESSAGE =
+  "defining a git alias, or loading extra git config on the command, is not allowed — run the plain git command instead.";
+
+/** True if any token is an environment assignment that hands git an alias. */
+function hasAliasConfigEnv(argv: string[]): boolean {
+  return argv.some((t) => {
+    if (GIT_CONFIG_FILE_ENV_RE.test(t)) return true;
+    const key = GIT_CONFIG_KEY_ENV_RE.exec(t);
+    return key !== null && isAliasConfigKey(key[1]);
+  });
+}
+
+/**
+ * True if a `-c` or `--config-env` anywhere after `git` carries an alias key.
+ * The value must hold `=`, as git's own `name=value` form does, so a
+ * subcommand's unrelated `-c` (`git show -c include.h`) is left alone.
+ */
+function hasAliasConfigOption(gitArgs: string[]): boolean {
+  return gitArgs.some((t, n) => {
+    if (t === "-c" || t === "--config-env") {
+      const value = gitArgs[n + 1] ?? "";
+      return value.includes("=") && isAliasConfigKey(value);
+    }
+    return t.startsWith("--config-env=") && isAliasConfigKey(t.slice("--config-env=".length));
+  });
+}
+
+/** The branch a `git push` argument writes to: `+src:refs/heads/dev` -> `dev`. */
+function pushDestination(arg: string): string {
+  const refspec = arg.startsWith("+") ? arg.slice(1) : arg;
+  const dest = refspec.slice(refspec.lastIndexOf(":") + 1);
+  return dest.replace(/^(?:refs\/)?heads\//, "");
+}
+
 function checkSegment(argv: string[], depth: number): CheckResult {
+  // 8a) An environment assignment that defines an alias (web-jam-tools#1223),
+  //     checked on the raw argv so a wrapper or nested shell cannot shed it.
+  if (hasAliasConfigEnv(argv)) return block(ALIAS_BLOCK_MESSAGE);
+
   const resolved = resolveThroughWrappers(argv);
   if (resolved.kind === "cap-exceeded") {
     return block("wrapper resolution exceeded iteration cap — failing closed");
@@ -104,13 +165,34 @@ function checkSegment(argv: string[], depth: number): CheckResult {
     return checkDangerousGitDeploy(resolved.command, depth + 1);
   }
 
-  const resolvedArgv = resolved.argv;
+  const globalStripped = stripGitGlobalOptions(resolved.argv);
+  const resolvedArgv = globalStripped.argv;
   let i = 0;
   while (i < resolvedArgv.length && ASSIGN_RE.test(resolvedArgv[i])) i++;
   if (i >= resolvedArgv.length) return ok();
 
   const cmd0 = resolvedArgv[i].split("/").pop();
   const rest = resolvedArgv.slice(i + 1);
+
+  if (cmd0 === "git") {
+    // 8b) `-c alias.x=...` / `--config-env=alias.x=...` (or an include key).
+    //     Scanned on the unstripped argv so an option the parser stopped at
+    //     cannot hide one further along.
+    if (hasAliasConfigOption(resolved.argv)) return block(ALIAS_BLOCK_MESSAGE);
+
+    // 8c) `git config alias.x ...` — the stored form of the same alias.
+    if (rest[0] === "config" && rest.slice(1).some(isAliasConfigKey)) {
+      return block(ALIAS_BLOCK_MESSAGE);
+    }
+
+    // 9) An option the parser does not recognise sits before the subcommand
+    //    and `push` comes later: the push cannot be evaluated, so block.
+    if (globalStripped.unrecognisedOption && rest.slice(1).includes("push")) {
+      return block(
+        "'git' with an unrecognised option before 'push' — run the plain 'git push' form from inside the repository instead.",
+      );
+    }
+  }
 
   // 1) Any PR merge (includes --admin / --squash / --rebase / --merge —
   //    they're just further tokens after "merge", not required here).
@@ -162,11 +244,13 @@ function checkSegment(argv: string[], depth: number): CheckResult {
     }
   }
 
-  // 3) Pushing to a protected branch (main/dev), force or not. Allows
-  //    feature branches (e.g. 'git push -u origin claude/...').
+  // 3) Pushing to a protected branch (main/dev), force or not, however the
+  //    destination is spelled (`+dev`, `HEAD:refs/heads/dev`, `heads/main`).
+  //    Allows feature branches (e.g. 'git push -u origin claude/...').
   if (cmd0 === "git" && rest[0] === "push") {
     for (const a of rest.slice(1)) {
-      if (a === "main" || a === "dev" || /:(?:main|dev)$/.test(a)) {
+      const dest = pushDestination(a);
+      if (dest === "main" || dest === "dev") {
         return block("'git push' to a protected branch (main/dev) — open a PR instead.");
       }
     }
@@ -187,6 +271,21 @@ function checkSegment(argv: string[], depth: number): CheckResult {
   if (isGitPushDeletion(resolvedArgv.slice(i))) {
     return block(
       "deleting a remote branch via 'git push' (--delete, -d, or :branch) — deleting a remote branch is Josh's decision.",
+    );
+  }
+
+  // 7) A git global option plus a dangerous push flag (web-jam-tools#1223):
+  //    the deny rules only match the plain form, so this guard owns the
+  //    `git <global option> push --force ...` shape.
+  if (
+    globalStripped.hadGlobalOptions && cmd0 === "git" && rest[0] === "push" &&
+    rest.slice(1).some((a) =>
+      DANGEROUS_PUSH_FLAGS.has(a) || a.startsWith("--force-with-lease=") ||
+      (a.length > 1 && a.startsWith(":"))
+    )
+  ) {
+    return block(
+      "'git' with a global option before 'push' plus a force, mirror, prune or delete flag — run the plain 'git push' form from inside the repository instead.",
     );
   }
 

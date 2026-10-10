@@ -35,6 +35,7 @@ const MERGE_CODEX_SCRIPT = `${REPO_ROOT}scripts/merge-codex-reaper-hook.ts`;
 const MERGE_AGENTS_MD_SCRIPT = `${REPO_ROOT}scripts/merge-agents-md-pointer.ts`;
 const STATUS_LINE_SCRIPT = `${REPO_ROOT}scripts/statusline.sh`;
 const AGENT_ALERT_SCRIPT = `${REPO_ROOT}scripts/agent-alert.sh`;
+const AGY_PROMPT_WATCH_SCRIPT = `${REPO_ROOT}scripts/agy-prompt-watch.sh`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
 
 interface RunResult {
@@ -115,7 +116,10 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     // destination as the *.sh hooks (so it gets a stable installed path),
     // but it is NOT a hook and must never appear in shHookNames() (which
     // only lists hooks/*.sh) or be picked up by the hook-registration loops.
-    assertEquals(linked, [...shHookNames(), "agent-alert.sh", "statusline.sh"].sort());
+    assertEquals(
+      linked,
+      [...shHookNames(), "agent-alert.sh", "agy-prompt-watch.sh", "statusline.sh"].sort(),
+    );
     for (const name of linked) {
       const info = await Deno.lstat(`${hooksDir}/${name}`);
       assert(info.isSymlink, `${name} should be a symlink`);
@@ -149,12 +153,6 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       "expected statusline.sh to be installed at the stable hooksDir path",
     );
 
-    // web-jam-tools#705: permissions.defaultMode is pinned to "acceptEdits"
-    // in the Claude Code settings.json so a session never lands in "auto"
-    // mode, where hooks/opus-delegation-gate.sh refused every
-    // Edit/Write/NotebookEdit until web-jam-tools#965.
-    assertEquals(settings.permissions?.defaultMode, "acceptEdits");
-
     // web-jam-tools#345: agy hooks.json is also created and populated
     const agyHooksPath = `${settingsDir}/hooks.json`;
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
@@ -163,6 +161,16 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     assertEquals(agyHooks.hooks.Stop, [
       { type: "command", command: "$HOME/.claude/hooks/agent-alert.sh agy finished" },
     ]);
+    // web-jam-tools#1212: agy-prompt-watch.sh is registered under matcher ".*"
+    const preToolHooks = agyHooks.hooks.PreToolUse.flatMap(
+      (e: { hooks?: Array<{ command?: string }> }) => e.hooks ?? [],
+    );
+    assert(
+      preToolHooks.some(
+        (h: { command?: string }) => h.command === "$HOME/.claude/hooks/agy-prompt-watch.sh",
+      ),
+      "expected $HOME/.claude/hooks/agy-prompt-watch.sh in agy PreToolUse hooks",
+    );
     // web-jam-tools#691: agy never gets a statusLine surface.
     assertEquals(agyHooks.statusLine, undefined);
     // web-jam-tools#705: agy has no permission-mode concept at all
@@ -170,6 +178,13 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     // either — this installer never passes --default-mode to the
     // $AGY_HOOKS_PATH invocation.
     assertEquals(agyHooks.permissions?.defaultMode, undefined);
+    // web-jam-tools#1240: agy never gets a skillOverrides surface.
+    assertEquals(agyHooks.skillOverrides, undefined);
+    // web-jam-tools#1240: settings.json gets the 30 bundled skills set to name-only
+    assertEquals(Object.keys(settings.skillOverrides).length, 30);
+    for (const [k, v] of Object.entries(settings.skillOverrides)) {
+      assertEquals(v, "name-only", `expected skillOverride ${k} to be name-only`);
+    }
 
     // web-jam-tools#1036: agy filters hooks.json entries by testing the
     // registered matcher against its OWN native tool names (e.g.
@@ -221,6 +236,37 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
       }) as its real matcher, got: ${secretLiteralsCmd}`,
     );
 
+    // web-jam-tools#1236: regenerate-memory-index.sh registered in PostToolUse
+    const postToolEntries = settings.hooks.PostToolUse.flatMap(
+      (entry: { matcher?: string; hooks?: Array<{ command?: string }> }) =>
+        (entry.hooks ?? []).map((h) => ({ matcher: entry.matcher, command: h.command })),
+    );
+    const memoryIndexEntry = postToolEntries.find(
+      (e: { command?: string }) => e.command === "$HOME/.claude/hooks/regenerate-memory-index.sh",
+    );
+    assert(
+      memoryIndexEntry,
+      "expected Claude Code settings.json to register regenerate-memory-index.sh in PostToolUse",
+    );
+    assertEquals(memoryIndexEntry.matcher, "Write|Edit");
+
+    const allAgyPostToolUseCmds: string[] = agyHooks.hooks.PostToolUse.flatMap(
+      (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command),
+    );
+    const memoryIndexAgyCmd = allAgyPostToolUseCmds.find((c) =>
+      c.includes("regenerate-memory-index.sh")
+    );
+    assert(
+      memoryIndexAgyCmd,
+      "expected an agy-side shim-wrapped entry for regenerate-memory-index.sh",
+    );
+    assert(
+      memoryIndexAgyCmd!.includes(btoa("Write|Edit")),
+      `expected regenerate-memory-index.sh agy entry to carry base64("Write|Edit") (${
+        btoa("Write|Edit")
+      }), got: ${memoryIndexAgyCmd}`,
+    );
+
     // Claude Code's own settings.json registrations (a completely separate
     // merge invocation, $SETTINGS_PATH not $AGY_HOOKS_PATH) must be
     // UNCHANGED by this fix — still keyed by the real, per-hook matcher,
@@ -269,7 +315,7 @@ Deno.test(
         JSON.stringify({
           tool_input: {
             command:
-              'gh issue create --repo WebJamApps/web-jam-tools --title "test" --body "standalone body text\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash High"',
+              'gh issue create --repo WebJamApps/web-jam-tools --title "test" --body "standalone body text\n\n🤖 Authored by Claude Code — Opus" --type Task --label "Flash"',
           },
         }),
       );
@@ -361,6 +407,47 @@ Deno.test(
       assert(
         matcherMatches(approvalTokenMatcher, "mcp__claude_ai_GitHub_MCP__sub_issue_write"),
         `expected require-approval-token-on-issue-write.sh's matcher (${approvalTokenMatcher}) to still fire for mcp__*__sub_issue_write`,
+      );
+
+      const citationMatcher = matcherFor("check-issue-citation-on-write.sh");
+      assert(
+        matcherMatches(citationMatcher, "Bash"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for Bash`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__issue_write"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__issue_write`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__pull_request_review_write"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__pull_request_review_write`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__add_comment_to_pending_review"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__add_comment_to_pending_review`,
+      );
+      assert(
+        matcherMatches(
+          citationMatcher,
+          "mcp__claude_ai_GitHub_MCP__add_reply_to_pull_request_comment",
+        ),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__add_reply_to_pull_request_comment`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__update_issue_comment"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__update_issue_comment`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__add_issue_comment"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for mcp__*__add_issue_comment`,
+      );
+      assert(
+        matcherMatches(citationMatcher, "issue_write"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to fire for bare issue_write`,
+      );
+      assert(
+        !matcherMatches(citationMatcher, "mcp__claude_ai_GitHub_MCP__get_file_contents"),
+        `expected check-issue-citation-on-write.sh's matcher (${citationMatcher}) to not fire for get_file_contents`,
       );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
@@ -459,7 +546,10 @@ Deno.test("default invocation (no --hooks-dir) still targets $HOME/.claude/hooks
     const linked = [...Deno.readDirSync(hooksDir)].map((e) => e.name).sort();
     // web-jam-tools#691: statusline.sh lands alongside the hooks at the
     // default destination too, but is not itself a hook.
-    assertEquals(linked, [...shHookNames(), "agent-alert.sh", "statusline.sh"].sort());
+    assertEquals(
+      linked,
+      [...shHookNames(), "agent-alert.sh", "agy-prompt-watch.sh", "statusline.sh"].sort(),
+    );
 
     // web-jam-tools#721: a normal, unsandboxed-hooks-dir run must still
     // register statusLine exactly as before — pointed at the default
@@ -498,11 +588,13 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
   await Deno.copyFile(MERGE_CODEX_SCRIPT, `${mainRepo}/scripts/merge-codex-reaper-hook.ts`);
   await Deno.copyFile(MERGE_AGENTS_MD_SCRIPT, `${mainRepo}/scripts/merge-agents-md-pointer.ts`);
-  // install-hooks.sh requires scripts/statusline.sh and scripts/agent-alert.sh to exist (web-jam-tools#688, web-jam-tools#1176).
+  // install-hooks.sh requires scripts/statusline.sh, scripts/agent-alert.sh, and scripts/agy-prompt-watch.sh to exist (web-jam-tools#688, web-jam-tools#1176, web-jam-tools#1212).
   await Deno.copyFile(STATUS_LINE_SCRIPT, `${mainRepo}/scripts/statusline.sh`);
   await Deno.chmod(`${mainRepo}/scripts/statusline.sh`, 0o755);
   await Deno.copyFile(AGENT_ALERT_SCRIPT, `${mainRepo}/scripts/agent-alert.sh`);
   await Deno.chmod(`${mainRepo}/scripts/agent-alert.sh`, 0o755);
+  await Deno.copyFile(AGY_PROMPT_WATCH_SCRIPT, `${mainRepo}/scripts/agy-prompt-watch.sh`);
+  await Deno.chmod(`${mainRepo}/scripts/agy-prompt-watch.sh`, 0o755);
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {
@@ -824,7 +916,7 @@ Deno.test("--hooks-dir is exempt from the worktree guard (no --force needed)", a
 const REALISTIC_SETTINGS_JSON = JSON.stringify(
   {
     statusLine: { type: "command", command: "/home/fakeuser/.claude/hooks/statusline.sh" },
-    permissions: { deny: ["Bash(git push --force *)"], defaultMode: "acceptEdits" },
+    permissions: { deny: ["Bash(git push --force *)"] },
     hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo hi" }] }] },
   },
   null,
@@ -1656,6 +1748,69 @@ Deno.test("install-hooks.sh builds the autoMode paths from HOME and the checkout
   }
 });
 
+// --- versioned skillOverrides section (web-jam-tools#1240) ---
+
+Deno.test(
+  "install-hooks.sh installs the versioned skillOverrides (30 entries name-only), is idempotent, keeps other keys, and --check flags drift",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agyHooksPath = `${settingsDir}/hooks.json`;
+    const base = ["--hooks-dir", hooksDir, "--settings-path", settingsPath];
+    try {
+      await Deno.writeTextFile(settingsPath, JSON.stringify({ model: "opus" }));
+      const first = await run("bash", [INSTALL_SCRIPT, ...base]);
+      assertEquals(first.code, 0, first.stdout + first.stderr);
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.model, "opus");
+      assert(settings.skillOverrides && typeof settings.skillOverrides === "object");
+      const keys = Object.keys(settings.skillOverrides).sort();
+      assertEquals(keys.length, 30);
+      for (const key of keys) {
+        assertEquals(settings.skillOverrides[key], "name-only");
+      }
+      // Verify both document skills and built-in skills are present
+      assert(keys.includes("anthropic-skills:pdf"));
+      assert(keys.includes("keybindings-help"));
+
+      // agy surface: no skillOverrides written
+      const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
+      assertEquals(agyHooks.skillOverrides, undefined);
+
+      // Second run is idempotent (no-op)
+      const second = await run("bash", [INSTALL_SCRIPT, ...base]);
+      assertEquals(second.code, 0, second.stdout + second.stderr);
+      assertEquals(JSON.parse(await Deno.readTextFile(settingsPath)), settings);
+      assertEquals((await run("bash", [INSTALL_SCRIPT, ...base, "--check"])).code, 0);
+
+      // Drift check when an entry is edited
+      settings.skillOverrides["keybindings-help"] = "full";
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings));
+      const checkDiff = await run("bash", [INSTALL_SCRIPT, ...base, "--check"]);
+      assert(checkDiff.code !== 0, "expected --check to fail on skillOverrides value drift");
+      assert(checkDiff.stderr.includes("skillOverrides differs"), checkDiff.stderr);
+      assert(
+        checkDiff.stderr.includes("skillOverrides.keybindings-help: value differs"),
+        checkDiff.stderr,
+      );
+
+      // Drift check when an entry is missing
+      delete settings.skillOverrides["anthropic-skills:pdf"];
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings));
+      const checkMissing = await run("bash", [INSTALL_SCRIPT, ...base, "--check"]);
+      assert(checkMissing.code !== 0, "expected --check to fail on missing skillOverrides entry");
+      assert(
+        checkMissing.stderr.includes("skillOverrides.anthropic-skills:pdf: key is missing"),
+        checkMissing.stderr,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
 Deno.test(
   "install-hooks.sh replaces old agy Stop entry with finished moment, and --check flags old entry as drift (web-jam-tools#1211)",
   async () => {
@@ -1713,6 +1868,505 @@ Deno.test(
       assertEquals(checkAfter.code, 0, checkAfter.stdout + checkAfter.stderr);
     } finally {
       await Deno.remove(sandbox, { recursive: true });
+    }
+  },
+);
+
+// --- Part R MCP deny and ask rules (R-39, R-40, R-42, R-43, web-jam-tools#448) ---
+
+Deno.test(
+  "install-hooks.sh registers Part R deny and ask rules with control tests (web-jam-tools#448)",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      const res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      const deny: string[] = settings.permissions?.deny ?? [];
+      const ask: string[] = settings.permissions?.ask ?? [];
+
+      // R-39 & R-43 (D-30): local Google Drive deleteItem, addPermission, and updatePermission ask
+      for (
+        const driveAskTool of [
+          "mcp__google-drive__deleteItem",
+          "mcp__google-drive__addPermission",
+          "mcp__google-drive__updatePermission",
+        ]
+      ) {
+        assert(
+          ask.includes(driveAskTool),
+          `${driveAskTool} must be in permissions.ask`,
+        );
+        assert(
+          !deny.includes(driveAskTool),
+          `${driveAskTool} must not be denied`,
+        );
+      }
+      // R-39 control tests: read/list operations are not in ask or deny
+      for (
+        const allowedTool of [
+          "mcp__google-drive__listFolder",
+          "mcp__google-drive__downloadFile",
+          "mcp__google-drive__search",
+        ]
+      ) {
+        assert(!ask.includes(allowedTool), `${allowedTool} must not be in permissions.ask`);
+        assert(!deny.includes(allowedTool), `${allowedTool} must not be in permissions.deny`);
+      }
+
+      // R-40: mcp__gmail__send_email denied (irreversible send)
+      assert(
+        deny.includes("mcp__gmail__send_email"),
+        "mcp__gmail__send_email must be in permissions.deny",
+      );
+      // R-40 control tests: drafting and reads remain permitted
+      for (
+        const permittedTool of [
+          "mcp__gmail__draft_email",
+          "mcp__gmail__read_email",
+          "mcp__gmail__search_emails",
+        ]
+      ) {
+        assert(
+          !deny.includes(permittedTool),
+          `${permittedTool} must not be in permissions.deny`,
+        );
+      }
+
+      // R-42: Composio connection-management and remote execution denied
+      const composioDenies = [
+        "mcp__claude_ai_Composio__COMPOSIO_MANAGE_CONNECTIONS",
+        "mcp__claude_ai_Composio__COMPOSIO_REMOTE_BASH_TOOL",
+        "mcp__claude_ai_Composio__COMPOSIO_REMOTE_WORKBENCH",
+      ];
+      for (const tool of composioDenies) {
+        assert(deny.includes(tool), `${tool} must be in permissions.deny`);
+      }
+      // R-42 control tests: safe Composio read/schema tools are not denied
+      for (
+        const permittedTool of [
+          "mcp__claude_ai_Composio__COMPOSIO_SEARCH_TOOLS",
+          "mcp__claude_ai_Composio__COMPOSIO_GET_TOOL_SCHEMAS",
+          "mcp__claude_ai_Composio__COMPOSIO_WAIT_FOR_CONNECTIONS",
+        ]
+      ) {
+        assert(
+          !deny.includes(permittedTool),
+          `${permittedTool} must not be in permissions.deny`,
+        );
+      }
+
+      // R-43 (D-29): Hosted Gmail connector write tools denied (local server is sanctioned laptop path)
+      const hostedGmailWrites = [
+        "mcp__claude_ai_Gmail__create_draft",
+        "mcp__claude_ai_Gmail__update_draft",
+        "mcp__claude_ai_Gmail__create_label",
+        "mcp__claude_ai_Gmail__update_label",
+        "mcp__claude_ai_Gmail__label_message",
+        "mcp__claude_ai_Gmail__label_thread",
+        "mcp__claude_ai_Gmail__unlabel_message",
+        "mcp__claude_ai_Gmail__unlabel_thread",
+        "mcp__claude_ai_Gmail__apply_sensitive_message_label",
+        "mcp__claude_ai_Gmail__apply_sensitive_thread_label",
+        "mcp__claude_ai_Gmail__delete_label",
+        "mcp__claude_ai_Gmail__send_message",
+        "mcp__claude_ai_Gmail__forward",
+        "mcp__claude_ai_Gmail__reply",
+      ];
+      for (const tool of hostedGmailWrites) {
+        assert(deny.includes(tool), `hosted Gmail write tool ${tool} must be in permissions.deny`);
+      }
+      // R-43 Gmail control tests: hosted Gmail reads are not denied
+      for (
+        const readTool of [
+          "mcp__claude_ai_Gmail__get_message",
+          "mcp__claude_ai_Gmail__get_thread",
+          "mcp__claude_ai_Gmail__list_drafts",
+          "mcp__claude_ai_Gmail__list_labels",
+          "mcp__claude_ai_Gmail__search_threads",
+        ]
+      ) {
+        assert(
+          !deny.includes(readTool),
+          `hosted Gmail read tool ${readTool} must not be in permissions.deny`,
+        );
+      }
+
+      // R-43 (D-30): Hosted Google Drive connector write tools denied (local server is sanctioned laptop path)
+      const hostedDriveWrites = [
+        "mcp__claude_ai_Google_Drive__copy_file",
+        "mcp__claude_ai_Google_Drive__create_file",
+        "mcp__claude_ai_Google_Drive__share_file",
+      ];
+      for (const tool of hostedDriveWrites) {
+        assert(deny.includes(tool), `hosted Drive write tool ${tool} must be in permissions.deny`);
+      }
+      // R-43 Drive control tests: hosted Drive reads are not denied
+      for (
+        const readTool of [
+          "mcp__claude_ai_Google_Drive__get_file_metadata",
+          "mcp__claude_ai_Google_Drive__get_file_permissions",
+          "mcp__claude_ai_Google_Drive__list_recent_files",
+          "mcp__claude_ai_Google_Drive__read_file_content",
+          "mcp__claude_ai_Google_Drive__search_files",
+          "mcp__claude_ai_Google_Drive__download_file_content",
+        ]
+      ) {
+        assert(
+          !deny.includes(readTool),
+          `hosted Drive read tool ${readTool} must not be in permissions.deny`,
+        );
+      }
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh strips deleteItem, addPermission, updatePermission, and denied tools from permissions.allow (R-39, R-40, R-43, web-jam-tools#448)",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Pre-populate settings.json with Drive ask tools and send_email in permissions.allow
+      const initialSettings = {
+        permissions: {
+          allow: [
+            "mcp__google-drive__deleteItem",
+            "mcp__google-drive__addPermission",
+            "mcp__google-drive__updatePermission",
+            "mcp__gmail__send_email",
+            "mcp__google-drive__listFolder",
+          ],
+        },
+      };
+      await Deno.writeTextFile(settingsPath, JSON.stringify(initialSettings, null, 2));
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+      assert(
+        installRes.stdout.includes(
+          "removed permissions.allow rule mcp__google-drive__deleteItem (now owned by permissions.ask)",
+        ),
+        installRes.stdout,
+      );
+      assert(
+        installRes.stdout.includes(
+          "removed permissions.allow rule mcp__google-drive__addPermission (now owned by permissions.ask)",
+        ),
+        installRes.stdout,
+      );
+      assert(
+        installRes.stdout.includes(
+          "removed permissions.allow rule mcp__google-drive__updatePermission (now owned by permissions.ask)",
+        ),
+        installRes.stdout,
+      );
+      assert(
+        installRes.stdout.includes(
+          "removed permissions.allow rule mcp__gmail__send_email (now owned by permissions.deny)",
+        ),
+        installRes.stdout,
+      );
+
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assert(
+        !settings.permissions.allow.includes("mcp__google-drive__deleteItem"),
+        "mcp__google-drive__deleteItem must be stripped from permissions.allow",
+      );
+      assert(
+        !settings.permissions.allow.includes("mcp__google-drive__addPermission"),
+        "mcp__google-drive__addPermission must be stripped from permissions.allow",
+      );
+      assert(
+        !settings.permissions.allow.includes("mcp__google-drive__updatePermission"),
+        "mcp__google-drive__updatePermission must be stripped from permissions.allow",
+      );
+      assert(
+        !settings.permissions.allow.includes("mcp__gmail__send_email"),
+        "mcp__gmail__send_email must be stripped from permissions.allow",
+      );
+      assert(
+        settings.permissions.allow.includes("mcp__google-drive__listFolder"),
+        "unowned allow rule mcp__google-drive__listFolder must survive",
+      );
+      assert(
+        settings.permissions.ask.includes("mcp__google-drive__deleteItem"),
+        "mcp__google-drive__deleteItem must be in permissions.ask",
+      );
+      assert(
+        settings.permissions.ask.includes("mcp__google-drive__addPermission"),
+        "mcp__google-drive__addPermission must be in permissions.ask",
+      );
+      assert(
+        settings.permissions.ask.includes("mcp__google-drive__updatePermission"),
+        "mcp__google-drive__updatePermission must be in permissions.ask",
+      );
+      assert(
+        settings.permissions.deny.includes("mcp__gmail__send_email"),
+        "mcp__gmail__send_email must be in permissions.deny",
+      );
+
+      // Verify --check passes cleanly
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift and exits non-zero when permissions.allow contains Drive permission tools (R-43, web-jam-tools#448)",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // First install cleanly into an empty settings file
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({ permissions: { allow: [] } }, null, 2),
+      );
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Now contaminate permissions.allow with addPermission and updatePermission
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      settings.permissions.allow.push(
+        "mcp__google-drive__addPermission",
+        "mcp__google-drive__updatePermission",
+      );
+      await Deno.writeTextFile(settingsPath, JSON.stringify(settings, null, 2));
+
+      // Run install-hooks.sh --check and verify it catches the stale allow rules
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 1, "check must exit 1 on drift");
+      assert(
+        checkRes.stderr.includes(
+          "permissions.allow rule mcp__google-drive__addPermission is also in permissions.ask (stale copy)",
+        ),
+        checkRes.stderr,
+      );
+      assert(
+        checkRes.stderr.includes(
+          "permissions.allow rule mcp__google-drive__updatePermission is also in permissions.ask (stale copy)",
+        ),
+        checkRes.stderr,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+// --- web-jam-tools#1232: installer stops setting Claude Code defaultMode ---
+
+Deno.test(
+  "install-hooks.sh preserves permissions.defaultMode auto and --check reports no defaultMode drift",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Criterion 1: initial settings has permissions.defaultMode = "auto"
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({ permissions: { defaultMode: "auto" } }, null, 2),
+      );
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Verify defaultMode is preserved as "auto"
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.permissions?.defaultMode, "auto");
+
+      // Criterion 4: --check prints no line about permissions.defaultMode and causes no drift error
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+      assert(
+        !checkRes.stdout.includes("defaultMode"),
+        `check stdout must not mention defaultMode: ${checkRes.stdout}`,
+      );
+      assert(
+        !checkRes.stderr.includes("defaultMode"),
+        `check stderr must not mention defaultMode: ${checkRes.stderr}`,
+      );
+      assert(
+        !checkRes.stderr.includes("drift detected"),
+        `check must not detect drift: ${checkRes.stderr}`,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh preserves permissions.defaultMode acceptEdits and --check reports no defaultMode drift",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Criterion 2: initial settings has permissions.defaultMode = "acceptEdits"
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({ permissions: { defaultMode: "acceptEdits" } }, null, 2),
+      );
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Verify defaultMode is preserved as "acceptEdits"
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.permissions?.defaultMode, "acceptEdits");
+
+      // Criterion 4: --check prints no line about permissions.defaultMode and causes no drift error
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+      assert(
+        !checkRes.stdout.includes("defaultMode"),
+        `check stdout must not mention defaultMode: ${checkRes.stdout}`,
+      );
+      assert(
+        !checkRes.stderr.includes("defaultMode"),
+        `check stderr must not mention defaultMode: ${checkRes.stderr}`,
+      );
+      assert(
+        !checkRes.stderr.includes("drift detected"),
+        `check must not detect drift: ${checkRes.stderr}`,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh preserves settings with no permissions.defaultMode key and --check reports no defaultMode drift",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    try {
+      // Criterion 3: initial settings has no permissions.defaultMode key
+      await Deno.writeTextFile(
+        settingsPath,
+        JSON.stringify({}, null, 2),
+      );
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Verify no permissions.defaultMode key was added
+      const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+      assertEquals(settings.permissions?.defaultMode, undefined);
+      assert(
+        !("defaultMode" in (settings.permissions ?? {})),
+        "permissions object must not have defaultMode key",
+      );
+
+      // Criterion 4: --check prints no line about permissions.defaultMode and causes no drift error
+      const checkRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--check",
+      ]);
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+      assert(
+        !checkRes.stdout.includes("defaultMode"),
+        `check stdout must not mention defaultMode: ${checkRes.stdout}`,
+      );
+      assert(
+        !checkRes.stderr.includes("defaultMode"),
+        `check stderr must not mention defaultMode: ${checkRes.stderr}`,
+      );
+      assert(
+        !checkRes.stderr.includes("drift detected"),
+        `check must not detect drift: ${checkRes.stderr}`,
+      );
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
     }
   },
 );

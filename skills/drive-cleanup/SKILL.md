@@ -1,6 +1,6 @@
 ---
 name: drive-cleanup
-description: Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.
+description: Analyze Google Drive for duplicates, misplaced files, and phone-authored bridge files awaiting merge, reporting findings in a table and waiting for approval before executing. Use when cleaning up Google Drive or when a session-start drive cleanup reminder appears.
 ---
 
 # drive-cleanup
@@ -240,3 +240,7 @@ After all actions, post a short summary: what was done, what was declined, and a
 - `My Drive/CLAUDE/CLAUDE.md` — team structure, file placement rule, canonical queue IDs
 - `/home/joshua/Dropbox/web-jam-llms/bridge-log.md` — append-only audit log of every bridge action
 - Memory: `reference_ai_team_structure.md`, `reference_claude_opus_tasks_file.md`, `reference_claude_sonnet_tasks_file.md`, `project_web_jam_llms_migration_plan.md`
+
+## Description Detail & Triggers
+
+Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.

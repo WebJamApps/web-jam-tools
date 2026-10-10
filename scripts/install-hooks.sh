@@ -23,21 +23,16 @@
 #    Code ONLY, never agy's hooks.json, since agy has no status-line surface
 #    for this to install into (web-jam-tools#688, web-jam-tools#691).
 #
-#    Also idempotently sets "permissions.defaultMode" to DEFAULT_MODE
-#    (currently "acceptEdits") in ~/.claude/settings.json — Claude Code ONLY,
-#    never agy's hooks.json, since agy has no permission-mode concept at all
-#    (docs/agy-hooks.md). This pins the session out of the "auto" mode in
-#    which hooks/opus-delegation-gate.sh used to refuse every
-#    Edit/Write/NotebookEdit (web-jam-tools#965 now decides a subagent's edit
-#    by its real model instead) — a defect that burned two
-#    dispatched subagents (~93k and ~62k tokens, zero output) before nothing
-#    pinned the mode (web-jam-tools#705).
-#
 #    Also installs the whole "autoMode" object (AUTO_MODE_JSON below) into
 #    ~/.claude/settings.json, replacing it when it differs; --check reports
 #    drift. Its path-bearing entries are built from $HOME and this checkout's
 #    parent directory at install time, so the object is correct for the
 #    machine the installer runs on. Claude Code only.
+#
+#    Also installs the whole "skillOverrides" object (SKILL_OVERRIDES_JSON
+#    below) into ~/.claude/settings.json, setting the 30 bundled Claude Code
+#    skills to names only, replacing it when it differs; --check reports
+#    drift. Claude Code only (web-jam-tools#1240).
 #
 # 3. Registers the REAPER startup check in Codex's own hooks.json, next to
 #    its active config ($CODEX_HOME or $HOME/.codex). This Codex-only check
@@ -204,6 +199,7 @@ PRE_TOOL_USE_HOOKS=(
   "Bash::block-raw-gh-write.sh"
   "Bash::block-backend-mutation.sh"
   "Bash::block-private-folder-read.sh"
+  "Bash|(?:mcp__.*__)?(issue_write|pull_request_review_write|add_comment_to_pending_review|add_reply_to_pull_request_comment|update_issue_comment|add_issue_comment)::check-issue-citation-on-write.sh"
 )
 
 # PostToolUse hooks, same "<matcher>::<script>" shape (web-jam-tools#272).
@@ -213,6 +209,7 @@ PRE_TOOL_USE_HOOKS=(
 # it does not depend on knowing how the value got printed.
 POST_TOOL_USE_HOOKS=(
   "Bash::scan-output-for-secrets.sh"
+  "Write|Edit::regenerate-memory-index.sh"
 )
 
 # agy-ONLY PreToolUse hooks (web-jam-tools#432) — never wired into Claude
@@ -224,29 +221,6 @@ AGY_ONLY_PRE_TOOL_USE_HOOKS=(
   "send_email|delete_email|batch_delete_emails::block-agy-gmail-send-delete.sh"
   ".*::agy-model-guard.sh"
 )
-
-# permissions.defaultMode this installer keeps set in settings.json
-# (web-jam-tools#705). When the session's permission mode was "auto" (rather
-# than a deliberate mode), hooks/opus-delegation-gate.sh refused EVERY
-# Edit/Write/NotebookEdit to a git-tracked path, main thread and subagent
-# alike, until web-jam-tools#965 made it decide a subagent's edit by that
-# subagent's real model — measured cost before that fix: two
-# dispatched Sonnet subagents refused on their first edit, ~93k and ~62k
-# tokens burned for zero output (2026-08-22). Nothing pinned the session out
-# of the mode that triggers it, so this installer now does: it sets
-# permissions.defaultMode to "acceptEdits", the same versioned/idempotent way
-# it already manages DENY_RULES/ASK_RULES below (single scalar value, not a
-# list — see the permissions.defaultMode merge in
-# scripts/merge-hooks-into-settings.ts, modeled on the statusLine merge from
-# web-jam-tools#688).
-#
-# Claude Code ONLY — deliberately NOT mirrored into agy's hooks.json. agy has
-# no permission-mode concept at all (docs/agy-hooks.md: "without touching
-# Claude Code's permissions at all (non-goal)"), so DEFAULT_MODE is passed
-# only to the $SETTINGS_PATH invocations below, never to the $AGY_HOOKS_PATH
-# ones (Josh-approved single-surface exception to the usual both-surfaces
-# rule for hook/skill changes).
-DEFAULT_MODE="acceptEdits"
 
 # permissions.deny patterns this installer keeps registered in settings.json
 # (web-jam-tools#308). PreToolUse hooks exit with code 2 to hard-block
@@ -271,40 +245,64 @@ DEFAULT_MODE="acceptEdits"
 DENY_RULES=(
   # git push --delete / -d <branch>  (explicit remote branch deletion)
   'Bash(git push --delete *)'
+  'Bash(git -C * push --delete *)'
   'Bash(git push --delete)'
+  'Bash(git -C * push --delete)'
   'Bash(git push * --delete *)'
+  'Bash(git -C * push * --delete *)'
   'Bash(git push * --delete)'
+  'Bash(git -C * push * --delete)'
   'Bash(git push -d *)'
+  'Bash(git -C * push -d *)'
   'Bash(git push -d)'
+  'Bash(git -C * push -d)'
   'Bash(git push * -d *)'
+  'Bash(git -C * push * -d *)'
   'Bash(git push * -d)'
+  'Bash(git -C * push * -d)'
 
   # git push --force / -f  — plain force stays DENIED, always. It overwrites
   # whatever arrived on the remote since your last fetch, with no check.
   # NOTE: --force-with-lease is deliberately NOT here — it moved to ASK_RULES
   # below. See the comment there for why.
   'Bash(git push --force *)'
+  'Bash(git -C * push --force *)'
   'Bash(git push --force)'
+  'Bash(git -C * push --force)'
   'Bash(git push * --force *)'
+  'Bash(git -C * push * --force *)'
   'Bash(git push * --force)'
+  'Bash(git -C * push * --force)'
   'Bash(git push -f *)'
+  'Bash(git -C * push -f *)'
   'Bash(git push -f)'
+  'Bash(git -C * push -f)'
   'Bash(git push * -f *)'
+  'Bash(git -C * push * -f *)'
   'Bash(git push * -f)'
+  'Bash(git -C * push * -f)'
 
   # git branch -D / --delete --force against a remotes/ ref (local ref
   # deletion of a REMOTE-tracking branch is out of scope of the local
   # cleanup allowance; plain local branches are untouched by this pattern)
   'Bash(git branch -D remotes/*)'
+  'Bash(git -C * branch -D remotes/*)'
   'Bash(git branch * -D remotes/*)'
+  'Bash(git -C * branch * -D remotes/*)'
   'Bash(git branch --delete --force remotes/*)'
+  'Bash(git -C * branch --delete --force remotes/*)'
   'Bash(git branch * --delete --force remotes/*)'
+  'Bash(git -C * branch * --delete --force remotes/*)'
 
   # git push --mirror / --prune (both can delete remote refs wholesale)
   'Bash(git push --mirror*)'
+  'Bash(git -C * push --mirror*)'
   'Bash(git push * --mirror*)'
+  'Bash(git -C * push * --mirror*)'
   'Bash(git push --prune*)'
+  'Bash(git -C * push --prune*)'
   'Bash(git push * --prune*)'
+  'Bash(git -C * push * --prune*)'
 
   # Laptop Dropbox deny list (web-jam-tools#321)
   'Read(//home/joshua/Dropbox/Apps/**)'
@@ -407,6 +405,35 @@ DENY_RULES=(
   # Dropbox MCP mutation denial (web-jam-tools#321)
   'mcp__claude_ai_Dropbox__delete'
   'mcp__claude_ai_Dropbox__move'
+
+  # Local Gmail send denial (R-40, web-jam-tools#448)
+  'mcp__gmail__send_email'
+
+  # Composio connection-management and remote execution denies (R-42, web-jam-tools#448)
+  'mcp__claude_ai_Composio__COMPOSIO_MANAGE_CONNECTIONS'
+  'mcp__claude_ai_Composio__COMPOSIO_REMOTE_BASH_TOOL'
+  'mcp__claude_ai_Composio__COMPOSIO_REMOTE_WORKBENCH'
+
+  # Hosted Gmail connector write tool denies — local server is sanctioned laptop path (R-43 & D-29, web-jam-tools#448)
+  'mcp__claude_ai_Gmail__create_draft'
+  'mcp__claude_ai_Gmail__update_draft'
+  'mcp__claude_ai_Gmail__create_label'
+  'mcp__claude_ai_Gmail__update_label'
+  'mcp__claude_ai_Gmail__label_message'
+  'mcp__claude_ai_Gmail__label_thread'
+  'mcp__claude_ai_Gmail__unlabel_message'
+  'mcp__claude_ai_Gmail__unlabel_thread'
+  'mcp__claude_ai_Gmail__apply_sensitive_message_label'
+  'mcp__claude_ai_Gmail__apply_sensitive_thread_label'
+  'mcp__claude_ai_Gmail__delete_label'
+  'mcp__claude_ai_Gmail__send_message'
+  'mcp__claude_ai_Gmail__forward'
+  'mcp__claude_ai_Gmail__reply'
+
+  # Hosted Google Drive connector write tool denies — local server is sanctioned laptop path (R-43 & D-30, web-jam-tools#448)
+  'mcp__claude_ai_Google_Drive__copy_file'
+  'mcp__claude_ai_Google_Drive__create_file'
+  'mcp__claude_ai_Google_Drive__share_file'
 )
 
 # permissions.ask patterns this installer keeps registered in settings.json
@@ -437,7 +464,9 @@ ASK_RULES=(
   # not be published at all — the deny rule blocked the push and no
   # authorization from Josh could lift it, so the rebase was unlandable.
   'Bash(git push --force-with-lease*)'
+  'Bash(git -C * push --force-with-lease*)'
   'Bash(git push * --force-with-lease*)'
+  'Bash(git -C * push * --force-with-lease*)'
 
   # gh pr (11 write verbs)
   'Bash(gh pr create *)'
@@ -607,6 +636,11 @@ ASK_RULES=(
   'mcp__claude_ai_GitHub_MCP__update_pull_request'
   'mcp__claude_ai_GitHub_MCP__update_pull_request_branch'
   'mcp__claude_ai_GitHub_MCP__run_secret_scanning'
+
+  # Local Google Drive asks — deleteItem recoverable via Trash, sharing/permission changes (R-39, R-43 & D-30, web-jam-tools#448)
+  'mcp__google-drive__deleteItem'
+  'mcp__google-drive__addPermission'
+  'mcp__google-drive__updatePermission'
 )
 
 # permissions.allow patterns this installer keeps registered in settings.json
@@ -800,16 +834,17 @@ ALERT_DEST="$HOOKS_DEST/agent-alert.sh"
 ALERT_AGY_COMMAND='$HOME/.claude/hooks/agent-alert.sh agy finished'
 merge_agy_stop_args=("$ALERT_AGY_COMMAND")
 
-# --- permissions.defaultMode (web-jam-tools#705) ---
-# Same Claude-Code-only scoping as merge_status_line_args above: passed only
-# to the $SETTINGS_PATH invocations below, never to $AGY_HOOKS_PATH.
-merge_default_mode_args=("$DEFAULT_MODE")
+# --- agy-prompt-watch.sh (web-jam-tools#1212) ---
+[ -e "$REPO_DIR/scripts/agy-prompt-watch.sh" ] || { echo "error: $REPO_DIR/scripts/agy-prompt-watch.sh not found" >&2; exit 1; }
+AGY_PROMPT_WATCH_DEST="$HOOKS_DEST/agy-prompt-watch.sh"
+# shellcheck disable=SC2016
+AGY_PROMPT_WATCH_COMMAND='$HOME/.claude/hooks/agy-prompt-watch.sh'
 
 # --- autoMode (web-jam-tools#1189 follow-up) ---
 # The "autoMode" section of Claude Code's settings.json (auto-mode classifier:
 # environment prose, allow, soft_deny; "$defaults" keeps the built-in rules).
 # Installed as ONE whole object: replaced when it differs, no other key
-# touched. Claude Code ONLY, like statusLine/defaultMode: passed solely to the
+# touched. Claude Code ONLY, like statusLine: passed solely to the
 # $SETTINGS_PATH invocations, never to agy's hooks.json. Quoted heredoc, so
 # "$defaults" is never expanded by the shell.
 #
@@ -871,6 +906,46 @@ AUTO_MODE_JSON=${AUTO_MODE_JSON//__HOME__/"$AUTO_MODE_HOME"}
 AUTO_MODE_JSON=${AUTO_MODE_JSON//__REPOS_DIR__/"$AUTO_MODE_REPOS_DIR"}
 merge_auto_mode_args=("$AUTO_MODE_JSON")
 
+# skillOverrides (web-jam-tools#1240) — sets the 30 skills bundled with
+# Claude Code (13 document skills and 17 built-in ones) to names only, so
+# their descriptions stop loading at every session open while remaining listed
+# and callable by name. Claude Code ONLY: agy and Codex have no such setting.
+read -r -d '' SKILL_OVERRIDES_JSON <<'SKILL_OVERRIDES_JSON_EOF' || true
+{
+  "anthropic-skills:built-in-browser": "name-only",
+  "anthropic-skills:chrome-browser": "name-only",
+  "anthropic-skills:computer-use": "name-only",
+  "anthropic-skills:deep-research": "name-only",
+  "anthropic-skills:docs": "name-only",
+  "anthropic-skills:docx": "name-only",
+  "anthropic-skills:google-workspace": "name-only",
+  "anthropic-skills:import-memory": "name-only",
+  "anthropic-skills:morning": "name-only",
+  "anthropic-skills:pdf": "name-only",
+  "anthropic-skills:pptx": "name-only",
+  "anthropic-skills:skill-creator": "name-only",
+  "anthropic-skills:xlsx": "name-only",
+  "artifact-capabilities": "name-only",
+  "artifact-design": "name-only",
+  "artifact-diagramming": "name-only",
+  "claude-api": "name-only",
+  "claude-in-chrome": "name-only",
+  "code-review": "name-only",
+  "dataviz": "name-only",
+  "fewer-permission-prompts": "name-only",
+  "init": "name-only",
+  "keybindings-help": "name-only",
+  "loop": "name-only",
+  "plugin-authoring": "name-only",
+  "run": "name-only",
+  "schedule": "name-only",
+  "security-review": "name-only",
+  "simplify": "name-only",
+  "update-config": "name-only"
+}
+SKILL_OVERRIDES_JSON_EOF
+merge_skill_overrides_args=("$SKILL_OVERRIDES_JSON")
+
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432, matcher-by-
 # -own-tool-names regression fixed by web-jam-tools#1036) ---
 #
@@ -925,6 +1000,8 @@ for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
   [ -e "$HOOKS_SRC/$name" ] || { echo "error: $HOOKS_SRC/$name not found (listed in PRE_TOOL_USE_HOOKS/AGY_ONLY_PRE_TOOL_USE_HOOKS)" >&2; exit 1; }
   merge_agy_pre_tool_use_args+=("$(agy_shim_arg PreToolUse "$matcher" "$name")")
 done
+# agy-native: registered directly under matcher ".*" without agy-hook-shim.sh (web-jam-tools#1212).
+merge_agy_pre_tool_use_args+=(".*::$AGY_PROMPT_WATCH_COMMAND")
 
 merge_agy_post_tool_use_args=()
 for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
@@ -979,6 +1056,11 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if [ ! -L "$AGY_PROMPT_WATCH_DEST" ] || [ "$(readlink -f "$AGY_PROMPT_WATCH_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agy-prompt-watch.sh")" ]; then
+    echo "drift: agy-prompt-watch script is not linked at $AGY_PROMPT_WATCH_DEST" >&2
+    DRIFT=1
+  fi
+
   if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
     AGENTS_DEST="$BIN_DIR/agents"
     if [ ! -L "$AGENTS_DEST" ] || [ "$(readlink -f "$AGENTS_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agents.sh")" ]; then
@@ -987,7 +1069,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}"; then
     DRIFT=1
   fi
 
@@ -1099,6 +1181,18 @@ else
   echo "agent-alert.sh: linked (new)"
 fi
 
+# --- agy-prompt-watch script symlink (web-jam-tools#1212) ---
+if [ -L "$AGY_PROMPT_WATCH_DEST" ] && [ "$(readlink -f "$AGY_PROMPT_WATCH_DEST")" = "$(readlink -f "$REPO_DIR/scripts/agy-prompt-watch.sh")" ]; then
+  echo "agy-prompt-watch.sh: ok (already linked)"
+elif [ -e "$AGY_PROMPT_WATCH_DEST" ] || [ -L "$AGY_PROMPT_WATCH_DEST" ]; then
+  mv "$AGY_PROMPT_WATCH_DEST" "$AGY_PROMPT_WATCH_DEST.bak-$STAMP"
+  ln -s "$REPO_DIR/scripts/agy-prompt-watch.sh" "$AGY_PROMPT_WATCH_DEST"
+  echo "agy-prompt-watch.sh: linked (previous version backed up to agy-prompt-watch.sh.bak-$STAMP)"
+else
+  ln -s "$REPO_DIR/scripts/agy-prompt-watch.sh" "$AGY_PROMPT_WATCH_DEST"
+  echo "agy-prompt-watch.sh: linked (new)"
+fi
+
 # --- CLI tools symlink (~/.local/bin/agents, web-jam-tools#1174) ---
 # Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default).
 # Only linked when targeting the real default destination (HOOKS_DEST_IS_DEFAULT=1)
@@ -1126,7 +1220,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--default-mode" "${merge_default_mode_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 

@@ -1,6 +1,6 @@
 ---
 name: draft-pr
-description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.
+description: Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge. Use to finish any coding task in a WebJamApps repo across Claude Code, agy, or Codex after tests pass, instead of calling `gh pr create` directly.
 metadata:
   version: v1
   publisher: josh
@@ -8,8 +8,9 @@ metadata:
 
 # draft-pr — finish a coding task by opening a draft PR
 
-Never call `gh pr create` directly in a WebJamApps repo. Finish coding tasks by
-running the shared script, which is the single source of truth for PR creation (see
+Never call `gh pr create` directly in a WebJamApps repo. Finish coding tasks across
+Claude Code, agy, and Codex by pushing through `deno task push` and running the
+shared script, which is the single source of truth for PR creation (see
 the full invocation under "How to run it" — `--summary` and `--test-plan` are
 **required**; `--test-evidence` is optional and normally omitted).
 
@@ -38,6 +39,7 @@ Josh alone reviews and flips draft → ready on GitHub.
    **An issue is OPTIONAL** (2026-07-03): with no issue resolvable, the PR simply has no Closes line
    and its title falls back to the last commit subject — NEVER create an issue just to satisfy the script.
 2. Everything is committed (clean working tree) and lint + tests are green.
+   **Push step:** Push your feature branch using `deno task push` on every surface (Claude Code, agy, and Codex alike).
 3. **Version bump:** On the PR's first commit, bump the version once in `deno.json`
    (web-jam-tools) or `package.json` (other repos). The CI "Version bump check" gate
    blocks PRs with no version change from the merge-base with `dev`. Follow-up commits
@@ -50,10 +52,18 @@ Josh alone reviews and flips draft → ready on GitHub.
 
 ## How to run it
 
+Push the branch through `deno task push` on every surface (Claude Code, agy, and Codex alike).
+Run the shared config invocation below from the target feature worktree. It works even when that repo has no Deno config or `push` task: `--repo-dir "$PWD"` explicitly selects that worktree's Git directory, independently of the shared config location or any inherited task environment. Do not change into the web-jam-tools main clone to push.
+
+Every `--force-with-lease` invocation also requires affirmative confirmation in an interactive terminal inside the push script. Noninteractive force pushes fail closed, including shared-config and `--repo-dir` forms that do not match Codex's command-prefix prompt. Josh must approve the named branch or PR before a force push; do not automate a response to the terminal prompt.
+
+Any unattended Codex launch of either skill (a scripted `/work-issue` run, or a scripted `/draft-pr` run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
+
 Pass your actual model in `--author` so Josh can track per-model quality, and fill
 the body sections via flags:
 
-```
+```sh
+deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"
 ~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
   --author "Claude Code — Opus 4.8" \
   --summary "What changed and why, in 2–4 sentences." \
@@ -164,6 +174,10 @@ a PR have an issue, only that a named one be real and open; or `--part-of` /
 `--no-close` is passed with no resolvable issue. If it refuses, fix the
 underlying condition — do not fall back to `gh pr create`.
 
+## Unattended Codex launches
+
+Any unattended Codex launch of `/work-issue` or `/draft-pr` (a scripted run with no one watching) passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`, so Codex's installed hooks always run and the hooks can tell an unattended run from Josh's own interactive window.
+
 ## Consumed rules
 
 ### dispatch-prompts-fence-test-evidence
@@ -191,7 +205,7 @@ the original 2026-07-11 failure on web-jam-back PR #935 is fixed at the script l
 
 Josh flagged (2026-07-02): web-jam-back PR #892 was built by Sonnet but its footer said the generic "🤖 Generated with [Claude Code](https://claude.com/claude-code)" — wrong per convention.
 
-**Why:** the repo convention (`web-jam-tools/scripts/create-draft-pr.sh`, REQUIRED `--author` flag) puts `🤖 Work by <tool> — <model>` (e.g. "Claude Code — Sonnet 5.5", "agy — Flash Medium") in the PR footer so Josh can track per-model quality. The generic harness tagline defeats that.
+**Why:** the repo convention (`web-jam-tools/scripts/create-draft-pr.sh`, REQUIRED `--author` flag) puts `🤖 Work by <tool> — <model>` (e.g. "Claude Code — Sonnet 5.5", "agy — Gemini Flash") in the PR footer so Josh can track per-model quality. The generic harness tagline defeats that.
 
 **How to apply:** when Fable/Opus writes a dispatch prompt that ends in a PR, instruct the subagent to either (a) use `~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh --author "<tool> — <its real model>"` (it's a SHARED script in web-jam-tools, run from any repo — a Haiku agent once concluded it "doesn't exist" because it looked only inside web-jam-back), or (b) if falling back to `gh pr create`, end the body with `🤖 Work by <tool> — <model>` naming the model actually doing the work — NOT the generic tagline, and NOT Fable's name. Do not retro-edit existing PRs unless Josh asks (he explicitly declined a fix for #892). Bake this into the delegate skill templates when it's next revised.
 
@@ -212,3 +226,7 @@ the same next version — re-read `origin/dev` and take the next free one when C
 gate complains.
 
 **How to apply:** Bump once when the PR's first commit lands. On later pushes to the same branch/PR, leave the version unchanged (the hook reminder is satisfied by the already-bumped version). Only bump again for a genuinely separate PR. If a PR has already over-bumped, reset it to a single bump (correcting an unmerged version is fine — not a published downgrade). Relates to the never-commit-to-dev and git-feature-branch-and-semver rules.
+
+## Description Detail & Triggers
+
+Open a pull request the WebJamApps way — always draft, always based on dev, closing the issue on merge (Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you've completed a coding task on a feature branch.

@@ -3,6 +3,7 @@
 
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
+import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 import {
   filePlan as realFilePlan,
   type FilePlanOptions,
@@ -12,9 +13,48 @@ import {
   parsePlanJson,
   runFilePlanCli,
 } from "../src/design-issue/file_plan.ts";
-import type { ApprovalCheckResult, ExecDeps, IssueData } from "../src/create-issue/lib.ts";
+import {
+  type ApprovalCheckResult,
+  defaultExecDeps,
+  type ExecDeps,
+  type IssueData,
+} from "../src/create-issue/lib.ts";
 
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
+
+Deno.test("signing plan m: every dry-run body has the looked-up Luna footer", () =>
+  withSigningFixture(async (signing) => {
+    const output: string[] = [];
+    const calls: string[][] = [];
+    const log = console.log;
+    console.log = (...values: unknown[]) => output.push(values.join(" "));
+    try {
+      const result = await realFilePlan({
+        planPath: "test/fixtures/design-issue/fixture-plan.json",
+        dryRun: true,
+        author: "Codex — GPT-6.1 Sol",
+        approvalCheck: APPROVE_ALL,
+        deps: {
+          signing,
+          readFileText: (path) => Deno.readTextFile(path),
+          runCmd: (cmd) => {
+            calls.push(cmd);
+            return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+          },
+        },
+      });
+      assertEquals(result.totalIssuesFiled, 0);
+    } finally {
+      console.log = log;
+    }
+    const bodies = output.filter((line) => line.startsWith("## What this builds"));
+    assertEquals(bodies.length, 3);
+    for (const body of bodies) {
+      assertEquals(body.trimEnd().endsWith(`🤖 Authored by ${LUNA_SIGNATURE}`), true);
+      assertEquals(body.includes("🤖 Authored by Codex — GPT-6.1 Sol"), false);
+    }
+    assertEquals(calls.some((cmd) => cmd[0] === "gh"), false);
+  }));
 
 // Authored-by footer (web-jam-tools#1205): supply a valid author and a fake
 // roster probe so the tests below stay about their own behavior.
@@ -22,7 +62,7 @@ const filePlan = (options: FilePlanOptions) =>
   realFilePlan({
     author: TEST_AUTHOR,
     ...options,
-    deps: options.deps ? withPassingProbe(options.deps) : options.deps,
+    deps: withPassingProbe(options.deps ?? defaultExecDeps),
   });
 
 Deno.test("parsePlanJson parses an object with epic and children", () => {
@@ -41,14 +81,14 @@ Deno.test("parsePlanJson parses an object with epic and children", () => {
         title: "Child 1",
         type: "Task",
         priority: "High",
-        tier: "Flash High",
+        tier: "Flash",
       },
       {
         id: 2,
         title: "Child 2",
         type: "Task",
         priority: "Medium",
-        tier: "Flash High",
+        tier: "Flash",
         blocked_by: [1],
       },
     ],
@@ -266,7 +306,7 @@ Deno.test("filePlan files epic first, then children attached to epic, then links
             code: 0,
             stdout: JSON.stringify({
               ...issue,
-              labels: num === 900 ? [{ name: "Opus" }] : [{ name: "Flash High" }],
+              labels: num === 900 ? [{ name: "Opus" }] : [{ name: "Flash" }],
               type: { name: num === 900 ? "Epic" : "Task" },
               milestone: { title: "token-savings" },
               parent: num > 900 ? { number: 900 } : undefined,
@@ -334,6 +374,7 @@ Deno.test("filePlan files epic first, then children attached to epic, then links
 Deno.test("filePlan refuses without --author before filing anything", async () => {
   const executedCmds: string[][] = [];
   const deps: ExecDeps = {
+    signing: { env: () => undefined },
     runCmd(cmd: string[]) {
       executedCmds.push(cmd);
       return Promise.resolve(

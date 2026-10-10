@@ -1,6 +1,6 @@
 ---
 name: book-gig
-description: Identify eligible venues for target performance weekends, filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, record Gate 1 venue-set approval, hold Gate 2 draft copy review loop and record fingerprints (--record-gate2), dispatch approved batches (--send --confirm-drafts), and track venue replies (--replies). Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".
+description: Identify eligible venues for target performance weekends, filter by spacing, generate voice-rule-compliant pitches, record Gate 1 and Gate 2 approvals, dispatch batches, and track replies. Use when booking gigs, planning venue outreach, or drafting pitches for target performance weekends.
 ---
 
 # book-gig — Target Performance Weekend Booking Outreach
@@ -187,3 +187,7 @@ Batch outreach dispatch is protected by two distinct, mandatory refusals operati
 | Pitch venues with active outreach campaigns for that weekend | Prevents embarrassing duplicate outreach to venue managers. |
 | Use corporate marketing copy or banned hype words | Violates cross-AI voice rules. Tone must remain genuine and personal. |
 | Invent unverified claims or musical genres | Anti-hallucination rule: only state facts given by Josh. |
+
+## Description Detail & Triggers
+
+Identify eligible venues for target performance weekends, filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, record Gate 1 venue-set approval, hold Gate 2 draft copy review loop and record fingerprints (--record-gate2), dispatch approved batches (--send --confirm-drafts), and track venue replies (--replies). Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".

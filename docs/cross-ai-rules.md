@@ -1,7 +1,7 @@
 # Cross-AI Rules for Josh Sherman's Personal Projects
 
 _See [ai-team-playbook.md](ai-team-playbook.md) for how the team works / who's who (model tiers,
-hand-offs, approval checkpoints). This doc holds the operational rules that apply to ALL of Josh's
+tier order, hand-offs, approval checkpoints). This doc holds the operational rules that apply to ALL of Josh's
 AI team — voice rules, file placement, protected files, canonical task queues, hard operational
 rules, and memory hygiene._
 
@@ -79,6 +79,7 @@ skill.
 
 ## OPERATIONAL HARD RULES (apply to any AI taking action on Josh's behalf)
 
+- **CODEX RUNNING MODEL:** On Codex, run `deno task whoami` whenever you need your own model — when Josh asks which model you are, and before `$pr-review` applies the reviewer rule — and never answer from your own context or from `~/.codex/config.toml`.
 - CALENDAR CONFLICT: never schedule over an existing event without Josh's explicit override.
 - EMAIL: always DRAFT, never send. Save as Gmail draft for Josh's review.
 - **EMAIL SEND CARVE-OUT — `/book-gig` gated batch dispatch only:** The single named
@@ -249,12 +250,10 @@ skill.
      on the user's computer and are 100% safe from rate limit interruptions.
   2. Google does NOT broadcast an advance warning gauge prior to hitting temporary hourly rate
      limits (`429 Rate Limit Exceeded`).
-  3. Use **`Flash Med`** for routine, high-volume REAPER operations (`transport_play`,
-     `transport_stop`, `track_create`, volume/pan tweaks, clip splits) to preserve hourly token
-     headroom.
-  4. Reserve **`Flash High`** for complex multi-track creative mixing, sidechain routing, and
-     intricate composition passes.
-  5. Always execute a project save (`project_save`) before running large multi-step automated
+  3. Use **`Flash`** (at high effort) for REAPER operations, routine (`transport_play`,
+     `transport_stop`, `track_create`, volume/pan tweaks, clip splits) and complex (multi-track
+     creative mixing, sidechain routing, intricate composition passes) alike.
+  4. Always execute a project save (`project_save`) before running large multi-step automated
      sequences.
 - **MAIN BRANCH PRs MUST ORIGINATE FROM DEV:** Across all 8 active WebJamApps repos, any PR
   targeting `main` must originate from `dev` as its head branch (`dev` → `main`). Feature branches
