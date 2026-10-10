@@ -211,3 +211,99 @@ Deno.test("runCli: a missing plan file fails with exit 1; --help exits 0", async
   assertEquals(await runCli(["--dir", dir]), 1);
   assertEquals(await runCli(["--help"]), 0);
 });
+
+Deno.test("guard marking: existing false or inline metadata gets one guard key, survives a second run", async () => {
+  const falseGuard = memory("flagged", "Ask first.", "  guard: false\n");
+  const inline = `---\nname: inl\ndescription: d\nmetadata: { type: feedback }\n---\n\nInline.\n`;
+  const { dir, home } = await sandbox({ "flagged.md": falseGuard, "inl.md": inline });
+  const plan: LowMarkPlan = {
+    guards: [{ slug: "flagged", kind: "approval-gate" }, { slug: "inl", kind: "deletion-guard" }],
+    removals: [
+      { slug: "flagged", reason: "already-said", evidence: "x" },
+      { slug: "inl", reason: "already-said", evidence: "x" },
+    ],
+  };
+  const first = await run(dir, home, plan);
+  assertEquals(first.rows.filter((r) => r.status === "marked").length, 2);
+  for (const slug of ["flagged", "inl"]) {
+    const text = await Deno.readTextFile(join(dir, `${slug}.md`));
+    assertEquals(text.match(/guard:/g)?.length, 1);
+    assertStringIncludes(text, "guard: true");
+  }
+
+  const second = await run(dir, home, {
+    removals: plan.removals,
+  }, { approved: ["flagged", "inl"] });
+  assert(second.rows.every((r) => r.status === "refused"));
+  assert(!(await exists(join(dir, "archive", "flagged.md"))));
+  assertStringIncludes(await Deno.readTextFile(join(dir, "MEMORY.md")), "flagged");
+});
+
+Deno.test("unparseable frontmatter fails closed: never marked, merged, moved or removed", async () => {
+  const broken = `---\nname: bad\nmetadata:\n  guard: true\n  guard: false\n---\n\nBroken.\n`;
+  const { dir, home } = await sandbox({ "bad.md": broken });
+  const result = await run(dir, home, {
+    guards: [{ slug: "bad", kind: "approval-gate" }],
+    removals: [{ slug: "bad", reason: "already-said", evidence: "x" }],
+  }, { approved: ["bad"] });
+  assert(result.rows.every((r) => r.status === "refused"));
+  assertEquals(result.rows.length, 2);
+  assertEquals(await Deno.readTextFile(join(dir, "bad.md")), broken);
+});
+
+Deno.test("index regeneration: a guarded done checkpoint stays, an unguarded one is reported", async () => {
+  const checkpoint = (slug: string, extra: string) =>
+    `---\nname: ${slug}\ndescription: d\nmetadata:\n  type: project\n  status: done\n${extra}---\n\nBody.\n`;
+  const { dir, home } = await sandbox({
+    "keeper.md": memory("keeper", "Keeper."),
+    "dupe.md": memory("dupe", "Dupe."),
+    "session-checkpoint-guard.md": checkpoint("session-checkpoint-guard", "  guard: true\n"),
+    "session-checkpoint-plain.md": checkpoint("session-checkpoint-plain", ""),
+  });
+  const result = await run(dir, home, { merges: [{ keep: "keeper", absorb: ["dupe"] }] });
+
+  assert(await exists(join(dir, "session-checkpoint-guard.md")));
+  assertStringIncludes(await Deno.readTextFile(join(dir, "MEMORY.md")), "session-checkpoint-guard");
+  assert(await exists(join(dir, "archive", "session-checkpoint-plain.md")));
+  assert(
+    result.rows.some((r) =>
+      r.status === "archived" && r.slug === "session-checkpoint-plain" &&
+      /memory index run/.test(r.detail)
+    ),
+  );
+  assert(!result.rows.some((r) => r.slug === "session-checkpoint-guard"));
+});
+
+Deno.test("part sizes: every surface's skill descriptions and the bundled skills are listed, below and above their limits", async () => {
+  const limits = await loadLimits();
+  const { dir, home } = await sandbox({ "a.md": memory("a", "text") });
+  const skill = (root: string, name: string, length: number) =>
+    Deno.mkdir(join(root, name), { recursive: true }).then(() =>
+      Deno.writeTextFile(
+        join(root, name, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${"x".repeat(length)}\n---\nbody\n`,
+      )
+    );
+  const claude = join(home, ".claude/skills");
+  const agy = join(home, ".gemini/config/plugins/webjam-tasks/skills");
+  await skill(claude, "short", 20);
+  await skill(agy, "long", limits.skillDescription.overMark + 5);
+
+  const text = (await run(dir, home, {})).partLines.join("\n");
+  const line = (name: string) => text.split("\n").find((l) => l.includes(name)) ?? "";
+  assertStringIncludes(line("Claude Code skills"), "20");
+  assertStringIncludes(line("Claude Code skills"), "ok");
+  assertStringIncludes(line("agy skills"), "OVER");
+  assertStringIncludes(line("Codex skills"), "ok");
+  assertStringIncludes(line("Claude Code bundled"), "OVER");
+  assertStringIncludes(line("Claude Code bundled"), String(limits.bundledSkills.totalCount));
+});
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await Deno.stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}

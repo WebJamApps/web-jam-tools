@@ -6,11 +6,13 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { dirname, isAbsolute, join, resolve } from "@std/path";
-import { parse as parseYaml } from "@std/yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "@std/yaml";
 import { isValidSlug } from "../../scripts/consume_memory_rules.ts";
 import { runCli as regenerateMemoryIndex } from "../memory-index/cli.ts";
 import {
   computeSessionLoadReport,
+  inspectBundledSkills,
+  inspectSkillsDirectory,
   loadLimits,
   type PartLimit,
   type SessionLoadReportOptions,
@@ -86,18 +88,23 @@ interface Memory {
   body: string;
   description: string;
   guard: boolean;
+  /** The frontmatter is there but cannot be parsed: treated like a guard rule, never touched. */
+  unreadable: boolean;
 }
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-function readFrontmatter(raw: string): Record<string, unknown> {
+/** The parsed frontmatter, `{}` when there is none, or `null` when it cannot be parsed. */
+function readFrontmatter(raw: string): Record<string, unknown> | null {
   const match = raw.match(FRONTMATTER);
   if (!match) return {};
   try {
     const parsed = parseYaml(match[1]);
-    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -111,13 +118,14 @@ async function readMemory(dir: string, slug: string): Promise<Memory | null> {
     return null;
   }
   const fm = readFrontmatter(raw);
-  const metadata = fm.metadata as Record<string, unknown> | null | undefined;
+  const metadata = fm?.metadata as Record<string, unknown> | null | undefined;
   return {
     path,
     raw,
     body: raw.replace(FRONTMATTER, ""),
-    description: typeof fm.description === "string" ? fm.description : "",
+    description: typeof fm?.description === "string" ? fm.description : "",
     guard: metadata?.guard === true,
+    unreadable: fm === null,
   };
 }
 
@@ -132,15 +140,23 @@ export function appearsWordForWord(haystack: string, needle: string): boolean {
   return ` ${words(haystack)} `.includes(` ${wanted} `);
 }
 
-/** Adds `guard: true` under `metadata:` in the frontmatter, creating the block if absent. */
+/**
+ * Sets `metadata.guard: true` by updating the parsed frontmatter, so an existing
+ * `guard: false` or an inline `metadata: {...}` never ends up with a duplicate key.
+ * Throws when the frontmatter cannot be parsed or `metadata` is not a mapping.
+ */
 export function markGuardRaw(raw: string): string {
   const match = raw.match(FRONTMATTER);
   if (!match) return `---\nmetadata:\n  guard: true\n---\n${raw}`;
-  const lines = match[1].split(/\r?\n/);
-  const at = lines.findIndex((line) => /^metadata:\s*$/.test(line));
-  if (at >= 0) lines.splice(at + 1, 0, "  guard: true");
-  else lines.push("metadata:", "  guard: true");
-  return raw.replace(FRONTMATTER, `---\n${lines.join("\n")}\n---\n`);
+  const fm = readFrontmatter(raw);
+  if (fm === null) throw new Error("frontmatter cannot be parsed");
+  const current = fm.metadata ?? {};
+  if (typeof current !== "object" || Array.isArray(current)) {
+    throw new Error("frontmatter metadata is not a mapping");
+  }
+  const { guard: _old, ...rest } = current as Record<string, unknown>;
+  const yaml = stringifyYaml({ ...fm, metadata: { guard: true, ...rest } });
+  return raw.replace(FRONTMATTER, `---\n${yaml.trimEnd()}\n---\n`);
 }
 
 function appendMerged(keeperRaw: string, absorbSlug: string, absorbed: Memory): string {
@@ -164,6 +180,16 @@ async function archiveMemory(dir: string, slug: string, dryRun: boolean): Promis
   if (dryRun) return;
   await Deno.mkdir(archiveDir, { recursive: true });
   await Deno.rename(join(dir, `${slug}.md`), dest);
+}
+
+async function memoryFiles(dir: string): Promise<string[]> {
+  const files: string[] = [];
+  for await (const entry of Deno.readDir(dir)) {
+    if (entry.isFile && entry.name.endsWith(".md") && entry.name !== "MEMORY.md") {
+      files.push(entry.name);
+    }
+  }
+  return files;
 }
 
 const number = (n: number): string => n.toLocaleString("en-US");
@@ -226,8 +252,45 @@ async function partLines(
       ),
     );
   }
+  lines.push("", ...await skillLines(report, limits));
   const session = await computeSessionLoadReport({ ...report, memoryIndexPath: indexPath });
   lines.push("", ...session.text.split("\n"));
+  return lines;
+}
+
+/** One line per surface for skill descriptions, plus the bundled skills Claude Code loads in full. */
+async function skillLines(
+  report: SessionLoadReportOptions,
+  limits: Awaited<ReturnType<typeof loadLimits>>,
+): Promise<string[]> {
+  const home = report.homeDir ?? Deno.env.get("HOME") ?? "/home/joshua";
+  const max = limits.skillDescription.overMark;
+  const surfaces: [string, string][] = [
+    ["Claude Code skills", report.claudeSkillsDir ?? join(home, ".claude/skills")],
+    [
+      "agy skills",
+      report.agySkillsDir ?? join(home, ".gemini/config/plugins/webjam-tasks/skills"),
+    ],
+    ["Codex skills", report.codexSkillsDir ?? join(home, ".codex/skills")],
+  ];
+  const lines: string[] = [];
+  for (const [name, path] of surfaces) {
+    const found = await inspectSkillsDirectory(path, max);
+    lines.push(
+      `${
+        partLine(name, found.longest, limits.skillDescription)
+      }  (longest of ${found.installedCount} skills, ${found.overCount} over)`,
+    );
+  }
+  const bundled = await inspectBundledSkills(
+    report.claudeSettingsPath ?? join(home, ".claude/settings.json"),
+    limits.bundledSkills,
+  );
+  lines.push(
+    `  ${"Claude Code bundled".padEnd(22)}${number(bundled).padStart(8)}  of ${
+      number(limits.bundledSkills.totalCount)
+    } load full text, none allowed  ${bundled > 0 ? "OVER" : "ok"}`,
+  );
   return lines;
 }
 
@@ -267,6 +330,9 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
     if (claimed.has(slug)) return refuse(slug, "already used by another row in this run"), null;
     const memory = await readMemory(dir, slug);
     if (!memory) return refuse(slug, "memory file not found"), null;
+    if (memory.unreadable) {
+      return refuse(slug, "frontmatter cannot be parsed: left untouched"), null;
+    }
     if (memory.guard || guards.has(slug)) {
       return refuse(slug, "guard rule: never offered, merged, moved or removed"), null;
     }
@@ -284,9 +350,24 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
       refuse(slug, "memory file not found");
       continue;
     }
+    if (memory.unreadable) {
+      refuse(slug, "frontmatter cannot be parsed: not marked, left untouched");
+      continue;
+    }
     guards.add(slug);
     if (memory.guard) continue;
-    if (!dryRun) await Deno.writeTextFile(memory.path, markGuardRaw(memory.raw));
+    try {
+      const marked = markGuardRaw(memory.raw);
+      const persisted = readFrontmatter(marked);
+      if ((persisted?.metadata as Record<string, unknown> | undefined)?.guard !== true) {
+        throw new Error("guard flag did not persist");
+      }
+      if (!dryRun) await Deno.writeTextFile(memory.path, marked);
+    } catch (error) {
+      guards.delete(slug);
+      refuse(slug, `not marked: ${(error as Error).message}`);
+      continue;
+    }
     changed = true;
     rows.push({ status: "marked", slug, detail: kind });
   }
@@ -365,7 +446,22 @@ export async function runLowMark(options: LowMarkOptions): Promise<LowMarkResult
     }
   }
 
-  if (changed && !dryRun) await regenerateMemoryIndex(["--dir", dir]);
+  if (changed && !dryRun) {
+    const before = await memoryFiles(dir);
+    await regenerateMemoryIndex(["--dir", dir]);
+    // The index run archives completed checkpoints itself (never a guard rule); name each one.
+    const after = new Set(await memoryFiles(dir));
+    for (const file of before) {
+      if (after.has(file)) continue;
+      const slug = file.replace(/\.md$/, "");
+      if (rows.some((row) => row.slug === slug && row.status !== "refused")) continue;
+      rows.push({
+        status: "archived",
+        slug,
+        detail: "completed checkpoint, archived by the memory index run",
+      });
+    }
+  }
 
   const sizes = await partLines(dir, options.report ?? {});
   return { rows, partLines: sizes, text: formatResult(rows, sizes, dryRun), changed };

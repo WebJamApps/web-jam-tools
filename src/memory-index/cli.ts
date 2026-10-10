@@ -3,7 +3,12 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { join } from "@std/path";
-import { archiveDoneCheckpoints, generateMemoryIndex, scanMemoryDirectory } from "./generator.ts";
+import {
+  archiveDoneCheckpoints,
+  generateMemoryIndex,
+  isArchivable,
+  scanMemoryDirectory,
+} from "./generator.ts";
 
 function expandHome(path: string): string {
   if (path.startsWith("~/") || path === "~") {
@@ -40,7 +45,7 @@ export async function runCli(args: string[]): Promise<number> {
 
   if (flags.check) {
     // In check mode: do not modify disk. Simulate filtering out done checkpoints.
-    const activeEntries = entries.filter((e) => !(e.isCheckpoint && e.status === "done"));
+    const activeEntries = entries.filter((e) => !isArchivable(e));
     const expected = generateMemoryIndex(activeEntries);
     const expectedBytes = new TextEncoder().encode(expected).length;
 

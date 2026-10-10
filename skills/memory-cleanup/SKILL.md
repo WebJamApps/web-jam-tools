@@ -10,6 +10,11 @@ three phases in order. Never skip Phase 2 (approval). Never auto-execute without
 Josh's explicit yes.** The skill is invoked manually; the session-start hook only
 *reminds* — it never runs the skill.
 
+**Two workflows live in this file.** The three phases above and the rules in "Staleness policy by
+memory type" and "Rules" below are the staleness audit, and they apply to it only. The last section,
+"Session-load cleanup", is a separate workflow with its own approval and merge rules, stated in that
+section; the staleness audit's approval and no-merge rules do not apply to its rows.
+
 Master copy: `skills/memory-cleanup/SKILL.md` in `web-jam-tools`. Installed locally
 as a file-level symlink at `~/.claude/skills/memory-cleanup/SKILL.md`. Runtime state
 (the stamp file) lives in the local dir, NOT the repo tree.
@@ -243,9 +248,10 @@ work and the checks. The plan file is JSON: `merges` (`keep`, `absorb`), `moves`
 
 1. Write the plan file, then run the script with `--dry-run` and show Josh the after-run list:
    `deno task --config ~/WebJamApps/web-jam-tools/deno.json memory-cleanup:run --dry-run --plan <plan file>`
-2. Merges and moves need no approval: a merge keeps the full text of both memories in the surviving
-   file, and a move happens only when the script finds the memory's text in the skill word for word.
-   A move whose text is not found REFUSES and the memory stays where it is.
+2. Merges and moves need no approval in this workflow, because neither loses text (the verbatim-preservation
+   policy): a merge keeps the full text of both memories in the surviving file, whatever their `metadata.type`
+   (including `user` and `feedback`), and a move happens only when the script finds the memory's text in the
+   skill word for word. A move whose text is not found REFUSES and the memory stays where it is.
 3. A removal because a hook now enforces the memory, or because `CLAUDE.md` or a skill already says it
    in different words, waits for Josh's yes on that row. Run it again with `--approve <slug>` for each
    row he approves; a row without his yes leaves the file untouched.
