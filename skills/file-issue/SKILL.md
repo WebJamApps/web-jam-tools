@@ -14,11 +14,15 @@ metadata:
 
 This is mechanical-with-light-judgment (search for duplicates, write acceptance criteria that
 close cleanly, pick one label from the model-tier list in `skills/fix-labels/labels.yaml`) — run it
-on **Sonnet**, the cheapest tier that
-reliably gets the judgment calls right. It is not hard-gated to a single model the way `/fix-labels`
+on the cheapest tier that reliably gets the judgment calls right, per surface:
+
+- **Claude Code:** **Sonnet**. Don't default to Opus/Fable for a fresh `/file-issue` invocation.
+- **agy / Antigravity:** **Flash**. Don't switch to a Claude model for a fresh `/file-issue` invocation.
+
+It is not hard-gated to a single model the way `/fix-labels`
 and `/handle-gmails` are (this skill is the quality layer, not the floor — see "Why a skill AND a
 hook" below); if you're running on a pricier model because you're mid-conversation, finish the
-issue rather than switching, but don't default to Opus/Fable for a fresh `/file-issue` invocation.
+issue rather than switching.
 
 ## Why a skill AND a hook
 

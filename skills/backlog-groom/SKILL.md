@@ -12,6 +12,7 @@ Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, de
 ## Execution Model
 
 - **Delegated Scan & Analysis:** Step 1 (Scan & Collect) and Step 2 (Analyze & Categorize) MUST be delegated to a single subagent running on **Flash** or **Haiku** to conserve token quota.
+- **Per-surface delegation:** On Claude Code, dispatch that subagent with `Agent(model: "haiku")`. On agy / Antigravity, dispatch it with `invoke_subagent(TypeName: "self", Role: "Backlog Groom Scanner", Model: "inherit")` on Flash.
 - **Report & Summary Output:** The delegated subagent performs all cross-repo `gh` lookup calls, writes the detailed report to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, and returns ONLY the final findings table, per-repo untyped summary ratios, and per-repo missing milestone summary ratios back to the primary session.
 - **Primary Session Presentation:** The primary session renders the findings table to Josh and handles interactive approval and execution.
 
