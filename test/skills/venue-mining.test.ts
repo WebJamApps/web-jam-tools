@@ -77,6 +77,9 @@ Deno.test("isUsableStreetAddress validates physical addresses and rejects placeh
   assertEquals(isUsableStreetAddress("Downtown Roanoke, VA 24011"), false);
   assertEquals(isUsableStreetAddress("Downtown, Roanoke, VA 24011"), false);
   assertEquals(isUsableStreetAddress("downtown Salem, VA 24153"), false);
+  // Downtown qualifier with a physical street address stays usable
+  assertEquals(isUsableStreetAddress("Downtown, 123 Main St, Roanoke, VA 24011"), true);
+  assertEquals(isUsableStreetAddress("Downtown 123 Main St"), true);
 });
 
 Deno.test("Step 4 heuristic rules: infers PubFestivalBrewery from name keywords", () => {
@@ -469,6 +472,16 @@ Deno.test("Step 6 buildCreateVenuePayload: throws when required fields are missi
     "valid physical street address is required",
   );
 
+  // Downtown qualifier with a physical street address is preserved as sourced
+  const downtownStreetPayload = buildCreateVenuePayload({
+    name: "The Pub",
+    city: "Roanoke",
+    usState: "VA",
+    address: "Downtown, 123 Main St, Roanoke, VA 24011",
+    venueType: "PubFestivalBrewery",
+  });
+  assertEquals(downtownStreetPayload.address, "Downtown, 123 Main St, Roanoke, VA 24011");
+
   // Unresolved venueType throws without silent fallback (D-78)
   assertThrows(
     () =>
@@ -755,6 +768,17 @@ Deno.test("Candidate verification pipeline: verifyAndEnrichVenue separates ready
   assertEquals(downtownZipResult.status, "skipped_missing_address");
   assertEquals(downtownZipResult.candidate.status, "Missing Address");
   assertMatch(downtownZipResult.skippedReason || "", /generic downtown/i);
+
+  // Downtown qualifier with a physical street address -> not skipped
+  const downtownStreetResult = verifyAndEnrichVenue({
+    name: "Twin Creeks Brewing",
+    city: "Roanoke",
+    usState: "VA",
+    address: "Downtown, 123 Main St, Roanoke, VA 24011",
+    email: "booking@twincreeksbrewing.com",
+    emailSource: "Venue website",
+  });
+  assertEquals(downtownStreetResult.status, "ready");
 
   // Probed domain with negative identity evidence: becomes ready with address, but outreachEligible remains false
   const probedNegativeResult = verifyAndEnrichVenue({

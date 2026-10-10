@@ -80,7 +80,9 @@ export function isUsableStreetAddress(address: unknown): boolean {
 
   // Reject generic downtown strings without street number/name (including bare "Downtown" and city/state/ZIP suffixes)
   const downtownPattern = /^downtown(?:\s*[,.-]?\s*[\w\s,().-]*)$/i;
-  if (downtownPattern.test(trimmed)) {
+  // A leading "Downtown" qualifier is fine when a street number and name follow ("Downtown, 123 Main St")
+  const streetNumberPattern = /\b\d{1,6}\s+[A-Za-z]/;
+  if (downtownPattern.test(trimmed) && !streetNumberPattern.test(trimmed)) {
     return false;
   }
 
