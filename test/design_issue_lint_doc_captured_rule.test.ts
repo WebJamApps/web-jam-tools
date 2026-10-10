@@ -109,6 +109,29 @@ Deno.test("invalid-slug END inside an open block is reported and the block stays
   assertEquals(count(content, CITATION_RULE), 1);
 });
 
+Deno.test("a valid-slug END of another slug inside a block is reported and the block stays linted", () => {
+  const content = doc(`${START}\n<!-- END_CAPTURED_RULE:other -->\n${CITE}\n${END}`);
+  assertEquals(count(content, MALFORMED), 1);
+  assertEquals(count(content, CITATION_RULE), 1);
+});
+
+Deno.test("blocks after an unclosed START are not exempted", () => {
+  const content = doc(
+    `${START}\n<!-- START_CAPTURED_RULE:inner -->\n${CITE}\n<!-- END_CAPTURED_RULE:inner -->`,
+  );
+  // unclosed outer START, the inner START while it is open, and the inner END with no open block
+  assertEquals(count(content, MALFORMED), 3);
+  assertEquals(count(content, CITATION_RULE), 1);
+});
+
+Deno.test("a properly closed inner pair inside a malformed outer block reports only the inner START", () => {
+  const content = doc(
+    `${START}\n<!-- START_CAPTURED_RULE:inner -->\n${CITE}\n<!-- END_CAPTURED_RULE:inner -->\n${END}`,
+  );
+  assertEquals(count(content, MALFORMED), 1);
+  assertEquals(count(content, CITATION_RULE), 1);
+});
+
 Deno.test("two nested START markers report one violation each", () => {
   const content = doc(
     `${START}\n<!-- START_CAPTURED_RULE:a -->\n<!-- START_CAPTURED_RULE:b -->\n${CITE}\n${END}`,

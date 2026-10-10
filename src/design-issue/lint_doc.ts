@@ -1198,6 +1198,8 @@ function blankCapturedRuleBlocks(
       lineContent: rawLines[i],
     });
   let inFence = false;
+  // An unmatched START stays open to the end of the document, so nothing after it is exempted.
+  let unclosedStartOpen = false;
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i];
     if (isFence(line)) {
@@ -1215,15 +1217,21 @@ function blankCapturedRuleBlocks(
       malformed(i, "END marker with no open block");
       continue;
     }
+    if (unclosedStartOpen) {
+      malformed(i, "START marker while another block is open");
+      continue;
+    }
     const endMarker = capturedRuleEndMarker(marker.slug);
     const end = rawLines.findIndex((l, j) => j > i && l.trimEnd() === endMarker);
     if (end === -1) {
       malformed(i, "START marker with no later END marker of the same slug");
+      unclosedStartOpen = true;
       continue;
     }
     // Inspect every marker inside the block; any malformed one leaves the whole block linted.
     let innerFence = false;
     let clean = true;
+    const nestedSlugs = new Set<string>();
     for (let j = i + 1; j < end; j++) {
       if (isFence(rawLines[j])) {
         innerFence = !innerFence;
@@ -1237,6 +1245,10 @@ function blankCapturedRuleBlocks(
         clean = false;
       } else if (inner.kind === "START") {
         malformed(j, "START marker while another block is open");
+        nestedSlugs.add(inner.slug);
+        clean = false;
+      } else if (inner.kind === "END" && !nestedSlugs.has(inner.slug)) {
+        malformed(j, "END marker with no open block");
         clean = false;
       }
     }
