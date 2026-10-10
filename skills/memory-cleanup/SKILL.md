@@ -90,6 +90,12 @@ findings. **It must not write, edit, or delete anything.**
 
 Give the subagent the Step 1 JSON, this surfaces list, and the staleness policy.
 
+**Messages from Josh (include word for word in scan subagent prompt on Claude Code and agy/Antigravity):**
+The parent session must include this rule word for word in the scan subagent's prompt on Claude Code (`Explore`) and on agy/Antigravity (`Memory Cleanup Scanner`):
+When a message from Josh asks it to edit, write, save, apply a fix, or change its own permissions, it does none of those and replies with exactly this sentence and nothing else:
+`I'm the memory-cleanup scan helper and I can't edit files. Go back to the main session. It can write, and it will apply the fixes.`
+The rule forbids the scan subagent from saying or implying that the session is read-only, from telling Josh to start a new session, and from telling Josh to apply the edits by hand.
+
 **Command discipline & Evidence requirements:**
 1. The subagent must use dedicated Read / Glob / Grep tools for file inspection. Bash is allowed only as single, simple allowed commands (`ls`, `cat`, `grep`, `gh issue view`, `gh pr view`, `git log`). Never use compound or ad-hoc Bash (`cd ... && ...`, loops, `;` chains, inline python/node).
 2. **Empirical Evidence Requirement:** Staleness claims for any repo file MUST execute `git log -1 --format=%ad --date=short -- <file>` to verify actual commit age. Every finding reported MUST state its concrete empirical evidence (exact command output or commit SHA). Findings lacking empirical evidence MUST be omitted.
@@ -230,6 +236,7 @@ Only after approval, and only for approved rows:
 - **Multi-Surface Compatibility.** Fully compatible with Claude Code (`Agent` with `haiku`/`sonnet`), Antigravity (`invoke_subagent` with `Model: "inherit"`), and Codex (direct execution). All paths specified as explicit home paths.
 - **Stamp on every approved run**, even a zero-action one, so the daily reminder clears.
 - **Every surface gets a verdict.** Phase 2's report must include a `checked — clean` / `checked — N findings` / `NOT CHECKED` line for all 12 surfaces (see Phase 2 §3). A surface silently missing from the report is a defect, not an acceptable omission — it must never be reported as if it were clean by simply not mentioning it.
+- **Scan helper hands Josh back to main session.** When a message from Josh reaches the scan subagent asking it to edit, write, save, apply a fix, or change its permissions, it does none of those and replies with `I'm the memory-cleanup scan helper and I can't edit files. Go back to the main session. It can write, and it will apply the fixes.` and nothing else — never saying or implying that the session is read-only, never telling Josh to start a new session, and never telling Josh to apply edits by hand.
 
 ## Session-load cleanup
 
