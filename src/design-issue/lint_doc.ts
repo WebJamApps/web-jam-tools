@@ -3,6 +3,11 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import * as path from "@std/path";
+import {
+  capturedRuleEndMarker,
+  isValidSlug,
+  parseCapturedRuleMarker,
+} from "../../scripts/consume_memory_rules.ts";
 import { expandHome } from "./gate1.ts";
 import { loadGate1Record, type PremiseRow } from "./gate1_record.ts";
 
@@ -1172,13 +1177,103 @@ export function presentingDay(now: Date): string {
   return local < utc ? local : utc;
 }
 
+/**
+ * Finds captured memory rule blocks (web-jam-tools#1317). Returns the document lines with every
+ * line of a well-formed block blanked (line numbers unchanged) plus one violation per malformed
+ * marker. Malformed markers exempt nothing (fail closed): a block holding a malformed marker is
+ * not blanked. The first whole-line END marker with the block's slug closes it, as in
+ * captureAndVerifyRulesInDesignDoc; markers inside a fenced code block are not markers.
+ */
+function blankCapturedRuleBlocks(
+  rawLines: string[],
+): { lines: string[]; violations: LintViolation[] } {
+  const lines = [...rawLines];
+  const violations: LintViolation[] = [];
+  const isFence = (line: string) => /^\s*```/.test(line) || /^\s*~~~/.test(line);
+  const malformed = (i: number, why: string) =>
+    violations.push({
+      rule: "captured-rule-block-malformed",
+      message: `Captured rule marker is malformed (${why}): "${rawLines[i].trim()}"`,
+      line: i + 1,
+      lineContent: rawLines[i],
+    });
+  let inFence = false;
+  // An unmatched START stays open to the end of the document, so nothing after it is exempted.
+  let unclosedStartOpen = false;
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (isFence(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const marker = parseCapturedRuleMarker(line);
+    if (!marker) continue;
+    if (!isValidSlug(marker.slug)) {
+      malformed(i, "invalid slug");
+      continue;
+    }
+    if (marker.kind === "END") {
+      malformed(i, "END marker with no open block");
+      continue;
+    }
+    if (unclosedStartOpen) {
+      malformed(i, "START marker while another block is open");
+      continue;
+    }
+    const endMarker = capturedRuleEndMarker(marker.slug);
+    const end = rawLines.findIndex((l, j) => j > i && l.trimEnd() === endMarker);
+    if (end === -1) {
+      malformed(i, "START marker with no later END marker of the same slug");
+      unclosedStartOpen = true;
+      continue;
+    }
+    // Inspect every marker inside the block; any malformed one leaves the whole block linted.
+    let innerFence = false;
+    let clean = true;
+    const nestedOpen = new Map<string, number>();
+    for (let j = i + 1; j < end; j++) {
+      if (isFence(rawLines[j])) {
+        innerFence = !innerFence;
+        continue;
+      }
+      if (innerFence) continue;
+      const inner = parseCapturedRuleMarker(rawLines[j]);
+      if (!inner) continue;
+      if (!isValidSlug(inner.slug)) {
+        malformed(j, "invalid slug");
+        clean = false;
+      } else if (inner.kind === "START") {
+        malformed(j, "START marker while another block is open");
+        nestedOpen.set(inner.slug, (nestedOpen.get(inner.slug) ?? 0) + 1);
+        clean = false;
+      } else if (inner.kind === "END") {
+        const open = nestedOpen.get(inner.slug) ?? 0;
+        if (open > 0) {
+          nestedOpen.set(inner.slug, open - 1);
+        } else {
+          malformed(j, "END marker with no open block");
+          clean = false;
+        }
+      }
+    }
+    if (clean) {
+      for (let j = i; j <= end; j++) lines[j] = "";
+    }
+    i = end;
+  }
+  return { lines, violations };
+}
+
 export function lintDesignDoc(
   content: string,
   docPath: string = "",
   options: LintDesignDocOptions = {},
 ): LintDocResult {
   const violations: LintViolation[] = [];
-  const lines = content.split(/\r?\n/);
+  const blanked = blankCapturedRuleBlocks(content.split(/\r?\n/));
+  const lines = blanked.lines;
+  violations.push(...blanked.violations);
   const nowImpl = options.nowImpl ?? (() => new Date());
   const now = nowImpl();
   // Earliest calendar day of today across local and UTC time, so evening local work

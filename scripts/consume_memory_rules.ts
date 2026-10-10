@@ -34,6 +34,43 @@ export function isValidSlug(slug: string): boolean {
   return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(slug);
 }
 
+const CAPTURED_RULE_START_PREFIX = "<!-- START_CAPTURED_RULE:";
+const CAPTURED_RULE_END_PREFIX = "<!-- END_CAPTURED_RULE:";
+const CAPTURED_RULE_SUFFIX = " -->";
+
+/** Marker line that opens a captured memory rule block in a design document. */
+export function capturedRuleStartMarker(slug: string): string {
+  return `${CAPTURED_RULE_START_PREFIX}${slug}${CAPTURED_RULE_SUFFIX}`;
+}
+
+/** Marker line that closes a captured memory rule block in a design document. */
+export function capturedRuleEndMarker(slug: string): string {
+  return `${CAPTURED_RULE_END_PREFIX}${slug}${CAPTURED_RULE_SUFFIX}`;
+}
+
+/**
+ * Recognises a whole-line captured rule marker (trailing whitespace ignored). Built from the same
+ * prefix and suffix the two marker builders use, so reader and writer cannot drift apart. The slug
+ * is returned unvalidated so a caller can report an invalid one.
+ */
+export function parseCapturedRuleMarker(
+  line: string,
+): { kind: "START" | "END"; slug: string } | null {
+  const text = line.trimEnd();
+  if (!text.endsWith(CAPTURED_RULE_SUFFIX)) return null;
+  for (
+    const [kind, prefix] of [
+      ["START", CAPTURED_RULE_START_PREFIX],
+      ["END", CAPTURED_RULE_END_PREFIX],
+    ] as const
+  ) {
+    if (text.startsWith(prefix) && text.length >= prefix.length + CAPTURED_RULE_SUFFIX.length) {
+      return { kind, slug: text.slice(prefix.length, text.length - CAPTURED_RULE_SUFFIX.length) };
+    }
+  }
+  return null;
+}
+
 /**
  * Move a file to system trash (or fallback trash directory).
  * NEVER permanently deletes with rm / Deno.remove.
@@ -231,8 +268,8 @@ export function captureAndVerifyRulesInDesignDoc(
     }
     const sourceBytes = new TextEncoder().encode(sourceContent);
 
-    const startTag = `<!-- START_CAPTURED_RULE:${slug} -->`;
-    const endTag = `<!-- END_CAPTURED_RULE:${slug} -->`;
+    const startTag = capturedRuleStartMarker(slug);
+    const endTag = capturedRuleEndMarker(slug);
 
     // Check if rule is already captured in the design doc
     const startIndex = content.indexOf(startTag);
