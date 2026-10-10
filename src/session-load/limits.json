@@ -61,11 +61,5 @@
       "update-config",
       "verify"
     ]
-  },
-  "connectors": {
-    "reportOnly": true
-  },
-  "googleBundledSkills": {
-    "reportOnly": true
   }
 }

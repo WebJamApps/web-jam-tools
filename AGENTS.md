@@ -622,13 +622,10 @@ target list, deployment steps, and verification procedures.
   matched strictly by identity against the canonical list of bundled skill identities, handling
   namespaced prefixes (`anthropic-skills:`, `claude-ai:`) and reporting the exact count of
   un-overridden bundled skills.
-- **Multi-Surface Session Load Part Coverage & Report-Only Connectors**: When reporting multi-tool
-  session load footprints across surfaces (Claude Code, agy, Codex), actively inspect and report
-  surface-specific extensions (such as MCP connectors from `~/.claude.json`,
-  `~/.gemini/antigravity-cli/mcp/`, `~/.codex/mcp`, and platform-bundled skills like
-  `~/.gemini/skills/`). Report-only parts must never impose synthetic limits or trigger `isOver`
-  alerts on their own, but must appear in structured outputs and format blocks when tools exceed
-  thresholds.
+- **Limit-Enforced Session Load Part Coverage**: When reporting multi-tool session load footprints
+  across surfaces (Claude Code, agy, Codex), report only parts that have an explicit limit configured
+  per the design document. Unbounded extensions without limits (such as MCP connectors or agy's
+  Google-bundled skills) must not be inspected or reported in the tab 1 session-load report.
 - **Registration Isolation Assertion Discipline**: In tests verifying that hooks or startup scripts
   are NOT registered in global settings or unauthorized surfaces, never wrap assertion checks in
   blanket `try/catch` blocks that swallow assertion errors. Catch only `Deno.errors.NotFound`, run
@@ -640,26 +637,6 @@ target list, deployment steps, and verification procedures.
   operational navigation instructions (such as detaching with `Ctrl-b d` or using an outside
   terminal) after commands that attach to tmux sessions (`agents --restart`) before executing
   background pane capture or verification checks.
-- **Effective Connector Listing Extraction & Launcher Configuration Isolation**: When measuring
-  connector (MCP) session load footprints across surfaces, collectors must read effective
-  configuration sources (both top-level/global `mcpServers` and project-scoped
-  `projects[projectPath].mcpServers` merged by server identity). Furthermore, connector listing
-  footprints must measure only listing content that actually loads into model context (tool names
-  and server instructions). Never measure raw JSON serialization of server configurations
-  (`JSON.stringify(servers)`), which conflates launcher parameters (`command`, `args`, `env`,
-  `type`) with session load and causes environment variable or argument inflation to falsely report
-  bloated model context. Configuration fields must not be mistaken for discovered listings. When
-  actual listing data is absent or sealed, report its size as unavailable, and label any readable
-  cached subset as partial; never fabricate a total from server-name lengths. Test fixtures must
-  include project-scoped sources and regressions demonstrating that launcher configuration changes
-  do not alter connector listing sizes.
-- **Recursive File Content Traversal for Connector Directories**: When measuring connector or plugin
-  payloads stored in filesystem directories (such as `~/.codex/mcp/` or
-  `~/.gemini/antigravity-cli/mcp/`), never measure directory inode metadata (`Deno.stat(dir).size`),
-  which yields a static filesystem block size (e.g. 60 or 4096 bytes) regardless of directory
-  contents. Collectors must recursively traverse connector subdirectories and sum the content sizes
-  of regular files (`instructions.md`, schema files, configs). Test suites must include nonempty
-  fixtures verifying that growing connector file payloads proportionally updates reported sizes.
 - **Propose-Then-Apply Backfill CLI Discipline**: When implementing database backfill or bulk
   tag-classification CLI tools (e.g. `deno task venue-tag:backfill-types`), default to dry-run
   preview mode displaying a formatted proposal table without database writes. Require an explicit

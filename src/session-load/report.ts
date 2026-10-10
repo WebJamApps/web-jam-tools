@@ -5,10 +5,6 @@
 import { join } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import { ACTIVE_REPOS } from "../shared/repos.ts";
-import { type ConnectorInfo, inspectClaudeConnectors } from "./claude_connectors.ts";
-export { inspectClaudeConnectors } from "./claude_connectors.ts";
-export type { ConnectorInfo } from "./claude_connectors.ts";
-
 export interface PartLimit {
   lowMark?: number;
   overMark: number;
@@ -18,10 +14,6 @@ export interface SkillDescriptionLimit {
   lowMark?: number;
   overMark: number;
   maxCharacters?: number;
-}
-
-export interface ReportOnlyLimit {
-  reportOnly?: boolean;
 }
 
 export interface BundledSkillsLimit {
@@ -38,15 +30,11 @@ export interface SessionLoadLimits {
   otherRepoRules: PartLimit;
   skillDescription: SkillDescriptionLimit;
   bundledSkills: BundledSkillsLimit;
-  connectors?: ReportOnlyLimit;
-  googleBundledSkills?: ReportOnlyLimit;
 }
 
 export interface SessionLoadReportOptions {
   /** Home directory (defaults to $HOME or /home/joshua). */
   homeDir?: string;
-  /** Optional project directory for project-scoped configurations (defaults to homeDir). */
-  projectDir?: string;
   /** WebJamApps parent directory holding repo checkouts (defaults to $HOME/WebJamApps). */
   webJamAppsDir?: string;
   /** Path to Claude Code settings.json (defaults to $HOME/.claude/settings.json). */
@@ -63,23 +51,11 @@ export interface SessionLoadReportOptions {
   memoryIndexPath?: string;
   /** Path to global CLAUDE.md (defaults to $HOME/.claude/CLAUDE.md). */
   globalClaudeMdPath?: string;
-  /** Path to Claude Code MCP config (defaults to $HOME/.claude.json). */
-  claudeMcpPath?: string;
-  /** Native discovery cache (defaults to $HOME/.claude/mcp-discovery-cache). */
-  claudeDiscoveryDir?: string;
-  /** Directory holding agy MCP connectors (defaults to $HOME/.gemini/antigravity-cli/mcp). */
-  agyMcpDir?: string;
-  /** Directory holding Codex MCP connectors (defaults to $HOME/.codex/mcp). */
-  codexMcpDir?: string;
-  /** Directory holding agy Google-bundled skills (defaults to $HOME/.gemini/skills). */
-  agyGoogleSkillsDir?: string;
 }
 
 export interface ToolReportResult {
   isOver: boolean;
   items: string[];
-  connectors: ConnectorInfo;
-  googleBundledSkillsCount?: number;
 }
 
 export interface SessionLoadReportResult {
@@ -89,14 +65,6 @@ export interface SessionLoadReportResult {
     claudeCode: ToolReportResult;
     agy: ToolReportResult;
     codex: ToolReportResult;
-  };
-  connectors: {
-    claudeCode: ConnectorInfo;
-    agy: ConnectorInfo;
-    codex: ConnectorInfo;
-  };
-  googleBundledSkills: {
-    agy: number;
   };
 }
 
@@ -230,108 +198,6 @@ export async function inspectBundledSkills(
   }
 }
 
-/** Recursively measures file content size in a directory. */
-export async function measureDirectoryContentSize(
-  dirPath: string,
-): Promise<number> {
-  let size = 0;
-  try {
-    for await (const entry of Deno.readDir(dirPath)) {
-      if (entry.name.startsWith(".")) continue;
-      const fullPath = join(dirPath, entry.name);
-      try {
-        const stat = await Deno.stat(fullPath);
-        if (stat.isFile) {
-          size += stat.size;
-        } else if (stat.isDirectory) {
-          size += await measureDirectoryContentSize(fullPath);
-        }
-      } catch {
-        // unreadable entry
-      }
-    }
-  } catch {
-    // unreadable dir
-  }
-  return size;
-}
-
-/** Inspects agy MCP connectors under ~/.gemini/antigravity-cli/mcp. */
-export async function inspectAgyConnectors(
-  agyMcpDir: string,
-): Promise<ConnectorInfo> {
-  let count = 0;
-  let sizeBytes = 0;
-  try {
-    for await (const entry of Deno.readDir(agyMcpDir)) {
-      if (entry.name.startsWith(".")) continue;
-      const fullPath = join(agyMcpDir, entry.name);
-      try {
-        const stat = await Deno.stat(fullPath);
-        if (stat.isDirectory) {
-          count++;
-          sizeBytes += await measureDirectoryContentSize(fullPath);
-        } else if (stat.isFile) {
-          count++;
-          sizeBytes += stat.size;
-        }
-      } catch {
-        // unreadable entry
-      }
-    }
-  } catch {
-    // missing dir
-  }
-  return { count, sizeBytes };
-}
-
-/** Inspects Codex MCP connectors under ~/.codex/mcp. */
-export async function inspectCodexConnectors(
-  codexMcpDir: string,
-): Promise<ConnectorInfo> {
-  let count = 0;
-  let sizeBytes = 0;
-  try {
-    for await (const entry of Deno.readDir(codexMcpDir)) {
-      if (entry.name.startsWith(".")) continue;
-      const fullPath = join(codexMcpDir, entry.name);
-      try {
-        const stat = await Deno.stat(fullPath);
-        if (stat.isFile) {
-          count++;
-          sizeBytes += stat.size;
-        } else if (stat.isDirectory) {
-          count++;
-          sizeBytes += await measureDirectoryContentSize(fullPath);
-        }
-      } catch {
-        // unreadable entry
-      }
-    }
-  } catch {
-    // missing dir
-  }
-  return { count, sizeBytes };
-}
-
-/** Counts agy Google-bundled skills in ~/.gemini/skills. */
-export async function inspectAgyGoogleBundledSkills(
-  googleSkillsDir: string,
-): Promise<number> {
-  let count = 0;
-  try {
-    for await (const entry of Deno.readDir(googleSkillsDir)) {
-      if (entry.name.startsWith(".")) continue;
-      if (entry.isDirectory) {
-        count++;
-      }
-    }
-  } catch {
-    // missing
-  }
-  return count;
-}
-
 /**
  * Computes the session load report across Claude Code, agy, and Codex.
  */
@@ -400,13 +266,6 @@ export async function computeSessionLoadReport(
   const codexSkillsDir = options.codexSkillsDir ||
     join(homeDir, ".codex/skills");
 
-  const claudeMcpPath = options.claudeMcpPath || join(homeDir, ".claude.json");
-  const agyMcpDir = options.agyMcpDir ||
-    join(homeDir, ".gemini/antigravity-cli/mcp");
-  const codexMcpDir = options.codexMcpDir || join(homeDir, ".codex/mcp");
-  const agyGoogleSkillsDir = options.agyGoogleSkillsDir ||
-    join(homeDir, ".gemini/skills");
-
   // Read sizes
   const globalClaudeMdSize = await getFileSize(globalClaudeMdPath);
   const memoryIndexSize = await getFileSize(memoryIndexPath);
@@ -442,25 +301,6 @@ export async function computeSessionLoadReport(
   const bundledSkillsOver = await inspectBundledSkills(
     claudeSettingsPath,
     limits.bundledSkills,
-  );
-
-  // Connectors and platform-bundled skills inspection (report-only)
-  const candidateProjectPaths = [homeDir];
-  if (
-    options.projectDir &&
-    !candidateProjectPaths.includes(options.projectDir)
-  ) {
-    candidateProjectPaths.push(options.projectDir);
-  }
-  const claudeConnectors = await inspectClaudeConnectors(
-    claudeMcpPath,
-    candidateProjectPaths,
-    options.claudeDiscoveryDir || join(homeDir, ".claude/mcp-discovery-cache"),
-  );
-  const agyConnectors = await inspectAgyConnectors(agyMcpDir);
-  const codexConnectors = await inspectCodexConnectors(codexMcpDir);
-  const agyGoogleSkillsCount = await inspectAgyGoogleBundledSkills(
-    agyGoogleSkillsDir,
   );
 
   // Build items for Claude Code
@@ -504,20 +344,6 @@ export async function computeSessionLoadReport(
   }
 
   const claudeOver = claudeItems.length > 0;
-  if (claudeOver) {
-    if (claudeConnectors.sizeBytes === null) {
-      claudeItems.push("connectors listing unavailable");
-      if (claudeConnectors.cachedToolNameBytes !== undefined) {
-        claudeItems.push(
-          `cached connector tool names ${
-            formatNumber(claudeConnectors.cachedToolNameBytes)
-          } bytes (partial)`,
-        );
-      }
-    } else if (claudeConnectors.sizeBytes > 0) {
-      claudeItems.push(`connectors ${formatNumber(claudeConnectors.sizeBytes)}`);
-    }
-  }
 
   // Build items for agy
   const agyItems: string[] = [];
@@ -546,17 +372,6 @@ export async function computeSessionLoadReport(
   }
 
   const agyOver = agyItems.length > 0;
-  if (agyOver) {
-    if (agyGoogleSkillsCount > 0) {
-      const label = agyGoogleSkillsCount === 1
-        ? "1 Google-bundled skill"
-        : `${agyGoogleSkillsCount} Google-bundled skills`;
-      agyItems.push(label);
-    }
-    if (agyConnectors.sizeBytes !== null && agyConnectors.sizeBytes > 0) {
-      agyItems.push(`connectors ${formatNumber(agyConnectors.sizeBytes)}`);
-    }
-  }
 
   // Build items for Codex
   const codexItems: string[] = [];
@@ -589,9 +404,6 @@ export async function computeSessionLoadReport(
   }
 
   const codexOver = codexItems.length > 0;
-  if (codexOver && codexConnectors.sizeBytes !== null && codexConnectors.sizeBytes > 0) {
-    codexItems.push(`connectors ${formatNumber(codexConnectors.sizeBytes)}`);
-  }
 
   const anyOver = claudeOver || agyOver || codexOver;
 
@@ -623,27 +435,15 @@ export async function computeSessionLoadReport(
       claudeCode: {
         isOver: claudeOver,
         items: claudeItems,
-        connectors: claudeConnectors,
       },
       agy: {
         isOver: agyOver,
         items: agyItems,
-        connectors: agyConnectors,
-        googleBundledSkillsCount: agyGoogleSkillsCount,
       },
       codex: {
         isOver: codexOver,
         items: codexItems,
-        connectors: codexConnectors,
       },
-    },
-    connectors: {
-      claudeCode: claudeConnectors,
-      agy: agyConnectors,
-      codex: codexConnectors,
-    },
-    googleBundledSkills: {
-      agy: agyGoogleSkillsCount,
     },
   };
 }
