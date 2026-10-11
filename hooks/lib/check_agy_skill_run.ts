@@ -140,19 +140,29 @@ export function evaluateMessage(
   };
 }
 
+export interface ReadTranscriptOptions {
+  isHelper?: boolean;
+}
+
 export interface TranscriptReadResult {
   canRead: boolean;
   validJson: boolean;
   rawText: string;
   userMessages: string[];
   entries: Record<string, unknown>[];
+  helperLaunchPrompt?: string;
 }
 
 /**
  * Reads a transcript file and extracts messages typed by Josh and structured entries.
  * Returns canRead: false on missing/unreadable file, validJson: false on syntax error.
+ * If options?.isHelper is true, the helper's synthetic launch prompt (initial USER_INPUT)
+ * is recorded in helperLaunchPrompt rather than userMessages.
  */
-export function readTranscript(transcriptPath: string): TranscriptReadResult {
+export function readTranscript(
+  transcriptPath: string,
+  options?: ReadTranscriptOptions,
+): TranscriptReadResult {
   let rawText: string;
   try {
     rawText = Deno.readTextFileSync(transcriptPath);
@@ -163,6 +173,7 @@ export function readTranscript(transcriptPath: string): TranscriptReadResult {
   const lines = rawText.split("\n");
   const userMessages: string[] = [];
   const entries: Record<string, unknown>[] = [];
+  let helperLaunchPrompt: string | undefined;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -204,15 +215,17 @@ export function readTranscript(transcriptPath: string): TranscriptReadResult {
       }
 
       const reqMatch = content.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
-      if (reqMatch) {
-        userMessages.push(reqMatch[1]);
+      const extractedContent = reqMatch ? reqMatch[1] : content;
+
+      if (options?.isHelper && helperLaunchPrompt === undefined) {
+        helperLaunchPrompt = extractedContent;
       } else {
-        userMessages.push(content);
+        userMessages.push(extractedContent);
       }
     }
   }
 
-  return { canRead: true, validJson: true, rawText, userMessages, entries };
+  return { canRead: true, validJson: true, rawText, userMessages, entries, helperLaunchPrompt };
 }
 
 /**
@@ -512,40 +525,41 @@ export function isSkillRunOpen(
       return { outcome: "cannot_tell" };
     }
 
+    const parentInfo = findParentConversation(currentTranscript, currentId);
+    if (parentInfo) {
+      if (stepsUp >= MAX_STEPS_UP) {
+        // Reached 3 steps up and still a helper requiring a 4th step -> not open.
+        return { outcome: "not_open" };
+      }
+
+      const parentTranscriptPath = resolveTranscriptPath(currentTranscript, parentInfo.parentId);
+      const parentTranscriptData = readTranscript(parentTranscriptPath);
+      if (!parentTranscriptData.canRead || !parentTranscriptData.validJson) {
+        return { outcome: "cannot_tell" };
+      }
+
+      // That conversation's record must list the child helper in an authentic creation result.
+      const hasCreationResult = parentTranscriptData.entries.some((entry) =>
+        isHelperCreationResult(entry, currentId)
+      );
+      if (!hasCreationResult) {
+        return { outcome: "not_open" };
+      }
+
+      currentId = parentInfo.parentId;
+      currentTranscript = parentTranscriptPath;
+      stepsUp++;
+      continue;
+    }
+
+    // No verified helper parent -> this is the starting conversation where Josh typed.
     if (transcriptData.userMessages.length > 0) {
       const isOpen = evaluateUserMessages(transcriptData.userMessages, pluginSkills, userSkills);
       return { outcome: isOpen ? "open" : "not_open" };
     }
 
-    // Current transcript holds nothing Josh typed.
-    if (stepsUp >= MAX_STEPS_UP) {
-      // Reached 3 steps up and still no user messages -> requires a 4th step, so not open.
-      return { outcome: "not_open" };
-    }
-
-    const parentInfo = findParentConversation(currentTranscript, currentId);
-    if (!parentInfo) {
-      // Holds nothing Josh typed and has no verified helper creation message.
-      return { outcome: "not_open" };
-    }
-
-    const parentTranscriptPath = resolveTranscriptPath(currentTranscript, parentInfo.parentId);
-    const parentTranscriptData = readTranscript(parentTranscriptPath);
-    if (!parentTranscriptData.canRead || !parentTranscriptData.validJson) {
-      return { outcome: "cannot_tell" };
-    }
-
-    // That conversation's record must list the child helper in an authentic creation result.
-    const hasCreationResult = parentTranscriptData.entries.some((entry) =>
-      isHelperCreationResult(entry, currentId)
-    );
-    if (!hasCreationResult) {
-      return { outcome: "not_open" };
-    }
-
-    currentId = parentInfo.parentId;
-    currentTranscript = parentTranscriptPath;
-    stepsUp++;
+    // Starting conversation holds nothing Josh typed.
+    return { outcome: "not_open" };
   }
 
   return { outcome: "not_open" };

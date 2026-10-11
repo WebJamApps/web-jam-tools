@@ -1444,3 +1444,373 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: fails open with allow on invalid inp
   const parsed = JSON.parse(outStr);
   assertEquals(parsed.decision, "allow");
 });
+
+// ---------------------------------------------------------------------------
+// 6. Captured helper input format (USER_INPUT/USER_EXPLICIT) & ancestry tests
+// ---------------------------------------------------------------------------
+
+function makeAuthenticCreationResult(childId: string): string {
+  return JSON.stringify({
+    step_index: 2,
+    source: "MODEL",
+    type: "GENERIC",
+    status: "DONE",
+    created_at: "2026-08-27T22:44:36Z",
+    content:
+      `Created At: 2026-08-27T18:44:36-04:00\nCompleted At: 2026-08-27T18:44:36-04:00\nCreated the following subagents:\n{\n  "conversationId":  "${childId}",\n  "logAbsoluteUri":  "file:///home/joshua/.gemini/antigravity-cli/brain/${childId}/.system_generated/logs/transcript.jsonl",\n  "workspaceUris":  [\n    "file:///home/joshua/WebJamApps/web-jam-tools"\n  ]\n}\nThe subagents will send you a message when they have completed their task or require guidance. There is no need to poll for their responses.`,
+  });
+}
+
+function makeHelperCreationMessage(childId: string, parentId: string): string {
+  return JSON.stringify({
+    recipient: childId,
+    sender: parentId,
+    sourceMetadata: {
+      tool: {
+        conversationId: parentId,
+        toolCall: { name: "invoke_subagent" },
+      },
+    },
+  });
+}
+
+const CAPTURED_CHILD_LAUNCH_ENTRY = JSON.stringify({
+  step_index: 0,
+  source: "USER_EXPLICIT",
+  type: "USER_INPUT",
+  status: "DONE",
+  created_at: "2026-08-27T22:44:36Z",
+  content:
+    "<USER_REQUEST>\nPlease execute the shell command `echo subagent-probe-test` using run_command in the workspace directory `/home/joshua/WebJamApps/web-jam-tools` and report the output.\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-08-27T18:44:36-04:00.\n</ADDITIONAL_METADATA>",
+});
+
+Deno.test("Helper agent with captured helper input format: handlePreToolUse rewrites pwd when parent opened /pr-review", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-captured-" });
+  try {
+    const parentId = "parent-pr-review-123";
+    const childId = "child-helper-456";
+
+    // Setup parent with /pr-review and authentic creation result
+    const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentLogs, { recursive: true });
+    const parentTranscript = join(parentLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      parentTranscript,
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        makeAuthenticCreationResult(childId),
+      ].join("\n") + "\n",
+    );
+
+    // Setup child with captured launch entry format and valid inbox message
+    const childLogs = join(tmpDir, childId, ".system_generated", "logs");
+    const childMessages = join(tmpDir, childId, ".system_generated", "messages");
+    await Deno.mkdir(childLogs, { recursive: true });
+    await Deno.mkdir(childMessages, { recursive: true });
+    const childTranscript = join(childLogs, "transcript.jsonl");
+    await Deno.writeTextFile(childTranscript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+
+    const msgFile = join(childMessages, "msg.json");
+    await Deno.writeTextFile(msgFile, makeHelperCreationMessage(childId, parentId));
+
+    const payload = {
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "pwd" },
+      },
+      transcriptPath: childTranscript,
+      conversationId: childId,
+    };
+
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper of a helper with captured helper input format: 2 steps up rewrites pwd when starting conv opened /pr-review", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-chain-" });
+  try {
+    const conv0Id = "root-conv-0";
+    const conv1Id = "helper-conv-1";
+    const conv2Id = "grandchild-conv-2";
+
+    // conv0: Josh typed /pr-review, created conv1
+    const conv0Logs = join(tmpDir, conv0Id, ".system_generated", "logs");
+    await Deno.mkdir(conv0Logs, { recursive: true });
+    await Deno.writeTextFile(
+      join(conv0Logs, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        makeAuthenticCreationResult(conv1Id),
+      ].join("\n") + "\n",
+    );
+
+    // conv1: helper 1, created conv2
+    const conv1Logs = join(tmpDir, conv1Id, ".system_generated", "logs");
+    const conv1Msgs = join(tmpDir, conv1Id, ".system_generated", "messages");
+    await Deno.mkdir(conv1Logs, { recursive: true });
+    await Deno.mkdir(conv1Msgs, { recursive: true });
+    await Deno.writeTextFile(
+      join(conv1Logs, "transcript.jsonl"),
+      [
+        CAPTURED_CHILD_LAUNCH_ENTRY,
+        makeAuthenticCreationResult(conv2Id),
+      ].join("\n") + "\n",
+    );
+    await Deno.writeTextFile(
+      join(conv1Msgs, "msg.json"),
+      makeHelperCreationMessage(conv1Id, conv0Id),
+    );
+
+    // conv2: helper of a helper
+    const conv2Logs = join(tmpDir, conv2Id, ".system_generated", "logs");
+    const conv2Msgs = join(tmpDir, conv2Id, ".system_generated", "messages");
+    await Deno.mkdir(conv2Logs, { recursive: true });
+    await Deno.mkdir(conv2Msgs, { recursive: true });
+    const conv2Transcript = join(conv2Logs, "transcript.jsonl");
+    await Deno.writeTextFile(conv2Transcript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(conv2Msgs, "msg.json"),
+      makeHelperCreationMessage(conv2Id, conv1Id),
+    );
+
+    const payload = {
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "pwd" },
+      },
+      transcriptPath: conv2Transcript,
+      conversationId: conv2Id,
+    };
+
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper of a helper with captured helper input format: does NOT rewrite when starting conv did not open skill run", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-chain-no-open-" });
+  try {
+    const conv0Id = "root-conv-0";
+    const conv1Id = "helper-conv-1";
+    const conv2Id = "grandchild-conv-2";
+
+    // conv0: Josh typed plain message (not a skill run)
+    const conv0Logs = join(tmpDir, conv0Id, ".system_generated", "logs");
+    await Deno.mkdir(conv0Logs, { recursive: true });
+    await Deno.writeTextFile(
+      join(conv0Logs, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "please fix this PR and leave a comment" }),
+        makeAuthenticCreationResult(conv1Id),
+      ].join("\n") + "\n",
+    );
+
+    // conv1: helper 1, created conv2
+    const conv1Logs = join(tmpDir, conv1Id, ".system_generated", "logs");
+    const conv1Msgs = join(tmpDir, conv1Id, ".system_generated", "messages");
+    await Deno.mkdir(conv1Logs, { recursive: true });
+    await Deno.mkdir(conv1Msgs, { recursive: true });
+    await Deno.writeTextFile(
+      join(conv1Logs, "transcript.jsonl"),
+      [
+        CAPTURED_CHILD_LAUNCH_ENTRY,
+        makeAuthenticCreationResult(conv2Id),
+      ].join("\n") + "\n",
+    );
+    await Deno.writeTextFile(
+      join(conv1Msgs, "msg.json"),
+      makeHelperCreationMessage(conv1Id, conv0Id),
+    );
+
+    // conv2: helper of a helper
+    const conv2Logs = join(tmpDir, conv2Id, ".system_generated", "logs");
+    const conv2Msgs = join(tmpDir, conv2Id, ".system_generated", "messages");
+    await Deno.mkdir(conv2Logs, { recursive: true });
+    await Deno.mkdir(conv2Msgs, { recursive: true });
+    const conv2Transcript = join(conv2Logs, "transcript.jsonl");
+    await Deno.writeTextFile(conv2Transcript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(conv2Msgs, "msg.json"),
+      makeHelperCreationMessage(conv2Id, conv1Id),
+    );
+
+    const payload = {
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "pwd" },
+      },
+      transcriptPath: conv2Transcript,
+      conversationId: conv2Id,
+    };
+
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(res.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper ancestry with captured helper input format: 3 steps up is open, 4 steps up is not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-4steps-captured-" });
+  try {
+    const convs = ["conv0", "conv1", "conv2", "conv3", "conv4"];
+
+    for (let i = 0; i < convs.length; i++) {
+      const id = convs[i];
+      const logs = join(tmpDir, id, ".system_generated", "logs");
+      await Deno.mkdir(logs, { recursive: true });
+      const tPath = join(logs, "transcript.jsonl");
+
+      let content: string;
+      if (i === 0) {
+        content =
+          JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }) +
+          "\n";
+      } else {
+        content = CAPTURED_CHILD_LAUNCH_ENTRY + "\n";
+      }
+      if (i < convs.length - 1) {
+        content += makeAuthenticCreationResult(convs[i + 1]) + "\n";
+      }
+      await Deno.writeTextFile(tPath, content);
+
+      if (i > 0) {
+        const msgs = join(tmpDir, id, ".system_generated", "messages");
+        await Deno.mkdir(msgs, { recursive: true });
+        const mPath = join(msgs, "msg.json");
+        await Deno.writeTextFile(mPath, makeHelperCreationMessage(id, convs[i - 1]));
+      }
+    }
+
+    // 3 steps up to conv0 (conv3 -> conv2 -> conv1 -> conv0) -> open
+    const conv3Transcript = join(tmpDir, "conv3", ".system_generated", "logs", "transcript.jsonl");
+    const res3 = isSkillRunOpen(conv3Transcript, "conv3", MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(
+      res3.outcome,
+      "open",
+      "3 steps up should resolve to open with captured helper input format",
+    );
+
+    // 4 steps up to conv0 (conv4 -> conv3 -> conv2 -> conv1 -> conv0) -> not open
+    const conv4Transcript = join(tmpDir, "conv4", ".system_generated", "logs", "transcript.jsonl");
+    const res4 = isSkillRunOpen(conv4Transcript, "conv4", MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res4.outcome, "not_open", "4 steps up must not be open");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper with captured helper input format: parent record does NOT list helper -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-unlisted-" });
+  try {
+    const parentId = "parent-conv-1";
+    const helperId = "child-conv-2";
+
+    const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(parentLogs, "transcript.jsonl"),
+      JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }) + "\n",
+    );
+
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMsgs, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(helperTranscript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(helperMsgs, "msg.json"),
+      makeHelperCreationMessage(helperId, parentId),
+    );
+
+    const payload = {
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "pwd" },
+      },
+      transcriptPath: helperTranscript,
+      conversationId: helperId,
+    };
+
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(res.overwrite, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites helper subagent command with captured helper input format", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-e2e-helper-captured-" });
+  try {
+    const parentId = "parent-conv-e2e";
+    const helperId = "helper-conv-e2e";
+
+    const pluginSkillsDir = join(tmpDir, "plugin-skills");
+    const userSkillsDir = join(tmpDir, "user-skills");
+    await Deno.mkdir(join(pluginSkillsDir, "work-issue"), { recursive: true });
+    await Deno.mkdir(userSkillsDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(pluginSkillsDir, "work-issue", "SKILL.md"),
+      "# work-issue skill\n",
+    );
+
+    const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(parentLogs, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }),
+        makeAuthenticCreationResult(helperId),
+      ].join("\n") + "\n",
+    );
+
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMsgs, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(helperTranscript, CAPTURED_CHILD_LAUNCH_ENTRY + "\n");
+    await Deno.writeTextFile(
+      join(helperMsgs, "msg.json"),
+      makeHelperCreationMessage(helperId, parentId),
+    );
+
+    const payload = {
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "git status" },
+      },
+      transcriptPath: helperTranscript,
+      conversationId: helperId,
+    };
+
+    const res = await runHookScript(payload, {
+      AGY_PLUGIN_SKILLS_DIR: pluginSkillsDir,
+      AGY_USER_SKILLS_DIR: userSkillsDir,
+    });
+    assertEquals(res.code, 0);
+    assertEquals(res.parsed.decision, "allow");
+    assertEquals(
+      res.parsed.overwrite?.CommandLine,
+      "/home/joshua/.claude/hooks/agy-skill-run.sh 'git status'",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});

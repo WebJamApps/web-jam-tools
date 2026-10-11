@@ -327,6 +327,14 @@ rules and do not reconstruct them from memory or from this file.
       declaring the `conversationId`), strictly refusing loose raw substring containment, generic
       model entries, assistant examples in planner responses, or unrelated JSON/status responses
       containing the ID.
+    - **Helper Synthetic Launch Input & Ancestry Traversal:** Real helper transcripts contain the
+      parent's synthetic launch prompt as `source: "USER_EXPLICIT", type: "USER_INPUT"`. Transcript
+      parsers and hook permission evaluators must distinguish a helper's synthetic launch prompt
+      from Josh's own input. When evaluating permission or skill-run inheritance, hooks must follow
+      the verified helper ancestry to the authentic starting conversation rather than prematurely
+      evaluating the helper's synthetic prompt as a direct user command and returning unapproved
+      before consulting verified creation messages and parent ancestry. Test suites must cover the
+      captured authentic helper launch format, including chained helper-of-a-helper ancestry.
 
 ## Opening pull requests (all WebJamApps repos)
 
