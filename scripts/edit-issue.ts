@@ -17,8 +17,12 @@
  * (web-jam-tools#1205). When the edit replaces the body it is required,
  * roster-checked, and the new body ends with one `🤖 Authored by` footer
  * naming the editing model in place of any earlier one.
+ *
+ * `--priority` is consumed here too: it uses the issue-creation library's
+ * native-field mutation, then reads the level back before reporting success.
  */
 import { checkAuthorOnRoster, withFooter } from "../hooks/lib/authored_by_footer.ts";
+import { PRIORITY_FIELD_ID, PRIORITY_MAP, priorityMutation } from "../src/create-issue/lib.ts";
 import {
   resolveSigningAuthor,
   type RunningModelOptions,
@@ -31,17 +35,27 @@ export interface Options {
   issue?: number;
   dryRun: boolean;
   author?: string;
+  priority?: string;
+  priorityError?: string;
   rest: string[];
 }
 
 export function parseArgs(args: string[]): Options {
   const opts: Options = { dryRun: false, rest: [] };
+  const bodyValues = new Set(
+    findBodyFlags(args).filter((flag) => flag.span === 2)
+      .map((flag) => flag.index + 1),
+  );
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--repo") opts.repo = args[++i];
     else if (arg === "--issue") opts.issue = Number(args[++i]);
     else if (arg === "--dry-run") opts.dryRun = true;
-    else if (arg === "--author") opts.author = args[++i] ?? "";
+    else if (!bodyValues.has(i) && (arg === "--priority" || arg.startsWith("--priority="))) {
+      const value = arg === "--priority" ? args[++i] ?? "" : arg.slice("--priority=".length);
+      if (opts.priority !== undefined) opts.priorityError = "--priority is given more than once.";
+      else opts.priority = value;
+    } else if (arg === "--author") opts.author = args[++i] ?? "";
     else if (arg.startsWith("--author=")) opts.author = arg.slice("--author=".length);
     else opts.rest.push(arg);
   }
@@ -99,11 +113,83 @@ export interface Deps {
 }
 
 const USAGE =
-  "usage: edit-issue --repo <owner/repo> --issue <n> [--author <tool — model>] [gh issue edit flags...] [--dry-run]\n  Outside Codex, --author is required whenever the body is replaced (--body, -b, --body-file or -F, in any form). Codex looks up the running model.";
+  "usage: edit-issue --repo <owner/repo> --issue <n> [--priority Urgent|High|Medium|Low] [--author <tool — model>] [gh issue edit flags...] [--dry-run]\n  Outside Codex, --author is required whenever the body is replaced (--body, -b, --body-file or -F, in any form). Codex looks up the running model.";
+
+/** Set the native field and refuse success until REST confirms the requested level. */
+async function setPriority(opts: Options, deps: Deps): Promise<void> {
+  const target = `${opts.repo}#${opts.issue}`;
+  const context = `Priority ${opts.priority} for ${target}`;
+  const endpoint = `repos/${opts.repo}/issues/${opts.issue}`;
+  const call = (cmd: string[]) => runWithRetry(deps.runCmd, cmd, { sleep: deps.sleep });
+  try {
+    const node = await call(["gh", "api", endpoint, "--jq", ".node_id"]);
+    if (node.code !== 0 || !/^I_[A-Za-z0-9_-]+$/.test(node.stdout.trim())) {
+      throw new Error("could not resolve the issue node ID");
+    }
+    const spec = PRIORITY_MAP[opts.priority!.toLowerCase()];
+    const mutation = await call([
+      "gh",
+      "api",
+      "graphql",
+      "-f",
+      `query=${priorityMutation(node.stdout.trim(), spec.node_id)}`,
+    ]);
+    if (mutation.code !== 0) throw new Error("field call failed");
+    const response = JSON.parse(mutation.stdout);
+    if (response?.errors?.length || !response?.data?.updateIssueFieldValue) {
+      throw new Error("field call did not confirm success");
+    }
+  } catch (error) {
+    throw new Error(
+      `Failed to set ${context}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  let fields;
+  try {
+    const read = await call(["gh", "api", endpoint, "--jq", ".issue_field_values"]);
+    if (read.code !== 0) throw new Error("read-back failed");
+    fields = JSON.parse(read.stdout);
+    if (!Array.isArray(fields)) throw new Error("read-back is not an array of fields");
+  } catch {
+    throw new Error(`${context} is unverified: could not read back the native Priority.`);
+  }
+  const field = fields.find((value) =>
+    value && (value.issue_field_id === PRIORITY_FIELD_ID || value.issue_field_name === "Priority")
+  );
+  const actual = field?.single_select_option?.name ?? "none";
+  if (actual !== opts.priority) {
+    throw new Error(`${target}: Priority mismatch: expected "${opts.priority}", got "${actual}".`);
+  }
+  console.log(`set ${target} Priority to ${actual}; read-back verified`);
+}
 
 export async function run(args: string[], deps: Deps): Promise<number> {
   const opts = parseArgs(args);
-  if (!opts.repo || !opts.issue || opts.rest.length === 0) {
+  if (opts.priorityError) {
+    console.error(`refusing to edit: ${opts.priorityError}`);
+    return 1;
+  }
+  if (
+    opts.priority !== undefined &&
+    !Object.values(PRIORITY_MAP).some((level) => level.name === opts.priority)
+  ) {
+    console.error(
+      "refusing to edit: --priority requires Urgent, High, Medium or Low (case-sensitive).",
+    );
+    return 1;
+  }
+  if (
+    opts.priority !== undefined &&
+    (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(opts.repo ?? "") ||
+      !Number.isSafeInteger(opts.issue) || (opts.issue ?? 0) <= 0)
+  ) {
+    console.error(
+      "refusing to edit Priority: give an owner/repo and a positive integer issue number.",
+    );
+    return 1;
+  }
+  if (!opts.repo || !opts.issue || (opts.rest.length === 0 && opts.priority === undefined)) {
     console.error(USAGE);
     return 1;
   }
@@ -156,16 +242,31 @@ export async function run(args: string[], deps: Deps): Promise<number> {
   const ghArgs = ["gh", "issue", "edit", String(opts.issue), "--repo", opts.repo, ...opts.rest];
 
   if (opts.dryRun) {
-    console.log(`dry run: would edit issue via: ${ghArgs.join(" ")}`);
+    if (opts.rest.length) console.log(`dry run: would edit issue via: ${ghArgs.join(" ")}`);
+    if (opts.priority !== undefined) {
+      console.log(
+        `dry run: would set ${opts.repo}#${opts.issue} Priority to ${opts.priority} and read it back`,
+      );
+    }
     return 0;
   }
 
-  const result = await runWithRetry(deps.runCmd, ghArgs, { sleep: deps.sleep });
-  if (result.code !== 0) {
-    console.error(`gh issue edit failed after ${result.attempts} attempt(s): ${result.stderr}`);
-    return 1;
+  if (opts.rest.length) {
+    const result = await runWithRetry(deps.runCmd, ghArgs, { sleep: deps.sleep });
+    if (result.code !== 0) {
+      console.error(`gh issue edit failed after ${result.attempts} attempt(s): ${result.stderr}`);
+      return 1;
+    }
+    console.log(`edited ${opts.repo}#${opts.issue} via gh issue edit`);
   }
-  console.log(`edited ${opts.repo}#${opts.issue}`);
+  if (opts.priority !== undefined) {
+    try {
+      await setPriority(opts, deps);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
+  }
   return 0;
 }
 

@@ -89,6 +89,23 @@ export const PRIORITY_MAP: Record<string, { id: number; node_id: string; name: s
 export const PRIORITY_FIELD_ID = 3909188;
 export const PRIORITY_FIELD_NODE_ID = "IFSS_kgDOADumRA";
 
+/** Shared native Priority mutation used by creation and guarded edits. */
+export function priorityMutation(issueNodeId: string, optionNodeId: string): string {
+  return `
+      mutation SetPriority {
+        updateIssueFieldValue(input: {
+          issueId: ${JSON.stringify(issueNodeId)},
+          issueField: {
+            fieldId: "${PRIORITY_FIELD_NODE_ID}",
+            singleSelectOptionId: ${JSON.stringify(optionNodeId)}
+          }
+        }) {
+          clientMutationId
+        }
+      }
+    `;
+}
+
 export function parseArgs(args: string[]): CreateIssueOptions {
   const options: CreateIssueOptions = {
     title: "",
@@ -786,19 +803,7 @@ export async function createIssueAndVerify(
       throw new Error(`Could not resolve child issue node ID for #${childNumber}`);
     }
 
-    const prioMutation = `
-      mutation SetPriority {
-        updateIssueFieldValue(input: {
-          issueId: "${childNodeId}",
-          issueField: {
-            fieldId: "${PRIORITY_FIELD_NODE_ID}",
-            singleSelectOptionId: "${spec.node_id}"
-          }
-        }) {
-          clientMutationId
-        }
-      }
-    `;
+    const prioMutation = priorityMutation(childNodeId, spec.node_id);
 
     const pRes = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${prioMutation}`]);
     if (pRes.code !== 0) {
