@@ -1891,6 +1891,36 @@ Deno.test("findParentConversation unit tests: returns none, found, and rejected 
     await Deno.writeTextFile(msgB, makeHelperCreationMessage("conv-child", "parent-b"));
     const resCompeting = findParentConversation(transcriptPath, "conv-child");
     assertEquals(resCompeting.outcome, "rejected");
+
+    // 7. Malformed JSON message -> indeterminate
+    await Deno.remove(msgA);
+    await Deno.remove(msgB);
+    const malformedMsg = join(messagesDir, "malformed.json");
+    await Deno.writeTextFile(malformedMsg, '{"recipient": "conv-child"'); // missing closing brace
+    const resMalformed = findParentConversation(transcriptPath, "conv-child");
+    assertEquals(resMalformed.outcome, "indeterminate");
+
+    // 8. Unreadable message file -> indeterminate
+    await Deno.remove(malformedMsg);
+    const unreadableMsg = join(messagesDir, "unreadable.json");
+    await Deno.writeTextFile(unreadableMsg, makeHelperCreationMessage("conv-child", "conv-parent"));
+    await Deno.chmod(unreadableMsg, 0);
+    try {
+      const resUnreadableFile = findParentConversation(transcriptPath, "conv-child");
+      assertEquals(resUnreadableFile.outcome, "indeterminate");
+    } finally {
+      await Deno.chmod(unreadableMsg, 0o644);
+      await Deno.remove(unreadableMsg);
+    }
+
+    // 9. Unreadable messages directory -> indeterminate
+    await Deno.chmod(messagesDir, 0);
+    try {
+      const resUnreadableDir = findParentConversation(transcriptPath, "conv-child");
+      assertEquals(resUnreadableDir.outcome, "indeterminate");
+    } finally {
+      await Deno.chmod(messagesDir, 0o755);
+    }
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
@@ -2430,6 +2460,376 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: does NOT rewrite helper command when
       undefined,
       "E2E hook must NOT rewrite command when helper ancestry was rejected",
     );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Full-handler regression: helper launch prompt /pr-review + malformed JSON in creation msg -> allow, NO rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-regress-malformed-json-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "child-helper-456";
+
+    const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(parentLogs, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/config" }),
+        makeAuthenticCreationResult(helperId),
+      ].join("\n") + "\n",
+    );
+
+    const childLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const childMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(childLogs, { recursive: true });
+    await Deno.mkdir(childMsgs, { recursive: true });
+    const childTranscript = join(childLogs, "transcript.jsonl");
+    await Deno.writeTextFile(childTranscript, SLASH_COMMAND_CHILD_LAUNCH_ENTRY + "\n");
+
+    // Malformed JSON (truncated closing brace)
+    const validJsonStr = makeHelperCreationMessage(helperId, parentId);
+    const malformedJsonStr = validJsonStr.slice(0, validJsonStr.lastIndexOf("}"));
+    await Deno.writeTextFile(join(childMsgs, "msg.json"), malformedJsonStr);
+
+    const isRunOpen = isSkillRunOpen(
+      childTranscript,
+      helperId,
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(isRunOpen.outcome, "cannot_tell");
+
+    const payload = {
+      toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+      transcriptPath: childTranscript,
+      conversationId: helperId,
+    };
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite,
+      undefined,
+      "Malformed inbox message must NOT authorize synthetic /pr-review",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Full-handler regression: helper launch prompt /pr-review + unreadable creation msg file -> allow, NO rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-regress-unreadable-file-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "child-helper-456";
+
+    const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(parentLogs, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/config" }),
+        makeAuthenticCreationResult(helperId),
+      ].join("\n") + "\n",
+    );
+
+    const childLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const childMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(childLogs, { recursive: true });
+    await Deno.mkdir(childMsgs, { recursive: true });
+    const childTranscript = join(childLogs, "transcript.jsonl");
+    await Deno.writeTextFile(childTranscript, SLASH_COMMAND_CHILD_LAUNCH_ENTRY + "\n");
+
+    const msgFile = join(childMsgs, "msg.json");
+    await Deno.writeTextFile(msgFile, makeHelperCreationMessage(helperId, parentId));
+    await Deno.chmod(msgFile, 0);
+
+    try {
+      const isRunOpen = isSkillRunOpen(
+        childTranscript,
+        helperId,
+        MOCK_PLUGIN_SKILLS,
+        MOCK_USER_SKILLS,
+      );
+      assertEquals(isRunOpen.outcome, "cannot_tell");
+
+      const payload = {
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+        transcriptPath: childTranscript,
+        conversationId: helperId,
+      };
+      const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+      assertEquals(res.decision, "allow");
+      assertEquals(
+        res.overwrite,
+        undefined,
+        "Unreadable inbox message must NOT authorize synthetic /pr-review",
+      );
+    } finally {
+      await Deno.chmod(msgFile, 0o644);
+    }
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Full-handler regression: helper launch prompt /pr-review + inbox directory read failure -> allow, NO rewrite", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-regress-unreadable-dir-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "child-helper-456";
+
+    const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(parentLogs, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/config" }),
+        makeAuthenticCreationResult(helperId),
+      ].join("\n") + "\n",
+    );
+
+    const childLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const childMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(childLogs, { recursive: true });
+    await Deno.mkdir(childMsgs, { recursive: true });
+    const childTranscript = join(childLogs, "transcript.jsonl");
+    await Deno.writeTextFile(childTranscript, SLASH_COMMAND_CHILD_LAUNCH_ENTRY + "\n");
+
+    await Deno.chmod(childMsgs, 0);
+
+    try {
+      const isRunOpen = isSkillRunOpen(
+        childTranscript,
+        helperId,
+        MOCK_PLUGIN_SKILLS,
+        MOCK_USER_SKILLS,
+      );
+      assertEquals(isRunOpen.outcome, "cannot_tell");
+
+      const payload = {
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+        transcriptPath: childTranscript,
+        conversationId: helperId,
+      };
+      const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+      assertEquals(res.decision, "allow");
+      assertEquals(
+        res.overwrite,
+        undefined,
+        "Unreadable inbox directory must NOT authorize synthetic /pr-review",
+      );
+    } finally {
+      await Deno.chmod(childMsgs, 0o755);
+    }
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Full-handler preservation: legitimate top-level conversation with no messages dir + /pr-review -> REWRITES pwd", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-preserv-no-msgs-" });
+  try {
+    const convId = "top-level-conv";
+    const logsDir = join(tmpDir, convId, ".system_generated", "logs");
+    await Deno.mkdir(logsDir, { recursive: true });
+    const transcriptPath = join(logsDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      transcriptPath,
+      JSON.stringify({
+        type: "USER_INPUT",
+        content: "/pr-review https://github.com/WebJamApps/web-jam-tools/pull/1323",
+      }) + "\n",
+    );
+
+    const isRunOpen = isSkillRunOpen(
+      transcriptPath,
+      convId,
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(isRunOpen.outcome, "open");
+
+    const payload = {
+      toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+      transcriptPath,
+      conversationId: convId,
+    };
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Full-handler preservation: legitimate top-level conversation with empty messages dir + /pr-review -> REWRITES pwd", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-preserv-empty-msgs-" });
+  try {
+    const convId = "top-level-conv-empty";
+    const logsDir = join(tmpDir, convId, ".system_generated", "logs");
+    const msgsDir = join(tmpDir, convId, ".system_generated", "messages");
+    await Deno.mkdir(logsDir, { recursive: true });
+    await Deno.mkdir(msgsDir, { recursive: true });
+    const transcriptPath = join(logsDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      transcriptPath,
+      JSON.stringify({
+        type: "USER_INPUT",
+        content: "/pr-review https://github.com/WebJamApps/web-jam-tools/pull/1323",
+      }) + "\n",
+    );
+
+    const isRunOpen = isSkillRunOpen(
+      transcriptPath,
+      convId,
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(isRunOpen.outcome, "open");
+
+    const payload = {
+      toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+      transcriptPath,
+      conversationId: convId,
+    };
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("E2E hooks/agy-skill-run-hook.sh: does NOT rewrite helper command when creation message is malformed even if child holds /pr-review", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-e2e-malformed-" });
+  try {
+    const parentId = "parent-conv-e2e-malformed";
+    const helperId = "helper-conv-e2e-malformed";
+
+    const pluginSkillsDir = join(tmpDir, "plugin-skills");
+    const userSkillsDir = join(tmpDir, "user-skills");
+    await Deno.mkdir(join(pluginSkillsDir, "pr-review"), { recursive: true });
+    await Deno.mkdir(userSkillsDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(pluginSkillsDir, "pr-review", "SKILL.md"),
+      "# pr-review skill\n",
+    );
+
+    const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(parentLogs, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/config" }),
+        makeAuthenticCreationResult(helperId),
+      ].join("\n") + "\n",
+    );
+
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMsgs, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(helperTranscript, SLASH_COMMAND_CHILD_LAUNCH_ENTRY + "\n");
+
+    // Malformed JSON (truncated closing brace)
+    const validJsonStr = makeHelperCreationMessage(helperId, parentId);
+    await Deno.writeTextFile(
+      join(helperMsgs, "msg.json"),
+      validJsonStr.slice(0, validJsonStr.lastIndexOf("}")),
+    );
+
+    const payload = {
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "git status" },
+      },
+      transcriptPath: helperTranscript,
+      conversationId: helperId,
+    };
+
+    const res = await runHookScript(payload, {
+      AGY_PLUGIN_SKILLS_DIR: pluginSkillsDir,
+      AGY_USER_SKILLS_DIR: userSkillsDir,
+    });
+    assertEquals(res.code, 0);
+    assertEquals(res.parsed.decision, "allow");
+    assertEquals(
+      res.parsed.overwrite,
+      undefined,
+      "E2E hook must NOT rewrite command when helper creation message is malformed",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("E2E hooks/agy-skill-run-hook.sh: does NOT rewrite helper command when inbox directory is unreadable even if child holds /pr-review", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-e2e-unreadable-dir-" });
+  try {
+    const parentId = "parent-conv-e2e-unread-dir";
+    const helperId = "helper-conv-e2e-unread-dir";
+
+    const pluginSkillsDir = join(tmpDir, "plugin-skills");
+    const userSkillsDir = join(tmpDir, "user-skills");
+    await Deno.mkdir(join(pluginSkillsDir, "pr-review"), { recursive: true });
+    await Deno.mkdir(userSkillsDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(pluginSkillsDir, "pr-review", "SKILL.md"),
+      "# pr-review skill\n",
+    );
+
+    const parentLogs = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentLogs, { recursive: true });
+    await Deno.writeTextFile(
+      join(parentLogs, "transcript.jsonl"),
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/config" }),
+        makeAuthenticCreationResult(helperId),
+      ].join("\n") + "\n",
+    );
+
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMsgs = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMsgs, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(helperTranscript, SLASH_COMMAND_CHILD_LAUNCH_ENTRY + "\n");
+
+    await Deno.chmod(helperMsgs, 0);
+
+    try {
+      const payload = {
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "git status" },
+        },
+        transcriptPath: helperTranscript,
+        conversationId: helperId,
+      };
+
+      const res = await runHookScript(payload, {
+        AGY_PLUGIN_SKILLS_DIR: pluginSkillsDir,
+        AGY_USER_SKILLS_DIR: userSkillsDir,
+      });
+      assertEquals(res.code, 0);
+      assertEquals(res.parsed.decision, "allow");
+      assertEquals(
+        res.parsed.overwrite,
+        undefined,
+        "E2E hook must NOT rewrite command when inbox directory is unreadable",
+      );
+    } finally {
+      await Deno.chmod(helperMsgs, 0o755);
+    }
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }

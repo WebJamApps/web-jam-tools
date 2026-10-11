@@ -346,6 +346,20 @@ rules and do not reconstruct them from memory or from this file.
       keeping `userMessages` empty). Test suites must include full-handler regressions where the
       helper's synthetic launch prompt contains a slash command (e.g. `/pr-review`) across every
       refusal case, verifying that rejected ancestry never rewrites or authorizes commands.
+    - **Preserve Indeterminate Ancestry on Helper Message Read and Parse Failures:** When inspecting
+      a helper's message inbox to discover its parent conversation, reading errors (such as
+      permissions or I/O failures when reading the messages directory or individual message files)
+      and parsing errors (such as malformed or truncated JSON in a message file) must never be
+      silently ignored or collapsed into a genuine starting conversation (`outcome: "none"`). Doing
+      so creates an approval bypass by allowing a helper whose creation message is malformed or
+      unreadable to fall through to direct-user evaluation, where its synthetic launch prompt (e.g.
+      `/pr-review`) would be treated as Josh's approval. Instead, read and parse failures must be
+      preserved and propagated as indeterminate ancestry (`outcome: "indeterminate"` /
+      `cannot_tell`), returning allow without rewriting (`overwrite: undefined`) while strictly
+      preserving the legitimate top-level/no-messages case (where the messages directory does not
+      exist or is empty). Test suites must include unit, full-handler, and E2E regressions covering
+      unreadable message directories, unreadable files, and malformed JSON messages with slash-command
+      launch prompts.
 
 ## Opening pull requests (all WebJamApps repos)
 

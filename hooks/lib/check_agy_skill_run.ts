@@ -175,7 +175,11 @@ export function readTranscript(
     const convId = getConversationIdFromTranscriptPath(transcriptPath);
     if (convId) {
       const parentInfo = findParentConversation(transcriptPath, convId);
-      if (parentInfo.outcome === "found" || parentInfo.outcome === "rejected") {
+      if (
+        parentInfo.outcome === "found" ||
+        parentInfo.outcome === "rejected" ||
+        parentInfo.outcome === "indeterminate"
+      ) {
         isHelper = true;
       }
     }
@@ -371,6 +375,7 @@ export function isHelperCreationMessage(
 export type ParentConversationResult =
   | { outcome: "found"; parentId: string }
   | { outcome: "rejected"; reason: string }
+  | { outcome: "indeterminate"; reason: string }
   | { outcome: "none" };
 
 /**
@@ -380,22 +385,37 @@ export type ParentConversationResult =
  * - { outcome: "found", parentId } when exactly one authentic parent creation message exists
  * - { outcome: "rejected", reason } when helper creation evidence exists but was rejected (e.g. missing recipient,
  *   mismatched recipient, competing senders, invalid sender)
+ * - { outcome: "indeterminate", reason } when reading helper messages or message directory fails or message is malformed
  * - { outcome: "none" } when no helper creation evidence exists (genuine starting conversation where Josh typed)
  */
 export function findParentConversation(
   transcriptPath: string,
   conversationId?: string,
 ): ParentConversationResult {
-  if (!conversationId) {
+  const targetId = conversationId ?? getConversationIdFromTranscriptPath(transcriptPath);
+  if (!targetId) {
     return { outcome: "none" };
   }
   const messagesDir = getMessagesDir(transcriptPath);
   let entries: Deno.DirEntry[];
   try {
     entries = [...Deno.readDirSync(messagesDir)];
-  } catch {
-    // messagesDir does not exist or is unreadable -> genuine starting conversation with no helper messages
-    return { outcome: "none" };
+  } catch (err) {
+    if (
+      err instanceof Deno.errors.NotFound ||
+      (typeof err === "object" && err !== null && "code" in err &&
+        (err as { code?: unknown }).code === "ENOENT")
+    ) {
+      // messagesDir does not exist -> genuine starting conversation with no helper messages
+      return { outcome: "none" };
+    }
+    // messagesDir exists but cannot be read (permission denied, I/O error, etc.) -> indeterminate ancestry
+    return {
+      outcome: "indeterminate",
+      reason: `failed to read messages directory: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
   }
 
   const parentIds = new Set<string>();
@@ -405,20 +425,36 @@ export function findParentConversation(
   for (const entry of entries) {
     if (entry.isFile && entry.name.endsWith(".json")) {
       const msgPath = join(messagesDir, entry.name);
+      let content: string;
       try {
-        const content = Deno.readTextFileSync(msgPath);
-        const parsed = JSON.parse(content);
-        const check = isHelperCreationMessage(parsed, conversationId);
-        if (check.isCreationAttempt) {
-          creationAttempts++;
-          if (check.valid && check.parentId) {
-            parentIds.add(check.parentId);
-          } else {
-            rejectionReasons.push(check.reason ?? "invalid helper creation message");
-          }
+        content = Deno.readTextFileSync(msgPath);
+      } catch (err) {
+        return {
+          outcome: "indeterminate",
+          reason: `failed to read message file ${entry.name}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(content);
+      } catch (err) {
+        return {
+          outcome: "indeterminate",
+          reason: `unparseable message file ${entry.name}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+      const check = isHelperCreationMessage(parsed, targetId);
+      if (check.isCreationAttempt) {
+        creationAttempts++;
+        if (check.valid && check.parentId) {
+          parentIds.add(check.parentId);
+        } else {
+          rejectionReasons.push(check.reason ?? "invalid helper creation message");
         }
-      } catch {
-        // ignore unparseable message file
       }
     }
   }
@@ -589,6 +625,11 @@ export function isSkillRunOpen(
 
   while (stepsUp <= MAX_STEPS_UP) {
     const parentInfo = findParentConversation(currentTranscript, currentId);
+
+    // If helper ancestry is indeterminate (message directory read failure or malformed message):
+    if (parentInfo.outcome === "indeterminate") {
+      return { outcome: "cannot_tell" };
+    }
 
     // If helper ancestry was rejected (e.g. mismatched recipient, missing recipient, competing parents):
     if (parentInfo.outcome === "rejected") {
