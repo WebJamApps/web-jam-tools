@@ -320,11 +320,13 @@ rules and do not reconstruct them from memory or from this file.
       traffic or incidental transcript mentions. The child agent's message inbox must strictly
       verify that the message is a genuine helper creation message (`invoke_subagent`) directed
       specifically to this helper's conversation ID, rejecting ordinary inter-agent messages
-      (`send_message`), mismatched recipients, or competing messages claiming conflicting parent
-      IDs. Reciprocally, the parent conversation record must be validated against structured
-      helper-creation results (such as `invoke_subagent` response blocks declaring `conversationId`),
-      strictly refusing loose raw substring containment checks that can be falsely satisfied by
-      incidental ID mentions in unrelated prose.
+      (`send_message`), missing or non-string recipients, mismatched recipients, or competing
+      messages claiming conflicting parent IDs. Reciprocally, the parent conversation record must
+      be validated against structured helper-creation results (such as authentic `invoke_subagent`
+      tool execution entries matching recognized creation header formats like `Created the following subagents:`
+      declaring the `conversationId`), strictly refusing loose raw substring containment, generic
+      model entries, assistant examples in planner responses, or unrelated JSON/status responses
+      containing the ID.
 
 ## Opening pull requests (all WebJamApps repos)
 

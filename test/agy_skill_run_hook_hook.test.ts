@@ -20,6 +20,8 @@ import {
   handlePreToolUse,
   type HookResult,
   INSTALLED_SCRIPT_PATH,
+  isHelperCreationMessage,
+  isHelperCreationResult,
   isSkillRunOpen,
   rewriteCommand,
 } from "../hooks/lib/check_agy_skill_run.ts";
@@ -251,7 +253,7 @@ Deno.test("Helper agent: holds nothing Josh typed, message folder names starting
     const parentContent = [
       JSON.stringify({ type: "USER_INPUT", content: "/work-issue web-jam-tools#1304" }),
       JSON.stringify({
-        type: "PLANNER_RESPONSE",
+        type: "GENERIC",
         content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
       }),
     ].join("\n");
@@ -606,6 +608,373 @@ Deno.test("Helper agent: message with mismatched recipient -> not open", async (
 
     const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
     assertEquals(res.outcome, "not_open");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("isHelperCreationResult unit tests: accepts authentic creation, rejects status/example/prose", () => {
+  const childId = "child-probe-999";
+  // Authentic generic tool result
+  assertEquals(
+    isHelperCreationResult(
+      {
+        type: "GENERIC",
+        content: `Created the following subagents:\n{\n  "conversationId": "${childId}"\n}`,
+      },
+      childId,
+    ),
+    true,
+  );
+
+  // Status lookup generic entry -> false
+  assertEquals(
+    isHelperCreationResult(
+      {
+        type: "GENERIC",
+        content: `Status lookup returned {"conversationId":"${childId}"}`,
+      },
+      childId,
+    ),
+    false,
+  );
+
+  // Assistant planner response example -> false
+  assertEquals(
+    isHelperCreationResult(
+      {
+        type: "PLANNER_RESPONSE",
+        content: `Created the following subagents:\n{"conversationId": "${childId}"}`,
+      },
+      childId,
+    ),
+    false,
+  );
+
+  // Assistant model speech with JSON -> false
+  assertEquals(
+    isHelperCreationResult(
+      {
+        source: "MODEL",
+        type: "PLANNER_RESPONSE",
+        content: `Subagent launched with {"conversationId":"${childId}"}`,
+      },
+      childId,
+    ),
+    false,
+  );
+
+  // User input containing creation text -> false
+  assertEquals(
+    isHelperCreationResult(
+      {
+        type: "USER_INPUT",
+        content: `Created the following subagents:\n{"conversationId": "${childId}"}`,
+      },
+      childId,
+    ),
+    false,
+  );
+});
+
+Deno.test("Helper agent: unrelated JSON/status response containing helper ID in parent transcript -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-status-json-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "child-probe";
+
+    // Parent holds /pr-review and a generic entry with status lookup JSON
+    const parentDir = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentDir, { recursive: true });
+    const parentTranscript = join(parentDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      parentTranscript,
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({
+          type: "GENERIC",
+          content: `Status lookup returned {"conversationId":"${helperId}"}`,
+        }),
+      ].join("\n"),
+    );
+
+    // Child inbox has creation metadata
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Helper running pwd" }) + "\n",
+    );
+
+    const msgFile = join(helperMessages, "msg-1.json");
+    await Deno.writeTextFile(
+      msgFile,
+      JSON.stringify({
+        recipient: helperId,
+        sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
+    );
+
+    const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.outcome, "not_open");
+
+    const hookRes = handlePreToolUse(
+      {
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+        transcriptPath: helperTranscript,
+        conversationId: helperId,
+      },
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(hookRes.decision, "allow");
+    assertEquals(
+      hookRes.overwrite,
+      undefined,
+      "Unrelated status response must NOT trigger command rewrite",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper agent: assistant example containing helper ID in parent transcript -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-assistant-example-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "child-probe";
+
+    // Parent holds /pr-review and an assistant example in PLANNER_RESPONSE
+    const parentDir = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentDir, { recursive: true });
+    const parentTranscript = join(parentDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      parentTranscript,
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({
+          type: "PLANNER_RESPONSE",
+          content:
+            `For example, you could see:\nCreated the following subagents:\n{"conversationId": "${helperId}"}`,
+        }),
+      ].join("\n"),
+    );
+
+    // Child inbox has creation metadata
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Helper running pwd" }) + "\n",
+    );
+
+    const msgFile = join(helperMessages, "msg-1.json");
+    await Deno.writeTextFile(
+      msgFile,
+      JSON.stringify({
+        recipient: helperId,
+        sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
+    );
+
+    const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.outcome, "not_open");
+
+    const hookRes = handlePreToolUse(
+      {
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+        transcriptPath: helperTranscript,
+        conversationId: helperId,
+      },
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(hookRes.decision, "allow");
+    assertEquals(
+      hookRes.overwrite,
+      undefined,
+      "Assistant example must NOT trigger command rewrite",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper agent: creation message without recipient property -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-missing-recipient-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "child-probe";
+
+    // Setup parent with /pr-review and authentic creation record
+    const parentDir = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentDir, { recursive: true });
+    const parentTranscript = join(parentDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      parentTranscript,
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({
+          type: "GENERIC",
+          content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
+        }),
+      ].join("\n"),
+    );
+
+    // Setup child inbox with message missing recipient property
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Helper running pwd" }) + "\n",
+    );
+
+    const msgFile = join(helperMessages, "msg-no-recipient.json");
+    await Deno.writeTextFile(
+      msgFile,
+      JSON.stringify({
+        sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
+    );
+
+    const msgCheck = isHelperCreationMessage({
+      sender: parentId,
+      sourceMetadata: {
+        tool: {
+          conversationId: parentId,
+          toolCall: { name: "invoke_subagent" },
+        },
+      },
+    }, helperId);
+    assertEquals(msgCheck.valid, false, "Missing recipient must be invalid");
+
+    const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.outcome, "not_open");
+
+    const hookRes = handlePreToolUse(
+      {
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+        transcriptPath: helperTranscript,
+        conversationId: helperId,
+      },
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(hookRes.decision, "allow");
+    assertEquals(
+      hookRes.overwrite,
+      undefined,
+      "Missing recipient message must NOT trigger command rewrite",
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Helper agent: creation message with non-string recipient -> not open", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-helper-nonstring-recipient-" });
+  try {
+    const parentId = "parent-conv-123";
+    const helperId = "child-probe";
+
+    // Setup parent with /pr-review and authentic creation record
+    const parentDir = join(tmpDir, parentId, ".system_generated", "logs");
+    await Deno.mkdir(parentDir, { recursive: true });
+    const parentTranscript = join(parentDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      parentTranscript,
+      [
+        JSON.stringify({ type: "USER_INPUT", content: "/pr-review" }),
+        JSON.stringify({
+          type: "GENERIC",
+          content: `Created the following subagents:\n{"conversationId": "${helperId}"}`,
+        }),
+      ].join("\n"),
+    );
+
+    // Setup child inbox with message with non-string recipient
+    const helperLogs = join(tmpDir, helperId, ".system_generated", "logs");
+    const helperMessages = join(tmpDir, helperId, ".system_generated", "messages");
+    await Deno.mkdir(helperLogs, { recursive: true });
+    await Deno.mkdir(helperMessages, { recursive: true });
+    const helperTranscript = join(helperLogs, "transcript.jsonl");
+    await Deno.writeTextFile(
+      helperTranscript,
+      JSON.stringify({ type: "PLANNER_RESPONSE", content: "Helper running pwd" }) + "\n",
+    );
+
+    const msgFile = join(helperMessages, "msg-nonstring-recipient.json");
+    await Deno.writeTextFile(
+      msgFile,
+      JSON.stringify({
+        recipient: 12345,
+        sender: parentId,
+        sourceMetadata: {
+          tool: {
+            conversationId: parentId,
+            toolCall: { name: "invoke_subagent" },
+          },
+        },
+      }),
+    );
+
+    const msgCheck = isHelperCreationMessage({
+      recipient: 12345,
+      sender: parentId,
+      sourceMetadata: {
+        tool: {
+          conversationId: parentId,
+          toolCall: { name: "invoke_subagent" },
+        },
+      },
+    }, helperId);
+    assertEquals(msgCheck.valid, false, "Non-string recipient must be invalid");
+
+    const res = isSkillRunOpen(helperTranscript, helperId, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.outcome, "not_open");
+
+    const hookRes = handlePreToolUse(
+      {
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+        transcriptPath: helperTranscript,
+        conversationId: helperId,
+      },
+      MOCK_PLUGIN_SKILLS,
+      MOCK_USER_SKILLS,
+    );
+    assertEquals(hookRes.decision, "allow");
+    assertEquals(
+      hookRes.overwrite,
+      undefined,
+      "Non-string recipient message must NOT trigger command rewrite",
+    );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
