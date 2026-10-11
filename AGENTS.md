@@ -482,7 +482,7 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
     contained execution work (coding, running test suites, branch/PR creation).
   - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct
     the subagent to pass `--author` matching its actual model tier (e.g.
-    `--author "Claude Code — Haiku 4.5"` for Haiku subagents) when calling `create-draft-pr.sh`.
+    `--author "Claude Code — Haiku 5.5"` for Haiku subagents) when calling `create-draft-pr.sh`.
 
 ## System Setup
 

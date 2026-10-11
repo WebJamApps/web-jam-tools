@@ -176,7 +176,7 @@ usage() {
 ROSTER=(
   "Gemini Flash"
   "Claude Sonnet 5.5"
-  "Claude Haiku 4.5"
+  "Claude Haiku 5.5"
   # Unversioned on purpose (Josh, 2026-07-26): the roster exists to stop a
   # model confabulating its checkpoint, and Opus ships new checkpoints faster
   # than this list gets updated — pinning a version only produced a stale

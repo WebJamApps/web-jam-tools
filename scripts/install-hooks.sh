@@ -840,6 +840,11 @@ AGY_PROMPT_WATCH_DEST="$HOOKS_DEST/agy-prompt-watch.sh"
 # shellcheck disable=SC2016
 AGY_PROMPT_WATCH_COMMAND='$HOME/.claude/hooks/agy-prompt-watch.sh'
 
+# Haiku effort comes from the same versioned settings the agents launcher reads.
+# Only its effort is merged; settings for other models and unrelated keys are preserved.
+MODEL_SETTINGS_JSON="$(jq -ce '.modelSettings | select(type == "object")' "$REPO_DIR/scripts/claude-settings.json")"
+merge_model_settings_args=("$MODEL_SETTINGS_JSON")
+
 # --- autoMode (web-jam-tools#1189 follow-up) ---
 # The "autoMode" section of Claude Code's settings.json (auto-mode classifier:
 # environment prose, allow, soft_deny; "$defaults" keeps the built-in rules).
@@ -1069,7 +1074,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     fi
   fi
 
-  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}"; then
+  if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"; then
     DRIFT=1
   fi
 
@@ -1220,7 +1225,7 @@ fi
 # sandboxed via --hooks-dir/--settings-path or a redirected $HOME, in
 # test/install_hooks_script.test.ts (web-jam-tools#273).
 
-deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}"
+deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
 

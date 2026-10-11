@@ -364,8 +364,8 @@ Deno.test("roster: the retired medium level is refused in any letter case (web-j
   }
 });
 
-Deno.test("roster match is by substring: 'Claude Code — Haiku 4.5' passes", async () => {
-  const res = await runScript(repoDir, baseArgs({ author: "Claude Code — Haiku 4.5" }));
+Deno.test("roster match is by substring: 'Claude Code — Haiku 5.5' passes", async () => {
+  const res = await runScript(repoDir, baseArgs({ author: "Claude Code — Haiku 5.5" }));
   assertEquals(res.code, 0, res.stderr);
 });
 

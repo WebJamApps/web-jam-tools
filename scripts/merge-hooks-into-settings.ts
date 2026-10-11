@@ -26,8 +26,10 @@ export function merge(settingsPath: string, args: string[]): number {
   let statusLineArgs: string[] = [];
   let autoModeArgs: string[] = [];
   let skillOverridesArgs: string[] = [];
+  let modelSettingsArgs: string[] = [];
 
   const isCheckMode = args.includes("--check");
+  const hasModelSettings = args.includes("--model-settings");
   // web-jam-tools#432 finding 9: a SessionStart or SessionEnd entry in agy's
   // hooks.json silently disables the ENTIRE hooks config on that surface —
   // not just that event, every PreToolUse guard included. install-hooks.sh
@@ -74,6 +76,7 @@ export function merge(settingsPath: string, args: string[]): number {
         "--status-line",
         "--auto-mode",
         "--skill-overrides",
+        "--model-settings",
       ],
       rest,
     );
@@ -98,6 +101,7 @@ export function merge(settingsPath: string, args: string[]): number {
     statusLineArgs = sections["--status-line"] || [];
     autoModeArgs = sections["--auto-mode"] || [];
     skillOverridesArgs = sections["--skill-overrides"] || [];
+    modelSettingsArgs = sections["--model-settings"] || [];
   }
 
   const passedLifecycle = [
@@ -115,6 +119,10 @@ export function merge(settingsPath: string, args: string[]): number {
         "script writes (measured 2026-09-28, agy 1.2.12). Remove the --session-end/head " +
         "SessionStart args from this call.",
     );
+    return 1;
+  }
+  if (forbidLifecycleHooks && hasModelSettings) {
+    console.error("error: --model-settings is Claude Code only; refusing it on the agy target.");
     return 1;
   }
 
@@ -505,7 +513,49 @@ export function merge(settingsPath: string, args: string[]): number {
     }
   }
 
-  // Secret-scan gate: check all strings in permissions, hooks, autoMode and skillOverrides for credentials
+  // Only the requested model's effort is managed; other models and per-model keys survive.
+  const changedModels: string[] = [];
+  if (hasModelSettings) {
+    let desired: unknown;
+    try {
+      if (modelSettingsArgs.length !== 1) throw new Error("expected one JSON object");
+      desired = JSON.parse(modelSettingsArgs[0]);
+    } catch {
+      console.error("error: --model-settings requires one valid JSON object.");
+      return 1;
+    }
+    if (
+      !isRecord(desired) || Object.keys(desired).length === 0 ||
+      Object.entries(desired).some(([model, entry]) =>
+        !/^[a-z0-9][a-z0-9-]*$/.test(model) || !isRecord(entry) ||
+        Object.keys(entry).length !== 1 || entry.effortLevel !== "high"
+      )
+    ) {
+      console.error(
+        "error: --model-settings requires model entries containing only effortLevel high.",
+      );
+      return 1;
+    }
+    if (data.modelSettings !== undefined && !isRecord(data.modelSettings)) {
+      console.error("error: existing modelSettings is not an object; refusing to replace it.");
+      return 1;
+    }
+    const installed: Record<string, unknown> = data.modelSettings ?? {};
+    for (const model of Object.keys(desired)) {
+      const current = installed[model];
+      if (current !== undefined && !isRecord(current)) {
+        console.error(`error: modelSettings.${model} is not an object; refusing to replace it.`);
+        return 1;
+      }
+      if (current?.effortLevel !== "high") {
+        changedModels.push(model);
+        installed[model] = { ...current, effortLevel: "high" };
+      }
+    }
+    if (changedModels.length) data.modelSettings = installed;
+  }
+
+  // Secret-scan gate: check all strings in managed sections for credentials.
   const secretFindings: string[] = [];
   if (data.permissions && typeof data.permissions === "object") {
     for (const section of ["allow", "deny", "ask"]) {
@@ -564,6 +614,10 @@ export function merge(settingsPath: string, args: string[]): number {
       secretFindings.push(`${where}: ${match}`);
     }
   });
+  forEachString(data.modelSettings, "modelSettings", (where, value) => {
+    const match = findCredentialLiteral(value);
+    if (match) secretFindings.push(`${where}: ${match}`);
+  });
 
   const targetFilename = path.basename(settingsPath);
 
@@ -601,7 +655,8 @@ export function merge(settingsPath: string, args: string[]): number {
     autoModeAdded ||
     autoModeChanged ||
     skillOverridesAdded ||
-    skillOverridesChanged;
+    skillOverridesChanged ||
+    changedModels.length > 0;
 
   if (isCheckMode) {
     if (hasDrift) {
@@ -716,6 +771,9 @@ export function merge(settingsPath: string, args: string[]): number {
           console.error(`  ${line}`);
         }
       }
+      for (const model of changedModels) {
+        console.error(`${targetFilename}: modelSettings.${model}.effortLevel must be high`);
+      }
       return 1;
     }
     console.log(
@@ -762,6 +820,9 @@ export function merge(settingsPath: string, args: string[]): number {
   }
 
   Deno.writeTextFileSync(settingsPath, JSON.stringify(data, null, 2) + "\n");
+  for (const model of changedModels) {
+    console.log(`${targetFilename}: set modelSettings.${model}.effortLevel to high`);
+  }
 
   for (const cmd of addedSession) {
     console.log(`${targetFilename}: added SessionStart hook ${cmd}`);
@@ -955,6 +1016,10 @@ function describeSkillOverridesDiff(installed: unknown, versioned: unknown): str
     }
   }
   return lines;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /** Calls fn for every string inside v, with a path such as autoMode.allow[1]. */
