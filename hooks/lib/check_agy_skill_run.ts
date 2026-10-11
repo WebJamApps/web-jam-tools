@@ -282,11 +282,14 @@ export function isHelperCreationMessage(
     };
   };
 
+  // Recipient must be a non-empty string. Missing or non-string recipients are refused.
+  if (typeof obj.recipient !== "string" || !obj.recipient) {
+    return { valid: false };
+  }
+
   // Must be targeted to this conversation if conversationId is specified
-  if (conversationId && typeof obj.recipient === "string") {
-    if (obj.recipient !== conversationId) {
-      return { valid: false };
-    }
+  if (conversationId && obj.recipient !== conversationId) {
+    return { valid: false };
   }
 
   // Must be an invoke_subagent creation message
@@ -330,6 +333,9 @@ export function findParentConversation(
   transcriptPath: string,
   conversationId?: string,
 ): { parentId: string } | null {
+  if (!conversationId) {
+    return null;
+  }
   const messagesDir = getMessagesDir(transcriptPath);
   try {
     const parentIds = new Set<string>();
@@ -396,9 +402,34 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function extractJsonBlocks(str: string): unknown[] {
+  const results: unknown[] = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (str[i] === "}") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start !== -1) {
+          try {
+            results.push(JSON.parse(str.slice(start, i + 1)));
+          } catch {
+            // ignore non-json block
+          }
+          start = -1;
+        }
+      }
+    }
+  }
+  return results;
+}
+
 /**
  * Validates whether a parent transcript entry is an authentic helper-creation result
- * confirming the launch of childId, rather than an incidental prose mention.
+ * confirming the launch of childId, rather than an incidental prose mention or unrelated JSON/status response.
  */
 export function isHelperCreationResult(
   entry: Record<string, unknown>,
@@ -407,12 +438,14 @@ export function isHelperCreationResult(
   if (!entry || typeof entry !== "object" || !childId) {
     return false;
   }
-  // User messages can never be helper-creation results
+  // Must be an authentic tool result entry (never user input or assistant planner response)
+  if (entry.type !== "GENERIC" && entry.type !== "TOOL_RESPONSE") {
+    return false;
+  }
   if (
-    entry.type === "USER_INPUT" ||
     entry.source === "USER_EXPLICIT" ||
     entry.role === "user" ||
-    entry.type === "user"
+    entry.role === "assistant"
   ) {
     return false;
   }
@@ -422,35 +455,27 @@ export function isHelperCreationResult(
     return false;
   }
 
-  // Check 1: Explicit agy subagent creation header with conversationId JSON
-  const subagentHeaderRegex = /created\s+(the\s+following\s+)?subagents?/i;
+  // Must match the recognized subagent creation header format (e.g. "Created the following subagents:" or "Created subagents:")
+  const subagentHeaderRegex = /created\s+(the\s+following\s+)?subagents?:?/i;
+  if (!subagentHeaderRegex.test(content)) {
+    return false;
+  }
+
+  // Fast pre-check for conversationId declaration
   const conversationIdRegex = new RegExp(
     `["']?conversationId["']?\\s*:\\s*["']${escapeRegex(childId)}["']`,
   );
-
-  if (subagentHeaderRegex.test(content) && conversationIdRegex.test(content)) {
-    return true;
+  if (!conversationIdRegex.test(content)) {
+    return false;
   }
 
-  // Check 2: Parsed JSON in content with conversationId === childId in subagent context
-  const jsonMatches = content.match(/\{[\s\S]*?\}/g);
-  if (jsonMatches) {
-    for (const jm of jsonMatches) {
-      try {
-        const parsed = JSON.parse(jm);
-        if (parsed && typeof parsed === "object" && parsed.conversationId === childId) {
-          if (
-            subagentHeaderRegex.test(content) ||
-            content.toLowerCase().includes("subagent") ||
-            entry.type === "TOOL_RESPONSE" ||
-            entry.type === "GENERIC" ||
-            entry.source === "MODEL"
-          ) {
-            return true;
-          }
-        }
-      } catch {
-        // ignore non-json block
+  // Must parse a JSON object that declares conversationId matching childId
+  const blocks = extractJsonBlocks(content);
+  for (const block of blocks) {
+    if (block && typeof block === "object") {
+      const record = block as Record<string, unknown>;
+      if (record.conversationId === childId) {
+        return true;
       }
     }
   }
