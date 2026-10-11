@@ -82,7 +82,7 @@ function assertDenied(stdout: string) {
 
 Deno.test("newest assistant turn on a haiku model is allowed (silent, no deny JSON)", async () => {
   await withTranscript(
-    [assistantTurn("claude-sonnet-4-6"), assistantTurn("claude-haiku-5-5")],
+    [assistantTurn("claude-sonnet-5-5"), assistantTurn("claude-haiku-5-5")],
     async (transcript_path) => {
       const res = await runHook({ transcript_path });
       assertEquals(res.code, 0);
@@ -95,7 +95,7 @@ Deno.test("Haiku main session with an interleaved Sonnet subagent entry is allow
   await withTranscript(
     [
       assistantTurn("claude-haiku-5-5"),
-      sidechainTurn("claude-sonnet-4-6"),
+      sidechainTurn("claude-sonnet-5-5"),
     ],
     async (transcript_path) => {
       const res = await runHook({ transcript_path });
@@ -109,7 +109,7 @@ Deno.test("Haiku main session with an interleaved Sonnet subagent entry is allow
 
 Deno.test("newest assistant turn on Sonnet is denied", async () => {
   await withTranscript(
-    [assistantTurn("claude-haiku-5-5"), assistantTurn("claude-sonnet-4-6")],
+    [assistantTurn("claude-haiku-5-5"), assistantTurn("claude-sonnet-5-5")],
     async (transcript_path) => {
       const res = await runHook({ transcript_path });
       assertEquals(res.code, 0);
