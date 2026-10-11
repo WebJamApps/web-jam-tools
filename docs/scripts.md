@@ -47,6 +47,23 @@ Create the input file under `/tmp/backlog-groom/`, outside every repository. Tha
 only permitted input directory; no user home, network or write permissions are granted to Deno.
 The GitHub subprocess authenticates through the existing `gh` setup.
 
+### `edit-issue.ts`
+
+Guarded edits to an existing issue. Ordinary `gh issue edit` flags pass through; native Priority
+uses the same GraphQL mutation as issue creation and is read back through REST before success.
+
+```sh
+deno task edit-issue --repo WebJamApps/web-jam-tools --issue 1329 --priority High --dry-run
+deno task edit-issue --repo WebJamApps/web-jam-tools --issue 1329 --priority High --add-label Sol
+```
+
+`--priority` accepts exactly `Urgent`, `High`, `Medium` or `Low`; invalid or missing values refuse
+before any command runs. A Priority-only edit needs no `--author`. Body replacements retain their
+author-footer, empty-body and credential guards. `--dry-run` previews the edit without GitHub calls.
+Combined edits run the pass-through edit first, then set and verify Priority, reporting both. If
+Priority fails after the other edit succeeded, the command exits nonzero; the earlier edit remains
+applied. Failed or unreadable verification also exits nonzero and does not claim a verified level.
+
 ### `skill-start-check.ts`
 
 Proves a skill still starts after its description or listing changes, on Claude Code and agy (web-jam-tools#1237).
