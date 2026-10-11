@@ -469,6 +469,128 @@ Deno.test("skills/file-issue/SKILL.md announces permission-prompt count and forb
   );
 });
 
+/**
+ * Asserts that skills/file-issue/SKILL.md rule 10 carries the four Priority level tests
+ * and the default of Medium, as stated in the design document (web-jam-tools#1347).
+ */
+export function assertFileIssueRule10PriorityLevelTests(text: string): void {
+  const rule10Match = text.match(
+    /10\.\s+\*\*Set Native Priority Field[\s\S]*?(?=\n\s*11\.\s+\*\*|$)/,
+  );
+  assert(
+    rule10Match !== null,
+    "skills/file-issue/SKILL.md must contain rule 10 ('Set Native Priority Field')",
+  );
+  const rule10 = rule10Match[0];
+
+  assert(
+    rule10.includes(
+      "Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.",
+    ),
+    "skills/file-issue/SKILL.md rule 10 must carry the Urgent level test ('Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.')",
+  );
+
+  assert(
+    rule10.includes(
+      "It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.",
+    ),
+    "skills/file-issue/SKILL.md rule 10 must carry the High level test ('It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.')",
+  );
+
+  assert(
+    rule10.includes("Nothing above fits."),
+    "skills/file-issue/SKILL.md rule 10 must carry the Medium level test ('Nothing above fits.')",
+  );
+
+  assert(
+    rule10.includes("It is nice to have, and nothing waits on it."),
+    "skills/file-issue/SKILL.md rule 10 must carry the Low level test ('It is nice to have, and nothing waits on it.')",
+  );
+
+  assert(
+    rule10.includes("Medium is the default") ||
+      (rule10.includes("This is the default.") && rule10.includes("Medium")),
+    "skills/file-issue/SKILL.md rule 10 must state the default of Medium",
+  );
+
+  assert(
+    rule10.includes(
+      "Whether other open issues are waiting on an issue is read from GitHub's native dependency links, never from body prose.",
+    ),
+    "skills/file-issue/SKILL.md rule 10 must state that open issues waiting is read from native dependency links",
+  );
+}
+
+Deno.test("skills/file-issue/SKILL.md rule 10 carries the four Priority level tests and Medium default (web-jam-tools#1347)", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  assertFileIssueRule10PriorityLevelTests(text);
+});
+
+Deno.test("assertFileIssueRule10PriorityLevelTests fails when rule 10 loses any of the four level tests or the default of Medium (web-jam-tools#1347)", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  // Fails when Urgent level test is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace(
+          "Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.",
+          "",
+        ),
+      ),
+    Error,
+    "Urgent level test",
+  );
+
+  // Fails when High level test is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace(
+          "It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.",
+          "",
+        ),
+      ),
+    Error,
+    "High level test",
+  );
+
+  // Fails when Medium level test is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace("Nothing above fits.", ""),
+      ),
+    Error,
+    "Medium level test",
+  );
+
+  // Fails when Low level test is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace("It is nice to have, and nothing waits on it.", ""),
+      ),
+    Error,
+    "Low level test",
+  );
+
+  // Fails when default of Medium is missing
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text
+          .replace("Medium is the default", "Medium is standard")
+          .replace("This is the default.", "This is standard."),
+      ),
+    Error,
+    "default of Medium",
+  );
+});
+
 Deno.test("skills/design-issue/SKILL.md contains the both-surfaces rule and refusal table entry", async () => {
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);

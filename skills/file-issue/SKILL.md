@@ -150,6 +150,16 @@ that's what following this skill prevents.
 10. **Set Native Priority Field via MCP or `create-issue.ts`, Never via `gh issue create` / `gh issue edit` — Then Verify It by Reading It Back.** Set the native `Priority` field (`Urgent`,
     `High`, `Medium`, `Low`) via GitHub MCP `issue_write` → `issue_fields` (or `set_issue_field`, or `scripts/create-issue.ts --priority <Level>`). `gh issue create`
     and `gh issue edit` cannot set native fields; never attempt to set native Priority through them. `scripts/create-issue.ts` sets it with a `gh api graphql` `updateIssueFieldValue` mutation, then re-reads the issue and exits with an error on a Priority mismatch — so a successful `create-issue.ts --priority` run is already verified and needs no second read-back. **Reading the field:** a `gh api graphql` query for it fails under the pinned `GH_TOKEN` (`INSUFFICIENT_SCOPES ... requires ... read:project`); that error means the wrong tool was used, not that Priority is unverifiable. The REST read `gh api repos/<owner>/<repo>/issues/<n> --jq '.issue_field_values'` works under that same token on both surfaces, as does the GitHub MCP read below. (On Claude Code the claude.ai GitHub connector authenticates separately from the pinned token; on agy the `github` MCP server runs on the pinned `GH_TOKEN` itself.)
+    - **Choose Priority from the level tests (Medium is the default).** A Priority level says when to work an issue. The filing agent picks the first level with a test that fits, reading from the top:
+
+      | Level | Means | Fits when any one of these is true |
+      |---|---|---|
+      | Urgent | Work this first | Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent. |
+      | High | Work this next | It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round. |
+      | Medium | Planned work | Nothing above fits. This is the default. |
+      | Low | When there is time | It is nice to have, and nothing waits on it. |
+
+      Whether other open issues are waiting on an issue is read from GitHub's native dependency links, never from body prose. In a Gate 2 plan each row takes its level from the same tests, with the plan's own rows counted as issues waiting, so the rows of a plan spread over the levels in dependency order; Josh rules on each row's level with the plan.
     - **A write response is never confirmation.** After creating the issue, read back the filed issue's Priority using the REST read `gh api repos/<owner>/<repo>/issues/<n> --jq '.issue_field_values'` (or on Claude Code, `mcp__claude_ai_GitHub_MCP__issue_read` for the one issue this run filed, or `mcp__claude_ai_GitHub_MCP__list_issues` with `fields: ["number","title","field_values"]`), and compare it against the value set. Only that read confirms the field landed.
     - **Missing or mismatched → set, then re-read.** If the read-back shows Priority missing or different from what was intended, set it again and re-read to confirm before reporting.
     - **Report it, don't report success over it.** A missing or mismatched Priority is reported to Josh explicitly — citing the issue as `repo#number "title"` with the expected and actual values — and the run does not report the filing as complete while it is unverified.
