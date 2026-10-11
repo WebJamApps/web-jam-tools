@@ -304,6 +304,62 @@ rules and do not reconstruct them from memory or from this file.
       `stdout`/`stderr` handles. Executors must cancel streams and escalate termination (SIGTERM ->
       bounded grace period -> SIGKILL). Test suites must include subprocess regressions verifying
       timely return when signals are trapped and pipes are retained.
+29. **Skill Discovery Test Directory Isolation & Strict Helper Ancestry Verification:**
+    - **Isolated Installed-Skill Fixtures in Hook & Integration Tests:** When testing hooks,
+      scripts, or CLIs that discover installed skills from default user or plugin directories (such
+      as `~/.gemini/config/plugins/...` or `~/.gemini/skills`), test suites must never depend on the
+      presence of skills in the ambient developer environment or host directories. The discovery
+      mechanism must accept directory overrides via environment variables (e.g.
+      `AGY_PLUGIN_SKILLS_DIR`, `AGY_USER_SKILLS_DIR`), and shell integration/E2E tests must
+      construct isolated temporary skill fixture directories containing mocked `SKILL.md` files so
+      that automated CI environments (such as CircleCI under `/home/circleci`) reliably discover
+      skills without host dependency.
+    - **Strict Helper Ancestry & Structured Creation Record Validation:** In multi-agent
+      conversation hierarchies, permission inheritance or skill-run state propagation across helper
+      agents must establish authentic creation ancestry rather than accepting arbitrary inter-agent
+      traffic or incidental transcript mentions. The child agent's message inbox must strictly
+      verify that the message is a genuine helper creation message (`invoke_subagent`) directed
+      specifically to this helper's conversation ID, rejecting ordinary inter-agent messages
+      (`send_message`), missing or non-string recipients, mismatched recipients, or competing
+      messages claiming conflicting parent IDs. Reciprocally, the parent conversation record must
+      be validated against structured helper-creation results (such as authentic `invoke_subagent`
+      tool execution entries matching recognized creation header formats like `Created the following subagents:`
+      declaring the `conversationId`), strictly refusing loose raw substring containment, generic
+      model entries, assistant examples in planner responses, or unrelated JSON/status responses
+      containing the ID.
+    - **Helper Synthetic Launch Input & Ancestry Traversal:** Real helper transcripts contain the
+      parent's synthetic launch prompt as `source: "USER_EXPLICIT", type: "USER_INPUT"`. Transcript
+      parsers and hook permission evaluators must distinguish a helper's synthetic launch prompt
+      from Josh's own input. When evaluating permission or skill-run inheritance, hooks must follow
+      the verified helper ancestry to the authentic starting conversation rather than prematurely
+      evaluating the helper's synthetic prompt as a direct user command and returning unapproved
+      before consulting verified creation messages and parent ancestry. Test suites must cover the
+      captured authentic helper launch format, including chained helper-of-a-helper ancestry.
+    - **Keep Rejected Helper Ancestry from Authorizing Synthetic Launch Input:** When resolving
+      helper ancestry, evaluators must strictly distinguish a genuine top-level starting
+      conversation (where Josh typed) from rejected or indeterminate helper evidence (e.g. missing
+      recipient, non-string recipient, mismatched recipient, competing senders, or parent records
+      failing reciprocal verification). If helper ancestry is rejected, the evaluator must fail
+      closed to `not_open` (allow without rewriting) and NEVER fall through to evaluate the helper's
+      synthetic launch prompt as user input. Furthermore, helper transcripts must be read with
+      helper mode active (isolating synthetic launch prompts into helper launch metadata and
+      keeping `userMessages` empty). Test suites must include full-handler regressions where the
+      helper's synthetic launch prompt contains a slash command (e.g. `/pr-review`) across every
+      refusal case, verifying that rejected ancestry never rewrites or authorizes commands.
+    - **Preserve Indeterminate Ancestry on Helper Message Read and Parse Failures:** When inspecting
+      a helper's message inbox to discover its parent conversation, reading errors (such as
+      permissions or I/O failures when reading the messages directory or individual message files)
+      and parsing errors (such as malformed or truncated JSON in a message file) must never be
+      silently ignored or collapsed into a genuine starting conversation (`outcome: "none"`). Doing
+      so creates an approval bypass by allowing a helper whose creation message is malformed or
+      unreadable to fall through to direct-user evaluation, where its synthetic launch prompt (e.g.
+      `/pr-review`) would be treated as Josh's approval. Instead, read and parse failures must be
+      preserved and propagated as indeterminate ancestry (`outcome: "indeterminate"` /
+      `cannot_tell`), returning allow without rewriting (`overwrite: undefined`) while strictly
+      preserving the legitimate top-level/no-messages case (where the messages directory does not
+      exist or is empty). Test suites must include unit, full-handler, and E2E regressions covering
+      unreadable message directories, unreadable files, and malformed JSON messages with slash-command
+      launch prompts.
 
 ## Opening pull requests (all WebJamApps repos)
 
