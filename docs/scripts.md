@@ -4,6 +4,49 @@ Index of utilities in `scripts/`. Run from the repo root unless noted.
 
 ## Workspace utilities
 
+### `backlog-groom:rank`
+
+Ranks one active repository's open issues and prints a batch of proposed native Priority moves.
+It only reads GitHub through `gh api`; it never applies the proposals.
+
+```sh
+deno task backlog-groom:rank --repo web-jam-tools --judgments /tmp/backlog-groom/judgments.json --focus gig-outreach
+deno task backlog-groom:rank --repo web-jam-tools --judgments /tmp/backlog-groom/judgments.json --json
+deno task backlog-groom:rank --help
+```
+
+The caller supplies the two judgments the design assigns to the skill's model, plus a one-line
+reason per issue. Keys are issue numbers in that repository:
+
+```json
+{
+  "1351": {
+    "liveBroken": false,
+    "costlyDefect": false,
+    "reason": "Planned ranking capability",
+    "levelFromTests": "Medium"
+  }
+}
+```
+
+`levelFromTests` is required below 20 open non-Epics: the caller selects it using
+`skills/file-issue/SKILL.md`, so this module does not duplicate those level tests. Missing or
+invalid judgments, failed GitHub reads and malformed responses refuse the run rather than making
+up facts. Parked issues and pull requests are excluded. Epics inherit the highest existing native
+Priority of their open, unparked children and are excluded from shares. An Epic with no child
+Priority supplies no proposal.
+
+Shares are rounded independently; the last band includes any rounding remainder. Overflow is
+measured from the current snapshot: more than three above a share proposes moving up to the
+excess count of eligible lowest-ranked issues down one level, without cascading those proposals
+into another level's count. Live broken issues stay Urgent and cannot be demoted.
+The JSON result includes the full ranking, current counts, shares, focus notices and proposals
+with reasons. A missing focus milestone skips that step and reports why.
+
+Create the input file under `/tmp/backlog-groom/`, outside every repository. That is the task's
+only permitted input directory; no user home, network or write permissions are granted to Deno.
+The GitHub subprocess authenticates through the existing `gh` setup.
+
 ### `skill-start-check.ts`
 
 Proves a skill still starts after its description or listing changes, on Claude Code and agy (web-jam-tools#1237).
