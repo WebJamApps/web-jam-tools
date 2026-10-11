@@ -304,6 +304,29 @@ rules and do not reconstruct them from memory or from this file.
       `stdout`/`stderr` handles. Executors must cancel streams and escalate termination (SIGTERM ->
       bounded grace period -> SIGKILL). Test suites must include subprocess regressions verifying
       timely return when signals are trapped and pipes are retained.
+29. **Skill Discovery Test Directory Isolation & Strict Helper Ancestry Verification:**
+    - **Isolated Installed-Skill Fixtures in Hook & Integration Tests:** When testing hooks,
+      scripts, or CLIs that discover installed skills from default user or plugin directories (such
+      as `~/.gemini/config/plugins/...` or `~/.gemini/skills`), test suites must never depend on the
+      presence of skills in the ambient developer environment or host directories. The discovery
+      mechanism must accept directory overrides via environment variables (e.g.
+      `AGY_PLUGIN_SKILLS_DIR`, `AGY_USER_SKILLS_DIR`), and shell integration/E2E tests must
+      construct isolated temporary skill fixture directories containing mocked `SKILL.md` files so
+      that automated CI environments (such as CircleCI under `/home/circleci`) reliably discover
+      skills without host dependency.
+    - **Strict Helper Ancestry & Structured Creation Record Validation:** In multi-agent
+      conversation hierarchies, permission inheritance or skill-run state propagation across helper
+      agents must establish authentic creation ancestry rather than accepting arbitrary inter-agent
+      traffic or incidental transcript mentions. The child agent's message inbox must strictly
+      verify that the message is a genuine helper creation message (`invoke_subagent`) directed
+      specifically to this helper's conversation ID, rejecting ordinary inter-agent messages
+      (`send_message`), missing or non-string recipients, mismatched recipients, or competing
+      messages claiming conflicting parent IDs. Reciprocally, the parent conversation record must
+      be validated against structured helper-creation results (such as authentic `invoke_subagent`
+      tool execution entries matching recognized creation header formats like `Created the following subagents:`
+      declaring the `conversationId`), strictly refusing loose raw substring containment, generic
+      model entries, assistant examples in planner responses, or unrelated JSON/status responses
+      containing the ID.
 
 ## Opening pull requests (all WebJamApps repos)
 

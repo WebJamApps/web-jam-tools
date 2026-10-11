@@ -57,6 +57,9 @@ const EXPECTED_HOOK_SCRIPTS = [
   // denies a non-Flash model chosen mid-session via agy's `modelName`
   // payload field, agy-only (Claude Code carries no such field).
   "agy-model-guard.sh",
+  // PreToolUse hook (web-jam-tools#1319) — rewrites run_command terminal commands
+  // into calls of scripts/agy-skill-run.sh when a skill run is open.
+  "agy-skill-run-hook.sh",
   "backlog-groom-reminder.sh",
   "backup-refusal-reminder.sh",
   // Unconditional send/delete fence for Gmail on the agy surface
