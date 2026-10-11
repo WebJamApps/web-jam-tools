@@ -74,8 +74,10 @@ function lastTurnModel(text: string, path: string): string {
   return model;
 }
 
-/** Resolve this session's signature, refusing any ambiguous or unreadable input. */
-export async function codexRunningModel(options: RunningModelOptions = {}): Promise<string> {
+/** Locate and read this session, refusing any ambiguous or unreadable input. */
+export async function readCodexSession(
+  options: Pick<RunningModelOptions, "env"> = {},
+): Promise<{ threadId: string; path: string; text: string }> {
   const env = options.env ?? ((name: string) => Deno.env.get(name));
   const id = env("CODEX_THREAD_ID");
   if (!id) throw new Error("Not a Codex session: CODEX_THREAD_ID is unset or empty");
@@ -106,6 +108,12 @@ export async function codexRunningModel(options: RunningModelOptions = {}): Prom
   } catch (error) {
     throw new Error(`Could not read session file ${path}: ${error}`);
   }
+  return { threadId: id, path, text };
+}
+
+/** Resolve this session's signature using the same session lookup as authorization readers. */
+export async function codexRunningModel(options: RunningModelOptions = {}): Promise<string> {
+  const { path, text } = await readCodexSession(options);
   const model = lastTurnModel(text, path);
   let roster: string[];
   try {

@@ -39,6 +39,7 @@
 
 import { dirname } from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
+import { readCodexTypedSession } from "../hooks/lib/codex_session_reader.ts";
 import {
   type ApprovalToken,
   defaultTokenPath,
@@ -411,11 +412,27 @@ export async function resolveWriteContext(
     };
   }
 
+  if (Deno.env.get("CODEX_THREAD_ID")) {
+    const session = await readCodexTypedSession();
+    if (options.sessionId !== session.threadId) {
+      throw new Error("Approval token session id does not match CODEX_THREAD_ID");
+    }
+    const call = session.latestSkillCall;
+    return {
+      // Only a real typed skill is adapted; plain prose never becomes a filing invocation.
+      entries: call
+        ? [{ type: "user", message: { role: "user", content: `/${call.name} ${call.arguments}` } }]
+        : [],
+      ownConversationId: session.threadId,
+      isSubagentInvocation: false,
+    };
+  }
+
   const claudeCode = await resolveClaudeCodeWriteContext(options.sessionId);
   if (claudeCode) return claudeCode;
 
   const antigravity = await resolveAntigravityWriteContext();
-  if (antigravity) return antigravity;
+  if (antigravity && antigravity.ownConversationId === options.sessionId) return antigravity;
 
   return { entries: [], ownConversationId: null, isSubagentInvocation: false };
 }
@@ -458,7 +475,7 @@ if (import.meta.main) {
 
 Options:
   -s, --session-id <id>     Session ID that received plan-gate approval (defaults to
-                            $CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, or $SESSION_ID)
+                            $CODEX_THREAD_ID, $CLAUDE_CODE_SESSION_ID, $CLAUDE_SESSION_ID, or $SESSION_ID)
   -r, --repo <owner/repo>   Target repository (e.g. WebJamApps/web-jam-tools)
   -t, --title <title>       Approved issue title (can be repeated)
   --titles <list|json>      Approved titles as JSON array or comma-separated list
@@ -474,6 +491,7 @@ Options:
     }
 
     const sessionId = args["session-id"] ||
+      Deno.env.get("CODEX_THREAD_ID") ||
       Deno.env.get("CLAUDE_CODE_SESSION_ID") ||
       Deno.env.get("CLAUDE_SESSION_ID") ||
       Deno.env.get("SESSION_ID") ||
@@ -533,7 +551,7 @@ Options:
     // were a working proof-of-concept of that). These env vars are never read from --help, never
     // documented for normal use, and a real invocation never sets them — same seam convention as
     // STATUSLINE_DOWNSTREAM_CMD in docs/scripts.md. Real invocations always go through
-    // resolveClaudeCodeWriteContext/resolveAntigravityWriteContext auto-discovery below.
+    // the surface-specific auto-discovery in resolveWriteContext above.
     const testTranscriptPath = Deno.env.get(
       "WRITE_ISSUE_APPROVAL_TOKEN_TEST_TRANSCRIPT_PATH",
     );
