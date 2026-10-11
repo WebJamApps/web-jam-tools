@@ -335,6 +335,17 @@ rules and do not reconstruct them from memory or from this file.
       evaluating the helper's synthetic prompt as a direct user command and returning unapproved
       before consulting verified creation messages and parent ancestry. Test suites must cover the
       captured authentic helper launch format, including chained helper-of-a-helper ancestry.
+    - **Keep Rejected Helper Ancestry from Authorizing Synthetic Launch Input:** When resolving
+      helper ancestry, evaluators must strictly distinguish a genuine top-level starting
+      conversation (where Josh typed) from rejected or indeterminate helper evidence (e.g. missing
+      recipient, non-string recipient, mismatched recipient, competing senders, or parent records
+      failing reciprocal verification). If helper ancestry is rejected, the evaluator must fail
+      closed to `not_open` (allow without rewriting) and NEVER fall through to evaluate the helper's
+      synthetic launch prompt as user input. Furthermore, helper transcripts must be read with
+      helper mode active (isolating synthetic launch prompts into helper launch metadata and
+      keeping `userMessages` empty). Test suites must include full-handler regressions where the
+      helper's synthetic launch prompt contains a slash command (e.g. `/pr-review`) across every
+      refusal case, verifying that rejected ancestry never rewrites or authorizes commands.
 
 ## Opening pull requests (all WebJamApps repos)
 

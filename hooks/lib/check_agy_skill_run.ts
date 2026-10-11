@@ -170,6 +170,17 @@ export function readTranscript(
     return { canRead: false, validJson: false, rawText: "", userMessages: [], entries: [] };
   }
 
+  let isHelper = options?.isHelper;
+  if (isHelper === undefined) {
+    const convId = getConversationIdFromTranscriptPath(transcriptPath);
+    if (convId) {
+      const parentInfo = findParentConversation(transcriptPath, convId);
+      if (parentInfo.outcome === "found" || parentInfo.outcome === "rejected") {
+        isHelper = true;
+      }
+    }
+  }
+
   const lines = rawText.split("\n");
   const userMessages: string[] = [];
   const entries: Record<string, unknown>[] = [];
@@ -217,8 +228,10 @@ export function readTranscript(
       const reqMatch = content.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
       const extractedContent = reqMatch ? reqMatch[1] : content;
 
-      if (options?.isHelper && helperLaunchPrompt === undefined) {
-        helperLaunchPrompt = extractedContent;
+      if (isHelper) {
+        if (helperLaunchPrompt === undefined) {
+          helperLaunchPrompt = extractedContent;
+        }
       } else {
         userMessages.push(extractedContent);
       }
@@ -273,6 +286,13 @@ export function getConversationIdFromTranscriptPath(transcriptPath: string): str
   return undefined;
 }
 
+export interface HelperCreationMessageResult {
+  valid: boolean;
+  isCreationAttempt: boolean;
+  parentId?: string;
+  reason?: string;
+}
+
 /**
  * Validates whether a parsed message JSON is an authentic helper-creation message
  * directed to the specified conversationId.
@@ -280,9 +300,9 @@ export function getConversationIdFromTranscriptPath(transcriptPath: string): str
 export function isHelperCreationMessage(
   parsed: unknown,
   conversationId?: string,
-): { valid: boolean; parentId?: string } {
+): HelperCreationMessageResult {
   if (!parsed || typeof parsed !== "object") {
-    return { valid: false };
+    return { valid: false, isCreationAttempt: false, reason: "payload is not an object" };
   }
   const obj = parsed as {
     recipient?: unknown;
@@ -295,20 +315,19 @@ export function isHelperCreationMessage(
     };
   };
 
+  const toolName = obj.sourceMetadata?.tool?.toolCall?.name;
+  if (toolName !== "invoke_subagent") {
+    return { valid: false, isCreationAttempt: false, reason: "toolCall is not invoke_subagent" };
+  }
+
   // Recipient must be a non-empty string. Missing or non-string recipients are refused.
   if (typeof obj.recipient !== "string" || !obj.recipient) {
-    return { valid: false };
+    return { valid: false, isCreationAttempt: true, reason: "missing or non-string recipient" };
   }
 
   // Must be targeted to this conversation if conversationId is specified
   if (conversationId && obj.recipient !== conversationId) {
-    return { valid: false };
-  }
-
-  // Must be an invoke_subagent creation message
-  const toolName = obj.sourceMetadata?.tool?.toolCall?.name;
-  if (toolName !== "invoke_subagent") {
-    return { valid: false };
+    return { valid: false, isCreationAttempt: true, reason: "mismatched recipient" };
   }
 
   const toolConvId = obj.sourceMetadata?.tool?.conversationId;
@@ -323,67 +342,116 @@ export function isHelperCreationMessage(
     const senderId = sender.split("/")[0];
     if (resolvedParentId && senderId !== resolvedParentId) {
       // Sender and tool.conversationId contradict each other
-      return { valid: false };
+      return {
+        valid: false,
+        isCreationAttempt: true,
+        reason: "contradictory sender and tool conversationId",
+      };
     }
     if (!resolvedParentId) {
       resolvedParentId = senderId;
     }
   }
 
-  if (!resolvedParentId || (conversationId && resolvedParentId === conversationId)) {
-    return { valid: false };
+  if (!resolvedParentId) {
+    return { valid: false, isCreationAttempt: true, reason: "missing parent conversation ID" };
   }
 
-  return { valid: true, parentId: resolvedParentId };
+  if (conversationId && resolvedParentId === conversationId) {
+    return {
+      valid: false,
+      isCreationAttempt: true,
+      reason: "self-referential parent conversation ID",
+    };
+  }
+
+  return { valid: true, isCreationAttempt: true, parentId: resolvedParentId };
 }
+
+export type ParentConversationResult =
+  | { outcome: "found"; parentId: string }
+  | { outcome: "rejected"; reason: string }
+  | { outcome: "none" };
 
 /**
  * Looks for the parent conversation in the messages directory.
  * Requires a verified helper-creation message (invoke_subagent) addressed to this helper.
- * If multiple conflicting parent IDs are found (competing senders), refuses by returning null.
+ * Returns:
+ * - { outcome: "found", parentId } when exactly one authentic parent creation message exists
+ * - { outcome: "rejected", reason } when helper creation evidence exists but was rejected (e.g. missing recipient,
+ *   mismatched recipient, competing senders, invalid sender)
+ * - { outcome: "none" } when no helper creation evidence exists (genuine starting conversation where Josh typed)
  */
 export function findParentConversation(
   transcriptPath: string,
   conversationId?: string,
-): { parentId: string } | null {
+): ParentConversationResult {
   if (!conversationId) {
-    return null;
+    return { outcome: "none" };
   }
   const messagesDir = getMessagesDir(transcriptPath);
+  let entries: Deno.DirEntry[];
   try {
-    const parentIds = new Set<string>();
+    entries = [...Deno.readDirSync(messagesDir)];
+  } catch {
+    // messagesDir does not exist or is unreadable -> genuine starting conversation with no helper messages
+    return { outcome: "none" };
+  }
 
-    for (const entry of Deno.readDirSync(messagesDir)) {
-      if (entry.isFile && entry.name.endsWith(".json")) {
-        const msgPath = join(messagesDir, entry.name);
-        try {
-          const content = Deno.readTextFileSync(msgPath);
-          const parsed = JSON.parse(content);
-          const check = isHelperCreationMessage(parsed, conversationId);
+  const parentIds = new Set<string>();
+  let creationAttempts = 0;
+  const rejectionReasons: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.isFile && entry.name.endsWith(".json")) {
+      const msgPath = join(messagesDir, entry.name);
+      try {
+        const content = Deno.readTextFileSync(msgPath);
+        const parsed = JSON.parse(content);
+        const check = isHelperCreationMessage(parsed, conversationId);
+        if (check.isCreationAttempt) {
+          creationAttempts++;
           if (check.valid && check.parentId) {
             parentIds.add(check.parentId);
+          } else {
+            rejectionReasons.push(check.reason ?? "invalid helper creation message");
           }
-        } catch {
-          // ignore unparseable message file
         }
+      } catch {
+        // ignore unparseable message file
       }
     }
-
-    if (parentIds.size === 0) {
-      return null;
-    }
-
-    // Competing senders claiming different parent IDs -> ambiguous / refuse
-    if (parentIds.size > 1) {
-      return null;
-    }
-
-    const [parentId] = parentIds;
-    return { parentId };
-  } catch {
-    // messagesDir does not exist or is unreadable
-    return null;
   }
+
+  // Competing senders claiming different parent IDs -> ambiguous / refuse
+  if (parentIds.size > 1) {
+    return { outcome: "rejected", reason: "competing parent conversation IDs" };
+  }
+
+  // If there was a rejected creation attempt alongside a valid one -> ambiguous / refuse
+  if (parentIds.size === 1 && rejectionReasons.length > 0) {
+    return {
+      outcome: "rejected",
+      reason: `conflicting creation attempts: ${rejectionReasons.join("; ")}`,
+    };
+  }
+
+  // If there were creation attempts, but none was valid -> refuse
+  if (creationAttempts > 0 && parentIds.size === 0) {
+    return {
+      outcome: "rejected",
+      reason: rejectionReasons.join("; ") || "invalid helper creation message",
+    };
+  }
+
+  // Exactly one valid parent ID found with no conflicts -> found
+  if (parentIds.size === 1) {
+    const [parentId] = parentIds;
+    return { outcome: "found", parentId };
+  }
+
+  // No creation attempts found in messagesDir -> genuine starting conversation
+  return { outcome: "none" };
 }
 
 /**
@@ -520,16 +588,28 @@ export function isSkillRunOpen(
   const MAX_STEPS_UP = 3;
 
   while (stepsUp <= MAX_STEPS_UP) {
-    const transcriptData = readTranscript(currentTranscript);
-    if (!transcriptData.canRead || !transcriptData.validJson) {
-      return { outcome: "cannot_tell" };
+    const parentInfo = findParentConversation(currentTranscript, currentId);
+
+    // If helper ancestry was rejected (e.g. mismatched recipient, missing recipient, competing parents):
+    if (parentInfo.outcome === "rejected") {
+      // Verify transcript readability so we fail open if corrupted
+      const currentData = readTranscript(currentTranscript, { isHelper: true });
+      if (!currentData.canRead || !currentData.validJson) {
+        return { outcome: "cannot_tell" };
+      }
+      return { outcome: "not_open" };
     }
 
-    const parentInfo = findParentConversation(currentTranscript, currentId);
-    if (parentInfo) {
+    if (parentInfo.outcome === "found") {
       if (stepsUp >= MAX_STEPS_UP) {
         // Reached 3 steps up and still a helper requiring a 4th step -> not open.
         return { outcome: "not_open" };
+      }
+
+      // Verify child transcript can be read
+      const currentData = readTranscript(currentTranscript, { isHelper: true });
+      if (!currentData.canRead || !currentData.validJson) {
+        return { outcome: "cannot_tell" };
       }
 
       const parentTranscriptPath = resolveTranscriptPath(currentTranscript, parentInfo.parentId);
@@ -552,7 +632,13 @@ export function isSkillRunOpen(
       continue;
     }
 
-    // No verified helper parent -> this is the starting conversation where Josh typed.
+    // parentInfo.outcome === "none":
+    // Genuine starting conversation where Josh typed.
+    const transcriptData = readTranscript(currentTranscript, { isHelper: false });
+    if (!transcriptData.canRead || !transcriptData.validJson) {
+      return { outcome: "cannot_tell" };
+    }
+
     if (transcriptData.userMessages.length > 0) {
       const isOpen = evaluateUserMessages(transcriptData.userMessages, pluginSkills, userSkills);
       return { outcome: isOpen ? "open" : "not_open" };
