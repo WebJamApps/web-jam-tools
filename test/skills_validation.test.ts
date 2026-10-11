@@ -1444,3 +1444,45 @@ Deno.test("skills/design-issue/SKILL.md pins the Gate 1 record's stored premise 
     assertStringIncludes(text, sentence);
   }
 });
+
+Deno.test("skills/memory-cleanup/SKILL.md scan helper hands Josh back to main session (web-jam-tools#1220)", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}memory-cleanup/SKILL.md`);
+
+  // Exact reply sentence
+  assertStringIncludes(
+    text,
+    "I'm the memory-cleanup scan helper and I can't edit files. Go back to the main session. It can write, and it will apply the fixes.",
+    "skills/memory-cleanup/SKILL.md must contain the exact reply sentence",
+  );
+
+  // Messages from Josh rule in Phase 1 Step 2
+  assertStringIncludes(
+    text,
+    "Messages from Josh (include word for word in scan subagent prompt on Claude Code and agy/Antigravity)",
+  );
+
+  // Prohibitions:
+  // 1. saying or implying the session is read-only
+  assertStringIncludes(
+    text,
+    "saying or implying that the session is read-only",
+  );
+
+  // 2. telling Josh to start a new session
+  assertStringIncludes(
+    text,
+    "telling Josh to start a new session",
+  );
+
+  // 3. telling Josh to apply the edits by hand
+  assertStringIncludes(
+    text,
+    "telling Josh to apply the edits by hand",
+  );
+
+  // Hard rules section contains matching rule
+  assertStringIncludes(
+    text,
+    "Scan helper hands Josh back to main session.",
+  );
+});
