@@ -8,6 +8,7 @@ import {
   filePlan as realFilePlan,
   type FilePlanOptions,
   getIssueDatabaseId,
+  type IssuePlanDoc,
   linkIssueDependency,
   parsePlanFile,
   parsePlanJson,
@@ -102,6 +103,226 @@ Deno.test("parsePlanJson parses an object with epic and children", () => {
   assertEquals(parsed.children[0].title, "Child 1");
   assertEquals(parsed.children[1].blocked_by, [1]);
 });
+
+/** Runs the real filer with a stubbed gh, recording native parent attachments. */
+async function fileParentFixture(plan: IssuePlanDoc) {
+  const planPath = await Deno.makeTempFile({ suffix: ".json" });
+  const items = [...(plan.epic ? [plan.epic] : []), ...(plan.children ?? [])];
+  const created = new Map<number, IssueData>();
+  const parents = new Map<number, number>();
+  let nextNumber = 700;
+  const deps: ExecDeps = {
+    readFileText: (p) => Deno.readTextFile(p),
+    runCmd(cmd) {
+      const reply = (data: unknown) =>
+        Promise.resolve({ code: 0, stdout: JSON.stringify(data), stderr: "" });
+      if (cmd[0] === "gh" && cmd[1] === "issue" && cmd[2] === "create") {
+        const number = nextNumber++;
+        const item = items[number - 700];
+        assertEquals(cmd[cmd.indexOf("--title") + 1], item.title);
+        created.set(number, {
+          number,
+          title: item.title,
+          type: { name: item.type ?? (item === plan.epic ? "Epic" : "Task") },
+        });
+        return Promise.resolve({
+          code: 0,
+          stdout: `https://github.com/WebJamApps/web-jam-tools/issues/${number}\n`,
+          stderr: "",
+        });
+      }
+      if (cmd[0] === "gh" && cmd[1] === "api") {
+        if (cmd[2].includes("issues?state=open&")) return reply([]);
+        if (cmd[2] === "graphql") {
+          const query = cmd.find((arg) => arg.startsWith("query=")) ?? "";
+          if (query.includes("GetChildAndTypes")) {
+            return reply({
+              data: {
+                repository: {
+                  issue: { id: "CREATED" },
+                  issueTypes: {
+                    nodes: [
+                      { id: "TASK", name: "Task" },
+                      { id: "EPIC", name: "Epic" },
+                    ],
+                  },
+                },
+              },
+            });
+          }
+          if (query.includes("SetIssueType")) return reply({ data: { updateIssue: {} } });
+          if (query.includes("GetIssueNodeIds")) {
+            const numbers = [...query.matchAll(/issue\(number: (\d+)\)/g)];
+            assertEquals(numbers.length, 2);
+            return reply({
+              data: {
+                parent: { issue: { id: `P${numbers[0][1]}` } },
+                child: { issue: { id: `C${numbers[1][1]}` } },
+              },
+            });
+          }
+          if (query.includes("AddSubIssue")) {
+            const parent = query.match(/issueId: "P(\d+)"/);
+            const child = query.match(/subIssueId: "C(\d+)"/);
+            if (!parent || !child) throw new Error(`Invalid attachment mutation: ${query}`);
+            parents.set(Number(child[1]), Number(parent[1]));
+            return reply({ data: { addSubIssue: {} } });
+          }
+        } else {
+          const match = cmd[2].match(/\/issues\/(\d+)$/);
+          if (match) {
+            const number = Number(match[1]);
+            const issue = created.get(number);
+            if (!issue) throw new Error(`Read uncreated issue ${number}`);
+            return reply({
+              ...issue,
+              id: number * 10,
+              ...(parents.has(number) ? { parent: { number: parents.get(number) } } : {}),
+            });
+          }
+        }
+      }
+      throw new Error(`Unexpected gh call: ${cmd.join(" ")}`);
+    },
+  };
+  try {
+    await Deno.writeTextFile(planPath, JSON.stringify(plan));
+    const result = await filePlan({ planPath, deps, approvalCheck: APPROVE_ALL });
+    return { result, parents };
+  } finally {
+    await Deno.remove(planPath);
+  }
+}
+
+for (
+  const parent of [1329, "1329", "#1329", "web-jam-tools#1329", "WebJamApps/web-jam-tools#1329"]
+) {
+  Deno.test(`filePlan parent: ${JSON.stringify(parent)} attaches to existing issue 1329`, async () => {
+    const { result, parents } = await fileParentFixture({
+      repo: "web-jam-tools",
+      children: [{ title: "Calibration child", parent }],
+    });
+    assertEquals(result.totalIssuesFiled, 1);
+    assertEquals([...parents], [[700, 1329]]);
+  });
+}
+
+for (const parent of ["none", "null", "-", "", null]) {
+  Deno.test(`filePlan parent: ${JSON.stringify(parent)} suppresses the default epic parent`, async () => {
+    const { parents } = await fileParentFixture({
+      repo: "web-jam-tools",
+      epic: { title: "Fixture epic" },
+      children: [{ title: "Calibration child", parent }],
+    });
+    assertEquals(parents.size, 0);
+  });
+}
+
+for (const parent of ["epic", "parent", undefined]) {
+  Deno.test(`filePlan parent: ${String(parent)} attaches to the filed epic`, async () => {
+    const { parents } = await fileParentFixture({
+      repo: "web-jam-tools",
+      epic: { title: "Fixture epic" },
+      children: [{ title: "Calibration child", parent }],
+    });
+    assertEquals([...parents], [[701, 700]]);
+  });
+}
+
+for (const parent of [2, "2", "#2", "feature-b", "Fixture CHILD B"]) {
+  Deno.test(`filePlan parent: ${JSON.stringify(parent)} resolves a preceding plan child`, async () => {
+    const { parents } = await fileParentFixture({
+      repo: "web-jam-tools",
+      children: [
+        { title: "Fixture child A" },
+        { id: "feature-b", title: "Fixture child B" },
+        { title: "Calibration child", parent },
+      ],
+    });
+    assertEquals([...parents], [[702, 701]]);
+  });
+}
+
+Deno.test("filePlan parent: repository citation names an existing issue rather than a plan position", async () => {
+  const { parents } = await fileParentFixture({
+    repo: "web-jam-tools",
+    children: [
+      { title: "Fixture child A" },
+      { title: "Fixture child B" },
+      { title: "Calibration child", parent: "web-jam-tools#2" },
+    ],
+  });
+  assertEquals([...parents], [[702, 2]]);
+});
+
+for (const id of ["web-jam-tools#2", "JaMmusic#12"]) {
+  Deno.test(`filePlan parent: explicit id ${id} precedes citation interpretation`, async () => {
+    const { parents } = await fileParentFixture({
+      repo: "web-jam-tools",
+      children: [
+        { title: "Fixture child A" },
+        { id, title: "Fixture child B" },
+        { title: "Calibration child", parent: id },
+      ],
+    });
+    assertEquals([...parents], [[702, 701]]);
+  });
+}
+
+for (
+  const parent of [
+    "JaMmusic#12",
+    "WebJamApps/JaMmusic#12",
+    "web-jam-tools#",
+    "no-such-id",
+    "epic",
+    "parent",
+  ]
+) {
+  for (const dryRun of [false, true]) {
+    Deno.test(`filePlan parent: refuses ${JSON.stringify(parent)} before any filing (dryRun=${dryRun})`, async () => {
+      const planPath = await Deno.makeTempFile({ suffix: ".json" });
+      const calls: string[][] = [];
+      try {
+        await Deno.writeTextFile(
+          planPath,
+          JSON.stringify({
+            repo: "web-jam-tools",
+            ...(["epic", "parent"].includes(parent) ? {} : { epic: { title: "Fixture epic" } }),
+            children: [{ title: "Valid preceding child" }, {
+              title: "Invalid parent child",
+              parent,
+            }],
+          }),
+        );
+        const error = await assertRejects(
+          () =>
+            filePlan({
+              planPath,
+              dryRun,
+              approvalCheck: APPROVE_ALL,
+              deps: {
+                readFileText: (p) => Deno.readTextFile(p),
+                runCmd(cmd) {
+                  calls.push(cmd);
+                  return Promise.reject(
+                    new Error("No gh call is allowed before parent validation"),
+                  );
+                },
+              },
+            }),
+          Error,
+          "Cannot resolve parent",
+        );
+        assertEquals(error.message.includes("Invalid parent child"), true);
+        assertEquals(error.message.includes(JSON.stringify(parent)), true);
+        assertEquals(calls, []);
+      } finally {
+        await Deno.remove(planPath);
+      }
+    });
+  }
+}
 
 Deno.test("parsePlanJson parses a top-level array of issues", () => {
   const json = JSON.stringify([
