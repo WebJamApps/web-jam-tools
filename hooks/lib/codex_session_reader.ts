@@ -19,6 +19,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const supportedSources = ["cli", "vscode"];
+
 /** Only the leading typed call counts; prose quoting a skill cannot grant authority. */
 export function codexSkillCall(text: string): CodexSkillCall | null {
   const match = text.trim().match(
@@ -28,7 +30,7 @@ export function codexSkillCall(text: string): CodexSkillCall | null {
   return { name: match[1].toLowerCase(), arguments: match[2] ?? "", text };
 }
 
-/** Read only a human-started terminal session; all unknown or damaged input refuses. */
+/** Read a human-started terminal or VS Code session; unknown or damaged input refuses. */
 export async function readCodexTypedSession(
   options: Pick<RunningModelOptions, "env"> = {},
 ): Promise<CodexTypedSession> {
@@ -51,11 +53,12 @@ export async function readCodexTypedSession(
   }
   const meta = metadata[0].payload;
   if (
-    meta.id !== threadId || meta.source !== "cli" || meta.originator !== "codex-tui" ||
+    meta.id !== threadId || typeof meta.source !== "string" ||
+    !supportedSources.includes(meta.source) || meta.originator !== "codex-tui" ||
     (meta.thread_source !== undefined && meta.thread_source !== "user") ||
     (meta.parent_thread_id !== undefined && meta.parent_thread_id !== null)
   ) {
-    throw new Error(`Not a human-started Codex terminal session: ${path}`);
+    throw new Error(`Not a supported human-started Codex session: ${path}`);
   }
   let latestSkillCall: CodexSkillCall | null = null;
   for (const record of records) {
