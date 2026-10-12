@@ -483,28 +483,37 @@ export function assertFileIssueRule10PriorityLevelTests(text: string): void {
   );
   const rule10 = rule10Match[0];
 
+  const urgentIndex = rule10.indexOf(
+    "Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.",
+  );
   assert(
-    rule10.includes(
-      "Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.",
-    ),
+    urgentIndex !== -1,
     "skills/file-issue/SKILL.md rule 10 must carry the Urgent level test ('Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent.')",
   );
 
+  const highIndex = rule10.indexOf(
+    "It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.",
+  );
   assert(
-    rule10.includes(
-      "It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.",
-    ),
+    highIndex !== -1,
     "skills/file-issue/SKILL.md rule 10 must carry the High level test ('It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round.')",
   );
 
+  const lowIndex = rule10.indexOf("It is nice to have, and nothing waits on it.");
   assert(
-    rule10.includes("Nothing above fits."),
+    lowIndex !== -1,
+    "skills/file-issue/SKILL.md rule 10 must carry the Low level test ('It is nice to have, and nothing waits on it.')",
+  );
+
+  const mediumIndex = rule10.indexOf("Nothing above fits.");
+  assert(
+    mediumIndex !== -1,
     "skills/file-issue/SKILL.md rule 10 must carry the Medium level test ('Nothing above fits.')",
   );
 
   assert(
-    rule10.includes("It is nice to have, and nothing waits on it."),
-    "skills/file-issue/SKILL.md rule 10 must carry the Low level test ('It is nice to have, and nothing waits on it.')",
+    lowIndex < mediumIndex,
+    "skills/file-issue/SKILL.md rule 10 must order Low before Medium fallback so Low is reachable under first-match",
   );
 
   assert(
@@ -528,7 +537,7 @@ Deno.test("skills/file-issue/SKILL.md rule 10 carries the four Priority level te
   assertFileIssueRule10PriorityLevelTests(text);
 });
 
-Deno.test("assertFileIssueRule10PriorityLevelTests fails when rule 10 loses any of the four level tests or the default of Medium (web-jam-tools#1347)", async () => {
+Deno.test("assertFileIssueRule10PriorityLevelTests fails when rule 10 loses any of the four level tests, misorders the Medium fallback before Low, or loses the default of Medium (web-jam-tools#1347)", async () => {
   const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
   const text = await Deno.readTextFile(fileIssuePath);
 
@@ -576,6 +585,19 @@ Deno.test("assertFileIssueRule10PriorityLevelTests fails when rule 10 loses any 
       ),
     Error,
     "Low level test",
+  );
+
+  // Fails when Medium fallback is placed before Low (making Low unreachable under first-match)
+  assertThrows(
+    () =>
+      assertFileIssueRule10PriorityLevelTests(
+        text.replace(
+          /\| Low \|[^\n]+\n\s*\| Medium \|[^\n]+/,
+          "| Medium | Planned work | Nothing above fits. This is the default. |\n      | Low | When there is time | It is nice to have, and nothing waits on it. |",
+        ),
+      ),
+    Error,
+    "Low before Medium",
   );
 
   // Fails when default of Medium is missing

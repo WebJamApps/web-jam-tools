@@ -156,8 +156,8 @@ that's what following this skill prevents.
       |---|---|---|
       | Urgent | Work this first | Something live is broken, exposed or losing data. Other open issues are waiting on it and nothing open blocks it. Josh says it is urgent. |
       | High | Work this next | It is a defect that costs something every time it is hit: a wrong result, wasted tokens, an extra review round. |
-      | Medium | Planned work | Nothing above fits. This is the default. |
       | Low | When there is time | It is nice to have, and nothing waits on it. |
+      | Medium | Planned work | Nothing above fits. This is the default. |
 
       Whether other open issues are waiting on an issue is read from GitHub's native dependency links, never from body prose. In a Gate 2 plan each row takes its level from the same tests, with the plan's own rows counted as issues waiting, so the rows of a plan spread over the levels in dependency order; Josh rules on each row's level with the plan.
     - **A write response is never confirmation.** After creating the issue, read back the filed issue's Priority using the REST read `gh api repos/<owner>/<repo>/issues/<n> --jq '.issue_field_values'` (or on Claude Code, `mcp__claude_ai_GitHub_MCP__issue_read` for the one issue this run filed, or `mcp__claude_ai_GitHub_MCP__list_issues` with `fields: ["number","title","field_values"]`), and compare it against the value set. Only that read confirms the field landed.
