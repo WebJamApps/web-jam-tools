@@ -29,28 +29,28 @@ split lost half its replacement pair, and `Flash`'s wrong color went unnoticed i
 front-end repos. The diff is now computed by `src/fix-labels/diff.ts`, unit-tested against exactly
 those four defects (`test/fix_labels_diff.test.ts`) so they can't silently regress.
 
-## ⛔ Model gate — MUST be on Haiku (do this FIRST)
+## ⛔ Model tier gate — cheap tier required (Haiku / Flash) (do this FIRST)
 
 This is mechanical, high-volume `gh label` / `gh issue list` / `gh api .../milestones` scanning
-across the active repos, so it must run on the cheapest tier that can do it: **Haiku**. A skill
-cannot switch the session model itself, so the **very first action of this skill is to check the
-running model** — before scanning any repo:
+across the active repos, so it must run on the cheapest tier that can do it: **Haiku** on Claude Code,
+or **Flash** on Antigravity / agy. A skill cannot switch the session model itself, so the **very first
+action of this skill is to verify the running model or delegate to the cheap tier** — before scanning any repo:
 
-- **If the model is NOT Haiku** (e.g. Opus, Sonnet): do **not** scan anything. Stop immediately and
-  tell Josh, verbatim:
-  > ⛔ /fix-labels must run on Haiku to keep this cheap. Please switch models first — type
-  > `/model haiku` — then re-run `/fix-labels`.
+- **Claude Code surface:**
+  - Run directly on Haiku. If running on a pricier model (e.g. Sonnet, Opus), prompt to switch to the cheap tier, or delegate the scan steps to a subagent:
+    - **Claude Code surface:** `Agent` tool with `model: "haiku"`.
+    - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
+- **Antigravity (`agy`) surface:**
+  - Run directly on Flash (an agy session running on Flash), or delegate the scan steps to a subagent:
+    - **Claude Code surface:** `Agent` tool with `model: "haiku"`.
+    - **Antigravity (`agy`) surface:** `invoke_subagent` with `Model: "flash"`.
 
-  Then **STOP and wait.** Do not proceed until the session is on Haiku.
-- **If the model IS Haiku:** proceed with the flow below.
-
-This skill runs **interactively, directly on the session — it does NOT dispatch a subagent.** Unlike
-skills that dispatch to a pricier subagent, `/fix-labels` is cheap enough at Haiku scale to run
-inline, and its approve/veto-per-label flow needs a live conversation with Josh anyway.
+This skill runs interactively for approval and application, while mechanical scans may run inline
+on the cheap tier or via a delegated subagent.
 
 Optional, implementer's discretion, not required for this issue: a hard `PreToolUse` hook mirroring
-`hooks/haiku-only-gmail-gate.sh` could deny `gh label` create/edit/delete calls unless the session
-is on Haiku, as belt-and-suspenders on top of the soft gate above. Not built here — this issue is
+`hooks/haiku-only-gmail-gate.sh` or `hooks/agy-model-guard.sh` could deny `gh label` create/edit/delete calls unless the session
+is on the cheap tier (Haiku on Claude Code, Flash on Antigravity / agy), as belt-and-suspenders on top of the soft gate above. Not built here — this issue is
 the skill file only.
 
 ## Trigger
@@ -124,7 +124,7 @@ added on a separate branch. Deleted rather than fixed, to remove the drift surfa
 
 ## Flow
 
-1. **Model gate** (above) — confirm Haiku before anything else.
+1. **Model gate** (above) — confirm cheap tier (Haiku on Claude Code, Flash on Antigravity / agy) before anything else.
 2. **Run both tasks.**
    ```
    deno task fix-labels:diff
@@ -283,7 +283,7 @@ milestone already exists must be surfaced, not swallowed.
 ## Non-goals
 
 - Never runs unprompted — manual `/fix-labels` invocation only.
-- Never dispatches a subagent — runs inline on the gated Haiku session.
+- Runs on the cheap tier (Haiku on Claude Code, Flash on Antigravity / agy) inline or via delegated subagent (Claude Code surface: `Agent` tool with `model: "haiku"`; Antigravity / agy surface: `invoke_subagent` with `Model: "flash"`).
 - Never auto-applies anything, including creates that look obviously safe.
 - Never deletes or removes a label without first computing and showing its blast radius.
 - Never touches `Fable` — retired/dormant, but always kept.
