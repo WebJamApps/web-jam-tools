@@ -18,6 +18,7 @@ import {
   defaultExecDeps,
   type ExecDeps,
   normalizeRepo,
+  parseIssueRef,
 } from "../create-issue/lib.ts";
 import { expandHome } from "./gate1.ts";
 
@@ -238,6 +239,82 @@ async function prepareBodyFile(
   return tempPath;
 }
 
+/** Resolve parents before filing, using the same epic-first, then child order as the filer. */
+function resolvePlanParents(plan: ParsedPlan): Array<number | PlanIssueItem | undefined> {
+  const available: PlanIssueItem[] = plan.epic ? [plan.epic] : [];
+  return plan.children.map((child, index) => {
+    const repo = normalizeRepo(child.repo || plan.defaultRepo);
+    const sameRepo = (item: PlanIssueItem) =>
+      normalizeRepo(item.repo || plan.defaultRepo).full.toLowerCase() === repo.full.toLowerCase();
+    const invalid = (reason: string): never => {
+      throw new Error(
+        `Cannot resolve parent ${JSON.stringify(child.parent)} for plan child ${
+          index + 1
+        } ("${child.title}"): ${reason}`,
+      );
+    };
+    const explicitId = (key: string) =>
+      available.findLast((item) => {
+        if (item.id === undefined) return false;
+        const id = String(item.id).trim().toLowerCase();
+        return id === key || id.replace(/^#/, "") === key;
+      });
+    const position = (number: number) =>
+      number >= 1 && number <= index ? plan.children[number - 1] : undefined;
+
+    let target: number | PlanIssueItem | undefined;
+    const parent = child.parent;
+    if (parent === undefined) {
+      target = plan.epic && sameRepo(plan.epic) ? plan.epic : undefined;
+    } else if (parent === null) {
+      target = undefined;
+    } else if (typeof parent === "number") {
+      target = position(parent) ?? explicitId(String(parent)) ?? parent;
+    } else if (typeof parent === "string") {
+      const trimmed = parent.trim();
+      const lower = trimmed.toLowerCase();
+      if (["none", "null", "-", ""].includes(lower)) {
+        target = undefined;
+      } else if (lower === "epic" || lower === "parent") {
+        target = plan.epic ?? invalid("the plan has no epic");
+      } else {
+        target = explicitId(lower) ??
+          available.find((item) => item.title.trim().toLowerCase() === lower);
+        if (target === undefined) {
+          // Bare numbers retain their position lookup. A repository citation
+          // always means an existing issue, after explicit IDs and titles.
+          const numeric = trimmed.match(/^#?(\d+)$/);
+          if (numeric) {
+            const number = Number(numeric[1]);
+            target = position(number) ?? number;
+          } else {
+            const reference = (() => {
+              try {
+                return parseIssueRef(trimmed, repo);
+              } catch {
+                return invalid("no preceding plan item or valid issue citation matches this value");
+              }
+            })();
+            if (
+              `${reference.owner}/${reference.repo}`.toLowerCase() !== repo.full.toLowerCase()
+            ) {
+              invalid("a sub-issue cannot have a parent in another repository");
+            }
+            target = reference.number;
+          }
+        }
+      }
+    } else {
+      invalid("expected an issue number, a string reference, or null");
+    }
+    if (typeof target === "object" && !sameRepo(target)) {
+      invalid("a sub-issue cannot have a parent in another repository");
+    }
+    available.push(child);
+    return target;
+  });
+}
+
 export async function filePlan(
   options: FilePlanOptions,
 ): Promise<FilePlanResult> {
@@ -327,6 +404,8 @@ export async function filePlan(
     }
   }
 
+  const parentTargets = resolvePlanParents(plan);
+
   // Authored-by footer (web-jam-tools#1205) — refuse before anything is filed.
   const authorCheck = await checkAuthorOnRoster(options.author, deps.runCmd, deps.probeScriptPath);
   if (!authorCheck.ok) {
@@ -375,6 +454,7 @@ export async function filePlan(
     const byPosition = new Map<number, FiledIssueInfo>();
     const byTitle = new Map<string, FiledIssueInfo>();
     const byGitHubCitation = new Map<string, FiledIssueInfo>();
+    const filedNumbers = new Map<PlanIssueItem, number>();
     let filedEpic: FiledIssueInfo | undefined;
     const filedChildren: FiledIssueInfo[] = [];
 
@@ -407,6 +487,7 @@ export async function filePlan(
       const m = resultStr.match(/#(\d+)/);
       const epicNumber = m ? parseInt(m[1], 10) : 0;
       const epicDbId = await getIssueDatabaseId(epicRepo.full, epicNumber, deps);
+      filedNumbers.set(epicItem, epicNumber);
 
       filedEpic = {
         repo: epicRepo,
@@ -444,44 +525,12 @@ export async function filePlan(
         ? String(plan.defaultMilestone)
         : undefined;
 
-      // Determine parent
-      let parentNumber: number | undefined;
-      if (childItem.parent !== undefined) {
-        if (typeof childItem.parent === "number") {
-          if (byPosition.has(childItem.parent)) {
-            parentNumber = byPosition.get(childItem.parent)!.number;
-          } else if (byExplicitId.has(String(childItem.parent))) {
-            parentNumber = byExplicitId.get(String(childItem.parent))!.number;
-          } else {
-            parentNumber = childItem.parent;
-          }
-        } else if (typeof childItem.parent === "string") {
-          const pTrim = childItem.parent.trim();
-          const pLower = pTrim.toLowerCase();
-          if (pLower === "none" || pLower === "null" || pLower === "-" || pLower === "") {
-            parentNumber = undefined;
-          } else if (pLower === "epic" || pLower === "parent") {
-            parentNumber = filedEpic?.number;
-          } else if (byExplicitId.has(pLower)) {
-            parentNumber = byExplicitId.get(pLower)!.number;
-          } else if (byTitle.has(pLower)) {
-            parentNumber = byTitle.get(pLower)!.number;
-          } else {
-            const numMatch = pTrim.match(/^#?(\d+)$/);
-            if (numMatch) {
-              const numVal = parseInt(numMatch[1], 10);
-              if (byPosition.has(numVal)) {
-                parentNumber = byPosition.get(numVal)!.number;
-              } else {
-                parentNumber = numVal;
-              }
-            }
-          }
-        }
-      } else if (filedEpic && childRepo.full === filedEpic.repo.full) {
-        // Default: attach child to the filed Epic if in the same repository
-        parentNumber = filedEpic.number;
-      }
+      const parentTarget = parentTargets[i];
+      const parentNumber = typeof parentTarget === "number"
+        ? parentTarget
+        : parentTarget
+        ? filedNumbers.get(parentTarget)!
+        : undefined;
 
       const createOptions: CreateIssueOptions = {
         repo: childRepo.full,
@@ -505,6 +554,7 @@ export async function filePlan(
       const m = resultStr.match(/#(\d+)/);
       const childNumber = m ? parseInt(m[1], 10) : 0;
       const childDbId = await getIssueDatabaseId(childRepo.full, childNumber, deps);
+      filedNumbers.set(childItem, childNumber);
 
       const filedChild: FiledIssueInfo = {
         repo: childRepo,
