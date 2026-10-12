@@ -1636,13 +1636,30 @@ Deno.test("skills/memory-cleanup/SKILL.md scan helper hands Josh back to main se
  * Validates revision table, rendered page, Phase 4 memory rules, and plan row priority.
  */
 export function assertDesignIssueRules(text: string): void {
-  // 1. Must not say one row per Epic
+  // 1. Must not say one row per Epic or retain obsolete Epic-based exceptions
   assertFalse(
     text.includes("One row per Epic"),
     "skills/design-issue/SKILL.md must not say 'One row per Epic'",
   );
+  assertFalse(
+    text.includes("append exactly one row for that Epic or Issue"),
+    "skills/design-issue/SKILL.md must not say 'append exactly one row for that Epic or Issue'",
+  );
+  assertFalse(
+    text.includes("Child issues of an Epic do not get their own row"),
+    "skills/design-issue/SKILL.md must not say 'Child issues of an Epic do not get their own row'",
+  );
+  assertFalse(
+    text.includes("rolls up into that Epic's existing row"),
+    "skills/design-issue/SKILL.md must not retain the obsolete Epic-based rollup exception",
+  );
 
   // 2. Must contain one-row-per-run rule
+  assertStringIncludes(
+    text,
+    "append exactly one row for the design run before Gate 1",
+    "skills/design-issue/SKILL.md must specify appending one row for the design run",
+  );
   assertStringIncludes(
     text,
     "One row and one version bump per design run",
@@ -1741,6 +1758,28 @@ Deno.test("skills/design-issue/SKILL.md validator fails on rule violations (web-
     () => assertDesignIssueRules(textWithOneRowPerEpic),
     Error,
     "must not say 'One row per Epic'",
+  );
+
+  // Fails when step 6 intro says "for that Epic or Issue"
+  const textWithRowForEpicOrIssue = validText.replace(
+    "append exactly one row for the design run before Gate 1",
+    "append exactly one row for that Epic or Issue before Gate 1",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithRowForEpicOrIssue),
+    Error,
+    "must not say 'append exactly one row for that Epic or Issue'",
+  );
+
+  // Fails when retaining the obsolete Epic-based rollup exception
+  const textWithChildIssuesRollup = validText.replace(
+    "- **Required columns:**",
+    "- **Child issues of an Epic do not get their own row:** Work done under an Epic rolls up into that Epic's existing row: the summary widens by a clause if needed and the date advances to the latest revision, but the version does not bump again.\n   - **Required columns:**",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithChildIssuesRollup),
+    Error,
+    "must not say 'Child issues of an Epic do not get their own row'",
   );
 
   // 2. Fails when it loses the one-row-per-run rule
