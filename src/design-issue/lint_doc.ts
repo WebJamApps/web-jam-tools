@@ -1438,8 +1438,10 @@ export function lintDesignDoc(
     const isRevHistoryTableLine = inRevisionHistorySection && line.trim().startsWith("|");
     for (const regex of revisionNarrationRegexes) {
       if (regex.source.includes("revision\\s+history")) {
-        // Narrowed: ## Revision History heading and its table are permitted (web-jam-tools#892)
-        if (isRevHistoryHeading || isRevHistoryTableLine) {
+        // The heading/table and explicitly marked verbatim quote lines may name this phrase.
+        // A quote marker accepts at most three leading spaces; escaped/indented markers and
+        // unmarked continuation lines remain prose, so a malformed quote exempts nothing.
+        if (isRevHistoryHeading || isRevHistoryTableLine || /^ {0,3}>/.test(line)) {
           continue;
         }
       }
