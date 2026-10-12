@@ -1630,3 +1630,199 @@ Deno.test("skills/memory-cleanup/SKILL.md scan helper hands Josh back to main se
     "Scan helper hands Josh back to main session.",
   );
 });
+
+/**
+ * Asserts skills/design-issue/SKILL.md follows the design document rules (web-jam-tools#1345).
+ * Validates revision table, rendered page, Phase 4 memory rules, and plan row priority.
+ */
+export function assertDesignIssueRules(text: string): void {
+  // 1. Must not say one row per Epic or retain obsolete Epic-based exceptions
+  assertFalse(
+    text.includes("One row per Epic"),
+    "skills/design-issue/SKILL.md must not say 'One row per Epic'",
+  );
+  assertFalse(
+    text.includes("append exactly one row for that Epic or Issue"),
+    "skills/design-issue/SKILL.md must not say 'append exactly one row for that Epic or Issue'",
+  );
+  assertFalse(
+    text.includes("Child issues of an Epic do not get their own row"),
+    "skills/design-issue/SKILL.md must not say 'Child issues of an Epic do not get their own row'",
+  );
+  assertFalse(
+    text.includes("rolls up into that Epic's existing row"),
+    "skills/design-issue/SKILL.md must not retain the obsolete Epic-based rollup exception",
+  );
+
+  // 2. Must contain one-row-per-run rule
+  assertStringIncludes(
+    text,
+    "append exactly one row for the design run before Gate 1",
+    "skills/design-issue/SKILL.md must specify appending one row for the design run",
+  );
+  assertStringIncludes(
+    text,
+    "One row and one version bump per design run",
+    "skills/design-issue/SKILL.md must specify one row and one version bump per design run",
+  );
+
+  // 3. Must contain every-issue-linked rule
+  assertStringIncludes(
+    text,
+    "with every issue behind the revision linked in that row",
+    "skills/design-issue/SKILL.md must specify every issue behind the revision linked in that row",
+  );
+  assertStringIncludes(
+    text,
+    "The row's `Epic / Issue` cell links every Epic and issue whose work is in the revision, each by its title",
+    "skills/design-issue/SKILL.md must specify linking every Epic and issue by title",
+  );
+
+  // 4. Phase 4 must not write into the design document and must keep copy in captured-rules file
+  const phase4Match = text.match(/### Phase 4 —[\s\S]*?(?=## The Two Approval Gates)/);
+  assert(phase4Match, "Phase 4 section must exist");
+  const phase4Text = phase4Match[0];
+  assertFalse(
+    phase4Text.includes("captures against the design document"),
+    "Phase 4 must not verify captures against or write into the design document",
+  );
+  assertFalse(
+    /writes? into the design document/i.test(phase4Text),
+    "Phase 4 must not write into the design document",
+  );
+  assertStringIncludes(
+    phase4Text,
+    "In a file of its own beside the design document, `~/Dropbox/web-jam-llms/<Theme>/<topic>-captured-rules.md`, and never in the design document.",
+    "Phase 4 must keep consumed rule copy in captured-rules file beside design document",
+  );
+
+  // 5. Gate 2 plan row Priority must be tied to level tests owned by /file-issue without restating tests
+  assertStringIncludes(
+    text,
+    "Each Gate 2 plan row takes its Priority level from the level tests that `/file-issue` owns",
+    "Gate 2 plan row Priority must be tied to level tests that /file-issue owns",
+  );
+  assertStringIncludes(
+    text,
+    "this skill does not restate the tests",
+    "skill must not restate the Priority level tests",
+  );
+
+  // 6. Carries the rendered-page rule for the history tables and paging
+  assertStringIncludes(
+    text,
+    "### The Rendered Page",
+    "skill must contain ### The Rendered Page section",
+  );
+  assertStringIncludes(
+    text,
+    "**The history tables show newest first on the page.**",
+    "skill must state history tables show newest first on the page",
+  );
+  assertStringIncludes(
+    text,
+    "- **The revision table** — the document's structured revision table — is shown bottom row first.",
+    "skill must specify revision table is shown bottom row first",
+  );
+  assertStringIncludes(
+    text,
+    "- **The premises table** — the table under the `Load-bearing premises` heading — is sorted by its `Proved` date, newest first; rows with the same date are shown bottom row first.",
+    "skill must specify premises table is sorted newest first",
+  );
+  assertStringIncludes(
+    text,
+    "- **The decision record** — the table under a heading that contains `Decision record`, `Decisions record`, `Decision log` or, as the whole heading, `Decisions`, in any capitalisation — is shown bottom row first.",
+    "skill must specify decision record is shown bottom row first",
+  );
+  assertStringIncludes(
+    text,
+    "**Every table is paged.** A table with more than 10 rows shows 10 rows at a time, with a control under it offering 10, 20, 30 and all, a previous and a next button, and a count of the rows shown.",
+    "skill must state table paging rule",
+  );
+}
+
+Deno.test("skills/design-issue/SKILL.md satisfies one-row-per-run, rendered-page, Phase 4 captured-rules, and plan priority rules (web-jam-tools#1345)", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  assertDesignIssueRules(text);
+});
+
+Deno.test("skills/design-issue/SKILL.md validator fails on rule violations (web-jam-tools#1345)", async () => {
+  const validText = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+
+  // 1. Fails when the skill says one row per Epic
+  const textWithOneRowPerEpic = validText.replace(
+    "One row and one version bump per design run",
+    "One row per Epic or standalone Issue",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithOneRowPerEpic),
+    Error,
+    "must not say 'One row per Epic'",
+  );
+
+  // Fails when step 6 intro says "for that Epic or Issue"
+  const textWithRowForEpicOrIssue = validText.replace(
+    "append exactly one row for the design run before Gate 1",
+    "append exactly one row for that Epic or Issue before Gate 1",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithRowForEpicOrIssue),
+    Error,
+    "must not say 'append exactly one row for that Epic or Issue'",
+  );
+
+  // Fails when retaining the obsolete Epic-based rollup exception
+  const textWithChildIssuesRollup = validText.replace(
+    "- **Required columns:**",
+    "- **Child issues of an Epic do not get their own row:** Work done under an Epic rolls up into that Epic's existing row: the summary widens by a clause if needed and the date advances to the latest revision, but the version does not bump again.\n   - **Required columns:**",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithChildIssuesRollup),
+    Error,
+    "must not say 'Child issues of an Epic do not get their own row'",
+  );
+
+  // 2. Fails when it loses the one-row-per-run rule
+  const textWithoutOneRowPerRun = validText.replaceAll(
+    "One row and one version bump per design run",
+    "Revision table rule",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithoutOneRowPerRun),
+    Error,
+    "must specify one row and one version bump per design run",
+  );
+
+  // 3. Fails when it loses the every-issue-linked rule
+  const textWithoutEveryIssueLinked = validText.replace(
+    "with every issue behind the revision linked in that row",
+    "",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithoutEveryIssueLinked),
+    Error,
+    "must specify every issue behind the revision linked in that row",
+  );
+
+  // 4. Fails when it says Phase 4 writes into the design document
+  const textWithPhase4WritingToDoc = validText.replace(
+    "keeps a word-for-word copy of each consumed rule and checks that copy byte for byte",
+    "byte-verifies captures against the design document appendix",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithPhase4WritingToDoc),
+    Error,
+    "Phase 4 must not verify captures against or write into the design document",
+  );
+
+  // 5. Fails when a plan row's Priority is not tied to the level tests
+  const textWithoutPriorityTied = validText.replace(
+    "Each Gate 2 plan row takes its Priority level from the level tests that `/file-issue` owns",
+    "Each Gate 2 plan row takes its Priority level from habit",
+  );
+  assertThrows(
+    () => assertDesignIssueRules(textWithoutPriorityTied),
+    Error,
+    "Gate 2 plan row Priority must be tied to level tests that /file-issue owns",
+  );
+});

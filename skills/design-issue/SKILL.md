@@ -35,7 +35,7 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
 3. **Put every decision to Josh one at a time** — applying the Decision-Readiness rule below — and write his answer into the document as he gives it, never batched at the end. An item is decided only when he rules on THAT item by name.
 4. **Verify facts rather than asserting them**, and record what was verified and how. Where a premise turns out to be false, the body records the corrected fact in present tense and the falsified premise goes in the decision-record appendix — never a "this turned out to be false" note in the body. Recording an unverified load-bearing premise is NOT sufficient to reach Gate 1 — every load-bearing premise must be resolved and proven, not merely logged as an unknown or caveat, before presenting the design for Gate 1 approval. A premise that cannot be proved from what exists — because the thing it asserts has never been measured — does not become a caveat and does not become an unchecked row: it converts the run to a measure-first run (below).
 5. **Reconcile edits continuously.** Apply the Edit-Reconciliation rule after any passage replacement.
-6. **Record revision in `## Revision History` table before Gate 1 (web-jam-tools#892):** When revising an existing design document, add the `## Revision History` table if absent, and append exactly one row for that Epic or Issue before Gate 1:
+6. **Record revision in `## Revision History` table before Gate 1 (web-jam-tools#892):** When revising an existing design document, add the `## Revision History` table if absent, and append exactly one row for the design run before Gate 1:
 
    ```markdown
    ## Revision History
@@ -46,8 +46,7 @@ With no argument, the skill scans all 8 active repos for open issues labeled `Ne
    | 1.1.0 | 2026-09-02 | [issue title](url) | One line saying what this revision covers. |
    ```
 
-   - **One row per Epic or standalone Issue:** Exactly one version bump for that whole piece of work no matter how many individual decisions it contained.
-   - **Child issues of an Epic do not get their own row:** Work done under an Epic rolls up into that Epic's existing row: the summary widens by a clause if needed and the date advances to the latest revision, but the version does not bump again. A new row and new version bump happen only when a different Epic, or a standalone Issue outside any Epic, changes the document.
+   - **One row and one version bump per design run:** Every run that touches the document appends exactly one new row and bumps the version once, no matter how many individual decisions or issues it covers. A run that covers multiple Epics, or child issues alongside standalone work, still appends one row for that whole run, with every issue behind the revision linked in that row. A later change to the same document in the same run widens that row's summary by a clause and advances its date to the latest revision; it never adds a second row and never bumps the version again. The row's `Epic / Issue` cell links every Epic and issue whose work is in the revision, each by its title. A new row and a new version bump happen only when a different design run changes the document. Before presenting at Gate 1, the run reads the newest rows of every document it touched and confirms each has one row for the run. In the file, rows run oldest to newest and each new row is added at the bottom; the rendered page shows them newest first (see "The Rendered Page" below).
    - **Required columns:** `Version`, `Date`, and a summary column are required; extra columns may be present. Versions are semantic (`MAJOR.MINOR.PATCH`) and dates are ISO (`YYYY-MM-DD`). Rows run oldest to newest. Issues are linked by title rather than by bare number.
 7. **GATE 1 — stop.** Present the design with `deno task design:gate1 <doc.md>` and no other way: it checks the document, renders it to a standalone HTML file, verifies the render with a headless screenshot, opens it for Josh in his own browser session in the background on his active display, and opens the run's **Gate 1 record** for that document (see "The Gate 1 record" below). Rendering, screenshotting and opening the document by hand skips the record, so the run cannot reach Gate 2 afterwards. Present the design and wait for his explicit approval. No writes to GitHub before Gate 1.
 
@@ -137,6 +136,7 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
    |---|---|---|---|---|---|---|---|
 
    - **Issue Titles**: Follows `skills/file-issue/SKILL.md` item 17 ("Issue Titles for Project Manager Audience with Skill/Feature Prefix and Epic Citation").
+   - **Priority**: Stated once, owned by `/file-issue`. Each Gate 2 plan row takes its Priority level from the level tests that `/file-issue` owns (under `skills/file-issue/SKILL.md`), and this skill does not restate the tests. In a Gate 2 plan each row takes its level from those same tests, with the plan's own rows counted as issues waiting, so the rows of a plan spread over the levels in dependency order; Josh rules on each row's level with the plan. The tests say which level fits one issue; they put no limit on how many issues a level holds.
 
 8. **Split out manual steps as pairs**, grouped by gate position in the dependency chain. Manual documentation / UI inspection (e.g. verifying generated Markdown/HTML in Google Chrome) and live demonstration / procedure walkthroughs (e.g. executing real-world steps with a learner or external party) are distinct verification surfaces and must be split into separate standalone pairs/issues. **Issue & Document Title Rule for Manual Steps:** Never include personal names (e.g. "Josh:") in issue titles or document titles. Issue titles must be professional, action-oriented, and role-agnostic (e.g. "Manual verification: ...", "Verification: ..."), with ownership designated exclusively by the `Josh` label or assignment, never embedded as a name prefix.
 9. **Determine the dependency chain** across the planned issues and record it. Where an issue's deliverable is a pointer — "point X at Y" — the plan **names Y concretely**, because an unnamed target hides an ordering: if Y turns out to be something another planned issue creates, the two issues are not independent, and the implementer picks the target after the chain was already declared. Where a load-bearing proof requires implementation work to obtain, sequence that proof FIRST in the dependency chain — never leave it as a late acceptance criterion whose failure would invalidate everything already built on it.
@@ -192,7 +192,8 @@ When a run finishes on Claude Code, the skill reads the memory surfaces for rule
 
 #### Memory Consumption Guard Rails:
 - **Guard rules are NEVER candidates.** A guard rule (an approval gate, a deletion guard, a credential rule, an authorization-to-spend rule) must fire in sessions that act without loading the skill. Guard rules are never offered as consume, never offered as delete, and never split; they stay in memory whole and are omitted from the table entirely.
-- **Executed by script, never by hand.** The file surgery is performed by `scripts/consume_memory_rules.ts` in `web-jam-tools` (dry-run by default, moves to trash never `rm`, byte-verifies captures against the design document appendix, strips removed slugs from `MEMORY.md`, and reports dangling links).
+- **Executed by script, never by hand.** The file surgery is performed by `scripts/consume_memory_rules.ts` in `web-jam-tools` (dry-run by default, moves to trash never `rm`, keeps a word-for-word copy of each consumed rule and checks that copy byte for byte, strips removed slugs from `MEMORY.md`, and reports dangling links).
+- **Where the copy of a consumed rule is kept.** In a file of its own beside the design document, `~/Dropbox/web-jam-llms/<Theme>/<topic>-captured-rules.md`, and never in the design document. Gate 1 approval is tied to the exact text of the design document, and Phase 4 runs after that approval, so a step of Phase 4 that wrote into the design document would leave it reading "changed since approval" with no change to the design. The captured-rules file is a record of what left memory. It is not design, it is not presented at Gate 1, and it has no approval.
 
 ---
 
@@ -414,6 +415,20 @@ Gate 2 approval of the plan authorizes those removals, executed in the filing ph
 
 - **Prune Superseded Working Drafts:** When deliverables, guides, or runbooks are renamed, restructured, or unified during design or implementation (e.g. `shoelace-guide-granny-knots.md` → `shoelace-tying-guide.md`, or merging standalone runbooks into a unified guide), agents MUST actively delete the superseded intermediate drafts (`.md` and `.html`) from `~/Dropbox/web-jam-llms/<Theme>/` rather than leaving stale duplicates.
 - **Post-Completion Folder Audit:** Before declaring deliverables complete or closing a parent Epic, agents MUST audit the target destination folder in `~/Dropbox/web-jam-llms/<Theme>/` to ensure only the active, canonical final deliverables remain, preventing the accumulation of stale working files.
+
+### The Rendered Page
+
+A design document is two files: the text file agents write and edit, and the page `scripts/render_design_doc.ts` builds from it, which is what Josh reads in Chrome. Gate 1 approval is tied to the text file.
+
+**The history tables show newest first on the page.** Three tables hold a document's history: the revision table, the premises table and the decision record. In the text file each is written oldest first, and a new row is added at the bottom. On the page each is shown newest first:
+
+- **The revision table** — the document's structured revision table — is shown bottom row first.
+- **The premises table** — the table under the `Load-bearing premises` heading — is sorted by its `Proved` date, newest first; rows with the same date are shown bottom row first.
+- **The decision record** — the table under a heading that contains `Decision record`, `Decisions record`, `Decision log` or, as the whole heading, `Decisions`, in any capitalisation — is shown bottom row first.
+
+Every other table is shown in the order the file holds it. A table whose order means something other than time — the gates, the tier order, the rows of a Gate 2 plan — therefore reads the way it was written. The text files are not rewritten, and the document checker keeps requiring the revision table to run oldest to newest in the file.
+
+**Every table is paged.** A table with more than 10 rows shows 10 rows at a time, with a control under it offering 10, 20, 30 and all, a previous and a next button, and a count of the rows shown. A table with 10 rows or fewer has no control. With the history tables shown newest first, the first page of each is its latest ten rows. Printing the page prints every row.
 
 ### Writing Style
 
