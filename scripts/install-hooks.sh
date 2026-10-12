@@ -1056,13 +1056,31 @@ CODEX_REAPER_HOOK_DEST="$HOOKS_DEST/codex-reaper-startup-check.sh"
 
 read_agy_permissions() {
   local target_settings="$1"
-  if ! command -v agy >/dev/null 2>&1; then
-    return 2 # agy command not found
-  fi
   if [ -e "$target_settings" ]; then
     if ! deno eval --no-config 'JSON.parse(await Deno.readTextFile(Deno.args[0]))' "$target_settings" >/dev/null 2>&1; then
       return 3 # unparseable settings JSON
     fi
+  fi
+
+  if ! command -v agy >/dev/null 2>&1; then
+    local out=""
+    if [ -e "$target_settings" ]; then
+      out=$(deno eval --no-config '
+        const path = Deno.args[0];
+        try {
+          const text = await Deno.readTextFile(path);
+          const data = JSON.parse(text);
+          const allow = data?.permissions?.allow;
+          if (Array.isArray(allow)) {
+            console.log(allow.join("\n"));
+          }
+        } catch (_) {
+          Deno.exit(3);
+        }
+      ' "$target_settings" 2>/dev/null) || return 3
+    fi
+    printf '%s\n' "$out"
+    return 0
   fi
 
   local out=""
