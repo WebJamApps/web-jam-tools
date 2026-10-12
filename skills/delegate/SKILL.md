@@ -83,7 +83,7 @@ Strict rules:
 **Default Tier & Bidirectional Delegation Flexibility:**
 Josh defaults to **`Flash`** (`Gemini Flash`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
 - **Handoff on "Go" (`Flash` → `Flash`)**: When discussing an issue interactively on `Flash`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the session does the work itself or hands contained coding tasks to a subagent at the same level (`handle-agy-tasks.sh`, or `invoke_subagent` where `Model: "flash"` runs as `gemini-3.8-flash-tiered` and passes the model guard, or `Model: "inherit"`). Trivial edits go to Luna or Haiku (a `Haiku` subagent, or a Luna handoff since Luna is outside agy's picker).
-- **Delegating up** (tier order: Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus; see `docs/ai-team-playbook.md`): Delegate logic- and safety-heavy coding to `Sol` or `Sonnet`, and open-ended design to `Opus`. `Flash` handles everyday coding on Google's allowance; `Astra` is kept for REAPER recording.
+- **Delegating up** (tier order: Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus; see `docs/ai-team-playbook.md`): Delegate logic- and safety-heavy coding to `Sol` or `Sonnet`, and open-ended design to `Opus`. `Flash` handles everyday coding on Google's allowance; `Astra` is kept for REAPER recording.
 
 **Setting explicit model chains via `AGY_MODELS`:**
 The default fallback chain runs `Gemini 3.8 Flash (High)`. To target a specific tier directly, set `AGY_MODELS`:
@@ -308,7 +308,7 @@ Rules:
   one file/function/flow), STOP and report the ambiguity instead of guessing.
 - If this involves a code change: work on branch claude/<issue#>-<slug> off latest
   dev. Commit with a clear message ending exactly:
-    Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>
+    Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
   Follow the "Dispatch checkpoint" subsection above for the whole PR lifecycle:
   open the checkpoint draft PR early (right after branch + first commit + push,
   via create-draft-pr.sh CREATE mode), keep it updated at each of the two
@@ -322,7 +322,7 @@ Rules:
   a shared BE/FE contract.
 
 <Mandatory PR attribution & conventions block from above, filled in for
-"Claude Code — Haiku 4.5">
+"Claude Code — Haiku 5.5">
 
 Report back:
 - What you found/changed, bulleted

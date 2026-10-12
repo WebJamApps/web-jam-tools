@@ -16,6 +16,113 @@ const SCRIPT_PATH = new URL(
   import.meta.url,
 ).pathname;
 
+const HAIKU_EFFORT_ARGS = [
+  "--model-settings",
+  JSON.stringify({
+    "claude-haiku-5-5": { effortLevel: "high" },
+  }),
+];
+
+Deno.test("model-settings: merges Haiku effort and preserves other models and keys", async () => {
+  await withTempSettings({
+    userSetting: "keep",
+    modelSettings: {
+      "claude-haiku-5-5": { effortLevel: "medium", customSetting: 7 },
+      "claude-sonnet-5-5": { effortLevel: "high" },
+      "claude-opus-5-5": { effortLevel: "high" },
+    },
+  }, async (path) => {
+    assertEquals((await runMerge(path, HAIKU_EFFORT_ARGS)).code, 0);
+    const data = JSON.parse(await Deno.readTextFile(path));
+    assertEquals(data.userSetting, "keep");
+    assertEquals(data.modelSettings, {
+      "claude-haiku-5-5": { effortLevel: "high", customSetting: 7 },
+      "claude-sonnet-5-5": { effortLevel: "high" },
+      "claude-opus-5-5": { effortLevel: "high" },
+    });
+    const before = await Deno.readTextFile(path);
+    assertEquals((await runMerge(path, HAIKU_EFFORT_ARGS)).code, 0);
+    assertEquals(await Deno.readTextFile(path), before);
+  });
+});
+
+Deno.test("model-settings: check refuses missing or low effort without writing, then passes high", async () => {
+  await withTempSettings({}, async (path) => {
+    const before = await Deno.readTextFile(path);
+    const missing = await runMerge(path, ["--check", ...HAIKU_EFFORT_ARGS]);
+    assertEquals(missing.code, 1);
+    assert(missing.stderr.includes("modelSettings.claude-haiku-5-5.effortLevel must be high"));
+    assertEquals(await Deno.readTextFile(path), before);
+    assertEquals((await runMerge(path, HAIKU_EFFORT_ARGS)).code, 0);
+    assertEquals((await runMerge(path, ["--check", ...HAIKU_EFFORT_ARGS])).code, 0);
+    const data = JSON.parse(await Deno.readTextFile(path));
+    data.modelSettings["claude-haiku-5-5"].effortLevel = "medium";
+    await Deno.writeTextFile(path, JSON.stringify(data));
+    const low = await runMerge(path, ["--check", ...HAIKU_EFFORT_ARGS]);
+    assertEquals(low.code, 1);
+    assert(low.stderr.includes("effortLevel must be high"));
+    assertEquals(JSON.parse(await Deno.readTextFile(path)), data);
+  });
+});
+
+Deno.test("model-settings: missing, invalid or unsupported values refuse without writing", async () => {
+  const values = [
+    [],
+    ["invalid"],
+    ["null"],
+    ["[]"],
+    ["{}"],
+    ['{"bad/model":{"effortLevel":"high"}}'],
+    ['{"claude-haiku-5-5":null}'],
+    ['{"claude-haiku-5-5":{"effortLevel":"medium"}}'],
+    ['{"claude-haiku-5-5":{"effortLevel":"high","extra":true}}'],
+    [HAIKU_EFFORT_ARGS[1], HAIKU_EFFORT_ARGS[1]],
+  ];
+  await withTempSettings({ untouched: true }, async (path) => {
+    const before = await Deno.readTextFile(path);
+    for (const value of values) {
+      assertEquals((await runMerge(path, ["--model-settings", ...value])).code, 1);
+      assertEquals(await Deno.readTextFile(path), before);
+    }
+  });
+});
+
+Deno.test("model-settings: malformed installed models are preserved and refused", async () => {
+  for (const modelSettings of [null, [], "wrong", { "claude-haiku-5-5": "wrong" }]) {
+    await withTempSettings({ modelSettings }, async (path) => {
+      const before = await Deno.readTextFile(path);
+      assertEquals((await runMerge(path, HAIKU_EFFORT_ARGS)).code, 1);
+      assertEquals(await Deno.readTextFile(path), before);
+    });
+  }
+});
+
+Deno.test("model-settings: refuses the agy surface and does nothing when the option is omitted", async () => {
+  await withTempSettings({ modelSettings: { custom: { effortLevel: "medium" } } }, async (path) => {
+    const before = JSON.parse(await Deno.readTextFile(path));
+    assertEquals(
+      (await runMerge(path, ["--forbid-lifecycle-hooks", ...HAIKU_EFFORT_ARGS])).code,
+      1,
+    );
+    assertEquals(JSON.parse(await Deno.readTextFile(path)), before);
+    assertEquals((await runMerge(path, [])).code, 0);
+    assertEquals(JSON.parse(await Deno.readTextFile(path)).modelSettings, before.modelSettings);
+  });
+});
+
+Deno.test("model-settings: secret scan refuses a credential before settings reach disk", async () => {
+  await withTempSettings({
+    modelSettings: { custom: { secret: "AIza" + variedFakeBody(35, 1326) } },
+  }, async (path) => {
+    const before = await Deno.readTextFile(path);
+    const result = await runMerge(path, HAIKU_EFFORT_ARGS);
+    assertEquals(result.code, 1);
+    assert(result.stderr.includes("SECRET DETECTED"));
+    assert(result.stderr.includes("modelSettings.custom.secret"));
+    assertEquals(await Deno.readTextFile(path), before);
+  });
+});
+
 interface RunResult {
   code: number;
   stdout: string;

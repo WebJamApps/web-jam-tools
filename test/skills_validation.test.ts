@@ -1170,7 +1170,7 @@ Deno.test("skills/pr-review/SKILL.md pairing matrix ranks Sonnet above Flash", a
 
   assertStringIncludes(
     text,
-    "**Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.**",
+    "**Tier order (weakest to strongest): Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus.**",
   );
 
   // The matrix rows themselves, weakest reviewer first: Flash reviews
@@ -1241,7 +1241,7 @@ Deno.test("skills/delegate/SKILL.md escalates coding to Sol or Sonnet and design
   );
   assertStringIncludes(
     text,
-    "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
+    "Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus",
   );
   assertStringIncludes(text, "`Astra` is kept for REAPER recording.");
   assertFalse(
@@ -1253,11 +1253,11 @@ Deno.test("skills/delegate/SKILL.md escalates coding to Sol or Sonnet and design
 // --- Tier-order pin across playbook, delegate, and pr-review (web-jam-tools#1134) ---
 //
 // The tier order across all seven model labels is:
-// Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus (Sol, Astra, and Sonnet share a rung).
+// Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus (Sol, Astra, and Sonnet share a rung).
 // Stated in docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md.
 // Must fail on any other tier-order line in those three files.
 
-const EXPECTED_TIER_ORDER = "Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus";
+const EXPECTED_TIER_ORDER = "Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus";
 const TIER_ORDER_FILES = [
   "docs/ai-team-playbook.md",
   "skills/delegate/SKILL.md",
@@ -1278,7 +1278,7 @@ function assertTierOrder(text: string, file: string): void {
 }
 
 Deno.test(
-  "tier order across docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md states Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus",
+  "tier order across docs/ai-team-playbook.md, skills/delegate/SKILL.md, and skills/pr-review/SKILL.md states Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus",
   async () => {
     for (const file of TIER_ORDER_FILES) {
       const text = await Deno.readTextFile(file);
@@ -1291,8 +1291,8 @@ Deno.test("tier-order check accepts Markdown and whitespace variations of the cu
   for (
     const text of [
       EXPECTED_TIER_ORDER,
-      "**Tier order: `Haiku`→`Luna` → `Flash` → `Sol`=`Astra` = `Sonnet` → `Opus`.**",
-      "Haiku  → Luna\t→ Flash →\n  Sol = Astra = Sonnet → Opus",
+      "**Tier order: `Luna`→`Haiku` → `Flash` → `Sol`=`Astra` = `Sonnet` → `Opus`.**",
+      "Luna  → Haiku\t→ Flash →\n  Sol = Astra = Sonnet → Opus",
       `${EXPECTED_TIER_ORDER}\n${EXPECTED_TIER_ORDER}`,
       `${EXPECTED_TIER_ORDER}\nA workflow hands off Flash → Sonnet.`,
     ]
@@ -1313,9 +1313,9 @@ Deno.test("tier-order check rejects any different chain alongside the correct or
     "Haiku→Flash Med→Flash→Sonnet→Opus",
     "`Haiku`  →  `Flash Med` →\n `Flash` → `Sonnet` → `Opus`",
     "Flash Med → Flash → Sonnet → Opus",
-    "Haiku → Luna → Flash → Sol → Sonnet → Astra → Opus",
-    "Haiku → Luna → Flash → Sol = Astra → Sonnet → Opus",
-    "Haiku → Luna → Flash → Sol = Sonnet = Astra → Opus",
+    "Luna → Haiku → Flash → Sol → Sonnet → Astra → Opus",
+    "Luna → Haiku → Flash → Sol = Astra → Sonnet → Opus",
+    "Luna → Haiku → Flash → Sol = Sonnet = Astra → Opus",
     "Luna → Flash → Sol = Astra = Sonnet → Opus",
     `${EXPECTED_TIER_ORDER} → Haiku`,
   ];

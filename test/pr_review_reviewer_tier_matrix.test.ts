@@ -1,7 +1,7 @@
 // test/pr_review_reviewer_tier_matrix.test.ts — web-jam-tools#1135
 //
 // Reviewer-tier rule and default reviewers matrix test across all seven model labels:
-// Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus
+// Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus
 //
 // A reviewer on the author's rung or a higher one is accepted, except Opus on Opus;
 // every lower one is rejected. Session eligibility is a separate prerequisite.
@@ -51,8 +51,8 @@ function isReviewerAccepted(
 
 // Independent expected outcomes; never compute these from the rungs being checked.
 const ACCEPTED_REVIEWERS: Record<ModelLabel, readonly ModelLabel[]> = {
-  Haiku: ["Haiku", "Luna", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
-  Luna: ["Luna", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
+  Haiku: ["Haiku", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
+  Luna: ["Luna", "Haiku", "Flash", "Sol", "Astra", "Sonnet", "Opus"],
   Flash: ["Flash", "Sol", "Astra", "Sonnet", "Opus"],
   Sol: ["Sol", "Astra", "Sonnet", "Opus"],
   Astra: ["Sol", "Astra", "Sonnet", "Opus"],
@@ -123,8 +123,8 @@ Deno.test("default reviewers: checks the skill's table across all seven model la
 
 Deno.test("reviewer matrices detect changed rungs and default-reviewer table cells", async () => {
   const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
-  const changedRungs = documentedRungs(text.replace("Haiku → Luna", "Luna → Haiku"));
-  assertThrows(() => assertEquals(isReviewerAccepted(changedRungs, "Haiku", "Luna"), true));
+  const changedRungs = documentedRungs(text.replace("Luna → Haiku", "Haiku → Luna"));
+  assertThrows(() => assertEquals(isReviewerAccepted(changedRungs, "Haiku", "Luna"), false));
   for (const [author, defaultCell] of Object.entries(DEFAULT_REVIEWERS)) {
     const authorsCell = author === "Haiku" || author === "Luna" ? "Haiku, Luna" : author;
     const changed = text.replace(

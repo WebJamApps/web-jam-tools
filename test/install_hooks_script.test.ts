@@ -126,6 +126,7 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     }
 
     const settings = JSON.parse(await Deno.readTextFile(settingsPath));
+    assertEquals(settings.modelSettings, { "claude-haiku-5-5": { effortLevel: "high" } });
     assert(settings.hooks.SessionStart.length > 0);
     assert(settings.hooks.SessionEnd.length > 0);
     assertEquals(
@@ -180,6 +181,7 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     assertEquals(agyHooks.permissions?.defaultMode, undefined);
     // web-jam-tools#1240: agy never gets a skillOverrides surface.
     assertEquals(agyHooks.skillOverrides, undefined);
+    assertEquals(agyHooks.modelSettings, undefined);
     // web-jam-tools#1240: settings.json gets the 30 bundled skills set to name-only
     assertEquals(Object.keys(settings.skillOverrides).length, 30);
     for (const [k, v] of Object.entries(settings.skillOverrides)) {
@@ -584,6 +586,10 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(`${REPO_ROOT}deno.json`, `${mainRepo}/deno.json`);
   await Deno.mkdir(`${mainRepo}/scripts`, { recursive: true });
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/claude-settings.json`,
+    `${mainRepo}/scripts/claude-settings.json`,
+  );
   await Deno.chmod(`${mainRepo}/scripts/install-hooks.sh`, 0o755);
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
   await Deno.copyFile(MERGE_CODEX_SCRIPT, `${mainRepo}/scripts/merge-codex-reaper-hook.ts`);

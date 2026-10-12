@@ -16,7 +16,7 @@ Cross-model review ensures fresh perspective and catches model-specific blind sp
 
 Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. Equal rank does not override a more specific eligibility rule (e.g. Sol does not review Sol; Opus or Josh reviews Astra). Reviewer eligibility depends on the named model, its contributions, and the reviewer-tier rules. A conversation can contain implementation by one model and review by another. Switching to an eligible different model allows the review to run in that conversation without requiring delegation. Astra may review Sol-authored work, including a Sol fix from the same conversation, if Astra has not contributed implementation or fixes. The reviewer must also pass the independent named-model eligibility checks below.
 
-**Tier order (weakest to strongest): Haiku → Luna → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
+**Tier order (weakest to strongest): Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
 is the basis for this order. (Superseded history: on 2026-09-05 Flash was ranked above Sonnet 5
 on contamination-resistant long-horizon coding, DeepSWE v1.1, where Gemini 3.8 Flash at high effort
@@ -109,14 +109,15 @@ The skill's worked cases cover these concrete sequences and required results:
 - **Auto-detect mode**: `/pr-review` (with no arguments).
   - Sweeps open draft/ready PRs across all eight active WebJamApps repositories (see the canonical repo list: `ACTIVE_REPOS` in [`src/shared/repos.ts`](../../src/shared/repos.ts)).
   - Matches candidate PRs based on the active reviewer's model tier per the pairing matrix:
-    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash` or `Claude Haiku 4.5`.
-    - **Flash (`Gemini Flash`)**: matches PRs authored by `Claude Haiku 4.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
+    - **Sonnet (`Claude Code — Sonnet 5.5`)**: matches PRs authored by `Gemini Flash` or `Claude Haiku 5.5`.
+    - **Flash (`Gemini Flash`)**: matches PRs authored by `Claude Haiku 5.5` only. It does not match Sonnet PRs — Sonnet ranks above it.
     - **Opus (`Claude Opus`)**: does NOT auto-detect candidates; Opus reviews are strictly manual/named mode per Josh's instruction.
     - Sonnet-authored PRs have no reviewer in auto-detect mode and receive an Opus review only when Josh explicitly names the PR for that review.
     - Matching inspects the author footer attribution (`🤖 Work by ...` or `--author` string) using the `ROSTER` spellings from `scripts/create-draft-pr.sh`. These roster spellings are deliberately unversioned — they identify the PR's author tier, not the model checkpoint that ran, so they stay as written here even as the underlying Gemini version moves:
       - `Gemini Flash` (e.g. `Antigravity — Gemini Flash` / `agy — Gemini Flash`). A pull request signed `Gemini Flash (High)` before the medium level was retired keeps its footer and is read as a Flash author.
       - `Claude Sonnet 5.5` (e.g. `Claude Code — Sonnet 5.5` / `Claude Code — Claude Sonnet 5.5`)
-      - `Claude Haiku 4.5` (e.g. `Claude Code — Haiku 4.5` / `Claude Code — Claude Haiku 4.5`)
+      - `Claude Haiku 5.5` (e.g. `Claude Code — Haiku 5.5` / `Claude Code — Claude Haiku 5.5`)
+    - **Older Haiku footers:** A pull request already signed `Claude Haiku 4.5` keeps its footer and is read as a Haiku author; the current roster is used only when signing new work.
   - Determines review status for each candidate PR using the head-SHA comparison from Step 1's "Already-Reviewed Check":
     - Compares the commit SHA of the newest automated review (`reviews | map(select((.body // "") | test("(?i)## PR Review Summary"))) | last | .commit.oid`) against the PR's current head commit SHA (`commits | last | .oid`).
     - If equal (`head_sha == last_review_sha`), mark as `reviewed at current head`. Already-reviewed PRs are included in the pick-list rather than filtered out.
