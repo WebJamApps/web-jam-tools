@@ -4,6 +4,29 @@ Index of utilities in `scripts/`. Run from the repo root unless noted.
 
 ## Workspace utilities
 
+### `running-model`
+
+Prints exactly one model name from the author roster using the tool's session record.
+
+```sh
+deno task running-model
+```
+
+Codex reads the newest recorded turn of the session named by `CODEX_THREAD_ID`. Claude Code locates
+the transcript named by `CLAUDE_CODE_SESSION_ID` across `~/.claude/projects/` and reads its newest
+genuine assistant entry. If both IDs are set, the command exits 1 because two tools claim the
+session. An identified session that cannot be read never falls back to another tool.
+
+Only when neither ID is set does it read the newest agy hook record from
+`/tmp/agy-hook-invocations.jsonl` (or `AGY_HOOK_RECORD_PATH`). The record must name a conversation
+and its model. That hook log is shared across agy sessions: concurrent invocations can leave another
+session's record last, so the command cannot distinguish those conversations. It never uses
+model-written prose or the configured default model.
+
+A missing, unreadable, ambiguous, or unrostered result prints `Cannot tell the running model` with
+the reason on stderr and exits 1 without stdout. The command reads local files and the roster's
+shell probe only; it has no network or write permissions.
+
 ### `backlog-groom:rank`
 
 Ranks one active repository's open issues and prints a batch of proposed native Priority moves.
