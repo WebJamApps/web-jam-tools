@@ -4,7 +4,7 @@
 // 1. Raw inline and block SVG rendering (AC1, AC2)
 // 2. Table column sizing and overflow prevention (AC3, AC4)
 // 3. Section navigation collapse and restore controls (AC5)
-// 4. Document version and revision date declarations in header (AC6)
+// 4. Revision table retained without a version/date subtitle
 
 import { assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
@@ -460,7 +460,7 @@ Content 2
   assertStringIncludes(html, 'layout.classList.remove("nav-collapsed")');
 });
 
-Deno.test("AC6: Document with ## Revision History table renders newest version and date in header and renders table in place", () => {
+Deno.test("renderDesignDoc: revision metadata stays in the table without a title subtitle", () => {
   // Case A: Document with ## Revision History table
   const docWithTable = `# Design Document Title
 
@@ -476,10 +476,13 @@ Section text.
 `;
   const htmlWithTable = renderDesignDoc(docWithTable);
   const mainWithTable = htmlWithTable.split("<main>")[1]?.split("</main>")[0] ?? "";
-  assertStringIncludes(mainWithTable, '<header class="doc-header">');
-  assertStringIncludes(mainWithTable, '<div class="doc-version-line">');
-  assertStringIncludes(mainWithTable, '<span class="doc-version">Version: 2.1.0</span>');
-  assertStringIncludes(mainWithTable, '<span class="doc-revised">Revised: 2026-09-02</span>');
+  assertStringIncludes(mainWithTable, "<h1>Design Document Title</h1>");
+  assertFalse(htmlWithTable.includes("doc-version"));
+  assertFalse(htmlWithTable.includes("doc-revised"));
+  assertFalse(mainWithTable.includes("Version:"));
+  assertFalse(mainWithTable.includes("Revised:"));
+  assertEquals(mainWithTable.match(/2\.1\.0/g)?.length, 1);
+  assertEquals(mainWithTable.match(/2026-09-02/g)?.length, 1);
   // Table must render in place in the body
   assertStringIncludes(mainWithTable, '<h2 id="revision-history">Revision History</h2>');
   assertStringIncludes(mainWithTable, "<th>Version</th>");
@@ -499,6 +502,24 @@ Section text.
   assertFalse(mainWithoutTable.includes("Version:"));
   assertFalse(mainWithoutTable.includes("Revised:"));
   assertStringIncludes(mainWithoutTable, "<h1>Clean Title</h1>");
+});
+
+Deno.test("renderDesignDoc: a revision table without H1 uses the title fallback without metadata", () => {
+  const html = renderDesignDoc(
+    `## Revision History
+
+| Version | Date | Summary |
+|---|---|---|
+| 1.0.0 | 2026-10-10 | Initial |
+`,
+    "Fallback title",
+  );
+  assertStringIncludes(html, "<title>Fallback title</title>");
+  assertStringIncludes(html, "<h1>Fallback title</h1>");
+  assertFalse(html.includes("doc-version"));
+  assertFalse(html.includes("doc-revised"));
+  assertStringIncludes(html, "<td>1.0.0</td>");
+  assertStringIncludes(html, "<td>2026-10-10</td>");
 });
 
 Deno.test("parseInlineMarkdown renders <br> variants as real line breaks in table cells", () => {
@@ -596,8 +617,10 @@ Deno.test("renderDesignDocFile reads markdown file and writes HTML", () => {
 
     const generatedHtml = Deno.readTextFileSync(htmlPath);
     assertStringIncludes(generatedHtml, "File Test");
-    assertStringIncludes(generatedHtml, "Version: 1.0.0");
-    assertStringIncludes(generatedHtml, "Revised: 2026-09-02");
+    assertFalse(generatedHtml.includes("doc-version"));
+    assertFalse(generatedHtml.includes("doc-revised"));
+    assertStringIncludes(generatedHtml, "<td>1.0.0</td>");
+    assertStringIncludes(generatedHtml, "<td>2026-09-02</td>");
     assertStringIncludes(generatedHtml, "nav-collapse-btn");
   } finally {
     Deno.removeSync(tempDir, { recursive: true });

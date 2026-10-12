@@ -19,6 +19,68 @@ function violationsFor(line: string, rule: string): number {
   return result.violations.filter((v) => v.rule === rule).length;
 }
 
+function revisionQuoteDoc(text: string): string {
+  return `${docWith(text)}
+
+## Load-bearing premises
+| Premise | Proof | Proved |
+|---|---|---|
+| Quotes preserve literal requests | Run the quoting regression fixtures | ${
+    new Date().toISOString().slice(0, 10)
+  } |
+`;
+}
+
+Deno.test("lintDesignDoc: explicit verbatim blockquotes can say revision history", () => {
+  for (
+    const text of [
+      "> we have a revision history in the document",
+      "> Revision History table only\n> no subtitle with redundant version and date",
+      "   > revision history",
+      ">>revision history",
+    ]
+  ) {
+    const result = lintDesignDoc(revisionQuoteDoc(text), "test.md");
+    assertEquals(result.violations, [], text);
+    assertEquals(result.valid, true);
+  }
+});
+
+Deno.test("lintDesignDoc: quote exemption ends before body prose", () => {
+  const text = "> revision history\n\nThe revision history records the changes.";
+  const result = lintDesignDoc(revisionQuoteDoc(text), "test.md");
+  const narration = result.violations.filter((v) => v.rule === "no-revision-narration");
+  assertEquals(result.valid, false);
+  assertEquals(narration.length, 1);
+  assertEquals(narration[0].line, 6);
+  assertEquals(narration[0].lineContent, "The revision history records the changes.");
+});
+
+Deno.test("lintDesignDoc: unparseable quote markers and unclosed quotes refuse at their line", () => {
+  for (
+    const text of [
+      "\\> revision history",
+      "&gt; revision history",
+      "    > revision history",
+      "\t> revision history",
+      '"revision history',
+      "`revision history",
+      "> quoted request\nrevision history",
+    ]
+  ) {
+    const result = lintDesignDoc(revisionQuoteDoc(text), "test.md");
+    const narration = result.violations.filter((v) => v.rule === "no-revision-narration");
+    assertEquals(result.valid, false, text);
+    assertEquals(narration.length, 1, text);
+    assertEquals(narration[0].line, text.includes("\n") ? 5 : 4, text);
+    assertEquals(narration[0].lineContent, text.split("\n").at(-1), text);
+  }
+});
+
+Deno.test("lintDesignDoc: blockquote exemption does not exempt other revision narration", () => {
+  assertEquals(violationsFor("> what changed in the revision history", "no-revision-narration"), 1);
+});
+
 // A representative bare-prose example for each of the three affected rules, used throughout.
 const BARE_EXAMPLES: Record<string, string> = {
   "no-gate-or-approval-state": "Gate 1: Approved",

@@ -174,13 +174,6 @@ export function parseInlineMarkdown(text: string): string {
 }
 
 /**
- * Converts a Markdown document into a standalone HTML document adhering to design rules.
- */
-function stripCellDecoration(cell: string): string {
-  return cell.replace(/[`*_"'“”‘’]/g, "").trim();
-}
-
-/**
  * Splits a Markdown table row (e.g. "| a | b\| c | d |") into trimmed cells,
  * treating a backslash-escaped pipe (`\|`) as a literal `|` inside a cell
  * rather than a column separator.
@@ -205,6 +198,7 @@ function parseTableRow(rowStr: string): string[] {
   return cells;
 }
 
+/** Converts a Markdown document into a standalone HTML document adhering to design rules. */
 export function renderDesignDoc(
   markdownContent: string,
   fallbackTitle: string = "Design Document",
@@ -212,16 +206,16 @@ export function renderDesignDoc(
   const lines = markdownContent.split(/\r?\n/);
 
   let documentTitle = fallbackTitle;
-  let version = "";
-  let revised = "";
+  let hasDocumentTitle = false;
   const tocEntries: Array<{ title: string; slug: string }> = [];
   const usedSlugs = new Set<string>();
 
-  // Pass 1: Extract document title, revision history version/date, and H2 TOC entries
+  // Pass 1: Extract document title and H2 TOC entries.
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (line.startsWith("# ") && documentTitle === fallbackTitle) {
       documentTitle = line.substring(2).trim();
+      hasDocumentTitle = true;
     } else if (line.startsWith("## ")) {
       const headingText = line.substring(3).trim();
       const cleanTitle = headingText
@@ -236,41 +230,6 @@ export function renderDesignDoc(
       }
       usedSlugs.add(slug);
       tocEntries.push({ title: cleanTitle || headingText, slug });
-
-      if (/^Revision\s+History$/i.test(cleanTitle)) {
-        // Look ahead for the table under ## Revision History
-        let j = i + 1;
-        while (j < lines.length && lines[j].trim() === "") {
-          j++;
-        }
-        if (j < lines.length && lines[j].trim().startsWith("|")) {
-          const tableLines: string[] = [];
-          while (
-            j < lines.length &&
-            lines[j].trim().startsWith("|") &&
-            lines[j].trim().endsWith("|")
-          ) {
-            tableLines.push(lines[j].trim());
-            j++;
-          }
-          if (tableLines.length >= 3) {
-            const headerCells = parseTableRow(tableLines[0]);
-            const versionIdx = headerCells.findIndex((c) =>
-              /^version$/i.test(stripCellDecoration(c))
-            );
-            const dateIdx = headerCells.findIndex((c) => /^date$/i.test(stripCellDecoration(c)));
-            if (versionIdx !== -1 && dateIdx !== -1) {
-              const dataRows = tableLines.slice(2).map(parseTableRow);
-              if (dataRows.length > 0) {
-                // Newest row is the last row (oldest-to-newest order)
-                const lastRow = dataRows[dataRows.length - 1];
-                version = stripCellDecoration(lastRow[versionIdx] ?? "");
-                revised = stripCellDecoration(lastRow[dateIdx] ?? "");
-              }
-            }
-          }
-        }
-      }
     }
   }
 
@@ -295,7 +254,9 @@ export function renderDesignDoc(
   let inAppendix = false;
   let inAppendixDetails = false;
   let h2Count = 0;
-  let hasRenderedHeader = false;
+  if (!hasDocumentTitle) {
+    bodyHtmlParts.push(`<h1>${escapeHtml(documentTitle)}</h1>`);
+  }
 
   let i = 0;
   while (i < lines.length) {
@@ -345,41 +306,8 @@ export function renderDesignDoc(
         const text = match[2].trim();
 
         if (level === 1) {
-          hasRenderedHeader = true;
-          if (version || revised) {
-            let metaHtml = `<div class="doc-version-line">\n`;
-            if (version) {
-              metaHtml += `    <span class="doc-version">Version: ${escapeHtml(version)}</span>\n`;
-            }
-            if (revised) {
-              metaHtml += `    <span class="doc-revised">Revised: ${escapeHtml(revised)}</span>\n`;
-            }
-            metaHtml += `  </div>`;
-            bodyHtmlParts.push(
-              `<header class="doc-header">\n  <h1>${
-                parseInlineMarkdown(text)
-              }</h1>\n  ${metaHtml}\n</header>`,
-            );
-          } else {
-            bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text)}</h1>`);
-          }
+          bodyHtmlParts.push(`<h1>${parseInlineMarkdown(text)}</h1>`);
         } else if (level === 2) {
-          if (!hasRenderedHeader && (version || revised)) {
-            hasRenderedHeader = true;
-            let metaHtml = `<div class="doc-version-line">\n`;
-            if (version) {
-              metaHtml += `    <span class="doc-version">Version: ${escapeHtml(version)}</span>\n`;
-            }
-            if (revised) {
-              metaHtml += `    <span class="doc-revised">Revised: ${escapeHtml(revised)}</span>\n`;
-            }
-            metaHtml += `  </div>`;
-            bodyHtmlParts.push(
-              `<header class="doc-header">\n  <h1>${
-                escapeHtml(documentTitle)
-              }</h1>\n  ${metaHtml}\n</header>`,
-            );
-          }
           if (inAppendixDetails) {
             bodyHtmlParts.push(`</div>\n</details>`);
             inAppendixDetails = false;
@@ -602,26 +530,6 @@ export function renderDesignDoc(
 
     main {
       min-width: 0;
-    }
-
-    .doc-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      flex-wrap: wrap;
-      gap: 16px;
-    }
-
-    .doc-header h1 {
-      margin: 0;
-    }
-
-    .doc-version-line {
-      display: flex;
-      gap: 16px;
-      font-size: 0.95rem;
-      color: var(--text-color);
-      opacity: 0.8;
     }
 
     .table-wrapper, pre {

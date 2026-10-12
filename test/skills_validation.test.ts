@@ -717,7 +717,7 @@ Deno.test("skills/design-issue/SKILL.md contains resume rule in Phase 1 step 1",
 
   assertStringIncludes(
     text,
-    "**Resume rather than restart:** Resolving the canonical design document is a precondition of the run itself rather than of creating one, so every run — including one that creates no document at all — looks in the theme folder for an existing `<topic>-design-*.md` and continues from its decision record; a run that wants a fresh document says so.",
+    "**Resume rather than restart:** Resolving the canonical design document is a precondition of the run itself rather than of creating one, so every run — including one that creates no document at all — looks in the theme folder for an existing `<topic>-design.md` and continues from its decision record; a run that wants a fresh document says so.",
   );
 });
 
@@ -752,7 +752,7 @@ Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as 
   );
   assertStringIncludes(
     text,
-    "| create a redundant parallel design document (e.g. `*-phase-2-design-*.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` |",
+    "| create a redundant parallel design document (e.g. `*-phase-2-design.md`) for a feature or skill that already has a canonical design document in `~/Dropbox/web-jam-llms/<Theme>/` |",
   );
 
   // Canonical-document discovery is described in exactly one place (STEP ZERO) — the duplicate
@@ -777,7 +777,7 @@ Deno.test("skills/design-issue/SKILL.md states canonical-document resolution as 
     const staleTrigger of [
       "Before creating a design document, look in the theme folder",
       "Before creating a new file, run `deno task design:candidates",
-      "for pre-existing canonical design documents (`<topic>-design-*.md` or `<topic>-skill-design-*.md`) before creating a new document",
+      "for pre-existing canonical design documents (`<topic>-design.md` or `<topic>-skill-design.md`) before creating a new document",
     ]
   ) {
     assertEquals(
@@ -1238,6 +1238,24 @@ Deno.test("skills/design-issue/SKILL.md contains installer-scope rule", async ()
   assertStringIncludes(
     text,
     "The installers exist for the two things a symlink cannot carry: a link that does not exist yet, and a registration entry.",
+  );
+});
+
+Deno.test("skills/design-issue/SKILL.md creates undated design documents consistently", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  const createStep = text.split("1. **Establish the theme and milestone.**")[1]?.split(
+    "2. **Record",
+  )[0];
+  assertEquals(typeof createStep, "string");
+  assertStringIncludes(
+    createStep!,
+    "create the design document at `~/Dropbox/web-jam-llms/<Theme>/<topic>-design.md`",
+  );
+  assertEquals(/design-(?:<YYYY-MM-DD>|\*)\.md/.test(text), false);
+  assertStringIncludes(text, "(`<topic>-design.md` or `<topic>-skill-design.md`)");
+  assertStringIncludes(
+    text,
+    "Design documents (`<topic>-design.md`) are permanent architectural records",
   );
 });
 
