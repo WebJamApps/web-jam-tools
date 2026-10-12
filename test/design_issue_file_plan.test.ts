@@ -201,7 +201,7 @@ Deno.test("filePlan files epic first, then children attached to epic, then links
       const cmdStr = cmd.join(" ");
 
       // web-jam-tools#901: duplicate search runs before each create call.
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
       }
 
@@ -862,7 +862,7 @@ Deno.test("filePlan: resolves position and explicit id dependencies accurately w
   const mockDeps: ExecDeps = {
     runCmd(cmd) {
       const cmdStr = cmd.join(" ");
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
       }
       if (cmdStr.includes("gh issue create")) {

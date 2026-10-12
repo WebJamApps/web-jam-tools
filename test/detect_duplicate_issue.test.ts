@@ -3,12 +3,14 @@ import { assertEquals } from "@std/assert";
 import {
   checkDuplicateTitle,
   classifyDuplicate,
+  type CommandRunner,
   DUPLICATE_MIN_SHARED_TOKENS,
   DUPLICATE_SIMILARITY_THRESHOLD,
-  FETCH_LIMIT,
+  FETCH_PAGE_SIZE,
   fetchOpenIssueTitles,
   findSimilarOpenIssues,
   formatCandidates,
+  type OpenIssueSummary,
   titleSimilarity,
   tokenizeTitle,
 } from "../hooks/lib/detect_duplicate_issue.ts";
@@ -173,10 +175,12 @@ Deno.test("classifyDuplicate: an empty/whitespace-only override reason does NOT 
 
 // --- fetchOpenIssueTitles / checkDuplicateTitle: async orchestration with an injected runner ---
 
-Deno.test("fetchOpenIssueTitles: parses a successful gh issue list response", async () => {
+Deno.test("fetchOpenIssueTitles: requests open issues and parses a successful REST page", async () => {
   const issues = await fetchOpenIssueTitles("WebJamApps/web-jam-tools", (args) => {
-    assertEquals(args[0], "issue");
-    assertEquals(args[1], "list");
+    assertEquals(args, [
+      "api",
+      "repos/WebJamApps/web-jam-tools/issues?state=open&per_page=100&page=1",
+    ]);
     return Promise.resolve({
       code: 0,
       stdout: JSON.stringify([{ number: 1, title: "One" }, { number: 2, title: "Two" }]),
@@ -210,28 +214,117 @@ Deno.test("fetchOpenIssueTitles: non-array JSON returns null (search failed)", a
   assertEquals(issues, null);
 });
 
-Deno.test("fetchOpenIssueTitles: a result exactly at FETCH_LIMIT is treated as truncated, not exhaustive (web-jam-tools#904 review)", async () => {
-  const fullPage = Array.from(
-    { length: FETCH_LIMIT },
-    (_, i) => ({ number: i + 1, title: `Issue ${i + 1}` }),
-  );
-  const issues = await fetchOpenIssueTitles(
+function pagedRunner(records: OpenIssueSummary[], failurePage?: number): CommandRunner {
+  let expectedPage = 1;
+  return (args) => {
+    assertEquals(args, [
+      "api",
+      `repos/WebJamApps/web-jam-tools/issues?state=open&per_page=100&page=${expectedPage}`,
+    ]);
+    const page = expectedPage++;
+    if (page === failurePage) {
+      return Promise.resolve({ code: 1, stdout: "", stderr: "rate limit exceeded" });
+    }
+    return Promise.resolve({
+      code: 0,
+      stdout: JSON.stringify(records.slice((page - 1) * FETCH_PAGE_SIZE, page * FETCH_PAGE_SIZE)),
+      stderr: "",
+    });
+  };
+}
+
+function openIssues(count: number): OpenIssueSummary[] {
+  return Array.from({ length: count }, (_, i) => ({ number: i + 1, title: `Issue ${i + 1}` }));
+}
+
+for (const count of [0, 299, 300, 301, 1000]) {
+  Deno.test(`fetchOpenIssueTitles: returns every title in a repository with ${count} open issues`, async () => {
+    const records = openIssues(count);
+    assertEquals(
+      await fetchOpenIssueTitles("WebJamApps/web-jam-tools", pagedRunner(records)),
+      records,
+    );
+    assertEquals(
+      await checkDuplicateTitle(
+        "Unrelated fresh task title",
+        "WebJamApps/web-jam-tools",
+        null,
+        pagedRunner(records),
+      ),
+      { outcome: "pass" },
+    );
+  });
+}
+
+Deno.test("checkDuplicateTitle: finds and names the 950th issue among 1000 open issues", async () => {
+  const records = openIssues(1000);
+  records[949].title = EXISTING_TITLE;
+  const result = await checkDuplicateTitle(
+    EXISTING_TITLE,
     "WebJamApps/web-jam-tools",
-    () => Promise.resolve({ code: 0, stdout: JSON.stringify(fullPage), stderr: "" }),
+    null,
+    pagedRunner(records),
   );
-  assertEquals(issues, null);
+  if (result.outcome !== "deny_duplicate") {
+    throw new Error(`Expected duplicate, got ${result.outcome}`);
+  }
+  assertEquals(result.candidates.map(({ number, title }) => ({ number, title })), [records[949]]);
+  assertEquals(
+    formatCandidates(result.repoFull, result.candidates),
+    `web-jam-tools#950 "${EXISTING_TITLE}"`,
+  );
 });
 
-Deno.test("fetchOpenIssueTitles: a result one short of FETCH_LIMIT is treated as exhaustive", async () => {
-  const almostFullPage = Array.from(
-    { length: FETCH_LIMIT - 1 },
-    (_, i) => ({ number: i + 1, title: `Issue ${i + 1}` }),
+Deno.test("checkDuplicateTitle: refuses a 1000-issue search that fails after the first 100", async () => {
+  const records = openIssues(1000);
+  records[0].title = EXISTING_TITLE;
+  assertEquals(
+    await fetchOpenIssueTitles("WebJamApps/web-jam-tools", pagedRunner(records, 2)),
+    null,
   );
-  const issues = await fetchOpenIssueTitles(
-    "WebJamApps/web-jam-tools",
-    () => Promise.resolve({ code: 0, stdout: JSON.stringify(almostFullPage), stderr: "" }),
+  assertEquals(
+    await checkDuplicateTitle(
+      EXISTING_TITLE,
+      "WebJamApps/web-jam-tools",
+      null,
+      pagedRunner(records, 2),
+    ),
+    { outcome: "deny_search_failed", repoFull: "WebJamApps/web-jam-tools" },
   );
-  assertEquals(issues?.length, FETCH_LIMIT - 1);
+});
+
+Deno.test("fetchOpenIssueTitles: pull requests do not match or stop pagination", async () => {
+  const records = openIssues(100);
+  const pullRequests = records.map((issue) => ({
+    ...issue,
+    title: EXISTING_TITLE,
+    pull_request: {},
+  }));
+  const issue = { number: 101, title: "Only issue" };
+  assertEquals(
+    await fetchOpenIssueTitles("WebJamApps/web-jam-tools", pagedRunner([...pullRequests, issue])),
+    [issue],
+  );
+});
+
+for (const stdout of ["not json", "{}", '[{"number":101}]']) {
+  Deno.test(`fetchOpenIssueTitles: malformed later page discards earlier titles (${stdout})`, async () => {
+    const firstPage = pagedRunner(openIssues(100));
+    let calls = 0;
+    const runner: CommandRunner = (args) =>
+      ++calls === 1 ? firstPage(args) : Promise.resolve({ code: 0, stdout, stderr: "" });
+    assertEquals(await fetchOpenIssueTitles("WebJamApps/web-jam-tools", runner), null);
+    assertEquals(calls, 2);
+  });
+}
+
+Deno.test("fetchOpenIssueTitles: a rejected runner returns null rather than a partial list", async () => {
+  const firstPage = pagedRunner(openIssues(100));
+  let calls = 0;
+  const runner: CommandRunner = (args) =>
+    ++calls === 1 ? firstPage(args) : Promise.reject(new Error("Network disconnected"));
+  assertEquals(await fetchOpenIssueTitles("WebJamApps/web-jam-tools", runner), null);
+  assertEquals(calls, 2);
 });
 
 Deno.test("checkDuplicateTitle: end-to-end deny_duplicate via an injected runner", async () => {

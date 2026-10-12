@@ -300,7 +300,7 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
       const cmdStr = cmd.join(" ");
 
       // web-jam-tools#901: duplicate search runs before the create call.
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
       }
       if (cmdStr.includes("gh issue create")) {
@@ -414,7 +414,7 @@ Deno.test("createIssueAndVerify setting type to Epic succeeds with mocked GraphQ
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
 
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
       }
       if (cmdStr.includes("gh issue create")) {
@@ -483,7 +483,7 @@ Deno.test("createIssueAndVerify fallback GraphQL parent check when parent missin
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
 
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
       }
       if (cmdStr.includes("gh issue create")) {
@@ -1179,7 +1179,7 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
         const mockDeps: ExecDeps = {
           runCmd(cmd: string[]) {
             const cmdStr = cmd.join(" ");
-            if (cmdStr.includes("gh issue list")) {
+            if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
               return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
             }
             if (cmdStr.includes("gh issue create")) {
@@ -1551,7 +1551,7 @@ Deno.test("createIssueAndVerify: refuses to file when a similar OPEN issue is fo
   const mockDeps: ExecDeps = {
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         return Promise.resolve({
           code: 0,
           stdout: JSON.stringify([{ number: 885, title: EXISTING_DUP_TITLE }]),
@@ -1583,7 +1583,7 @@ Deno.test("createIssueAndVerify: no similar OPEN issue proceeds unchanged", asyn
   const mockDeps: ExecDeps = {
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         return Promise.resolve({
           code: 0,
           stdout: JSON.stringify([{ number: 885, title: EXISTING_DUP_TITLE }]),
@@ -1621,7 +1621,7 @@ Deno.test("createIssueAndVerify: refuses to file when the duplicate search itsel
   const mockDeps: ExecDeps = {
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         return Promise.resolve({ code: 1, stdout: "", stderr: "gh: auth error" });
       }
       return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
@@ -1650,7 +1650,7 @@ Deno.test("createIssueAndVerify: --dedup-override clears a duplicate deny and re
   const mockDeps: ExecDeps = {
     runCmd(cmd: string[]) {
       const cmdStr = cmd.join(" ");
-      if (cmdStr.includes("gh issue list")) {
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues?state=open&")) {
         throw new Error("dedup search should have been skipped once an override reason is given");
       }
       if (cmdStr.includes("gh issue create")) {
