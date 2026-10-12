@@ -7,32 +7,31 @@ description: Process Josh's Gmail inbox one message at a time, newest first, sug
 
 Process Josh's primary Gmail (joshua.v.sherman@gmail.com) one message at a time, newest first. Includes **both read and unread** messages in `label:inbox` — Josh is trying to keep the inbox clean, not just process unread.
 
-## ⛔ Model gate — laptop MUST be on Haiku (do this FIRST)
+## ⛔ Model tier gate — cheap tier required (do this FIRST)
 
-This is mechanical, high-volume triage: every message body gets pulled into context one at a time, so it must run on the **cheapest tier**. On the laptop that is **Haiku**; on the phone it is the **Sonnet** seat. **Never run it on Opus** (or any pricier model) — that burns high-tier tokens on routine cleanup.
+This is mechanical, high-volume triage: every message body gets pulled into context one at a time, so it must run on the **cheapest tier**. On the laptop that is **Haiku** (Claude Code) or **Flash** (Antigravity / agy); on the phone it is the **Sonnet** seat. Running on higher tiers (such as Opus or Pro) burns expensive tokens on routine cleanup.
 
-A skill cannot switch the session model itself, so on the laptop the **very first action of this skill is to check the running model** — before pulling any email:
+A skill cannot switch the session model itself, so on the laptop the **very first action of this skill is to verify the running model** — before pulling any email:
 
-- **If the model is NOT Haiku** (e.g. Opus, or Sonnet): do **not** process any message. Stop immediately and tell Josh, verbatim:
-  > ⛔ handle-gmails must run on **Haiku** to keep Gmail cleanup cheap. Please switch models first — type `/model haiku` — then re-run `/handle-gmails`.
-
-  Then **STOP and wait.** Do not proceed with any triage until the session is on Haiku.
-- **If the model IS Haiku:** proceed with the per-session flow below.
-
-The **phone Sonnet** surface is exempt from this gate — Sonnet is the intended cheap tier on mobile.
+- **Claude Code surface:**
+  - Verify the session is on Haiku. If on a pricier model (e.g. Sonnet, Opus), stop and prompt Josh to switch to Haiku before re-running `/handle-gmails`.
+- **Antigravity (`agy`) surface:**
+  - Verify the session is on Flash (`gemini-3.7-flash` or newer, enforced by `hooks/agy-model-guard.sh`). If on a higher-tier model (e.g. Pro), switch to Flash before proceeding.
+- **Phone Sonnet surface:**
+  - Exempt from this check — Sonnet is the intended cheap tier on mobile.
 
 ## Surfaces — who runs this and how it loads
 
-This one skill runs on two surfaces against the **same** primary inbox. Don't run both at the same moment.
+This skill runs across three surfaces against the **same** primary inbox. Don't run multiple surfaces at the same moment.
 
-| | **Laptop — Haiku** (Claude Code) | **Phone — Sonnet** (Claude app) |
-|---|---|---|
-| Gmail tools | `mcp__gmail__*` (local MCP) | `mcp__claude_ai_Gmail__*` |
-| Local filesystem | yes | **no** |
-| How it loads | installed skill at `~/.claude/skills/handle-gmails/` (symlinked to this repo); invoked via `/handle-gmails` | Josh pastes a prompt telling Sonnet to fetch this file from GitHub and follow it (see "Phone pickup prompt" below) |
-| rules.yaml / daily log / last-run.txt | used (steps 1–3, 6) | **skipped** — no filesystem. Every message pauses for approval; no auto-rules, no log, no last-run. |
+| | **Laptop — Claude Code** (Haiku) | **Laptop — Antigravity / agy** (Flash) | **Phone — Claude app** (Sonnet) |
+|---|---|---|---|
+| Gmail tools | `mcp__gmail__*` (local MCP) | `search_emails`, `read_email`, `list_email_labels`, `modify_email` (unprefixed Gmail MCP tools) | `mcp__claude_ai_Gmail__*` |
+| Local filesystem | yes | yes | **no** |
+| How it loads | installed skill at `~/.claude/skills/handle-gmails/` (symlinked); invoked via `/handle-gmails` | installed plugin skill at `~/.gemini/config/plugins/webjam-tasks/skills/handle-gmails/`; invoked via `/handle-gmails` | Josh pastes prompt to fetch from GitHub (see "Phone pickup prompt" below) |
+| rules.yaml / daily log / last-run.txt | used (steps 1–3, 6) | used (steps 1–3, 6) | **skipped** — no filesystem. Every message pauses for approval; no auto-rules, no log, no last-run. |
 
-Both surfaces share the same **core flow**, **action vocabulary**, and **hard rules**. The local-file machinery (rules, log, last-run) is laptop-only and is clearly marked below.
+All surfaces share the same **core flow**, **action vocabulary**, and **hard rules**. The local-file machinery (rules, log, last-run at `~/.claude/skills/handle-gmails/`) is laptop-only and is clearly marked below.
 
 ## Trigger phrases
 
@@ -64,19 +63,19 @@ Steps marked **(laptop only)** require a local filesystem — phone Sonnet skips
 
 ## Action vocabulary — per surface
 
-On the phone, the `mcp__claude_ai_Gmail__*` tools operate on **threads and labels** (there is no direct "delete" or "modify"); archiving and spam are done by removing/adding labels. Describe the action semantically and use whichever tool on your surface matches.
+On the phone, the `mcp__claude_ai_Gmail__*` tools operate on **threads and labels** (there is no direct "delete" or "modify"); archiving and spam are done by removing/adding labels. On Antigravity / agy, tool names are unprefixed (`modify_email`, `draft_email`, etc.) and `send_email`/`delete_email` are denied by `hooks/block-agy-gmail-send-delete.sh`. Describe the action semantically and use whichever tool on your surface matches.
 
-| Action | Laptop — `mcp__gmail__*` | Phone — `mcp__claude_ai_Gmail__*` |
-|---|---|---|
-| `archive` | `modify_email` removing `INBOX`. Don't mark read if it was unread. | `unlabel_thread` removing `INBOX`. |
-| `delete` (move to Trash) | `modify_email` with `addLabelIds: ["TRASH"]` — moves the message to Trash without permanently deleting it. | `label_thread` (or `label_message`) adding `TRASH` — moves it to Trash. (`TRASH` is a supported system label; there's just no dedicated delete tool.) |
-| `draft reply` | `draft_email` with `inReplyTo` + `threadId` from the source message. **Print the draft for Josh's review before saving.** | `create_draft` referencing the thread. **Print the draft for Josh's review before saving.** |
-| `label <name>` | `get_or_create_label` then `modify_email` adding the label. | `list_labels` (or `create_label` if missing) then `label_thread` adding it. |
-| `mark important` | `modify_email` adding `IMPORTANT`. | `label_thread` adding `IMPORTANT`. |
-| `mark spam` | `modify_email` removing `INBOX` and adding `SPAM`. | `label_thread` adding `SPAM` + `unlabel_thread` removing `INBOX`. |
-| `unsubscribe` | Find the List-Unsubscribe link (headers/body), give Josh the URL, ask for go-ahead (we can't click — Josh does). Then archive. | Same — find the link, give Josh the URL, then archive (unlabel `INBOX`). |
-| `do nothing / next` | No-op; move to next message. | Same. |
-| `stop` / `done` | Update last-run.txt and exit cleanly. | Just stop — nothing to persist. |
+| Action | Laptop — Claude Code (`mcp__gmail__*`) | Laptop — Antigravity / agy (Gmail MCP) | Phone — Claude app (`mcp__claude_ai_Gmail__*`) |
+|---|---|---|---|
+| `archive` | `modify_email` removing `INBOX`. Don't mark read if it was unread. | `modify_email` removing `INBOX`. Don't mark read if it was unread. | `unlabel_thread` removing `INBOX`. |
+| `delete` (move to Trash) | `modify_email` with `addLabelIds: ["TRASH"]` — moves the message to Trash without permanently deleting it. | `modify_email` with `addLabelIds: ["TRASH"]` (direct delete is blocked by safety hook). | `label_thread` (or `label_message`) adding `TRASH` — moves it to Trash. (`TRASH` is a supported system label; there's just no dedicated delete tool.) |
+| `draft reply` | `draft_email` with `inReplyTo` + `threadId` from the source message. **Print the draft for Josh's review before saving.** | `draft_email` with `inReplyTo` + `threadId` from the source message. **Print the draft for Josh's review before saving.** | `create_draft` referencing the thread. **Print the draft for Josh's review before saving.** |
+| `label <name>` | `get_or_create_label` then `modify_email` adding the label. | `modify_email` adding the label ID (resolve via `list_email_labels`). | `list_labels` (or `create_label` if missing) then `label_thread` adding it. |
+| `mark important` | `modify_email` adding `IMPORTANT`. | `modify_email` adding `IMPORTANT`. | `label_thread` adding `IMPORTANT`. |
+| `mark spam` | `modify_email` removing `INBOX` and adding `SPAM`. | `modify_email` removing `INBOX` and adding `SPAM`. | `label_thread` adding `SPAM` + `unlabel_thread` removing `INBOX`. |
+| `unsubscribe` | Find the List-Unsubscribe link (headers/body), give Josh the URL, ask for go-ahead (we can't click — Josh does). Then archive. | Find the List-Unsubscribe link (headers/body), give Josh the URL, ask for go-ahead (we can't click — Josh does). Then archive. | Same — find the link, give Josh the URL, then archive (unlabel `INBOX`). |
+| `do nothing / next` | No-op; move to next message. | No-op; move to next message. | Same. |
+| `stop` / `done` | Update last-run.txt and exit cleanly. | Update last-run.txt and exit cleanly. | Just stop — nothing to persist. |
 
 ## Phone pickup prompt
 
@@ -128,7 +127,7 @@ A single line: today's date in `YYYY-MM-DD` (Eastern time). Updated at the end o
 - If file missing OR contains a date != today → and it's past 09:00 ET → nag Josh with: `[handle-gmails] inbox not yet handled today. Type /handle-gmails when ready.`
 - If file contains today's date → silent.
 
-## Hard rules — both surfaces
+## Hard rules — all surfaces
 
 - **Never auto-execute outside the rules.yaml path.** Even "obvious" spam pauses for Josh's OK by default. (On the phone there are no rules, so EVERYTHING pauses.)
 - **Always print draft replies BEFORE saving.** Josh reviews; he doesn't want unreviewed Gmail drafts in his account.
