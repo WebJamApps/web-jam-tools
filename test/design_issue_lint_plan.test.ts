@@ -15,10 +15,10 @@ import {
   checkNeedsDesignRemovals,
   findNarrowedDirective,
   type IssueBodyFetcher,
-  lintPlanTableFile,
+  lintPlanTableFile as lintPlanFile,
   parseNeedsDesignRemovals,
   type PlanTableViolation,
-  runLintPlanCli,
+  runLintPlanCli as lintPlanCli,
   validatePlanTable,
 } from "../src/design-issue/lint_plan.ts";
 import {
@@ -29,6 +29,16 @@ import {
 import type { Schema } from "../src/fix-labels/diff.ts";
 import { ACTIVE_REPOS } from "../src/shared/repos.ts";
 import denoJson from "../deno.json" with { type: "json" };
+import type { CommandRunner, OpenIssueSummary } from "../hooks/lib/detect_duplicate_issue.ts";
+
+// File/CLI tests never call the workstation's gh or use the live backlog.
+const emptyOpenIssues: CommandRunner = () => Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+function lintPlanTableFile(file: string, options?: Parameters<typeof lintPlanFile>[1]) {
+  return lintPlanFile(file, { runGh: emptyOpenIssues, ...options });
+}
+function runLintPlanCli(args: string[], options?: Parameters<typeof lintPlanCli>[1]) {
+  return lintPlanCli(args, { runGh: emptyOpenIssues, ...options });
+}
 
 const HEADER_LINE =
   "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |";
@@ -68,7 +78,7 @@ function findRule(violations: PlanTableViolation[], rule: string): PlanTableViol
 // A clean baseline epic + child row pair, reused (with mutations) by every test below so each
 // test isolates exactly the one cell/case it targets.
 const EPIC_ROW =
-  "| 1 | Add design:lint-plan cell validation | - | Opus | High | web-jam-tools | Unit tests covering every validator rule | all children close |";
+  "| 1 | Coordinate plan validation delivery | - | Opus | High | web-jam-tools | Unit tests covering every validator rule | all children close |";
 function childRow(overrides: Partial<{
   title: string;
   epicChild: string;
@@ -79,7 +89,7 @@ function childRow(overrides: Partial<{
   closes: string;
 }> = {}): string {
   const c = {
-    title: "Add cell validators for design:lint-plan",
+    title: "Reject missing model tiers",
     epicChild: "Epic #1",
     tier: "Flash",
     priority: "High",
@@ -90,6 +100,238 @@ function childRow(overrides: Partial<{
   };
   return `| 2 | ${c.title} | ${c.epicChild} | ${c.tier} | ${c.priority} | ${c.repo} | ${c.tests} | ${c.closes} |`;
 }
+
+// Duplicate-title acceptance fixtures (web-jam-tools#1356).
+const PUSH_TITLE =
+  "scripts/push: post the fix comment with the push and sign it with the model the tool recorded";
+const MODEL_TITLE = "scripts/running-model: print the model the tool recorded for the session";
+const REWORDED_MODEL_TITLE = "scripts/running-model: print which model this session is running on";
+const FIX_PR_TITLE = "skills/fix-pr: add the skill and install it on Claude Code, agy and Codex";
+
+function duplicateRow(title: string, id = 1, repo = "web-jam-tools", tier = "Flash"): string {
+  return `| ${id} | ${title} | - | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | PR merges |`;
+}
+
+function issueRunner(issues: OpenIssueSummary[]): CommandRunner {
+  return (args) => {
+    assertEquals(args, [
+      "api",
+      "repos/WebJamApps/web-jam-tools/issues?state=open&per_page=100&page=1",
+    ]);
+    return Promise.resolve({ code: 0, stdout: JSON.stringify(issues), stderr: "" });
+  };
+}
+
+async function lintDuplicateRows(rows: string[], runGh: CommandRunner) {
+  const file = await Deno.makeTempFile({ suffix: ".md" });
+  try {
+    await Deno.writeTextFile(file, planTableDoc(rows));
+    return await lintPlanTableFile(file, { schema: TEST_SCHEMA, runGh });
+  } finally {
+    await Deno.remove(file);
+  }
+}
+
+Deno.test("duplicate titles: open look-alikes, rewording, exact existing rows, and closed issues", async (t) => {
+  const cases = [
+    {
+      name: "recorded-model look-alike refuses",
+      title: MODEL_TITLE,
+      open: PUSH_TITLE,
+      fails: true,
+    },
+    {
+      name: "different-work rewording passes",
+      title: REWORDED_MODEL_TITLE,
+      open: PUSH_TITLE,
+      fails: false,
+    },
+    { name: "exact existing issue passes", title: FIX_PR_TITLE, open: FIX_PR_TITLE, fails: false },
+    {
+      name: "nearly equal fix-pr title refuses",
+      title: "skills/fix-pr: add the skill and install it on Claude Code and Codex",
+      open: FIX_PR_TITLE,
+      fails: true,
+    },
+    // The runner asserts state=open above; a closed look-alike is absent from that listing.
+    { name: "closed look-alike passes", title: MODEL_TITLE, open: null, fails: false },
+  ];
+  for (const c of cases) {
+    await t.step(c.name, async () => {
+      const result = await lintDuplicateRows(
+        [duplicateRow(c.title)],
+        issueRunner(c.open ? [{ number: 137, title: c.open }] : []),
+      );
+      assertEquals(result.valid, !c.fails);
+      if (c.fails) {
+        assertEquals(result.violations.length, 1);
+        const violation = result.violations[0];
+        assertEquals(violation.rule, "duplicate-title");
+        assertEquals(violation.line, 7);
+        assertEquals(violation.column, "Proposed title");
+        assertStringIncludes(violation.message, `web-jam-tools#137 "${c.open}"`);
+      } else {
+        assertEquals(result.violations, []);
+      }
+    });
+  }
+});
+
+Deno.test("duplicate titles: new plan rows cite both look-alikes, and rewording passes", async () => {
+  const first =
+    "skills/backlog-groom: check Priority against the spread, with a focus milestone named for the run";
+  const second =
+    "Manual verification: run backlog-groom with a focus and approve its first Priority batch";
+  const result = await lintDuplicateRows(
+    [duplicateRow(first), duplicateRow(second, 2, "web-jam-tools", "Josh")],
+    issueRunner([]),
+  );
+  assertEquals(result.valid, false);
+  assertEquals(result.violations.map((v) => [v.rule, v.line]), [
+    ["duplicate-title", 7],
+    ["duplicate-title", 8],
+  ]);
+  assertStringIncludes(result.violations[0].message, `plan row 2 (web-jam-tools) "${second}"`);
+  assertStringIncludes(result.violations[1].message, `plan row 1 (web-jam-tools) "${first}"`);
+
+  const reworded = await lintDuplicateRows([
+    duplicateRow(first),
+    duplicateRow(
+      "Manual verification: approve the first batch of proposed levels from a focused groom run",
+      2,
+      "web-jam-tools",
+      "Josh",
+    ),
+  ], issueRunner([]));
+  assertEquals(reworded.valid, true);
+  assertEquals(reworded.violations, []);
+});
+
+Deno.test("duplicate titles: exact existing row stays a candidate for a different new row", async () => {
+  const newTitle = "skills/fix-pr: add the skill and install it on Claude Code and Codex";
+  const result = await lintDuplicateRows(
+    [
+      duplicateRow(FIX_PR_TITLE),
+      duplicateRow(newTitle, 2),
+    ],
+    issueRunner([{ number: 42, title: FIX_PR_TITLE }, {
+      number: 43,
+      title: newTitle + " tomorrow",
+    }]),
+  );
+  assertEquals(result.violations.length, 1);
+  assertEquals(result.violations[0].line, 8);
+  assertStringIncludes(result.violations[0].message, `web-jam-tools#42 "${FIX_PR_TITLE}"`);
+  assertStringIncludes(result.violations[0].message, `web-jam-tools#43 "${newTitle} tomorrow"`);
+});
+
+Deno.test("duplicate titles: fewer than three significant tokens and an empty plan never fetch", async () => {
+  const unexpectedFetch: CommandRunner = () => {
+    throw new Error("short/empty plans must not call gh");
+  };
+  for (const rows of [[], [duplicateRow("Fix the typo")]]) {
+    const result = await lintDuplicateRows(rows, unexpectedFetch);
+    assertEquals(result.valid, true);
+    assertEquals(result.violations, []);
+  }
+});
+
+Deno.test("duplicate titles: fetch each row's repository once, even with owner/markdown wrappers", async () => {
+  const requests: string[][] = [];
+  const runner: CommandRunner = (args) => {
+    requests.push(args);
+    const title = args[1].includes("/JaMmusic/") ? MODEL_TITLE : PUSH_TITLE;
+    return Promise.resolve({
+      code: 0,
+      stdout: JSON.stringify([{ number: 99, title }]),
+      stderr: "",
+    });
+  };
+  const result = await lintDuplicateRows([
+    duplicateRow(MODEL_TITLE),
+    duplicateRow(FIX_PR_TITLE, 2, "`WebJamApps/web-jam-tools`"),
+    duplicateRow("Arrange guitar chord positions", 3, "JaMmusic"),
+  ], runner);
+  assertEquals(requests, [
+    ["api", "repos/WebJamApps/web-jam-tools/issues?state=open&per_page=100&page=1"],
+    ["api", "repos/WebJamApps/JaMmusic/issues?state=open&per_page=100&page=1"],
+  ]);
+  assertEquals(result.violations.length, 1);
+  assertStringIncludes(result.violations[0].message, `web-jam-tools#99 "${PUSH_TITLE}"`);
+});
+
+Deno.test("duplicate titles: failed or incomplete listings refuse and name the repository", async (t) => {
+  const failures: [string, CommandRunner][] = [
+    ["gh nonzero", () => Promise.resolve({ code: 1, stdout: "", stderr: "offline" })],
+    ["runner throws", () => {
+      throw new Error("gh unavailable");
+    }],
+    ["invalid listing", () => Promise.resolve({ code: 0, stdout: "{}", stderr: "" })],
+    ["later page fails", (args) => {
+      if (args[1].endsWith("page=1")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify(
+            Array.from({ length: 100 }, (_, i) => ({ number: i + 1, title: PUSH_TITLE })),
+          ),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({ code: 1, stdout: "", stderr: "rate limited" });
+    }],
+  ];
+  for (const [name, runner] of failures) {
+    await t.step(name, async () => {
+      const requests: string[][] = [];
+      const result = await lintDuplicateRows([duplicateRow(MODEL_TITLE, 1, "JaMmusic")], (args) => {
+        requests.push(args);
+        return runner(args);
+      });
+      assertEquals(
+        requests,
+        (name === "later page fails" ? [1, 2] : [1]).map((page) => [
+          "api",
+          `repos/WebJamApps/JaMmusic/issues?state=open&per_page=100&page=${page}`,
+        ]),
+      );
+      assertEquals(result.valid, false);
+      assertEquals(result.violations.length, 1);
+      assertEquals(result.violations[0].rule, "duplicate-title-search-failed");
+      assertStringIncludes(
+        result.violations[0].message,
+        "could not run or finish for WebJamApps/JaMmusic",
+      );
+    });
+  }
+});
+
+Deno.test("duplicate titles: CLI forwards the injected runner and refuses despite approved Gate 1", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const doc = `${dir}/design.md`;
+    const plan = `${dir}/plan.md`;
+    await Deno.writeTextFile(doc, "# Design\n");
+    await Deno.writeTextFile(plan, planTableDoc([duplicateRow(MODEL_TITLE)]));
+    await openGate1Record(doc, "# Design\n", { stateDir: dir });
+    await approveGate1Record(doc, "Gate 1 approved by Josh.", { stateDir: dir });
+    const output: string[] = [];
+    const errors: string[] = [];
+    const code = await runLintPlanCli([plan, "--design-doc", doc, "--state-dir", dir, "--json"], {
+      schema: TEST_SCHEMA,
+      runGh: issueRunner([{ number: 137, title: PUSH_TITLE }]),
+      log: (line) => output.push(line),
+      errorLog: (line) => errors.push(line),
+    });
+    assertEquals(code, 1);
+    assertEquals(errors, []);
+    const result = JSON.parse(output.join("\n"));
+    assertEquals(result.valid, false);
+    assertEquals(result.violations.length, 1);
+    assertStringIncludes(result.violations[0].message, `web-jam-tools#137 "${PUSH_TITLE}"`);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
 
 // --- 1. Missing cell values ---
 
@@ -376,8 +618,12 @@ Deno.test("malformed rows from the parser are surfaced as malformed-row violatio
 // --- CLI Runner (runLintPlanCli) tests ---
 
 Deno.test("runLintPlanCli: --help exits with 0", async () => {
-  const code = await runLintPlanCli(["--help"]);
+  const output: string[] = [];
+  const code = await runLintPlanCli(["--help"], { log: (line) => output.push(line) });
   assertEquals(code, 0);
+  assertStringIncludes(output.join("\n"), "new titles resembling open issues");
+  assertStringIncludes(output.join("\n"), "other new");
+  assertStringIncludes(output.join("\n"), "failed title listing refuses the plan");
 });
 
 Deno.test("runLintPlanCli: missing path argument exits with 1", async () => {

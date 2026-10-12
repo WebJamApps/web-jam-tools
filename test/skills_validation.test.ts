@@ -36,6 +36,51 @@ Deno.test("cross-AI rules require Codex to look up its running model", async () 
   );
 });
 
+function assertGate2DuplicateTitleRules(text: string): void {
+  const start = text.indexOf("12. **GATE 2 — stop.**");
+  const end = text.indexOf("### Phase 3", start);
+  assert(start >= 0 && end > start, "Phase 2 Gate 2 item must exist");
+  const gate2 = text.slice(start, end);
+  assertStringIncludes(gate2, "Every new title passes the duplicate search before Gate 2");
+  assertStringIncludes(
+    gate2,
+    "Where it is different work, the run rewords the title and runs the check again until it passes; Josh is not asked.",
+    "Gate 2 must require rewording different work and rerunning without asking Josh",
+  );
+  assertStringIncludes(
+    gate2,
+    "Where it is the same work, the run never rewords around the search: the new row leaves the plan and the plan names the existing issue in its place.",
+    "Gate 2 must forbid rewording the same work and substitute the existing issue",
+  );
+}
+
+Deno.test("skills/design-issue/SKILL.md requires both Gate 2 duplicate-title rules (web-jam-tools#1356)", async () => {
+  assertGate2DuplicateTitleRules(await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`));
+});
+
+Deno.test("Gate 2 duplicate-title validation fails when either rewording rule is removed", async () => {
+  const text = await Deno.readTextFile(`${SKILLS_DIR}design-issue/SKILL.md`);
+  assertGate2DuplicateTitleRules(text);
+  assertThrows(
+    () =>
+      assertGate2DuplicateTitleRules(text.replace(
+        "Where it is different work, the run rewords the title and runs the check again until it passes; Josh is not asked.",
+        "",
+      )),
+    Error,
+    "Gate 2 must require rewording different work",
+  );
+  assertThrows(
+    () =>
+      assertGate2DuplicateTitleRules(text.replace(
+        "Where it is the same work, the run never rewords around the search: the new row leaves the plan and the plan names the existing issue in its place.",
+        "",
+      )),
+    Error,
+    "Gate 2 must forbid rewording the same work",
+  );
+});
+
 /** Split a SKILL.md's contents into { frontmatter, body }. */
 function extractFrontmatter(text: string): string {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
