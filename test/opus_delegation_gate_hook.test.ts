@@ -128,7 +128,20 @@ function assertDenied(stdout: string, expectedInReason: string[] = []): void {
 
 function assertAllowed(res: RunResult): void {
   assertEquals(res.code, 0, `expected exit code 0, got ${res.code}: ${res.stderr}`);
-  assertEquals(res.stdout, "", `expected empty stdout on allow, got: ${res.stdout}`);
+  if (res.stdout.trim()) {
+    const output = JSON.parse(res.stdout).hookSpecificOutput;
+    assertEquals(output.hookEventName, "PreToolUse");
+    assertEquals(output.permissionDecision, undefined);
+    assert(typeof output.additionalContext === "string" && output.additionalContext.length > 0);
+  }
+}
+
+function assertAllowedWithNote(res: RunResult, expected: string): void {
+  assertAllowed(res);
+  const note = JSON.parse(res.stdout).hookSpecificOutput.additionalContext;
+  assert(note.includes(expected), note);
+  assert(note.includes("delegate it or ask Josh for approval"), note);
+  assert(!res.stderr.trim(), "the note belongs in agent context, not terminal stderr");
 }
 
 // Target file inside the current repository
@@ -715,13 +728,35 @@ Deno.test("Opus session with interleaved Haiku subagent is still recognized as O
   );
 });
 
+Deno.test("fix-pr: the installed shell entry point allows the active typed call and denies after pr-review", async () => {
+  for (const [later, expected] of [["go ahead", "allow"], ["/pr-review", "deny"]]) {
+    await withTranscript([
+      userTurn("/fix-pr web-jam-tools#1318"),
+      assistantTurn("claude-opus-5"),
+      userTurn(later),
+    ], async (transcript_path) => {
+      const res = await runHook({
+        tool_name: "Write",
+        tool_input: { file_path: IN_REPO_FILE },
+        transcript_path,
+      });
+      if (expected === "allow") {
+        assertAllowed(res);
+        assertEquals(res.stdout, "");
+      } else {
+        assertDenied(res.stdout);
+      }
+    });
+  }
+});
+
 // --- Allow on missing/unreadable transcript (workflow guard default) ---
 
 Deno.test("missing transcript_path is allowed (workflow default)", async () => {
   const res = await runHook({
     tool_input: { file_path: IN_REPO_FILE },
   });
-  assertAllowed(res);
+  assertAllowedWithNote(res, "The session transcript could not be read");
 });
 
 Deno.test("nonexistent transcript file is allowed (workflow default)", async () => {
@@ -729,7 +764,7 @@ Deno.test("nonexistent transcript file is allowed (workflow default)", async () 
     tool_input: { file_path: IN_REPO_FILE },
     transcript_path: "/tmp/nonexistent-transcript-gate-test.jsonl",
   });
-  assertAllowed(res);
+  assertAllowedWithNote(res, "The session transcript could not be read");
 });
 
 Deno.test("empty transcript file is allowed (workflow default)", async () => {
@@ -738,7 +773,20 @@ Deno.test("empty transcript file is allowed (workflow default)", async () => {
       tool_input: { file_path: IN_REPO_FILE },
       transcript_path,
     });
-    assertAllowed(res);
+    assertAllowedWithNote(res, "The session model could not be determined");
+  });
+});
+
+Deno.test("checker failure allows with additional context for the agent", async () => {
+  await withFakeGh(async (env) => {
+    const bin = env.PATH.split(":")[0];
+    await Deno.writeTextFile(`${bin}/deno`, "#!/usr/bin/env bash\nexit 1\n");
+    await Deno.chmod(`${bin}/deno`, 0o755);
+    const res = await runHook({
+      tool_name: "Write",
+      tool_input: { file_path: IN_REPO_FILE },
+    }, env);
+    assertAllowedWithNote(res, "checker returned no usable decision");
   });
 });
 

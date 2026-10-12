@@ -512,6 +512,99 @@ Deno.test("workIssueApprovalActive: only a human /work-issue on an Opus- or Fabl
   assert(!workIssueApprovalActive([], labels));
 });
 
+// --- Typed fix-pr approval (web-jam-tools#1336) ---
+
+Deno.test("fix-pr: the newest human typed call approves the session until another typed skill", () => {
+  const call = "/fix-pr web-jam-tools#1318";
+  const noLookup: LabelLookup = () => {
+    throw new Error("fix-pr approval must not look up issue labels");
+  };
+  const cases: [TranscriptEntry[], "allow" | "deny"][] = [
+    [[human(call)], "allow"],
+    [[human(call), human("go ahead")], "allow"],
+    [[human(call), human(PR_REVIEW)], "deny"],
+    [[human(call + " use an Opus helper"), human(PR_REVIEW)], "deny"],
+    [[
+      human("fix it"),
+      assistant("claude-opus-5", {
+        message: { role: "assistant", model: "claude-opus-5", content: call },
+      }),
+    ], "deny"],
+    [[notification(call)], "deny"],
+    [[metaEntry(call)], "deny"],
+    [[{ type: "tool", message: { role: "tool", content: call } }], "deny"],
+    [[human("The command is " + call)], "deny"],
+    [[human(call), notification("/pr-review"), metaEntry("/pr-review")], "allow"],
+    [[human(call), { type: "user", message: { role: "user", content: "/pr-review" } }], "allow"],
+  ];
+  for (const [entries, expected] of cases) {
+    const read = reader({ [MAIN]: jsonl([...entries, assistant("claude-opus-5")]) });
+    assertEquals(decideMainThreadEdit(MAIN, read, noLookup).decision, expected, jsonl(entries));
+  }
+});
+
+Deno.test("fix-pr: only a named PR in a typed skill call approves, including wrapper and plugin forms", () => {
+  const args = "web-jam-tools#1318";
+  const approves = [
+    "/fix-pr " + args,
+    "/fix-pr WebJamApps/" + args,
+    "/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/1318",
+    "/fix-pr 1318",
+    "/fix-pr #1318",
+    "/webjam-tasks:fix-pr " + args,
+    "$fix-pr " + args,
+    "<command-name>/fix-pr</command-name>\n<command-args>" + args +
+    "</command-args>",
+  ];
+  const refuses = [
+    "/fix-pr",
+    "/fix-pr use an Opus helper",
+    "/fix-pr https://github.com/WebJamApps/web-jam-tools/issues/1318",
+    "/fix-pr web-jam-tools#0",
+    "/fix-pr -1318",
+    "/fix-pr 1318.5",
+    "/fix-pr web-jam-tools#9007199254740992",
+    "/fix-pr-other " + args,
+  ];
+  for (const [calls, expected] of [[approves, "allow"], [refuses, "deny"]] as const) {
+    for (const call of calls) {
+      const read = reader({ [MAIN]: jsonl([human(call), assistant("claude-opus-5")]) });
+      assertEquals(decideMainThreadEdit(MAIN, read, labels).decision, expected, call);
+    }
+  }
+});
+
+Deno.test("fix-pr: an Opus helper needs the same active call to ask for it, through later plain messages", () => {
+  const call = "/fix-pr web-jam-tools#1318";
+  const cases: [string, TranscriptEntry[], "allow" | "deny"][] = [
+    [call + " use an Opus helper", [], "allow"],
+    [call + " use an Opus helper", [human("go ahead")], "allow"],
+    [call + " dispatch to an Opus subagent", [], "allow"],
+    [call, [], "deny"],
+    [call + " use Opus", [], "deny"],
+    [call + " do not use an Opus helper", [], "deny"],
+    [call + " use a Sonnet helper", [], "deny"],
+  ];
+  for (const [text, later, expected] of cases) {
+    const entries = [human(text), ...later, spawn("toolu_fix")];
+    const read = reader({
+      [MAIN]: jsonl(entries),
+      ...meta("fix", { model: "opus", toolUseId: "toolu_fix" }),
+      ...meta("nested", { model: "opus", parentAgentId: "fix" }),
+    });
+    for (const id of ["fix", "nested"]) {
+      assertEquals(decideSubagentEdit(id, MAIN, read).decision, expected, text);
+    }
+  }
+  for (const later of [human(PR_REVIEW), human(call), human(call + " use an Opus helper")]) {
+    const read = reader({
+      [MAIN]: jsonl([human(call + " use an Opus helper"), spawn("toolu_fix"), later]),
+      ...meta("fix", { model: "opus", toolUseId: "toolu_fix" }),
+    });
+    assertEquals(decideSubagentEdit("fix", MAIN, read).decision, "deny");
+  }
+});
+
 // --- decisions ---
 
 Deno.test("decideMainThreadEdit: every outcome", () => {
