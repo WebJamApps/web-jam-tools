@@ -57,7 +57,7 @@
 # never removes or reorders any existing permissions.deny entry (hand-added
 # or from a previous run).
 #
-# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--codex-hooks-path PATH] [--bin-dir PATH] [--force]
+# Usage: scripts/install-hooks.sh [--hooks-dir PATH] [--settings-path PATH] [--agy-hooks-path PATH] [--agy-settings-path PATH] [--codex-hooks-path PATH] [--bin-dir PATH] [--force]
 #   --hooks-dir PATH       Symlink hooks into PATH instead of $HOME/.claude/hooks
 #                           (also settable via CLAUDE_HOOKS_DIR). Mainly for testing
 #                           the symlink step without touching the real hooks dir.
@@ -77,6 +77,8 @@
 #                           unless --hooks-dir is ALSO passed (web-jam-tools#273).
 #   --agy-hooks-path PATH  Merge agy hooks into PATH instead of $HOME/.gemini/config/hooks.json
 #                           (also settable via AGY_HOOKS_PATH).
+#   --agy-settings-path PATH Merge agy settings into PATH instead of $HOME/.gemini/antigravity-cli/settings.json
+#                           (also settable via AGY_SETTINGS_PATH; web-jam-tools#1320).
 #   --codex-hooks-path PATH Register the Codex startup check in PATH (also
 #                           settable via CODEX_HOOKS_PATH). Defaults to
 #                           $CODEX_HOME/hooks.json or $HOME/.codex/hooks.json;
@@ -109,6 +111,14 @@ if [ -n "${AGY_HOOKS_PATH:-}" ]; then
   AGY_HOOKS_PATH_EXPLICIT=1
 else
   AGY_HOOKS_PATH="$HOME/.gemini/config/hooks.json"
+fi
+
+AGY_SETTINGS_PATH_EXPLICIT=0
+if [ -n "${AGY_SETTINGS_PATH:-}" ]; then
+  AGY_SETTINGS_PATH="$AGY_SETTINGS_PATH"
+  AGY_SETTINGS_PATH_EXPLICIT=1
+else
+  AGY_SETTINGS_PATH="$HOME/.gemini/antigravity-cli/settings.json"
 fi
 
 CODEX_HOOKS_PATH_EXPLICIT=0
@@ -685,6 +695,11 @@ while [ $# -gt 0 ]; do
       AGY_HOOKS_PATH_EXPLICIT=1
       shift 2
       ;;
+    --agy-settings-path)
+      AGY_SETTINGS_PATH="$2"
+      AGY_SETTINGS_PATH_EXPLICIT=1
+      shift 2
+      ;;
     --codex-hooks-path)
       CODEX_HOOKS_PATH="$2"
       CODEX_HOOKS_PATH_EXPLICIT=1
@@ -739,6 +754,10 @@ fi
 
 if [ "$AGY_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
   AGY_HOOKS_PATH="$(dirname "$SETTINGS_PATH")/hooks.json"
+fi
+
+if [ "$AGY_SETTINGS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  AGY_SETTINGS_PATH="$(dirname "$SETTINGS_PATH")/antigravity-cli-settings.json"
 fi
 
 if [ "$CODEX_HOOKS_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
@@ -844,6 +863,13 @@ AGY_PROMPT_WATCH_COMMAND='$HOME/.claude/hooks/agy-prompt-watch.sh'
 # Only its effort is merged; settings for other models and unrelated keys are preserved.
 MODEL_SETTINGS_JSON="$(jq -ce '.modelSettings | select(type == "object")' "$REPO_DIR/scripts/claude-settings.json")"
 merge_model_settings_args=("$MODEL_SETTINGS_JSON")
+
+# --- agy-skill-run.sh (web-jam-tools#1319, web-jam-tools#1320) ---
+[ -e "$REPO_DIR/scripts/agy-skill-run.sh" ] || { echo "error: $REPO_DIR/scripts/agy-skill-run.sh not found" >&2; exit 1; }
+AGY_SKILL_RUN_DEST="$HOOKS_DEST/agy-skill-run.sh"
+# shellcheck disable=SC2016
+AGY_SKILL_RUN_HOOK_COMMAND='$HOME/.claude/hooks/agy-skill-run-hook.sh'
+AGY_SKILL_RUN_ALLOW_ENTRY="command(/home/joshua/.claude/hooks/agy-skill-run.sh)"
 
 # --- autoMode (web-jam-tools#1189 follow-up) ---
 # The "autoMode" section of Claude Code's settings.json (auto-mode classifier:
@@ -1007,6 +1033,8 @@ for entry in "${PRE_TOOL_USE_HOOKS[@]}" "${AGY_ONLY_PRE_TOOL_USE_HOOKS[@]}"; do
 done
 # agy-native: registered directly under matcher ".*" without agy-hook-shim.sh (web-jam-tools#1212).
 merge_agy_pre_tool_use_args+=(".*::$AGY_PROMPT_WATCH_COMMAND")
+# agy-skill-run: registered directly under matcher ".*" without agy-hook-shim.sh, last (web-jam-tools#1319, web-jam-tools#1320).
+merge_agy_pre_tool_use_args+=(".*::$AGY_SKILL_RUN_HOOK_COMMAND")
 
 merge_agy_post_tool_use_args=()
 for entry in "${POST_TOOL_USE_HOOKS[@]}"; do
@@ -1025,6 +1053,39 @@ merge_allow_args=("${ALLOW_RULES[@]}")
 # Use the stable installed hook location, including --hooks-dir overrides.
 [ -e "$HOOKS_SRC/codex-reaper-startup-check.sh" ] || { echo "error: $HOOKS_SRC/codex-reaper-startup-check.sh not found" >&2; exit 1; }
 CODEX_REAPER_HOOK_DEST="$HOOKS_DEST/codex-reaper-startup-check.sh"
+
+read_agy_permissions() {
+  local target_settings="$1"
+  if ! command -v agy >/dev/null 2>&1; then
+    return 2 # agy command not found
+  fi
+  if [ -e "$target_settings" ]; then
+    if ! deno eval --no-config 'JSON.parse(await Deno.readTextFile(Deno.args[0]))' "$target_settings" >/dev/null 2>&1; then
+      return 3 # unparseable settings JSON
+    fi
+  fi
+
+  local out=""
+  if [ "$target_settings" = "$HOME/.gemini/antigravity-cli/settings.json" ]; then
+    if ! out=$(agy -p "/permissions" 2>/dev/null); then
+      return 1 # agy command failed
+    fi
+  else
+    local tmp_h
+    tmp_h=$(mktemp -d /tmp/agy-perm-check-XXXXXX)
+    mkdir -p "$tmp_h/.gemini/antigravity-cli"
+    if [ -e "$target_settings" ]; then
+      cp "$target_settings" "$tmp_h/.gemini/antigravity-cli/settings.json"
+    fi
+    local status=0
+    out=$(HOME="$tmp_h" agy -p "/permissions" 2>/dev/null) || status=$?
+    rm -rf "$tmp_h"
+    if [ "$status" -ne 0 ]; then
+      return 1 # agy command failed
+    fi
+  fi
+  printf '%s\n' "$out"
+}
 
 if [ "$CHECK_MODE" = "1" ]; then
   DRIFT=0
@@ -1066,6 +1127,11 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  if [ ! -L "$AGY_SKILL_RUN_DEST" ] || [ "$(readlink -f "$AGY_SKILL_RUN_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agy-skill-run.sh")" ]; then
+    echo "drift: agy-skill-run script is not linked at $AGY_SKILL_RUN_DEST" >&2
+    DRIFT=1
+  fi
+
   if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
     AGENTS_DEST="$BIN_DIR/agents"
     if [ ! -L "$AGENTS_DEST" ] || [ "$(readlink -f "$AGENTS_DEST")" != "$(readlink -f "$REPO_DIR/scripts/agents.sh")" ]; then
@@ -1080,6 +1146,73 @@ if [ "$CHECK_MODE" = "1" ]; then
 
   if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--check" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"; then
     DRIFT=1
+  fi
+
+  # Check that agy-skill-run hook is registered last in agy hooks file (web-jam-tools#1320)
+  if [ -e "$AGY_HOOKS_PATH" ]; then
+    hook_order_status=0
+    hook_order_msg=$(deno eval --no-config '
+      let data;
+      try {
+        data = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+      } catch {
+        console.log("cannot_parse");
+        Deno.exit(2);
+      }
+      const pre = data?.hooks?.PreToolUse;
+      if (!Array.isArray(pre) || pre.length === 0) {
+        console.log("missing");
+        Deno.exit(1);
+      }
+      const allHooks = [];
+      for (const item of pre) {
+        for (const h of item.hooks || []) {
+          if (h && typeof h.command === "string") {
+            allHooks.push(h.command);
+          }
+        }
+      }
+      const target = "$HOME/.claude/hooks/agy-skill-run-hook.sh";
+      const lastHook = allHooks[allHooks.length - 1];
+      if (lastHook !== target) {
+        if (allHooks.includes(target)) {
+          console.log("not_last");
+        } else {
+          console.log("missing");
+        }
+        Deno.exit(1);
+      }
+      console.log("ok");
+    ' "$AGY_HOOKS_PATH" 2>/dev/null) || hook_order_status=$?
+
+    if [ "$hook_order_status" -eq 2 ] || [ "$hook_order_msg" = "cannot_parse" ]; then
+      echo "error: cannot parse agy hooks file $AGY_HOOKS_PATH" >&2
+      DRIFT=1
+    elif [ "$hook_order_msg" = "missing" ]; then
+      echo "drift: agy-skill-run hook is missing from agy hooks file $AGY_HOOKS_PATH" >&2
+      DRIFT=1
+    elif [ "$hook_order_status" -ne 0 ] || [ "$hook_order_msg" = "not_last" ]; then
+      echo "drift: agy-skill-run hook is not last in agy hooks file $AGY_HOOKS_PATH" >&2
+      DRIFT=1
+    fi
+  else
+    echo "drift: agy hooks file $AGY_HOOKS_PATH does not exist" >&2
+    DRIFT=1
+  fi
+
+  # Check agy allow-list entry (web-jam-tools#1320)
+  agy_perm_out=""
+  agy_perm_status=0
+  agy_perm_out=$(read_agy_permissions "$AGY_SETTINGS_PATH") || agy_perm_status=$?
+
+  if [ "$agy_perm_status" -ne 0 ]; then
+    echo "error: cannot read agy permissions (cannot tell: agy -p \"/permissions\" failed or unreadable)" >&2
+    DRIFT=1
+  else
+    if ! printf '%s\n' "$agy_perm_out" | grep -F "$AGY_SKILL_RUN_ALLOW_ENTRY" >/dev/null 2>&1; then
+      echo "drift: agy allow-list entry $AGY_SKILL_RUN_ALLOW_ENTRY is missing" >&2
+      DRIFT=1
+    fi
   fi
 
   if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH" "--check"; then
@@ -1198,6 +1331,18 @@ else
   echo "agy-prompt-watch.sh: linked (new)"
 fi
 
+# --- agy-skill-run script symlink (web-jam-tools#1319, web-jam-tools#1320) ---
+if [ -L "$AGY_SKILL_RUN_DEST" ] && [ "$(readlink -f "$AGY_SKILL_RUN_DEST")" = "$(readlink -f "$REPO_DIR/scripts/agy-skill-run.sh")" ]; then
+  echo "agy-skill-run.sh: ok (already linked)"
+elif [ -e "$AGY_SKILL_RUN_DEST" ] || [ -L "$AGY_SKILL_RUN_DEST" ]; then
+  mv "$AGY_SKILL_RUN_DEST" "$AGY_SKILL_RUN_DEST.bak-$STAMP"
+  ln -s "$REPO_DIR/scripts/agy-skill-run.sh" "$AGY_SKILL_RUN_DEST"
+  echo "agy-skill-run.sh: linked (previous version backed up to agy-skill-run.sh.bak-$STAMP)"
+else
+  ln -s "$REPO_DIR/scripts/agy-skill-run.sh" "$AGY_SKILL_RUN_DEST"
+  echo "agy-skill-run.sh: linked (new)"
+fi
+
 # --- CLI tools symlink (~/.local/bin/agents, web-jam-tools#1174) ---
 # Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default).
 # Only linked when targeting the real default destination (HOOKS_DEST_IS_DEFAULT=1)
@@ -1228,6 +1373,72 @@ fi
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$AGY_HOOKS_PATH" "--forbid-lifecycle-hooks" "--" "--stop" "${merge_agy_stop_args[@]}" "--pre-tool-use" "${merge_agy_pre_tool_use_args[@]}" "--post-tool-use" "${merge_agy_post_tool_use_args[@]}"
+
+# Ensure agy-skill-run hook is registered last in agy hooks file (web-jam-tools#1320)
+deno eval --no-config '
+  let data;
+  try {
+    data = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+  } catch (err) {
+    console.error("error: cannot parse agy hooks file", Deno.args[0], err);
+    Deno.exit(1);
+  }
+  if (!data.hooks) data.hooks = {};
+  if (!Array.isArray(data.hooks.PreToolUse)) data.hooks.PreToolUse = [];
+  const pre = data.hooks.PreToolUse;
+  const target = "$HOME/.claude/hooks/agy-skill-run-hook.sh";
+  for (const item of pre) {
+    if (Array.isArray(item.hooks)) {
+      item.hooks = item.hooks.filter((h) => h?.command !== target);
+    }
+  }
+  let lastEntry = pre[pre.length - 1];
+  if (!lastEntry) {
+    lastEntry = { matcher: ".*", hooks: [] };
+    pre.push(lastEntry);
+  }
+  if (!Array.isArray(lastEntry.hooks)) lastEntry.hooks = [];
+  lastEntry.hooks.push({ type: "command", command: target });
+  await Deno.writeTextFile(Deno.args[0], JSON.stringify(data, null, 2) + "\n");
+' "$AGY_HOOKS_PATH"
+
+# Add agy allow-list entry (web-jam-tools#1320)
+agy_check_perms=""
+if ! agy_check_perms=$(read_agy_permissions "$AGY_SETTINGS_PATH"); then
+  echo "error: cannot read agy permissions (cannot tell: agy -p \"/permissions\" failed or unreadable)" >&2
+  exit 1
+fi
+
+if ! printf '%s\n' "$agy_check_perms" | grep -F "$AGY_SKILL_RUN_ALLOW_ENTRY" >/dev/null 2>&1; then
+  if [ -e "$AGY_SETTINGS_PATH" ]; then
+    cp "$AGY_SETTINGS_PATH" "$AGY_SETTINGS_PATH.bak-$STAMP"
+  fi
+  deno eval --no-config '
+    const path = Deno.args[0];
+    let data = {};
+    try {
+      const text = await Deno.readTextFile(path);
+      data = JSON.parse(text);
+    } catch (e) {
+      if (!(e instanceof Deno.errors.NotFound)) {
+        console.error("error: cannot parse agy settings file", e);
+        Deno.exit(1);
+      }
+    }
+    if (!data || typeof data !== "object") data = {};
+    if (!data.permissions || typeof data.permissions !== "object") data.permissions = {};
+    if (!Array.isArray(data.permissions.allow)) data.permissions.allow = [];
+    const entry = Deno.args[1];
+    if (!data.permissions.allow.includes(entry)) {
+      data.permissions.allow.push(entry);
+      await Deno.mkdir(path.replace(/\/[^\/]+$/, ""), { recursive: true });
+      await Deno.writeTextFile(path, JSON.stringify(data, null, 2) + "\n");
+      console.log("agy settings.json: added allow-list entry " + entry);
+    }
+  ' "$AGY_SETTINGS_PATH" "$AGY_SKILL_RUN_ALLOW_ENTRY"
+else
+  echo "agy settings.json: ok (allow-list entry already present)"
+fi
 
 deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-agents-md-pointer.ts" "$AGENTS_MD_PATH"
 

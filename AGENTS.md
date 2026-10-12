@@ -321,12 +321,12 @@ rules and do not reconstruct them from memory or from this file.
       verify that the message is a genuine helper creation message (`invoke_subagent`) directed
       specifically to this helper's conversation ID, rejecting ordinary inter-agent messages
       (`send_message`), missing or non-string recipients, mismatched recipients, or competing
-      messages claiming conflicting parent IDs. Reciprocally, the parent conversation record must
-      be validated against structured helper-creation results (such as authentic `invoke_subagent`
-      tool execution entries matching recognized creation header formats like `Created the following subagents:`
-      declaring the `conversationId`), strictly refusing loose raw substring containment, generic
-      model entries, assistant examples in planner responses, or unrelated JSON/status responses
-      containing the ID.
+      messages claiming conflicting parent IDs. Reciprocally, the parent conversation record must be
+      validated against structured helper-creation results (such as authentic `invoke_subagent` tool
+      execution entries matching recognized creation header formats like
+      `Created the following subagents:` declaring the `conversationId`), strictly refusing loose
+      raw substring containment, generic model entries, assistant examples in planner responses, or
+      unrelated JSON/status responses containing the ID.
     - **Helper Synthetic Launch Input & Ancestry Traversal:** Real helper transcripts contain the
       parent's synthetic launch prompt as `source: "USER_EXPLICIT", type: "USER_INPUT"`. Transcript
       parsers and hook permission evaluators must distinguish a helper's synthetic launch prompt
@@ -342,10 +342,10 @@ rules and do not reconstruct them from memory or from this file.
       failing reciprocal verification). If helper ancestry is rejected, the evaluator must fail
       closed to `not_open` (allow without rewriting) and NEVER fall through to evaluate the helper's
       synthetic launch prompt as user input. Furthermore, helper transcripts must be read with
-      helper mode active (isolating synthetic launch prompts into helper launch metadata and
-      keeping `userMessages` empty). Test suites must include full-handler regressions where the
-      helper's synthetic launch prompt contains a slash command (e.g. `/pr-review`) across every
-      refusal case, verifying that rejected ancestry never rewrites or authorizes commands.
+      helper mode active (isolating synthetic launch prompts into helper launch metadata and keeping
+      `userMessages` empty). Test suites must include full-handler regressions where the helper's
+      synthetic launch prompt contains a slash command (e.g. `/pr-review`) across every refusal
+      case, verifying that rejected ancestry never rewrites or authorizes commands.
     - **Preserve Indeterminate Ancestry on Helper Message Read and Parse Failures:** When inspecting
       a helper's message inbox to discover its parent conversation, reading errors (such as
       permissions or I/O failures when reading the messages directory or individual message files)
@@ -366,6 +366,21 @@ rules and do not reconstruct them from memory or from this file.
 31. **Full Edit Reconciliation & Superseded Exception Removal on Rule Changes:**
     - **Reconcile Surrounding Clauses and Exceptions on Instruction Updates:** When updating or replacing an instruction in a skill, rule, or design document (such as replacing "One row per Epic or standalone Issue" with "One row and one version bump per design run"), never stop at changing a single targeted bullet or line. Re-read and reconcile the surrounding introductory sentences, adjacent bullets, qualifiers, and exceptions (such as obsolete Epic-based rollup exceptions). Retaining superseded exceptions creates contradictory guidance (e.g. telling a run to append one row per run while an adjacent bullet tells it that child issues roll up without a version bump).
     - **Reject Superseded Exceptions in Validation Tests:** Validation test suites for rule changes must never rely solely on a single string-exclusion test (e.g. `assertFalse(text.includes("One row per Epic"))`) that allows contradictory retained instructions or exception clauses to survive. Tests must actively assert that all contradictory retained instructions and superseded exception patterns are rejected, with negative test cases verifying that retaining obsolete exceptions fails validation.
+32. **Fail-Closed Shell Check Classification & Command Substitution Status Capture:**
+    - **Capture Command Substitution Exit Codes via `|| status=$?`:** In Bash, never capture the
+      exit status of a command substitution inside an inverted `if ! var=$(cmd); then status=$?; fi`
+      condition. Because `!` inverts the pipeline return value to 0, `$?` inside the `then` block
+      evaluates to `0` rather than the non-zero exit code of `cmd`. Always assign exit status
+      directly using `var=$(cmd) || status=$?` before evaluating `status`.
+    - **Evaluate Specific Failure Classifications Before Catch-All Non-Zero Checks:** In shell hook
+      or config drift checkers that parse evaluator output, specific failure strings (such as
+      `msg="missing"`) must be evaluated before generic non-zero status checks (`status -ne 0` /
+      `msg="not_last"`). Generic non-zero branches evaluated prematurely catch all non-zero returns
+      and misclassify specific missing or corrupted states as generic drift.
+    - **Preserve Hook Registry Placement and End Ordering:** When installing or reconciling hook
+      chains where a specific handler must execute last (such as skill-run or prompt-watch hooks),
+      reconciliation steps must guarantee that handlers are moved to the end of the registry array
+      across all matched blocks and that re-ordering logic accounts for managed hook pruning.
 
 ## Opening pull requests (all WebJamApps repos)
 
@@ -691,9 +706,9 @@ target list, deployment steps, and verification procedures.
   namespaced prefixes (`anthropic-skills:`, `claude-ai:`) and reporting the exact count of
   un-overridden bundled skills.
 - **Limit-Enforced Session Load Part Coverage**: When reporting multi-tool session load footprints
-  across surfaces (Claude Code, agy, Codex), report only parts that have an explicit limit configured
-  per the design document. Unbounded extensions without limits (such as MCP connectors or agy's
-  Google-bundled skills) must not be inspected or reported in the tab 1 session-load report.
+  across surfaces (Claude Code, agy, Codex), report only parts that have an explicit limit
+  configured per the design document. Unbounded extensions without limits (such as MCP connectors or
+  agy's Google-bundled skills) must not be inspected or reported in the tab 1 session-load report.
 - **Registration Isolation Assertion Discipline**: In tests verifying that hooks or startup scripts
   are NOT registered in global settings or unauthorized surfaces, never wrap assertion checks in
   blanket `try/catch` blocks that swallow assertion errors. Catch only `Deno.errors.NotFound`, run
