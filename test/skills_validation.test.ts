@@ -1889,3 +1889,122 @@ Deno.test("skills/design-issue/SKILL.md validator fails on rule violations (web-
     "Gate 2 plan row Priority must be tied to level tests that /file-issue owns",
   );
 });
+
+/**
+ * Asserts skills/backlog-groom/SKILL.md follows the running-model and guarded command rules (web-jam-tools#1350).
+ * Validates the who-does-the-run table, running-model usage, Codex invocation ($backlog-groom),
+ * guarded commands (edit-issue, unblock-issue), and absence of raw gh issue edit commands.
+ */
+export function assertBacklogGroomRules(text: string): void {
+  // 1. Table of who does the run
+  assertStringIncludes(
+    text,
+    "| Tool | The session is on | Who does the run |",
+    "skills/backlog-groom/SKILL.md must contain the table of who does the run",
+  );
+  assertStringIncludes(
+    text,
+    "| Claude Code | Opus | a Sonnet helper the session starts |",
+    "skills/backlog-groom/SKILL.md table must include Claude Code Opus row",
+  );
+  assertStringIncludes(
+    text,
+    "| Claude Code | Sonnet or Haiku | the session itself |",
+    "skills/backlog-groom/SKILL.md table must include Claude Code Sonnet or Haiku row",
+  );
+  assertStringIncludes(
+    text,
+    "| agy | Flash | the session itself |",
+    "skills/backlog-groom/SKILL.md table must include agy Flash row",
+  );
+  assertStringIncludes(
+    text,
+    "deno task running-model",
+    "skills/backlog-groom/SKILL.md must use deno task running-model to determine session model",
+  );
+
+  // 2. Must not leave Codex out: includes Codex rows in the table and $backlog-groom
+  assertStringIncludes(
+    text,
+    "| Codex | Astra | a Sol helper the session starts |",
+    "skills/backlog-groom/SKILL.md must include Codex in table of who does the run",
+  );
+  assertStringIncludes(
+    text,
+    "| Codex | Sol or Luna | the session itself |",
+    "skills/backlog-groom/SKILL.md must include Codex in table of who does the run",
+  );
+  assertStringIncludes(
+    text,
+    "$backlog-groom",
+    "skills/backlog-groom/SKILL.md must include Codex invocation $backlog-groom",
+  );
+
+  // 3. Must not name raw gh edit commands
+  assertFalse(
+    /\bgh\s+issue\s+edit\b/.test(text),
+    "skills/backlog-groom/SKILL.md must not name raw gh issue edit commands",
+  );
+
+  // 4. Must use guarded commands
+  assertStringIncludes(
+    text,
+    "deno task edit-issue",
+    "skills/backlog-groom/SKILL.md must use deno task edit-issue",
+  );
+  assertStringIncludes(
+    text,
+    "deno task unblock-issue",
+    "skills/backlog-groom/SKILL.md must use deno task unblock-issue",
+  );
+}
+
+Deno.test(
+  "skills/backlog-groom/SKILL.md satisfies running-model table, guarded commands, and Codex (web-jam-tools#1350)",
+  async () => {
+    const text = await Deno.readTextFile(`${SKILLS_DIR}backlog-groom/SKILL.md`);
+    assertBacklogGroomRules(text);
+  },
+);
+
+Deno.test(
+  "skills/backlog-groom/SKILL.md validator fails on rule violations (web-jam-tools#1350)",
+  async () => {
+    const validText = await Deno.readTextFile(`${SKILLS_DIR}backlog-groom/SKILL.md`);
+
+    // 1. Fails when it loses the table of who does the run
+    const textWithoutTable = validText.replace(
+      "| Tool | The session is on | Who does the run |",
+      "| Tool | Model | Who runs |",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutTable),
+      Error,
+      "must contain the table of who does the run",
+    );
+
+    // 2. Fails when it names a raw gh issue edit command
+    const textWithRawGh = validText + "\n- `gh issue edit --milestone test`\n";
+    assertThrows(
+      () => assertBacklogGroomRules(textWithRawGh),
+      Error,
+      "must not name raw gh issue edit commands",
+    );
+
+    // 3. Fails when it leaves Codex out
+    const textWithoutCodex = validText.replaceAll("Codex", "OtherTool");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutCodex),
+      Error,
+      "must include Codex",
+    );
+
+    // 4. Fails when it omits Codex syntax ($backlog-groom)
+    const textWithoutCodexSyntax = validText.replaceAll("$backlog-groom", "/bg");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutCodexSyntax),
+      Error,
+      "must include Codex invocation $backlog-groom",
+    );
+  },
+);

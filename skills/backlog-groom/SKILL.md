@@ -7,14 +7,27 @@ description: Audit all 8 active WebJamApps repos for model-label drift, native d
 
 Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, dependency alignment, issue spec executability, untyped issues, milestone coverage drift, and stale/completed issues.
 
+Josh types `/backlog-groom` (or on Codex `$backlog-groom`).
+
 **Strict Interactive Gate:** This skill NEVER makes unilateral edits on GitHub. It writes its findings to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, presents a numbered table of findings to Josh in chat, and **WAITS for explicit per-item approval** before executing any label edits, issue edits, or closures on GitHub.
 
-## Execution Model
+## Which Model Does the Run
 
-- **Delegated Scan & Analysis:** Step 1 (Scan & Collect) and Step 2 (Analyze & Categorize) MUST be delegated to a single subagent running on **Flash** or **Haiku** to conserve token quota.
-- **Per-surface delegation:** On Claude Code, dispatch that subagent with `Agent(model: "haiku")`. On agy / Antigravity, dispatch it with `invoke_subagent(TypeName: "self", Role: "Backlog Groom Scanner", Model: "inherit")` on Flash.
-- **Report & Summary Output:** The delegated subagent performs all cross-repo `gh` lookup calls, writes the detailed report to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, and returns ONLY the final findings table, per-repo untyped summary ratios, and per-repo missing milestone summary ratios back to the primary session.
-- **Primary Session Presentation:** The primary session renders the findings table to Josh and handles interactive approval and execution.
+Which model does the run depends on the model the session is on:
+
+| Tool | The session is on | Who does the run |
+|---|---|---|
+| Claude Code | Opus | a Sonnet helper the session starts |
+| Claude Code | Sonnet or Haiku | the session itself |
+| agy | Flash | the session itself |
+| Codex | Astra | a Sol helper the session starts |
+| Codex | Sol or Luna | the session itself |
+
+The run is the reading, the checking, the report, and the edits. A session that hands the run to a helper does three things itself and nothing more: it starts the helper; it shows Josh the table the helper returns; and it passes his approvals back to the helper, which makes the edits. The helper runs at high effort, as every model does.
+
+The session learns which model it is on from `deno task running-model`, never from its own account of itself. When that command cannot tell, the session hands the run to the helper its tool would use for the expensive model: Sonnet on Claude Code, Sol on Codex. On agy there is one model, so the session does the run.
+
+On Claude Code, dispatch that helper with `Agent(model: "sonnet")`. On Codex, start a helper with Sol named in the request.
 
 ## Repositories in Scope (8)
 
@@ -106,7 +119,7 @@ If no drift is found across all repos, report that the backlog is 100% clean.
 ### Step 5: Await Explicit Approval & Execute
 - **STOP and wait for Josh's response.**
 - Accept selective approvals (e.g., "approve 1, 2", "all except 3", "yes to all").
-- Execute ONLY approved actions on GitHub via `gh issue edit --milestone "<name>"`, `gh issue edit`, `gh label`, etc.
+- Execute ONLY approved actions on GitHub through the guarded commands: `deno task edit-issue` for a label, a milestone, or a body (and its `--priority <Level>` flag for a Priority level), and `deno task unblock-issue` for a dependency that blocks an issue on its own parent.
 - Never touch unapproved items.
 
 ## Description Detail & Triggers
