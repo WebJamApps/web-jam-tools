@@ -360,6 +360,9 @@ rules and do not reconstruct them from memory or from this file.
       exist or is empty). Test suites must include unit, full-handler, and E2E regressions covering
       unreadable message directories, unreadable files, and malformed JSON messages with slash-command
       launch prompts.
+30. **First-Match Decision Table Ordering & Reachability Test Coverage:**
+    - **Fallback / Catch-All Ordering After Specific Tests:** In top-down decision tables, pattern-matching cascades, or priority-selection rules evaluated under a first-match rule (such as `skills/file-issue/SKILL.md` rule 10 Priority level tests), catch-all or default fallback rows (e.g. "Nothing above fits", "default") must ALWAYS be ordered after all specific condition rows (including "Low" or lower-priority specific conditions). Even if an upstream design document drafts the default above lower levels, the agent must recognize that placing a fallback above specific tests makes subsequent rows unreachable dead rules, and order the fallback last.
+    - **Reachability and Order Assertions in Rule Validation:** Unit and validation test suites for decision tables or skill instructions must never rely solely on disjoint `text.includes(...)` substring checks that only verify the presence of isolated rule strings. Tests must explicitly assert relative rule ordering and reachability (e.g. `lowIndex < mediumIndex`), and test suites must include negative regression cases verifying that misordering a fallback above specific tests fails validation.
 
 ## Opening pull requests (all WebJamApps repos)
 
