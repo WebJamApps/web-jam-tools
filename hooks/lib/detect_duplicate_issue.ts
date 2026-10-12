@@ -70,12 +70,8 @@ export const DUPLICATE_MIN_SHARED_TOKENS = 3;
 /** Jaccard similarity (token-set intersection / union) threshold to flag a candidate. */
 export const DUPLICATE_SIMILARITY_THRESHOLD = 0.3;
 
-/**
- * `gh issue list --limit` cap for the OPEN-issue fetch. A result exactly at this cap is
- * indistinguishable from a truncated one, so `fetchOpenIssueTitles` treats hitting it as a failed
- * search rather than risking a false "no candidates" on a repo that has grown past it.
- */
-export const FETCH_LIMIT = 300;
+/** GitHub's maximum REST page size; this limits each request, never the complete search. */
+export const FETCH_PAGE_SIZE = 100;
 
 /** Lowercase, alphanumeric-token, stopword-filtered, deduplicated tokenization of a title. */
 export function tokenizeTitle(title: string): string[] {
@@ -214,30 +210,31 @@ export async function fetchOpenIssueTitles(
   repoFull: string,
   runner: CommandRunner = runGhCommand,
 ): Promise<OpenIssueSummary[] | null> {
-  const res = await runner([
-    "issue",
-    "list",
-    "--repo",
-    repoFull,
-    "--state",
-    "open",
-    "--json",
-    "number,title",
-    "--limit",
-    String(FETCH_LIMIT),
-  ]);
-  if (res.code !== 0) return null;
   try {
-    const parsed = JSON.parse(res.stdout);
-    if (!Array.isArray(parsed)) return null;
-    // A result exactly at the limit can't be told apart from a truncated one
-    // — searching a partial issue list and reporting "no candidates" would
-    // silently defeat the whole point of failing closed (web-jam-tools#904
-    // review), so treat it the same as a failed search rather than guessing.
-    if (parsed.length >= FETCH_LIMIT) return null;
-    return parsed
-      .filter((x) => x && typeof x.number === "number" && typeof x.title === "string")
-      .map((x) => ({ number: x.number, title: x.title }));
+    const issues: OpenIssueSummary[] = [];
+    for (let page = 1;; page++) {
+      const res = await runner([
+        "api",
+        `repos/${repoFull}/issues?state=open&per_page=${FETCH_PAGE_SIZE}&page=${page}`,
+      ]);
+      if (res.code !== 0) return null;
+      const parsed: unknown = JSON.parse(res.stdout);
+      if (!Array.isArray(parsed) || parsed.length > FETCH_PAGE_SIZE) return null;
+      for (const issue of parsed) {
+        if (
+          !issue || typeof issue.number !== "number" || typeof issue.title !== "string"
+        ) return null;
+        // The REST issues endpoint also lists pull requests. They consume page
+        // slots but are not candidates in the open-issue title search.
+        if (!Object.hasOwn(issue, "pull_request")) {
+          issues.push({ number: issue.number, title: issue.title });
+        }
+      }
+      // A full page is not proof of completeness: request the next page even
+      // when the total is an exact multiple of the page size. A later failure
+      // discards every earlier page instead of reporting a partial search.
+      if (parsed.length < FETCH_PAGE_SIZE) return issues;
+    }
   } catch {
     return null;
   }
