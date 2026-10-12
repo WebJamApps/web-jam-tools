@@ -30,6 +30,16 @@ import {
   type Schema,
 } from "../fix-labels/diff.ts";
 import { ACTIVE_REPOS } from "../shared/repos.ts";
+import {
+  type CommandRunner,
+  DUPLICATE_MIN_SHARED_TOKENS,
+  fetchOpenIssueTitles,
+  findSimilarOpenIssues,
+  formatCandidates,
+  type OpenIssueSummary,
+  runGhCommand,
+  tokenizeTitle,
+} from "../../hooks/lib/detect_duplicate_issue.ts";
 import { expandHome } from "./gate1.ts";
 import { type Gate1StatusResult, type Gate1StatusType, getGate1Status } from "./gate1_record.ts";
 import {
@@ -84,6 +94,8 @@ export interface LintPlanOptions {
   /** Reads an issue's body for the `Needs Design` removal check. Defaults to a read-only
    * `gh issue view`; tests inject a stub. Throws when the body cannot be read. */
   fetchIssueBody?: IssueBodyFetcher;
+  /** Read-only gh runner for the shared open-issue title listing; tests inject a stub. */
+  runGh?: CommandRunner;
   /** Canonical design document path to check Gate 1 approval against. */
   designDocPath?: string;
   /** Gate 1 state directory override (for testing). */
@@ -524,7 +536,9 @@ export async function checkGate1ApprovalRecord(
 
 /** Reads a design document from disk, parses its Gate 2 plan table, validates every cell, and
  * checks its `Needs Design` label removals against the removed issues' own bodies. Also verifies
- * Gate 1 disk record when `options.designDocPath` is provided. */
+ * Gate 1 disk record when `options.designDocPath` is provided.
+ *
+ * Checks each new plan title against open issues and the plan's other new titles. */
 export async function lintPlanTableFile(
   filePath: string,
   options?: LintPlanOptions,
@@ -539,6 +553,11 @@ export async function lintPlanTableFile(
   const violations = validatePlanTable(parsed, { schema, activeRepos: options?.activeRepos });
   violations.push(
     ...await checkNeedsDesignRemovals(markdown, options?.fetchIssueBody ?? ghIssueBody),
+    ...await checkDuplicatePlanTitles(
+      parsed.rows,
+      options?.runGh ?? runGhCommand,
+      options?.activeRepos ?? ACTIVE_REPOS,
+    ),
   );
 
   let gate1Approval: LintPlanResult["gate1Approval"];
@@ -567,6 +586,73 @@ export async function lintPlanTableFile(
     violations,
     gate1Approval,
   };
+}
+
+/** Reuse the issue-creation search before Gate 2, including comparisons within the plan. */
+async function checkDuplicatePlanTitles(
+  rows: PlanTableRow[],
+  runner: CommandRunner,
+  activeRepos: readonly string[],
+): Promise<PlanTableViolation[]> {
+  const searchable = rows.map((row) => ({
+    row,
+    title: row.cells[COL_TITLE].trim(),
+    repo: normalizeRepoCell(row.cells[COL_REPO]),
+  })).filter(({ title, repo }) =>
+    !isMissingValue(title) && activeRepos.includes(repo) &&
+    tokenizeTitle(title).length >= DUPLICATE_MIN_SHARED_TOKENS
+  );
+  const issuesByRepo = new Map<string, OpenIssueSummary[] | null>();
+  const violations: PlanTableViolation[] = [];
+  for (const { row, repo } of searchable) {
+    if (issuesByRepo.has(repo)) continue;
+    const issues = await fetchOpenIssueTitles(`WebJamApps/${repo}`, runner);
+    issuesByRepo.set(repo, issues);
+    if (issues === null) {
+      violations.push({
+        rule: "duplicate-title-search-failed",
+        line: row.line,
+        column: "Proposed title",
+        message:
+          `Duplicate-title search could not run or finish for WebJamApps/${repo}; refusing the plan.`,
+      });
+    }
+  }
+
+  // An exact existing title identifies an already-filed issue, not a new plan title.
+  const newRows = searchable.filter(({ title, repo }) => {
+    const issues = issuesByRepo.get(repo);
+    return issues !== null && issues !== undefined &&
+      !issues.some((issue) => issue.title === title);
+  });
+  for (const { row, title, repo } of newRows) {
+    const openMatches = findSimilarOpenIssues(title, issuesByRepo.get(repo)!);
+    const planMatches = findSimilarOpenIssues(
+      title,
+      newRows.filter((other) => other.row !== row).map((other) => ({
+        number: other.row.line,
+        title: other.title,
+      })),
+    );
+    const matches: string[] = [];
+    if (openMatches.length > 0) matches.push(formatCandidates(`WebJamApps/${repo}`, openMatches));
+    for (const candidate of planMatches) {
+      const other = newRows.find((entry) => entry.row.line === candidate.number)!;
+      // Unfiled rows have no GitHub number; never present their positions as issue citations.
+      matches.push(`plan row ${other.row.cells[0]} (${other.repo}) "${candidate.title}"`);
+    }
+    if (matches.length > 0) {
+      violations.push({
+        rule: "duplicate-title",
+        line: row.line,
+        column: "Proposed title",
+        message: `New title "${title}" resembles ${
+          matches.join(", ")
+        }. Read each look-alike before revising the plan.`,
+      });
+    }
+  }
+  return violations;
 }
 
 // --- Needs Design removals: "Not resolved" must never narrow the issue's own directive ---
@@ -735,6 +821,7 @@ export interface LintPlanCliOptions {
   errorLog?: (msg: string) => void;
   schema?: Schema;
   fetchIssueBody?: IssueBodyFetcher;
+  runGh?: CommandRunner;
   activeRepos?: string[];
   stateDir?: string;
   designDoc?: string;
@@ -777,11 +864,13 @@ Validates the Gate 2 plan table's cell values in a design document:
   - a composite Josh-labeled manual row (doc review + live walkthrough)
   - a cross-repo child not cited as repo#number "title"
   - a Tests cell with no statement of what proves the issue
+  - new titles resembling open issues in their row's repository or other new
+    plan titles; an incomplete or failed title listing refuses the plan
   - a "Needs Design label removals" item whose "Not resolved" part quotes or
     narrows a directive line of that issue's own body (read with gh; a body
     that cannot be read fails the check)
 
-Report-only. Writes nothing; its only GitHub call is a read-only gh issue view.
+Report-only. Writes nothing; GitHub calls only read issue bodies and open titles with gh.
 
 Arguments:
   <plan.md>               Path to markdown file containing the plan table
@@ -822,6 +911,7 @@ Options:
     const result = await lintPlanTableFile(docPath, {
       schema: options?.schema,
       fetchIssueBody: options?.fetchIssueBody,
+      runGh: options?.runGh,
       activeRepos: options?.activeRepos,
       designDocPath,
       stateDir,
