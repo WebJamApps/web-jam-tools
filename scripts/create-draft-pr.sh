@@ -105,6 +105,7 @@
 #   --dry-run       Run every guard and compose the full PR body, print it, and
 #                   exit 0 WITHOUT pushing or opening/editing a PR. For testing
 #                   this script's composition/guards safely (web-jam-tools#150).
+#                   Also prints the model label for a new PR; adds no labels.
 #   --update        Update the CURRENT BRANCH's existing open PR instead of
 #                   opening a new one (web-jam-tools#236). Runs through the exact
 #                   same guard pipeline as create mode — author roster, the #77
@@ -114,7 +115,7 @@
 #                   creation. Looks the PR up via `gh pr view` for the current
 #                   branch (push happens first, same as create mode) and refuses
 #                   if none is found — open one first (omit --update). Only the
-#                   body is replaced; the title is left as-is. Exists for a
+#                   body is replaced; the title and labels are left as-is. Exists for a
 #                   "checkpoint" PR opened early (e.g. by the delegate skill's
 #                   dispatch-checkpoint mechanism) whose body starts as a
 #                   plan/status scaffold and needs the REAL Summary/Test
@@ -191,6 +192,9 @@ ROSTER=(
   "GPT-6 Astra"
 )
 
+MATCHED_AUTHOR_MODEL=""
+PR_MODEL_LABEL=""
+
 author_roster_check() {
   local author="$1" entry needle
   # The bare "Gemini Flash" entry would also substring-match the retired medium level, so an
@@ -205,6 +209,19 @@ author_roster_check() {
   for entry in "${ROSTER[@]}"; do
     needle="${entry#Claude }"
     if printf '%s' "$author" | grep -qF "$needle"; then
+      MATCHED_AUTHOR_MODEL="$entry"
+      # Use the very roster entry that accepted the signing author, never the issue's label.
+      # Fable remains accepted by the roster but has no label in the tier-order design.
+      case "$entry" in
+        "Claude Haiku 5.5") PR_MODEL_LABEL="Haiku" ;;
+        "GPT-6 Luna") PR_MODEL_LABEL="Luna" ;;
+        "Gemini Flash") PR_MODEL_LABEL="Flash" ;;
+        "GPT-6.1 Sol") PR_MODEL_LABEL="Sol" ;;
+        "GPT-6 Astra") PR_MODEL_LABEL="Astra" ;;
+        "Claude Sonnet 5.5") PR_MODEL_LABEL="Sonnet" ;;
+        "Claude Opus") PR_MODEL_LABEL="Opus" ;;
+        *) PR_MODEL_LABEL="" ;;
+      esac
       return 0
     fi
   done
@@ -765,6 +782,13 @@ TITLE: $PR_TITLE
 $BODY
 === END DRY RUN ===
 EOF
+  if [ "$UPDATE" -eq 1 ]; then
+    echo "MODEL LABEL: unchanged (update leaves labels alone)"
+  elif [ -n "$PR_MODEL_LABEL" ]; then
+    echo "MODEL LABEL: $PR_MODEL_LABEL (would add once after creation)"
+  else
+    echo "MODEL LABEL: unavailable for '$MATCHED_AUTHOR_MODEL' (creation would report an error after opening the PR)"
+  fi
   exit 0
 fi
 
@@ -816,5 +840,17 @@ else
   else
     echo "  base: $BASE | state: draft | closes: $FORMATTED_ISSUE | by: $AUTHOR"
   fi
+  # Label only newly opened PRs. Keep the PR and its URL even if labeling fails.
+  PR_REPO="${PR_URL#https://github.com/}"
+  PR_REPO="${PR_REPO%/pull/*}"
+  if [ -z "$PR_MODEL_LABEL" ]; then
+    echo "ERROR: draft PR remains open at $PR_URL, but the tier-order table gives roster entry '$MATCHED_AUTHOR_MODEL' no model label in repository '$PR_REPO'." >&2
+    exit 1
+  fi
+  if ! gh pr edit "$PR_URL" --add-label "$PR_MODEL_LABEL"; then
+    echo "ERROR: draft PR remains open at $PR_URL, but could not add model label '$PR_MODEL_LABEL' in repository '$PR_REPO'." >&2
+    exit 1
+  fi
+  echo "  model label: $PR_MODEL_LABEL"
   echo "Josh reviews the diff and flips draft -> ready on GitHub."
 fi

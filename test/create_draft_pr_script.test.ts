@@ -1258,9 +1258,12 @@ Deno.test("opening a PR when current branch matches --base is refused", async ()
 
 // --- --base passed through to gh pr create/edit tests ---
 
-async function makeMockGhWithArgCapture() {
+async function makeMockGhWithArgCapture(
+  options: { labelFailure?: boolean; initialLabels?: string[]; issueLabels?: string[] } = {},
+) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-args-" });
   const argsLogPath = `${dir}/gh-invocations.txt`;
+  await Deno.writeTextFile(`${dir}/labels`, (options.initialLabels ?? []).join("\n"));
 
   const scriptContent = `#!/usr/bin/env bash
 # Log all invocations to a file for inspection
@@ -1286,16 +1289,24 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
       echo "Test Issue"
       exit 0
     elif [ "$arg" = "labels" ]; then
-      echo ""
+      echo "${(options.issueLabels ?? []).join("\n")}"
       exit 0
     fi
   done
 fi
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
+  touch "${dir}/pr-open"
   echo "https://github.com/WebJamApps/web-jam-tools/pull/9999"
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
+  if [ "\${4:-}" = "--add-label" ]; then
+    if [ "${options.labelFailure ? "1" : "0"}" = "1" ]; then
+      echo "label does not exist" >&2
+      exit 1
+    fi
+    printf '%s\\n' "$5" >> "${dir}/labels"
+  fi
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
@@ -1310,6 +1321,180 @@ exit 0
   await Deno.chmod(ghPath, 0o755);
   return { dir, argsLogPath };
 }
+
+// Run the actual create/update paths offline; gh records every argument, and git only stubs push.
+async function withModelLabelFixture(
+  test: (fixture: {
+    repo: string;
+    dir: string;
+    env: Record<string, string>;
+    invocations: () => Promise<string[][]>;
+  }) => Promise<void>,
+  options: { labelFailure?: boolean; initialLabels?: string[]; issueLabels?: string[] } = {},
+): Promise<void> {
+  const repo = await makeFixtureRepo();
+  const { dir, argsLogPath } = await makeMockGhWithArgCapture(options);
+  try {
+    await Deno.writeTextFile(
+      `${dir}/git`,
+      '#!/usr/bin/env bash\nif [ "$1" = "push" ]; then exit 0; fi\nexec /usr/bin/git "$@"\n',
+    );
+    await Deno.chmod(`${dir}/git`, 0o755);
+    await test({
+      repo,
+      dir,
+      env: { PATH: `${dir}:${Deno.env.get("PATH")}` },
+      invocations: async () => {
+        try {
+          return (await Deno.readTextFile(argsLogPath))
+            .split("=== gh invocation ===\n").slice(1)
+            .map((call) => call.split("\n=== end ===")[0].split("\n"));
+        } catch (error) {
+          if (error instanceof Deno.errors.NotFound) return [];
+          throw error;
+        }
+      },
+    });
+  } finally {
+    await Deno.remove(repo, { recursive: true });
+    await Deno.remove(dir, { recursive: true });
+  }
+}
+
+const MODEL_LABEL_CASES = [
+  ["Claude Code — Claude Haiku 5.5", "Haiku"],
+  ["Codex — GPT-6 Luna", "Luna"],
+  ["agy — Gemini Flash", "Flash"],
+  ["Codex — GPT-6.1 Sol", "Sol"],
+  ["Codex — GPT-6 Astra", "Astra"],
+  ["Claude Code — Claude Sonnet 5.5", "Sonnet"],
+  ["Claude Code — Claude Opus", "Opus"],
+] as const;
+const LABEL_PR_URL = "https://github.com/WebJamApps/web-jam-tools/pull/9999";
+
+for (const [author, label] of MODEL_LABEL_CASES) {
+  Deno.test(`model label: creation signed ${author} adds ${label} once after opening`, () =>
+    withModelLabelFixture(async ({ repo, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(repo, baseArgs({ author }), env);
+      assertEquals(result.code, 0, result.stderr);
+      const calls = await invocations();
+      assertEquals(calls.map((call) => call.slice(0, 2)), [["pr", "create"], ["pr", "edit"]]);
+      assertEquals(calls[0].includes("--draft"), true);
+      assertEquals(calls[0].includes("--label"), false);
+      assertEquals(calls[0].includes("--add-label"), false);
+      assertEquals(calls[0].join("\n").includes(`🤖 Work by ${author}`), true);
+      assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", label]);
+    }));
+
+  Deno.test(`model label: missing ${label} preserves the new PR and reports repository`, () =>
+    withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(repo, baseArgs({ author }), env);
+      assertEquals(result.code, 1);
+      assertEquals((await Deno.stat(`${dir}/pr-open`)).isFile, true);
+      assertEquals(result.stdout.includes(`Draft PR opened: ${LABEL_PR_URL}`), true);
+      assertEquals(result.stderr.includes(`model label '${label}'`), true);
+      assertEquals(result.stderr.includes("WebJamApps/web-jam-tools"), true);
+      assertEquals((await invocations()).map((call) => call.slice(0, 2)), [
+        ["pr", "create"],
+        ["pr", "edit"],
+      ]);
+    }, { labelFailure: true }));
+
+  Deno.test(`model label: dry run signed ${author} prints ${label} with no writes`, () =>
+    withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
+      const result = await runScript(repo, baseArgs({ author }), env);
+      assertEquals(result.code, 0, result.stderr);
+      assertEquals(
+        result.stdout.includes(`MODEL LABEL: ${label} (would add once after creation)`),
+        true,
+      );
+      assertEquals(await invocations(), []);
+      assertEquals(
+        Array.from(Deno.readDirSync(dir)).some((entry) => entry.name === "pr-open"),
+        false,
+      );
+      assertEquals(await Deno.readTextFile(`${dir}/labels`), "");
+    }));
+}
+
+Deno.test("model label: Fable opens the draft before reporting no tier-order label", () =>
+  withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
+    const result = await runScriptWithoutDryRun(
+      repo,
+      baseArgs({ author: "Claude Code — Claude Fable 5" }),
+      env,
+    );
+    assertEquals(result.code, 1);
+    assertEquals((await Deno.stat(`${dir}/pr-open`)).isFile, true);
+    assertEquals(result.stderr.includes("Claude Fable 5"), true);
+    assertEquals(result.stderr.includes("no model label"), true);
+    assertEquals(result.stderr.includes("WebJamApps/web-jam-tools"), true);
+    assertEquals((await invocations()).map((call) => call.slice(0, 2)), [["pr", "create"]]);
+  }));
+
+for (const initialLabels of [["Flash"], []]) {
+  Deno.test(`model label: update preserves ${initialLabels.length ? "Flash" : "no labels"}`, () =>
+    withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(
+        repo,
+        [...baseArgs({ author: "Codex — GPT-6.1 Sol" }), "--update"],
+        env,
+      );
+      assertEquals(result.code, 0, result.stderr);
+      const calls = await invocations();
+      assertEquals(calls.filter((call) => call[1] === "create"), []);
+      assertEquals(calls.filter((call) => call.includes("--add-label")), []);
+      assertEquals(calls.filter((call) => call.includes("--remove-label")), []);
+      assertEquals(await Deno.readTextFile(`${dir}/labels`), initialLabels.join("\n"));
+    }, { initialLabels }));
+}
+
+Deno.test("model label: forced signing author controls footer and label", () =>
+  withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const result = await runScriptWithoutDryRun(repo, baseArgs({ author: "Codex — GPT-6.1 Sol" }), {
+      ...env,
+      FORCED_PR_AUTHOR: "agy — Gemini Flash",
+    });
+    assertEquals(result.code, 0, result.stderr);
+    const calls = await invocations();
+    assertEquals(calls[0].join("\n").includes("🤖 Work by agy — Gemini Flash"), true);
+    assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", "Flash"]);
+  }));
+
+Deno.test("model label: Sol signature wins over the issue's Flash label", () =>
+  withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const result = await runScriptWithoutDryRun(
+      repo,
+      [...baseArgs({ author: "Codex — GPT-6.1 Sol" }), "--issue", "999"],
+      env,
+    );
+    assertEquals(result.code, 0, result.stderr);
+    const labelCalls = (await invocations()).filter((call) => call.includes("--add-label"));
+    assertEquals(labelCalls, [["pr", "edit", LABEL_PR_URL, "--add-label", "Sol"]]);
+  }, { issueLabels: ["Flash"] }));
+
+Deno.test("model label: Codex session resolves Sol instead of the typed Astra author", () =>
+  withSigningFixture(async (_options, signingEnv, sessionPath) => {
+    await Deno.writeTextFile(
+      sessionPath,
+      '{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}\n',
+      { append: true },
+    );
+    await withModelLabelFixture(async ({ repo, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(
+        repo,
+        baseArgs({ author: "Codex — GPT-6 Astra" }),
+        {
+          ...env,
+          ...signingEnv,
+        },
+      );
+      assertEquals(result.code, 0, result.stderr);
+      const calls = await invocations();
+      assertEquals(calls[0].join("\n").includes("🤖 Work by Codex — GPT-6.1 Sol"), true);
+      assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", "Sol"]);
+    });
+  }));
 
 Deno.test("--base some-branch is passed through to gh pr create call", async () => {
   const { dir, argsLogPath } = await makeMockGhWithArgCapture();
