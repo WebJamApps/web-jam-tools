@@ -5,6 +5,7 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/
 import { join } from "@std/path";
 import {
   captureAndVerifyRulesInDesignDoc,
+  capturedRulesPathForDesignDoc,
   findDanglingLinks,
   isValidSlug,
   parsePlanInput,
@@ -14,6 +15,38 @@ import {
 
 const REPO_ROOT = new URL("../", import.meta.url).pathname;
 const SCRIPT_SH_PATH = join(REPO_ROOT, "scripts", "consume-memory-rules.sh");
+
+// Force trash commands to fall back to a HOME inside the fixture, never the user's trash.
+async function executeFixturePlan(planPath: string, tempDir: string, denyWrite?: string) {
+  return await new Deno.Command(Deno.execPath(), {
+    args: [
+      "run",
+      "--allow-read",
+      "--allow-write",
+      "--allow-env",
+      "--allow-run",
+      ...(denyWrite ? [`--deny-write=${denyWrite}`] : []),
+      join(REPO_ROOT, "scripts", "consume_memory_rules.ts"),
+      planPath,
+      "--delete",
+    ],
+    env: { HOME: tempDir, PATH: tempDir },
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+}
+
+Deno.test("captured-rules path uses the topic beside current and legacy design filenames", () => {
+  assertEquals(
+    capturedRulesPathForDesignDoc("Theme/my-topic-design.md"),
+    "Theme/my-topic-captured-rules.md",
+  );
+  assertEquals(
+    capturedRulesPathForDesignDoc("Theme/design-issue-file-issue-design-2026-08-23.md"),
+    "Theme/design-issue-file-issue-captured-rules.md",
+  );
+  assertEquals(capturedRulesPathForDesignDoc("Theme/topic.md"), "Theme/topic-captured-rules.md");
+});
 
 Deno.test("parsePlanInput handles JSON and YAML objects and arrays", () => {
   const jsonArray = JSON.stringify([
@@ -169,8 +202,11 @@ Deno.test("runConsumeMemoryRules --dry-run (default) verifies without modifying 
     const stat2 = await Deno.stat(memoryFile2);
     assert(stat2.isFile);
 
-    const docText = await Deno.readTextFile(designDocPath);
-    assert(!docText.includes("### Captured Rule"));
+    assertEquals(await Deno.readTextFile(designDocPath), "# Design Document\n\nInitial content.\n");
+    await assertRejects(
+      () => Deno.stat(join(tempDir, "design_doc-captured-rules.md")),
+      Deno.errors.NotFound,
+    );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
@@ -182,11 +218,15 @@ Deno.test("runConsumeMemoryRules --delete executes capture, MEMORY.md strip, and
     const memoryDir = join(tempDir, "memory");
     await Deno.mkdir(memoryDir);
 
-    const designDocPath = join(tempDir, "design_doc.md");
-    await Deno.writeTextFile(designDocPath, "# Design Document\n\nInitial content.\n");
+    const designDocPath = join(tempDir, "my-topic-design.md");
+    const designBytes = new TextEncoder().encode(
+      "# Design Document\r\n\r\nApproved café design.\r\n\r\n<!-- START_CAPTURED_RULE:legacy-rule -->\r\nLegacy capture stays here.\r\n<!-- END_CAPTURED_RULE:legacy-rule -->\r\n",
+    );
+    await Deno.writeFile(designDocPath, designBytes);
+    const capturedRulesPath = join(tempDir, "my-topic-captured-rules.md");
 
     const memoryFile1 = join(memoryDir, "rule-consume.md");
-    const source1Text = "Rule consume content: byte verified.";
+    const source1Text = "\uFEFFRule consume content: café, byte verified.\r\n";
     await Deno.writeTextFile(memoryFile1, source1Text);
 
     const memoryFile2 = join(memoryDir, "rule-delete.md");
@@ -216,9 +256,11 @@ Deno.test("runConsumeMemoryRules --delete executes capture, MEMORY.md strip, and
     );
 
     // Execute with delete: true
-    const result = await runConsumeMemoryRules({ planPath, delete: true });
-    assertEquals(result.dryRun, false);
-    assertStringIncludes(result.summary, "Mode: EXECUTE");
+    const result = await executeFixturePlan(planPath, tempDir);
+    assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
+    const summary = new TextDecoder().decode(result.stdout);
+    assertStringIncludes(summary, "Mode: EXECUTE");
+    assertStringIncludes(summary, `Captured-rules file: ${capturedRulesPath}`);
 
     // 1. Verify memory files are no longer in memoryDir
     let exists1 = true;
@@ -243,13 +285,19 @@ Deno.test("runConsumeMemoryRules --delete executes capture, MEMORY.md strip, and
     assert(!updatedMemoryMd.includes("rule-delete"));
     assertStringIncludes(updatedMemoryMd, "rule-stay");
 
-    // 3. Verify design document gained byte-verified captured text
-    const updatedDocText = await Deno.readTextFile(designDocPath);
-    assertStringIncludes(updatedDocText, "### Captured Rule: `rule-consume`");
-    assertStringIncludes(updatedDocText, source1Text);
+    // 3. Verify the sibling record gained the capture and the design bytes stayed unchanged.
+    assertEquals(await Deno.readFile(designDocPath), designBytes);
+    const capturedText = await Deno.readTextFile(capturedRulesPath);
+    assertStringIncludes(capturedText, "### Captured Rule: `rule-consume`");
+    assertStringIncludes(capturedText, source1Text);
+    assert(!capturedText.includes("legacy-rule"));
+    assertEquals(
+      await Deno.readFile(join(tempDir, ".local/share/Trash/files/rule-consume.md")),
+      new TextEncoder().encode(source1Text),
+    );
 
     // Re-run captureAndVerifyRulesInDesignDoc to assert byte verification passes
-    const reVerify = captureAndVerifyRulesInDesignDoc(updatedDocText, [
+    const reVerify = captureAndVerifyRulesInDesignDoc(capturedText, [
       {
         slug: "rule-consume",
         target_skill: "skills/design-issue/SKILL.md",
@@ -257,6 +305,30 @@ Deno.test("runConsumeMemoryRules --delete executes capture, MEMORY.md strip, and
       },
     ]);
     assertEquals(reVerify.verifiedCount, 1);
+
+    // A later run adds another capture to the same record and preserves the first capture.
+    const source2Text = "Second rule, with no trailing newline.";
+    await Deno.writeTextFile(join(memoryDir, "second-rule.md"), source2Text);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        design_doc: designDocPath,
+        memory_dir: memoryDir,
+        rules: [{ slug: "second-rule", disposition: "consume" }],
+      }),
+    );
+    const secondResult = await executeFixturePlan(planPath, tempDir);
+    assertEquals(secondResult.code, 0, new TextDecoder().decode(secondResult.stderr));
+    const appendedText = await Deno.readTextFile(capturedRulesPath);
+    assertStringIncludes(appendedText, capturedText.trimEnd());
+    assertEquals(
+      captureAndVerifyRulesInDesignDoc(appendedText, [
+        { slug: "rule-consume", sourceContent: source1Text },
+        { slug: "second-rule", sourceContent: source2Text },
+      ]).verifiedCount,
+      2,
+    );
+    assertEquals(await Deno.readFile(designDocPath), designBytes);
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
@@ -288,6 +360,101 @@ Deno.test("runConsumeMemoryRules stops when a slug is absent from memory directo
     await Deno.remove(tempDir, { recursive: true });
   }
 });
+
+for (
+  const failure of [
+    "write-denied",
+    "readback-mismatch",
+    "directory",
+    "symlink",
+    "hardlink",
+    "corrupt-capture",
+  ] as const
+) {
+  Deno.test(`capture ${failure} refuses before any memory or index changes`, async () => {
+    const tempDir = await Deno.makeTempDir();
+    try {
+      const memoryDir = join(tempDir, "memory");
+      await Deno.mkdir(memoryDir);
+      const designDocPath = join(tempDir, "topic-design.md");
+      const designBytes = new TextEncoder().encode("# Approved design\r\n\r\nUnchanged.\r\n");
+      await Deno.writeFile(designDocPath, designBytes);
+      const capturePath = join(tempDir, "topic-captured-rules.md");
+      const sourceText = "Original consumed rule.\n";
+      await Deno.writeTextFile(join(memoryDir, "consume-rule.md"), sourceText);
+      await Deno.writeTextFile(join(memoryDir, "delete-rule.md"), "Original deleted rule.\n");
+      const indexText = "# Memory Index\n\nconsume-rule · delete-rule\n";
+      await Deno.writeTextFile(join(memoryDir, "MEMORY.md"), indexText);
+      const planPath = join(tempDir, "plan.json");
+      await Deno.writeTextFile(
+        planPath,
+        JSON.stringify({
+          design_doc: designDocPath,
+          memory_dir: memoryDir,
+          rules: [
+            { slug: "consume-rule", disposition: "consume" },
+            { slug: "delete-rule", disposition: "delete" },
+          ],
+        }),
+      );
+
+      if (failure === "directory") await Deno.mkdir(capturePath);
+      if (failure === "symlink") await Deno.symlink(designDocPath, capturePath);
+      if (failure === "hardlink") await Deno.link(designDocPath, capturePath);
+      if (failure === "corrupt-capture") {
+        await Deno.writeTextFile(
+          capturePath,
+          "<!-- START_CAPTURED_RULE:consume-rule -->\nWrong copy.\n<!-- END_CAPTURED_RULE:consume-rule -->\n",
+        );
+      }
+      if (failure === "readback-mismatch") {
+        const originalReadFile = Deno.readFile;
+        Deno.readFile = (path, options) =>
+          path === capturePath
+            ? Promise.resolve(new Uint8Array())
+            : originalReadFile(path, options);
+        try {
+          await assertRejects(
+            () => runConsumeMemoryRules({ planPath, delete: true }),
+            Error,
+            "Capture byte verification failed after writing",
+          );
+        } finally {
+          Deno.readFile = originalReadFile;
+        }
+      } else {
+        const result = await executeFixturePlan(
+          planPath,
+          tempDir,
+          failure === "write-denied" ? capturePath : undefined,
+        );
+        assertEquals(result.code, 1);
+        const errorText = new TextDecoder().decode(result.stderr);
+        assertStringIncludes(
+          errorText,
+          failure === "write-denied"
+            ? "Cannot persist captured-rules file"
+            : failure === "corrupt-capture"
+            ? "Capture byte verification failed"
+            : "Captured-rules file",
+        );
+      }
+      assertEquals(await Deno.readFile(designDocPath), designBytes);
+      assertEquals(await Deno.readTextFile(join(memoryDir, "consume-rule.md")), sourceText);
+      assertEquals(
+        await Deno.readTextFile(join(memoryDir, "delete-rule.md")),
+        "Original deleted rule.\n",
+      );
+      assertEquals(await Deno.readTextFile(join(memoryDir, "MEMORY.md")), indexText);
+      await assertRejects(
+        () => Deno.stat(join(tempDir, ".local/share/Trash")),
+        Deno.errors.NotFound,
+      );
+    } finally {
+      await Deno.remove(tempDir, { recursive: true });
+    }
+  });
+}
 
 Deno.test("runConsumeMemoryRules stops when design document is unreadable or missing for consume rules", async () => {
   const tempDir = await Deno.makeTempDir();
@@ -348,8 +515,13 @@ Deno.test("shell wrapper scripts/consume-memory-rules.sh runs dry-run by default
     );
 
     // 1. Dry run via shell wrapper
-    const dryRunCmd = new Deno.Command(SCRIPT_SH_PATH, {
-      args: [planPath],
+    const dryRunCmd = new Deno.Command("/bin/bash", {
+      args: [SCRIPT_SH_PATH, planPath],
+      env: {
+        HOME: tempDir,
+        XDG_DATA_HOME: join(tempDir, ".local/share"),
+        DENO_BIN: Deno.execPath(),
+      },
       stdout: "piped",
       stderr: "piped",
     });
@@ -363,8 +535,13 @@ Deno.test("shell wrapper scripts/consume-memory-rules.sh runs dry-run by default
     assert(statBefore.isFile);
 
     // 2. Delete run via shell wrapper
-    const deleteCmd = new Deno.Command(SCRIPT_SH_PATH, {
-      args: [planPath, "--delete"],
+    const deleteCmd = new Deno.Command("/bin/bash", {
+      args: [SCRIPT_SH_PATH, planPath, "--delete"],
+      env: {
+        HOME: tempDir,
+        XDG_DATA_HOME: join(tempDir, ".local/share"),
+        DENO_BIN: Deno.execPath(),
+      },
       stdout: "piped",
       stderr: "piped",
     });
@@ -381,6 +558,11 @@ Deno.test("shell wrapper scripts/consume-memory-rules.sh runs dry-run by default
       fileExistsAfter = false;
     }
     assert(!fileExistsAfter);
+    assertEquals(await Deno.readTextFile(designDocPath), "# Design Doc\n");
+    assertStringIncludes(
+      await Deno.readTextFile(join(tempDir, "design_doc-captured-rules.md")),
+      "Shell wrapper test rule content.",
+    );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
