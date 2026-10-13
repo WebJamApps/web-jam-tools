@@ -36,6 +36,7 @@ const MERGE_AGENTS_MD_SCRIPT = `${REPO_ROOT}scripts/merge-agents-md-pointer.ts`;
 const STATUS_LINE_SCRIPT = `${REPO_ROOT}scripts/statusline.sh`;
 const AGENT_ALERT_SCRIPT = `${REPO_ROOT}scripts/agent-alert.sh`;
 const AGY_PROMPT_WATCH_SCRIPT = `${REPO_ROOT}scripts/agy-prompt-watch.sh`;
+const AGY_SKILL_RUN_SCRIPT = `${REPO_ROOT}scripts/agy-skill-run.sh`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
 
 interface RunResult {
@@ -56,7 +57,13 @@ async function run(
     stdout: "piped",
     stderr: "piped",
     // Never inherit real Codex config overrides into an installer fixture.
-    env: { ...Deno.env.toObject(), CODEX_HOME: "", CODEX_HOOKS_PATH: "", ...env },
+    env: {
+      ...Deno.env.toObject(),
+      CODEX_HOME: "",
+      CODEX_HOOKS_PATH: "",
+      PATH: `${Deno.execPath().slice(0, Deno.execPath().lastIndexOf("/"))}:/usr/bin:/bin`,
+      ...env,
+    },
   });
 
   if (stdinText !== undefined) {
@@ -118,7 +125,13 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     // only lists hooks/*.sh) or be picked up by the hook-registration loops.
     assertEquals(
       linked,
-      [...shHookNames(), "agent-alert.sh", "agy-prompt-watch.sh", "statusline.sh"].sort(),
+      [
+        ...shHookNames(),
+        "agent-alert.sh",
+        "agy-prompt-watch.sh",
+        "agy-skill-run.sh",
+        "statusline.sh",
+      ].sort(),
     );
     for (const name of linked) {
       const info = await Deno.lstat(`${hooksDir}/${name}`);
@@ -171,6 +184,18 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
         (h: { command?: string }) => h.command === "$HOME/.claude/hooks/agy-prompt-watch.sh",
       ),
       "expected $HOME/.claude/hooks/agy-prompt-watch.sh in agy PreToolUse hooks",
+    );
+    // web-jam-tools#1320: agy-skill-run-hook.sh is registered under matcher ".*" and is LAST
+    assert(
+      preToolHooks.some(
+        (h: { command?: string }) => h.command === "$HOME/.claude/hooks/agy-skill-run-hook.sh",
+      ),
+      "expected $HOME/.claude/hooks/agy-skill-run-hook.sh in agy PreToolUse hooks",
+    );
+    assertEquals(
+      preToolHooks[preToolHooks.length - 1]?.command,
+      "$HOME/.claude/hooks/agy-skill-run-hook.sh",
+      "expected agy-skill-run-hook.sh to be the last PreToolUse hook",
     );
     // web-jam-tools#691: agy never gets a statusLine surface.
     assertEquals(agyHooks.statusLine, undefined);
@@ -550,7 +575,13 @@ Deno.test("default invocation (no --hooks-dir) still targets $HOME/.claude/hooks
     // default destination too, but is not itself a hook.
     assertEquals(
       linked,
-      [...shHookNames(), "agent-alert.sh", "agy-prompt-watch.sh", "statusline.sh"].sort(),
+      [
+        ...shHookNames(),
+        "agent-alert.sh",
+        "agy-prompt-watch.sh",
+        "agy-skill-run.sh",
+        "statusline.sh",
+      ].sort(),
     );
 
     // web-jam-tools#721: a normal, unsandboxed-hooks-dir run must still
@@ -587,6 +618,10 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.mkdir(`${mainRepo}/scripts`, { recursive: true });
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
   await Deno.copyFile(
+    `${REPO_ROOT}scripts/agy-permissions.ts`,
+    `${mainRepo}/scripts/agy-permissions.ts`,
+  );
+  await Deno.copyFile(
     `${REPO_ROOT}scripts/claude-settings.json`,
     `${mainRepo}/scripts/claude-settings.json`,
   );
@@ -594,13 +629,15 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(MERGE_SCRIPT, `${mainRepo}/scripts/merge-hooks-into-settings.ts`);
   await Deno.copyFile(MERGE_CODEX_SCRIPT, `${mainRepo}/scripts/merge-codex-reaper-hook.ts`);
   await Deno.copyFile(MERGE_AGENTS_MD_SCRIPT, `${mainRepo}/scripts/merge-agents-md-pointer.ts`);
-  // install-hooks.sh requires scripts/statusline.sh, scripts/agent-alert.sh, and scripts/agy-prompt-watch.sh to exist (web-jam-tools#688, web-jam-tools#1176, web-jam-tools#1212).
+  // install-hooks.sh requires scripts/statusline.sh, scripts/agent-alert.sh, scripts/agy-prompt-watch.sh, and scripts/agy-skill-run.sh to exist (web-jam-tools#688, web-jam-tools#1176, web-jam-tools#1212, web-jam-tools#1320).
   await Deno.copyFile(STATUS_LINE_SCRIPT, `${mainRepo}/scripts/statusline.sh`);
   await Deno.chmod(`${mainRepo}/scripts/statusline.sh`, 0o755);
   await Deno.copyFile(AGENT_ALERT_SCRIPT, `${mainRepo}/scripts/agent-alert.sh`);
   await Deno.chmod(`${mainRepo}/scripts/agent-alert.sh`, 0o755);
   await Deno.copyFile(AGY_PROMPT_WATCH_SCRIPT, `${mainRepo}/scripts/agy-prompt-watch.sh`);
   await Deno.chmod(`${mainRepo}/scripts/agy-prompt-watch.sh`, 0o755);
+  await Deno.copyFile(AGY_SKILL_RUN_SCRIPT, `${mainRepo}/scripts/agy-skill-run.sh`);
+  await Deno.chmod(`${mainRepo}/scripts/agy-skill-run.sh`, 0o755);
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {

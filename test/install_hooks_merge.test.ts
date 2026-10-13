@@ -23,6 +23,24 @@ const HAIKU_EFFORT_ARGS = [
   }),
 ];
 
+Deno.test("matcher hooks remain idempotent across multiple blocks with the same matcher", async () => {
+  const data = {
+    hooks: {
+      PreToolUse: [
+        { matcher: ".*", hooks: [{ type: "command", command: "/guard.sh" }] },
+        { matcher: ".*", hooks: [{ type: "command", command: "/rewrite.sh" }] },
+      ],
+    },
+  };
+  await withTempSettings(data, async (path) => {
+    const before = await Deno.readTextFile(path);
+    const args = ["--pre-tool-use", ".*::/guard.sh", ".*::/rewrite.sh"];
+    assertEquals((await runMerge(path, ["--check", ...args])).code, 0);
+    assertEquals((await runMerge(path, args)).code, 0);
+    assertEquals(await Deno.readTextFile(path), before);
+  });
+});
+
 Deno.test("model-settings: merges Haiku effort and preserves other models and keys", async () => {
   await withTempSettings({
     userSetting: "keep",

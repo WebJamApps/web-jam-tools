@@ -354,6 +354,14 @@ export function merge(settingsPath: string, args: string[]): number {
     }
 
     for (const [matcher, cmd] of pairs) {
+      // A matcher may have multiple blocks (e.g. a dedicated final rewrite hook).
+      if (
+        bucket.some((item) =>
+          item?.matcher === matcher && item.hooks?.some((h) => h?.command === cmd)
+        )
+      ) {
+        continue;
+      }
       let entry = matcherEntries[matcher];
       if (!entry) {
         entry = { matcher, hooks: [] };

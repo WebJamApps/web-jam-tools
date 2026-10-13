@@ -4,7 +4,6 @@ import {
   DEFAULT_TARGETS,
   formatAlertEmail,
   formatHeartbeatEmail,
-  type MailTransporter,
   runAllChecks,
   runCheck,
   sendAlertEmail,
@@ -155,7 +154,18 @@ Deno.test("formatHeartbeatEmail formats daily status email correctly", () => {
   assertStringIncludes(email.html, "Site A");
 });
 
-Deno.test("sendAlertEmail validates environment variables", async () => {
+function pad(s: string): string {
+  return s + "=".repeat((4 - (s.length % 4)) % 4);
+}
+function b64ToUtf8(s: string): string {
+  const bin = atob(pad(s.replace(/\r?\n/g, "")));
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+}
+function b64urlToUtf8(s: string): string {
+  return b64ToUtf8(s.replace(/-/g, "+").replace(/_/g, "/"));
+}
+
+Deno.test("sendAlertEmail validates environment variables and throws naming all three Gmail settings", async () => {
   const failedResults: CheckResult[] = [
     {
       config: { name: "Site A", url: "https://sitea.com" },
@@ -164,14 +174,28 @@ Deno.test("sendAlertEmail validates environment variables", async () => {
     },
   ];
 
-  await assertRejects(
-    () => sendAlertEmail(failedResults, {}),
-    Error,
-    "Missing required environment variables GMAIL_USER or GMAIL_APP_PASSWORD",
-  );
+  const origId = Deno.env.get("GMAIL_CLIENT_ID");
+  const origSecret = Deno.env.get("GMAIL_CLIENT_SECRET");
+  const origToken = Deno.env.get("GMAIL_REFRESH_TOKEN");
+
+  try {
+    Deno.env.delete("GMAIL_CLIENT_ID");
+    Deno.env.delete("GMAIL_CLIENT_SECRET");
+    Deno.env.delete("GMAIL_REFRESH_TOKEN");
+
+    await assertRejects(
+      () => sendAlertEmail(failedResults),
+      Error,
+      "Missing Gmail OAuth secrets: set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN",
+    );
+  } finally {
+    if (origId) Deno.env.set("GMAIL_CLIENT_ID", origId);
+    if (origSecret) Deno.env.set("GMAIL_CLIENT_SECRET", origSecret);
+    if (origToken) Deno.env.set("GMAIL_REFRESH_TOKEN", origToken);
+  }
 });
 
-Deno.test("sendAlertEmail uses transporter to send mail", async () => {
+Deno.test("sendAlertEmail makes one token request and one send request to Gmail API", async () => {
   const failedResults: CheckResult[] = [
     {
       config: { name: "Site A", url: "https://sitea.com" },
@@ -181,29 +205,64 @@ Deno.test("sendAlertEmail uses transporter to send mail", async () => {
     },
   ];
 
-  let sentOptions: Record<string, unknown> | null = null;
-  const mockTransporter: MailTransporter = {
-    sendMail(options) {
-      sentOptions = options;
-      return Promise.resolve({ accepted: [options.to] });
-    },
-  };
+  const origId = Deno.env.get("GMAIL_CLIENT_ID");
+  const origSecret = Deno.env.get("GMAIL_CLIENT_SECRET");
+  const origToken = Deno.env.get("GMAIL_REFRESH_TOKEN");
 
-  const env = {
-    GMAIL_USER: "testuser@gmail.com",
-    GMAIL_APP_PASSWORD: "app-password-secret",
-  };
+  try {
+    Deno.env.set("GMAIL_CLIENT_ID", "test-client-id");
+    Deno.env.set("GMAIL_CLIENT_SECRET", "test-client-secret");
+    Deno.env.set("GMAIL_REFRESH_TOKEN", "test-refresh-token");
 
-  await sendAlertEmail(failedResults, env, mockTransporter);
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const mockFetch = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const urlStr = String(url);
+      calls.push({ url: urlStr, init });
+      if (urlStr === "https://oauth2.googleapis.com/token") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ access_token: "test-token" }), { status: 200 }),
+        );
+      }
+      if (urlStr === "https://gmail.googleapis.com/gmail/v1/users/me/messages/send") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "alert-msg-123" }), { status: 200 }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${urlStr}`));
+    };
 
-  assert(sentOptions);
-  assertStringIncludes(String(sentOptions["to"]), "joshua.v.sherman@gmail.com");
-  assertStringIncludes(String(sentOptions["to"]), "chemmariasherman@gmail.com");
-  assertStringIncludes(String(sentOptions["from"]), "testuser@gmail.com");
-  assertStringIncludes(String(sentOptions["subject"]), "Production Service Failure");
+    const res = await sendAlertEmail(failedResults, mockFetch);
+    assertEquals(res, "alert-msg-123");
+    assertEquals(calls.length, 2);
+
+    // Verify token request
+    assertEquals(calls[0].url, "https://oauth2.googleapis.com/token");
+    assertEquals(calls[0].init?.method, "POST");
+
+    // Verify send request
+    assertEquals(calls[1].url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+    assertEquals(calls[1].init?.method, "POST");
+    const sendPayload = JSON.parse(String(calls[1].init?.body));
+    const decoded = b64urlToUtf8(sendPayload.raw);
+    assertStringIncludes(decoded, "To: joshua.v.sherman@gmail.com, chemmariasherman@gmail.com");
+    assertStringIncludes(
+      decoded,
+      "Subject: [Uptime Alert] Production Service Failure (1 check failed)",
+    );
+    const bodyPart = decoded.split("\r\n\r\n").slice(1).join("\r\n\r\n");
+    assertStringIncludes(b64ToUtf8(bodyPart), "Site A");
+    assertStringIncludes(b64ToUtf8(bodyPart), "Internal Server Error");
+  } finally {
+    if (origId) Deno.env.set("GMAIL_CLIENT_ID", origId);
+    else Deno.env.delete("GMAIL_CLIENT_ID");
+    if (origSecret) Deno.env.set("GMAIL_CLIENT_SECRET", origSecret);
+    else Deno.env.delete("GMAIL_CLIENT_SECRET");
+    if (origToken) Deno.env.set("GMAIL_REFRESH_TOKEN", origToken);
+    else Deno.env.delete("GMAIL_REFRESH_TOKEN");
+  }
 });
 
-Deno.test("sendHeartbeatEmail uses transporter to send heartbeat mail", async () => {
+Deno.test("sendHeartbeatEmail makes one token request and one send request to Gmail API", async () => {
   const results: CheckResult[] = [
     {
       config: { name: "Site A", url: "https://sitea.com" },
@@ -212,23 +271,58 @@ Deno.test("sendHeartbeatEmail uses transporter to send heartbeat mail", async ()
     },
   ];
 
-  let sentOptions: Record<string, unknown> | null = null;
-  const mockTransporter: MailTransporter = {
-    sendMail(options) {
-      sentOptions = options;
-      return Promise.resolve({ accepted: [options.to] });
-    },
-  };
+  const origId = Deno.env.get("GMAIL_CLIENT_ID");
+  const origSecret = Deno.env.get("GMAIL_CLIENT_SECRET");
+  const origToken = Deno.env.get("GMAIL_REFRESH_TOKEN");
 
-  const env = {
-    GMAIL_USER: "testuser@gmail.com",
-    GMAIL_APP_PASSWORD: "app-password-secret",
-  };
+  try {
+    Deno.env.set("GMAIL_CLIENT_ID", "test-client-id");
+    Deno.env.set("GMAIL_CLIENT_SECRET", "test-client-secret");
+    Deno.env.set("GMAIL_REFRESH_TOKEN", "test-refresh-token");
 
-  await sendHeartbeatEmail(results, env, mockTransporter);
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const mockFetch = (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const urlStr = String(url);
+      calls.push({ url: urlStr, init });
+      if (urlStr === "https://oauth2.googleapis.com/token") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ access_token: "test-token" }), { status: 200 }),
+        );
+      }
+      if (urlStr === "https://gmail.googleapis.com/gmail/v1/users/me/messages/send") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "heartbeat-msg-456" }), { status: 200 }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${urlStr}`));
+    };
 
-  assert(sentOptions);
-  assertStringIncludes(String(sentOptions["to"]), "joshua.v.sherman@gmail.com");
-  assertStringIncludes(String(sentOptions["to"]), "chemmariasherman@gmail.com");
-  assertStringIncludes(String(sentOptions["subject"]), "Daily Heartbeat");
+    const res = await sendHeartbeatEmail(results, mockFetch);
+    assertEquals(res, "heartbeat-msg-456");
+    assertEquals(calls.length, 2);
+
+    // Verify token request
+    assertEquals(calls[0].url, "https://oauth2.googleapis.com/token");
+    assertEquals(calls[0].init?.method, "POST");
+
+    // Verify send request
+    assertEquals(calls[1].url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+    assertEquals(calls[1].init?.method, "POST");
+    const sendPayload = JSON.parse(String(calls[1].init?.body));
+    const decoded = b64urlToUtf8(sendPayload.raw);
+    assertStringIncludes(decoded, "To: joshua.v.sherman@gmail.com, chemmariasherman@gmail.com");
+    assertStringIncludes(
+      decoded,
+      "Subject: [Uptime Monitor] Daily Heartbeat: All 1 Production Services Healthy",
+    );
+    const bodyPart = decoded.split("\r\n\r\n").slice(1).join("\r\n\r\n");
+    assertStringIncludes(b64ToUtf8(bodyPart), "Site A");
+  } finally {
+    if (origId) Deno.env.set("GMAIL_CLIENT_ID", origId);
+    else Deno.env.delete("GMAIL_CLIENT_ID");
+    if (origSecret) Deno.env.set("GMAIL_CLIENT_SECRET", origSecret);
+    else Deno.env.delete("GMAIL_CLIENT_SECRET");
+    if (origToken) Deno.env.set("GMAIL_REFRESH_TOKEN", origToken);
+    else Deno.env.delete("GMAIL_REFRESH_TOKEN");
+  }
 });
