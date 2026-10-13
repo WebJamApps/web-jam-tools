@@ -24,7 +24,8 @@ async function runHook(
   const input = JSON.stringify(payload);
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
-    env,
+    // CircleCI's Bash startup file can prepend real binaries ahead of the test fixtures.
+    env: { ...env, BASH_ENV: "" },
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -777,15 +778,20 @@ Deno.test("empty transcript file is allowed (workflow default)", async () => {
   });
 });
 
-Deno.test("checker failure allows with additional context for the agent", async () => {
+Deno.test("checker failure ignores Bash startup files and allows with agent context", async () => {
   await withFakeGh(async (env) => {
     const bin = env.PATH.split(":")[0];
     await Deno.writeTextFile(`${bin}/deno`, "#!/usr/bin/env bash\nexit 1\n");
     await Deno.chmod(`${bin}/deno`, 0o755);
+    const startupFile = `${bin}/bash-env.sh`;
+    await Deno.writeTextFile(
+      startupFile,
+      "export PATH=/usr/bin:/bin\nprintf 'unexpected Bash startup file\\n' >&2\nexit 99\n",
+    );
     const res = await runHook({
       tool_name: "Write",
       tool_input: { file_path: IN_REPO_FILE },
-    }, env);
+    }, { ...env, BASH_ENV: startupFile });
     assertAllowedWithNote(res, "checker returned no usable decision");
   });
 });
