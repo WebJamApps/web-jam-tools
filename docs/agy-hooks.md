@@ -291,6 +291,8 @@ its GitHub MCP tool-calling structure, and whether `PreToolUse` hooks registered
 The live session tool-call log was recorded at `/tmp/agy-hook-invocations.jsonl` and preserved at the run's scratchpad path `/home/joshua/.gemini/antigravity-cli/brain/b4801061-7dd9-40ac-a0b3-585b30cca574/scratch/probe-log-2026-10-12.jsonl`.
 The probe verification script `scripts/probe-agy-tools.sh` (runnable via `deno task probe:agy-tools`) analyzes the log, validates tool argument signatures, confirms `PreToolUse` firing, and verifies that zero write calls occurred:
 
+An empty log, malformed JSON, or a record without a usable tool identity is refused with exit 1. The verifier reports the path and line for damaged records and emits no safety report for an unreadable log.
+
 ```bash
 deno task probe:agy-tools --log /path/to/log.jsonl
 ```

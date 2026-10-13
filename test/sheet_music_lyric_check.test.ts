@@ -1,7 +1,13 @@
 // test/sheet_music_lyric_check.test.ts
 // Unit and integration tests for sheet music check-lyrics task (web-jam-tools#1013).
 
-import { assert, assertEquals, assertFalse, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertFalse,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import * as path from "@std/path";
 import {
   alignAndFindMissingRuns,
@@ -47,6 +53,146 @@ const SYNTHETIC_SONG: SongDefinition = {
     },
   ],
 };
+
+function runLyricCommand(args: string[], env?: Record<string, string>) {
+  return new Deno.Command(Deno.execPath(), {
+    args: [
+      "run",
+      "--allow-read",
+      "--allow-write",
+      "--allow-run=tesseract,pdftoppm",
+      new URL("../src/sheet-music/lyric_check.ts", import.meta.url).pathname,
+      ...args,
+    ],
+    env,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+}
+
+Deno.test("vision readings with no usable words are undeterminable in the loader and CLI", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "vision-empty-" });
+  try {
+    const visionPath = path.join(tempDir, "vision.txt");
+    for (
+      const content of [
+        "",
+        " \n\t",
+        "[]",
+        '{"words":[]}',
+        '{"lines":[]}',
+        "!!! ...",
+        '[" ", "!!!"]',
+      ]
+    ) {
+      await Deno.writeTextFile(visionPath, content);
+      await assertRejects(() => loadVisionWords(visionPath), Error, "contains no usable words");
+      const { code, stdout, stderr } = await runLyricCommand([
+        "--json",
+        JSON.stringify(SYNTHETIC_SONG),
+        "--vision",
+        visionPath,
+      ]);
+      assertEquals(code, 2, content);
+      assertFalse(new TextDecoder().decode(stdout).includes("[PASS]"));
+      assertStringIncludes(new TextDecoder().decode(stderr), "condition undeterminable");
+      assertStringIncludes(new TextDecoder().decode(stderr), visionPath);
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("vision JSON refuses malformed lists instead of treating JSON syntax as reading words", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "vision-invalid-" });
+  try {
+    const visionPath = path.join(tempDir, "vision.json");
+    for (const content of ['{"words":', "{}", "[null]", '[{"word":"the"}]']) {
+      await Deno.writeTextFile(visionPath, content);
+      await assertRejects(() => loadVisionWords(visionPath), Error, visionPath);
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI accepts both --json and its advertised -j alias with matching vision readings", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "lyric-json-alias-" });
+  try {
+    const visionPath = path.join(tempDir, "vision.json");
+    const words = extractSongWords(SYNTHETIC_SONG);
+    for (
+      const content of [
+        JSON.stringify(words),
+        JSON.stringify({ words }),
+        JSON.stringify({ lines: [words.join(" ")] }),
+      ]
+    ) {
+      await Deno.writeTextFile(visionPath, content);
+      for (const flag of ["--json", "-j"]) {
+        const { code, stdout, stderr } = await runLyricCommand([
+          flag,
+          JSON.stringify(SYNTHETIC_SONG),
+          "--vision",
+          visionPath,
+        ]);
+        assertEquals(code, 0, new TextDecoder().decode(stderr));
+        assertStringIncludes(new TextDecoder().decode(stdout), "[PASS]");
+      }
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("CLI refuses empty or entirely filtered OCR even when a usable vision reading is supplied", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "lyric-ocr-empty-" });
+  try {
+    const tesseractPath = path.join(tempDir, "tesseract");
+    await Deno.writeTextFile(
+      tesseractPath,
+      `#!/bin/sh
+if [ "$1" != "--version" ]; then printf '%s\\n' "$LYRIC_TEST_OCR"; fi
+`,
+    );
+    await Deno.chmod(tesseractPath, 0o755);
+    const dictPath = path.join(tempDir, "dictionary.txt");
+    const visionPath = path.join(tempDir, "vision.txt");
+    const imagePath = path.join(tempDir, "scan.png");
+    const words = extractSongWords(SYNTHETIC_SONG);
+    await Deno.writeTextFile(dictPath, words.join("\n"));
+    await Deno.writeTextFile(visionPath, words.join(" "));
+    await Deno.writeFile(imagePath, new Uint8Array());
+    for (const reading of ["", " \n\t", "C#m7 F#m7 B7 Emaj7 Asus2", words.join(" ")]) {
+      const { code, stdout, stderr } = await runLyricCommand([
+        "-j",
+        JSON.stringify(SYNTHETIC_SONG),
+        "--image",
+        imagePath,
+        "--dict",
+        dictPath,
+        "--vision",
+        visionPath,
+      ], {
+        PATH: `${tempDir}:${Deno.env.get("PATH") ?? ""}`,
+        LYRIC_TEST_OCR: reading,
+      });
+      if (reading === words.join(" ")) {
+        assertEquals(code, 0, new TextDecoder().decode(stderr));
+        assertStringIncludes(new TextDecoder().decode(stdout), "[PASS]");
+      } else {
+        assertEquals(code, 2);
+        assertFalse(new TextDecoder().decode(stdout).includes("[PASS]"));
+        assertStringIncludes(
+          new TextDecoder().decode(stderr),
+          "Tesseract reading after filtering contains no usable words",
+        );
+      }
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
 
 Deno.test("extractSongWords extracts normalized words and strips chord markers and joins syllables (web-jam-tools#1013)", () => {
   const words = extractSongWords(SYNTHETIC_SONG);

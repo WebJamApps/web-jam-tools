@@ -4,10 +4,67 @@
 // verifies tool argument parsing, PreToolUse detection for agy file edit
 // and GitHub MCP tools, JSON output, and strict fail-closed refusal on write calls.
 
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { analyzeProbeLog, formatProbeReport } from "../scripts/probe-agy-tools.ts";
 
 const SCRIPT_PATH = new URL("../scripts/probe-agy-tools.sh", import.meta.url).pathname;
+
+const SAFE_RECORD = JSON.stringify({
+  event: "PreToolUse",
+  toolCall: { name: "replace_file_content", args: { TargetFile: "fixture.ts" } },
+});
+const DAMAGED_RECORDS = [
+  '{"event":"PreToolUse","toolCall":{"name":"issue_write"',
+  "null",
+  "[]",
+  '"issue_write"',
+  "42",
+  "true",
+  "{}",
+  JSON.stringify({ event: "PreToolUse", toolCall: { name: "issue_write", args: [] } }),
+  JSON.stringify({ event: "PreToolUse", toolCall: { name: "call_mcp_tool", args: {} } }),
+];
+
+Deno.test("analyzeProbeLog refuses damaged records even beside valid records", () => {
+  for (const damaged of DAMAGED_RECORDS) {
+    assertThrows(
+      () => analyzeProbeLog([SAFE_RECORD, "", damaged], "/tmp/damaged.jsonl"),
+      Error,
+      "Invalid probe log at /tmp/damaged.jsonl:3",
+    );
+  }
+  assertThrows(
+    () => analyzeProbeLog(["", "  "], "/tmp/empty.jsonl"),
+    Error,
+    "no tool event records",
+  );
+});
+
+Deno.test("scripts/probe-agy-tools.sh refuses damaged or empty logs without certifying safety", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "probe-damaged-" });
+  try {
+    const logPath = `${dir}/damaged.jsonl`;
+    for (const content of ["", ...DAMAGED_RECORDS.map((line) => `${SAFE_RECORD}\n${line}\n`)]) {
+      await Deno.writeTextFile(logPath, content);
+      for (const format of [[], ["--json"]]) {
+        const { code, stdout, stderr } = await new Deno.Command("bash", {
+          args: [SCRIPT_PATH, "--log", logPath, ...format],
+          stdout: "piped",
+          stderr: "piped",
+        }).output();
+        assertEquals(code, 1, content);
+        assertEquals(
+          new TextDecoder().decode(stdout),
+          "",
+          "No partial safety report may be emitted",
+        );
+        assertStringIncludes(new TextDecoder().decode(stderr), "refusing to verify probe log");
+      }
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
 
 Deno.test("scripts/probe-agy-tools.sh --help displays usage and returns 0", async () => {
   const cmd = new Deno.Command("bash", {

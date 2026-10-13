@@ -1957,6 +1957,17 @@ export function assertBacklogGroomRules(text: string): void {
     "deno task unblock-issue",
     "skills/backlog-groom/SKILL.md must use deno task unblock-issue",
   );
+
+  // 5. Every workflow route must use the session or helper selected by the table.
+  assertStringIncludes(
+    text,
+    'The session or helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5.',
+    "skills/backlog-groom/SKILL.md workflow must assign the full run to the selected session or helper",
+  );
+  assertFalse(
+    /delegated\s+to\s+subagent/i.test(text),
+    "skills/backlog-groom/SKILL.md must not unconditionally delegate workflow steps to a subagent",
+  );
 }
 
 Deno.test(
@@ -2005,6 +2016,27 @@ Deno.test(
       () => assertBacklogGroomRules(textWithoutCodexSyntax),
       Error,
       "must include Codex invocation $backlog-groom",
+    );
+
+    // Retaining any one of the old headings must fail, even with the new table present.
+    for (
+      const heading of [
+        "### Step 1: Scan & Collect",
+        "### Step 2: Analyze & Categorize",
+        "### Step 3: Write Report File",
+      ]
+    ) {
+      const retainedDelegation = validText.replace(heading, `${heading} (Delegated to Subagent)`);
+      assertThrows(
+        () => assertBacklogGroomRules(retainedDelegation),
+        Error,
+        "must not unconditionally delegate workflow steps",
+      );
+    }
+    assertThrows(
+      () => assertBacklogGroomRules(validText.replace("performs Steps 1–3", "performs Step 1")),
+      Error,
+      "workflow must assign the full run",
     );
   },
 );

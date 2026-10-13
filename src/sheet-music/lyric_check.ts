@@ -162,7 +162,7 @@ export async function loadDictionary(
 
 /**
  * Reads a vision word-list file (plain text or JSON format) and extracts words.
- * Fails closed if the file cannot be read.
+ * Fails closed if the file cannot be read or contains no usable words.
  */
 export async function loadVisionWords(visionPath: string): Promise<string[]> {
   let content: string;
@@ -177,26 +177,36 @@ export async function loadVisionWords(visionPath: string): Promise<string[]> {
   }
 
   const trimmed = content.trim();
+  let reading = content;
   if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) {
-        return extractWords(joinHyphenatedSyllables(parsed.join(" ")));
-      }
-      if (typeof parsed === "object" && parsed !== null) {
-        if (Array.isArray(parsed.words)) {
-          return extractWords(joinHyphenatedSyllables(parsed.words.join(" ")));
-        }
-        if (Array.isArray(parsed.lines)) {
-          return extractWords(joinHyphenatedSyllables(parsed.lines.join(" ")));
-        }
-      }
+      parsed = JSON.parse(trimmed);
     } catch {
-      // Fallback to plain text handling
+      throw new Error(`Vision word-list at ${visionPath} is not valid JSON`);
     }
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>).words ?? (parsed as Record<string, unknown>).lines
+      : undefined;
+    if (!Array.isArray(entries) || !entries.every((entry) => typeof entry === "string")) {
+      throw new Error(`Vision word-list at ${visionPath} must contain an array of strings`);
+    }
+    reading = entries.join(" ");
   }
 
-  return extractWords(joinHyphenatedSyllables(content));
+  return requireReadingWords(
+    extractWords(joinHyphenatedSyllables(reading)),
+    `Vision word-list at ${visionPath}`,
+  );
+}
+
+function requireReadingWords(words: string[], source: string): string[] {
+  if (words.length === 0) {
+    throw new Error(`${source} contains no usable words`);
+  }
+  return words;
 }
 
 /**
@@ -484,7 +494,10 @@ export async function checkLyrics(
       const allLines = ocrTexts.flatMap((t) => t.split(/\r?\n/));
       const keptLines = filterReadingLines(allLines, dictionary);
       const joinedText = joinHyphenatedSyllables(keptLines.join("\n"));
-      tesseractWords = extractWords(joinedText);
+      tesseractWords = requireReadingWords(
+        extractWords(joinedText),
+        "Tesseract reading after filtering",
+      );
 
       const tesseractFlags = alignAndFindMissingRuns(
         tesseractWords,
@@ -543,6 +556,7 @@ export function parseCliArgs(args: string[]): CheckLyricsOptions & { help?: bool
       p: "pdf",
       v: "vision",
       d: "dict",
+      j: "json",
       h: "help",
     },
   });
@@ -601,7 +615,7 @@ Options:
 Exit codes:
   0: Condition holds — no missing lyric runs of 2+ words detected.
   1: Condition fails — missing lyric runs of 2+ words detected.
-  2: Condition undeterminable — required binaries, dictionary, or files are missing or unreadable.`);
+  2: Condition undeterminable — required binaries, dictionary, or files are missing or unreadable, or a supplied reading contains no usable words.`);
 }
 
 export async function runCli(args: string[]): Promise<number> {

@@ -89,17 +89,19 @@ The audit inspects every open issue across all 8 repositories against six core c
 
 ## Workflow & Execution Steps
 
-### Step 1: Scan & Collect (Delegated to Subagent)
+The session or helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5. The primary session presents the findings and receives Josh's approvals; when a helper is selected, it passes those approvals back to that helper.
+
+### Step 1: Scan & Collect
 1. Fetch all open issues for each of the 8 repos using `gh issue list` and `gh api`.
 2. Retrieve native `Priority`, `Type`, `issue_field_values`, and native dependencies (`blocked_by` API) for candidate issues.
 3. Exclude issues marked with the gray `parked` label (these are intentionally parked by Josh and skipped).
 
-### Step 2: Analyze & Categorize (Delegated to Subagent)
+### Step 2: Analyze & Categorize
 1. Evaluate each issue against the 6 audit categories above.
 2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
 
-### Step 3: Write Report File (Delegated to Subagent)
+### Step 3: Write Report File
 Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts, untyped ratios, and missing milestone ratios per repo, and detailed findings.
 
 ### Step 4: Present Findings Table in Chat (Primary Session)

@@ -44,24 +44,33 @@ export function analyzeProbeLog(lines: string[], logPath: string): ProbeSummary 
   let issueWriteCount = 0;
   let subIssueWriteCount = 0;
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     if (!line.trim()) continue;
     totalLines++;
-    let data: Record<string, unknown>;
+    let data: unknown;
     try {
       data = JSON.parse(line);
     } catch {
-      continue;
+      throw new Error(`Invalid probe log at ${logPath}:${index + 1}: malformed JSON`);
     }
 
-    const event = typeof data.event === "string" ? data.event : "";
-    const toolCall = (typeof data.toolCall === "object" && data.toolCall !== null)
-      ? data.toolCall as Record<string, unknown>
-      : {};
-    const name = typeof toolCall.name === "string" ? toolCall.name : "";
-    const args = (typeof toolCall.args === "object" && toolCall.args !== null)
-      ? toolCall.args as Record<string, unknown>
-      : {};
+    if (
+      !isRecord(data) || typeof data.event !== "string" || !data.event.trim() ||
+      !isRecord(data.toolCall) || typeof data.toolCall.name !== "string" ||
+      !data.toolCall.name.trim() || !isRecord(data.toolCall.args)
+    ) {
+      throw new Error(`Invalid probe log at ${logPath}:${index + 1}: expected a tool event record`);
+    }
+    const event = data.event;
+    const name = data.toolCall.name;
+    const args = data.toolCall.args;
+    if (
+      name === "call_mcp_tool" &&
+      (typeof args.ServerName !== "string" || !args.ServerName.trim() ||
+        typeof args.ToolName !== "string" || !args.ToolName.trim())
+    ) {
+      throw new Error(`Invalid probe log at ${logPath}:${index + 1}: missing MCP tool identity`);
+    }
 
     if (name === "replace_file_content") {
       replaceCount++;
@@ -100,6 +109,10 @@ export function analyzeProbeLog(lines: string[], logPath: string): ProbeSummary 
     }
   }
 
+  if (totalLines === 0) {
+    throw new Error(`Invalid probe log at ${logPath}: no tool event records`);
+  }
+
   return {
     logPath,
     totalLines,
@@ -134,6 +147,10 @@ export function analyzeProbeLog(lines: string[], logPath: string): ProbeSummary 
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function formatProbeReport(summary: ProbeSummary): string {
   const lines: string[] = [
     "============================================================",
@@ -146,12 +163,20 @@ export function formatProbeReport(summary: ProbeSummary): string {
     "1. agy Native File Edit / Write Tools:",
     `   - replace_file_content:`,
     `       Invocations in log: ${summary.fileEditTools.replace_file_content.count}`,
-    `       PreToolUse fired:   ${summary.fileEditTools.replace_file_content.preToolUseFired ? "YES" : "NO"}`,
-    `       Observed args:      ${summary.fileEditTools.replace_file_content.argKeys.join(", ") || "(none)"}`,
+    `       PreToolUse fired:   ${
+      summary.fileEditTools.replace_file_content.preToolUseFired ? "YES" : "NO"
+    }`,
+    `       Observed args:      ${
+      summary.fileEditTools.replace_file_content.argKeys.join(", ") || "(none)"
+    }`,
     `   - write_to_file:`,
     `       Invocations in log: ${summary.fileEditTools.write_to_file.count}`,
-    `       PreToolUse fired:   ${summary.fileEditTools.write_to_file.preToolUseFired ? "YES" : "NO"}`,
-    `       Observed args:      ${summary.fileEditTools.write_to_file.argKeys.join(", ") || "(none)"}`,
+    `       PreToolUse fired:   ${
+      summary.fileEditTools.write_to_file.preToolUseFired ? "YES" : "NO"
+    }`,
+    `       Observed args:      ${
+      summary.fileEditTools.write_to_file.argKeys.join(", ") || "(none)"
+    }`,
     `   - multi_replace_file_content:`,
     `       Identified in:      agy binary deterministic vetting configs`,
     `       Invocations in log: ${summary.fileEditTools.multi_replace_file_content.count}`,
@@ -166,7 +191,11 @@ export function formatProbeReport(summary: ProbeSummary): string {
     "3. Safety Invariant Check (Zero Live Writes):",
     `   - issue_write calls:     ${summary.writeCallsDetected.issue_write}`,
     `   - sub_issue_write calls: ${summary.writeCallsDetected.sub_issue_write}`,
-    `   - Status:                ${summary.verifiedNoWrites ? "VERIFIED SAFE (0 write calls made)" : "VIOLATION (Forbidden write calls detected!)"}`,
+    `   - Status:                ${
+      summary.verifiedNoWrites
+        ? "VERIFIED SAFE (0 write calls made)"
+        : "VIOLATION (Forbidden write calls detected!)"
+    }`,
     "============================================================",
   ];
   return lines.join("\n");
@@ -193,7 +222,8 @@ Options:
     Deno.exit(0);
   }
 
-  const logPath = args.log || Deno.env.get("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
+  const logPath = args.log || Deno.env.get("AGY_HOOK_RECORD_PATH") ||
+    "/tmp/agy-hook-invocations.jsonl";
 
   let content = "";
   try {
@@ -204,7 +234,15 @@ Options:
   }
 
   const lines = content.split("\n");
-  const summary = analyzeProbeLog(lines, logPath);
+  let summary: ProbeSummary;
+  try {
+    summary = analyzeProbeLog(lines, logPath);
+  } catch (err) {
+    console.error(
+      `error: refusing to verify probe log: ${err instanceof Error ? err.message : err}`,
+    );
+    Deno.exit(1);
+  }
 
   if (args.json) {
     console.log(JSON.stringify(summary, null, 2));
