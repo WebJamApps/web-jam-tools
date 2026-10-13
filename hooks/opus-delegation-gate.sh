@@ -11,8 +11,8 @@
 # closes the accidental path (an Opus session refused Edit rewrote repo files with a python script),
 # not a determined bypass. Commands that write nothing (git, gh, deno task test, grep, ls) pass.
 #
-# Design: ~/Dropbox/web-jam-llms/Token_Savings/opus-delegation-gate-design-2026-08-18.md
-# (decision record D-1..D-7 in its Appendix C).
+# Design: ~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md
+# Typed fix-pr approval: ~/Dropbox/web-jam-llms/Token_Savings/fix-pr-design-2026-10-10.md.
 #
 # Allow/Refuse Sequence:
 #   Step 1: Subagent call (agent_id present) AND permission_mode != "auto" -> allow (exit 0)
@@ -22,21 +22,24 @@
 #     - Subagent call in auto mode (D-6): allow when the subagent's own model is not Opus, or it is
 #       Opus and the human prompt that spawned it contains "opus edit ok", asks for an Opus
 #       subagent, or asks Opus to do the work (D-8, e.g. "use Opus to fix it"). An undeterminable
-#       model or spawning prompt refuses.
+#       model or spawning prompt allows with a note. An active typed fix-pr call approves a helper
+#       only when that same call asks for an Opus helper.
 #     - Main-thread call: allow when the session model is not Opus, when Josh has approved Opus
 #       edits anywhere earlier in the SESSION — a human prompt containing "opus edit ok" or asking
 #       Opus to do the work (D-8) — and has not since withdrawn it with "opus edit off", or when the
 #       most recent slash command he typed is /work-issue on an issue labeled Opus (D-7; the label is
 #       read with gh and reused for ten minutes). Any other label, no issue named, or a failed lookup
-#       gives no approval, so Opus must delegate. His approval is session-scoped rather than
+#       gives no approval, so Opus must delegate. A typed /fix-pr naming a pull request also
+#       approves the session while that call is in force; another typed skill ends it. His
+#       separate phrase approval is session-scoped rather than
 #       per-turn: it is not discarded by whatever he happens to type next.
 #     Only prompts Josh actually sent (origin.kind "human", not isMeta) count, so a task
 #     notification neither grants approval nor cancels it.
 #   Step 5: Otherwise refuse (deny) with JSON naming the target file and the reason. A main-thread
 #           refusal also carries the delegation commands and the escape phrase.
 #
-# Fail-CLOSED: a missing or unreadable transcript, an unknown model, or no decision from the
-# module refuses — unknown must not silently run on the expensive model.
+# Workflow default: a missing or unreadable transcript, an unknown model, or no usable decision
+# from the module allows, with additional context telling the agent what could not be determined.
 #
 # transcript_path shape. Verified against the installed Claude Code 2.1.267 binary on 2026-09-10:
 # the PreToolUse payload's transcript_path is the MAIN session transcript
@@ -183,7 +186,14 @@ decision="$(printf '%s' "$gate_json" | jq -r '.decision // empty' 2>/dev/null ||
 kind="$(printf '%s' "$gate_json" | jq -r '.kind // empty' 2>/dev/null || true)"
 why="$(printf '%s' "$gate_json" | jq -r '.why // empty' 2>/dev/null || true)"
 
-if [ "$decision" = "allow" ]; then
+if [ "$decision" != "deny" ]; then
+  if [ "$decision" != "allow" ]; then
+    why="The Opus delegation gate checker returned no usable decision; proceeding by workflow default."
+  fi
+  if [ -n "$why" ]; then
+    note="Opus delegation gate: $why If this is an unapproved Opus repository edit, delegate it or ask Josh for approval."
+    jq -cn --arg note "$note" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$note}}'
+  fi
   exit 0
 fi
 

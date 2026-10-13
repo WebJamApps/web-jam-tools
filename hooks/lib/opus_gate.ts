@@ -1,10 +1,9 @@
 /**
  * Opus delegation gate decisions (web-jam-tools#965).
  *
- * Requirements: ~/Dropbox/web-jam-llms/Token_Savings/opus-delegation-gate-design-2026-08-18.md,
- * Appendix C, decisions D-6 (subagent edits in auto mode), D-7 (a `/work-issue` run on an
- * Opus-labeled issue approves the Opus session's own edits), and D-8 (a message asking Opus to do
- * the work approves like "opus edit ok" does).
+ * Requirements: ~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md,
+ * "How a hook decides" and "The delegation gate's Bash writes"; typed fix-pr authorization is
+ * also specified in ~/Dropbox/web-jam-llms/Token_Savings/fix-pr-design-2026-10-10.md.
  *
  * hooks/opus-delegation-gate.sh makes the cheap exits itself (a subagent call outside auto mode, no
  * target path, a path outside any git working tree) and pipes every remaining PreToolUse payload to
@@ -17,11 +16,14 @@
  *     "opus edit off". His approval is not discarded by whatever he happens to type next, or
  *   - the most recent slash command in the transcript is a `/work-issue` Josh typed, naming an issue
  *     whose model label is Opus (D-7). Any other label, no issue named, or a failed label lookup gives
- *     no approval — the skill then has to delegate to the labeled tier.
+ *     no approval — the skill then has to delegate to the labeled tier, or
+ *   - the newest skill Josh typed is `/fix-pr` naming a pull request. Later plain messages keep
+ *     this approval; another typed skill ends it.
  *
  * Subagent call in auto mode (D-6) — allowed when the subagent's own model is not Opus, or when it is
  * Opus and the human prompt that spawned it contains "opus edit ok", asks for an Opus subagent, or
- * asks Opus to do the work. An undeterminable model or spawning prompt is refused.
+ * asks Opus to do the work. During a fix-pr call, only its explicit Opus helper request approves
+ * the helper. An undeterminable model or spawning prompt allows with a note.
  *
  * Only prompts a person actually sent count (isHumanPrompt), on every path: a task notification or
  * an isMeta injection can neither grant approval nor displace Josh's last real prompt.
@@ -537,11 +539,11 @@ function toolUseIds(entry: TranscriptEntry): string[] {
  * that ancestor's `toolUseId` in the main transcript, and take the nearest human prompt before it.
  * Returns null when the chain is broken, the tool_use is missing, or no human prompt precedes it.
  */
-export function findSpawningHumanPrompt(
+function findSpawningContext(
   files: SessionFiles,
   agentId: string,
   read: ReadText,
-): TranscriptEntry | null {
+): { entries: TranscriptEntry[]; preceding: TranscriptEntry[]; prompt: TranscriptEntry } | null {
   let meta = readSubagentMeta(files, agentId, read);
   for (let hops = 0; typeof meta?.parentAgentId === "string" && meta.parentAgentId !== ""; hops++) {
     if (hops >= MAX_SPAWN_DEPTH) return null;
@@ -557,9 +559,19 @@ export function findSpawningHumanPrompt(
     entry.isSidechain !== true && toolUseIds(entry).includes(toolUseId)
   );
   for (let i = spawnIndex - 1; i >= 0; i--) {
-    if (isHumanPrompt(entries[i])) return entries[i];
+    if (isHumanPrompt(entries[i])) {
+      return { entries, preceding: entries.slice(0, spawnIndex), prompt: entries[i] };
+    }
   }
   return null;
+}
+
+export function findSpawningHumanPrompt(
+  files: SessionFiles,
+  agentId: string,
+  read: ReadText,
+): TranscriptEntry | null {
+  return findSpawningContext(files, agentId, read)?.prompt ?? null;
 }
 
 /** The slash command a user-turn text invokes — Claude Code's wrapper form or a bare leading `/` — or null. */
@@ -567,16 +579,58 @@ export function slashCommandOf(text: string): string | null {
   const trimmed = text.trim();
   const wrapped = slashCommandFromInvocationWrapper(trimmed);
   if (wrapped) return wrapped;
-  const bare = trimmed.match(/^\/([a-zA-Z0-9_-]+)/);
+  const bare = trimmed.match(/^[/$](?:[a-zA-Z0-9_-]+:)?([a-zA-Z0-9_-]+)(?=\s|$)/);
   return bare ? bare[1].toLowerCase() : null;
 }
 
-/** The arguments of a `/work-issue` invocation: the `<command-args>` element, or the text after a bare `/work-issue`. */
-export function workIssueArgs(text: string): string {
+/** Arguments from an invocation wrapper or a leading typed skill call. */
+function skillArgs(text: string): string {
   const wrapped = text.match(/<command-args>([\s\S]*?)<\/command-args>/);
   if (wrapped) return wrapped[1].trim();
-  const bare = text.trim().match(/^\/work-issue\b([\s\S]*)$/i);
-  return bare ? bare[1].trim() : "";
+  const bare = text.trim().match(/^[/$](?:[a-zA-Z0-9_-]+:)?[a-zA-Z0-9_-]+(?:\s+([\s\S]*))?$/);
+  return bare?.[1]?.trim() ?? "";
+}
+
+export function workIssueArgs(text: string): string {
+  return slashCommandOf(text) === "work-issue" ? skillArgs(text) : "";
+}
+
+interface TypedSkillCall {
+  entry: TranscriptEntry;
+  command: string;
+  args: string;
+}
+
+/** Agent/tool text cannot grant approval or replace the most recent skill Josh typed. */
+function newestTypedSkillCall(entries: readonly TranscriptEntry[]): TypedSkillCall | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (!isHumanPrompt(entries[i])) continue;
+    const text = extractEntryText(entries[i]);
+    const command = slashCommandOf(text);
+    if (command) return { entry: entries[i], command, args: skillArgs(text) };
+  }
+  return null;
+}
+
+/** Recognise the fix-pr target forms, without mistaking an issue URL or prose for a PR. */
+function activeFixPrCall(entries: readonly TranscriptEntry[]):
+  | (TypedSkillCall & {
+    instructions: string;
+  })
+  | null {
+  const call = newestTypedSkillCall(entries);
+  if (call?.command !== "fix-pr") return null;
+  const target = call.args.match(/^\S+/)?.[0] ?? "";
+  const ref = target.match(
+    /^(?:https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/|(?:[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+#|#?)([1-9]\d*)$/,
+  );
+  if (!ref || !Number.isSafeInteger(Number(ref[1]))) return null;
+  return { ...call, instructions: call.args.slice(target.length).trim() };
+}
+
+function asksForFixPrOpusHelper(instructions: string): boolean {
+  return /\bopus\s+(?:helpers?|sub-?agents?)\b/i.test(instructions) &&
+    asksOpusToDoTheWork(instructions);
 }
 
 /**
@@ -742,6 +796,8 @@ export function opusEditApprovalActive(entries: readonly TranscriptEntry[]): boo
     if (!isUserTurnBoundary(entry) || entry.isMeta === true) continue;
     if (!isHumanPrompt(entry)) continue;
     const text = extractEntryText(entry).toLowerCase();
+    // A fix-pr helper request is scoped to that call, never a permanent session grant.
+    if (slashCommandOf(text) === "fix-pr") continue;
     if (text.includes(REVOKE_PHRASE)) return false;
     if (text.includes(ESCAPE_PHRASE) || asksOpusToDoTheWork(text)) return true;
   }
@@ -768,7 +824,8 @@ export function decideMainThreadEdit(
   if (!isOpusModel(info.model)) return allow("main");
   if (
     opusEditApprovalActive(entries) ||
-    workIssueApprovalActive(entries, lookupLabels)
+    workIssueApprovalActive(entries, lookupLabels) ||
+    activeFixPrCall(entries) !== null
   ) {
     return allow("main");
   }
@@ -792,14 +849,23 @@ export function decideSubagentEdit(
     );
   }
   if (!isOpusModel(model)) return allow("subagent");
-  const prompt = findSpawningHumanPrompt(files, agentId, read);
-  if (!prompt) {
+  const context = findSpawningContext(files, agentId, read);
+  if (!context) {
     return allow(
       "subagent",
       "The message Josh typed that spawned this Opus subagent could not be found.",
     );
   }
-  if (approvesOpusSubagent(extractEntryText(prompt))) return allow("subagent");
+  const spawningCall = newestTypedSkillCall(context.preceding);
+  if (spawningCall?.command === "fix-pr") {
+    const activeCall = activeFixPrCall(context.entries);
+    if (
+      activeCall?.entry === spawningCall.entry &&
+      asksForFixPrOpusHelper(activeCall.instructions)
+    ) return allow("subagent");
+    return deny("subagent", "The active typed fix-pr call does not ask for this Opus helper.");
+  }
+  if (approvesOpusSubagent(extractEntryText(context.prompt))) return allow("subagent");
   return deny(
     "subagent",
     'This is an Opus subagent, and the message that spawned it neither contains "opus edit ok", ' +
