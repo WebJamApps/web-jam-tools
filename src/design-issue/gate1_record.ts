@@ -70,6 +70,31 @@ export function computeFingerprint(content: string): string {
   return crypto.createHash("sha256").update(content, "utf8").digest("hex");
 }
 
+/** Carry a rename without approving unrelated edits or refreshing stale premise rows. */
+export function carryGate1Record(
+  record: Gate1Record,
+  docPath: string,
+  before: string,
+  after: string,
+  replace: (text: string) => string,
+): Gate1Record {
+  const carried = structuredClone(record);
+  carried.docPath = docPath;
+  const beforeHash = computeFingerprint(before);
+  if (record.presentedFingerprint === beforeHash) {
+    carried.presentedFingerprint = computeFingerprint(after);
+  }
+  if (record.approvedAt && record.approvedFingerprint === beforeHash) {
+    carried.approvedFingerprint = computeFingerprint(after);
+    carried.premiseRows = record.premiseRows?.map((row) => ({
+      premise: replace(row.premise),
+      proof: replace(row.proof),
+      proved: row.proved,
+    }));
+  }
+  return carried;
+}
+
 /**
  * Computes SHA-256 hex digest of the document's absolute path.
  */
