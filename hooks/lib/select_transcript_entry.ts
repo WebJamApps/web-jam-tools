@@ -476,9 +476,9 @@ export function getOpusGateInfo(entries: readonly TranscriptEntry[]): OpusGateIn
 
 /**
  * Parses JSONL transcript string into an array of TranscriptEntry objects.
- * Silently skips empty or invalid JSON lines.
+ * Skips empty lines; strict callers refuse malformed records instead of skipping them.
  */
-export function parseTranscriptJsonl(jsonl: string): TranscriptEntry[] {
+export function parseTranscriptJsonl(jsonl: string, strict = false): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const lines = jsonl.split("\n");
   for (const line of lines) {
@@ -486,10 +486,13 @@ export function parseTranscriptJsonl(jsonl: string): TranscriptEntry[] {
     if (!trimmed) continue;
     try {
       const parsed = JSON.parse(trimmed);
-      if (parsed && typeof parsed === "object") {
+      if (parsed && typeof parsed === "object" && (!strict || !Array.isArray(parsed))) {
         entries.push(parsed);
+      } else if (strict) {
+        throw new Error("Invalid transcript record");
       }
     } catch {
+      if (strict) throw new Error("Cannot read complete transcript records");
       // ignore invalid json lines (fail-open)
     }
   }
@@ -503,12 +506,13 @@ export function parseTranscriptJsonl(jsonl: string): TranscriptEntry[] {
  * `brain/<conversationId>/` path segment — both are written by the surface. Claude Code
  * transcripts pass through unchanged, since neither value applies to them.
  */
-async function readTranscriptFile(
+export async function readTranscriptFile(
   path: string,
   context?: AntigravitySessionContext | null,
+  strict = false,
 ): Promise<TranscriptEntry[]> {
   const content = await Deno.readTextFile(path);
-  const entries = parseTranscriptJsonl(content);
+  const entries = parseTranscriptJsonl(content, strict);
   return tagAntigravityEntries(entries, {
     conversationId: context?.conversationId || conversationIdFromTranscriptPath(path),
     modelName: context?.modelName ?? "",

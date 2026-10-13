@@ -50,6 +50,7 @@ import {
 import {
   conversationIdFromTranscriptPath,
   loadTranscript,
+  readTranscriptFile,
   type TranscriptEntry,
 } from "../hooks/lib/select_transcript_entry.ts";
 import {
@@ -238,8 +239,10 @@ export interface ResolvedWriteContext {
  */
 export async function resolveClaudeCodeWriteContext(
   sessionId: string,
+  strict = false,
 ): Promise<ResolvedWriteContext | null> {
   if (!sessionId) return null;
+  if (strict && !isSafeSessionId(sessionId)) return null;
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "/home/joshua";
   const projectsDir = `${home}/.claude/projects`;
   let matchPath: string | null = null;
@@ -249,9 +252,11 @@ export async function resolveClaudeCodeWriteContext(
       const candidate = `${projectsDir}/${projectEntry.name}/${sessionId}.jsonl`;
       try {
         await Deno.stat(candidate);
+        if (strict && matchPath) return null;
         matchPath = candidate;
-        break;
-      } catch {
+        if (!strict) break;
+      } catch (error) {
+        if (strict && !(error instanceof Deno.errors.NotFound)) return null;
         continue;
       }
     }
@@ -259,7 +264,9 @@ export async function resolveClaudeCodeWriteContext(
     return null;
   }
   if (!matchPath) return null;
-  const entries = await loadTranscript(matchPath);
+  const entries = strict
+    ? await readTranscriptFile(matchPath, null, true)
+    : await loadTranscript(matchPath);
   return {
     entries,
     ownConversationId: sessionId,
@@ -290,7 +297,9 @@ export async function resolveClaudeCodeWriteContext(
  * isSubagentInvocation is therefore decided from outside the transcript, by
  * isAntigravitySubagentConversation().
  */
-export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteContext | null> {
+export async function resolveAntigravityWriteContext(
+  strict = false,
+): Promise<ResolvedWriteContext | null> {
   const recordPath = Deno.env.get("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
   let text: string;
   try {
@@ -304,16 +313,25 @@ export async function resolveAntigravityWriteContext(): Promise<ResolvedWriteCon
     try {
       parsed = JSON.parse(lines[i]);
     } catch {
+      if (strict) return null;
       continue;
     }
-    if (!parsed || typeof parsed !== "object") continue;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      if (strict) return null;
+      continue;
+    }
     const rec = parsed as Record<string, unknown>;
     const conversationId = typeof rec.conversationId === "string" ? rec.conversationId : "";
     const transcriptPath = typeof rec.transcriptPath === "string" ? rec.transcriptPath : "";
-    if (!conversationId || !transcriptPath) continue;
+    if (!conversationId || !transcriptPath) {
+      if (strict) return null;
+      continue;
+    }
     let entries: TranscriptEntry[];
     try {
-      entries = await loadTranscript(transcriptPath);
+      entries = strict
+        ? await readTranscriptFile(transcriptPath, null, true)
+        : await loadTranscript(transcriptPath);
     } catch {
       return null;
     }
