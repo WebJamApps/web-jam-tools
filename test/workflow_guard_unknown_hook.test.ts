@@ -28,7 +28,12 @@ for (
       await Deno.chmod(runtime, 0o755);
       const child = new Deno.Command("bash", {
         args: [`${hooksDir}${script}`],
-        env: { PATH: `${runtimeDir}:${Deno.env.get("PATH")}` },
+        env: {
+          PATH: `${runtimeDir}:${Deno.env.get("PATH")}`,
+          // CI's Bash startup file prepends the real Deno to PATH. Keep the
+          // fake runtime first so these tests exercise checker startup failures.
+          BASH_ENV: "",
+        },
         stdin: "piped",
         stdout: "piped",
         stderr: "piped",
