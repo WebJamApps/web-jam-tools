@@ -32,6 +32,7 @@ import {
 import { runLintDocCli } from "./lint_doc.ts";
 import { runLintPlanCli } from "./lint_plan.ts";
 import { runLintRunbookCli } from "./lint_runbook.ts";
+import { runRenameDocCli } from "./rename_doc.ts";
 import { runStaleBodiesCli } from "./stale_bodies.ts";
 import { runVerifyCitationsCli } from "./verify_citations.ts";
 
@@ -467,6 +468,10 @@ export async function runCli(
   options?: Partial<Gate1Options>,
 ): Promise<number> {
   const firstArg = args.length > 0 ? String(args[0]) : "";
+
+  if (firstArg === "rename-doc") {
+    return await runRenameDocCli(args.slice(1));
+  }
 
   if (firstArg === "lint-doc" || firstArg === "lint_doc") {
     return await runLintDocCli(args.slice(1));
