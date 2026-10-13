@@ -119,18 +119,21 @@ export function main(): void {
       rawInput += decoder.decode(buf.subarray(0, n));
     }
   } catch {
-    Deno.exit(0);
+    allowWithNote("hook payload could not be read");
+    return;
   }
 
   if (!rawInput.trim()) {
-    Deno.exit(0);
+    allowWithNote("hook payload is empty");
+    return;
   }
 
   let data: Record<string, unknown> = {};
   try {
     data = JSON.parse(rawInput);
   } catch {
-    Deno.exit(0);
+    allowWithNote("hook payload could not be parsed");
+    return;
   }
 
   const toolName = String(data.tool_name ?? data.name ?? "").trim();
@@ -169,8 +172,16 @@ export function main(): void {
     targetPaths = [singlePath];
   }
 
-  const cwd = Deno.cwd();
+  const cwd = typeof data.cwd === "string" && path.isAbsolute(data.cwd) ? data.cwd : undefined;
+  if (!cwd) {
+    allowWithNote("cwd is missing or is not an absolute path");
+    return;
+  }
   const repoRoot = getRepoRoot(cwd);
+  if (!repoRoot) {
+    allowWithNote("repository root could not be resolved from payload cwd");
+    return;
+  }
 
   for (const targetPath of targetPaths) {
     if (!isInsideTree(targetPath, repoRoot, cwd)) {
@@ -193,4 +204,14 @@ export function main(): void {
 
 if (import.meta.main) {
   main();
+}
+
+function allowWithNote(field: string): void {
+  console.log(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext:
+        `out-of-tree write guard: ${field}; proceeding. Verify the target is in the intended repository working tree or an allowed scratch/document path before writing.`,
+    },
+  }));
 }

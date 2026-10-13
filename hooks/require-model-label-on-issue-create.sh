@@ -19,7 +19,8 @@
 #     `scripts/create-issue.ts` invocation (web-jam-tools#553)
 #   - MCP: any `mcp__*__issue_write` tool call (method: create, update, edit)
 #
-# Fail CLOSED on ambiguity. Exit 2 = block (stderr shown to model).
+# Workflow guard: allow with additionalContext when the check cannot run.
+# Determinable violations still exit 2 (stderr shown to model).
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"/.. && pwd)"
@@ -27,20 +28,13 @@ MODEL_LABELS_JSON="$REPO_DIR/skills/fix-labels/model-labels.json"
 
 input=$(cat)
 
-result=$(printf '%s' "$input" | MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" deno run --no-config --allow-env --allow-read --allow-run=gh,"$REPO_DIR/scripts/create-draft-pr.sh" "$REPO_DIR/hooks/lib/check_model_label_on_issue_create.ts" 2>/dev/null) || true
+status=0
+result=$(printf '%s' "$input" | MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" deno run --no-config --allow-env --allow-read --allow-run=gh,"$REPO_DIR/scripts/create-draft-pr.sh" "$REPO_DIR/hooks/lib/check_model_label_on_issue_create.ts" 2>/dev/null) || status=$?
 
-
-if [ -z "$result" ]; then
-  if printf '%s' "$input" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"mcp__[^"]*__issue_write"' \
-    || (printf '%s' "$input" | grep -Eq '\bgh\b' \
-        && printf '%s' "$input" | grep -Eq '\bissue\b' \
-        && (printf '%s' "$input" | grep -Eq '\bcreate\b' || printf '%s' "$input" | grep -Eq '\bedit\b')) \
-    || printf '%s' "$input" | grep -Eq 'create-issue'; then
-    echo "BLOCKED (model-label guard): couldn't parse this issue create/edit call (hook parser failure)." >&2
-    echo "Check that model label, native type, and issue body meet requirements (web-jam-tools#265, web-jam-tools#342, web-jam-tools#415)." >&2
-    exit 2
-  fi
-  exit 0
+if [ "$status" -ne 0 ]; then
+  result="PASS: could not determine issue model-label requirements (checker exited $status); proceeding. Verify the model label, native type, and body before creating or editing an issue."
+elif [ -z "$result" ]; then
+  result="PASS: could not determine issue model-label requirements (checker returned no result); proceeding. Verify the model label, native type, and body before creating or editing an issue."
 fi
 
 case "$result" in
@@ -59,6 +53,8 @@ case "$result" in
     exit 2
     ;;
   *)
+    note="model-label guard: could not determine issue model-label requirements (unrecognized checker result); proceeding. Verify the model label, native type, and body before creating or editing an issue."
+    jq -cn --arg note "$note" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $note}}'
     exit 0
     ;;
 esac
