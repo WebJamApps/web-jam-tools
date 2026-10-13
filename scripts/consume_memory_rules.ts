@@ -37,13 +37,15 @@ export function isValidSlug(slug: string): boolean {
 const CAPTURED_RULE_START_PREFIX = "<!-- START_CAPTURED_RULE:";
 const CAPTURED_RULE_END_PREFIX = "<!-- END_CAPTURED_RULE:";
 const CAPTURED_RULE_SUFFIX = " -->";
+// Preserve UTF-8 BOMs and refuse malformed bytes rather than capturing a lossy replacement.
+const ruleDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-/** Marker line that opens a captured memory rule block in a design document. */
+/** Marker line that opens a captured memory rule block. */
 export function capturedRuleStartMarker(slug: string): string {
   return `${CAPTURED_RULE_START_PREFIX}${slug}${CAPTURED_RULE_SUFFIX}`;
 }
 
-/** Marker line that closes a captured memory rule block in a design document. */
+/** Marker line that closes a captured memory rule block. */
 export function capturedRuleEndMarker(slug: string): string {
   return `${CAPTURED_RULE_END_PREFIX}${slug}${CAPTURED_RULE_SUFFIX}`;
 }
@@ -132,7 +134,9 @@ export function parsePlanInput(content: string): ApprovedPlan {
     try {
       parsed = parseYaml(content);
     } catch (e) {
-      throw new Error(`Failed to parse plan file as JSON or YAML: ${e instanceof Error ? e.message : String(e)}`);
+      throw new Error(
+        `Failed to parse plan file as JSON or YAML: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
 
@@ -142,7 +146,11 @@ export function parsePlanInput(content: string): ApprovedPlan {
 
   if (typeof parsed === "object" && parsed !== null) {
     const obj = parsed as Record<string, unknown>;
-    const rules = Array.isArray(obj.rules) ? (obj.rules as PlanRule[]) : Array.isArray(obj.plan) ? (obj.plan as PlanRule[]) : [];
+    const rules = Array.isArray(obj.rules)
+      ? (obj.rules as PlanRule[])
+      : Array.isArray(obj.plan)
+      ? (obj.plan as PlanRule[])
+      : [];
     return {
       design_doc: typeof obj.design_doc === "string" ? obj.design_doc : undefined,
       memory_dir: typeof obj.memory_dir === "string" ? obj.memory_dir : undefined,
@@ -150,7 +158,9 @@ export function parsePlanInput(content: string): ApprovedPlan {
     };
   }
 
-  throw new Error("Plan file must be a JSON/YAML object with a 'rules' array or an array of rules.");
+  throw new Error(
+    "Plan file must be a JSON/YAML object with a 'rules' array or an array of rules.",
+  );
 }
 
 /**
@@ -230,7 +240,10 @@ export function stripSlugsFromMemoryMd(content: string, removedSlugs: Set<string
     }
 
     // Single slug line
-    if (trimmed && !trimmed.startsWith("#") && !trimmed.startsWith("-") && !trimmed.startsWith("*") && !trimmed.includes(" ")) {
+    if (
+      trimmed && !trimmed.startsWith("#") && !trimmed.startsWith("-") && !trimmed.startsWith("*") &&
+      !trimmed.includes(" ")
+    ) {
       if (removedSlugs.has(trimmed)) {
         continue; // Strip single slug line
       }
@@ -243,14 +256,14 @@ export function stripSlugsFromMemoryMd(content: string, removedSlugs: Set<string
 }
 
 /**
- * Captures verbatim content of consumed rules into the design document's appendix,
+ * Builds captured-rule content for the sibling record (also understands legacy appendices),
  * and byte-verifies every captured rule against its source.
  */
 export function captureAndVerifyRulesInDesignDoc(
-  designDocContent: string,
+  capturedRulesContent: string,
   consumedRules: Array<{ slug: string; target_skill?: string; sourceContent: string }>,
 ): { updatedContent: string; verifiedCount: number } {
-  let content = designDocContent;
+  let content = capturedRulesContent;
 
   // Ensure Appendix section exists
   if (!content.includes("## Appendix")) {
@@ -271,7 +284,7 @@ export function captureAndVerifyRulesInDesignDoc(
     const startTag = capturedRuleStartMarker(slug);
     const endTag = capturedRuleEndMarker(slug);
 
-    // Check if rule is already captured in the design doc
+    // Check if rule is already captured in the record
     const startIndex = content.indexOf(startTag);
     const endIndex = content.indexOf(endTag);
 
@@ -304,7 +317,10 @@ ${endTag}
       // Verify immediately
       const newStartIndex = content.indexOf(startTag);
       const newEndIndex = content.indexOf(endTag);
-      const newlyCaptured = content.slice(newStartIndex + startTag.length, newEndIndex).replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+      const newlyCaptured = content.slice(newStartIndex + startTag.length, newEndIndex).replace(
+        /^\r?\n/,
+        "",
+      ).replace(/\r?\n$/, "");
       const newlyCapturedBytes = new TextEncoder().encode(newlyCaptured);
 
       if (newlyCapturedBytes.length !== sourceBytes.length || newlyCaptured !== sourceContent) {
@@ -317,6 +333,14 @@ ${endTag}
   }
 
   return { updatedContent: content, verifiedCount };
+}
+
+/** Derives the sibling record from a topic-design.md or legacy topic-design-YYYY-MM-DD.md. */
+export function capturedRulesPathForDesignDoc(designDocPath: string): string {
+  const stem = basename(designDocPath, ".md");
+  const topic = stem.replace(/-design(?:-\d{4}-\d{2}-\d{2})?$/, "");
+  if (!topic) throw new Error(`Cannot derive a captured-rules topic from '${designDocPath}'.`);
+  return join(dirname(designDocPath), `${topic}-captured-rules.md`);
 }
 
 /**
@@ -335,7 +359,9 @@ export async function runConsumeMemoryRules(options: {
   try {
     rawPlan = await Deno.readTextFile(options.planPath);
   } catch (e) {
-    throw new Error(`Unreadable plan file '${options.planPath}': ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(
+      `Unreadable plan file '${options.planPath}': ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 
   const plan = parsePlanInput(rawPlan);
@@ -358,7 +384,9 @@ export async function runConsumeMemoryRules(options: {
       );
     }
     if (!validDispositions.has(rule.disposition)) {
-      throw new Error(`Invalid disposition '${rule.disposition}' for rule '${rule.slug}'. Must be one of: consume, delete, split-or-stay, stay.`);
+      throw new Error(
+        `Invalid disposition '${rule.disposition}' for rule '${rule.slug}'. Must be one of: consume, delete, split-or-stay, stay.`,
+      );
     }
   }
 
@@ -369,7 +397,11 @@ export async function runConsumeMemoryRules(options: {
       throw new Error(`Memory directory path '${memoryDir}' is not a directory.`);
     }
   } catch (e) {
-    throw new Error(`Memory directory '${memoryDir}' is inaccessible or does not exist: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(
+      `Memory directory '${memoryDir}' is inaccessible or does not exist: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
   }
 
   // Collect rules by disposition
@@ -383,28 +415,63 @@ export async function runConsumeMemoryRules(options: {
     try {
       await Deno.stat(fileSlugPath);
     } catch {
-      throw new Error(`Slug '${rule.slug}' in approved plan is absent from memory directory at '${fileSlugPath}'.`);
+      throw new Error(
+        `Slug '${rule.slug}' in approved plan is absent from memory directory at '${fileSlugPath}'.`,
+      );
     }
   }
 
-  // 3. Read design document if there are consume rules
-  let designDocContent = "";
+  // 3. Verify the design document is readable, then read its sibling capture record.
+  // The approved design is never a write destination.
+  let capturedRulesPath: string | undefined;
+  let capturedRulesContent = "";
   if (consumeRules.length > 0) {
     if (!designDocPath) {
-      throw new Error("Plan contains 'consume' rules but no design document path was provided via plan or --design-doc.");
+      throw new Error(
+        "Plan contains 'consume' rules but no design document path was provided via plan or --design-doc.",
+      );
     }
     try {
-      designDocContent = await Deno.readTextFile(designDocPath);
+      await Deno.readFile(designDocPath);
     } catch (e) {
-      throw new Error(`Design document '${designDocPath}' is unreadable or missing: ${e instanceof Error ? e.message : String(e)}`);
+      throw new Error(
+        `Design document '${designDocPath}' is unreadable or missing: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+    capturedRulesPath = capturedRulesPathForDesignDoc(designDocPath);
+    try {
+      const captureStat = await Deno.lstat(capturedRulesPath);
+      const designStat = await Deno.stat(designDocPath);
+      if (
+        !captureStat.isFile ||
+        (captureStat.ino !== null && captureStat.ino === designStat.ino &&
+          captureStat.dev === designStat.dev)
+      ) {
+        throw new Error(
+          "Capture destination must be a regular file separate from the design document.",
+        );
+      }
+      capturedRulesContent = ruleDecoder.decode(await Deno.readFile(capturedRulesPath));
+    } catch (e) {
+      if (!(e instanceof Deno.errors.NotFound)) {
+        throw new Error(
+          `Captured-rules file '${capturedRulesPath}' is inaccessible: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
     }
   }
 
   // Read source content for consume rules
-  const consumedRulesWithContent: Array<{ slug: string; target_skill?: string; sourceContent: string }> = [];
+  const consumedRulesWithContent: Array<
+    { slug: string; target_skill?: string; sourceContent: string }
+  > = [];
   for (const rule of consumeRules) {
     const filePath = join(memoryDir, `${rule.slug}.md`);
-    const sourceContent = await Deno.readTextFile(filePath);
+    const sourceContent = ruleDecoder.decode(await Deno.readFile(filePath));
     consumedRulesWithContent.push({
       slug: rule.slug,
       target_skill: rule.target_skill,
@@ -413,10 +480,13 @@ export async function runConsumeMemoryRules(options: {
   }
 
   // 4. Capture & byte-verify rules
-  let updatedDesignDocContent = designDocContent;
+  let updatedCapturedRulesContent = capturedRulesContent;
   if (consumedRulesWithContent.length > 0) {
-    const captureResult = captureAndVerifyRulesInDesignDoc(designDocContent, consumedRulesWithContent);
-    updatedDesignDocContent = captureResult.updatedContent;
+    const captureResult = captureAndVerifyRulesInDesignDoc(
+      capturedRulesContent,
+      consumedRulesWithContent,
+    );
+    updatedCapturedRulesContent = captureResult.updatedContent;
   }
 
   // 5. Inbound [[link]] dangling link report
@@ -425,19 +495,28 @@ export async function runConsumeMemoryRules(options: {
   // 6. Build summary
   const summaryLines: string[] = [];
   summaryLines.push("=== MEMORY CONSUME/DELETE SURGERY ===");
-  summaryLines.push(`Mode: ${dryRun ? "DRY RUN (default - no files modified)" : "EXECUTE (deleting and writing changes)"}`);
+  summaryLines.push(
+    `Mode: ${
+      dryRun ? "DRY RUN (default - no files modified)" : "EXECUTE (deleting and writing changes)"
+    }`,
+  );
   summaryLines.push(`Memory directory: ${memoryDir}`);
   if (designDocPath) summaryLines.push(`Design document: ${designDocPath}`);
+  if (capturedRulesPath) summaryLines.push(`Captured-rules file: ${capturedRulesPath}`);
   summaryLines.push("");
 
   summaryLines.push("Plan breakdown:");
   summaryLines.push(`  - Consumed: ${consumeRules.length}`);
   summaryLines.push(`  - Deleted: ${deleteRules.length}`);
-  summaryLines.push(`  - Untouched (stay/split-or-stay): ${plan.rules.length - consumeRules.length - deleteRules.length}`);
+  summaryLines.push(
+    `  - Untouched (stay/split-or-stay): ${
+      plan.rules.length - consumeRules.length - deleteRules.length
+    }`,
+  );
   summaryLines.push("");
 
   if (consumeRules.length > 0) {
-    summaryLines.push("Captured rules to design doc (byte-verified):");
+    summaryLines.push("Captured rules to sibling record (byte-verified):");
     for (const r of consumedRulesWithContent) {
       const bytes = new TextEncoder().encode(r.sourceContent).length;
       summaryLines.push(`  - ${r.slug} (${bytes} bytes -> ${r.target_skill || "N/A"})`);
@@ -465,9 +544,25 @@ export async function runConsumeMemoryRules(options: {
 
   // 7. Perform execution if not dry run
   if (!dryRun) {
-    // Write design doc
-    if (consumeRules.length > 0 && designDocPath) {
-      await Deno.writeTextFile(designDocPath, updatedDesignDocContent);
+    // Persist and read back the capture before changing the index or trashing any memory.
+    if (capturedRulesPath) {
+      try {
+        await Deno.writeTextFile(capturedRulesPath, updatedCapturedRulesContent);
+        const persistedBytes = await Deno.readFile(capturedRulesPath);
+        const expectedBytes = new TextEncoder().encode(updatedCapturedRulesContent);
+        if (
+          persistedBytes.length !== expectedBytes.length ||
+          persistedBytes.some((byte, i) => byte !== expectedBytes[i])
+        ) {
+          throw new Error("Capture byte verification failed after writing the record.");
+        }
+      } catch (e) {
+        throw new Error(
+          `Cannot persist captured-rules file '${capturedRulesPath}'; no memory files were trashed: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
     }
 
     // Update MEMORY.md
@@ -478,7 +573,9 @@ export async function runConsumeMemoryRules(options: {
       await Deno.writeTextFile(memoryMdPath, updatedMemoryMd);
       summaryLines.push(`Updated ${memoryMdPath} (stripped ${removedSlugs.size} slugs).`);
     } catch {
-      summaryLines.push(`Note: MEMORY.md at '${memoryMdPath}' was not found or unreadable; skipped index update.`);
+      summaryLines.push(
+        `Note: MEMORY.md at '${memoryMdPath}' was not found or unreadable; skipped index update.`,
+      );
     }
 
     // Move files to trash
@@ -522,7 +619,7 @@ Options:
   --design-doc, -d <path>   Path to design document markdown file
   --memory-dir, -m <path>   Path to memory directory (defaults to ~/.claude/projects/-home-joshua/memory)
   --dry-run                 Perform all validations, checks & reports without modifying files (default)
-  --delete, --apply         Execute real file moves to trash, design-doc capture, and MEMORY.md updates
+  --delete, --apply         Execute real file moves to trash, sibling captured-rules writes, and MEMORY.md updates
   --help, -h                Show this help message
 `);
     Deno.exit(0);
