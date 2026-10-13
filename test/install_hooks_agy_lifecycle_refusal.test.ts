@@ -34,7 +34,11 @@ async function run(cmd: string, args: string[], env?: Record<string, string>): P
     args,
     stdout: "piped",
     stderr: "piped",
-    env: env ? { ...Deno.env.toObject(), ...env } : undefined,
+    env: {
+      ...Deno.env.toObject(),
+      PATH: `${Deno.execPath().slice(0, Deno.execPath().lastIndexOf("/"))}:/usr/bin:/bin`,
+      ...env,
+    },
   });
   const { code, stdout, stderr } = await command.output();
   return {

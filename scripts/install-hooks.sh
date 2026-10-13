@@ -1056,34 +1056,14 @@ CODEX_REAPER_HOOK_DEST="$HOOKS_DEST/codex-reaper-startup-check.sh"
 
 read_agy_permissions() {
   local target_settings="$1"
-  if [ -e "$target_settings" ]; then
-    if ! deno eval --no-config 'JSON.parse(await Deno.readTextFile(Deno.args[0]))' "$target_settings" >/dev/null 2>&1; then
-      return 3 # unparseable settings JSON
-    fi
-  fi
+  local out=""
+  out=$(deno run --no-config --allow-read="$target_settings" "$REPO_DIR/scripts/agy-permissions.ts" read-settings "$target_settings" 2>/dev/null) || return 3
 
   if ! command -v agy >/dev/null 2>&1; then
-    local out=""
-    if [ -e "$target_settings" ]; then
-      out=$(deno eval --no-config '
-        const path = Deno.args[0];
-        try {
-          const text = await Deno.readTextFile(path);
-          const data = JSON.parse(text);
-          const allow = data?.permissions?.allow;
-          if (Array.isArray(allow)) {
-            console.log(allow.join("\n"));
-          }
-        } catch (_) {
-          Deno.exit(3);
-        }
-      ' "$target_settings" 2>/dev/null) || return 3
-    fi
     printf '%s\n' "$out"
     return 0
   fi
 
-  local out=""
   if [ "$target_settings" = "$HOME/.gemini/antigravity-cli/settings.json" ]; then
     if ! out=$(agy -p "/permissions" 2>/dev/null); then
       return 1 # agy command failed
@@ -1102,7 +1082,7 @@ read_agy_permissions() {
       return 1 # agy command failed
     fi
   fi
-  printf '%s\n' "$out"
+  printf '%s\n' "$out" | deno run --no-config "$REPO_DIR/scripts/agy-permissions.ts" parse-cli 2>/dev/null
 }
 
 if [ "$CHECK_MODE" = "1" ]; then
@@ -1191,6 +1171,11 @@ if [ "$CHECK_MODE" = "1" ]; then
         }
       }
       const target = "$HOME/.claude/hooks/agy-skill-run-hook.sh";
+      const registrations = pre.filter((entry) => entry.hooks?.some((h) => h?.command === target));
+      if (registrations.length && (registrations.length !== 1 || registrations[0].matcher !== ".*")) {
+        console.log("not_last");
+        Deno.exit(1);
+      }
       const lastHook = allHooks[allHooks.length - 1];
       if (lastHook !== target) {
         if (allHooks.includes(target)) {
@@ -1227,7 +1212,7 @@ if [ "$CHECK_MODE" = "1" ]; then
     echo "error: cannot read agy permissions (cannot tell: agy -p \"/permissions\" failed or unreadable)" >&2
     DRIFT=1
   else
-    if ! printf '%s\n' "$agy_perm_out" | grep -F "$AGY_SKILL_RUN_ALLOW_ENTRY" >/dev/null 2>&1; then
+    if ! printf '%s\n' "$agy_perm_out" | grep -Fx "$AGY_SKILL_RUN_ALLOW_ENTRY" >/dev/null 2>&1; then
       echo "drift: agy allow-list entry $AGY_SKILL_RUN_ALLOW_ENTRY is missing" >&2
       DRIFT=1
     fi
@@ -1410,13 +1395,8 @@ deno eval --no-config '
       item.hooks = item.hooks.filter((h) => h?.command !== target);
     }
   }
-  let lastEntry = pre[pre.length - 1];
-  if (!lastEntry) {
-    lastEntry = { matcher: ".*", hooks: [] };
-    pre.push(lastEntry);
-  }
-  if (!Array.isArray(lastEntry.hooks)) lastEntry.hooks = [];
-  lastEntry.hooks.push({ type: "command", command: target });
+  data.hooks.PreToolUse = pre.filter((entry) => !Array.isArray(entry.hooks) || entry.hooks.length > 0);
+  data.hooks.PreToolUse.push({ matcher: ".*", hooks: [{ type: "command", command: target }] });
   await Deno.writeTextFile(Deno.args[0], JSON.stringify(data, null, 2) + "\n");
 ' "$AGY_HOOKS_PATH"
 
@@ -1427,33 +1407,11 @@ if ! agy_check_perms=$(read_agy_permissions "$AGY_SETTINGS_PATH"); then
   exit 1
 fi
 
-if ! printf '%s\n' "$agy_check_perms" | grep -F "$AGY_SKILL_RUN_ALLOW_ENTRY" >/dev/null 2>&1; then
+if ! printf '%s\n' "$agy_check_perms" | grep -Fx "$AGY_SKILL_RUN_ALLOW_ENTRY" >/dev/null 2>&1; then
   if [ -e "$AGY_SETTINGS_PATH" ]; then
     cp "$AGY_SETTINGS_PATH" "$AGY_SETTINGS_PATH.bak-$STAMP"
   fi
-  deno eval --no-config '
-    const path = Deno.args[0];
-    let data = {};
-    try {
-      const text = await Deno.readTextFile(path);
-      data = JSON.parse(text);
-    } catch (e) {
-      if (!(e instanceof Deno.errors.NotFound)) {
-        console.error("error: cannot parse agy settings file", e);
-        Deno.exit(1);
-      }
-    }
-    if (!data || typeof data !== "object") data = {};
-    if (!data.permissions || typeof data.permissions !== "object") data.permissions = {};
-    if (!Array.isArray(data.permissions.allow)) data.permissions.allow = [];
-    const entry = Deno.args[1];
-    if (!data.permissions.allow.includes(entry)) {
-      data.permissions.allow.push(entry);
-      await Deno.mkdir(path.replace(/\/[^\/]+$/, ""), { recursive: true });
-      await Deno.writeTextFile(path, JSON.stringify(data, null, 2) + "\n");
-      console.log("agy settings.json: added allow-list entry " + entry);
-    }
-  ' "$AGY_SETTINGS_PATH" "$AGY_SKILL_RUN_ALLOW_ENTRY"
+  deno run --no-config --allow-read="$AGY_SETTINGS_PATH" --allow-write="$(dirname "$AGY_SETTINGS_PATH")" "$REPO_DIR/scripts/agy-permissions.ts" add-allow "$AGY_SETTINGS_PATH" "$AGY_SKILL_RUN_ALLOW_ENTRY"
 else
   echo "agy settings.json: ok (allow-list entry already present)"
 fi

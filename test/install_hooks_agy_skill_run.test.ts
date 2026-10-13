@@ -33,7 +33,14 @@ async function run(
     args,
     stdout: "piped",
     stderr: "piped",
-    env: { ...Deno.env.toObject(), CODEX_HOME: "", CODEX_HOOKS_PATH: "", ...env },
+    env: {
+      ...Deno.env.toObject(),
+      CODEX_HOME: "",
+      CODEX_HOOKS_PATH: "",
+      // Keep installer fixtures independent of the workstation's agy installation.
+      PATH: `${Deno.execPath().slice(0, Deno.execPath().lastIndexOf("/"))}:/usr/bin:/bin`,
+      ...env,
+    },
   });
   const { code, stdout, stderr } = await command.output();
   return {
@@ -204,6 +211,10 @@ Deno.test("install-hooks.sh moves agy-skill-run-hook.sh to end if existing hooks
               { type: "command", command: "$HOME/.claude/hooks/agy-prompt-watch.sh" },
             ],
           },
+          {
+            matcher: "view_file",
+            hooks: [{ type: "command", command: "/custom/read-guard.sh" }],
+          },
         ],
       },
     };
@@ -224,6 +235,15 @@ Deno.test("install-hooks.sh moves agy-skill-run-hook.sh to end if existing hooks
 
     const agyHooks = JSON.parse(await Deno.readTextFile(agyHooksPath));
     const preToolUse = agyHooks.hooks?.PreToolUse;
+    assertEquals(preToolUse.at(-1), {
+      matcher: ".*",
+      hooks: [{ type: "command", command: AGY_SKILL_RUN_HOOK_COMMAND }],
+    });
+    assert(
+      preToolUse.some((entry: { matcher: string; hooks: { command: string }[] }) =>
+        entry.matcher === "view_file" && entry.hooks[0]?.command === "/custom/read-guard.sh"
+      ),
+    );
     const allHooks: string[] = [];
     for (const entry of preToolUse) {
       for (const h of entry.hooks || []) {
@@ -243,6 +263,125 @@ Deno.test("install-hooks.sh moves agy-skill-run-hook.sh to end if existing hooks
       allHooks.includes("$HOME/.claude/hooks/agy-prompt-watch.sh"),
       "other hook must be preserved",
     );
+  });
+});
+
+function installerArgs(sandbox: Sandbox, check = false): string[] {
+  return [
+    INSTALL_SCRIPT,
+    "--hooks-dir",
+    sandbox.hooksDir,
+    "--settings-path",
+    sandbox.settingsPath,
+    "--agy-hooks-path",
+    sandbox.agyHooksPath,
+    "--agy-settings-path",
+    sandbox.agySettingsPath,
+    ...(check ? ["--check"] : []),
+  ];
+}
+
+async function fakeAgy(
+  sandbox: Sandbox,
+  output: string,
+  exit = 0,
+): Promise<Record<string, string>> {
+  const bin = `${sandbox.dir}/bin`;
+  await Deno.mkdir(bin, { recursive: true });
+  await Deno.writeTextFile(
+    `${bin}/agy`,
+    '#!/bin/bash\nprintf "%s\\n" "$AGY_TEST_PERMISSION_OUTPUT"\nexit "$AGY_TEST_PERMISSION_EXIT"\n',
+  );
+  await Deno.chmod(`${bin}/agy`, 0o755);
+  return {
+    PATH: `${bin}:${Deno.execPath().slice(0, Deno.execPath().lastIndexOf("/"))}:/usr/bin:/bin`,
+    AGY_TEST_PERMISSION_OUTPUT: output,
+    AGY_TEST_PERMISSION_EXIT: String(exit),
+  };
+}
+
+Deno.test("installer refuses unreadable successful CLI output without changing permissions", async () => {
+  await withSandbox(async (sandbox) => {
+    const original = JSON.stringify({ permissions: { allow: ["command(echo hello)"] } });
+    await Deno.writeTextFile(sandbox.agySettingsPath, original);
+    for (
+      const output of [
+        "",
+        "unrelated text",
+        `global allow ${AGY_SKILL_RUN_ALLOW_ENTRY}\nunreadable row`,
+      ]
+    ) {
+      const env = await fakeAgy(sandbox, output);
+      for (const check of [false, true]) {
+        const result = await run("bash", installerArgs(sandbox, check), env);
+        assert(result.code !== 0, output);
+        assert(result.stderr.includes("cannot read agy permissions"), result.stderr);
+        assertEquals(await Deno.readTextFile(sandbox.agySettingsPath), original);
+      }
+    }
+    const failed = await run("bash", installerArgs(sandbox), await fakeAgy(sandbox, "", 1));
+    assert(failed.code !== 0);
+    assertEquals(await Deno.readTextFile(sandbox.agySettingsPath), original);
+  });
+});
+
+Deno.test("installer requires an exact global allow row, preserving other grants", async () => {
+  await withSandbox(async (sandbox) => {
+    for (
+      const output of [
+        `global\tdeny\t${AGY_SKILL_RUN_ALLOW_ENTRY}`,
+        `workspace\tallow\t${AGY_SKILL_RUN_ALLOW_ENTRY}`,
+        `global\tallow\t${AGY_SKILL_RUN_ALLOW_ENTRY}-different`,
+      ]
+    ) {
+      const original = {
+        marker: "keep",
+        permissions: { allow: [], deny: [AGY_SKILL_RUN_ALLOW_ENTRY] },
+      };
+      await Deno.writeTextFile(sandbox.agySettingsPath, JSON.stringify(original));
+      const env = await fakeAgy(sandbox, output);
+      const check = await run("bash", installerArgs(sandbox, true), env);
+      assert(check.code !== 0);
+      assert(check.stderr.includes("agy allow-list entry"), check.stderr);
+      const install = await run("bash", installerArgs(sandbox), env);
+      assertEquals(install.code, 0, install.stdout + install.stderr);
+      assertEquals(JSON.parse(await Deno.readTextFile(sandbox.agySettingsPath)), {
+        ...original,
+        permissions: { ...original.permissions, allow: [AGY_SKILL_RUN_ALLOW_ENTRY] },
+      });
+    }
+    const original = JSON.stringify({ permissions: { allow: [AGY_SKILL_RUN_ALLOW_ENTRY] } });
+    await Deno.writeTextFile(sandbox.agySettingsPath, original);
+    const env = await fakeAgy(sandbox, `global\tallow\t${AGY_SKILL_RUN_ALLOW_ENTRY}`);
+    const install = await run("bash", installerArgs(sandbox), env);
+    assertEquals(install.code, 0, install.stdout + install.stderr);
+    assertEquals(await Deno.readTextFile(sandbox.agySettingsPath), original);
+  });
+});
+
+Deno.test("installer JSON fallback refuses malformed permission structures unchanged", async () => {
+  await withSandbox(async (sandbox) => {
+    for (
+      const settings of [
+        null,
+        [],
+        { permissions: null },
+        { permissions: [] },
+        { permissions: { allow: "wrong" } },
+        { permissions: { allow: [1] } },
+        { permissions: { deny: "wrong" } },
+        { permissions: { ask: {} } },
+      ]
+    ) {
+      const original = JSON.stringify(settings);
+      await Deno.writeTextFile(sandbox.agySettingsPath, original);
+      for (const check of [false, true]) {
+        const result = await run("bash", installerArgs(sandbox, check));
+        assert(result.code !== 0, original);
+        assert(result.stderr.includes("cannot read agy permissions"), result.stderr);
+        assertEquals(await Deno.readTextFile(sandbox.agySettingsPath), original);
+      }
+    }
   });
 });
 

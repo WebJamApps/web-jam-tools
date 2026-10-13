@@ -436,9 +436,15 @@ Deno.test("install-hooks.sh sandboxed run merges hook into Claude settings and a
         settingsPath,
         "--agy-hooks-path",
         agyHooksPath,
+        "--codex-hooks-path",
+        path.join(settingsDir, "codex-hooks.json"),
       ],
       stdout: "piped",
       stderr: "piped",
+      env: {
+        ...Deno.env.toObject(),
+        PATH: `${Deno.execPath().slice(0, Deno.execPath().lastIndexOf("/"))}:/usr/bin:/bin`,
+      },
     });
     const { code, stderr } = await cmd.output();
     assertEquals(code, 0, `install-hooks.sh failed: ${new TextDecoder().decode(stderr)}`);

@@ -57,7 +57,13 @@ async function run(
     stdout: "piped",
     stderr: "piped",
     // Never inherit real Codex config overrides into an installer fixture.
-    env: { ...Deno.env.toObject(), CODEX_HOME: "", CODEX_HOOKS_PATH: "", ...env },
+    env: {
+      ...Deno.env.toObject(),
+      CODEX_HOME: "",
+      CODEX_HOOKS_PATH: "",
+      PATH: `${Deno.execPath().slice(0, Deno.execPath().lastIndexOf("/"))}:/usr/bin:/bin`,
+      ...env,
+    },
   });
 
   if (stdinText !== undefined) {
@@ -611,6 +617,10 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.copyFile(`${REPO_ROOT}deno.json`, `${mainRepo}/deno.json`);
   await Deno.mkdir(`${mainRepo}/scripts`, { recursive: true });
   await Deno.copyFile(INSTALL_SCRIPT, `${mainRepo}/scripts/install-hooks.sh`);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/agy-permissions.ts`,
+    `${mainRepo}/scripts/agy-permissions.ts`,
+  );
   await Deno.copyFile(
     `${REPO_ROOT}scripts/claude-settings.json`,
     `${mainRepo}/scripts/claude-settings.json`,
