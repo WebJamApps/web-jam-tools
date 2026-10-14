@@ -381,6 +381,10 @@ rules and do not reconstruct them from memory or from this file.
       chains where a specific handler must execute last (such as skill-run or prompt-watch hooks),
       reconciliation steps must guarantee that handlers are moved to the end of the registry array
       across all matched blocks and that re-ordering logic accounts for managed hook pruning.
+33. **Fail-Closed Verification, Probe Log Integrity & CLI Alias Wiring:**
+    - **Never Certify Safety from Incomplete, Corrupted, or Empty Inputs:** In safety verification and auditing tools (such as probe log analyzers, lyric checkers, and security sweeps), parse errors, corrupted records, truncated payloads, or empty inputs must never be skipped or treated as a clean pass. A damaged or missing log cannot prove that no forbidden writes occurred, and an empty reading cannot prove that content matches. All incomplete, unreadable, or unusable inputs must fail closed with a non-zero exit code and refuse to emit a verified-safe or pass outcome. Test suites must explicitly cover damaged, truncated, empty, and malformed inputs.
+    - **Wiring and Regression Coverage for Advertised CLI Aliases:** Whenever a CLI short option or alias (e.g. `-j` for `--json`) is documented in `--help` text, usage strings, or task specifications, the CLI argument parser must explicitly map the alias in its option configuration. Tests must include end-to-end CLI regressions verifying that the documented alias functions identically to the long flag.
+    - **Reconciling Execution Model Headings with Delegation Tables:** When updating a skill's execution model or delegation matrix to assign work to the primary session or specific model tiers, review and update all subsequent workflow headings and step descriptions to eliminate obsolete unconditional delegation labels (e.g. "(Delegated to Subagent)"). Skill validation tests must assert the absence of contradictory retained delegation directives.
 
 ## Opening pull requests (all WebJamApps repos)
 
