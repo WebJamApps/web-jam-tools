@@ -358,9 +358,25 @@ through (for example `--check`). It runs from any directory and refuses, exiting
 is on `dev`.
 
 `install-hooks.sh` symlinks it into `~/.local/bin/update-scripts`, so after the first install you
-update by typing just `update-scripts` in any terminal. On a machine that does not have the command
-yet, run the full path once: `~/WebJamApps/web-jam-tools/scripts/update-scripts.sh` (that run
-installs the command).
+update by typing just `update-scripts` in any terminal. For the first install after this change
+merges, confirm the clone is on `dev`:
+
+```sh
+git -C "$HOME/WebJamApps/web-jam-tools" branch --show-current
+```
+
+Continue only if that prints `dev`. Fetch the merged source before invoking the new helper,
+because an older checkout does not contain `scripts/update-scripts.sh`:
+
+```sh
+git -C "$HOME/WebJamApps/web-jam-tools" pull --ff-only origin dev
+```
+
+After the pull succeeds, run the helper by its full path to install the command:
+
+```sh
+"$HOME/WebJamApps/web-jam-tools/scripts/update-scripts.sh"
+```
 
 The `agents` command also runs it, right after `update-all.sh`, whenever it creates or restarts the
 session (not when it only attaches). A failure prints a warning and the agents still start. Override
