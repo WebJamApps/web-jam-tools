@@ -302,6 +302,42 @@ for (const part of ["mainRules", "crossAiRules", "jammusicRules"] as const) {
   });
 }
 
+Deno.test("GitHub SSH URLs and Git insteadOf rewrites retain the repository identity", async () => {
+  await withWorktree("mainRules", async ({ root, filePath, planPath, source }) => {
+    await git(root, ["config", "url.ssh://git@github.com/.insteadOf", "https://github.com/"]);
+    for (
+      const origin of [
+        "https://github.com/WebJamApps/web-jam-tools.git",
+        "ssh://git@github.com/WebJamApps/web-jam-tools.git",
+        "git@github.com:WebJamApps/web-jam-tools.git",
+      ]
+    ) {
+      await git(root, ["remote", "set-url", "origin", origin]);
+      await Deno.writeTextFile(filePath, source);
+      const result = await runRulesCuts({ filePath, planPath });
+      assertEquals(await Deno.readTextFile(filePath), result.after);
+    }
+    await git(root, [
+      "config",
+      "url.ssh://git@github.com/.insteadOf",
+      "https://untrusted.invalid/",
+    ]);
+    await git(root, [
+      "remote",
+      "set-url",
+      "origin",
+      "ssh://git@untrusted.invalid/WebJamApps/web-jam-tools.git",
+    ]);
+    await Deno.writeTextFile(filePath, source);
+    await assertRejects(
+      () => runRulesCuts({ filePath, planPath }),
+      Error,
+      "requires the web-jam-tools repository",
+    );
+    assertEquals(await Deno.readTextFile(filePath), source);
+  });
+});
+
 Deno.test("shared clones, protected or detached branches, wrong repos and escaped paths are untouched", async () => {
   const scenarios = {
     shared: "isolated git worktree",

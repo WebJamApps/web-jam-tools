@@ -214,7 +214,7 @@ async function assertFeatureWorktree(filePath: string, part: RulesPart): Promise
   if (gitDir === commonDir) throw new Error("Rules cuts require an isolated git worktree");
   const origin = await git(dir, ["remote", "get-url", "origin"]);
   const remoteRepo = origin.match(
-    /^(?:https:\/\/github\.com\/|git@github\.com:)WebJamApps\/(web-jam-tools|JaMmusic)(?:\.git)?$/i,
+    /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)WebJamApps\/(web-jam-tools|JaMmusic)(?:\.git)?$/i,
   )?.[1];
   if (remoteRepo?.toLowerCase() !== PARTS[part].repo.toLowerCase()) {
     throw new Error(`Rules part ${part} requires the ${PARTS[part].repo} repository`);
