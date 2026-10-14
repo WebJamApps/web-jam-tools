@@ -23,8 +23,20 @@ import {
   evaluatePush,
   getCurrentBranch,
   type GitRunner,
-  runPush,
+  runPush as pushWithContext,
 } from "../scripts/push.ts";
+import {
+  checkFixRun,
+  githubRepository,
+  latestTypedSkillCall,
+  parseFixPrReference,
+  type PullRequestState,
+} from "../hooks/lib/fix_run.ts";
+import { resolveFixRun } from "../scripts/push.ts";
+
+// Existing policy tests have no user invocation and never inspect this workstation's sessions.
+const runPush: typeof pushWithContext = (args, cwd, options) =>
+  pushWithContext(args, cwd, { readSkillCall: () => Promise.resolve(null), ...options });
 
 const SCRIPT_PATH = new URL("../scripts/push.ts", import.meta.url).pathname;
 const SHARED_CONFIG_PATH = new URL("../deno.json", import.meta.url).pathname;
@@ -116,6 +128,7 @@ async function runDenoTaskPush(
   args: string[],
   cwd: string,
   sharedConfig = false,
+  fixtureEnv: Record<string, string> = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const cmd = new Deno.Command(Deno.execPath(), {
     args: [
@@ -126,6 +139,13 @@ async function runDenoTaskPush(
       ...args,
     ],
     cwd,
+    env: {
+      CODEX_THREAD_ID: "",
+      CLAUDE_CODE_SESSION_ID: "",
+      WJT_SURFACE: "codex",
+      WJT_UNATTENDED: "",
+      ...fixtureEnv,
+    },
     stdin: "null",
     stdout: "piped",
     stderr: "piped",
@@ -692,3 +712,446 @@ Deno.test("runPush: returns 1 when spawning the push fails", async () => {
   });
   assertEquals(code, 1);
 });
+
+const targetRepo = "WebJamApps/web-jam-tools";
+const targetPr: PullRequestState = {
+  number: 1318,
+  state: "OPEN",
+  headRefName: "probe-branch",
+  headRepository: { nameWithOwner: targetRepo },
+  isCrossRepository: false,
+};
+const fixCall = {
+  name: "fix-pr",
+  arguments: "web-jam-tools#1318",
+  text: "/fix-pr web-jam-tools#1318",
+};
+const activeFix = { kind: "active" as const, pullRequest: { repo: targetRepo, number: 1318 } };
+
+Deno.test("fix run resolves supported PR names and GitHub push remotes", () => {
+  for (
+    const args of [
+      "1318",
+      "web-jam-tools#1318",
+      `${targetRepo}#1318`,
+      "https://github.com/WebJamApps/web-jam-tools/pull/1318 also run checks",
+    ]
+  ) {
+    assertEquals(parseFixPrReference(args, targetRepo), { repo: targetRepo, number: 1318 });
+  }
+  for (
+    const args of ["", "0", "-1", "9007199254740993", "please fix 1318", "1318suffix", "foo#0"]
+  ) {
+    assertEquals(parseFixPrReference(args, targetRepo), null);
+  }
+  for (
+    const remote of [
+      "https://github.com/WebJamApps/web-jam-tools.git",
+      "git@github.com:WebJamApps/web-jam-tools.git",
+      "ssh://git@github.com/WebJamApps/web-jam-tools",
+    ]
+  ) {
+    assertEquals(githubRepository(remote), targetRepo);
+  }
+  for (
+    const remote of [
+      "https://other.host/WebJamApps/web-jam-tools.git",
+      "https://user:password@github.com/WebJamApps/web-jam-tools.git",
+      "/tmp/origin.git",
+      `https://github.com/${targetRepo}.git\nhttps://github.com/${targetRepo}.git`,
+    ]
+  ) {
+    assertEquals(githubRepository(remote), null);
+  }
+});
+
+Deno.test("typed call ignores agent text and keeps plain replies, but a new skill ends it", () => {
+  const human = (text: string) => ({
+    type: "user",
+    origin: { kind: "human" },
+    message: { role: "user", content: text },
+  });
+  const ctx = {
+    entries: [human(fixCall.text), human("also bump the version")],
+    ownConversationId: "session",
+    isSubagentInvocation: false,
+  };
+  const agentEntries = [
+    { type: "assistant", message: { role: "assistant", content: "/pr-review" } },
+    { type: "user", isMeta: true, message: { role: "user", content: "/pr-review" } },
+    { ...human("/pr-review"), origin: { kind: "task-notification" } },
+    { ...human("/pr-review"), isSidechain: true },
+    { type: "user", message: { role: "user", content: "/pr-review" } },
+  ];
+  for (const entry of agentEntries) {
+    assertEquals(latestTypedSkillCall({ ...ctx, entries: [...ctx.entries, entry] }), fixCall);
+  }
+  assertEquals(
+    latestTypedSkillCall({ ...ctx, entries: [...ctx.entries, human("/pr-review")] })?.name,
+    "pr-review",
+  );
+  assertEquals(latestTypedSkillCall({ ...ctx, isSubagentInvocation: true }), null);
+  assertEquals(latestTypedSkillCall({ ...ctx, ownConversationId: null }), null);
+  assertEquals(
+    latestTypedSkillCall({
+      ...ctx,
+      entries: [human(
+        "<command-message>fix-pr</command-message><command-name>/fix-pr</command-name>" +
+          "<command-args>web-jam-tools#1318</command-args>",
+      )],
+    })?.arguments,
+    fixCall.arguments,
+  );
+});
+
+Deno.test("active fix requires a comment and preserves every forbidden push form", () => {
+  for (const args of [[], ["--force-with-lease"]]) {
+    const result = evaluatePush(args, "probe-branch", activeFix);
+    assertEquals(result.rule, "missing-fix-comment");
+    assertStringIncludes(result.reason, "--fix-comment");
+  }
+  for (
+    const args of [["--fix-comment", "c.md"], ["--force-with-lease", "--fix-comment", "c.md"], [
+      "--fix-comment",
+      "c.md",
+      "--force-with-lease",
+    ]]
+  ) {
+    assertEquals(evaluatePush(args, "probe-branch", activeFix).outcome, "allowed");
+    assertEquals(evaluatePush(args, "probe-branch").rule, "fix-comment-outside-run");
+  }
+  for (
+    const args of [
+      ["--fix-comment"],
+      ["--fix-comment", ""],
+      ["--fix-comment", "--force-with-lease"],
+      ["--fix-comment", "c.md", "--fix-comment", "d.md"],
+      ["--force-with-lease", "--force-with-lease"],
+    ]
+  ) {
+    assertEquals(evaluatePush(args, "probe-branch", activeFix).outcome, "refused");
+  }
+  for (const flag of ["--force", "-f", "--delete", "-d", ":probe", "--mirror", "--prune"]) {
+    assertEquals(
+      evaluatePush([flag, "--fix-comment", "c.md"], "probe-branch", activeFix).outcome,
+      "refused",
+    );
+  }
+  for (const branch of ["main", "dev", "+dev", null]) {
+    assertEquals(
+      evaluatePush(["--force-with-lease", "--fix-comment", "c.md"], branch, activeFix).outcome ===
+        "allowed",
+      false,
+    );
+  }
+});
+
+Deno.test("fix run binds state, number, branch and repository including fork refusal", () => {
+  for (
+    const changes of [
+      { state: "CLOSED" },
+      { state: "MERGED" },
+      { number: 1322 },
+      { headRefName: "another-branch" },
+      { isCrossRepository: true },
+      { headRepository: null },
+      { headRepository: { nameWithOwner: "other/web-jam-tools" } },
+    ]
+  ) {
+    assertEquals(
+      checkFixRun(fixCall, targetRepo, "probe-branch", { ...targetPr, ...changes }).kind,
+      "refused",
+    );
+  }
+  assertEquals(
+    checkFixRun(fixCall, "WebJamApps/JaMmusic", "probe-branch", targetPr).kind,
+    "refused",
+  );
+  assertEquals(checkFixRun(fixCall, targetRepo, "probe-branch", null).kind, "none");
+});
+
+Deno.test("resolution failure never grants a fix run or falls back to another typed session", async () => {
+  const deps = {
+    readSkillCall: () => Promise.resolve(fixCall),
+    runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${targetRepo}.git` }),
+    lookupPullRequest: () => Promise.resolve(targetPr),
+  };
+  assertEquals(await resolveFixRun("probe-branch", undefined, deps), activeFix);
+  for (
+    const failed of [
+      { readSkillCall: () => Promise.reject(new Error("record unavailable")) },
+      { runGit: () => Promise.reject(new Error("git unavailable")) },
+      { runGit: () => Promise.resolve({ code: 1, stdout: "" }) },
+      { lookupPullRequest: () => Promise.reject(new Error("GitHub unavailable")) },
+      { lookupPullRequest: () => Promise.resolve(null) },
+    ]
+  ) {
+    assertEquals(await resolveFixRun("probe-branch", undefined, { ...deps, ...failed }), {
+      kind: "none",
+    });
+  }
+  let spawned = false;
+  const code = await runPush(["--force-with-lease", "--fix-comment", "c.md"], undefined, {
+    branch: "probe-branch",
+    ...deps,
+    confirmForce: () => {
+      throw new Error("active fix must never ask");
+    },
+    spawnPush: (args) => {
+      assertEquals(args.at(-1), "refs/heads/probe-branch:refs/heads/probe-branch");
+      spawned = true;
+      return Promise.resolve(0);
+    },
+  });
+  assertEquals(code, 0);
+  assertEquals(spawned, true);
+});
+
+const fixtureThread = "12345678-1234-5678-abcd-123456789abc";
+type Surface = "claude" | "agy" | "codex";
+
+async function createFixFixture(surface: Surface) {
+  const fixture = await createFixtureRepo();
+  const userHome = `${fixture.tempDir}/home`;
+  const toolsDir = `${fixture.tempDir}/bin`;
+  const codexHome = `${userHome}/.codex`;
+  const sessionPath = surface === "codex"
+    ? `${codexHome}/sessions/rollout-${fixtureThread}.jsonl`
+    : surface === "claude"
+    ? `${userHome}/.claude/projects/probe/${fixtureThread}.jsonl`
+    : `${userHome}/.gemini/brain/${fixtureThread}/.system_generated/logs/transcript_full.jsonl`;
+  await Deno.mkdir(sessionPath.slice(0, sessionPath.lastIndexOf("/")), { recursive: true });
+  await Deno.mkdir(toolsDir);
+  const realGit = (Deno.env.get("PATH") ?? "").split(":").map((dir) => `${dir}/git`).find(
+    (path) => {
+      try {
+        return Deno.statSync(path).isFile;
+      } catch {
+        return false;
+      }
+    },
+  );
+  if (!realGit) throw new Error("git not found for local fixture");
+  const quotedGit = `'${realGit.replaceAll("'", "'\\''")}'`;
+  // Only repository discovery is stubbed; the push itself goes to the fixture's real bare origin.
+  await Deno.writeTextFile(
+    `${toolsDir}/git`,
+    '#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ]; then\n' +
+      '  printf "%s\\n" "$PUSH_TEST_REMOTE"\n  exit 0\nfi\n' + `exec ${quotedGit} "$@"\n`,
+  );
+  await Deno.writeTextFile(
+    `${toolsDir}/gh`,
+    '#!/bin/sh\nprintf "%s\\n" "$PUSH_TEST_PR"\nexit "${PUSH_TEST_GH_EXIT:-0}"\n',
+  );
+  await Deno.chmod(`${toolsDir}/git`, 0o755);
+  await Deno.chmod(`${toolsDir}/gh`, 0o755);
+  const recordPath = `${fixture.tempDir}/agy-record.jsonl`;
+  const shellEnv = {
+    HOME: userHome,
+    CODEX_HOME: codexHome,
+    CODEX_THREAD_ID: surface === "codex" ? fixtureThread : "",
+    CLAUDE_CODE_SESSION_ID: surface === "claude" ? fixtureThread : "",
+    AGY_HOOK_RECORD_PATH: recordPath,
+    WJT_SURFACE: surface,
+    PATH: `${toolsDir}:${Deno.env.get("PATH") ?? ""}`,
+    PUSH_TEST_REMOTE: `https://github.com/${targetRepo}.git`,
+    PUSH_TEST_PR: JSON.stringify(targetPr),
+    PUSH_TEST_GH_EXIT: "0",
+  };
+  const writeSession = async (texts: string[], helper = false, damaged = false) => {
+    const records = surface === "codex"
+      ? [
+        {
+          type: "session_meta",
+          payload: {
+            id: fixtureThread,
+            source: helper ? "exec" : "cli",
+            originator: helper ? "codex_exec" : "codex-tui",
+            thread_source: "user",
+            parent_thread_id: null,
+          },
+        },
+        ...texts.map((text) => ({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text }],
+          },
+        })),
+      ]
+      : surface === "claude"
+      ? texts.map((text) => ({
+        type: "user",
+        origin: { kind: "human" },
+        isSidechain: helper,
+        message: { role: "user", content: text },
+      }))
+      : texts.map((text, step_index) => ({
+        type: "USER_INPUT",
+        source: "USER_EXPLICIT",
+        step_index,
+        content: `<USER_REQUEST>${text}</USER_REQUEST>`,
+      }));
+    await Deno.writeTextFile(
+      sessionPath,
+      records.map((record) => JSON.stringify(record)).join("\n") + "\n" + (damaged ? "{torn" : ""),
+    );
+    if (surface === "agy") {
+      await Deno.writeTextFile(
+        recordPath,
+        JSON.stringify({
+          conversationId: fixtureThread,
+          transcriptPath: sessionPath,
+        }) + "\n",
+      );
+      const parent = `${userHome}/.gemini/brain/parent/.system_generated/subagents`;
+      await Deno.mkdir(parent, { recursive: true });
+      const childFile = `${parent}/${fixtureThread}.json`;
+      if (helper) await Deno.writeTextFile(childFile, "{}");
+      else {try {
+          await Deno.remove(childFile);
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+        }}
+    }
+  };
+  return { ...fixture, shellEnv, writeSession, sessionPath, recordPath };
+}
+
+for (const surface of ["claude", "agy", "codex"] as const) {
+  Deno.test(`${surface}: real Deno task pushes a rebased branch only for the closed fix-run case list`, async () => {
+    const fixture = await createFixFixture(surface);
+    try {
+      await fixture.git(["push", "-q", "-u", "origin", "probe-branch"]);
+      await Deno.writeTextFile(`${fixture.repoDir}/file.txt`, "rebased probe\n");
+      await fixture.git(["commit", "-qam", "changed probe"]);
+      // The remote stays at its original probe commit, while local HEAD replaces it.
+      await fixture.git(["reset", "--soft", "HEAD~1"]);
+      await fixture.git(["commit", "--amend", "-qm", "rebased probe"]);
+      const forceArgs = ["--force-with-lease", "--fix-comment", "c.md"];
+      const cases = [
+        { texts: [fixCall.text], args: forceArgs, ok: true },
+        {
+          texts: ["/fix-pr https://github.com/WebJamApps/web-jam-tools/pull/1318"],
+          args: forceArgs,
+          ok: true,
+        },
+        { texts: ["/fix-pr 1318"], args: forceArgs, ok: true },
+        { texts: [fixCall.text, "also bump the version"], args: forceArgs, ok: true },
+        { texts: [fixCall.text], args: ["--fix-comment", "c.md"], ok: true },
+        { texts: [fixCall.text], args: ["--force-with-lease"], rule: "missing-fix-comment" },
+        { texts: [fixCall.text], args: [], rule: "missing-fix-comment" },
+        { texts: [fixCall.text, "/pr-review"], args: forceArgs, rule: "fix-comment-outside-run" },
+        {
+          texts: [fixCall.text, "/fix-pr web-jam-tools#1322"],
+          args: forceArgs,
+          rule: "fix-run-mismatch",
+        },
+        { texts: ["/fix-pr JaMmusic#1318"], args: forceArgs, rule: "fix-run-mismatch" },
+        {
+          texts: ["/work-issue web-jam-tools#1317"],
+          args: ["--force-with-lease"],
+          rule: "force-with-lease-confirmation",
+        },
+        {
+          texts: ["/work-issue web-jam-tools#1317"],
+          args: ["--fix-comment", "c.md"],
+          rule: "fix-comment-outside-run",
+        },
+        { texts: [fixCall.text], args: forceArgs, helper: true, rule: "fix-comment-outside-run" },
+        {
+          texts: [fixCall.text],
+          args: ["--force-with-lease"],
+          helper: true,
+          rule: "force-with-lease-confirmation",
+        },
+        { texts: [fixCall.text], args: forceArgs, damaged: true, rule: "fix-comment-outside-run" },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          pr: { ...targetPr, state: "CLOSED" },
+          rule: "fix-run-mismatch",
+        },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          pr: { ...targetPr, state: "MERGED" },
+          rule: "fix-run-mismatch",
+        },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          pr: { ...targetPr, headRefName: "other" },
+          rule: "fix-run-mismatch",
+        },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          pr: { ...targetPr, isCrossRepository: true },
+          rule: "fix-run-mismatch",
+        },
+        {
+          texts: [fixCall.text],
+          args: ["--force-with-lease"],
+          ghExit: "1",
+          rule: "force-with-lease-confirmation",
+        },
+        {
+          texts: [fixCall.text],
+          args: forceArgs,
+          unattended: "1",
+          rule: "fix-comment-outside-run",
+        },
+        ...["--force", "--delete", ":probe"].map((flag) => ({
+          texts: [fixCall.text],
+          args: [flag, "--fix-comment", "c.md"],
+          rule: flag === "--force"
+            ? "plain-force"
+            : flag === "--delete"
+            ? "branch-deletion"
+            : "colon-refspec",
+        })),
+      ];
+      let caseIndex = 0;
+      for (const item of cases) {
+        caseIndex++;
+        await fixture.writeSession(
+          item.texts,
+          "helper" in item && item.helper,
+          "damaged" in item && item.damaged,
+        );
+        if ("ok" in item && item.ok) {
+          await Deno.writeTextFile(`${fixture.repoDir}/file.txt`, `case ${caseIndex}\n`);
+          await fixture.git(["commit", "-qam", `case ${caseIndex}`]);
+        }
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(item.args, fixture.repoDir, true, {
+          ...fixture.shellEnv,
+          PUSH_TEST_PR: JSON.stringify("pr" in item ? item.pr : targetPr),
+          PUSH_TEST_GH_EXIT: "ghExit" in item ? item.ghExit ?? "0" : "0",
+          WJT_UNATTENDED: "unattended" in item ? item.unattended ?? "" : "",
+        });
+        const allowed = "ok" in item && item.ok;
+        assertEquals(result.code, allowed ? 0 : 1, `case ${caseIndex}: ${result.stderr}`);
+        if (allowed) {
+          assertEquals(result.stderr.includes("Force-push feature branch"), false);
+          const remote = await fixture.git(["ls-remote", "origin", "refs/heads/probe-branch"]);
+          assertEquals(remote.split(/\s+/)[0], await fixture.git(["rev-parse", "HEAD"]));
+        } else {
+          assertStringIncludes(result.stderr, `Refused (${"rule" in item ? item.rule : ""})`);
+          assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+        }
+      }
+      if (surface === "codex") {
+        await fixture.writeSession(["$fix-pr web-jam-tools#1318", "yes"]);
+        assertEquals(
+          (await runDenoTaskPush(forceArgs, fixture.repoDir, true, fixture.shellEnv)).code,
+          0,
+        );
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+}
