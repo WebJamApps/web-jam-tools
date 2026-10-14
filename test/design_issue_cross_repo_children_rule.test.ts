@@ -15,27 +15,21 @@ Deno.test("skills/design-issue/SKILL.md defines the cross-repo children rule in 
   // Rule heading / marker
   assertStringIncludes(content, "**Cross-repo children.**");
 
-  // Key requirement 1: Sub-issues are same-repo only
+  // Key requirement 1: Children in any repo attached natively and not restated in epic body
   assertStringIncludes(
     content,
-    "GitHub sub-issues exist only within a single repository",
+    "Attach every child, in any repository, natively as a sub-issue and do NOT restate it inside the epic body",
   );
 
-  // Key requirement 2: Same-repo children attached natively and not restated in epic body
+  // Key requirement 2: Every plan row belongs to an epic
   assertStringIncludes(
     content,
-    "Attach every same-repo child natively and do NOT restate it in the epic body",
+    "**Every plan row belongs to an epic**: Every non-epic row in the plan table must name an epic or a plan row in its `Epic / child of` cell (never empty or `none`)",
   );
 
-  // Key requirement 3: Cross-repo children named in epic body under own heading and cited as repo#number "title"
+  // Key requirement 3: Cross-repository work lives in web-jam-tools
   assertStringIncludes(
     content,
-    'Name ONLY the cross-repo children in the epic body, under their own heading, and cite each as `repo#number "title"`',
-  );
-
-  // Key requirement 4: Non-duplication rule
-  assertStringIncludes(
-    content,
-    "Never both: each child appears in exactly one place, or the epic drifts from its own child list",
+    "**Cross-repository work lives in web-jam-tools**: An epic whose children sit in more than one repository, and a non-epic issue whose work spans repositories, must have its Repo cell set to `web-jam-tools`",
   );
 });

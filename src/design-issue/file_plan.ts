@@ -18,6 +18,7 @@ import {
   defaultExecDeps,
   type ExecDeps,
   normalizeRepo,
+  type ParsedIssueRef,
   parseIssueRef,
 } from "../create-issue/lib.ts";
 import { expandHome } from "./gate1.ts";
@@ -240,12 +241,12 @@ async function prepareBodyFile(
 }
 
 /** Resolve parents before filing, using the same epic-first, then child order as the filer. */
-function resolvePlanParents(plan: ParsedPlan): Array<number | PlanIssueItem | undefined> {
+function resolvePlanParents(
+  plan: ParsedPlan,
+): Array<number | string | PlanIssueItem | undefined> {
   const available: PlanIssueItem[] = plan.epic ? [plan.epic] : [];
   return plan.children.map((child, index) => {
     const repo = normalizeRepo(child.repo || plan.defaultRepo);
-    const sameRepo = (item: PlanIssueItem) =>
-      normalizeRepo(item.repo || plan.defaultRepo).full.toLowerCase() === repo.full.toLowerCase();
     const invalid = (reason: string): never => {
       throw new Error(
         `Cannot resolve parent ${JSON.stringify(child.parent)} for plan child ${
@@ -262,10 +263,10 @@ function resolvePlanParents(plan: ParsedPlan): Array<number | PlanIssueItem | un
     const position = (number: number) =>
       number >= 1 && number <= index ? plan.children[number - 1] : undefined;
 
-    let target: number | PlanIssueItem | undefined;
+    let target: number | string | PlanIssueItem | undefined;
     const parent = child.parent;
     if (parent === undefined) {
-      target = plan.epic && sameRepo(plan.epic) ? plan.epic : undefined;
+      target = plan.epic ?? undefined;
     } else if (parent === null) {
       target = undefined;
     } else if (typeof parent === "number") {
@@ -295,20 +296,12 @@ function resolvePlanParents(plan: ParsedPlan): Array<number | PlanIssueItem | un
                 return invalid("no preceding plan item or valid issue citation matches this value");
               }
             })();
-            if (
-              `${reference.owner}/${reference.repo}`.toLowerCase() !== repo.full.toLowerCase()
-            ) {
-              invalid("a sub-issue cannot have a parent in another repository");
-            }
-            target = reference.number;
+            target = `${reference.owner}/${reference.repo}#${reference.number}`;
           }
         }
       }
     } else {
       invalid("expected an issue number, a string reference, or null");
-    }
-    if (typeof target === "object" && !sameRepo(target)) {
-      invalid("a sub-issue cannot have a parent in another repository");
     }
     available.push(child);
     return target;
@@ -458,6 +451,50 @@ export async function filePlan(
     let filedEpic: FiledIssueInfo | undefined;
     const filedChildren: FiledIssueInfo[] = [];
 
+    // 0. Pre-validate external parent citations before filing anything (web-jam-tools#1398)
+    for (let i = 0; i < parentTargets.length; i++) {
+      const target = parentTargets[i];
+      const child = plan.children[i];
+      const childRepo = normalizeRepo(child.repo || plan.defaultRepo);
+      let targetRef: ParsedIssueRef | undefined;
+      if (typeof target === "string") {
+        targetRef = parseIssueRef(target, { owner: childRepo.owner, name: childRepo.name });
+      } else if (typeof target === "number") {
+        targetRef = parseIssueRef(target, { owner: childRepo.owner, name: childRepo.name });
+      }
+      if (targetRef) {
+        const parentQuery = `
+          query ValidateParent {
+            repository(owner: "${targetRef.owner}", name: "${targetRef.repo}") {
+              issue(number: ${targetRef.number}) { id }
+            }
+          }
+        `;
+        const res = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${parentQuery}`]);
+        let parentFound = false;
+        if (res.code === 0) {
+          try {
+            const data = JSON.parse(res.stdout);
+            if (data?.data?.repository?.issue?.id ?? data?.data?.parent?.issue?.id) {
+              parentFound = true;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (!parentFound) {
+          const refStr = typeof target === "string"
+            ? target
+            : `${targetRef.owner}/${targetRef.repo}#${targetRef.number}`;
+          throw new Error(
+            `Refused to file plan — parent issue "${refStr}" for plan child ${
+              i + 1
+            } ("${child.title}") not found`,
+          );
+        }
+      }
+    }
+
     // 1. File the Epic first if present
     if (plan.epic) {
       const epicItem = plan.epic;
@@ -526,11 +563,18 @@ export async function filePlan(
         : undefined;
 
       const parentTarget = parentTargets[i];
-      const parentNumber = typeof parentTarget === "number"
-        ? parentTarget
-        : parentTarget
-        ? filedNumbers.get(parentTarget)!
-        : undefined;
+      let parentOption: number | string | undefined;
+      if (typeof parentTarget === "number" || typeof parentTarget === "string") {
+        parentOption = parentTarget;
+      } else if (parentTarget) {
+        const parentNum = filedNumbers.get(parentTarget)!;
+        const parentRepo = normalizeRepo(parentTarget.repo || plan.defaultRepo);
+        if (parentRepo.full.toLowerCase() === childRepo.full.toLowerCase()) {
+          parentOption = parentNum;
+        } else {
+          parentOption = `${parentRepo.full}#${parentNum}`;
+        }
+      }
 
       const createOptions: CreateIssueOptions = {
         repo: childRepo.full,
@@ -540,7 +584,7 @@ export async function filePlan(
         labels: childLabels.length > 0 ? childLabels : undefined,
         milestone: childMilestone,
         priority: childItem.priority,
-        parent: parentNumber,
+        parent: parentOption,
         author: options.author,
       };
 
@@ -581,7 +625,7 @@ export async function filePlan(
 
       console.log(
         `[design:file-plan] Filed Child: ${childRepo.name}#${childNumber} "${childItem.title}"${
-          parentNumber ? ` (parent: #${parentNumber})` : ""
+          parentOption !== undefined ? ` (parent: ${parentOption})` : ""
         }`,
       );
     }

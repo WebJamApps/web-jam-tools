@@ -354,7 +354,10 @@ Deno.test("createIssueAndVerify succeeds and returns formatted issue string with
           stderr: "",
         });
       }
-      if (cmdStr.includes("graphql") && cmdStr.includes("GetIssueNodeIds")) {
+      if (
+        cmdStr.includes("graphql") &&
+        (cmdStr.includes("GetIssueNodeIds") || cmdStr.includes("GetParentIssue"))
+      ) {
         return Promise.resolve({
           code: 0,
           stdout: JSON.stringify({
@@ -493,7 +496,10 @@ Deno.test("createIssueAndVerify fallback GraphQL parent check when parent missin
           stderr: "",
         });
       }
-      if (cmdStr.includes("graphql") && cmdStr.includes("GetIssueNodeIds")) {
+      if (
+        cmdStr.includes("graphql") &&
+        (cmdStr.includes("GetIssueNodeIds") || cmdStr.includes("GetParentIssue"))
+      ) {
         return Promise.resolve({
           code: 0,
           stdout: JSON.stringify({
@@ -772,7 +778,7 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
   const failNodeIdQueryDeps: ExecDeps = {
     runCmd: (cmd) => {
       const str = cmd.join(" ");
-      if (str.includes("GetIssueNodeIds")) {
+      if (str.includes("GetIssueNodeIds") || str.includes("GetParentIssue")) {
         return Promise.resolve({ code: 1, stdout: "", stderr: "node query error" });
       }
       return Promise.resolve({
@@ -791,14 +797,14 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
         APPROVE_ALL,
       ),
     Error,
-    "Failed to resolve node IDs",
+    "lookup failed",
   );
 
   // Parent node IDs missing in data
   const missingNodeIdDeps: ExecDeps = {
     runCmd: (cmd) => {
       const str = cmd.join(" ");
-      if (str.includes("GetIssueNodeIds")) {
+      if (str.includes("GetIssueNodeIds") || str.includes("GetParentIssue")) {
         return Promise.resolve({ code: 0, stdout: JSON.stringify({ data: {} }), stderr: "" });
       }
       return Promise.resolve({
@@ -817,14 +823,14 @@ Deno.test("createIssueAndVerify error handling branches", async () => {
         APPROVE_ALL,
       ),
     Error,
-    "Could not resolve GraphQL node IDs",
+    "not found",
   );
 
   // AddSubIssue mutation failure
   const failSubIssueMutDeps: ExecDeps = {
     runCmd: (cmd) => {
       const str = cmd.join(" ");
-      if (str.includes("GetIssueNodeIds")) {
+      if (str.includes("GetIssueNodeIds") || str.includes("GetParentIssue")) {
         return Promise.resolve({
           code: 0,
           stdout: JSON.stringify({
@@ -1387,7 +1393,7 @@ Deno.test("createIssueAndVerify: accepted sibling dependency is registered and v
         });
       }
       // Parent attach
-      if (cmdStr.includes("GetIssueNodeIds")) {
+      if (cmdStr.includes("GetIssueNodeIds") || cmdStr.includes("GetParentIssue")) {
         return Promise.resolve({
           code: 0,
           stdout: JSON.stringify({
@@ -1934,4 +1940,179 @@ Deno.test("createIssueAndVerify: a body already ending in a footer gets exactly 
 Deno.test("parseArgs reads --author in both forms", () => {
   assertEquals(parseArgs(["--author", "Claude Code — Opus"]).author, "Claude Code — Opus");
   assertEquals(parseArgs(["--author=Claude Code — Opus"]).author, "Claude Code — Opus");
+});
+
+Deno.test("createIssueAndVerify: cross-repo parent links child issue under parent in another repo", async () => {
+  const commands: string[] = [];
+  const mockDeps: ExecDeps = {
+    runCmd(cmd) {
+      const cmdStr = cmd.join(" ");
+      commands.push(cmdStr);
+      if (cmdStr.includes("issues?state=open")) {
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      }
+      if (cmdStr.includes("GetParentIssue")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                issue: { id: "PARENT_NODE_1355" },
+              },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("gh issue create")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: "https://github.com/WebJamApps/JaMmusic/issues/200\n",
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("GetIssueNodeIds")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              parent: { issue: { id: "PARENT_NODE_1355" } },
+              child: { issue: { id: "CHILD_NODE_200" } },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("AddSubIssue")) {
+        return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+      }
+      if (cmdStr.includes("gh api repos/WebJamApps/JaMmusic/issues/200")) {
+        const mockIssue: IssueData = {
+          number: 200,
+          title: "Cross-repo child",
+          parent: {
+            number: 1355,
+            repository: { name: "web-jam-tools", owner: { login: "WebJamApps" } },
+          },
+        };
+        return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText() {
+      return Promise.resolve("## What this builds\nBody text");
+    },
+  };
+
+  const result = await createIssueAndVerify(
+    {
+      repo: "JaMmusic",
+      title: "Cross-repo child",
+      bodyFile: "/tmp/b.md",
+      parent: "WebJamApps/web-jam-tools#1355",
+    },
+    mockDeps,
+    APPROVE_ALL,
+  );
+  assertEquals(result, 'JaMmusic#200 "Cross-repo child"');
+  assertEquals(commands.some((c) => c.includes("AddSubIssue")), true);
+});
+
+Deno.test("createIssueAndVerify: GitHub refusing link (100 sub-issues) fails naming GitHub message", async () => {
+  const mockDeps: ExecDeps = {
+    runCmd(cmd) {
+      const cmdStr = cmd.join(" ");
+      if (cmdStr.includes("GetParentIssue")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: { repository: { issue: { id: "PARENT_ID" } } },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("gh issue create")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: "https://github.com/WebJamApps/web-jam-tools/issues/201\n",
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("GetIssueNodeIds")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              parent: { issue: { id: "PARENT_ID" } },
+              child: { issue: { id: "CHILD_ID" } },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("AddSubIssue")) {
+        return Promise.resolve({
+          code: 1,
+          stdout: JSON.stringify({
+            errors: [
+              {
+                message: "This issue already has 100 sub-issues, which is the maximum allowed.",
+              },
+            ],
+          }),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText() {
+      return Promise.resolve("## What this builds\nBody text");
+    },
+  };
+
+  const err = await assertRejects(
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", parent: 1355 },
+        mockDeps,
+        APPROVE_ALL,
+      ),
+    Error,
+    "This issue already has 100 sub-issues, which is the maximum allowed.",
+  );
+  assertEquals(err.message.includes("Failed to attach parent sub-issue"), true);
+});
+
+Deno.test("createIssueAndVerify: parent lookup failing refuses before creating the issue", async () => {
+  const calls: string[] = [];
+  const mockDeps: ExecDeps = {
+    runCmd(cmd) {
+      const cmdStr = cmd.join(" ");
+      calls.push(cmdStr);
+      if (cmdStr.includes("GetParentIssue")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ data: { repository: { issue: null } } }),
+          stderr: "",
+        });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText() {
+      return Promise.resolve("## What this builds\nBody text");
+    },
+  };
+
+  const err = await assertRejects(
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", parent: "WebJamApps/web-jam-tools#999999" },
+        mockDeps,
+        APPROVE_ALL,
+      ),
+    Error,
+    "WebJamApps/web-jam-tools#999999",
+  );
+  assertEquals(err.message.includes("not found"), true);
+  assertEquals(calls.some((c) => c.includes("gh issue create")), false);
 });
