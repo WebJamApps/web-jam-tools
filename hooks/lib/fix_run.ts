@@ -40,12 +40,14 @@ export function latestTypedSkillCall(context: ResolvedWriteContext): CodexSkillC
     ) return null;
     const text = stripUserRequestWrapper(extractEntryText(entry));
     const wrapped = slashCommandFromInvocationWrapper(text);
+    const dated = (call: CodexSkillCall): CodexSkillCall =>
+      typeof entry.timestamp === "string" ? { ...call, timestamp: entry.timestamp } : call;
     if (wrapped) {
       const args = text.match(/<command-args>([\s\S]*?)<\/command-args>/);
-      return { name: wrapped, arguments: args?.[1].trim() ?? "", text };
+      return dated({ name: wrapped, arguments: args?.[1].trim() ?? "", text });
     }
     const call = codexSkillCall(text);
-    if (call) return call;
+    if (call) return dated(call);
   }
   return null;
 }

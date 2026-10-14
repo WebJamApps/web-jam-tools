@@ -37,7 +37,7 @@ export async function readAuthorRoster(): Promise<string[]> {
   return new TextDecoder().decode(result.stdout).split(/\r?\n/).filter((line) => line.length > 0);
 }
 
-async function findSessionFiles(directory: string, suffix: string): Promise<string[]> {
+export async function findSessionFiles(directory: string, suffix: string): Promise<string[]> {
   const matches: string[] = [];
   for await (const entry of Deno.readDir(directory)) {
     const path = join(directory, entry.name);

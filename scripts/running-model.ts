@@ -22,7 +22,7 @@ function matchesClaudeModel(model: string, entry: string): boolean {
   return /\d/.test(entry) ? /^\d{8}$/.test(suffix) : /^\d+(?:-\d+)*$/.test(suffix);
 }
 
-async function claudeSessionModel(
+export async function claudeSessionRecord(
   sessionId: string,
   userHome: string | undefined,
 ): Promise<string> {
@@ -42,17 +42,30 @@ async function claudeSessionModel(
     }
   }
   if (files.length !== 1) {
-    throw new Error(`Expected one Claude Code record for ${sessionId}; found ${files.length}`);
+    throw new Error(
+      `Expected one Claude Code record for ${sessionId} under ${projects}; found ${files.length}`,
+    );
   }
-  const entries = parseTranscriptJsonl(await Deno.readTextFile(files[0]));
+  return files[0];
+}
+
+/** Resolve a main or helper Claude record through the same sole author roster. */
+export async function claudeRecordedAuthor(
+  path: string,
+  options: RunningModelOptions = {},
+  helper = false,
+): Promise<string> {
+  const entries = parseTranscriptJsonl(await Deno.readTextFile(path));
   const latest = entries.findLast((entry) =>
     (entry.type === "assistant" || entry.message?.role === "assistant") &&
-    entry.isSidechain !== true && entry.isApiErrorMessage !== true
+    (helper || entry.isSidechain !== true) && entry.isApiErrorMessage !== true
   );
-  // Pass only the newest genuine assistant entry so missing metadata cannot use an older model.
-  const model = selectSessionModel(latest ? [latest] : []);
-  if (!model) throw new Error("The newest Claude Code assistant entry has no recorded model");
-  return model;
+  const model = selectSessionModel(latest ? [{ ...latest, isSidechain: false }] : []);
+  if (!model) {
+    throw new Error(`The newest Claude Code assistant entry has no recorded model: ${path}`);
+  }
+  const roster = await (options.readRoster ?? readAuthorRoster)();
+  return uniqueRosterModel(model, roster.filter((entry) => matchesClaudeModel(model, entry)));
 }
 
 async function agySessionModel(recordPath: string): Promise<string> {
@@ -85,12 +98,19 @@ export async function resolveRunningModel(options: RunningModelOptions = {}): Pr
   }
   const roster = await (options.readRoster ?? readAuthorRoster)();
   if (claudeId) {
-    const model = await claudeSessionModel(claudeId, env("HOME"));
-    return uniqueRosterModel(model, roster.filter((entry) => matchesClaudeModel(model, entry)));
+    const path = await claudeSessionRecord(claudeId, env("HOME"));
+    return await claudeRecordedAuthor(path, {
+      ...options,
+      readRoster: () => Promise.resolve(roster),
+    });
   }
-  const model = await agySessionModel(
-    env("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl",
-  );
+  const recordPath = env("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
+  let model: string;
+  try {
+    model = await agySessionModel(recordPath);
+  } catch (error) {
+    throw new Error(`Cannot read the agy model record ${recordPath}: ${error}`);
+  }
   const flash = model === "Gemini Flash" ||
     /^gemini-\d+(?:\.\d+)*-flash-(?:high|tiered)$/.test(model) ||
     /^Gemini \d+(?:\.\d+)* Flash(?: \(High\))?$/.test(model);

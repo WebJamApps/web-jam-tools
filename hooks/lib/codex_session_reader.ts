@@ -7,6 +7,7 @@ export interface CodexSkillCall {
   name: string;
   arguments: string;
   text: string;
+  timestamp?: string;
 }
 
 export interface CodexTypedSession {
@@ -79,7 +80,11 @@ export async function readCodexTypedSession(
       }
     }
     const call = codexSkillCall(parts.join("\n"));
-    if (call) latestSkillCall = call;
+    if (call) {
+      latestSkillCall = typeof record.timestamp === "string"
+        ? { ...call, timestamp: record.timestamp }
+        : call;
+    }
   }
   return { threadId, path, latestSkillCall };
 }
