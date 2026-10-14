@@ -14,7 +14,7 @@ This skill provides a systematic pipeline for automated cross-model pull request
 
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
 
-Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. Equal rank does not override a more specific eligibility rule (e.g. Sol does not review Sol; Opus or Josh reviews Astra). Reviewer eligibility depends on the named model, its contributions, and the reviewer-tier rules. A conversation can contain implementation by one model and review by another. Switching to an eligible different model allows the review to run in that conversation without requiring delegation. Astra may review Sol-authored work, including a Sol fix from the same conversation, if Astra has not contributed implementation or fixes. The reviewer must also pass the independent named-model eligibility checks below.
+Reviewer tier is **never below author tier** (a weaker model never reviews a stronger model's work). Over all seven model labels (`Haiku`, `Luna`, `Flash`, `Sol`, `Astra`, `Sonnet`, `Opus`): a reviewer on the author's rung or a higher one is accepted, except that Opus never reviews Opus work, and every lower one is rejected, with Sol, Astra and Sonnet on one rung. Equal rank does not override a more specific eligibility rule (e.g. Sol does not review Sol; Opus or Josh reviews Astra). Reviewer eligibility depends on the named model, its contributions, and the reviewer-tier rules. A conversation can contain implementation by one model and review by another. Switching to an eligible different model allows the review to run in that conversation without requiring delegation. Astra may review Sol-authored work, including a Sol fix from the same conversation, if Astra has not contributed implementation or fixes in the review range. The reviewer must also pass the independent named-model eligibility checks below.
 
 **Tier order (weakest to strongest): Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus.** Josh ruled
 on 2026-10-01 that Sonnet 5.5 ranks above Gemini 3.8 Flash (High); that ruling, not a benchmark,
@@ -68,13 +68,18 @@ A named model is the model identity, such as Sol, Astra, Sonnet, or Opus. Versio
 
 **Contributions within a conversation:**
 - **A model never reviews its own contribution.** The restriction follows the named model that wrote or pushed the implementation or fix, rather than disqualifying every model that uses the conversation. A switch to a higher model permits review in the same session; writing or pushing a commit earlier in the conversation is not by itself a reason to refuse. Merely reading the code, discussing it, or posting a review does not count as writing a fix.
-- **Astra may review Sol-authored work, including a Sol fix in the same session.** This is Josh's explicit permitted model escalation even though Sol and Astra share a scheduling rung. Astra may review directly in that conversation if Astra has not contributed implementation or fixes. Sol must not review its own Sol fix, and switching to a lower model does not make that work eligible. Check every author on the PR, not just its original footer.
+- **Astra may review Sol-authored work, including a Sol fix in the same session.** This is Josh's explicit permitted model escalation even though Sol and Astra share a scheduling rung. Astra may review directly in that conversation if Astra has not contributed implementation or fixes in the review range. Sol must not review its own Sol fix, and switching to a lower model does not make that work eligible. Check every author in the review range, not just the PR's original footer.
 - **Versions and reasoning effort:** A model that writes or pushes a fix cannot review that contribution simply by changing its version, reasoning effort, or switching away and back. Preserve the contribution history when determining eligibility; do not assume only the last active model matters. Separate sessions remain subject to the reviewer choices and tier rules; a new session does not bypass restrictions on Astra or Opus work.
 - **Opus or Josh reviews Astra's work, including Astra's fixes to Sol's code.** Returning to Sol, selecting Sonnet at the same tier, or opening another Astra session does not replace that reviewer choice. An eligible Opus reviewer can review the resulting PR when Josh names it.
-- **Opus never reviews Opus work.** The matrix has no Opus-reviews-Opus row and none is implied: a different Opus session is not an independent reviewer. If Opus itself authors a commit or fix on the PR, the PR has no model reviewer, because the tier rule also rules out every lower tier; Josh reviews it.
+- **Opus never reviews Opus work.** The matrix has no Opus-reviews-Opus row and none is implied: a different Opus session is not an independent reviewer. If Opus itself authors a commit or fix in the review range, that range has no model reviewer, because the tier rule also rules out every lower tier; Josh reviews it.
+
+**Reviewing another model's fixes to a pull request you wrote:**
+Eligibility is judged against the commits a review covers. A re-review covers the commits that arrived since the newest automated review; use that review's commit SHA as the exclusive start and the captured current head SHA as the inclusive end. A model that wrote earlier commits may review this later range when it wrote or pushed none of the contributions in it. A first review covers every commit, so the model that wrote the pull request is never its first reviewer.
+
+Apply the named-model and reviewer-tier rules to every contributor in that range. Earlier contributions outside it do not disqualify the reviewer. The review states the commit range it covers and that the earlier commits are outside it; the previous review still stands for those earlier commits. If a commit in the range is the reviewer's own, it does not review. If it cannot establish who wrote a commit in the range, it names that commit and asks Josh; it does not guess.
 
 **Establishing identity and authorship:**
-Use the active model information supplied by the surface, this conversation's model history, and explicit model-selection statements from Josh. A Sol attribution on an earlier commit does not mean the current reviewer is Sol: use the active session's model and Josh's explicit correction; never infer active identity from the earlier author. Identify contributions from the conversation and PR attribution, including fix commits. A PR's original author footer alone is insufficient when another model has added fixes. On Codex, the established lookup is this session's latest `turn_context.payload.model` in its rollout JSONL, identified by `session_meta.id`. Claude Code and Antigravity use their active model information and conversation history; Josh's explicit identification can resolve a missing model name.
+Use the active model information supplied by the surface, this conversation's model history, and explicit model-selection statements from Josh. A Sol attribution on an earlier commit does not mean the current reviewer is Sol: use the active session's model and Josh's explicit correction; never infer active identity from the earlier author. Identify contributions in the review range from the conversation and PR attribution, including fix commits. A PR's original author footer alone is insufficient when another model has added fixes. A fix-pr comment lists the commits it pushed and ends with `🤖 Fixed by <tool> — <model>`; use that signed comment to establish the author of those fix commits. On Codex, the established lookup is this session's latest `turn_context.payload.model` in its rollout JSONL, identified by `session_meta.id`. Claude Code and Antigravity use their active model information and conversation history; Josh's explicit identification can resolve a missing model name.
 
 **Three eligibility outcomes:**
 1. **Proceeding when eligible**: When the current model is eligible, perform the requested review directly in this conversation without requiring a fresh session, redundant permission, or delegation.
@@ -100,6 +105,11 @@ The skill's worked cases cover these concrete sequences and required results:
 | Opus writes or fixes → another Opus session selected | No model reviewer; Josh reviews |
 | Sonnet writes → Flash selected | Refuse because the reviewer tier is lower |
 | Sol writes → Astra selected → same head already reviewed | Apply the existing duplicate-review rule |
+| Sol writes → another model reviews → Luna fixes → Josh asks Sol to review | Sol reviews the commits since that review and says its review covers only them |
+| Sol writes → another model reviews → Sol and Luna both fix → Sol review requested | Sol does not review; one commit in the range is its own |
+| Sol writes → no review yet → Luna fixes → Sol review requested | Sol does not review; a first review covers every commit, Sol's included |
+| Sonnet writes → another model reviews → Sol fixes → Flash selected | Refuse because the reviewer ranks below the author of a commit in the range |
+| A commit since the last review has no author the reviewer can establish | Name the commit and ask Josh; do not guess |
 | Contributor identity cannot be established | Explain the missing information and ask Josh; do not guess or delegate automatically |
 
 ## Trigger & Invocation
@@ -152,28 +162,35 @@ worktree is only needed when a pasted test-evidence block has to be reproduced.
 
 **Reviewer eligibility is checked first.** Right after item 1's fetch, and before the diff is read,
 apply the named-model eligibility rules under "Purpose & Model Pairing" above:
-- Establish the active named model and all models responsible for implementation and fixes on the PR
+- Establish the review range from item 1's fetched reviews and commits: only automated reviews carrying
+  the `## PR Review Summary` header set its start. Use the newest such review's `.commit.oid` as
+  `last_review_sha` and the current head as `head_sha`; the range is `last_review_sha..head_sha`.
+  With no earlier automated review, the range is every PR commit. If the current head is already
+  reviewed, post nothing as item 2 requires. If the start cannot be established as an ancestor of
+  the captured head (for example after a rebase), name the missing range evidence and ask Josh.
+- Establish the active named model and all models responsible for implementation and fixes in that range
   (from current surface/session model information, Josh's explicit model selection or correction,
-  conversation history, and item 1's `commits` list which carries each commit's `authors`).
+  conversation history, item 1's `commits` list which carries each commit's `authors`, and signed
+  fix-pr comments in its `comments` list).
   Never infer the active reviewer model from the PR author's footer or an earlier commit attribution.
-- Stop if the active model contributed implementation or pushed any fix to the PR (a model never
+- Stop if the active model contributed implementation or pushed any fix in the review range (a model never
   reviews its own contribution; versions, reasoning effort, or switching away and back do not bypass
   this). A switch to a higher eligible model within the conversation may review earlier work by
   another model.
 - Permit Astra to review Sol-authored work, including a Sol fix from this same conversation, when
-  Astra has not contributed implementation or fixes.
-- Stop if the PR carries Astra contributions (implementation or fixes) and the active model is not Opus
+  Astra has not contributed implementation or fixes in the review range.
+- Stop if the review range carries Astra contributions (implementation or fixes) and the active model is not Opus
   (Opus or Josh reviews Astra's work).
-- Stop if any commit names an Opus author or co-author (Opus never reviews Opus work; Josh reviews).
-- Stop if the active model ranks below any contributor's tier (tier rule).
+- Stop if any commit in the review range names an Opus author or co-author (Opus never reviews Opus work; Josh reviews).
+- Stop if the active model ranks below any contributor's tier in the review range (tier rule).
 - Stop and ask Josh if contributor or active model identity cannot be established (fail closed; do
-  not guess or delegate automatically).
+  not guess or delegate automatically). For an unknown author, name the commit in the review range.
 On a stop, post no review, tell Josh why the current model is ineligible or what information is
 missing, and leave reviewer selection to Josh. Session continuity alone never blocks review.
 
-1. Fetch PR details, metadata, mergeability, reviews, and commits:
+1. Fetch PR details, metadata, mergeability, reviews, commits, and fix comments:
    ```sh
-   gh pr view <pr-num> --repo WebJamApps/<Repo> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits
+   gh pr view <pr-num> --repo WebJamApps/<Repo> --json number,title,body,author,headRefName,baseRefName,state,isDraft,mergeable,mergeStateStatus,reviews,commits,comments
    ```
 2. **Already-Reviewed Check**:
    - Filter `reviews` for automated reviews carrying the `## PR Review Summary` header:
@@ -183,7 +200,7 @@ missing, and leave reviewer selection to Josh. Session continuity alone never bl
      ```
    - Compare the commit SHA of the newest automated review (`last_review_sha` from `.commit.oid`) against the PR's current head commit SHA (`head_sha` from `.commits | last | .oid`).
    - If equal (and a prior automated review exists at that SHA), stop and report to Josh that the PR was already reviewed at that SHA with no new commits, and post NO review comment.
-   - If new commits exist after the newest review (or if the PR has no prior automated reviews), proceed with the review. When re-reviewing after new commits, state that the review evaluates the delta since the previous review.
+   - If new commits exist after the newest review (or if the PR has no prior automated reviews), proceed when eligible for that range. When re-reviewing after new commits, state the exclusive start SHA and inclusive head SHA and that earlier commits are outside the review; their previous review still stands.
    - **Record `head_sha`** from the query above (e.g. as `HEAD_SHA`) — this is the commit the diff
      fetched in item 4 below reflects, and every finding in this review is composed against it.
      Step 3 passes this same value back to `deno task post-pr-review --head-sha` (web-jam-tools#825)
@@ -205,6 +222,13 @@ missing, and leave reviewer selection to Josh. Session continuity alone never bl
    ```sh
    gh pr diff <pr-num> --repo WebJamApps/<Repo>
    ```
+   For a re-review, fetch the diff for the captured range instead:
+   ```sh
+   gh api repos/WebJamApps/<Repo>/compare/<last_review_sha>...<head_sha> -H 'Accept: application/vnd.github.diff'
+   ```
+   Limit findings and the review verdict to this range. Earlier code may be read as context for
+   changed callers and contracts; it remains outside the review. Step 3 still posts with the
+   captured `head_sha` so a moved branch cannot receive stale findings.
 5. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
    ```sh
    gh issue view <issue-num> --repo WebJamApps/<Repo>
@@ -383,7 +407,7 @@ afterward.
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem. A 🟡 icon marks a non-blocking finding about the artifact being merged; a 🔵 icon marks a cosmetic PR/issue-body prose nit, which never blocks merge either.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
      - Exception: `Version bump check (PR branches only)` failing (or unresolved) is never listed here — Step 4 item 5's carve-out reports it under Suggestions instead of under `### 🛑 Must Fix Items`, whether it fails alone or alongside another job.
-   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
+   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
      The **Semver Bump** row is an exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
      The **Guardrails** and **Scope** rows are exceptions too. Guardrails is prefixed 🟡 when its only finding is raw `any` in a test file (Step 2 item 9); Scope is prefixed 🟡 when its only finding is leftover debug output in a test file (Step 2 item 4). Each is prefixed 🛑 when it has any other finding of its own, and ✅ otherwise.
