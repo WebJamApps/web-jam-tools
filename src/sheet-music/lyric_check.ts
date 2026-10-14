@@ -17,6 +17,7 @@ export interface CheckLyricsOptions {
   imagePath?: string;
   visionPath?: string;
   dictPath?: string;
+  tempDir?: string;
 }
 
 export interface FlaggedRun {
@@ -123,7 +124,7 @@ export function filterReadingLines(
 
 /**
  * Loads dictionary words from disk and augments the set with words from the song definition.
- * Fails closed if the dictionary file cannot be read.
+ * Fails closed if the dictionary file cannot be read or contains no usable words.
  */
 export async function loadDictionary(
   dictPath: string = "/usr/share/dict/american-english",
@@ -142,10 +143,14 @@ export async function loadDictionary(
 
   const set = new Set<string>();
   for (const line of content.split(/\r?\n/)) {
-    const word = line.trim().toLowerCase();
-    if (word.length > 0) {
-      set.add(word);
+    const clean = line.trim().toLowerCase().replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
+    if (clean.length > 0) {
+      set.add(clean);
     }
+  }
+
+  if (set.size === 0) {
+    throw new Error(`Dictionary file at ${dictPath} contains no usable words`);
   }
 
   if (extraWords) {
@@ -481,10 +486,16 @@ export async function checkLyrics(
 
     let imagePaths: string[] = [];
     let tempDir: string | undefined;
+    let createdTempDir = false;
 
     try {
       if (hasPdf) {
-        tempDir = await Deno.makeTempDir({ prefix: "lyric-check-" });
+        if (options.tempDir) {
+          tempDir = options.tempDir;
+        } else {
+          tempDir = await Deno.makeTempDir({ prefix: "lyric-check-" });
+          createdTempDir = true;
+        }
         imagePaths = await renderPdfPagesWithPdftoppm(options.pdfPath!, tempDir);
       } else if (hasImage) {
         imagePaths = [options.imagePath!];
@@ -506,7 +517,7 @@ export async function checkLyrics(
       );
       allFlags.push(...tesseractFlags);
     } finally {
-      if (tempDir) {
+      if (createdTempDir && tempDir) {
         await Deno.remove(tempDir, { recursive: true }).catch(() => {});
       }
     }
@@ -548,6 +559,7 @@ export function parseCliArgs(args: string[]): CheckLyricsOptions & { help?: bool
       "d",
       "json",
       "j",
+      "temp-dir",
     ],
     boolean: ["help", "h"],
     alias: {
@@ -594,6 +606,7 @@ export function parseCliArgs(args: string[]): CheckLyricsOptions & { help?: bool
     imagePath: flags.image,
     visionPath,
     dictPath: flags.dict || "/usr/share/dict/american-english",
+    tempDir: flags["temp-dir"],
   };
 }
 
@@ -604,13 +617,14 @@ Compares a song definition's lyrics against source scan readings (Tesseract OCR 
 to detect dropped lyric lines before .docx lead sheet generation.
 
 Options:
-  -s, --song <path>     Path to song definition JSON file
-  -j, --json <string>   Inline JSON string of song definition
-  -p, --pdf <path>      Path to scan PDF (renders pages at 300 dpi grayscale with pdftoppm, reads with tesseract --psm 4)
-      --image <path>    Path to single image file for Tesseract OCR
-  -v, --vision <path>   Path to vision word-list file
-  -d, --dict <path>     Path to dictionary file (default: /usr/share/dict/american-english)
-  -h, --help            Show this help message
+  -s, --song <path>       Path to song definition JSON file
+  -j, --json <string>     Inline JSON string of song definition
+  -p, --pdf <path>        Path to scan PDF (renders pages at 300 dpi grayscale with pdftoppm, reads with tesseract --psm 4)
+      --image <path>      Path to single image file for Tesseract OCR
+  -v, --vision <path>     Path to vision word-list file
+  -d, --dict <path>       Path to dictionary file (default: /usr/share/dict/american-english)
+      --temp-dir <path>   Path to temporary output directory for rendered OCR images
+  -h, --help              Show this help message
 
 Exit codes:
   0: Condition holds — no missing lyric runs of 2+ words detected.

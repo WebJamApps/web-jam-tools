@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.46.0",
+  "version": "1.46.1",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "whoami": "bash -c 'exec deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME --allow-read=.,\"${CODEX_HOME:-$HOME/.codex}/sessions\" --allow-run=bash scripts/whoami.ts'",
@@ -10,7 +10,7 @@
     "reaper:start": "deno run --allow-read --allow-write --allow-env --allow-run scripts/reaper-start.ts",
     "reaper:done": "deno run --allow-read --allow-write --allow-env --allow-run scripts/reaper-done.ts",
     "sheet-music:generate": "deno run --allow-read --allow-write src/sheet-music/generate_docx.ts",
-    "sheet-music:check-lyrics": "deno run --allow-read --allow-write --allow-run=pdftoppm,tesseract src/sheet-music/lyric_check.ts",
+    "sheet-music:check-lyrics": "bash scripts/sheet-music-check-lyrics.sh",
     "circleci-settings": "deno run --allow-net --allow-env scripts/circleci-settings.ts",
     "install-git-secret-hook": "bash scripts/install-git-secret-hook.sh",
     "gitleaks": "bash scripts/gitleaks.sh",

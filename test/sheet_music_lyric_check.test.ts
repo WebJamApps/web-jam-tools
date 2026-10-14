@@ -659,3 +659,164 @@ startxref
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("loadDictionary refuses empty, whitespace, or punctuation-only files before augmentation (Rule 34)", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "lyric-empty-dict-" });
+  try {
+    for (const content of ["", "   \n\t  \n", "--- \n ... \n !?!"]) {
+      const dictPath = path.join(tempDir, "test.dict");
+      await Deno.writeTextFile(dictPath, content);
+      await assertRejects(
+        () => loadDictionary(dictPath, ["extra", "words"]),
+        Error,
+        "contains no usable words",
+      );
+    }
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("OCR filtering with empty dictionary refuses as undeterminable rather than falsely passing omitted lines (Codex regression)", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "lyric-codex-regression-" });
+  try {
+    const emptyDict = path.join(tempDir, "empty.dict");
+    await Deno.writeTextFile(emptyDict, "");
+
+    const songDef: SongDefinition = {
+      metadata: { title: "Bright Morning" },
+      sections: [
+        {
+          title: "VERSE 1",
+          lines: [{ lyrics: "bright morning" }],
+        },
+      ],
+    };
+    const songFile = path.join(tempDir, "song.json");
+    await Deno.writeTextFile(songFile, JSON.stringify(songDef));
+
+    // loadDictionary itself must throw before augmenting with ["bright", "morning"]
+    await assertRejects(
+      () => loadDictionary(emptyDict, ["bright", "morning"]),
+      Error,
+      "contains no usable words",
+    );
+
+    // checkLyrics must reject with undeterminable condition error
+    await assertRejects(
+      () =>
+        checkLyrics({
+          songPath: songFile,
+          dictPath: emptyDict,
+          imagePath: path.join(tempDir, "dummy.png"),
+        }),
+      Error,
+      "contains no usable words",
+    );
+
+    // CLI must exit 2 (undeterminable) rather than falsely reporting pass (exit 0)
+    const code = await runCli([
+      "--song",
+      songFile,
+      "--dict",
+      emptyDict,
+      "--image",
+      path.join(tempDir, "dummy.png"),
+    ]);
+    assertEquals(code, 2);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("deno.json registers sheet-music:check-lyrics via launcher without blanket permissions (Rule 21)", async () => {
+  const config = JSON.parse(await Deno.readTextFile("deno.json"));
+  const taskCommand = config.tasks?.["sheet-music:check-lyrics"];
+  assert(taskCommand, "sheet-music:check-lyrics task must exist in deno.json");
+  assertFalse(
+    taskCommand.includes("--allow-read ") || taskCommand.endsWith("--allow-read"),
+    "Task must not use bare --allow-read (Rule 21)",
+  );
+  assertFalse(
+    taskCommand.includes("--allow-write ") || taskCommand.endsWith("--allow-write"),
+    "Task must not use bare --allow-write (Rule 21)",
+  );
+  assertStringIncludes(taskCommand, "scripts/sheet-music-check-lyrics.sh");
+});
+
+Deno.test("scripts/sheet-music-check-lyrics.sh launcher executes end-to-end with scoped permissions", async () => {
+  const launcherPath = new URL("../scripts/sheet-music-check-lyrics.sh", import.meta.url).pathname;
+
+  // 1. --help exits 0
+  const helpCmd = new Deno.Command("bash", {
+    args: [launcherPath, "--help"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const helpOut = await helpCmd.output();
+  assertEquals(helpOut.code, 0);
+  assertStringIncludes(
+    new TextDecoder().decode(helpOut.stdout),
+    "Usage: deno task sheet-music:check-lyrics",
+  );
+
+  // 2. Matching vision reading exits 0
+  const tempDir = await Deno.makeTempDir({ prefix: "launcher-test-" });
+  try {
+    const visionPath = path.join(tempDir, "vision.txt");
+    await Deno.writeTextFile(
+      visionPath,
+      "The morning sun rises high above the green mountains\nAnd the river flows peaceful through the quiet valley\nSing aloud to the heavens with a joyful song\nRemember the promises that last so long",
+    );
+
+    const passCmd = new Deno.Command("bash", {
+      args: [launcherPath, "--json", JSON.stringify(SYNTHETIC_SONG), "--vision", visionPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const passOut = await passCmd.output();
+    assertEquals(passOut.code, 0);
+    assertStringIncludes(new TextDecoder().decode(passOut.stdout), "[PASS]");
+
+    // 3. Dropped line in definition exits 1
+    const missingSong: SongDefinition = {
+      metadata: { title: "Missing verse" },
+      sections: [{
+        title: "VERSE 1",
+        lines: [{ lyrics: "The morning sun rises high above the green mountains" }],
+      }],
+    };
+    const failCmd = new Deno.Command("bash", {
+      args: [launcherPath, "--json", JSON.stringify(missingSong), "--vision", visionPath],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const failOut = await failCmd.output();
+    assertEquals(failOut.code, 1);
+    assertStringIncludes(new TextDecoder().decode(failOut.stderr), "[FAIL]");
+
+    // 4. Empty dictionary exits 2 (undeterminable)
+    const emptyDict = path.join(tempDir, "empty.dict");
+    await Deno.writeTextFile(emptyDict, "");
+    const emptyDictCmd = new Deno.Command("bash", {
+      args: [
+        launcherPath,
+        "--json",
+        JSON.stringify(SYNTHETIC_SONG),
+        "--vision",
+        visionPath,
+        "--dict",
+        emptyDict,
+        "--image",
+        path.join(tempDir, "dummy.png"),
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+    const emptyDictOut = await emptyDictCmd.output();
+    assertEquals(emptyDictOut.code, 2);
+    assertStringIncludes(new TextDecoder().decode(emptyDictOut.stderr), "condition undeterminable");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
