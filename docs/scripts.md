@@ -350,6 +350,38 @@ installation steps on Linux.
 - `REAPER_UPDATE_BIN`: Path or command for REAPER updater (default: auto-detected from PATH or
   `$SCRIPT_DIR/reaper-update.sh`).
 
+### `update-scripts.sh` (the `update-scripts` command)
+
+`scripts/update-scripts.sh` fast-forward pulls `dev` in the web-jam-tools clone (`$WJT_REPO_DIR`,
+default `~/WebJamApps/web-jam-tools`) and then runs `install-hooks.sh`, passing its arguments
+through (for example `--check`). It runs from any directory and refuses, exiting 1, unless the clone
+is on `dev`.
+
+`install-hooks.sh` symlinks it into `~/.local/bin/update-scripts`, so after the first install you
+update by typing just `update-scripts` in any terminal. For the first install after this change
+merges, confirm the clone is on `dev`:
+
+```sh
+git -C "$HOME/WebJamApps/web-jam-tools" branch --show-current
+```
+
+Continue only if that prints `dev`. Fetch the merged source before invoking the new helper,
+because an older checkout does not contain `scripts/update-scripts.sh`:
+
+```sh
+git -C "$HOME/WebJamApps/web-jam-tools" pull --ff-only origin dev
+```
+
+After the pull succeeds, run the helper by its full path to install the command:
+
+```sh
+"$HOME/WebJamApps/web-jam-tools/scripts/update-scripts.sh"
+```
+
+The `agents` command also runs it, right after `update-all.sh`, whenever it creates or restarts the
+session (not when it only attaches). A failure prints a warning and the agents still start. Override
+the command with `AGENTS_UPDATE_SCRIPTS_CMD`.
+
 ### `install-hooks.sh` — what actually gets symlinked
 
 `scripts/install-hooks.sh` symlinks `hooks/*.sh` only — `hooks/lib/` is never installed, so there is
