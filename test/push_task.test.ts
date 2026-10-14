@@ -41,6 +41,8 @@ const runPush: typeof pushWithContext = (args, cwd, options) =>
 const SCRIPT_PATH = new URL("../scripts/push.ts", import.meta.url).pathname;
 const SHARED_CONFIG_PATH = new URL("../deno.json", import.meta.url).pathname;
 
+const fixBody = (author: string) => `Fixed formatting.\n\n🤖 Fixed by ${author}\n`;
+
 interface FixtureEnv {
   tempDir: string;
   bareDir: string;
@@ -48,6 +50,254 @@ interface FixtureEnv {
   git: (args: string[]) => Promise<string>;
   cleanup: () => Promise<void>;
 }
+
+for (const surface of ["claude", "agy", "codex"] as const) {
+  Deno.test(`${surface}: comment checks run before pushing, and successful pushes post recorded signatures`, async () => {
+    const fixture = await createFixFixture(surface);
+    const comment = `${fixture.repoDir}/c ' retry.md`;
+    const signature = surface === "codex"
+      ? "Codex — GPT-6 Luna"
+      : surface === "claude"
+      ? "Claude Code — Claude Opus"
+      : "agy — Gemini Flash";
+    try {
+      await fixture.writeSession([fixCall.text]);
+      const args = ["--fix-comment", comment];
+      const help = await runDenoTaskPush(["--help"], fixture.repoDir, true, fixture.shellEnv);
+      assertEquals(help.code, 0, help.stderr);
+      assertStringIncludes(help.stdout, "--fix-comment");
+      const initial = await Deno.readTextFile(fixture.sessionPath);
+      const initialRecord = surface === "agy" ? await Deno.readTextFile(fixture.recordPath) : "";
+      for (
+        const body of [
+          "",
+          "🤖 Fixed by Claude Code — Claude Opus",
+          "Fixed formatting.",
+          `${fixBody(signature)}extra text`,
+          `## PR Review Summary\n${fixBody(signature)}`,
+          `${fixBody(signature)}${fixBody(signature)}`,
+        ]
+      ) {
+        await Deno.writeTextFile(comment, body);
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(args, fixture.repoDir, true, fixture.shellEnv);
+        assertEquals(result.code, 1, result.stderr);
+        assertStringIncludes(result.stderr, "Refused (fix-comment)");
+        assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+        assertEquals(await remoteRefs(fixture.bareDir), "refs/heads/dev\nrefs/heads/main");
+      }
+      await Deno.writeTextFile(comment, fixBody("Codex — GPT"));
+      const recordedFile = surface === "agy" ? fixture.recordPath : fixture.sessionPath;
+      const recordedText = surface === "agy" ? initialRecord : initial;
+      const slug = surface === "codex"
+        ? "gpt-6-luna"
+        : surface === "claude"
+        ? "claude-opus-5-5"
+        : "gemini-3.8-flash-high";
+      for (const model of ["missing-model", "gpt-6-sol"]) {
+        const damaged = model === "missing-model"
+          ? recordedText.replace(`"${slug}"`, "null")
+          : recordedText.replace(slug, model);
+        await Deno.writeTextFile(recordedFile, damaged);
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(args, fixture.repoDir, true, fixture.shellEnv);
+        assertEquals(result.code, 1, result.stderr);
+        assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+        assertStringIncludes(
+          result.stderr,
+          model === "missing-model" ? recordedFile : "roster entry",
+        );
+      }
+      await Deno.writeTextFile(recordedFile, recordedText);
+      await Deno.remove(comment);
+      const missing = await runDenoTaskPush(args, fixture.repoDir, true, fixture.shellEnv);
+      assertEquals(missing.code, 1);
+      assertStringIncludes(missing.stderr, comment);
+
+      await Deno.writeTextFile(comment, fixBody("Codex — GPT"));
+      const result = await runDenoTaskPush(args, fixture.repoDir, true, fixture.shellEnv);
+      assertEquals(result.code, 0, result.stderr);
+      assertEquals(
+        await Deno.readTextFile(fixture.shellEnv.PUSH_TEST_COMMENT_OUTPUT),
+        fixBody(signature),
+      );
+      assertEquals(await Deno.readTextFile(comment), fixBody(signature));
+      assertEquals(
+        (await fixture.git(["ls-remote", "origin", "refs/heads/probe-branch"])).split(/\s+/)[0],
+        await fixture.git(["rev-parse", "HEAD"]),
+      );
+
+      // The remote has changed even if the subsequent post fails. Retry only that signed file.
+      await Deno.writeTextFile(`${fixture.repoDir}/file.txt`, "next fix\n");
+      await fixture.git(["commit", "-qam", "next fix"]);
+      const failed = await runDenoTaskPush(args, fixture.repoDir, true, {
+        ...fixture.shellEnv,
+        PUSH_TEST_POST_EXIT: "1",
+      });
+      assertEquals(failed.code, 1);
+      assertStringIncludes(failed.stderr, "Push landed, but the fix comment was not posted");
+      const remote = await fixture.git(["ls-remote", "origin"]);
+      assertStringIncludes(remote, await fixture.git(["rev-parse", "HEAD"]));
+      const retry = failed.stderr.trim().split("\n").at(-1)!;
+      assertStringIncludes(retry, "post-pr-comment --repo");
+      const retried = await new Deno.Command("bash", {
+        args: ["-c", retry],
+        cwd: fixture.repoDir,
+        env: fixture.shellEnv,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assertEquals(retried.code, 0, new TextDecoder().decode(retried.stderr));
+      assertEquals(await fixture.git(["ls-remote", "origin"]), remote);
+      assertEquals(
+        await Deno.readTextFile(fixture.shellEnv.PUSH_TEST_COMMENT_OUTPUT),
+        fixBody(signature),
+      );
+      assertEquals(await Deno.readTextFile(fixture.shellEnv.PUSH_TEST_TRACE), "post\npost\npost\n");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+}
+
+for (const surface of ["claude", "codex"] as const) {
+  Deno.test(`${surface}: only this session's helpers started since the typed call may sign`, async () => {
+    const fixture = await createFixFixture(surface);
+    const comment = `${fixture.repoDir}/c.md`;
+    const childId = "12345678-1234-5678-abcd-123456789abd";
+    const parentAuthor = surface === "claude" ? "Claude Code — Claude Opus" : "Codex — GPT-6.1 Sol";
+    const helperAuthor = surface === "claude"
+      ? "Claude Code — Claude Haiku 5.5"
+      : "Codex — GPT-6 Luna";
+    const outsider = surface === "claude"
+      ? "Claude Code — Claude Sonnet 5.5"
+      : "Codex — GPT-6 Astra";
+    try {
+      await fixture.writeSession([fixCall.text]);
+      if (surface === "codex") {
+        await Deno.writeTextFile(
+          fixture.sessionPath,
+          (await Deno.readTextFile(fixture.sessionPath)).replace("gpt-6-luna", "gpt-6.1-sol"),
+        );
+      }
+      const helperPath = surface === "claude"
+        ? `${fixture.sessionPath.slice(0, -6)}/subagents/agent-${childId}.jsonl`
+        : `${fixture.shellEnv.CODEX_HOME}/sessions/rollout-${childId}.jsonl`;
+      await Deno.mkdir(helperPath.slice(0, helperPath.lastIndexOf("/")), { recursive: true });
+      const child = (
+        timestamp: string,
+        model = surface === "claude" ? "claude-haiku-5-5" : "gpt-6-luna",
+        parent = fixtureThread,
+      ) =>
+        (surface === "claude"
+          ? [
+            {
+              type: "user",
+              timestamp,
+              isSidechain: true,
+              message: { role: "user", content: "Do the fix" },
+            },
+            { type: "assistant", isSidechain: true, message: { role: "assistant", model } },
+          ]
+          : [
+            {
+              type: "session_meta",
+              timestamp,
+              payload: {
+                id: childId,
+                thread_source: "subagent",
+                parent_thread_id: parent,
+                source: { subagent: { thread_spawn: { parent_thread_id: parent } } },
+              },
+            },
+            { type: "turn_context", payload: { model } },
+          ]).map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+      for (const author of [helperAuthor, parentAuthor, outsider]) {
+        await Deno.writeTextFile(helperPath, child("2026-10-13T01:01:00Z"));
+        await Deno.writeTextFile(comment, fixBody(author));
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(
+          ["--fix-comment", comment],
+          fixture.repoDir,
+          true,
+          fixture.shellEnv,
+        );
+        assertEquals(result.code, author === outsider ? 1 : 0, result.stderr);
+        if (author === outsider) {
+          assertStringIncludes(result.stderr, "neither the session model nor a helper");
+          assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+        } else {
+          assertEquals(
+            await Deno.readTextFile(fixture.shellEnv.PUSH_TEST_COMMENT_OUTPUT),
+            fixBody(author),
+          );
+        }
+      }
+      await Deno.writeTextFile(helperPath, child("2026-10-13T00:01:00Z"));
+      await Deno.writeTextFile(comment, fixBody(helperAuthor));
+      assertEquals(
+        (await runDenoTaskPush(["--fix-comment", comment], fixture.repoDir, true, fixture.shellEnv))
+          .code,
+        0,
+      );
+      assertEquals(await Deno.readTextFile(comment), fixBody(parentAuthor));
+      for (
+        const [timestamp, model] of [["bad date", "gpt-6-luna"], [
+          "2026-10-13T01:01:00Z",
+          "unknown-model",
+        ]]
+      ) {
+        await Deno.writeTextFile(helperPath, child(timestamp, model));
+        await Deno.writeTextFile(comment, fixBody(helperAuthor));
+        const before = await fixture.git(["ls-remote", "origin"]);
+        const result = await runDenoTaskPush(
+          ["--fix-comment", comment],
+          fixture.repoDir,
+          true,
+          fixture.shellEnv,
+        );
+        assertEquals(result.code, 1);
+        assertEquals(await fixture.git(["ls-remote", "origin"]), before);
+      }
+      if (surface === "codex") {
+        await Deno.writeTextFile(helperPath, child("2026-10-13T01:01:00Z", "gpt-6-luna", childId));
+        await Deno.writeTextFile(comment, fixBody(outsider));
+        assertEquals(
+          (await runDenoTaskPush(
+            ["--fix-comment", comment],
+            fixture.repoDir,
+            true,
+            fixture.shellEnv,
+          )).code,
+          0,
+        );
+        assertEquals(await Deno.readTextFile(comment), fixBody(parentAuthor));
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+}
+
+Deno.test("a failed or throwing push never posts a validated fix comment", async () => {
+  for (const throws of [false, true]) {
+    let posted = false;
+    const code = await runPush(["--fix-comment", "c.md"], undefined, {
+      branch: "probe-branch",
+      readSkillCall: () => Promise.resolve(fixCall),
+      runGit: () => Promise.resolve({ code: 0, stdout: `https://github.com/${targetRepo}.git` }),
+      lookupPullRequest: () => Promise.resolve(targetPr),
+      prepareComment: () => Promise.resolve(),
+      spawnPush: () => throws ? Promise.reject(new Error("push failed")) : Promise.resolve(1),
+      postComment: () => {
+        posted = true;
+        return Promise.resolve(0);
+      },
+    });
+    assertEquals(code, 1);
+    assertEquals(posted, false);
+  }
+});
 
 async function createFixtureRepo(): Promise<FixtureEnv> {
   const tempDir = await Deno.makeTempDir({ prefix: "push-task-test-" });
@@ -894,6 +1144,8 @@ Deno.test("resolution failure never grants a fix run or falls back to another ty
   const code = await runPush(["--force-with-lease", "--fix-comment", "c.md"], undefined, {
     branch: "probe-branch",
     ...deps,
+    prepareComment: () => Promise.resolve(),
+    postComment: () => Promise.resolve(0),
     confirmForce: () => {
       throw new Error("active fix must never ask");
     },
@@ -941,7 +1193,15 @@ async function createFixFixture(surface: Surface) {
   );
   await Deno.writeTextFile(
     `${toolsDir}/gh`,
-    '#!/bin/sh\nprintf "%s\\n" "$PUSH_TEST_PR"\nexit "${PUSH_TEST_GH_EXIT:-0}"\n',
+    '#!/bin/sh\nif [ "$1" = pr ] && [ "$2" = comment ]; then\n' +
+      '  printf "post\\n" >> "$PUSH_TEST_TRACE"\n' +
+      '  while [ "$#" -gt 0 ]; do\n' +
+      '    if [ "$1" = --body-file ]; then cat "$2" > "$PUSH_TEST_COMMENT_OUTPUT"; break; fi\n' +
+      '    if [ "$1" = --body ]; then printf "%s" "$2" > "$PUSH_TEST_COMMENT_OUTPUT"; break; fi\n' +
+      "    shift\n  done\n" +
+      '  if [ "$PUSH_TEST_POST_EXIT" != 0 ]; then echo "comment unavailable" >&2; fi\n' +
+      '  exit "$PUSH_TEST_POST_EXIT"\nfi\n' +
+      'printf "%s\\n" "$PUSH_TEST_PR"\nexit "${PUSH_TEST_GH_EXIT:-0}"\n',
   );
   await Deno.chmod(`${toolsDir}/git`, 0o755);
   await Deno.chmod(`${toolsDir}/gh`, 0o755);
@@ -957,12 +1217,17 @@ async function createFixFixture(surface: Surface) {
     PUSH_TEST_REMOTE: `https://github.com/${targetRepo}.git`,
     PUSH_TEST_PR: JSON.stringify(targetPr),
     PUSH_TEST_GH_EXIT: "0",
+    PUSH_TEST_POST_EXIT: "0",
+    PUSH_TEST_TRACE: `${fixture.tempDir}/post-trace`,
+    PUSH_TEST_COMMENT_OUTPUT: `${fixture.tempDir}/posted-comment.md`,
+    FORCED_PR_AUTHOR: "",
   };
   const writeSession = async (texts: string[], helper = false, damaged = false) => {
     const records = surface === "codex"
       ? [
         {
           type: "session_meta",
+          timestamp: "2026-10-13T00:00:00Z",
           payload: {
             id: fixtureThread,
             source: helper ? "exec" : "cli",
@@ -971,8 +1236,10 @@ async function createFixFixture(surface: Surface) {
             parent_thread_id: null,
           },
         },
+        { type: "turn_context", payload: { model: "gpt-6-luna" } },
         ...texts.map((text) => ({
           type: "response_item",
+          timestamp: "2026-10-13T01:00:00Z",
           payload: {
             type: "message",
             role: "user",
@@ -981,14 +1248,19 @@ async function createFixFixture(surface: Surface) {
         })),
       ]
       : surface === "claude"
-      ? texts.map((text) => ({
-        type: "user",
-        origin: { kind: "human" },
-        isSidechain: helper,
-        message: { role: "user", content: text },
-      }))
+      ? [
+        ...texts.map((text) => ({
+          type: "user",
+          timestamp: "2026-10-13T01:00:00Z",
+          origin: { kind: "human" },
+          isSidechain: helper,
+          message: { role: "user", content: text },
+        })),
+        { type: "assistant", message: { role: "assistant", model: "claude-opus-5-5" } },
+      ]
       : texts.map((text, step_index) => ({
         type: "USER_INPUT",
+        timestamp: "2026-10-13T01:00:00Z",
         source: "USER_EXPLICIT",
         step_index,
         content: `<USER_REQUEST>${text}</USER_REQUEST>`,
@@ -1003,6 +1275,7 @@ async function createFixFixture(surface: Surface) {
         JSON.stringify({
           conversationId: fixtureThread,
           transcriptPath: sessionPath,
+          modelName: "gemini-3.8-flash-high",
         }) + "\n",
       );
       const parent = `${userHome}/.gemini/brain/parent/.system_generated/subagents`;
@@ -1016,6 +1289,10 @@ async function createFixFixture(surface: Surface) {
         }}
     }
   };
+  await Deno.writeTextFile(
+    `${fixture.repoDir}/c.md`,
+    "Fixed formatting.\n\n🤖 Fixed by Codex — GPT\n",
+  );
   return { ...fixture, shellEnv, writeSession, sessionPath, recordPath };
 }
 

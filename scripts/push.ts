@@ -8,7 +8,8 @@
  * From a repo without this task, load the shared config and pass --repo-dir
  * before the push flags to select that repo explicitly.
  * Inside a verified fix-pr run, --fix-comment <file> is required and force-with-lease
- * uses the typed authorization. Comment validation/posting is a separate change.
+ * uses the typed authorization. The comment is validated and signed before pushing,
+ * then posted through the shared post-pr-comment command only after a successful push.
  * Outside that run, force-with-lease still requires affirmative terminal confirmation.
  *
  * Refuses protected branches (dev, main), plain --force / -f, --delete / -d,
@@ -25,6 +26,9 @@ import {
   type PullRequestState,
   readTypedSkillCall,
 } from "../hooks/lib/fix_run.ts";
+import { resolve } from "@std/path";
+import { signedFixComment } from "../src/shared/fix_comment.ts";
+import type { RunningModelOptions } from "../src/shared/codex_running_model.ts";
 import type { CodexSkillCall } from "../hooks/lib/codex_session_reader.ts";
 
 export type PushOutcome = "allowed" | "refused" | "refused-fail-closed";
@@ -295,6 +299,31 @@ export async function getCurrentBranch(
   }
 }
 
+/** Use the shared guarded comment command, including its retries and form checks. */
+async function postFixComment(pr: PullRequestRef, path: string): Promise<number> {
+  const status = await new Deno.Command(Deno.execPath(), {
+    args: [
+      "task",
+      "--config",
+      new URL("../deno.json", import.meta.url).pathname,
+      "post-pr-comment",
+      "--repo",
+      pr.repo,
+      "--pr",
+      String(pr.number),
+      "--body-file",
+      path,
+    ],
+    stdout: "inherit",
+    stderr: "inherit",
+  }).spawn().status;
+  return status.code;
+}
+
+function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
 /**
  * Executes guarded push against the current repository.
  */
@@ -307,18 +336,44 @@ export async function runPush(
     stderr?: "inherit" | "piped";
     spawnPush?: PushSpawner;
     confirmForce?: (branch: string) => boolean;
+    signing?: RunningModelOptions;
+    prepareComment?: (path: string, call: CodexSkillCall | null) => Promise<void>;
+    postComment?: (pr: PullRequestRef, path: string) => Promise<number>;
   },
 ): Promise<number> {
   const branch = options?.branch !== undefined
     ? options.branch
     : await getCurrentBranch(cwd, options?.runGit);
 
-  const fixRun = await resolveFixRun(branch, cwd, options);
+  const call = await (options?.readSkillCall ?? readTypedSkillCall)().catch(() => null);
+  const fixRun = await resolveFixRun(branch, cwd, {
+    ...options,
+    readSkillCall: () => Promise.resolve(call),
+  });
   const decision = evaluatePush(args, branch, fixRun);
 
   if (decision.outcome !== "allowed") {
     console.error(`Refused (${decision.rule}): ${decision.reason}`);
     return 1;
+  }
+
+  const commentPath = decision.fixComment ? resolve(cwd ?? Deno.cwd(), decision.fixComment) : null;
+  if (commentPath) {
+    try {
+      if (options?.prepareComment) await options.prepareComment(commentPath, call);
+      else {
+        const body = await Deno.readTextFile(commentPath);
+        const signed = await signedFixComment(body, call, options?.signing);
+        await Deno.writeTextFile(commentPath, signed);
+      }
+    } catch (error) {
+      console.error(
+        `Refused (fix-comment): ${commentPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return 1;
+    }
   }
 
   // Explicit refspec: the branch name can never be read as an option or a force marker.
@@ -339,10 +394,31 @@ export async function runPush(
       );
       return 1;
     }
-    return await (options?.spawnPush ?? defaultPushSpawner)(gitArgs, cwd, {
+    const pushed = await (options?.spawnPush ?? defaultPushSpawner)(gitArgs, cwd, {
       stdout: options?.stdout ?? "inherit",
       stderr: options?.stderr ?? "inherit",
     });
+    if (pushed !== 0 || !commentPath || fixRun.kind !== "active") return pushed;
+    try {
+      if (await (options?.postComment ?? postFixComment)(fixRun.pullRequest, commentPath) === 0) {
+        return 0;
+      }
+    } catch (error) {
+      console.error(
+        `Comment posting failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    console.error(
+      "Push landed, but the fix comment was not posted. Do not push again. Retry the comment with:",
+    );
+    console.error(
+      `deno task --config ${
+        shellQuote(new URL("../deno.json", import.meta.url).pathname)
+      } post-pr-comment --repo ${
+        shellQuote(fixRun.pullRequest.repo)
+      } --pr ${fixRun.pullRequest.number} --body-file ${shellQuote(commentPath)}`,
+    );
+    return 1;
   } catch (err) {
     console.error(
       `Failed to execute git push: ${err instanceof Error ? err.message : String(err)}`,
@@ -361,6 +437,11 @@ if (import.meta.main) {
       console.error("Refused (missing-repo-dir): --repo-dir requires a repository directory");
       Deno.exit(1);
     }
+  }
+  if (args.length === 1 && args[0] === "--help") {
+    console.log("usage: deno task push [--repo-dir <path>] [--force-with-lease] [--fix-comment <file>]");
+    console.log("Inside a typed fix-pr run, --fix-comment validates, signs, pushes, and posts the fix.");
+    Deno.exit(0);
   }
   const exitCode = await runPush(args, cwd);
   Deno.exit(exitCode);

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/denoland/deno/main/cli/schemas/config-file.v1.json",
   "name": "@webjam/tools",
-  "version": "1.44.6",
+  "version": "1.45.0",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
     "whoami": "bash -c 'exec deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME --allow-read=.,\"${CODEX_HOME:-$HOME/.codex}/sessions\" --allow-run=bash scripts/whoami.ts'",
@@ -46,7 +46,7 @@
     "book-gig": "deno run --allow-all src/book-gig/cli.ts",
     "book-gig:convert-touches": "deno run --allow-all src/book-gig/convert_touches.ts",
     "queue": "deno run --allow-read --allow-write src/task-queue/cli.ts",
-    "push": "deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME,USERPROFILE,CLAUDE_CODE_SESSION_ID,AGY_HOOK_RECORD_PATH,WJT_SURFACE,WJT_UNATTENDED --allow-read --allow-run=git,gh scripts/push.ts",
+    "push": "deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME,USERPROFILE,CLAUDE_CODE_SESSION_ID,AGY_HOOK_RECORD_PATH,WJT_SURFACE,WJT_UNATTENDED,FORCED_PR_AUTHOR --allow-read --allow-write --allow-run=git,gh,bash,deno scripts/push.ts",
     "test": "deno test --allow-env --allow-run --allow-read --allow-write",
     "coverage": "rm -rf cov_profile && deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile && deno coverage cov_profile",
     "coverage:check": "bash scripts/coverage-check.sh",
