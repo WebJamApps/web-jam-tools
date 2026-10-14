@@ -270,6 +270,50 @@ work and the checks. The plan file is JSON: `merges` (`keep`, `absorb`), `moves`
    yes, and every part's size against its limit. The limits are read from
    `src/session-load/limits.json`; never restate a limit number.
 
+### Rules-file cuts
+
+For the rules-file half of session-load cleanup, propose cuts to only
+`web-jam-tools/AGENTS.md`, `web-jam-tools/docs/cross-ai-rules.md`, and `JaMmusic/AGENTS.md`.
+Read their low marks from `src/session-load/limits.json`; the other six repositories' rules
+files stay as they are. This workflow prepares a pull request for Josh to review. Every rule
+stays, even if that means a proposed cut cannot meet its low mark.
+
+1. Create an isolated feature worktree off fresh `dev` for each affected repository. Work on
+   that worktree's rules file, never the shared checkout or the home symlink. Use the
+   `draft-pr` skill to finish each repository's changes as a draft pull request to `dev`.
+   Never merge the pull request; Josh reviews and merges every rules-file cut.
+2. Make the judgments in a JSON plan saved outside the repository, for example in `/tmp/`.
+   Set `part` to `mainRules`, `crossAiRules`, or `jammusicRules`. Its `spans` array must
+   reproduce the entire current file in order, with no omitted or overlapping text. Every
+   span has a unique `id`, its exact `text` including whitespace, and one `kind`:
+   - `rule`: retained unchanged. A plan that asks to drop a rule is refused.
+   - `skill-instruction`: first copy the text word for word into its `target_skill`'s
+     `SKILL.md`, in the tools feature worktree. Pull request mechanics belong in `draft-pr`,
+     venue and gate items in `book-gig` or `venue-mining`, issue field mechanics in
+     `file-issue`, review mechanics in `pr-review`, dispatch flags in `delegate`, and the
+     plan table in `design-issue`. This workflow may edit these target skills to preserve
+     the moved instructions. Include those edits in the tools pull request.
+   - `backstory`: removed (origin blocks, issue citations with titles, quoted statements,
+     error strings, and worked examples).
+   - `repeat`: removed only when `repeats` names an identical retained rule span. The
+     retained copy must survive in the rules file; repeat chains cannot remove every copy.
+3. Set optional `skills_dir` to the tools feature worktree's `skills` directory when moving
+   instructions. Relative paths resolve against the plan file. Without it, the command uses
+   the skills beside its own source. A move is refused if the text is absent or reworded.
+4. Preview the plan from the tools feature worktree:
+
+   ```sh
+   deno task memory-cleanup:rules-cuts --dry-run --plan /tmp/rules-cuts-plan.json --file /tmp/feature-worktree/AGENTS.md
+   ```
+
+   The script prints the full rules-before and rules-after lists, which must be equal, and
+   the proposed byte size against the low and over marks. A dry run writes nothing. A stale
+   plan, missing moved text, changed repeat, or result above the low mark refuses the cut.
+5. Run the same command without `--dry-run` to prepare the cut in the feature worktree.
+   Review the diff and both rules lists, then commit, push, and open the draft pull request
+   through `draft-pr`. If instructions move out of JaMmusic into the tools repository,
+   prepare both pull requests and retain their relationship in the descriptions.
+
 ## Triggering
 
 - Manual: type `/memory-cleanup`, or say "clean up memory" / "memory hygiene".

@@ -77,6 +77,7 @@
     "sweep:redundant-blocked-labels": "deno run --allow-run=gh scripts/sweep_redundant_blocked_labels.ts",
     "memory-index": "deno run --allow-read --allow-write --allow-env src/memory-index/cli.ts",
     "memory-cleanup:run": "deno run --allow-read --allow-write --allow-env src/memory-cleanup/low_mark.ts",
+    "memory-cleanup:rules-cuts": "deno run --allow-read=.,/tmp,$HOME/WebJamApps/web-jam-tools/skills,$HOME/WebJamApps/web-jam-tools/src/session-load/limits.json --allow-write=.,/tmp --allow-run=git src/memory-cleanup/rules_cuts.ts",
     "memory-cleanup:scan": "deno run --allow-read --allow-run=gh --allow-env=HOME src/memory-cleanup/cli.ts",
     "memory:consume": "bash scripts/consume-memory-rules.sh",
     "update:all": "bash scripts/update-all.sh",
