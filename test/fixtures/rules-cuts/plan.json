@@ -1,0 +1,33 @@
+{
+  "part": "mainRules",
+  "skills_dir": "skills",
+  "spans": [
+    {
+      "id": "heading",
+      "kind": "rule",
+      "text": "# Fixture rules\n\n"
+    },
+    {
+      "id": "retained-copy",
+      "kind": "rule",
+      "text": "Always preserve the rule text.\n\n"
+    },
+    {
+      "id": "move",
+      "kind": "skill-instruction",
+      "text": "Open changes through a draft pull request.\n\n",
+      "target_skill": "draft-pr"
+    },
+    {
+      "id": "story",
+      "kind": "backstory",
+      "text": "This paragraph records an obsolete origin story.\n\n"
+    },
+    {
+      "id": "repeat",
+      "kind": "repeat",
+      "text": "Always preserve the rule text.\n",
+      "repeats": "retained-copy"
+    }
+  ]
+}
