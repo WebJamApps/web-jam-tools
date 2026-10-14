@@ -226,7 +226,10 @@ Deno.test("loadModelLabels: error handling on bad json", () => {
 });
 
 Deno.test("checkModelLabelOnIssueCreate: invalid json or empty command returns PASS", async () => {
-  assertEquals(await checkModelLabelOnIssueCreate("not-json", MODEL_LABELS_PATH), "PASS");
+  assertEquals(
+    (await checkModelLabelOnIssueCreate("not-json", MODEL_LABELS_PATH)).startsWith("PASS: "),
+    true,
+  );
   assertEquals(
     await checkModelLabelOnIssueCreate(
       JSON.stringify({ tool_name: "Bash", tool_input: { command: "" } }),

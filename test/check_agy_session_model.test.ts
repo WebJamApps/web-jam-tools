@@ -71,9 +71,11 @@ Deno.test("checkSessionModel: Outcome 2 - below-floor, flash-low, and non-Flash 
 // --- Outcome 3: cannot determine (fails open) ---
 
 Deno.test("checkSessionModel: Outcome 3 - missing, null, or empty modelName fails open", () => {
-  assertEquals(checkSessionModel(undefined), { allowed: true });
-  assertEquals(checkSessionModel(null), { allowed: true });
-  assertEquals(checkSessionModel(""), { allowed: true });
+  for (const model of [undefined, null, "", "   "]) {
+    const result = checkSessionModel(model);
+    assertEquals(result.allowed, true);
+    assert(result.reason?.includes("could not determine modelName"));
+  }
 });
 
 // --- CLI stdin execution tests for all three outcomes ---

@@ -9,9 +9,8 @@
  * two guards can never drift apart on what counts as an allowed model.
  *
  * Fail OPEN when `modelName` is missing/empty: this is a cost-control guard,
- * not a secret-leak guard, so an unparseable/absent field is let through
- * rather than guessed at — same fail-open convention as
- * hooks/block-agy-non-flash-model.sh.
+ * so an unparseable/absent field is let through with additionalContext
+ * telling the agent to verify the session model.
  */
 import { ALLOWED_SESSION_SLUGS, isAllowedModelSlug } from "./check_agy_model.ts";
 import { checkAndConsumeWorkflowSwitch, type SwitchCheckResult } from "./workflow_switch.ts";
@@ -25,8 +24,12 @@ export function checkSessionModel(
   modelName: string | undefined | null,
   switchChecker?: (guardName: string) => SwitchCheckResult,
 ): SessionModelResult {
-  if (!modelName) {
-    return { allowed: true };
+  if (!modelName?.trim()) {
+    return {
+      allowed: true,
+      reason:
+        "could not determine modelName; proceeding. Verify the agy session uses an allowed Flash model before continuing.",
+    };
   }
   if (isAllowedModelSlug(modelName)) {
     return { allowed: true };
@@ -60,9 +63,9 @@ async function readAllStdin(): Promise<string> {
 }
 
 if (import.meta.main) {
-  const rawInput = await readAllStdin();
   let modelName: string | undefined;
   try {
+    const rawInput = await readAllStdin();
     const parsed = JSON.parse(rawInput);
     modelName = typeof parsed?.modelName === "string" ? parsed.modelName : undefined;
   } catch {
@@ -72,6 +75,14 @@ if (import.meta.main) {
   if (!result.allowed) {
     console.error(`BLOCKED (agy-model guard): ${result.reason}`);
     Deno.exit(2);
+  }
+  if (result.reason) {
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        additionalContext: `agy-model guard: ${result.reason}`,
+      },
+    }));
   }
   Deno.exit(0);
 }

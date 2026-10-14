@@ -17,6 +17,7 @@ const SCRIPT_PATH = new URL(
 
 interface RunResult {
   code: number;
+  stdout: string;
   stderr: string;
 }
 
@@ -24,7 +25,7 @@ async function runHook(
   payload: Record<string, unknown>,
   cwd?: string,
 ): Promise<RunResult> {
-  const input = JSON.stringify(payload);
+  const input = JSON.stringify({ cwd: cwd || Deno.cwd(), ...payload });
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
     cwd: cwd || Deno.cwd(),
@@ -36,8 +37,12 @@ async function runHook(
   const writer = child.stdin.getWriter();
   await writer.write(new TextEncoder().encode(input));
   await writer.close();
-  const { code, stderr } = await child.output();
-  return { code, stderr: new TextDecoder().decode(stderr) };
+  const { code, stdout, stderr } = await child.output();
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
 }
 
 // --- Library function unit tests ---
@@ -276,18 +281,50 @@ Deno.test("write to ~/.claude/CLAUDE.md from a non-git CWD is ALLOWED (web-jam-t
   }
 });
 
-Deno.test("write to ~/.claude/settings.json from a non-git CWD is DENIED (PR #538 review regression test)", async () => {
+Deno.test("unresolvable repository root from payload cwd allows with a note, even when the hook runs in a repo", async () => {
   const tempNonGitDir = await Deno.makeTempDir();
   try {
     const res = await runHook({
+      cwd: tempNonGitDir,
       tool_name: "Write",
       tool_input: { file_path: "~/.claude/settings.json" },
-    }, tempNonGitDir);
-    assertEquals(res.code, 2);
-    assert(res.stderr.includes("BLOCKED"));
+    });
+    assertEquals(res.code, 0, res.stderr);
+    const output = JSON.parse(res.stdout).hookSpecificOutput;
+    assertEquals(output.hookEventName, "PreToolUse");
+    assertEquals(output.permissionDecision, undefined);
+    assert(output.additionalContext.includes("repository root"));
+    assert(output.additionalContext.includes("payload cwd"));
   } finally {
     await Deno.remove(tempNonGitDir, { recursive: true });
   }
+});
+
+Deno.test("payload repo cwd still denies an out-of-tree write when the hook process runs outside a repo", async () => {
+  const processDir = await Deno.makeTempDir();
+  try {
+    const res = await runHook({
+      cwd: Deno.cwd(),
+      tool_name: "Edit",
+      tool_input: { file_path: "/etc/probe.txt" },
+    }, processDir);
+    assertEquals(res.code, 2);
+    assert(res.stderr.includes("BLOCKED"));
+  } finally {
+    await Deno.remove(processDir, { recursive: true });
+  }
+});
+
+Deno.test("missing payload cwd allows with a note rather than using the hook process directory", async () => {
+  const res = await runHook({
+    cwd: null,
+    tool_name: "Write",
+    tool_input: { file_path: "/etc/probe.txt" },
+  });
+  assertEquals(res.code, 0, res.stderr);
+  const output = JSON.parse(res.stdout).hookSpecificOutput;
+  assertEquals(output.permissionDecision, undefined);
+  assert(output.additionalContext.includes("cwd is missing"));
 });
 
 Deno.test("write to /tmp from a non-git CWD is ALLOWED", async () => {

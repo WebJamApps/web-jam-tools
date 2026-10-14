@@ -101,9 +101,14 @@ Deno.test("agy-model-guard.sh allows gemini-3.8-flash-tiered", async () => {
   assertEquals(res.code, 0, res.stderr);
 });
 
-Deno.test("agy-model-guard.sh fails open when modelName is absent", async () => {
+Deno.test("agy-model-guard.sh allows with additionalContext when modelName is absent", async () => {
   const res = await runDirect({});
   assertEquals(res.code, 0, res.stderr);
+  const output = JSON.parse(res.stdout).hookSpecificOutput;
+  assertEquals(output.hookEventName, "PreToolUse");
+  assertEquals(output.permissionDecision, undefined);
+  assert(output.additionalContext.includes("could not determine modelName"));
+  assert(output.additionalContext.includes("allowed Flash model"));
 });
 
 // --- End-to-end via the shim, real agy payload shape ---
