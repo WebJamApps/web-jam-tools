@@ -830,7 +830,7 @@ export function formatDriftMessage(result: DriftResult): string {
   return [
     "WARNING: Installed hooks drift detected (Claude Code and/or agy/Antigravity):",
     ...sections,
-    "Run 'git pull origin dev && bash scripts/install-hooks.sh' in ~/WebJamApps/web-jam-tools " +
+    "Run 'cd ~/WebJamApps/web-jam-tools && git pull origin dev && bash scripts/install-hooks.sh' " +
     "to update — it merges both settings.json and agy's hooks.json.",
   ].join("\n");
 }
