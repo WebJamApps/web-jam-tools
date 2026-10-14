@@ -295,10 +295,10 @@ Deno.test("detectDrift catches added, deleted, and modified hook files on origin
     assert(msg.includes("Added on origin/dev: hooks/hook3.sh"), msg);
     assert(msg.includes("Deleted on origin/dev: hooks/hook1.sh"), msg);
     assert(msg.includes("Modified on origin/dev: hooks/hook2.sh"), msg);
-    // The update command must work from any directory, not only inside the repo.
+    // The update command must be the cwd-independent helper script, not a repo-relative path.
     assert(
       msg.includes(
-        "'cd ~/WebJamApps/web-jam-tools && git pull origin dev && bash scripts/install-hooks.sh'",
+        "'~/WebJamApps/web-jam-tools/scripts/update-hooks.sh'",
       ),
       msg,
     );
