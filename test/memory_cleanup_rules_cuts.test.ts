@@ -61,6 +61,20 @@ Deno.test("the registered task previews the fixture without changing any fixture
   assertEquals(await Promise.all(paths.map((p) => Deno.readFile(p))), before);
 });
 
+Deno.test("removing backstory cannot concatenate adjacent rules into different words", async () => {
+  const plan: RulesCutsPlan = {
+    part: "mainRules",
+    spans: [
+      { id: "first", kind: "rule", text: "Never delete files." },
+      { id: "story", kind: "backstory", text: "\nAn origin story.\n" },
+      { id: "second", kind: "rule", text: "Always use drafts." },
+    ],
+  };
+  const result = await planRulesCuts(plan.spans.map((s) => s.text).join(""), plan, SKILLS);
+  assertEquals(result.after, "Never delete files.\n\nAlways use drafts.");
+  assertEquals(result.rulesBefore, result.rulesAfter);
+});
+
 async function withPlan(
   test: (filePath: string, planPath: string, source: string, plan: RulesCutsPlan) => Promise<void>,
 ) {

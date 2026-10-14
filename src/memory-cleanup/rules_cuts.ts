@@ -142,9 +142,12 @@ export async function planRulesCuts(
   }
 
   const kept = plan.spans.filter((span) => span.kind === "rule");
-  const after = kept.map((span) => span.text).join("");
+  const after = kept.reduce((text, span) => {
+    const separator = text && !/\s$/.test(text) && !/^\s/.test(span.text) ? "\n\n" : "";
+    return text + separator + span.text;
+  }, "");
   const rulesBefore = plan.spans.filter((span) => span.kind === "rule").map((span) => span.text);
-  const rulesAfter = kept.map((span) => span.text);
+  const rulesAfter = rulesBefore.filter((rule) => appearsWordForWord(after, rule));
   if (JSON.stringify(rulesBefore) !== JSON.stringify(rulesAfter)) {
     throw new Error("Rules before and after differ");
   }
