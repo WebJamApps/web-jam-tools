@@ -71,6 +71,7 @@ Deno.test("agents.sh creates session 'agents' with tabs claude, codex, agy (indi
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, `agents.sh failed: ${res.stdout}\n${res.stderr}`);
@@ -152,6 +153,7 @@ Deno.test("agents.sh turns off automatic-rename so tab names stay fixed", async 
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0);
@@ -206,6 +208,7 @@ Deno.test("agents.sh second run attaches to existing session without creating a 
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res1.code, 0);
@@ -214,6 +217,7 @@ Deno.test("agents.sh second run attaches to existing session without creating a 
     const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName], {
       TMUX_TMPDIR: tmpDir,
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res2.code, 0, `Second run failed: ${res2.stdout}\n${res2.stderr}`);
@@ -244,6 +248,7 @@ Deno.test("agents.sh started twice at the same moment never fails with duplicate
         AGENTS_CODEX_CMD: "sleep 60",
         AGENTS_AGY_CMD: "sleep 60",
         AGENTS_UPDATE_CMD: "true",
+        AGENTS_UPDATE_SCRIPTS_CMD: "true",
         AGENTS_LAPTOP_WINDOW_CMD: "true",
       };
       const [first, second] = await Promise.all([
@@ -283,6 +288,7 @@ Deno.test("agents.sh drops a tab to a plain shell when its agent exits instead o
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0);
@@ -338,6 +344,7 @@ Deno.test("agents run through its ~/.local/bin symlink passes the repo's claude-
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
@@ -371,6 +378,7 @@ Deno.test("agents started over SSH starts every tab without SSH_* variables, so 
       AGENTS_CODEX_CMD: probe("codex"),
       AGENTS_AGY_CMD: probe("agy"),
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
@@ -398,6 +406,7 @@ Deno.test("agents.sh supports -S socket path and --no-attach", async () => {
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
@@ -440,6 +449,7 @@ Deno.test("agents.sh runs the update command before the new session exists, and 
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: updateCmd,
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     };
     const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
@@ -461,10 +471,63 @@ Deno.test("agents.sh still creates the session and exits 0, with a warning, when
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "exit 1",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
     assert(res.stderr.includes("warning: update-all failed"), `no warning in: ${res.stderr}`);
+    const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
+      TMUX_TMPDIR: tmpDir,
+    });
+    assertEquals(has.code, 0);
+  });
+});
+
+Deno.test("agents.sh runs update-scripts after update-all and before the new session exists, and not when it only attaches", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const marker = `${tmpDir}/order.txt`;
+    const sessionState = `if tmux -L ${socketName} has-session -t agents 2>/dev/null; ` +
+      `then echo session-existed; else echo no-session-yet; fi`;
+    const env = {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: `echo update-all >> "${marker}"`,
+      AGENTS_UPDATE_SCRIPTS_CMD: `echo "update-scripts $(${sessionState})" >> "${marker}"`,
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+    };
+    const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+    assertEquals(res1.code, 0, res1.stderr);
+    const expected = ["update-all", "update-scripts no-session-yet"];
+    assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), expected);
+
+    // Second run only attaches, so neither update command runs again.
+    const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+    assertEquals(res2.code, 0, res2.stderr);
+    assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), expected);
+  });
+});
+
+Deno.test("agents.sh still creates the session and exits 0, with a warning, when the update-scripts command fails", async () => {
+  await withThrowawayTmux(async (socketName, tmpDir) => {
+    const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+      TMUX_TMPDIR: tmpDir,
+      AGENTS_CLAUDE_CMD: "sleep 60",
+      AGENTS_CODEX_CMD: "sleep 60",
+      AGENTS_AGY_CMD: "sleep 60",
+      AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "exit 1",
+      AGENTS_LAPTOP_WINDOW_CMD: "true",
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assert(
+      res.stderr.includes(
+        "warning: update-scripts failed; starting the agents with the hooks already installed",
+      ),
+      `no warning in: ${res.stderr}`,
+    );
+    assert(!res.stderr.includes("warning: update-all failed"), res.stderr);
     const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
       TMUX_TMPDIR: tmpDir,
     });
@@ -483,6 +546,7 @@ function stubEnv(tmpDir: string, windowCmd: string, extra: Record<string, string
     AGENTS_CODEX_CMD: "sleep 60",
     AGENTS_AGY_CMD: "sleep 60",
     AGENTS_UPDATE_CMD: "true",
+    AGENTS_UPDATE_SCRIPTS_CMD: "true",
     AGENTS_LAPTOP_WINDOW_CMD: windowCmd,
     AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
     ...extra,
@@ -695,6 +759,7 @@ Deno.test("agents starts codex with overrides passing prompt moment for Permissi
       AGENTS_CLAUDE_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
     assertEquals(res.code, 0, res.stderr);
@@ -733,6 +798,7 @@ Deno.test("agents prints warning when agy Tool Permission is not request-review,
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\talways-proceed\\n'",
     });
@@ -754,6 +820,7 @@ Deno.test("agents prints warning when agy Tool Permission is not request-review,
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
     });
@@ -774,6 +841,7 @@ Deno.test("agents prints warning when agy Tool Permission fails, times out, or p
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "exit 1",
     });
@@ -792,6 +860,7 @@ Deno.test("agents prints warning when agy Tool Permission fails, times out, or p
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'otherSetting\\tfoo\\n'",
     });
@@ -810,6 +879,7 @@ Deno.test("agents prints warning when agy Tool Permission fails, times out, or p
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "sleep 10",
     });
@@ -830,6 +900,7 @@ Deno.test("agents does not check agy Tool Permission when only attaching to exis
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
     });
@@ -839,6 +910,7 @@ Deno.test("agents does not check agy Tool Permission when only attaching to exis
     const resAttach = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
       TMUX_TMPDIR: tmpDir,
       AGENTS_UPDATE_CMD: "false", // would warn if run
+      AGENTS_UPDATE_SCRIPTS_CMD: "false", // would warn if run
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\talways-proceed\\n'", // would warn if run
       AGENTS_LAPTOP_WINDOW_CMD: "true",
     });
@@ -850,6 +922,10 @@ Deno.test("agents does not check agy Tool Permission when only attaching to exis
     assert(
       !resAttach.stderr.includes("warning: update-all"),
       `attach should not run update-all: ${resAttach.stderr}`,
+    );
+    assert(
+      !resAttach.stderr.includes("warning: update-scripts"),
+      `attach should not run update-scripts: ${resAttach.stderr}`,
     );
   });
 });
@@ -982,6 +1058,7 @@ Deno.test(
         AGENTS_CODEX_CMD: "sleep 60",
         AGENTS_AGY_CMD: "sleep 60",
         AGENTS_UPDATE_CMD: "true",
+        AGENTS_UPDATE_SCRIPTS_CMD: "true",
         AGENTS_LAPTOP_WINDOW_CMD: "true",
         AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
       };
@@ -1080,6 +1157,7 @@ Deno.test("agents.sh --restart with no session behaves like a first run", async 
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
     };
@@ -1121,6 +1199,7 @@ export AGENTS_CLAUDE_CMD="sleep 60"
 export AGENTS_CODEX_CMD="sleep 60"
 export AGENTS_AGY_CMD="sleep 60"
 export AGENTS_UPDATE_CMD="true"
+export AGENTS_UPDATE_SCRIPTS_CMD="true"
 export AGENTS_LAPTOP_WINDOW_CMD="true"
 export AGENTS_AGY_CONFIG_CMD="printf 'toolPermission\\trequest-review\\n'"
 exec bash "${AGENTS_SCRIPT}" -L "${socketName}" --no-attach --restart
@@ -1135,6 +1214,7 @@ exec bash "${AGENTS_SCRIPT}" -L "${socketName}" --no-attach --restart
         AGENTS_CODEX_CMD: "sleep 60",
         AGENTS_AGY_CMD: "sleep 60",
         AGENTS_UPDATE_CMD: "true",
+        AGENTS_UPDATE_SCRIPTS_CMD: "true",
         AGENTS_LAPTOP_WINDOW_CMD: "true",
         AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
       };
@@ -1228,6 +1308,7 @@ exec /usr/bin/tmux "$@"
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
     };
@@ -1301,6 +1382,7 @@ Deno.test("agents.sh --restart combines with -S socket path and --no-attach", as
       AGENTS_CODEX_CMD: "sleep 60",
       AGENTS_AGY_CMD: "sleep 60",
       AGENTS_UPDATE_CMD: "true",
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
       AGENTS_LAPTOP_WINDOW_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
     };
@@ -1374,6 +1456,7 @@ Deno.test("agents.sh inside-session restart retains SSH and laptop clients and r
       AGENTS_AGY_CMD: agentCommand("agy"),
       AGENTS_UPDATE_CMD:
         `if tmux -L '${socketName}' has-session -t '=agents' 2>/dev/null; then exit 1; fi; echo updated >> '${updateLog}'`,
+      AGENTS_UPDATE_SCRIPTS_CMD: "true",
     });
     const initial = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
     assertEquals(initial.code, 0, initial.stderr);
