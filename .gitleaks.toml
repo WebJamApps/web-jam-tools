@@ -70,26 +70,18 @@ keywords = ["eyJ"]
 [[rules]]
 id = "mongodb-connection-string"
 description = "MongoDB connection string"
-regex = '''mongodb(?:\+srv)?:\/\/[^\s"']+'''
+regex = '''mongodb(?:\+srv)?:\/\/[^\/:\s"']+:[^@\s"']+@[^\s"']+'''
 keywords = ["mongodb://", "mongodb+srv://"]
 
 [allowlist]
 description = "Global allowlist for WebJamApps repositories"
-regexTarget = "line"
 paths = [
-  '''test/.*''',
-  '''tests/.*''',
   '''cov_profile/.*''',
   '''coverage/.*''',
-  '''hooks/.*''',
   '''node_modules/.*''',
   '''dist/.*''',
   '''build/.*''',
-  '''\.husky/.*''',
   '''package-lock\.json''',
   '''deno\.lock''',
   '''\.gitleaks\.toml''',
-]
-regexes = [
-  '''webjam-fixture-ok''',
 ]

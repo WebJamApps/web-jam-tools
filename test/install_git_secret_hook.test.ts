@@ -41,7 +41,10 @@ Deno.test("master .gitleaks.toml exists and has valid structure", async () => {
   assertStringIncludes(content, "WebJamApps Gitleaks Configuration");
   assertStringIncludes(content, "google-api-key");
   assertStringIncludes(content, "github-pat");
-  assertStringIncludes(content, "webjam-fixture-ok");
+  assert(
+    !content.includes("webjam-fixture-ok"),
+    ".gitleaks.toml must not contain webjam-fixture-ok",
+  );
 });
 
 Deno.test("install-git-secret-hook.sh installs hook into Node repo (.husky/pre-push)", async () => {
@@ -205,17 +208,21 @@ Deno.test("pre-push hook blocks push containing credential literal and does not 
     assert(!leakPush.stderr.includes(fakeKey), "Secret literal was leaked in stderr output");
     assert(!leakPush.stdout.includes(fakeKey), "Secret literal was leaked in stdout output");
 
-    // 6. Test fixture with pragma succeeds
+    // 6. Test fixture with .gitleaksignore succeeds
     await runCmd(["git", "rm", "leak.ts"], localDir);
     await Deno.writeTextFile(
       path.join(localDir, "fixture.ts"),
-      `const key = "${fakeKey}"; // webjam-fixture-ok\n`,
+      `const key = "${fakeKey}";\n`,
     );
-    await runCmd(["git", "add", "fixture.ts"], localDir);
-    await runCmd(["git", "commit", "--amend", "-m", "probe with pragma"], localDir);
+    await Deno.writeTextFile(
+      path.join(localDir, ".gitleaksignore"),
+      "fixture.ts:google-api-key:1\n",
+    );
+    await runCmd(["git", "add", "fixture.ts", ".gitleaksignore"], localDir);
+    await runCmd(["git", "commit", "--amend", "-m", "probe with ignore"], localDir);
 
     const pragmaPush = await runCmd(["git", "push", "origin", "HEAD:main"], localDir);
-    assertEquals(pragmaPush.code, 0, `Push with pragma should succeed: ${pragmaPush.stderr}`);
+    assertEquals(pragmaPush.code, 0, `Push with ignore should succeed: ${pragmaPush.stderr}`);
   } finally {
     await Deno.remove(remoteDir, { recursive: true }).catch(() => {});
     await Deno.remove(localDir, { recursive: true }).catch(() => {});

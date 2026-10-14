@@ -17,7 +17,7 @@ rm -rf cov_profile
 # failed` to stderr. A failing CI build therefore showed a bare "Test failed"
 # with no test name, and unrelated stderr `Download ...` lines directly above
 # it read as the cause. That cost a whole wrong root-cause diagnosis.
-deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile
+deno test --allow-env --allow-run --allow-read --allow-write --coverage=cov_profile </dev/null
 report="$(deno coverage cov_profile 2>/dev/null)"
 echo "$report"
 
