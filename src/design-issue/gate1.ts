@@ -940,6 +940,53 @@ async function assertDirectoryReadable(dirPath: string, describe: string): Promi
   }
 }
 
+export type ThemeFolderMatchResult =
+  | { outcome: "match"; folder: string }
+  | { outcome: "ambiguous"; matches: string[] }
+  | { outcome: "none" };
+
+/**
+ * Normalizes a theme name or folder name for fuzzy matching:
+ * lowercases and treats spaces, hyphens, and underscores as the same character.
+ */
+export function normalizeThemeName(name: string): string {
+  return name.trim().toLowerCase().replace(/[\s\-_]+/g, "_");
+}
+
+/**
+ * Matches a theme name to a folder under the design-documents root.
+ * Compares the two with letter case ignored and with space, hyphen, and underscore
+ * treated as the same character. An exact match is preferred.
+ *
+ * - Condition holds (exactly one folder matches, or one matches exactly) → { outcome: "match", folder }
+ * - Ambiguous (two or more folders match and neither is exact) → { outcome: "ambiguous", matches }
+ * - Does not hold (zero folders match) → { outcome: "none" }
+ */
+export function matchThemeFolder(
+  themeName: string,
+  availableFolders: string[],
+): ThemeFolderMatchResult {
+  const normalizedTarget = normalizeThemeName(themeName);
+  const normalizedMatches = availableFolders.filter(
+    (folder) => normalizeThemeName(folder) === normalizedTarget,
+  );
+
+  if (normalizedMatches.length === 0) {
+    return { outcome: "none" };
+  }
+
+  if (normalizedMatches.length === 1) {
+    return { outcome: "match", folder: normalizedMatches[0] };
+  }
+
+  const exactMatches = normalizedMatches.filter((folder) => folder === themeName);
+  if (exactMatches.length === 1) {
+    return { outcome: "match", folder: exactMatches[0] };
+  }
+
+  return { outcome: "ambiguous", matches: [...normalizedMatches].sort() };
+}
+
 /**
  * The canonical-document precondition for a design run (web-jam-tools#942).
  *
@@ -972,15 +1019,50 @@ export async function resolveCanonicalDesignDoc(
 
   await assertDirectoryReadable(root, "the design-documents root");
 
-  const themes: string[] = [];
-  if (options.theme) {
-    themes.push(options.theme);
-  } else {
+  const availableFolders: string[] = [];
+  try {
     for await (const entry of Deno.readDir(root)) {
       if (entry.isDirectory && !entry.name.startsWith(".")) {
-        themes.push(entry.name);
+        availableFolders.push(entry.name);
       }
     }
+  } catch (err) {
+    throw new DesignDocResolutionRefusal(
+      root,
+      `the design-documents root could not be listed (${
+        err instanceof Error ? err.message : String(err)
+      })`,
+    );
+  }
+
+  let themes: string[] = [];
+  let finderTheme: string | undefined = undefined;
+
+  if (options.theme && options.theme.trim()) {
+    const match = matchThemeFolder(options.theme, availableFolders);
+    if (match.outcome === "match") {
+      themes = [match.folder];
+      finderTheme = match.folder;
+    } else if (match.outcome === "ambiguous") {
+      throw new DesignDocResolutionRefusal(
+        root,
+        `multiple theme folders match "${options.theme}" (${
+          match.matches.map((f) => `"${f}"`).join(", ")
+        })`,
+      );
+    } else {
+      // outcome === "none": refuses, naming the path, as today.
+      await assertDirectoryReadable(
+        path.join(root, options.theme),
+        `the theme folder "${options.theme}"`,
+      );
+      throw new DesignDocResolutionRefusal(
+        path.join(root, options.theme),
+        `the theme folder "${options.theme}" is missing or unreadable`,
+      );
+    }
+  } else {
+    themes = availableFolders;
   }
 
   for (const theme of themes) {
@@ -988,7 +1070,7 @@ export async function resolveCanonicalDesignDoc(
   }
 
   const finder = options.findExistingDesignDocsImpl ?? findExistingDesignDocs;
-  const matches = await finder({ topic, theme: options.theme, dropboxDir: root });
+  const matches = await finder({ topic, theme: finderTheme, dropboxDir: root });
 
   if (matches.length === 0) {
     return { outcome: "no-document", topic, root, match: null, decisions: [] };

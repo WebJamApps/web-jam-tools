@@ -20,6 +20,8 @@ import {
   isDesignDocFilename,
   isThemeLevelDesignDoc,
   matchesTopic,
+  matchThemeFolder,
+  normalizeThemeName,
   normalizeTopicSlug,
   parseDecisionsRecord,
   refuseRedundantDesignDoc,
@@ -1743,6 +1745,168 @@ Deno.test("runGate1 opens Gate 1 record as open and clears any earlier approval"
     const status3 = await getGate1Status(docPath, { stateDir });
     assertEquals(status3.status, "open");
     assertEquals(status3.reply, undefined);
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("web-jam-tools#1394: matchThemeFolder matches theme folder ignoring casing and separators", () => {
+  assertEquals(normalizeThemeName("AI Misbehaves"), "ai_misbehaves");
+  assertEquals(normalizeThemeName("Access Controls"), "access_controls");
+  assertEquals(normalizeThemeName("token-savings"), "token_savings");
+  assertEquals(normalizeThemeName("Token_Savings"), "token_savings");
+
+  assertEquals(matchThemeFolder("AI Misbehaves", ["AI_Misbehaves"]), {
+    outcome: "match",
+    folder: "AI_Misbehaves",
+  });
+  assertEquals(matchThemeFolder("Access Controls", ["Access_Controls"]), {
+    outcome: "match",
+    folder: "Access_Controls",
+  });
+  assertEquals(matchThemeFolder("token-savings", ["Token_Savings"]), {
+    outcome: "match",
+    folder: "Token_Savings",
+  });
+  assertEquals(matchThemeFolder("gig-outreach", ["gig-outreach"]), {
+    outcome: "match",
+    folder: "gig-outreach",
+  });
+  assertEquals(matchThemeFolder("AI_Misbehaves", ["AI_Misbehaves"]), {
+    outcome: "match",
+    folder: "AI_Misbehaves",
+  });
+  assertEquals(
+    matchThemeFolder("token-savings", ["token-savings", "Token_Savings"]),
+    {
+      outcome: "match",
+      folder: "token-savings",
+    },
+  );
+  assertEquals(
+    matchThemeFolder("Token Savings", ["token-savings", "Token_Savings"]),
+    {
+      outcome: "ambiguous",
+      matches: ["Token_Savings", "token-savings"],
+    },
+  );
+  assertEquals(matchThemeFolder("song-recordings", []), {
+    outcome: "none",
+  });
+  assertEquals(matchThemeFolder("backup", ["backups", "backup-restore"]), {
+    outcome: "none",
+  });
+});
+
+Deno.test("web-jam-tools#1394: resolveCanonicalDesignDoc matches theme folder ignoring casing and separators (9-case closed set)", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "theme-folder-resolution-" });
+  try {
+    // Set up initial folders
+    await Deno.mkdir(path.join(tempDir, "AI_Misbehaves"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "Access_Controls"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "Token_Savings"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "gig-outreach"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "backups"), { recursive: true });
+    await Deno.mkdir(path.join(tempDir, "backup-restore"), { recursive: true });
+
+    // 1. "AI Misbehaves" -> "AI_Misbehaves" (resolves)
+    const res1 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "AI Misbehaves",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res1.outcome, "no-document");
+
+    // 2. "Access Controls" -> "Access_Controls" (resolves)
+    const res2 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "Access Controls",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res2.outcome, "no-document");
+
+    // 3. "token-savings" -> "Token_Savings" (resolves)
+    const res3 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "token-savings",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res3.outcome, "no-document");
+
+    // 4. "gig-outreach" -> "gig-outreach" (resolves)
+    const res4 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "gig-outreach",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res4.outcome, "no-document");
+
+    // 5. "AI_Misbehaves" -> "AI_Misbehaves" (resolves)
+    const res5 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "AI_Misbehaves",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res5.outcome, "no-document");
+
+    // Create "token-savings" alongside "Token_Savings"
+    await Deno.mkdir(path.join(tempDir, "token-savings"), { recursive: true });
+    await Deno.writeTextFile(
+      path.join(tempDir, "token-savings", "test-topic-design-2026-10-14.md"),
+      MINIMAL_LINT_CLEAN_DOC,
+    );
+
+    // 6. "token-savings" with ["token-savings", "Token_Savings"] present -> resolves to exact "token-savings"
+    const res6 = await resolveCanonicalDesignDoc({
+      topic: "test-topic",
+      theme: "token-savings",
+      dropboxDir: tempDir,
+    });
+    assertEquals(res6.outcome, "existing-document");
+    assertEquals(res6.match?.theme, "token-savings");
+
+    // 7. "Token Savings" with ["token-savings", "Token_Savings"] present -> refuses naming both
+    const err7 = await assertRejects(
+      () =>
+        resolveCanonicalDesignDoc({
+          topic: "test-topic",
+          theme: "Token Savings",
+          dropboxDir: tempDir,
+        }),
+      DesignDocResolutionRefusal,
+    );
+    assertStringIncludes(err7.message, 'multiple theme folders match "Token Savings"');
+    assertStringIncludes(err7.message, '"Token_Savings"');
+    assertStringIncludes(err7.message, '"token-savings"');
+
+    // 8. "song-recordings" -> refuses naming path (no folder exists)
+    const err8 = await assertRejects(
+      () =>
+        resolveCanonicalDesignDoc({
+          topic: "test-topic",
+          theme: "song-recordings",
+          dropboxDir: tempDir,
+        }),
+      DesignDocResolutionRefusal,
+    );
+    assertStringIncludes(
+      err8.message,
+      'the theme folder "song-recordings" is missing or unreadable',
+    );
+    assertStringIncludes(err8.message, path.join(tempDir, "song-recordings"));
+
+    // 9. "backup" with ["backups", "backup-restore"] present -> refuses naming path (neither matches; no prefix-match)
+    const err9 = await assertRejects(
+      () =>
+        resolveCanonicalDesignDoc({
+          topic: "test-topic",
+          theme: "backup",
+          dropboxDir: tempDir,
+        }),
+      DesignDocResolutionRefusal,
+    );
+    assertStringIncludes(err9.message, 'the theme folder "backup" is missing or unreadable');
+    assertStringIncludes(err9.message, path.join(tempDir, "backup"));
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }

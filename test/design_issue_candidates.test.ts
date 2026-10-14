@@ -278,3 +278,71 @@ Deno.test("runCandidatesCli resolving a topic under an unreadable design-documen
     "an indeterminate check must never report a genuine no-document result",
   );
 });
+
+Deno.test("web-jam-tools#1394: runCandidatesCli with --epic matches theme folder whose name is spelled differently from milestone", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "candidates-milestone-diff-" });
+  const themeDir = `${tempDir}/AI_Misbehaves`;
+  await Deno.mkdir(themeDir, { recursive: true });
+
+  const runner = createMockRunner({
+    "JaMmusic": {
+      stdout: JSON.stringify({
+        title: "secret-guard: push guard protection",
+        milestone: { title: "AI Misbehaves" },
+      }),
+    },
+  });
+
+  const logs: string[] = [];
+  const errors: string[] = [];
+  try {
+    // 1. When no document exists yet, reports no existing design doc found without theme-folder refusal (exit 0)
+    const exitCode1 = await runCandidatesCli(
+      [
+        "--epic",
+        'JaMmusic#1315 "Secret Guard"',
+        "--dropbox-dir",
+        tempDir,
+      ],
+      {
+        runner,
+        log: (msg) => logs.push(msg),
+        errorLog: (msg) => errors.push(msg),
+      },
+    );
+
+    assertEquals(exitCode1, 0);
+    assertEquals(errors.length, 0);
+    assertStringIncludes(logs.join("\n"), 'No existing design document found for "secret-guard"');
+
+    // 2. When a matching document exists under AI_Misbehaves, resolves it without theme-folder refusal (exit 0)
+    await Deno.writeTextFile(
+      `${themeDir}/secret-guard-design-2026-10-14.md`,
+      `# Secret Guard Design\n\n## Section\nContent\n`,
+    );
+    const logs2: string[] = [];
+    const errors2: string[] = [];
+    const exitCode2 = await runCandidatesCli(
+      [
+        "--epic",
+        'JaMmusic#1315 "Secret Guard"',
+        "--dropbox-dir",
+        tempDir,
+      ],
+      {
+        runner,
+        log: (msg) => logs2.push(msg),
+        errorLog: (msg) => errors2.push(msg),
+      },
+    );
+
+    assertEquals(exitCode2, 0);
+    assertEquals(errors2.length, 0);
+    assertStringIncludes(
+      logs2.join("\n"),
+      'Resolved existing canonical design document for "secret-guard"',
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
