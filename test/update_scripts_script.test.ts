@@ -1,14 +1,14 @@
-// update_hooks_script.test.ts
+// update_scripts_script.test.ts
 //
-// Exercises scripts/update-hooks.sh against a sandbox: a bare "origin" whose
+// Exercises scripts/update-scripts.sh against a sandbox: a bare "origin" whose
 // dev branch carries a stub scripts/install-hooks.sh, plus a clone of it. The
-// real update-hooks.sh is run from an unrelated cwd to prove it works from any
+// real update-scripts.sh is run from an unrelated cwd to prove it works from any
 // directory. The real ~/.claude and the real clone are never touched.
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
-const UPDATE_SCRIPT = `${REPO_ROOT}scripts/update-hooks.sh`;
+const UPDATE_SCRIPT = `${REPO_ROOT}scripts/update-scripts.sh`;
 
 async function run(
   cmd: string,
@@ -45,7 +45,7 @@ interface Sandbox {
 }
 
 async function makeSandbox(): Promise<Sandbox> {
-  const root = await Deno.makeTempDir({ prefix: "update-hooks-" });
+  const root = await Deno.makeTempDir({ prefix: "update-scripts-" });
   const origin = `${root}/origin.git`;
   const seed = `${root}/seed`;
   const clone = `${root}/clone`;
@@ -86,7 +86,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-Deno.test("update-hooks.sh refuses when the clone is not on dev", async () => {
+Deno.test("update-scripts.sh refuses when the clone is not on dev", async () => {
   const sb = await makeSandbox();
   try {
     await git(sb.clone, "checkout", "-b", "feature/x");
@@ -104,7 +104,7 @@ Deno.test("update-hooks.sh refuses when the clone is not on dev", async () => {
   }
 });
 
-Deno.test("update-hooks.sh pulls dev and passes args to install-hooks.sh from any cwd", async () => {
+Deno.test("update-scripts.sh pulls dev and passes args to install-hooks.sh from any cwd", async () => {
   const sb = await makeSandbox();
   try {
     await Deno.writeTextFile(`${sb.seed}/newer.txt`, "newer\n");

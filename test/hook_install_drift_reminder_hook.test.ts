@@ -295,11 +295,10 @@ Deno.test("detectDrift catches added, deleted, and modified hook files on origin
     assert(msg.includes("Added on origin/dev: hooks/hook3.sh"), msg);
     assert(msg.includes("Deleted on origin/dev: hooks/hook1.sh"), msg);
     assert(msg.includes("Modified on origin/dev: hooks/hook2.sh"), msg);
-    // The update command must be the cwd-independent helper script, not a repo-relative path.
+    // The update command must be the installed command, with the cwd-independent full path as the first-run fallback.
+    assert(msg.includes("'update-scripts'"), msg);
     assert(
-      msg.includes(
-        "'~/WebJamApps/web-jam-tools/scripts/update-hooks.sh'",
-      ),
+      msg.includes("'~/WebJamApps/web-jam-tools/scripts/update-scripts.sh'"),
       msg,
     );
   } finally {

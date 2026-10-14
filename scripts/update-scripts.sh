@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# update-hooks.sh — update installed hooks from any directory.
+# update-scripts.sh — update installed hooks from any directory.
 #
 # Fast-forward pulls dev in the web-jam-tools clone, then runs install-hooks.sh
 # (arguments such as --check are passed through). Refuses unless the clone is
@@ -10,7 +10,7 @@ REPO="${WJT_REPO_DIR:-$HOME/WebJamApps/web-jam-tools}"
 
 branch="$(git -C "$REPO" symbolic-ref --short HEAD)"
 if [ "$branch" != "dev" ]; then
-  echo "update-hooks: the clone at $REPO is on branch '$branch', not dev; pulling would merge dev into that branch." >&2
+  echo "update-scripts: the clone at $REPO is on branch '$branch', not dev; pulling would merge dev into that branch." >&2
   echo "Switch it to dev first: git -C \"$REPO\" checkout dev" >&2
   exit 1
 fi

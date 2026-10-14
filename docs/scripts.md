@@ -350,12 +350,21 @@ installation steps on Linux.
 - `REAPER_UPDATE_BIN`: Path or command for REAPER updater (default: auto-detected from PATH or
   `$SCRIPT_DIR/reaper-update.sh`).
 
-### `update-hooks.sh`
+### `update-scripts.sh` (the `update-scripts` command)
 
-`scripts/update-hooks.sh` fast-forward pulls `dev` in the web-jam-tools clone (`$WJT_REPO_DIR`,
+`scripts/update-scripts.sh` fast-forward pulls `dev` in the web-jam-tools clone (`$WJT_REPO_DIR`,
 default `~/WebJamApps/web-jam-tools`) and then runs `install-hooks.sh`, passing its arguments
 through (for example `--check`). It runs from any directory and refuses, exiting 1, unless the clone
 is on `dev`.
+
+`install-hooks.sh` symlinks it into `~/.local/bin/update-scripts`, so after the first install you
+update by typing just `update-scripts` in any terminal. On a machine that does not have the command
+yet, run the full path once: `~/WebJamApps/web-jam-tools/scripts/update-scripts.sh` (that run
+installs the command).
+
+The `agents` command also runs it, right after `update-all.sh`, whenever it creates or restarts the
+session (not when it only attaches). A failure prints a warning and the agents still start. Override
+the command with `AGENTS_UPDATE_SCRIPTS_CMD`.
 
 ### `install-hooks.sh` — what actually gets symlinked
 

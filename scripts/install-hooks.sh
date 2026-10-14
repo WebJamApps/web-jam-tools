@@ -86,7 +86,8 @@
 #                           alongside that isolated settings file.
 #   --agents-md-path PATH  Merge rules pointer into PATH instead of $HOME/.agents/AGENTS.md
 #                           (also settable via AGENTS_MD_PATH).
-#   --bin-dir PATH         Symlink CLI scripts into PATH instead of $HOME/.local/bin
+#   --bin-dir PATH         Symlink CLI scripts (agents, update-scripts) into PATH instead of
+#                           $HOME/.local/bin
 #                           (also settable via BIN_DIR; web-jam-tools#1174).
 #   --force                 Required to link into the default hooks destination when
 #                           this script is running from inside a git worktree (see
@@ -1136,6 +1137,12 @@ if [ "$CHECK_MODE" = "1" ]; then
       echo "drift: agents script is not linked at $AGENTS_DEST" >&2
       DRIFT=1
     fi
+
+    UPDATE_SCRIPTS_DEST="$BIN_DIR/update-scripts"
+    if [ ! -L "$UPDATE_SCRIPTS_DEST" ] || [ "$(readlink -f "$UPDATE_SCRIPTS_DEST")" != "$(readlink -f "$REPO_DIR/scripts/update-scripts.sh")" ]; then
+      echo "drift: update-scripts script is not linked at $UPDATE_SCRIPTS_DEST" >&2
+      DRIFT=1
+    fi
   fi
 
   if ! deno run --allow-read --allow-env "$REPO_DIR/scripts/merge-hooks-into-settings.ts" "$SETTINGS_PATH" "--check" "--" "${merge_session_start_args[@]}" "--stop" "${merge_stop_args[@]}" "--session-end" "${merge_session_end_args[@]}" "--pre-tool-use" "${merge_pre_tool_use_args[@]}" "--post-tool-use" "${merge_post_tool_use_args[@]}" "--deny" "${merge_deny_args[@]}" "--ask" "${merge_ask_args[@]}" "--allow" "${merge_allow_args[@]}" "--status-line" "${merge_status_line_args[@]}" "--auto-mode" "${merge_auto_mode_args[@]}" "--skill-overrides" "${merge_skill_overrides_args[@]}" "--model-settings" "${merge_model_settings_args[@]}"; then
@@ -1347,7 +1354,8 @@ else
 fi
 
 # --- CLI tools symlink (~/.local/bin/agents, web-jam-tools#1174) ---
-# Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default).
+# Symlinks scripts/agents.sh into $BIN_DIR/agents (~/.local/bin/agents by default)
+# and scripts/update-scripts.sh into $BIN_DIR/update-scripts.
 # Only linked when targeting the real default destination (HOOKS_DEST_IS_DEFAULT=1)
 # or when an explicit --bin-dir/BIN_DIR override is provided, keeping sandboxed
 # hook tests from touching the real ~/.local/bin.
@@ -1363,6 +1371,18 @@ if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$BIN_DIR_IS_DEFAULT" = "0" ]; then
   else
     ln -s "$REPO_DIR/scripts/agents.sh" "$AGENTS_DEST"
     echo "agents: linked (new)"
+  fi
+
+  UPDATE_SCRIPTS_DEST="$BIN_DIR/update-scripts"
+  if [ -L "$UPDATE_SCRIPTS_DEST" ] && [ "$(readlink -f "$UPDATE_SCRIPTS_DEST")" = "$(readlink -f "$REPO_DIR/scripts/update-scripts.sh")" ]; then
+    echo "update-scripts: ok (already linked)"
+  elif [ -e "$UPDATE_SCRIPTS_DEST" ] || [ -L "$UPDATE_SCRIPTS_DEST" ]; then
+    mv "$UPDATE_SCRIPTS_DEST" "$UPDATE_SCRIPTS_DEST.bak-$STAMP"
+    ln -s "$REPO_DIR/scripts/update-scripts.sh" "$UPDATE_SCRIPTS_DEST"
+    echo "update-scripts: linked (previous version backed up to update-scripts.bak-$STAMP)"
+  else
+    ln -s "$REPO_DIR/scripts/update-scripts.sh" "$UPDATE_SCRIPTS_DEST"
+    echo "update-scripts: linked (new)"
   fi
 fi
 

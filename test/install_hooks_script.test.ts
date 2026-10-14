@@ -1678,6 +1678,21 @@ Deno.test(
         `expected target to end with scripts/agents.sh, got ${target}`,
       );
 
+      const updateScriptsSymlink = `${binDir}/update-scripts`;
+      assert(
+        await pathExists(updateScriptsSymlink),
+        "expected update-scripts to be symlinked in binDir",
+      );
+      assert(
+        (await Deno.lstat(updateScriptsSymlink)).isSymlink,
+        "expected update-scripts to be a symlink",
+      );
+      const updateTarget = await Deno.readLink(updateScriptsSymlink);
+      assert(
+        updateTarget.endsWith("scripts/update-scripts.sh"),
+        `expected target to end with scripts/update-scripts.sh, got ${updateTarget}`,
+      );
+
       // Clean check passes
       const checkRes = await run("bash", [
         INSTALL_SCRIPT,
@@ -1710,6 +1725,23 @@ Deno.test(
       assert(
         checkDriftRes.stderr.includes("drift: agents script is not linked at"),
         checkDriftRes.stderr,
+      );
+
+      // Remove update-scripts too -> --check also reports it
+      await Deno.remove(updateScriptsSymlink);
+      const checkDrift2Res = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--bin-dir",
+        binDir,
+        "--check",
+      ]);
+      assert(
+        checkDrift2Res.stderr.includes("drift: update-scripts script is not linked at"),
+        checkDrift2Res.stderr,
       );
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
