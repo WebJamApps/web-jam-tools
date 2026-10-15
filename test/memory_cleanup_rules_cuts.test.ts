@@ -174,10 +174,16 @@ Deno.test("limits come from canonical limits.json for all three parts and count 
     assertEquals(result.overMark, limits[part].overMark);
     const text = "é".repeat(Math.floor(limits[part].lowMark! / 2) + 1);
     assert(text.length < limits[part].lowMark!);
-    await assertRejects(
-      () => planRulesCuts(text, { part, spans: [{ id: "keep", kind: "rule", text }] }, SKILLS),
-      Error,
-      "exceeds low mark",
+    const overResult = await planRulesCuts(
+      text,
+      { part, spans: [{ id: "keep", kind: "rule", text }] },
+      SKILLS,
+    );
+    assertEquals(overResult.after, text);
+    assert(overResult.afterBytes > limits[part].lowMark!);
+    assertStringIncludes(
+      overResult.report,
+      `${overResult.afterBytes - limits[part].lowMark!} bytes over low mark`,
     );
   }
   await assertRejects(
@@ -189,6 +195,308 @@ Deno.test("limits come from canonical limits.json for all three parts and count 
     Error,
     "retain at least one rule",
   );
+});
+
+Deno.test("acceptance: rule span kept unchanged is present in result, before and after rule lists match", async () => {
+  const plan: RulesCutsPlan = {
+    part: "mainRules",
+    spans: [
+      { id: "keep1", kind: "rule", text: "Rule number one.\n\n" },
+      { id: "keep2", kind: "rule", text: "Rule number two.\n" },
+    ],
+  };
+  const source = plan.spans.map((s) => s.text).join("");
+  const result = await planRulesCuts(source, plan, SKILLS);
+  assertEquals(result.after, "Rule number one.\n\nRule number two.\n");
+  assertEquals(result.rulesBefore, result.rulesAfter);
+  assertEquals(result.rulesBefore, ["Rule number one.\n\n", "Rule number two.\n"]);
+  assertStringIncludes(result.report, "Rules unchanged: yes");
+});
+
+Deno.test("acceptance: skill-instruction word for word in SKILL.md is removed from rules file", async () => {
+  const plan: RulesCutsPlan = {
+    part: "mainRules",
+    spans: [
+      { id: "rule1", kind: "rule", text: "Keep this rule.\n\n" },
+      {
+        id: "instruct",
+        kind: "skill-instruction",
+        text: "Open changes through a draft pull request.\n\n",
+        target_skill: "draft-pr",
+      },
+      { id: "rule2", kind: "rule", text: "Keep this rule too.\n" },
+    ],
+  };
+  const source = plan.spans.map((s) => s.text).join("");
+  const result = await planRulesCuts(source, plan, SKILLS);
+  assertEquals(result.after, "Keep this rule.\n\nKeep this rule too.\n");
+  assert(!result.after.includes("draft pull request"));
+  assertEquals(result.rulesBefore, result.rulesAfter);
+});
+
+Deno.test("acceptance: skill-instruction absent or reworded in target skill refuses cut", async () => {
+  const plan: RulesCutsPlan = {
+    part: "mainRules",
+    spans: [
+      { id: "rule1", kind: "rule", text: "Keep this rule.\n\n" },
+      {
+        id: "instruct",
+        kind: "skill-instruction",
+        text: "This instruction is not in the draft-pr skill.\n\n",
+        target_skill: "draft-pr",
+      },
+    ],
+  };
+  const source = plan.spans.map((s) => s.text).join("");
+  await assertRejects(
+    () => planRulesCuts(source, plan, SKILLS),
+    Error,
+    "does not appear word for word",
+  );
+});
+
+Deno.test("acceptance: scoped-rule word for word in target skill is removed and after list names it as moved", async () => {
+  const plan: RulesCutsPlan = {
+    part: "mainRules",
+    spans: [
+      { id: "r1", kind: "rule", text: "Keep this rule.\n\n" },
+      {
+        id: "scoped1",
+        kind: "scoped-rule",
+        text: "Open changes through a draft pull request.\n\n",
+        target_skill: "draft-pr",
+      },
+    ],
+  };
+  const source = plan.spans.map((s) => s.text).join("");
+  const result = await planRulesCuts(source, plan, SKILLS);
+  assertEquals(result.after, "Keep this rule.\n\n");
+  assert(!result.after.includes("draft pull request"));
+  assertEquals(result.rulesBefore, [
+    "Keep this rule.\n\n",
+    "Open changes through a draft pull request.\n\n",
+  ]);
+  assertEquals(result.rulesAfter, [
+    "Keep this rule.\n\n",
+    "[moved to draft-pr] Open changes through a draft pull request.\n\n",
+  ]);
+  assertStringIncludes(result.rulesAfter[1], "moved to draft-pr");
+  assertStringIncludes(result.report, "moved to draft-pr");
+  assertStringIncludes(result.report, "Rules unchanged: no");
+});
+
+Deno.test("acceptance: scoped-rule marked as approval or safety rule refuses cut", async () => {
+  for (
+    const patch of [
+      { guard: true },
+      { safety: true },
+      { approval: true },
+      { reason: "approval" },
+      { reason: "safety" },
+      { reason: "approval-gate" },
+      { reason: "deletion-guard" },
+      { reason: "credential-rule" },
+      { reason: "spending-rule" },
+    ]
+  ) {
+    const plan: RulesCutsPlan = {
+      part: "mainRules",
+      spans: [
+        { id: "r1", kind: "rule", text: "Keep this rule.\n\n" },
+        {
+          id: "scoped1",
+          kind: "scoped-rule",
+          text: "Open changes through a draft pull request.\n\n",
+          target_skill: "draft-pr",
+          ...patch,
+        },
+      ],
+    };
+    const source = plan.spans.map((s) => s.text).join("");
+    await assertRejects(
+      () => planRulesCuts(source, plan, SKILLS),
+      Error,
+      "Approval and safety rules cannot be moved into a skill",
+    );
+  }
+});
+
+Deno.test("acceptance: reworded span with replacement and approved: true replaces text and shows change in after list", async () => {
+  const plan: RulesCutsPlan = {
+    part: "mainRules",
+    spans: [
+      { id: "r1", kind: "rule", text: "Keep this rule.\n\n" },
+      {
+        id: "rew1",
+        kind: "reworded",
+        text:
+          "This is a very long, verbose, complicated sentence stating a simple requirement.\n\n",
+        replacement: "Short requirement.\n\n",
+        approved: true,
+      },
+    ],
+  };
+  const source = plan.spans.map((s) => s.text).join("");
+  const result = await planRulesCuts(source, plan, SKILLS);
+  assertEquals(result.after, "Keep this rule.\n\nShort requirement.\n\n");
+  assertStringIncludes(result.after, "Short requirement.");
+  assert(!result.after.includes("verbose"));
+  assertEquals(result.rulesBefore, [
+    "Keep this rule.\n\n",
+    "This is a very long, verbose, complicated sentence stating a simple requirement.\n\n",
+  ]);
+  assertEquals(result.rulesAfter, [
+    "Keep this rule.\n\n",
+    "[reworded] Short requirement.\n\n",
+  ]);
+  assertStringIncludes(result.report, "[reworded] Short requirement.");
+});
+
+Deno.test("acceptance: reworded span with approved: false or no approved keeps original rule", async () => {
+  for (const approvedVal of [false, undefined]) {
+    const plan: RulesCutsPlan = {
+      part: "mainRules",
+      spans: [
+        { id: "r1", kind: "rule", text: "Keep this rule.\n\n" },
+        {
+          id: "rew1",
+          kind: "reworded",
+          text: "Original verbose rule text.\n\n",
+          replacement: "Short.\n\n",
+          approved: approvedVal,
+        },
+      ],
+    };
+    const source = plan.spans.map((s) => s.text).join("");
+    const result = await planRulesCuts(source, plan, SKILLS);
+    assertEquals(result.after, "Keep this rule.\n\nOriginal verbose rule text.\n\n");
+    assertStringIncludes(result.after, "Original verbose rule text.");
+    assert(!result.after.includes("Short."));
+    assertEquals(result.rulesBefore, result.rulesAfter);
+    assertEquals(result.rulesAfter, ["Keep this rule.\n\n", "Original verbose rule text.\n\n"]);
+  }
+});
+
+Deno.test("acceptance: removed-rule span with approved: true and reason obsolete/hook-enforced is removed and named in after list", async () => {
+  for (const reason of ["obsolete", "hook-enforced"]) {
+    const plan: RulesCutsPlan = {
+      part: "mainRules",
+      spans: [
+        { id: "r1", kind: "rule", text: "Keep this rule.\n\n" },
+        {
+          id: "rem1",
+          kind: "removed-rule",
+          text: "Old rule that is no longer needed.\n\n",
+          reason,
+          approved: true,
+        },
+      ],
+    };
+    const source = plan.spans.map((s) => s.text).join("");
+    const result = await planRulesCuts(source, plan, SKILLS);
+    assertEquals(result.after, "Keep this rule.\n\n");
+    assert(!result.after.includes("Old rule"));
+    assertEquals(result.rulesBefore, [
+      "Keep this rule.\n\n",
+      "Old rule that is no longer needed.\n\n",
+    ]);
+    assertEquals(result.rulesAfter, [
+      "Keep this rule.\n\n",
+      `[removed: ${reason}] Old rule that is no longer needed.\n\n`,
+    ]);
+    assertStringIncludes(result.rulesAfter[1], `removed: ${reason}`);
+    assertStringIncludes(result.report, `[removed: ${reason}]`);
+  }
+});
+
+Deno.test("acceptance: removed-rule span without approved: true keeps original rule", async () => {
+  for (const approvedVal of [false, undefined]) {
+    const plan: RulesCutsPlan = {
+      part: "mainRules",
+      spans: [
+        { id: "r1", kind: "rule", text: "Keep this rule.\n\n" },
+        {
+          id: "rem1",
+          kind: "removed-rule",
+          text: "Rule proposed for removal.\n\n",
+          reason: "obsolete",
+          approved: approvedVal,
+        },
+      ],
+    };
+    const source = plan.spans.map((s) => s.text).join("");
+    const result = await planRulesCuts(source, plan, SKILLS);
+    assertEquals(result.after, "Keep this rule.\n\nRule proposed for removal.\n\n");
+    assertStringIncludes(result.after, "Rule proposed for removal.");
+    assertEquals(result.rulesBefore, result.rulesAfter);
+  }
+});
+
+Deno.test("acceptance: result above low mark makes cut and names remaining bytes over low mark without refusal", async () => {
+  const limits = await loadLimits();
+  const part = "mainRules";
+  const lowMark = limits[part].lowMark!;
+  const filler = "Rule text that exceeds the low mark. ".repeat(Math.ceil(lowMark / 30));
+  const plan: RulesCutsPlan = {
+    part,
+    spans: [{ id: "bigRule", kind: "rule", text: filler }],
+  };
+  const result = await planRulesCuts(filler, plan, SKILLS);
+  assertEquals(result.after, filler);
+  assert(result.afterBytes > lowMark);
+  const remaining = result.afterBytes - lowMark;
+  assertStringIncludes(result.report, `${remaining} bytes over low mark`);
+});
+
+Deno.test("check 3: fixture plan holding one span of each kind lists before and after, names moved, reworded, and removed rows, and names bytes over low mark", async () => {
+  const limits = await loadLimits();
+  const lowMark = limits.mainRules.lowMark!;
+  const bigRuleText = "A".repeat(lowMark + 50);
+  const plan: RulesCutsPlan = {
+    part: "mainRules",
+    skills_dir: SKILLS,
+    spans: [
+      { id: "r1", kind: "rule", text: "First rule.\n\n" },
+      { id: "story", kind: "backstory", text: "A backstory paragraph.\n\n" },
+      {
+        id: "inst",
+        kind: "skill-instruction",
+        text: "Open changes through a draft pull request.\n\n",
+        target_skill: "draft-pr",
+      },
+      { id: "rep", kind: "repeat", text: "First rule.\n\n", repeats: "r1" },
+      {
+        id: "scoped",
+        kind: "scoped-rule",
+        text: "Open changes through a draft pull request.\n\n",
+        target_skill: "draft-pr",
+      },
+      {
+        id: "rew",
+        kind: "reworded",
+        text: "Verbose rule text.\n\n",
+        replacement: "Concise rule.\n\n",
+        approved: true,
+      },
+      {
+        id: "rem",
+        kind: "removed-rule",
+        text: "Obsolete rule.\n\n",
+        reason: "obsolete",
+        approved: true,
+      },
+      { id: "big", kind: "rule", text: bigRuleText },
+    ],
+  };
+  const source = plan.spans.map((s) => s.text).join("");
+  const result = await planRulesCuts(source, plan, SKILLS);
+  assert(result.afterBytes > lowMark);
+  assertStringIncludes(result.report, "Rules before:");
+  assertStringIncludes(result.report, "Rules after:");
+  assertStringIncludes(result.report, "[moved to draft-pr]");
+  assertStringIncludes(result.report, "[reworded] Concise rule.");
+  assertStringIncludes(result.report, "[removed: obsolete]");
+  assertStringIncludes(result.report, "bytes over low mark");
 });
 
 Deno.test("malformed plans, unsupported parts, unsafe skills and contradictory actions fail closed", async () => {
@@ -225,6 +533,30 @@ Deno.test("malformed plans, unsupported parts, unsafe skills and contradictory a
   );
   assertThrows(() =>
     parseRulesCutsPlan({ ...plan, spans: [{ id: "r", kind: "rule", text: " " }] })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [{ id: "r", kind: "removed-rule", text: "x", approved: true, reason: "invalid" }],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [{ id: "r", kind: "reworded", text: "x", approved: true, replacement: " " }],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [{ id: "r", kind: "scoped-rule", text: "x", target_skill: "INVALID_SLUG" }],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [{ id: "r", kind: "scoped-rule", text: "x", target_skill: "draft-pr", guard: true }],
+    })
   );
 });
 

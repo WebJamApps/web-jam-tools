@@ -275,8 +275,9 @@ work and the checks. The plan file is JSON: `merges` (`keep`, `absorb`), `moves`
 For the rules-file half of session-load cleanup, propose cuts to only
 `web-jam-tools/AGENTS.md`, `web-jam-tools/docs/cross-ai-rules.md`, and `JaMmusic/AGENTS.md`.
 Read their low marks from `src/session-load/limits.json`; the other six repositories' rules
-files stay as they are. This workflow prepares a pull request for Josh to review. Every rule
-stays, even if that means a proposed cut cannot meet its low mark.
+files stay as they are. This workflow prepares a pull request for Josh to review.
+A cut whose result is above the low mark is made, and the output names the
+remaining bytes over the low mark.
 
 1. Create an isolated feature worktree off fresh `dev` for each affected repository. Work on
    that worktree's rules file, never the shared checkout or the home symlink. Use the
@@ -293,6 +294,13 @@ stays, even if that means a proposed cut cannot meet its low mark.
      `file-issue`, review mechanics in `pr-review`, dispatch flags in `delegate`, and the
      plan table in `design-issue`. This workflow may edit these target skills to preserve
      the moved instructions. Include those edits in the tools pull request.
+   - `scoped-rule`: moves a rule that matters only for one kind of work, word for word, into
+     its `target_skill`'s `SKILL.md`. An approval or safety rule never moves: a rule about
+     real outreach, spending, deletion, or credentials stays in the rules file.
+   - `reworded`: proposes a shorter wording in `replacement`. Applied only with Josh's yes on
+     that row (`approved: true`); without approval, the original rule stays.
+   - `removed-rule`: proposes removal with `reason` of `obsolete` or `hook-enforced`. Applied
+     only with Josh's yes on that row (`approved: true`); without approval, the rule stays.
    - `backstory`: removed (origin blocks, issue citations with titles, quoted statements,
      error strings, and worked examples).
    - `repeat`: removed only when `repeats` names an identical retained rule span. The
@@ -308,7 +316,8 @@ stays, even if that means a proposed cut cannot meet its low mark.
 
    The script prints the full rules-before and rules-after lists, which must be equal, and
    the proposed byte size against the low and over marks. A dry run writes nothing. A stale
-   plan, missing moved text, changed repeat, or result above the low mark refuses the cut.
+   plan, missing moved text, or changed repeat refuses the cut; a result above the low mark
+   is made and names the remaining bytes over the low mark.
 5. Run the same command without `--dry-run` to prepare the cut in the feature worktree.
    Review the diff and both rules lists, then commit, push, and open the draft pull request
    through `draft-pr`. If instructions move out of JaMmusic into the tools repository,
