@@ -24,6 +24,9 @@ import {
   assertThrows,
 } from "@std/assert";
 import { parse as parseYaml } from "@std/yaml";
+import { join } from "@std/path";
+import { installSkills } from "../src/install-skills/lib.ts";
+import { installCodex } from "../src/install-codex/install.ts";
 import { loadLimits } from "../src/session-load/report.ts";
 
 const SKILLS_DIR = new URL("../skills/", import.meta.url).pathname;
@@ -1197,16 +1200,57 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
   const designIssuePath = `${SKILLS_DIR}design-issue/SKILL.md`;
   const text = await Deno.readTextFile(designIssuePath);
 
+  assertStringIncludes(text, "### The model conducting the design");
+  assertStringIncludes(
+    text,
+    "When Josh invokes `/design-issue` or `$design-issue` in a session, the current model conducts the design. The run does not stop, require a model switch, or ask for additional authorization merely because that model differs from a default recommendation.",
+  );
+  assertStringIncludes(
+    text,
+    "The defaults guide choosing a new session: Flash for a single genuinely simple Bug or Task; Opus for a Feature, Epic, multi-repository or multi-issue design, or a Bug or Task whose scope requires substantial judgment. They are recommendations for arranging work, not an eligibility list for a session Josh invokes.",
+  );
+  assertStringIncludes(text, "### Phase 1 — Design\n");
+  assertStringIncludes(text, "### Phase 2 — The Issue Plan\n");
+  assertFalse(
+    text.includes("### Phase 1 — Design (Opus / Flash for simple Bug or Task)"),
+    "Phase 1 heading must not contradict current-session authorization rule",
+  );
+  assertFalse(
+    text.includes("### Phase 2 — The Issue Plan (Opus / Flash)"),
+    "Phase 2 heading must not contradict current-session authorization rule",
+  );
+
   assertStringIncludes(text, "## Which Model Runs What & Design Tiers");
+  assertStringIncludes(
+    text,
+    "| Invoked Design Session | Current model | Invocation authorizes the current model; does not stop, require a model switch, or ask for additional authorization merely because it differs from a default recommendation |",
+  );
+  assertStringIncludes(
+    text,
+    "| Simple `Bug` or `Task` Design (recommended default) | Flash | Recommended default for choosing a new session: contained judgment about one repo's own behavior |",
+  );
+  assertStringIncludes(
+    text,
+    "| Complex Design (`Feature`, `Epic`, multi-repo, multi-issue, or arguable scope) (recommended default) | Opus | Recommended default for choosing a new session: architectural reasoning and deep system judgment |",
+  );
   assertStringIncludes(text, "### Design Tiers");
   assertStringIncludes(
     text,
-    "- **`Flash` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.",
+    "- **Defaults remain recommendations; invocation authorizes the current model:** When Josh invokes `/design-issue` or `$design-issue` in a session, the current model conducts the design. The run does not stop, require a model switch, or ask for additional authorization merely because that model differs from a default recommendation. Defaults guide choosing a new session, not an eligibility list for a session Josh invokes.",
   );
   assertStringIncludes(
     text,
-    "- **`Opus` keeps everything else:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, and any `Bug` or `Task` whose scope is arguable.",
+    "- **`Flash` is the recommended default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.",
   );
+  assertStringIncludes(
+    text,
+    "- **`Opus` is the recommended default for complex design:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, or any `Bug` or `Task` whose scope requires substantial judgment.",
+  );
+  assertFalse(
+    text.includes("- **`Opus` keeps everything else:"),
+    "Design Tiers must stop pinning exclusive Opus wording",
+  );
+
   assertStringIncludes(text, "### Delegation Rules for Filing");
   assertStringIncludes(
     text,
@@ -1220,6 +1264,88 @@ Deno.test("skills/design-issue/SKILL.md contains Design Tiers and Delegation Rul
     text,
     "- An **agy** session already running on **Flash** files the issues itself without delegating: spawning a subagent on the tier you are already running costs a cold start and re-derived context to save nothing.",
   );
+});
+
+Deno.test("design-issue symlink resolves into fixture canonical clone across Claude Code, agy, and Codex fixture surfaces", async () => {
+  const root = new URL("../", import.meta.url).pathname;
+  const tempDir = await Deno.makeTempDir({ prefix: "design_issue_symlink_test_" });
+  try {
+    const fixtureCanonical = join(tempDir, "canonical-clone");
+    const tempHome = join(tempDir, "home");
+
+    await Deno.mkdir(join(fixtureCanonical, "skills/design-issue"), { recursive: true });
+    await Deno.copyFile(
+      `${SKILLS_DIR}design-issue/SKILL.md`,
+      join(fixtureCanonical, "skills/design-issue/SKILL.md"),
+    );
+
+    // 1. Claude Code and agy installation
+    const claudeDest = join(tempHome, ".claude/skills");
+    const agyDest = join(tempHome, ".gemini/config/plugins/webjam-tasks/skills");
+    await installSkills({
+      repoDir: fixtureCanonical,
+      claudeDest,
+      agyDest,
+      claudeBackupDest: join(tempHome, ".claude/skills-backups"),
+      agyBackupDest: join(tempHome, ".gemini/config/plugins/webjam-tasks/skills-backups"),
+      allowNonCanonical: true,
+      allowUnsafeForTesting: true,
+      quiet: true,
+    });
+
+    // 2. Codex installation
+    await Deno.mkdir(join(fixtureCanonical, "scripts"), { recursive: true });
+    const hooksSh = await Deno.readTextFile(join(root, "scripts/install-hooks.sh"));
+    await Deno.writeTextFile(join(fixtureCanonical, "scripts/install-hooks.sh"), hooksSh);
+    await Deno.mkdir(join(fixtureCanonical, "codex/rules"), { recursive: true });
+    const rules = await Deno.readTextFile(join(root, "codex/rules/web-jam-tools.rules"));
+    await Deno.writeTextFile(join(fixtureCanonical, "codex/rules/web-jam-tools.rules"), rules);
+
+    await Deno.mkdir(join(tempHome, ".claude/hooks"), { recursive: true });
+    const { readHookRegistrations } = await import("../src/install-codex/hooks.ts");
+    for (const groups of Object.values(readHookRegistrations(hooksSh, tempHome))) {
+      for (const group of groups) {
+        const name = group.hooks[0].command.split("/").at(-1)!.slice(0, -1);
+        await Deno.writeTextFile(join(tempHome, ".claude/hooks", name), "#!/bin/sh\nexit 0\n");
+      }
+    }
+
+    const code = installCodex({ home: tempHome, repo: fixtureCanonical });
+    assertEquals(code, 0, "installCodex should succeed");
+
+    const claudeSymlink = join(claudeDest, "design-issue");
+    const claudeStat = Deno.lstatSync(claudeSymlink);
+    assertEquals(claudeStat.isSymlink, true, "Claude Code skill must be a symlink");
+    assertEquals(
+      await Deno.realPath(claudeSymlink),
+      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
+      "Claude Code skill must resolve into fixture canonical clone",
+    );
+
+    const agySymlink = join(agyDest, "design-issue");
+    const agyStat = Deno.lstatSync(agySymlink);
+    assertEquals(agyStat.isSymlink, true, "agy skill must be a symlink");
+    assertEquals(
+      await Deno.realPath(agySymlink),
+      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
+      "agy skill must resolve into fixture canonical clone",
+    );
+
+    const codexSymlink = join(tempHome, ".codex/skills/design-issue");
+    const codexStat = Deno.lstatSync(codexSymlink);
+    assertEquals(codexStat.isSymlink, true, "Codex skill must be a symlink");
+    assertEquals(
+      await Deno.realPath(codexSymlink),
+      await Deno.realPath(join(fixtureCanonical, "skills/design-issue")),
+      "Codex skill must resolve into fixture canonical clone",
+    );
+  } finally {
+    try {
+      await Deno.remove(tempDir, { recursive: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
 });
 
 Deno.test("skills/design-issue/SKILL.md contains installer-scope rule", async () => {
