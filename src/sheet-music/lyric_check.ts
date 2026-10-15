@@ -403,7 +403,9 @@ export async function renderPdfPagesWithPdftoppm(
   pdfPath: string,
   outputDir: string,
 ): Promise<string[]> {
-  const prefix = path.join(outputDir, "page");
+  // A caller may reuse its output directory; keep stale pages and unrelated PNGs out of this run.
+  const renderDir = await Deno.makeTempDir({ dir: outputDir, prefix: "render-" });
+  const prefix = path.join(renderDir, "page");
   const cmd = new Deno.Command("pdftoppm", {
     args: ["-r", "300", "-gray", "-png", pdfPath, prefix],
     stdout: "piped",
@@ -418,9 +420,9 @@ export async function renderPdfPagesWithPdftoppm(
   }
 
   const generatedImages: string[] = [];
-  for await (const entry of Deno.readDir(outputDir)) {
+  for await (const entry of Deno.readDir(renderDir)) {
     if (entry.isFile && entry.name.endsWith(".png")) {
-      generatedImages.push(path.join(outputDir, entry.name));
+      generatedImages.push(path.join(renderDir, entry.name));
     }
   }
   generatedImages.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));

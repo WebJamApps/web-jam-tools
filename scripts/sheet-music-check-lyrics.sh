@@ -177,7 +177,7 @@ done
 
 if [ "$is_help" = true ]; then
   exec "$DENO_BIN" run \
-    --allow-read="$MODULE_READ_DIR,$CONFIG_FILE" \
+    --allow-read="${MODULE_READ_DIR//,/,,},${CONFIG_FILE//,/,,}" \
     "$REPO_DIR/src/sheet-music/lyric_check.ts" "${passthrough_args[@]}"
 fi
 
@@ -220,7 +220,8 @@ unique_paths=()
 for p in "${read_paths[@]}"; do
   if [ -z "${seen_paths["$p"]:-}" ]; then
     seen_paths["$p"]=1
-    unique_paths+=("$p")
+    # Deno separates permission paths with commas; doubled commas encode a literal comma.
+    unique_paths+=("${p//,/,,}")
   fi
 done
 
@@ -231,7 +232,7 @@ unset IFS
 set +e
 "$DENO_BIN" run \
   --allow-read="$ALLOW_READ" \
-  --allow-write="$TEMP_DIR" \
+  --allow-write="${TEMP_DIR//,/,,}" \
   --allow-run=pdftoppm,tesseract \
   "$REPO_DIR/src/sheet-music/lyric_check.ts" \
   "${passthrough_args[@]}"

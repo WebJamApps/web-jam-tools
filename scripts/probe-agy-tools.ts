@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-env
+#!/usr/bin/env -S deno run
 // probe-agy-tools.ts — verify and summarize agy tool-invocation probe results (web-jam-tools#1055).
 import { parseArgs } from "@std/cli";
 

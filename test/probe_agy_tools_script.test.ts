@@ -228,3 +228,49 @@ Deno.test("scripts/probe-agy-tools.sh fails closed with exit 1 on forbidden issu
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("probe launcher scopes permissions and supports explicit and environment log paths with commas", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "probe,permissions-" });
+  try {
+    const logPath = `${dir}/selected,log.jsonl`;
+    const argsPath = `${dir}/deno-args.txt`;
+    const wrapperPath = `${dir}/record-deno`;
+    await Deno.writeTextFile(logPath, `${SAFE_RECORD}\n`);
+    await Deno.writeTextFile(
+      wrapperPath,
+      `#!/bin/sh
+printf '%s\\n' "$@" > "$PROBE_TEST_ARGS"
+exec "$PROBE_TEST_DENO" "$@"
+`,
+    );
+    await Deno.chmod(wrapperPath, 0o755);
+    for (const logArgs of [[], ["--log", logPath], ["-l", logPath], [`--log=${logPath}`]]) {
+      const output = await new Deno.Command("bash", {
+        args: [SCRIPT_PATH, "--json", ...logArgs],
+        env: {
+          DENO_BIN: wrapperPath,
+          PROBE_TEST_ARGS: argsPath,
+          PROBE_TEST_DENO: Deno.execPath(),
+          // Explicit log selection must override even an unreadable environment fallback.
+          AGY_HOOK_RECORD_PATH: logArgs.length ? `${dir}/missing.jsonl` : logPath,
+        },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assertEquals(output.code, 0, new TextDecoder().decode(output.stderr));
+      assertEquals(JSON.parse(new TextDecoder().decode(output.stdout)).verifiedNoWrites, true);
+
+      const denoArgs = (await Deno.readTextFile(argsPath)).trim().split("\n");
+      assertEquals(denoArgs.includes("--allow-read"), false);
+      assertEquals(denoArgs.some((arg) => arg.startsWith("--allow-env")), false);
+      const readArg = denoArgs.find((arg) => arg.startsWith("--allow-read="))!;
+      const grants = readArg.slice("--allow-read=".length).replaceAll(",,", "\0").split(",")
+        .map((entry) => entry.replaceAll("\0", ","));
+      assertEquals(grants.includes(logPath), true);
+      assertEquals(grants.some((entry) => entry === dir || entry === "/" || entry === "."), false);
+      assertEquals(grants.length, 3);
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

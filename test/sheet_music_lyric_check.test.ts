@@ -820,3 +820,68 @@ Deno.test("scripts/sheet-music-check-lyrics.sh launcher executes end-to-end with
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("lyric launcher accepts commas in song, vision, dictionary, and OCR output paths", async () => {
+  const tempDir = await Deno.makeTempDir({ prefix: "lyric,paths-" });
+  const launcherPath = new URL("../scripts/sheet-music-check-lyrics.sh", import.meta.url).pathname;
+  try {
+    const songPath = path.join(tempDir, "song,definition.json");
+    const visionPath = path.join(tempDir, "vision,words.txt");
+    const dictPath = path.join(tempDir, "reference,words.txt");
+    const outputDir = path.join(tempDir, "rendered,pages");
+    const pdfPath = path.join(tempDir, "scan,input.pdf");
+    await Deno.writeTextFile(
+      songPath,
+      JSON.stringify({ sections: [{ lines: [{ lyrics: "bright morning" }] }] }),
+    );
+    await Deno.writeTextFile(visionPath, "bright morning");
+    await Deno.writeTextFile(dictPath, "bright\nmorning\nquiet\nhills\nover\nvalley\n");
+    await Deno.writeTextFile(pdfPath, "synthetic input for the fake renderer");
+    await Deno.mkdir(outputDir);
+    // These must survive the check without being read as pages from the current PDF.
+    for (const name of ["page-2.png", "unrelated.png"]) {
+      await Deno.writeTextFile(path.join(outputDir, name), "quiet hills over valley");
+    }
+
+    const pdftoppm = path.join(tempDir, "pdftoppm");
+    await Deno.writeTextFile(
+      pdftoppm,
+      `#!/bin/sh
+if [ "$1" = "-v" ]; then exit 0; fi
+for arg do prefix="$arg"; done
+printf '%s\\n' 'bright morning' > "$prefix-1.png"
+`,
+    );
+    const tesseract = path.join(tempDir, "tesseract");
+    await Deno.writeTextFile(
+      tesseract,
+      `#!/bin/sh
+if [ "$1" = "--version" ]; then exit 0; fi
+/bin/cat "$1"
+`,
+    );
+    await Deno.chmod(pdftoppm, 0o755);
+    await Deno.chmod(tesseract, 0o755);
+
+    for (const readingArgs of [["--vision", visionPath], ["--pdf", pdfPath, "--dict", dictPath]]) {
+      const output = await new Deno.Command("bash", {
+        args: [launcherPath, "--song", songPath, "--temp-dir", outputDir, ...readingArgs],
+        env: { PATH: `${tempDir}:${Deno.env.get("PATH") ?? ""}` },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      assertEquals(output.code, 0, new TextDecoder().decode(output.stderr));
+      assertStringIncludes(new TextDecoder().decode(output.stdout), "[PASS]");
+    }
+    assertEquals(
+      await Deno.readTextFile(path.join(outputDir, "page-2.png")),
+      "quiet hills over valley",
+    );
+    assertEquals(
+      await Deno.readTextFile(path.join(outputDir, "unrelated.png")),
+      "quiet hills over valley",
+    );
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
