@@ -544,13 +544,15 @@ export function decide(
     const present = labels.length ? labels.join(", ") : "(none)";
     return `DENY:no model label (labels present: ${present}). Valid model labels: ${validStr}.`;
   }
-  if (matched.length > 1) {
+  const isSolSonnetPair = matched.length === 2 && matched.includes("Sol") &&
+    matched.includes("Sonnet");
+  if (matched.length > 1 && !isSolSonnetPair) {
     const joined = matched.join(", ");
-    return `DENY:${matched.length} model labels given (${joined}) — exactly one is required. Valid model labels: ${validStr}.`;
+    return `DENY:${matched.length} model labels given (${joined}) — exactly one is required, except for the Sol and Sonnet pair. Valid model labels: ${validStr}.`;
   }
 
-  const matchedTier = matched[0];
-  if (ESCALATION_LABELS.has(matchedTier)) {
+  const matchedTier = matched.find((label) => ESCALATION_LABELS.has(label));
+  if (matchedTier) {
     const reason = escalationReason?.trim();
     if (!reason) {
       if (mode === "mcp") {

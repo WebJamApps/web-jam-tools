@@ -142,6 +142,97 @@ Deno.test("decide: MCP mode formats denial message with tool input property inst
   assertEquals(res.includes("supply an 'escalation_reason' property"), true);
 });
 
+Deno.test("decide: Sol alone requires no escalation justification", () => {
+  assertEquals(decide(["Sol"], loadModelLabels(MODEL_LABELS_PATH)), "PASS");
+});
+
+for (
+  const labels of [
+    ["Sol", "Sonnet"],
+    ["Sonnet", "Sol"],
+    ["Josh", "Sol", "Sonnet"],
+    ["Sol", "Sonnet", "Sol", "bug"],
+  ]
+) {
+  Deno.test(`decide: ${labels.join(" / ")} passes with a reason`, () => {
+    assertEquals(decide(labels, loadModelLabels(MODEL_LABELS_PATH), "guard logic"), "PASS");
+  });
+}
+
+for (const mode of ["cli", "mcp"] as const) {
+  Deno.test(`decide: Sol / Sonnet still requires a Sonnet reason in ${mode} mode`, () => {
+    const modelLabels = loadModelLabels(MODEL_LABELS_PATH);
+    for (const reason of [undefined, null, "", " \t\n"]) {
+      const result = decide(["Sol", "Sonnet"], modelLabels, reason, undefined, mode);
+      assertEquals(
+        result.startsWith(
+          "DENY:Creating an issue labeled 'Sonnet' requires an explicit escalation justification.",
+        ),
+        true,
+        result,
+      );
+      assertEquals(
+        result.includes(mode === "cli" ? "--escalation-reason" : "'escalation_reason' property"),
+        true,
+        result,
+      );
+    }
+  });
+}
+
+for (
+  const labels of [
+    ["Flash", "Sonnet"],
+    ["Sol", "Opus"],
+    ["Sol", "Astra"],
+    ["Sonnet", "Opus"],
+    ["Sol", "Sonnet", "Flash"],
+  ]
+) {
+  Deno.test(`decide: ${labels.join(" / ")} is refused even with a reason`, () => {
+    const result = decide(labels, loadModelLabels(MODEL_LABELS_PATH), "guard logic");
+    assertEquals(result.startsWith(`DENY:${labels.length} model labels given`), true, result);
+  });
+}
+
+for (const withReason of [true, false]) {
+  Deno.test(`checkModelLabelOnIssueCreate: CLI Sol / Sonnet ${withReason ? "passes" : "needs a reason"}`, async () => {
+    const payload = JSON.stringify({
+      tool_name: "Bash",
+      tool_input: {
+        command:
+          'gh issue create --title T --body "Body.\n\n🤖 Authored by Claude Code — Opus" --type Task --label Sol,Sonnet' +
+          (withReason ? ' --escalation-reason "guard logic"' : ""),
+      },
+    });
+    const result = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH);
+    assertEquals(
+      withReason ? result : result.startsWith("DENY:Creating an issue labeled 'Sonnet'"),
+      withReason ? "PASS" : true,
+      result,
+    );
+  });
+
+  Deno.test(`checkModelLabelOnIssueCreate: MCP Sol / Sonnet ${withReason ? "passes" : "needs a reason"}`, async () => {
+    const payload = JSON.stringify({
+      tool_name: "mcp__github__issue_write",
+      tool_input: {
+        method: "create",
+        type: "Task",
+        labels: ["Sol", "Sonnet"],
+        body: SIGNED_BODY,
+        ...(withReason ? { escalation_reason: "guard logic" } : {}),
+      },
+    });
+    const result = await checkModelLabelOnIssueCreate(payload, MODEL_LABELS_PATH);
+    assertEquals(
+      withReason ? result : result.startsWith("DENY:Creating an issue labeled 'Sonnet'"),
+      withReason ? "PASS" : true,
+      result,
+    );
+  });
+}
+
 Deno.test("checkModelLabelOnIssueCreate: end-to-end payload evaluation", async () => {
   const cliSonnetNoReason = JSON.stringify({
     tool_name: "Bash",
