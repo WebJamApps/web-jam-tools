@@ -155,6 +155,22 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
       ) {
         throw new Error(`Span ${span.id}: ${span.kind} must drop; cannot ${String(span.action)}`);
       }
+      if (span.kind === "removed-rule") {
+        const expected = span.approved === true ? "drop" : "keep";
+        if (span.action !== expected) {
+          const state = span.approved === true ? "approved" : "unapproved";
+          throw new Error(
+            `Span ${span.id}: ${state} removed-rule must ${expected}; cannot ${
+              String(span.action)
+            }`,
+          );
+        }
+      }
+      if (span.kind === "reworded") {
+        if (span.action !== "keep") {
+          throw new Error(`Span ${span.id}: reworded must keep; cannot ${String(span.action)}`);
+        }
+      }
     }
     if (
       (span.kind === "rule" ||
@@ -168,6 +184,27 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
     if (span.approved !== undefined && typeof span.approved !== "boolean") {
       throw new Error(`Span ${span.id} approved must be a boolean`);
     }
+    if (span.guard !== undefined && typeof span.guard !== "boolean") {
+      throw new Error(`Span ${span.id} guard must be a boolean`);
+    }
+    if (span.safety !== undefined && typeof span.safety !== "boolean") {
+      throw new Error(`Span ${span.id} safety must be a boolean`);
+    }
+    if (span.approval !== undefined && typeof span.approval !== "boolean") {
+      throw new Error(`Span ${span.id} approval must be a boolean`);
+    }
+    if (span.reason !== undefined && typeof span.reason !== "string") {
+      throw new Error(`Span ${span.id} reason must be a string`);
+    }
+    if (
+      span.kind !== "scoped-rule" &&
+      span.kind !== "skill-instruction" &&
+      (span.guard !== undefined || span.safety !== undefined || span.approval !== undefined)
+    ) {
+      throw new Error(
+        `Only a rule moving to a skill may name guard, safety, or approval: ${span.id}`,
+      );
+    }
     if (span.kind === "skill-instruction" || span.kind === "scoped-rule") {
       if (
         typeof span.target_skill !== "string" ||
@@ -175,7 +212,7 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
       ) {
         throw new Error(`Span ${span.id} needs a target_skill slug`);
       }
-      if (span.kind === "scoped-rule" && isApprovalOrSafetyRule(span)) {
+      if (isApprovalOrSafetyRule(span)) {
         throw new Error(`Approval and safety rules cannot be moved into a skill: ${span.id}`);
       }
     } else if (span.target_skill !== undefined) {
@@ -242,7 +279,6 @@ export async function planRulesCuts(
   for (const span of plan.spans) {
     if (span.kind === "skill-instruction" || span.kind === "scoped-rule") {
       if (
-        span.kind === "scoped-rule" &&
         isApprovalOrSafetyRule(span as unknown as Record<string, unknown>)
       ) {
         throw new Error(`Approval and safety rules cannot be moved into a skill: ${span.id}`);

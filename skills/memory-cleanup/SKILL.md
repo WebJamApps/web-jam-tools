@@ -314,8 +314,9 @@ remaining bytes over the low mark.
    deno task memory-cleanup:rules-cuts --dry-run --plan /tmp/rules-cuts-plan.json --file /tmp/feature-worktree/AGENTS.md
    ```
 
-   The script prints the full rules-before and rules-after lists, which must be equal, and
-   the proposed byte size against the low and over marks. A dry run writes nothing. A stale
+   The script prints the full rules-before and rules-after lists, which account for each
+   verified move and approved rewording/removal while all other rules match, and the
+   proposed byte size against the low and over marks. A dry run writes nothing. A stale
    plan, missing moved text, or changed repeat refuses the cut; a result above the low mark
    is made and names the remaining bytes over the low mark.
 5. Run the same command without `--dry-run` to prepare the cut in the feature worktree.

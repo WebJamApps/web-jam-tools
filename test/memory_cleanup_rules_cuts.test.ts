@@ -11,6 +11,7 @@ import {
   planRulesCuts,
   type RulesCutsPlan,
   type RulesPart,
+  type RulesSpan,
   runCli,
   runRulesCuts,
 } from "../src/memory-cleanup/rules_cuts.ts";
@@ -558,6 +559,219 @@ Deno.test("malformed plans, unsupported parts, unsafe skills and contradictory a
       spans: [{ id: "r", kind: "scoped-rule", text: "x", target_skill: "draft-pr", guard: true }],
     })
   );
+  for (const badValue of ["true", 1, null, []]) {
+    assertThrows(() =>
+      parseRulesCutsPlan({
+        ...plan,
+        spans: [
+          {
+            id: "r",
+            kind: "scoped-rule",
+            text: "x",
+            target_skill: "draft-pr",
+            safety: badValue as unknown as boolean,
+          },
+        ],
+      })
+    );
+    assertThrows(() =>
+      parseRulesCutsPlan({
+        ...plan,
+        spans: [
+          {
+            id: "r",
+            kind: "scoped-rule",
+            text: "x",
+            target_skill: "draft-pr",
+            approval: badValue as unknown as boolean,
+          },
+        ],
+      })
+    );
+    assertThrows(() =>
+      parseRulesCutsPlan({
+        ...plan,
+        spans: [
+          {
+            id: "r",
+            kind: "scoped-rule",
+            text: "x",
+            target_skill: "draft-pr",
+            guard: badValue as unknown as boolean,
+          },
+        ],
+      })
+    );
+  }
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "scoped-rule",
+          text: "x",
+          target_skill: "draft-pr",
+          reason: 123 as unknown as string,
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "skill-instruction",
+          text: "x",
+          target_skill: "draft-pr",
+          safety: true,
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "rule",
+          text: "x",
+          safety: true,
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "reworded",
+          text: "x",
+          guard: true,
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "removed-rule",
+          text: "x",
+          approval: true,
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "removed-rule",
+          text: "x",
+          action: "keep",
+          approved: true,
+          reason: "obsolete",
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "removed-rule",
+          text: "x",
+          action: "drop",
+          approved: false,
+          reason: "obsolete",
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "removed-rule",
+          text: "x",
+          action: "drop",
+          reason: "obsolete",
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "reworded",
+          text: "x",
+          action: "drop",
+          approved: true,
+          replacement: "y",
+        },
+      ],
+    })
+  );
+  assertThrows(() =>
+    parseRulesCutsPlan({
+      ...plan,
+      spans: [
+        {
+          id: "r",
+          kind: "reworded",
+          text: "x",
+          action: "drop",
+          approved: false,
+          replacement: "y",
+        },
+      ],
+    })
+  );
+});
+
+Deno.test("contradictory actions and safety-marked moves refuse and leave source untouched", async () => {
+  const badCases: Array<Partial<RulesSpan>> = [
+    { kind: "removed-rule", action: "keep", approved: true, reason: "obsolete" },
+    { kind: "removed-rule", action: "drop", approved: false, reason: "obsolete" },
+    { kind: "removed-rule", action: "drop", reason: "obsolete" },
+    { kind: "reworded", action: "drop", approved: true, replacement: "x" },
+    { kind: "reworded", action: "drop", approved: false, replacement: "x" },
+    { kind: "scoped-rule", target_skill: "draft-pr", safety: "true" as unknown as boolean },
+    { kind: "scoped-rule", target_skill: "draft-pr", approval: 1 as unknown as boolean },
+    { kind: "scoped-rule", target_skill: "draft-pr", guard: null as unknown as boolean },
+    { kind: "scoped-rule", target_skill: "draft-pr", safety: true },
+    { kind: "skill-instruction", target_skill: "draft-pr", safety: true },
+    { kind: "skill-instruction", target_skill: "draft-pr", guard: true },
+    { kind: "skill-instruction", target_skill: "draft-pr", approval: true },
+  ];
+  for (const patch of badCases) {
+    await withPlan(async (filePath, planPath, _source, plan) => {
+      Object.assign(plan.spans[2], patch);
+      await Deno.writeTextFile(planPath, JSON.stringify(plan));
+      const before = await Deno.readTextFile(filePath);
+      await assertRejects(() => runRulesCuts({ filePath, planPath }), Error);
+      assertEquals(await Deno.readTextFile(filePath), before);
+      assertEquals(await runCli(["--plan", planPath, "--file", filePath]), 1);
+      assertEquals(await Deno.readTextFile(filePath), before);
+    });
+  }
 });
 
 async function git(dir: string, args: string[]) {
