@@ -938,44 +938,18 @@ AUTO_MODE_JSON=${AUTO_MODE_JSON//__HOME__/"$AUTO_MODE_HOME"}
 AUTO_MODE_JSON=${AUTO_MODE_JSON//__REPOS_DIR__/"$AUTO_MODE_REPOS_DIR"}
 merge_auto_mode_args=("$AUTO_MODE_JSON")
 
-# skillOverrides (web-jam-tools#1240) — sets the 30 skills bundled with
-# Claude Code (13 document skills and 17 built-in ones) to names only, so
-# their descriptions stop loading at every session open while remaining listed
-# and callable by name. Claude Code ONLY: agy and Codex have no such setting.
-read -r -d '' SKILL_OVERRIDES_JSON <<'SKILL_OVERRIDES_JSON_EOF' || true
-{
-  "anthropic-skills:built-in-browser": "name-only",
-  "anthropic-skills:chrome-browser": "name-only",
-  "anthropic-skills:computer-use": "name-only",
-  "anthropic-skills:deep-research": "name-only",
-  "anthropic-skills:docs": "name-only",
-  "anthropic-skills:docx": "name-only",
-  "anthropic-skills:google-workspace": "name-only",
-  "anthropic-skills:import-memory": "name-only",
-  "anthropic-skills:morning": "name-only",
-  "anthropic-skills:pdf": "name-only",
-  "anthropic-skills:pptx": "name-only",
-  "anthropic-skills:skill-creator": "name-only",
-  "anthropic-skills:xlsx": "name-only",
-  "artifact-capabilities": "name-only",
-  "artifact-design": "name-only",
-  "artifact-diagramming": "name-only",
-  "claude-api": "name-only",
-  "claude-in-chrome": "name-only",
-  "code-review": "name-only",
-  "dataviz": "name-only",
-  "fewer-permission-prompts": "name-only",
-  "init": "name-only",
-  "keybindings-help": "name-only",
-  "loop": "name-only",
-  "plugin-authoring": "name-only",
-  "run": "name-only",
-  "schedule": "name-only",
-  "security-review": "name-only",
-  "simplify": "name-only",
-  "update-config": "name-only"
-}
-SKILL_OVERRIDES_JSON_EOF
+# skillOverrides (web-jam-tools#1240, web-jam-tools#1416) — sets the 30 skills
+# bundled with Claude Code (13 document skills and 17 built-in ones) to names
+# only, so their descriptions stop loading at every session open while
+# remaining listed and callable by name. Claude Code ONLY: agy and Codex have no
+# such setting. Dynamically generated from src/session-load/limits.json so
+# limits.json is the single source of truth.
+SKILL_OVERRIDES_JSON=$(deno eval --no-config '
+  const limits = JSON.parse(await Deno.readTextFile(Deno.args[0]));
+  const skills = limits.bundledSkills?.skills || [];
+  const overrides = Object.fromEntries(skills.map(s => [s, "name-only"]));
+  console.log(JSON.stringify(overrides, null, 2));
+' "$REPO_DIR/src/session-load/limits.json")
 merge_skill_overrides_args=("$SKILL_OVERRIDES_JSON")
 
 # --- agy-side PreToolUse/PostToolUse args (web-jam-tools#432, matcher-by-

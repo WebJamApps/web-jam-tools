@@ -603,6 +603,101 @@ Deno.test("bundled skill overrides: unrelated overrides do not suppress warning,
   }
 });
 
+Deno.test("bundled skills inspection: all 30 name-only produces no warning, 1 missing or 1 non-name-only warns 1 bundled skill", async () => {
+  const limits = await loadLimits(LIMITS_PATH);
+  const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
+
+  try {
+    const bundledSkills = limits.bundledSkills.skills ?? [];
+
+    // Base files under low mark so only bundled skills state dictates OVER
+    const lowDelta = 100;
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/CLAUDE.md"),
+      "x".repeat(limits.globalClaudeMd.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/projects/-home-joshua/memory/MEMORY.md"),
+      "x".repeat(limits.memoryIndex.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "web-jam-tools/AGENTS.md"),
+      "x".repeat(limits.mainRules.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "web-jam-tools/docs/cross-ai-rules.md"),
+      "x".repeat(limits.crossAiRules.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "JaMmusic/AGENTS.md"),
+      "x".repeat(limits.jammusicRules.lowMark! - lowDelta),
+    );
+
+    // Case 1: all 30 set to "name-only" -> 0 over, no warning in rendered report
+    const all30Overrides: Record<string, string> = {};
+    for (const skill of bundledSkills) {
+      all30Overrides[skill] = "name-only";
+    }
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/settings.json"),
+      JSON.stringify({ skillOverrides: all30Overrides }),
+    );
+
+    let res = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+    assertEquals(res.isOver, false);
+    assertEquals(res.tools.claudeCode.isOver, false);
+    assert(!res.text.includes("bundled skill"));
+
+    // Case 2: 1 of the 30 missing from skillOverrides -> 1 over, rendered report warns "1 bundled skill"
+    const missingOneOverrides: Record<string, string> = {};
+    for (let i = 0; i < bundledSkills.length - 1; i++) {
+      missingOneOverrides[bundledSkills[i]] = "name-only";
+    }
+    // bundledSkills[bundledSkills.length - 1] is omitted
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/settings.json"),
+      JSON.stringify({ skillOverrides: missingOneOverrides }),
+    );
+
+    res = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+    assertEquals(res.isOver, true);
+    assertEquals(res.tools.claudeCode.isOver, true);
+    assert(res.tools.claudeCode.items.includes("1 bundled skill"));
+    assert(res.text.includes("1 bundled skill"));
+
+    // Case 3: 1 of the 30 set to a value other than "name-only" -> 1 over, rendered report warns "1 bundled skill"
+    const nonNameOnlyOverrides: Record<string, string> = {};
+    for (let i = 0; i < bundledSkills.length - 1; i++) {
+      nonNameOnlyOverrides[bundledSkills[i]] = "name-only";
+    }
+    nonNameOnlyOverrides[bundledSkills[bundledSkills.length - 1]] = "full";
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/settings.json"),
+      JSON.stringify({ skillOverrides: nonNameOnlyOverrides }),
+    );
+
+    res = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+    assertEquals(res.isOver, true);
+    assertEquals(res.tools.claudeCode.isOver, true);
+    assert(res.tools.claudeCode.items.includes("1 bundled skill"));
+    assert(res.text.includes("1 bundled skill"));
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
 Deno.test("forbidden registration in global Claude settings or agy hooks fails assertion outside try-catch", async () => {
   const tempDir = await Deno.makeTempDir();
   try {

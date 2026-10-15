@@ -1,6 +1,6 @@
 ---
 name: memory-cleanup
-description: Cross-agent memory hygiene audit that scans memory surfaces for staleness, dead links, and closed issue drift, reporting findings and waiting for approval. Use when auditing memory surfaces, cleaning up agent memory, or when a session-start memory cleanup reminder appears.
+description: Session-load cleanup cutting parts to low marks when over, and staleness audit scanning memory surfaces for dead links, finished checkpoints, and closed issue drift, waiting for approval. Use when session load is over, cleaning up agent memory, or auditing memory surfaces for staleness.
 ---
 
 # memory-cleanup

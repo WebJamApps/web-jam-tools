@@ -175,9 +175,7 @@ export async function inspectBundledSkills(
     if (targetSkills.length > 0) {
       let overCount = 0;
       for (const skill of targetSkills) {
-        const val = overrides[skill] ??
-          overrides[`anthropic-skills:${skill}`] ??
-          overrides[`claude-ai:${skill}`];
+        const val = overrides[skill];
         if (val !== "name-only") {
           overCount++;
         }
