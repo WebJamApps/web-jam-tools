@@ -1,7 +1,6 @@
 # agy (Antigravity/Flash) Hook Contract & Gmail Fence
 
-*Created for [web-jam-tools#432](https://github.com/WebJamApps/web-jam-tools/issues/432). Last
-updated 2026-08-15.*
+*Created for [web-jam-tools#432](https://github.com/WebJamApps/web-jam-tools/issues/432).*
 
 This document records the agy PreToolUse/PostToolUse hook contract as measured (2026-08-07,
 against `gemini-3.6-flash-low`), the translation shim that makes hooks actually enforce on that
@@ -24,17 +23,23 @@ under a control/test A/B, not by what the model said.
 
 1. **Hooks execute.** A hook registered in `~/.gemini/config/hooks.json` fires on `run_command`,
    `view_file`, `send_message`, and any other tool call.
-2. **`matcher` is ignored.** Registered with matcher `"Bash"`, a probe hook still fired on every
-   tool call — agy runs every registered `PreToolUse` hook on every tool, always. The shim (§3)
-   enforces the matcher itself.
+2. **`matcher` is evaluated against agy's own native tool names, not ignored.**
+   *(Initial finding 2026-08-07 claimed matcher was ignored; corrected 2026-09-16 via
+   [web-jam-tools#1036](https://github.com/WebJamApps/web-jam-tools/issues/1036) and design decision
+   D-24).*
+   agy tests the `matcher` field in `~/.gemini/config/hooks.json` against agy's *own native tool names*
+   (`run_command`, `replace_file_content`, `write_to_file`, `call_mcp_tool`, etc.), never Claude Code's
+   tool names. When a hook was registered with a Claude-shaped matcher like `"Bash"` or `"Edit|Write"`,
+   agy tested `"Bash"` against `run_command`, found no match, and silently never invoked the hook.
+   To solve this, `scripts/install-hooks.sh` registers every entry under `matcher: ".*"` so agy always
+   invokes `agy-hook-shim.sh`. The shim then receives the real Claude matcher (base64-encoded) and
+   enforces it against the normalized tool name (§3).
 3. **agy's tool names are not Claude's.** The shell tool is `run_command`, with the command in
    `args.CommandLine` and the working directory in `args.Cwd`. There is no `Bash`, `Edit`, or
-   `Write` tool name — this is the only tool/arg-name mapping independently verified against a
-   live probe (agy is closed-source, so nothing else is verifiable from source). Best-effort
-   fallback field names for an edit-like tool (`TargetFile`, `CodeContent`,
-   `ReplacementContent`/`ReplacementChunks`) come from earlier work
-   ([web-jam-tools#344](https://github.com/WebJamApps/web-jam-tools/issues/344)) and are honoured
-   by the shim, but are NOT independently verified the same way `run_command` is.
+   `Write` tool name. Best-effort fallback field names for edit tools from earlier work
+   ([web-jam-tools#344](https://github.com/WebJamApps/web-jam-tools/issues/344)) were formalized and
+   independently measured live on 2026-10-12 ([web-jam-tools#1055](https://github.com/WebJamApps/web-jam-tools/issues/1055)) —
+   see §9 for literal tool names and argument signatures.
 4. **The payload schema is camelCase, not Claude's.** agy sends `toolCall.name`, `toolCall.args`,
    `transcriptPath`, `conversationId`, `stepIdx`, `artifactDirectoryPath`, `workspacePaths`. None
    of Claude's `tool_input`, `transcript_path`, `hook_event_name` exist, so an unmodified hook's
@@ -229,3 +234,66 @@ hook" section for the same disclosure on a related agy-native hook):
   agy session reports "denied by a system hook" for `send_email`/`delete_email`/
   `batch_delete_emails` and for a non-Flash model switch, and that Gmail read/label/archive still
   works, needs Josh to run it after applying §6 and restarting agy.
+
+## 9. Live Tool-Name & GitHub MCP Probe (2026-10-12, web-jam-tools#1055)
+
+A live agy probe was conducted on 2026-10-12 to measure agy's native file-edit-shaped tool names,
+its GitHub MCP tool-calling structure, and whether `PreToolUse` hooks registered under `.*` fire for each.
+
+### File-Edit Tools
+
+- **`replace_file_content`** (native block replacement tool):
+  - Literal tool name: `replace_file_content`.
+  - Arguments observed in `args`:
+    - `TargetFile` (string, required path to file)
+    - `Instruction` (string, description of edit)
+    - `Description` (string, explanation of change)
+    - `StartLine` (number, 1-indexed start line)
+    - `EndLine` (number, 1-indexed end line)
+    - `TargetContent` (string, exact text to match and replace)
+    - `ReplacementContent` (string, replacement text)
+    - `AllowMultiple` (boolean)
+    - Optional: `TargetLintErrorIds` (array of lint error IDs)
+    - Standard metadata: `toolAction`, `toolSummary`.
+  - **PreToolUse hook firing:** Confirmed. A `PreToolUse` hook registered under `.*` fires on every invocation of `replace_file_content`.
+- **`write_to_file`** (native file creation and overwrite tool):
+  - Literal tool name: `write_to_file`.
+  - Arguments observed in `args`:
+    - `TargetFile` (string, required target file path)
+    - `CodeContent` (string, full content to write)
+    - `Overwrite` (boolean, overwrite permission flag)
+    - `Description` (string, rationale)
+    - Optional: `Append` (boolean), `ArtifactMetadata` (object)
+    - Standard metadata: `toolAction`, `toolSummary`.
+  - **PreToolUse hook firing:** Confirmed. A `PreToolUse` hook registered under `.*` fires on every invocation of `write_to_file`.
+- **`multi_replace_file_content`**:
+  - Identified directly in the agy binary (`strings "$(readlink -f "$(command -v agy)")"`) under Cortex deterministic vetting configs (`third_party/jetski/cortex/policyguardian/deterministic_vetting_configs/`) alongside `replace_file_content` and `write_to_file`.
+
+### GitHub MCP Tools (`issue_write`, `sub_issue_write`)
+
+- **Dispatch convention:** agy configures GitHub MCP tools lazily under `~/.gemini/antigravity-cli/mcp/github/`.
+  When a GitHub MCP tool is invoked, agy calls the native lazy dispatcher `call_mcp_tool`.
+- **Observed read-only call:** A live read-only `issue_read` call confirmed the literal hook payload shape:
+  - `toolCall.name`: `"call_mcp_tool"`
+  - `toolCall.args.ServerName`: `"github"`
+  - `toolCall.args.ToolName`: `"issue_read"`
+  - `toolCall.args.Arguments`: `{ "owner": "WebJamApps", "repo": "web-jam-tools", "issue_number": 1055, "method": "get" }`
+  - **PreToolUse hook firing:** Confirmed. `PreToolUse` hooks registered under `.*` fire for `call_mcp_tool`.
+- **Derived write tool names:** From the observed naming structure and the server schemas at `~/.gemini/antigravity-cli/mcp/github/` (`issue_write.json`, `sub_issue_write.json`):
+  - `issue_write`: `method: "create" | "update"`, `owner`, `repo`, `title`, `body`, `labels`, `milestone`, etc.
+  - `sub_issue_write`: `method: "add" | "remove" | "reprioritize"`, `owner`, `repo`, `issue_number`, `sub_issue_id`.
+  - In agy hook payloads, lazy dispatch emits `toolCall.name: "call_mcp_tool"` with `args.ServerName: "github"` and `args.ToolName: "issue_write"` or `"sub_issue_write"`. Eager or direct naming exposes `mcp_github_issue_write` / `mcp_github_sub_issue_write` or bare `issue_write` / `sub_issue_write`.
+  - Because guards like `require-model-label-on-issue-create` and `require-approval-token-on-issue-write` match against `mcp__.*__issue_write`, agy calls do not match without translation by `agy-hook-shim.sh`.
+- **Safety invariant verified:** At no point during the probe was an `issue_write` or `sub_issue_write` call made against a live repository. Zero write calls exist in the invocation log.
+
+### Verification Runbook and Probe Tooling
+
+The live session tool-call log was recorded at `/tmp/agy-hook-invocations.jsonl` and preserved at the run's scratchpad path `/home/joshua/.gemini/antigravity-cli/brain/b4801061-7dd9-40ac-a0b3-585b30cca574/scratch/probe-log-2026-10-12.jsonl`.
+The probe verification script `scripts/probe-agy-tools.sh` (runnable via `deno task probe:agy-tools`) analyzes the log, validates tool argument signatures, confirms `PreToolUse` firing, and verifies that zero write calls occurred:
+
+An empty log, malformed JSON, or a record without a usable tool identity is refused with exit 1. The verifier reports the path and line for damaged records and emits no safety report for an unreadable log.
+
+```bash
+deno task probe:agy-tools --log /path/to/log.jsonl
+```
+
