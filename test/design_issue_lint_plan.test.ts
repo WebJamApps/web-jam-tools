@@ -360,6 +360,62 @@ Deno.test("AC2: a model tier absent from labels.yaml is reported, including case
   }
 });
 
+// --- 2b. The approved Sonnet / Sol tier pair (web-jam-tools#1425) ---
+
+const SCHEMA_WITH_SOL: Schema = {
+  ...TEST_SCHEMA,
+  labels: [...TEST_SCHEMA.labels, { name: "Sol", hex: "5319E7", repos: "all", modelTier: true }],
+};
+
+function tierViolations(tier: string, schema: Schema = SCHEMA_WITH_SOL): PlanTableViolation[] {
+  const parsed = parsePlanTable(planTableDoc([EPIC_ROW, childRow({ tier })]));
+  if (parsed === null) throw new Error("test fixture has no plan table");
+  return validatePlanTable(parsed, { schema, activeRepos: ACTIVE_REPOS });
+}
+
+Deno.test("#1425: the Sonnet / Sol pair is accepted in either order and either spacing", () => {
+  for (const tier of ["Sonnet / Sol", "Sol / Sonnet", "Sonnet/Sol", "**Sonnet / Sol**"]) {
+    const violations = tierViolations(tier);
+    assertEquals(findRule(violations, "tier-unknown").length, 0, `"${tier}" should be accepted`);
+    assertEquals(findRule(violations, "cell-missing").length, 0);
+  }
+});
+
+Deno.test("#1425: a single Sonnet or Sol is still accepted", () => {
+  for (const tier of ["Sonnet", "Sol"]) {
+    assertEquals(findRule(tierViolations(tier), "tier-unknown").length, 0, `"${tier}"`);
+  }
+});
+
+Deno.test("#1425: every other pair or list of tiers is tier-unknown", () => {
+  for (
+    const tier of [
+      "Flash / Sonnet",
+      "Sonnet / Opus",
+      "Sol / Astra",
+      "Sonnet / Sol / Flash",
+      "Sonnet / Sonnet",
+    ]
+  ) {
+    assertEquals(
+      findRule(tierViolations(tier), "tier-unknown").length,
+      1,
+      `expected tier-unknown for "${tier}"`,
+    );
+  }
+});
+
+Deno.test("#1425: an empty tier cell is still cell-missing, not tier-unknown", () => {
+  const violations = tierViolations("");
+  assertEquals(findRule(violations, "cell-missing").length, 1);
+  assertEquals(findRule(violations, "tier-unknown").length, 0);
+});
+
+Deno.test("#1425: the pair is accepted only when Sol is in the canonical vocabulary", () => {
+  // TEST_SCHEMA has Sonnet but no Sol.
+  assertEquals(findRule(tierViolations("Sonnet / Sol", TEST_SCHEMA), "tier-unknown").length, 1);
+});
+
 Deno.test("resolveTierVocabulary: a schema that resolves to zero tiers throws rather than skipping validation", () => {
   const degradedSchema: Schema = {
     repoClasses: { frontend: [], other: [] },

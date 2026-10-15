@@ -254,6 +254,16 @@ function resolveTierVocabulary(schema: Schema | undefined): string[] {
   return vocabulary;
 }
 
+/** The one pair of model labels a row may carry: logic- and safety-heavy coding is labeled `Sonnet`
+ * and `Sol` together, and Josh chooses the lane at dispatch (model-tier-order design, "How the
+ * order is used" item 1). Either order and either spacing is accepted, but only when both names are
+ * in the canonical vocabulary read from labels.yaml. */
+function isApprovedTierPair(tier: string, canonicalTiers: string[]): boolean {
+  const parts = tier.split("/").map((part) => part.trim());
+  return parts.length === 2 && parts[0] !== parts[1] &&
+    ["Sonnet", "Sol"].every((name) => parts.includes(name) && canonicalTiers.includes(name));
+}
+
 function checkMissingAndTier(
   row: PlanTableRow,
   canonicalTiers: string[],
@@ -270,7 +280,10 @@ function checkMissingAndTier(
     return;
   }
   const tier = stripMdMarkers(raw);
-  if (canonicalTiers.length > 0 && !canonicalTiers.includes(tier)) {
+  if (
+    canonicalTiers.length > 0 && !canonicalTiers.includes(tier) &&
+    !isApprovedTierPair(tier, canonicalTiers)
+  ) {
     violations.push({
       rule: "tier-unknown",
       line: row.line,
