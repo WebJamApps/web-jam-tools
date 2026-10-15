@@ -11,15 +11,30 @@ const PARTS = {
 } as const;
 
 export type RulesPart = keyof typeof PARTS;
+export type RulesSpanKind =
+  | "rule"
+  | "skill-instruction"
+  | "backstory"
+  | "repeat"
+  | "scoped-rule"
+  | "reworded"
+  | "removed-rule";
+
 export interface RulesSpan {
   id: string;
-  kind: "rule" | "skill-instruction" | "backstory" | "repeat";
+  kind: RulesSpanKind;
   /** Exact source text, including whitespace; spans cover the whole file in order. */
   text: string;
   /** Defaults to keep for rules and drop for all other kinds. */
   action?: "keep" | "drop";
   target_skill?: string;
   repeats?: string;
+  replacement?: string;
+  approved?: boolean;
+  reason?: string;
+  guard?: boolean;
+  safety?: boolean;
+  approval?: boolean;
 }
 
 export interface RulesCutsPlan {
@@ -51,6 +66,34 @@ function onlyKeys(record: Record<string, unknown>, keys: string[]): void {
   }
 }
 
+function isApprovalOrSafetyRule(span: Record<string, unknown>): boolean {
+  if (span.guard === true || span.safety === true || span.approval === true) {
+    return true;
+  }
+  if (typeof span.reason === "string") {
+    const r = span.reason.toLowerCase();
+    return (
+      r.includes("approval") ||
+      r.includes("safety") ||
+      r.includes("guard") ||
+      r.includes("credential") ||
+      r.includes("spending") ||
+      r.includes("deletion")
+    );
+  }
+  return false;
+}
+
+const VALID_SPAN_KINDS: readonly RulesSpanKind[] = [
+  "rule",
+  "skill-instruction",
+  "backstory",
+  "repeat",
+  "scoped-rule",
+  "reworded",
+  "removed-rule",
+];
+
 /** Reject malformed judgments before any file can change. */
 export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
   if (!isRecord(value)) throw new Error("Plan must be an object");
@@ -69,7 +112,20 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
   const ids = new Set<string>();
   for (const span of value.spans) {
     if (!isRecord(span)) throw new Error("Each span must be an object");
-    onlyKeys(span, ["id", "kind", "text", "action", "target_skill", "repeats"]);
+    onlyKeys(span, [
+      "id",
+      "kind",
+      "text",
+      "action",
+      "target_skill",
+      "repeats",
+      "replacement",
+      "approved",
+      "reason",
+      "guard",
+      "safety",
+      "approval",
+    ]);
     if (typeof span.id !== "string" || !span.id.trim() || ids.has(span.id)) {
       throw new Error("Each span needs a unique nonempty id");
     }
@@ -79,28 +135,90 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
     }
     if (
       typeof span.kind !== "string" ||
-      !["rule", "skill-instruction", "backstory", "repeat"].includes(span.kind)
+      !VALID_SPAN_KINDS.includes(span.kind as RulesSpanKind)
     ) {
       throw new Error(`Unknown span kind for ${span.id}`);
     }
-    const expected = span.kind === "rule" ? "keep" : "drop";
-    if (span.action !== undefined && span.action !== expected) {
-      throw new Error(
-        `Span ${span.id}: ${span.kind} must ${expected}; cannot ${String(span.action)}`,
-      );
+    if (span.action !== undefined) {
+      if (span.action !== "keep" && span.action !== "drop") {
+        throw new Error(`Span ${span.id}: invalid action ${String(span.action)}`);
+      }
+      if (span.kind === "rule" && span.action !== "keep") {
+        throw new Error(`Span ${span.id}: rule must keep; cannot ${String(span.action)}`);
+      }
+      if (
+        (span.kind === "skill-instruction" ||
+          span.kind === "backstory" ||
+          span.kind === "repeat" ||
+          span.kind === "scoped-rule") &&
+        span.action !== "drop"
+      ) {
+        throw new Error(`Span ${span.id}: ${span.kind} must drop; cannot ${String(span.action)}`);
+      }
+      if (span.kind === "removed-rule") {
+        const expected = span.approved === true ? "drop" : "keep";
+        if (span.action !== expected) {
+          const state = span.approved === true ? "approved" : "unapproved";
+          throw new Error(
+            `Span ${span.id}: ${state} removed-rule must ${expected}; cannot ${
+              String(span.action)
+            }`,
+          );
+        }
+      }
+      if (span.kind === "reworded") {
+        if (span.action !== "keep") {
+          throw new Error(`Span ${span.id}: reworded must keep; cannot ${String(span.action)}`);
+        }
+      }
     }
-    if (span.kind === "rule" && !span.text.trim()) {
+    if (
+      (span.kind === "rule" ||
+        span.kind === "scoped-rule" ||
+        span.kind === "reworded" ||
+        span.kind === "removed-rule") &&
+      !span.text.trim()
+    ) {
       throw new Error(`Rule ${span.id} contains no rule text`);
     }
-    if (span.kind === "skill-instruction") {
+    if (span.approved !== undefined && typeof span.approved !== "boolean") {
+      throw new Error(`Span ${span.id} approved must be a boolean`);
+    }
+    if (span.guard !== undefined && typeof span.guard !== "boolean") {
+      throw new Error(`Span ${span.id} guard must be a boolean`);
+    }
+    if (span.safety !== undefined && typeof span.safety !== "boolean") {
+      throw new Error(`Span ${span.id} safety must be a boolean`);
+    }
+    if (span.approval !== undefined && typeof span.approval !== "boolean") {
+      throw new Error(`Span ${span.id} approval must be a boolean`);
+    }
+    if (span.reason !== undefined && typeof span.reason !== "string") {
+      throw new Error(`Span ${span.id} reason must be a string`);
+    }
+    if (
+      span.kind !== "scoped-rule" &&
+      span.kind !== "skill-instruction" &&
+      (span.guard !== undefined || span.safety !== undefined || span.approval !== undefined)
+    ) {
+      throw new Error(
+        `Only a rule moving to a skill may name guard, safety, or approval: ${span.id}`,
+      );
+    }
+    if (span.kind === "skill-instruction" || span.kind === "scoped-rule") {
       if (
         typeof span.target_skill !== "string" ||
         !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(span.target_skill)
       ) {
         throw new Error(`Span ${span.id} needs a target_skill slug`);
       }
+      if (isApprovalOrSafetyRule(span)) {
+        throw new Error(`Approval and safety rules cannot be moved into a skill: ${span.id}`);
+      }
     } else if (span.target_skill !== undefined) {
-      throw new Error(`Only a skill-instruction may name target_skill: ${span.id}`);
+      throw new Error(
+        `Only a skill-instruction or scoped-rule may name target_skill: ${span.id}`,
+      );
     }
     if (span.kind === "repeat") {
       if (typeof span.repeats !== "string" || !span.repeats) {
@@ -108,6 +226,39 @@ export function parseRulesCutsPlan(value: unknown): RulesCutsPlan {
       }
     } else if (span.repeats !== undefined) {
       throw new Error(`Only a repeat may name repeats: ${span.id}`);
+    }
+    if (span.kind === "reworded") {
+      if (span.approved === true) {
+        if (typeof span.replacement !== "string" || !span.replacement.trim()) {
+          throw new Error(`Span ${span.id} needs a nonempty replacement`);
+        }
+      } else if (
+        span.replacement !== undefined &&
+        (typeof span.replacement !== "string" || !span.replacement.trim())
+      ) {
+        throw new Error(`Span ${span.id} replacement must be a nonempty string if provided`);
+      }
+    } else if (span.replacement !== undefined) {
+      throw new Error(`Only a reworded span may name replacement: ${span.id}`);
+    }
+    if (span.kind === "removed-rule") {
+      if (span.approved === true) {
+        if (span.reason !== "obsolete" && span.reason !== "hook-enforced") {
+          throw new Error(
+            `Removed rule ${span.id} requires reason "obsolete" or "hook-enforced" when approved`,
+          );
+        }
+      } else if (
+        span.reason !== undefined &&
+        span.reason !== "obsolete" &&
+        span.reason !== "hook-enforced"
+      ) {
+        throw new Error(
+          `Removed rule ${span.id} reason must be "obsolete" or "hook-enforced" if provided`,
+        );
+      }
+    } else if (span.kind !== "scoped-rule" && span.reason !== undefined) {
+      throw new Error(`Only a removed-rule or scoped-rule may name reason: ${span.id}`);
     }
   }
   return value as unknown as RulesCutsPlan;
@@ -126,7 +277,12 @@ export async function planRulesCuts(
   const byId = new Map(plan.spans.map((span) => [span.id, span]));
   const words = (text: string) => text.trim().split(/\s+/).join(" ");
   for (const span of plan.spans) {
-    if (span.kind === "skill-instruction") {
+    if (span.kind === "skill-instruction" || span.kind === "scoped-rule") {
+      if (
+        isApprovalOrSafetyRule(span as unknown as Record<string, unknown>)
+      ) {
+        throw new Error(`Approval and safety rules cannot be moved into a skill: ${span.id}`);
+      }
       const skillPath = join(skillsDir, span.target_skill!, "SKILL.md");
       const skill = await Deno.readTextFile(skillPath);
       if (!appearsWordForWord(skill, span.text)) {
@@ -141,16 +297,74 @@ export async function planRulesCuts(
     }
   }
 
-  const kept = plan.spans.filter((span) => span.kind === "rule");
-  const after = kept.reduce((text, span) => {
-    const separator = text && !/\s$/.test(text) && !/^\s/.test(span.text) ? "\n\n" : "";
-    return text + separator + span.text;
-  }, "");
-  const rulesBefore = plan.spans.filter((span) => span.kind === "rule").map((span) => span.text);
-  const rulesAfter = rulesBefore.filter((rule) => appearsWordForWord(after, rule));
-  if (JSON.stringify(rulesBefore) !== JSON.stringify(rulesAfter)) {
-    throw new Error("Rules before and after differ");
+  const keptChunks: string[] = [];
+  for (const span of plan.spans) {
+    if (span.kind === "rule") {
+      keptChunks.push(span.text);
+    } else if (span.kind === "reworded") {
+      if (span.approved === true) {
+        keptChunks.push(span.replacement!);
+      } else {
+        keptChunks.push(span.text);
+      }
+    } else if (span.kind === "removed-rule") {
+      if (span.approved !== true) {
+        keptChunks.push(span.text);
+      }
+    }
   }
+
+  const after = keptChunks.reduce((text, chunk) => {
+    const separator = text && !/\s$/.test(text) && !/^\s/.test(chunk) ? "\n\n" : "";
+    return text + separator + chunk;
+  }, "");
+
+  const ruleSpans = plan.spans.filter((span) =>
+    span.kind === "rule" ||
+    span.kind === "scoped-rule" ||
+    span.kind === "reworded" ||
+    span.kind === "removed-rule"
+  );
+  const rulesBefore = ruleSpans.map((span) => span.text);
+  const rulesAfter: string[] = [];
+
+  for (const span of ruleSpans) {
+    if (span.kind === "rule") {
+      rulesAfter.push(span.text);
+    } else if (span.kind === "scoped-rule") {
+      rulesAfter.push(`[moved to ${span.target_skill}] ${span.text}`);
+    } else if (span.kind === "reworded") {
+      if (span.approved === true) {
+        rulesAfter.push(`[reworded] ${span.replacement}`);
+      } else {
+        rulesAfter.push(span.text);
+      }
+    } else if (span.kind === "removed-rule") {
+      if (span.approved === true) {
+        rulesAfter.push(`[removed: ${span.reason}] ${span.text}`);
+      } else {
+        rulesAfter.push(span.text);
+      }
+    }
+  }
+
+  for (const span of ruleSpans) {
+    if (
+      span.kind === "rule" ||
+      (span.kind === "reworded" && span.approved !== true) ||
+      (span.kind === "removed-rule" && span.approved !== true)
+    ) {
+      if (!appearsWordForWord(after, span.text)) {
+        throw new Error("Rules before and after differ");
+      }
+    }
+    if (span.kind === "reworded" && span.approved === true) {
+      if (!appearsWordForWord(after, span.replacement!)) {
+        throw new Error("Reworded rule replacement missing from result");
+      }
+    }
+  }
+
   if (rulesBefore.length === 0) throw new Error("Plan must retain at least one rule");
   const limit = (await loadLimits())[plan.part];
   if (!Number.isSafeInteger(limit.lowMark) || limit.lowMark! <= 0) {
@@ -158,18 +372,22 @@ export async function planRulesCuts(
   }
   const beforeBytes = new TextEncoder().encode(source).length;
   const afterBytes = new TextEncoder().encode(after).length;
-  if (afterBytes > limit.lowMark!) {
-    throw new Error(`${plan.part}: proposed ${afterBytes} bytes exceeds low mark ${limit.lowMark}`);
-  }
-  const report = [
+  const overLowMark = afterBytes > limit.lowMark! ? afterBytes - limit.lowMark! : 0;
+
+  const rulesUnchanged = JSON.stringify(rulesBefore) === JSON.stringify(rulesAfter);
+  const reportLines = [
     `Rules file: ${PARTS[plan.part].repo}/${PARTS[plan.part].file}`,
     "Rules before:",
     JSON.stringify(rulesBefore, null, 2),
     "Rules after:",
     JSON.stringify(rulesAfter, null, 2),
-    "Rules unchanged: yes",
+    `Rules unchanged: ${rulesUnchanged ? "yes" : "no"}`,
     `Bytes: ${beforeBytes} -> ${afterBytes}; low mark ${limit.lowMark}; over at ${limit.overMark}`,
-  ].join("\n");
+  ];
+  if (overLowMark > 0) {
+    reportLines.push(`${overLowMark} bytes over low mark`);
+  }
+  const report = reportLines.join("\n");
   return {
     before: source,
     after,
@@ -268,10 +486,13 @@ export async function runCli(args: string[]): Promise<number> {
     if (flags.help) {
       console.log(`Usage: deno task memory-cleanup:rules-cuts --plan PATH --file PATH [--dry-run]
 
-Classify every source span as rule, skill-instruction, backstory, or repeat.
+Classify every source span as rule, skill-instruction, backstory, repeat,
+scoped-rule, reworded, or removed-rule.
 The JSON plan has part (mainRules, crossAiRules, jammusicRules), optional skills_dir,
-and ordered spans with id, kind, and exact text. A skill-instruction needs target_skill;
-a repeat needs repeats (the id of an identical retained rule). Rules always stay.
+and ordered spans with id, kind, and exact text. A skill-instruction or scoped-rule
+needs target_skill; a repeat needs repeats (the id of an identical retained rule);
+reworded needs replacement when approved; removed-rule needs reason (obsolete or hook-enforced)
+when approved. Approval and safety rules cannot move into skills.
 Moved text must already appear word for word in its target SKILL.md.
 Dry runs write nothing. Applying requires an isolated feature worktree off dev;
 finish through the draft-pr skill and let Josh review and merge the pull request.`);
