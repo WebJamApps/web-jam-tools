@@ -511,11 +511,26 @@ export function verifyIssueAttributes(
       (actual.parent_issue_url
         ? parseInt(actual.parent_issue_url.split("/").pop() || "0", 10)
         : undefined);
+    const actualParentRepo = actual.parent?.repository?.name ??
+      (actual.parent_issue_url
+        ? actual.parent_issue_url.match(/repos\/[^/]+\/([^/]+)\/issues\/\d+/)?.[1] ??
+          actual.parent_issue_url.match(/github\.com\/[^/]+\/([^/]+)\/issues\/\d+/)?.[1]
+        : undefined);
+
     if (actualParentNum !== parentRef.number) {
       errors.push(
         `Parent issue mismatch: expected #${parentRef.number}, got ${
           actualParentNum ? `#${actualParentNum}` : "none"
         }`,
+      );
+    }
+    if (
+      actualParentNum !== undefined &&
+      actualParentRepo &&
+      actualParentRepo.toLowerCase() !== parentRef.repo.toLowerCase()
+    ) {
+      errors.push(
+        `Parent repository mismatch: expected ${parentRef.repo}#${parentRef.number}, got ${actualParentRepo}#${actualParentNum}`,
       );
     }
   }

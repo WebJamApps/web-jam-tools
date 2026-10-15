@@ -37,7 +37,13 @@ function lintPlanTableFile(file: string, options?: Parameters<typeof lintPlanFil
   return lintPlanFile(file, { runGh: emptyOpenIssues, ...options });
 }
 function runLintPlanCli(args: string[], options?: Parameters<typeof lintPlanCli>[1]) {
-  return lintPlanCli(args, { runGh: emptyOpenIssues, ...options });
+  return lintPlanCli(args, {
+    runGh: emptyOpenIssues,
+    renderDesignDocFileImpl: () => {},
+    openBrowserImpl: () => Promise.resolve(),
+    noOpen: options?.openBrowserImpl ? false : true,
+    ...options,
+  });
 }
 
 const HEADER_LINE =
@@ -108,8 +114,14 @@ const MODEL_TITLE = "scripts/running-model: print the model the tool recorded fo
 const REWORDED_MODEL_TITLE = "scripts/running-model: print which model this session is running on";
 const FIX_PR_TITLE = "skills/fix-pr: add the skill and install it on Claude Code, agy and Codex";
 
-function duplicateRow(title: string, id = 1, repo = "web-jam-tools", tier = "Flash"): string {
-  return `| ${id} | ${title} | - | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | PR merges |`;
+function duplicateRow(
+  title: string,
+  id = 1,
+  repo = "web-jam-tools",
+  tier = "Flash",
+  epic = "Epic #1",
+): string {
+  return `| ${id} | ${title} | ${epic} | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | PR merges |`;
 }
 
 function issueRunner(issues: OpenIssueSummary[]): CommandRunner {
@@ -541,6 +553,15 @@ Deno.test("AC4 (#1398): a non-epic row whose Epic / child of cell is empty or no
   ]);
   const upperNoneViolations = findRule(validate(upperNoneDoc), "row-missing-epic");
   assertEquals(upperNoneViolations.length, 1);
+
+  for (const missing of ["-", "—", "n/a", "N/A", "Standalone issue", "standalone issue"]) {
+    const doc = planTableDoc([
+      EPIC_ROW,
+      childRow({ epicChild: missing }),
+    ]);
+    const violations = findRule(validate(doc), "row-missing-epic");
+    assertEquals(violations.length, 1, `expected row-missing-epic for "${missing}"`);
+  }
 });
 
 Deno.test("AC4 (#1398): a non-epic row whose Epic / child of cell names an epic or plan row passes", () => {

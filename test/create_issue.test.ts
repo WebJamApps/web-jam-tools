@@ -291,6 +291,48 @@ Deno.test("verifyIssueAttributes fails when Parent issue did not stick", () => {
   assertStringIncludes(res.errors[0], "Parent issue mismatch: expected #437, got #100");
 });
 
+Deno.test("verifyIssueAttributes fails when Parent repository does not match requested repository", () => {
+  const actual: IssueData = {
+    number: 10,
+    title: "Test",
+    parent: {
+      number: 437,
+      repository: { name: "JaMmusic", owner: { login: "WebJamApps" } },
+    },
+  };
+  const requested = {
+    title: "Test",
+    bodyFile: "/tmp/b.md",
+    parent: "WebJamApps/web-jam-tools#437",
+  };
+
+  const res = verifyIssueAttributes(actual, requested);
+  assertEquals(res.ok, false);
+  assertEquals(res.errors, [
+    "Parent repository mismatch: expected web-jam-tools#437, got JaMmusic#437",
+  ]);
+});
+
+Deno.test("verifyIssueAttributes passes when Parent repository matches requested repository", () => {
+  const actual: IssueData = {
+    number: 10,
+    title: "Test",
+    parent: {
+      number: 437,
+      repository: { name: "web-jam-tools", owner: { login: "WebJamApps" } },
+    },
+  };
+  const requested = {
+    title: "Test",
+    bodyFile: "/tmp/b.md",
+    parent: "WebJamApps/web-jam-tools#437",
+  };
+
+  const res = verifyIssueAttributes(actual, requested);
+  assertEquals(res.ok, true);
+  assertEquals(res.errors.length, 0);
+});
+
 Deno.test("createIssueAndVerify succeeds and returns formatted issue string with mocked deps", async () => {
   const executedCmds: string[][] = [];
 

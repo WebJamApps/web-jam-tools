@@ -244,7 +244,12 @@ function checkEpicBelonging(
     if (isEpicRow(row, rows)) continue;
     const raw = row.cells[COL_EPIC];
     const stripped = stripMdMarkers(raw).trim();
-    if (stripped === "" || stripped.toLowerCase() === "none") {
+    const lower = stripped.toLowerCase();
+    if (
+      isMissingValue(stripped) ||
+      lower === "none" ||
+      lower === "standalone issue"
+    ) {
       violations.push({
         rule: "row-missing-epic",
         line: row.line,
