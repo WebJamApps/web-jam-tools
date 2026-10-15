@@ -476,13 +476,13 @@ export async function checkLyrics(
   let visionWords: string[] | undefined;
 
   if (hasPdf || hasImage) {
+    const dictPath = options.dictPath || "/usr/share/dict/american-english";
+    const dictionary = await loadDictionary(dictPath, definitionWords);
+
     if (hasPdf) {
       await assertBinaryRunnable("pdftoppm");
     }
     await assertBinaryRunnable("tesseract");
-
-    const dictPath = options.dictPath || "/usr/share/dict/american-english";
-    const dictionary = await loadDictionary(dictPath, definitionWords);
 
     let imagePaths: string[] = [];
     let tempDir: string | undefined;
