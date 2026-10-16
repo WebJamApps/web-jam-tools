@@ -465,6 +465,42 @@ loading at every session open while every skill stays listed and callable by nam
 
 **Claude Code ONLY**: it is never merged into agy's `hooks.json`.
 
+### `ubuntu-health.sh`
+
+The one script that applies the Ubuntu security/efficiency design on a system: the laptop, and the
+Ubuntu in WSL on the desktop. Josh runs it with `sudo`, once per system; no agent runs it as root.
+Supporting files live in `scripts/ubuntu-health/`.
+
+```sh
+sudo scripts/ubuntu-health.sh          # apply
+scripts/ubuntu-health.sh --check       # change nothing; name every drift; exit 1 if any
+```
+
+- **Mode.** `systemd-detect-virt` printing `none` means laptop, `wsl` means WSL. Anything else, or
+  the command failing, refuses the run and names the command.
+- **Root-owned copies.** A run installs the weekly job, its sender and the script itself under
+  `/usr/local/lib/ubuntu-health/`, and the unit files under `/etc/systemd/system/`, all owned by
+  root. The weekly job runs only those copies, never a file from the repository or a home folder.
+  Running it again changes nothing that is already right. A run also writes
+  `/usr/local/lib/ubuntu-health/manifest.sha256`, a root-owned checksum of every installed file, and
+  refuses to run from the installed copy, which would record its own files as correct.
+- **Weekly timer.** `ubuntu-health-weekly.timer` runs the job Sundays at 03:00 (`Persistent=true`)
+  at idle CPU and disk priority. The job runs the installed `--check` and, when it finds anything,
+  sends one email naming the system and what to run next. A week with nothing to report sends
+  nothing. The job's log is `/var/log/ubuntu-health.log`.
+- **`--check`.** Needs no `sudo`. Reports each drifted step as `DRIFT <step>: <what>` (`job-files`,
+  `unit-files`, `timer`, `email-login`), or `no drift`. Installed files are verified against
+  `manifest.sha256`, which is how the weekly job (running the installed copy, with no repository
+  beside it) still catches a changed `weekly.sh` or `gmail-send.sh`; run from the repository, it
+  also compares each file with its repository source.
+- **Email.** `gmail-send.sh` makes the same two Gmail API requests as `src/shared/gmail_send.ts`
+  with `curl`. It reads `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` from the
+  send-only login file `/etc/ubuntu-health/gmail-send.env`, which must be owned by root with mode
+  0600; a missing file, a wider mode or a failed token refresh sends nothing and is written to the
+  job's log.
+- **Tests.** `test/ubuntu_health.test.ts` points `UBUNTU_HEALTH_ROOT` at a temporary folder standing
+  in for `/` and puts stub commands first on `PATH`; never run the script with `sudo` while testing.
+
 ## Example scraping / data utilities
 
 These scripts target a specific Wix-hosted site and were built as one-offs for the maintainer's use
