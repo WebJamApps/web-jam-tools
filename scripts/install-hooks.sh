@@ -137,6 +137,24 @@ else
   AGENTS_MD_PATH="$HOME/.agents/AGENTS.md"
 fi
 
+AGY_SAFETY_RULES_PATH_EXPLICIT=0
+if [ -n "${AGY_SAFETY_RULES_PATH:-}" ]; then
+  AGY_SAFETY_RULES_PATH="$AGY_SAFETY_RULES_PATH"
+  AGY_SAFETY_RULES_PATH_EXPLICIT=1
+else
+  AGY_SAFETY_RULES_PATH="$HOME/.gemini/AGENTS.md"
+fi
+
+CODEX_SAFETY_RULES_PATH_EXPLICIT=0
+if [ -n "${CODEX_SAFETY_RULES_PATH:-}" ]; then
+  CODEX_SAFETY_RULES_PATH="$CODEX_SAFETY_RULES_PATH"
+  CODEX_SAFETY_RULES_PATH_EXPLICIT=1
+else
+  CODEX_SAFETY_RULES_PATH="${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+fi
+
+SAFETY_RULES_SRC="$REPO_DIR/docs/safety-rules.md"
+
 # HOOKS_DEST_IS_DEFAULT tracks whether HOOKS_DEST is still the real, live
 # destination (as opposed to a caller-supplied override via --hooks-dir or
 # CLAUDE_HOOKS_DIR). The worktree guard below only fires when it's still "1" —
@@ -711,6 +729,16 @@ while [ $# -gt 0 ]; do
       AGENTS_MD_PATH_EXPLICIT=1
       shift 2
       ;;
+    --agy-safety-rules-path)
+      AGY_SAFETY_RULES_PATH="$2"
+      AGY_SAFETY_RULES_PATH_EXPLICIT=1
+      shift 2
+      ;;
+    --codex-safety-rules-path)
+      CODEX_SAFETY_RULES_PATH="$2"
+      CODEX_SAFETY_RULES_PATH_EXPLICIT=1
+      shift 2
+      ;;
     --bin-dir)
       BIN_DIR="$2"
       BIN_DIR_IS_DEFAULT=0
@@ -769,7 +797,16 @@ if [ "$AGENTS_MD_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; 
   AGENTS_MD_PATH="$(dirname "$SETTINGS_PATH")/AGENTS.md"
 fi
 
+if [ "$AGY_SAFETY_RULES_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  AGY_SAFETY_RULES_PATH="$(dirname "$SETTINGS_PATH")/gemini-AGENTS.md"
+fi
+
+if [ "$CODEX_SAFETY_RULES_PATH_EXPLICIT" = "0" ] && [ "$SETTINGS_PATH_EXPLICIT" = "1" ]; then
+  CODEX_SAFETY_RULES_PATH="$(dirname "$SETTINGS_PATH")/codex-AGENTS.md"
+fi
+
 [ -d "$HOOKS_SRC" ] || { echo "error: $HOOKS_SRC not found" >&2; exit 1; }
+[ -e "$SAFETY_RULES_SRC" ] || { echo "error: $SAFETY_RULES_SRC not found" >&2; exit 1; }
 
 # --- Secret-scan gate (web-jam-tools#339) ---
 # Runs BEFORE any settings file is written or checked against. Fails closed (exit 1).
@@ -1213,6 +1250,18 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  # Check agy safety rules link (web-jam-tools#1415)
+  if [ ! -L "$AGY_SAFETY_RULES_PATH" ] || [ "$(readlink -f "$AGY_SAFETY_RULES_PATH")" != "$(readlink -f "$SAFETY_RULES_SRC")" ]; then
+    echo "drift: agy safety rules file is not linked at $AGY_SAFETY_RULES_PATH" >&2
+    DRIFT=1
+  fi
+
+  # Check Codex safety rules link (web-jam-tools#1415)
+  if [ ! -L "$CODEX_SAFETY_RULES_PATH" ] || [ "$(readlink -f "$CODEX_SAFETY_RULES_PATH")" != "$(readlink -f "$SAFETY_RULES_SRC")" ]; then
+    echo "drift: codex safety rules file is not linked at $CODEX_SAFETY_RULES_PATH" >&2
+    DRIFT=1
+  fi
+
   if [ "$DRIFT" -ne 0 ]; then
     echo "error: drift detected" >&2
     exit 1
@@ -1420,3 +1469,30 @@ deno run --allow-read --allow-write --allow-env "$REPO_DIR/scripts/merge-agents-
 
 # The worktree guard above has run before this or any other installer write.
 deno run --allow-read="$CODEX_HOOKS_PATH" --allow-write="$(dirname "$CODEX_HOOKS_PATH")" "$REPO_DIR/scripts/merge-codex-reaper-hook.ts" "$CODEX_HOOKS_PATH" "$CODEX_REAPER_HOOK_DEST"
+
+# --- Safety rules file symlinks (web-jam-tools#1415) ---
+# Link docs/safety-rules.md into agy's and Codex's global rules locations:
+# ~/.gemini/AGENTS.md and ~/.codex/AGENTS.md.
+mkdir -p "$(dirname "$AGY_SAFETY_RULES_PATH")"
+if [ -L "$AGY_SAFETY_RULES_PATH" ] && [ "$(readlink -f "$AGY_SAFETY_RULES_PATH")" = "$(readlink -f "$SAFETY_RULES_SRC")" ]; then
+  echo "agy AGENTS.md: ok (symlink already present)"
+elif [ -e "$AGY_SAFETY_RULES_PATH" ] || [ -L "$AGY_SAFETY_RULES_PATH" ]; then
+  mv "$AGY_SAFETY_RULES_PATH" "$AGY_SAFETY_RULES_PATH.bak-$STAMP"
+  ln -s "$SAFETY_RULES_SRC" "$AGY_SAFETY_RULES_PATH"
+  echo "agy AGENTS.md: replaced existing file (backed up to $(basename "$AGY_SAFETY_RULES_PATH").bak-$STAMP)"
+else
+  ln -s "$SAFETY_RULES_SRC" "$AGY_SAFETY_RULES_PATH"
+  echo "agy AGENTS.md: created symlink"
+fi
+
+mkdir -p "$(dirname "$CODEX_SAFETY_RULES_PATH")"
+if [ -L "$CODEX_SAFETY_RULES_PATH" ] && [ "$(readlink -f "$CODEX_SAFETY_RULES_PATH")" = "$(readlink -f "$SAFETY_RULES_SRC")" ]; then
+  echo "codex AGENTS.md: ok (symlink already present)"
+elif [ -e "$CODEX_SAFETY_RULES_PATH" ] || [ -L "$CODEX_SAFETY_RULES_PATH" ]; then
+  mv "$CODEX_SAFETY_RULES_PATH" "$CODEX_SAFETY_RULES_PATH.bak-$STAMP"
+  ln -s "$SAFETY_RULES_SRC" "$CODEX_SAFETY_RULES_PATH"
+  echo "codex AGENTS.md: replaced existing file (backed up to $(basename "$CODEX_SAFETY_RULES_PATH").bak-$STAMP)"
+else
+  ln -s "$SAFETY_RULES_SRC" "$CODEX_SAFETY_RULES_PATH"
+  echo "codex AGENTS.md: created symlink"
+fi
