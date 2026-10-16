@@ -207,8 +207,14 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     // web-jam-tools#1240: agy never gets a skillOverrides surface.
     assertEquals(agyHooks.skillOverrides, undefined);
     assertEquals(agyHooks.modelSettings, undefined);
-    // web-jam-tools#1240: settings.json gets the 30 bundled skills set to name-only
-    assertEquals(Object.keys(settings.skillOverrides).length, 30);
+    // web-jam-tools#1240, web-jam-tools#1416: settings.json gets the 30 bundled skills set to name-only from limits.json
+    const limits = JSON.parse(
+      await Deno.readTextFile(`${REPO_ROOT}src/session-load/limits.json`),
+    );
+    assertEquals(
+      Object.keys(settings.skillOverrides).sort(),
+      [...limits.bundledSkills.skills].sort(),
+    );
     for (const [k, v] of Object.entries(settings.skillOverrides)) {
       assertEquals(v, "name-only", `expected skillOverride ${k} to be name-only`);
     }
@@ -638,6 +644,20 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.chmod(`${mainRepo}/scripts/agy-prompt-watch.sh`, 0o755);
   await Deno.copyFile(AGY_SKILL_RUN_SCRIPT, `${mainRepo}/scripts/agy-skill-run.sh`);
   await Deno.chmod(`${mainRepo}/scripts/agy-skill-run.sh`, 0o755);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/scan-settings-for-secrets.sh`,
+    `${mainRepo}/scripts/scan-settings-for-secrets.sh`,
+  );
+  await Deno.chmod(`${mainRepo}/scripts/scan-settings-for-secrets.sh`, 0o755);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/scan_settings_for_secrets.ts`,
+    `${mainRepo}/scripts/scan_settings_for_secrets.ts`,
+  );
+  await Deno.mkdir(`${mainRepo}/src/session-load`, { recursive: true });
+  await Deno.copyFile(
+    `${REPO_ROOT}src/session-load/limits.json`,
+    `${mainRepo}/src/session-load/limits.json`,
+  );
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {
@@ -1840,8 +1860,11 @@ Deno.test(
       const settings = JSON.parse(await Deno.readTextFile(settingsPath));
       assertEquals(settings.model, "opus");
       assert(settings.skillOverrides && typeof settings.skillOverrides === "object");
+      const limits = JSON.parse(
+        await Deno.readTextFile(`${REPO_ROOT}src/session-load/limits.json`),
+      );
       const keys = Object.keys(settings.skillOverrides).sort();
-      assertEquals(keys.length, 30);
+      assertEquals(keys, [...limits.bundledSkills.skills].sort());
       for (const key of keys) {
         assertEquals(settings.skillOverrides[key], "name-only");
       }
@@ -1883,6 +1906,40 @@ Deno.test(
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });
     }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh refuses install when limits.json bundledSkills.skills is invalid or length mismatches totalCount",
+  async () => {
+    await withTempWorktree(async (worktreePath) => {
+      const sandbox = await Deno.makeTempDir();
+      const hooksDir = `${sandbox}/hooks`;
+      const settingsPath = `${sandbox}/settings.json`;
+      const base = [
+        `${worktreePath}/scripts/install-hooks.sh`,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ];
+      try {
+        await Deno.writeTextFile(settingsPath, JSON.stringify({ model: "opus" }));
+        const limitsPath = `${worktreePath}/src/session-load/limits.json`;
+        const limits = JSON.parse(await Deno.readTextFile(limitsPath));
+        limits.bundledSkills.skills.pop();
+        await Deno.writeTextFile(limitsPath, JSON.stringify(limits));
+
+        const res = await run("bash", base);
+        assert(res.code !== 0, "expected install-hooks.sh to fail on invalid bundledSkills");
+        assert(
+          res.stderr.includes("expected bundledSkills.skills to be an array of length"),
+          res.stderr,
+        );
+      } finally {
+        await Deno.remove(sandbox, { recursive: true });
+      }
+    });
   },
 );
 

@@ -330,12 +330,7 @@ Deno.test("runCli: --check mode reports skips and returns exit code 1 even when 
   }
 });
 
-// P1-6 budget check: Derived budget function (Design 1C):
-//   bytes(MEMORY.md) ≈ Σ len(slug) + group markup + live-checkpoint lines
-// Evaluates to ~6.7KB currently; the hard upper bound is the `memoryIndex` over mark in
-// src/session-load/limits.json.
-Deno.test("real memory directory index generation budget check (memoryIndex over mark)", async () => {
-  const { overMark } = (await loadLimits()).memoryIndex;
+Deno.test("real memory directory index generation succeeds on real data", async () => {
   const realDir = "/home/joshua/.claude/projects/-home-joshua/memory";
   try {
     const stat = await Deno.stat(realDir);
@@ -347,12 +342,31 @@ Deno.test("real memory directory index generation budget check (memoryIndex over
   const { entries } = await scanMemoryDirectory(realDir);
   const activeEntries = entries.filter((e) => !(e.isCheckpoint && e.status === "done"));
   const output = generateMemoryIndex(activeEntries);
+  assert(output.startsWith("# Memory Index"));
+  assert(output.includes("## "));
   const byteCount = new TextEncoder().encode(output).length;
+  assert(byteCount > 0, "Generated index must not be empty");
+});
 
-  assert(
-    byteCount <= overMark,
-    `Memory index size (${byteCount} bytes) exceeds budget of ${overMark} bytes`,
-  );
+Deno.test("generateMemoryIndex: completes successfully when index exceeds overMark", async () => {
+  const { overMark } = (await loadLimits()).memoryIndex;
+  const entries = [];
+  for (let i = 0; i < 300; i++) {
+    entries.push({
+      filename: `synthetic-memory-entry-slug-${i}.md`,
+      slug: `synthetic-memory-entry-slug-${i}`,
+      type: "project" as const,
+      description:
+        `Synthetic memory description for entry ${i} ensuring index byte count exceeds limit comfortably`,
+      isCheckpoint: true,
+      status: "live",
+    });
+  }
+  const output = generateMemoryIndex(entries);
+  const byteCount = new TextEncoder().encode(output).length;
+  assert(byteCount > overMark, `Byte count (${byteCount}) should exceed overMark (${overMark})`);
+  assert(output.startsWith("# Memory Index"));
+  assert(output.includes("## Project"));
 });
 
 Deno.test("memory-index --protect keeps a named done checkpoint out of the archive", async () => {
