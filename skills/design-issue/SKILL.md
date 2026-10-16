@@ -18,7 +18,15 @@ Design work does not happen in plain chat. The moment a conversation turns into 
 
 ## Workflow Phases
 
-### Phase 1 — Design (Opus / Flash for simple Bug or Task)
+### The model conducting the design
+
+When Josh invokes `/design-issue` or `$design-issue` in a session, the current model conducts the design. The run does not stop, require a model switch, or ask for additional authorization merely because that model differs from a default recommendation.
+
+The defaults guide choosing a new session: Flash for a single genuinely simple Bug or Task; Opus for a Feature, Epic, multi-repository or multi-issue design, or a Bug or Task whose scope requires substantial judgment. They are recommendations for arranging work, not an eligibility list for a session Josh invokes. A concrete capability limitation is explained with the evidence that prevents progress, rather than inferred from the current model's name.
+
+The model conducting the conversation does not determine the implementation issues' model labels. Those labels follow the triage and sizing rules. The design and issue-plan approval gates, filing requirements, and prohibition on dispatching implementation still apply.
+
+### Phase 1 — Design
 
 With no argument, the skill scans all 8 active repos for open issues labeled `Needs Design` and offers them as candidates. Josh picks; the skill never picks for him.
 
@@ -128,7 +136,7 @@ Replacing a paragraph is not the complete edit. An edit is finished only when th
 - Confirm the passage makes each point exactly once, contains no duplicate conclusions, and still argues in one consistent direction.
 - A patch applied without reading its neighboring paragraphs is not done.
 
-### Phase 2 — The Issue Plan (Opus / Flash)
+### Phase 2 — The Issue Plan
 
 7. **Propose the plan table**, applying the epic heuristic and the Flash size checklist:
 
@@ -468,14 +476,16 @@ Every other table is shown in the order the file holds it. A table whose order m
 
 | Phase / Scope | Tier | Why |
 |---|---|---|
-| Simple `Bug` or `Task` Design | Flash | Contained judgment about one repo's own behavior; cost-effective default |
-| Complex Design (`Feature`, `Epic`, multi-repo, multi-issue, or arguable scope) | Opus | Architectural reasoning and deep system judgment; the reason the skill exists |
+| Invoked Design Session | Current model | Invocation authorizes the current model; does not stop, require a model switch, or ask for additional authorization merely because it differs from a default recommendation |
+| Simple `Bug` or `Task` Design (recommended default) | Flash | Recommended default for choosing a new session: contained judgment about one repo's own behavior |
+| Complex Design (`Feature`, `Epic`, multi-repo, multi-issue, or arguable scope) (recommended default) | Opus | Recommended default for choosing a new session: architectural reasoning and deep system judgment |
 | Filing (Opus design run) | Sonnet subagent | Mechanical, but bodies must be self-contained and correctly cited |
 | Filing (agy / Flash design run) | Flash (session) | Already on Flash — files directly itself (no self-delegation to save a cold start) |
 
 ### Design Tiers
-- **`Flash` is the default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.
-- **`Opus` keeps everything else:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, and any `Bug` or `Task` whose scope is arguable.
+- **Defaults remain recommendations; invocation authorizes the current model:** When Josh invokes `/design-issue` or `$design-issue` in a session, the current model conducts the design. The run does not stop, require a model switch, or ask for additional authorization merely because that model differs from a default recommendation. Defaults guide choosing a new session, not an eligibility list for a session Josh invokes.
+- **`Flash` is the recommended default design tier for a single genuinely simple `Bug` or `Task`.** A one-issue Bug or Task design is a contained judgment about one repo's own behavior.
+- **`Opus` is the recommended default for complex design:** new `Feature` issues, `Epic` designs, cross-repo work, multi-issue plans with dependency chains, or any `Bug` or `Task` whose scope requires substantial judgment.
 
 ### Delegation Rules for Filing
 - Filing delegates to a subagent **only when delegating moves the work down a tier**.
