@@ -81,10 +81,12 @@ type Marker = [string, boolean];
 
 function scanHeredocLine(line: string, quote: Quote = null): {
   marker: Marker | null;
+  markerIndex: number;
   quote: Quote;
   executableLine: string;
 } {
   let marker: Marker | null = null;
+  let markerIndex = -1;
   let i = 0;
   const n = line.length;
 
@@ -105,7 +107,7 @@ function scanHeredocLine(line: string, quote: Quote = null): {
       continue;
     }
     if (startsShellComment(line, i)) {
-      return { marker, quote, executableLine: line.slice(0, i) };
+      return { marker, markerIndex, quote, executableLine: line.slice(0, i) };
     }
     if (ch === "'") {
       quote = "'";
@@ -133,13 +135,16 @@ function scanHeredocLine(line: string, quote: Quote = null): {
       const start = j;
       while (j < n && /[A-Za-z0-9_]/.test(line[j])) j++;
       const word = line.slice(start, j);
-      if (word && !marker) marker = [word, stripTabs];
+      if (word && !marker) {
+        marker = [word, stripTabs];
+        markerIndex = i;
+      }
       i += 2;
       continue;
     }
     i++;
   }
-  return { marker, quote, executableLine: line };
+  return { marker, markerIndex, quote, executableLine: line };
 }
 
 export function findHeredocMarker(line: string): Marker | null {
@@ -150,7 +155,72 @@ interface CommandRegion {
   kind: "shell" | "data" | "script";
   text: string;
   closing?: string;
-  python?: boolean;
+}
+
+function interpreterKind(segment: string): CommandRegion["kind"] {
+  const tokens = splitShellTokens(segment);
+  const argv: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    // Redirections can precede the command or occur between a wrapper and its command.
+    const redirect = tokens[i].match(/^(?:\d*|&)(?:<<<|<<-?|>>?|[<>]&?)/)?.[0];
+    if (redirect) {
+      if (redirect === tokens[i]) i++;
+    } else argv.push(tokens[i]);
+  }
+  let receiver = argv;
+  for (let depth = 0; depth <= MAX_WRAPPER_ITERATIONS; depth++) {
+    const resolved = resolveThroughWrappers(receiver);
+    if (resolved.kind === "cap-exceeded") break;
+    if (resolved.kind === "nested") return "shell";
+    const index = resolved.argv.findIndex((token) => !ASSIGN_RE.test(token));
+    if (index < 0) break;
+    const name = resolved.argv[index].split("/").pop() ?? "";
+    if (/^(python3?|node|deno)$/.test(name)) return "script";
+    if (INTERPRETER.test(name) || SHELL_INTERPRETER_NAMES.has(name) || name === "coproc") {
+      return "shell";
+    }
+    // Shell execution prefixes belong to the receiver; their words are not data arguments.
+    if (
+      ![
+        "!",
+        "if",
+        "then",
+        "elif",
+        "else",
+        "while",
+        "until",
+        "do",
+        "exec",
+        "builtin",
+        "time",
+        "noglob",
+      ].includes(name)
+    ) return "data";
+    let next = index + 1;
+    while (resolved.argv[next]?.startsWith("-")) {
+      const flag = resolved.argv[next++];
+      if (flag === "--") break;
+      if (
+        (name === "exec" && flag === "-a") ||
+        (name === "time" && ["-f", "--format", "-o", "--output"].includes(flag))
+      ) next++;
+    }
+    receiver = resolved.argv.slice(next);
+  }
+  throw new Error("unreadable heredoc receiver");
+}
+
+function heredocKind(line: string, markerIndex: number): CommandRegion["kind"] {
+  const owner = splitPlainOperators(line.slice(0, markerIndex), true, true).segments.length - 1;
+  const { segments, operators } = splitPlainOperators(line, true, true);
+  for (let i = owner; i < segments.length; i++) {
+    const kind = interpreterKind(segments[i]);
+    if (kind !== "data") return kind;
+    // A data producer can pipe the body to an interpreter (`cat <<EOF | node`).
+    // Stop at every other operator: a separate command never owns this heredoc.
+    if (operators[i] !== "|") break;
+  }
+  return "data";
 }
 
 /** Keep interpreter bodies separate until the enclosing shell has been validated. */
@@ -171,9 +241,7 @@ function commandRegions(text: string): { regions: CommandRegion[]; unterminated:
     const marker = scanned.marker;
     if (marker) {
       const [word, stripTabs] = marker;
-      const executed = INTERPRETER.test(scanned.executableLine);
-      const nonShell = /(^|[\s;&|(])(\S*\/)?(python3?|node|deno)(?=[\s;&|)<]|$)/
-        .test(scanned.executableLine);
+      const kind = heredocKind(scanned.executableLine, scanned.markerIndex);
       let j = i + 1;
       const body: string[] = [];
       let terminated = false;
@@ -192,10 +260,9 @@ function commandRegions(text: string): { regions: CommandRegion[]; unterminated:
       regions.push({ kind: "shell", text: shell.join("\n") });
       shell = [];
       regions.push({
-        kind: !executed ? "data" : nonShell ? "script" : "shell",
+        kind,
         text: body.join("\n"),
         closing: terminated ? lines[j - 1] : undefined,
-        python: /(^|[\s/])python3?(?=\s|$)/.test(scanned.executableLine),
       });
       if (!terminated) unterminated = true;
       i = j;
@@ -365,17 +432,29 @@ export const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * hooks/lib/check_model_label_on_issue_create.ts — do not duplicate this in
  * any of them; import it from here.
  */
-function splitPlainOperators(text: string): { segments: string[]; unterminated: boolean } {
+function splitPlainOperators(
+  text: string,
+  shellComments = true,
+  preserveSubstitutions = false,
+): {
+  segments: string[];
+  operators: string[];
+  unterminated: boolean;
+} {
   const segments: string[] = [];
+  const operators: string[] = [];
   let current = "";
   let inSquote = false;
   let inDquote = false;
   let escaped = false;
+  let substitutionDepth = 0;
+  let inBacktick = false;
   let i = 0;
   const n = text.length;
 
-  const flush = () => {
+  const flush = (operator = "") => {
     segments.push(current);
+    operators.push(operator);
     current = "";
   };
 
@@ -393,6 +472,12 @@ function splitPlainOperators(text: string): { segments: string[]; unterminated: 
       i++;
       continue;
     }
+    if (preserveSubstitutions && inBacktick) {
+      current += ch;
+      if (ch === "`") inBacktick = false;
+      i++;
+      continue;
+    }
     if (inSquote) {
       current += ch;
       if (ch === "'") inSquote = false;
@@ -405,7 +490,7 @@ function splitPlainOperators(text: string): { segments: string[]; unterminated: 
       i++;
       continue;
     }
-    if (startsShellComment(text, i)) {
+    if (shellComments && startsShellComment(text, i)) {
       while (i < n && text[i] !== "\n") i++;
       continue;
     }
@@ -421,18 +506,34 @@ function splitPlainOperators(text: string): { segments: string[]; unterminated: 
       i++;
       continue;
     }
+    if (preserveSubstitutions) {
+      // Substitutions are arguments of the receiver, not a different heredoc-owning command.
+      if (ch === "`") inBacktick = true;
+      if (ch === "(" && (substitutionDepth > 0 || text[i - 1] === "$")) substitutionDepth++;
+      else if (ch === ")" && substitutionDepth > 0) {
+        substitutionDepth--;
+        current += ch;
+        i++;
+        continue;
+      }
+      if (substitutionDepth > 0 || inBacktick) {
+        current += ch;
+        i++;
+        continue;
+      }
+    }
     if (ch === "\n" || ch === ";") {
-      flush();
+      flush(ch);
       i++;
       continue;
     }
     if ((ch === "&" && text[i + 1] === "&") || (ch === "|" && text[i + 1] === "|")) {
-      flush();
+      flush(ch + text[i + 1]);
       i += 2;
       continue;
     }
     if (ch === "|") {
-      flush();
+      flush(ch);
       i++;
       continue;
     }
@@ -446,12 +547,12 @@ function splitPlainOperators(text: string): { segments: string[]; unterminated: 
         i++;
         continue;
       }
-      flush();
+      flush(ch);
       i++;
       continue;
     }
     if (ch === "(" || ch === ")" || ch === "{" || ch === "}") {
-      flush();
+      flush(ch);
       i++;
       continue;
     }
@@ -460,33 +561,7 @@ function splitPlainOperators(text: string): { segments: string[]; unterminated: 
   }
   flush();
 
-  return { segments, unterminated: inSquote || inDquote };
-}
-
-/** Remove native comments without mistaking comment-looking text in strings for comments. */
-function stripScriptComments(text: string, python: boolean): string {
-  let quote: string | null = null;
-  let result = "";
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quote) {
-      result += ch;
-      if (ch === "\\" && i + 1 < text.length) result += text[++i];
-      else if (ch === quote) quote = null;
-    } else if (ch === "'" || ch === '"' || (!python && ch === "`")) {
-      quote = ch;
-      result += ch;
-    } else if ((python && ch === "#") || (!python && text.slice(i, i + 2) === "//")) {
-      while (i < text.length && text[i] !== "\n") i++;
-      result += "\n";
-    } else if (!python && text.slice(i, i + 2) === "/*") {
-      const end = text.indexOf("*/", i + 2);
-      const stop = end < 0 ? text.length : end + 2;
-      result += text.slice(i, stop).replace(/[^\n]/g, " ");
-      i = stop - 1;
-    } else result += ch;
-  }
-  return result;
+  return { segments, operators, unterminated: inSquote || inDquote };
 }
 
 export function splitOnOperators(text: string): { segments: string[]; unterminated: boolean } {
@@ -495,15 +570,13 @@ export function splitOnOperators(text: string): { segments: string[]; unterminat
   let unterminated = parsed.unterminated;
   for (const region of parsed.regions) {
     if (region.kind === "data" && region.closing !== undefined) continue;
-    const source = region.kind === "script"
-      ? stripScriptComments(region.text, region.python ?? false)
-      : region.text;
     const result = region.kind === "shell" && region.closing !== undefined
-      ? splitOnOperators(source)
-      : splitPlainOperators(source);
+      ? splitOnOperators(region.text)
+      : splitPlainOperators(region.text, region.kind !== "script");
     segments.push(...result.segments);
     // An interpreter body's quotes never alter the enclosing shell's state. Its code remains
-    // available to the existing positional matchers; this does not evaluate interpreter APIs.
+    // available to the existing positional matchers, without stripping native comments or
+    // interpreting JavaScript regex/template syntax. This does not evaluate interpreter APIs.
     if (region.kind !== "script") unterminated ||= result.unterminated;
   }
   return { segments, unterminated };

@@ -58,3 +58,76 @@ const rows: ReadonlyArray<readonly [string, GuardOutcome]> = [
 export const COMMENT_HEREDOC_GUARD_CASES: readonly CommentHeredocCase[] = rows.map(
   ([command, irreversible], index) => ({ id: index + 1, command, irreversible }),
 );
+
+/** Supplemental review regressions; the canonical 36-row design matrix above stays unchanged. */
+const reviewRows: ReadonlyArray<readonly [string, GuardOutcome]> = [
+  ["node -v; bash <<'EOF'\necho hi //; gh repo delete WebJamApps/x --yes\nEOF", "operation"],
+  ["node -v; bash <<'EOF'\ntrue /*\ngh repo delete WebJamApps/x --yes\n*/\nEOF", "operation"],
+  ...["python3", "deno"].flatMap((name): [string, GuardOutcome][] => [
+    [
+      `${name} --version; bash <<'EOF'\necho hi //; gh repo delete WebJamApps/x --yes\nEOF`,
+      "operation",
+    ],
+    [
+      `${name} --version; sh <<'EOF'\ntrue /*\ngh repo delete WebJamApps/x --yes\n*/\nEOF`,
+      "operation",
+    ],
+  ]),
+  ...["node", "python3", "deno"].flatMap((name): [string, GuardOutcome][] => [
+    [`bash -s ${name} <<'EOF'\necho hi //; gh repo delete WebJamApps/x --yes\nEOF`, "operation"],
+    [
+      `bash <<'EOF'; ${name} --version\necho hi //; gh repo delete WebJamApps/x --yes\nEOF`,
+      "operation",
+    ],
+    [`${name} --version; bash <<'EOF'\necho \"unclosed\nEOF`, "unreadable"],
+    [`${name} --version; cat <<'EOF'\ngh repo delete WebJamApps/x --yes\nEOF`, "allow"],
+  ]),
+  ["node -v | /bin/bash <<'EOF'\necho hi //; gh repo delete WebJamApps/x --yes\nEOF", "operation"],
+  [
+    "env FOO=node /bin/bash <<'EOF'\necho hi //; gh repo delete WebJamApps/x --yes\nEOF",
+    "operation",
+  ],
+  [
+    "</dev/null env FOO=node /bin/bash <<'EOF'\necho hi //; gh repo delete WebJamApps/x --yes\nEOF",
+    "operation",
+  ],
+  [
+    "cat <<'EOF' | env FOO=node /bin/bash\necho hi //; gh repo delete WebJamApps/x --yes\nEOF",
+    "operation",
+  ],
+  ["bash $(node -v) <<'EOF'\ngh repo delete WebJamApps/x --yes\nEOF", "operation"],
+  ["bash `node -v` <<'EOF'\ngh repo delete WebJamApps/x --yes\nEOF", "operation"],
+  ["cat $(node -v) <<'EOF'\ngh repo delete WebJamApps/x --yes\nEOF", "allow"],
+  ["node $(echo arg) <<'JS'\n// don't\nconsole.log(1);\nJS", "allow"],
+  ...[
+    "exec /bin/bash",
+    "exec -a worker /bin/bash",
+    "time -p bash",
+    "! bash",
+    "if bash",
+    "then bash",
+    "builtin source /dev/stdin",
+  ].map(
+    (
+      receiver,
+    ): [string, GuardOutcome] => [
+      `${receiver} <<'EOF'\necho hi //; gh repo delete WebJamApps/x --yes\nEOF`,
+      "operation",
+    ],
+  ),
+  ["exec node <<'JS'\n// don't\nconsole.log(1);\nJS", "allow"],
+  ["echo node <<'EOF'\ngh repo delete WebJamApps/x --yes\nEOF", "allow"],
+  ["cat <<'EOF'; node --version\ngh repo delete WebJamApps/x --yes\nEOF", "allow"],
+  [
+    "node <<'JS'\nconst pattern = /\\/\\//; const regexTail = 1;\nJS\ngh repo delete WebJamApps/x --yes",
+    "operation",
+  ],
+  [
+    "node <<'JS'\nconst text = `text ${\"// don't\"}`; const templateTail = 1;\nJS\ngh repo delete WebJamApps/x --yes",
+    "operation",
+  ],
+];
+
+export const HEREDOC_REVIEW_CASES: readonly CommentHeredocCase[] = reviewRows.map(
+  ([command, irreversible], index) => ({ id: 37 + index, command, irreversible }),
+);

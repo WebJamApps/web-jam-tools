@@ -7,7 +7,10 @@
 // test/check_irreversible_operations_lib.test.ts.
 
 import { assertEquals } from "@std/assert";
-import { COMMENT_HEREDOC_GUARD_CASES } from "./comment_heredoc_guard_cases.ts";
+import {
+  COMMENT_HEREDOC_GUARD_CASES,
+  HEREDOC_REVIEW_CASES,
+} from "./comment_heredoc_guard_cases.ts";
 
 const HOOK_PATH = new URL("../hooks/block-irreversible-operations.sh", import.meta.url).pathname;
 
@@ -37,7 +40,7 @@ async function runHook(
   };
 }
 
-for (const row of COMMENT_HEREDOC_GUARD_CASES) {
+for (const row of [...COMMENT_HEREDOC_GUARD_CASES, ...HEREDOC_REVIEW_CASES]) {
   Deno.test(`apostrophe shell literal case ${row.id}: ${row.irreversible}`, async () => {
     const result = await runHook({ tool_name: "Bash", command: row.command });
     assertEquals(result.code, row.irreversible === "allow" ? 0 : 2, result.stderr);

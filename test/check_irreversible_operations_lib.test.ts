@@ -8,9 +8,12 @@
 
 import { assertEquals } from "@std/assert";
 import { checkIrreversibleOperation } from "../hooks/lib/check_irreversible_operations.ts";
-import { COMMENT_HEREDOC_GUARD_CASES } from "./comment_heredoc_guard_cases.ts";
+import {
+  COMMENT_HEREDOC_GUARD_CASES,
+  HEREDOC_REVIEW_CASES,
+} from "./comment_heredoc_guard_cases.ts";
 
-for (const row of COMMENT_HEREDOC_GUARD_CASES) {
+for (const row of [...COMMENT_HEREDOC_GUARD_CASES, ...HEREDOC_REVIEW_CASES]) {
   Deno.test(`apostrophe checker literal case ${row.id}: ${row.irreversible}`, () => {
     const result = checkIrreversibleOperation(row.command);
     assertEquals(result.blocked, row.irreversible !== "allow");

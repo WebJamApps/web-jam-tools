@@ -61,6 +61,26 @@ Deno.test("apostrophe parser retains interpreter contents, quoted comment marker
   );
 });
 
+Deno.test("apostrophe parser retains JavaScript regex and template contents without a native comment stripper", () => {
+  for (
+    const body of [
+      "const pattern = /\\/\\//; const regexTail = 1;",
+      'const text = `text ${"// don\'t"}`; const templateTail = 1;',
+    ]
+  ) {
+    const { segments, unterminated } = splitOnOperators(`node <<'JS'\n${body}\nJS`);
+    assertEquals(unterminated, false);
+    assertStringIncludes(
+      segments.join("\n"),
+      body.includes("regexTail") ? "const regexTail = 1" : "const templateTail = 1",
+    );
+    assertStringIncludes(
+      segments.join("\n"),
+      body.includes("regexTail") ? "/\\/\\//" : '"// don\'t"',
+    );
+  }
+});
+
 Deno.test("detect_bare_issue_refs helper", () => {
   const text = 'Here is web-jam-tools#123 "Fix bug" and a bare #456.';
   const refs = findBareIssueRefs(text);
