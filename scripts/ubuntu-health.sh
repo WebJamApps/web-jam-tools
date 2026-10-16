@@ -9,6 +9,11 @@
 #   sudo scripts/ubuntu-health.sh           apply: refresh the root-owned copies, enable the timer
 #   scripts/ubuntu-health.sh --check        change nothing; name every drift; exit 1 if any
 #
+# Apply also records a root-owned checksum of every file it installs (manifest.sha256). The weekly
+# job runs the INSTALLED --check, whose "source" would be the installed files themselves, so it
+# verifies content against that manifest instead and reads nothing from the repository or a home
+# folder. Run from the repository, --check compares against the repository files as well.
+#
 # UBUNTU_HEALTH_ROOT stands in for "/" so tests never touch the real system.
 # Design: Operations/ubuntu-security-efficiency-design-2026-10-15.md in the web-jam-llms folder.
 set -euo pipefail
@@ -17,10 +22,14 @@ ROOT="${UBUNTU_HEALTH_ROOT:-}"
 LIB="$ROOT/usr/local/lib/ubuntu-health"
 UNIT_DIR="$ROOT/etc/systemd/system"
 ENV_FILE="$ROOT/etc/ubuntu-health/gmail-send.env"
+MANIFEST="$LIB/manifest.sha256"
 TIMER="ubuntu-health-weekly.timer"
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SELF_DIR="$(dirname "$SELF")"
+# True when this is the installed copy (the weekly job's), not the one in the repository.
+FROM_INSTALLED=0
+[ "$SELF_DIR" != "$(readlink -f "$LIB" 2>/dev/null || true)" ] || FROM_INSTALLED=1
 # In the repository the support files sit in scripts/ubuntu-health/; the installed copy has them
 # flat beside it.
 SUPPORT="$SELF_DIR"
@@ -64,6 +73,19 @@ wanted_files() {
   done
 }
 
+# The checksum line the manifest holds for one installed file: "<sha256>  <path without ROOT>".
+manifest_line() {
+  echo "$(sha256sum "$1" | cut -d' ' -f1)  ${2#"$ROOT"}"
+}
+
+# The manifest apply would write: one line per wanted file, hashed from its repository source.
+manifest_text() {
+  local step src dst mode
+  while IFS='|' read -r step src dst mode; do
+    manifest_line "$src" "$dst"
+  done < <(wanted_files)
+}
+
 check() {
   local drift=0 step src dst mode state
   report() {
@@ -71,10 +93,20 @@ check() {
     drift=1
   }
 
+  if [ ! -f "$MANIFEST" ]; then
+    report job-files "$MANIFEST is missing, so installed files cannot be verified"
+  elif [ "$(stat -c %a "$MANIFEST")" != "644" ]; then
+    report job-files "$MANIFEST has mode $(stat -c %a "$MANIFEST"), expected 644"
+  elif [ "$(stat -c %u "$MANIFEST")" != "$WANT_UID" ]; then
+    report job-files "$MANIFEST is not owned by root"
+  fi
+
   while IFS='|' read -r step src dst mode; do
     if [ ! -f "$dst" ]; then
       report "$step" "$dst is missing"
-    elif ! cmp -s "$src" "$dst"; then
+    elif [ -f "$MANIFEST" ] && ! grep -qxF "$(manifest_line "$dst" "$dst")" "$MANIFEST"; then
+      report "$step" "$dst differs from the checksum recorded at install"
+    elif [ "$FROM_INSTALLED" -eq 0 ] && ! cmp -s "$src" "$dst"; then
       report "$step" "$dst differs from $(basename "$src")"
     elif [ "$(stat -c %a "$dst")" != "$mode" ]; then
       report "$step" "$dst has mode $(stat -c %a "$dst"), expected $mode"
@@ -101,9 +133,13 @@ check() {
 }
 
 apply() {
-  local step src dst mode units_changed=0
+  local step src dst mode units_changed=0 manifest_new
   if [ -z "$ROOT" ] && [ "$(id -u)" -ne 0 ]; then
     echo "ubuntu-health: run this with sudo, or use --check" >&2
+    exit 2
+  fi
+  if [ "$FROM_INSTALLED" -eq 1 ]; then
+    echo "ubuntu-health: run apply from the repository; the installed copy would record its own files as correct" >&2
     exit 2
   fi
 
@@ -117,6 +153,15 @@ apply() {
     fi
     chown root:root "$dst"
   done < <(wanted_files)
+
+  manifest_new="$(mktemp)"
+  manifest_text >"$manifest_new"
+  if [ ! -f "$MANIFEST" ] || ! cmp -s "$manifest_new" "$MANIFEST" || [ "$(stat -c %a "$MANIFEST")" != "644" ]; then
+    install -m 644 "$manifest_new" "$MANIFEST"
+    echo "wrote $MANIFEST"
+  fi
+  rm -f "$manifest_new"
+  chown root:root "$MANIFEST"
 
   [ "$units_changed" -eq 0 ] || systemctl daemon-reload
   if [ "$(systemctl is-enabled "$TIMER" 2>/dev/null || true)" != "enabled" ] ||

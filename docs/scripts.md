@@ -481,13 +481,18 @@ scripts/ubuntu-health.sh --check       # change nothing; name every drift; exit 
 - **Root-owned copies.** A run installs the weekly job, its sender and the script itself under
   `/usr/local/lib/ubuntu-health/`, and the unit files under `/etc/systemd/system/`, all owned by
   root. The weekly job runs only those copies, never a file from the repository or a home folder.
-  Running it again changes nothing that is already right.
+  Running it again changes nothing that is already right. A run also writes
+  `/usr/local/lib/ubuntu-health/manifest.sha256`, a root-owned checksum of every installed file, and
+  refuses to run from the installed copy, which would record its own files as correct.
 - **Weekly timer.** `ubuntu-health-weekly.timer` runs the job Sundays at 03:00 (`Persistent=true`)
   at idle CPU and disk priority. The job runs the installed `--check` and, when it finds anything,
   sends one email naming the system and what to run next. A week with nothing to report sends
   nothing. The job's log is `/var/log/ubuntu-health.log`.
 - **`--check`.** Needs no `sudo`. Reports each drifted step as `DRIFT <step>: <what>` (`job-files`,
-  `unit-files`, `timer`, `email-login`), or `no drift`.
+  `unit-files`, `timer`, `email-login`), or `no drift`. Installed files are verified against
+  `manifest.sha256`, which is how the weekly job (running the installed copy, with no repository
+  beside it) still catches a changed `weekly.sh` or `gmail-send.sh`; run from the repository, it
+  also compares each file with its repository source.
 - **Email.** `gmail-send.sh` makes the same two Gmail API requests as `src/shared/gmail_send.ts`
   with `curl`. It reads `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` from the
   send-only login file `/etc/ubuntu-health/gmail-send.env`, which must be owned by root with mode

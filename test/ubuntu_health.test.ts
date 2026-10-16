@@ -258,6 +258,117 @@ Deno.test("frame: --check with one step drifted -> exit non-zero, the step named
   }
 });
 
+// The weekly job runs the INSTALLED checker, whose own copies are the only files beside it, so these
+// cases invoke that copy (not the repository's) the way weekly.sh does.
+const installedCheck = (h: Harness) => run(h, installed(h, "ubuntu-health.sh"), ["--check"]);
+
+Deno.test("frame: the installed --check with nothing drifted -> exit 0", async () => {
+  const h = await makeHarness();
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+  const before = await snapshot(h.root);
+
+  const r = await installedCheck(h);
+
+  assertEquals(r.code, 0, r.stdout);
+  assertStringIncludes(r.stdout, "no drift");
+  assertEquals(await snapshot(h.root), before);
+});
+
+Deno.test("frame: the installed --check names a changed weekly.sh or gmail-send.sh, as the repository check does", async () => {
+  for (const name of ["weekly.sh", "gmail-send.sh", "ubuntu-health.sh"]) {
+    const h = await makeHarness();
+    await apply(h);
+    await writeEnvFile(h, 0o600);
+    const path = installed(h, name);
+    await Deno.writeTextFile(path, `${await Deno.readTextFile(path)}# appended\n`);
+
+    for (const r of [await check(h), await installedCheck(h)]) {
+      assert(r.code !== 0, `${name} change went unreported:\n${r.stdout}`);
+      assertStringIncludes(r.stdout, "DRIFT job-files");
+      assertStringIncludes(r.stdout, path);
+    }
+  }
+});
+
+Deno.test("frame: the installed --check names a changed unit file", async () => {
+  const h = await makeHarness();
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+  const unit = `${h.root}${UNIT_DIR}/ubuntu-health-weekly.service`;
+  await Deno.writeTextFile(unit, `${await Deno.readTextFile(unit)}# appended\n`);
+
+  const r = await installedCheck(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, "DRIFT unit-files");
+});
+
+Deno.test("frame: the installed --check reports a missing or loosened checksum manifest", async () => {
+  const h = await makeHarness();
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+  const manifest = installed(h, "manifest.sha256");
+
+  await Deno.chmod(manifest, 0o666);
+  const loose = await installedCheck(h);
+  assert(loose.code !== 0);
+  assertStringIncludes(loose.stdout, "DRIFT job-files");
+  assertStringIncludes(loose.stdout, "expected 644");
+
+  await Deno.remove(manifest);
+  const missing = await installedCheck(h);
+  assert(missing.code !== 0);
+  assertStringIncludes(missing.stdout, "DRIFT job-files");
+  assertStringIncludes(missing.stdout, "manifest.sha256 is missing");
+});
+
+Deno.test("frame: apply refuses to run from the installed copy, which would bless its own files", async () => {
+  const h = await makeHarness();
+  await apply(h);
+  const before = await snapshot(h.root);
+
+  const r = await run(h, installed(h, "ubuntu-health.sh"));
+
+  assertEquals(r.code, 2);
+  assertStringIncludes(r.stderr, "from the repository");
+  assertEquals(await snapshot(h.root), before);
+});
+
+Deno.test("frame: apply records a checksum for every installed file", async () => {
+  const h = await makeHarness();
+  await apply(h);
+
+  const manifest = await Deno.readTextFile(installed(h, "manifest.sha256"));
+  for (
+    const path of [
+      `${LIB}/ubuntu-health.sh`,
+      `${LIB}/weekly.sh`,
+      `${LIB}/gmail-send.sh`,
+      `${LIB}/ubuntu-health-weekly.service`,
+      `${LIB}/ubuntu-health-weekly.timer`,
+      `${UNIT_DIR}/ubuntu-health-weekly.service`,
+      `${UNIT_DIR}/ubuntu-health-weekly.timer`,
+    ]
+  ) {
+    assertStringIncludes(manifest, `  ${path}\n`);
+  }
+  assertEquals(manifest.includes(h.root), false, "the manifest must not hold the test root");
+});
+
+Deno.test("frame: the weekly job emails when a job file changes, found by the installed checker", async () => {
+  const h = await makeHarness();
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+  const sender = installed(h, "gmail-send.sh");
+  await Deno.writeTextFile(sender, `${await Deno.readTextFile(sender)}# appended\n`);
+
+  await run(h, installed(h, "weekly.sh"));
+
+  assertStringIncludes(await readLog(h), "DRIFT job-files");
+  assert((await curlCalls(h)).length > 0, "the findings were not emailed");
+});
+
 Deno.test("frame: --check names the timer and unit files when they drift", async () => {
   const h = await makeHarness();
   await apply(h);
