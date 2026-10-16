@@ -4,6 +4,7 @@
 
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
+import { MODEL_LABEL_CASES } from "./support/model_label_cases.ts";
 import {
   LUNA_SIGNATURE,
   SIGNING_SESSION_ID,
@@ -31,6 +32,37 @@ import {
 // down this file.
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
 
+for (const { labels, reason, error } of MODEL_LABEL_CASES) {
+  Deno.test(`create-issue enforces the shared rule: ${JSON.stringify(labels)}, reason ${JSON.stringify(reason)}`, async () => {
+    const { deps, calls } = probeDeps("## What this builds\n\nFixture.", { code: 0, stderr: "" });
+    const options = {
+      title: "Label rule fixture",
+      bodyFile: "/fixture.md",
+      labels,
+      escalationReason: reason,
+      author: TEST_AUTHOR,
+    };
+    if (error) {
+      for (const dryRun of [true, false]) {
+        await assertRejects(
+          () => realCreateIssueAndVerify({ ...options, dryRun }, deps, APPROVE_ALL),
+          Error,
+          error,
+        );
+      }
+    } else {
+      const result = await realCreateIssueAndVerify(
+        { ...options, dryRun: true },
+        deps,
+        APPROVE_ALL,
+      );
+      assertStringIncludes(result, "dry run: would create issue");
+      if (reason) assertStringIncludes(result, reason);
+    }
+    assertEquals(calls, []);
+  });
+}
+
 Deno.test("signing issue k: dry run replaces the typed author with Luna", () =>
   withSigningFixture(async (signing) => {
     const { deps, calls } = probeDeps("## What this builds\nBody", { code: 0, stderr: "" });
@@ -39,6 +71,7 @@ Deno.test("signing issue k: dry run replaces the typed author with Luna", () =>
       {
         title: "Signing fixture",
         bodyFile: "/tmp/b.md",
+        labels: ["Flash"],
         author: "Codex — GPT-6.1 Sol",
         dryRun: true,
       },
@@ -58,7 +91,12 @@ Deno.test("signing issue n: missing session refuses before any GitHub call", () 
     await assertRejects(
       () =>
         realCreateIssueAndVerify(
-          { title: "Signing fixture", bodyFile: "/tmp/b.md", author: LUNA_SIGNATURE },
+          {
+            title: "Signing fixture",
+            bodyFile: "/tmp/b.md",
+            labels: ["Flash"],
+            author: LUNA_SIGNATURE,
+          },
           deps,
           APPROVE_ALL,
         ),
@@ -77,7 +115,7 @@ const createIssueAndVerify = (
   approvalCheck?: (repoFull: string, title: string) => ApprovalCheckResult,
 ) =>
   realCreateIssueAndVerify(
-    { author: TEST_AUTHOR, ...options },
+    { author: TEST_AUTHOR, labels: ["Flash"], ...options },
     withPassingProbe(deps ?? defaultExecDeps),
     approvalCheck,
   );
@@ -499,6 +537,7 @@ Deno.test("createIssueAndVerify setting type to Epic succeeds with mocked GraphQ
         const mockIssue: IssueData = {
           number: 516,
           title: "My Epic Issue",
+          labels: [{ name: "Flash" }],
           type: { name: "Epic" },
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
@@ -561,6 +600,7 @@ Deno.test("createIssueAndVerify fallback GraphQL parent check when parent missin
         const mockIssue: IssueData = {
           number: 515,
           title: "My New Issue",
+          labels: [{ name: "Flash" }],
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
       }
@@ -1238,7 +1278,11 @@ Deno.test("createIssueAndVerify (default approvalCheck, no third arg): succeeds 
               });
             }
             if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/999")) {
-              const mockIssue: IssueData = { number: 999, title: "My Approved Issue" };
+              const mockIssue: IssueData = {
+                number: 999,
+                title: "My Approved Issue",
+                labels: [{ name: "Flash" }],
+              };
               return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
             }
             return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
@@ -1482,6 +1526,7 @@ Deno.test("createIssueAndVerify: accepted sibling dependency is registered and v
         const issueData: IssueData = {
           number: 850,
           title: "Sibling child",
+          labels: [{ name: "Flash" }],
           parent: { number: 737 },
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(issueData), stderr: "" });
@@ -1649,6 +1694,7 @@ Deno.test("createIssueAndVerify: no similar OPEN issue proceeds unchanged", asyn
         const mockIssue: IssueData = {
           number: 902,
           title: "docs: fix a broken link in the README",
+          labels: [{ name: "Flash" }],
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
       }
@@ -1714,6 +1760,7 @@ Deno.test("createIssueAndVerify: --dedup-override clears a duplicate deny and re
         const mockIssue: IssueData = {
           number: 903,
           title: "skills/design-issue: support and validate structured Revision History tables",
+          labels: [{ name: "Flash" }],
         };
         return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
       }
@@ -1862,6 +1909,7 @@ Deno.test("createIssueAndVerify writes the Authored-by footer as the last line, 
       bodyFile: "/tmp/b.md",
       author: "Claude Code — Opus",
       dedupOverrideReason: "different scope",
+      labels: ["Flash"],
       dryRun: true,
     },
     deps,
@@ -1882,6 +1930,7 @@ Deno.test("createIssueAndVerify: a body already ending in a footer, filed with a
       bodyFile: "/tmp/b.md",
       author: "Claude Code — Opus",
       dedupOverrideReason: "different scope",
+      labels: ["Flash"],
       dryRun: true,
     },
     deps,
@@ -1896,7 +1945,12 @@ Deno.test("createIssueAndVerify: a body already ending in a footer, filed with a
 Deno.test("createIssueAndVerify refuses a missing --author and files nothing", async () => {
   const { deps, calls } = probeDeps("Body", { code: 1, stderr: ROSTER_REFUSAL });
   await assertRejects(
-    () => realCreateIssueAndVerify({ title: "T", bodyFile: "/tmp/b.md" }, deps, APPROVE_ALL),
+    () =>
+      realCreateIssueAndVerify(
+        { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"] },
+        deps,
+        APPROVE_ALL,
+      ),
     Error,
     "--author is required",
   );
@@ -1908,7 +1962,7 @@ Deno.test("createIssueAndVerify refuses an empty --author and files nothing", as
   await assertRejects(
     () =>
       realCreateIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", author: "  " },
+        { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"], author: "  " },
         deps,
         APPROVE_ALL,
       ),
@@ -1925,7 +1979,7 @@ Deno.test("createIssueAndVerify refuses an author not on the roster, names it an
   });
   const err = await assertRejects(() =>
     realCreateIssueAndVerify(
-      { title: "T", bodyFile: "/tmp/b.md", author: "Codex — GPT-6" },
+      { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"], author: "Codex — GPT-6" },
       deps,
       APPROVE_ALL,
     )
@@ -1943,7 +1997,7 @@ Deno.test("createIssueAndVerify: a probe that cannot run refuses with a differen
     const { deps, calls } = probeDeps("Body", probe);
     const err = await assertRejects(() =>
       realCreateIssueAndVerify(
-        { title: "T", bodyFile: "/tmp/b.md", author: "Claude Code — Opus" },
+        { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"], author: "Claude Code — Opus" },
         deps,
         APPROVE_ALL,
       )
@@ -1955,7 +2009,7 @@ Deno.test("createIssueAndVerify: a probe that cannot run refuses with a differen
   const { deps } = probeDeps("Body", { code: 1, stderr: ROSTER_REFUSAL });
   const notOnRoster = await assertRejects(() =>
     realCreateIssueAndVerify(
-      { title: "T", bodyFile: "/tmp/b.md", author: "X" },
+      { title: "T", bodyFile: "/tmp/b.md", labels: ["Flash"], author: "X" },
       deps,
       APPROVE_ALL,
     )
@@ -1970,7 +2024,13 @@ Deno.test("createIssueAndVerify: a body already ending in a footer gets exactly 
     stderr: "",
   });
   const result = await realCreateIssueAndVerify(
-    { title: "T", bodyFile: "/tmp/b.md", author: "Claude Code — Opus", dryRun: true },
+    {
+      title: "T",
+      bodyFile: "/tmp/b.md",
+      labels: ["Flash"],
+      author: "Claude Code — Opus",
+      dryRun: true,
+    },
     deps,
     APPROVE_ALL,
   );
@@ -2032,6 +2092,7 @@ Deno.test("createIssueAndVerify: cross-repo parent links child issue under paren
         const mockIssue: IssueData = {
           number: 200,
           title: "Cross-repo child",
+          labels: [{ name: "Flash" }],
           parent: {
             number: 1355,
             repository: { name: "web-jam-tools", owner: { login: "WebJamApps" } },

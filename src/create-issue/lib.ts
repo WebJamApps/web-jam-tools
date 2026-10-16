@@ -20,6 +20,7 @@ import {
 } from "../../hooks/lib/authored_by_footer.ts";
 import { findIssueCreateBodyViolation } from "../../hooks/lib/check_model_label_on_issue_create.ts";
 import { resolveSigningAuthor, type RunningModelOptions } from "../shared/codex_running_model.ts";
+import { loadModelLabels, modelLabelViolation } from "../shared/model_label_rule.ts";
 
 export interface CreateIssueOptions {
   repo?: string;
@@ -595,6 +596,12 @@ export async function createIssueAndVerify(
   if (!options.bodyFile) {
     throw new Error("Missing required argument --body-file");
   }
+  const labelViolation = modelLabelViolation(
+    options.labels ?? [],
+    loadModelLabels(),
+    options.escalationReason,
+  );
+  if (labelViolation) throw new Error(`Refused to file issue — ${labelViolation}`);
   options = { ...options, author: await resolveSigningAuthor(options.author, deps.signing) };
 
   // Body checks (web-jam-tools#1167) — the hook can't read a body file whose
@@ -670,6 +677,9 @@ export async function createIssueAndVerify(
   // A footer the given body already ends with is removed first, so it cannot
   // be left mid-body once a section is appended below it.
   let bodyText = stripFooter(fileBody);
+  if (options.escalationReason?.trim()) {
+    bodyText += `\n\n## Escalation reason\n\n${options.escalationReason.trim()}\n`;
+  }
   if (options.dedupOverrideReason && options.dedupOverrideReason.trim()) {
     const candidateNote = options.dedupOverride ? ` (considered ${options.dedupOverride})` : "";
     bodyText +=

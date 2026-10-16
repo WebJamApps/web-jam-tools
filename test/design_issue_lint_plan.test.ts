@@ -65,6 +65,7 @@ const TEST_SCHEMA: Schema = {
   labels: [
     { name: "Haiku", hex: "0E8A16", repos: "all", modelTier: true },
     { name: "Sonnet", hex: "1D76DB", repos: "all", modelTier: true },
+    { name: "Sol", hex: "006B75", repos: "all", modelTier: true },
     { name: "Opus", hex: "B392F0", repos: "all", modelTier: true },
     { name: "Flash", hex: "E67E22", repos: "all", modelTier: true },
     { name: "Josh", hex: "795548", repos: "all" },
@@ -369,6 +370,27 @@ Deno.test("AC2: a model tier absent from labels.yaml is reported, including case
     const doc = planTableDoc([EPIC_ROW, childRow({ tier })]);
     const violations = findRule(validate(doc), "tier-unknown");
     assertEquals(violations.length, 1, `expected tier-unknown violation for "${tier}"`);
+  }
+});
+
+Deno.test("lint-plan applies the shared plan reader and pair rule without an escalation column", () => {
+  for (const tier of ["Sonnet / Sol", "Sol / Sonnet", "Sonnet/Sol", "**Sonnet  /  Sol**"]) {
+    assertEquals(validate(planTableDoc([EPIC_ROW, childRow({ tier })])), [], tier);
+  }
+  for (
+    const tier of [
+      "Sonnet / Flash",
+      "Sol / Opus",
+      "Sol / Sonnet / Opus",
+      "Sonnet / Bogus",
+      "Sonnet / ",
+    ]
+  ) {
+    assertEquals(
+      findRule(validate(planTableDoc([EPIC_ROW, childRow({ tier })])), "tier-unknown").length,
+      1,
+      tier,
+    );
   }
 });
 

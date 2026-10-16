@@ -109,6 +109,7 @@ Deno.test("parsePlanJson parses an object with epic and children", () => {
 async function fileParentFixture(plan: IssuePlanDoc) {
   const planPath = await Deno.makeTempFile({ suffix: ".json" });
   const items = [...(plan.epic ? [plan.epic] : []), ...(plan.children ?? [])];
+  for (const item of items) item.labels ??= ["Flash"];
   const created = new Map<number, IssueData>();
   const parents = new Map<number, number>();
   let nextNumber = 700;
@@ -125,6 +126,7 @@ async function fileParentFixture(plan: IssuePlanDoc) {
           number,
           title: item.title,
           type: { name: item.type ?? (item === plan.epic ? "Epic" : "Task") },
+          labels: (item.labels as string[]).map((name) => ({ name })),
         });
         const childRepo = normalizeRepo(item.repo || plan.repo);
         return Promise.resolve({
@@ -320,7 +322,11 @@ Deno.test('filePlan parent: "WebJamApps/web-jam-tools#999999" (no such issue) re
       JSON.stringify({
         repo: "JaMmusic",
         children: [
-          { title: "Child with missing parent", parent: "WebJamApps/web-jam-tools#999999" },
+          {
+            title: "Child with missing parent",
+            labels: ["Flash"],
+            parent: "WebJamApps/web-jam-tools#999999",
+          },
         ],
       }),
     );
@@ -373,9 +379,12 @@ for (
           planPath,
           JSON.stringify({
             repo: "web-jam-tools",
-            ...(["epic", "parent"].includes(parent) ? {} : { epic: { title: "Fixture epic" } }),
-            children: [{ title: "Valid preceding child" }, {
+            ...(["epic", "parent"].includes(parent)
+              ? {}
+              : { epic: { title: "Fixture epic", tier: "Flash" } }),
+            children: [{ title: "Valid preceding child", tier: "Flash" }, {
               title: "Invalid parent child",
+              tier: "Flash",
               parent,
             }],
           }),
@@ -757,6 +766,7 @@ Deno.test("filePlan links external dependency citations (e.g. web-jam-tools#747)
         {
           title: "Dependent Issue",
           type: "Task",
+          tier: "Flash",
           blocked_by: ["web-jam-tools#747"],
         },
       ],
@@ -804,6 +814,7 @@ Deno.test("filePlan links external dependency citations (e.g. web-jam-tools#747)
             number: 850,
             title: "Dependent Issue",
             type: { name: "Task" },
+            labels: [{ name: "Flash" }],
           }),
           stderr: "",
         });
@@ -946,8 +957,8 @@ Deno.test("filePlan throws when dependency linking fails", async () => {
     JSON.stringify({
       repo: "web-jam-tools",
       children: [
-        { id: 1, title: "Task 1", type: "Task" },
-        { id: 2, title: "Task 2", type: "Task", blocked_by: [1] },
+        { id: 1, title: "Task 1", type: "Task", tier: "Flash" },
+        { id: 2, title: "Task 2", type: "Task", tier: "Flash", blocked_by: [1] },
       ],
     }),
   );
@@ -992,6 +1003,7 @@ Deno.test("filePlan throws when dependency linking fails", async () => {
             number: num,
             title: titlesByNum600[num] || `Task ${num}`,
             type: { name: "Task" },
+            labels: [{ name: "Flash" }],
           }),
           stderr: "",
         });
@@ -1132,8 +1144,8 @@ Deno.test("filePlan: pre-validation rejects plan with duplicate titles (case-ins
     JSON.stringify({
       repo: "web-jam-tools",
       children: [
-        { title: "Add rate limiting" },
-        { title: "add RATE limiting" },
+        { title: "Add rate limiting", tier: "Flash" },
+        { title: "add RATE limiting", tier: "Flash" },
       ],
     }),
   );
@@ -1160,9 +1172,9 @@ Deno.test("filePlan: resolves position and explicit id dependencies accurately w
     JSON.stringify({
       repo: "web-jam-tools",
       children: [
-        { title: "Child A (Position 1)" },
-        { id: "feat-b", title: "Child B (Position 2, explicit id feat-b)" },
-        { title: "Child C (Position 3)", blocked_by: [1, "feat-b"] },
+        { title: "Child A (Position 1)", tier: "Flash" },
+        { id: "feat-b", title: "Child B (Position 2, explicit id feat-b)", tier: "Flash" },
+        { title: "Child C (Position 3)", tier: "Flash", blocked_by: [1, "feat-b"] },
       ],
     }),
   );
@@ -1212,6 +1224,7 @@ Deno.test("filePlan: resolves position and explicit id dependencies accurately w
             number: num,
             title: titlesByNum700[num] || `Task ${num}`,
             type: { name: "Task" },
+            labels: [{ name: "Flash" }],
           }),
           stderr: "",
         });

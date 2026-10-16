@@ -13,7 +13,7 @@ metadata:
 ## Execution model
 
 This is mechanical-with-light-judgment (search for duplicates, write acceptance criteria that
-close cleanly, pick one label from the model-tier list in `skills/fix-labels/labels.yaml`) — run it
+close cleanly, choose model labels under the tier-order design cited below) — run it
 on the cheapest tier that reliably gets the judgment calls right, per surface:
 
 - **Claude Code:** **Sonnet**. Don't default to Opus/Fable for a fresh `/file-issue` invocation.
@@ -26,12 +26,11 @@ issue rather than switching.
 
 ## Why a skill AND a hook
 
-`hooks/require-model-label-on-issue-create.sh` (web-jam-tools#265) is a hard gate: it denies any
-`gh issue create` or MCP `issue_write` create call that doesn't carry exactly one label from
-`skills/fix-labels/labels.yaml`'s `modelTier: true` entries — read at runtime from the generated
-sidecar `skills/fix-labels/model-labels.json` (not restated here; that list drifts every time a
-model tier is added or retired, so `labels.yaml` is the only place it lives), since the hook is
-bash/python and can't parse YAML in CI.
+Allowed model-label combinations are set by
+`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used".
+The filing tools apply that rule through `src/shared/model_label_rule.ts`, reading the vocabulary
+from `skills/fix-labels/model-labels.json`. The issue-create hook keeps its own check while the
+guard freeze stands; a parity test verifies that it agrees with the shared rule.
 That hook closes the silent-omission hole — it cannot judge whether the
 label is the *right* one, whether the body cites its references correctly, whether a duplicate
 already exists, or whether the acceptance criteria actually let the issue close. This skill is the
@@ -73,13 +72,9 @@ that's what following this skill prevents.
 2. **Choose the model label deliberately, not as an afterthought.** This is the thing
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
    model label, because the label was going to be "added later."    Decide the label as part of
-    deciding what the issue IS — before you write the body — from:
-    - `Flash` — full-stack coding (FE, BE, APIs, tooling), contained refactoring, multi-file feature edits, and interactive work across all repos (Josh's default tier for interactive work; fast, cost-effective Sonnet alternative).
-    - `Haiku` — mechanical/one-off: lookups, scans, single-file/one-field edits, typo/data fixes, running tests/builds and reporting the result.
-    - `Sonnet` — major feature implementation, multi-file refactoring, complex backend/system coding, and deep reasoning across codebases (top-tier software engineering model; ranks above Flash per Josh's 2026-10-01 ruling, though Flash stays the default lane).
-    - `Opus` — top-tier architectural design, complex tech-lead judgment, spec/requirements alignment, and reviewing complex subagent outputs.
-    - `Fable` — retired/dormant; do not apply to new issues (kept in the schema for
-      delete-protection only, per `skills/fix-labels/labels.yaml`).
+    deciding what the issue IS — before you write the body — under "Triage: which label an issue
+    gets" in the tier-order design cited above. That document owns both routing and allowed
+    combinations; do not keep another list here.
 
    **A prompt that hands filing to another agent never names the label.** A session that sends a
    subagent to file an issue tells it to choose the label under this rule, and names the default
@@ -91,7 +86,7 @@ that's what following this skill prevents.
    of the Gate 2 plan table are that case: Josh rules on each row's tier with the plan, so the
    filing agent applies the tier the row carries.
 
-   **Tier is not a function of diff size.** The bullets above describe the *kind* of thinking a
+   **Tier is not a function of diff size.** The tier-order design describes the *kind* of thinking a
    task needs, not how many files it touches. A one-file, twenty-line change can be `Opus` work,
    and a ten-file change can be `Flash` work. Before settling on a tier, ask what the task
    would **fail** on rather than how big it is. If the hard part is any of these, it is `Opus`
@@ -112,7 +107,7 @@ that's what following this skill prevents.
    See item 15 below for the three-outcome specification and model floor governing any guard, gate, or permission check.
 
    When genuinely unsure between two tiers, say so in the issue body rather than guessing — but
-   still pick one label, since the hook requires exactly one. **`Sonnet` and `Opus` require an
+   choose labels allowed by the tier-order design cited above. **`Sonnet` and `Opus` require an
    explicit escalation reason** — `--escalation-reason` on the CLI, `escalation_reason` in the
    MCP `issue_write` input — before `hooks/lib/check_model_label_on_issue_create.ts`
    (`ESCALATION_LABELS`, web-jam-tools#709 "Guard denies issue-create carrying Sonnet/Opus model
@@ -278,18 +273,14 @@ deno task create-issue \
 
 - Require native type (`Task`, `Bug`, `Feature`, `Epic`) via `scripts/create-issue.ts --type <Type>` or GitHub MCP `issue_write` (`"type": "<Type>"`).
 - Specify `--milestone "<name>"` when an open repo Milestone matches the scope. If no open Milestone fits, explicitly note "no fitting milestone — leaving unassigned" in chat or body.
-- Exactly **one** label from the six model labels above — the hook denies zero or two-plus.
+- Choose model labels according to the tier-order design cited above. `deno task create-issue`
+  checks them before any create, including in `--dry-run`.
 - For `Sonnet` or `Opus`, also supply `--escalation-reason "<why the tier above is not needed>"`
-  (CLI) or `escalation_reason: "<...>"` (MCP `issue_write`) — on Claude Code,
-  `hooks/lib/check_model_label_on_issue_create.ts` denies the create without it
-  (`ESCALATION_LABELS`, web-jam-tools#709 "Guard denies issue-create carrying Sonnet/Opus model
-  label without an explicit escalation justification"). On agy/Antigravity, `deno task
-  create-issue` has no hook mechanism of its own — `src/create-issue/lib.ts`'s `parseArgs` only
-  reads the flag into `options.escalationReason` and `createIssueAndVerify()` never validates it,
-  so this field is unguarded on that path. Wherever it is checked, the reason must compare against
-  the tier above, not just justify the tier chosen.
+  (CLI) or `escalation_reason: "<...>"` (MCP `issue_write`). The shared check and the hook refuse
+  a missing or blank reason. The create task records the reason in the issue body. The reason
+  must compare against the tier above, not just justify the tier chosen.
 - Set dependencies natively: When an issue depends on another GitHub issue, set native GitHub `blocked_by` dependencies via `--blocked-by <issue>` (e.g. `scripts/create-issue.ts --blocked-by <issue_num>`) ONLY and do NOT add the `Blocked` label (native dependencies clear automatically on close). Note: A `--blocked-by` value that matches the issue's parent or ancestor is refused at parse time.
-- Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model label freely; the hook only checks that exactly one *model* label is present, not that it's the only label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
+- Add non-model status labels (`Needs Design`, `Josh`, `parked`, ...) alongside the model labels freely; the shared check applies the tier-order design to the model labels. A `Josh` manual step may carry no model label. Apply the `Blocked` label ONLY for external, non-GitHub blockers (credentials, vendor delays, assets from Josh, physical prerequisites; web-jam-tools#725).
 - Set native `Priority` field (`Urgent`, `High`, `Medium`, `Low`) via `scripts/create-issue.ts --priority <Level>`.
 - Attach parent issue link via `scripts/create-issue.ts --parent <parent_issue_number>`.
 - Pass your own tool and model as `--author "<tool> — <model>"` (for example `--author "Claude Code — Opus"` or `--author "agy — Gemini Flash"`) on every `deno task create-issue` call, and on every `deno task edit-issue` call that replaces the body with `--body` or `--body-file`. The task checks the author against the author roster in `scripts/create-draft-pr.sh` (the same check `create-draft-pr.sh` and `deno task post-pr-comment` run) and ends the body with one footer line, `🤖 Authored by <tool> — <model>`, naming the model that wrote the content. A missing author, one not on the roster, or a roster check that cannot run refuses the call and files or edits nothing. The footer names who wrote the content, so after you rewrite a body it names you in place of the earlier author. A raw `gh issue create` or a connector `issue_write` create is denied by the issue-create hook unless its body already ends with that footer, so file through `deno task create-issue`.
