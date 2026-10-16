@@ -229,16 +229,12 @@ function isChildOfRow(
   return false;
 }
 
-/** Determines if a row represents an Epic row. */
+/** Determines if a row represents an Epic row: its own `Epic / child of` cell says `Epic`, or
+ * another row names it as its parent. A word in the title or any other cell never makes a row an
+ * epic ("Epics, repositories and sub-issues", web-jam-tools#1455). */
 function isEpicRow(row: PlanTableRow, allRows: PlanTableRow[]): boolean {
   const epicCell = stripMdMarkers(row.cells[COL_EPIC]).trim().toLowerCase();
   if (epicCell === "epic") return true;
-
-  const closesCell = stripMdMarkers(row.cells[COL_CLOSES]).toLowerCase();
-  if (closesCell.includes("children close")) return true;
-
-  const title = stripMdMarkers(row.cells[COL_TITLE]).trim().toLowerCase();
-  if (title.startsWith("epic:") || title.startsWith("epic -")) return true;
 
   if (allRows.some((other) => isChildOfRow(other, row, allRows))) {
     return true;
@@ -266,7 +262,7 @@ function checkEpicBelonging(
         line: row.line,
         column: "Epic / child of",
         message:
-          `Non-epic row is missing an epic ("${raw}") -- every plan row must belong to an epic`,
+          `The plan needs an epic for this row: the row names no epic ("${raw}") -- every non-epic plan row must name its epic`,
       });
     }
   }
@@ -279,19 +275,26 @@ function checkCrossRepoEpic(
   for (const row of rows) {
     if (!isEpicRow(row, rows)) continue;
     const children = rows.filter((r) => isChildOfRow(r, row, rows));
+    const epicRepo = normalizeRepoCell(row.cells[COL_REPO]);
     const childRepos = new Set(
       children.map((c) => normalizeRepoCell(c.cells[COL_REPO])).filter(Boolean),
     );
-    if (childRepos.size > 1) {
-      const epicRepo = normalizeRepoCell(row.cells[COL_REPO]);
+    // A child in a repository other than the epic's own makes the work cross-repository, so the
+    // epic's repository counts with its children's.
+    const spanned = new Set([
+      ...childRepos,
+      ...(children.length > 0 && epicRepo ? [epicRepo] : []),
+    ]);
+    if (spanned.size > 1) {
       if (epicRepo !== "web-jam-tools") {
         violations.push({
           rule: "cross-repo-epic-not-in-web-jam-tools",
           line: row.line,
           column: "Repo",
-          message: `Epic row has children in more than one repository (${
-            Array.from(childRepos).join(", ")
-          }), so its Repo must be "web-jam-tools" (found "${epicRepo}")`,
+          message:
+            `Cross-repository work lives in web-jam-tools: this epic row and its children span more than one repository (${
+              Array.from(spanned).join(", ")
+            }), so its Repo must be "web-jam-tools" (found "${epicRepo}")`,
         });
       }
     }
@@ -914,19 +917,6 @@ export interface LintPlanCliOptions {
   renderDesignDocFileImpl?: (inputPath: string, outputPath: string) => void;
 }
 
-/** Gate 1's background launcher cannot report a missing browser executable. */
-async function defaultOpenPlanBrowserImpl(htmlPath: string, display?: string): Promise<void> {
-  const availability = await new Deno.Command("bash", {
-    args: ["-c", "command -v google-chrome >/dev/null 2>&1"],
-    stdout: "null",
-    stderr: "null",
-  }).output();
-  if (!availability.success) {
-    throw new Error("google-chrome was not found on PATH");
-  }
-  await defaultOpenBrowserImpl(htmlPath, display);
-}
-
 /**
  * CLI runner for `deno task design:lint-plan <plan.md> --design-doc <doc.md>`.
  */
@@ -964,7 +954,7 @@ Validates the Gate 2 plan table's cell values in a design document:
   - out-of-range priorities (Urgent/High/Medium/Low only)
   - a Josh-labeled manual row with no paired agent row
   - a composite Josh-labeled manual row (doc review + live walkthrough)
-  - a non-epic row missing an epic ("" or "none")
+  - a non-epic row that names no epic ("" or "none")
   - an epic row whose children sit in more than one repository when its repo is not web-jam-tools
   - a Tests cell with no statement of what proves the issue
   - new titles resembling open issues in their row's repository or other new
@@ -1031,14 +1021,14 @@ Options:
 
       const noOpen = flags["no-open"] || flags.no_open || options?.noOpen;
       if (!noOpen) {
-        const openBrowser = options?.openBrowserImpl ?? defaultOpenPlanBrowserImpl;
+        const openBrowser = options?.openBrowserImpl ?? defaultOpenBrowserImpl;
         const display = (typeof flags.display === "string" ? flags.display : undefined) ||
           options?.display;
         try {
           await openBrowser(htmlPath, display);
         } catch (browserErr) {
           const msg = browserErr instanceof Error ? browserErr.message : String(browserErr);
-          errorLog(`[design:lint-plan] Warning: Google Chrome is unavailable: ${msg}`);
+          errorLog(`[design:lint-plan] Warning: Chrome could not be opened: ${msg}`);
         }
       }
     }
