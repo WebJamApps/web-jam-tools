@@ -946,7 +946,13 @@ merge_auto_mode_args=("$AUTO_MODE_JSON")
 # limits.json is the single source of truth.
 SKILL_OVERRIDES_JSON=$(deno eval --no-config '
   const limits = JSON.parse(await Deno.readTextFile(Deno.args[0]));
-  const skills = limits.bundledSkills?.skills || [];
+  const skills = limits.bundledSkills?.skills;
+  const expectedCount = limits.bundledSkills?.totalCount;
+  if (!Array.isArray(skills) || skills.length !== expectedCount) {
+    throw new Error(
+      `expected bundledSkills.skills to be an array of length ${expectedCount}, got ${Array.isArray(skills) ? skills.length : typeof skills}`,
+    );
+  }
   const overrides = Object.fromEntries(skills.map(s => [s, "name-only"]));
   console.log(JSON.stringify(overrides, null, 2));
 ' "$REPO_DIR/src/session-load/limits.json")

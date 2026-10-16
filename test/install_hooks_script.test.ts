@@ -644,6 +644,15 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
   await Deno.chmod(`${mainRepo}/scripts/agy-prompt-watch.sh`, 0o755);
   await Deno.copyFile(AGY_SKILL_RUN_SCRIPT, `${mainRepo}/scripts/agy-skill-run.sh`);
   await Deno.chmod(`${mainRepo}/scripts/agy-skill-run.sh`, 0o755);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/scan-settings-for-secrets.sh`,
+    `${mainRepo}/scripts/scan-settings-for-secrets.sh`,
+  );
+  await Deno.chmod(`${mainRepo}/scripts/scan-settings-for-secrets.sh`, 0o755);
+  await Deno.copyFile(
+    `${REPO_ROOT}scripts/scan_settings_for_secrets.ts`,
+    `${mainRepo}/scripts/scan_settings_for_secrets.ts`,
+  );
   await Deno.mkdir(`${mainRepo}/src/session-load`, { recursive: true });
   await Deno.copyFile(
     `${REPO_ROOT}src/session-load/limits.json`,
@@ -1897,6 +1906,40 @@ Deno.test(
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });
     }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh refuses install when limits.json bundledSkills.skills is invalid or length mismatches totalCount",
+  async () => {
+    await withTempWorktree(async (worktreePath) => {
+      const sandbox = await Deno.makeTempDir();
+      const hooksDir = `${sandbox}/hooks`;
+      const settingsPath = `${sandbox}/settings.json`;
+      const base = [
+        `${worktreePath}/scripts/install-hooks.sh`,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+      ];
+      try {
+        await Deno.writeTextFile(settingsPath, JSON.stringify({ model: "opus" }));
+        const limitsPath = `${worktreePath}/src/session-load/limits.json`;
+        const limits = JSON.parse(await Deno.readTextFile(limitsPath));
+        limits.bundledSkills.skills.pop();
+        await Deno.writeTextFile(limitsPath, JSON.stringify(limits));
+
+        const res = await run("bash", base);
+        assert(res.code !== 0, "expected install-hooks.sh to fail on invalid bundledSkills");
+        assert(
+          res.stderr.includes("expected bundledSkills.skills to be an array of length"),
+          res.stderr,
+        );
+      } finally {
+        await Deno.remove(sandbox, { recursive: true });
+      }
+    });
   },
 );
 
