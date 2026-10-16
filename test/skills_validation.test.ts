@@ -2094,6 +2094,89 @@ export function assertBacklogGroomRules(text: string): void {
     /delegated\s+to\s+subagent/i.test(text),
     "skills/backlog-groom/SKILL.md must not unconditionally delegate workflow steps to a subagent",
   );
+
+  // 6. Seventh check: Priority
+  assertStringIncludes(
+    text,
+    "### 7. Priority",
+    "skills/backlog-groom/SKILL.md must include the seventh check, Priority",
+  );
+  assertStringIncludes(
+    text,
+    "deno task backlog-groom:rank",
+    "skills/backlog-groom/SKILL.md must call ranking entry point deno task backlog-groom:rank",
+  );
+  assertStringIncludes(
+    text,
+    "deno task edit-issue --priority",
+    "skills/backlog-groom/SKILL.md must set approved levels with deno task edit-issue --priority",
+  );
+
+  // 7. Focus argument
+  assertStringIncludes(
+    text,
+    "focus <milestone>",
+    "skills/backlog-groom/SKILL.md must take focus <milestone>",
+  );
+  assertStringIncludes(
+    text,
+    "/backlog-groom focus gig-outreach",
+    "skills/backlog-groom/SKILL.md must include focus argument example for Claude Code / agy",
+  );
+  assertStringIncludes(
+    text,
+    "$backlog-groom focus gig-outreach",
+    "skills/backlog-groom/SKILL.md must include focus argument example for Codex",
+  );
+
+  // 8. One batch per repository
+  assertStringIncludes(
+    text,
+    "one batch for each repository",
+    "skills/backlog-groom/SKILL.md must show proposed Priority moves as one batch for each repository",
+  );
+
+  // 9. Does not restate the level tests, the shares or the ranking
+  assertStringIncludes(
+    text,
+    'what each Priority level means is in "Priority Levels" in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md`',
+    "skills/backlog-groom/SKILL.md must point to Priority Levels in design-issue and file-issue design",
+  );
+  assertStringIncludes(
+    text,
+    'the shares, the ranking, and the focus are in "The Priority check" in `~/Dropbox/web-jam-llms/Token_Savings/backlog-groom-design.md`',
+    "skills/backlog-groom/SKILL.md must point to The Priority check in backlog-groom design",
+  );
+  assertFalse(
+    /Urgent\s+10\s+percent/i.test(text),
+    "skills/backlog-groom/SKILL.md must not restate level shares",
+  );
+  assertFalse(
+    /Work this (?:first|next)/i.test(text),
+    "skills/backlog-groom/SKILL.md must not restate the Priority level tests",
+  );
+
+  // 10. Model doing the run judges the two facts and gives reason
+  assertStringIncludes(
+    text,
+    "something live is broken, exposed or losing data",
+    "skills/backlog-groom/SKILL.md must name first fact: something live is broken, exposed or losing data",
+  );
+  assertStringIncludes(
+    text,
+    "it is a defect that costs something every time it is hit",
+    "skills/backlog-groom/SKILL.md must name second fact: it is a defect that costs something every time it is hit",
+  );
+  assertStringIncludes(
+    text,
+    "hands the ranking a yes or a no for each",
+    "skills/backlog-groom/SKILL.md must state model hands ranking a yes or a no for each",
+  );
+  assertStringIncludes(
+    text,
+    "gives its reason in one line beside every move it proposes",
+    "skills/backlog-groom/SKILL.md must state model gives reason in one line beside every move it proposes",
+  );
 }
 
 Deno.test(
@@ -2163,6 +2246,71 @@ Deno.test(
       () => assertBacklogGroomRules(validText.replace("performs Steps 1–3", "performs Step 1")),
       Error,
       "workflow must assign the full run",
+    );
+  },
+);
+
+Deno.test(
+  "skills/backlog-groom/SKILL.md validator fails on Priority check rule violations (web-jam-tools#1352)",
+  async () => {
+    const validText = await Deno.readTextFile(`${SKILLS_DIR}backlog-groom/SKILL.md`);
+
+    // 1. Fails when the skill loses the seventh check (Priority)
+    const textWithoutPriority = validText.replace("### 7. Priority", "### 7. Other Check");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutPriority),
+      Error,
+      "must include the seventh check, Priority",
+    );
+
+    // 2. Fails when the skill loses the focus argument
+    const textWithoutFocus = validText.replaceAll("focus <milestone>", "other <arg>");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutFocus),
+      Error,
+      "must take focus <milestone>",
+    );
+
+    // 3. Fails when the skill loses the one-batch-per-repository rule
+    const textWithoutOneBatch = validText.replaceAll(
+      "one batch for each repository",
+      "spread across repositories",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutOneBatch),
+      Error,
+      "must show proposed Priority moves as one batch for each repository",
+    );
+
+    // 4. Fails when the skill restates the level tests
+    const textWithRestatedTests = validText +
+      "\nUrgent: Work this first when something is broken.\n";
+    assertThrows(
+      () => assertBacklogGroomRules(textWithRestatedTests),
+      Error,
+      "must not restate the Priority level tests",
+    );
+
+    // 5. Fails when the skill loses the model judging two facts
+    const textWithoutTwoFacts = validText.replaceAll(
+      "something live is broken, exposed or losing data",
+      "the issue is high priority",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutTwoFacts),
+      Error,
+      "must name first fact: something live is broken, exposed or losing data",
+    );
+
+    // 6. Fails when the skill loses giving reason beside every proposed move
+    const textWithoutReason = validText.replaceAll(
+      "gives its reason in one line beside every move it proposes",
+      "proposes moves without reasons",
+    );
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutReason),
+      Error,
+      "must state model gives reason in one line beside every move it proposes",
     );
   },
 );

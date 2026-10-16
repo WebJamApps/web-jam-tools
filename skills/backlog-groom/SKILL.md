@@ -8,6 +8,7 @@ description: Audit all 8 active WebJamApps repos for model-label drift, native d
 Audits all 8 active WebJamApps repositories for backlog drift, label hygiene, dependency alignment, issue spec executability, untyped issues, milestone coverage drift, and stale/completed issues.
 
 Josh types `/backlog-groom` (or on Codex `$backlog-groom`).
+Josh can name a focus milestone for that run: `/backlog-groom focus <milestone>` (and on Codex `$backlog-groom focus <milestone>`, e.g. `/backlog-groom focus gig-outreach` and `$backlog-groom focus gig-outreach`). The focus milestone is passed to the ranking for that run only.
 
 **Strict Interactive Gate:** This skill NEVER makes unilateral edits on GitHub. It writes its findings to `~/Dropbox/web-jam-llms/backlog-groom-report.md`, presents a numbered table of findings to Josh in chat, and **WAITS for explicit per-item approval** before executing any label edits, issue edits, or closures on GitHub.
 
@@ -85,6 +86,21 @@ The audit inspects every open issue across all 8 repositories against six core c
   2. Otherwise, match the issue's title and body theme against the titles and descriptions of the repo's open Milestones.
   3. If no Epic parent exists and no clear theme match exists, suggest `"no fitting milestone — leave unassigned"` rather than guessing.
 
+### 7. Priority
+
+The level each issue carries, checked against the spread with a focus milestone named for the run:
+- **Seventh Check (Priority):** Evaluates open issues against target level shares and calls the ranking entry point `deno task backlog-groom:rank` (via `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--focus <milestone>]`), reading judgments stored in `/tmp/backlog-groom`.
+- **Focus Argument:** Takes `focus <milestone>` in the call (`/backlog-groom focus gig-outreach`, and `$backlog-groom focus gig-outreach` on Codex) and passes it to the ranking for that run only.
+- **One Batch per Repository:** Proposed Priority moves are shown as one batch for each repository.
+- **Where Rules Live (No Restatement):** The skill does not restate the level tests, the shares or the ranking:
+  - what each Priority level means is in "Priority Levels" in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md` (the design-issue and file-issue design);
+  - the shares, the ranking, and the focus are in "The Priority check" in `~/Dropbox/web-jam-llms/Token_Savings/backlog-groom-design.md` (the backlog-groom design).
+- **Model Judgment on Two Facts:** The model doing the run judges the two facts no GitHub field records:
+  1. something live is broken, exposed or losing data;
+  2. it is a defect that costs something every time it is hit.
+  The model hands the ranking a yes or a no for each (as `liveBroken` and `costlyDefect` in the judgments JSON), and gives its reason in one line beside every move it proposes.
+- **Setting Approved Levels:** Sets approved levels with `deno task edit-issue --priority <Level>` and reads back the set value.
+
 ---
 
 ## Workflow & Execution Steps
@@ -100,6 +116,7 @@ The session or helper selected by the table in "Which Model Does the Run" perfor
 1. Evaluate each issue against the 6 audit categories above.
 2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
+4. For Priority, the model doing the run judges the two facts no GitHub field records (something live is broken; a defect that costs something every time it is hit), hands the ranking a yes or a no for each, and gives its reason in one line beside every move it proposes, calling `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--focus <milestone>]`.
 
 ### Step 3: Write Report File
 Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts, untyped ratios, and missing milestone ratios per repo, and detailed findings.
@@ -117,6 +134,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 | 6 | web-jam-tools | #753 | Self-Blocking Dependency | Issue is blocked by its parent #737 | Remove self-blocking dependency via `deno task unblock-issue --repo WebJamApps/web-jam-tools --issue 753 --blocker 737` |
 
 If no drift is found across all repos, report that the backlog is 100% clean.
+Proposed Priority moves are shown as one batch for each repository.
 
 ### Step 5: Await Explicit Approval & Execute
 - **STOP and wait for Josh's response.**
