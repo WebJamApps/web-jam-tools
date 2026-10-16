@@ -36,6 +36,11 @@ async function setupFixtureWorkspace() {
   });
   await Deno.mkdir(join(webJamAppsDir, "JaMmusic"), { recursive: true });
 
+  await Deno.writeTextFile(
+    join(webJamAppsDir, "web-jam-tools/docs/safety-rules.md"),
+    "x".repeat(100),
+  );
+
   return { tempDir, homeDir, webJamAppsDir };
 }
 
@@ -55,6 +60,8 @@ Deno.test("limits live strictly in src/session-load/limits.json and are not rest
     limits.jammusicRules.lowMark,
     limits.jammusicRules.overMark,
     limits.otherRepoRules.overMark,
+    limits.safetyRules.lowMark,
+    limits.safetyRules.overMark,
   ].filter((num): num is number => num !== undefined);
 
   const filesToCheck = [
@@ -907,6 +914,129 @@ Deno.test("with connectors set up for Claude Code, agy and Codex and Google-bund
     assertEquals(lines[2], "agy          OVER  main rules +1,000");
     assertEquals(lines[3], "Codex        OVER  main rules +1,000");
     assertEquals(lines[4], "Run /memory-cleanup to cut.");
+  } finally {
+    await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("safety rules file report cases: exact limit produces ok, limit + 1 produces excess, missing produces missing note", async () => {
+  const limits = await loadLimits(LIMITS_PATH);
+  const { tempDir, homeDir, webJamAppsDir } = await setupFixtureWorkspace();
+
+  try {
+    const skillOverrides: Record<string, string> = {};
+    for (const skill of limits.bundledSkills.skills ?? []) {
+      skillOverrides[skill] = "name-only";
+    }
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/settings.json"),
+      JSON.stringify({ skillOverrides }),
+    );
+
+    // Keep all standard files under low mark
+    const lowDelta = 100;
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/CLAUDE.md"),
+      "x".repeat(limits.globalClaudeMd.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(homeDir, ".claude/projects/-home-joshua/memory/MEMORY.md"),
+      "x".repeat(limits.memoryIndex.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "web-jam-tools/AGENTS.md"),
+      "x".repeat(limits.mainRules.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "web-jam-tools/docs/cross-ai-rules.md"),
+      "x".repeat(limits.crossAiRules.lowMark! - lowDelta),
+    );
+    await Deno.writeTextFile(
+      join(webJamAppsDir, "JaMmusic/AGENTS.md"),
+      "x".repeat(limits.jammusicRules.lowMark! - lowDelta),
+    );
+
+    const compliantSkillContent =
+      `---\nname: test-skill\ndescription: A short description under the limit.\n---\nBody`;
+    for (
+      const dir of [
+        join(homeDir, ".claude/skills/test-skill"),
+        join(homeDir, ".gemini/config/plugins/webjam-tasks/skills/test-skill"),
+        join(homeDir, ".codex/skills/test-skill"),
+      ]
+    ) {
+      await Deno.mkdir(dir, { recursive: true });
+      await Deno.writeTextFile(join(dir, "SKILL.md"), compliantSkillContent);
+    }
+
+    const safetyRulesPath = join(
+      webJamAppsDir,
+      "web-jam-tools/docs/safety-rules.md",
+    );
+
+    // Case 1: safety rules file at exact limit -> ok for agy and Codex
+    await Deno.writeTextFile(
+      safetyRulesPath,
+      "x".repeat(limits.safetyRules.overMark),
+    );
+    let result = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+    assertEquals(result.isOver, false);
+    assertEquals(result.tools.agy.isOver, false);
+    assertEquals(result.tools.codex.isOver, false);
+    assertEquals(
+      result.text,
+      "Session load: Claude Code ok · agy ok · Codex ok",
+    );
+
+    // Case 2: safety rules file at limit + 1 byte (e.g. 3,001 bytes) -> safety rules +1
+    await Deno.writeTextFile(
+      safetyRulesPath,
+      "x".repeat(limits.safetyRules.overMark + 1),
+    );
+    result = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+    assertEquals(result.isOver, true);
+    assertEquals(result.tools.claudeCode.isOver, false);
+    assertEquals(result.tools.agy.isOver, true);
+    assertEquals(result.tools.codex.isOver, true);
+    assertEquals(result.tools.agy.items, ["safety rules +1"]);
+    assertEquals(result.tools.codex.items, ["safety rules +1"]);
+    assert(result.text.includes("agy          OVER  safety rules +1"));
+    assert(result.text.includes("Codex        OVER  safety rules +1"));
+    assert(result.text.includes("Claude Code  ok"));
+
+    // Case 3: safety rules file missing -> the safety rules file is missing
+    await Deno.remove(safetyRulesPath);
+    result = await computeSessionLoadReport({
+      homeDir,
+      webJamAppsDir,
+      limitsPath: LIMITS_PATH,
+    });
+    assertEquals(result.isOver, true);
+    assertEquals(result.tools.claudeCode.isOver, false);
+    assertEquals(result.tools.agy.isOver, true);
+    assertEquals(result.tools.codex.isOver, true);
+    assertEquals(result.tools.agy.items, ["the safety rules file is missing"]);
+    assertEquals(result.tools.codex.items, [
+      "the safety rules file is missing",
+    ]);
+    assert(
+      result.text.includes(
+        "agy          OVER  the safety rules file is missing",
+      ),
+    );
+    assert(
+      result.text.includes(
+        "Codex        OVER  the safety rules file is missing",
+      ),
+    );
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }

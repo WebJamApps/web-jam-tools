@@ -38,6 +38,7 @@ const AGENT_ALERT_SCRIPT = `${REPO_ROOT}scripts/agent-alert.sh`;
 const AGY_PROMPT_WATCH_SCRIPT = `${REPO_ROOT}scripts/agy-prompt-watch.sh`;
 const AGY_SKILL_RUN_SCRIPT = `${REPO_ROOT}scripts/agy-skill-run.sh`;
 const HOOKS_SRC_DIR = `${REPO_ROOT}hooks`;
+const SAFETY_RULES_SRC = `${REPO_ROOT}docs/safety-rules.md`;
 
 interface RunResult {
   code: number;
@@ -658,6 +659,8 @@ async function withTempWorktree(fn: (worktreePath: string) => Promise<void>): Pr
     `${REPO_ROOT}src/session-load/limits.json`,
     `${mainRepo}/src/session-load/limits.json`,
   );
+  await Deno.mkdir(`${mainRepo}/docs`, { recursive: true });
+  await Deno.copyFile(SAFETY_RULES_SRC, `${mainRepo}/docs/safety-rules.md`);
   await Deno.mkdir(`${mainRepo}/hooks/lib`, { recursive: true });
   for (const entry of Deno.readDirSync(`${HOOKS_SRC_DIR}/lib`)) {
     if (entry.isFile) {
@@ -2499,6 +2502,271 @@ Deno.test(
     } finally {
       await Deno.remove(hooksDir, { recursive: true });
       await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+// --- Safety rules symlinks (web-jam-tools#1415) ---
+
+Deno.test(
+  "install-hooks.sh symlinks docs/safety-rules.md to agy and codex AGENTS.md, backs up pre-existing regular files, and is idempotent",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agyDir = `${settingsDir}/gemini`;
+    const codexDir = `${settingsDir}/codex`;
+    await Deno.mkdir(agyDir, { recursive: true });
+    await Deno.mkdir(codexDir, { recursive: true });
+    const agySafetyRulesPath = `${agyDir}/AGENTS.md`;
+    const codexSafetyRulesPath = `${codexDir}/AGENTS.md`;
+
+    try {
+      // Pre-existing regular files should be backed up
+      await Deno.writeTextFile(agySafetyRulesPath, "# Pre-existing agy rules\n");
+      await Deno.writeTextFile(codexSafetyRulesPath, "# Pre-existing codex rules\n");
+
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+      assert(
+        installRes.stdout.includes(
+          "agy AGENTS.md: replaced existing file (backed up to AGENTS.md.bak-",
+        ),
+        `expected backup message for agy: ${installRes.stdout}`,
+      );
+      assert(
+        installRes.stdout.includes(
+          "codex AGENTS.md: replaced existing file (backed up to AGENTS.md.bak-",
+        ),
+        `expected backup message for codex: ${installRes.stdout}`,
+      );
+
+      // Verify backup files exist and contain pre-existing content
+      const agyBackups = [...Deno.readDirSync(agyDir)].filter((e) =>
+        e.name.startsWith("AGENTS.md.bak-")
+      );
+      assertEquals(agyBackups.length, 1);
+      assertEquals(
+        await Deno.readTextFile(`${agyDir}/${agyBackups[0].name}`),
+        "# Pre-existing agy rules\n",
+      );
+
+      const codexBackups = [...Deno.readDirSync(codexDir)].filter((e) =>
+        e.name.startsWith("AGENTS.md.bak-")
+      );
+      assertEquals(codexBackups.length, 1);
+      assertEquals(
+        await Deno.readTextFile(`${codexDir}/${codexBackups[0].name}`),
+        "# Pre-existing codex rules\n",
+      );
+
+      // Verify symlinks point to docs/safety-rules.md
+      const expectedRealTarget = await Deno.realPath(SAFETY_RULES_SRC);
+      const agyLstat = await Deno.lstat(agySafetyRulesPath);
+      assert(agyLstat.isSymlink, "expected agySafetyRulesPath to be a symlink");
+      assertEquals(await Deno.realPath(agySafetyRulesPath), expectedRealTarget);
+
+      const codexLstat = await Deno.lstat(codexSafetyRulesPath);
+      assert(codexLstat.isSymlink, "expected codexSafetyRulesPath to be a symlink");
+      assertEquals(await Deno.realPath(codexSafetyRulesPath), expectedRealTarget);
+
+      // Idempotency: re-running does not replace symlink or create additional backups
+      const secondRun = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+      ]);
+      assertEquals(secondRun.code, 0, secondRun.stdout + secondRun.stderr);
+      assert(
+        secondRun.stdout.includes("agy AGENTS.md: ok (symlink already present)"),
+        `expected agy ok message: ${secondRun.stdout}`,
+      );
+      assert(
+        secondRun.stdout.includes("codex AGENTS.md: ok (symlink already present)"),
+        `expected codex ok message: ${secondRun.stdout}`,
+      );
+      const agyBackupsAfter = [...Deno.readDirSync(agyDir)].filter((e) =>
+        e.name.startsWith("AGENTS.md.bak-")
+      );
+      assertEquals(agyBackupsAfter.length, 1);
+      const codexBackupsAfter = [...Deno.readDirSync(codexDir)].filter((e) =>
+        e.name.startsWith("AGENTS.md.bak-")
+      );
+      assertEquals(codexBackupsAfter.length, 1);
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh --check reports drift when agy or codex safety rules symlink is missing or drifted",
+  async () => {
+    const hooksDir = await Deno.makeTempDir();
+    const settingsDir = await Deno.makeTempDir();
+    const settingsPath = `${settingsDir}/settings.json`;
+    const agySafetyRulesPath = `${settingsDir}/gemini-AGENTS.md`;
+    const codexSafetyRulesPath = `${settingsDir}/codex-AGENTS.md`;
+
+    try {
+      const installRes = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+      ]);
+      assertEquals(installRes.code, 0, installRes.stdout + installRes.stderr);
+
+      // Clean check passes
+      const cleanCheck = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+        "--check",
+      ]);
+      assertEquals(cleanCheck.code, 0, cleanCheck.stdout + cleanCheck.stderr);
+      assert(cleanCheck.stdout.includes("check passed (no drift)"));
+
+      // Drift on agy: remove symlink and replace with regular file
+      await Deno.remove(agySafetyRulesPath);
+      await Deno.writeTextFile(agySafetyRulesPath, "# not a symlink\n");
+
+      const agyDriftCheck = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+        "--check",
+      ]);
+      assert(
+        agyDriftCheck.code !== 0,
+        "expected --check to fail when agy safety rules symlink is not a link",
+      );
+      assert(
+        agyDriftCheck.stderr.includes("drift: agy safety rules file is not linked"),
+        `expected agy drift message: ${agyDriftCheck.stderr}`,
+      );
+      assert(agyDriftCheck.stderr.includes("error: drift detected"));
+
+      // Restore agy symlink and break codex symlink (remove completely)
+      await Deno.remove(agySafetyRulesPath);
+      await Deno.symlink(SAFETY_RULES_SRC, agySafetyRulesPath);
+      await Deno.remove(codexSafetyRulesPath);
+
+      const codexDriftCheck = await run("bash", [
+        INSTALL_SCRIPT,
+        "--hooks-dir",
+        hooksDir,
+        "--settings-path",
+        settingsPath,
+        "--agy-safety-rules-path",
+        agySafetyRulesPath,
+        "--codex-safety-rules-path",
+        codexSafetyRulesPath,
+        "--check",
+      ]);
+      assert(
+        codexDriftCheck.code !== 0,
+        "expected --check to fail when codex safety rules symlink is missing",
+      );
+      assert(
+        codexDriftCheck.stderr.includes("drift: codex safety rules file is not linked"),
+        `expected codex drift message: ${codexDriftCheck.stderr}`,
+      );
+      assert(codexDriftCheck.stderr.includes("error: drift detected"));
+    } finally {
+      await Deno.remove(hooksDir, { recursive: true });
+      await Deno.remove(settingsDir, { recursive: true });
+    }
+  },
+);
+
+Deno.test(
+  "install-hooks.sh with default destinations links docs/safety-rules.md to $HOME/.gemini/AGENTS.md and $HOME/.codex/AGENTS.md",
+  async () => {
+    const home = await Deno.makeTempDir();
+    try {
+      const res = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+        ],
+        { HOME: home },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const expectedRealTarget = await Deno.realPath(SAFETY_RULES_SRC);
+      const agyRules = `${home}/.gemini/AGENTS.md`;
+      const codexRules = `${home}/.codex/AGENTS.md`;
+
+      assert(await pathExists(agyRules), "expected $HOME/.gemini/AGENTS.md to exist");
+      const agyLstat = await Deno.lstat(agyRules);
+      assert(agyLstat.isSymlink, "expected $HOME/.gemini/AGENTS.md to be a symlink");
+      assertEquals(await Deno.realPath(agyRules), expectedRealTarget);
+
+      assert(await pathExists(codexRules), "expected $HOME/.codex/AGENTS.md to exist");
+      const codexLstat = await Deno.lstat(codexRules);
+      assert(codexLstat.isSymlink, "expected $HOME/.codex/AGENTS.md to be a symlink");
+      assertEquals(await Deno.realPath(codexRules), expectedRealTarget);
+
+      // Claude Code settings.json must NOT contain safety-rules references
+      const claudeSettings = `${home}/.claude/settings.json`;
+      if (await pathExists(claudeSettings)) {
+        const content = await Deno.readTextFile(claudeSettings);
+        assert(
+          !content.includes("safety-rules"),
+          "Claude settings.json must not reference safety-rules",
+        );
+      }
+
+      // Check mode passes against the installed HOME
+      const checkRes = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+          "--check",
+        ],
+        { HOME: home },
+      );
+      assertEquals(checkRes.code, 0, checkRes.stdout + checkRes.stderr);
+      assert(checkRes.stdout.includes("check passed (no drift)"));
+    } finally {
+      await Deno.remove(home, { recursive: true });
     }
   },
 );

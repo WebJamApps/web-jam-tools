@@ -28,6 +28,7 @@ export interface SessionLoadLimits {
   crossAiRules: PartLimit;
   jammusicRules: PartLimit;
   otherRepoRules: PartLimit;
+  safetyRules: PartLimit;
   skillDescription: SkillDescriptionLimit;
   bundledSkills: BundledSkillsLimit;
 }
@@ -51,6 +52,8 @@ export interface SessionLoadReportOptions {
   memoryIndexPath?: string;
   /** Path to global CLAUDE.md (defaults to $HOME/.claude/CLAUDE.md). */
   globalClaudeMdPath?: string;
+  /** Path to safety rules file (defaults to $HOME/WebJamApps/web-jam-tools/docs/safety-rules.md). */
+  safetyRulesPath?: string;
 }
 
 export interface ToolReportResult {
@@ -277,6 +280,18 @@ export async function computeSessionLoadReport(
   const crossAiRulesSize = await getFileSize(crossAiRulesPath);
   const jammusicRulesSize = await getFileSize(jammusicRulesPath);
 
+  const safetyRulesPath = options.safetyRulesPath ||
+    join(webJamAppsDir, "web-jam-tools/docs/safety-rules.md");
+  let safetyRulesSize = -1;
+  try {
+    const stat = await Deno.stat(safetyRulesPath);
+    if (stat.isFile) {
+      safetyRulesSize = stat.size;
+    }
+  } catch {
+    // Missing or unreadable safety rules file
+  }
+
   // Other repos' rules files
   const otherRepoSizes: Record<string, number> = {};
   for (const repo of ACTIVE_REPOS) {
@@ -365,6 +380,12 @@ export async function computeSessionLoadReport(
       agyItems.push(`${repo} rules +${formatNumber(excess)}`);
     }
   }
+  if (safetyRulesSize === -1) {
+    agyItems.push("the safety rules file is missing");
+  } else if (safetyRulesSize > limits.safetyRules.overMark) {
+    const excess = safetyRulesSize - limits.safetyRules.overMark;
+    agyItems.push(`safety rules +${formatNumber(excess)}`);
+  }
   if (agySkills.overCount > 0) {
     agyItems.push(`${agySkills.overCount} skill descriptions`);
   }
@@ -392,6 +413,12 @@ export async function computeSessionLoadReport(
       const excess = size - limits.otherRepoRules.overMark;
       codexItems.push(`${repo} rules +${formatNumber(excess)}`);
     }
+  }
+  if (safetyRulesSize === -1) {
+    codexItems.push("the safety rules file is missing");
+  } else if (safetyRulesSize > limits.safetyRules.overMark) {
+    const excess = safetyRulesSize - limits.safetyRules.overMark;
+    codexItems.push(`safety rules +${formatNumber(excess)}`);
   }
   if (codexSkills.installedCount === 0) {
     if (codexItems.length > 0) {

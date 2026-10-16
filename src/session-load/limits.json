@@ -22,6 +22,10 @@
   "otherRepoRules": {
     "overMark": 10000
   },
+  "safetyRules": {
+    "lowMark": 3000,
+    "overMark": 3000
+  },
   "skillDescription": {
     "lowMark": 300,
     "overMark": 300,
