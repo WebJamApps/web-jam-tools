@@ -648,6 +648,10 @@ const PORT22_RULES: [string, string][] = [
   ["a port list", "allow tcp 22,80 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
   ["every port on another interface", "allow any any 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
   ["a rule carrying a comment", "allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0 comment=73736820"],
+  // ufw appends the logging type to the action: "ufw allow log 22/tcp" is allow_log.
+  ["a logged rule for every interface", "allow_log tcp 22 0.0.0.0/0 any 0.0.0.0/0 in"],
+  ["a log-all rule on another interface", "allow_log-all tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
+  ["a logged rate-limited rule", "limit_log tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
 ];
 
 Deno.test("ssh: --check names every way a rule can admit port 22 off Tailscale", async () => {
@@ -694,6 +698,60 @@ Deno.test("ssh: --check with no rule for tailscale0, or no default deny -> drift
   assert(r.code !== 0);
   assertStringIncludes(r.stdout, "DRIFT firewall: no rule allows incoming traffic on tailscale0");
   assertStringIncludes(r.stdout, "DRIFT firewall: incoming traffic is not denied by default");
+});
+
+// Rules for tailscale0 that are narrower than the blanket allowance "ufw allow in on tailscale0".
+const RESTRICTED_TAILSCALE_RULES: [string, string][] = [
+  ["one source address", "allow any any 0.0.0.0/0 any 100.64.0.2 in_tailscale0"],
+  ["one destination address", "allow any any 100.64.0.1 any 0.0.0.0/0 in_tailscale0"],
+  ["one source port", "allow any any 0.0.0.0/0 4000 0.0.0.0/0 in_tailscale0"],
+  ["one destination port", "allow tcp 80 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0"],
+  ["one protocol", "allow tcp any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0"],
+];
+
+Deno.test("ssh: --check does not take a restricted rule for tailscale0 as the blanket allowance", async () => {
+  for (const [label, tuple] of RESTRICTED_TAILSCALE_RULES) {
+    const h = await makeHarness();
+    await applyAndSettle(h);
+    await writeUfwRules(h, tuple);
+
+    const r = await check(h);
+
+    assert(r.code !== 0, `${label} was certified as the tailscale0 allowance`);
+    assertStringIncludes(r.stdout, "DRIFT firewall: no rule allows incoming traffic on tailscale0");
+  }
+});
+
+Deno.test("ssh: apply still installs the tailscale0 allowance when only a restricted rule exists", async () => {
+  for (const [label, tuple] of RESTRICTED_TAILSCALE_RULES) {
+    const h = await makeHarness();
+    await writeUfwRules(h, tuple);
+
+    const r = await apply(h);
+
+    assertEquals(r.code, 0, `${label}: ${r.stderr}`);
+    assert(
+      (await calls(h)).includes("ufw allow in on tailscale0"),
+      `${label} suppressed the allow`,
+    );
+  }
+});
+
+Deno.test("ssh: the blanket tailscale0 allowance is recognized with a logged action or an IPv6 form", async () => {
+  for (
+    const tuple of [
+      "allow_log any any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0",
+      "allow any any ::/0 any ::/0 in_tailscale0",
+    ]
+  ) {
+    const h = await makeHarness();
+    await applyAndSettle(h);
+    await writeUfwRules(h, tuple);
+
+    const r = await check(h);
+
+    assertEquals(r.code, 0, `${tuple}: ${r.stdout}`);
+  }
 });
 
 Deno.test("ssh: --check with PasswordAuthentication yes effective -> drift named", async () => {
@@ -895,6 +953,32 @@ Deno.test("ssh: --check names a Match block that can switch passwords back on", 
     assert(r.code !== 0, `${label} was certified clean`);
     assertStringIncludes(r.stdout, 'DRIFT ssh: a Match block sets PasswordAuthentication to "yes"');
     assertStringIncludes(r.stdout, "key-only login is not confirmed");
+  }
+});
+
+Deno.test("ssh: an included sshd file only root can read is reported as not checked, not skipped silently", async () => {
+  const h = await makeHarness();
+  await seedSshdConfig(h, "Include /etc/ssh/sshd_config.d/*.conf\nUsePAM yes\n");
+  const extra = `${h.root}/etc/ssh/sshd_config.d/50-extra.conf`;
+  await Deno.writeTextFile(extra, "Match User joshua\n  PasswordAuthentication yes\n");
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+  await Deno.chmod(extra, 0o000);
+
+  // Run as root, the file stays readable and the Match block is reported as drift instead.
+  let readable = true;
+  try {
+    await Deno.readTextFile(extra);
+  } catch {
+    readable = false;
+  }
+  const r = await check(h);
+  await Deno.chmod(extra, 0o600);
+
+  if (!readable) {
+    assertStringIncludes(r.stdout, "NOTE: SSH login rules not fully checked without sudo");
+    assertStringIncludes(r.stdout, "50-extra.conf");
+    assertEquals(r.code, 0, r.stdout);
   }
 });
 

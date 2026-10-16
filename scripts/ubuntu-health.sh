@@ -111,7 +111,10 @@ ufw_denies_incoming() {
   esac
 }
 
-# One line per incoming allow rule ufw holds: action|proto|port|interface (interface empty = all).
+# One line per incoming allow rule ufw holds:
+# action|proto|port|interface|destination|source port|source address (interface empty = all).
+# ufw writes a logged rule's action with the logging type appended (allow_log, limit_log-all), so
+# that suffix is dropped before the action is classified.
 ufw_tuples() {
   local f
   for f in "${UFW_RULE_FILES[@]}"; do
@@ -120,15 +123,19 @@ ufw_tuples() {
       n = NF
       if ($n ~ /^comment=/) n--
       dir = $n
-      if ($4 !~ /^(allow|limit)$/ || dir !~ /^in(_|$)/ || dir ~ /_out/) next
+      action = $4
+      sub(/_log(-all)?$/, "", action)
+      if (action !~ /^(allow|limit)$/ || dir !~ /^in(_|$)/ || dir ~ /_out/) next
       iface = (dir == "in") ? "" : substr(dir, 4)
-      print $4 "|" $5 "|" $6 "|" iface
+      print action "|" $5 "|" $6 "|" iface "|" $7 "|" $8 "|" $9
     }' "$f"
   done
 }
 
+# The blanket allowance "ufw allow in on tailscale0" writes: every protocol, port and address. A rule
+# for tailscale0 that is restricted to one source, destination or port is not that allowance.
 ufw_has_tailscale_rule() {
-  ufw_tuples | grep -qE '^(allow|limit)\|any\|any\|tailscale0$'
+  ufw_tuples | grep -qE '^(allow|limit)\|any\|any\|tailscale0\|(0\.0\.0\.0/0|::/0)\|any\|(0\.0\.0\.0/0|::/0)$'
 }
 
 # True when a rule for protocol $1 and port field $2 (any, 22, 20:30 or 22,80) covers SSH.
@@ -152,8 +159,8 @@ admits_port22() {
 # One line per ufw rule that admits port 22 off Tailscale. Loopback is not a network door, and
 # tailscale0 is the one place SSH is meant to come in.
 ufw_port22_exposures() {
-  local action proto dport iface
-  while IFS='|' read -r action proto dport iface; do
+  local action proto dport iface _rest
+  while IFS='|' read -r action proto dport iface _rest; do
     case "$iface" in tailscale0 | lo) continue ;; esac
     admits_port22 "$proto" "$dport" || continue
     echo "port 22 is admitted on ${iface:-every interface} by an $action rule ($proto, port $dport)"
@@ -169,6 +176,7 @@ ufw_port22_exposures() {
 SSHD_RESULT=""
 SSHD_MATCH_RESULT=""
 SSHD_IN_MATCH=0
+SSHD_UNREADABLE=()
 scan_sshd() {
   local file="$1" line key val pattern f match_seen=0
   local LC_COLLATE=C
@@ -193,7 +201,8 @@ scan_sshd() {
         for pattern in $val; do
           case "$pattern" in /*) ;; *) pattern="/etc/ssh/$pattern" ;; esac
           for f in "$ROOT"$pattern; do
-            [ ! -f "$f" ] || scan_sshd "$f"
+            [ -f "$f" ] || continue
+            if [ -r "$f" ]; then scan_sshd "$f"; else SSHD_UNREADABLE+=("$f"); fi
           done
         done
         ;;
@@ -203,7 +212,7 @@ scan_sshd() {
 }
 
 check_ssh() {
-  local result value
+  local result value f
   if [ -e "$SSH_PENDING" ]; then
     report ssh "ssh.service has not been restarted since $SSHD_DROPIN was written; run apply again"
   fi
@@ -218,7 +227,11 @@ check_ssh() {
   SSHD_RESULT=""
   SSHD_MATCH_RESULT=""
   SSHD_IN_MATCH=0
+  SSHD_UNREADABLE=()
   scan_sshd "$SSHD_CONFIG"
+  for f in "${SSHD_UNREADABLE[@]}"; do
+    echo "NOTE: SSH login rules not fully checked without sudo ($f is not readable, so a setting in it could not be seen)"
+  done
   result="${SSHD_RESULT:-yes|the built-in default}"
   value="${result%%|*}"
   if [ "${value,,}" != "no" ]; then
