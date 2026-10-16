@@ -2462,17 +2462,34 @@ Deno.test("docs/ai-team-playbook.md and skills: triage issues to model labels by
   // 5. Installed skill symlinks resolve into canonical clone across Claude Code and agy
   const home = Deno.env.get("HOME") || "/home/joshua";
   const skillNames = ["file-issue", "design-issue", "delegate", "backlog-groom"];
-  for (const skill of skillNames) {
-    const claudeLink = `${home}/.claude/skills/${skill}`;
-    const claudeInfo = await Deno.lstat(claudeLink).catch(() => null);
-    if (claudeInfo) {
+  const claudeSkillsDir = `${home}/.claude/skills`;
+  const agySkillsDir = `${home}/.gemini/config/plugins/webjam-tasks/skills`;
+  const hasClaude = await Deno.stat(claudeSkillsDir).then((s) => s.isDirectory).catch(() => false);
+  const hasAgy = await Deno.stat(agySkillsDir).then((s) => s.isDirectory).catch(() => false);
+
+  if (!Deno.env.get("CI")) {
+    assert(
+      hasClaude || hasAgy,
+      "Expected at least one installed skill surface (~/.claude/skills or ~/.gemini/config/plugins/webjam-tasks/skills) on local runs",
+    );
+  }
+
+  if (hasClaude) {
+    for (const skill of skillNames) {
+      const claudeLink = `${claudeSkillsDir}/${skill}`;
+      const claudeInfo = await Deno.lstat(claudeLink).catch(() => null);
+      assertExists(claudeInfo, `~/.claude/skills/${skill} must exist`);
       assertEquals(claudeInfo.isSymlink, true, `~/.claude/skills/${skill} must be a symlink`);
       const target = await Deno.readLink(claudeLink);
       assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
     }
-    const agyLink = `${home}/.gemini/config/plugins/webjam-tasks/skills/${skill}`;
-    const agyInfo = await Deno.lstat(agyLink).catch(() => null);
-    if (agyInfo) {
+  }
+
+  if (hasAgy) {
+    for (const skill of skillNames) {
+      const agyLink = `${agySkillsDir}/${skill}`;
+      const agyInfo = await Deno.lstat(agyLink).catch(() => null);
+      assertExists(agyInfo, `~/.gemini/.../skills/${skill} must exist`);
       assertEquals(agyInfo.isSymlink, true, `~/.gemini/.../skills/${skill} must be a symlink`);
       const target = await Deno.readLink(agyLink);
       assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
