@@ -244,7 +244,12 @@ The writer authorizes itself off `hooks/lib/check_token_write_authorization.ts`,
 either of two things in this session's own, non-sidechain transcript: a user turn that invoked
 `/file-issue` or `/design-issue` (with no other skill invoked since), or Josh's latest reply
 approving in chat — it follows an agent turn that showed every exact `--title` and does not open
-with `no`, `nope`, `nah`, `don't`, `do not`, `stop`, `never`, `cancel`, `hold off`, `wait` or `not yet`.
+with `no`, `nope`, `nah`, `don't`, `do not`, `stop`, `never`, `cancel`, `hold off`, `wait` or `not yet`
+(any run of spaces or a line break between the two words of `do not`, `hold off` and `not yet` counts
+as the same refusal). A title is shown only when it appears whole: on a line of its own (a list item
+or heading), in a table cell, or in quotes, backticks or bold — a shortened or embedded part of a
+longer title does not count, and neither does a title written unquoted in the middle of a sentence.
+The titles may be spread over several of your messages in that turn, each title in one message.
 Run it outside that context (a different session, titles not shown to Josh first, or a subagent's
 own turn) and it refuses. That refusal is the gate working as designed, not a bug to route around:
 show Josh the exact titles and get his reply, or get his fresh `/file-issue` (or `/design-issue`)

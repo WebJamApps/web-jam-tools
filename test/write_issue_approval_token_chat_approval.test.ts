@@ -251,6 +251,7 @@ Deno.test("chat approval: Antigravity shape, own-conversation prompt and model t
 
 async function runWriter(
   entries: TranscriptEntry[] | null,
+  titles: readonly string[] = TITLES,
 ): Promise<{ code: number; stdout: string; stderr: string; tokenPath: string; dir: string }> {
   const dir = await Deno.makeTempDir();
   const transcript = `${dir}/transcript.jsonl`;
@@ -269,10 +270,7 @@ async function runWriter(
       "sess-chat-1",
       "--repo",
       "WebJamApps/web-jam-tools",
-      "--title",
-      TITLE_A,
-      "--title",
-      TITLE_B,
+      ...titles.flatMap((title) => ["--title", title]),
       "--token-path",
       tokenPath,
     ],
@@ -349,6 +347,231 @@ Deno.test("CLI chat approval: titles never shown, Josh says 'yes file it', refus
   try {
     assertEquals(r.code, 1);
     assertEquals(await exists(r.tokenPath), false);
+  } finally {
+    await Deno.remove(r.dir, { recursive: true });
+  }
+});
+
+// --- Review fixes (web-jam-tools#1054): refusal spacing, complete titles, a multi-message turn ---
+
+const IRREGULAR_REFUSALS = [
+  "do  not file it",
+  "do\tnot file it",
+  "do\nnot file it",
+  "do not file it",
+  "hold  off",
+  "hold\noff for now",
+  "not  yet",
+  "not\nyet",
+  "  Do   Not file those",
+];
+
+Deno.test("chat approval: refusal phrases tolerate any whitespace between their words", () => {
+  for (const reply of IRREGULAR_REFUSALS) {
+    assertEquals(
+      replyOpensWithRefusal(reply),
+      true,
+      `reply ${JSON.stringify(reply)} must read as a refusal`,
+    );
+    assertEquals(
+      authorize(titlesThenReply(reply)).ok,
+      false,
+      `reply ${JSON.stringify(reply)} must refuse`,
+    );
+  }
+});
+
+Deno.test("chat approval: irregular spacing does not turn a longer word into a refusal", () => {
+  for (const reply of ["do notate it, go", "hold offices are fine, go", "not yetis, go"]) {
+    assertEquals(
+      replyOpensWithRefusal(reply),
+      false,
+      `reply ${JSON.stringify(reply)} must not read as a refusal`,
+    );
+  }
+});
+
+Deno.test("CLI chat approval: refusals with irregular spacing refuse and write nothing", async () => {
+  for (const reply of ["do  not file it", "hold\noff for now", "not\tyet"]) {
+    const r = await runWriter(titlesThenReply(reply));
+    try {
+      assertEquals(r.code, 1, `reply ${JSON.stringify(reply)} must exit 1`);
+      assertStringIncludes(r.stderr, "Refused to write approval token");
+      assertEquals(await exists(r.tokenPath), false);
+    } finally {
+      await Deno.remove(r.dir, { recursive: true });
+    }
+  }
+});
+
+const LONG_TITLE = "Fix approval token validation";
+
+/** A transcript where the agent's only message is `shown`, then Josh replies "yes, go". */
+function showThenApprove(shown: string): TranscriptEntry[] {
+  return [human("plan it"), assistant(shown), human("yes, go")];
+}
+
+Deno.test("chat approval: a shortened title is not the complete title that was shown", () => {
+  const shownForms = [
+    `Proposed title: "${LONG_TITLE}"`,
+    `1. ${LONG_TITLE}`,
+    `| 1 | ${LONG_TITLE} | Sonnet |`,
+    `Filing \`${LONG_TITLE}\` next`,
+  ];
+  for (const shown of shownForms) {
+    for (
+      const shortened of [
+        "approval token",
+        "Fix approval token",
+        "approval token validation",
+        "Fix",
+      ]
+    ) {
+      assertEquals(
+        authorize(showThenApprove(shown), [shortened]).ok,
+        false,
+        `${JSON.stringify(shortened)} inside ${JSON.stringify(shown)} must refuse`,
+      );
+    }
+    assertEquals(
+      authorize(showThenApprove(shown), [LONG_TITLE]).ok,
+      true,
+      `${JSON.stringify(shown)} shows the complete title`,
+    );
+  }
+});
+
+Deno.test("chat approval: a title longer than the one shown is not shown", () => {
+  assertEquals(
+    authorize(showThenApprove(`1. ${LONG_TITLE}`), [`${LONG_TITLE} and more`]).ok,
+    false,
+  );
+});
+
+Deno.test("chat approval: an unquoted title in the middle of a sentence is not shown", () => {
+  assertEquals(
+    authorize(showThenApprove(`I will file ${LONG_TITLE} next.`), [LONG_TITLE]).ok,
+    false,
+  );
+});
+
+Deno.test("chat approval: a complete title in quotes, bold, a bullet, a heading or a table cell is shown", () => {
+  for (
+    const shown of [
+      `“${LONG_TITLE}”`,
+      `'${LONG_TITLE}'`,
+      `**${LONG_TITLE}**`,
+      `- ${LONG_TITLE}`,
+      `> ${LONG_TITLE}`,
+      `## ${LONG_TITLE}`,
+      `1) ${LONG_TITLE}`,
+      `| # | Proposed title |\n|---|---|\n| 1 | ${LONG_TITLE} |`,
+    ]
+  ) {
+    assertEquals(
+      authorize(showThenApprove(shown), [LONG_TITLE]).ok,
+      true,
+      `${JSON.stringify(shown)} shows the complete title`,
+    );
+  }
+});
+
+Deno.test("CLI chat approval: a shortened title is refused, the complete title writes", async () => {
+  const transcript = showThenApprove(`Proposed title: "${LONG_TITLE}"`);
+  const shortened = await runWriter(transcript, ["approval token"]);
+  try {
+    assertEquals(shortened.code, 1);
+    assertStringIncludes(shortened.stderr, "Refused to write approval token");
+    assertEquals(await exists(shortened.tokenPath), false);
+  } finally {
+    await Deno.remove(shortened.dir, { recursive: true });
+  }
+  const full = await runWriter(transcript, [LONG_TITLE]);
+  try {
+    assertEquals(full.code, 0, full.stderr);
+    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).titles, [LONG_TITLE]);
+  } finally {
+    await Deno.remove(full.dir, { recursive: true });
+  }
+});
+
+/** A tool result, which Claude Code records as a user entry that is not a prompt from a person. */
+function toolResult(): TranscriptEntry {
+  return {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }],
+    },
+  } as TranscriptEntry;
+}
+
+Deno.test("chat approval: titles shown across several assistant messages in one turn count", () => {
+  const entries = [
+    human("plan the two fixes"),
+    assistant(`First:\n1. ${TITLE_A}`),
+    toolResult(),
+    assistant(`Second:\n2. ${TITLE_B}\nShall I file these?`),
+    human("yes, go"),
+  ];
+  const result = authorize(entries);
+  assertEquals(result.ok, true);
+  assertEquals(result.via, "chat-approval");
+});
+
+Deno.test("chat approval: titles split across turns, or into a subagent's sidechain, still refuse", () => {
+  // The first title is before an earlier prompt of Josh's, so it belongs to a previous turn.
+  assertEquals(
+    authorize([
+      human("plan it"),
+      assistant(`1. ${TITLE_A}`),
+      human("and the second?"),
+      assistant(`2. ${TITLE_B}`),
+      human("yes, go"),
+    ]).ok,
+    false,
+  );
+  // The second title is a subagent's sidechain message, not the session's own turn.
+  assertEquals(
+    authorize([
+      human("plan it"),
+      assistant(`1. ${TITLE_A}`),
+      assistant(`2. ${TITLE_B}`, { isSidechain: true }),
+      human("yes, go"),
+    ]).ok,
+    false,
+  );
+});
+
+Deno.test("chat approval: Antigravity titles shown across two model messages count", () => {
+  const agy = (type: string, source: string, step: number, content: string) =>
+    ({ type, source, step_index: step, content, conversationId: "conv-1" }) as TranscriptEntry;
+  const result = checkTokenWriteAuthorization({
+    entries: [
+      agy("USER_INPUT", "USER_EXPLICIT", 0, "<USER_REQUEST>plan it</USER_REQUEST>"),
+      agy("PLANNER_RESPONSE", "MODEL", 1, `1. ${TITLE_A}`),
+      agy("PLANNER_RESPONSE", "MODEL", 2, `2. ${TITLE_B}`),
+      agy("USER_INPUT", "USER_EXPLICIT", 3, "<USER_REQUEST>yes, go</USER_REQUEST>"),
+    ],
+    ownConversationId: "conv-1",
+    isSubagentInvocation: false,
+    titles: TITLES,
+  });
+  assertEquals(result.ok, true);
+  assertEquals(result.via, "chat-approval");
+});
+
+Deno.test("CLI chat approval: titles shown across two assistant messages write the token", async () => {
+  const r = await runWriter([
+    human("plan the two fixes"),
+    assistant(`First:\n1. ${TITLE_A}`),
+    toolResult(),
+    assistant(`Second:\n2. ${TITLE_B}`),
+    human("yes, go"),
+  ]);
+  try {
+    assertEquals(r.code, 0, r.stderr);
+    assertEquals(JSON.parse(await Deno.readTextFile(r.tokenPath)).titles, TITLES);
   } finally {
     await Deno.remove(r.dir, { recursive: true });
   }

@@ -272,10 +272,12 @@ export interface TokenWriteAuthorizationResult {
  * The words that, opening Josh's reply, make it a refusal rather than an approval (D-35). Matched as
  * whole words at the start of the reply only, so "nothing to add, go" and "waiting is fine, go" are
  * not refusals, and a refusal word later in an otherwise approving reply is not read as one. A hyphen
- * counts as a word boundary ("no-go" refuses); an apostrophe does not ("don't" is one word).
+ * counts as a word boundary ("no-go" refuses); an apostrophe does not ("don't" is one word). The
+ * words of a two-word opener may be separated by any run of whitespace, a line break included
+ * ("do  not file it" and "hold\noff" refuse); spacing is never what turns a refusal into an approval.
  */
 const REFUSAL_OPENER_RE =
-  /^(?:no|nope|nah|don['’]t|do not|stop|never|cancel|hold off|wait|not yet)(?![a-z0-9'’])/i;
+  /^(?:no|nope|nah|don['’]t|do\s+not|stop|never|cancel|hold\s+off|wait|not\s+yet)(?![a-z0-9'’])/i;
 
 /** True when the reply opens with a refusal word (leading whitespace, quotes and markdown ignored). */
 export function replyOpensWithRefusal(text: string): boolean {
@@ -303,12 +305,71 @@ function isOwnAssistantEntry(
   return entry.type === "assistant" || entry.message?.role === "assistant";
 }
 
+/** Pairs that set a whole title off inside a line: quotes, code spans and bold. */
+const TITLE_WRAPPERS: ReadonlyArray<readonly [string, string]> = [
+  ['"', '"'],
+  ["“", "”"],
+  ["'", "'"],
+  ["‘", "’"],
+  ["`", "`"],
+  ["**", "**"],
+  ["__", "__"],
+];
+
+/** Markdown that opens a line without being part of what it shows: list numbers, bullets, quotes, headings. */
+const LINE_MARKER_RE = /^(?:(?:[-*+>]|\d+[.)]|#{1,6})\s+)+/;
+
+/** Peels matching wrappers (quotes, backticks, bold) off both ends of `text`, however deeply nested. */
+function stripTitleWrappers(text: string): string {
+  let current = text.trim();
+  for (;;) {
+    const wrapper = TITLE_WRAPPERS.find(([open, close]) =>
+      current.length > open.length + close.length && current.startsWith(open) &&
+      current.endsWith(close)
+    );
+    if (!wrapper) return current;
+    current = current.slice(wrapper[0].length, current.length - wrapper[1].length).trim();
+  }
+}
+
+/**
+ * True when `text` shows `title` as a COMPLETE title (web-jam-tools#1054 review): a substring of a
+ * longer title is not the title Josh saw. A title counts as shown when it is
+ *   - the whole of a line, after any list number, bullet or heading marker and any wrapping quotes,
+ *     backticks or bold, or
+ *   - the whole of a table cell, or
+ *   - wrapped in matching quotes, backticks or bold anywhere in a line.
+ * So `Proposed title: "Fix approval token validation"` shows that full title and nothing shorter:
+ * `approval token` sits between letters of the longer title, bounded by no marker, so it is refused.
+ * An unquoted title in the middle of a sentence is refused for the same reason — the agent shows each
+ * title on its own line, in a table cell or in quotes.
+ */
+export function titleShownExactly(text: string, title: string): boolean {
+  const isTitle = (candidate: string): boolean => {
+    const trimmed = candidate.trim();
+    return trimmed === title || stripTitleWrappers(trimmed) === title;
+  };
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (isTitle(trimmed.replace(LINE_MARKER_RE, ""))) return true;
+    if (trimmed.includes("|") && trimmed.split("|").some(isTitle)) return true;
+    if (TITLE_WRAPPERS.some(([open, close]) => trimmed.includes(`${open}${title}${close}`))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Josh's approval given in chat (D-35): his latest reply comes after an agent turn that showed every
- * exact title, and does not open with a refusal word. "Showed" means the title appears verbatim in
- * the agent's text between the prompt before his reply and the reply itself, so titles the agent
- * only says after his reply, or showed turns earlier, never count. A reply that is itself another
- * skill's slash command is not an approval. Anything unreadable fails closed.
+ * exact title, and does not open with a refusal word. "Showed" means each title appears as a complete
+ * title (see titleShownExactly) in the agent's text between the prompt before his reply and the reply
+ * itself. That turn can span several assistant entries — the agent may show the titles across
+ * messages with tool calls between them — so the titles are collected across all of them, each title
+ * in a single entry. Titles the agent only says after his reply, or showed before an earlier prompt
+ * of his, never count, and a subagent's sidechain entries are skipped. A reply that is itself
+ * another skill's slash command is not an approval. Anything unreadable fails closed.
  */
 function checkChatApproval(
   ctx: TokenWriteAuthorizationContext,
@@ -335,16 +396,21 @@ function checkChatApproval(
     return { ok: false, reason: "Josh's latest reply opens with a refusal" };
   }
 
-  for (let i = replyIdx - 1; i >= 0; i--) {
+  const unshown = new Set(titles);
+  for (let i = replyIdx - 1; i >= 0 && unshown.size > 0; i--) {
     const entry = ctx.entries[i];
     if (isJoshReply(entry, ownConversationId)) break;
     if (!isOwnAssistantEntry(entry, ownConversationId)) continue;
     const text = extractEntryText(entry);
-    if (titles.every((title) => text.includes(title))) return { ok: true };
+    for (const title of [...unshown]) {
+      if (titleShownExactly(text, title)) unshown.delete(title);
+    }
   }
+  if (unshown.size === 0) return { ok: true };
   return {
     ok: false,
-    reason: "the agent did not show every exact title before Josh's latest reply",
+    reason:
+      "the agent did not show every exact title before Josh's latest reply (each complete title on its own line, in a table cell or in quotes)",
   };
 }
 
