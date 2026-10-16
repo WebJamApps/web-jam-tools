@@ -95,10 +95,10 @@ The level each issue carries, checked against the spread with a focus milestone 
 - **Where Rules Live (No Restatement):** The skill does not restate the level tests, the shares or the ranking:
   - what each Priority level means is in "Priority Levels" in `~/Dropbox/web-jam-llms/Token_Savings/design-issue-file-issue-design-2026-08-23.md` (the design-issue and file-issue design);
   - the shares, the ranking, and the focus are in "The Priority check" in `~/Dropbox/web-jam-llms/Token_Savings/backlog-groom-design.md` (the backlog-groom design).
-- **Model Judgment on Two Facts:** The model doing the run judges the two facts no GitHub field records:
+- **Model Judgment on Two Facts & Small-Repo Input Contract:** The model doing the run judges the two facts no GitHub field records:
   1. something live is broken, exposed or losing data;
   2. it is a defect that costs something every time it is hit.
-  The model hands the ranking a yes or a no for each (as `liveBroken` and `costlyDefect` in the judgments JSON), and gives its reason in one line beside every move it proposes.
+  The model hands the ranking a yes or a no for each (as `liveBroken` and `costlyDefect` booleans in the judgments JSON), and gives its reason in one line beside every move it proposes (as `reason`). For repositories below the 20 open non-Epic issue floor, the judgments JSON must also supply `levelFromTests` (Urgent, High, Medium, or Low) determined from the canonical level tests `/file-issue` owns (and `levelFromTests` must be Urgent when `liveBroken` is true). The input schema and example are documented in `docs/scripts.md` under `### backlog-groom:rank` and CLI help (`deno task backlog-groom:rank --help`).
 - **Setting Approved Levels:** Sets approved levels with `deno task edit-issue --priority <Level>` and reads back the set value.
 
 ---
@@ -116,7 +116,7 @@ The session or helper selected by the table in "Which Model Does the Run" perfor
 1. Evaluate each issue against the 6 audit categories above.
 2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
-4. For Priority, the model doing the run judges the two facts no GitHub field records (something live is broken; a defect that costs something every time it is hit), hands the ranking a yes or a no for each, and gives its reason in one line beside every move it proposes, calling `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--focus <milestone>]`.
+4. For Priority, the model doing the run judges the two facts no GitHub field records (something live is broken; a defect that costs something every time it is hit), hands the ranking a yes or a no for each, and gives its reason in one line beside every move it proposes (with `liveBroken`, `costlyDefect`, and a one-line `reason`). For repositories below the 20-issue floor, it also supplies `levelFromTests` from the canonical level tests `/file-issue` owns. The judgments JSON is stored in `/tmp/backlog-groom` (following the input schema in `docs/scripts.md` and `deno task backlog-groom:rank --help`), calling `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--focus <milestone>]`.
 
 ### Step 3: Write Report File
 Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts, untyped ratios, and missing milestone ratios per repo, and detailed findings.

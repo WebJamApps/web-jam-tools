@@ -2177,6 +2177,18 @@ export function assertBacklogGroomRules(text: string): void {
     "gives its reason in one line beside every move it proposes",
     "skills/backlog-groom/SKILL.md must state model gives reason in one line beside every move it proposes",
   );
+
+  // 11. Small-repo input contract and schema pointer
+  assertStringIncludes(
+    text,
+    "levelFromTests",
+    "skills/backlog-groom/SKILL.md must specify levelFromTests for repositories below the 20-issue floor",
+  );
+  assertStringIncludes(
+    text,
+    "docs/scripts.md",
+    "skills/backlog-groom/SKILL.md must point to input schema in docs/scripts.md",
+  );
 }
 
 Deno.test(
@@ -2311,6 +2323,14 @@ Deno.test(
       () => assertBacklogGroomRules(textWithoutReason),
       Error,
       "must state model gives reason in one line beside every move it proposes",
+    );
+
+    // 7. Fails when the skill loses the small-repo levelFromTests requirement
+    const textWithoutSmallRepo = validText.replaceAll("levelFromTests", "ignoredField");
+    assertThrows(
+      () => assertBacklogGroomRules(textWithoutSmallRepo),
+      Error,
+      "must specify levelFromTests for repositories below the 20-issue floor",
     );
   },
 );
