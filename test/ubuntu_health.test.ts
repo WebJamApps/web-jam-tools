@@ -994,6 +994,27 @@ Deno.test("ssh: an Include whose directory only root can enter or list is report
       "private",
     ],
     ["a directory above the files", "/etc/ssh/private/*/x.conf", 0o000, "private"],
+    ["a directory below a wildcard", "/etc/ssh/*/private/*.conf", 0o000, "configs/private"],
+    [
+      "a non-listable directory below a wildcard",
+      "/etc/ssh/*/private/*.conf",
+      0o100,
+      "configs/private",
+    ],
+    [
+      "a directory that cannot be listed for an intermediate wildcard",
+      "/etc/ssh/*/private/*/x.conf",
+      0o100,
+      "configs/private",
+    ],
+    ["a literal file below a wildcard", "/etc/ssh/*/private/x.conf", 0o000, "configs/private"],
+    [
+      "question-mark and bracket wildcards",
+      "/etc/ssh/config?/[p]rivate/*.conf",
+      0o000,
+      "configs/private",
+    ],
+    ["several wildcard directories", "/etc/ssh/*/*/private/*.conf", 0o000, "configs/inner/private"],
   ];
   for (const [label, pattern, mode, dirName] of cases) {
     const h = await makeHarness();
@@ -1027,6 +1048,9 @@ Deno.test("ssh: an Include whose directory only root can enter or list is report
       assertStringIncludes(r.stdout, "NOTE: SSH login rules not fully checked without sudo", label);
       assertStringIncludes(r.stdout, `${dirName} is not readable`, label);
       assertEquals(r.code, 0, `${label}: ${r.stdout}`);
+    } else {
+      assertStringIncludes(r.stdout, "a Match block sets PasswordAuthentication", label);
+      assertEquals(r.code, 1, `${label}: ${r.stdout}`);
     }
   }
 });
@@ -1035,7 +1059,8 @@ Deno.test("ssh: an Include that matches no file at all is still not a warning", 
   const h = await makeHarness();
   await seedSshdConfig(
     h,
-    "Include /etc/ssh/sshd_config.d/*.conf\nInclude /etc/ssh/absent/*.conf\nInclude /etc/ssh/none-*.conf\nUsePAM yes\n",
+    "Include /etc/ssh/sshd_config.d/*.conf\nInclude /etc/ssh/absent/*.conf\nInclude /etc/ssh/none-*.conf\n" +
+      "Include /etc/ssh/no-match-*/*/*.conf\nInclude /etc/ssh/*/absent/*.conf\nUsePAM yes\n",
   );
   await apply(h);
   await writeEnvFile(h, 0o600);
@@ -1043,6 +1068,26 @@ Deno.test("ssh: an Include that matches no file at all is still not a warning", 
   const r = await check(h);
 
   assertEquals(r.code, 0, r.stdout);
+  assert(!r.stdout.includes("not fully checked"), r.stdout);
+});
+
+Deno.test("ssh: readable wildcard directories still expose conditional password overrides", async () => {
+  const h = await makeHarness();
+  await seedSshdConfig(
+    h,
+    SSHD_CONFIG_BODY + "Include /etc/ssh/config?/*/*.conf\n",
+  );
+  const dir = `${h.root}/etc/ssh/configs/inner`;
+  await Deno.mkdir(dir, { recursive: true });
+  await Deno.writeTextFile(`${dir}/x.conf`, "Match User joshua\n  PasswordAuthentication yes\n");
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+
+  const r = await check(h);
+
+  assertEquals(r.code, 1, r.stdout);
+  assertStringIncludes(r.stdout, "a Match block sets PasswordAuthentication");
+  assertStringIncludes(r.stdout, "configs/inner/x.conf");
   assert(!r.stdout.includes("not fully checked"), r.stdout);
 });
 

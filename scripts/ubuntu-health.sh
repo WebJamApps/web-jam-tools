@@ -178,30 +178,33 @@ SSHD_MATCH_RESULT=""
 SSHD_IN_MATCH=0
 SSHD_UNREADABLE=()
 
-# Prints the first directory on the way to Include pattern $1 that this user cannot get through
-# (no search permission), or cannot list while the last component is a glob. Without it the pattern
-# expands to nothing, which looks the same as an Include that simply matches no file.
+# Prints the first directory on the way to Include pattern $1 that this user cannot search, or
+# cannot list when expanding a wildcard. Expand one directory component at a time so inaccessible
+# directories below wildcards cannot disappear into what looks like a pattern matching no file.
 blocked_include_dir() {
-  local parts part dir="" i last
+  local parts part dir candidate i last needs_listing
+  local -a dirs=("$ROOT") next_dirs
   IFS=/ read -ra parts <<<"${1#/}"
   last=$((${#parts[@]} - 1))
-  for ((i = 0; i < last; i++)); do
+  for ((i = 0; i <= last; i++)); do
     part="${parts[$i]}"
-    case "$part" in *[\*\?\[]*) return 1 ;; esac
-    dir="$dir/$part"
-    if [ -d "$ROOT$dir" ] && [ ! -x "$ROOT$dir" ]; then
-      echo "$ROOT$dir"
-      return 0
-    fi
-  done
-  case "${parts[$last]}" in
-    *[\*\?\[]*)
-      if [ -d "$ROOT$dir" ] && [ ! -r "$ROOT$dir" ]; then
-        echo "$ROOT$dir"
+    needs_listing=0
+    case "$part" in *[\*\?\[]*) needs_listing=1 ;; esac
+    next_dirs=()
+    for dir in "${dirs[@]}"; do
+      [ -d "${dir:-/}" ] || continue
+      if [ ! -x "${dir:-/}" ] || { [ "$needs_listing" -eq 1 ] && [ ! -r "${dir:-/}" ]; }; then
+        echo "${dir:-/}"
         return 0
       fi
-      ;;
-  esac
+      [ "$i" -lt "$last" ] || continue
+      for candidate in "$dir"/$part; do
+        [ -d "$candidate" ] || continue
+        next_dirs+=("$candidate")
+      done
+    done
+    dirs=("${next_dirs[@]}")
+  done
   return 1
 }
 
