@@ -29,7 +29,7 @@ export interface CreateIssueOptions {
   labels?: string[];
   milestone?: string;
   priority?: string;
-  parent?: number;
+  parent?: number | string;
   blockedBy?: string[];
   escalationReason?: string;
   dryRun?: boolean;
@@ -53,7 +53,11 @@ export interface IssueData {
   labels?: Array<{ name: string }>;
   milestone?: { title: string; number?: number };
   type?: { name: string };
-  parent?: { number: number; id?: string };
+  parent?: {
+    number: number;
+    id?: string;
+    repository?: { name?: string; owner?: { login?: string } };
+  };
   parent_issue_url?: string;
   blocked_by?: Array<{
     id?: number;
@@ -150,9 +154,11 @@ export function parseArgs(args: string[]): CreateIssueOptions {
     } else if (arg.startsWith("--priority=")) {
       options.priority = arg.slice("--priority=".length);
     } else if (arg === "--parent" && i + 1 < args.length) {
-      options.parent = parseInt(args[++i], 10);
+      const val = args[++i];
+      options.parent = /^\d+$/.test(val) ? parseInt(val, 10) : val;
     } else if (arg.startsWith("--parent=")) {
-      options.parent = parseInt(arg.slice("--parent=".length), 10);
+      const val = arg.slice("--parent=".length);
+      options.parent = /^\d+$/.test(val) ? parseInt(val, 10) : val;
     } else if (arg === "--blocked-by" && i + 1 < args.length) {
       const val = args[++i];
       const items = val.split(",").map((s) => s.trim()).filter(Boolean);
@@ -500,15 +506,31 @@ export function verifyIssueAttributes(
   }
 
   if (requested.parent !== undefined) {
+    const parentRef = parseIssueRef(requested.parent, normalizeRepo(requested.repo));
     const actualParentNum = actual.parent?.number ??
       (actual.parent_issue_url
         ? parseInt(actual.parent_issue_url.split("/").pop() || "0", 10)
         : undefined);
-    if (actualParentNum !== requested.parent) {
+    const actualParentRepo = actual.parent?.repository?.name ??
+      (actual.parent_issue_url
+        ? actual.parent_issue_url.match(/repos\/[^/]+\/([^/]+)\/issues\/\d+/)?.[1] ??
+          actual.parent_issue_url.match(/github\.com\/[^/]+\/([^/]+)\/issues\/\d+/)?.[1]
+        : undefined);
+
+    if (actualParentNum !== parentRef.number) {
       errors.push(
-        `Parent issue mismatch: expected #${requested.parent}, got ${
+        `Parent issue mismatch: expected #${parentRef.number}, got ${
           actualParentNum ? `#${actualParentNum}` : "none"
         }`,
+      );
+    }
+    if (
+      actualParentNum !== undefined &&
+      actualParentRepo &&
+      actualParentRepo.toLowerCase() !== parentRef.repo.toLowerCase()
+    ) {
+      errors.push(
+        `Parent repository mismatch: expected ${parentRef.repo}#${parentRef.number}, got ${actualParentRepo}#${actualParentNum}`,
       );
     }
   }
@@ -597,21 +619,32 @@ export async function createIssueAndVerify(
     parseIssueRef(b, { owner: repoInfo.owner, name: repoInfo.name })
   );
 
+  // Parse requested parent if any
+  let parentRef: ParsedIssueRef | undefined;
+  if (options.parent !== undefined) {
+    parentRef = parseIssueRef(options.parent, { owner: repoInfo.owner, name: repoInfo.name });
+  }
+
   // Self-blocking / parent-equals-blocker and ancestor refusal checks
-  if (options.parent !== undefined && parsedBlockers.length > 0) {
+  if (parentRef && parsedBlockers.length > 0) {
     for (const blocker of parsedBlockers) {
       if (
-        blocker.owner.toLowerCase() === repoInfo.owner.toLowerCase() &&
-        blocker.repo.toLowerCase() === repoInfo.name.toLowerCase() &&
-        blocker.number === options.parent
+        blocker.owner.toLowerCase() === parentRef.owner.toLowerCase() &&
+        blocker.repo.toLowerCase() === parentRef.repo.toLowerCase() &&
+        blocker.number === parentRef.number
       ) {
         throw new Error(
-          `Refused: requested blocker #${blocker.number} is the parent #${options.parent} of this issue (an issue cannot be blocked by its parent).`,
+          `Refused: requested blocker #${blocker.number} is the parent #${parentRef.number} of this issue (an issue cannot be blocked by its parent).`,
         );
       }
     }
 
-    const ancestors = await getIssueAncestors(repoInfo, options.parent, deps.runCmd);
+    const parentRepoInfo = {
+      owner: parentRef.owner,
+      name: parentRef.repo,
+      full: `${parentRef.owner}/${parentRef.repo}`,
+    };
+    const ancestors = await getIssueAncestors(parentRepoInfo, parentRef.number, deps.runCmd);
     for (const blocker of parsedBlockers) {
       const isAncestor = ancestors.some(
         (a) =>
@@ -621,7 +654,7 @@ export async function createIssueAndVerify(
       );
       if (isAncestor) {
         throw new Error(
-          `Refused: requested blocker #${blocker.number} is an ancestor of parent #${options.parent} of this issue.`,
+          `Refused: requested blocker #${blocker.number} is an ancestor of parent #${parentRef.number} of this issue.`,
         );
       }
     }
@@ -679,6 +712,34 @@ export async function createIssueAndVerify(
     throw new Error(
       `Refused to file issue — could not search ${dedup.repoFull} for duplicate open issues (the search failed, not a duplicate finding). Re-run with --dedup-override-reason "<why it's safe to proceed>" to override.`,
     );
+  }
+
+  // 0c. Validate parent up front before creating the issue (web-jam-tools#1398)
+  let parentNodeId: string | undefined;
+  if (parentRef) {
+    const parentLookupQuery = `
+      query GetParentIssue {
+        repository(owner: "${parentRef.owner}", name: "${parentRef.repo}") {
+          issue(number: ${parentRef.number}) { id }
+        }
+      }
+    `;
+    const pRes = await deps.runCmd(["gh", "api", "graphql", "-f", `query=${parentLookupQuery}`]);
+    if (pRes.code !== 0) {
+      throw new Error(
+        `Refused: parent issue ${parentRef.raw} lookup failed: ${pRes.stderr || pRes.stdout}`,
+      );
+    }
+    let pData;
+    try {
+      pData = JSON.parse(pRes.stdout);
+    } catch {
+      throw new Error(`Refused: failed to parse parent issue ${parentRef.raw} lookup response`);
+    }
+    parentNodeId = pData?.data?.repository?.issue?.id ?? pData?.data?.parent?.issue?.id;
+    if (!parentNodeId) {
+      throw new Error(`Refused: parent issue ${parentRef.raw} not found`);
+    }
   }
 
   // 1. Create base issue via gh issue create
@@ -812,11 +873,11 @@ export async function createIssueAndVerify(
   }
 
   // 4. Attach parent sub-issue via GraphQL addSubIssue if requested
-  if (options.parent !== undefined) {
+  if (parentRef) {
     const parentQuery = `
       query GetIssueNodeIds {
-        parent: repository(owner: "${repoInfo.owner}", name: "${repoInfo.name}") {
-          issue(number: ${options.parent}) { id }
+        parent: repository(owner: "${parentRef.owner}", name: "${parentRef.repo}") {
+          issue(number: ${parentRef.number}) { id }
         }
         child: repository(owner: "${repoInfo.owner}", name: "${repoInfo.name}") {
           issue(number: ${childNumber}) { id }
@@ -838,18 +899,18 @@ export async function createIssueAndVerify(
     }
 
     const queryData = JSON.parse(queryRes.stdout);
-    const parentId = queryData?.data?.parent?.issue?.id;
+    const resolvedParentId = parentNodeId ?? queryData?.data?.parent?.issue?.id;
     const childId = queryData?.data?.child?.issue?.id;
 
-    if (!parentId || !childId) {
+    if (!resolvedParentId || !childId) {
       throw new Error(
-        `Could not resolve GraphQL node IDs: parentId=${parentId}, childId=${childId}`,
+        `Could not resolve GraphQL node IDs: parentId=${resolvedParentId}, childId=${childId}`,
       );
     }
 
     const addSubIssueMutation = `
       mutation AddSubIssue {
-        addSubIssue(input: { issueId: "${parentId}", subIssueId: "${childId}" }) {
+        addSubIssue(input: { issueId: "${resolvedParentId}", subIssueId: "${childId}" }) {
           issue { id }
           subIssue { id }
         }
@@ -864,9 +925,35 @@ export async function createIssueAndVerify(
       `query=${addSubIssueMutation}`,
     ]);
     if (mutRes.code !== 0) {
-      throw new Error(
-        `Failed to attach parent sub-issue via addSubIssue: ${mutRes.stderr || mutRes.stdout}`,
-      );
+      let errMsg = (mutRes.stderr || mutRes.stdout).trim();
+      try {
+        const parsed = JSON.parse(mutRes.stdout || mutRes.stderr);
+        if (parsed.errors && Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+          errMsg = parsed.errors.map((e: { message?: string }) => e.message || String(e)).join(
+            ", ",
+          );
+        }
+      } catch {
+        // ignore
+      }
+      throw new Error(`Failed to attach parent sub-issue via addSubIssue: ${errMsg}`);
+    }
+
+    try {
+      const parsed = JSON.parse(mutRes.stdout);
+      if (parsed.errors && Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+        const errMsg = parsed.errors.map((e: { message?: string }) => e.message || String(e)).join(
+          ", ",
+        );
+        throw new Error(`Failed to attach parent sub-issue via addSubIssue: ${errMsg}`);
+      }
+    } catch (e) {
+      if (
+        e instanceof Error &&
+        e.message.startsWith("Failed to attach parent sub-issue via addSubIssue:")
+      ) {
+        throw e;
+      }
     }
   }
 
@@ -948,12 +1035,18 @@ export async function createIssueAndVerify(
   const actual: IssueData = JSON.parse(readRes.stdout);
 
   // If parent requested, also query parent in GraphQL to be 100% thorough if REST parent field is missing
-  if (options.parent !== undefined && !actual.parent && !actual.parent_issue_url) {
+  if (parentRef && !actual.parent && !actual.parent_issue_url) {
     const parentCheckQuery = `
       query CheckParent {
         repository(owner: "${repoInfo.owner}", name: "${repoInfo.name}") {
           issue(number: ${childNumber}) {
-            parent { number }
+            parent {
+              number
+              repository {
+                name
+                owner { login }
+              }
+            }
           }
         }
       }
@@ -967,9 +1060,9 @@ export async function createIssueAndVerify(
     ]);
     if (pCheckRes.code === 0) {
       const pData = JSON.parse(pCheckRes.stdout);
-      const pNum = pData?.data?.repository?.issue?.parent?.number;
-      if (pNum) {
-        actual.parent = { number: pNum };
+      const parentObj = pData?.data?.repository?.issue?.parent;
+      if (parentObj?.number) {
+        actual.parent = parentObj;
       }
     }
   }

@@ -37,7 +37,13 @@ function lintPlanTableFile(file: string, options?: Parameters<typeof lintPlanFil
   return lintPlanFile(file, { runGh: emptyOpenIssues, ...options });
 }
 function runLintPlanCli(args: string[], options?: Parameters<typeof lintPlanCli>[1]) {
-  return lintPlanCli(args, { runGh: emptyOpenIssues, ...options });
+  return lintPlanCli(args, {
+    runGh: emptyOpenIssues,
+    renderDesignDocFileImpl: () => {},
+    openBrowserImpl: () => Promise.resolve(),
+    noOpen: options?.openBrowserImpl ? false : true,
+    ...options,
+  });
 }
 
 const HEADER_LINE =
@@ -108,8 +114,14 @@ const MODEL_TITLE = "scripts/running-model: print the model the tool recorded fo
 const REWORDED_MODEL_TITLE = "scripts/running-model: print which model this session is running on";
 const FIX_PR_TITLE = "skills/fix-pr: add the skill and install it on Claude Code, agy and Codex";
 
-function duplicateRow(title: string, id = 1, repo = "web-jam-tools", tier = "Flash"): string {
-  return `| ${id} | ${title} | - | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | PR merges |`;
+function duplicateRow(
+  title: string,
+  id = 1,
+  repo = "web-jam-tools",
+  tier = "Flash",
+  epic = "Epic #1",
+): string {
+  return `| ${id} | ${title} | ${epic} | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | PR merges |`;
 }
 
 function issueRunner(issues: OpenIssueSummary[]): CommandRunner {
@@ -516,26 +528,130 @@ Deno.test("AC9 (non-composite case): a single-surface Josh row is not reported c
   assertEquals(violations.length, 0);
 });
 
-// --- 10. Cross-repo child not cited as repo#number "title" ---
+// --- 10. Epic requirement and cross-repo epics (web-jam-tools#1398) ---
 
-Deno.test('AC10: a child row whose repo differs from the epic\'s and is not cited as repo#number "title" is reported', () => {
-  const doc = planTableDoc([
-    EPIC_ROW, // repo: web-jam-tools
-    childRow({ epicChild: "Epic #1", repo: "JaMmusic" }), // cross-repo, cited only as "Epic #1"
+Deno.test("AC4 (#1398): a non-epic row whose Epic / child of cell is empty or none is reported as row-missing-epic", () => {
+  const emptyCellDoc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "" }),
   ]);
-  const violations = findRule(validate(doc), "cross-repo-child-uncited");
-  assertEquals(violations.length, 1);
+  const emptyViolations = findRule(validate(emptyCellDoc), "row-missing-epic");
+  assertEquals(emptyViolations.length, 1);
+  assertEquals(emptyViolations[0].column, "Epic / child of");
+
+  const noneCellDoc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "none" }),
+  ]);
+  const noneViolations = findRule(validate(noneCellDoc), "row-missing-epic");
+  assertEquals(noneViolations.length, 1);
+  assertEquals(noneViolations[0].column, "Epic / child of");
+
+  const upperNoneDoc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "None" }),
+  ]);
+  const upperNoneViolations = findRule(validate(upperNoneDoc), "row-missing-epic");
+  assertEquals(upperNoneViolations.length, 1);
+
+  for (const missing of ["-", "—", "n/a", "N/A", "Standalone issue", "standalone issue"]) {
+    const doc = planTableDoc([
+      EPIC_ROW,
+      childRow({ epicChild: missing }),
+    ]);
+    const violations = findRule(validate(doc), "row-missing-epic");
+    assertEquals(violations.length, 1, `expected row-missing-epic for "${missing}"`);
+  }
 });
 
-Deno.test('AC10 (properly cited case): a cross-repo child cited as repo#number "title" is not reported', () => {
+Deno.test("AC4 (#1398): a non-epic row whose Epic / child of cell names an epic or plan row passes", () => {
+  for (const epicChild of ["Epic #1", "row 1", "web-jam-tools#1355"]) {
+    const doc = planTableDoc([
+      EPIC_ROW,
+      childRow({ epicChild }),
+    ]);
+    const violations = findRule(validate(doc), "row-missing-epic");
+    assertEquals(violations.length, 0, `expected no row-missing-epic for "${epicChild}"`);
+  }
+});
+
+Deno.test("a task mentioning an epic in its test description still requires a parent", () => {
   const doc = planTableDoc([
     EPIC_ROW,
-    childRow({
-      epicChild: 'Epic web-jam-tools#793 "design-issue skill enhancements and fixes"',
-      repo: "JaMmusic",
-    }),
+    childRow({ epicChild: "none", tests: "Unit tests reject a task without an epic" }),
   ]);
-  const violations = findRule(validate(doc), "cross-repo-child-uncited");
+  assertEquals(findRule(validate(doc), "row-missing-epic").length, 1);
+});
+
+Deno.test("cross-repo epic validation resolves qualified parent citations", () => {
+  const title = "Coordinate cross-repo music features";
+  const epic =
+    `| 1 | ${title} | Epic | Opus | High | JaMmusic | Tests cover both child repositories | all children close |`;
+  for (const prefix of ["", "Epic "]) {
+    for (const repo of ["JaMmusic", "WebJamApps/JaMmusic"]) {
+      const epicChild = `${prefix}${repo}#1355 "${title}"`;
+      const doc = planTableDoc([
+        epic,
+        childRow({ epicChild, repo: "JaMmusic" }),
+        childRow({ epicChild, repo: "web-jam-back", title: "Add backend audio routes" }),
+      ]);
+      assertEquals(
+        findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools").length,
+        1,
+        epicChild,
+      );
+    }
+  }
+});
+
+Deno.test("qualified parent citations do not match a different repository or owner", () => {
+  const title = "Coordinate cross-repo music features";
+  const epic =
+    `| 1 | ${title} | Epic | Opus | High | JaMmusic | Tests cover both child repositories | all children close |`;
+  for (const repo of ["AppersonAuto", "OtherOrg/JaMmusic"]) {
+    const epicChild = `${repo}#1355 "${title}"`;
+    const doc = planTableDoc([
+      epic,
+      childRow({ epicChild, repo: "JaMmusic" }),
+      childRow({ epicChild, repo: "web-jam-back", title: "Add backend audio routes" }),
+    ]);
+    assertEquals(findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools").length, 0);
+  }
+});
+
+Deno.test("AC5 (#1398): an Epic row whose children sit in more than one repo fails when Repo is not web-jam-tools", () => {
+  const epicJaMmusic =
+    "| 1 | Coordinate cross-repo music features | Epic | Opus | High | JaMmusic | Unit tests | all children close |";
+  const doc = planTableDoc([
+    epicJaMmusic,
+    childRow({ epicChild: "row 1", repo: "JaMmusic" }),
+    childRow({ epicChild: "row 1", repo: "web-jam-back", title: "Add backend audio routes" }),
+  ]);
+  const violations = findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools");
+  assertEquals(violations.length, 1);
+  assertEquals(violations[0].column, "Repo");
+  assertStringIncludes(violations[0].message, "web-jam-tools");
+});
+
+Deno.test("AC5 (#1398): an Epic row whose children sit in more than one repo passes when Repo is web-jam-tools", () => {
+  const doc = planTableDoc([
+    EPIC_ROW, // repo: web-jam-tools
+    childRow({ epicChild: "Epic #1", repo: "JaMmusic" }),
+    childRow({ epicChild: "Epic #1", repo: "web-jam-back", title: "Add backend audio routes" }),
+  ]);
+  const violations = findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools");
+  assertEquals(violations.length, 0);
+});
+
+Deno.test("AC5 (#1398): an Epic row whose children sit in a single repo passes when Repo matches that repo", () => {
+  const epicJaMmusic =
+    "| 1 | Coordinate single-repo music features | Epic | Opus | High | JaMmusic | Unit tests | all children close |";
+  const doc = planTableDoc([
+    epicJaMmusic,
+    childRow({ epicChild: "row 1", repo: "JaMmusic" }),
+    childRow({ epicChild: "row 1", repo: "JaMmusic", title: "Add frontend audio player" }),
+  ]);
+  const violations = findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools");
   assertEquals(violations.length, 0);
 });
 
@@ -1109,6 +1225,215 @@ Deno.test("AC7 (#1156): refuses when design document cannot be read", async () =
     const gate1Result = await checkGate1ApprovalRecord(nonExistentDesignDoc, { stateDir: tmpDir });
     assertEquals(gate1Result.valid, false);
     assertStringIncludes(gate1Result.error ?? "", "Cannot read design document at");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+// --- HTML rendering and Chrome opening (AC6 #1398) ---
+
+Deno.test("AC6 (#1398): passing runLintPlanCli renders <plan>.html and opens in Chrome", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    let renderedInput = "";
+    let renderedOutput = "";
+    let openedHtml = "";
+    let openedDisplay: string | undefined = undefined;
+
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        schema: TEST_SCHEMA,
+        renderDesignDocFileImpl: (inPath, outPath) => {
+          renderedInput = inPath;
+          renderedOutput = outPath;
+        },
+        openBrowserImpl: (htmlPath, display) => {
+          openedHtml = htmlPath;
+          openedDisplay = display;
+          return Promise.resolve();
+        },
+      },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(renderedInput, planFile);
+    assertEquals(renderedOutput, `${tmpDir}/plan.html`);
+    assertEquals(openedHtml, `${tmpDir}/plan.html`);
+    assertEquals(openedDisplay, undefined);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC6 (#1398): passing runLintPlanCli with --no-open renders <plan>.html but skips browser open", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    let rendered = false;
+    let opened = false;
+
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir, "--no-open"],
+      {
+        schema: TEST_SCHEMA,
+        renderDesignDocFileImpl: () => {
+          rendered = true;
+        },
+        openBrowserImpl: () => {
+          opened = true;
+          return Promise.resolve();
+        },
+      },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(rendered, true);
+    assertEquals(opened, false);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC6 (#1398): passing runLintPlanCli prints warning and exits 0 when Chrome is unavailable", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "Epic #1" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    const errLogs: string[] = [];
+
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        schema: TEST_SCHEMA,
+        errorLog: (msg) => errLogs.push(msg),
+        renderDesignDocFileImpl: () => {},
+        openBrowserImpl: () => {
+          return Promise.reject(new Error("google-chrome: command not found"));
+        },
+      },
+    );
+
+    assertEquals(code, 0);
+    assertEquals(
+      errLogs.some((l) => l.includes("Warning") && l.includes("Google Chrome is unavailable")),
+      true,
+    );
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("AC6 (#1398): failing plan writes and opens nothing", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planFile = `${tmpDir}/plan.md`;
+    const designDoc = `${tmpDir}/design.md`;
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    // Missing epic in child row
+    const doc = planTableDoc([EPIC_ROW, childRow({ epicChild: "none" })]);
+    await Deno.writeTextFile(planFile, doc);
+
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    let rendered = false;
+    let opened = false;
+
+    const code = await runLintPlanCli(
+      [planFile, "--design-doc", designDoc, "--state-dir", tmpDir],
+      {
+        schema: TEST_SCHEMA,
+        renderDesignDocFileImpl: () => {
+          rendered = true;
+        },
+        openBrowserImpl: () => {
+          opened = true;
+          return Promise.resolve();
+        },
+      },
+    );
+
+    assertEquals(code, 1);
+    assertEquals(rendered, false);
+    assertEquals(opened, false);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("lint-plan CLI warns when Chrome is absent using the real browser launcher", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const binDir = path.join(tmpDir, "bin");
+    await Deno.mkdir(binDir);
+    await Deno.symlink("/bin/bash", path.join(binDir, "bash"));
+    await Deno.writeTextFile(path.join(binDir, "gh"), "#!/bin/bash\nprintf '[]\\n'\n", {
+      mode: 0o755,
+    });
+    const planFile = path.join(tmpDir, "plan.md");
+    const designDoc = path.join(tmpDir, "design.md");
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    await Deno.writeTextFile(planFile, planTableDoc([EPIC_ROW, childRow()]));
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    const repoDir = path.resolve(path.dirname(path.fromFileUrl(import.meta.url)), "..");
+    const result = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--cached-only",
+        "--config",
+        path.join(repoDir, "deno.json"),
+        "-A",
+        path.join(repoDir, "src/design-issue/cli.ts"),
+        "lint-plan",
+        planFile,
+        "--design-doc",
+        designDoc,
+        "--state-dir",
+        tmpDir,
+      ],
+      env: { PATH: binDir },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+
+    const stdout = new TextDecoder().decode(result.stdout);
+    const stderr = new TextDecoder().decode(result.stderr);
+    assertEquals(result.code, 0, stderr);
+    assertStringIncludes(stdout, "[design:lint-plan] PASS:");
+    assertStringIncludes(stderr, "Warning: Google Chrome is unavailable");
+    assertEquals((await Deno.stat(path.join(tmpDir, "plan.html"))).isFile, true);
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }

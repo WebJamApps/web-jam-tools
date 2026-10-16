@@ -22,7 +22,7 @@ async function main() {
     console.error("  --label <label>        (or --labels <l1,l2>)");
     console.error("  --milestone <name>");
     console.error("  --priority <Urgent|High|Medium|Low>");
-    console.error("  --parent <issue_num>");
+    console.error("  --parent <issue_num|repo#num>");
     console.error("  --blocked-by <issue>   (repeatable, e.g. 123, #123, repo#123)");
     console.error("  --escalation-reason <why>");
     console.error("  --dedup-override <repo#number>       (candidate considered, for the record)");

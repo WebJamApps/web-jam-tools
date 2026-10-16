@@ -40,7 +40,8 @@ import {
   runGhCommand,
   tokenizeTitle,
 } from "../../hooks/lib/detect_duplicate_issue.ts";
-import { expandHome } from "./gate1.ts";
+import { defaultOpenBrowserImpl, expandHome, resolveHtmlPath } from "./gate1.ts";
+import { renderDesignDocFile } from "../../scripts/render_design_doc.ts";
 import { type Gate1StatusResult, type Gate1StatusType, getGate1Status } from "./gate1_record.ts";
 import {
   type MalformedPlanTableRow,
@@ -107,6 +108,7 @@ export interface LintPlanOptions {
 export type IssueBodyFetcher = (repo: string, number: number) => Promise<string>;
 
 // Column indices resolved from PLAN_TABLE_HEADER (never hardcoded against reordering).
+const COL_NUM = PLAN_TABLE_HEADER.indexOf("#");
 const COL_TITLE = PLAN_TABLE_HEADER.indexOf("Proposed title");
 const COL_EPIC = PLAN_TABLE_HEADER.indexOf("Epic / child of");
 const COL_TIER = PLAN_TABLE_HEADER.indexOf("Model tier");
@@ -175,23 +177,122 @@ const WALKTHROUGH_KEYWORDS = [
   /\bexternal\s+part(y|ies)\b/i,
 ];
 
-/** A cross-repo child's `Epic / child of` cell must cite its parent as `repo#number "title"`
- * (the same citation shape the standing hard rule requires everywhere else) so it is unambiguous
- * which repo's epic it belongs to. */
-const REPO_NUMBER_TITLE_CITATION = /[\w.\-/]+#\d+\s+"[^"]+"/;
-
-/** Finds the plan table's own epic row: the one row whose `Epic / child of` cell is a "missing"
- * value (`-`, blank, etc.) meaning "this row has no parent". Returns `undefined` when zero or more
- * than one such row exists, since the epic cannot be unambiguously identified either way -- a flat
- * set of standalone issues legitimately has several "no parent" rows, and cross-repo-child
- * citation checking (the one check that needs "the epic's repo") is skipped rather than guessed. */
-function findEpicRow(rows: PlanTableRow[]): PlanTableRow | undefined {
-  const candidates = rows.filter((r) => isMissingValue(stripMdMarkers(r.cells[COL_EPIC])));
-  return candidates.length === 1 ? candidates[0] : undefined;
-}
-
 function normalizeRepoCell(cell: string): string {
   return stripMdMarkers(cell).replace(/^WebJamApps\//i, "").trim();
+}
+
+/** Determines if a child row cites or belongs to a potential parent/epic row. */
+function isChildOfRow(
+  child: PlanTableRow,
+  parent: PlanTableRow,
+  allRows: PlanTableRow[],
+): boolean {
+  if (child === parent) return false;
+  const childEpicCell = stripMdMarkers(child.cells[COL_EPIC]).trim();
+  if (
+    isMissingValue(childEpicCell) ||
+    childEpicCell.toLowerCase() === "none" ||
+    childEpicCell.toLowerCase() === "epic"
+  ) {
+    return false;
+  }
+
+  const parentNum = stripMdMarkers(parent.cells[COL_NUM]).trim();
+  const parentPos = String(allRows.indexOf(parent) + 1);
+  const targetNums = new Set([parentNum, parentPos].filter(Boolean));
+
+  const numMatch = childEpicCell.match(/^(?:row|epic)\s*#?\s*(\d+)\b/i) ??
+    childEpicCell.match(/^#?(\d+)$/);
+  if (numMatch && targetNums.has(numMatch[1])) {
+    return true;
+  }
+
+  const parentTitle = stripMdMarkers(parent.cells[COL_TITLE]).trim().toLowerCase();
+  if (parentTitle && childEpicCell.toLowerCase() === parentTitle) {
+    return true;
+  }
+
+  // An external issue number is not a plan position. Match a qualified citation
+  // by its repository and quoted title instead of comparing its number to COL_NUM.
+  const citation = childEpicCell.match(
+    /^(?:epic\s+)?((?:[a-z0-9_.-]+\/)?[a-z0-9_.-]+)#\d+\s+"([^"]+)"$/i,
+  );
+  if (citation) {
+    return normalizeRepoCell(citation[1]).toLowerCase() ===
+        normalizeRepoCell(parent.cells[COL_REPO]).toLowerCase() &&
+      citation[2].trim().toLowerCase() === parentTitle;
+  }
+
+  return false;
+}
+
+/** Determines if a row represents an Epic row. */
+function isEpicRow(row: PlanTableRow, allRows: PlanTableRow[]): boolean {
+  const epicCell = stripMdMarkers(row.cells[COL_EPIC]).trim().toLowerCase();
+  if (epicCell === "epic") return true;
+
+  const closesCell = stripMdMarkers(row.cells[COL_CLOSES]).toLowerCase();
+  if (closesCell.includes("children close")) return true;
+
+  const title = stripMdMarkers(row.cells[COL_TITLE]).trim().toLowerCase();
+  if (title.startsWith("epic:") || title.startsWith("epic -")) return true;
+
+  if (allRows.some((other) => isChildOfRow(other, row, allRows))) {
+    return true;
+  }
+
+  return false;
+}
+
+function checkEpicBelonging(
+  rows: PlanTableRow[],
+  violations: PlanTableViolation[],
+): void {
+  for (const row of rows) {
+    if (isEpicRow(row, rows)) continue;
+    const raw = row.cells[COL_EPIC];
+    const stripped = stripMdMarkers(raw).trim();
+    const lower = stripped.toLowerCase();
+    if (
+      isMissingValue(stripped) ||
+      lower === "none" ||
+      lower === "standalone issue"
+    ) {
+      violations.push({
+        rule: "row-missing-epic",
+        line: row.line,
+        column: "Epic / child of",
+        message:
+          `Non-epic row is missing an epic ("${raw}") -- every plan row must belong to an epic`,
+      });
+    }
+  }
+}
+
+function checkCrossRepoEpic(
+  rows: PlanTableRow[],
+  violations: PlanTableViolation[],
+): void {
+  for (const row of rows) {
+    if (!isEpicRow(row, rows)) continue;
+    const children = rows.filter((r) => isChildOfRow(r, row, rows));
+    const childRepos = new Set(
+      children.map((c) => normalizeRepoCell(c.cells[COL_REPO])).filter(Boolean),
+    );
+    if (childRepos.size > 1) {
+      const epicRepo = normalizeRepoCell(row.cells[COL_REPO]);
+      if (epicRepo !== "web-jam-tools") {
+        violations.push({
+          rule: "cross-repo-epic-not-in-web-jam-tools",
+          line: row.line,
+          column: "Repo",
+          message: `Epic row has children in more than one repository (${
+            Array.from(childRepos).join(", ")
+          }), so its Repo must be "web-jam-tools" (found "${epicRepo}")`,
+        });
+      }
+    }
+  }
 }
 
 /** Validates every well-formed row of a parsed Gate 2 plan table. Parser-level malformed rows
@@ -210,8 +311,6 @@ export function validatePlanTable(
 
   const canonicalTiers = resolveTierVocabulary(options.schema);
   const activeRepos = options.activeRepos ?? ACTIVE_REPOS;
-  const epicRow = findEpicRow(rows);
-  const epicRepo = epicRow ? normalizeRepoCell(epicRow.cells[COL_REPO]) : undefined;
 
   for (const row of rows) {
     checkMissingAndTier(row, canonicalTiers, violations);
@@ -222,10 +321,8 @@ export function validatePlanTable(
   }
 
   checkJoshPairingAndComposite(rows, violations);
-
-  if (epicRow && epicRepo) {
-    checkCrossRepoChildren(rows, epicRow, epicRepo, violations);
-  }
+  checkEpicBelonging(rows, violations);
+  checkCrossRepoEpic(rows, violations);
 
   return violations;
 }
@@ -401,35 +498,6 @@ function checkJoshPairingAndComposite(
         column: "Proposed title",
         message: `Josh-labeled manual row combines artifact/doc review with a live walkthrough` +
           ` -- these are distinct verification surfaces and must be separate rows/issues`,
-      });
-    }
-  }
-}
-
-/** A child row whose own Repo differs from the epic's Repo must cite its parent as
- * `repo#number "title"` in its `Epic / child of` cell -- an unqualified reference like "Epic #1"
- * is ambiguous once the child is filed in a different repository than the epic. */
-function checkCrossRepoChildren(
-  rows: PlanTableRow[],
-  epicRow: PlanTableRow,
-  epicRepo: string,
-  violations: PlanTableViolation[],
-): void {
-  for (const row of rows) {
-    if (row === epicRow) continue;
-    const epicChildCell = row.cells[COL_EPIC];
-    if (isMissingValue(stripMdMarkers(epicChildCell))) continue; // not a child of anything
-
-    const childRepo = normalizeRepoCell(row.cells[COL_REPO]);
-    if (!childRepo || childRepo === epicRepo) continue;
-
-    if (!REPO_NUMBER_TITLE_CITATION.test(epicChildCell)) {
-      violations.push({
-        rule: "cross-repo-child-uncited",
-        line: row.line,
-        column: "Epic / child of",
-        message: `Child row's repo ("${childRepo}") differs from the epic's ("${epicRepo}") ` +
-          `but "Epic / child of" ("${epicChildCell}") is not cited as repo#number "title"`,
       });
     }
   }
@@ -825,6 +893,23 @@ export interface LintPlanCliOptions {
   activeRepos?: string[];
   stateDir?: string;
   designDoc?: string;
+  noOpen?: boolean;
+  display?: string;
+  openBrowserImpl?: (htmlPath: string, display?: string) => Promise<void>;
+  renderDesignDocFileImpl?: (inputPath: string, outputPath: string) => void;
+}
+
+/** Gate 1's background launcher cannot report a missing browser executable. */
+async function defaultOpenPlanBrowserImpl(htmlPath: string, display?: string): Promise<void> {
+  const availability = await new Deno.Command("bash", {
+    args: ["-c", "command -v google-chrome >/dev/null 2>&1"],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  if (!availability.success) {
+    throw new Error("google-chrome was not found on PATH");
+  }
+  await defaultOpenBrowserImpl(htmlPath, display);
 }
 
 /**
@@ -838,8 +923,8 @@ export async function runLintPlanCli(
   const errorLog = options?.errorLog ?? console.error;
 
   const flags = parseArgs(args, {
-    boolean: ["help", "json"],
-    string: ["doc", "design-doc", "design_doc", "state-dir", "state_dir"],
+    boolean: ["help", "json", "no-open", "no_open"],
+    string: ["doc", "design-doc", "design_doc", "state-dir", "state_dir", "display"],
     alias: {
       h: "help",
       j: "json",
@@ -847,6 +932,8 @@ export async function runLintPlanCli(
     default: {
       help: false,
       json: false,
+      "no-open": false,
+      no_open: false,
     },
   });
 
@@ -862,7 +949,8 @@ Validates the Gate 2 plan table's cell values in a design document:
   - out-of-range priorities (Urgent/High/Medium/Low only)
   - a Josh-labeled manual row with no paired agent row
   - a composite Josh-labeled manual row (doc review + live walkthrough)
-  - a cross-repo child not cited as repo#number "title"
+  - a non-epic row missing an epic ("" or "none")
+  - an epic row whose children sit in more than one repository when its repo is not web-jam-tools
   - a Tests cell with no statement of what proves the issue
   - new titles resembling open issues in their row's repository or other new
     plan titles; an incomplete or failed title listing refuses the plan
@@ -870,7 +958,9 @@ Validates the Gate 2 plan table's cell values in a design document:
     narrows a directive line of that issue's own body (read with gh; a body
     that cannot be read fails the check)
 
-Report-only. Writes nothing; GitHub calls only read issue bodies and open titles with gh.
+When validation passes, renders <plan>.html and opens it in Google Chrome.
+
+Report-only validation. GitHub calls only read issue bodies and open titles with gh.
 
 Arguments:
   <plan.md>               Path to markdown file containing the plan table
@@ -878,6 +968,8 @@ Arguments:
 Options:
   --design-doc <path>     Canonical design document path to verify Gate 1 approval
   --doc <path>            Explicit plan document path
+  --display <display>     X11 display to open browser on (defaults to $DISPLAY or :0)
+  --no-open               Skip opening <plan>.html in Google Chrome
   -j, --json              Output result as JSON
   -h, --help              Show this help message
 `);
@@ -916,6 +1008,25 @@ Options:
       designDocPath,
       stateDir,
     });
+
+    if (result.valid) {
+      const htmlPath = resolveHtmlPath(result.docPath);
+      const renderFile = options?.renderDesignDocFileImpl ?? renderDesignDocFile;
+      renderFile(result.docPath, htmlPath);
+
+      const noOpen = flags["no-open"] || flags.no_open || options?.noOpen;
+      if (!noOpen) {
+        const openBrowser = options?.openBrowserImpl ?? defaultOpenPlanBrowserImpl;
+        const display = (typeof flags.display === "string" ? flags.display : undefined) ||
+          options?.display;
+        try {
+          await openBrowser(htmlPath, display);
+        } catch (browserErr) {
+          const msg = browserErr instanceof Error ? browserErr.message : String(browserErr);
+          errorLog(`[design:lint-plan] Warning: Google Chrome is unavailable: ${msg}`);
+        }
+      }
+    }
 
     if (flags.json) {
       log(JSON.stringify(result, null, 2));

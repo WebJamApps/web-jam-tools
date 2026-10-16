@@ -19,6 +19,7 @@ import {
   defaultExecDeps,
   type ExecDeps,
   type IssueData,
+  normalizeRepo,
 } from "../src/create-issue/lib.ts";
 
 const APPROVE_ALL: (repoFull: string, title: string) => ApprovalCheckResult = () => ({ ok: true });
@@ -125,16 +126,26 @@ async function fileParentFixture(plan: IssuePlanDoc) {
           title: item.title,
           type: { name: item.type ?? (item === plan.epic ? "Epic" : "Task") },
         });
+        const childRepo = normalizeRepo(item.repo || plan.repo);
         return Promise.resolve({
           code: 0,
-          stdout: `https://github.com/WebJamApps/web-jam-tools/issues/${number}\n`,
+          stdout: `https://github.com/${childRepo.full}/issues/${number}\n`,
           stderr: "",
         });
       }
       if (cmd[0] === "gh" && cmd[1] === "api") {
-        if (cmd[2].includes("issues?state=open&")) return reply([]);
+        if (cmd[2].includes("issues?state=open&") || cmd[2].includes("issues?state=open")) {
+          return reply([]);
+        }
         if (cmd[2] === "graphql") {
           const query = cmd.find((arg) => arg.startsWith("query=")) ?? "";
+          if (query.includes("ValidateParent") || query.includes("GetParentIssue")) {
+            const num = query.match(/issue\(number: (\d+)\)/)?.[1];
+            if (num === "999999") {
+              return reply({ data: { repository: { issue: null } } });
+            }
+            return reply({ data: { repository: { issue: { id: `P${num}` } } } });
+          }
           if (query.includes("GetChildAndTypes")) {
             return reply({
               data: {
@@ -269,10 +280,84 @@ for (const id of ["web-jam-tools#2", "JaMmusic#12"]) {
   });
 }
 
+Deno.test("filePlan parent: 1 (plan position, same repository) links to child 1", async () => {
+  const { parents } = await fileParentFixture({
+    repo: "web-jam-tools",
+    children: [
+      { title: "First child" },
+      { title: "Second child", parent: 1 },
+    ],
+  });
+  assertEquals([...parents], [[701, 700]]);
+});
+
+Deno.test('filePlan parent: "WebJamApps/web-jam-tools#1355" on a JaMmusic child links across repositories', async () => {
+  const { parents } = await fileParentFixture({
+    repo: "web-jam-tools",
+    children: [
+      { title: "JaMmusic child", repo: "JaMmusic", parent: "WebJamApps/web-jam-tools#1355" },
+    ],
+  });
+  assertEquals([...parents], [[700, 1355]]);
+});
+
+Deno.test('filePlan parent: "web-jam-tools#1355" resolves to WebJamApps/web-jam-tools#1355 and links across repositories', async () => {
+  const { parents } = await fileParentFixture({
+    repo: "web-jam-tools",
+    children: [
+      { title: "JaMmusic child", repo: "JaMmusic", parent: "web-jam-tools#1355" },
+    ],
+  });
+  assertEquals([...parents], [[700, 1355]]);
+});
+
+Deno.test('filePlan parent: "WebJamApps/web-jam-tools#999999" (no such issue) refused before anything is filed, naming reference', async () => {
+  const planPath = await Deno.makeTempFile({ suffix: ".json" });
+  const calls: string[][] = [];
+  try {
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "JaMmusic",
+        children: [
+          { title: "Child with missing parent", parent: "WebJamApps/web-jam-tools#999999" },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () =>
+        filePlan({
+          planPath,
+          dryRun: false,
+          approvalCheck: APPROVE_ALL,
+          deps: {
+            readFileText: (p) => Deno.readTextFile(p),
+            runCmd(cmd) {
+              calls.push(cmd);
+              const cmdStr = cmd.join(" ");
+              if (cmdStr.includes("ValidateParent") || cmdStr.includes("GetParentIssue")) {
+                return Promise.resolve({
+                  code: 0,
+                  stdout: JSON.stringify({ data: { repository: { issue: null } } }),
+                  stderr: "",
+                });
+              }
+              return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+            },
+          },
+        }),
+      Error,
+      "WebJamApps/web-jam-tools#999999",
+    );
+    assertEquals(error.message.includes("not found"), true);
+    assertEquals(calls.some((cmd) => cmd.includes("gh issue create")), false);
+  } finally {
+    await Deno.remove(planPath);
+  }
+});
+
 for (
   const parent of [
-    "JaMmusic#12",
-    "WebJamApps/JaMmusic#12",
     "web-jam-tools#",
     "no-such-id",
     "epic",
@@ -496,12 +581,18 @@ Deno.test("filePlan files epic first, then children attached to epic, then links
         });
       }
 
-      // GraphQL GetIssueNodeIds
-      if (cmdStr.includes("graphql") && cmdStr.includes("GetIssueNodeIds")) {
+      // GraphQL GetIssueNodeIds / GetParentIssue / ValidateParent
+      if (
+        cmdStr.includes("graphql") &&
+        (cmdStr.includes("GetIssueNodeIds") ||
+          cmdStr.includes("GetParentIssue") ||
+          cmdStr.includes("ValidateParent"))
+      ) {
         return Promise.resolve({
           code: 0,
           stdout: JSON.stringify({
             data: {
+              repository: { issue: { id: "NODE_PARENT" } },
               parent: { issue: { id: "NODE_PARENT" } },
               child: { issue: { id: "NODE_CHILD" } },
             },
