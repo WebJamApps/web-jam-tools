@@ -19,7 +19,10 @@
  */
 
 import {
+  entryConversationId,
   extractEntryText,
+  isAntigravityEntry,
+  isHumanPrompt,
   isOwnSessionUserTurnBoundary,
   type TranscriptEntry,
 } from "./select_transcript_entry.ts";
@@ -247,6 +250,13 @@ export interface TokenWriteAuthorizationContext {
    * the surface writes when it spawns one (isAntigravitySubagentConversation).
    */
   isSubagentInvocation: boolean;
+  /**
+   * The exact titles the token will approve (web-jam-tools#1054, design decision D-35). When given,
+   * Josh's chat approval can authorize the write without a filing skill invocation: his latest reply
+   * follows an agent turn that showed every one of these titles, and does not open with a refusal.
+   * Omitted, only a filing skill invocation authorizes the write, as before.
+   */
+  titles?: readonly string[];
 }
 
 export interface TokenWriteAuthorizationResult {
@@ -254,6 +264,174 @@ export interface TokenWriteAuthorizationResult {
   reason?: string;
   /** Which skill's invocation satisfied the check, when ok is true. */
   skill?: FilingSkill;
+  /** Set to "chat-approval" when Josh's reply to the shown titles satisfied the check. */
+  via?: "chat-approval";
+}
+
+/**
+ * The words that, opening Josh's reply, make it a refusal rather than an approval (D-35). Matched as
+ * whole words at the start of the reply only, so "nothing to add, go" and "waiting is fine, go" are
+ * not refusals, and a refusal word later in an otherwise approving reply is not read as one. A hyphen
+ * counts as a word boundary ("no-go" refuses); an apostrophe does not ("don't" is one word). The
+ * words of a two-word opener may be separated by any run of whitespace, a line break included
+ * ("do  not file it" and "hold\noff" refuse); spacing is never what turns a refusal into an approval.
+ */
+const REFUSAL_OPENER_RE =
+  /^(?:no|nope|nah|don['’]t|do\s+not|stop|never|cancel|hold\s+off|wait|not\s+yet)(?![a-z0-9'’])/i;
+
+/** True when the reply opens with a refusal word (leading whitespace, quotes and markdown ignored). */
+export function replyOpensWithRefusal(text: string): boolean {
+  return REFUSAL_OPENER_RE.test(text.replace(/^[\s"'“”‘’*_>~`]+/, ""));
+}
+
+/** A prompt Josh sent: a human-origin prompt on Claude Code, an own-conversation prompt on Antigravity. */
+function isJoshReply(entry: TranscriptEntry | undefined, ownConversationId: string): boolean {
+  if (!entry) return false;
+  return isAntigravityEntry(entry)
+    ? isOwnSessionUserTurnBoundary(entry, ownConversationId)
+    : isHumanPrompt(entry);
+}
+
+/** An assistant entry written by the session itself, never a subagent's sidechain. */
+function isOwnAssistantEntry(
+  entry: TranscriptEntry | undefined,
+  ownConversationId: string,
+): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (isAntigravityEntry(entry)) {
+    return entry.source === "MODEL" && entryConversationId(entry) === ownConversationId;
+  }
+  if (entry.isSidechain === true || entry.isApiErrorMessage === true) return false;
+  return entry.type === "assistant" || entry.message?.role === "assistant";
+}
+
+/** Pairs that set a whole title off inside a line: quotes, code spans and bold. */
+const TITLE_WRAPPERS: ReadonlyArray<readonly [string, string]> = [
+  ['"', '"'],
+  ["“", "”"],
+  ["'", "'"],
+  ["‘", "’"],
+  ["`", "`"],
+  ["**", "**"],
+  ["__", "__"],
+];
+
+/** Markdown that opens a line without being part of what it shows: list numbers, bullets, quotes, headings. */
+const LINE_MARKER_RE = /^(?:(?:[-*+>]|\d+[.)]|#{1,6})\s+)+/;
+
+/** Peels matching wrappers (quotes, backticks, bold) off both ends of `text`, however deeply nested. */
+function stripTitleWrappers(text: string): string {
+  let current = text.trim();
+  for (;;) {
+    const wrapper = TITLE_WRAPPERS.find(([open, close]) =>
+      current.length > open.length + close.length && current.startsWith(open) &&
+      current.endsWith(close)
+    );
+    if (!wrapper) return current;
+    current = current.slice(wrapper[0].length, current.length - wrapper[1].length).trim();
+  }
+}
+
+/**
+ * A presentation label that introduces a title and is not part of it: exactly "Title:", "Proposed
+ * title:", "Suggested title:", "New title:" or "Issue title:", optionally numbered ("Title 2:",
+ * "Title (2):", "Title #2:"). The label must be the whole of what precedes the colon, so a longer
+ * title that merely contains the word ("Fix issue title: ...") is never read as a label plus a title.
+ */
+const TITLE_LABEL_RE =
+  /^(?:(?:proposed|suggested|new|issue)\s+)?title(?:\s+(?:#\s*)?\(?\d+\)?)?:\s+/i;
+
+/**
+ * The titles a piece of agent text DISPLAYS, worked out from the text alone, before any requested
+ * title is considered. A displayed title is the whole of a field —
+ *   - a whole line, after any list number, bullet or heading marker, both as written and with any
+ *     wrapping quotes, backticks or bold peeled off, or
+ *   - a whole table cell (the same two forms), or
+ *   - everything after a presentation label's colon (TITLE_LABEL_RE) on a line, when that remainder
+ *     is itself wrapped in quotes, backticks or bold, so the wrapper marks where the title ends.
+ * Nothing is searched for inside a field: a wrapped span within a longer title
+ * (``Fix `approval token` validation``, ``Fix issue title: "approval token"``) is that title's
+ * content, and a title written inside a sentence is not a displayed field.
+ */
+export function displayedTitles(text: string): Set<string> {
+  const shown = new Set<string>();
+  const addField = (candidate: string): void => {
+    const trimmed = candidate.trim();
+    if (!trimmed) return;
+    shown.add(trimmed);
+    shown.add(stripTitleWrappers(trimmed));
+  };
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const body = trimmed.replace(LINE_MARKER_RE, "");
+    addField(body);
+    const label = TITLE_LABEL_RE.exec(body);
+    if (label) {
+      const remainder = body.slice(label[0].length).trim().replace(/[.,;!?]+$/, "");
+      if (stripTitleWrappers(remainder) !== remainder) addField(remainder);
+    }
+    if (trimmed.includes("|")) trimmed.split("|").forEach(addField);
+  }
+  return shown;
+}
+
+/** True when `text` displays `title` as a COMPLETE title (web-jam-tools#1054 review); see displayedTitles. */
+export function titleShownExactly(text: string, title: string): boolean {
+  return displayedTitles(text).has(title);
+}
+
+/**
+ * Josh's approval given in chat (D-35): his latest reply comes after an agent turn that showed every
+ * exact title, and does not open with a refusal word. "Showed" means each title appears as a complete
+ * title (see titleShownExactly) in the agent's text between the prompt before his reply and the reply
+ * itself. That turn can span several assistant entries — the agent may show the titles across
+ * messages with tool calls between them — so the titles are collected across all of them, each title
+ * in a single entry. Titles the agent only says after his reply, or showed before an earlier prompt
+ * of his, never count, and a subagent's sidechain entries are skipped. A reply that is itself
+ * another skill's slash command is not an approval. Anything unreadable fails closed.
+ */
+function checkChatApproval(
+  ctx: TokenWriteAuthorizationContext,
+  ownConversationId: string,
+): { ok: boolean; reason?: string } {
+  const titles = (ctx.titles ?? []).map((t) => t.trim()).filter((t) => t.length > 0);
+  if (titles.length === 0) return { ok: false, reason: "no approved titles were supplied" };
+
+  let replyIdx = -1;
+  for (let i = ctx.entries.length - 1; i >= 0; i--) {
+    if (isJoshReply(ctx.entries[i], ownConversationId)) {
+      replyIdx = i;
+      break;
+    }
+  }
+  if (replyIdx < 0) return { ok: false, reason: "no reply from Josh was found" };
+
+  const reply = stripUserRequestWrapper(extractEntryText(ctx.entries[replyIdx])).trim();
+  if (!reply) return { ok: false, reason: "Josh's latest reply carries no text" };
+  if (nonFilingSlashCommandInvoked(reply)) {
+    return { ok: false, reason: "Josh's latest reply invokes another skill rather than approving" };
+  }
+  if (replyOpensWithRefusal(reply)) {
+    return { ok: false, reason: "Josh's latest reply opens with a refusal" };
+  }
+
+  const unshown = new Set(titles);
+  for (let i = replyIdx - 1; i >= 0 && unshown.size > 0; i--) {
+    const entry = ctx.entries[i];
+    if (isJoshReply(entry, ownConversationId)) break;
+    if (!isOwnAssistantEntry(entry, ownConversationId)) continue;
+    const text = extractEntryText(entry);
+    for (const title of [...unshown]) {
+      if (titleShownExactly(text, title)) unshown.delete(title);
+    }
+  }
+  if (unshown.size === 0) return { ok: true };
+  return {
+    ok: false,
+    reason:
+      "the agent did not show every exact title before Josh's latest reply (each complete title on its own line, in a table cell or in quotes)",
+  };
 }
 
 /**
@@ -268,6 +446,10 @@ export interface TokenWriteAuthorizationResult {
  * since a long `/design-issue` run can settle decisions over many turns before filing at the end,
  * and the token this check gates is already bound to this session id and carries its own bounded
  * TTL — a second, shorter expiry here only broke the runs it exists to serve.
+ *
+ * When `ctx.titles` is given and no filing skill authorizes the write, Josh's approval in chat can
+ * (web-jam-tools#1054, D-35): see checkChatApproval. A subagent, an undetermined identity and an
+ * unreadable transcript still refuse first or fall through to the refusal.
  */
 export function checkTokenWriteAuthorization(
   ctx: TokenWriteAuthorizationContext,
@@ -288,9 +470,25 @@ export function checkTokenWriteAuthorization(
     };
   }
 
+  const bySkill = checkFilingSkillInvocation(ctx, ctx.ownConversationId);
+  if (bySkill.ok || !ctx.titles) return bySkill;
+
+  const byChat = checkChatApproval(ctx, ctx.ownConversationId);
+  if (byChat.ok) return { ok: true, via: "chat-approval" };
+  return {
+    ok: false,
+    reason: `${bySkill.reason} Josh's approval in chat did not count either: ${byChat.reason}.`,
+  };
+}
+
+/** The filing-skill half of checkTokenWriteAuthorization: the backward scan described there. */
+function checkFilingSkillInvocation(
+  ctx: TokenWriteAuthorizationContext,
+  ownConversationId: string,
+): TokenWriteAuthorizationResult {
   for (let i = ctx.entries.length - 1; i >= 0; i--) {
     const entry = ctx.entries[i];
-    if (!isOwnSessionUserTurnBoundary(entry, ctx.ownConversationId)) continue;
+    if (!isOwnSessionUserTurnBoundary(entry, ownConversationId)) continue;
     const text = extractEntryText(entry);
     const otherCmd = nonFilingSlashCommandInvoked(text);
     if (otherCmd) {
