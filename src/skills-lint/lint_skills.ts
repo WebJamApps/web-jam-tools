@@ -58,17 +58,37 @@ export const SURFACE_SPECIFIC_MACHINERY_PATTERNS: RegExp[] = [
 export const AGY_MENTION_PATTERN = /\b(?:agy|Antigravity)\b/i;
 
 /**
+ * Closed list of literal Claude-only machinery strings (web-jam-tools#1090).
+ * Flagged wherever they appear outside YAML frontmatter and fenced code blocks.
+ * This list is closed and must not be widened.
+ */
+export const CLAUDE_ONLY_MACHINERY_LITERALS: readonly string[] = [
+  "/model haiku",
+  "MUST be on Haiku",
+  "must run on Haiku",
+  "delegate: Haiku",
+  "Haiku subagent",
+  "Haiku subagents",
+  "Never run it on Opus",
+  "Flash High multimodal vision",
+];
+
+/**
  * Checks a skill markdown string for:
  * 1. Unresolvable [[...]] wiki-link syntax (web-jam-tools#744).
  * 2. Surface-specific machinery requirement: any skill body naming surface-specific machinery
  *    must mention 'agy' or 'Antigravity' at least once (web-jam-tools#1091).
+ * 3. Literal Claude-only machinery strings: flags closed list of literal Claude-only
+ *    machinery strings wherever they appear outside frontmatter and fenced code blocks (web-jam-tools#1090).
  *
  * Rules:
  * 1. Fails if the skill body (outside fenced code blocks and inline backtick code) contains `[[...]]`.
  * 2. Fails if the skill body (outside frontmatter and fenced code blocks) names surface-specific
  *    machinery but does not contain at least one mention of `agy` or `Antigravity`.
  *    The predicate keys on `agy` and `Antigravity` and on nothing else (it does not accept `Flash` or `Gemini`).
- * 3. Frontmatter (`--- ... ---`) and fenced code blocks are ignored.
+ * 3. Fails if the skill body (outside frontmatter and fenced code blocks) contains any of the 8 literal
+ *    Claude-only machinery strings in CLAUDE_ONLY_MACHINERY_LITERALS.
+ * 4. Frontmatter (`--- ... ---`) and fenced code blocks are ignored.
  */
 export function lintSkillMarkdown(content: string, filePath: string = ""): LintSkillResult {
   const violations: SkillLintViolation[] = [];
@@ -128,6 +148,26 @@ export function lintSkillMarkdown(content: string, filePath: string = ""): LintS
           };
           break;
         }
+      }
+    }
+
+    // Check for literal Claude-only machinery strings (web-jam-tools#1090)
+    for (const literal of CLAUDE_ONLY_MACHINERY_LITERALS) {
+      if (rawLine.includes(literal)) {
+        if (literal === "Haiku subagent" && rawLine.includes("Haiku subagents")) {
+          const hasDistinctSingular = /\bHaiku subagent\b/.test(rawLine);
+          if (!hasDistinctSingular) {
+            continue;
+          }
+        }
+        violations.push({
+          file: filePath,
+          line: lineNumber,
+          linkText: literal,
+          lineContent: rawLine,
+          message:
+            `Literal Claude-only machinery string '${literal}' found at line ${lineNumber}. Skill bodies must use surface-neutral vocabulary and name roles/tiers rather than surface-specific machinery.`,
+        });
       }
     }
 
@@ -284,6 +324,7 @@ export async function runLintSkillsCli(args: string[]): Promise<number> {
 Lints skill markdown files (skills/*/SKILL.md) to ensure:
 1. They contain no unresolvable [[...]] wiki-links (web-jam-tools#744).
 2. Any skill body naming surface-specific machinery mentions agy or Antigravity (web-jam-tools#1091).
+3. They contain no literal Claude-only machinery strings (web-jam-tools#1090).
 Skill bodies must be self-contained and state rules in prose without wiki-link syntax.
 
 Arguments:

@@ -5,6 +5,7 @@ import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import * as path from "@std/path";
 import {
   AGY_MENTION_PATTERN,
+  CLAUDE_ONLY_MACHINERY_LITERALS,
   findSkillFiles,
   lintAllSkills,
   lintSkillFile,
@@ -313,8 +314,7 @@ description: Fixture naming Claude machinery and listing Flash High label.
 
 # fix-labels-fixture
 
-## Model gate — MUST be on Haiku (do this FIRST)
-Type /model haiku before proceeding.
+On Claude Code, spawn via the Agent tool.
 
 Supported GitHub labels:
 - Flash High
@@ -435,6 +435,113 @@ Commit footer: Co-Authored-By: Claude Sonnet 5.5.
 `;
 
   const result = lintSkillMarkdown(content, "model-attribution-skill/SKILL.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
+// --- Tests for web-jam-tools#1090 (literal Claude-only machinery strings) ---
+
+Deno.test("CLAUDE_ONLY_MACHINERY_LITERALS: contains exactly the closed list of 8 strings", () => {
+  const expected = [
+    "/model haiku",
+    "MUST be on Haiku",
+    "must run on Haiku",
+    "delegate: Haiku",
+    "Haiku subagent",
+    "Haiku subagents",
+    "Never run it on Opus",
+    "Flash High multimodal vision",
+  ];
+  assertEquals([...CLAUDE_ONLY_MACHINERY_LITERALS], expected);
+});
+
+Deno.test("lintSkillMarkdown: each of the 8 strings fails a fixture body (AC 1)", () => {
+  for (const literal of CLAUDE_ONLY_MACHINERY_LITERALS) {
+    const fixture = `---
+name: failing-skill
+description: Skill testing literal string failure.
+---
+
+# failing-skill
+
+Instruction mentioning agy and Antigravity so whole-file rule passes.
+Here is the offending machinery: ${literal}
+`;
+
+    const result = lintSkillMarkdown(fixture, "failing-skill/SKILL.md");
+    assertEquals(
+      result.valid,
+      false,
+      `Expected literal string '${literal}' to fail the fixture, but it passed.`,
+    );
+    const violation = result.violations.find((v) => v.linkText === literal);
+    assertExists(
+      violation,
+      `Expected violation with linkText '${literal}', but found: ${
+        JSON.stringify(result.violations)
+      }`,
+    );
+    assert(
+      violation.message.includes("Literal Claude-only machinery string"),
+      `Expected message to mention literal Claude-only machinery string: ${violation.message}`,
+    );
+  }
+});
+
+Deno.test("lintSkillMarkdown: literal strings inside fenced code blocks or frontmatter pass", () => {
+  for (const literal of CLAUDE_ONLY_MACHINERY_LITERALS) {
+    const codeBlockFixture = `---
+name: code-block-skill
+description: Mentions ${literal} in frontmatter.
+---
+
+# code-block-skill
+
+Mentions agy and Antigravity in prose.
+
+\`\`\`markdown
+Example of machinery: ${literal}
+\`\`\`
+`;
+    const result = lintSkillMarkdown(codeBlockFixture, "code-block-skill/SKILL.md");
+    assertEquals(
+      result.valid,
+      true,
+      `Expected '${literal}' in code block/frontmatter to be ignored, but failed: ${
+        JSON.stringify(result.violations)
+      }`,
+    );
+  }
+});
+
+Deno.test("lintSkillMarkdown: body containing mcp__claude_ai_GitHub_MCP__issue_read beside an agy clause passes (AC 2)", () => {
+  const content = `---
+name: dual-mcp-skill
+description: Dual surface MCP tool usage.
+---
+
+# dual-mcp-skill
+
+- Under Claude Code: call mcp__claude_ai_GitHub_MCP__issue_read to inspect issue state.
+- Under agy / Antigravity: use gh issue view.
+`;
+  const result = lintSkillMarkdown(content, "dual-mcp-skill/SKILL.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
+Deno.test('lintSkillMarkdown: body containing model: "haiku" beside an invoke_subagent line passes (AC 3)', () => {
+  const content = `---
+name: dual-dispatch-skill
+description: Dual surface dispatch instructions.
+---
+
+# dual-dispatch-skill
+
+- On Claude Code: dispatch Agent with model: "haiku" to handle dispatch.
+- On agy / Antigravity: dispatch with invoke_subagent.
+`;
+  const result = lintSkillMarkdown(content, "dual-dispatch-skill/SKILL.md");
   assertEquals(result.valid, true);
   assertEquals(result.violations.length, 0);
 });
