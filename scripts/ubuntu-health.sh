@@ -177,8 +177,36 @@ SSHD_RESULT=""
 SSHD_MATCH_RESULT=""
 SSHD_IN_MATCH=0
 SSHD_UNREADABLE=()
+
+# Prints the first directory on the way to Include pattern $1 that this user cannot get through
+# (no search permission), or cannot list while the last component is a glob. Without it the pattern
+# expands to nothing, which looks the same as an Include that simply matches no file.
+blocked_include_dir() {
+  local parts part dir="" i last
+  IFS=/ read -ra parts <<<"${1#/}"
+  last=$((${#parts[@]} - 1))
+  for ((i = 0; i < last; i++)); do
+    part="${parts[$i]}"
+    case "$part" in *[\*\?\[]*) return 1 ;; esac
+    dir="$dir/$part"
+    if [ -d "$ROOT$dir" ] && [ ! -x "$ROOT$dir" ]; then
+      echo "$ROOT$dir"
+      return 0
+    fi
+  done
+  case "${parts[$last]}" in
+    *[\*\?\[]*)
+      if [ -d "$ROOT$dir" ] && [ ! -r "$ROOT$dir" ]; then
+        echo "$ROOT$dir"
+        return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+
 scan_sshd() {
-  local file="$1" line key val pattern f match_seen=0
+  local file="$1" line key val pattern f blocked match_seen=0
   local LC_COLLATE=C
   [ -r "$file" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -200,6 +228,10 @@ scan_sshd() {
       include)
         for pattern in $val; do
           case "$pattern" in /*) ;; *) pattern="/etc/ssh/$pattern" ;; esac
+          if blocked="$(blocked_include_dir "$pattern")"; then
+            SSHD_UNREADABLE+=("$blocked")
+            continue
+          fi
           for f in "$ROOT"$pattern; do
             [ -f "$f" ] || continue
             if [ -r "$f" ]; then scan_sshd "$f"; else SSHD_UNREADABLE+=("$f"); fi

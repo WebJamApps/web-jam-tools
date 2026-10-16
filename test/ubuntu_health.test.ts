@@ -982,6 +982,70 @@ Deno.test("ssh: an included sshd file only root can read is reported as not chec
   }
 });
 
+Deno.test("ssh: an Include whose directory only root can enter or list is reported as not checked, not as no match", async () => {
+  const cases: [string, string, number, string][] = [
+    // label, Include pattern, mode of the directory holding the files, where the files sit
+    ["a directory without any access", "/etc/ssh/private/*.conf", 0o000, "private"],
+    ["a directory that cannot be listed", "/etc/ssh/private/*.conf", 0o100, "private"],
+    [
+      "a directory that cannot be entered, named without a glob",
+      "/etc/ssh/private/x.conf",
+      0o000,
+      "private",
+    ],
+    ["a directory above the files", "/etc/ssh/private/*/x.conf", 0o000, "private"],
+  ];
+  for (const [label, pattern, mode, dirName] of cases) {
+    const h = await makeHarness();
+    await seedSshdConfig(
+      h,
+      `Include /etc/ssh/sshd_config.d/*.conf\nInclude ${pattern}\nUsePAM yes\n`,
+    );
+    const dir = `${h.root}/etc/ssh/${dirName}`;
+    await Deno.mkdir(`${dir}/inner`, { recursive: true });
+    await Deno.writeTextFile(`${dir}/x.conf`, "Match User joshua\n  PasswordAuthentication yes\n");
+    await Deno.writeTextFile(
+      `${dir}/inner/x.conf`,
+      "Match User joshua\n  PasswordAuthentication yes\n",
+    );
+    await apply(h);
+    await writeEnvFile(h, 0o600);
+    await Deno.chmod(dir, mode);
+
+    // Run as root, the directory stays open and the Match block is reported as drift instead.
+    let open = true;
+    try {
+      for await (const _ of Deno.readDir(dir)) break;
+      await Deno.stat(`${dir}/x.conf`);
+    } catch {
+      open = false;
+    }
+    const r = await check(h);
+    await Deno.chmod(dir, 0o755);
+
+    if (!open) {
+      assertStringIncludes(r.stdout, "NOTE: SSH login rules not fully checked without sudo", label);
+      assertStringIncludes(r.stdout, `${dirName} is not readable`, label);
+      assertEquals(r.code, 0, `${label}: ${r.stdout}`);
+    }
+  }
+});
+
+Deno.test("ssh: an Include that matches no file at all is still not a warning", async () => {
+  const h = await makeHarness();
+  await seedSshdConfig(
+    h,
+    "Include /etc/ssh/sshd_config.d/*.conf\nInclude /etc/ssh/absent/*.conf\nInclude /etc/ssh/none-*.conf\nUsePAM yes\n",
+  );
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+
+  const r = await check(h);
+
+  assertEquals(r.code, 0, r.stdout);
+  assert(!r.stdout.includes("not fully checked"), r.stdout);
+});
+
 Deno.test("ssh: --check leaves alone Match blocks that keep passwords off", async () => {
   const h = await makeHarness();
   await seedSshdConfig(
