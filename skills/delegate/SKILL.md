@@ -23,7 +23,8 @@ table — this skill does not repeat it), use the matching section below.
 Flash work is executed by the Antigravity CLI (`agy`) via the wrapper script
 `~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh`. Dispatch is
 **GitHub-issues-only** — the task must already exist as a GitHub issue labeled
-`Flash` before you dispatch it. (A queue-file entry point — appending a line to
+for its tier under the triage table in `docs/ai-team-playbook.md` (everyday coding
+labeled `Flash`) before you dispatch it. (A queue-file entry point — appending a line to
 `~/Dropbox/web-jam-llms/agy-tasks.txt` — used to exist as a shortcut for quick
 tasks with no issue; Josh retired it and deleted the file, since it let a
 session dispatch work with no durable record — see web-jam-tools#249. A quick
@@ -81,7 +82,7 @@ Strict rules:
 ```
 
 **Default Tier & Bidirectional Delegation Flexibility:**
-Josh defaults to **`Flash`** (`Gemini Flash`) as the primary interactive model tier in `agy`. Delegation is flexible and works in both directions:
+The model tier for a task comes from the triage table in `docs/ai-team-playbook.md` (where everyday coding defaults to `Flash` / `Gemini Flash` in `agy`). Delegation is flexible and works in both directions:
 - **Handoff on "Go" (`Flash` → `Flash`)**: When discussing an issue interactively on `Flash`, once requirements and steps are aligned and Josh gives the go-ahead ("go", "proceed", "start", "work issue #X"), the session does the work itself or hands contained coding tasks to a subagent at the same level (`handle-agy-tasks.sh`, or `invoke_subagent` where `Model: "flash"` runs as `gemini-3.8-flash-tiered` and passes the model guard, or `Model: "inherit"`). Trivial edits go to Luna or Haiku (a `Haiku` subagent, or a Luna handoff since Luna is outside agy's picker).
 - **Delegating up** (tier order: Luna → Haiku → Flash → Sol = Astra = Sonnet → Opus; see `docs/ai-team-playbook.md`): Delegate logic- and safety-heavy coding to `Sol` or `Sonnet`, and open-ended design to `Opus`. `Flash` handles everyday coding on Google's allowance; `Astra` is kept for REAPER recording.
 
