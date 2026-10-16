@@ -247,10 +247,11 @@ approving in chat — it follows an agent turn that showed every exact `--title`
 with `no`, `nope`, `nah`, `don't`, `do not`, `stop`, `never`, `cancel`, `hold off`, `wait` or `not yet`
 (any run of spaces or a line break between the two words of `do not`, `hold off` and `not yet` counts
 as the same refusal). A title is shown only when it appears whole: on a line of its own (a list item
-or heading), in a table cell, or in quotes, backticks or bold right after a label's colon or dash
-(`Proposed title: "..."`) — a shortened or embedded part of a longer title does not count (a quoted or
-backticked span inside a longer title is that title's content), and neither does a title in the middle
-of a sentence, quoted or not.
+or heading), in a table cell, or in quotes, backticks or bold right after a `title` label's colon
+(`Proposed title: "..."`) — the whole displayed field is compared, so a shortened or embedded part of
+a longer title does not count (a quoted or backticked span inside a longer title is that title's
+content, whatever punctuation surrounds it), and neither does a title in the middle of a sentence,
+quoted or not.
 The titles may be spread over several of your messages in that turn, each title in one message.
 Run it outside that context (a different session, titles not shown to Josh first, or a subagent's
 own turn) and it refuses. That refusal is the gate working as designed, not a bug to route around:

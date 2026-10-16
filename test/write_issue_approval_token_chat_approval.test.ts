@@ -465,6 +465,13 @@ Deno.test("chat approval: a quoted or code-formatted span inside a longer title 
       `Fix "${innerTitle}" validation`,
       `Fix validation of the \`${innerTitle}\``,
       `Then \`${innerTitle}\` is checked`,
+      // Punctuation on both sides of the span does not set it off from the title that encloses it.
+      `Proposed title: "hooks: \`${innerTitle}\` — validation"`,
+      `Proposed title: "hooks: \`${innerTitle}\`, validation"`,
+      `1. hooks: \`${innerTitle}\` — validation`,
+      `Title: hooks: "${innerTitle}"`,
+      `Title: "hooks" — "${innerTitle}"`,
+      `- Title: **hooks** (\`${innerTitle}\`)`,
     ]
   ) {
     assertEquals(
@@ -477,6 +484,18 @@ Deno.test("chat approval: a quoted or code-formatted span inside a longer title 
   const longer = `Fix \`${innerTitle}\` validation`;
   assertEquals(authorize(showThenApprove(`1. ${longer}`), [longer]).ok, true);
   assertEquals(authorize(showThenApprove(`Proposed title: "${longer}"`), [longer]).ok, true);
+  // So does a longer title whose inner span sits between punctuation.
+  const punctuated = `hooks: \`${innerTitle}\` — validation`;
+  assertEquals(
+    authorize(showThenApprove(`Proposed title: "${punctuated}"`), [punctuated]).ok,
+    true,
+  );
+  assertEquals(authorize(showThenApprove(`1. ${punctuated}`), [punctuated]).ok, true);
+  // A trailing full stop after the wrapped title is sentence punctuation, not title content.
+  assertEquals(
+    authorize(showThenApprove(`Proposed title: "${LONG_TITLE}".`), [LONG_TITLE]).ok,
+    true,
+  );
 });
 
 Deno.test("chat approval: a quoted title in the middle of a sentence is not shown", () => {
@@ -595,6 +614,26 @@ Deno.test("chat approval: Antigravity titles shown across two model messages cou
 Deno.test("CLI chat approval: a formatted fragment inside a longer title is refused, the longer title writes", async () => {
   const longer = "Fix `approval token` validation";
   const transcript = showThenApprove(`1. ${longer}`);
+  const fragment = await runWriter(transcript, ["approval token"]);
+  try {
+    assertEquals(fragment.code, 1);
+    assertStringIncludes(fragment.stderr, "Refused to write approval token");
+    assertEquals(await exists(fragment.tokenPath), false);
+  } finally {
+    await Deno.remove(fragment.dir, { recursive: true });
+  }
+  const full = await runWriter(transcript, [longer]);
+  try {
+    assertEquals(full.code, 0, full.stderr);
+    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).titles, [longer]);
+  } finally {
+    await Deno.remove(full.dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI chat approval: a span between punctuation inside a longer title is refused, the longer title writes", async () => {
+  const longer = "hooks: `approval token` — validation";
+  const transcript = showThenApprove(`Proposed title: "${longer}"`);
   const fragment = await runWriter(transcript, ["approval token"]);
   try {
     assertEquals(fragment.code, 1);

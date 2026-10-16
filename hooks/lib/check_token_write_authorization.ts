@@ -332,55 +332,42 @@ function stripTitleWrappers(text: string): string {
   }
 }
 
-/** What may sit just before a wrapped title for it to be set off from the line rather than part of a longer title. */
-const TITLE_LEAD_IN_RE = /(?:^|[:=(\[>\-–—→])\s*$/;
-
-/** What may follow a wrapped title: nothing, or punctuation — never another word of a longer title. */
-const TITLE_TRAIL_OUT_RE = /^\s*(?:$|[^\p{L}\p{N}\s`"'“”‘’*_])/u;
-
-/**
- * True when `line` carries `title` wrapped in matching quotes, backticks or bold AND set off from the
- * rest of the line: it opens the line or follows a label's colon, dash or bracket, and ends the line or
- * is followed by punctuation. A wrapped span inside a longer title (``Fix `approval token` validation``)
- * has a word on each side of it, so it is the longer title's content, not a title of its own.
- */
-function wrappedTitleSetOff(line: string, title: string): boolean {
-  return TITLE_WRAPPERS.some(([open, close]) => {
-    const needle = `${open}${title}${close}`;
-    for (let at = line.indexOf(needle); at >= 0; at = line.indexOf(needle, at + 1)) {
-      if (
-        TITLE_LEAD_IN_RE.test(line.slice(0, at)) &&
-        TITLE_TRAIL_OUT_RE.test(line.slice(at + needle.length))
-      ) return true;
-    }
-    return false;
-  });
-}
+/** A label that introduces a title on its line: "Proposed title:", "Title 2:", "Issue title (1):". */
+const TITLE_LABEL_RE = /^[^\s"'“”‘’`*_|:][^"'“”‘’`*_|:]{0,40}:\s+/;
 
 /**
  * True when `text` shows `title` as a COMPLETE title (web-jam-tools#1054 review): a substring of a
- * longer title is not the title Josh saw. A title counts as shown when it is
- *   - the whole of a line, after any list number, bullet or heading marker and any wrapping quotes,
+ * longer title is not the title Josh saw. The title must be the whole of a displayed field —
+ *   - a whole line, after any list number, bullet or heading marker and any wrapping quotes,
  *     backticks or bold, or
- *   - the whole of a table cell, or
- *   - wrapped in matching quotes, backticks or bold and set off from the rest of its line (see
- *     wrappedTitleSetOff) — a wrapped span inside a longer title is that title's content.
- * So `Proposed title: "Fix approval token validation"` shows that full title and nothing shorter:
- * `approval token` sits between letters of the longer title, bounded by no marker, so it is refused.
- * An unquoted title in the middle of a sentence is refused for the same reason — the agent shows each
- * title on its own line, in a table cell or in quotes.
+ *   - a whole table cell, or
+ *   - everything after a "title" label's colon on a line (`Proposed title: "..."`), when that
+ *     remainder is itself wrapped in quotes, backticks or bold.
+ * The field is compared as a whole, never searched for inside: a wrapped span within a longer title
+ * (``Fix `approval token` validation``, ``"hooks: `approval token` — validation"``) is that title's
+ * content, and a title written inside a sentence is not a displayed field. The agent shows each
+ * title on its own line, in a table cell, or after a label.
  */
 export function titleShownExactly(text: string, title: string): boolean {
   const isTitle = (candidate: string): boolean => {
     const trimmed = candidate.trim();
     return trimmed === title || stripTitleWrappers(trimmed) === title;
   };
+  // The remainder after a label counts only when wrapped, so the wrapper marks where the title ends.
+  const isLabelledTitle = (remainder: string): boolean => {
+    const trimmed = remainder.trim().replace(/[.,;!?]+$/, "");
+    return stripTitleWrappers(trimmed) !== trimmed && isTitle(trimmed);
+  };
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    if (isTitle(trimmed.replace(LINE_MARKER_RE, ""))) return true;
+    const body = trimmed.replace(LINE_MARKER_RE, "");
+    if (isTitle(body)) return true;
+    const label = TITLE_LABEL_RE.exec(body);
+    if (label && /\btitles?\b/i.test(label[0]) && isLabelledTitle(body.slice(label[0].length))) {
+      return true;
+    }
     if (trimmed.includes("|") && trimmed.split("|").some(isTitle)) return true;
-    if (wrappedTitleSetOff(trimmed, title)) return true;
   }
   return false;
 }
