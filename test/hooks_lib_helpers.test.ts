@@ -1,5 +1,12 @@
-import { assertEquals, assertNotEquals } from "@std/assert";
-import { dropProse, normalize, stripHeredocs } from "../hooks/lib/normalize_command.ts";
+import { assertEquals, assertNotEquals, assertStringIncludes } from "@std/assert";
+import {
+  dropProse,
+  findHeredocMarker,
+  normalize,
+  splitOnOperators,
+  splitShellTokens,
+  stripHeredocs,
+} from "../hooks/lib/normalize_command.ts";
 import { findBareIssueRefs, stripCode } from "../hooks/lib/detect_bare_issue_refs.ts";
 import { findCredentialLiteral } from "../hooks/lib/detect_credential_literal.ts";
 import {
@@ -29,7 +36,29 @@ Deno.test("normalize_command helper", () => {
 
   const hd = "cat <<EOF\nsome secret text\nEOF\n";
   const stripped = stripHeredocs(hd);
-  assertEquals(stripped.trim(), "cat <<EOF");
+  assertEquals(stripped.trim(), "cat <<EOF\nEOF");
+});
+
+Deno.test("apostrophe parser shares comment boundaries across marker discovery, tokenizing and splitting", () => {
+  assertEquals(findHeredocMarker("echo hi # don't <<'FAKE'"), null);
+  assertEquals(splitShellTokens("echo hi # don't\necho done"), ["echo", "hi", "echo", "done"]);
+  assertEquals(splitOnOperators("echo hi # don't\necho done").segments, ["echo hi ", "echo done"]);
+  assertEquals(splitShellTokens("echo hello#world \\#hello"), ["echo", "hello#world", "#hello"]);
+});
+
+Deno.test("apostrophe parser retains interpreter contents, quoted comment markers and following shell commands", () => {
+  const source = "node <<'JS'\n// don't\nconsole.log(\"// don't\");\nJS\ngh repo delete owner/repo";
+  const parsed = splitOnOperators(stripHeredocs(source));
+  assertEquals(parsed.unterminated, false);
+  const retained = parsed.segments.join("\n");
+  assertStringIncludes(retained, "console.log");
+  assertStringIncludes(retained, '"// don\'t"');
+  assertStringIncludes(retained, "gh repo delete owner/repo");
+  assertEquals(
+    splitOnOperators("bash <<'SH'\ncat <<'DATA'\n# don't\nDATA\ngh repo delete owner/repo\nSH")
+      .unterminated,
+    false,
+  );
 });
 
 Deno.test("detect_bare_issue_refs helper", () => {

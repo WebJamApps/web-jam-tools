@@ -11,12 +11,9 @@
 # not free-form text, so they were never exposed to the heredoc/quoting bug.
 #
 # SCOPE: this guard only ever sees a Bash tool_input.command string and an
-# MCP tool_name. It does NOT see Write/Edit file writes, and it does NOT see
-# anything agy does internally — agy's own hooks are inert
-# (web-jam-tools#432 "agy hooks do not enforce — all 12 are inert on Flash,
-# and a Stop/SessionStart entry kills the whole config; fix that, then give
-# Antigravity Gmail MCP fenced by a working hook"). Do not widen this guard to
-# compensate for that gap.
+# MCP tool_name. It does NOT see Write/Edit file writes. Claude Code and Codex
+# invoke the installed symlink directly; agy reaches this same script through
+# its existing shim registration. No registration changes are needed for content fixes.
 set -euo pipefail
 
 input=$(cat)
@@ -35,6 +32,14 @@ block() {
   exit 2
 }
 
+could_not_read() {
+  echo "BLOCKED (irreversible operation guard): could not read the command; no protected operation was identified." >&2
+  echo "$1" >&2
+  echo "You may restate the same action in a form this guard can read. The restated command must be checked by this same guard." >&2
+  echo "Do not change what the command does. Report this parsing or evaluation gap at the end of the turn." >&2
+  exit 2
+}
+
 # MCP tools check (R-24)
 if [[ "$tool_name" =~ delete_file$ ]]; then
   block "GitHub MCP delete_file" "gh api -X DELETE repos/OWNER/REPO/contents/PATH"
@@ -48,7 +53,9 @@ if [ -n "$cmd" ]; then
   stderr_file=$(mktemp)
   trap "rm -f '$stderr_file'" EXIT
 
-  result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>"$stderr_file") || true
+  if ! result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>"$stderr_file"); then
+    could_not_read "guard could not evaluate the command — failing closed: $(cat "$stderr_file")"
+  fi
 
   # Fails CLOSED: this is a destructive-operation guard, unlike the agy
   # cost-control guard which deliberately fails open. If the lib couldn't be
@@ -59,11 +66,14 @@ if [ -n "$cmd" ]; then
     if [ -z "$stderr_output" ]; then
       stderr_output="(no error output available)"
     fi
-    block "irreversible operation (guard could not evaluate the command — failing closed: $stderr_output)" "$cmd"
+    could_not_read "guard could not evaluate the command — failing closed: $stderr_output"
   fi
-  if [ "$result" != "OK" ]; then
-    block "${result#BLOCK:}" "$cmd"
-  fi
+  case "$result" in
+    OK) ;;
+    UNREADABLE:*) could_not_read "${result#UNREADABLE:}" ;;
+    BLOCK:*) block "${result#BLOCK:}" "$cmd" ;;
+    *) could_not_read "guard could not evaluate the command — unexpected checker response" ;;
+  esac
 fi
 
 exit 0
