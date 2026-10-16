@@ -19,7 +19,10 @@
  */
 
 import {
+  entryConversationId,
   extractEntryText,
+  isAntigravityEntry,
+  isHumanPrompt,
   isOwnSessionUserTurnBoundary,
   type TranscriptEntry,
 } from "./select_transcript_entry.ts";
@@ -247,6 +250,13 @@ export interface TokenWriteAuthorizationContext {
    * the surface writes when it spawns one (isAntigravitySubagentConversation).
    */
   isSubagentInvocation: boolean;
+  /**
+   * The exact titles the token will approve (web-jam-tools#1054, design decision D-35). When given,
+   * Josh's chat approval can authorize the write without a filing skill invocation: his latest reply
+   * follows an agent turn that showed every one of these titles, and does not open with a refusal.
+   * Omitted, only a filing skill invocation authorizes the write, as before.
+   */
+  titles?: readonly string[];
 }
 
 export interface TokenWriteAuthorizationResult {
@@ -254,6 +264,88 @@ export interface TokenWriteAuthorizationResult {
   reason?: string;
   /** Which skill's invocation satisfied the check, when ok is true. */
   skill?: FilingSkill;
+  /** Set to "chat-approval" when Josh's reply to the shown titles satisfied the check. */
+  via?: "chat-approval";
+}
+
+/**
+ * The words that, opening Josh's reply, make it a refusal rather than an approval (D-35). Matched as
+ * whole words at the start of the reply only, so "nothing to add, go" and "waiting is fine, go" are
+ * not refusals, and a refusal word later in an otherwise approving reply is not read as one. A hyphen
+ * counts as a word boundary ("no-go" refuses); an apostrophe does not ("don't" is one word).
+ */
+const REFUSAL_OPENER_RE =
+  /^(?:no|nope|nah|don['’]t|do not|stop|never|cancel|hold off|wait|not yet)(?![a-z0-9'’])/i;
+
+/** True when the reply opens with a refusal word (leading whitespace, quotes and markdown ignored). */
+export function replyOpensWithRefusal(text: string): boolean {
+  return REFUSAL_OPENER_RE.test(text.replace(/^[\s"'“”‘’*_>~`]+/, ""));
+}
+
+/** A prompt Josh sent: a human-origin prompt on Claude Code, an own-conversation prompt on Antigravity. */
+function isJoshReply(entry: TranscriptEntry | undefined, ownConversationId: string): boolean {
+  if (!entry) return false;
+  return isAntigravityEntry(entry)
+    ? isOwnSessionUserTurnBoundary(entry, ownConversationId)
+    : isHumanPrompt(entry);
+}
+
+/** An assistant entry written by the session itself, never a subagent's sidechain. */
+function isOwnAssistantEntry(
+  entry: TranscriptEntry | undefined,
+  ownConversationId: string,
+): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  if (isAntigravityEntry(entry)) {
+    return entry.source === "MODEL" && entryConversationId(entry) === ownConversationId;
+  }
+  if (entry.isSidechain === true || entry.isApiErrorMessage === true) return false;
+  return entry.type === "assistant" || entry.message?.role === "assistant";
+}
+
+/**
+ * Josh's approval given in chat (D-35): his latest reply comes after an agent turn that showed every
+ * exact title, and does not open with a refusal word. "Showed" means the title appears verbatim in
+ * the agent's text between the prompt before his reply and the reply itself, so titles the agent
+ * only says after his reply, or showed turns earlier, never count. A reply that is itself another
+ * skill's slash command is not an approval. Anything unreadable fails closed.
+ */
+function checkChatApproval(
+  ctx: TokenWriteAuthorizationContext,
+  ownConversationId: string,
+): { ok: boolean; reason?: string } {
+  const titles = (ctx.titles ?? []).map((t) => t.trim()).filter((t) => t.length > 0);
+  if (titles.length === 0) return { ok: false, reason: "no approved titles were supplied" };
+
+  let replyIdx = -1;
+  for (let i = ctx.entries.length - 1; i >= 0; i--) {
+    if (isJoshReply(ctx.entries[i], ownConversationId)) {
+      replyIdx = i;
+      break;
+    }
+  }
+  if (replyIdx < 0) return { ok: false, reason: "no reply from Josh was found" };
+
+  const reply = stripUserRequestWrapper(extractEntryText(ctx.entries[replyIdx])).trim();
+  if (!reply) return { ok: false, reason: "Josh's latest reply carries no text" };
+  if (nonFilingSlashCommandInvoked(reply)) {
+    return { ok: false, reason: "Josh's latest reply invokes another skill rather than approving" };
+  }
+  if (replyOpensWithRefusal(reply)) {
+    return { ok: false, reason: "Josh's latest reply opens with a refusal" };
+  }
+
+  for (let i = replyIdx - 1; i >= 0; i--) {
+    const entry = ctx.entries[i];
+    if (isJoshReply(entry, ownConversationId)) break;
+    if (!isOwnAssistantEntry(entry, ownConversationId)) continue;
+    const text = extractEntryText(entry);
+    if (titles.every((title) => text.includes(title))) return { ok: true };
+  }
+  return {
+    ok: false,
+    reason: "the agent did not show every exact title before Josh's latest reply",
+  };
 }
 
 /**
@@ -268,6 +360,10 @@ export interface TokenWriteAuthorizationResult {
  * since a long `/design-issue` run can settle decisions over many turns before filing at the end,
  * and the token this check gates is already bound to this session id and carries its own bounded
  * TTL — a second, shorter expiry here only broke the runs it exists to serve.
+ *
+ * When `ctx.titles` is given and no filing skill authorizes the write, Josh's approval in chat can
+ * (web-jam-tools#1054, D-35): see checkChatApproval. A subagent, an undetermined identity and an
+ * unreadable transcript still refuse first or fall through to the refusal.
  */
 export function checkTokenWriteAuthorization(
   ctx: TokenWriteAuthorizationContext,
@@ -288,9 +384,25 @@ export function checkTokenWriteAuthorization(
     };
   }
 
+  const bySkill = checkFilingSkillInvocation(ctx, ctx.ownConversationId);
+  if (bySkill.ok || !ctx.titles) return bySkill;
+
+  const byChat = checkChatApproval(ctx, ctx.ownConversationId);
+  if (byChat.ok) return { ok: true, via: "chat-approval" };
+  return {
+    ok: false,
+    reason: `${bySkill.reason} Josh's approval in chat did not count either: ${byChat.reason}.`,
+  };
+}
+
+/** The filing-skill half of checkTokenWriteAuthorization: the backward scan described there. */
+function checkFilingSkillInvocation(
+  ctx: TokenWriteAuthorizationContext,
+  ownConversationId: string,
+): TokenWriteAuthorizationResult {
   for (let i = ctx.entries.length - 1; i >= 0; i--) {
     const entry = ctx.entries[i];
-    if (!isOwnSessionUserTurnBoundary(entry, ctx.ownConversationId)) continue;
+    if (!isOwnSessionUserTurnBoundary(entry, ownConversationId)) continue;
     const text = extractEntryText(entry);
     const otherCmd = nonFilingSlashCommandInvoked(text);
     if (otherCmd) {

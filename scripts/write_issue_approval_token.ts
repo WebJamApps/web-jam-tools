@@ -23,7 +23,9 @@
  * web-jam-tools#808: the CLI invocation below refuses to write at all unless
  * hooks/lib/check_token_write_authorization.ts's decision 21 check passes — the most recent
  * own-session, non-sidechain user turn must have invoked /design-issue or /file-issue, and the
- * invocation must not itself be a dispatched subagent's own turn. See resolveWriteContext() below
+ * invocation must not itself be a dispatched subagent's own turn. web-jam-tools#1054 (D-35) adds a
+ * second way in: Josh's latest reply follows the agent showing every exact --title and does not open
+ * with a refusal word, with no slash command needed. See resolveWriteContext() below
  * for how the transcript to check is located on each surface. The exported buildApprovalToken/
  * writeApprovalToken/writeApprovalTokenSync functions themselves stay unchanged and unauthorized —
  * they are the mechanical "write this already-authorized token" primitives the CLI block calls
@@ -457,10 +459,15 @@ export async function resolveWriteContext(
 
 /** Runs the decision 21 authorization check for one CLI invocation. Exported for testing. */
 export async function authorizeWrite(
-  options: { sessionId: string; transcriptPath?: string; conversationId?: string },
+  options: {
+    sessionId: string;
+    transcriptPath?: string;
+    conversationId?: string;
+    titles?: readonly string[];
+  },
 ): Promise<TokenWriteAuthorizationResult> {
   const context = await resolveWriteContext(options);
-  return checkTokenWriteAuthorization(context);
+  return checkTokenWriteAuthorization({ ...context, titles: options.titles });
 }
 
 if (import.meta.main) {
@@ -580,6 +587,7 @@ Options:
       sessionId,
       transcriptPath: testTranscriptPath || undefined,
       conversationId: testConversationId || undefined,
+      titles,
     });
     if (!authorization.ok) {
       console.error(`Refused to write approval token: ${authorization.reason}`);

@@ -240,11 +240,15 @@ match the `--title` passed to `deno task create-issue` below EXACTLY** — the t
 titles, so any mismatch (even punctuation or casing) means the create-issue call is denied even
 though a token exists.
 
-The writer authorizes itself off `hooks/lib/check_token_write_authorization.ts`'s check that the
-most recent own-session, non-sidechain user turn invoked `/file-issue` or `/design-issue` — run it
-outside that context (a different session, or after other turns intervened) and it refuses. That
-refusal is the gate working as designed, not a bug to route around: get Josh's fresh `/file-issue`
-(or `/design-issue`) invocation first rather than looking for a workaround.
+The writer authorizes itself off `hooks/lib/check_token_write_authorization.ts`, which accepts
+either of two things in this session's own, non-sidechain transcript: a user turn that invoked
+`/file-issue` or `/design-issue` (with no other skill invoked since), or Josh's latest reply
+approving in chat — it follows an agent turn that showed every exact `--title` and does not open
+with `no`, `nope`, `nah`, `don't`, `do not`, `stop`, `never`, `cancel`, `hold off`, `wait` or `not yet`.
+Run it outside that context (a different session, titles not shown to Josh first, or a subagent's
+own turn) and it refuses. That refusal is the gate working as designed, not a bug to route around:
+show Josh the exact titles and get his reply, or get his fresh `/file-issue` (or `/design-issue`)
+invocation, rather than looking for a workaround.
 
 Running this writer step is not a bypass of the approval gate: `hooks/lib/check_issue_approval_token.ts`
 still independently validates session, repo, title, and expiry at `deno task create-issue` time,
