@@ -29,8 +29,8 @@ shell probe only; it has no network or write permissions.
 
 ### `backlog-groom:rank`
 
-Ranks one active repository's open issues and prints a batch of proposed native Priority moves.
-It only reads GitHub through `gh api`; it never applies the proposals.
+Ranks one active repository's open issues and prints a batch of proposed native Priority moves. It
+only reads GitHub through `gh api`; it never applies the proposals.
 
 ```sh
 deno task backlog-groom:rank --repo web-jam-tools --judgments /tmp/backlog-groom/judgments.json --focus gig-outreach
@@ -54,21 +54,21 @@ reason per issue. Keys are issue numbers in that repository:
 
 `levelFromTests` is required below 20 open non-Epics: the caller selects it using
 `skills/file-issue/SKILL.md`, so this module does not duplicate those level tests. Missing or
-invalid judgments, failed GitHub reads and malformed responses refuse the run rather than making
-up facts. Parked issues and pull requests are excluded. Epics inherit the highest existing native
+invalid judgments, failed GitHub reads and malformed responses refuse the run rather than making up
+facts. Parked issues and pull requests are excluded. Epics inherit the highest existing native
 Priority of their open, unparked children and are excluded from shares. An Epic with no child
 Priority supplies no proposal.
 
 Shares are rounded independently; the last band includes any rounding remainder. Overflow is
-measured from the current snapshot: more than three above a share proposes moving up to the
-excess count of eligible lowest-ranked issues down one level, without cascading those proposals
-into another level's count. Live broken issues stay Urgent and cannot be demoted.
-The JSON result includes the full ranking, current counts, shares, focus notices and proposals
-with reasons. A missing focus milestone skips that step and reports why.
+measured from the current snapshot: more than three above a share proposes moving up to the excess
+count of eligible lowest-ranked issues down one level, without cascading those proposals into
+another level's count. Live broken issues stay Urgent and cannot be demoted. The JSON result
+includes the full ranking, current counts, shares, focus notices and proposals with reasons. A
+missing focus milestone skips that step and reports why.
 
-Create the input file under `/tmp/backlog-groom/`, outside every repository. That is the task's
-only permitted input directory; no user home, network or write permissions are granted to Deno.
-The GitHub subprocess authenticates through the existing `gh` setup.
+Create the input file under `/tmp/backlog-groom/`, outside every repository. That is the task's only
+permitted input directory; no user home, network or write permissions are granted to Deno. The
+GitHub subprocess authenticates through the existing `gh` setup.
 
 ### `edit-issue.ts`
 
@@ -89,7 +89,8 @@ applied. Failed or unreadable verification also exits nonzero and does not claim
 
 ### `skill-start-check.ts`
 
-Proves a skill still starts after its description or listing changes, on Claude Code and agy (web-jam-tools#1237).
+Proves a skill still starts after its description or listing changes, on Claude Code and agy
+(web-jam-tools#1237).
 
 ```sh
 deno task skill-start-check <skill-name> [--tool claude|agy|all]
@@ -97,8 +98,8 @@ deno task skill-start-check <skill-name> [--tool claude|agy|all]
 
 The check reads the installed skill without changing its links. If its instructions or resources
 differ from the candidate, it refuses rather than reporting a result for the installed copy. The
-harness-only `start-check.json` is excluded from that comparison. agy checks require Linux
-`setsid` and `kill` to terminate the check's process group and its descendants on timeout.
+harness-only `start-check.json` is excluded from that comparison. agy checks require Linux `setsid`
+and `kill` to terminate the check's process group and its descendants on timeout.
 
 ### `install-codex.ts`
 
@@ -138,7 +139,9 @@ Manual steps are in `~/Dropbox/web-jam-llms/Token_Savings/codex-install-manual-s
 
 ### `session-load-report.ts`
 
-Emits the session load report at Claude Code startup in tab 1 of `agents` (web-jam-tools#1234). Reads the size of every session-load part from disk across Claude Code, agy, and Codex against the canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
+Emits the session load report at Claude Code startup in tab 1 of `agents` (web-jam-tools#1234).
+Reads the size of every session-load part from disk across Claude Code, agy, and Codex against the
+canonical limits in `src/session-load/limits.json`, prints a `systemMessage` JSON line, and exits 0.
 
 ```sh
 deno run --allow-read --allow-env scripts/session-load-report.ts
@@ -209,11 +212,15 @@ See [docs/circleci-project-settings.md](circleci-project-settings.md) for full d
 
 ### `gitleaks.sh`
 
-Runs `gitleaks detect` with repository configuration and shared `.gitleaks.toml` rules (web-jam-tools#658, #1403).
+Runs `gitleaks detect` with repository configuration and shared `.gitleaks.toml` rules
+(web-jam-tools#658, #1403).
 
 - Supports scanning a named repository via `--repo <path>` (defaults to current repository root).
-- Runs on the latest gitleaks release: uses `docker run --pull=always zricethezav/gitleaks:latest` when Docker is available; falls back to an installed `gitleaks` on `PATH` when Docker is absent; fails closed when neither is available.
-- Passes `--exit-code=2` (0 = clean, 2 = finding, non-zero and != 2 = failure), `--ignore-gitleaks-allow`, and runs with `--source .` relative to the repository.
+- Runs on the latest gitleaks release: uses `docker run --pull=always zricethezav/gitleaks:latest`
+  when Docker is available; falls back to an installed `gitleaks` on `PATH` when Docker is absent;
+  fails closed when neither is available.
+- Passes `--exit-code=2` (0 = clean, 2 = finding, non-zero and != 2 = failure),
+  `--ignore-gitleaks-allow`, and runs with `--source .` relative to the repository.
 
 ```bash
 # Scan current repository
@@ -384,8 +391,8 @@ merges, confirm the clone is on `dev`:
 git -C "$HOME/WebJamApps/web-jam-tools" branch --show-current
 ```
 
-Continue only if that prints `dev`. Fetch the merged source before invoking the new helper,
-because an older checkout does not contain `scripts/update-scripts.sh`:
+Continue only if that prints `dev`. Fetch the merged source before invoking the new helper, because
+an older checkout does not contain `scripts/update-scripts.sh`:
 
 ```sh
 git -C "$HOME/WebJamApps/web-jam-tools" pull --ff-only origin dev
@@ -443,8 +450,7 @@ script.
 - **Its strings are secret-scanned** with the same credential-literal check as `permissions` and
   `hooks`; a match refuses the write.
 
-**Claude Code ONLY**, like `statusLine`: it is never merged into agy's
-`hooks.json`.
+**Claude Code ONLY**, like `statusLine`: it is never merged into agy's `hooks.json`.
 
 ### `skillOverrides` (managed by `install-hooks.sh`)
 
@@ -452,12 +458,13 @@ The `skillOverrides` section of `~/.claude/settings.json` holds overrides for Cl
 skills. `scripts/install-hooks.sh` sets the 30 skills bundled with Claude Code (13 document skills
 named `anthropic-skills:<name>` and 17 built-in skills) to `name-only`, so their descriptions stop
 loading at every session open while every skill stays listed and callable by name
-(web-jam-tools#1240). Its content is generated by `scripts/install-hooks.sh` from the canonical list in `src/session-load/limits.json` (web-jam-tools#1416).
+(web-jam-tools#1240). Its content is generated by `scripts/install-hooks.sh` from the canonical list
+in `src/session-load/limits.json` (web-jam-tools#1416).
 
 - **It is replaced as a whole.** A run installs the object when it is absent and replaces it when it
   differs; no other key in `settings.json` is touched.
-- **Change it in `src/session-load/limits.json`, not in `settings.json`.** A hand edit to `settings.json` is
-  reported by `--check` and overwritten by the next run.
+- **Change it in `src/session-load/limits.json`, not in `settings.json`.** A hand edit to
+  `settings.json` is reported by `--check` and overwritten by the next run.
 - **The drift report names what differs.** Both `--check` and a replacing run list each key that
   differs or is missing.
 - **Its strings are secret-scanned** with the same credential-literal check as `permissions` and
@@ -488,11 +495,38 @@ scripts/ubuntu-health.sh --check       # change nothing; name every drift; exit 
   at idle CPU and disk priority. The job runs the installed `--check` and, when it finds anything,
   sends one email naming the system and what to run next. A week with nothing to report sends
   nothing. The job's log is `/var/log/ubuntu-health.log`.
+- **SSH and the firewall (laptop only).** SSH into the laptop accepts a key only and the firewall
+  admits only Tailscale. A run installs `/etc/ssh/sshd_config.d/00-ubuntu-health.conf` with
+  `PasswordAuthentication no` (named `00-` because sshd keeps the first value it reads) and restarts
+  `ssh.service` when that file changed; on a real system `sshd -t` must accept the configuration
+  first. A restart that fails (or a run that stops before it) is not forgotten: a marker file,
+  `ssh-restart-pending` beside the installed script, stays until the restart succeeds, the next
+  apply retries it, and `--check` names it meanwhile. The firewall step runs
+  `ufw allow in on
+  tailscale0`, `ufw default deny incoming` and `ufw enable`, each only when ufw
+  does not already hold it, so a second run with everything set makes no `ufw` or `ssh` change; ufw
+  asks you to confirm `ufw enable` itself. If ufw already holds a rule that admits port 22 off
+  Tailscale, apply refuses, names the rule and leaves the firewall as it was, because that rule
+  would survive every change; remove it with `ufw status numbered` and `ufw delete <number>`, then
+  run apply again. It never deletes a rule itself. In WSL both steps are skipped and the output says
+  so, because WSL runs no SSH server (Windows' own SSH server reaches it).
 - **`--check`.** Needs no `sudo`. Reports each drifted step as `DRIFT <step>: <what>` (`job-files`,
-  `unit-files`, `timer`, `email-login`), or `no drift`. Installed files are verified against
-  `manifest.sha256`, which is how the weekly job (running the installed copy, with no repository
-  beside it) still catches a changed `weekly.sh` or `gmail-send.sh`; run from the repository, it
-  also compares each file with its repository source.
+  `unit-files`, `timer`, `email-login`, and on the laptop `ssh` and `firewall`), or `no drift`. The
+  `ssh` step names an effective `PasswordAuthentication` other than `no`, read from `sshd_config`
+  and the files it includes, and a `Match` block (anywhere in them) that sets it to anything but
+  `no`, because that can switch passwords back on for the connections it matches (an included file
+  or a directory holding included files only root can read, search or list (including directories
+  beneath wildcard path components) prints `NOTE: ... not fully checked without sudo`); it also
+  names an `ssh.service` restart still pending. Readable Include matches are still scanned when a
+  sibling directory is inaccessible, so known password drift is reported alongside the NOTE. The
+  `firewall` step names "firewall off" (`ENABLED` is not `yes` in `/etc/ufw/ufw.conf`), a missing
+  default deny, a missing `tailscale0` rule (the blanket `ufw allow in on tailscale0`; one limited
+  to a source, destination, port or protocol does not count), or a rule, logged or not, that admits
+  port 22 on any other interface; ufw's rule files are readable only by root, so without `sudo` it
+  prints `NOTE: ... not checked without sudo` for them instead of guessing. Installed files are
+  verified against `manifest.sha256`, which is how the weekly job (running the installed copy, with
+  no repository beside it) still catches a changed `weekly.sh` or `gmail-send.sh`; run from the
+  repository, it also compares each file with its repository source.
 - **Email.** `gmail-send.sh` makes the same two Gmail API requests as `src/shared/gmail_send.ts`
   with `curl`. It reads `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` from the
   send-only login file `/etc/ubuntu-health/gmail-send.env`, which must be owned by root with mode
