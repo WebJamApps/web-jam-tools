@@ -212,6 +212,17 @@ function isChildOfRow(
     return true;
   }
 
+  // An external issue number is not a plan position. Match a qualified citation
+  // by its repository and quoted title instead of comparing its number to COL_NUM.
+  const citation = childEpicCell.match(
+    /^(?:epic\s+)?((?:[a-z0-9_.-]+\/)?[a-z0-9_.-]+)#\d+\s+"([^"]+)"$/i,
+  );
+  if (citation) {
+    return normalizeRepoCell(citation[1]).toLowerCase() ===
+        normalizeRepoCell(parent.cells[COL_REPO]).toLowerCase() &&
+      citation[2].trim().toLowerCase() === parentTitle;
+  }
+
   return false;
 }
 
@@ -222,9 +233,6 @@ function isEpicRow(row: PlanTableRow, allRows: PlanTableRow[]): boolean {
 
   const closesCell = stripMdMarkers(row.cells[COL_CLOSES]).toLowerCase();
   if (closesCell.includes("children close")) return true;
-
-  const testsCell = stripMdMarkers(row.cells[COL_TESTS]).toLowerCase();
-  if (testsCell.includes("an epic")) return true;
 
   const title = stripMdMarkers(row.cells[COL_TITLE]).trim().toLowerCase();
   if (title.startsWith("epic:") || title.startsWith("epic -")) return true;
@@ -891,6 +899,19 @@ export interface LintPlanCliOptions {
   renderDesignDocFileImpl?: (inputPath: string, outputPath: string) => void;
 }
 
+/** Gate 1's background launcher cannot report a missing browser executable. */
+async function defaultOpenPlanBrowserImpl(htmlPath: string, display?: string): Promise<void> {
+  const availability = await new Deno.Command("bash", {
+    args: ["-c", "command -v google-chrome >/dev/null 2>&1"],
+    stdout: "null",
+    stderr: "null",
+  }).output();
+  if (!availability.success) {
+    throw new Error("google-chrome was not found on PATH");
+  }
+  await defaultOpenBrowserImpl(htmlPath, display);
+}
+
 /**
  * CLI runner for `deno task design:lint-plan <plan.md> --design-doc <doc.md>`.
  */
@@ -995,7 +1016,7 @@ Options:
 
       const noOpen = flags["no-open"] || flags.no_open || options?.noOpen;
       if (!noOpen) {
-        const openBrowser = options?.openBrowserImpl ?? defaultOpenBrowserImpl;
+        const openBrowser = options?.openBrowserImpl ?? defaultOpenPlanBrowserImpl;
         const display = (typeof flags.display === "string" ? flags.display : undefined) ||
           options?.display;
         try {

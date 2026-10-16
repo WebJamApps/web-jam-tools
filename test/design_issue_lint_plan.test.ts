@@ -575,6 +575,50 @@ Deno.test("AC4 (#1398): a non-epic row whose Epic / child of cell names an epic 
   }
 });
 
+Deno.test("a task mentioning an epic in its test description still requires a parent", () => {
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "none", tests: "Unit tests reject a task without an epic" }),
+  ]);
+  assertEquals(findRule(validate(doc), "row-missing-epic").length, 1);
+});
+
+Deno.test("cross-repo epic validation resolves qualified parent citations", () => {
+  const title = "Coordinate cross-repo music features";
+  const epic =
+    `| 1 | ${title} | Epic | Opus | High | JaMmusic | Tests cover both child repositories | all children close |`;
+  for (const prefix of ["", "Epic "]) {
+    for (const repo of ["JaMmusic", "WebJamApps/JaMmusic"]) {
+      const epicChild = `${prefix}${repo}#1355 "${title}"`;
+      const doc = planTableDoc([
+        epic,
+        childRow({ epicChild, repo: "JaMmusic" }),
+        childRow({ epicChild, repo: "web-jam-back", title: "Add backend audio routes" }),
+      ]);
+      assertEquals(
+        findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools").length,
+        1,
+        epicChild,
+      );
+    }
+  }
+});
+
+Deno.test("qualified parent citations do not match a different repository or owner", () => {
+  const title = "Coordinate cross-repo music features";
+  const epic =
+    `| 1 | ${title} | Epic | Opus | High | JaMmusic | Tests cover both child repositories | all children close |`;
+  for (const repo of ["AppersonAuto", "OtherOrg/JaMmusic"]) {
+    const epicChild = `${repo}#1355 "${title}"`;
+    const doc = planTableDoc([
+      epic,
+      childRow({ epicChild, repo: "JaMmusic" }),
+      childRow({ epicChild, repo: "web-jam-back", title: "Add backend audio routes" }),
+    ]);
+    assertEquals(findRule(validate(doc), "cross-repo-epic-not-in-web-jam-tools").length, 0);
+  }
+});
+
 Deno.test("AC5 (#1398): an Epic row whose children sit in more than one repo fails when Repo is not web-jam-tools", () => {
   const epicJaMmusic =
     "| 1 | Coordinate cross-repo music features | Epic | Opus | High | JaMmusic | Unit tests | all children close |";
@@ -1341,6 +1385,55 @@ Deno.test("AC6 (#1398): failing plan writes and opens nothing", async () => {
     assertEquals(code, 1);
     assertEquals(rendered, false);
     assertEquals(opened, false);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("lint-plan CLI warns when Chrome is absent using the real browser launcher", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const binDir = path.join(tmpDir, "bin");
+    await Deno.mkdir(binDir);
+    await Deno.symlink("/bin/bash", path.join(binDir, "bash"));
+    await Deno.writeTextFile(path.join(binDir, "gh"), "#!/bin/bash\nprintf '[]\\n'\n", {
+      mode: 0o755,
+    });
+    const planFile = path.join(tmpDir, "plan.md");
+    const designDoc = path.join(tmpDir, "design.md");
+    const designContent = "# Approved Design\n";
+    await Deno.writeTextFile(designDoc, designContent);
+    await Deno.writeTextFile(planFile, planTableDoc([EPIC_ROW, childRow()]));
+    await openGate1Record(designDoc, designContent, { stateDir: tmpDir });
+    await approveGate1Record(designDoc, "Approved.", { stateDir: tmpDir });
+
+    const repoDir = path.resolve(path.dirname(path.fromFileUrl(import.meta.url)), "..");
+    const result = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--cached-only",
+        "--config",
+        path.join(repoDir, "deno.json"),
+        "-A",
+        path.join(repoDir, "src/design-issue/cli.ts"),
+        "lint-plan",
+        planFile,
+        "--design-doc",
+        designDoc,
+        "--state-dir",
+        tmpDir,
+      ],
+      env: { PATH: binDir },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+
+    const stdout = new TextDecoder().decode(result.stdout);
+    const stderr = new TextDecoder().decode(result.stderr);
+    assertEquals(result.code, 0, stderr);
+    assertStringIncludes(stdout, "[design:lint-plan] PASS:");
+    assertStringIncludes(stderr, "Warning: Google Chrome is unavailable");
+    assertEquals((await Deno.stat(path.join(tmpDir, "plan.html"))).isFile, true);
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
