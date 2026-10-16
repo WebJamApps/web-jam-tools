@@ -4,11 +4,13 @@
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import * as path from "@std/path";
 import {
+  AGY_MENTION_PATTERN,
   findSkillFiles,
   lintAllSkills,
   lintSkillFile,
   lintSkillMarkdown,
   runLintSkillsCli,
+  SURFACE_SPECIFIC_MACHINERY_PATTERNS,
 } from "../src/skills-lint/lint_skills.ts";
 
 Deno.test("lintSkillMarkdown: passes on clean skill markdown", () => {
@@ -223,4 +225,216 @@ Deno.test("runLintSkillsCli: failing file exits 1 and supports --json", async ()
   } finally {
     await Deno.remove(tempDir, { recursive: true });
   }
+});
+
+// --- Tests for web-jam-tools#1091 (agy / Antigravity presence rule) ---
+
+Deno.test("lintSkillMarkdown: fixture body naming surface-specific machinery with no agy/Antigravity mention fails (AC 1)", () => {
+  const fixture1 = `---
+name: sample-skill
+description: Fixture naming Claude Code surface.
+---
+
+# sample-skill
+
+- On Claude Code, spawn via the Agent tool (model: "haiku").
+- Use mcp__google-drive__listFiles to find drive files.
+`;
+
+  const result1 = lintSkillMarkdown(fixture1, "claude-skill/SKILL.md");
+  assertEquals(result1.valid, false);
+  assertEquals(result1.violations.length, 1);
+  assertEquals(result1.violations[0].line, 8);
+  assertEquals(result1.violations[0].linkText, "Claude Code");
+  assert(result1.violations[0].message.includes("must mention 'agy' or 'Antigravity'"));
+
+  // Check another fixture naming only mcp__ machinery
+  const fixture2 = `---
+name: mcp-skill
+description: Fixture naming mcp tools.
+---
+
+# mcp-skill
+
+Call mcp__github__issue_read to inspect issue state.
+`;
+  const result2 = lintSkillMarkdown(fixture2, "mcp-skill/SKILL.md");
+  assertEquals(result2.valid, false);
+  assertEquals(result2.violations.length, 1);
+  assertEquals(result2.violations[0].linkText, "mcp__github__issue_read");
+
+  // Check fixture with invoke_subagent but no agy/Antigravity
+  const fixture3 = `# invoke-skill
+Dispatch a subagent using invoke_subagent.
+`;
+  const result3 = lintSkillMarkdown(fixture3, "invoke-skill/SKILL.md");
+  assertEquals(result3.valid, false);
+  assertEquals(result3.violations.length, 1);
+  assertEquals(result3.violations[0].linkText, "invoke_subagent");
+});
+
+Deno.test("lintSkillMarkdown: the same body with one agy or Antigravity mention passes (AC 2)", () => {
+  const passingAgy = `---
+name: dual-surface-skill
+description: Fixture naming Claude Code and agy.
+---
+
+# dual-surface-skill
+
+- On Claude Code, spawn via the Agent tool (model: "haiku").
+- On Antigravity (\`agy\`), dispatch via invoke_subagent.
+- Use mcp__google-drive__listFiles or call_mcp_tool on agy.
+`;
+
+  const resultAgy = lintSkillMarkdown(passingAgy, "dual-surface-skill/SKILL.md");
+  assertEquals(resultAgy.valid, true);
+  assertEquals(resultAgy.violations.length, 0);
+
+  const passingAntigravityOnly = `---
+name: antigravity-skill
+description: Fixture naming Antigravity.
+---
+
+# antigravity-skill
+
+- On Claude Code surface: execute directly.
+- On Antigravity surface: dispatch task.
+`;
+  const resultAntigravity = lintSkillMarkdown(passingAntigravityOnly, "antigravity-skill/SKILL.md");
+  assertEquals(resultAntigravity.valid, true);
+  assertEquals(resultAntigravity.violations.length, 0);
+});
+
+Deno.test("lintSkillMarkdown: a body matching only Flash High as a label name still fails (AC 3)", () => {
+  const fixtureWithFlashHighLabel = `---
+name: fix-labels-fixture
+description: Fixture naming Claude machinery and listing Flash High label.
+---
+
+# fix-labels-fixture
+
+## Model gate — MUST be on Haiku (do this FIRST)
+Type /model haiku before proceeding.
+
+Supported GitHub labels:
+- Flash High
+- Flash Med
+- Flash Low
+`;
+
+  const result = lintSkillMarkdown(fixtureWithFlashHighLabel, "fix-labels-fixture/SKILL.md");
+  assertEquals(result.valid, false);
+  assertEquals(result.violations.length, 1);
+  assert(result.violations[0].message.includes("must mention 'agy' or 'Antigravity'"));
+
+  // Also verify that a body with model: "haiku" and Flash High as label still fails
+  const fixture2 = `# label-fixture
+- Model tier label: Flash High
+- Subagent dispatch: model: "haiku"
+`;
+  const result2 = lintSkillMarkdown(fixture2, "label-fixture/SKILL.md");
+  assertEquals(result2.valid, false);
+  assertEquals(result2.violations.length, 1);
+  assert(result2.violations[0].message.includes("must mention 'agy' or 'Antigravity'"));
+});
+
+Deno.test("lintSkillMarkdown: ignores surface machinery inside fenced code blocks", () => {
+  const codeBlockOnly = `---
+name: code-only-skill
+description: Surface machinery in code block only.
+---
+
+# code-only-skill
+
+Here is an example in a fenced code block:
+
+\`\`\`markdown
+- On Claude Code, run tool.
+- Model: "haiku"
+- mcp__github__issue_read
+\`\`\`
+
+Prose has no surface machinery, only standard instructions.
+`;
+
+  const result = lintSkillMarkdown(codeBlockOnly, "code-only-skill/SKILL.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
+Deno.test("lintSkillMarkdown: ignores surface machinery inside frontmatter", () => {
+  const frontmatterOnly = `---
+name: frontmatter-skill
+description: Mentions Claude Code in frontmatter description only.
+---
+
+# frontmatter-skill
+
+Prose body is clean and surface-neutral.
+`;
+
+  const result = lintSkillMarkdown(frontmatterOnly, "frontmatter-skill/SKILL.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
+});
+
+Deno.test("AGY_MENTION_PATTERN: strictly matches agy and Antigravity, rejecting Flash and Gemini", () => {
+  assert(AGY_MENTION_PATTERN.test("agy"));
+  assert(AGY_MENTION_PATTERN.test("AGY"));
+  assert(AGY_MENTION_PATTERN.test("Antigravity"));
+  assert(AGY_MENTION_PATTERN.test("antigravity"));
+  assert(AGY_MENTION_PATTERN.test("(`agy`)"));
+  assert(AGY_MENTION_PATTERN.test("Antigravity / agy"));
+  assert(AGY_MENTION_PATTERN.test("agy/Flash"));
+
+  // Must reject surface-neutral model labels and names
+  assertEquals(AGY_MENTION_PATTERN.test("Flash"), false);
+  assertEquals(AGY_MENTION_PATTERN.test("Flash High"), false);
+  assertEquals(AGY_MENTION_PATTERN.test("Flash Med"), false);
+  assertEquals(AGY_MENTION_PATTERN.test("Flash Low"), false);
+  assertEquals(AGY_MENTION_PATTERN.test("Gemini"), false);
+  assertEquals(AGY_MENTION_PATTERN.test("Gemini Flash"), false);
+});
+
+Deno.test("SURFACE_SPECIFIC_MACHINERY_PATTERNS: matches surface-specific indicators", () => {
+  const matchesAny = (str: string) => SURFACE_SPECIFIC_MACHINERY_PATTERNS.some((p) => p.test(str));
+
+  assert(matchesAny("On Claude Code, run the tool."));
+  assert(matchesAny("~/.claude/hooks/foo.sh"));
+  assert(matchesAny("On Codex, run directly."));
+  assert(matchesAny("mcp__github__issue_read"));
+  assert(matchesAny('Agent tool with model: "haiku"'));
+  assert(matchesAny('Agent(model: "sonnet")'));
+  assert(matchesAny("/model haiku"));
+  assert(matchesAny('/model "Gemini 3.8 Flash (High)"'));
+  assert(matchesAny("Haiku subagents"));
+  assert(matchesAny("MUST be on Haiku"));
+  assert(matchesAny("invoke_subagent"));
+  assert(matchesAny("call_mcp_tool"));
+
+  // Surface-neutral strings and false positives should not match
+  assertEquals(matchesAny("Clean instructions for git commit."), false);
+  assertEquals(matchesAny("Labels: Flash High, Flash Med, Flash Low"), false);
+  assertEquals(matchesAny("See src/shared/model/helpers.ts for model logic."), false);
+  assertEquals(matchesAny("Co-Authored-By: Claude Sonnet 5.5"), false);
+  // agy / Antigravity is the target mention, not surface machinery
+  assertEquals(matchesAny("On agy, run the tool."), false);
+  assertEquals(matchesAny("Antigravity surface"), false);
+});
+
+Deno.test("lintSkillMarkdown: passes on path segment containing /model/ and bare Claude model attribution without agy mention", () => {
+  const content = `---
+name: model-attribution-skill
+description: Skill mentioning file path and bare model name.
+---
+
+# model-attribution-skill
+
+See \`src/shared/model/helpers.ts\` or src/shared/model/helpers.ts for shared helpers.
+Commit footer: Co-Authored-By: Claude Sonnet 5.5.
+`;
+
+  const result = lintSkillMarkdown(content, "model-attribution-skill/SKILL.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
 });
