@@ -439,8 +439,12 @@ if (import.meta.main) {
     }
   }
   if (args.length === 1 && args[0] === "--help") {
-    console.log("usage: deno task push [--repo-dir <path>] [--force-with-lease] [--fix-comment <file>]");
-    console.log("Inside a typed fix-pr run, --fix-comment validates, signs, pushes, and posts the fix.");
+    console.log(
+      "usage: deno task push [--repo-dir <path>] [--force-with-lease] [--fix-comment <file>]",
+    );
+    console.log(
+      "Inside a typed fix-pr run, --fix-comment validates, signs, pushes, and posts the fix.",
+    );
     Deno.exit(0);
   }
   const exitCode = await runPush(args, cwd);

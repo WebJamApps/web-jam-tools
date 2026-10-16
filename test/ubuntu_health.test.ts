@@ -26,6 +26,7 @@ esac`,
   // Stateful like the real thing: "enable" is what makes is-enabled / is-active answer yes.
   systemctl: `case "$1" in
   enable) touch "$STUB_STATE/timer-enabled" ;;
+  restart) [ "$STUB_RESTART_FAIL" = 1 ] && exit 1 ;;
   is-enabled) [ -e "$STUB_STATE/timer-enabled" ] && echo enabled || { echo disabled; exit 1; } ;;
   is-active) [ -e "$STUB_STATE/timer-enabled" ] && echo active || { echo inactive; exit 3; } ;;
 esac`,
@@ -35,7 +36,20 @@ esac`,
   snap: "",
   flatpak: "",
   docker: "",
-  ufw: "",
+  // Stateful like the real thing: each change lands in the file ufw keeps it in, which is what the
+  // script reads back (ufw.conf, /etc/default/ufw, user.rules) under UBUNTU_HEALTH_ROOT.
+  ufw: `r="$UBUNTU_HEALTH_ROOT"
+case "$*" in
+  "default deny incoming")
+    mkdir -p "$r/etc/default"
+    printf 'DEFAULT_INPUT_POLICY="DROP"\\n' > "$r/etc/default/ufw" ;;
+  "allow in on tailscale0")
+    mkdir -p "$r/etc/ufw"
+    printf '### tuple ### allow any any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0\\n' >> "$r/etc/ufw/user.rules" ;;
+  enable)
+    mkdir -p "$r/etc/ufw"
+    printf 'ENABLED=yes\\n' > "$r/etc/ufw/ufw.conf" ;;
+esac`,
   "ubuntu-drivers": "",
   "powershell.exe": "",
   // curl reads the secrets from stdin (-K -); the stub keeps them out of the logged arguments.
@@ -136,6 +150,22 @@ async function writeEnvFile(h: Harness, mode: number): Promise<void> {
   await Deno.chmod(`${h.root}${ENV_PATH}`, mode);
 }
 
+// A stock Ubuntu sshd_config: its first line reads the drop-in folder, then the commented default.
+const SSHD_CONFIG_BODY = "Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\n" +
+  "KbdInteractiveAuthentication no\nUsePAM yes\n";
+
+async function seedSshdConfig(h: Harness, body = SSHD_CONFIG_BODY): Promise<void> {
+  await Deno.mkdir(`${h.root}/etc/ssh/sshd_config.d`, { recursive: true });
+  await Deno.writeTextFile(`${h.root}/etc/ssh/sshd_config`, body);
+}
+
+// The system after a clean run: ssh and the firewall set by apply, the login file in place.
+async function applyAndSettle(h: Harness): Promise<void> {
+  await seedSshdConfig(h);
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+}
+
 // Every file under dir with its content and modification time.
 async function snapshot(dir: string): Promise<Record<string, string>> {
   const seen: Record<string, string> = {};
@@ -232,8 +262,7 @@ Deno.test("frame: a second apply changes nothing", async () => {
 
 Deno.test("frame: --check with nothing drifted -> exit 0, nothing written", async () => {
   const h = await makeHarness();
-  await apply(h);
-  await writeEnvFile(h, 0o600);
+  await applyAndSettle(h);
   const before = await snapshot(h.root);
 
   const r = await check(h);
@@ -264,8 +293,7 @@ const installedCheck = (h: Harness) => run(h, installed(h, "ubuntu-health.sh"), 
 
 Deno.test("frame: the installed --check with nothing drifted -> exit 0", async () => {
   const h = await makeHarness();
-  await apply(h);
-  await writeEnvFile(h, 0o600);
+  await applyAndSettle(h);
   const before = await snapshot(h.root);
 
   const r = await installedCheck(h);
@@ -495,8 +523,7 @@ Deno.test("email: token refresh error -> no send, error written to the job's log
 
 Deno.test("frame: a week with no findings -> no curl call", async () => {
   const h = await makeHarness();
-  await apply(h);
-  await writeEnvFile(h, 0o600);
+  await applyAndSettle(h);
 
   const r = await run(h, installed(h, "weekly.sh"));
 
@@ -509,4 +536,651 @@ Deno.test("frame: docs/scripts.md describes the script and --check", async () =>
   const docs = await Deno.readTextFile(`${REPO_ROOT}docs/scripts.md`);
   assertStringIncludes(docs, "scripts/ubuntu-health.sh");
   assertStringIncludes(docs, "--check");
+});
+
+// --- SSH by key only, and a firewall that admits only Tailscale (web-jam-tools#1427) -------------
+
+const SSH_DROPIN = "/etc/ssh/sshd_config.d/00-ubuntu-health.conf";
+const UFW_CONF = "/etc/ufw/ufw.conf";
+const UFW_RULES = "/etc/ufw/user.rules";
+
+const ufwChanges = async (h: Harness) =>
+  (await calls(h)).filter((l) => /^ufw (default|allow|enable|deny|delete|reset)/.test(l));
+const sshRestarts = async (h: Harness) =>
+  (await calls(h)).filter((l) => l.startsWith("systemctl restart"));
+
+// A user.rules holding one tuple line, the way ufw writes it.
+async function writeUfwRules(h: Harness, ...tuples: string[]): Promise<void> {
+  await Deno.mkdir(`${h.root}/etc/ufw`, { recursive: true });
+  await Deno.writeTextFile(
+    `${h.root}${UFW_RULES}`,
+    tuples.map((t) => `### tuple ### ${t}\n`).join(""),
+  );
+}
+
+Deno.test("ssh: apply sets the firewall, the key-only login, and restarts ssh.service", async () => {
+  const h = await makeHarness();
+  const r = await apply(h);
+  assertEquals(r.code, 0, r.stderr);
+
+  const all = await calls(h);
+  assert(all.includes("ufw default deny incoming"), all.join("\n"));
+  assert(all.includes("ufw allow in on tailscale0"), all.join("\n"));
+  assert(all.includes("ufw enable"), all.join("\n"));
+  assert(all.includes("systemctl restart ssh.service"), all.join("\n"));
+  const dropin = await Deno.readTextFile(`${h.root}${SSH_DROPIN}`);
+  assertStringIncludes(dropin, "PasswordAuthentication no\n");
+  // Allowing Tailscale comes before the firewall is switched on, so enabling it cuts nothing off.
+  assert(all.indexOf("ufw allow in on tailscale0") < all.indexOf("ufw enable"));
+  const owned = all.filter((l) => l.startsWith("chown root:root "));
+  assert(owned.includes(`chown root:root ${h.root}${SSH_DROPIN}`));
+});
+
+Deno.test("ssh: a second apply with both already set makes no ufw or ssh change", async () => {
+  const h = await makeHarness();
+  await apply(h);
+  const before = await snapshot(h.root);
+  const callsBefore = (await calls(h)).length;
+
+  const r = await apply(h);
+
+  assertEquals(r.code, 0, r.stderr);
+  assertEquals(await snapshot(h.root), before);
+  assertEquals((await ufwChanges(h)).length, 3);
+  assertEquals((await sshRestarts(h)).length, 1);
+  const later = (await calls(h)).slice(callsBefore);
+  assertEquals(later.filter((l) => l.startsWith("ufw ")), []);
+  assertEquals(later.filter((l) => l.startsWith("systemctl restart")), []);
+});
+
+Deno.test("ssh: apply changes only what is not already right", async () => {
+  const h = await makeHarness();
+  await Deno.mkdir(`${h.root}/etc/ufw`, { recursive: true });
+  await Deno.mkdir(`${h.root}/etc/default`, { recursive: true });
+  await Deno.writeTextFile(`${h.root}${UFW_CONF}`, "ENABLED=yes\n");
+  await Deno.writeTextFile(`${h.root}/etc/default/ufw`, 'DEFAULT_INPUT_POLICY="DROP"\n');
+  await writeUfwRules(h, "allow any any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0");
+
+  await apply(h);
+
+  assertEquals(await ufwChanges(h), []);
+});
+
+Deno.test("ssh: --check after a clean apply -> no drift", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+
+  const r = await check(h);
+
+  assertEquals(r.code, 0, r.stdout);
+  assertStringIncludes(r.stdout, "no drift");
+});
+
+Deno.test("ssh: --check with ENABLED=no in ufw.conf -> firewall off", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await Deno.writeTextFile(`${h.root}${UFW_CONF}`, "ENABLED=no\n");
+
+  const r = await check(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, "DRIFT firewall: firewall off");
+});
+
+Deno.test("ssh: --check with a rule for port 22 on another interface -> that interface is named", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  const tailscale = "allow any any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0";
+  await writeUfwRules(h, tailscale, "allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_wlp3s0");
+
+  const r = await check(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, "DRIFT firewall: port 22 is admitted on wlp3s0");
+});
+
+// Every way a rule can admit port 22 off Tailscale; shared by the --check and the apply cases.
+const PORT22_RULES: [string, string][] = [
+  ["a rule for every interface", "allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in"],
+  ["an application profile", "allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 OpenSSH - in"],
+  ["a rate-limited rule", "limit tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
+  ["a port range", "allow tcp 20:30 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
+  ["a port list", "allow tcp 22,80 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
+  ["every port on another interface", "allow any any 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
+  ["a rule carrying a comment", "allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0 comment=73736820"],
+  // ufw appends the logging type to the action: "ufw allow log 22/tcp" is allow_log.
+  ["a logged rule for every interface", "allow_log tcp 22 0.0.0.0/0 any 0.0.0.0/0 in"],
+  ["a log-all rule on another interface", "allow_log-all tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
+  ["a logged rate-limited rule", "limit_log tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0"],
+];
+
+Deno.test("ssh: --check names every way a rule can admit port 22 off Tailscale", async () => {
+  const tailscale = "allow any any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0";
+  for (const [label, tuple] of PORT22_RULES) {
+    const h = await makeHarness();
+    await applyAndSettle(h);
+    await writeUfwRules(h, tailscale, tuple);
+
+    const r = await check(h);
+
+    assert(r.code !== 0, `${label} went unreported`);
+    assertStringIncludes(r.stdout, "port 22 is admitted");
+  }
+});
+
+Deno.test("ssh: --check leaves alone rules that do not admit port 22 off Tailscale", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await writeUfwRules(
+    h,
+    "allow any any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0",
+    "allow tcp 80 0.0.0.0/0 any 0.0.0.0/0 in_eth0",
+    "allow udp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0",
+    "allow tcp 1714:1764 0.0.0.0/0 any 0.0.0.0/0 in_eth0",
+    "deny tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0",
+    "allow any any 0.0.0.0/0 any 0.0.0.0/0 in_lo",
+    "route:allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0_out_eth1",
+  );
+
+  const r = await check(h);
+
+  assertEquals(r.code, 0, r.stdout);
+});
+
+Deno.test("ssh: --check with no rule for tailscale0, or no default deny -> drift named", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await writeUfwRules(h);
+  await Deno.writeTextFile(`${h.root}/etc/default/ufw`, 'DEFAULT_INPUT_POLICY="ACCEPT"\n');
+
+  const r = await check(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, "DRIFT firewall: no rule allows incoming traffic on tailscale0");
+  assertStringIncludes(r.stdout, "DRIFT firewall: incoming traffic is not denied by default");
+});
+
+// Rules for tailscale0 that are narrower than the blanket allowance "ufw allow in on tailscale0".
+const RESTRICTED_TAILSCALE_RULES: [string, string][] = [
+  ["one source address", "allow any any 0.0.0.0/0 any 100.64.0.2 in_tailscale0"],
+  ["one destination address", "allow any any 100.64.0.1 any 0.0.0.0/0 in_tailscale0"],
+  ["one source port", "allow any any 0.0.0.0/0 4000 0.0.0.0/0 in_tailscale0"],
+  ["one destination port", "allow tcp 80 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0"],
+  ["one protocol", "allow tcp any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0"],
+];
+
+Deno.test("ssh: --check does not take a restricted rule for tailscale0 as the blanket allowance", async () => {
+  for (const [label, tuple] of RESTRICTED_TAILSCALE_RULES) {
+    const h = await makeHarness();
+    await applyAndSettle(h);
+    await writeUfwRules(h, tuple);
+
+    const r = await check(h);
+
+    assert(r.code !== 0, `${label} was certified as the tailscale0 allowance`);
+    assertStringIncludes(r.stdout, "DRIFT firewall: no rule allows incoming traffic on tailscale0");
+  }
+});
+
+Deno.test("ssh: apply still installs the tailscale0 allowance when only a restricted rule exists", async () => {
+  for (const [label, tuple] of RESTRICTED_TAILSCALE_RULES) {
+    const h = await makeHarness();
+    await writeUfwRules(h, tuple);
+
+    const r = await apply(h);
+
+    assertEquals(r.code, 0, `${label}: ${r.stderr}`);
+    assert(
+      (await calls(h)).includes("ufw allow in on tailscale0"),
+      `${label} suppressed the allow`,
+    );
+  }
+});
+
+Deno.test("ssh: the blanket tailscale0 allowance is recognized with a logged action or an IPv6 form", async () => {
+  for (
+    const tuple of [
+      "allow_log any any 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0",
+      "allow any any ::/0 any ::/0 in_tailscale0",
+    ]
+  ) {
+    const h = await makeHarness();
+    await applyAndSettle(h);
+    await writeUfwRules(h, tuple);
+
+    const r = await check(h);
+
+    assertEquals(r.code, 0, `${tuple}: ${r.stdout}`);
+  }
+});
+
+Deno.test("ssh: --check with PasswordAuthentication yes effective -> drift named", async () => {
+  // A later drop-in cannot override ours, but a setting read BEFORE the Include line can.
+  const before = "PasswordAuthentication yes\nInclude /etc/ssh/sshd_config.d/*.conf\n";
+  const h = await makeHarness();
+  await seedSshdConfig(h, before);
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+
+  const r = await check(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, 'DRIFT ssh: PasswordAuthentication is effectively "yes"');
+  assertStringIncludes(r.stdout, "/etc/ssh/sshd_config");
+});
+
+Deno.test("ssh: --check with our drop-in changed to yes -> drift named", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await Deno.writeTextFile(`${h.root}${SSH_DROPIN}`, "PasswordAuthentication yes\n");
+
+  const r = await check(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, 'DRIFT ssh: PasswordAuthentication is effectively "yes"');
+  assertStringIncludes(r.stdout, "DRIFT ssh: ");
+});
+
+Deno.test("ssh: the first value sshd reads wins, so our 00- drop-in beats a later one", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await Deno.writeTextFile(
+    `${h.root}/etc/ssh/sshd_config.d/50-cloud-init.conf`,
+    "PasswordAuthentication yes\n",
+  );
+
+  const r = await check(h);
+
+  assertEquals(r.code, 0, r.stdout);
+});
+
+Deno.test("ssh: --check reports an sshd_config that never reads the drop-in folder", async () => {
+  const h = await makeHarness();
+  await seedSshdConfig(h, "#PasswordAuthentication yes\nUsePAM yes\n");
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+
+  const r = await check(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, 'DRIFT ssh: PasswordAuthentication is effectively "yes"');
+});
+
+Deno.test("ssh: --check reports a missing sshd_config and a missing firewall setup", async () => {
+  const h = await makeHarness();
+  await apply(h);
+  await Deno.remove(`${h.root}${UFW_CONF}`);
+
+  const r = await check(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, "DRIFT ssh: ");
+  assertStringIncludes(r.stdout, "sshd_config is missing");
+  assertStringIncludes(r.stdout, "DRIFT firewall: firewall off");
+});
+
+Deno.test("ssh: --check reports a changed or missing drop-in as a job-file style drift", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await Deno.remove(`${h.root}${SSH_DROPIN}`);
+
+  const r = await check(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, `DRIFT ssh: ${h.root}${SSH_DROPIN} is missing`);
+});
+
+Deno.test("ssh: the installed --check catches a changed drop-in too", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await Deno.writeTextFile(`${h.root}${SSH_DROPIN}`, "PasswordAuthentication no\n# edited\n");
+
+  const r = await installedCheck(h);
+
+  assert(r.code !== 0);
+  assertStringIncludes(r.stdout, "differs from the checksum recorded at install");
+});
+
+Deno.test("ssh: a firewall file only root can read is reported as not checked, not as drift", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await Deno.chmod(`${h.root}${UFW_RULES}`, 0o000);
+
+  // Run as root, the file stays readable and there is nothing to report: the case needs a user.
+  let readable = true;
+  try {
+    await Deno.readTextFile(`${h.root}${UFW_RULES}`);
+  } catch {
+    readable = false;
+  }
+  const r = await check(h);
+  await Deno.chmod(`${h.root}${UFW_RULES}`, 0o600);
+
+  if (!readable) {
+    assertEquals(r.code, 0, r.stdout);
+    assertStringIncludes(r.stdout, "not checked without sudo");
+  }
+});
+
+Deno.test("ssh: WSL mode skips the step, says so, and touches no ssh or firewall file", async () => {
+  const h = await makeHarness({ STUB_VIRT: "wsl" });
+
+  const applied = await apply(h);
+  assertEquals(applied.code, 0, applied.stderr);
+  assertStringIncludes(applied.stdout, "skipped: SSH and firewall");
+  assertEquals(await ufwChanges(h), []);
+  assertEquals(await sshRestarts(h), []);
+  for (const path of ["/etc/ssh", "/etc/ufw", "/etc/default"]) {
+    let found = true;
+    try {
+      await Deno.stat(`${h.root}${path}`);
+    } catch {
+      found = false;
+    }
+    assertEquals(found, false, `${path} exists`);
+  }
+
+  await writeEnvFile(h, 0o600);
+  const checked = await check(h);
+  assertEquals(checked.code, 0, checked.stdout);
+  assertStringIncludes(checked.stdout, "skipped: SSH and firewall");
+  assertStringIncludes(checked.stdout, "no drift");
+});
+
+// Rules the firewall step must never touch or trip over.
+const UNRELATED_RULES = [
+  "allow tcp 80 0.0.0.0/0 any 0.0.0.0/0 in_eth0",
+  "allow udp 5353 0.0.0.0/0 any 224.0.0.251 in_eth0",
+  "allow udp 22 0.0.0.0/0 any 0.0.0.0/0 in_eth0",
+];
+
+Deno.test("ssh: apply refuses to switch the firewall on while a rule admits port 22 off Tailscale", async () => {
+  for (const [label, tuple] of PORT22_RULES) {
+    const h = await makeHarness();
+    await writeUfwRules(h, tuple, ...UNRELATED_RULES);
+    const rules = await Deno.readTextFile(`${h.root}${UFW_RULES}`);
+
+    const r = await apply(h);
+
+    assert(r.code !== 0, `${label} did not stop apply`);
+    assertStringIncludes(r.stderr, "port 22 is admitted", label);
+    assertStringIncludes(r.stderr, "ufw delete <number>", label);
+    assertEquals(await ufwChanges(h), [], `${label}: apply changed the firewall`);
+    assertEquals(await Deno.readTextFile(`${h.root}${UFW_RULES}`), rules, label);
+  }
+});
+
+Deno.test("ssh: once the port 22 rule is removed, apply finishes the firewall and the pending restart", async () => {
+  const h = await makeHarness();
+  await writeUfwRules(h, "allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in", ...UNRELATED_RULES);
+  const refused = await apply(h);
+  assert(refused.code !== 0);
+  assertEquals(await sshRestarts(h), []);
+
+  await writeUfwRules(h, ...UNRELATED_RULES);
+  const r = await apply(h);
+
+  assertEquals(r.code, 0, r.stderr);
+  const all = await calls(h);
+  assert(all.includes("ufw allow in on tailscale0"), all.join("\n"));
+  assert(all.includes("ufw enable"), all.join("\n"));
+  assertEquals((await sshRestarts(h)).length, 1);
+  const rules = await Deno.readTextFile(`${h.root}${UFW_RULES}`);
+  for (const kept of UNRELATED_RULES) assertStringIncludes(rules, kept);
+});
+
+Deno.test("ssh: --check names a Match block that can switch passwords back on", async () => {
+  const stock = "Include /etc/ssh/sshd_config.d/*.conf\nUsePAM yes\n";
+  const yesBlock = "Match User joshua\n  PasswordAuthentication yes\n";
+  const cases: [string, string, string | null][] = [
+    ["in sshd_config", stock + yesBlock, null],
+    [
+      "on a network match",
+      stock + "Match Address 100.64.0.0/10\n  PasswordAuthentication yes\n",
+      null,
+    ],
+    ["in an included file", stock, yesBlock],
+  ];
+  for (const [label, body, extra] of cases) {
+    const h = await makeHarness();
+    await seedSshdConfig(h, body);
+    if (extra) await Deno.writeTextFile(`${h.root}/etc/ssh/sshd_config.d/50-extra.conf`, extra);
+    await apply(h);
+    await writeEnvFile(h, 0o600);
+
+    const r = await check(h);
+
+    assert(r.code !== 0, `${label} was certified clean`);
+    assertStringIncludes(r.stdout, 'DRIFT ssh: a Match block sets PasswordAuthentication to "yes"');
+    assertStringIncludes(r.stdout, "key-only login is not confirmed");
+  }
+});
+
+Deno.test("ssh: an included sshd file only root can read is reported as not checked, not skipped silently", async () => {
+  const h = await makeHarness();
+  await seedSshdConfig(h, "Include /etc/ssh/sshd_config.d/*.conf\nUsePAM yes\n");
+  const extra = `${h.root}/etc/ssh/sshd_config.d/50-extra.conf`;
+  await Deno.writeTextFile(extra, "Match User joshua\n  PasswordAuthentication yes\n");
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+  await Deno.chmod(extra, 0o000);
+
+  // Run as root, the file stays readable and the Match block is reported as drift instead.
+  let readable = true;
+  try {
+    await Deno.readTextFile(extra);
+  } catch {
+    readable = false;
+  }
+  const r = await check(h);
+  await Deno.chmod(extra, 0o600);
+
+  if (!readable) {
+    assertStringIncludes(r.stdout, "NOTE: SSH login rules not fully checked without sudo");
+    assertStringIncludes(r.stdout, "50-extra.conf");
+    assertEquals(r.code, 0, r.stdout);
+  }
+});
+
+Deno.test("ssh: an Include whose directory only root can enter or list is reported as not checked, not as no match", async () => {
+  const cases: [string, string, number, string][] = [
+    // label, Include pattern, mode of the directory holding the files, where the files sit
+    ["a directory without any access", "/etc/ssh/private/*.conf", 0o000, "private"],
+    ["a directory that cannot be listed", "/etc/ssh/private/*.conf", 0o100, "private"],
+    [
+      "a directory that cannot be entered, named without a glob",
+      "/etc/ssh/private/x.conf",
+      0o000,
+      "private",
+    ],
+    ["a directory above the files", "/etc/ssh/private/*/x.conf", 0o000, "private"],
+    ["a directory below a wildcard", "/etc/ssh/*/private/*.conf", 0o000, "configs/private"],
+    [
+      "a non-listable directory below a wildcard",
+      "/etc/ssh/*/private/*.conf",
+      0o100,
+      "configs/private",
+    ],
+    [
+      "a directory that cannot be listed for an intermediate wildcard",
+      "/etc/ssh/*/private/*/x.conf",
+      0o100,
+      "configs/private",
+    ],
+    ["a literal file below a wildcard", "/etc/ssh/*/private/x.conf", 0o000, "configs/private"],
+    [
+      "question-mark and bracket wildcards",
+      "/etc/ssh/config?/[p]rivate/*.conf",
+      0o000,
+      "configs/private",
+    ],
+    ["several wildcard directories", "/etc/ssh/*/*/private/*.conf", 0o000, "configs/inner/private"],
+  ];
+  for (const [label, pattern, mode, dirName] of cases) {
+    const h = await makeHarness();
+    await seedSshdConfig(
+      h,
+      `Include /etc/ssh/sshd_config.d/*.conf\nInclude ${pattern}\nUsePAM yes\n`,
+    );
+    const dir = `${h.root}/etc/ssh/${dirName}`;
+    await Deno.mkdir(`${dir}/inner`, { recursive: true });
+    await Deno.writeTextFile(`${dir}/x.conf`, "Match User joshua\n  PasswordAuthentication yes\n");
+    await Deno.writeTextFile(
+      `${dir}/inner/x.conf`,
+      "Match User joshua\n  PasswordAuthentication yes\n",
+    );
+    await apply(h);
+    await writeEnvFile(h, 0o600);
+    await Deno.chmod(dir, mode);
+
+    // Run as root, the directory stays open and the Match block is reported as drift instead.
+    let open = true;
+    try {
+      for await (const _ of Deno.readDir(dir)) break;
+      await Deno.stat(`${dir}/x.conf`);
+    } catch {
+      open = false;
+    }
+    const r = await check(h);
+    await Deno.chmod(dir, 0o755);
+
+    if (!open) {
+      assertStringIncludes(r.stdout, "NOTE: SSH login rules not fully checked without sudo", label);
+      assertStringIncludes(r.stdout, `${dirName} is not readable`, label);
+      assertEquals(r.code, 0, `${label}: ${r.stdout}`);
+    } else {
+      assertStringIncludes(r.stdout, "a Match block sets PasswordAuthentication", label);
+      assertEquals(r.code, 1, `${label}: ${r.stdout}`);
+    }
+  }
+});
+
+Deno.test("ssh: an unreadable Include sibling does not hide readable password overrides", async () => {
+  const cases: [string, string, number][] = [
+    ["/etc/ssh/*/private/*.conf", "a-blocked", 0o000],
+    ["/etc/ssh/*/private/*.conf", "z-blocked", 0o000],
+    ["/etc/ssh/*/private/*/*.conf", "a-blocked", 0o100],
+  ];
+  for (const [pattern, blockedName, mode] of cases) {
+    const h = await makeHarness();
+    await seedSshdConfig(h, SSHD_CONFIG_BODY + `Include ${pattern}\n`);
+    for (const sibling of [blockedName, "m-open"]) {
+      const dir = `${h.root}/etc/ssh/${sibling}/private`;
+      await Deno.mkdir(`${dir}/inner`, { recursive: true });
+      for (const file of ["x.conf", "inner/x.conf"]) {
+        await Deno.writeTextFile(
+          `${dir}/${file}`,
+          "Match User joshua\n  PasswordAuthentication yes\n",
+        );
+      }
+    }
+    await apply(h);
+    await writeEnvFile(h, 0o600);
+    const blockedDir = `${h.root}/etc/ssh/${blockedName}/private`;
+    await Deno.chmod(blockedDir, mode);
+    try {
+      let inaccessible = false;
+      try {
+        for await (const _ of Deno.readDir(blockedDir)) break;
+      } catch (error) {
+        if (!(error instanceof Deno.errors.PermissionDenied)) throw error;
+        inaccessible = true;
+      }
+      const r = await check(h);
+
+      assertEquals(r.code, 1, r.stdout);
+      assertStringIncludes(r.stdout, "DRIFT ssh: a Match block sets PasswordAuthentication");
+      if (inaccessible) {
+        assertStringIncludes(r.stdout, "NOTE: SSH login rules not fully checked without sudo");
+        assertStringIncludes(r.stdout, `${blockedName}/private is not readable`);
+        assertStringIncludes(r.stdout, "m-open/private/");
+      }
+    } finally {
+      await Deno.chmod(blockedDir, 0o755);
+    }
+  }
+});
+
+Deno.test("ssh: an Include that matches no file at all is still not a warning", async () => {
+  const h = await makeHarness();
+  await seedSshdConfig(
+    h,
+    "Include /etc/ssh/sshd_config.d/*.conf\nInclude /etc/ssh/absent/*.conf\nInclude /etc/ssh/none-*.conf\n" +
+      "Include /etc/ssh/no-match-*/*/*.conf\nInclude /etc/ssh/*/absent/*.conf\nUsePAM yes\n",
+  );
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+
+  const r = await check(h);
+
+  assertEquals(r.code, 0, r.stdout);
+  assert(!r.stdout.includes("not fully checked"), r.stdout);
+});
+
+Deno.test("ssh: readable wildcard directories still expose conditional password overrides", async () => {
+  const h = await makeHarness();
+  await seedSshdConfig(
+    h,
+    SSHD_CONFIG_BODY + "Include /etc/ssh/config?/*/*.conf\n",
+  );
+  const dir = `${h.root}/etc/ssh/configs/inner`;
+  await Deno.mkdir(dir, { recursive: true });
+  await Deno.writeTextFile(`${dir}/x.conf`, "Match User joshua\n  PasswordAuthentication yes\n");
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+
+  const r = await check(h);
+
+  assertEquals(r.code, 1, r.stdout);
+  assertStringIncludes(r.stdout, "a Match block sets PasswordAuthentication");
+  assertStringIncludes(r.stdout, "configs/inner/x.conf");
+  assert(!r.stdout.includes("not fully checked"), r.stdout);
+});
+
+Deno.test("ssh: --check leaves alone Match blocks that keep passwords off", async () => {
+  const h = await makeHarness();
+  await seedSshdConfig(
+    h,
+    SSHD_CONFIG_BODY + "Match User joshua\n  PasswordAuthentication no\n  X11Forwarding no\n" +
+      "Match Address 10.0.0.0/8\n  AllowTcpForwarding no\n",
+  );
+  await apply(h);
+  await writeEnvFile(h, 0o600);
+
+  const r = await check(h);
+
+  assertEquals(r.code, 0, r.stdout);
+});
+
+Deno.test("ssh: a restart that failed is retried by the next apply, and --check names it meanwhile", async () => {
+  const h = await makeHarness({ STUB_RESTART_FAIL: "1" });
+  await seedSshdConfig(h);
+  const first = await apply(h);
+  assert(first.code !== 0, "a failed restart must fail apply");
+  assertEquals((await sshRestarts(h)).length, 1);
+
+  await writeEnvFile(h, 0o600);
+  const pending = await check(h);
+  assert(pending.code !== 0);
+  assertStringIncludes(pending.stdout, "DRIFT ssh: ssh.service has not been restarted");
+
+  h.env.STUB_RESTART_FAIL = "0";
+  const second = await apply(h);
+
+  assertEquals(second.code, 0, second.stderr);
+  assertEquals((await sshRestarts(h)).length, 2);
+  const settled = await check(h);
+  assertEquals(settled.code, 0, settled.stdout);
+
+  const callsBefore = (await calls(h)).length;
+  const third = await apply(h);
+  assertEquals(third.code, 0, third.stderr);
+  const later = (await calls(h)).slice(callsBefore);
+  assertEquals(later.filter((l) => l.startsWith("systemctl restart")), []);
+});
+
+Deno.test("ssh: docs/scripts.md describes the key-only login and the Tailscale-only firewall", async () => {
+  const docs = await Deno.readTextFile(`${REPO_ROOT}docs/scripts.md`);
+  assertStringIncludes(docs, "PasswordAuthentication no");
+  assertStringIncludes(docs, "tailscale0");
 });

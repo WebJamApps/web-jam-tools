@@ -36,7 +36,8 @@ export interface Deps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const USAGE = "usage: deno task unblock-issue --repo <owner/repo> --issue <n> --blocker <m> [--dry-run]";
+const USAGE =
+  "usage: deno task unblock-issue --repo <owner/repo> --issue <n> --blocker <m> [--dry-run]";
 
 export async function run(args: string[], deps: Deps): Promise<number> {
   const opts = parseArgs(args);
@@ -55,7 +56,9 @@ export async function run(args: string[], deps: Deps): Promise<number> {
   ]);
   if (depsRes.code !== 0) {
     console.error(
-      `Failed to fetch dependencies for ${repoInfo.name}#${opts.issue}: ${depsRes.stderr || depsRes.stdout}`,
+      `Failed to fetch dependencies for ${repoInfo.name}#${opts.issue}: ${
+        depsRes.stderr || depsRes.stdout
+      }`,
     );
     return 1;
   }
@@ -74,7 +77,9 @@ export async function run(args: string[], deps: Deps): Promise<number> {
 
   const matchedDep = depList.find((d) => d.number === opts.blocker);
   if (!matchedDep) {
-    console.error(`ERROR: issue ${repoInfo.name}#${opts.issue} is not blocked by #${opts.blocker}.`);
+    console.error(
+      `ERROR: issue ${repoInfo.name}#${opts.issue} is not blocked by #${opts.blocker}.`,
+    );
     return 1;
   }
 
@@ -112,7 +117,9 @@ export async function run(args: string[], deps: Deps): Promise<number> {
 
   const result = await runWithRetry(deps.runCmd, deleteArgs, { sleep: deps.sleep });
   if (result.code !== 0) {
-    console.error(`Failed to delete dependency after ${result.attempts} attempt(s): ${result.stderr}`);
+    console.error(
+      `Failed to delete dependency after ${result.attempts} attempt(s): ${result.stderr}`,
+    );
     return 1;
   }
 
@@ -123,9 +130,17 @@ export async function run(args: string[], deps: Deps): Promise<number> {
 }
 
 async function realRunCmd(cmd: string[]) {
-  const command = new Deno.Command(cmd[0], { args: cmd.slice(1), stdout: "piped", stderr: "piped" });
+  const command = new Deno.Command(cmd[0], {
+    args: cmd.slice(1),
+    stdout: "piped",
+    stderr: "piped",
+  });
   const { code, stdout, stderr } = await command.output();
-  return { code, stdout: new TextDecoder().decode(stdout), stderr: new TextDecoder().decode(stderr) };
+  return {
+    code,
+    stdout: new TextDecoder().decode(stdout),
+    stderr: new TextDecoder().decode(stderr),
+  };
 }
 
 if (import.meta.main) {
