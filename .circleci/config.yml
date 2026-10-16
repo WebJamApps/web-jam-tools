@@ -57,10 +57,15 @@ jobs:
               "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
               -o /tmp/shellcheck.tar.xz
             tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-            # gitleaks (pinned)
-            GITLEAKS_VERSION="v8.24.0"
+            # gitleaks (latest release via redirect)
+            LATEST_TAG="$(curl -sI https://github.com/gitleaks/gitleaks/releases/latest | grep -i '^location:' | sed -e 's/.*tag\///' -e 's/\r//' || true)"
+            if [ -z "$LATEST_TAG" ]; then
+              echo "ERROR: failed to resolve latest gitleaks release from redirect" >&2
+              exit 1
+            fi
+            GITLEAKS_VERSION="${LATEST_TAG#v}"
             curl -fsSL \
-              "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" \
+              "https://github.com/gitleaks/gitleaks/releases/download/${LATEST_TAG}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
               -o /tmp/gitleaks.tar.gz
             tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
             sudo mv /tmp/gitleaks /usr/local/bin/gitleaks

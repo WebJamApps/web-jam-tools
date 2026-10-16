@@ -207,6 +207,25 @@ deno task circleci-settings
 
 See [docs/circleci-project-settings.md](circleci-project-settings.md) for full documentation.
 
+### `gitleaks.sh`
+
+Runs `gitleaks detect` with repository configuration and shared `.gitleaks.toml` rules (web-jam-tools#658, #1403).
+
+- Supports scanning a named repository via `--repo <path>` (defaults to current repository root).
+- Runs on the latest gitleaks release: uses `docker run --pull=always zricethezav/gitleaks:latest` when Docker is available; falls back to an installed `gitleaks` on `PATH` when Docker is absent; fails closed when neither is available.
+- Passes `--exit-code=2` (0 = clean, 2 = finding, non-zero and != 2 = failure), `--ignore-gitleaks-allow`, and runs with `--source .` relative to the repository.
+
+```bash
+# Scan current repository
+bash scripts/gitleaks.sh
+
+# Scan a target repository
+bash scripts/gitleaks.sh --repo /path/to/repo
+
+# Scan git history range on target repository
+bash scripts/gitleaks.sh --repo /path/to/repo --log-opts="origin/dev..HEAD"
+```
+
 ### `install-git-secret-hook.sh`
 
 Installs the push-time secret scanner (`gitleaks` pre-push hook) and shared `.gitleaks.toml`
