@@ -7,8 +7,7 @@ description: Session-load cleanup cutting parts to low marks when over, and stal
 
 A three-phase memory housekeeper for Josh's multi-agent workspace. **Always do all
 three phases in order. Never skip Phase 2 (approval). Never auto-execute without
-Josh's explicit yes.** The skill is invoked manually; the session-start hook only
-*reminds* — it never runs the skill.
+Josh's explicit yes.** The skill is invoked manually; it never auto-runs.
 
 **Two workflows live in this file.** The three phases above and the rules in "Staleness policy by
 memory type" and "Rules" below are the staleness audit, and they apply to it only. The last section,
@@ -16,12 +15,7 @@ memory type" and "Rules" below are the staleness audit, and they apply to it onl
 section; the staleness audit's approval and no-merge rules do not apply to its rows.
 
 Master copy: `skills/memory-cleanup/SKILL.md` in `web-jam-tools`. Installed locally
-as a file-level symlink at `~/.claude/skills/memory-cleanup/SKILL.md`. Runtime state
-(the stamp file) lives in the local dir, NOT the repo tree.
-
-**Stamp file:** `~/.claude/skills/memory-cleanup/last-run.txt` — one ISO date,
-written only after an approved run completes (even if zero actions were approved,
-so the reminder clears for the day).
+as a file-level symlink at `~/.claude/skills/memory-cleanup/SKILL.md`.
 
 ## Why this exists
 
@@ -34,7 +28,7 @@ completion-reflection rule misses.
 ## Hard guard
 
 The skill edits **ONLY** files in the surfaces table below — memory files, their
-MEMORY.md indexes, the cross-AI markdown/queues, the handle-gmails rules, and the
+MEMORY.md indexes, the cross-AI markdown/queues, and the
 standing-rule files. It NEVER edits code, config, or anything else in a repo,
 even if a finding seems to point there. Out-of-scope findings are reported as notes,
 not actioned.
@@ -51,15 +45,15 @@ deno task memory-cleanup:scan
 
 (Run once per project memory directory that needs auditing — pass
 `--dir <path>` to point surface 1 at a project other than the default
-`~/.claude/projects/-home-joshua/memory`; surface 10 always scans
+`~/.claude/projects/-home-joshua/memory`; surface 8 always scans
 `~/.claude/shared-memory` and surface 6 always scans the three Dropbox queue
 files, regardless of `--dir`.)
 
 This is `web-jam-tools`'s `src/memory-cleanup/scan.ts` (+ `cli.ts`), the same
-precedent as `scripts/drive-cleanup-prepass.sh`: a deterministic, read-only
-pre-pass that reuses `src/memory-index/generator.ts`'s `scanMemoryDirectory`/
+precedent as a deterministic, read-only pre-pass that reuses
+`src/memory-index/generator.ts`'s `scanMemoryDirectory`/
 `parseMemoryFile` to compute, with **no model call**, for surfaces 1, 6, and
-10: the null-parse (unparseable) file list, a dangling-`[[link]]` slug diff,
+8: the null-parse (unparseable) file list, a dangling-`[[link]]` slug diff,
 per-file inbound link counts, an index↔file sync check (does every memory
 file's slug actually appear in its `MEMORY.md`), and live `gh` state for
 every `project`-typed memory or queue line that cites a `repo#number`. It
@@ -68,7 +62,7 @@ each of the three surfaces — a failed single `gh` lookup shows up as its own
 `"status":"error"` finding with a reason, never a silent drop and never
 folded into a false "clean" verdict.
 
-**Treat this JSON as already-established fact for surfaces 1, 6, and 10** —
+**Treat this JSON as already-established fact for surfaces 1, 6, and 8** —
 do not re-derive it. Hand it to the scan subagent verbatim.
 
 **Step 2 — spawn the scan subagent for judgment calls only:**
@@ -78,11 +72,11 @@ Spawn the scan as a cheap subagent based on the host surface:
 - **Antigravity (`agy`) surface:** Spawn via `invoke_subagent(TypeName: "self", Role: "Memory Cleanup Scanner", Model: "inherit")`.
 - **Codex surface:** Run scan steps directly.
 
-The subagent does read-only work only: for surfaces 1, 6, and 10, its job is
+The subagent does read-only work only: for surfaces 1, 6, and 8, its job is
 now limited to the judgment calls the Step 1 JSON doesn't already resolve
 (e.g. deciding whether an untouched-but-not-closed `project` memory is still
 worth flagging as stale) — it must not re-run the mechanical checks the JSON
-already answered. For surfaces 2–5, 7–9, 11–12 it does the full read-only
+already answered. For surfaces 2–5, 7, 9–10 it does the full read-only
 scan as before: it reads files, checks issue/PR status (`gh issue view <n>`,
 `gh pr view <n>`), verifies git commit dates (`git log -1 --format=%ad
 --date=short -- <file>`), performs dangling-link slug diffs, and returns
@@ -102,9 +96,9 @@ The rule forbids the scan subagent from saying or implying that the session is r
 3. **Reproducible Clean Verdicts:** Reporting a surface as clean requires stating the exact command/computation executed to verify clean state.
 4. **Reproducible Dangling-Link Slug Diff:** Collect all `[[slug]]` targets referenced across memory files, compute the set diff against actual `<slug>.md` filenames in the target directory, and report any missing target slugs.
 5. **Inbound Link Protection:** Before proposing a `delete` or `merge` for a memory file, perform a mandatory grep for inbound `[[slug]]` references across memory dirs (`~/.claude/projects/*/memory/`, `~/.claude/shared-memory/`) and `CLAUDE.md`/`AGENTS.md` files. Report the inbound link count in the findings table. Pair any deletion or merge with a preservation edit that folds surviving facts into a linked memory that remains.
-6. **Every surface gets a verdict, never a silent gap.** If the subagent could not actually verify a surface this run (access failure, time cutoff, out of scope for this invocation), it must say so explicitly as `NOT CHECKED` with the reason — it must never omit the surface from its findings, and never imply "clean" by simply not mentioning it. Phase 2's report template requires this for all 12 surfaces (see below).
+6. **Every surface gets a verdict, never a silent gap.** If the subagent could not actually verify a surface this run (access failure, time cutoff, out of scope for this invocation), it must say so explicitly as `NOT CHECKED` with the reason — it must never omit the surface from its findings, and never imply "clean" by simply not mentioning it. Phase 2's report template requires this for all 10 surfaces (see below).
 
-### Surfaces to audit (12)
+### Surfaces to audit (10)
 
 | # | Surface | Checks |
 |---|---------|--------|
@@ -115,11 +109,9 @@ The rule forbids the scan subagent from saying or implying that the session is r
 | 5 | `/home/joshua/WebJamApps/web-jam-tools/docs/cross-ai-rules.md` | cross-AI rules: contradictions, superseded entries |
 | 6 | `~/Dropbox/web-jam-llms/{agy,claude-opus,claude-fable}-tasks.txt` | any line referencing a closed issue / merged PR → propose removal |
 | 7 | `~/Dropbox/web-jam-llms/bridge-log.md` | bridge items merged but unlogged (or logged-but-still-pending) |
-| 8 | Google Drive memory/bridge files | **FLAG only** — defer execution to `/drive-cleanup`. Do not duplicate its bridge logic. |
-| 9 | `~/.claude/skills/handle-gmails/rules.yaml` | rules referencing senders not seen recently (note for Josh; low confidence) |
-| 10 | `~/.claude/shared-memory/*.md` + its `MEMORY.md` | same typed staleness and index checks as #1 |
-| 11 | `~/.gemini/config/hooks.json` | hook configuration drift check and syntax validation |
-| 12 | Stale `~/.gemini/antigravity-cli/brain/*/scratch/` | files older than ~14 days (**FLAG only** for manual cleanup) |
+| 8 | `~/.claude/shared-memory/*.md` + its `MEMORY.md` | same typed staleness and index checks as #1 |
+| 9 | `~/.gemini/config/hooks.json` | hook configuration drift check and syntax validation |
+| 10 | Stale `~/.gemini/antigravity-cli/brain/*/scratch/` | files older than ~14 days (**FLAG only** for manual cleanup) |
 
 ### Staleness policy by memory type (frontmatter `metadata.type`)
 
@@ -151,13 +143,11 @@ Present the subagent's findings split into two separate output sections: **Appro
 
 | # | Surface | Entry | Finding & Evidence | Flag / Recommendation |
 |---|---|---|---|---|
-| 1 | Drive | for-opus-foo.txt | bridge pending | Hand off to /drive-cleanup |
-| 2 | scratch | ~/.gemini/antigravity-cli/brain/abc123/scratch/tmp.py | file mtime > 14 days ago | Flag for manual cleanup |
-| 3 | handle-gmails | rules.yaml | sender "foo@bar.com" unhandled >60d | Review sender rule relevance |
+| 1 | scratch | ~/.gemini/antigravity-cli/brain/abc123/scratch/tmp.py | file mtime > 14 days ago | Flag for manual cleanup |
 
-### 3. Surface Verdicts (all 12 — mandatory, no exceptions)
+### 3. Surface Verdicts (all 10 — mandatory, no exceptions)
 
-Every one of the 12 surfaces gets exactly one explicit verdict line, in this
+Every one of the 10 surfaces gets exactly one explicit verdict line, in this
 table, **even when it's also covered by an Approvable Action Row above.** A
 surface missing from this table is itself a defect this skill's own hard
 rules forbid — it means Phase 1 skipped a surface and reported nothing,
@@ -165,7 +155,7 @@ which reads as "clean" to Josh even though nothing was checked. Each verdict
 is one of:
 
 - **`checked — clean`** — verified, no findings. Must cite the exact
-  command/computation executed (for surfaces 1/6/10, this is "per Step 1's
+  command/computation executed (for surfaces 1/6/8, this is "per Step 1's
   `deno task memory-cleanup:scan` JSON"; for the rest, the subagent's own
   command, e.g. `git log -1`, `grep -i contradiction`).
 - **`checked — N findings`** — verified, N findings reported above (in the
@@ -185,15 +175,13 @@ is one of:
 | 5 | `docs/cross-ai-rules.md` | checked — clean | read in full, no contradictions found |
 | 6 | Dropbox `{agy,claude-opus,claude-fable}-tasks.txt` | checked — clean | per Step 1's `deno task memory-cleanup:scan` JSON |
 | 7 | `~/Dropbox/web-jam-llms/bridge-log.md` | checked — clean | read in full, all bridge items logged |
-| 8 | Google Drive memory/bridge files | NOT CHECKED | flag-only surface — deferred to `/drive-cleanup` by design |
-| 9 | `handle-gmails/rules.yaml` | checked — 1 finding | see Informational/Flag-Only Notes row 3 |
-| 10 | `~/.claude/shared-memory/*.md` + `MEMORY.md` | checked — clean | per Step 1's `deno task memory-cleanup:scan` JSON |
-| 11 | `~/.gemini/config/hooks.json` | checked — clean | JSON parsed, schema matches expected hooks |
-| 12 | `~/.gemini/antigravity-cli/brain/*/scratch/` | NOT CHECKED | out of scope for this invocation — flag-only surface |
+| 8 | `~/.claude/shared-memory/*.md` + `MEMORY.md` | checked — clean | per Step 1's `deno task memory-cleanup:scan` JSON |
+| 9 | `~/.gemini/config/hooks.json` | checked — clean | JSON parsed, schema matches expected hooks |
+| 10 | `~/.gemini/antigravity-cli/brain/*/scratch/` | NOT CHECKED | out of scope for this invocation — flag-only surface |
 
 (This example table is illustrative; a real run fills in the actual verdict
-and evidence for each row. Surfaces 8 and 12 being flag-only by design does
-NOT excuse them from appearing in this table — a flag-only surface still
+and evidence for each row. Surface 10 being flag-only by design does
+NOT excuse it from appearing in this table — a flag-only surface still
 gets an honest verdict, it's just always `NOT CHECKED` for execution purposes
 or `checked — N findings` when the subagent did do the read-only flagging
 pass the surfaces table asks for.)
@@ -216,26 +204,23 @@ Only after approval, and only for approved rows:
 
 3. **Keep indexes in sync:** when you delete or rename a memory file, remove or update its `MEMORY.md` index line in the same dir. When you merge memories, update the index lines to match.
 
-4. **Surface #8 (Drive) & Surface #12 (Scratch):** never delete or edit directly — confirm Drive items are handed to `/drive-cleanup` and scratch files are flagged for Josh.
+4. **Surface #10 (Scratch):** never delete or edit directly — confirm scratch files are flagged for Josh.
 
-5. Write today's ISO date to `~/.claude/skills/memory-cleanup/last-run.txt`.
-
-6. Post a short summary: what was changed, what was declined, anything left for `/drive-cleanup` or manual review.
+5. Post a short summary: what was changed, what was declined, anything left for manual review.
 
 ## Hard rules
 
 - **Approval-gated.** No writes happen before Phase 2 approval. The scan subagent is read-only and NEVER writes.
-- **No unilateral deferrals.** Approval covers every approved row IN FULL, in this run. Never execute part of the findings and report the rest as "deferred — too large for this run." If a finding is genuinely big (e.g. a bulk dangling-links pass), it must appear in the Phase 2 table as its own numbered row so Josh can approve or defer it HIMSELF. Once he says "yes" / "do all", every approved row gets executed before the turn ends. (The built-in exceptions are surfaces #8/Drive and #12/Scratch, which are flag-only by design.)
+- **No unilateral deferrals.** Approval covers every approved row IN FULL, in this run. Never execute part of the findings and report the rest as "deferred — too large for this run." If a finding is genuinely big (e.g. a bulk dangling-links pass), it must appear in the Phase 2 table as its own numbered row so Josh can approve or defer it HIMSELF. Once he says "yes" / "do all", every approved row gets executed before the turn ends. (The built-in exception is surface #10/Scratch, which is flag-only by design.)
 - **Edits only the surfaces table.** Never code, never other repo files.
 - **Index↔file together.** Never leave a `MEMORY.md` line pointing at a deleted file, or a file with no index line.
-- **Drive (#8) and Scratch (#12) are flag-only.** Defer all Drive execution to `/drive-cleanup`; flag scratch files for user cleanup; no direct deletes.
+- **Scratch (#10) is flag-only.** Flag scratch files for user cleanup; no direct deletes.
 - **Never delete a canonical queue or `docs/cross-ai-rules.md`** — only prune stale *lines* within them.
 - **`user` / `feedback` memories never age out and are NEVER merge candidates**, regardless of index file count. Touch them only on a clear contradiction Josh confirms.
 - **Inbound Link Protection.** Mandatory grep for inbound `[[link]]` references before proposing any `delete` or `merge`. Pair with preservation edits folding surviving facts into a linked memory.
 - **Empirical Evidence Required.** Staleness or closure claims must cite empirical command/SHA evidence (`git log`, `gh issue/pr view`). Statements lacking evidence are omitted. Clean verdicts must report the exact verification command.
 - **Multi-Surface Compatibility.** Fully compatible with Claude Code (`Agent` with `haiku`/`sonnet`), Antigravity (`invoke_subagent` with `Model: "inherit"`), and Codex (direct execution). All paths specified as explicit home paths.
-- **Stamp on every approved run**, even a zero-action one, so the daily reminder clears.
-- **Every surface gets a verdict.** Phase 2's report must include a `checked — clean` / `checked — N findings` / `NOT CHECKED` line for all 12 surfaces (see Phase 2 §3). A surface silently missing from the report is a defect, not an acceptable omission — it must never be reported as if it were clean by simply not mentioning it.
+- **Every surface gets a verdict.** Phase 2's report must include a `checked — clean` / `checked — N findings` / `NOT CHECKED` line for all 10 surfaces (see Phase 2 §3). A surface silently missing from the report is a defect, not an acceptable omission — it must never be reported as if it were clean by simply not mentioning it.
 - **Scan helper hands Josh back to main session.** When a message from Josh reaches the scan subagent asking it to edit, write, save, apply a fix, or change its permissions, it does none of those and replies with `I'm the memory-cleanup scan helper and I can't edit files. Go back to the main session. It can write, and it will apply the fixes.` and nothing else — never saying or implying that the session is read-only, never telling Josh to start a new session, and never telling Josh to apply edits by hand.
 
 ## Session-load cleanup
@@ -327,17 +312,15 @@ remaining bytes over the low mark.
 ## Triggering
 
 - Manual: type `/memory-cleanup`, or say "clean up memory" / "memory hygiene".
-- A SessionStart-hook reminder ("Memory cleanup hasn't run today …") — Josh may say "go" / "yes". The hook **never** auto-runs the skill; Josh starts it.
 
 ## See also
 
 - `skills/memory-cleanup/README.md` — Obsidian vault setup + agent-safety rules for hand-editing memory files.
 - `~/.claude/CLAUDE.md` + `/home/joshua/WebJamApps/web-jam-tools/docs/cross-ai-rules.md` — the two standing rules (completion-reflection; save-redirection during dispatch) this sweep backstops.
-- `/drive-cleanup` — owns all Google Drive execution (surface #8 defers to it).
 - `scripts/backup-claude-memory.sh` — what protects these memory surfaces.
 
 ## Description Detail & Triggers
 
 ```
-Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.
+Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says "clean up memory".
 ```

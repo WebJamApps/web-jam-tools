@@ -1,6 +1,6 @@
 ---
 name: drive-cleanup
-description: Analyze Google Drive for duplicates, misplaced files, and phone-authored bridge files awaiting merge, reporting findings in a table and waiting for approval before executing. Use when cleaning up Google Drive or when a session-start drive cleanup reminder appears.
+description: Analyze Google Drive for duplicates, misplaced files, and phone-authored bridge files awaiting merge, reporting findings in a table and waiting for approval before executing. Use when cleaning up Google Drive.
 ---
 
 # drive-cleanup
@@ -33,9 +33,8 @@ prints a report with a reconciliation line, a **Proposed actions** list (each wi
 exact `rclone` command), an **Ambiguous** list, and `### Status: CLEAN` or
 `ACTIONS_PROPOSED`. It is read-only — it proposes, never executes.
 
-- **If `Status: CLEAN`** → say `Drive is clean — no actions needed.`, write the stamp (see
-  **Triggering**), and **STOP**. Do NOT spawn a subagent and do NOT make a single
-  Drive API call. This is the zero-token path for clean days.
+- **If `Status: CLEAN`** → say `Drive is clean — no actions needed.`, and **STOP**. Do NOT spawn a
+  subagent and do NOT make a single Drive API call. This is the zero-token path for clean days.
 - **Otherwise** → Step 2, for the Ambiguous remainder only.
 
 **Step 2 — Classify ONLY the pre-pass's Ambiguous list:**
@@ -118,7 +117,7 @@ Lead with the Phase-1 **count reconciliation** line (every root item classified 
 
 End with explicit prompt: **"Approve these actions? Reply yes / no / specific numbers (e.g., 1,3)."**
 
-If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` Do not proceed to Phase 3 — but still write the stamp file (see **Triggering**) so the daily reminder clears.
+If Phase 1 found NOTHING, say exactly: `Drive is clean — no actions needed.` Do not proceed to Phase 3.
 
 ## Phase 3 — Execute (only after explicit approval)
 
@@ -219,7 +218,7 @@ rclone copy /home/joshua/Dropbox/joshandmariamusic/JoshMariaMusic/ gdrive:JoshMa
 
 **Do not push other files from `Dropbox/joshandmariamusic/JoshMariaMusic/`** — only the 4 Sonnet-readable templates above are mirrored. The rest stays Dropbox-only.
 
-After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current. **Finally, write today's ISO date to `~/.claude/skills/drive-cleanup/last-run.txt`** (even if zero actions were approved) so the session-start reminder clears for the day.
+After all actions, post a short summary: what was done, what was declined, and any verify-failures that left files in their pre-action state. Include a "mirror: refreshed (or no-op)" line so Josh knows the templates are current.
 
 ## Hard rules
 
@@ -233,18 +232,8 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Triggering
 
-- **Reminder-only, never auto-run.** A `SessionStart` hook in `~/.claude/settings.json`
-  prints "Drive cleanup has not run today …" when the stamp file is missing or not today's
-  date. The hook NEVER invokes this skill — Josh starts it himself (same as /memory-cleanup).
-- **Stamp file:** after a completed run, write today's ISO date to
-  `~/.claude/skills/drive-cleanup/last-run.txt` — write it even on a zero-action / clean
-  run, so the reminder clears for the day. The local skill dir is the right home for
-  runtime state (handle-gmails / memory-cleanup precedent).
-- **Manual:** invoke via the Skill tool or just type `/drive-cleanup`.
-- The old **07:00 daily run is retired** (Josh's call 2026-06-12): the reminder + manual
-  invocation are the only triggers. If a scheduled routine for drive-cleanup ever turns up
-  (none in crontab or hooks as of 2026-06-12), show it to Josh and remove it with his OK.
-  Never create a headless run — Phase 2 needs his interactive approval.
+- **Manual only:** invoke via the Skill tool or just type `/drive-cleanup`. Never auto-runs.
+- The old **07:00 daily run is retired** (Josh's call 2026-06-12): manual invocation is the only trigger. If a scheduled routine for drive-cleanup ever turns up (none in crontab or hooks as of 2026-06-12), show it to Josh and remove it with his OK. Never create a headless run — Phase 2 needs his interactive approval.
 
 ## See also
 
@@ -254,4 +243,4 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Description Detail & Triggers
 
-Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.
+Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.
