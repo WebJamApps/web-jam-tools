@@ -71,10 +71,10 @@ that's what following this skill prevents.
    comment on, or attempt to reuse it — see the Closed Issues Are Immutable rule below.
 2. **Choose the model label deliberately, not as an afterthought.** This is the thing
    web-jam-tools#265 exists because of: web-jam-tools#263 shipped with only a `bug` label and no
-   model label, because the label was going to be "added later."    Decide the label as part of
-    deciding what the issue IS — before you write the body — under "Triage: which label an issue
-    gets" in the tier-order design cited above. That document owns both routing and allowed
-    combinations; do not keep another list here.
+   model label, because the label was going to be "added later." Decide the label as part of
+   deciding what the issue IS — before you write the body — using the triage table in
+   `docs/ai-team-playbook.md` (and under "Triage: which label an issue gets" in the tier-order design
+   cited above). That table owns routing by kind of work; do not keep another list here.
 
    **A prompt that hands filing to another agent never names the label.** A session that sends a
    subagent to file an issue tells it to choose the label under this rule, and names the default

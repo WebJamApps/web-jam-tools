@@ -903,7 +903,7 @@ Deno.test("skills/design-issue/SKILL.md contains Sized for Flash rule", async ()
   assertStringIncludes(text, "### Sized for Flash");
   assertStringIncludes(
     text,
-    "Non-epic issues default to **`Flash`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
+    "An issue's model label comes from the triage table in `docs/ai-team-playbook.md`; the sizing checklist below keeps the size limit for everyday coding tasks (`Flash`). Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
   );
   assertStringIncludes(text, "- one repo;");
   assertStringIncludes(text, "- one layer — frontend or backend, not both;");
@@ -2377,5 +2377,105 @@ Deno.test("filing skills point to the tier-order design and preserve paired lane
     assertThrows(() =>
       assertModelLabelGuidance(skill, `${text}\nA hook requires exactly one model label.\n`)
     );
+  }
+});
+
+Deno.test("docs/ai-team-playbook.md and skills: triage issues to model labels by kind of work (web-jam-tools#1203)", async () => {
+  const playbook = await Deno.readTextFile("docs/ai-team-playbook.md");
+
+  // 1. docs/ai-team-playbook.md contains header line | Kind of work | Label |
+  assertStringIncludes(playbook, "| Kind of work | Label |");
+
+  // A row for each of the five kinds of work with its label cell
+  const kindsOfWork = [
+    { kind: "Mechanical one-off", label: "`Luna` or `Haiku`" },
+    { kind: "Logic- and safety-heavy coding", label: "`Sol` or `Sonnet`" },
+    { kind: "All other coding", label: "`Flash`" },
+    { kind: "Design, and coding whose list of cases cannot be closed", label: "`Opus`" },
+    { kind: "Recording", label: "`Astra`, only when Josh names it" },
+  ];
+  for (const { kind, label } of kindsOfWork) {
+    assert(playbook.includes(kind), `docs/ai-team-playbook.md must contain kind of work: ${kind}`);
+    const row = playbook.split("\n").find((l) => l.includes(kind) && l.includes(label));
+    assert(
+      row,
+      `docs/ai-team-playbook.md must contain row with kind '${kind}' and label '${label}'`,
+    );
+  }
+
+  // Four-point definition
+  for (
+    const def of [
+      "changes a guard, hook, matcher, filter, regular expression or permission rule",
+      "sends, writes or deletes something outside the repo",
+      "changes login, permissions or the handling of credentials",
+      "acceptance criteria list cases that a resolver, a classifier or a change of state has to get right",
+    ]
+  ) {
+    assertStringIncludes(playbook, def);
+  }
+
+  // 2. skills/file-issue, design-issue, delegate, backlog-groom each contain docs/ai-team-playbook.md and "triage table"
+  const skills = [
+    "skills/file-issue/SKILL.md",
+    "skills/design-issue/SKILL.md",
+    "skills/delegate/SKILL.md",
+    "skills/backlog-groom/SKILL.md",
+  ];
+  const legacyLabelBulletRegex = /^\s*-\s*`(?:Flash|Haiku|Luna|Sol|Astra|Sonnet|Opus)`\s*—/m;
+
+  for (const file of skills) {
+    const text = await Deno.readTextFile(file);
+    assertStringIncludes(
+      text,
+      "docs/ai-team-playbook.md",
+      `${file} must contain docs/ai-team-playbook.md`,
+    );
+    assertStringIncludes(text, "triage table", `${file} must contain 'triage table'`);
+    assertFalse(
+      legacyLabelBulletRegex.test(text),
+      `${file} must not contain legacy bulleted label list`,
+    );
+  }
+
+  // 3. skills/design-issue/SKILL.md sends guard, hook and matcher work to Sol or Sonnet and keeps Opus escalation
+  const designIssueText = await Deno.readTextFile("skills/design-issue/SKILL.md");
+  const caseListPassage = designIssueText.split("### Sized by Case List, Not Diff")[1]?.split(
+    "### Closeable, Always",
+  )[0];
+  assert(caseListPassage, "Missing Sized by Case List, Not Diff section");
+  assertStringIncludes(caseListPassage, "Sol");
+  assertStringIncludes(caseListPassage, "Sonnet");
+  assertStringIncludes(caseListPassage, "Opus");
+  assert(
+    caseListPassage.includes("`Sol` or `Sonnet`") || caseListPassage.includes("Sol or Sonnet"),
+    "design-issue passage must route to Sol or Sonnet",
+  );
+
+  // 4. skills/backlog-groom/SKILL.md states that it compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item
+  const backlogGroomText = await Deno.readTextFile("skills/backlog-groom/SKILL.md");
+  assertStringIncludes(
+    backlogGroomText,
+    "The skill compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item.",
+  );
+
+  // 5. Installed skill symlinks resolve into canonical clone across Claude Code and agy
+  const home = Deno.env.get("HOME") || "/home/joshua";
+  const skillNames = ["file-issue", "design-issue", "delegate", "backlog-groom"];
+  for (const skill of skillNames) {
+    const claudeLink = `${home}/.claude/skills/${skill}`;
+    const claudeInfo = await Deno.lstat(claudeLink).catch(() => null);
+    if (claudeInfo) {
+      assertEquals(claudeInfo.isSymlink, true, `~/.claude/skills/${skill} must be a symlink`);
+      const target = await Deno.readLink(claudeLink);
+      assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
+    }
+    const agyLink = `${home}/.gemini/config/plugins/webjam-tasks/skills/${skill}`;
+    const agyInfo = await Deno.lstat(agyLink).catch(() => null);
+    if (agyInfo) {
+      assertEquals(agyInfo.isSymlink, true, `~/.gemini/.../skills/${skill} must be a symlink`);
+      const target = await Deno.readLink(agyLink);
+      assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
+    }
   }
 });
