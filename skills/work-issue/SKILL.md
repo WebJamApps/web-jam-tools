@@ -10,12 +10,12 @@ aliases:
 
 # /work-issue — run a model-labeled coding task (Claude Code, Antigravity & Codex)
 
-This skill is installed across all agent surfaces (Claude Code, Antigravity/agy, Codex) and model tiers (Haiku, Flash, Sonnet, Opus, Luna, Sol, Astra). It delegates the deterministic setup (issue fetch + git branching) to a
+This skill is installed across all agent surfaces (Claude Code, Antigravity/agy, Codex) and model tiers in the canonical vocabulary. It delegates the deterministic setup (issue fetch + git branching) to a
 shell script, then you (the agent) do the actual coding inside this same session.
 Dispatch is always against a concrete GitHub issue (web-jam-tools#249 removed the
 older stateful queue-file mode). There are two ways to arrive at that issue:
 
-- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly (invoked as `$work-issue Repo#123` on Codex). Read the GitHub issue's model tier label (`Haiku`, `Flash`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`) to determine agent delegation or session execution (valid across Claude Code, Antigravity, and Codex), then run the pre-checks below before "## Steps".
+- **`/work-issue Repo#123`** (named mode) — the issue is given explicitly (invoked as `$work-issue Repo#123` on Codex). Read the GitHub issue's model labels under the tier-order design (see "Model Label Check & Approval") to determine agent delegation or session execution (valid across Claude Code, Antigravity, and Codex), then run the pre-checks below before "## Steps".
 - **`/work-issue`** (no argument, auto-pick mode) — read-only resolve the next
   actionable issue from `~/Dropbox/web-jam-llms/haiku-issues.md` (when invoked via Claude Code / Haiku), then hand off
   to the same flow below. Under Antigravity (Flash / agy) and Codex there is no worklist: stop and ask Josh to name an issue. See "## No-argument mode" first.
@@ -35,14 +35,19 @@ written**, and they run for a named issue and an auto-picked one alike:
 
 ## Model Label Check & Approval
 
+Allowed model-label combinations follow
+`~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used".
+For a paired issue, run on whichever of its two lanes Josh dispatches it to. Matching either label
+satisfies the model-label check: retain both labels and do not ask for a label override.
+
 When `work-issue` begins an issue (`<Repo>#<num>`):
-1. **Read the GitHub issue's model label**: Read the issue's model tier label (`Haiku`, `Flash`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
+1. **Read the GitHub issue's model labels**: Read the model labels under the tier-order design cited above.
 2. **Determine Agent Delegation vs Execution**:
    - Under **Claude Code** (e.g., Opus/Sonnet interactive session): If the issue is labeled `Haiku` or `Sonnet`, delegate execution to a subagent matching the labeled tier per delegation rules.
    - Under **Antigravity** (e.g., Flash interactive session): If the issue is labeled `Flash`, execute it in the session or hand it to a subagent at the same level.
    - Under **Codex**: Execute directly when the running model's tier matches the issue's `Luna`, `Sol`, or `Astra` label. If it differs, follow the approval rule below before overruling the label.
-   - If the active session tier matches the issue's model label, execute the task directly in the current session.
-3. **Prompt for approval before overruling**: If the active session tier differs from the issue's model label and the session intends to overrule the label rather than delegating down, prompt Josh for explicit approval in chat before executing:
+   - If the active session tier matches either of the issue's model labels, execute the task directly in the current session.
+3. **Prompt for approval before overruling**: If the active session tier matches none of the issue's model labels and the session intends to overrule the labels rather than delegating down, prompt Josh for explicit approval in chat before executing:
    ```bash
    gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>
    ```
@@ -283,9 +288,9 @@ When an issue's deliverables are strictly external documents (such as manual ver
 
 3. **Perform Model Label Check & Model Selection:** Before implementing:
    - Perform the **Model Label Check**:
-     1. Read the GitHub issue's model label (`Flash`, `Haiku`, `Sonnet`, `Opus`, `Luna`, `Sol`, `Astra`).
-     2. Compare the issue's model label against the active executing session tier.
-     3. If the active session tier differs from the issue's model label and the session intends to overrule the label, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
+     1. Read the issue's model labels under the tier-order design cited above.
+     2. Compare the issue's model labels against the active executing session tier.
+     3. If the active session tier matches none of the issue's model labels and the session intends to overrule the labels, prompt Josh for explicit approval in chat before executing `gh issue edit <num> --repo WebJamApps/<Repo> --add-label <NewTier> --remove-label <OldTier>`.
      4. Ensure the final `--author` passed to `create-draft-pr.sh` strictly matches the executing model tier.
    - **Codex**: Keep the matching running model and execute in this session. Do not invoke the agy `/model` switch or use the Claude/Gemini fallback ladder below. A tier mismatch uses the Model Label Check & Approval rule above.
    - **Claude Code**: Follow the delegation/execution choice in Model Label Check & Approval above.

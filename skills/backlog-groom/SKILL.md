@@ -45,8 +45,8 @@ On Claude Code, dispatch that helper with `Agent(model: "sonnet")`. On Codex, st
 The audit inspects every open issue across all 8 repositories against six core categories:
 
 ### 1. Model-Label Drift
-- **Missing Model Label:** Issue has no model-tier label (`Haiku`, `Sonnet`, `Opus`, `Fable`, `Flash`, `Flash Low`) assigned.
-- **Multiple Model Labels:** Issue carries more than one model-tier label simultaneously (e.g. both `Sonnet` and `Flash`).
+- **Missing Model Label:** Issue has no model-tier label from `skills/fix-labels/model-labels.json`, unless it is a `Josh` manual step.
+- **Multiple Model Labels:** Report two or more model labels as drift only when they are not the allowed pair in `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used". The allowed pair is valid and must not be reduced to one label.
 - **Retired / Deprecated Labels:** Issue carries retired or non-canonical model labels (e.g. old `Flash-lane`, `GPT-4`, `Claude-2` or mismatched tier spellings).
 
 ### 2. Native Dependencies & Blocked Label Drift

@@ -22,6 +22,11 @@ import {
   parseIssueRef,
 } from "../create-issue/lib.ts";
 import { expandHome } from "./gate1.ts";
+import {
+  loadModelLabels,
+  modelLabelViolation,
+  readPlanModelLabels,
+} from "../shared/model_label_rule.ts";
 
 export interface PlanIssueItem {
   id?: number | string;
@@ -35,6 +40,7 @@ export interface PlanIssueItem {
   tier?: string;
   model?: string;
   modelTier?: string;
+  escalationReason?: string;
   labels?: string[] | string;
   milestone?: string | number;
   repo?: string;
@@ -151,18 +157,18 @@ export async function parsePlanFile(filePath: string): Promise<ParsedPlan> {
   return parsePlanJson(content);
 }
 
-function resolveLabels(item: PlanIssueItem): string[] {
+function resolveLabels(item: PlanIssueItem, modelLabels: ReadonlySet<string>): string[] {
   const result: string[] = [];
   const addLabel = (l: string) => {
     const trimmed = l.trim();
-    if (trimmed && !result.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
+    if (trimmed && !result.includes(trimmed)) {
       result.push(trimmed);
     }
   };
 
-  const tier = item.tier || item.model || item.modelTier;
-  if (tier) {
-    addLabel(tier);
+  const tier = item.tier ?? item.model ?? item.modelTier;
+  if (tier !== undefined) {
+    for (const label of readPlanModelLabels(tier, modelLabels)) addLabel(label);
   }
 
   if (item.labels) {
@@ -374,6 +380,8 @@ export async function filePlan(
   }
 
   const titleSet = new Set<string>();
+  const modelLabels = loadModelLabels();
+  const resolvedLabels = new Map<PlanIssueItem, string[]>();
   for (const { item, isEpic } of allItems) {
     if (!item.title || item.title.trim() === "") {
       throw new Error("Plan contains an issue with missing or empty title.");
@@ -385,6 +393,19 @@ export async function filePlan(
       );
     }
     titleSet.add(normalizedTitle);
+
+    try {
+      const labels = resolveLabels(item, modelLabels);
+      const violation = modelLabelViolation(labels, modelLabels, item.escalationReason);
+      if (violation) throw new Error(violation);
+      resolvedLabels.set(item, labels);
+    } catch (error) {
+      throw new Error(
+        `Refused to file plan — ${isEpic ? "Epic" : "issue"} "${item.title}": ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+    }
 
     const repoInfo = normalizeRepo(item.repo || plan.defaultRepo);
     const approval = approvalCheck(repoInfo.full, item.title);
@@ -500,7 +521,7 @@ export async function filePlan(
       const epicItem = plan.epic;
       const epicRepo = normalizeRepo(epicItem.repo || plan.defaultRepo);
       const epicBodyFile = await prepareBodyFile(epicItem, tempFiles);
-      const epicLabels = resolveLabels(epicItem);
+      const epicLabels = resolvedLabels.get(epicItem)!;
       const epicMilestone = epicItem.milestone !== undefined
         ? String(epicItem.milestone)
         : plan.defaultMilestone !== undefined
@@ -513,6 +534,7 @@ export async function filePlan(
         bodyFile: epicBodyFile,
         type: epicItem.type || "Epic",
         labels: epicLabels.length > 0 ? epicLabels : undefined,
+        escalationReason: epicItem.escalationReason,
         milestone: epicMilestone,
         priority: epicItem.priority,
         author: options.author,
@@ -555,7 +577,7 @@ export async function filePlan(
       const childItem = plan.children[i];
       const childRepo = normalizeRepo(childItem.repo || plan.defaultRepo);
       const childBodyFile = await prepareBodyFile(childItem, tempFiles);
-      const childLabels = resolveLabels(childItem);
+      const childLabels = resolvedLabels.get(childItem)!;
       const childMilestone = childItem.milestone !== undefined
         ? String(childItem.milestone)
         : plan.defaultMilestone !== undefined
@@ -582,6 +604,7 @@ export async function filePlan(
         bodyFile: childBodyFile,
         type: childItem.type || "Task",
         labels: childLabels.length > 0 ? childLabels : undefined,
+        escalationReason: childItem.escalationReason,
         milestone: childMilestone,
         priority: childItem.priority,
         parent: parentOption,

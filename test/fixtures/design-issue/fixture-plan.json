@@ -7,6 +7,7 @@
     "type": "Epic",
     "priority": "High",
     "tier": "Opus",
+    "escalationReason": "The case list is closed; no higher tier is needed",
     "repo": "web-jam-tools",
     "milestone": "token-savings"
   },

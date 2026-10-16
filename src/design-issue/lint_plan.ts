@@ -12,12 +12,8 @@
 // body with a read-only `gh issue view`, and fails closed when a body cannot be read.
 //
 // Canonical vocabularies are read from source at runtime, never hardcoded:
-//   - Model tiers: `skills/fix-labels/labels.yaml`, via the existing loader in
-//     `../fix-labels/diff.ts` (`loadSchema` + `computeModelLabels`) -- read-only, that module is
-//     never modified here. The `Josh` label (used as the Model tier value for manual rows per
-//     `skills/design-issue/SKILL.md` "Manual Steps & Verification Pairs") is not `modelTier: true`
-//     in the schema, so it is looked up by name and added to the allowed tier set only when it is
-//     actually present in `labels.yaml`.
+//   - Model tiers: `skills/fix-labels/model-labels.json`, through the shared label rule.
+//     Tests may inject a labels.yaml-shaped schema; Josh denotes a manual row.
 //   - Repos: `ACTIVE_REPOS` in `../shared/repos.ts` -- read-only, that module is never
 //     modified here.
 
@@ -30,6 +26,11 @@ import {
   type Schema,
 } from "../fix-labels/diff.ts";
 import { ACTIVE_REPOS } from "../shared/repos.ts";
+import {
+  loadModelLabels,
+  modelLabelViolation,
+  readPlanModelLabels,
+} from "../shared/model_label_rule.ts";
 import {
   type CommandRunner,
   DUPLICATE_MIN_SHARED_TOKENS,
@@ -84,12 +85,14 @@ export interface LintPlanResult {
 }
 
 export interface LintPlanOptions {
-  /** Canonical model-tier vocabulary source. `lintPlanTableFile` defaults this to loading
-   * `labels.yaml` when omitted; `validatePlanTable` instead treats an omitted schema as an
+  /** Test model-tier vocabulary source. `lintPlanTableFile` defaults to the generated
+   * model-label sidecar when omitted; `validatePlanTable` treats an omitted vocabulary as an
    * explicit opt-out that skips tier validation entirely. A schema that IS provided but yields
    * an empty vocabulary is treated as a degraded `labels.yaml` and throws (see
    * `resolveTierVocabulary`), rather than silently passing every tier. */
   schema?: Schema;
+  /** Explicit vocabulary for tests; production reads the generated model-label sidecar. */
+  modelLabels?: ReadonlySet<string>;
   /** Canonical active-repo vocabulary. Defaults to `ACTIVE_REPOS`. */
   activeRepos?: readonly string[];
   /** Reads an issue's body for the `Needs Design` removal check. Defaults to a read-only
@@ -309,7 +312,9 @@ export function validatePlanTable(
     violations.push(malformedRowViolation(bad));
   }
 
-  const canonicalTiers = resolveTierVocabulary(options.schema);
+  const canonicalTiers = options.modelLabels
+    ? [...options.modelLabels]
+    : resolveTierVocabulary(options.schema);
   const activeRepos = options.activeRepos ?? ACTIVE_REPOS;
 
   for (const row of rows) {
@@ -366,13 +371,20 @@ function checkMissingAndTier(
     });
     return;
   }
-  const tier = stripMdMarkers(raw);
-  if (canonicalTiers.length > 0 && !canonicalTiers.includes(tier)) {
+  if (canonicalTiers.length === 0) return;
+  try {
+    const vocabulary = new Set(canonicalTiers.filter((name) => name !== "Josh"));
+    const labels = readPlanModelLabels(raw, vocabulary);
+    const violation = modelLabelViolation(labels, vocabulary, undefined, false);
+    if (violation) throw new Error(violation);
+  } catch (error) {
     violations.push({
       rule: "tier-unknown",
       line: row.line,
       column: "Model tier",
-      message: `Model tier "${tier}" is not in labels.yaml's canonical model-tier vocabulary`,
+      message: `Model tier "${stripMdMarkers(raw)}": ${
+        error instanceof Error ? error.message : error
+      }`,
     });
   }
 }
@@ -617,8 +629,11 @@ export async function lintPlanTableFile(
     throw new Error(`No Gate 2 plan table found in ${filePath}`);
   }
 
-  const schema = options?.schema ?? await loadCanonicalSchema();
-  const violations = validatePlanTable(parsed, { schema, activeRepos: options?.activeRepos });
+  const violations = validatePlanTable(parsed, {
+    schema: options?.schema,
+    modelLabels: options?.modelLabels ?? (options?.schema ? undefined : loadModelLabels()),
+    activeRepos: options?.activeRepos,
+  });
   violations.push(
     ...await checkNeedsDesignRemovals(markdown, options?.fetchIssueBody ?? ghIssueBody),
     ...await checkDuplicatePlanTitles(

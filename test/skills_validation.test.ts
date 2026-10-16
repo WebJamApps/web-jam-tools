@@ -2166,3 +2166,48 @@ Deno.test(
     );
   },
 );
+
+function assertModelLabelGuidance(skill: string, text: string): void {
+  assertStringIncludes(text, "model-tier-order-design-2026-10-02.md");
+  for (
+    const stale of [
+      "exactly one label from",
+      "Exactly **one** label",
+      "hook requires exactly one",
+      "exactly one model label",
+      "exactly one *model* label",
+      "hook denies zero or two-plus",
+      "simultaneously (e.g. both",
+      "createIssueAndVerify()` never validates it",
+    ]
+  ) {
+    assertFalse(text.includes(stale), `${skill}: stale model-label rule: ${stale}`);
+  }
+  if (skill === "backlog-groom") assertStringIncludes(text, "must not be reduced to one label");
+  if (skill === "work-issue") {
+    assertStringIncludes(text, "retain both labels and do not ask for a label override");
+  }
+  if (skill === "design-issue") {
+    assertStringIncludes(text, "### Changing a value tools read");
+    assertStringIncludes(text, "searches the repository for the value itself");
+    assertStringIncludes(text, "no plan uses the new value until those readers carry it");
+    assertStringIncludes(text, "every row (the epic included)");
+    assertStringIncludes(text, "escalationReason");
+  }
+}
+
+Deno.test("filing skills point to the tier-order design and preserve paired lanes", async () => {
+  for (const skill of ["file-issue", "design-issue", "backlog-groom", "work-issue"]) {
+    const text = await Deno.readTextFile(`${SKILLS_DIR}${skill}/SKILL.md`);
+    assertModelLabelGuidance(skill, text);
+    assertThrows(() =>
+      assertModelLabelGuidance(
+        skill,
+        text.replaceAll("model-tier-order-design-2026-10-02.md", "missing"),
+      )
+    );
+    assertThrows(() =>
+      assertModelLabelGuidance(skill, `${text}\nA hook requires exactly one model label.\n`)
+    );
+  }
+});
