@@ -472,6 +472,12 @@ Deno.test("chat approval: a quoted or code-formatted span inside a longer title 
       `Title: hooks: "${innerTitle}"`,
       `Title: "hooks" — "${innerTitle}"`,
       `- Title: **hooks** (\`${innerTitle}\`)`,
+      // A title that merely contains the word "title" is not a presentation label plus a title.
+      `1. Fix issue title: "${innerTitle}"`,
+      `Fix issue title: "${innerTitle}"`,
+      `- Update the title: \`${innerTitle}\``,
+      `## Rename proposed title: **${innerTitle}**`,
+      `Retitle: "${innerTitle}"`,
     ]
   ) {
     assertEquals(
@@ -491,6 +497,25 @@ Deno.test("chat approval: a quoted or code-formatted span inside a longer title 
     true,
   );
   assertEquals(authorize(showThenApprove(`1. ${punctuated}`), [punctuated]).ok, true);
+  // The complete list-item title is the displayed field, label-like words and all.
+  const titleWord = `Fix issue title: "${innerTitle}"`;
+  assertEquals(authorize(showThenApprove(`1. ${titleWord}`), [titleWord]).ok, true);
+  // Explicit presentation labels still introduce a wrapped title.
+  for (
+    const shown of [
+      `Title: "${innerTitle}"`,
+      `Proposed title: **${innerTitle}**`,
+      `- Title 2: \`${innerTitle}\``,
+      `3. Issue title (3): "${innerTitle}"`,
+      `suggested title #1: "${innerTitle}"`,
+    ]
+  ) {
+    assertEquals(
+      authorize(showThenApprove(shown), [innerTitle]).ok,
+      true,
+      `${JSON.stringify(shown)} labels the title`,
+    );
+  }
   // A trailing full stop after the wrapped title is sentence punctuation, not title content.
   assertEquals(
     authorize(showThenApprove(`Proposed title: "${LONG_TITLE}".`), [LONG_TITLE]).ok,
@@ -613,6 +638,26 @@ Deno.test("chat approval: Antigravity titles shown across two model messages cou
 
 Deno.test("CLI chat approval: a formatted fragment inside a longer title is refused, the longer title writes", async () => {
   const longer = "Fix `approval token` validation";
+  const transcript = showThenApprove(`1. ${longer}`);
+  const fragment = await runWriter(transcript, ["approval token"]);
+  try {
+    assertEquals(fragment.code, 1);
+    assertStringIncludes(fragment.stderr, "Refused to write approval token");
+    assertEquals(await exists(fragment.tokenPath), false);
+  } finally {
+    await Deno.remove(fragment.dir, { recursive: true });
+  }
+  const full = await runWriter(transcript, [longer]);
+  try {
+    assertEquals(full.code, 0, full.stderr);
+    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).titles, [longer]);
+  } finally {
+    await Deno.remove(full.dir, { recursive: true });
+  }
+});
+
+Deno.test("CLI chat approval: a list title that contains the word title is not split at its colon", async () => {
+  const longer = 'Fix issue title: "approval token"';
   const transcript = showThenApprove(`1. ${longer}`);
   const fragment = await runWriter(transcript, ["approval token"]);
   try {

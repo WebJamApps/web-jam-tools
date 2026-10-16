@@ -332,44 +332,53 @@ function stripTitleWrappers(text: string): string {
   }
 }
 
-/** A label that introduces a title on its line: "Proposed title:", "Title 2:", "Issue title (1):". */
-const TITLE_LABEL_RE = /^[^\s"'“”‘’`*_|:][^"'“”‘’`*_|:]{0,40}:\s+/;
+/**
+ * A presentation label that introduces a title and is not part of it: exactly "Title:", "Proposed
+ * title:", "Suggested title:", "New title:" or "Issue title:", optionally numbered ("Title 2:",
+ * "Title (2):", "Title #2:"). The label must be the whole of what precedes the colon, so a longer
+ * title that merely contains the word ("Fix issue title: ...") is never read as a label plus a title.
+ */
+const TITLE_LABEL_RE =
+  /^(?:(?:proposed|suggested|new|issue)\s+)?title(?:\s+(?:#\s*)?\(?\d+\)?)?:\s+/i;
 
 /**
- * True when `text` shows `title` as a COMPLETE title (web-jam-tools#1054 review): a substring of a
- * longer title is not the title Josh saw. The title must be the whole of a displayed field —
- *   - a whole line, after any list number, bullet or heading marker and any wrapping quotes,
- *     backticks or bold, or
- *   - a whole table cell, or
- *   - everything after a "title" label's colon on a line (`Proposed title: "..."`), when that
- *     remainder is itself wrapped in quotes, backticks or bold.
- * The field is compared as a whole, never searched for inside: a wrapped span within a longer title
- * (``Fix `approval token` validation``, ``"hooks: `approval token` — validation"``) is that title's
- * content, and a title written inside a sentence is not a displayed field. The agent shows each
- * title on its own line, in a table cell, or after a label.
+ * The titles a piece of agent text DISPLAYS, worked out from the text alone, before any requested
+ * title is considered. A displayed title is the whole of a field —
+ *   - a whole line, after any list number, bullet or heading marker, both as written and with any
+ *     wrapping quotes, backticks or bold peeled off, or
+ *   - a whole table cell (the same two forms), or
+ *   - everything after a presentation label's colon (TITLE_LABEL_RE) on a line, when that remainder
+ *     is itself wrapped in quotes, backticks or bold, so the wrapper marks where the title ends.
+ * Nothing is searched for inside a field: a wrapped span within a longer title
+ * (``Fix `approval token` validation``, ``Fix issue title: "approval token"``) is that title's
+ * content, and a title written inside a sentence is not a displayed field.
  */
-export function titleShownExactly(text: string, title: string): boolean {
-  const isTitle = (candidate: string): boolean => {
+export function displayedTitles(text: string): Set<string> {
+  const shown = new Set<string>();
+  const addField = (candidate: string): void => {
     const trimmed = candidate.trim();
-    return trimmed === title || stripTitleWrappers(trimmed) === title;
-  };
-  // The remainder after a label counts only when wrapped, so the wrapper marks where the title ends.
-  const isLabelledTitle = (remainder: string): boolean => {
-    const trimmed = remainder.trim().replace(/[.,;!?]+$/, "");
-    return stripTitleWrappers(trimmed) !== trimmed && isTitle(trimmed);
+    if (!trimmed) return;
+    shown.add(trimmed);
+    shown.add(stripTitleWrappers(trimmed));
   };
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const body = trimmed.replace(LINE_MARKER_RE, "");
-    if (isTitle(body)) return true;
+    addField(body);
     const label = TITLE_LABEL_RE.exec(body);
-    if (label && /\btitles?\b/i.test(label[0]) && isLabelledTitle(body.slice(label[0].length))) {
-      return true;
+    if (label) {
+      const remainder = body.slice(label[0].length).trim().replace(/[.,;!?]+$/, "");
+      if (stripTitleWrappers(remainder) !== remainder) addField(remainder);
     }
-    if (trimmed.includes("|") && trimmed.split("|").some(isTitle)) return true;
+    if (trimmed.includes("|")) trimmed.split("|").forEach(addField);
   }
-  return false;
+  return shown;
+}
+
+/** True when `text` displays `title` as a COMPLETE title (web-jam-tools#1054 review); see displayedTitles. */
+export function titleShownExactly(text: string, title: string): boolean {
+  return displayedTitles(text).has(title);
 }
 
 /**

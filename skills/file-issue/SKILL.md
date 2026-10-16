@@ -247,7 +247,7 @@ approving in chat — it follows an agent turn that showed every exact `--title`
 with `no`, `nope`, `nah`, `don't`, `do not`, `stop`, `never`, `cancel`, `hold off`, `wait` or `not yet`
 (any run of spaces or a line break between the two words of `do not`, `hold off` and `not yet` counts
 as the same refusal). A title is shown only when it appears whole: on a line of its own (a list item
-or heading), in a table cell, or in quotes, backticks or bold right after a `title` label's colon
+or heading), in a table cell, or in quotes, backticks or bold right after a plain `Title:` / `Proposed title:` label's colon
 (`Proposed title: "..."`) — the whole displayed field is compared, so a shortened or embedded part of
 a longer title does not count (a quoted or backticked span inside a longer title is that title's
 content, whatever punctuation surrounds it), and neither does a title in the middle of a sentence,
