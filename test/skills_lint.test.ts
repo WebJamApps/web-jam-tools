@@ -400,17 +400,41 @@ Deno.test("SURFACE_SPECIFIC_MACHINERY_PATTERNS: matches surface-specific indicat
   const matchesAny = (str: string) => SURFACE_SPECIFIC_MACHINERY_PATTERNS.some((p) => p.test(str));
 
   assert(matchesAny("On Claude Code, run the tool."));
+  assert(matchesAny("~/.claude/hooks/foo.sh"));
   assert(matchesAny("On Codex, run directly."));
   assert(matchesAny("mcp__github__issue_read"));
   assert(matchesAny('Agent tool with model: "haiku"'));
   assert(matchesAny('Agent(model: "sonnet")'));
   assert(matchesAny("/model haiku"));
+  assert(matchesAny('/model "Gemini 3.8 Flash (High)"'));
   assert(matchesAny("Haiku subagents"));
   assert(matchesAny("MUST be on Haiku"));
   assert(matchesAny("invoke_subagent"));
   assert(matchesAny("call_mcp_tool"));
 
-  // Surface-neutral strings should not match
+  // Surface-neutral strings and false positives should not match
   assertEquals(matchesAny("Clean instructions for git commit."), false);
   assertEquals(matchesAny("Labels: Flash High, Flash Med, Flash Low"), false);
+  assertEquals(matchesAny("See src/shared/model/helpers.ts for model logic."), false);
+  assertEquals(matchesAny("Co-Authored-By: Claude Sonnet 5.5"), false);
+  // agy / Antigravity is the target mention, not surface machinery
+  assertEquals(matchesAny("On agy, run the tool."), false);
+  assertEquals(matchesAny("Antigravity surface"), false);
+});
+
+Deno.test("lintSkillMarkdown: passes on path segment containing /model/ and bare Claude model attribution without agy mention", () => {
+  const content = `---
+name: model-attribution-skill
+description: Skill mentioning file path and bare model name.
+---
+
+# model-attribution-skill
+
+See \`src/shared/model/helpers.ts\` or src/shared/model/helpers.ts for shared helpers.
+Commit footer: Co-Authored-By: Claude Sonnet 5.5.
+`;
+
+  const result = lintSkillMarkdown(content, "model-attribution-skill/SKILL.md");
+  assertEquals(result.valid, true);
+  assertEquals(result.violations.length, 0);
 });

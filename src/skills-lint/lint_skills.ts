@@ -31,13 +31,14 @@ export interface LintSkillsSummary {
  * body must mention `agy` or `Antigravity` at least once.
  */
 export const SURFACE_SPECIFIC_MACHINERY_PATTERNS: RegExp[] = [
-  /\bClaude(?:\s+Code)?\b/i,
+  /\bClaude\s+Code\b/i,
+  /(?<!\w)\.claude\b/i,
   /\bCodex\b/i,
   /\bmcp__\w*/,
   /\bmodel:\s*["'][^"']+["']/i,
   /\bAgent\s+tool\b/i,
   /\bAgent\s*\(/,
-  /\/model\b/i,
+  /(?<![\w/])\/model\s+\S+/i,
   /\bHaiku\s+subagents?\b/i,
   /\bMUST\s+be\s+on\s+Haiku\b/i,
   /\b(?:must\s+)?run\s+on\s+Haiku\b/i,
@@ -47,7 +48,6 @@ export const SURFACE_SPECIFIC_MACHINERY_PATTERNS: RegExp[] = [
   /\bFlash\s+High\s+multimodal\s+vision\b/i,
   /\binvoke_subagent\b/,
   /\bcall_mcp_tool\b/,
-  /\b(?:agy|Antigravity)\b/i,
 ];
 
 /**
