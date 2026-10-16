@@ -16,8 +16,9 @@
 #
 # On the laptop (not in WSL) apply also makes SSH accept a key only and the firewall admit only
 # Tailscale: a drop-in under /etc/ssh/sshd_config.d/ sets "PasswordAuthentication no" (ssh.service
-# is restarted when it changes), and ufw denies incoming traffic by default, allows everything
+# is restarted until the restart succeeds), and ufw denies incoming traffic by default, allows everything
 # arriving on tailscale0, and is switched on. ufw asks you to confirm "ufw enable" itself. --check
+# refuses to switch the firewall on while it already admits SSH off Tailscale. --check
 # reads the same state from files and reports it drifting; the parts that need root say so instead
 # of guessing. WSL runs no SSH server (Windows' own SSH server reaches it), so both steps are skipped.
 #
@@ -34,6 +35,9 @@ TIMER="ubuntu-health-weekly.timer"
 # Sorts before any other drop-in: sshd keeps the FIRST value it reads for a setting.
 SSHD_CONFIG="$ROOT/etc/ssh/sshd_config"
 SSHD_DROPIN="$ROOT/etc/ssh/sshd_config.d/00-ubuntu-health.conf"
+# Exists from just before the drop-in is written until ssh.service has restarted, so a restart
+# that failed, or a run that stopped first, is retried by the next apply and named by --check.
+SSH_PENDING="$LIB/ssh-restart-pending"
 UFW_CONF="$ROOT/etc/ufw/ufw.conf"
 UFW_DEFAULTS="$ROOT/etc/default/ufw"
 UFW_RULE_FILES=("$ROOT/etc/ufw/user.rules" "$ROOT/etc/ufw/user6.rules")
@@ -145,38 +149,64 @@ admits_port22() {
   return 1
 }
 
-# The first PasswordAuthentication sshd reads, as "value|file", following Include lines in order
-# (relative ones from /etc/ssh). Stops at a Match line: what follows applies only to a condition.
+# One line per ufw rule that admits port 22 off Tailscale. Loopback is not a network door, and
+# tailscale0 is the one place SSH is meant to come in.
+ufw_port22_exposures() {
+  local action proto dport iface
+  while IFS='|' read -r action proto dport iface; do
+    case "$iface" in tailscale0 | lo) continue ;; esac
+    admits_port22 "$proto" "$dport" || continue
+    echo "port 22 is admitted on ${iface:-every interface} by an $action rule ($proto, port $dport)"
+  done < <(ufw_tuples)
+}
+
+# Reads the whole sshd configuration, following Include lines in order (relative ones from
+# /etc/ssh). SSHD_RESULT is the first PasswordAuthentication outside any Match block, as
+# "value|file": the one sshd keeps. A Match block applies only to a condition, so its setting is
+# not that value, but one that is not "no" can still switch passwords on for the connections it
+# matches; the first such setting is kept in SSHD_MATCH_RESULT. Once a Match line is read, every
+# later line in every file counts as conditional, whether or not sshd has closed the block.
 SSHD_RESULT=""
+SSHD_MATCH_RESULT=""
+SSHD_IN_MATCH=0
 scan_sshd() {
-  local file="$1" line key val pattern f
+  local file="$1" line key val pattern f match_seen=0
   local LC_COLLATE=C
   [ -r "$file" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
-    [ -z "$SSHD_RESULT" ] || return 0
     read -r key val <<<"$line" || true
     case "${key,,}" in
       "" | "#"*) continue ;;
-      match) return 0 ;;
+      match)
+        SSHD_IN_MATCH=1
+        match_seen=0
+        ;;
       passwordauthentication)
-        SSHD_RESULT="$val|${file#"$ROOT"}"
-        return 0
+        if [ "$SSHD_IN_MATCH" -eq 0 ]; then
+          [ -n "$SSHD_RESULT" ] || SSHD_RESULT="$val|${file#"$ROOT"}"
+        elif [ "$match_seen" -eq 0 ]; then
+          match_seen=1
+          [ "${val,,}" = "no" ] || [ -n "$SSHD_MATCH_RESULT" ] || SSHD_MATCH_RESULT="$val|${file#"$ROOT"}"
+        fi
         ;;
       include)
         for pattern in $val; do
           case "$pattern" in /*) ;; *) pattern="/etc/ssh/$pattern" ;; esac
           for f in "$ROOT"$pattern; do
             [ ! -f "$f" ] || scan_sshd "$f"
-            [ -z "$SSHD_RESULT" ] || return 0
           done
         done
         ;;
     esac
   done <"$file"
+  return 0
 }
 
 check_ssh() {
   local result value
+  if [ -e "$SSH_PENDING" ]; then
+    report ssh "ssh.service has not been restarted since $SSHD_DROPIN was written; run apply again"
+  fi
   if [ ! -f "$SSHD_CONFIG" ]; then
     report ssh "$SSHD_CONFIG is missing, so sshd's login rules cannot be read"
     return 0
@@ -186,14 +216,20 @@ check_ssh() {
     return 0
   fi
   SSHD_RESULT=""
+  SSHD_MATCH_RESULT=""
+  SSHD_IN_MATCH=0
   scan_sshd "$SSHD_CONFIG"
   result="${SSHD_RESULT:-yes|the built-in default}"
   value="${result%%|*}"
-  [ "${value,,}" = "no" ] || report ssh "PasswordAuthentication is effectively \"$value\" (${result#*|}); expected \"no\""
+  if [ "${value,,}" != "no" ]; then
+    report ssh "PasswordAuthentication is effectively \"$value\" (${result#*|}); expected \"no\""
+  elif [ -n "$SSHD_MATCH_RESULT" ]; then
+    report ssh "a Match block sets PasswordAuthentication to \"${SSHD_MATCH_RESULT%%|*}\" (${SSHD_MATCH_RESULT#*|}), so a password can still be accepted for the connections it matches; key-only login is not confirmed"
+  fi
 }
 
 check_firewall() {
-  local f unreadable=0 action proto dport iface policy
+  local f unreadable=0 policy msg
   if [ ! -f "$UFW_CONF" ]; then
     report firewall "firewall off: $UFW_CONF is missing (is ufw installed?)"
   elif ! ufw_enabled; then
@@ -211,12 +247,9 @@ check_firewall() {
   done
   [ "$unreadable" -eq 0 ] || return 0
   ufw_has_tailscale_rule || report firewall "no rule allows incoming traffic on tailscale0"
-  while IFS='|' read -r action proto dport iface; do
-    # Loopback is not a network door, and tailscale0 is the one place SSH is meant to come in.
-    case "$iface" in tailscale0 | lo) continue ;; esac
-    admits_port22 "$proto" "$dport" || continue
-    report firewall "port 22 is admitted on ${iface:-every interface} by an $action rule ($proto, port $dport)"
-  done < <(ufw_tuples)
+  while IFS= read -r msg; do
+    report firewall "$msg"
+  done < <(ufw_port22_exposures)
 }
 
 # The checksum line the manifest holds for one installed file: "<sha256>  <path without ROOT>".
@@ -286,7 +319,7 @@ check() {
 }
 
 apply() {
-  local step src dst mode units_changed=0 ssh_changed=0 manifest_new
+  local step src dst mode units_changed=0 manifest_new
   if [ -z "$ROOT" ] && [ "$(id -u)" -ne 0 ]; then
     echo "ubuntu-health: run this with sudo, or use --check" >&2
     exit 2
@@ -301,10 +334,10 @@ apply() {
   [ "$MODE" != "laptop" ] || install -d -m 0755 "$(dirname "$SSHD_DROPIN")"
   while IFS='|' read -r step src dst mode; do
     if [ ! -f "$dst" ] || ! cmp -s "$src" "$dst" || [ "$(stat -c %a "$dst")" != "$mode" ]; then
+      [ "$step" != "ssh" ] || : >"$SSH_PENDING"
       install -m "$mode" "$src" "$dst"
       echo "wrote $dst"
       [ "$step" != "unit-files" ] || units_changed=1
-      [ "$step" != "ssh" ] || ssh_changed=1
     fi
     chown root:root "$dst"
   done < <(wanted_files)
@@ -331,7 +364,7 @@ apply() {
 
   if [ "$MODE" = "laptop" ]; then
     apply_firewall
-    [ "$ssh_changed" -eq 0 ] || restart_ssh
+    [ ! -e "$SSH_PENDING" ] || restart_ssh
   else
     wsl_skip
   fi
@@ -339,6 +372,19 @@ apply() {
 
 # Tailscale is allowed first, so switching the firewall on never cuts the way in that stays open.
 apply_firewall() {
+  local exposed
+  # A rule that already admits SSH off Tailscale survives every change below, so switching the
+  # firewall on would report success while leaving the exposure. Nothing is deleted for you:
+  # which rules to drop is your call.
+  exposed="$(ufw_port22_exposures)"
+  if [ -n "$exposed" ]; then
+    {
+      echo "ubuntu-health: not changing the firewall: ufw already admits SSH off Tailscale:"
+      sed 's/^/  /' <<<"$exposed"
+      echo "  List the rules with \"ufw status numbered\", remove each of these with \"ufw delete <number>\", then run this again."
+    } >&2
+    exit 1
+  fi
   if ! ufw_has_tailscale_rule; then
     ufw allow in on tailscale0
     echo "allowed incoming traffic on tailscale0"
@@ -361,6 +407,7 @@ restart_ssh() {
     exit 1
   fi
   systemctl restart ssh.service
+  rm -f "$SSH_PENDING"
   echo "restarted ssh.service"
 }
 

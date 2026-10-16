@@ -9,10 +9,7 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import {
-  defaultWorkflowSwitchPath,
-  normalizeGuardName,
-} from "../hooks/lib/workflow_switch.ts";
+import { defaultWorkflowSwitchPath, normalizeGuardName } from "../hooks/lib/workflow_switch.ts";
 
 export const DEFAULT_TTL_MINUTES = 15;
 
