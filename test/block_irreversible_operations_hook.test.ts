@@ -7,6 +7,10 @@
 // test/check_irreversible_operations_lib.test.ts.
 
 import { assertEquals } from "@std/assert";
+import {
+  COMMENT_HEREDOC_GUARD_CASES,
+  HEREDOC_REVIEW_CASES,
+} from "./comment_heredoc_guard_cases.ts";
 
 const HOOK_PATH = new URL("../hooks/block-irreversible-operations.sh", import.meta.url).pathname;
 
@@ -34,6 +38,28 @@ async function runHook(
     stdout: new TextDecoder().decode(output.stdout).trim(),
     stderr: new TextDecoder().decode(output.stderr).trim(),
   };
+}
+
+for (const row of [...COMMENT_HEREDOC_GUARD_CASES, ...HEREDOC_REVIEW_CASES]) {
+  Deno.test(`apostrophe shell literal case ${row.id}: ${row.irreversible}`, async () => {
+    const result = await runHook({ tool_name: "Bash", command: row.command });
+    assertEquals(result.code, row.irreversible === "allow" ? 0 : 2, result.stderr);
+    if (row.irreversible === "allow") {
+      assertEquals(result.stderr, "");
+    } else if (row.irreversible === "operation") {
+      assertEquals(result.stderr.includes("This operation is irreversible"), true, result.stderr);
+      assertEquals(result.stderr.includes("could not read the command"), false, result.stderr);
+    } else {
+      assertEquals(result.stderr.includes("could not read the command"), true, result.stderr);
+      assertEquals(result.stderr.includes("no protected operation was identified"), true);
+      assertEquals(result.stderr.includes("restate the same action"), true);
+      assertEquals(result.stderr.includes("same guard"), true);
+      assertEquals(result.stderr.includes("Do not change what the command does"), true);
+      assertEquals(result.stderr.includes("end of the turn"), true);
+      assertEquals(result.stderr.includes("irreversible and hard-blocked"), false);
+      assertEquals(result.stderr.includes("separate terminal"), false);
+    }
+  });
 }
 
 Deno.test("irreversible operations: all 17 operations blocked with exit 2 and runnable commands (R-24 & R-25)", async () => {
@@ -272,10 +298,41 @@ Deno.test("when deno itself is unavailable, the guard still fails CLOSED", async
 
     assertEquals(output.code, 2, `expected fail-closed when deno is missing, stderr: ${stderr}`);
     assertEquals(stderr.includes("guard could not evaluate"), true, stderr);
+    assertEquals(stderr.includes("no protected operation was identified"), true, stderr);
+    assertEquals(stderr.includes("irreversible and hard-blocked"), false, stderr);
   } finally {
     await Deno.remove(shadowDir, { recursive: true });
   }
 });
+
+for (const [output, code] of [["", 0], ["OK", 7], ["unexpected", 0]] as const) {
+  Deno.test(`apostrophe checker failure ${JSON.stringify(output)}/${code} uses the could-not-read response`, async () => {
+    const dir = await Deno.makeTempDir({ prefix: "apostrophe-failed-checker-" });
+    try {
+      await Deno.writeTextFile(`${dir}/deno`, `#!/bin/sh\nprintf '%s' '${output}'\nexit ${code}\n`);
+      await Deno.chmod(`${dir}/deno`, 0o755);
+      const child = new Deno.Command("bash", {
+        args: [HOOK_PATH],
+        env: { BASH_ENV: "", PATH: `${dir}:${Deno.env.get("PATH") ?? ""}` },
+        stdin: "piped",
+        stdout: "piped",
+        stderr: "piped",
+      }).spawn();
+      const writer = child.stdin.getWriter();
+      await writer.write(
+        new TextEncoder().encode(JSON.stringify({ tool_input: { command: "git status" } })),
+      );
+      await writer.close();
+      const result = await child.output();
+      const stderr = new TextDecoder().decode(result.stderr);
+      assertEquals(result.code, 2, stderr);
+      assertEquals(stderr.includes("could not read the command"), true, stderr);
+      assertEquals(stderr.includes("irreversible and hard-blocked"), false, stderr);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
 
 // --- web-jam-tools#1223: git global options before the subcommand ---
 // Real hook script, full PreToolUse Bash payload, exit code per table row.
