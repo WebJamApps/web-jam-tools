@@ -1055,6 +1055,52 @@ Deno.test("ssh: an Include whose directory only root can enter or list is report
   }
 });
 
+Deno.test("ssh: an unreadable Include sibling does not hide readable password overrides", async () => {
+  const cases: [string, string, number][] = [
+    ["/etc/ssh/*/private/*.conf", "a-blocked", 0o000],
+    ["/etc/ssh/*/private/*.conf", "z-blocked", 0o000],
+    ["/etc/ssh/*/private/*/*.conf", "a-blocked", 0o100],
+  ];
+  for (const [pattern, blockedName, mode] of cases) {
+    const h = await makeHarness();
+    await seedSshdConfig(h, SSHD_CONFIG_BODY + `Include ${pattern}\n`);
+    for (const sibling of [blockedName, "m-open"]) {
+      const dir = `${h.root}/etc/ssh/${sibling}/private`;
+      await Deno.mkdir(`${dir}/inner`, { recursive: true });
+      for (const file of ["x.conf", "inner/x.conf"]) {
+        await Deno.writeTextFile(
+          `${dir}/${file}`,
+          "Match User joshua\n  PasswordAuthentication yes\n",
+        );
+      }
+    }
+    await apply(h);
+    await writeEnvFile(h, 0o600);
+    const blockedDir = `${h.root}/etc/ssh/${blockedName}/private`;
+    await Deno.chmod(blockedDir, mode);
+    try {
+      let inaccessible = false;
+      try {
+        for await (const _ of Deno.readDir(blockedDir)) break;
+      } catch (error) {
+        if (!(error instanceof Deno.errors.PermissionDenied)) throw error;
+        inaccessible = true;
+      }
+      const r = await check(h);
+
+      assertEquals(r.code, 1, r.stdout);
+      assertStringIncludes(r.stdout, "DRIFT ssh: a Match block sets PasswordAuthentication");
+      if (inaccessible) {
+        assertStringIncludes(r.stdout, "NOTE: SSH login rules not fully checked without sudo");
+        assertStringIncludes(r.stdout, `${blockedName}/private is not readable`);
+        assertStringIncludes(r.stdout, "m-open/private/");
+      }
+    } finally {
+      await Deno.chmod(blockedDir, 0o755);
+    }
+  }
+});
+
 Deno.test("ssh: an Include that matches no file at all is still not a warning", async () => {
   const h = await makeHarness();
   await seedSshdConfig(

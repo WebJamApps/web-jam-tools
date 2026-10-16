@@ -233,8 +233,8 @@ scan_sshd() {
           case "$pattern" in /*) ;; *) pattern="/etc/ssh/$pattern" ;; esac
           if blocked="$(blocked_include_dir "$pattern")"; then
             SSHD_UNREADABLE+=("$blocked")
-            continue
           fi
+          # A blocked sibling makes the scan incomplete, but readable matches can still reveal drift.
           for f in "$ROOT"$pattern; do
             [ -f "$f" ] || continue
             if [ -r "$f" ]; then scan_sshd "$f"; else SSHD_UNREADABLE+=("$f"); fi

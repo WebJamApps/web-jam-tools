@@ -517,15 +517,16 @@ scripts/ubuntu-health.sh --check       # change nothing; name every drift; exit 
   `no`, because that can switch passwords back on for the connections it matches (an included file
   or a directory holding included files only root can read, search or list (including directories
   beneath wildcard path components) prints `NOTE: ... not fully checked without sudo`); it also
-  names an `ssh.service` restart still pending. The `firewall` step names "firewall off" (`ENABLED`
-  is not `yes` in `/etc/ufw/ufw.conf`), a missing default deny, a missing `tailscale0` rule (the
-  blanket `ufw allow in on tailscale0`; one limited to a source, destination, port or protocol does
-  not count), or a rule, logged or not, that admits port 22 on any other interface; ufw's rule files
-  are readable only by root, so without `sudo` it prints `NOTE: ... not checked without sudo` for
-  them instead of guessing. Installed files are verified against `manifest.sha256`, which is how the
-  weekly job (running the installed copy, with no repository beside it) still catches a changed
-  `weekly.sh` or `gmail-send.sh`; run from the repository, it also compares each file with its
-  repository source.
+  names an `ssh.service` restart still pending. Readable Include matches are still scanned when a
+  sibling directory is inaccessible, so known password drift is reported alongside the NOTE. The
+  `firewall` step names "firewall off" (`ENABLED` is not `yes` in `/etc/ufw/ufw.conf`), a missing
+  default deny, a missing `tailscale0` rule (the blanket `ufw allow in on tailscale0`; one limited
+  to a source, destination, port or protocol does not count), or a rule, logged or not, that admits
+  port 22 on any other interface; ufw's rule files are readable only by root, so without `sudo` it
+  prints `NOTE: ... not checked without sudo` for them instead of guessing. Installed files are
+  verified against `manifest.sha256`, which is how the weekly job (running the installed copy, with
+  no repository beside it) still catches a changed `weekly.sh` or `gmail-send.sh`; run from the
+  repository, it also compares each file with its repository source.
 - **Email.** `gmail-send.sh` makes the same two Gmail API requests as `src/shared/gmail_send.ts`
   with `curl`. It reads `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` from the
   send-only login file `/etc/ubuntu-health/gmail-send.env`, which must be owned by root with mode
