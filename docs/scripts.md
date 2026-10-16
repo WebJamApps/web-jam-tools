@@ -488,11 +488,24 @@ scripts/ubuntu-health.sh --check       # change nothing; name every drift; exit 
   at idle CPU and disk priority. The job runs the installed `--check` and, when it finds anything,
   sends one email naming the system and what to run next. A week with nothing to report sends
   nothing. The job's log is `/var/log/ubuntu-health.log`.
+- **SSH and the firewall (laptop only).** SSH into the laptop accepts a key only and the firewall
+  admits only Tailscale. A run installs `/etc/ssh/sshd_config.d/00-ubuntu-health.conf` with
+  `PasswordAuthentication no` (named `00-` because sshd keeps the first value it reads) and restarts
+  `ssh.service` when that file changed; on a real system `sshd -t` must accept the configuration
+  first. It runs `ufw allow in on tailscale0`, `ufw default deny incoming` and `ufw enable`, each
+  only when ufw does not already hold it, so a second run makes no `ufw` or `ssh` change; ufw asks
+  you to confirm `ufw enable` itself. In WSL both steps are skipped and the output says so, because
+  WSL runs no SSH server (Windows' own SSH server reaches it).
 - **`--check`.** Needs no `sudo`. Reports each drifted step as `DRIFT <step>: <what>` (`job-files`,
-  `unit-files`, `timer`, `email-login`), or `no drift`. Installed files are verified against
-  `manifest.sha256`, which is how the weekly job (running the installed copy, with no repository
-  beside it) still catches a changed `weekly.sh` or `gmail-send.sh`; run from the repository, it
-  also compares each file with its repository source.
+  `unit-files`, `timer`, `email-login`, and on the laptop `ssh` and `firewall`), or `no drift`. The
+  `ssh` step names an effective `PasswordAuthentication` other than `no`, read from `sshd_config`
+  and the files it includes. The `firewall` step names "firewall off" (`ENABLED` is not `yes` in
+  `/etc/ufw/ufw.conf`), a missing default deny, a missing `tailscale0` rule, or a rule that admits
+  port 22 on any other interface; ufw's rule files are readable only by root, so without `sudo` it
+  prints `NOTE: ... not checked without sudo` for them instead of guessing. Installed files are
+  verified against `manifest.sha256`, which is how the weekly job (running the installed copy, with
+  no repository beside it) still catches a changed `weekly.sh` or `gmail-send.sh`; run from the
+  repository, it also compares each file with its repository source.
 - **Email.** `gmail-send.sh` makes the same two Gmail API requests as `src/shared/gmail_send.ts`
   with `curl`. It reads `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN` from the
   send-only login file `/etc/ubuntu-health/gmail-send.env`, which must be owned by root with mode

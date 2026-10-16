@@ -14,6 +14,13 @@
 # verifies content against that manifest instead and reads nothing from the repository or a home
 # folder. Run from the repository, --check compares against the repository files as well.
 #
+# On the laptop (not in WSL) apply also makes SSH accept a key only and the firewall admit only
+# Tailscale: a drop-in under /etc/ssh/sshd_config.d/ sets "PasswordAuthentication no" (ssh.service
+# is restarted when it changes), and ufw denies incoming traffic by default, allows everything
+# arriving on tailscale0, and is switched on. ufw asks you to confirm "ufw enable" itself. --check
+# reads the same state from files and reports it drifting; the parts that need root say so instead
+# of guessing. WSL runs no SSH server (Windows' own SSH server reaches it), so both steps are skipped.
+#
 # UBUNTU_HEALTH_ROOT stands in for "/" so tests never touch the real system.
 # Design: Operations/ubuntu-security-efficiency-design-2026-10-15.md in the web-jam-llms folder.
 set -euo pipefail
@@ -24,6 +31,12 @@ UNIT_DIR="$ROOT/etc/systemd/system"
 ENV_FILE="$ROOT/etc/ubuntu-health/gmail-send.env"
 MANIFEST="$LIB/manifest.sha256"
 TIMER="ubuntu-health-weekly.timer"
+# Sorts before any other drop-in: sshd keeps the FIRST value it reads for a setting.
+SSHD_CONFIG="$ROOT/etc/ssh/sshd_config"
+SSHD_DROPIN="$ROOT/etc/ssh/sshd_config.d/00-ubuntu-health.conf"
+UFW_CONF="$ROOT/etc/ufw/ufw.conf"
+UFW_DEFAULTS="$ROOT/etc/default/ufw"
+UFW_RULE_FILES=("$ROOT/etc/ufw/user.rules" "$ROOT/etc/ufw/user6.rules")
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SELF_DIR="$(dirname "$SELF")"
@@ -71,6 +84,139 @@ wanted_files() {
     echo "job-files|$SUPPORT/$f|$LIB/$f|644"
     echo "unit-files|$SUPPORT/$f|$UNIT_DIR/$f|644"
   done
+  [ "$MODE" != "laptop" ] || echo "ssh|$SUPPORT/ubuntu-health-sshd.conf|$SSHD_DROPIN|644"
+}
+
+wsl_skip() {
+  echo "skipped: SSH and firewall steps (WSL runs no SSH server; Windows' own SSH server reaches it)"
+}
+
+# --- firewall and SSH state, read from files so --check needs no ufw or sshd call -----------------
+
+# The value of KEY in a KEY=value file such as ufw.conf, lowercase and without quotes.
+conf_value() {
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1 | tr -d '"' | tr '[:upper:]' '[:lower:]'
+}
+
+ufw_enabled() { [ "$(conf_value "$UFW_CONF" ENABLED)" = "yes" ]; }
+
+ufw_denies_incoming() {
+  case "$(conf_value "$UFW_DEFAULTS" DEFAULT_INPUT_POLICY)" in
+    drop | reject) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# One line per incoming allow rule ufw holds: action|proto|port|interface (interface empty = all).
+ufw_tuples() {
+  local f
+  for f in "${UFW_RULE_FILES[@]}"; do
+    [ -r "$f" ] || continue
+    awk '/^### tuple ###/ {
+      n = NF
+      if ($n ~ /^comment=/) n--
+      dir = $n
+      if ($4 !~ /^(allow|limit)$/ || dir !~ /^in(_|$)/ || dir ~ /_out/) next
+      iface = (dir == "in") ? "" : substr(dir, 4)
+      print $4 "|" $5 "|" $6 "|" iface
+    }' "$f"
+  done
+}
+
+ufw_has_tailscale_rule() {
+  ufw_tuples | grep -qE '^(allow|limit)\|any\|any\|tailscale0$'
+}
+
+# True when a rule for protocol $1 and port field $2 (any, 22, 20:30 or 22,80) covers SSH.
+admits_port22() {
+  local p lo hi IFS=,
+  case "$1" in tcp | any) ;; *) return 1 ;; esac
+  [ "$2" != "any" ] || return 0
+  for p in $2; do
+    case "$p" in
+      *:*)
+        lo="${p%%:*}"
+        hi="${p##*:}"
+        if [ "$lo" -le 22 ] 2>/dev/null && [ "$hi" -ge 22 ] 2>/dev/null; then return 0; fi
+        ;;
+      22) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# The first PasswordAuthentication sshd reads, as "value|file", following Include lines in order
+# (relative ones from /etc/ssh). Stops at a Match line: what follows applies only to a condition.
+SSHD_RESULT=""
+scan_sshd() {
+  local file="$1" line key val pattern f
+  local LC_COLLATE=C
+  [ -r "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -z "$SSHD_RESULT" ] || return 0
+    read -r key val <<<"$line" || true
+    case "${key,,}" in
+      "" | "#"*) continue ;;
+      match) return 0 ;;
+      passwordauthentication)
+        SSHD_RESULT="$val|${file#"$ROOT"}"
+        return 0
+        ;;
+      include)
+        for pattern in $val; do
+          case "$pattern" in /*) ;; *) pattern="/etc/ssh/$pattern" ;; esac
+          for f in "$ROOT"$pattern; do
+            [ ! -f "$f" ] || scan_sshd "$f"
+            [ -z "$SSHD_RESULT" ] || return 0
+          done
+        done
+        ;;
+    esac
+  done <"$file"
+}
+
+check_ssh() {
+  local result value
+  if [ ! -f "$SSHD_CONFIG" ]; then
+    report ssh "$SSHD_CONFIG is missing, so sshd's login rules cannot be read"
+    return 0
+  fi
+  if [ ! -r "$SSHD_CONFIG" ]; then
+    echo "NOTE: SSH login rules not checked without sudo ($SSHD_CONFIG is not readable)"
+    return 0
+  fi
+  SSHD_RESULT=""
+  scan_sshd "$SSHD_CONFIG"
+  result="${SSHD_RESULT:-yes|the built-in default}"
+  value="${result%%|*}"
+  [ "${value,,}" = "no" ] || report ssh "PasswordAuthentication is effectively \"$value\" (${result#*|}); expected \"no\""
+}
+
+check_firewall() {
+  local f unreadable=0 action proto dport iface policy
+  if [ ! -f "$UFW_CONF" ]; then
+    report firewall "firewall off: $UFW_CONF is missing (is ufw installed?)"
+  elif ! ufw_enabled; then
+    report firewall "firewall off: ENABLED is not yes in $UFW_CONF"
+  fi
+  if ! ufw_denies_incoming; then
+    policy="$(conf_value "$UFW_DEFAULTS" DEFAULT_INPUT_POLICY)"
+    report firewall "incoming traffic is not denied by default (DEFAULT_INPUT_POLICY=${policy:-unset} in $UFW_DEFAULTS)"
+  fi
+  for f in "${UFW_RULE_FILES[@]}"; do
+    if [ -e "$f" ] && [ ! -r "$f" ]; then
+      unreadable=1
+      echo "NOTE: firewall rules not checked without sudo ($f is not readable)"
+    fi
+  done
+  [ "$unreadable" -eq 0 ] || return 0
+  ufw_has_tailscale_rule || report firewall "no rule allows incoming traffic on tailscale0"
+  while IFS='|' read -r action proto dport iface; do
+    # Loopback is not a network door, and tailscale0 is the one place SSH is meant to come in.
+    case "$iface" in tailscale0 | lo) continue ;; esac
+    admits_port22 "$proto" "$dport" || continue
+    report firewall "port 22 is admitted on ${iface:-every interface} by an $action rule ($proto, port $dport)"
+  done < <(ufw_tuples)
 }
 
 # The checksum line the manifest holds for one installed file: "<sha256>  <path without ROOT>".
@@ -128,12 +274,19 @@ check() {
     report email-login "$ENV_FILE is not owned by root"
   fi
 
+  if [ "$MODE" = "laptop" ]; then
+    check_ssh
+    check_firewall
+  else
+    wsl_skip
+  fi
+
   [ "$drift" -eq 0 ] && echo "no drift"
   return "$drift"
 }
 
 apply() {
-  local step src dst mode units_changed=0 manifest_new
+  local step src dst mode units_changed=0 ssh_changed=0 manifest_new
   if [ -z "$ROOT" ] && [ "$(id -u)" -ne 0 ]; then
     echo "ubuntu-health: run this with sudo, or use --check" >&2
     exit 2
@@ -145,11 +298,13 @@ apply() {
 
   install -d -m 0755 "$LIB" "$UNIT_DIR" "$(dirname "$ENV_FILE")"
   chown root:root "$LIB" "$(dirname "$ENV_FILE")"
+  [ "$MODE" != "laptop" ] || install -d -m 0755 "$(dirname "$SSHD_DROPIN")"
   while IFS='|' read -r step src dst mode; do
     if [ ! -f "$dst" ] || ! cmp -s "$src" "$dst" || [ "$(stat -c %a "$dst")" != "$mode" ]; then
       install -m "$mode" "$src" "$dst"
       echo "wrote $dst"
       [ "$step" != "unit-files" ] || units_changed=1
+      [ "$step" != "ssh" ] || ssh_changed=1
     fi
     chown root:root "$dst"
   done < <(wanted_files)
@@ -173,6 +328,40 @@ apply() {
   if [ ! -f "$ENV_FILE" ]; then
     echo "NOTE: $ENV_FILE is missing, so the weekly job cannot email until you make it (runbook)"
   fi
+
+  if [ "$MODE" = "laptop" ]; then
+    apply_firewall
+    [ "$ssh_changed" -eq 0 ] || restart_ssh
+  else
+    wsl_skip
+  fi
+}
+
+# Tailscale is allowed first, so switching the firewall on never cuts the way in that stays open.
+apply_firewall() {
+  if ! ufw_has_tailscale_rule; then
+    ufw allow in on tailscale0
+    echo "allowed incoming traffic on tailscale0"
+  fi
+  if ! ufw_denies_incoming; then
+    ufw default deny incoming
+    echo "set incoming traffic to deny by default"
+  fi
+  if ! ufw_enabled; then
+    ufw enable
+    echo "enabled the firewall"
+  fi
+}
+
+# On the real system a configuration sshd rejects is caught before the restart that would leave
+# the phone and tablet with no way in.
+restart_ssh() {
+  if [ -z "$ROOT" ] && command -v sshd >/dev/null 2>&1 && ! sshd -t; then
+    echo "ubuntu-health: sshd rejects its configuration; not restarting ssh.service" >&2
+    exit 1
+  fi
+  systemctl restart ssh.service
+  echo "restarted ssh.service"
 }
 
 case "${1:-}" in
