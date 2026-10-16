@@ -26,8 +26,6 @@ The defaults guide choosing a new session: Flash for a single genuinely simple B
 
 The model conducting the conversation does not determine the implementation issues' model labels. Those labels follow the triage and sizing rules. The design and issue-plan approval gates, filing requirements, and prohibition on dispatching implementation still apply.
 
-The skill states this rule consistently in its phase headings, model table and design-tier guidance. The existing design-tier validation in `test/skills_validation.test.ts` checks that defaults remain recommendations, invocation authorizes the current model, and no model switch or additional authorization is required merely because the current model differs from a default. Its assertions no longer require wording that reserves all complex designs to Opus. The same skill source supplies Claude Code, agy and Codex; a content correction needs no installer run.
-
 ### Phase 1 — Design
 
 With no argument, the skill scans all 8 active repos for open issues labeled `Needs Design` and offers them as candidates. Josh picks; the skill never picks for him.
