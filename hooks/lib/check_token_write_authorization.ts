@@ -332,13 +332,39 @@ function stripTitleWrappers(text: string): string {
   }
 }
 
+/** What may sit just before a wrapped title for it to be set off from the line rather than part of a longer title. */
+const TITLE_LEAD_IN_RE = /(?:^|[:=(\[>\-–—→])\s*$/;
+
+/** What may follow a wrapped title: nothing, or punctuation — never another word of a longer title. */
+const TITLE_TRAIL_OUT_RE = /^\s*(?:$|[^\p{L}\p{N}\s`"'“”‘’*_])/u;
+
+/**
+ * True when `line` carries `title` wrapped in matching quotes, backticks or bold AND set off from the
+ * rest of the line: it opens the line or follows a label's colon, dash or bracket, and ends the line or
+ * is followed by punctuation. A wrapped span inside a longer title (``Fix `approval token` validation``)
+ * has a word on each side of it, so it is the longer title's content, not a title of its own.
+ */
+function wrappedTitleSetOff(line: string, title: string): boolean {
+  return TITLE_WRAPPERS.some(([open, close]) => {
+    const needle = `${open}${title}${close}`;
+    for (let at = line.indexOf(needle); at >= 0; at = line.indexOf(needle, at + 1)) {
+      if (
+        TITLE_LEAD_IN_RE.test(line.slice(0, at)) &&
+        TITLE_TRAIL_OUT_RE.test(line.slice(at + needle.length))
+      ) return true;
+    }
+    return false;
+  });
+}
+
 /**
  * True when `text` shows `title` as a COMPLETE title (web-jam-tools#1054 review): a substring of a
  * longer title is not the title Josh saw. A title counts as shown when it is
  *   - the whole of a line, after any list number, bullet or heading marker and any wrapping quotes,
  *     backticks or bold, or
  *   - the whole of a table cell, or
- *   - wrapped in matching quotes, backticks or bold anywhere in a line.
+ *   - wrapped in matching quotes, backticks or bold and set off from the rest of its line (see
+ *     wrappedTitleSetOff) — a wrapped span inside a longer title is that title's content.
  * So `Proposed title: "Fix approval token validation"` shows that full title and nothing shorter:
  * `approval token` sits between letters of the longer title, bounded by no marker, so it is refused.
  * An unquoted title in the middle of a sentence is refused for the same reason — the agent shows each
@@ -354,9 +380,7 @@ export function titleShownExactly(text: string, title: string): boolean {
     if (!trimmed) continue;
     if (isTitle(trimmed.replace(LINE_MARKER_RE, ""))) return true;
     if (trimmed.includes("|") && trimmed.split("|").some(isTitle)) return true;
-    if (TITLE_WRAPPERS.some(([open, close]) => trimmed.includes(`${open}${title}${close}`))) {
-      return true;
-    }
+    if (wrappedTitleSetOff(trimmed, title)) return true;
   }
   return false;
 }

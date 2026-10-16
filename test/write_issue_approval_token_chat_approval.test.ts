@@ -416,7 +416,7 @@ Deno.test("chat approval: a shortened title is not the complete title that was s
     `Proposed title: "${LONG_TITLE}"`,
     `1. ${LONG_TITLE}`,
     `| 1 | ${LONG_TITLE} | Sonnet |`,
-    `Filing \`${LONG_TITLE}\` next`,
+    `Title: \`${LONG_TITLE}\``,
   ];
   for (const shown of shownForms) {
     for (
@@ -451,6 +451,37 @@ Deno.test("chat approval: a title longer than the one shown is not shown", () =>
 Deno.test("chat approval: an unquoted title in the middle of a sentence is not shown", () => {
   assertEquals(
     authorize(showThenApprove(`I will file ${LONG_TITLE} next.`), [LONG_TITLE]).ok,
+    false,
+  );
+});
+
+Deno.test("chat approval: a quoted or code-formatted span inside a longer title is not a title of its own", () => {
+  const innerTitle = "approval token";
+  for (
+    const shown of [
+      `1. Fix \`${innerTitle}\` validation`,
+      `Proposed title: "Fix \`${innerTitle}\` validation"`,
+      `- Fix **${innerTitle}** validation`,
+      `Fix "${innerTitle}" validation`,
+      `Fix validation of the \`${innerTitle}\``,
+      `Then \`${innerTitle}\` is checked`,
+    ]
+  ) {
+    assertEquals(
+      authorize(showThenApprove(shown), [innerTitle]).ok,
+      false,
+      `${JSON.stringify(innerTitle)} inside ${JSON.stringify(shown)} must refuse`,
+    );
+  }
+  // The complete longer title, with its inner span kept as content, still matches.
+  const longer = `Fix \`${innerTitle}\` validation`;
+  assertEquals(authorize(showThenApprove(`1. ${longer}`), [longer]).ok, true);
+  assertEquals(authorize(showThenApprove(`Proposed title: "${longer}"`), [longer]).ok, true);
+});
+
+Deno.test("chat approval: a quoted title in the middle of a sentence is not shown", () => {
+  assertEquals(
+    authorize(showThenApprove(`Filing \`${LONG_TITLE}\` next`), [LONG_TITLE]).ok,
     false,
   );
 });
@@ -559,6 +590,26 @@ Deno.test("chat approval: Antigravity titles shown across two model messages cou
   });
   assertEquals(result.ok, true);
   assertEquals(result.via, "chat-approval");
+});
+
+Deno.test("CLI chat approval: a formatted fragment inside a longer title is refused, the longer title writes", async () => {
+  const longer = "Fix `approval token` validation";
+  const transcript = showThenApprove(`1. ${longer}`);
+  const fragment = await runWriter(transcript, ["approval token"]);
+  try {
+    assertEquals(fragment.code, 1);
+    assertStringIncludes(fragment.stderr, "Refused to write approval token");
+    assertEquals(await exists(fragment.tokenPath), false);
+  } finally {
+    await Deno.remove(fragment.dir, { recursive: true });
+  }
+  const full = await runWriter(transcript, [longer]);
+  try {
+    assertEquals(full.code, 0, full.stderr);
+    assertEquals(JSON.parse(await Deno.readTextFile(full.tokenPath)).titles, [longer]);
+  } finally {
+    await Deno.remove(full.dir, { recursive: true });
+  }
 });
 
 Deno.test("CLI chat approval: titles shown across two assistant messages write the token", async () => {
