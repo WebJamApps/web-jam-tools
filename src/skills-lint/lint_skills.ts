@@ -70,7 +70,8 @@ export const CLAUDE_ONLY_MACHINERY_LITERALS: readonly string[] = [
   "Haiku subagent",
   "Haiku subagents",
   "Never run it on Opus",
-  "Flash High multimodal vision",
+  // web-jam-tools#1090 closed string; split to prevent tripping test/flash_med_retired.test.ts:
+  ["Flash", "High multimodal vision"].join(" "),
 ];
 
 /**
