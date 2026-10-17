@@ -49,10 +49,9 @@ The default reviewers across the seven model labels:
 
 The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.
 
-### Sol Reviews on Codex & Recording-Day Rules
+### Sol Reviews on Codex
 
 - Sol reviews of Flash and Sonnet pull requests run through `/pr-review` (typed `$pr-review` in Codex).
-- On a recording day or for any pull request Josh names, Sonnet reviews a Flash pull request instead, and a Sonnet pull request waits for Sol or goes to Opus when Josh names it.
 - Astra is never picked as a reviewer unless Josh names it.
 - An unattended Sol review launch passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`.
 

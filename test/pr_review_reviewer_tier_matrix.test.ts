@@ -136,7 +136,7 @@ Deno.test("reviewer matrices detect changed rungs and default-reviewer table cel
   }
 });
 
-Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewers, and Codex/recording rules", async () => {
+Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewers, and Codex rules", async () => {
   const text = await Deno.readTextFile("skills/pr-review/SKILL.md");
 
   // Rule over all seven labels with Sol, Astra, Sonnet on one rung
@@ -151,15 +151,13 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
     "The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.",
   );
 
-  // Sol reviews on Codex & recording-day rules
+  // Sol reviews on Codex
   assertStringIncludes(
     text,
     "Sol reviews of Flash and Sonnet pull requests run through `/pr-review` (typed `$pr-review` in Codex).",
   );
-  assertStringIncludes(
-    text,
-    "On a recording day or for any pull request Josh names, Sonnet reviews a Flash pull request instead, and a Sonnet pull request waits for Sol or goes to Opus when Josh names it.",
-  );
+  assertFalse(text.includes("On a recording day"));
+  assertFalse(text.includes("Recording-Day Rules"));
   assertStringIncludes(
     text,
     "Astra is never picked as a reviewer unless Josh names it.",
