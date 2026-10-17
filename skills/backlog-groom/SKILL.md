@@ -46,7 +46,7 @@ On Claude Code, dispatch that helper with `Agent(model: "sonnet")`. On Codex, st
 The audit inspects every open issue across all 8 repositories against six core categories:
 
 ### 1. Model-Label Drift
-- **Missing Model Label:** Issue has no model-tier label from `skills/fix-labels/model-labels.json`, unless it is a `Josh` manual step.
+- **Missing or Misaligned Model Label:** Issue has no model-tier label from `skills/fix-labels/model-labels.json` (unless it is a `Josh` manual step) or carries a label that differs from the triage table in `docs/ai-team-playbook.md`. The skill compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item. It does not apply `Flash` by default.
 - **Multiple Model Labels:** Report two or more model labels as drift only when they are not the allowed pair in `~/Dropbox/web-jam-llms/Token_Savings/model-tier-order-design-2026-10-02.md`, "How the order is used". The allowed pair is valid and must not be reduced to one label.
 - **Retired / Deprecated Labels:** Issue carries retired or non-canonical model labels (e.g. old `Flash-lane`, `GPT-4`, `Claude-2` or mismatched tier spellings).
 
@@ -114,7 +114,7 @@ The session or helper selected by the table in "Which Model Does the Run" perfor
 
 ### Step 2: Analyze & Categorize
 1. Evaluate each issue against the 6 audit categories above.
-2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Add label `Flash`", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
+2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Apply label `Sol` per triage table", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
 4. For Priority, the model doing the run judges the two facts no GitHub field records (something live is broken; a defect that costs something every time it is hit), hands the ranking a yes or a no for each, and gives its reason in one line beside every move it proposes (with `liveBroken`, `costlyDefect`, and a one-line `reason`). For repositories below the 20-issue floor, it also supplies `levelFromTests` from the canonical level tests `/file-issue` owns. The judgments JSON is stored in `/tmp/backlog-groom` (following the input schema in `docs/scripts.md` and `deno task backlog-groom:rank --help`), calling `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--focus <milestone>]`.
 
@@ -126,7 +126,7 @@ Render a clear, numbered Markdown table in chat along with per-repo untyped rati
 
 | # | Repo | Issue | Category | Finding / Drift | Proposed Action |
 |---|------|-------|----------|-----------------|-----------------|
-| 1 | JaMmusic | #102 | Model Label Drift | Missing model label | Apply `Flash` label |
+| 1 | JaMmusic | #102 | Model Label Drift | Missing model label (screens/styling) | Apply `Flash` label per triage table |
 | 2 | JaMmusic | #1243 | Dependency Drift | Labeled `Blocked` & body says "do not start", but blocker web-jam-back#990 "Add PATCH /venue/:id (the honest verb for our partial-merge update)" is CLOSED | Remove `Blocked` label & reconcile body (note web-jam-back#990 closed; preserve deploy step) |
 | 3 | CollegeLutheran | #88 | Spec Quality | Body relies on "see comment for details" | Recommend spec inline edit or `Needs Design` |
 | 4 | web-jam-tools | #380 | Untyped Issue | Native Type is unset | Set native Type to `Task` |

@@ -100,7 +100,6 @@ const EXPECTED_HOOK_SCRIPTS = [
   // SessionStart reminder (web-jam-tools#664) — reports when installed hooks
   // are behind origin/dev, registered at a dead path, or unregistered.
   "hook-install-drift-reminder.sh",
-  "memory-cleanup-reminder.sh",
   "notes-sync-reminder.sh",
   // PreToolUse gate (web-jam-tools#641) — refuses repository code writes
   // attempted directly by an Opus main session without explicit grant.

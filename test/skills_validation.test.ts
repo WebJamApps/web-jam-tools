@@ -178,7 +178,7 @@ Deno.test("every text span removed from a shortened skill description appears wo
       '(Closes #N by default; Part of #N with --part-of for partial PRs, standing run-log/epic issues, and hook issues that must be confirmed firing before closing). Use this to finish ANY coding task in a WebJamApps repo across Claude Code, agy, or Codex instead of calling `gh pr create` directly. Triggered when the user says "open a PR", "draft PR", "finish the task", or when you\'ve completed a coding task on a feature branch.',
     ],
     "drive-cleanup": [
-      "Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a subagent (Claude Code: Haiku; agy: Flash) then classifies only the ambiguous remainder. Invoke when the session-start reminder appears or Josh asks (or /drive-cleanup) — it does NOT auto-run.",
+      "Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a subagent (Claude Code: Haiku; agy: Flash) then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.",
     ],
     "file-issue": [
       'File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when a message opens with a filing verb (file, create, open, draft, make, add, log, raise, write), optionally behind a leading affirmation (yes/yeah/yep/ok/okay/sure, optional comma), optionally behind please/pls or can/could/would/will you (please), and optionally go ahead and, followed by up to three short filler words (a, an, the, new, another, quick, separate, follow-up) and then issue, ticket, bug, or bug report (singular or plural) — for example "file an issue", "please create a new issue", "can you open a ticket", "yes file the new issue", or "file the issues" — or when a task needs a tracking issue instead of just being done inline.',
@@ -187,10 +187,10 @@ Deno.test("every text span removed from a shortened skill description appears wo
       "Recurring GitHub issue-label AND topic-milestone drift-detector across the active WebJamApps repos. Computes label drift (missing / misnamed / miscolored / wrong-repo / non-canonical) by diffing each repo's actual labels against skills/fix-labels/labels.yaml in code (`deno task fix-labels:diff`), with blast radius per label, and milestone-name drift (missing / misspelled / non-canonical) the same way (`deno task fix-labels:milestone-diff`). Waits for Josh's per-item approval, then applies only what he approved. Manual only — `/fix-labels`, never auto-runs. Interactive, hard-gated to Haiku (same pattern as handle-gmails), does NOT dispatch a subagent. A clean workspace reports \"no changes\"; re-run anytime to catch drift that accumulates over time.",
     ],
     "handle-gmails": [
-      'Runs on TWO surfaces — laptop Haiku (Claude Code, local mcp__gmail__ tools + local files; MUST be on the Haiku model — the skill refuses to run on a pricier model) and phone Sonnet (Claude app, mcp__claude_ai_Gmail__ tools, no filesystem). Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Per-sender auto-archive rules in rules.yaml (laptop only). Daily-handled log in log/<YYYY-MM-DD>.md (laptop only, auto-pruned after 7 days). Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar. Also invoke if a session-start hook reminder appears noting today hasn\'t been handled.',
+      'Process Josh\'s Gmail inbox one message at a time, newest first. Suggest action (archive / delete / draft reply / label / mark important / mark spam / unsubscribe / next). Pause for approval before executing. Runs across laptop Haiku (Claude Code), laptop Flash (Antigravity), and phone Sonnet (Claude app) — running the identical flow with no local runtime state. Covers joshua.v.sherman@gmail.com primary account only — web.jam.adm@gmail.com is handled manually via the Gmail web UI. Triggered when Josh says "/handle-gmails", "handle my gmails", "process my inbox", or similar.',
     ],
     "memory-cleanup": [
-      "Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, handle-gmails rules, Google Drive memory/bridge files, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says \"clean up memory\", or when a session-start reminder notes it hasn't run today. Reminder-only — never auto-runs.",
+      "Cross-agent memory hygiene audit. Scans every memory surface across all of Josh's agents (Claude Code per-project + shared memory, global and per-repo CLAUDE.md/AGENTS.md, cross-AI rules doc/task queues, bridge-log, hooks.json, and brain scratch files) for staleness, dangling [[links]], index↔file drift, and entries whose tracked issue/PR has closed. The read-only scan runs on a cheap subagent (Haiku / Flash); findings are reported as separate action/flag tables and the skill WAITS for Josh's explicit approval before executing any fix. Edits ONLY the files in the surfaces table — never code. Triggered when Josh types /memory-cleanup or says \"clean up memory\".",
     ],
     "pr-review": [
       "where reviewer tier is never below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).",
@@ -903,7 +903,7 @@ Deno.test("skills/design-issue/SKILL.md contains Sized for Flash rule", async ()
   assertStringIncludes(text, "### Sized for Flash");
   assertStringIncludes(
     text,
-    "Non-epic issues default to **`Flash`** as the implementation tier. Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
+    "An issue's model label comes from the triage table in `docs/ai-team-playbook.md`; the sizing checklist below keeps the size limit for everyday coding tasks (`Flash`). Sizing is governed by the reviewer's burden in one sitting (Josh's per-sitting review burden) rather than raw file count.",
   );
   assertStringIncludes(text, "- one repo;");
   assertStringIncludes(text, "- one layer — frontend or backend, not both;");
@@ -2377,5 +2377,122 @@ Deno.test("filing skills point to the tier-order design and preserve paired lane
     assertThrows(() =>
       assertModelLabelGuidance(skill, `${text}\nA hook requires exactly one model label.\n`)
     );
+  }
+});
+
+Deno.test("docs/ai-team-playbook.md and skills: triage issues to model labels by kind of work (web-jam-tools#1203)", async () => {
+  const playbook = await Deno.readTextFile("docs/ai-team-playbook.md");
+
+  // 1. docs/ai-team-playbook.md contains header line | Kind of work | Label |
+  assertStringIncludes(playbook, "| Kind of work | Label |");
+
+  // A row for each of the five kinds of work with its label cell
+  const kindsOfWork = [
+    { kind: "Mechanical one-off", label: "`Luna` or `Haiku`" },
+    { kind: "Logic- and safety-heavy coding", label: "`Sol` or `Sonnet`" },
+    { kind: "All other coding", label: "`Flash`" },
+    { kind: "Design, and coding whose list of cases cannot be closed", label: "`Opus`" },
+    { kind: "Recording", label: "`Astra`, only when Josh names it" },
+  ];
+  for (const { kind, label } of kindsOfWork) {
+    assert(playbook.includes(kind), `docs/ai-team-playbook.md must contain kind of work: ${kind}`);
+    const row = playbook.split("\n").find((l) => l.includes(kind) && l.includes(label));
+    assert(
+      row,
+      `docs/ai-team-playbook.md must contain row with kind '${kind}' and label '${label}'`,
+    );
+  }
+
+  // Four-point definition
+  for (
+    const def of [
+      "changes a guard, hook, matcher, filter, regular expression or permission rule",
+      "sends, writes or deletes something outside the repo",
+      "changes login, permissions or the handling of credentials",
+      "acceptance criteria list cases that a resolver, a classifier or a change of state has to get right",
+    ]
+  ) {
+    assertStringIncludes(playbook, def);
+  }
+
+  // 2. skills/file-issue, design-issue, delegate, backlog-groom each contain docs/ai-team-playbook.md and "triage table"
+  const skills = [
+    "skills/file-issue/SKILL.md",
+    "skills/design-issue/SKILL.md",
+    "skills/delegate/SKILL.md",
+    "skills/backlog-groom/SKILL.md",
+  ];
+  const legacyLabelBulletRegex = /^\s*-\s*`(?:Flash|Haiku|Luna|Sol|Astra|Sonnet|Opus)`\s*—/m;
+
+  for (const file of skills) {
+    const text = await Deno.readTextFile(file);
+    assertStringIncludes(
+      text,
+      "docs/ai-team-playbook.md",
+      `${file} must contain docs/ai-team-playbook.md`,
+    );
+    assertStringIncludes(text, "triage table", `${file} must contain 'triage table'`);
+    assertFalse(
+      legacyLabelBulletRegex.test(text),
+      `${file} must not contain legacy bulleted label list`,
+    );
+  }
+
+  // 3. skills/design-issue/SKILL.md sends guard, hook and matcher work to Sol or Sonnet and keeps Opus escalation
+  const designIssueText = await Deno.readTextFile("skills/design-issue/SKILL.md");
+  const caseListPassage = designIssueText.split("### Sized by Case List, Not Diff")[1]?.split(
+    "### Closeable, Always",
+  )[0];
+  assert(caseListPassage, "Missing Sized by Case List, Not Diff section");
+  assertStringIncludes(caseListPassage, "Sol");
+  assertStringIncludes(caseListPassage, "Sonnet");
+  assertStringIncludes(caseListPassage, "Opus");
+  assert(
+    caseListPassage.includes("`Sol` or `Sonnet`") || caseListPassage.includes("Sol or Sonnet"),
+    "design-issue passage must route to Sol or Sonnet",
+  );
+
+  // 4. skills/backlog-groom/SKILL.md states that it compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item
+  const backlogGroomText = await Deno.readTextFile("skills/backlog-groom/SKILL.md");
+  assertStringIncludes(
+    backlogGroomText,
+    "The skill compares each open coding issue's label with the triage table and proposes a relabel per issue, asking Josh per item.",
+  );
+
+  // 5. Installed skill symlinks resolve into canonical clone across Claude Code and agy
+  const home = Deno.env.get("HOME") || "/home/joshua";
+  const skillNames = ["file-issue", "design-issue", "delegate", "backlog-groom"];
+  const claudeSkillsDir = `${home}/.claude/skills`;
+  const agySkillsDir = `${home}/.gemini/config/plugins/webjam-tasks/skills`;
+  const hasClaude = await Deno.stat(claudeSkillsDir).then((s) => s.isDirectory).catch(() => false);
+  const hasAgy = await Deno.stat(agySkillsDir).then((s) => s.isDirectory).catch(() => false);
+
+  if (!Deno.env.get("CI")) {
+    assert(
+      hasClaude || hasAgy,
+      "Expected at least one installed skill surface (~/.claude/skills or ~/.gemini/config/plugins/webjam-tasks/skills) on local runs",
+    );
+  }
+
+  if (hasClaude) {
+    for (const skill of skillNames) {
+      const claudeLink = `${claudeSkillsDir}/${skill}`;
+      const claudeInfo = await Deno.lstat(claudeLink).catch(() => null);
+      assertExists(claudeInfo, `~/.claude/skills/${skill} must exist`);
+      assertEquals(claudeInfo.isSymlink, true, `~/.claude/skills/${skill} must be a symlink`);
+      const target = await Deno.readLink(claudeLink);
+      assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
+    }
+  }
+
+  if (hasAgy) {
+    for (const skill of skillNames) {
+      const agyLink = `${agySkillsDir}/${skill}`;
+      const agyInfo = await Deno.lstat(agyLink).catch(() => null);
+      assertExists(agyInfo, `~/.gemini/.../skills/${skill} must exist`);
+      assertEquals(agyInfo.isSymlink, true, `~/.gemini/.../skills/${skill} must be a symlink`);
+      const target = await Deno.readLink(agyLink);
+      assertStringIncludes(target, `web-jam-tools/skills/${skill}`);
+    }
   }
 });
