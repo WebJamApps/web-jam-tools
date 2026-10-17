@@ -545,3 +545,54 @@ description: Dual surface dispatch instructions.
   assertEquals(result.valid, true);
   assertEquals(result.violations.length, 0);
 });
+
+Deno.test("lintSkillMarkdown: singular and plural Haiku subagent disambiguation", () => {
+  // 1. Plural only produces exactly one violation for 'Haiku subagents'
+  const pluralFixture = `---
+name: plural-skill
+description: Tests plural disambiguation.
+---
+
+# plural-skill
+
+Instruction mentioning agy and Antigravity so whole-file rule passes.
+Do not dispatch multiple Haiku subagents for this task.
+`;
+  const pluralResult = lintSkillMarkdown(pluralFixture, "plural-skill/SKILL.md");
+  assertEquals(pluralResult.valid, false);
+  assertEquals(pluralResult.violations.length, 1);
+  assertEquals(pluralResult.violations[0].linkText, "Haiku subagents");
+
+  // 2. Both singular and plural on the same line produces exactly two violations
+  const dualFixture = `---
+name: dual-skill
+description: Tests both singular and plural on one line.
+---
+
+# dual-skill
+
+Instruction mentioning agy and Antigravity so whole-file rule passes.
+Neither a single Haiku subagent nor multiple Haiku subagents should be used.
+`;
+  const dualResult = lintSkillMarkdown(dualFixture, "dual-skill/SKILL.md");
+  assertEquals(dualResult.valid, false);
+  assertEquals(dualResult.violations.length, 2);
+  const dualLiterals = dualResult.violations.map((v) => v.linkText).sort();
+  assertEquals(dualLiterals, ["Haiku subagent", "Haiku subagents"]);
+
+  // 3. Singular only produces exactly one violation for 'Haiku subagent'
+  const singularFixture = `---
+name: singular-skill
+description: Tests singular only.
+---
+
+# singular-skill
+
+Instruction mentioning agy and Antigravity so whole-file rule passes.
+Dispatching via a thin Haiku subagent is prohibited.
+`;
+  const singularResult = lintSkillMarkdown(singularFixture, "singular-skill/SKILL.md");
+  assertEquals(singularResult.valid, false);
+  assertEquals(singularResult.violations.length, 1);
+  assertEquals(singularResult.violations[0].linkText, "Haiku subagent");
+});
