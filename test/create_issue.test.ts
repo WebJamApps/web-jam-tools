@@ -2044,7 +2044,76 @@ Deno.test("parseArgs reads --author in both forms", () => {
   assertEquals(parseArgs(["--author=Claude Code — Opus"]).author, "Claude Code — Opus");
 });
 
-Deno.test("createIssueAndVerify: cross-repo parent links child issue under parent in another repo", async () => {
+Deno.test("epics case 13: create-issue --parent <N> in web-jam-tools links the issue under that parent", async () => {
+  const commands: string[] = [];
+  const mockDeps: ExecDeps = {
+    runCmd(cmd) {
+      const cmdStr = cmd.join(" ");
+      commands.push(cmdStr);
+      if (cmdStr.includes("issues?state=open")) {
+        return Promise.resolve({ code: 0, stdout: "[]", stderr: "" });
+      }
+      if (cmdStr.includes("GetParentIssue")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({ data: { repository: { issue: { id: "PARENT_NODE_1355" } } } }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("gh issue create")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: "https://github.com/WebJamApps/web-jam-tools/issues/300\n",
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("GetIssueNodeIds")) {
+        return Promise.resolve({
+          code: 0,
+          stdout: JSON.stringify({
+            data: {
+              parent: { issue: { id: "PARENT_NODE_1355" } },
+              child: { issue: { id: "CHILD_NODE_300" } },
+            },
+          }),
+          stderr: "",
+        });
+      }
+      if (cmdStr.includes("AddSubIssue")) {
+        return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+      }
+      if (cmdStr.includes("gh api repos/WebJamApps/web-jam-tools/issues/300")) {
+        const mockIssue: IssueData = {
+          number: 300,
+          title: "Same-repo child",
+          labels: [{ name: "Flash" }],
+          parent: {
+            number: 1355,
+            repository: { name: "web-jam-tools", owner: { login: "WebJamApps" } },
+          },
+        };
+        return Promise.resolve({ code: 0, stdout: JSON.stringify(mockIssue), stderr: "" });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText() {
+      return Promise.resolve("## What this builds\nBody text");
+    },
+  };
+
+  const result = await createIssueAndVerify(
+    { repo: "web-jam-tools", title: "Same-repo child", bodyFile: "/tmp/b.md", parent: 1355 },
+    mockDeps,
+    APPROVE_ALL,
+  );
+  assertEquals(result, 'web-jam-tools#300 "Same-repo child"');
+  const lookup = commands.find((c) => c.includes("GetParentIssue")) ?? "";
+  assertEquals(lookup.includes('repository(owner: "WebJamApps", name: "web-jam-tools")'), true);
+  assertEquals(lookup.includes("issue(number: 1355)"), true);
+  assertEquals(commands.some((c) => c.includes("AddSubIssue")), true);
+});
+
+Deno.test("epics case 14: create-issue --parent WebJamApps/web-jam-tools#<N> from JaMmusic links across repositories", async () => {
   const commands: string[] = [];
   const mockDeps: ExecDeps = {
     runCmd(cmd) {
@@ -2121,7 +2190,7 @@ Deno.test("createIssueAndVerify: cross-repo parent links child issue under paren
   assertEquals(commands.some((c) => c.includes("AddSubIssue")), true);
 });
 
-Deno.test("createIssueAndVerify: GitHub refusing link (100 sub-issues) fails naming GitHub message", async () => {
+Deno.test("epics case 15: create-issue --parent WebJamApps/web-jam-tools#<N> fails naming GitHub's message when GitHub refuses the link", async () => {
   const mockDeps: ExecDeps = {
     runCmd(cmd) {
       const cmdStr = cmd.join(" ");
@@ -2176,7 +2245,12 @@ Deno.test("createIssueAndVerify: GitHub refusing link (100 sub-issues) fails nam
   const err = await assertRejects(
     () =>
       createIssueAndVerify(
-        { title: "T", bodyFile: "/b", parent: 1355 },
+        {
+          repo: "JaMmusic",
+          title: "T",
+          bodyFile: "/b",
+          parent: "WebJamApps/web-jam-tools#1355",
+        },
         mockDeps,
         APPROVE_ALL,
       ),
@@ -2186,7 +2260,7 @@ Deno.test("createIssueAndVerify: GitHub refusing link (100 sub-issues) fails nam
   assertEquals(err.message.includes("Failed to attach parent sub-issue"), true);
 });
 
-Deno.test("createIssueAndVerify: parent lookup failing refuses before creating the issue", async () => {
+Deno.test("epics case 16: create-issue --parent WebJamApps/web-jam-tools#<N> is refused before the issue is created when the parent lookup fails", async () => {
   const calls: string[] = [];
   const mockDeps: ExecDeps = {
     runCmd(cmd) {
@@ -2218,4 +2292,29 @@ Deno.test("createIssueAndVerify: parent lookup failing refuses before creating t
   );
   assertEquals(err.message.includes("not found"), true);
   assertEquals(calls.some((c) => c.includes("gh issue create")), false);
+
+  // The lookup call itself failing refuses the same way.
+  const failingCalls: string[] = [];
+  const failingDeps: ExecDeps = {
+    runCmd(cmd) {
+      const cmdStr = cmd.join(" ");
+      failingCalls.push(cmdStr);
+      if (cmdStr.includes("GetParentIssue")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "HTTP 502: Bad Gateway" });
+      }
+      return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+    },
+    readFileText: () => Promise.resolve("## What this builds\nBody text"),
+  };
+  await assertRejects(
+    () =>
+      createIssueAndVerify(
+        { title: "T", bodyFile: "/b", parent: "WebJamApps/web-jam-tools#1355" },
+        failingDeps,
+        APPROVE_ALL,
+      ),
+    Error,
+    "HTTP 502: Bad Gateway",
+  );
+  assertEquals(failingCalls.some((c) => c.includes("gh issue create")), false);
 });

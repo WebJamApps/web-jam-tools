@@ -156,42 +156,40 @@ export async function defaultScreenshotImpl(
   }
 }
 
+/** Starts `bin` detached from this process. Throws when the program cannot be started. */
+function spawnDetached(bin: string, args: string[], env: Record<string, string>): void {
+  const child = new Deno.Command(bin, {
+    args,
+    env,
+    stdin: "null",
+    stdout: "null",
+    stderr: "null",
+  }).spawn();
+  child.unref();
+}
+
 /**
- * Opens the rendered HTML in Google Chrome on the active display in the background.
+ * Opens the rendered HTML in Google Chrome on the active display, without waiting for Chrome to
+ * exit. Chrome is started directly, not through a backgrounded shell command, so a missing
+ * executable throws instead of going unreported (web-jam-tools#1455).
  */
-export async function defaultOpenBrowserImpl(
+export function defaultOpenBrowserImpl(
   htmlPath: string,
   display?: string,
-  execCommand?: (
-    cmd: string,
-    env: Record<string, string>,
-  ) => Promise<{ success: boolean; code: number }>,
+  launch: (bin: string, args: string[], env: Record<string, string>) => void = spawnDetached,
 ): Promise<void> {
   const absHtmlPath = path.resolve(htmlPath);
   const activeDisplay = display || Deno.env.get("DISPLAY") || ":0";
-  const shellCmd =
-    `DISPLAY="${activeDisplay}" google-chrome "file://${absHtmlPath}" >/dev/null 2>&1 &`;
   const env = { ...Deno.env.toObject(), DISPLAY: activeDisplay };
-
-  if (execCommand) {
-    const output = await execCommand(shellCmd, env);
-    if (!output.success) {
-      throw new Error(`Failed to launch Google Chrome (exit code ${output.code})`);
-    }
-    return;
+  try {
+    launch("google-chrome", [`file://${absHtmlPath}`], env);
+  } catch (err) {
+    const reason = err instanceof Deno.errors.NotFound
+      ? "google-chrome was not found on PATH"
+      : `Failed to launch Google Chrome: ${err instanceof Error ? err.message : String(err)}`;
+    return Promise.reject(new Error(reason));
   }
-
-  const cmd = new Deno.Command("bash", {
-    args: ["-c", shellCmd],
-    env,
-    stdout: "null",
-    stderr: "null",
-  });
-
-  const output = await cmd.output();
-  if (!output.success) {
-    throw new Error(`Failed to launch Google Chrome (exit code ${output.code})`);
-  }
+  return Promise.resolve();
 }
 
 /**

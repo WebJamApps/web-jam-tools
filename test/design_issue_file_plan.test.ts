@@ -112,6 +112,7 @@ async function fileParentFixture(plan: IssuePlanDoc) {
   for (const item of items) item.labels ??= ["Flash"];
   const created = new Map<number, IssueData>();
   const parents = new Map<number, number>();
+  const queries: string[] = [];
   let nextNumber = 700;
   const deps: ExecDeps = {
     readFileText: (p) => Deno.readTextFile(p),
@@ -141,6 +142,7 @@ async function fileParentFixture(plan: IssuePlanDoc) {
         }
         if (cmd[2] === "graphql") {
           const query = cmd.find((arg) => arg.startsWith("query=")) ?? "";
+          queries.push(query);
           if (query.includes("ValidateParent") || query.includes("GetParentIssue")) {
             const num = query.match(/issue\(number: (\d+)\)/)?.[1];
             if (num === "999999") {
@@ -201,7 +203,7 @@ async function fileParentFixture(plan: IssuePlanDoc) {
   try {
     await Deno.writeTextFile(planPath, JSON.stringify(plan));
     const result = await filePlan({ planPath, deps, approvalCheck: APPROVE_ALL });
-    return { result, parents };
+    return { result, parents, queries };
   } finally {
     await Deno.remove(planPath);
   }
@@ -282,7 +284,7 @@ for (const id of ["web-jam-tools#2", "JaMmusic#12"]) {
   });
 }
 
-Deno.test("filePlan parent: 1 (plan position, same repository) links to child 1", async () => {
+Deno.test("epics case 09: design:file-plan parent 1, the first plan item in the same repository, is linked", async () => {
   const { parents } = await fileParentFixture({
     repo: "web-jam-tools",
     children: [
@@ -293,7 +295,7 @@ Deno.test("filePlan parent: 1 (plan position, same repository) links to child 1"
   assertEquals([...parents], [[701, 700]]);
 });
 
-Deno.test('filePlan parent: "WebJamApps/web-jam-tools#1355" on a JaMmusic child links across repositories', async () => {
+Deno.test('epics case 10: design:file-plan parent "WebJamApps/web-jam-tools#1355" on a JaMmusic child is linked across repositories', async () => {
   const { parents } = await fileParentFixture({
     repo: "web-jam-tools",
     children: [
@@ -303,17 +305,21 @@ Deno.test('filePlan parent: "WebJamApps/web-jam-tools#1355" on a JaMmusic child 
   assertEquals([...parents], [[700, 1355]]);
 });
 
-Deno.test('filePlan parent: "web-jam-tools#1355" resolves to WebJamApps/web-jam-tools#1355 and links across repositories', async () => {
-  const { parents } = await fileParentFixture({
+Deno.test('epics case 11: design:file-plan parent "web-jam-tools#1355" is resolved to WebJamApps/web-jam-tools#1355 and linked', async () => {
+  const { parents, queries } = await fileParentFixture({
     repo: "web-jam-tools",
     children: [
       { title: "JaMmusic child", repo: "JaMmusic", parent: "web-jam-tools#1355" },
     ],
   });
   assertEquals([...parents], [[700, 1355]]);
+  // The bare citation was looked up and attached as WebJamApps/web-jam-tools#1355.
+  const lookup = queries.find((q) => q.includes("ValidateParent")) ?? "";
+  assertEquals(lookup.includes('repository(owner: "WebJamApps", name: "web-jam-tools")'), true);
+  assertEquals(lookup.includes("issue(number: 1355)"), true);
 });
 
-Deno.test('filePlan parent: "WebJamApps/web-jam-tools#999999" (no such issue) refused before anything is filed, naming reference', async () => {
+Deno.test('epics case 12: design:file-plan parent "WebJamApps/web-jam-tools#999999", an issue that does not exist, is refused before anything is filed, naming the reference', async () => {
   const planPath = await Deno.makeTempFile({ suffix: ".json" });
   const calls: string[][] = [];
   try {
@@ -356,7 +362,7 @@ Deno.test('filePlan parent: "WebJamApps/web-jam-tools#999999" (no such issue) re
       "WebJamApps/web-jam-tools#999999",
     );
     assertEquals(error.message.includes("not found"), true);
-    assertEquals(calls.some((cmd) => cmd.includes("gh issue create")), false);
+    assertEquals(calls.some((cmd) => cmd[1] === "issue" && cmd[2] === "create"), false);
   } finally {
     await Deno.remove(planPath);
   }
