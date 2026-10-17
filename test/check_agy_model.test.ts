@@ -9,6 +9,7 @@ import {
   ALLOWED_AGY_MODELS,
   ALLOWED_SESSION_SLUGS,
   checkAgyModel,
+  DEFAULT_AGY_MODELS,
   deriveSessionSlugs,
   isAllowedModelSlug,
 } from "../hooks/lib/check_agy_model.ts";
@@ -108,7 +109,8 @@ Deno.test("ALLOWED_SESSION_SLUGS derives -tiered slug matching ALLOWED_AGY_MODEL
     );
   }
   // Verify it contains no stale versions that are not present in ALLOWED_AGY_MODELS
-  for (const slug of ALLOWED_SESSION_SLUGS) {
+  // Argon has no -tiered variant, so only Flash slugs carry a version token.
+  for (const slug of ALLOWED_SESSION_SLUGS.filter((s) => s.includes("-flash-"))) {
     const v = slug.match(/^gemini-(\d+(?:\.\d+)*)-flash-/)?.[1];
     assert(v && versions.includes(v), `Unexpected version ${v} in ALLOWED_SESSION_SLUGS`);
   }
@@ -148,7 +150,96 @@ Deno.test("check_agy_model.ts CLI --default-models preserves default chain displ
   const { code, stdout } = await cmd.output();
   assertEquals(code, 0);
   const outStr = new TextDecoder().decode(stdout).trim();
-  assertEquals(outStr, ALLOWED_AGY_MODELS.map((m) => m.displayName).join("|"));
+  assertEquals(outStr, DEFAULT_AGY_MODELS.map((m) => m.displayName).join("|"));
+  // Argon is allowed but is not in the default chain: it runs only when a dispatch names it.
+  assert(ALLOWED_AGY_MODELS.some((m) => m.displayName === "Gemini 4 Argon (High)"));
+  assert(!outStr.includes("Argon"));
   // web-jam-tools#1202: Gemini Flash runs at high effort only, so the medium level is not dispatched on.
   assertEquals(outStr, "Gemini 3.8 Flash (High)");
+});
+
+// --- Gemini 4 Argon at high, and agy behind another command (tier-order design 1.5.0) ---
+
+Deno.test("ALLOWED_AGY_MODELS lists Gemini 3.8 Flash (High) and Gemini 4 Argon (High) and nothing else", () => {
+  assertEquals(ALLOWED_AGY_MODELS.map((m) => [m.slug, m.displayName]), [
+    ["gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"],
+    ["gemini-4-argon-high", "Gemini 4 Argon (High)"],
+  ]);
+  assert(ALLOWED_SESSION_SLUGS.includes("gemini-4-argon-high"));
+});
+
+Deno.test("isAllowedModelSlug: accepts Argon at high only", () => {
+  assert(isAllowedModelSlug("gemini-4-argon-high"));
+  assert(!isAllowedModelSlug("gemini-4-argon-medium"));
+  assert(!isAllowedModelSlug("gemini-4-argon-low"));
+  assert(!isAllowedModelSlug("gemini-4-argon-tiered"));
+  assert(!isAllowedModelSlug("gemini-5-argon-high"));
+});
+
+const OK_COMMANDS = [
+  `agy --model gemini-4-argon-high -p="x"`,
+  `agy --model "Gemini 4 Argon (High)" -p="x"`,
+  `AGY_MODELS='Gemini 4 Argon (High)' handle-agy-tasks.sh --headless "JaMmusic#1"`,
+  `agy --model gemini-3.8-flash-high -p="x"`,
+  `agy -p="x"`,
+  `AGY_MODELS='Gemini 4 Argon (High)|Gemini 3.8 Flash (High)' agy -p="x"`,
+  `timeout 180 agy --model gemini-4-argon-high -p="x"`,
+  `bash -c 'agy --model "Gemini 4 Argon (High)" -p="x"'`,
+  `echo "agy it's mentioned" > /dev/null`,
+  `ls -la`,
+];
+
+for (const cmd of OK_COMMANDS) {
+  Deno.test(`checkAgyModel: OK for ${cmd}`, () => {
+    assertEquals(checkAgyModel(cmd), "OK");
+  });
+}
+
+const REFUSED_COMMANDS = [
+  `agy --model gemini-4-argon-medium -p="x"`,
+  `agy --model gemini-4-argon-low -p="x"`,
+  `agy --model "Gemini 4 Argon (Medium)" -p="x"`,
+  `agy --model "Claude Opus 5.5 (High)" -p="x"`,
+  `timeout 180 agy --model "Claude Opus 5.5 (High)" -p="x"`,
+  `cd /tmp && timeout 180 agy --model gemini-4-argon-low -p="x"`,
+  `nice agy --model gemini-3.8-flash-medium -p="x"`,
+  `nohup agy --model "Claude Sonnet 5.5 (High)" -p="x"`,
+  `env FOO=1 agy --model gemini-4-argon-low -p="x"`,
+  `command agy --model gemini-4-argon-low -p="x"`,
+  `exec agy --model gemini-4-argon-low -p="x"`,
+  `time agy --model gemini-4-argon-low -p="x"`,
+  `sudo agy --model gemini-4-argon-low -p="x"`,
+  `bash -c 'agy --model gemini-4-argon-low -p="x"'`,
+  `sh -c "agy --model gemini-4-argon-low -p=x"`,
+  `/home/joshua/.local/bin/agy --model gemini-4-argon-low -p="x"`,
+  // Stacked wrappers, and wrappers around a shell payload.
+  `sudo time nice agy --model gemini-4-argon-low -p="x"`,
+  `timeout 5 bash -c 'nohup agy --model gemini-4-argon-low -p="x"'`,
+  // AGY_MODELS on the agy command, or carried through env / a shell payload.
+  `AGY_MODELS='Gemini 4 Argon (Medium)' agy -p="x"`,
+  `env AGY_MODELS=claude-opus-4-6-thinking agy -p="x"`,
+  `AGY_MODELS=claude-opus-4-6-thinking bash -c 'agy -p="x"'`,
+];
+
+for (const cmd of REFUSED_COMMANDS) {
+  Deno.test(`checkAgyModel: refuses ${cmd}`, () => {
+    const result = checkAgyModel(cmd);
+    assert(
+      result !== "OK" && result.startsWith("BLOCK_"),
+      `expected a BLOCK_ result, got ${result}`,
+    );
+  });
+}
+
+Deno.test("checkAgyModel: a command that mentions agy and cannot be parsed fails closed", () => {
+  assert(checkAgyModel(`agy --model "gemini-3.8-flash-high -p=x`).startsWith("BLOCK_PARSE:"));
+  assert(checkAgyModel(`bash -c 'agy --model "gemini-3.8-flash-high'`).startsWith("BLOCK_PARSE:"));
+  // Wrappers nested beyond the shared recursion cap.
+  let deep = `agy --model gemini-3.8-flash-high`;
+  for (let i = 0; i < 8; i++) deep = `bash -c '${deep.replaceAll("'", "'\\''")}'`;
+  assert(checkAgyModel(deep).startsWith("BLOCK_PARSE:"));
+});
+
+Deno.test("checkAgyModel: an unparseable command that never mentions agy is not this guard's business", () => {
+  assertEquals(checkAgyModel(`echo "it's unterminated`), "OK");
 });
