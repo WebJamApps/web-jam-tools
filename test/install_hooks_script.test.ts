@@ -2770,3 +2770,37 @@ Deno.test(
     }
   },
 );
+
+Deno.test(
+  "scripts/install-hooks.sh does not install retired memory-cleanup-reminder hook",
+  async () => {
+    const home = await Deno.makeTempDir();
+    try {
+      const res = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+        ],
+        { HOME: home },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      const claudeSettings = `${home}/.claude/settings.json`;
+      assert(await pathExists(claudeSettings), "settings.json should exist");
+      const content = await Deno.readTextFile(claudeSettings);
+      assert(
+        !content.includes("memory-cleanup-reminder"),
+        "settings.json must not reference memory-cleanup-reminder",
+      );
+
+      const hookFile = `${home}/.claude/hooks/memory-cleanup-reminder.sh`;
+      assert(
+        !(await pathExists(hookFile)),
+        "memory-cleanup-reminder.sh symlink should not be created",
+      );
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  },
+);

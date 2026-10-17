@@ -221,7 +221,7 @@ export interface Finding {
 }
 
 export interface SurfaceCheckedResult {
-  surface: 1 | 6 | 10;
+  surface: 1 | 6 | 8;
   status: "checked";
   dir?: string;
   paths?: string[];
@@ -235,14 +235,14 @@ export interface SurfaceCheckedResult {
 }
 
 export interface SurfaceErrorResult {
-  surface: 1 | 6 | 10;
+  surface: 1 | 6 | 8;
   status: "error";
   reason: string;
 }
 
 export type SurfaceResult = SurfaceCheckedResult | SurfaceErrorResult;
 
-// --- surfaces 1 & 10: a memory directory + its MEMORY.md ---
+// --- surfaces 1 & 8: a memory directory + its MEMORY.md ---
 
 async function readMemoryFileContents(dirPath: string): Promise<Map<string, string>> {
   const contents = new Map<string, string>();
@@ -256,7 +256,7 @@ async function readMemoryFileContents(dirPath: string): Promise<Map<string, stri
 }
 
 /**
- * Runs every mechanical check for one memory directory (surface 1 or 10):
+ * Runs every mechanical check for one memory directory (surface 1 or 8):
  * index↔file sync (missing-from-index, by whole-token slug presence — see
  * module doc for why this is a set-membership check, not a byte-for-byte
  * `generateMemoryIndex` comparison), the null-parse list, a dangling-`[[link]]`
@@ -264,7 +264,7 @@ async function readMemoryFileContents(dirPath: string): Promise<Map<string, stri
  * `project`-typed memory that cites a `repo#number`.
  */
 export async function scanMemoryIndexSurface(
-  surface: 1 | 10,
+  surface: 1 | 8,
   dirPath: string,
   runner: CommandRunner,
 ): Promise<SurfaceResult> {
@@ -550,7 +550,9 @@ export interface MemoryCleanupScanResult {
 
 export interface MemoryCleanupScanOptions {
   surface1Dir: string;
-  surface10Dir: string;
+  surface8Dir: string;
+  /** @deprecated Renumbered to surface 8 (web-jam-tools#413). Retained for transition compatibility. */
+  surface10Dir?: string;
   surface6Paths: string[];
   runner?: CommandRunner;
 }
@@ -559,10 +561,14 @@ export async function runMemoryCleanupScan(
   options: MemoryCleanupScanOptions,
 ): Promise<MemoryCleanupScanResult> {
   const runner = options.runner ?? runGhCommand;
+  const surface8Dir = options.surface8Dir ?? options.surface10Dir;
+  if (!surface8Dir) {
+    throw new Error("runMemoryCleanupScan requires surface8Dir");
+  }
   const surfaces: SurfaceResult[] = [
     await scanMemoryIndexSurface(1, options.surface1Dir, runner),
     await scanQueueSurface(options.surface6Paths, runner),
-    await scanMemoryIndexSurface(10, options.surface10Dir, runner),
+    await scanMemoryIndexSurface(8, surface8Dir, runner),
   ];
   return {
     generatedAt: new Date().toISOString(),

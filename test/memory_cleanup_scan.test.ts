@@ -3,7 +3,7 @@
 // Unit tests for src/memory-cleanup/scan.ts and cli.ts. No network, no real
 // `gh` binary — every `gh` shell-out goes through an injected CommandRunner
 // with a fake implementation. Covers the mechanical Phase 1 checks for
-// surfaces 1, 6, and 10: a dangling [[link]], an unparseable memory file, a
+// surfaces 1, 6, and 8: a dangling [[link]], an unparseable memory file, a
 // project memory citing a closed issue, a surface-6 line citing a merged PR,
 // and a gh lookup failure surfacing as an explicit `error` finding rather
 // than being dropped or counted as clean.
@@ -479,25 +479,25 @@ Deno.test("scanQueueSurface: an OPEN issue citation is not flagged", async () =>
 
 // --- runMemoryCleanupScan (top-level combined scan) ---
 
-Deno.test("runMemoryCleanupScan: emits one result per surface (1, 6, 10), each with an explicit status", async () => {
+Deno.test("runMemoryCleanupScan: emits one result per surface (1, 6, 8), each with an explicit status", async () => {
   await withTempDir(async (base) => {
     const surface1Dir = join(base, "surface1");
-    const surface10Dir = join(base, "surface10");
+    const surface8Dir = join(base, "surface8");
     await Deno.mkdir(surface1Dir);
-    await Deno.mkdir(surface10Dir);
+    await Deno.mkdir(surface8Dir);
     await Deno.writeTextFile(join(surface1Dir, "MEMORY.md"), "# Memory Index\n");
-    await Deno.writeTextFile(join(surface10Dir, "MEMORY.md"), "# Memory Index\n");
+    await Deno.writeTextFile(join(surface8Dir, "MEMORY.md"), "# Memory Index\n");
     const missingQueuePath = join(base, "no-such-queue.txt");
 
     const result = await runMemoryCleanupScan({
       surface1Dir,
-      surface10Dir,
+      surface8Dir,
       surface6Paths: [missingQueuePath],
       runner: NO_CALLS_RUNNER,
     });
 
     assertEquals(result.surfaces.length, 3);
-    assertEquals(result.surfaces.map((s) => s.surface).sort((a, b) => a - b), [1, 6, 10]);
+    assertEquals(result.surfaces.map((s) => s.surface).sort((a, b) => a - b), [1, 6, 8]);
     for (const s of result.surfaces) {
       assert(
         s.status === "checked" || s.status === "error",
@@ -535,13 +535,13 @@ Deno.test("cli runCli: --help prints usage and exits 0 without touching any dire
 Deno.test("cli runCli: a real run against temp dirs prints valid JSON covering all 3 surfaces", async () => {
   await withTempDir(async (base) => {
     const surface1Dir = join(base, "surface1");
-    const surface10Dir = join(base, "surface10");
+    const surface8Dir = join(base, "surface8");
     const dropboxDir = join(base, "dropbox");
     await Deno.mkdir(surface1Dir);
-    await Deno.mkdir(surface10Dir);
+    await Deno.mkdir(surface8Dir);
     await Deno.mkdir(dropboxDir);
     await Deno.writeTextFile(join(surface1Dir, "MEMORY.md"), "# Memory Index\n");
-    await Deno.writeTextFile(join(surface10Dir, "MEMORY.md"), "# Memory Index\n");
+    await Deno.writeTextFile(join(surface8Dir, "MEMORY.md"), "# Memory Index\n");
     // None of DEFAULT_QUEUE_FILENAMES exist in dropboxDir -> all queue-file-absent, no gh calls.
 
     const { logs } = await withConsole(async () => {
@@ -549,7 +549,7 @@ Deno.test("cli runCli: a real run against temp dirs prints valid JSON covering a
         "--dir",
         surface1Dir,
         "--shared-dir",
-        surface10Dir,
+        surface8Dir,
         "--dropbox-dir",
         dropboxDir,
       ]);
@@ -559,6 +559,8 @@ Deno.test("cli runCli: a real run against temp dirs prints valid JSON covering a
     interface ParsedSurface {
       surface: number;
       status: string;
+      dir?: string;
+      paths?: string[];
       findings: Finding[];
     }
     interface ParsedOutput {
@@ -568,9 +570,17 @@ Deno.test("cli runCli: a real run against temp dirs prints valid JSON covering a
     const parsed = JSON.parse(output) as ParsedOutput;
     assertEquals(parsed.surfaces.length, 3);
     const bySurface = new Map<number, ParsedSurface>(parsed.surfaces.map((s) => [s.surface, s]));
+    assertEquals(parsed.surfaces.map((s) => s.surface).sort((a, b) => a - b), [1, 6, 8]);
     assertEquals(bySurface.get(1)?.status, "checked");
-    assertEquals(bySurface.get(10)?.status, "checked");
+    assertEquals(bySurface.get(1)?.dir, surface1Dir);
+    assertEquals(bySurface.get(8)?.status, "checked");
+    assertEquals(bySurface.get(8)?.dir, surface8Dir);
     assertEquals(bySurface.get(6)?.status, "checked");
+    assertEquals(
+      bySurface.has(10),
+      false,
+      "surface 10 remains reserved for separate scratch audit",
+    );
     assertEquals(
       bySurface.get(6)?.findings.filter((f) => f.kind === "queue-file-absent").length,
       DEFAULT_QUEUE_FILENAMES.length,
@@ -581,13 +591,13 @@ Deno.test("cli runCli: a real run against temp dirs prints valid JSON covering a
 Deno.test("cli runCli: expands a '~/'-prefixed --dir against HOME", async () => {
   await withTempDir(async (fakeHome) => {
     const surface1Dir = join(fakeHome, "surface1");
-    const surface10Dir = join(fakeHome, "surface10");
+    const surface8Dir = join(fakeHome, "surface8");
     const dropboxDir = join(fakeHome, "dropbox");
     await Deno.mkdir(surface1Dir);
-    await Deno.mkdir(surface10Dir);
+    await Deno.mkdir(surface8Dir);
     await Deno.mkdir(dropboxDir);
     await Deno.writeTextFile(join(surface1Dir, "MEMORY.md"), "# Memory Index\n");
-    await Deno.writeTextFile(join(surface10Dir, "MEMORY.md"), "# Memory Index\n");
+    await Deno.writeTextFile(join(surface8Dir, "MEMORY.md"), "# Memory Index\n");
 
     const origHome = Deno.env.get("HOME");
     Deno.env.set("HOME", fakeHome);
@@ -597,7 +607,7 @@ Deno.test("cli runCli: expands a '~/'-prefixed --dir against HOME", async () => 
           "--dir",
           "~/surface1",
           "--shared-dir",
-          "~/surface10",
+          "~/surface8",
           "--dropbox-dir",
           "~/dropbox",
         ]);
@@ -605,6 +615,12 @@ Deno.test("cli runCli: expands a '~/'-prefixed --dir against HOME", async () => 
       });
       const parsed = JSON.parse(logs.join("\n"));
       assertEquals(parsed.surfaces.length, 3);
+      assertEquals(
+        parsed.surfaces.map((s: { surface: number }) => s.surface).sort((a: number, b: number) =>
+          a - b
+        ),
+        [1, 6, 8],
+      );
     } finally {
       if (origHome !== undefined) Deno.env.set("HOME", origHome);
     }
