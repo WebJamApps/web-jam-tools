@@ -62,10 +62,10 @@ By default, `handle-agy-tasks.sh` checks out the created feature branch into the
 ~/WebJamApps/web-jam-tools/scripts/handle-agy-tasks.sh --headless --no-land "web-jam-tools#567"
 ```
 
-**Dispatching `agy` via a thin Haiku subagent (Claude Code):**
-In Claude Code sessions, rather than running `handle-agy-tasks.sh` directly in a blocking Bash tool call in the main session, dispatch the script via a thin Haiku subagent (`Agent` tool with `model: "haiku"`). This offloads the long-running command execution and allows Josh to see status and progress in the session UI.
+**Dispatching `agy` via a thin subagent on Haiku (Claude Code):**
+In Claude Code sessions, rather than running `handle-agy-tasks.sh` directly in a blocking Bash tool call in the main session, dispatch the script via a thin subagent on Haiku (`Agent` tool with `model: "haiku"`). This offloads the long-running command execution and allows Josh to see status and progress in the session UI.
 
-- **Strict constraint — dispatch-and-report only:** The Haiku subagent wrapper exists strictly to run the dispatch command, wait for it to exit, and report the result (exit status, stdout summary, and PR URL) back to the parent session. It is **forbidden** from reading or analyzing the issue, modifying code files, running tests/linters, or reviewing the resulting PR. `handle-agy-tasks.sh` and the child `agy` instance handle the entire task lifecycle; performing task work in the wrapper duplicates effort and pays twice for the same tokens.
+- **Strict constraint — dispatch-and-report only:** The subagent wrapper exists strictly to run the dispatch command, wait for it to exit, and report the result (exit status, stdout summary, and PR URL) back to the parent session. It is **forbidden** from reading or analyzing the issue, modifying code files, running tests/linters, or reviewing the resulting PR. `handle-agy-tasks.sh` and the child `agy` instance handle the entire task lifecycle; performing task work in the wrapper duplicates effort and pays twice for the same tokens.
 
 Example subagent prompt for Haiku agy dispatch:
 

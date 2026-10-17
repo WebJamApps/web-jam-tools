@@ -243,4 +243,5 @@ After all actions, post a short summary: what was done, what was declined, and a
 
 ## Description Detail & Triggers
 
-Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a Haiku subagent then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.
+Analyze Josh's Google Drive for duplicates, misplaced files, and phone-Sonnet-authored bridge files awaiting merge into the Dropbox-authoritative opus queue. Reports findings as a table, waits for explicit approval, then executes approved actions (including the cross-store bridge). Phase 1 runs a deterministic rclone pre-pass first (clean days cost zero tokens); a subagent (Claude Code: Haiku; agy: Flash) then classifies only the ambiguous remainder. Invoke when Josh asks (or /drive-cleanup) — it does NOT auto-run.
+
