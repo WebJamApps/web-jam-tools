@@ -21,6 +21,9 @@
 # refuses to switch the firewall on while it already admits SSH off Tailscale. --check
 # reads the same state from files and reports it drifting; the parts that need root say so instead
 # of guessing. WSL runs no SSH server (Windows' own SSH server reaches it), so both steps are skipped.
+# On the laptop it also installs Chrome's managed notification allowlist and extension blocklist.
+# The policy and its root-owned reference are checksummed; --check names changed entries. WSL
+# skips Chrome. The policy comparison uses Ubuntu's system Python 3 and its JSON standard library.
 #
 # UBUNTU_HEALTH_ROOT stands in for "/" so tests never touch the real system.
 # Design: Operations/ubuntu-security-efficiency-design-2026-10-15.md in the web-jam-llms folder.
@@ -41,6 +44,7 @@ SSH_PENDING="$LIB/ssh-restart-pending"
 UFW_CONF="$ROOT/etc/ufw/ufw.conf"
 UFW_DEFAULTS="$ROOT/etc/default/ufw"
 UFW_RULE_FILES=("$ROOT/etc/ufw/user.rules" "$ROOT/etc/ufw/user6.rules")
+CHROME_POLICY="$ROOT/etc/opt/chrome/policies/managed/ubuntu-health.json"
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SELF_DIR="$(dirname "$SELF")"
@@ -89,10 +93,27 @@ wanted_files() {
     echo "unit-files|$SUPPORT/$f|$UNIT_DIR/$f|644"
   done
   [ "$MODE" != "laptop" ] || echo "ssh|$SUPPORT/ubuntu-health-sshd.conf|$SSHD_DROPIN|644"
+  if [ "$MODE" = "laptop" ]; then
+    for f in ubuntu-health-chrome.json check-chrome-policy.py; do
+      echo "job-files|$SUPPORT/$f|$LIB/$f|644"
+    done
+    echo "chrome|$SUPPORT/ubuntu-health-chrome.json|$CHROME_POLICY|644"
+  fi
 }
 
 wsl_skip() {
   echo "skipped: SSH and firewall steps (WSL runs no SSH server; Windows' own SSH server reaches it)"
+  echo "skipped: Chrome policy (WSL has no Chrome)"
+}
+
+# The JSON parser names the changed entries as well as the file-level checksum drift. Python 3 is
+# part of Ubuntu; the installed weekly job reads only its root-owned support copies beside it.
+check_chrome() {
+  local detail
+  [ -f "$CHROME_POLICY" ] || return 0 # wanted_files already reports a missing policy.
+  if ! detail="$(python3 "$SUPPORT/check-chrome-policy.py" "$SUPPORT/ubuntu-health-chrome.json" "$CHROME_POLICY" 2>&1)"; then
+    report chrome "${detail:-could not inspect $CHROME_POLICY}"
+  fi
 }
 
 # --- firewall and SSH state, read from files so --check needs no ufw or sshd call -----------------
@@ -358,6 +379,7 @@ check() {
   if [ "$MODE" = "laptop" ]; then
     check_ssh
     check_firewall
+    check_chrome
   else
     wsl_skip
   fi
@@ -380,6 +402,10 @@ apply() {
   install -d -m 0755 "$LIB" "$UNIT_DIR" "$(dirname "$ENV_FILE")"
   chown root:root "$LIB" "$(dirname "$ENV_FILE")"
   [ "$MODE" != "laptop" ] || install -d -m 0755 "$(dirname "$SSHD_DROPIN")"
+  if [ "$MODE" = "laptop" ]; then
+    install -d -m 0755 "$(dirname "$CHROME_POLICY")"
+    chown root:root "$(dirname "$CHROME_POLICY")"
+  fi
   while IFS='|' read -r step src dst mode; do
     if [ ! -f "$dst" ] || ! cmp -s "$src" "$dst" || [ "$(stat -c %a "$dst")" != "$mode" ]; then
       [ "$step" != "ssh" ] || : >"$SSH_PENDING"
