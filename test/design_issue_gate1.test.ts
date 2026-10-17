@@ -1979,26 +1979,38 @@ Deno.test("epics case 20: the test files that reach the browser launcher record 
       "test/design_issue_lint_doc_proved_date.test.ts",
       "test/design_issue_lint_runbook.test.ts",
     ];
-    const result = await new Deno.Command(Deno.execPath(), {
-      args: [
-        "test",
-        "--cached-only",
-        "--config",
-        path.join(repoDir, "deno.json"),
-        "--allow-env",
-        "--allow-run",
-        "--allow-read",
-        "--allow-write",
-        ...files.map((f) => path.join(repoDir, f)),
-      ],
-      cwd: repoDir,
-      env: {
-        PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
-        [STAND_IN_CHILD_ENV]: "1",
-      },
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
+    const prevLiveChrome = Deno.env.get("WJT_LIVE_CHROME");
+    Deno.env.set("WJT_LIVE_CHROME", "1");
+    let result: Deno.CommandOutput;
+    try {
+      result = await new Deno.Command(Deno.execPath(), {
+        args: [
+          "test",
+          "--cached-only",
+          "--config",
+          path.join(repoDir, "deno.json"),
+          "--allow-env",
+          "--allow-run",
+          "--allow-read",
+          "--allow-write",
+          ...files.map((f) => path.join(repoDir, f)),
+        ],
+        cwd: repoDir,
+        env: {
+          PATH: `${binDir}:${Deno.env.get("PATH") ?? ""}`,
+          [STAND_IN_CHILD_ENV]: "1",
+          WJT_LIVE_CHROME: "",
+        },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+    } finally {
+      if (prevLiveChrome === undefined) {
+        Deno.env.delete("WJT_LIVE_CHROME");
+      } else {
+        Deno.env.set("WJT_LIVE_CHROME", prevLiveChrome);
+      }
+    }
     const stderr = new TextDecoder().decode(result.stderr);
     assertEquals(result.success, true, stderr + new TextDecoder().decode(result.stdout));
 
