@@ -120,29 +120,33 @@ accidentally adds one there is blocked instead of silently disarming every guard
 Two hooks exist only on the agy surface (never wired into Claude Code's `settings.json` — they
 depend on agy-native payload fields Claude Code's hook payload doesn't carry):
 
-- **`hooks/agy-model-guard.sh`** — matcher `.*` (every tool call). Denies a non-Flash model chosen
+- **`hooks/agy-model-guard.sh`** — matcher `.*` (every tool call). Checks the selected model
   **in-session**, using the `modelName` field agy's own payload carries (finding 7). Shares its
-  allowed-slug list (the 3.7 Flash floor, `gemini-3.7-flash-*` or newer, plus `gemini-4-argon-high`)
+  allowed-slug list (the 3.7 Flash floor, `gemini-3.7-flash-*` or newer, plus
+  `gemini-4-argon-high` and `claude-sonnet-5-5-high`)
   with `hooks/block-agy-non-flash-model.sh` (which sees an `agy --model ...` Bash invocation from
   Claude Code, including one behind `timeout`, `sudo`, `bash -c` and the like, not a running
   agy session's live model) via `hooks/lib/check_agy_model.ts`, so the two can't drift apart.
   Fails OPEN when `modelName` is missing (cost guard, not a leak guard).
+
+  Post-merge verification follows
+  `~/Dropbox/web-jam-llms/Token_Savings/agy-model-guard-restore-manual-steps-2026-10-18.md`;
+  Josh restores the installed guard himself in web-jam-tools#1483
+  "Manual verification: restore the installed agy guard symlink".
 - **`hooks/block-agy-gmail-send-delete.sh`** — matcher
   `send_email|delete_email|batch_delete_emails` (agy exposes Gmail MCP tool names unprefixed — no
   `mcp__gmail__` prefix; that convention is Claude Code-specific). Unconditionally denies once it
   runs. Read, label, and archive tooling (`search_emails`, `read_email`, `list_email_labels`,
   `modify_email`, ...) are not matched and stay available.
 
-## 5. Haiku cost gate surface-awareness
+## 5. Gmail model choice and the session guard
 
-`hooks/haiku-only-gmail-gate.sh` is **not edited**. On Claude Code it stays wired to its existing
-matcher (`mcp__(gmail|claude_ai_Gmail)__.*`) and keeps gating Gmail tools to Haiku, exactly as
-before. On agy it's still wrapped by the shim (it's in the shared hook list), but that matcher is
-the Claude Code-specific `mcp__` prefix convention and never matches agy's raw, unprefixed Gmail
-tool names — so it naturally never fires there. Instead, `hooks/agy-model-guard.sh` (§4, matcher
-`.*`) is what gates the Antigravity surface: any tool call — Gmail included — is denied unless the
-session is on an allowed Flash model. Net effect: Claude Code stays gated to Haiku, Antigravity is
-gated to Flash, and neither hook needed to change.
+The session guard permits Flash, Argon and Sonnet at high; it supplies no Gmail-specific cost
+confirmation or action approval. The chosen-model workflow and expensive-model question are owned
+by `~/Dropbox/web-jam-llms/AI_Misbehaves/hooks-design-2026-09-15.md`, “Gmail model choice and
+connections”. Their implementation is tracked separately by web-jam-tools#1225
+"skills/handle-gmails: use the chosen model and ask the Astra or Opus cost question".
+The Gmail fence remains separate from model selection. This guard change adds no Gmail connection.
 
 ## 6. Antigravity Gmail MCP setup
 
@@ -215,8 +219,8 @@ file is backed up before being replaced by the symlink.
 `send_email`, `delete_email`, and `batch_delete_emails` are denied unconditionally on the
 Antigravity surface by `hooks/block-agy-gmail-send-delete.sh` (§4) — Flash never gets outbound
 mail identity or delete capability on Josh's personal inbox, independent of which model is active.
-Read, label, and archive tooling remain available, gated only by the model guard (§4/§5). This
-mirrors Claude Code's own draft-only Gmail policy in spirit, without touching Claude Code's
+Read, label, and archive tooling remain available, subject to the separate Gmail permissions and
+skill workflow (§5). This mirrors Claude Code's own draft-only Gmail policy in spirit, without touching Claude Code's
 permissions at all (non-goal).
 
 ## 8. What is NOT verified / NOT applied

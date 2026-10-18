@@ -154,16 +154,18 @@ Deno.test("check_agy_model.ts CLI --default-models preserves default chain displ
   // Argon is allowed but is not in the default chain: it runs only when a dispatch names it.
   assert(ALLOWED_AGY_MODELS.some((m) => m.displayName === "Gemini 4 Argon (High)"));
   assert(!outStr.includes("Argon"));
+  assert(!outStr.includes("Sonnet"));
   // web-jam-tools#1202: Gemini Flash runs at high effort only, so the medium level is not dispatched on.
   assertEquals(outStr, "Gemini 3.8 Flash (High)");
 });
 
 // --- Gemini 4 Argon at high, and agy behind another command (tier-order design 1.5.0) ---
 
-Deno.test("ALLOWED_AGY_MODELS lists Gemini 3.8 Flash (High) and Gemini 4 Argon (High) and nothing else", () => {
+Deno.test("ALLOWED_AGY_MODELS lists Flash, Argon and Sonnet high and nothing else", () => {
   assertEquals(ALLOWED_AGY_MODELS.map((m) => [m.slug, m.displayName]), [
     ["gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"],
     ["gemini-4-argon-high", "Gemini 4 Argon (High)"],
+    ["claude-sonnet-5-5-high", "Claude Sonnet 5.5 (High)"],
   ]);
   assert(ALLOWED_SESSION_SLUGS.includes("gemini-4-argon-high"));
 });
@@ -177,6 +179,16 @@ Deno.test("isAllowedModelSlug: accepts Argon at high only", () => {
 });
 
 const OK_COMMANDS = [
+  `agy --model claude-sonnet-5-5-high -p="x"`,
+  `agy --model "Claude Sonnet 5.5 (High)" -p="x"`,
+  `AGY_MODELS='Claude Sonnet 5.5 (High)' scripts/handle-agy-tasks.sh --headless "web-jam-tools#fixture"`,
+  `timeout 180 agy --model claude-sonnet-5-5-high -p="x"`,
+  `nohup agy --model "Claude Sonnet 5.5 (High)" -p="x"`,
+  `time -p agy --model claude-sonnet-5-5-high -p=x`,
+  `exec -a worker agy --model claude-sonnet-5-5-high -p=x`,
+  `env AGY_MODELS=claude-sonnet-5-5-high timeout 180 agy -p=x`,
+  `env AGY_MODELS=claude-sonnet-5-5-high bash -c "agy -p=x"`,
+  `env AGY_MODELS=gemini-4-argon-low env AGY_MODELS=claude-sonnet-5-5-high agy`,
   `agy --model gemini-4-argon-high -p="x"`,
   `agy --model "Gemini 4 Argon (High)" -p="x"`,
   `AGY_MODELS='Gemini 4 Argon (High)' handle-agy-tasks.sh --headless "JaMmusic#1"`,
@@ -196,6 +208,24 @@ for (const cmd of OK_COMMANDS) {
 }
 
 const REFUSED_COMMANDS = [
+  `agy --model claude-sonnet-5-5-low -p="x"`,
+  `agy --model claude-sonnet-5-5-medium -p="x"`,
+  `agy --model "Claude Sonnet 5.5 (Medium)" -p="x"`,
+  `agy --model claude-opus-5-5-high -p="x"`,
+  `agy --model gpt-oss-120b-medium -p="x"`,
+  `nice agy --model claude-sonnet-5-5-medium -p="x"`,
+  `env FOO=1 agy --model claude-sonnet-5-5-low -p="x"`,
+  `command agy --model claude-sonnet-5-5-low -p="x"`,
+  `exec agy --model claude-sonnet-5-5-low -p="x"`,
+  `time agy --model claude-sonnet-5-5-low -p="x"`,
+  `sudo agy --model claude-sonnet-5-5-low -p="x"`,
+  `bash -c 'agy --model claude-sonnet-5-5-low -p="x"'`,
+  `sh -c "agy --model claude-sonnet-5-5-low -p=x"`,
+  `/home/joshua/.local/bin/agy --model claude-sonnet-5-5-low -p="x"`,
+  `time -p agy --model gemini-4-argon-low -p=x`,
+  `exec -a worker agy --model gemini-4-argon-low -p=x`,
+  `env AGY_MODELS=gemini-4-argon-low timeout 180 agy -p=x`,
+  `env AGY_MODELS=gemini-4-argon-low bash -c "agy -p=x"`,
   `agy --model gemini-4-argon-medium -p="x"`,
   `agy --model gemini-4-argon-low -p="x"`,
   `agy --model "Gemini 4 Argon (Medium)" -p="x"`,
@@ -203,7 +233,6 @@ const REFUSED_COMMANDS = [
   `timeout 180 agy --model "Claude Opus 5.5 (High)" -p="x"`,
   `cd /tmp && timeout 180 agy --model gemini-4-argon-low -p="x"`,
   `nice agy --model gemini-3.8-flash-medium -p="x"`,
-  `nohup agy --model "Claude Sonnet 5.5 (High)" -p="x"`,
   `env FOO=1 agy --model gemini-4-argon-low -p="x"`,
   `command agy --model gemini-4-argon-low -p="x"`,
   `exec agy --model gemini-4-argon-low -p="x"`,

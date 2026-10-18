@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # PreToolUse guard (Bash): restrict `agy` (Antigravity CLI) invocations to
-# Flash models (3.7 floor or newer) and Gemini 4 Argon at high effort. Design:
+# Flash models (3.7 floor or newer), Gemini 4 Argon and Claude Sonnet 5.5 at high effort. Design:
 # web-jam-tools#267 ("agy flash default model fix", approved by Josh 2026-07-25;
-# web-jam-tools#549), extended by the model tier-order design 1.5.0, "The agy model guard".
+# web-jam-tools#549), extended by the model tier-order design 1.6.0, "The agy model guard".
 #
 # Rationale: agy's own configured default has drifted before, and nothing stopped an ad hoc
 # `agy --model claude-opus-4-6-thinking` (or similar) from burning
@@ -19,9 +19,8 @@
 #   - `--model` (or `--model=`) equal to a Flash model (3.7 floor or newer)
 #     (e.g. gemini-3.8-flash-high, gemini-3.8-flash-tiered). The medium level is retired
 #     (web-jam-tools#1202): Gemini Flash runs at high effort only.
-#   - `--model gemini-4-argon-high` or `--model "Gemini 4 Argon (High)"`. Argon runs only when
-#     a dispatch names it; agy's default stays Gemini 3.8 Flash (High). Argon's low and medium
-#     levels are refused like any other slug outside the list.
+#   - Argon or Sonnet high, by slug or exact display name from ALLOWED_AGY_MODELS.
+#     agy's default stays Gemini 3.8 Flash (High); low and medium levels are refused.
 #
 # BLOCKED:
 #   - any other --model value (notably claude-sonnet-4-6,
@@ -58,7 +57,7 @@ ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowe
 
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2
-  echo "agy is restricted to Gemini 3.8 Flash and Gemini 4 Argon, both at high: $ALLOWED_SLUGS — or omit --model entirely to use agy's own configured default." >&2
+  echo "agy is restricted to Flash, Argon and Sonnet at high: $ALLOWED_SLUGS — or omit --model entirely to use agy's own configured default." >&2
   echo "(design: web-jam-tools#267 — override by rephrasing to one of the allowed slugs)" >&2
   exit 2
 }

@@ -4,7 +4,7 @@
 // tests driving REAL agy PreToolUse payloads (carrying `modelName`, per
 // finding 7) through hooks/agy-hook-shim.sh + hooks/agy-model-guard.sh,
 // asserting the shim's emitted verdict is agy's `decision:"deny"` form for
-// a non-Flash model, and `decision:"allow"` for an allowed Flash model.
+// a non-Flash model, and `decision:"allow"` for an allowed high model.
 
 import { assert, assertEquals } from "@std/assert";
 import { checkSessionModel } from "../hooks/lib/check_agy_session_model.ts";
@@ -97,7 +97,7 @@ Deno.test("agy-model-guard.sh denies a non-Flash modelName with exit 2", async (
   assert(res.stderr.includes("BLOCKED (agy-model guard)"), res.stderr);
 });
 
-Deno.test("agy-model-guard.sh allows an allowed Flash modelName", async () => {
+Deno.test("agy-model-guard.sh allows an allowed high modelName", async () => {
   const res = await runDirect({ modelName: "gemini-3.8-flash-high" });
   assertEquals(res.code, 0, res.stderr);
 });
@@ -124,7 +124,7 @@ Deno.test("agy-model-guard.sh allows with additionalContext when modelName is ab
   assertEquals(output.hookEventName, "PreToolUse");
   assertEquals(output.permissionDecision, undefined);
   assert(output.additionalContext.includes("could not determine modelName"));
-  assert(output.additionalContext.includes("allowed Flash model"));
+  assert(output.additionalContext.includes("allowed high model"));
 });
 
 // --- End-to-end via the shim, real agy payload shape ---
@@ -142,7 +142,7 @@ Deno.test(
 );
 
 Deno.test(
-  "agy-native model guard: an allowed Flash modelName driven through the shim yields decision:allow",
+  "agy-native model guard: an allowed high modelName driven through the shim yields decision:allow",
   async () => {
     const verdict = await runViaShim({
       toolCall: { name: "run_command", args: { CommandLine: "ls" } },
@@ -174,18 +174,8 @@ Deno.test(
   },
 );
 
-// --- Haiku cost gate surface-awareness (scope item 4) ---
-//
-// hooks/haiku-only-gmail-gate.sh is NOT edited and stays wired on Claude
-// Code with its existing matcher (mcp__(gmail|claude_ai_Gmail)__.*), gating
-// it to Haiku exactly as before (unchanged, covered by
-// test/haiku_only_gmail_gate_hook.test.ts). It also stays in the shared
-// PRE_TOOL_USE_HOOKS list wrapped for agy, but that matcher is Claude
-// Code-specific (the mcp__ prefix convention) and never matches agy's raw,
-// unprefixed Gmail tool names, so on agy it naturally never fires — instead,
-// this session-wide Flash gate (matcher ".*") is what permits/denies Gmail
-// calls there. Together: Claude Code stays gated to Haiku, Antigravity is
-// gated to Flash, neither hook needed to change.
+// Gmail matcher coverage only: model choice/cost dialogue belongs to handle-gmails,
+// while this session guard permits Flash, Argon and Sonnet high.
 
 Deno.test(
   "haiku-only-gmail-gate.sh's matcher never matches agy's raw (unprefixed) Gmail tool names",
@@ -196,3 +186,20 @@ Deno.test(
     }
   },
 );
+
+Deno.test("Sonnet high is allowed through the direct hook and agy shim; low/medium are denied", async () => {
+  for (
+    const [modelName, decision, code] of [
+      ["claude-sonnet-5-5-high", "allow", 0],
+      ["claude-sonnet-5-5-medium", "deny", 2],
+      ["claude-sonnet-5-5-low", "deny", 2],
+    ] as const
+  ) {
+    assertEquals((await runDirect({ modelName })).code, code, modelName);
+    assertEquals(
+      (await runViaShim({ toolCall: { name: "run_command", args: {} }, modelName })).decision,
+      decision,
+      modelName,
+    );
+  }
+});

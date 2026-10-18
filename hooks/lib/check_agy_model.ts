@@ -4,7 +4,7 @@
 import {
   MAX_WRAPPER_ITERATIONS,
   MAX_WRAPPER_RECURSION_DEPTH,
-  resolveThroughWrappers,
+  resolveWrapperLayer,
   splitOnOperators,
   splitShellTokens,
   stripHeredocs,
@@ -23,13 +23,17 @@ const ARGON_MODEL: AgyModelSpec = {
   slug: "gemini-4-argon-high",
   displayName: "Gemini 4 Argon (High)",
 };
+const SONNET_MODEL: AgyModelSpec = {
+  slug: "claude-sonnet-5-5-high",
+  displayName: "Claude Sonnet 5.5 (High)",
+};
 
-/** Every model agy may run: Flash and Argon, both at high effort only (design 1.5.0). */
-export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [FLASH_MODEL, ARGON_MODEL];
+/** Every model agy may run: Flash, Argon and Sonnet at high (design 1.6.0). */
+export const ALLOWED_AGY_MODELS: readonly AgyModelSpec[] = [FLASH_MODEL, ARGON_MODEL, SONNET_MODEL];
 
 /**
- * The models agy dispatches on when nothing names one: Flash only. Argon runs only when a
- * dispatch names it (AGY_MODELS or --model), so it stays out of the default chain.
+ * The models agy dispatches on when nothing names one: Flash only. Selecting Argon or Sonnet
+ * through AGY_MODELS or --model never adds either to the default retry chain.
  */
 export const DEFAULT_AGY_MODELS: readonly AgyModelSpec[] = [FLASH_MODEL];
 
@@ -78,8 +82,30 @@ export function isAllowedAgyModel(value: string): boolean {
 }
 
 // Shell keywords and builtins that put another command in front of `agy` but that the shared
-// wrapper resolver (resolveThroughWrappers) does not peel: `time`, `exec`, and the `!` negation.
+// wrapper resolver does not peel: `time`, `exec`, and the `!` negation.
 const LEADING_KEYWORDS = new Set(["time", "exec", "!"]);
+
+function peelKeyword(argv: string[], i: number, name: string): string[] {
+  let j = i + 1;
+  while (name !== "!" && j < argv.length && argv[j].startsWith("-")) {
+    const option = argv[j++];
+    if (option === "--") break;
+    const takesValue = name === "exec"
+      ? option === "-a"
+      : ["-f", "--format", "-o", "--output"].includes(option);
+    if (takesValue) {
+      if (j >= argv.length) throw new ParseFailure("missing wrapper option value");
+      j++;
+    } else if (
+      !(name === "exec"
+        ? /^-[cl]+$/.test(option)
+        : ["-p", "-v", "-a", "--portability", "--verbose", "--append", "--quiet"].includes(option))
+    ) {
+      throw new ParseFailure("unrecognized wrapper option");
+    }
+  }
+  return argv.slice(j);
+}
 
 const AGY_WORD_RE = /(^|[^A-Za-z0-9_-])agy($|[^A-Za-z0-9_-])/;
 
@@ -113,18 +139,19 @@ function checkSegments(cmd: string, inheritedEnv: string | null, depth: number):
         if (m[1] === "AGY_MODELS") envAgyModels = m[2];
         i++;
       }
-      if (i < argv.length && LEADING_KEYWORDS.has(argv[i])) {
-        argv = argv.slice(i + 1);
+      const name = argv[i]?.split("/").pop() ?? "";
+      if (LEADING_KEYWORDS.has(name)) {
+        argv = peelKeyword(argv, i, name);
         continue;
       }
-      const resolved = resolveThroughWrappers(argv);
-      if (resolved.kind === "cap-exceeded") throw new ParseFailure("wrappers nested too deeply");
+      // Inspect assignments after EVERY layer; peeling the whole chain loses env's AGY_MODELS
+      // before a later timeout or nested shell can inherit it.
+      const resolved = resolveWrapperLayer(argv);
+      if (resolved === null) break;
       if (resolved.kind === "nested") {
         nested = resolved.command;
         break;
       }
-      // resolveThroughWrappers hands back the same array when no wrapper was peeled.
-      if (resolved.argv === argv) break;
       argv = resolved.argv;
     }
 

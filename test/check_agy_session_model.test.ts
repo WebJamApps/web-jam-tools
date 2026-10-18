@@ -255,11 +255,21 @@ Deno.test("CLI stdin with malformed JSON state file proceeds as absent and exits
 
 Deno.test("checkSessionModel: gemini-4-argon-high and gemini-3.8-flash-high are allowed", () => {
   assertEquals(checkSessionModel("gemini-4-argon-high"), { allowed: true });
+  assertEquals(checkSessionModel("claude-sonnet-5-5-high"), { allowed: true });
   assertEquals(checkSessionModel("gemini-3.8-flash-high"), { allowed: true });
 });
 
 Deno.test("checkSessionModel: Argon at medium or low, and a Claude model, are denied", () => {
-  for (const slug of ["gemini-4-argon-medium", "gemini-4-argon-low", "claude-opus-5-5-high"]) {
+  for (
+    const slug of [
+      "gemini-4-argon-medium",
+      "gemini-4-argon-low",
+      "claude-opus-5-5-high",
+      "claude-sonnet-5-5-medium",
+      "claude-sonnet-5-5-low",
+      "gpt-oss-120b-medium",
+    ]
+  ) {
     const result = checkSessionModel(slug);
     assertEquals(result.allowed, false, slug);
     assert(result.reason?.includes("gemini-4-argon-high"), slug);
@@ -270,7 +280,19 @@ Deno.test("CLI stdin: gemini-4-argon-high exits 0, argon medium/low and claude-o
   const allowed = await runSessionModelCli(JSON.stringify({ modelName: "gemini-4-argon-high" }));
   assertEquals(allowed.code, 0);
   assertEquals(allowed.stderr, "");
-  for (const slug of ["gemini-4-argon-medium", "gemini-4-argon-low", "claude-opus-5-5-high"]) {
+  const sonnet = await runSessionModelCli(JSON.stringify({ modelName: "claude-sonnet-5-5-high" }));
+  assertEquals(sonnet.code, 0);
+  assertEquals(sonnet.stderr, "");
+  for (
+    const slug of [
+      "gemini-4-argon-medium",
+      "gemini-4-argon-low",
+      "claude-opus-5-5-high",
+      "claude-sonnet-5-5-medium",
+      "claude-sonnet-5-5-low",
+      "gpt-oss-120b-medium",
+    ]
+  ) {
     const res = await runSessionModelCli(JSON.stringify({ modelName: slug }));
     assertEquals(res.code, 2, slug);
     assert(res.stderr.includes("BLOCKED (agy-model guard)"), slug);
