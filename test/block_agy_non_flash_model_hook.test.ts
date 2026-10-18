@@ -186,6 +186,8 @@ Deno.test("block message names permitted slugs", async () => {
     const slug of [
       "gemini-3.8-flash-high",
       "gemini-3.8-flash-tiered",
+      "gemini-4-argon-high",
+      "claude-sonnet-5-5-high",
     ]
   ) {
     if (!res.stderr.includes(slug)) {
@@ -193,6 +195,77 @@ Deno.test("block message names permitted slugs", async () => {
     }
   }
   assertEquals(res.stderr.includes("flash-medium"), false, res.stderr);
+});
+
+// --- Gemini 4 Argon at high, and agy behind another command (tier-order design 1.5.0) ---
+
+Deno.test("Argon at high is allowed, by slug and by display name", async () => {
+  for (
+    const cmd of [
+      `agy --model gemini-4-argon-high -p="x"`,
+      `agy --model "Gemini 4 Argon (High)" -p="x"`,
+      `AGY_MODELS='Gemini 4 Argon (High)' agy -p="x"`,
+      `AGY_MODELS='Gemini 4 Argon (High)' handle-agy-tasks.sh --headless "JaMmusic#1"`,
+    ]
+  ) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, 0, `${cmd}: ${res.stderr}`);
+  }
+});
+
+Deno.test("Argon at medium or low, and a Claude model, are blocked", async () => {
+  for (
+    const cmd of [
+      `agy --model gemini-4-argon-medium -p="x"`,
+      `agy --model gemini-4-argon-low -p="x"`,
+      `agy --model "Gemini 4 Argon (Medium)" -p="x"`,
+      `agy --model "Claude Opus 5.5 (High)" -p="x"`,
+    ]
+  ) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, 2, cmd);
+    assertBlocked(res.stderr);
+  }
+});
+
+Deno.test("agy behind a wrapper or a shell payload is checked, whatever the wrapper", async () => {
+  for (
+    const cmd of [
+      `timeout 180 agy --model "Claude Opus 5.5 (High)" -p="x"`,
+      `cd /tmp && timeout 180 agy --model gemini-4-argon-low -p="x"`,
+      `nice agy --model gemini-3.8-flash-medium -p="x"`,
+      `nohup agy --model "Claude Sonnet 5.5 (Medium)" -p="x"`,
+      `env FOO=1 agy --model gemini-4-argon-low -p="x"`,
+      `command agy --model gemini-4-argon-low -p="x"`,
+      `exec agy --model gemini-4-argon-low -p="x"`,
+      `time agy --model gemini-4-argon-low -p="x"`,
+      `sudo agy --model gemini-4-argon-low -p="x"`,
+      `bash -c 'agy --model gemini-4-argon-low -p="x"'`,
+      `sh -c "agy --model gemini-4-argon-low -p=x"`,
+      `/home/joshua/.local/bin/agy --model gemini-4-argon-low -p="x"`,
+    ]
+  ) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, 2, cmd);
+    assertBlocked(res.stderr);
+  }
+});
+
+Deno.test("agy behind a wrapper with an allowed model is allowed", async () => {
+  const res = await runHook(`timeout 180 agy --model gemini-4-argon-high -p="x"`);
+  assertEquals(res.code, 0, res.stderr);
+});
+
+Deno.test("a command that runs agy but cannot be parsed is refused (fails closed)", async () => {
+  const res = await runHook(`agy --model "gemini-3.8-flash-high -p=x`);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr);
+  assertEquals(res.stderr.includes("could not be parsed"), true, res.stderr);
+});
+
+Deno.test("an unparseable command that never mentions agy still passes through", async () => {
+  const res = await runHook(`echo "it's unterminated`);
+  assertEquals(res.code, 0, res.stderr);
 });
 
 // --- blocked: AGY_MODELS= env prefix bypassing --model ---
@@ -350,5 +423,28 @@ Deno.test("Outcome 3: failed helper subprocess proceeds (fails open)", async () 
     assertEquals(code, 0, new TextDecoder().decode(stderr));
   } finally {
     await Deno.remove(tempDir, { recursive: true });
+  }
+});
+
+Deno.test("Sonnet high and reviewed wrapper bypasses are enforced by the shell hook", async () => {
+  for (
+    const [cmd, code] of [
+      [`agy --model "Claude Sonnet 5.5 (High)" -p=x`, 0],
+      [`nohup agy --model "Claude Sonnet 5.5 (High)" -p=x`, 0],
+      [`time -p agy --model claude-sonnet-5-5-high -p=x`, 0],
+      [`exec -a worker agy --model claude-sonnet-5-5-high -p=x`, 0],
+      [`env AGY_MODELS=claude-sonnet-5-5-high timeout 180 agy -p=x`, 0],
+      [`env AGY_MODELS=claude-sonnet-5-5-high bash -c "agy -p=x"`, 0],
+      [`agy --model claude-sonnet-5-5-medium -p=x`, 2],
+      [`time -p agy --model gemini-4-argon-low -p=x`, 2],
+      [`exec -a worker agy --model gemini-4-argon-low -p=x`, 2],
+      [`env AGY_MODELS=gemini-4-argon-low timeout 180 agy -p=x`, 2],
+      [`env AGY_MODELS=gemini-4-argon-low bash -c "agy -p=x"`, 2],
+      [`time --unrecognized agy --model claude-sonnet-5-5-high`, 2],
+    ] as const
+  ) {
+    const res = await runHook(cmd);
+    assertEquals(res.code, code, `${cmd}: ${res.stderr}`);
+    if (code === 2) assertBlocked(res.stderr);
   }
 });

@@ -4,7 +4,7 @@
  * Reads a shim-normalized PreToolUse payload (hooks/lib/agy_hook_shim.ts)
  * from stdin and checks its `modelName` field — carried directly in agy's
  * own payload (finding 7, unlike Claude Code, which exposes no model field
- * to hooks at all) — against the same Flash allowlist/floor already used by
+ * to hooks at all) — against the same Flash/Argon/Sonnet high allowlist already used by
  * hooks/block-agy-non-flash-model.sh (hooks/lib/check_agy_model.ts), so the
  * two guards can never drift apart on what counts as an allowed model.
  *
@@ -28,7 +28,7 @@ export function checkSessionModel(
     return {
       allowed: true,
       reason:
-        "could not determine modelName; proceeding. Verify the agy session uses an allowed Flash model before continuing.",
+        "could not determine modelName; proceeding. Verify the agy session uses an allowed high model before continuing.",
     };
   }
   if (isAllowedModelSlug(modelName)) {
@@ -44,7 +44,7 @@ export function checkSessionModel(
   return {
     allowed: false,
     reason:
-      `agy session model '${modelName}' is not an allowed Flash slug (allowed: ${allowedSlugs}). ` +
+      `agy session model '${modelName}' is not an allowed agy model slug (allowed: ${allowedSlugs}). ` +
       `(design: web-jam-tools#267, web-jam-tools#432)`,
   };
 }
