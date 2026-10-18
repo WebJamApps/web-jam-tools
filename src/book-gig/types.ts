@@ -78,6 +78,12 @@ export interface CandidateVenue {
   bookingNotes?: string;
   contactNotes?: string;
   priorContactNotes?: string;
+  touches?: Array<{
+    type?: string;
+    date?: string | Date;
+    note?: string;
+    [key: string]: unknown;
+  }>;
   priorGigs?: unknown[];
   outreachEligible?: boolean;
   bookingStatus?: string;

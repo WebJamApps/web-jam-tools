@@ -111,45 +111,110 @@ Deno.test("resolveVenueStage: resolves to cold by default when neither past gig 
   assertEquals(resolveVenueStage(venue), "cold");
 });
 
-Deno.test("detectConversationContext: detects phone, in-person, general, or null context cleanly", () => {
-  // Phone conversation
+Deno.test("detectConversationContext: selects opener from touches and ignores notes words (D-68, #995)", () => {
+  // 1. Venue with a call touch (phone opener)
   assertEquals(
     detectConversationContext({
-      _id: "v_phone",
-      name: "Phone Venue",
-      contactNotes: "Spoke with manager on phone call last Tuesday",
+      _id: "v_call_touch",
+      name: "Call Venue",
+      touches: [{ type: "call", date: "2026-05-09" }],
     }),
     "phone",
   );
 
-  // In-person conversation
+  // 2. Venue with a visit touch (in-person opener)
   assertEquals(
     detectConversationContext({
-      _id: "v_inperson",
-      name: "In Person Venue",
-      bookingNotes: "Connected in person at the brewery",
+      _id: "v_visit_touch",
+      name: "Visit Venue",
+      touches: [{ type: "visit", date: "2026-05-09" }],
     }),
     "in-person",
   );
 
-  // General conversation
+  // 3. Venue with neither touch type but notes text containing "called" or "phone"
+  // (Hamlet Vineyards defect regression: legacy metadata or notes text must NOT select conversation opener)
   assertEquals(
     detectConversationContext({
-      _id: "v_gen",
-      name: "General Conversation Venue",
-      priorContactNotes: "Had an earlier conversation about fall music dates",
-    }),
-    "general",
-  );
-
-  // Phone number label only (not a conversation)
-  assertEquals(
-    detectConversationContext({
-      _id: "v_num",
-      name: "Number Venue",
-      notes: "Phone: (540) 555-1234. Nice outdoor patio.",
+      _id: "v_hamlet_vineyards",
+      name: "Hamlet Vineyards",
+      notes: "Date called: 2026-05-09. Spoke with manager on phone.",
+      contactNotes: "Called Dave to check fall availability",
+      bookingNotes: "Phone: (540) 555-1234",
+      priorContactNotes: "visited the venue last Saturday",
+      touches: [],
     }),
     null,
+  );
+
+  // Also null when touches is undefined or carries non-conversation touch types
+  assertEquals(
+    detectConversationContext({
+      _id: "v_hamlet_vineyards_no_touches",
+      name: "Hamlet Vineyards",
+      notes: "Date called: 2026-05-09",
+    }),
+    null,
+  );
+  assertEquals(
+    detectConversationContext({
+      _id: "v_email_only",
+      name: "Email Only Venue",
+      notes: "called last month",
+      touches: [{ type: "email", date: "2026-07-22" }],
+    }),
+    null,
+  );
+
+  // 4. Venue with both a call and a visit touch:
+  // Resolves deterministically by most recent touch date
+  assertEquals(
+    detectConversationContext({
+      _id: "v_both_visit_newer",
+      name: "Both Touches - Visit Newer",
+      touches: [
+        { type: "call", date: "2026-04-10" },
+        { type: "visit", date: "2026-06-01" },
+      ],
+    }),
+    "in-person",
+  );
+
+  assertEquals(
+    detectConversationContext({
+      _id: "v_both_call_newer",
+      name: "Both Touches - Call Newer",
+      touches: [
+        { type: "visit", date: "2026-04-10" },
+        { type: "call", date: "2026-06-01" },
+      ],
+    }),
+    "phone",
+  );
+
+  // When dates are tied or absent, deterministically picks the latest recorded touch in the array
+  assertEquals(
+    detectConversationContext({
+      _id: "v_both_same_date",
+      name: "Both Touches - Same Date",
+      touches: [
+        { type: "call", date: "2026-05-01" },
+        { type: "visit", date: "2026-05-01" },
+      ],
+    }),
+    "in-person",
+  );
+
+  assertEquals(
+    detectConversationContext({
+      _id: "v_both_no_date",
+      name: "Both Touches - No Date",
+      touches: [
+        { type: "visit" },
+        { type: "call" },
+      ],
+    }),
+    "phone",
   );
 });
 
@@ -275,7 +340,7 @@ Deno.test("renderPitch: generates dynamic warm returning phrasing and subject li
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
-Deno.test("renderPitch: generates tailored phone conversation intro when notes indicate spoken phone call", () => {
+Deno.test("renderPitch: generates tailored phone conversation intro when touches include call", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -294,6 +359,7 @@ Deno.test("renderPitch: generates tailored phone conversation intro when notes i
     email: "booking@samplepub.com",
     contactName: "Dave",
     contactNotes: "Spoke with manager on phone call last Tuesday about booking",
+    touches: [{ type: "call" }],
   };
 
   const pitch = renderPitch(venue, weekend);
@@ -307,7 +373,7 @@ Deno.test("renderPitch: generates tailored phone conversation intro when notes i
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
-Deno.test("renderPitch: generates tailored in-person conversation intro when notes indicate connecting in person", () => {
+Deno.test("renderPitch: generates tailored in-person conversation intro when touches include visit", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -326,6 +392,7 @@ Deno.test("renderPitch: generates tailored in-person conversation intro when not
     email: "booking@samplepub.com",
     contactName: "Sarah",
     bookingNotes: "Connected in person at the pub last weekend",
+    touches: [{ type: "visit" }],
   };
 
   const pitch = renderPitch(venue, weekend);
@@ -425,12 +492,32 @@ Deno.test("detectConversationContext: does not trigger in-person context for web
     null,
   );
 
-  // But legitimate in-person visits DO trigger
+  // Notes mentioning in-person visits without touches do NOT trigger in-person
+  assertEquals(
+    detectConversationContext({
+      _id: "v_inperson_notes_only",
+      name: "Real Visit Venue",
+      notes: "visited the venue last Saturday",
+    }),
+    null,
+  );
+
+  assertEquals(
+    detectConversationContext({
+      _id: "v_inperson_notes_them",
+      name: "Them Visit Venue",
+      notes: "visited them to introduce our duo",
+    }),
+    null,
+  );
+
+  // But structured visit touches DO trigger in-person
   assertEquals(
     detectConversationContext({
       _id: "v_inperson_real",
       name: "Real Visit Venue",
       notes: "visited the venue last Saturday",
+      touches: [{ type: "visit" }],
     }),
     "in-person",
   );
@@ -440,6 +527,7 @@ Deno.test("detectConversationContext: does not trigger in-person context for web
       _id: "v_inperson_them",
       name: "Them Visit Venue",
       notes: "visited them to introduce our duo",
+      touches: [{ type: "visit" }],
     }),
     "in-person",
   );
@@ -511,6 +599,7 @@ Deno.test("renderPitch: combines returning stage with conversation context in in
     email: "booking@rivertaphouse.com",
     contactName: "Sam",
     contactNotes: "Called manager on the phone to check on fall availability",
+    touches: [{ type: "call" }],
     reason: { lastGigDate: "2025-08-10" },
   };
   const phonePitch = renderPitch(phoneVenue, weekend);
@@ -531,6 +620,7 @@ Deno.test("renderPitch: combines returning stage with conversation context in in
     email: "booking@rivertaphouse.com",
     contactName: "Sam",
     bookingNotes: "Stopped by and met in person to discuss dates",
+    touches: [{ type: "visit" }],
     reason: { lastGigDate: "2025-08-10" },
   };
   const inPersonPitch = renderPitch(inPersonVenue, weekend);
@@ -541,24 +631,27 @@ Deno.test("renderPitch: combines returning stage with conversation context in in
   );
   assertEquals(validateVoiceRules(inPersonPitch.body).valid, true);
 
-  // General + returning
-  const genVenue: CandidateVenue = {
-    _id: "v_ret_gen",
+  // Notes without touches + returning -> gets default returning opener, notes text never selects an opener (D-68)
+  const notesVenue: CandidateVenue = {
+    _id: "v_ret_notes",
     name: "River Taphouse",
     city: "Salem",
     usState: "VA",
     email: "booking@rivertaphouse.com",
     contactName: "Sam",
-    notes: "Had an earlier conversation about fall dates",
+    notes: "Had an earlier conversation about fall dates, called on phone last week",
     reason: { lastGigDate: "2025-08-10" },
   };
-  const genPitch = renderPitch(genVenue, weekend);
-  assertEquals(genPitch.templateStage, "returning");
+  const notesPitch = renderPitch(notesVenue, weekend);
+  assertEquals(notesPitch.templateStage, "returning");
   assertStringIncludes(
-    genPitch.body,
-    "Following up on our earlier conversation — it's always great playing for you guys at River Taphouse, and we'd love to return on October 16–18, 2026.",
+    notesPitch.body,
+    "It's Josh from \"Josh and Maria\" — Maria and I really enjoyed our last show at River Taphouse, and we'd love to come back.",
   );
-  assertEquals(validateVoiceRules(genPitch.body).valid, true);
+  assertEquals(notesPitch.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(notesPitch.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(notesPitch.body.includes("Following up on connecting in person"), false);
+  assertEquals(validateVoiceRules(notesPitch.body).valid, true);
 });
 
 Deno.test("renderPitch: generates distinct type-appropriate returning phrasing for Originals and MidRangeCafeBar", () => {

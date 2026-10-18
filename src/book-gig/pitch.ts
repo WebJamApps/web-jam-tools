@@ -257,38 +257,62 @@ export function resolveIntroHtml(
 
 export type ConversationContext = "phone" | "in-person" | "general" | null;
 
-const IN_PERSON_CONVERSATION_RE =
-  /\b(in[- ]person|face[- ]to[- ]face|stopped by|visited (?:in person|the venue|them)|met in person|connecting in person)\b/i;
-const PHONE_CONVERSATION_RE = /\b(phone|call|called|telephoned)\b/i;
-const GENERAL_CONVERSATION_RE =
-  /\b(conversation|spoke|spoken|talked|chat|chatted|discussed|contacted|follow(?:ed)?[- ]?up)\b/i;
+function parseTouchTimestamp(date: unknown): number {
+  if (!date) return 0;
+  if (date instanceof Date) {
+    const t = date.getTime();
+    return Number.isNaN(t) ? 0 : t;
+  }
+  if (typeof date === "string" || typeof date === "number") {
+    const t = new Date(date).getTime();
+    return Number.isNaN(t) ? 0 : t;
+  }
+  return 0;
+}
 
 export function detectConversationContext(venue: CandidateVenue): ConversationContext {
-  const combinedNotes = [
-    venue.contactNotes,
-    venue.priorContactNotes,
-    venue.bookingNotes,
-    venue.notes,
-  ].filter(Boolean).join(" ");
-
-  if (!combinedNotes.trim()) return null;
-
-  // Clean out explicit phone number patterns like "Phone: 540-123-4567" so bare phone numbers don't trigger phone conversation
-  const cleanedNotes = combinedNotes
-    .replace(
-      /(?:cell|phone|tel)(?:\s*(?:#|number|no\.?))?\s*(?::\s*[\d\(\)\-\.\s]+|[\d\(\)\-\.]{7,})/gi,
-      " ",
-    )
-    .trim();
-
-  if (IN_PERSON_CONVERSATION_RE.test(cleanedNotes)) {
-    return "in-person";
+  if (!Array.isArray(venue.touches) || venue.touches.length === 0) {
+    return null;
   }
-  if (PHONE_CONVERSATION_RE.test(cleanedNotes)) {
+
+  const conversationTouches: Array<{
+    type: "call" | "visit";
+    timestamp: number;
+    index: number;
+  }> = [];
+
+  for (let i = 0; i < venue.touches.length; i++) {
+    const touch = venue.touches[i];
+    if (!touch || typeof touch.type !== "string") continue;
+    const normalizedType = touch.type.trim().toLowerCase();
+    if (normalizedType === "call" || normalizedType === "visit") {
+      conversationTouches.push({
+        type: normalizedType as "call" | "visit",
+        timestamp: parseTouchTimestamp(touch.date),
+        index: i,
+      });
+    }
+  }
+
+  if (conversationTouches.length === 0) {
+    return null;
+  }
+
+  // Deterministic ordering: most recent touch by date first.
+  // If dates are tied or absent, prefer the later touch in the array (most recently recorded).
+  conversationTouches.sort((a, b) => {
+    if (b.timestamp !== a.timestamp) {
+      return b.timestamp - a.timestamp;
+    }
+    return b.index - a.index;
+  });
+
+  const selected = conversationTouches[0];
+  if (selected.type === "call") {
     return "phone";
   }
-  if (GENERAL_CONVERSATION_RE.test(cleanedNotes)) {
-    return "general";
+  if (selected.type === "visit") {
+    return "in-person";
   }
 
   return null;
