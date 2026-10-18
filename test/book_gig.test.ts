@@ -3074,7 +3074,11 @@ Deno.test("renderPitch: injects prior contact context into custom body for retur
 
   assertStringIncludes(pitch.body, "Hi Matt,");
   assertEquals(pitch.body.includes("Hi Matt Kimble,"), false);
-  assertStringIncludes(pitch.body, "Following up on our earlier conversation");
+  assertStringIncludes(
+    pitch.body,
+    "You mentioned checking back around this time for open dates — we'd love to see if we can get on the calendar for January 15–17, 2027.",
+  );
+  assertEquals(pitch.body.includes("Following up on our earlier conversation"), false);
   assertStringIncludes(pitch.body, "January 15–17, 2027");
   assertEquals(pitch.body.includes("[Custom Body]"), false);
 

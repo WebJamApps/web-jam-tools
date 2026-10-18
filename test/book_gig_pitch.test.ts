@@ -5,6 +5,8 @@ import {
   detectConversationContext,
   formatNextGigDate,
   renderPitch,
+  renderPitchesFromBackend,
+  resolveConversationIntro,
   resolveIntroHtml,
   resolveVenueStage,
   synthesizeCustomBodyHook,
@@ -432,7 +434,7 @@ Deno.test("renderPitch: falls back to cold template when no notes or prior gigs 
   assertEquals(validateVoiceRules(pitch.body).valid, true);
 });
 
-Deno.test("synthesizeCustomBodyHook: avoids duplicate conversation follow-up sentence when conversation intro is active", () => {
+Deno.test("synthesizeCustomBodyHook: notes do not produce conversation reference with or without conversation intro (D-68, #995)", () => {
   const weekend: TargetWeekend = {
     start: "2026-10-16",
     end: "2026-10-18",
@@ -449,7 +451,7 @@ Deno.test("synthesizeCustomBodyHook: avoids duplicate conversation follow-up sen
     notes: "Spoke with owner: booked through summer, follow up in October",
   };
 
-  // With conversation intro active: avoids duplicate "Following up on our earlier conversation"
+  // With conversation intro active: mentions checking back, no conversation follow-up sentence
   const hookWithIntro = synthesizeCustomBodyHook(venue, weekend, { hasConversationIntro: true });
   assertStringIncludes(
     hookWithIntro,
@@ -457,11 +459,15 @@ Deno.test("synthesizeCustomBodyHook: avoids duplicate conversation follow-up sen
   );
   assertEquals(hookWithIntro.includes("Following up on our earlier conversation"), false);
 
-  // Without conversation intro active: retains full follow-up hook
+  // Without conversation intro active: still mentions checking back, and does NOT claim earlier conversation
   const hookWithoutIntro = synthesizeCustomBodyHook(venue, weekend, {
     hasConversationIntro: false,
   });
-  assertStringIncludes(hookWithoutIntro, "Following up on our earlier conversation");
+  assertStringIncludes(
+    hookWithoutIntro,
+    "You mentioned checking back around this time for open dates",
+  );
+  assertEquals(hookWithoutIntro.includes("Following up on our earlier conversation"), false);
 });
 
 Deno.test("detectConversationContext: does not trigger in-person context for website or social media visits", () => {
@@ -830,4 +836,240 @@ Deno.test("resolveIntroHtml: upcoming gets the same conversation intros as cold,
       assertEquals(upcoming === resolveIntroHtml(UPCOMING_TEMPLATE, "returning", ctx), false);
     }
   }
+});
+
+Deno.test("renderPitch: notes mentioning spoke with, contacted, or 2027 do not produce conversation reference without structured touches", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  // 1. Spoke with manager in notes, but empty touches[] -> no conversation reference
+  const spokeVenue: CandidateVenue = {
+    _id: "v_spoke_notes",
+    name: "Spoke Venue",
+    email: "booking@spokevenue.com",
+    contactName: "Dave",
+    notes: "Spoke with manager about live music dates",
+    touches: [],
+  };
+  const spokePitch = renderPitch(spokeVenue, weekend);
+  assertEquals(spokePitch.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(spokePitch.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(spokePitch.body.includes("Following up on connecting in person"), false);
+  assertEquals(validateVoiceRules(spokePitch.body).valid, true);
+
+  // 2. Follow up / 2027 in notes, empty touches[] -> mentions checking back, but NO conversation reference
+  const followUpVenue: CandidateVenue = {
+    _id: "v_followup_notes",
+    name: "Followup Venue",
+    email: "booking@followup.com",
+    contactName: "Sarah",
+    notes: "Follow up in 2027; booked through end of year",
+    touches: [],
+  };
+  const followUpPitch = renderPitch(followUpVenue, weekend);
+  assertStringIncludes(
+    followUpPitch.body,
+    "You mentioned checking back around this time for open dates — we'd love to see if we can get on the calendar for October 16–18, 2026.",
+  );
+  assertEquals(followUpPitch.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(followUpPitch.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(followUpPitch.body.includes("Following up on connecting in person"), false);
+  assertEquals(validateVoiceRules(followUpPitch.body).valid, true);
+
+  // 3. Exact Hamlet Vineyards regression: legacy "Date called:" note and email exchange, empty touches[]
+  const hamletVenue: CandidateVenue = {
+    _id: "v_hamlet_regression",
+    name: "Hamlet Vineyards",
+    email: "va@hamletvineyards.com",
+    contactName: "Liza Crowder",
+    notes:
+      "Type of gig: Vineyard\nComments: Sent pitch email regarding Sunday afternoons 2026-05-09\nStatus (sheet): [S]\nDate called: 2026-05-09\nNotes: Sent pitch email regarding Sunday afternoons to va@hamletvineyards.com on 2026-05-09.\n\n[2026-07-22] Liza Crowder: 2026 music calendar is fully booked. Reconnect for 2027 season.",
+    touches: [],
+  };
+  const hamletPitch = renderPitch(hamletVenue, weekend);
+  assertEquals(hamletPitch.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(hamletPitch.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(hamletPitch.body.includes("Following up on connecting in person"), false);
+  assertEquals(validateVoiceRules(hamletPitch.body).valid, true);
+});
+
+Deno.test("renderPitchesFromBackend: forwards touch-based conversation opener as customIntro to canonical preview renderer", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const capturedRequests: Array<{ url: string; query: Record<string, string> }> = [];
+
+  const mockFetch: typeof fetch = (input) => {
+    const urlStr = typeof input === "string" ? input : (input as Request).url;
+    const urlObj = new URL(urlStr);
+    const query: Record<string, string> = {};
+    for (const [k, v] of urlObj.searchParams.entries()) {
+      query[k] = v;
+    }
+    capturedRequests.push({ url: urlStr, query });
+
+    const venueIds = (query.venueIds || "").split(",").filter(Boolean);
+    const results = venueIds.map((id) => {
+      let bodyHtml = "<p>Hi there,</p><p>Acoustic Duo</p>";
+      if (query.customIntro) {
+        bodyHtml = query.customIntro.split(/\n{2,}/).map((p) => `<p>${p}</p>`).join("\n");
+      }
+      return {
+        venueId: id,
+        venueName: `Venue ${id}`,
+        subject:
+          `Performance Inquiry: Josh and Maria — Acoustic Duo for October 2026 — Venue ${id}`,
+        body: bodyHtml,
+      };
+    });
+
+    return Promise.resolve(
+      new Response(JSON.stringify(results), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  const callVenue: CandidateVenue = {
+    _id: "venue-call",
+    name: "Call Brewery",
+    email: "booking@callbrewery.com",
+    contactName: "Dave",
+    touches: [{ type: "call" }],
+  };
+
+  const visitVenue: CandidateVenue = {
+    _id: "venue-visit",
+    name: "Visit Tavern",
+    email: "booking@visittavern.com",
+    contactName: "Sarah",
+    touches: [{ type: "visit" }],
+  };
+
+  const noTouchVenue1: CandidateVenue = {
+    _id: "venue-notouch-1",
+    name: "Quiet Pub",
+    email: "booking@quietpub.com",
+    notes: "Date called: 2026-05-09. Spoke with manager on phone.",
+    touches: [],
+  };
+
+  const noTouchVenue2: CandidateVenue = {
+    _id: "venue-notouch-2",
+    name: "Still Pub",
+    email: "booking@stillpub.com",
+    touches: [],
+  };
+
+  const pitches = await renderPitchesFromBackend(
+    [callVenue, visitVenue, noTouchVenue1, noTouchVenue2],
+    weekend,
+    {},
+    mockFetch,
+  );
+
+  assertEquals(pitches.length, 4);
+
+  // 1. Call venue gets its own preview request with the phone opener forwarded as customIntro
+  const callReq = capturedRequests.find((r) => r.query.venueIds === "venue-call");
+  assertEquals(Boolean(callReq), true);
+  assertEquals(callReq!.query.customIntro?.includes("Hi Dave,"), true);
+  assertEquals(
+    callReq!.query.customIntro?.includes("Following up on our recent phone conversation"),
+    true,
+  );
+  assertEquals(
+    callReq!.query.customIntro?.includes("acoustic set at Call Brewery"),
+    true,
+  );
+
+  // 2. Visit venue gets its own preview request with the in-person opener forwarded as customIntro
+  const visitReq = capturedRequests.find((r) => r.query.venueIds === "venue-visit");
+  assertEquals(Boolean(visitReq), true);
+  assertEquals(visitReq!.query.customIntro?.includes("Hi Sarah,"), true);
+  assertEquals(
+    visitReq!.query.customIntro?.includes("Following up on connecting in person"),
+    true,
+  );
+  assertEquals(
+    visitReq!.query.customIntro?.includes("acoustic set at Visit Tavern"),
+    true,
+  );
+
+  // 3. No-touch venues are batched together with no customIntro forwarded
+  const noTouchReq = capturedRequests.find((r) =>
+    r.query.venueIds?.includes("venue-notouch-1") && r.query.venueIds?.includes("venue-notouch-2")
+  );
+  assertEquals(Boolean(noTouchReq), true);
+  assertEquals(noTouchReq!.query.customIntro, undefined);
+
+  // 4. Rendered pitch email objects preserve the phone/visit opener in body
+  const callPitch = pitches.find((p) => p.venueId === "venue-call");
+  assertStringIncludes(callPitch!.body, "Following up on our recent phone conversation");
+
+  const visitPitch = pitches.find((p) => p.venueId === "venue-visit");
+  assertStringIncludes(visitPitch!.body, "Following up on connecting in person");
+
+  const noTouchPitch = pitches.find((p) => p.venueId === "venue-notouch-1");
+  assertEquals(noTouchPitch!.body.includes("Following up on our recent phone conversation"), false);
+  assertEquals(noTouchPitch!.body.includes("Following up on connecting in person"), false);
+  assertEquals(noTouchPitch!.body.includes("Following up on our earlier conversation"), false);
+});
+
+Deno.test("resolveConversationIntro: returns plain-text intro for call and visit, and undefined when no context", () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const callVenue: CandidateVenue = {
+    _id: "v_call_direct",
+    name: "Call Brewery",
+    contactName: "Dave",
+    touches: [{ type: "call" }],
+  };
+  const callIntro = resolveConversationIntro(callVenue, weekend);
+  assertEquals(
+    callIntro,
+    "Hi Dave,\n\nFollowing up on our recent phone conversation — wanted to check if October 16–18, 2026 might work for an acoustic set at Call Brewery.",
+  );
+
+  const visitVenue: CandidateVenue = {
+    _id: "v_visit_direct",
+    name: "Visit Tavern",
+    contactName: "Sarah",
+    touches: [{ type: "visit" }],
+  };
+  const visitIntro = resolveConversationIntro(visitVenue, weekend);
+  assertEquals(
+    visitIntro,
+    "Hi Sarah,\n\nFollowing up on connecting in person — wanted to check if October 16–18, 2026 might work for an acoustic set at Visit Tavern.",
+  );
+
+  const noTouchVenue: CandidateVenue = {
+    _id: "v_none_direct",
+    name: "Plain Pub",
+    touches: [],
+  };
+  assertEquals(resolveConversationIntro(noTouchVenue, weekend), undefined);
 });
