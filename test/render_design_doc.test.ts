@@ -6,7 +6,7 @@
 // 3. Section navigation collapse and restore controls (AC5)
 // 4. Revision table retained without a version/date subtitle
 
-import { assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
   computeTablePagination,
@@ -478,6 +478,28 @@ Deno.test("Table pagination: page navigation uses the tested pagination state", 
     "status.textContent = state.statusText;",
   );
   assertStringIncludes(html, "Rows per page: ");
+});
+
+Deno.test("Table pagination: embedded calculator runs independently and matches exported state", () => {
+  const html = renderDesignDoc(makeRowsTable(38));
+  const embedded = html.match(/var computePagination = ([\s\S]*?);\s*var tables =/);
+  assert(embedded, "Generated HTML must include the pagination calculator");
+
+  // Function creates a fresh scope without access to this module's imports or helpers.
+  const computeEmbedded = new Function(
+    `return (${embedded[1]});`,
+  )() as typeof computeTablePagination;
+  const cases: Parameters<typeof computeTablePagination>[] = [
+    [38, 99, "20"],
+    [38, 1, "all"],
+    [38, 2, 10],
+    [38, 0, "30"],
+    [38, 1, "invalid"],
+    [0, 1, 10],
+  ];
+  for (const args of cases) {
+    assertEquals(computeEmbedded(...args), computeTablePagination(...args));
+  }
 });
 
 Deno.test("computeTablePagination: calculates correct ranges and boundary states for 40 rows with pageSize 5", () => {
