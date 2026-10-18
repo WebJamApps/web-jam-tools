@@ -1,0 +1,13 @@
+{
+  "DefaultNotificationsSetting": 2,
+  "NotificationsAllowedForUrls": [
+    "https://meet.google.com",
+    "https://calendar.google.com",
+    "https://app.zoom.us",
+    "https://www.youtube.com",
+    "https://www.bandlab.com"
+  ],
+  "ExtensionInstallBlocklist": [
+    "nenlahapcbofgnanklpelkaejcehkggg"
+  ]
+}
