@@ -224,7 +224,7 @@ Deno.test("publishAndOpenReport: never posts over the stored report when reading
       };
 
       const { result, htmlPath } = await publishAndOpenReport(
-        sampleResult,
+        { ...sampleResult, mode: "send" },
         { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
         mockFetch,
       );

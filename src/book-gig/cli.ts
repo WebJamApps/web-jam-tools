@@ -391,7 +391,6 @@ export async function runBookGigCli(
     const candidates = filterAndRankCandidates(rawCandidates, location, {
       targetWeekend: weekend,
     });
-    const density = assessDensity(candidates, location);
 
     // 2. Resolve approved venue IDs
     let eligibleVenues = candidates.filter(isPitchableCandidate);
@@ -416,6 +415,7 @@ export async function runBookGigCli(
     }
 
     const venueIds = eligibleVenues.map((c) => c._id);
+    const density = assessDensity(eligibleVenues, location);
 
     if (venueIds.length === 0) {
       console.error(`\n⚠️  No eligible candidate venues found to approve for ${weekend.label}.`);
@@ -480,7 +480,7 @@ export async function runBookGigCli(
       location,
       includeVenues: parsed.includeVenues,
       excludeVenues: parsed.excludeVenues,
-      candidates,
+      candidates: eligibleVenues,
       density,
       pitches: [],
       gate1Record,
@@ -517,7 +517,6 @@ export async function runBookGigCli(
     const candidates = filterAndRankCandidates(rawCandidates, location, {
       targetWeekend: weekend,
     });
-    const density = assessDensity(candidates, location);
 
     // 2. Resolve eligible venues
     let eligibleVenues = candidates.filter(isPitchableCandidate);
@@ -545,6 +544,8 @@ export async function runBookGigCli(
       console.error(`\n⚠️  No eligible candidate venues found to review for ${weekend.label}.`);
       throw new Error("No eligible candidate venues found for Gate 2 review");
     }
+
+    const density = assessDensity(eligibleVenues, location);
 
     // 3. Render pitches via backend with any tweaks
     const pitches = await renderPitchesFromBackend(
@@ -606,7 +607,7 @@ export async function runBookGigCli(
         location,
         includeVenues: parsed.includeVenues,
         excludeVenues: parsed.excludeVenues,
-        candidates,
+        candidates: eligibleVenues,
         density,
         pitches,
         tweaksApplied: parsed.tweaks,
@@ -672,7 +673,7 @@ export async function runBookGigCli(
         location,
         includeVenues: parsed.includeVenues,
         excludeVenues: parsed.excludeVenues,
-        candidates,
+        candidates: eligibleVenues,
         density,
         pitches,
         gate2Status: "holding",
@@ -741,7 +742,7 @@ export async function runBookGigCli(
       location,
       includeVenues: parsed.includeVenues,
       excludeVenues: parsed.excludeVenues,
-      candidates,
+      candidates: eligibleVenues,
       density,
       pitches,
       gate2Record,

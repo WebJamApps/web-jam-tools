@@ -59,6 +59,7 @@ import {
   SORTING_SCRIPT,
 } from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
+import { publishAndOpenReport } from "../src/book-gig/publish.ts";
 import {
   deduplicateCampaignsByVenue,
   formatLocationDisplay,
@@ -5809,4 +5810,263 @@ Deno.test("fetchCandidates: enriches candidate pool with bookingStatus and nextG
   assertEquals(enriched?.bookingStatus, "booked");
   assertEquals(enriched?.nextGig?._id, "gig-1");
   assertEquals(enriched?.distanceKm, 92.5);
+});
+
+Deno.test("publishAndOpenReport: Gate 1 and Gate 2 reports render strictly the curated set without resurrecting excluded venues (#994)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2027-01-08",
+    end: "2027-01-10",
+    rawText: "Jan 8-10 2027",
+    label: "January 8–10, 2027",
+    year: 2027,
+    month: 1,
+    days: [8, 9, 10],
+  };
+
+  // Simulating an initial 100-venue discovery sweep: 75 eligible venues and 25 excluded venues
+  const eligibleVenues: CandidateVenue[] = Array.from({ length: 75 }, (_, i) => ({
+    _id: `v-elig-${i + 1}`,
+    name: `Eligible Venue ${i + 1}`,
+    city: "Salem",
+    usState: "VA",
+    email: `booking${i + 1}@eligible.com`,
+    isExcluded: false,
+  }));
+
+  const excludedVenues: CandidateVenue[] = Array.from({ length: 25 }, (_, i) => ({
+    _id: `v-excl-${i + 1}`,
+    name: `Excluded Venue ${i + 1}`,
+    city: "Roanoke",
+    usState: "VA",
+    email: `booking${i + 1}@excluded.com`,
+    isExcluded: true,
+    exclusionReason: "seasonal-hold",
+    statusBadge: "Seasonal Hold: Mar 2027",
+  }));
+
+  const discoveryReportHtml = renderDarkHtml({
+    mode: "preview",
+    weekend,
+    location: { raw: "Salem, VA" },
+    candidates: [...eligibleVenues, ...excludedVenues],
+    density: { count: 75, isSparse: false },
+    pitches: [],
+  });
+
+  const scratchDir = await Deno.makeTempDir({ prefix: "book_gig_curated_report_" });
+  try {
+    let storedReportHtml = discoveryReportHtml;
+    let publishedHtml: string | null = null;
+
+    const mockFetch: typeof fetch = (input, init) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/outreach/report/") && (!init || init.method === "GET")) {
+        return Promise.resolve(new Response(storedReportHtml, { status: 200 }));
+      }
+      if (url.endsWith("/outreach/report") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string);
+        publishedHtml = body.htmlContent;
+        storedReportHtml = body.htmlContent;
+        return Promise.resolve(
+          new Response(JSON.stringify({ message: "Report saved successfully" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    };
+
+    // 1. Gate 1 review: operator approves strictly the 75 eligible venues
+    const gate1Result: BookGigResult = {
+      mode: "gate1",
+      weekend,
+      location: { raw: "Salem, VA" },
+      candidates: eligibleVenues,
+      density: { count: 75, isSparse: false },
+      pitches: [],
+      gate1Record: {
+        batchId: "2027-01-08-to-2027-01-10",
+        weekend: "2027-01-08-to-2027-01-10",
+        venueIds: eligibleVenues.map((v) => v._id),
+        approver: "Josh Sherman",
+      },
+    };
+
+    const gate1Published = await publishAndOpenReport(
+      gate1Result,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    assertEquals(gate1Published.result.candidates.length, 75);
+    assert(publishedHtml !== null);
+    const g1Html = publishedHtml as string;
+    // Verify none of the 25 excluded venues were resurrected into the Gate 1 review HTML
+    for (const excl of excludedVenues) {
+      assert(
+        !g1Html.includes(`data-venue-id="${excl._id}"`),
+        `Gate 1 report must not contain excluded venue ${excl._id}`,
+      );
+    }
+    const gate1Matches = (g1Html.match(/<tr data-venue-id="v-elig-/g) || []).length;
+    assertEquals(gate1Matches, 75);
+
+    // 2. Gate 2 review: operator reviews 75 pitch drafts for the 75 approved candidates
+    const gate2Pitches = eligibleVenues.map((v) => renderPitch(v, weekend));
+    const gate2Result: BookGigResult = {
+      mode: "gate2",
+      weekend,
+      location: { raw: "Salem, VA" },
+      candidates: eligibleVenues,
+      density: { count: 75, isSparse: false },
+      pitches: gate2Pitches,
+      gate2Status: "holding",
+    };
+
+    publishedHtml = null;
+    const gate2Published = await publishAndOpenReport(
+      gate2Result,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    assertEquals(gate2Published.result.candidates.length, 75);
+    assertEquals(gate2Published.result.pitches.length, 75);
+    assert(publishedHtml !== null);
+    const g2Html = publishedHtml as string;
+
+    // Check table rows in Gate 2 HTML artifact match exact approved count
+    const gate2Matches = (g2Html.match(/<tr data-venue-id="v-elig-/g) || []).length;
+    assertEquals(gate2Matches, 75);
+    for (const excl of excludedVenues) {
+      assert(
+        !g2Html.includes(`data-venue-id="${excl._id}"`),
+        `Gate 2 report must not contain excluded venue ${excl._id}`,
+      );
+    }
+  } finally {
+    await Deno.remove(scratchDir, { recursive: true });
+  }
+});
+
+Deno.test("mergeWeekendRuns: preserves explicit exclusions and holds when merging candidate entries (#994)", () => {
+  const weekend: TargetWeekend = {
+    start: "2027-01-08",
+    end: "2027-01-10",
+    rawText: "Jan 8-10 2027",
+    label: "January 8–10, 2027",
+    year: 2027,
+    month: 1,
+    days: [8, 9, 10],
+  };
+
+  // Case A: Existing candidate has explicit seasonal hold, new batch entry is unexcluded
+  const existingHoldCandidate: CandidateVenue = {
+    _id: "venue-hold-1",
+    name: "Winter Taproom",
+    email: "winter@taproom.com",
+    isExcluded: true,
+    exclusionReason: "seasonal-hold",
+    statusBadge: "Don't contact until 1 May 2027",
+    resumeBooking: "2027-05-01",
+    bookedThrough: "2026-12-31",
+    outreachEligible: false,
+  };
+
+  const incomingUnexcludedCandidate: CandidateVenue = {
+    _id: "venue-hold-1",
+    name: "Winter Taproom Updated",
+    email: "winter@taproom.com",
+    isExcluded: false,
+    outreachEligible: true,
+  };
+
+  const mergedA = mergeWeekendRuns(
+    { candidates: [existingHoldCandidate], pitches: [] },
+    {
+      mode: "send",
+      weekend,
+      candidates: [incomingUnexcludedCandidate],
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    },
+  );
+
+  assertEquals(mergedA.candidates.length, 1);
+  const candA = mergedA.candidates[0];
+  assertEquals(candA.isExcluded, true);
+  assertEquals(candA.exclusionReason, "seasonal-hold");
+  assertEquals(candA.statusBadge, "Don't contact until 1 May 2027");
+  assertEquals(candA.resumeBooking, "2027-05-01");
+  assertEquals(candA.bookedThrough, "2026-12-31");
+  assertEquals(candA.outreachEligible, false);
+
+  // Case B: Existing candidate was unexcluded, new batch candidate has explicit exclusion
+  const existingUnexcludedCandidate: CandidateVenue = {
+    _id: "venue-spacing-2",
+    name: "Downtown Bistro",
+    email: "music@downtownbistro.com",
+    isExcluded: false,
+  };
+
+  const incomingExcludedCandidate: CandidateVenue = {
+    _id: "venue-spacing-2",
+    name: "Downtown Bistro",
+    email: "music@downtownbistro.com",
+    isExcluded: true,
+    exclusionReason: "gig-spacing",
+    statusBadge: "[Gig Spacing: Nov 20 Show]",
+    bookedThrough: "2027-02-01",
+  };
+
+  const mergedB = mergeWeekendRuns(
+    { candidates: [existingUnexcludedCandidate], pitches: [] },
+    {
+      mode: "send",
+      weekend,
+      candidates: [incomingExcludedCandidate],
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    },
+  );
+
+  assertEquals(mergedB.candidates.length, 1);
+  const candB = mergedB.candidates[0];
+  assertEquals(candB.isExcluded, true);
+  assertEquals(candB.exclusionReason, "gig-spacing");
+  assertEquals(candB.statusBadge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(candB.bookedThrough, "2027-02-01");
+
+  // Case C: Gate 1 and Gate 2 modes strictly ignore existing discovery candidates and pitches
+  const discoveryCandidates: CandidateVenue[] = [
+    { _id: "disc-1", name: "D1", email: "d1@a.com" },
+    { _id: "disc-2", name: "D2", email: "d2@a.com", isExcluded: true },
+  ];
+  const gateCuratedCandidates: CandidateVenue[] = [
+    { _id: "gate-1", name: "G1", email: "g1@a.com", isExcluded: false },
+  ];
+
+  const mergedGate1 = mergeWeekendRuns(
+    { candidates: discoveryCandidates, pitches: [] },
+    {
+      mode: "gate1",
+      weekend,
+      candidates: gateCuratedCandidates,
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    },
+  );
+  assertEquals(mergedGate1.candidates.length, 1);
+  assertEquals(mergedGate1.candidates[0]._id, "gate-1");
+
+  const mergedGate2 = mergeWeekendRuns(
+    { candidates: discoveryCandidates, pitches: [] },
+    {
+      mode: "gate2",
+      weekend,
+      candidates: gateCuratedCandidates,
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    },
+  );
+  assertEquals(mergedGate2.candidates.length, 1);
+  assertEquals(mergedGate2.candidates[0]._id, "gate-1");
 });

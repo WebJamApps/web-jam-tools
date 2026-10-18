@@ -42,9 +42,12 @@ export function mergeWeekendRuns(
   existing: WeekendRunData,
   current: BookGigResult,
 ): BookGigResult {
+  // Gate 1 and Gate 2 review runs render strictly the curated set under review (web-jam-tools#994).
+  const isGateReview = current.mode === "gate1" || current.mode === "gate2";
+
   // 1. Candidate Venues: deduplicate by venueId / _id
   const candidateMap = new Map<string, CandidateVenue>();
-  if (!current.location?.allLocations) {
+  if (!current.location?.allLocations && !isGateReview) {
     for (const c of existing.candidates || []) {
       const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
       if (id) {
@@ -56,7 +59,32 @@ export function mergeWeekendRuns(
     const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
     if (id) {
       if (candidateMap.has(id)) {
-        candidateMap.set(id, { ...candidateMap.get(id)!, ...c, _id: id });
+        const prev = candidateMap.get(id)!;
+        const isExcluded = Boolean(prev.isExcluded || c.isExcluded);
+        const exclusionReason = c.isExcluded
+          ? (c.exclusionReason ?? prev.exclusionReason)
+          : (prev.isExcluded ? prev.exclusionReason : (c.exclusionReason ?? prev.exclusionReason));
+        const statusBadge = c.isExcluded
+          ? (c.statusBadge ?? prev.statusBadge)
+          : (prev.isExcluded ? prev.statusBadge : (c.statusBadge ?? prev.statusBadge));
+        const reason = c.isExcluded
+          ? (c.reason ?? prev.reason)
+          : (prev.isExcluded ? prev.reason : (c.reason ?? prev.reason));
+        const resumeBooking = c.resumeBooking ?? prev.resumeBooking;
+        const bookedThrough = c.bookedThrough ?? prev.bookedThrough;
+        const outreachEligible = (prev.outreachEligible === false || c.outreachEligible === false)
+          ? false
+          : (c.outreachEligible ?? prev.outreachEligible);
+
+        candidateMap.set(id, {
+          ...prev,
+          ...c,
+          _id: id,
+          ...(resumeBooking ? { resumeBooking } : {}),
+          ...(bookedThrough ? { bookedThrough } : {}),
+          ...(outreachEligible !== undefined ? { outreachEligible } : {}),
+          ...(isExcluded ? { isExcluded: true, exclusionReason, statusBadge, reason } : {}),
+        });
       } else {
         candidateMap.set(id, { ...c, _id: id });
       }
@@ -67,7 +95,7 @@ export function mergeWeekendRuns(
   // 2. Pitch Cards: deduplicate by venueId
   // Excluded or on-hold venues must NEVER have pitch cards (decision D-44 / D-50 / D-54).
   const pitchMap = new Map<string, PitchEmail>();
-  if (!current.location?.allLocations) {
+  if (!current.location?.allLocations && !isGateReview) {
     for (const p of existing.pitches || []) {
       const id = p.venueId || p.venueName;
       if (id) {
@@ -111,8 +139,8 @@ export function mergeWeekendRuns(
     s.venueId || s.venueName
   );
 
-  const mergedBatches = existing.batches ? [...existing.batches] : [];
-  if (mergedBatches.length === 0 && existing.batchDispatch) {
+  const mergedBatches = !isGateReview && existing.batches ? [...existing.batches] : [];
+  if (!isGateReview && mergedBatches.length === 0 && existing.batchDispatch) {
     // Synthesize the previous batch from existing state
     mergedBatches.push({
       candidateIds: (existing.candidates || []).map((c) =>
@@ -149,7 +177,7 @@ export function mergeWeekendRuns(
       skippedVenueIds: currentSkippedVenueIds,
     });
   } else if (existing.batchDispatch && !current.batchDispatch) {
-    mergedBatchDispatch = { ...existing.batchDispatch };
+    mergedBatchDispatch = isGateReview ? undefined : { ...existing.batchDispatch };
   } else if (existing.batchDispatch && current.batchDispatch) {
     if (isDuplicateBatch) {
       mergedBatchDispatch = { ...existing.batchDispatch };

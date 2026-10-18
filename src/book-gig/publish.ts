@@ -194,10 +194,12 @@ export interface PublishAndOpenReportResult {
 }
 
 /**
- * The single entry point a /book-gig run calls to report its result: reads any previously
- * stored report for this weekend from the database, merges the current run's candidates/pitches/
- * batch tallies into it, posts the merged HTML back to POST /outreach/report as the one durable
- * copy, and writes that same HTML to a disposable scratch file purely so it can open in Chrome.
+ * The single entry point a /book-gig run calls to report its result: for multi-batch dispatches
+ * (mode === "send"), reads any previously stored report for this weekend from the database and
+ * merges candidates/pitches/batch tallies into it; for discovery sweeps, Gate 1, and Gate 2
+ * reviews, renders strictly the curated set under review without resurrecting excluded venues
+ * (web-jam-tools#994). Posts the HTML back to POST /outreach/report as the one durable copy,
+ * and writes that same HTML to a disposable scratch file purely so it can open in Chrome.
  * No file is ever written under ~/Dropbox/ (web-jam-tools#955, decision D-51).
  */
 export async function publishAndOpenReport(
@@ -211,7 +213,7 @@ export async function publishAndOpenReport(
   let priorReportReadError: string | null = null;
   const alreadyConsolidated = (result as unknown as { _alreadyConsolidated?: boolean })
     ._alreadyConsolidated;
-  if (result.weekend && !alreadyConsolidated) {
+  if (result.weekend && !alreadyConsolidated && result.mode === "send") {
     const prior = await fetchOutreachReport(weekendSlug, options, fetchFn);
     if (prior.status === "failed") {
       priorReportReadError = prior.error;
