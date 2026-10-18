@@ -203,12 +203,23 @@ Deno.test("running-model rejects unsafe Claude session identifiers", () =>
   }));
 
 for (
-  const modelName of ["gemini-3.8-flash-high", "gemini-3.8-flash-tiered", "Gemini 3.8 Flash (High)"]
+  const [modelName, expected] of [
+    ["gemini-3.8-flash-high", "Gemini Flash"],
+    ["gemini-3.8-flash-tiered", "Gemini Flash"],
+    ["Gemini 3.8 Flash (High)", "Gemini Flash"],
+    ["Gemini Flash", "Gemini Flash"],
+    ["gemini-4-argon-high", "Gemini Argon"],
+    ["Gemini 4 Argon (High)", "Gemini Argon"],
+    ["Gemini Argon", "Gemini Argon"],
+    ["claude-sonnet-5-5-high", "Claude Sonnet 5.5"],
+    ["Claude Sonnet 5.5 (High)", "Claude Sonnet 5.5"],
+    ["Claude Sonnet 5.5", "Claude Sonnet 5.5"],
+  ] as const
 ) {
   Deno.test(`running-model reads agy's ${modelName} hook record with neither id set`, () =>
     withFixture(async (fixture) => {
       await fixture.agy({ ...FLASH_RECORD, modelName });
-      await succeeds(fixture, "Gemini Flash");
+      await succeeds(fixture, expected);
     }));
 }
 
@@ -222,6 +233,15 @@ for (
     [{ modelName: "Gemini Flash" }, "no running conversation"],
     [{ conversationId: "agy-conversation" }, "no recorded model"],
     [{ ...FLASH_RECORD, modelName: "gemini-9-pro" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "gemini-4-argon-low" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "gemini-4-argon-medium" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "Gemini 4 Argon (Low)" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "Gemini 4 Argon (Medium)" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "claude-sonnet-5-5-low" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "claude-sonnet-5-5-medium" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "Claude Sonnet 5.5 (Low)" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "Claude Sonnet 5.5 (Medium)" }, "no author roster entry"],
+    [{ ...FLASH_RECORD, modelName: "Totally Fake Model" }, "no author roster entry"],
   ] as const
 ) {
   Deno.test(`running-model refuses an agy record: ${reason} ${JSON.stringify(record)}`, () =>

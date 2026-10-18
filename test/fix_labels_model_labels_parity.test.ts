@@ -38,3 +38,19 @@ Deno.test("model-labels.json is sorted and has no duplicates", async () => {
   assertEquals(parsed.modelLabels, sorted);
   assertEquals(new Set(parsed.modelLabels).size, parsed.modelLabels.length);
 });
+
+Deno.test("labels.yaml and model-labels.json include Argon as a canonical model-tier label across all repos", async () => {
+  const schema = await loadSchema(DEFAULT_SCHEMA_PATH);
+  const argon = schema.labels.find((label) => label.name === "Argon");
+  assertEquals(argon?.modelTier, true);
+  assertEquals(argon?.repos, "all");
+  assertEquals(argon?.hex, "2B0607");
+  assertEquals(
+    argon?.description,
+    "Logic- and safety-heavy coding via agy: Gemini 4 Argon (gemini-4-argon-high), high effort",
+  );
+
+  const raw = await Deno.readTextFile(MODEL_LABELS_JSON_PATH);
+  const parsed = JSON.parse(raw);
+  assertEquals(parsed.modelLabels.includes("Argon"), true);
+});

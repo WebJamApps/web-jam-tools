@@ -26,7 +26,7 @@
 // comment says. It is also not where the defect lived.
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { DEFAULT_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
+import { ALLOWED_AGY_MODELS, DEFAULT_AGY_MODELS } from "../hooks/lib/check_agy_model.ts";
 
 const SCRIPT_PATH = new URL("../scripts/handle-agy-tasks.sh", import.meta.url).pathname;
 const CREATE_PR_PATH = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
@@ -188,6 +188,34 @@ Deno.test("every model in the default chain yields an author the roster accepts"
       `create-draft-pr.sh's roster refuses '${author}', derived from '${spec.displayName}' — ` +
         "a dispatch on this model could not open a PR through that script at all",
     );
+  }
+});
+
+Deno.test("every allowed agy model (displayName and slug) yields a roster-accepted author, and low/medium names are refused", async () => {
+  for (const spec of ALLOWED_AGY_MODELS) {
+    for (const input of [spec.displayName, spec.slug]) {
+      const author = await derivedAuthor(input);
+      assertEquals(
+        await rosterAccepts(author),
+        true,
+        `create-draft-pr.sh's roster refuses '${author}', derived from '${input}'`,
+      );
+    }
+  }
+  assertEquals(await derivedAuthor("Gemini 4 Argon (High)"), "agy — Gemini Argon");
+  assertEquals(await derivedAuthor("gemini-4-argon-high"), "agy — Gemini Argon");
+  assertEquals(await derivedAuthor("Claude Sonnet 5.5 (High)"), "agy — Claude Sonnet 5.5");
+  assertEquals(await derivedAuthor("claude-sonnet-5-5-high"), "agy — Claude Sonnet 5.5");
+
+  for (
+    const rejected of [
+      "Gemini 4 Argon (Low)",
+      "Gemini 4 Argon (Medium)",
+      "Claude Sonnet 5.5 (Low)",
+      "Claude Sonnet 5.5 (Medium)",
+    ]
+  ) {
+    assertEquals(await rosterAccepts(await derivedAuthor(rejected)), false, rejected);
   }
 });
 

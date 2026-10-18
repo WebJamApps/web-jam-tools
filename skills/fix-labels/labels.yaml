@@ -51,13 +51,13 @@ labels:
   # --- Model-tier — all 8 repos ---
   # `modelTier: true` is the machine-readable marker for "this is a model
   # label" (web-jam-tools#265). src/fix-labels/generate-model-labels.ts
-  # selects these nine entries into the committed sidecar
+  # selects these entries into the committed sidecar
   # skills/fix-labels/model-labels.json (`deno task
   # fix-labels:generate-model-labels`, kept honest by
   # test/fix_labels_model_labels_parity.test.ts), which
   # hooks/require-model-label-on-issue-create.sh reads at runtime — that hook
   # is bash/python and the CircleCI image has no PyYAML, so it can't parse
-  # this file directly. No second hardcoded copy of the nine names exists
+  # this file directly. No second hardcoded copy of the model names exists
   # anywhere; regenerate the sidecar after editing modelTier entries here.
   - name: Haiku
     hex: "0E8A16"
@@ -72,6 +72,11 @@ labels:
   - name: Sonnet
     hex: "1D76DB"
     description: "Coding that needs a Claude-side capability Flash lacks; ranks above Flash but is not the default coder tier (a cost decision)"
+    repos: all
+    modelTier: true
+  - name: Argon
+    hex: "2B0607"
+    description: "Logic- and safety-heavy coding via agy: Gemini 4 Argon (gemini-4-argon-high), high effort"
     repos: all
     modelTier: true
   - name: Opus

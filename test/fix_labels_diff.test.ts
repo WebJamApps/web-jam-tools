@@ -285,6 +285,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
   assertEquals(byName.get("Flash")?.repos, "all");
   const modelTierNames = schema.labels.filter((l) => l.modelTier).map((l) => l.name).sort();
   assertEquals(modelTierNames, [
+    "Argon",
     "Astra",
     "Fable",
     "Flash",
