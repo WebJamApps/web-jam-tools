@@ -6,7 +6,7 @@
 // 3. Section navigation collapse and restore controls (AC5)
 // 4. Revision table retained without a version/date subtitle
 
-import { assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertFalse, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import {
   computeTablePagination,
@@ -249,7 +249,178 @@ function makeRowsTable(rowCount: number): string {
   return `# Pagination Test\n\n## Big Table\n\n${header}${rows}\n`;
 }
 
-Deno.test("Table pagination: a table with more than 5 rows emits the pagination script/CSS and every row is still present in the DOM", () => {
+function renderedRows(markdown: string): string[][][] {
+  return Array.from(
+    renderDesignDoc(markdown).matchAll(/<tbody>([\s\S]*?)<\/tbody>/g),
+    (body) =>
+      Array.from(
+        body[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g),
+        (row) => Array.from(row[1].matchAll(/<td>([\s\S]*?)<\/td>/g), (cell) => cell[1]),
+      ),
+  );
+}
+
+for (
+  const heading of [
+    "## Revision History",
+    "## Appendix C — Decision Record",
+    "## Appendix B — Decision record",
+    "## Appendix — decision record",
+    "## Appendix — Decisions Record",
+    "## Appendix B — decisions record",
+    "## 7. Decision Log",
+    "## Decisions",
+  ]
+) {
+  Deno.test(`History ordering: ${heading} shows bottom row first`, () => {
+    assertEquals(
+      renderedRows(`${heading}\n\n| Entry |\n|---|\n| Oldest |\n| Latest |`),
+      [[["Latest"], ["Oldest"]]],
+    );
+  });
+}
+
+for (
+  const heading of [
+    "## Decisions made so far (each is written into its document with Josh's words)",
+    "## The Two Approval Gates (/design-issue)",
+    "## Plan table",
+    "## Both surfaces",
+  ]
+) {
+  Deno.test(`History ordering: ${heading} keeps file order`, () => {
+    assertEquals(
+      renderedRows(`${heading}\n\n| Entry |\n|---|\n| First |\n| Second |`),
+      [[["First"], ["Second"]]],
+    );
+  });
+}
+
+for (const heading of ["## Load-bearing premises", "## Load-bearing Premises"]) {
+  Deno.test(`History ordering: ${heading} sorts by Proved date, newest first`, () => {
+    // Dates deliberately disagree with file order; Proved is not the last column.
+    assertEquals(
+      renderedRows(`${heading}
+
+| Premise | Proved | Proof |
+|---|---|---|
+| Latest | 2026-10-12 | Verified |
+| Oldest | 2026-10-01 | Verified |
+| Middle | 2026-10-10 | Verified |`),
+      [[
+        ["Latest", "2026-10-12", "Verified"],
+        ["Middle", "2026-10-10", "Verified"],
+        ["Oldest", "2026-10-01", "Verified"],
+      ]],
+    );
+  });
+}
+
+Deno.test("Premises with equal Proved dates show bottom row first and empty dates last", () => {
+  assertEquals(
+    renderedRows(`## Load-bearing premises
+
+| Premise | Proved |
+|---|---|
+| Empty | |
+| First tied | 2026-10-10 |
+| Oldest | 2026-10-01 |
+| Second tied | 2026-10-10 |`),
+    [[
+      ["Second tied", "2026-10-10"],
+      ["First tied", "2026-10-10"],
+      ["Oldest", "2026-10-01"],
+      ["Empty", ""],
+    ]],
+  );
+});
+
+Deno.test("History ordering ends at the next heading and ignores headings in fenced examples", () => {
+  assertEquals(
+    renderedRows(`## Decisions
+
+| Entry |
+|---|
+| Old |
+| New |
+
+### Other table
+
+| Entry |
+|---|
+| First |
+| Second |
+
+\`\`\`md
+## Revision History
+\`\`\`
+
+| Entry |
+|---|
+| One |
+| Two |`),
+    [[["New"], ["Old"]], [["First"], ["Second"]], [["One"], ["Two"]]],
+  );
+});
+
+Deno.test("Premises tables without Proved keep file order; formatted dates sort normally", () => {
+  assertEquals(
+    renderedRows(`## Load-bearing premises
+
+| Entry |
+|---|
+| First |
+| Second |
+
+## Load-bearing Premises
+
+| Premise | **Proved** |
+|---|---|
+| Old | \`2026-10-01\` |
+| Empty | |
+| New | **2026-10-12** |`),
+    [
+      [["First"], ["Second"]],
+      [["New", "<strong>2026-10-12</strong>"], ["Old", "<code>2026-10-01</code>"], ["Empty", ""]],
+    ],
+  );
+});
+
+Deno.test("Pagination uses 10, 20, 30 and All with correct ranges, clamping and controls", () => {
+  for (const [size, lastPage, lastStart] of [[10, 4, 31], [20, 2, 21], [30, 2, 31]]) {
+    const first = computeTablePagination(38, 1, String(size));
+    assertEquals([first.startIdx, first.endIdx, first.statusText], [0, size, `1-${size} of 38`]);
+    assertEquals([first.prevDisabled, first.nextDisabled], [true, false]);
+    const last = computeTablePagination(38, 99, size);
+    assertEquals([last.currentPage, last.totalPages, last.startDisplay, last.endDisplay], [
+      lastPage,
+      lastPage,
+      lastStart,
+      38,
+    ]);
+    assertEquals([last.prevDisabled, last.nextDisabled], [false, true]);
+  }
+  const all = computeTablePagination(38, 99, "all");
+  assertEquals([all.currentPage, all.statusText, all.prevDisabled, all.nextDisabled], [
+    1,
+    "1-38 of 38",
+    true,
+    true,
+  ]);
+  const invalidSize = computeTablePagination(38, 1, "invalid");
+  assertEquals([invalidSize.pageSize, invalidSize.statusText], [10, "1-10 of 38"]);
+  for (const rows of [0, 1, 10]) {
+    const state = computeTablePagination(rows, 1, 10);
+    assertEquals([state.startIdx, state.endIdx, state.prevDisabled, state.nextDisabled], [
+      0,
+      rows,
+      true,
+      true,
+    ]);
+  }
+});
+
+Deno.test("Table pagination: a table with more than 10 rows emits the pagination script/CSS and every row is still present in the DOM", () => {
   const html = renderDesignDoc(makeRowsTable(25));
   const mainContent = html.split("<main>")[1]?.split("</main>")[0] ?? "";
 
@@ -263,8 +434,8 @@ Deno.test("Table pagination: a table with more than 5 rows emits the pagination 
   assertStringIncludes(html, ".table-pager-btn");
   assertStringIncludes(html, "table-pager-hidden-row");
   assertStringIncludes(html, "table-pager-size");
-  assertStringIncludes(html, "DEFAULT_PAGE_SIZE = 5");
-  assertStringIncludes(html, 'var sizeOptions = ["5", "10", "25", "All"];');
+  assertStringIncludes(html, "DEFAULT_PAGE_SIZE = 10");
+  assertStringIncludes(html, 'var sizeOptions = ["10", "20", "30", "All"];');
   assertStringIncludes(html, "@media print {");
 
   // A print stylesheet forces any JS-hidden row back to visible.
@@ -274,11 +445,11 @@ Deno.test("Table pagination: a table with more than 5 rows emits the pagination 
   );
 });
 
-Deno.test("Table pagination: the pagination initializer only activates on tables with more than 5 rows", () => {
-  const html = renderDesignDoc(makeRowsTable(5));
+Deno.test("Table pagination: the pagination initializer only activates on tables with more than 10 rows", () => {
+  const html = renderDesignDoc(makeRowsTable(10));
   // The script text itself is always emitted (it's a static asset embedded
   // once per page), so this is a source-level pin on the runtime guard that
-  // keeps it a no-op for <=5 row tables, not a DOM assertion.
+  // keeps it a no-op for <=10 row tables, not a DOM assertion.
   assertStringIncludes(html, "if (rows.length <= DEFAULT_PAGE_SIZE) return;");
 });
 
@@ -299,14 +470,36 @@ Deno.test("Sticky header and scrolling wrapper: thead cells are styled with posi
   assertStringIncludes(html, "overflow-y: auto;");
 });
 
-Deno.test("Table pagination: page navigation and position range format (e.g. '6-10 of 38')", () => {
+Deno.test("Table pagination: page navigation uses the tested pagination state", () => {
   const html = renderDesignDoc(makeRowsTable(40));
   // Verifies the position format `<start>-<end> of <total>` emitted in the pager logic
   assertStringIncludes(
     html,
-    'status.textContent = startDisplay + "-" + endDisplay + " of " + rows.length;',
+    "status.textContent = state.statusText;",
   );
   assertStringIncludes(html, "Rows per page: ");
+});
+
+Deno.test("Table pagination: embedded calculator runs independently and matches exported state", () => {
+  const html = renderDesignDoc(makeRowsTable(38));
+  const embedded = html.match(/var computePagination = ([\s\S]*?);\s*var tables =/);
+  assert(embedded, "Generated HTML must include the pagination calculator");
+
+  // Function creates a fresh scope without access to this module's imports or helpers.
+  const computeEmbedded = new Function(
+    `return (${embedded[1]});`,
+  )() as typeof computeTablePagination;
+  const cases: Parameters<typeof computeTablePagination>[] = [
+    [38, 99, "20"],
+    [38, 1, "all"],
+    [38, 2, 10],
+    [38, 0, "30"],
+    [38, 1, "invalid"],
+    [0, 1, 10],
+  ];
+  for (const args of cases) {
+    assertEquals(computeEmbedded(...args), computeTablePagination(...args));
+  }
 });
 
 Deno.test("computeTablePagination: calculates correct ranges and boundary states for 40 rows with pageSize 5", () => {
