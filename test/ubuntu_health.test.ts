@@ -1184,3 +1184,166 @@ Deno.test("ssh: docs/scripts.md describes the key-only login and the Tailscale-o
   assertStringIncludes(docs, "PasswordAuthentication no");
   assertStringIncludes(docs, "tailscale0");
 });
+
+// Chrome policy cases use the same temporary-root harness; no real Chrome profile is read.
+const CHROME_POLICY = "/etc/opt/chrome/policies/managed/ubuntu-health.json";
+interface ChromePolicy {
+  DefaultNotificationsSetting: number;
+  NotificationsAllowedForUrls: string[];
+  ExtensionInstallBlocklist: string[];
+}
+
+Deno.test("chrome: laptop apply installs the exact managed policy, root-owned at 0644", async () => {
+  const h = await makeHarness();
+  const r = await apply(h);
+  assertEquals(r.code, 0, r.stderr);
+  const path = `${h.root}${CHROME_POLICY}`;
+  const policy = JSON.parse(await Deno.readTextFile(path));
+  assertEquals(policy, {
+    DefaultNotificationsSetting: 2,
+    NotificationsAllowedForUrls: [
+      "https://meet.google.com",
+      "https://calendar.google.com",
+      "https://app.zoom.us",
+      "https://www.youtube.com",
+      "https://www.bandlab.com",
+    ],
+    ExtensionInstallBlocklist: ["nenlahapcbofgnanklpelkaejcehkggg"],
+  });
+  assertEquals((await Deno.stat(path)).mode! & 0o777, 0o644);
+  const logged = await calls(h);
+  for (
+    const file of [
+      path,
+      installed(h, "ubuntu-health-chrome.json"),
+      installed(h, "check-chrome-policy.py"),
+    ]
+  ) {
+    assert(logged.includes(`chown root:root ${file}`), `${file} was not chowned to root`);
+  }
+  assertStringIncludes(
+    await Deno.readTextFile(installed(h, "manifest.sha256")),
+    `  ${CHROME_POLICY}\n`,
+  );
+});
+
+Deno.test("chrome: missing policy is named by repository and installed checks", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  await Deno.remove(`${h.root}${CHROME_POLICY}`);
+  for (const result of [await check(h), await installedCheck(h)]) {
+    assertEquals(result.code, 1, result.stdout);
+    assertStringIncludes(result.stdout, `DRIFT chrome: ${h.root}${CHROME_POLICY} is missing`);
+  }
+});
+
+Deno.test("chrome: changed lists and notification default name their drift without writing", async (t) => {
+  const cases: [string, (policy: ChromePolicy) => void, string[]][] = [
+    ["missing allowed site", (p) => {
+      p.NotificationsAllowedForUrls.pop();
+    }, ["missing", "https://www.bandlab.com"]],
+    ["unexpected allowed site", (p) => {
+      p.NotificationsAllowedForUrls.push("https://ads.example");
+    }, ["unexpected", "https://ads.example"]],
+    ["replaced allowed site", (p) => {
+      p.NotificationsAllowedForUrls[0] = "https://ads.example";
+    }, ["https://meet.google.com", "https://ads.example"]],
+    ["duplicate allowed site", (p) => {
+      p.NotificationsAllowedForUrls.push(p.NotificationsAllowedForUrls[0]);
+    }, ["unexpected", "https://meet.google.com"]],
+    ["removed extension block", (p) => {
+      p.ExtensionInstallBlocklist = [];
+    }, ["ExtensionInstallBlocklist", "missing", "nenlahapcbofgnanklpelkaejcehkggg"]],
+    ["unexpected extension block", (p) => {
+      p.ExtensionInstallBlocklist.push("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    }, ["ExtensionInstallBlocklist", "unexpected", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]],
+    ["notifications permitted", (p) => {
+      p.DefaultNotificationsSetting = 1;
+    }, ["DefaultNotificationsSetting", "expected 2, got 1"]],
+  ];
+  for (const [name, mutate, details] of cases) {
+    await t.step(name, async () => {
+      const h = await makeHarness();
+      await applyAndSettle(h);
+      const path = `${h.root}${CHROME_POLICY}`;
+      const policy: ChromePolicy = JSON.parse(await Deno.readTextFile(path));
+      mutate(policy);
+      await Deno.writeTextFile(path, JSON.stringify(policy));
+      const before = await snapshot(h.root);
+      const callsBefore = (await calls(h)).length;
+      for (const result of [await check(h), await installedCheck(h)]) {
+        assertEquals(result.code, 1, result.stdout);
+        assertStringIncludes(result.stdout, "DRIFT chrome:");
+        for (const detail of details) assertStringIncludes(result.stdout, detail);
+      }
+      assertEquals(await snapshot(h.root), before);
+      assertEquals((await calls(h)).slice(callsBefore), [
+        "systemd-detect-virt",
+        "systemctl is-enabled ubuntu-health-weekly.timer",
+        "systemctl is-active ubuntu-health-weekly.timer",
+        "systemd-detect-virt",
+        "systemctl is-enabled ubuntu-health-weekly.timer",
+        "systemctl is-active ubuntu-health-weekly.timer",
+      ]);
+    });
+  }
+});
+
+Deno.test("chrome: malformed JSON and invalid value types are drift, never a clean policy", async () => {
+  for (
+    const body of [
+      "{invalid",
+      "[]",
+      '{"DefaultNotificationsSetting":true,"NotificationsAllowedForUrls":{},"ExtensionInstallBlocklist":[null]}',
+    ]
+  ) {
+    const h = await makeHarness();
+    await applyAndSettle(h);
+    await Deno.writeTextFile(`${h.root}${CHROME_POLICY}`, body);
+    const result = await installedCheck(h);
+    assertEquals(result.code, 1, result.stdout);
+    assertStringIncludes(result.stdout, "DRIFT chrome:");
+    assert(!result.stdout.includes("no drift"));
+  }
+});
+
+Deno.test("chrome: permissions drift and apply repairs the policy; another apply changes nothing", async () => {
+  const h = await makeHarness();
+  await applyAndSettle(h);
+  const path = `${h.root}${CHROME_POLICY}`;
+  await Deno.chmod(path, 0o666);
+  const drift = await installedCheck(h);
+  assertEquals(drift.code, 1, drift.stdout);
+  assertStringIncludes(drift.stdout, "DRIFT chrome:");
+  assertStringIncludes(drift.stdout, "expected 644");
+  await Deno.writeTextFile(path, "{}");
+  assertEquals((await apply(h)).code, 0);
+  assertEquals((await Deno.stat(path)).mode! & 0o777, 0o644);
+  assertEquals((await installedCheck(h)).code, 0);
+  const before = await snapshot(h.root);
+  assertEquals((await apply(h)).code, 0);
+  assertEquals(await snapshot(h.root), before);
+});
+
+Deno.test("chrome: WSL apply and check skip Chrome without creating or changing its policy", async () => {
+  for (const existing of [false, true]) {
+    const h = await makeHarness({ STUB_VIRT: "wsl" });
+    const directory = `${h.root}/etc/opt/chrome/policies/managed`;
+    if (existing) {
+      await Deno.mkdir(directory, { recursive: true });
+      await Deno.writeTextFile(`${h.root}${CHROME_POLICY}`, '{"keep":"unchanged"}');
+    }
+    const before = existing ? await snapshot(directory) : {};
+    const applied = await apply(h);
+    await writeEnvFile(h, 0o600);
+    for (const result of [applied, await check(h), await installedCheck(h)]) {
+      assertEquals(result.code, 0, result.stdout + result.stderr);
+      assertStringIncludes(result.stdout, "skipped: Chrome policy (WSL has no Chrome)");
+      assert(!result.stdout.includes("DRIFT chrome:"));
+    }
+    if (existing) assertEquals(await snapshot(directory), before);
+    else assert(!Object.keys(await snapshot(h.root)).some((p) => p.includes("/etc/opt/chrome/")));
+    assert(!(await calls(h)).some((call) => call.includes("chrome")));
+    assert(!(await Deno.readTextFile(installed(h, "manifest.sha256"))).includes("chrome"));
+  }
+});
