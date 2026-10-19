@@ -133,11 +133,12 @@ depend on agy-native payload fields Claude Code's hook payload doesn't carry):
   `~/Dropbox/web-jam-llms/Token_Savings/agy-model-guard-restore-manual-steps-2026-10-18.md`;
   Josh restores the installed guard himself in web-jam-tools#1483
   "Manual verification: restore the installed agy guard symlink".
-- **`hooks/block-agy-gmail-send-delete.sh`** — matcher
-  `send_email|delete_email|batch_delete_emails` (agy exposes Gmail MCP tool names unprefixed — no
-  `mcp__gmail__` prefix; that convention is Claude Code-specific). Unconditionally denies once it
-  runs. Read, label, and archive tooling (`search_emails`, `read_email`, `list_email_labels`,
-  `modify_email`, ...) are not matched and stay available.
+- **`hooks/block-agy-gmail-send-delete.sh`** — matcher covers all nineteen raw and
+  exact-server-prefixed Gmail MCP tool names (`mcp__gmail__.*|send_email|...`). Classifies tool calls
+  via `hooks/lib/check_gmail_write.ts`: unconditionally denies the five irreversible tools (`send_email`,
+  `delete_email`, `batch_delete_emails`, `delete_filter`, `delete_label`); refuses moving mail to Trash
+  while agy's permission prompt remains unverified; allows removing Trash, archiving, reads, drafts,
+  and ordinary labels.
 
 ## 5. Gmail model choice and the session guard
 
@@ -216,12 +217,14 @@ file is backed up before being replaced by the symlink.
 
 ## 7. Send/delete fence
 
-`send_email`, `delete_email`, and `batch_delete_emails` are denied unconditionally on the
-Antigravity surface by `hooks/block-agy-gmail-send-delete.sh` (§4) — Flash never gets outbound
-mail identity or delete capability on Josh's personal inbox, independent of which model is active.
-Read, label, and archive tooling remain available, subject to the separate Gmail permissions and
-skill workflow (§5). This mirrors Claude Code's own draft-only Gmail policy in spirit, without touching Claude Code's
-permissions at all (non-goal).
+The five irreversible Gmail actions (`send_email`, `delete_email`, `batch_delete_emails`,
+`delete_filter`, and `delete_label`) are denied unconditionally on the Antigravity surface by
+`hooks/block-agy-gmail-send-delete.sh` (§4) — Flash never gets outbound mail identity or destructive
+deletion capability on Josh's personal inbox, independent of which model is active. Moving mail to
+Trash requires a real permission prompt; because agy's permission prompt is unverified, Trash additions
+are also refused. Removing Trash, archiving, reads, drafts, and ordinary labels pass this fence and
+remain subject to the separate Gmail permissions and skill workflow (§5). This mirrors Claude Code's
+own draft-only Gmail policy in spirit, without touching Claude Code's permissions at all (non-goal).
 
 ## 8. What is NOT verified / NOT applied
 

@@ -461,8 +461,16 @@ export async function runShim(
     return { decision: "allow" };
   }
   if (gmailFence) {
-    const args = payload.toolCall?.args;
-    if (!args || typeof args !== "object" || Array.isArray(args)) {
+    const rawArgs = payload.toolCall?.args;
+    const baseName = toolName.startsWith("mcp__gmail__")
+      ? toolName.slice("mcp__gmail__".length)
+      : toolName;
+    const isParameterless = baseName === "list_email_labels" || baseName === "list_filters";
+    if (rawArgs === undefined) {
+      if (!isParameterless) {
+        return { decision: "deny", reason: "Gmail safety fence could not read safety arguments." };
+      }
+    } else if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
       return { decision: "deny", reason: "Gmail safety fence could not read safety arguments." };
     }
   }

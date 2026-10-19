@@ -100,6 +100,40 @@ Deno.test("Gmail fence: malformed shim inputs refuse instead of normalizing to a
   );
 });
 
+Deno.test("Gmail fence: parameterless read tools proceed when args is omitted, but refuse malformed args", async () => {
+  for (
+    const name of [
+      "list_email_labels",
+      "list_filters",
+      "mcp__gmail__list_email_labels",
+      "mcp__gmail__list_filters",
+    ]
+  ) {
+    assertEquals(
+      (await runShim(
+        "PreToolUse",
+        MATCHER,
+        HOOK_PATH,
+        JSON.stringify({ toolCall: { name } }),
+      )).decision,
+      "allow",
+      `${name} without args should proceed`,
+    );
+    for (const badArgs of [[], null, "invalid", 123]) {
+      assertEquals(
+        (await runShim(
+          "PreToolUse",
+          MATCHER,
+          HOOK_PATH,
+          JSON.stringify({ toolCall: { name, args: badArgs } }),
+        )).decision,
+        "deny",
+        `${name} with malformed args should deny`,
+      );
+    }
+  }
+});
+
 Deno.test("Gmail fence: missing, crashing and empty classifiers fail closed through installed symlinks", async () => {
   const sandbox = await Deno.makeTempDir();
   try {
@@ -233,6 +267,12 @@ Deno.test("Gmail fence: scripts/install-hooks.sh installs only the agy adapter a
       { HOME: home },
     );
     assertEquals(JSON.parse(trash.stdout).decision, "deny");
+    const listWithoutArgs = await runShell(
+      ["-c", command],
+      JSON.stringify({ toolCall: { name: "list_email_labels" } }),
+      { HOME: home },
+    );
+    assertEquals(JSON.parse(listWithoutArgs.stdout).decision, "allow");
   } finally {
     await Deno.remove(home, { recursive: true });
   }
