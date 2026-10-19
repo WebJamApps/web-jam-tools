@@ -6329,3 +6329,146 @@ Deno.test("mergeWeekendRuns: resolves dispatched entities by venueId rather than
   assertEquals(runDataPitches.length, 2);
   assertEquals(runDataPitches.map((p) => p.venueId), ["venue-a", "venue-b"]);
 });
+
+Deno.test("mergeWeekendRuns: excludes skippedVenueIds from batches and resolves records by venueName (#994)", () => {
+  const existing: WeekendRunData = {
+    candidates: [
+      { _id: "venue-sent", name: "Sent Venue", city: "Salem, VA" } as CandidateVenue,
+      { _id: "venue-skipped", name: "Skipped Venue", city: "Salem, VA" } as CandidateVenue,
+      { _id: "venue-name-only", name: "Named Venue", city: "Roanoke, VA" } as CandidateVenue,
+    ],
+    pitches: [
+      {
+        venueId: "venue-sent",
+        venueName: "Sent Venue",
+        to: "sent@venue.com",
+        subject: "S1",
+        body: "B1",
+      },
+      {
+        venueId: "venue-skipped",
+        venueName: "Skipped Venue",
+        to: "skip@venue.com",
+        subject: "S2",
+        body: "B2",
+      },
+      { venueName: "Named Venue", to: "named@venue.com", subject: "S3", body: "B3" } as PitchEmail,
+    ],
+    batches: [
+      {
+        candidateIds: ["venue-sent", "venue-skipped"],
+        requested: 2,
+        sent: 1,
+        skippedVenueIds: ["venue-skipped"],
+      },
+    ],
+    batchDispatch: {
+      requested: 3,
+      sent: 2,
+      skipped: [{ venueId: "venue-skipped", venueName: "Skipped Venue", reason: "missing email" }],
+      // Record carrying venueName rather than venueId
+      records: [{ _id: "outreach-named", venueName: "Named Venue" }],
+    },
+  };
+
+  const gate2Review: BookGigResult = {
+    mode: "gate2",
+    weekend: {
+      start: "2027-01-08",
+      end: "2027-01-10",
+      rawText: "Jan 8-10 2027",
+      label: "January 8–10, 2027",
+      year: 2027,
+      month: 1,
+      days: [8, 9, 10],
+    },
+    candidates: [
+      { _id: "venue-new", name: "New Venue", city: "Blacksburg, VA" } as CandidateVenue,
+    ],
+    density: { count: 1, isSparse: true },
+    pitches: [
+      {
+        venueId: "venue-new",
+        venueName: "New Venue",
+        to: "new@venue.com",
+        subject: "S",
+        body: "B",
+      },
+    ],
+  };
+
+  const merged = mergeWeekendRuns(existing, gate2Review);
+
+  // Visible review set is curated to Venue New
+  assertEquals(merged.candidates.length, 1);
+  assertEquals(merged.candidates[0]._id, "venue-new");
+
+  // Embedded machine-readable run data must retain Sent Venue and Named Venue, but NOT Skipped Venue
+  const runDataCandidates =
+    (merged as unknown as { _runDataCandidates?: CandidateVenue[] })._runDataCandidates;
+  const runDataPitches = (merged as unknown as { _runDataPitches?: PitchEmail[] })._runDataPitches;
+  assert(runDataCandidates !== undefined);
+  assertEquals(runDataCandidates.length, 3);
+  assertEquals(runDataCandidates.map((c) => c._id || c.name), [
+    "venue-sent",
+    "venue-name-only",
+    "venue-new",
+  ]);
+
+  assert(runDataPitches !== undefined);
+  assertEquals(runDataPitches.length, 3);
+  assertEquals(runDataPitches.map((p) => p.venueId || p.venueName), [
+    "venue-sent",
+    "Named Venue",
+    "venue-new",
+  ]);
+});
+
+Deno.test("renderDarkHtml: synthesizes batches in run data when result.batchDispatch is present without _runDataBatches (#994)", () => {
+  const sendResult: BookGigResult = {
+    mode: "send",
+    weekend: {
+      start: "2027-01-08",
+      end: "2027-01-10",
+      rawText: "Jan 8-10 2027",
+      label: "January 8–10, 2027",
+      year: 2027,
+      month: 1,
+      days: [8, 9, 10],
+    },
+    candidates: [
+      { _id: "venue-1", name: "Venue One", city: "Salem, VA" } as CandidateVenue,
+      { _id: "venue-2", name: "Venue Two", city: "Salem, VA" } as CandidateVenue,
+    ],
+    density: { count: 2, isSparse: true },
+    pitches: [
+      {
+        venueId: "venue-1",
+        venueName: "Venue One",
+        to: "v1@example.com",
+        subject: "S1",
+        body: "B1",
+      },
+    ],
+    batchDispatch: {
+      requested: 2,
+      sent: 1,
+      skipped: [{ venueId: "venue-2", venueName: "Venue Two", reason: "no email" }],
+      records: [{ _id: "outreach-1", venueId: "venue-1" }],
+    },
+  };
+
+  // Render HTML directly from raw send result (which lacks _runDataBatches)
+  const html = renderDarkHtml(sendResult);
+  assert(html.includes('<script id="book-gig-run-data" type="application/json">'));
+
+  // Extract run data from HTML and verify batches array was synthesized
+  const extracted = extractRunDataFromHtml(html);
+  assert(extracted !== null);
+  assert(extracted.batches !== undefined);
+  assertEquals(extracted.batches.length, 1);
+  assertEquals(extracted.batches[0].candidateIds, ["venue-1", "venue-2"]);
+  assertEquals(extracted.batches[0].requested, 2);
+  assertEquals(extracted.batches[0].sent, 1);
+  assertEquals(extracted.batches[0].skippedVenueIds, ["venue-2"]);
+});

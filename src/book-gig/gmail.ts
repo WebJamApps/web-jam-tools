@@ -62,10 +62,6 @@ export function mergeWeekendRuns(
       const venueId = rec.venueId || rec.venue;
       if (venueId) {
         priorDispatchedIds.add(venueId);
-      } else if (rec.venueName) {
-        priorDispatchedIds.add(rec.venueName);
-      } else if (rec._id) {
-        priorDispatchedIds.add(rec._id);
       }
       if (rec.venueName) {
         priorDispatchedIds.add(rec.venueName);
@@ -194,7 +190,7 @@ export function mergeWeekendRuns(
     const rdCandMap = new Map<string, CandidateVenue>();
     for (const c of existing.candidates || []) {
       const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
-      if (id && priorDispatchedIds.has(id)) {
+      if (id && (priorDispatchedIds.has(id) || (c.name && priorDispatchedIds.has(c.name)))) {
         rdCandMap.set(id, { ...c, _id: c._id || id });
       }
     }
@@ -209,7 +205,9 @@ export function mergeWeekendRuns(
     const rdPitchMap = new Map<string, PitchEmail>();
     for (const p of existing.pitches || []) {
       const id = p.venueId || p.venueName;
-      if (id && priorDispatchedIds.has(id)) {
+      if (
+        id && (priorDispatchedIds.has(id) || (p.venueName && priorDispatchedIds.has(p.venueName)))
+      ) {
         rdPitchMap.set(id, { ...p });
       }
     }
