@@ -42,96 +42,177 @@ export function mergeWeekendRuns(
   existing: WeekendRunData,
   current: BookGigResult,
 ): BookGigResult {
-  // Gate 1 and Gate 2 review runs render strictly the curated set under review (web-jam-tools#994).
-  const isGateReview = current.mode === "gate1" || current.mode === "gate2";
+  const isSend = current.mode === "send";
 
-  // 1. Candidate Venues: deduplicate by venueId / _id
-  const candidateMap = new Map<string, CandidateVenue>();
-  if (!current.location?.allLocations && !isGateReview) {
+  // Identify any candidates that were already dispatched in prior batches
+  const priorDispatchedIds = new Set<string>();
+  if (existing.batches && existing.batches.length > 0) {
+    for (const b of existing.batches) {
+      if (b.sent > 0 || (b.candidateIds && b.candidateIds.length > 0)) {
+        for (const id of b.candidateIds) {
+          if (id) priorDispatchedIds.add(id);
+        }
+      }
+    }
+  }
+  if (existing.batchDispatch?.records && existing.batchDispatch.records.length > 0) {
+    for (const r of existing.batchDispatch.records) {
+      const rec = r as { _id?: string; venueId?: string };
+      const id = rec._id || rec.venueId;
+      if (id) priorDispatchedIds.add(id);
+    }
+  }
+  if (priorDispatchedIds.size === 0 && existing.batchDispatch && existing.batchDispatch.sent > 0) {
     for (const c of existing.candidates || []) {
       const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
+      if (id && !c.isExcluded) priorDispatchedIds.add(id);
+    }
+  }
+  const hasPriorDispatch = priorDispatchedIds.size > 0 ||
+    Boolean(existing.batchDispatch && existing.batchDispatch.sent > 0);
+
+  // 1. Candidate Venues
+  // For sends: accumulate all candidates from existing and current, preserving exclusions and holds.
+  // For discovery sweeps and Gate 1/Gate 2 reviews: render strictly the curated set under review.
+  let mergedCandidates: CandidateVenue[];
+  if (isSend) {
+    const candidateMap = new Map<string, CandidateVenue>();
+    if (!current.location?.allLocations) {
+      for (const c of existing.candidates || []) {
+        const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
+        if (id) {
+          candidateMap.set(id, { ...c, _id: c._id || id });
+        }
+      }
+    }
+    for (const c of current.candidates || []) {
+      const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
       if (id) {
-        candidateMap.set(id, { ...c, _id: c._id || id });
+        if (candidateMap.has(id)) {
+          const prev = candidateMap.get(id)!;
+          const isExcluded = Boolean(prev.isExcluded || c.isExcluded);
+          const exclusionReason = c.isExcluded
+            ? (c.exclusionReason ?? prev.exclusionReason)
+            : (prev.isExcluded
+              ? prev.exclusionReason
+              : (c.exclusionReason ?? prev.exclusionReason));
+          const statusBadge = c.isExcluded
+            ? (c.statusBadge ?? prev.statusBadge)
+            : (prev.isExcluded ? prev.statusBadge : (c.statusBadge ?? prev.statusBadge));
+          const reason = c.isExcluded
+            ? (c.reason ?? prev.reason)
+            : (prev.isExcluded ? prev.reason : (c.reason ?? prev.reason));
+          const resumeBooking = c.resumeBooking ?? prev.resumeBooking;
+          const bookedThrough = c.bookedThrough ?? prev.bookedThrough;
+          const outreachEligible = (prev.outreachEligible === false || c.outreachEligible === false)
+            ? false
+            : (c.outreachEligible ?? prev.outreachEligible);
+
+          candidateMap.set(id, {
+            ...prev,
+            ...c,
+            _id: id,
+            ...(resumeBooking ? { resumeBooking } : {}),
+            ...(bookedThrough ? { bookedThrough } : {}),
+            ...(outreachEligible !== undefined ? { outreachEligible } : {}),
+            ...(isExcluded ? { isExcluded: true, exclusionReason, statusBadge, reason } : {}),
+          });
+        } else {
+          candidateMap.set(id, { ...c, _id: id });
+        }
       }
     }
+    mergedCandidates = Array.from(candidateMap.values());
+  } else {
+    mergedCandidates = [...(current.candidates || [])];
   }
-  for (const c of current.candidates || []) {
-    const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
-    if (id) {
-      if (candidateMap.has(id)) {
-        const prev = candidateMap.get(id)!;
-        const isExcluded = Boolean(prev.isExcluded || c.isExcluded);
-        const exclusionReason = c.isExcluded
-          ? (c.exclusionReason ?? prev.exclusionReason)
-          : (prev.isExcluded ? prev.exclusionReason : (c.exclusionReason ?? prev.exclusionReason));
-        const statusBadge = c.isExcluded
-          ? (c.statusBadge ?? prev.statusBadge)
-          : (prev.isExcluded ? prev.statusBadge : (c.statusBadge ?? prev.statusBadge));
-        const reason = c.isExcluded
-          ? (c.reason ?? prev.reason)
-          : (prev.isExcluded ? prev.reason : (c.reason ?? prev.reason));
-        const resumeBooking = c.resumeBooking ?? prev.resumeBooking;
-        const bookedThrough = c.bookedThrough ?? prev.bookedThrough;
-        const outreachEligible = (prev.outreachEligible === false || c.outreachEligible === false)
-          ? false
-          : (c.outreachEligible ?? prev.outreachEligible);
 
-        candidateMap.set(id, {
-          ...prev,
-          ...c,
-          _id: id,
-          ...(resumeBooking ? { resumeBooking } : {}),
-          ...(bookedThrough ? { bookedThrough } : {}),
-          ...(outreachEligible !== undefined ? { outreachEligible } : {}),
-          ...(isExcluded ? { isExcluded: true, exclusionReason, statusBadge, reason } : {}),
-        });
-      } else {
-        candidateMap.set(id, { ...c, _id: id });
+  // 2. Pitch Cards
+  // For sends: accumulate all pitches from existing and current, excluding pitches for excluded venues.
+  // For discovery sweeps and Gate 1/Gate 2 reviews: render strictly the curated pitches under review.
+  let mergedPitches: PitchEmail[];
+  if (isSend) {
+    const pitchMap = new Map<string, PitchEmail>();
+    const currentCandidateMap = new Map<string, CandidateVenue>(
+      mergedCandidates.map((
+        c,
+      ) => [c._id || (c as unknown as { venueId?: string }).venueId || c.name, c]),
+    );
+    if (!current.location?.allLocations) {
+      for (const p of existing.pitches || []) {
+        const id = p.venueId || p.venueName;
+        if (id) {
+          const c = currentCandidateMap.get(id);
+          if (c?.isExcluded) {
+            continue;
+          }
+          pitchMap.set(id, { ...p, venueId: p.venueId || id });
+        }
       }
     }
-  }
-  const mergedCandidates = Array.from(candidateMap.values());
-
-  // 2. Pitch Cards: deduplicate by venueId
-  // Excluded or on-hold venues must NEVER have pitch cards (decision D-44 / D-50 / D-54).
-  const pitchMap = new Map<string, PitchEmail>();
-  if (!current.location?.allLocations && !isGateReview) {
-    for (const p of existing.pitches || []) {
+    for (const p of current.pitches || []) {
       const id = p.venueId || p.venueName;
       if (id) {
-        const c = candidateMap.get(id);
+        const c = currentCandidateMap.get(id);
         if (c?.isExcluded) {
           continue;
         }
-        pitchMap.set(id, { ...p, venueId: p.venueId || id });
+        if (pitchMap.has(id)) {
+          pitchMap.set(id, { ...pitchMap.get(id)!, ...p, venueId: id });
+        } else {
+          pitchMap.set(id, { ...p, venueId: id });
+        }
       }
     }
-  }
-  for (const p of current.pitches || []) {
-    const id = p.venueId || p.venueName;
-    if (id) {
-      const c = candidateMap.get(id);
-      if (c?.isExcluded) {
-        continue;
-      }
-      if (pitchMap.has(id)) {
-        pitchMap.set(id, { ...pitchMap.get(id)!, ...p, venueId: id });
-      } else {
-        pitchMap.set(id, { ...p, venueId: id });
+
+    // Purge any pitch for any candidate marked excluded in currentCandidateMap
+    for (const [id, c] of currentCandidateMap.entries()) {
+      if (c.isExcluded) {
+        pitchMap.delete(id);
+        if (c.name) pitchMap.delete(c.name);
       }
     }
+    mergedPitches = Array.from(pitchMap.values());
+  } else {
+    mergedPitches = [...(current.pitches || [])];
   }
 
-  // Purge any pitch for any candidate marked excluded in candidateMap
-  for (const [id, c] of candidateMap.entries()) {
-    if (c.isExcluded) {
-      pitchMap.delete(id);
-      if (c.name) pitchMap.delete(c.name);
+  // 3. Machine-readable run data candidates & pitches
+  let runDataCandidates = mergedCandidates;
+  let runDataPitches = mergedPitches;
+  if (!isSend && hasPriorDispatch) {
+    const rdCandMap = new Map<string, CandidateVenue>();
+    for (const c of existing.candidates || []) {
+      const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
+      if (id && priorDispatchedIds.has(id)) {
+        rdCandMap.set(id, { ...c, _id: c._id || id });
+      }
     }
-  }
-  const mergedPitches = Array.from(pitchMap.values());
+    for (const c of current.candidates || []) {
+      const id = c._id || (c as unknown as { venueId?: string }).venueId || c.name;
+      if (id) {
+        rdCandMap.set(id, { ...(rdCandMap.get(id) || {}), ...c, _id: id });
+      }
+    }
+    runDataCandidates = Array.from(rdCandMap.values());
 
-  // 3. Batch Dispatch: accumulate requested and sent counts, deduplicate skipped by venueId
+    const rdPitchMap = new Map<string, PitchEmail>();
+    for (const p of existing.pitches || []) {
+      const id = p.venueId || p.venueName;
+      if (id && priorDispatchedIds.has(id)) {
+        rdPitchMap.set(id, { ...p });
+      }
+    }
+    for (const p of current.pitches || []) {
+      const id = p.venueId || p.venueName;
+      if (id) {
+        rdPitchMap.set(id, { ...p });
+      }
+    }
+    runDataPitches = Array.from(rdPitchMap.values());
+  }
+
+  // 4. Batch Dispatch: accumulate requested and sent counts, deduplicate skipped by venueId
   const currentCandidateIds = (current.candidates || []).map((c) =>
     c._id || (c as unknown as { venueId?: string }).venueId || c.name
   );
@@ -139,8 +220,8 @@ export function mergeWeekendRuns(
     s.venueId || s.venueName
   );
 
-  const mergedBatches = !isGateReview && existing.batches ? [...existing.batches] : [];
-  if (!isGateReview && mergedBatches.length === 0 && existing.batchDispatch) {
+  const mergedBatches = existing.batches ? [...existing.batches] : [];
+  if (mergedBatches.length === 0 && existing.batchDispatch) {
     // Synthesize the previous batch from existing state
     mergedBatches.push({
       candidateIds: (existing.candidates || []).map((c) =>
@@ -177,7 +258,7 @@ export function mergeWeekendRuns(
       skippedVenueIds: currentSkippedVenueIds,
     });
   } else if (existing.batchDispatch && !current.batchDispatch) {
-    mergedBatchDispatch = isGateReview ? undefined : { ...existing.batchDispatch };
+    mergedBatchDispatch = { ...existing.batchDispatch };
   } else if (existing.batchDispatch && current.batchDispatch) {
     if (isDuplicateBatch) {
       mergedBatchDispatch = { ...existing.batchDispatch };
@@ -246,6 +327,8 @@ export function mergeWeekendRuns(
     reportUrl: current.reportUrl || existing.reportUrl,
     ...({
       _runDataBatches: mergedBatches,
+      _runDataCandidates: runDataCandidates,
+      _runDataPitches: runDataPitches,
       _alreadyConsolidated: true,
     } as Record<string, unknown>),
   };

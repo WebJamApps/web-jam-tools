@@ -213,7 +213,7 @@ export async function publishAndOpenReport(
   let priorReportReadError: string | null = null;
   const alreadyConsolidated = (result as unknown as { _alreadyConsolidated?: boolean })
     ._alreadyConsolidated;
-  if (result.weekend && !alreadyConsolidated && result.mode === "send") {
+  if (result.weekend && !alreadyConsolidated) {
     const prior = await fetchOutreachReport(weekendSlug, options, fetchFn);
     if (prior.status === "failed") {
       priorReportReadError = prior.error;
