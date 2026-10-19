@@ -257,38 +257,62 @@ export function resolveIntroHtml(
 
 export type ConversationContext = "phone" | "in-person" | "general" | null;
 
-const IN_PERSON_CONVERSATION_RE =
-  /\b(in[- ]person|face[- ]to[- ]face|stopped by|visited (?:in person|the venue|them)|met in person|connecting in person)\b/i;
-const PHONE_CONVERSATION_RE = /\b(phone|call|called|telephoned)\b/i;
-const GENERAL_CONVERSATION_RE =
-  /\b(conversation|spoke|spoken|talked|chat|chatted|discussed|contacted|follow(?:ed)?[- ]?up)\b/i;
+function parseTouchTimestamp(date: unknown): number {
+  if (!date) return 0;
+  if (date instanceof Date) {
+    const t = date.getTime();
+    return Number.isNaN(t) ? 0 : t;
+  }
+  if (typeof date === "string" || typeof date === "number") {
+    const t = new Date(date).getTime();
+    return Number.isNaN(t) ? 0 : t;
+  }
+  return 0;
+}
 
 export function detectConversationContext(venue: CandidateVenue): ConversationContext {
-  const combinedNotes = [
-    venue.contactNotes,
-    venue.priorContactNotes,
-    venue.bookingNotes,
-    venue.notes,
-  ].filter(Boolean).join(" ");
-
-  if (!combinedNotes.trim()) return null;
-
-  // Clean out explicit phone number patterns like "Phone: 540-123-4567" so bare phone numbers don't trigger phone conversation
-  const cleanedNotes = combinedNotes
-    .replace(
-      /(?:cell|phone|tel)(?:\s*(?:#|number|no\.?))?\s*(?::\s*[\d\(\)\-\.\s]+|[\d\(\)\-\.]{7,})/gi,
-      " ",
-    )
-    .trim();
-
-  if (IN_PERSON_CONVERSATION_RE.test(cleanedNotes)) {
-    return "in-person";
+  if (!Array.isArray(venue.touches) || venue.touches.length === 0) {
+    return null;
   }
-  if (PHONE_CONVERSATION_RE.test(cleanedNotes)) {
+
+  const conversationTouches: Array<{
+    type: "call" | "visit";
+    timestamp: number;
+    index: number;
+  }> = [];
+
+  for (let i = 0; i < venue.touches.length; i++) {
+    const touch = venue.touches[i];
+    if (!touch || typeof touch.type !== "string") continue;
+    const normalizedType = touch.type.trim().toLowerCase();
+    if (normalizedType === "call" || normalizedType === "visit") {
+      conversationTouches.push({
+        type: normalizedType as "call" | "visit",
+        timestamp: parseTouchTimestamp(touch.date),
+        index: i,
+      });
+    }
+  }
+
+  if (conversationTouches.length === 0) {
+    return null;
+  }
+
+  // Deterministic ordering: most recent touch by date first.
+  // If dates are tied or absent, prefer the later touch in the array (most recently recorded).
+  conversationTouches.sort((a, b) => {
+    if (b.timestamp !== a.timestamp) {
+      return b.timestamp - a.timestamp;
+    }
+    return b.index - a.index;
+  });
+
+  const selected = conversationTouches[0];
+  if (selected.type === "call") {
     return "phone";
   }
-  if (GENERAL_CONVERSATION_RE.test(cleanedNotes)) {
-    return "general";
+  if (selected.type === "visit") {
+    return "in-person";
   }
 
   return null;
@@ -332,9 +356,6 @@ export function synthesizeCustomBodyHook(
     venue.priorContactNotes,
   ].filter(Boolean).join(" ");
 
-  const hasConversationIntro = options.hasConversationIntro ??
-    Boolean(detectConversationContext(venue));
-
   if (combinedNotes) {
     const lowerNotes = combinedNotes.toLowerCase();
     if (
@@ -344,15 +365,7 @@ export function synthesizeCustomBodyHook(
       lowerNotes.includes("booked through") ||
       lowerNotes.includes("full for")
     ) {
-      if (hasConversationIntro) {
-        return `<p>You mentioned checking back around this time for open dates — we'd love to see if we can get on the calendar for ${weekend.label}.</p>`;
-      }
-      return `<p>Following up on our earlier conversation when you mentioned checking back around this time for open dates — we'd love to see if we can get on the calendar for ${weekend.label}.</p>`;
-    }
-    if (lowerNotes.includes("spoke with") || lowerNotes.includes("contacted")) {
-      if (!hasConversationIntro) {
-        return `<p>Following up on our earlier conversation about live music dates — wanted to check if ${weekend.label} might be open for an acoustic set.</p>`;
-      }
+      return `<p>You mentioned checking back around this time for open dates — we'd love to see if we can get on the calendar for ${weekend.label}.</p>`;
     }
   }
 
@@ -687,7 +700,7 @@ function findDeclaredTemplates(pitch: PitchEmail, templates: EmailTemplate[]): E
 // Mirrors web-jam-back's renderCustomHtml(): free-text customIntro/customBody is HTML-escaped,
 // blank-line-separated paragraphs are wrapped in <p>, single newlines become <br>, and no
 // template tokens are filled.
-function renderCustomHtml(customText: string): string {
+export function renderCustomHtml(customText: string): string {
   const escaped = customText.trim()
     .split("&").join("&amp;")
     .split("<").join("&lt;")
@@ -914,6 +927,7 @@ export interface RenderPitchesFromBackendOptions
   extends Omit<FetchPitchPreviewsOptions, "venueIds" | "targetDates" | "templateType"> {
   templateType?: TemplateVenueType;
   tweaks?: VenueTweak[] | Map<string, VenueTweak>;
+  templates?: EmailTemplate[];
 }
 
 export function findTweakForCandidate(
@@ -946,6 +960,45 @@ export function findTweakForCandidate(
 }
 
 /**
+ * Resolve the conversation intro for a venue with structured touches (call or visit)
+ * as plain text suitable for forwarding as `customIntro` to the backend renderer (web-jam-tools#995).
+ * The backend `renderCustomHtml` escapes HTML and wraps blank-line-separated paragraphs
+ * in `<p>...</p>`, matching the output of `renderPitch()` byte-for-byte.
+ */
+export function resolveConversationIntro(
+  venue: CandidateVenue,
+  weekend: TargetWeekend,
+  options: RenderPitchOptions = {},
+  templates: EmailTemplate[] = [],
+): string | undefined {
+  const context = detectConversationContext(venue);
+  if (!context) return undefined;
+
+  const stage = resolveVenueStage(venue, options);
+  const type = resolveVenueTemplateType(venue, options.templateType);
+  const allTemplates = templates && templates.length > 0 ? templates : DEFAULT_TEMPLATES;
+  const template = findTemplateIn(allTemplates, type, stage) ||
+    findTemplateIn(allTemplates, type, "cold") ||
+    findTemplateIn(DEFAULT_TEMPLATES, type, stage) ||
+    findTemplateIn(allTemplates, "MidRangeCafeBar", stage) ||
+    findTemplateIn(DEFAULT_TEMPLATES, "MidRangeCafeBar", stage) ||
+    DEFAULT_TEMPLATES[0];
+
+  const introHtml = resolveIntroHtml(template, stage, context);
+  const bookingPeriod = resolveBookingPeriod(weekend, options.bookingPeriod);
+
+  const personalizedHtml = substituteTokens(introHtml, {
+    contactName: options.contactName || venue.contactName || "",
+    venueName: venue.name,
+    targetDates: weekend.label,
+    bookingPeriod,
+    nextGigDate: formatNextGigDate(venue),
+  });
+
+  return htmlToPlainText(personalizedHtml);
+}
+
+/**
  * Render every eligible candidate's pitch draft using the backend's own
  * rendering (`buildPitchEmail`, via the batch form of `GET /outreach/preview`)
  * rather than the local template renderer above (web-jam-tools#948). The
@@ -954,8 +1007,9 @@ export function findTweakForCandidate(
  * function — see the design doc's load-bearing premise 17.
  *
  * If `options.tweaks` contains custom slot modifications for specific venues,
- * those venues are re-rendered individually with their custom slots (e.g. `customBody`),
- * while all other venues remain completely untouched (D-44, Gate 2 review loop).
+ * or if a candidate has a structured conversation touch (call/visit) selecting
+ * a conversation opener, those venues are rendered with their custom slots (e.g. `customIntro`),
+ * while untweaked venues without conversation context are batched together cleanly.
  *
  * Eligibility mirrors the local pool used elsewhere in the CLI: a candidate
  * needs an `_id` and a booking `email`, and must not be `isExcluded`. A venue
@@ -975,40 +1029,46 @@ export async function renderPitchesFromBackend(
 
   const bookingPeriod = resolveBookingPeriod(weekend, options.bookingPeriod);
 
-  const untweaked = eligible.filter((c) => !findTweakForCandidate(c, options.tweaks));
-  const tweaked = eligible.filter((c) => Boolean(findTweakForCandidate(c, options.tweaks)));
-
+  const standardCandidates: CandidateVenue[] = [];
   const previewPromises: Promise<PitchPreview[]>[] = [];
 
-  if (untweaked.length > 0) {
-    previewPromises.push(
-      fetchPitchPreviews(
-        {
-          backendUrl: options.backendUrl,
-          token: options.token,
-          venueIds: untweaked.map((c) => c._id),
-          templateType: options.templateType,
-          targetDates: weekend.label,
-          bookingPeriod,
-        },
-        fetchFn,
-      ),
-    );
+  for (const c of eligible) {
+    const tweak = findTweakForCandidate(c, options.tweaks);
+    const customIntro = tweak?.customIntro ||
+      resolveConversationIntro(c, weekend, options, options.templates);
+    const customBody = tweak?.customBody;
+
+    if (customIntro || customBody) {
+      previewPromises.push(
+        fetchPitchPreviews(
+          {
+            backendUrl: options.backendUrl,
+            token: options.token,
+            venueIds: [c._id],
+            templateType: options.templateType,
+            targetDates: weekend.label,
+            bookingPeriod,
+            customBody,
+            customIntro,
+          },
+          fetchFn,
+        ),
+      );
+    } else {
+      standardCandidates.push(c);
+    }
   }
 
-  for (const c of tweaked) {
-    const tweak = findTweakForCandidate(c, options.tweaks);
+  if (standardCandidates.length > 0) {
     previewPromises.push(
       fetchPitchPreviews(
         {
           backendUrl: options.backendUrl,
           token: options.token,
-          venueIds: [c._id],
+          venueIds: standardCandidates.map((c) => c._id),
           templateType: options.templateType,
           targetDates: weekend.label,
           bookingPeriod,
-          customBody: tweak?.customBody,
-          customIntro: tweak?.customIntro,
         },
         fetchFn,
       ),
@@ -1023,6 +1083,11 @@ export async function renderPitchesFromBackend(
   for (const c of eligible) {
     const preview = previewByVenueId.get(String(c._id));
     if (!preview) continue;
+    const tweak = findTweakForCandidate(c, options.tweaks);
+    const customIntro = tweak?.customIntro ||
+      resolveConversationIntro(c, weekend, options, options.templates);
+    const customBody = tweak?.customBody;
+
     pitches.push({
       venueId: c._id,
       venueName: preview.venueName || c.name,
@@ -1035,6 +1100,8 @@ export async function renderPitchesFromBackend(
       htmlBody: preview.body || "",
       templateType: resolveVenueTemplateType(c, options.templateType),
       templateStage: resolveVenueStage(c, options),
+      customIntro,
+      customBody,
     });
   }
   return pitches;
@@ -1043,16 +1110,26 @@ export async function renderPitchesFromBackend(
 /**
  * Per-venue verification options for a batch rendered with `tweaks`: a tweaked venue's preview
  * was rendered with its `customIntro`, so its fidelity check must expect that intro rather than
- * the template's own.
+ * the template's own. Similarly, touch-derived conversation openers (call/visit) are forwarded as
+ * `customIntro` to the backend renderer, so verification must check against the escaped custom intro
+ * rather than unescaped template tokens.
  */
 export function verificationOptionsFromTweaks(
   candidates: CandidateVenue[],
   tweaks?: VenueTweak[] | Map<string, VenueTweak>,
+  weekend?: TargetWeekend,
+  templates: EmailTemplate[] = [],
+  options: RenderPitchOptions = {},
 ): Record<string, RenderPitchOptions> {
   const byVenueId: Record<string, RenderPitchOptions> = {};
   for (const c of candidates) {
+    if (!c._id) continue;
     const tweak = findTweakForCandidate(c, tweaks);
-    if (c._id && tweak?.customIntro) byVenueId[c._id] = { customIntro: tweak.customIntro };
+    const customIntro = tweak?.customIntro ||
+      (weekend ? resolveConversationIntro(c, weekend, options, templates) : undefined);
+    if (customIntro) {
+      byVenueId[c._id] = { customIntro };
+    }
   }
   return byVenueId;
 }

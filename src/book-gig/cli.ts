@@ -563,7 +563,7 @@ export async function runBookGigCli(
       eligibleVenues,
       weekend,
       templates,
-      verificationOptionsFromTweaks(eligibleVenues, parsed.tweaks),
+      verificationOptionsFromTweaks(eligibleVenues, parsed.tweaks, weekend, templates),
     );
     if (!templateVerification.valid) {
       const details = templateVerification.violations
@@ -889,7 +889,7 @@ export async function runBookGigCli(
     candidates,
     weekend,
     templates,
-    verificationOptionsFromTweaks(candidates, parsed.tweaks),
+    verificationOptionsFromTweaks(candidates, parsed.tweaks, weekend, templates),
   );
   if (!templateVerification.valid) {
     const details = templateVerification.violations
@@ -941,6 +941,7 @@ export async function runBookGigCli(
             weekend,
             venueIds,
             venueNames,
+            pitches,
             onProgress: (p) => {
               console.log(
                 `  → Send call ${p.callNumber}: ${p.sent} sent so far, ` +

@@ -115,6 +115,7 @@ Deno.test("verifyPitchAgainstTemplate: recognizes the deterministic phone-conver
   const venue = returningVenue({
     _id: "venue-phone-1",
     contactNotes: "Called the venue and spoke with the owner about a return date.",
+    touches: [{ type: "call" }],
   });
   const pitch = renderPitch(venue, WEEKEND, {}, TEMPLATES);
   // Confirm the phone-conversation intro override actually kicked in (diverges from the raw
