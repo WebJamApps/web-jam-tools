@@ -27,13 +27,48 @@ A missing, unreadable, ambiguous, or unrostered result prints `Cannot tell the r
 the reason on stderr and exits 1 without stdout. The command reads local files and the roster's
 shell probe only; it has no network or write permissions.
 
+### `backlog-groom:collect`
+
+Collect the eight active repos once with a single global cap on concurrent `gh` subprocesses:
+
+```sh
+deno task backlog-groom:collect --output /tmp/backlog-groom/run-20261019/snapshot.json --concurrency 6
+deno task backlog-groom:collect --help
+```
+
+The output path must be a new JSON file under `/tmp/backlog-groom`; traversal, symlink
+paths and existing destinations are refused. The task grants Deno only `gh` execution and
+scratch-directory read/write permissions. Existing `gh` authentication supplies GitHub access.
+The default cap is 6; accepted values are 1–16. No GitHub mutations occur.
+
+Schema version 1 records `owner`, `startedAt`, `completedAt`, subprocess `requests`, and one
+`repositories` entry per active repo. Each entry contains its `repo`, raw `milestones`, and
+`issues`: raw issue metadata (including body, native type/fields, labels and milestone), native
+`blockers`, `blocking`, `children`, and `parent` (explicit null when GitHub returns HTTP 404).
+Paginated responses are flattened in TypeScript from `gh api --paginate --slurp` page arrays;
+`--jq` is incompatible with `--slurp` in current gh. A valid explicit zero summary suppresses
+empty relationship reads. Missing summaries fall back to fetching, never inferred emptiness.
+GitHub currently may omit those summaries, so the fallback remains necessary.
+
+The collector validates every repository and relationship before atomically publishing a new
+file. Missing/malformed fields, failed reads and indeterminate parent lookups refuse the run;
+no partial snapshot is published. Read this snapshot for the audit, then use it for all eight
+ranking calls. Targeted follow-up reads still establish facts not stored here, such as merged
+PRs, code completion, external prerequisites and closed ancestor chains.
+
+A snapshot is evidence for one run, never an approval record. Ranking accepts only complete,
+matching version-1 snapshots started within the last hour, with valid completion timestamps.
+Recollect and reconsider affected findings when that window expires. Josh's per-item approval
+is still required for every GitHub change.
+
 ### `backlog-groom:rank`
 
 Ranks one active repository's open issues and prints a batch of proposed native Priority moves. It
-only reads GitHub through `gh api`; it never applies the proposals.
+reads GitHub through `gh api` by default; with `--snapshot` it validates and reuses the collected
+input with zero GitHub calls. It never applies the proposals.
 
 ```sh
-deno task backlog-groom:rank --repo web-jam-tools --judgments /tmp/backlog-groom/judgments.json --focus gig-outreach
+deno task backlog-groom:rank --repo web-jam-tools --judgments /tmp/backlog-groom/judgments.json --snapshot /tmp/backlog-groom/run-20261019/snapshot.json --focus gig-outreach
 deno task backlog-groom:rank --repo web-jam-tools --judgments /tmp/backlog-groom/judgments.json --json
 deno task backlog-groom:rank --help
 ```
@@ -55,8 +90,8 @@ reason per issue. Keys are issue numbers in that repository:
 `levelFromTests` is required below 20 open non-Epics: the caller selects it using
 `skills/file-issue/SKILL.md`, so this module does not duplicate those level tests. Missing or
 invalid judgments, failed GitHub reads and malformed responses refuse the run rather than making up
-facts. Parked issues and pull requests are excluded. Epics inherit the highest existing native
-Priority of their open, unparked children and are excluded from shares. An Epic with no child
+facts. Pull requests are excluded; legacy `parked` labels do not exclude issues. Epics inherit the highest existing native
+Priority of their open children and are excluded from shares. An Epic with no child
 Priority supplies no proposal.
 
 Shares are rounded independently; the last band includes any rounding remainder. Overflow is

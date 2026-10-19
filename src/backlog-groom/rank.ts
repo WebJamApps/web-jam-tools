@@ -113,7 +113,7 @@ export function rankIssues(
   milestones: readonly string[] = [],
   focus?: string,
 ): RankResult {
-  const active = issues.filter((issue) => !issue.labels.includes("parked"));
+  const active = issues;
   const regular = active.filter((issue) => !issue.epic);
   const shares = targetShares(regular.length);
   const effectiveFocus = focus && milestones.includes(focus) ? focus : null;

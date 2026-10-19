@@ -1,9 +1,9 @@
 import { ACTIVE_REPOS, type CommandRunner, REPO_OWNER } from "../shared/repos.ts";
 import { isPriority, type IssueFacts, type Priority } from "./rank.ts";
 
-type JsonObject = Record<string, unknown>;
+export type JsonObject = Record<string, unknown>;
 
-function object(value: unknown): JsonObject {
+export function object(value: unknown): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Expected a GitHub object");
   }
@@ -53,7 +53,7 @@ function priority(issue: JsonObject): Priority | null {
   return value;
 }
 
-async function readArray(path: string, runner: CommandRunner): Promise<JsonObject[]> {
+export async function readArray(path: string, runner: CommandRunner): Promise<JsonObject[]> {
   const result = await runner([
     "api",
     path,
@@ -61,14 +61,12 @@ async function readArray(path: string, runner: CommandRunner): Promise<JsonObjec
     "GET",
     "--paginate",
     "--slurp",
-    "--jq",
-    "add",
   ]);
   if (result.code !== 0) {
     throw new Error(`GitHub read failed for ${path} (exit ${result.code})`);
   }
   try {
-    return array(JSON.parse(result.stdout)).map(object);
+    return array(JSON.parse(result.stdout)).flatMap((page) => array(page).map(object));
   } catch {
     throw new Error(`Invalid GitHub response for ${path}`);
   }
@@ -98,8 +96,6 @@ export async function readRepository(
   const issues: IssueFacts[] = [];
   for (const issue of raw) {
     if (issue.pull_request || !open(issue)) continue;
-    const issueLabels = labels(issue);
-    if (issueLabels.includes("parked")) continue;
     const issueNumber = number(issue.number);
     const path = `${root}/issues/${issueNumber}`;
     const epic = issue.type !== null && issue.type !== undefined &&
@@ -111,19 +107,32 @@ export async function readRepository(
     const waiting = epic
       ? []
       : await readArray(`${path}/dependencies/blocking?per_page=100`, runner);
-    issues.push({
-      number: issueNumber,
-      title: text(issue.title),
-      updatedAt: text(issue.updated_at),
-      milestone: issue.milestone === null ? null : text(object(issue.milestone).title),
-      priority: priority(issue),
-      epic,
-      labels: issueLabels,
-      openWaiting: waiting.filter((item) => open(item) && !labels(item).includes("parked")).length,
-      blockedByOpen: blockers.some(open),
-      children: children.filter((child) => open(child) && !labels(child).includes("parked"))
-        .map((child) => ({ number: number(child.number), priority: priority(child) })),
-    });
+    issues.push(issueFacts(issue, children, blockers, waiting));
   }
   return { issues, milestones };
+}
+
+export function issueFacts(
+  issue: JsonObject,
+  children: JsonObject[],
+  blockers: JsonObject[],
+  waiting: JsonObject[],
+): IssueFacts {
+  const issueNumber = number(issue.number);
+  const issueLabels = labels(issue);
+  const epic = issue.type !== null && issue.type !== undefined &&
+    object(issue.type).name === "Epic";
+  return {
+    number: issueNumber,
+    title: text(issue.title),
+    updatedAt: text(issue.updated_at),
+    milestone: issue.milestone === null ? null : text(object(issue.milestone).title),
+    priority: priority(issue),
+    epic,
+    labels: issueLabels,
+    openWaiting: waiting.filter(open).length,
+    blockedByOpen: blockers.some(open),
+    children: children.filter(open)
+      .map((child) => ({ number: number(child.number), priority: priority(child) })),
+  };
 }
