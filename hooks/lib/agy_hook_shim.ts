@@ -406,6 +406,7 @@ export async function runShim(
   rawInput: string,
   recordPath?: string,
 ): Promise<AgyVerdict> {
+  const gmailFence = targetHookPath.endsWith("/block-agy-gmail-send-delete.sh");
   let payload: AgyPayload = {};
   let parsedRaw: unknown = undefined;
   try {
@@ -431,16 +432,47 @@ export async function runShim(
       : { raw: parsedRaw }),
   };
 
-  await recordInvocation(recordEntry, recordPath);
+  // Gmail probe records contain tool identity only, never mailbox data or draft copy.
+  await recordInvocation(
+    gmailFence
+      ? {
+        timestamp: recordEntry.timestamp,
+        event,
+        matcher,
+        targetHookPath,
+        toolCall: { name: payload.toolCall?.name },
+      }
+      : recordEntry,
+    recordPath,
+  );
 
   if (!parsedRaw || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
-    return { decision: "allow" };
+    return gmailFence
+      ? { decision: "deny", reason: "Gmail safety fence could not read the tool payload." }
+      : { decision: "allow" };
   }
 
   const rawName = payload.toolCall?.name ?? "";
+  if (gmailFence && (typeof rawName !== "string" || !rawName)) {
+    return { decision: "deny", reason: "Gmail safety fence could not identify the tool." };
+  }
   const toolName = mapAgyToolName(rawName);
   if (!matcherMatches(matcher, toolName)) {
     return { decision: "allow" };
+  }
+  if (gmailFence) {
+    const rawArgs = payload.toolCall?.args;
+    const baseName = toolName.startsWith("mcp__gmail__")
+      ? toolName.slice("mcp__gmail__".length)
+      : toolName;
+    const isParameterless = baseName === "list_email_labels" || baseName === "list_filters";
+    if (rawArgs === undefined) {
+      if (!isParameterless) {
+        return { decision: "deny", reason: "Gmail safety fence could not read safety arguments." };
+      }
+    } else if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
+      return { decision: "deny", reason: "Gmail safety fence could not read safety arguments." };
+    }
   }
 
   let transcriptText = "";

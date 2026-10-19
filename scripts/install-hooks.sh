@@ -243,11 +243,10 @@ POST_TOOL_USE_HOOKS=(
 
 # agy-ONLY PreToolUse hooks (web-jam-tools#432) — never wired into Claude
 # Code's settings.json, only into AGY_HOOKS_PATH (via the shim below). Both
-# depend on agy-native payload fields (raw, unprefixed MCP tool names;
-# `modelName`) that Claude Code's hook payload doesn't carry, so they would
-# either misfire or never fire there.
+# are surface-specific: Gmail safety adapts raw/prefixed local tool names,
+# and the model guard consumes agy's `modelName` field.
 AGY_ONLY_PRE_TOOL_USE_HOOKS=(
-  "send_email|delete_email|batch_delete_emails::block-agy-gmail-send-delete.sh"
+  "mcp__gmail__.*|send_email|draft_email|read_email|search_emails|modify_email|delete_email|list_email_labels|batch_modify_emails|batch_delete_emails|create_label|update_label|delete_label|get_or_create_label|create_filter|list_filters|get_filter|delete_filter|create_filter_from_template|download_attachment::block-agy-gmail-send-delete.sh"
   ".*::agy-model-guard.sh"
 )
 
