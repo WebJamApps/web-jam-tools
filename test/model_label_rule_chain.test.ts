@@ -87,7 +87,7 @@ Deno.test("model-label chain: lint-plan, dry-run and filing preserve both labels
         "",
         "| # | Proposed title | Epic / child of | Model tier | Priority | Repo | Tests | Closes when |",
         "|---|---|---|---|---|---|---|---|",
-        '| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | Sonnet / Sol | High | web-jam-tools | Unit tests cover every literal case | PR merges |',
+        '| 1 | Share the model-label reader | web-jam-tools#900 "Fixture epic" | Sonnet / Sol | High | web-jam-tools | Unit tests cover every literal case | `deno task test` passes |',
       ].join("\n"),
     );
     const logs: string[] = [];
@@ -104,9 +104,13 @@ Deno.test("model-label chain: lint-plan, dry-run and filing preserve both labels
       tier: "Sonnet / Sol",
       labels: ["Needs Design"],
       escalationReason: ESCALATION_REASON,
-      body: "## What this builds\n\nBuild the shared model-label reader.",
+      body:
+        "## What this builds\n\nBuild the shared model-label reader.\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
     };
-    await Deno.writeTextFile(planPath, JSON.stringify({ children: [child] }));
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({ designDoc: designPath, children: [child] }),
+    );
     const options = { planPath, deps, author: TEST_AUTHOR, approvalCheck: () => ({ ok: true }) };
     const callsBeforeDryRun = calls.length;
     const dry = await filePlan({ ...options, dryRun: true });

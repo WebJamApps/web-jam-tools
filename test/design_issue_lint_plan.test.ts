@@ -11,10 +11,13 @@ import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import * as path from "@std/path";
 import { parsePlanTable } from "../src/design-issue/plan_table.ts";
 import {
+  checkCriterionOrClosesCell,
   checkGate1ApprovalRecord,
   checkNeedsDesignRemovals,
+  extractDesignHeadings,
   findNarrowedDirective,
   type IssueBodyFetcher,
+  type LintPlanOptions,
   lintPlanTableFile as lintPlanFile,
   parseNeedsDesignRemovals,
   type PlanTableViolation,
@@ -72,10 +75,17 @@ const TEST_SCHEMA: Schema = {
   ],
 };
 
-function validate(doc: string): PlanTableViolation[] {
+function validate(
+  doc: string,
+  options?: Partial<LintPlanOptions>,
+): PlanTableViolation[] {
   const parsed = parsePlanTable(doc);
   if (parsed === null) throw new Error("test fixture has no plan table");
-  return validatePlanTable(parsed, { schema: TEST_SCHEMA, activeRepos: ACTIVE_REPOS });
+  return validatePlanTable(parsed, {
+    schema: TEST_SCHEMA,
+    activeRepos: ACTIVE_REPOS,
+    ...options,
+  });
 }
 
 function findRule(violations: PlanTableViolation[], rule: string): PlanTableViolation[] {
@@ -102,7 +112,7 @@ function childRow(overrides: Partial<{
     priority: "High",
     repo: "web-jam-tools",
     tests: "Unit tests, one per acceptance criterion",
-    closes: "PR merges",
+    closes: "the `deno task test` suite passes",
     ...overrides,
   };
   return `| 2 | ${c.title} | ${c.epicChild} | ${c.tier} | ${c.priority} | ${c.repo} | ${c.tests} | ${c.closes} |`;
@@ -122,7 +132,7 @@ function duplicateRow(
   tier = "Flash",
   epic = "Epic #1",
 ): string {
-  return `| ${id} | ${title} | ${epic} | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | PR merges |`;
+  return `| ${id} | ${title} | ${epic} | ${tier} | Medium | ${repo} | Unit tests cover each acceptance case | the \`deno task test\` suite passes |`;
 }
 
 function issueRunner(issues: OpenIssueSummary[]): CommandRunner {
@@ -1636,4 +1646,107 @@ Deno.test("epics case 19: design:lint-plan on a passing plan with no Chrome inst
     else Deno.env.set("PATH", originalPath);
     await Deno.remove(emptyBin, { recursive: true });
   }
+});
+
+// --- Appendix D — Case Lists: Issues filed from a design point at it (Cases 1–6) ---
+// In every case the design document has a heading `### The model-label rule` and no heading `Nope`.
+const APPENDIX_D_DESIGN_DOC = `
+# Appendix D Design Fixture
+
+### The model-label rule
+
+Requirements text here.
+`;
+
+Deno.test('Appendix D Case 1: Closes when cell `builds "The model-label rule" as written; tests pass` passes', () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const check = checkCriterionOrClosesCell(
+    'builds "The model-label rule" as written; tests pass',
+    headings,
+  );
+  assertEquals(check.valid, true);
+
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ closes: 'builds "The model-label rule" as written; tests pass' }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
+  assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
+});
+
+Deno.test("Appendix D Case 2: Closes when cell `the `deno task test` suite passes` passes — a backtick-quoted command", () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const check = checkCriterionOrClosesCell("the `deno task test` suite passes", headings);
+  assertEquals(check.valid, true);
+
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ closes: "the `deno task test` suite passes" }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
+  assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
+});
+
+Deno.test('Appendix D Case 3: Closes when cell `builds "Nope" as written` fails, naming the row and Nope', () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const check = checkCriterionOrClosesCell('builds "Nope" as written', headings);
+  assertEquals(check.valid, false);
+  assertEquals(check.reason, "unknown-heading");
+  assertEquals(check.unknownHeading, "Nope");
+
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ closes: 'builds "Nope" as written' }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  const unknown = findRule(violations, "closes-when-unknown-heading");
+  assertEquals(unknown.length, 1);
+  assertStringIncludes(unknown[0].message, "Row 2");
+  assertStringIncludes(unknown[0].message, "Nope");
+});
+
+Deno.test("Appendix D Case 4: Closes when cell `PR merges` fails, naming the row: neither a heading nor a command", () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const check = checkCriterionOrClosesCell("PR merges", headings);
+  assertEquals(check.valid, false);
+  assertEquals(check.reason, "neither-heading-nor-command");
+
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ closes: "PR merges" }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  const bad = findRule(violations, "closes-when-neither-heading-nor-command");
+  assertEquals(bad.length, 1);
+  assertStringIncludes(bad[0].message, "Row 2");
+  assertStringIncludes(bad[0].message, "neither a heading nor a command");
+});
+
+Deno.test("Appendix D Case 5: Closes when cell `PR merges` on a row whose Epic / child of cell reads Epic passes — an epic closes when its children close", () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const epic =
+    "| 1 | Coordinate plan validation | Epic | Opus | High | web-jam-tools | Unit tests | PR merges |";
+  const doc = planTableDoc([
+    epic,
+    childRow({ epicChild: "row 1", closes: "the `deno task test` suite passes" }),
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
+  assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
+});
+
+Deno.test("Appendix D Case 6: Closes when cell `Josh confirms he ran it` on a row whose Model tier is Josh passes — a manual step", () => {
+  const headings = extractDesignHeadings(APPENDIX_D_DESIGN_DOC);
+  const joshRow =
+    "| 3 | Manual verification run | row 1 | Josh | Medium | web-jam-tools | None | Josh confirms he ran it |";
+  const doc = planTableDoc([
+    EPIC_ROW,
+    childRow({ epicChild: "row 1", closes: "the `deno task test` suite passes" }),
+    joshRow,
+  ]);
+  const violations = validate(doc, { designHeadings: headings });
+  assertEquals(findRule(violations, "closes-when-unknown-heading").length, 0);
+  assertEquals(findRule(violations, "closes-when-neither-heading-nor-command").length, 0);
 });

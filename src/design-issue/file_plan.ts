@@ -28,6 +28,8 @@ import {
   readPlanModelLabels,
 } from "../shared/model_label_rule.ts";
 
+import { checkCriterionOrClosesCell, extractDesignHeadings } from "./lint_plan.ts";
+
 export interface PlanIssueItem {
   id?: number | string;
   title: string;
@@ -57,6 +59,8 @@ export interface IssuePlanDoc {
   children?: PlanIssueItem[];
   issues?: PlanIssueItem[];
   plan?: PlanIssueItem[];
+  designDoc?: string;
+  design_doc?: string;
 }
 
 export interface FiledIssueInfo {
@@ -88,6 +92,7 @@ interface ParsedPlan {
   defaultMilestone?: string | number;
   epic?: PlanIssueItem;
   children: PlanIssueItem[];
+  designDoc?: string;
 }
 
 export function parsePlanJson(jsonText: string): ParsedPlan {
@@ -123,6 +128,7 @@ export function parsePlanJson(jsonText: string): ParsedPlan {
     const defaultMilestone = doc.milestone;
     const epic = doc.epic;
     const childrenList = doc.children || doc.issues || doc.plan || [];
+    const designDoc = doc.designDoc ?? doc.design_doc;
 
     if (!epic && childrenList.length === 0) {
       throw new Error("Plan contains no issues to file (missing epic and children/issues).");
@@ -133,6 +139,7 @@ export function parsePlanJson(jsonText: string): ParsedPlan {
       defaultMilestone,
       epic,
       children: childrenList,
+      designDoc,
     };
   }
 
@@ -314,6 +321,62 @@ function resolvePlanParents(
   });
 }
 
+/**
+ * Validates that an issue body has an "## Acceptance criteria" section,
+ * and that every criterion in that section names a heading from designHeadings in double quotes
+ * or carries a backtick-quoted command.
+ * Case 11: A body with no `## Acceptance criteria` section -> refused before the first issue is filed, naming the item
+ * Case 9: Body criterion `- [ ] builds "Nope" as written` -> refused before the first issue is filed, naming the item and the line
+ * Case 10: Body criterion `- [ ] The pull request merges` -> refused the same way: neither a heading nor a command
+ */
+export function validateIssueBodyCriteria(
+  title: string,
+  body: string,
+  designHeadings: ReadonlySet<string>,
+): void {
+  const lines = body.split(/\r?\n/);
+  let inCriteria = false;
+  const criteriaLines: { line: string; lineNum: number }[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+
+    if (/^##\s+Acceptance\s+criteria\b/i.test(trimmed)) {
+      inCriteria = true;
+      continue;
+    } else if (inCriteria && /^##+\s+/.test(trimmed)) {
+      break;
+    }
+
+    if (inCriteria) {
+      if (trimmed === "" || trimmed.startsWith("<!--")) continue;
+      criteriaLines.push({ line: trimmed, lineNum: i + 1 });
+    }
+  }
+
+  if (!inCriteria || criteriaLines.length === 0) {
+    throw new Error(
+      `Refused to file plan — issue "${title}" body has no "## Acceptance criteria" section.`,
+    );
+  }
+
+  for (const { line, lineNum } of criteriaLines) {
+    const check = checkCriterionOrClosesCell(line, designHeadings);
+    if (!check.valid) {
+      if (check.reason === "unknown-heading") {
+        throw new Error(
+          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${line}"): names heading "${check.unknownHeading}", which does not exist in the design document.`,
+        );
+      } else {
+        throw new Error(
+          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${line}"): neither a heading nor a command.`,
+        );
+      }
+    }
+  }
+}
+
 export async function filePlan(
   options: FilePlanOptions,
 ): Promise<FilePlanResult> {
@@ -424,6 +487,57 @@ export async function filePlan(
   const authorCheck = await checkAuthorOnRoster(options.author, deps.runCmd, deps.probeScriptPath);
   if (!authorCheck.ok) {
     throw new Error(`Refused to file plan — ${authorCheck.message}`);
+  }
+
+  // Validate design document and issue body acceptance criteria (web-jam-tools#1442)
+  if (!plan.designDoc || plan.designDoc.trim() === "") {
+    throw new Error(
+      'Refused to file plan — the design document is not named (missing "designDoc" field in plan).',
+    );
+  }
+
+  const rawDesignDoc = plan.designDoc.trim();
+  const resolvedDesignDoc = path.resolve(expandHome(rawDesignDoc));
+  let designDocContent: string;
+  try {
+    designDocContent = await deps.readFileText(resolvedDesignDoc);
+  } catch (err) {
+    throw new Error(
+      `Refused to file plan — design document at "${rawDesignDoc}" (${resolvedDesignDoc}) cannot be read: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  const designHeadings = extractDesignHeadings(designDocContent);
+
+  for (const { item, isEpic } of allItems) {
+    if (isEpic || item.type?.toLowerCase() === "epic") continue;
+    const labels = resolvedLabels.get(item) ?? [];
+    const tier = item.tier ?? item.model ?? item.modelTier;
+    if (labels.includes("Josh") || tier === "Josh") continue;
+
+    const bodyPath = item.bodyFile || item.body_file || item.bodyPath;
+    let body: string | undefined = item.body;
+    if (bodyPath) {
+      try {
+        body = await deps.readFileText(path.resolve(expandHome(bodyPath)));
+      } catch (err) {
+        throw new Error(
+          `Refused to file plan — cannot read body file "${bodyPath}" for issue "${item.title}": ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    if (body === undefined) {
+      throw new Error(
+        `Refused to file plan — issue "${item.title}" body has no "## Acceptance criteria" section.`,
+      );
+    }
+
+    validateIssueBodyCriteria(item.title, body, designHeadings);
   }
 
   if (options.dryRun) {
