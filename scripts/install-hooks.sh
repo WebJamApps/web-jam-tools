@@ -98,6 +98,9 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS_SRC="$REPO_DIR/hooks"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
+CANONICAL_GIT_HOOKS="$REPO_DIR/git-hooks"
+GIT_HOOKS_PATH_EXPLICIT=0
+
 SETTINGS_PATH_EXPLICIT=0
 if [ -n "${CLAUDE_SETTINGS_PATH:-}" ]; then
   SETTINGS_PATH="$CLAUDE_SETTINGS_PATH"
@@ -743,6 +746,11 @@ while [ $# -gt 0 ]; do
       BIN_DIR_IS_DEFAULT=0
       shift 2
       ;;
+    --canonical-git-hooks-path)
+      CANONICAL_GIT_HOOKS="$2"
+      GIT_HOOKS_PATH_EXPLICIT=1
+      shift 2
+      ;;
     --force)
       FORCE=1
       shift
@@ -1261,6 +1269,18 @@ if [ "$CHECK_MODE" = "1" ]; then
     DRIFT=1
   fi
 
+  # Check git config --global core.hooksPath (web-jam-tools#1404)
+  if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$GIT_HOOKS_PATH_EXPLICIT" = "1" ]; then
+    current_hooks_path="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+    if [ -z "$current_hooks_path" ]; then
+      echo "drift: git config --global core.hooksPath is unset" >&2
+      DRIFT=1
+    elif [ "$(readlink -f "$current_hooks_path" 2>/dev/null || echo "$current_hooks_path")" != "$(readlink -f "$CANONICAL_GIT_HOOKS" 2>/dev/null || echo "$CANONICAL_GIT_HOOKS")" ]; then
+      echo "drift: git config --global core.hooksPath ($current_hooks_path) does not point to $CANONICAL_GIT_HOOKS" >&2
+      DRIFT=1
+    fi
+  fi
+
   if [ "$DRIFT" -ne 0 ]; then
     echo "error: drift detected" >&2
     exit 1
@@ -1494,4 +1514,20 @@ elif [ -e "$CODEX_SAFETY_RULES_PATH" ] || [ -L "$CODEX_SAFETY_RULES_PATH" ]; the
 else
   ln -s "$SAFETY_RULES_SRC" "$CODEX_SAFETY_RULES_PATH"
   echo "codex AGENTS.md: created symlink"
+fi
+
+# --- Global core.hooksPath setting (web-jam-tools#1404) ---
+# Sets git config --global core.hooksPath to the canonical clone's git-hooks directory.
+if [ "$HOOKS_DEST_IS_DEFAULT" = "1" ] || [ "$GIT_HOOKS_PATH_EXPLICIT" = "1" ]; then
+  mkdir -p "$CANONICAL_GIT_HOOKS"
+  if [ -f "$CANONICAL_GIT_HOOKS/pre-push" ]; then
+    chmod +x "$CANONICAL_GIT_HOOKS/pre-push"
+  fi
+  current_hooks_path="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$current_hooks_path" ] && [ "$(readlink -f "$current_hooks_path" 2>/dev/null || echo "$current_hooks_path")" = "$(readlink -f "$CANONICAL_GIT_HOOKS" 2>/dev/null || echo "$CANONICAL_GIT_HOOKS")" ]; then
+    echo "core.hooksPath: ok (already set to $CANONICAL_GIT_HOOKS)"
+  else
+    git config --global core.hooksPath "$CANONICAL_GIT_HOOKS"
+    echo "core.hooksPath: set to $CANONICAL_GIT_HOOKS"
+  fi
 fi

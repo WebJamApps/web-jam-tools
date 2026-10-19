@@ -96,23 +96,23 @@ this machine — and says nothing when it hasn't.
 
 ## Push-time secret scanning (Gitleaks)
 
-`scripts/install-git-secret-hook.sh` installs a push-time secret guard and shared `.gitleaks.toml` configuration across WebJamApps repositories (web-jam-tools#658):
+`scripts/install-hooks.sh` sets `git config --global core.hooksPath` to the canonical clone's `git-hooks` directory, installing a machine-wide `pre-push` hook (`git-hooks/pre-push`) that scans commits being pushed across all WebJamApps repositories using the shared Docker-driven gitleaks tool (`scripts/gitleaks.sh`):
 
 ```bash
-# Install in the current repository
-bash scripts/install-git-secret-hook.sh
+# Install machine-wide hooks and set core.hooksPath
+bash scripts/install-hooks.sh
 
-# Install into a target repository
-bash scripts/install-git-secret-hook.sh --repo ../JaMmusic
+# Check for drift across installed hooks and global git settings
+bash scripts/install-hooks.sh --check
 
-# Check for drift
-bash scripts/install-git-secret-hook.sh --check
+# Run proof script on laptop
+bash scripts/prove-push-guard.sh
 ```
 
-- Node repos are wired via `.husky/pre-push`.
-- Deno repos are wired via `.git/hooks/pre-push`.
-- When a credential literal is detected in commits being pushed, the push is refused with non-zero exit, naming the file and rule ID while redacting the secret value.
-- To allow intentional test fixtures, include `// webjam-fixture-ok` or locate the test under `test/`.
+- Installed once globally via `core.hooksPath`; no per-repository copying or husky hooks needed.
+- When a credential literal is detected in commits being pushed, the push is refused with non-zero exit, naming the file, line, and rule ID while redacting the secret value.
+- Refusals print the way out: remove the secret or fingerprint it in the repository's `.gitleaksignore`.
+- After clean scanning, executes the repository's own `.git/hooks/pre-push` if present.
 
 ## Checks (CI gate)
 

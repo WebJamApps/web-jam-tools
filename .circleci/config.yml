@@ -208,14 +208,6 @@ jobs:
             bash scripts/install-hooks.sh --hooks-dir "$temp_hooks" --settings-path "$temp_settings"
             bash scripts/install-hooks.sh --hooks-dir "$temp_hooks" --settings-path "$temp_settings" --check
       - run:
-          name: Git secret hook drift check (--check)
-          command: |
-            temp_repo="$(mktemp -d)"
-            git init "$temp_repo"
-            bash scripts/install-git-secret-hook.sh --repo "$temp_repo"
-            bash scripts/install-git-secret-hook.sh --repo "$temp_repo" --check
-            rm -rf "$temp_repo"
-      - run:
           name: Git secret scan (Gitleaks)
           command: |
             # 1. Working-tree scan (current checkout)

@@ -228,17 +228,18 @@ update-all
 
 After setting up the CLIs above:
 
-1. **Install Push-Time Secret Scanner:**
+1. **Install Claude, Antigravity, and Git Hooks:**
    ```bash
-   bash scripts/install-git-secret-hook.sh
+   bash scripts/install-hooks.sh
    ```
-2. **Install Claude Skills:**
+   This installs agent hooks, CLI tools (`agents`, `update-scripts`), and sets `git config --global core.hooksPath` to install the machine-wide `pre-push` secret scanner.
+2. **Install Claude & Codex Skills:**
    ```bash
    deno task install-skills
    ```
-3. **Install Claude & Antigravity Hooks:**
+3. **Run Push-Time Guard Proof:**
    ```bash
-   bash scripts/install-hooks.sh
+   bash scripts/prove-push-guard.sh
    ```
 4. **Wire Multi-Root VSCode Workspace:**
    ```bash
