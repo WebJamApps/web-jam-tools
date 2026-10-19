@@ -700,7 +700,7 @@ function findDeclaredTemplates(pitch: PitchEmail, templates: EmailTemplate[]): E
 // Mirrors web-jam-back's renderCustomHtml(): free-text customIntro/customBody is HTML-escaped,
 // blank-line-separated paragraphs are wrapped in <p>, single newlines become <br>, and no
 // template tokens are filled.
-function renderCustomHtml(customText: string): string {
+export function renderCustomHtml(customText: string): string {
   const escaped = customText.trim()
     .split("&").join("&amp;")
     .split("<").join("&lt;")
@@ -1083,6 +1083,11 @@ export async function renderPitchesFromBackend(
   for (const c of eligible) {
     const preview = previewByVenueId.get(String(c._id));
     if (!preview) continue;
+    const tweak = findTweakForCandidate(c, options.tweaks);
+    const customIntro = tweak?.customIntro ||
+      resolveConversationIntro(c, weekend, options, options.templates);
+    const customBody = tweak?.customBody;
+
     pitches.push({
       venueId: c._id,
       venueName: preview.venueName || c.name,
@@ -1095,6 +1100,8 @@ export async function renderPitchesFromBackend(
       htmlBody: preview.body || "",
       templateType: resolveVenueTemplateType(c, options.templateType),
       templateStage: resolveVenueStage(c, options),
+      customIntro,
+      customBody,
     });
   }
   return pitches;
@@ -1103,16 +1110,26 @@ export async function renderPitchesFromBackend(
 /**
  * Per-venue verification options for a batch rendered with `tweaks`: a tweaked venue's preview
  * was rendered with its `customIntro`, so its fidelity check must expect that intro rather than
- * the template's own.
+ * the template's own. Similarly, touch-derived conversation openers (call/visit) are forwarded as
+ * `customIntro` to the backend renderer, so verification must check against the escaped custom intro
+ * rather than unescaped template tokens.
  */
 export function verificationOptionsFromTweaks(
   candidates: CandidateVenue[],
   tweaks?: VenueTweak[] | Map<string, VenueTweak>,
+  weekend?: TargetWeekend,
+  templates: EmailTemplate[] = [],
+  options: RenderPitchOptions = {},
 ): Record<string, RenderPitchOptions> {
   const byVenueId: Record<string, RenderPitchOptions> = {};
   for (const c of candidates) {
+    if (!c._id) continue;
     const tweak = findTweakForCandidate(c, tweaks);
-    if (c._id && tweak?.customIntro) byVenueId[c._id] = { customIntro: tweak.customIntro };
+    const customIntro = tweak?.customIntro ||
+      (weekend ? resolveConversationIntro(c, weekend, options, templates) : undefined);
+    if (customIntro) {
+      byVenueId[c._id] = { customIntro };
+    }
   }
   return byVenueId;
 }

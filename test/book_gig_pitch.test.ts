@@ -1,9 +1,9 @@
-// test/book_gig_pitch.test.ts — Unit tests for /book-gig pitch stage resolution and rendering
-
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
+  DEFAULT_TEMPLATES,
   detectConversationContext,
   formatNextGigDate,
+  renderCustomHtml,
   renderPitch,
   renderPitchesFromBackend,
   resolveConversationIntro,
@@ -11,8 +11,17 @@ import {
   resolveVenueStage,
   synthesizeCustomBodyHook,
   validateVoiceRules,
+  verificationOptionsFromTweaks,
+  verifyBatchAgainstTemplates,
 } from "../src/book-gig/pitch.ts";
-import type { CandidateVenue, EmailTemplate, TargetWeekend } from "../src/book-gig/types.ts";
+import { computeDraftFingerprint, dispatchBatchOutreach } from "../src/book-gig/outreach_api.ts";
+import { Gate2ReviewSession } from "../src/book-gig/gate2.ts";
+import type {
+  CandidateVenue,
+  EmailTemplate,
+  PitchEmail,
+  TargetWeekend,
+} from "../src/book-gig/types.ts";
 
 Deno.test("resolveVenueStage: resolves to cold when relationshipStage is set but no linked past gig exists", () => {
   // Venue with relationshipStage: "returning" but reason.lastGigDate unset
@@ -926,7 +935,7 @@ Deno.test("renderPitchesFromBackend: forwards touch-based conversation opener as
     const results = venueIds.map((id) => {
       let bodyHtml = "<p>Hi there,</p><p>Acoustic Duo</p>";
       if (query.customIntro) {
-        bodyHtml = query.customIntro.split(/\n{2,}/).map((p) => `<p>${p}</p>`).join("\n");
+        bodyHtml = renderCustomHtml(query.customIntro);
       }
       return {
         venueId: id,
@@ -1018,17 +1027,35 @@ Deno.test("renderPitchesFromBackend: forwards touch-based conversation opener as
   assertEquals(Boolean(noTouchReq), true);
   assertEquals(noTouchReq!.query.customIntro, undefined);
 
-  // 4. Rendered pitch email objects preserve the phone/visit opener in body
+  // 4. Rendered pitch email objects preserve the phone/visit opener in body and fields
   const callPitch = pitches.find((p) => p.venueId === "venue-call");
   assertStringIncludes(callPitch!.body, "Following up on our recent phone conversation");
+  assertEquals(
+    callPitch?.customIntro?.includes("Following up on our recent phone conversation"),
+    true,
+  );
 
   const visitPitch = pitches.find((p) => p.venueId === "venue-visit");
   assertStringIncludes(visitPitch!.body, "Following up on connecting in person");
+  assertEquals(visitPitch?.customIntro?.includes("Following up on connecting in person"), true);
 
   const noTouchPitch = pitches.find((p) => p.venueId === "venue-notouch-1");
   assertEquals(noTouchPitch!.body.includes("Following up on our recent phone conversation"), false);
   assertEquals(noTouchPitch!.body.includes("Following up on connecting in person"), false);
   assertEquals(noTouchPitch!.body.includes("Following up on our earlier conversation"), false);
+  assertEquals(noTouchPitch?.customIntro, undefined);
+
+  // 5. Verification options accurately resolve customIntro for call/visit venues
+  const vOpts = verificationOptionsFromTweaks(
+    [callVenue, visitVenue, noTouchVenue1, noTouchVenue2],
+    undefined,
+    weekend,
+    DEFAULT_TEMPLATES,
+  );
+  assertEquals(Boolean(vOpts["venue-call"]?.customIntro), true);
+  assertEquals(Boolean(vOpts["venue-visit"]?.customIntro), true);
+  assertEquals(vOpts["venue-notouch-1"], undefined);
+  assertEquals(vOpts["venue-notouch-2"], undefined);
 });
 
 Deno.test("resolveConversationIntro: returns plain-text intro for call and visit, and undefined when no context", () => {
@@ -1072,4 +1099,391 @@ Deno.test("resolveConversationIntro: returns plain-text intro for call and visit
     touches: [],
   };
   assertEquals(resolveConversationIntro(noTouchVenue, weekend), undefined);
+});
+
+Deno.test("renderPitchesFromBackend: returning call venue with apostrophes and ampersands passes template verification with escaped HTML", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const returningVenueWithAmp: CandidateVenue = {
+    _id: "venue-mac-bobs",
+    name: "Mac & Bob's Restaurant",
+    email: "booking@macandbobs.com",
+    contactName: "Dave",
+    touches: [{ type: "call" }],
+    reason: { lastGigDate: "2026-01-10" },
+    venueType: "PubFestivalBrewery",
+  };
+
+  // Mock backend GET /outreach/preview:
+  // Mirrors buildPitchEmail / renderCustomHtml which escapes & to &amp; and ' to &#39;.
+  const mockFetch: typeof fetch = (input) => {
+    const urlStr = typeof input === "string" ? input : (input as Request).url;
+    const urlObj = new URL(urlStr);
+    const customIntro = urlObj.searchParams.get("customIntro") || "";
+    const renderedIntro = renderCustomHtml(customIntro);
+
+    const template = DEFAULT_TEMPLATES.find(
+      (t) => t.type === "PubFestivalBrewery" && t.stage === "returning",
+    )!;
+    const bodyResolved = template.bodyHtml!
+      .replaceAll("[Booking Period]", "October 2026")
+      .replaceAll("[Target Dates]", "October 16–18, 2026")
+      .replace("[Custom Body]\n", "");
+    const body = `${renderedIntro}\n${bodyResolved}`;
+
+    const results = [
+      {
+        venueId: "venue-mac-bobs",
+        venueName: "Mac & Bob's Restaurant",
+        subject: "Back at Mac & Bob's Restaurant this October 2026? — Josh & Maria",
+        body,
+      },
+    ];
+
+    return Promise.resolve(
+      new Response(JSON.stringify(results), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  const pitches = await renderPitchesFromBackend(
+    [returningVenueWithAmp],
+    weekend,
+    { templates: DEFAULT_TEMPLATES },
+    mockFetch,
+  );
+
+  assertEquals(pitches.length, 1);
+  const pitch = pitches[0];
+  assertEquals(pitch.customIntro !== undefined, true);
+  assertStringIncludes(pitch.customIntro!, "Following up on our recent phone conversation");
+  // Backend preview rendered with escaped it&#39;s, we&#39;d, &amp;
+  assertStringIncludes(pitch.htmlBody || "", "it&#39;s");
+  assertStringIncludes(pitch.htmlBody || "", "we&#39;d");
+  assertStringIncludes(pitch.htmlBody || "", "Mac &amp; Bob&#39;s Restaurant");
+
+  // 1. With effective generated intros passed to verificationOptionsFromTweaks:
+  const verificationOpts = verificationOptionsFromTweaks(
+    [returningVenueWithAmp],
+    undefined,
+    weekend,
+    DEFAULT_TEMPLATES,
+  );
+  assertEquals(Boolean(verificationOpts["venue-mac-bobs"]?.customIntro), true);
+
+  const verificationResult = verifyBatchAgainstTemplates(
+    pitches,
+    [returningVenueWithAmp],
+    weekend,
+    DEFAULT_TEMPLATES,
+    verificationOpts,
+  );
+  assertEquals(verificationResult.valid, true);
+  assertEquals(verificationResult.violations.length, 0);
+
+  // 2. Proving the regression: without weekend passed (old behavior omitting customIntro),
+  // template verification fails due to unescaped HTML comparison.
+  const oldOpts = verificationOptionsFromTweaks([returningVenueWithAmp]);
+  assertEquals(oldOpts["venue-mac-bobs"], undefined);
+  const failedResult = verifyBatchAgainstTemplates(
+    pitches,
+    [returningVenueWithAmp],
+    weekend,
+    DEFAULT_TEMPLATES,
+    oldOpts,
+  );
+  assertEquals(failedResult.valid, false);
+  assertEquals(failedResult.violations.length, 1);
+  assertStringIncludes(
+    failedResult.violations[0].reason,
+    "Rendered body diverges from stored template",
+  );
+});
+
+Deno.test("full dispatch contract: call venue preview carries customIntro through Gate 2 approval, preflight, and dispatch", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const callVenue: CandidateVenue = {
+    _id: "venue-call-contract",
+    name: "Olde Salem Brewing",
+    email: "booking@oldesalem.com",
+    contactName: "Kevin",
+    touches: [{ type: "call" }],
+    venueType: "PubFestivalBrewery",
+  };
+
+  let preflightBody: Record<string, unknown> | null = null;
+  let approvedFingerprint: string | null = null;
+
+  const mockFetch: typeof fetch = (input, init) => {
+    const urlStr = typeof input === "string" ? input : (input as Request).url;
+    const urlObj = new URL(urlStr);
+
+    // 1. GET /outreach/preview
+    if (urlStr.includes("/outreach/preview")) {
+      const customIntro = urlObj.searchParams.get("customIntro") || "";
+      const renderedIntro = renderCustomHtml(customIntro);
+      const template = DEFAULT_TEMPLATES.find((t) =>
+        t.type === "PubFestivalBrewery" && t.stage === "cold"
+      )!;
+      const bodyResolved = template.bodyHtml!
+        .replaceAll("[Booking Period]", "October 2026")
+        .replaceAll("[Target Dates]", "October 16–18, 2026")
+        .replace("[Custom Body]\n", "");
+      const fullHtml = `${renderedIntro}\n${bodyResolved}`;
+
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              venueId: "venue-call-contract",
+              venueName: "Olde Salem Brewing",
+              subject:
+                "Performance Inquiry: Josh and Maria — Acoustic Duo for October 2026 — Olde Salem Brewing",
+              body: fullHtml,
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+
+    // 2. /outreach/approval/draft-fingerprints (Gate 2)
+    if (urlStr.includes("/outreach/approval/draft-fingerprints")) {
+      if (init?.method === "GET" || !init?.method) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ message: "No approval found" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      const body = JSON.parse(init?.body as string);
+      approvedFingerprint = body.draftFingerprints[0].fingerprint;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            _id: "gate2-appr-1",
+            batchId: body.batchId,
+            draftFingerprints: body.draftFingerprints,
+            approver: body.approver,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+
+    // 3. POST /outreach/batch/preflight
+    if (urlStr.includes("/outreach/batch/preflight")) {
+      preflightBody = JSON.parse(init?.body as string);
+
+      // Verify draft fingerprint against Gate 2 using body.customIntro
+      // If customIntro is absent, backend re-renders default template intro -> fingerprint mismatch!
+      const receivedIntro = preflightBody!.customIntro as string | undefined;
+      const reRenderedIntro = receivedIntro
+        ? renderCustomHtml(receivedIntro)
+        : "<p>Hi Kevin,</p>\n<p>Default intro</p>";
+      const template = DEFAULT_TEMPLATES.find((t) =>
+        t.type === "PubFestivalBrewery" && t.stage === "cold"
+      )!;
+      const bodyResolved = template.bodyHtml!
+        .replaceAll("[Booking Period]", "October 2026")
+        .replaceAll("[Target Dates]", "October 16–18, 2026")
+        .replace("[Custom Body]\n", "");
+      const reRenderedHtml = `${reRenderedIntro}\n${bodyResolved}`;
+      const recomputedFp = computeDraftFingerprint({
+        subject:
+          "Performance Inquiry: Josh and Maria — Acoustic Duo for October 2026 — Olde Salem Brewing",
+        body: reRenderedHtml,
+      });
+
+      if (recomputedFp !== approvedFingerprint) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              message:
+                "dispatch refused: Gate 2 draft fingerprint mismatch for venue 'venue-call-contract'",
+            }),
+            { status: 403, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ dispatchId: "disp-contract-1", venueCount: 1 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+
+    // 4. POST /outreach/batch
+    if (urlStr.includes("/outreach/batch")) {
+      const body = JSON.parse(init?.body as string);
+      assertEquals(body.dispatchId, "disp-contract-1");
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sent: 1,
+            remaining: 0,
+            skipped: [],
+            records: [{ venueId: "venue-call-contract", status: "sent" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+
+    return Promise.resolve(new Response("Not Found", { status: 404 }));
+  };
+
+  // Step 1: Preview rendering
+  const pitches = await renderPitchesFromBackend(
+    [callVenue],
+    weekend,
+    { backendUrl: "https://test.local", token: "tok" },
+    mockFetch,
+  );
+  assertEquals(pitches.length, 1);
+  const pitch = pitches[0];
+  assertEquals(Boolean(pitch.customIntro), true);
+  assertStringIncludes(pitch.customIntro!, "Following up on our recent phone conversation");
+
+  // Step 2: Gate 2 Approval computes and records draft fingerprints
+  const session = new Gate2ReviewSession({
+    weekend,
+    candidates: [callVenue],
+    pitches,
+    fetchFn: mockFetch,
+    backendConfig: { backendUrl: "https://test.local", token: "tok" },
+  });
+  const gate2Record = await session.approveWholeBatch({
+    approver: "Josh",
+    batchId: "batch-contract-test",
+    explicitApproval: true,
+  });
+  assertEquals(gate2Record.draftFingerprints.length, 1);
+  assertEquals(gate2Record.draftFingerprints[0].fingerprint, approvedFingerprint);
+
+  // Step 3: Batch dispatch carrying pitches passes customIntro into preflight and completes send
+  const dispatchResult = await dispatchBatchOutreach(
+    {
+      weekend,
+      venueIds: ["venue-call-contract"],
+      pitches,
+      backendUrl: "https://test.local",
+      token: "tok",
+    },
+    mockFetch,
+  );
+
+  assertEquals(dispatchResult.requested, 1);
+  assertEquals(dispatchResult.sent, 1);
+  assertEquals(preflightBody !== null, true);
+  assertEquals(preflightBody!.customIntro, pitch.customIntro);
+});
+
+Deno.test("dispatchBatchOutreach: groups venues with distinct custom intros and runs preflight + send per group", async () => {
+  const weekend: TargetWeekend = {
+    start: "2026-10-16",
+    end: "2026-10-18",
+    rawText: "Oct 16-18 2026",
+    label: "October 16–18, 2026",
+    year: 2026,
+    month: 10,
+    days: [16, 17, 18],
+  };
+
+  const pitch1: PitchEmail = {
+    venueId: "v1",
+    venueName: "Venue One",
+    to: "v1@test.com",
+    subject: "Sub 1",
+    body: "Body 1",
+    customIntro: "Intro One",
+  };
+
+  const pitch2: PitchEmail = {
+    venueId: "v2",
+    venueName: "Venue Two",
+    to: "v2@test.com",
+    subject: "Sub 2",
+    body: "Body 2",
+    customIntro: "Intro Two",
+  };
+
+  const preflightCalls: Array<{ venueIds: string[]; customIntro?: string }> = [];
+  const sendCalls: Array<{ dispatchId: string }> = [];
+
+  const mockFetch: typeof fetch = (input, init) => {
+    const urlStr = typeof input === "string" ? input : (input as Request).url;
+    if (urlStr.includes("/outreach/batch/preflight")) {
+      const body = JSON.parse(init?.body as string);
+      preflightCalls.push({ venueIds: body.venueIds, customIntro: body.customIntro });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            dispatchId: `disp-${preflightCalls.length}`,
+            venueCount: body.venueIds.length,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    if (urlStr.includes("/outreach/batch")) {
+      const body = JSON.parse(init?.body as string);
+      sendCalls.push({ dispatchId: body.dispatchId });
+      const currentGroupVenue = body.dispatchId === "disp-1" ? "v1" : "v2";
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            sent: 1,
+            remaining: 0,
+            skipped: [],
+            records: [{ venueId: currentGroupVenue, status: "sent" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    }
+    return Promise.resolve(new Response("Not Found", { status: 404 }));
+  };
+
+  const res = await dispatchBatchOutreach(
+    {
+      weekend,
+      venueIds: ["v1", "v2"],
+      pitches: [pitch1, pitch2],
+      backendUrl: "https://test.local",
+      token: "secret",
+    },
+    mockFetch,
+  );
+
+  assertEquals(res.requested, 2);
+  assertEquals(res.sent, 2);
+  assertEquals(preflightCalls.length, 2);
+  assertEquals(preflightCalls[0].venueIds, ["v1"]);
+  assertEquals(preflightCalls[0].customIntro, "Intro One");
+  assertEquals(preflightCalls[1].venueIds, ["v2"]);
+  assertEquals(preflightCalls[1].customIntro, "Intro Two");
+  assertEquals(sendCalls.length, 2);
 });

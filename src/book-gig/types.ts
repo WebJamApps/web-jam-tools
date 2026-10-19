@@ -155,6 +155,8 @@ export interface PitchEmail {
   htmlBody?: string;
   templateType?: string;
   templateStage?: string;
+  customIntro?: string;
+  customBody?: string;
 }
 
 export interface BatchDispatchSkipped {
