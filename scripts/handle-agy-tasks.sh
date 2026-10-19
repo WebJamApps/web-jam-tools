@@ -197,9 +197,24 @@ IFS='|' read -r -a MODELS <<< "${AGY_MODELS:-$DEFAULT_MODELS}"
 # a PR opened with `gh pr create` (no footer, or any other author) still fails.
 pr_author_for_model() {
   local model="$1"
-  # Gemini Flash runs at high effort only, so the effort suffix is dropped too: the roster
-  # names the model, "Gemini Flash" (web-jam-tools#1202). A "(Medium)" suffix is kept so the
-  # roster refuses it.
+  case "$model" in
+    gemini-*-flash-high|gemini-*-flash-tiered)
+      printf 'agy — Gemini Flash'
+      return 0
+      ;;
+    gemini-4-argon-high)
+      printf 'agy — Gemini Argon'
+      return 0
+      ;;
+    claude-sonnet-5-5-high)
+      printf 'agy — Claude Sonnet 5.5'
+      return 0
+      ;;
+  esac
+  # agy models (Gemini Flash, Gemini Argon, Claude Sonnet 5.5) run at high effort only, so the
+  # "(High)" effort suffix is dropped too: the roster names the model ("Gemini Flash",
+  # "Gemini Argon", "Claude Sonnet 5.5", web-jam-tools#1202, web-jam-tools#1465). A "(Low)" or
+  # "(Medium)" suffix is kept so the roster refuses it.
   printf 'agy — %s' "$(printf '%s' "$model" | sed -E 's/^([[:alpha:]]+)[[:space:]]+[0-9]+(\.[0-9]+)*[[:space:]]+/\1 /; s/[[:space:]]+\(High\)$//')"
 }
 
@@ -1079,7 +1094,7 @@ else
   # switch models mid-session via /model, this stays pinned to the launch
   # model — re-run with AGY_MODELS set to the new model (or export
   # FORCED_PR_AUTHOR yourself) before finishing, if you do switch.
-  export FORCED_PR_AUTHOR="agy — $ACTIVE_MODEL"
+  export FORCED_PR_AUTHOR="$(pr_author_for_model "$ACTIVE_MODEL")"
   agy_env_args
   env -i "${AGY_ENV_ARGS[@]}" "$AGY" --model "$ACTIVE_MODEL" -i "$PROMPT"
 fi

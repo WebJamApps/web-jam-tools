@@ -86,6 +86,25 @@ async function agySessionModel(recordPath: string): Promise<string> {
   return fields.modelName;
 }
 
+function matchesAgyModel(model: string, entry: string): boolean {
+  if (entry === "Gemini Flash") {
+    return model === "Gemini Flash" ||
+      /^gemini-\d+(?:\.\d+)*-flash-(?:high|tiered)$/.test(model) ||
+      /^Gemini \d+(?:\.\d+)* Flash(?: \(High\))?$/.test(model);
+  }
+  if (entry === "Gemini Argon") {
+    return model === "Gemini Argon" ||
+      model === "gemini-4-argon-high" ||
+      model === "Gemini 4 Argon (High)";
+  }
+  if (entry === "Claude Sonnet 5.5") {
+    return model === "Claude Sonnet 5.5" ||
+      model === "claude-sonnet-5-5-high" ||
+      model === "Claude Sonnet 5.5 (High)";
+  }
+  return false;
+}
+
 /** Resolve the current surface's recorded model, never falling back from an identified session. */
 export async function resolveRunningModel(options: RunningModelOptions = {}): Promise<string> {
   const env = options.env ?? ((name: string) => Deno.env.get(name));
@@ -111,10 +130,7 @@ export async function resolveRunningModel(options: RunningModelOptions = {}): Pr
   } catch (error) {
     throw new Error(`Cannot read the agy model record ${recordPath}: ${error}`);
   }
-  const flash = model === "Gemini Flash" ||
-    /^gemini-\d+(?:\.\d+)*-flash-(?:high|tiered)$/.test(model) ||
-    /^Gemini \d+(?:\.\d+)* Flash(?: \(High\))?$/.test(model);
-  return uniqueRosterModel(model, roster.filter((entry) => flash && entry === "Gemini Flash"));
+  return uniqueRosterModel(model, roster.filter((entry) => matchesAgyModel(model, entry)));
 }
 
 export async function runRunningModel(

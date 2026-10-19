@@ -136,7 +136,7 @@ Deno.test("--list-roster is read-only and needs no git repository", async () => 
     assertEquals(result.code, 0);
     assertEquals(new TextDecoder().decode(result.stderr), "");
     const entries = new TextDecoder().decode(result.stdout).trimEnd().split("\n");
-    for (const entry of ["GPT-6 Luna", "GPT-6.1 Sol", "GPT-6 Astra"]) {
+    for (const entry of ["Gemini Argon", "GPT-6 Luna", "GPT-6.1 Sol", "GPT-6 Astra"]) {
       assertEquals(entries.includes(entry), true);
     }
     assertEquals(Array.from(Deno.readDirSync(dir)).map((entry) => entry.name), ["git"]);
@@ -1365,6 +1365,7 @@ const MODEL_LABEL_CASES = [
   ["Claude Code — Claude Haiku 5.5", "Haiku"],
   ["Codex — GPT-6 Luna", "Luna"],
   ["agy — Gemini Flash", "Flash"],
+  ["agy — Gemini Argon", "Argon"],
   ["Codex — GPT-6.1 Sol", "Sol"],
   ["Codex — GPT-6 Astra", "Astra"],
   ["Claude Code — Claude Sonnet 5.5", "Sonnet"],
@@ -1685,8 +1686,19 @@ for (
   const [author, code] of [
     ["Antigravity — Gemini Flash (Medium)", 1],
     ["Antigravity — gemini flash (MEDIUM)", 1],
+    ["Antigravity — Gemini Flash (Low)", 1],
     ["Antigravity — Gemini Flash", 0],
     ["Antigravity — Gemini Flash (High)", 0],
+    ["agy — Gemini Argon", 0],
+    ["agy — Gemini Argon (High)", 0],
+    ["agy — Gemini Argon (Low)", 1],
+    ["agy — Gemini Argon (Medium)", 1],
+    ["agy — Gemini 4 Argon (High)", 1],
+    ["agy — Gemini 4 Argon (Low)", 1],
+    ["agy — Gemini 4 Argon (Medium)", 1],
+    ["agy — Claude Sonnet 5.5", 0],
+    ["agy — Claude Sonnet 5.5 (Low)", 1],
+    ["agy — Claude Sonnet 5.5 (Medium)", 1],
   ] as const
 ) {
   Deno.test(`create-draft-pr.sh --check-author: ${author} exits ${code}`, async () => {
