@@ -38,7 +38,11 @@ import {
   validateVoiceRules,
   verifyPitchAgainstTemplate,
 } from "../src/book-gig/pitch.ts";
-import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
+import {
+  formatDraftPayload,
+  mergeWeekendRuns,
+  type WeekendRunData,
+} from "../src/book-gig/gmail.ts";
 import {
   BatchDispatchError,
   checkGmailReplies,
@@ -79,6 +83,7 @@ import type {
   CandidateVenue,
   EmailTemplate,
   OutreachCampaignRecord,
+  PitchEmail,
   TargetWeekend,
 } from "../src/book-gig/types.ts";
 
@@ -6151,7 +6156,7 @@ Deno.test("publishAndOpenReport: preserves accumulated dispatch history across i
         requested: 1,
         sent: 1,
         skipped: [],
-        records: [{ venueId: "venue-a" }],
+        records: [{ _id: "outreach-a", venueId: "venue-a" }],
       },
     };
 
@@ -6239,7 +6244,7 @@ Deno.test("publishAndOpenReport: preserves accumulated dispatch history across i
         requested: 1,
         sent: 1,
         skipped: [],
-        records: [{ venueId: "venue-b" }],
+        records: [{ _id: "outreach-b", venueId: "venue-b" }],
       },
     };
 
@@ -6267,4 +6272,60 @@ Deno.test("publishAndOpenReport: preserves accumulated dispatch history across i
   } finally {
     await Deno.remove(scratchDir, { recursive: true });
   }
+});
+
+Deno.test("mergeWeekendRuns: resolves dispatched entities by venueId rather than outreach record _id (#994)", () => {
+  const existing: WeekendRunData = {
+    candidates: [
+      { _id: "venue-a", name: "Venue A", city: "Salem, VA" } as CandidateVenue,
+    ],
+    pitches: [
+      { venueId: "venue-a", venueName: "Venue A", to: "a@venue.com", subject: "S", body: "B" },
+    ],
+    batchDispatch: {
+      requested: 1,
+      sent: 1,
+      skipped: [],
+      records: [{ _id: "outreach-a", venueId: "venue-a" }],
+    },
+  };
+
+  const gate2Review: BookGigResult = {
+    mode: "gate2",
+    weekend: {
+      start: "2027-01-08",
+      end: "2027-01-10",
+      rawText: "Jan 8-10 2027",
+      label: "January 8–10, 2027",
+      year: 2027,
+      month: 1,
+      days: [8, 9, 10],
+    },
+    candidates: [
+      { _id: "venue-b", name: "Venue B", city: "Roanoke, VA" } as CandidateVenue,
+    ],
+    density: { count: 1, isSparse: true },
+    pitches: [
+      { venueId: "venue-b", venueName: "Venue B", to: "b@venue.com", subject: "S", body: "B" },
+    ],
+  };
+
+  const merged = mergeWeekendRuns(existing, gate2Review);
+
+  // Visible review set is curated to Venue B
+  assertEquals(merged.candidates.length, 1);
+  assertEquals(merged.candidates[0]._id, "venue-b");
+  assertEquals(merged.pitches.length, 1);
+  assertEquals(merged.pitches[0].venueId, "venue-b");
+
+  // Embedded machine-readable run data must retain Venue A by venueId
+  const runDataCandidates =
+    (merged as unknown as { _runDataCandidates?: CandidateVenue[] })._runDataCandidates;
+  const runDataPitches = (merged as unknown as { _runDataPitches?: PitchEmail[] })._runDataPitches;
+  assert(runDataCandidates !== undefined);
+  assertEquals(runDataCandidates.length, 2);
+  assertEquals(runDataCandidates.map((c) => c._id), ["venue-a", "venue-b"]);
+  assert(runDataPitches !== undefined);
+  assertEquals(runDataPitches.length, 2);
+  assertEquals(runDataPitches.map((p) => p.venueId), ["venue-a", "venue-b"]);
 });

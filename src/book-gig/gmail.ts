@@ -49,17 +49,27 @@ export function mergeWeekendRuns(
   if (existing.batches && existing.batches.length > 0) {
     for (const b of existing.batches) {
       if (b.sent > 0 || (b.candidateIds && b.candidateIds.length > 0)) {
+        const skipped = new Set(b.skippedVenueIds || []);
         for (const id of b.candidateIds) {
-          if (id) priorDispatchedIds.add(id);
+          if (id && !skipped.has(id)) priorDispatchedIds.add(id);
         }
       }
     }
   }
   if (existing.batchDispatch?.records && existing.batchDispatch.records.length > 0) {
     for (const r of existing.batchDispatch.records) {
-      const rec = r as { _id?: string; venueId?: string };
-      const id = rec._id || rec.venueId;
-      if (id) priorDispatchedIds.add(id);
+      const rec = r as { _id?: string; venueId?: string; venueName?: string; venue?: string };
+      const venueId = rec.venueId || rec.venue;
+      if (venueId) {
+        priorDispatchedIds.add(venueId);
+      } else if (rec.venueName) {
+        priorDispatchedIds.add(rec.venueName);
+      } else if (rec._id) {
+        priorDispatchedIds.add(rec._id);
+      }
+      if (rec.venueName) {
+        priorDispatchedIds.add(rec.venueName);
+      }
     }
   }
   if (priorDispatchedIds.size === 0 && existing.batchDispatch && existing.batchDispatch.sent > 0) {
@@ -286,8 +296,8 @@ export function mergeWeekendRuns(
         ...(current.batchDispatch.records || []),
       ];
       for (const r of allRecords) {
-        const rec = r as { _id?: string; venueId?: string };
-        const id = rec?._id || rec?.venueId;
+        const rec = r as { _id?: string; venueId?: string; venue?: string };
+        const id = rec?.venueId || rec?.venue || rec?._id;
         if (id) {
           recordMap.set(id, r);
         } else {

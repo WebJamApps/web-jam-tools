@@ -1124,7 +1124,18 @@ ${
       location: result.location,
       reportUrl: result.reportUrl,
       batches: (result as unknown as { _runDataBatches?: WeekendRunData["batches"] })
-        ._runDataBatches,
+        ._runDataBatches ?? (result.batchDispatch
+          ? [{
+            candidateIds: (result.candidates || []).map((c) =>
+              c._id || (c as unknown as { venueId?: string }).venueId || c.name
+            ),
+            requested: result.batchDispatch.requested,
+            sent: result.batchDispatch.sent,
+            skippedVenueIds: (result.batchDispatch.skipped || []).map((s) =>
+              s.venueId || s.venueName
+            ),
+          }]
+          : undefined),
     })
   }
   </script>
