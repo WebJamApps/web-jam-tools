@@ -78,7 +78,7 @@ An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
    - Check if an OPEN PR references it:
      ```bash
      gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body,reviews,commits,statusCheckRollup \
-       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)"))'
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+(?:([A-Za-z0-9_.-]+/)?([A-Za-z0-9_.-]+))?#<num>([^0-9]|$)"))'
      ```
    - **Fix-bucket resume carve-out**: If an OPEN PR exists for this issue, check whether it belongs to the **fix bucket** — having changes requested (one or more Must Fix items in its current automated review) or failing CI checks (`statusCheckRollup` has failures/errors). If so, the skill proceeds in **resume mode** rather than stopping:
      - No new branch is cut off `dev`.
@@ -93,18 +93,25 @@ An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
      ```
      returns nothing (unless in resume mode for an existing branch).
 
-4. **Not already done (completion detection)**:
+4. **Not already done (completion detection & post-merge validation)**:
    - **Signal 1 (Merged or closed PR)**: Query for merged or closed PRs whose body references the issue with `Closes` or `Part of`:
      ```bash
      gh pr list --repo WebJamApps/<Repo> --state merged --json headRefName,body \
-       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+#<num>([^0-9]|$)")) | .headRefName'
+       --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+(?:([A-Za-z0-9_.-]+/)?([A-Za-z0-9_.-]+))?#<num>([^0-9]|$)")) | .headRefName'
      ```
-     If a merged or closed PR already addressed the issue, the issue is **appears already done: verify and close** (not startable).
+     Matches `Part of <repo>#<num>`, `Part of <owner>/<repo>#<num>`, and bare `Closes`/`Part of #<num>`. If a merged or closed PR already addressed the issue, the issue is **appears already done: verify and close** (not startable for new branch or PR creation).
    - **Signal 2 (Concrete mechanically checkable end state)**: When the issue's acceptance criteria name a concrete, mechanically checkable end state — a filesystem path that must exist or must not exist (e.g. `test -d /path` or `test -f /path`), or a deterministic command whose exit status decides the matter — verify that state directly.
      - *Priority for `Josh`-labeled manual steps*: `Josh`-labeled manual steps never produce a PR, so Signal 1 can never detect them. Prioritize checking their concrete end states directly (e.g. verifying an obsolete backup directory was deleted).
      - *Bounded scope*: Only mechanically checkable criteria are verified directly. Do not attempt open-ended verification of arbitrary prose criteria, keeping check costs flat.
-   - If either signal indicates completion, the issue is classified as **appears already done: verify and close**.
-   - **Read-only rule**: This check is strictly read-only. It never closes an issue, comments on an issue, or edits a label on its own. It reports the completion evidence and lets Josh verify and close it.
+   - If either signal indicates completion, the issue is classified as **appears already done: verify and close** (no new branch or PR is cut off `dev`). Instead, execute the post-merge validation step below across Claude Code, agy/Antigravity, and Codex.
+   - **Post-merge acceptance criteria validation (Three outcomes)**:
+     When an issue is detected as already implemented, validate each of its acceptance criteria against `dev` and local state (running the issue's `## How to test locally` commands, symlink/registration checks, and concrete end-state checks):
+     - **Outcome 1 (All acceptance criteria pass validation):** When every acceptance criterion is verified against `dev` and local state, the agent updates the issue body via `deno task edit-issue` to check off all verified AC checkboxes (`- [ ]` → `- [x]`), posts a structured validation comment with the concrete verification receipts via `deno task post-issue-comment`, and stops for Josh to review and close.
+     - **Outcome 2 (One or more acceptance criteria fail validation):** When any acceptance criterion does not hold, the agent refuses to check off the failing criterion (`- [ ]` remains unchecked), reports the failing criterion and receipts in chat, and stops without closing the issue.
+     - **Outcome 3 (Unable to determine whether an acceptance criterion holds):** When a verification check errors, times out, or cannot read the required state, the agent **refuses** (fails closed on validation): leaves that criterion's checkbox unchecked (`- [ ]`), reports what could not be verified, and does not claim validation passed.
+   - **Hard safety bounds on completion detection**:
+     - **Never close an issue autonomously:** Agents are strictly forbidden from running `gh issue close` autonomously without Josh's explicit authorization in chat naming the specific issue (`gh issue close` remains human-gated per `docs/cross-ai-rules.md`).
+     - **No label or worklist edits:** The agent never edits labels (`gh issue edit --add-label` / `--remove-label`) and never writes to `haiku-issues.md` (or any other worklist file) during completion detection.
 
 ## No-argument mode — auto-pick worklist based on agent surface
 
