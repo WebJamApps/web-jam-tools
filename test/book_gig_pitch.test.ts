@@ -1,4 +1,4 @@
-import { assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import {
   DEFAULT_TEMPLATES,
   detectConversationContext,
@@ -14,7 +14,11 @@ import {
   verificationOptionsFromTweaks,
   verifyBatchAgainstTemplates,
 } from "../src/book-gig/pitch.ts";
-import { computeDraftFingerprint, dispatchBatchOutreach } from "../src/book-gig/outreach_api.ts";
+import {
+  BatchDispatchError,
+  computeDraftFingerprint,
+  dispatchBatchOutreach,
+} from "../src/book-gig/outreach_api.ts";
 import { Gate2ReviewSession } from "../src/book-gig/gate2.ts";
 import type {
   CandidateVenue,
@@ -1210,280 +1214,180 @@ Deno.test("renderPitchesFromBackend: returning call venue with apostrophes and a
   );
 });
 
-Deno.test("full dispatch contract: call venue preview carries customIntro through Gate 2 approval, preflight, and dispatch", async () => {
-  const weekend: TargetWeekend = {
-    start: "2026-10-16",
-    end: "2026-10-18",
-    rawText: "Oct 16-18 2026",
-    label: "October 16–18, 2026",
-    year: 2026,
-    month: 10,
-    days: [16, 17, 18],
-  };
+// The server requires the whole remaining Gate 1/Gate 2 set before any send,
+// then checks each rendered fingerprint using the inputs persisted at preflight.
+for (const mutation of ["none", "missing-opener", "changed-body", "venue-subset"]) {
+  Deno.test(`mixed-venue preview/approval/dispatch contract: ${mutation}`, async () => {
+    const weekend: TargetWeekend = {
+      start: "2026-10-16",
+      end: "2026-10-18",
+      rawText: "Oct 16-18 2026",
+      label: "October 16–18, 2026",
+      year: 2026,
+      month: 10,
+      days: [16, 17, 18],
+    };
+    const candidates: CandidateVenue[] = [
+      { _id: "call", name: "Call Brewery", contactName: "Dave", touches: [{ type: "call" }] },
+      { _id: "visit", name: "Visit Tavern", contactName: "Sarah", touches: [{ type: "visit" }] },
+      { _id: "standard", name: "Standard Venue", notes: "Date called: 2026-05-09", touches: [] },
+      { _id: "tweak", name: "Tweaked Venue", touches: [] },
+    ].map((c) => ({ ...c, email: c._id + "@example.com", venueType: "PubFestivalBrewery" }));
+    const venueIds = candidates.map((c) => c._id!);
+    const approved = new Map<string, string>();
+    const preflightCalls: Record<string, unknown>[] = [];
+    const sendCalls: Record<string, unknown>[] = [];
+    const persisted = new Map<string, PitchEmail>();
+    const sent: string[] = [];
+    const reply = (data: unknown, status = 200) =>
+      Promise.resolve(new Response(JSON.stringify(data), { status }));
+    const render = (
+      venueId: string,
+      slots: { customIntro?: string; customBody?: string } = {},
+    ): PitchEmail => {
+      const venue = candidates.find((c) => c._id === venueId)!;
+      // Simulate the server's custom-slot renderer, which does not infer conversation
+      // context. The companion backend regression exercises the real renderer and mailer.
+      const intro = slots.customIntro
+        ? renderCustomHtml(slots.customIntro)
+        : `<p>Hi ${venue.contactName || "there"},</p><p>Default opener.</p>`;
+      const htmlBody = `${intro}\n<p>Booking for ${weekend.label}.</p>\n${
+        slots.customBody ? renderCustomHtml(slots.customBody) : ""
+      }`;
+      return {
+        venueId,
+        venueName: venue.name,
+        to: venue.email!,
+        subject: `Inquiry: ${venue.name}`,
+        body: htmlBody,
+        htmlBody,
+      };
+    };
+    const fingerprint = (pitch: PitchEmail) =>
+      computeDraftFingerprint({ subject: pitch.subject, body: pitch.htmlBody! });
 
-  const callVenue: CandidateVenue = {
-    _id: "venue-call-contract",
-    name: "Olde Salem Brewing",
-    email: "booking@oldesalem.com",
-    contactName: "Kevin",
-    touches: [{ type: "call" }],
-    venueType: "PubFestivalBrewery",
-  };
-
-  let preflightBody: Record<string, unknown> | null = null;
-  let approvedFingerprint: string | null = null;
-
-  const mockFetch: typeof fetch = (input, init) => {
-    const urlStr = typeof input === "string" ? input : (input as Request).url;
-    const urlObj = new URL(urlStr);
-
-    // 1. GET /outreach/preview
-    if (urlStr.includes("/outreach/preview")) {
-      const customIntro = urlObj.searchParams.get("customIntro") || "";
-      const renderedIntro = renderCustomHtml(customIntro);
-      const template = DEFAULT_TEMPLATES.find((t) =>
-        t.type === "PubFestivalBrewery" && t.stage === "cold"
-      )!;
-      const bodyResolved = template.bodyHtml!
-        .replaceAll("[Booking Period]", "October 2026")
-        .replaceAll("[Target Dates]", "October 16–18, 2026")
-        .replace("[Custom Body]\n", "");
-      const fullHtml = `${renderedIntro}\n${bodyResolved}`;
-
-      return Promise.resolve(
-        new Response(
-          JSON.stringify([
-            {
-              venueId: "venue-call-contract",
-              venueName: "Olde Salem Brewing",
-              subject:
-                "Performance Inquiry: Josh and Maria — Acoustic Duo for October 2026 — Olde Salem Brewing",
-              body: fullHtml,
-            },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-    }
-
-    // 2. /outreach/approval/draft-fingerprints (Gate 2)
-    if (urlStr.includes("/outreach/approval/draft-fingerprints")) {
-      if (init?.method === "GET" || !init?.method) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ message: "No approval found" }), {
-            status: 404,
-            headers: { "Content-Type": "application/json" },
+    const mockFetch: typeof fetch = (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/outreach/preview") {
+        const slots = {
+          customIntro: url.searchParams.get("customIntro") || undefined,
+          customBody: url.searchParams.get("customBody") || undefined,
+        };
+        return reply(
+          url.searchParams.get("venueIds")!.split(",").map((id) => {
+            const pitch = render(id, slots);
+            return {
+              venueId: id,
+              venueName: pitch.venueName,
+              subject: pitch.subject,
+              body: pitch.htmlBody,
+            };
           }),
         );
       }
-      const body = JSON.parse(init?.body as string);
-      approvedFingerprint = body.draftFingerprints[0].fingerprint;
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            _id: "gate2-appr-1",
-            batchId: body.batchId,
-            draftFingerprints: body.draftFingerprints,
-            approver: body.approver,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-    }
-
-    // 3. POST /outreach/batch/preflight
-    if (urlStr.includes("/outreach/batch/preflight")) {
-      preflightBody = JSON.parse(init?.body as string);
-
-      // Verify draft fingerprint against Gate 2 using body.customIntro
-      // If customIntro is absent, backend re-renders default template intro -> fingerprint mismatch!
-      const receivedIntro = preflightBody!.customIntro as string | undefined;
-      const reRenderedIntro = receivedIntro
-        ? renderCustomHtml(receivedIntro)
-        : "<p>Hi Kevin,</p>\n<p>Default intro</p>";
-      const template = DEFAULT_TEMPLATES.find((t) =>
-        t.type === "PubFestivalBrewery" && t.stage === "cold"
-      )!;
-      const bodyResolved = template.bodyHtml!
-        .replaceAll("[Booking Period]", "October 2026")
-        .replaceAll("[Target Dates]", "October 16–18, 2026")
-        .replace("[Custom Body]\n", "");
-      const reRenderedHtml = `${reRenderedIntro}\n${bodyResolved}`;
-      const recomputedFp = computeDraftFingerprint({
-        subject:
-          "Performance Inquiry: Josh and Maria — Acoustic Duo for October 2026 — Olde Salem Brewing",
-        body: reRenderedHtml,
-      });
-
-      if (recomputedFp !== approvedFingerprint) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              message:
-                "dispatch refused: Gate 2 draft fingerprint mismatch for venue 'venue-call-contract'",
-            }),
-            { status: 403, headers: { "Content-Type": "application/json" } },
-          ),
-        );
+      if (url.pathname === "/outreach/approval/draft-fingerprints") {
+        if (!init?.method || init.method === "GET") {
+          return reply({ message: "No approval found" }, 404);
+        }
+        const body = JSON.parse(init.body as string);
+        for (const item of body.draftFingerprints) approved.set(item.venueId, item.fingerprint);
+        return reply({ ...body, _id: "gate2-record" });
       }
-
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({ dispatchId: "disp-contract-1", venueCount: 1 }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-    }
-
-    // 4. POST /outreach/batch
-    if (urlStr.includes("/outreach/batch")) {
-      const body = JSON.parse(init?.body as string);
-      assertEquals(body.dispatchId, "disp-contract-1");
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            sent: 1,
-            remaining: 0,
-            skipped: [],
-            records: [{ venueId: "venue-call-contract", status: "sent" }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-    }
-
-    return Promise.resolve(new Response("Not Found", { status: 404 }));
-  };
-
-  // Step 1: Preview rendering
-  const pitches = await renderPitchesFromBackend(
-    [callVenue],
-    weekend,
-    { backendUrl: "https://test.local", token: "tok" },
-    mockFetch,
-  );
-  assertEquals(pitches.length, 1);
-  const pitch = pitches[0];
-  assertEquals(Boolean(pitch.customIntro), true);
-  assertStringIncludes(pitch.customIntro!, "Following up on our recent phone conversation");
-
-  // Step 2: Gate 2 Approval computes and records draft fingerprints
-  const session = new Gate2ReviewSession({
-    weekend,
-    candidates: [callVenue],
-    pitches,
-    fetchFn: mockFetch,
-    backendConfig: { backendUrl: "https://test.local", token: "tok" },
-  });
-  const gate2Record = await session.approveWholeBatch({
-    approver: "Josh",
-    batchId: "batch-contract-test",
-    explicitApproval: true,
-  });
-  assertEquals(gate2Record.draftFingerprints.length, 1);
-  assertEquals(gate2Record.draftFingerprints[0].fingerprint, approvedFingerprint);
-
-  // Step 3: Batch dispatch carrying pitches passes customIntro into preflight and completes send
-  const dispatchResult = await dispatchBatchOutreach(
-    {
+      if (url.pathname === "/outreach/batch/preflight") {
+        const body = JSON.parse(init?.body as string);
+        preflightCalls.push(body);
+        const actualSet = new Set(body.venueIds);
+        if (actualSet.size !== venueIds.length || !venueIds.every((id) => actualSet.has(id))) {
+          return reply({ message: "Gate 1 venue-set approval does not match batch venueIds" }, 403);
+        }
+        if (approved.size !== actualSet.size) {
+          return reply({ message: "Gate 2 venue set mismatch" }, 403);
+        }
+        const customizations: Array<
+          { venueId: string; customIntro?: string; customBody?: string }
+        > = body.venueCustomizations || [];
+        for (const id of body.venueIds) {
+          const slots = customizations.find((c) => c.venueId === id) || {};
+          const pitch = render(id, slots);
+          if (fingerprint(pitch) !== approved.get(id)) {
+            return reply({ message: "Gate 2 draft fingerprint mismatch: " + id }, 403);
+          }
+          persisted.set(id, pitch);
+        }
+        return reply({ dispatchId: "mixed-dispatch", venueCount: venueIds.length });
+      }
+      if (url.pathname === "/outreach/batch") {
+        const body = JSON.parse(init?.body as string);
+        sendCalls.push(body);
+        assertEquals(body, { dispatchId: "mixed-dispatch" });
+        // Simulate a time-limited send: all copy has passed preflight before the first call.
+        assertEquals(persisted.size, venueIds.length);
+        const id = venueIds[sent.length];
+        assertEquals(fingerprint(persisted.get(id)!), approved.get(id));
+        sent.push(id);
+        return reply({
+          sent: 1,
+          remaining: venueIds.length - sent.length,
+          skipped: [],
+          records: [{ venueId: id }],
+        });
+      }
+      throw new Error("Unexpected request: " + url);
+    };
+    const config = { backendUrl: "https://test.local", token: "test-token" };
+    const pitches = await renderPitchesFromBackend(candidates, weekend, {
+      ...config,
+      tweaks: [{ venueId: "tweak", customBody: "My son lives nearby." }],
+    }, mockFetch);
+    assertEquals(pitches.length, 4);
+    assertStringIncludes(pitches[0].customIntro!, "phone conversation");
+    assertStringIncludes(pitches[1].customIntro!, "connecting in person");
+    assertEquals(pitches[2].customIntro, undefined);
+    assertEquals(pitches[3].customBody, "My son lives nearby.");
+    const session = new Gate2ReviewSession({
       weekend,
-      venueIds: ["venue-call-contract"],
+      candidates,
       pitches,
-      backendUrl: "https://test.local",
-      token: "tok",
-    },
-    mockFetch,
-  );
+      fetchFn: mockFetch,
+      backendConfig: config,
+    });
+    await session.approveWholeBatch({
+      approver: "Josh",
+      batchId: "mixed-batch",
+      explicitApproval: true,
+    });
+    assertEquals(approved.size, 4);
 
-  assertEquals(dispatchResult.requested, 1);
-  assertEquals(dispatchResult.sent, 1);
-  assertEquals(preflightBody !== null, true);
-  assertEquals(preflightBody!.customIntro, pitch.customIntro);
-});
-
-Deno.test("dispatchBatchOutreach: groups venues with distinct custom intros and runs preflight + send per group", async () => {
-  const weekend: TargetWeekend = {
-    start: "2026-10-16",
-    end: "2026-10-18",
-    rawText: "Oct 16-18 2026",
-    label: "October 16–18, 2026",
-    year: 2026,
-    month: 10,
-    days: [16, 17, 18],
-  };
-
-  const pitch1: PitchEmail = {
-    venueId: "v1",
-    venueName: "Venue One",
-    to: "v1@test.com",
-    subject: "Sub 1",
-    body: "Body 1",
-    customIntro: "Intro One",
-  };
-
-  const pitch2: PitchEmail = {
-    venueId: "v2",
-    venueName: "Venue Two",
-    to: "v2@test.com",
-    subject: "Sub 2",
-    body: "Body 2",
-    customIntro: "Intro Two",
-  };
-
-  const preflightCalls: Array<{ venueIds: string[]; customIntro?: string }> = [];
-  const sendCalls: Array<{ dispatchId: string }> = [];
-
-  const mockFetch: typeof fetch = (input, init) => {
-    const urlStr = typeof input === "string" ? input : (input as Request).url;
-    if (urlStr.includes("/outreach/batch/preflight")) {
-      const body = JSON.parse(init?.body as string);
-      preflightCalls.push({ venueIds: body.venueIds, customIntro: body.customIntro });
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            dispatchId: `disp-${preflightCalls.length}`,
-            venueCount: body.venueIds.length,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-    }
-    if (urlStr.includes("/outreach/batch")) {
-      const body = JSON.parse(init?.body as string);
-      sendCalls.push({ dispatchId: body.dispatchId });
-      const currentGroupVenue = body.dispatchId === "disp-1" ? "v1" : "v2";
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            sent: 1,
-            remaining: 0,
-            skipped: [],
-            records: [{ venueId: currentGroupVenue, status: "sent" }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
-    }
-    return Promise.resolve(new Response("Not Found", { status: 404 }));
-  };
-
-  const res = await dispatchBatchOutreach(
-    {
+    if (mutation === "missing-opener") pitches[1].customIntro = undefined;
+    if (mutation === "changed-body") pitches[3].customBody = "Changed after approval.";
+    const options = {
+      ...config,
       weekend,
-      venueIds: ["v1", "v2"],
-      pitches: [pitch1, pitch2],
-      backendUrl: "https://test.local",
-      token: "secret",
-    },
-    mockFetch,
-  );
-
-  assertEquals(res.requested, 2);
-  assertEquals(res.sent, 2);
-  assertEquals(preflightCalls.length, 2);
-  assertEquals(preflightCalls[0].venueIds, ["v1"]);
-  assertEquals(preflightCalls[0].customIntro, "Intro One");
-  assertEquals(preflightCalls[1].venueIds, ["v2"]);
-  assertEquals(preflightCalls[1].customIntro, "Intro Two");
-  assertEquals(sendCalls.length, 2);
-});
+      venueIds: mutation === "venue-subset" ? venueIds.slice(0, 2) : venueIds,
+      pitches,
+    };
+    if (mutation === "none") {
+      const result = await dispatchBatchOutreach(options, mockFetch);
+      assertEquals(result.sent, 4);
+      assertEquals(sent, venueIds);
+      assertEquals(sendCalls.length, 4);
+    } else {
+      const err = await assertRejects(
+        () => dispatchBatchOutreach(options, mockFetch),
+        BatchDispatchError,
+      );
+      assertEquals(err.stage, "preflight");
+      assertEquals(err.partialResult.sent, 0);
+      assertEquals(sendCalls.length, 0);
+    }
+    assertEquals(preflightCalls.length, 1);
+    if (mutation !== "venue-subset") assertEquals(preflightCalls[0].venueIds, venueIds);
+    if (mutation === "none") {
+      assertEquals(preflightCalls[0].venueCustomizations, [
+        { venueId: "call", customIntro: pitches[0].customIntro },
+        { venueId: "visit", customIntro: pitches[1].customIntro },
+        { venueId: "tweak", customBody: pitches[3].customBody },
+      ]);
+    }
+  });
+}

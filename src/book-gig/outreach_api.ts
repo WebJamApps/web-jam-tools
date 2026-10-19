@@ -206,166 +206,138 @@ export async function dispatchBatchOutreach(
     throw new BatchDispatchError(msg, aggregate, { ...context, unsentVenues: unsentVenues() });
   };
 
-  // Group venueIds by identical (customIntro, customBody) so each group's preflight and send
-  // carry matching rendering parameters to web-jam-back.
-  interface DispatchGroup {
-    venueIds: string[];
-    customIntro?: string;
-    customBody?: string;
-  }
-
+  // Preflight must check the entire approved set before any send. Carry each preview's
+  // rendering inputs alongside that set; never split it into separate approvals.
   const pitchByVenueId = new Map((options.pitches || []).map((p) => [p.venueId, p]));
-  const groups: DispatchGroup[] = [];
+  const venueCustomizations = options.venueIds.flatMap((venueId) => {
+    const pitch = pitchByVenueId.get(venueId);
+    const customIntro = options.customIntro ?? pitch?.customIntro;
+    const customBody = options.customBody ?? pitch?.customBody;
+    return customIntro || customBody ? [{ venueId, customIntro, customBody }] : [];
+  });
 
-  if (options.pitches && options.pitches.length > 0) {
-    const groupMap = new Map<string, DispatchGroup>();
-    for (const venueId of options.venueIds) {
-      const pitch = pitchByVenueId.get(venueId);
-      const customIntro = options.customIntro ?? pitch?.customIntro;
-      const customBody = options.customBody ?? pitch?.customBody;
-      const key = `${customIntro ?? ""}\0${customBody ?? ""}`;
-      let group = groupMap.get(key);
-      if (!group) {
-        group = { venueIds: [], customIntro, customBody };
-        groupMap.set(key, group);
-        groups.push(group);
-      }
-      group.venueIds.push(venueId);
-    }
-  } else {
-    groups.push({
-      venueIds: options.venueIds,
-      customIntro: options.customIntro,
-      customBody: options.customBody,
+  // Step 1: pre-flight for the whole set. Nothing is sent by this call.
+  const preflightPayload: Record<string, unknown> = {
+    venueIds: options.venueIds,
+    targetDates,
+    targetWeekend: { start: options.weekend.start, end: options.weekend.end },
+    templateType: options.templateType,
+    bookingPeriod,
+  };
+  if (options.customIntro) preflightPayload.customIntro = options.customIntro;
+  if (options.customBody) preflightPayload.customBody = options.customBody;
+  if (venueCustomizations.length > 0) preflightPayload.venueCustomizations = venueCustomizations;
+
+  let preflightRes: Response;
+  try {
+    preflightRes = await fetchFn(`${baseUrl}/outreach/batch/preflight`, {
+      method: "POST",
+      headers: buildHeaders(token),
+      body: JSON.stringify(preflightPayload),
     });
+  } catch (err) {
+    return fail(
+      `Outreach batch pre-flight network error: ${
+        (err as Error).message
+      }. Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { stage: "preflight", callNumber: 0 },
+    );
+  }
+  if (!preflightRes.ok) {
+    const reason = await readRefusalText(preflightRes);
+    return fail(
+      `Outreach batch pre-flight refused with HTTP ${preflightRes.status}: ${reason}. ` +
+        `Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { status: preflightRes.status, stage: "preflight", callNumber: 0 },
+    );
+  }
+  let dispatchId: string | undefined;
+  try {
+    const data = await preflightRes.json();
+    if (typeof data?.dispatchId === "string" && data.dispatchId.trim()) {
+      dispatchId = data.dispatchId.trim();
+    }
+  } catch {
+    // handled below: no usable dispatch id
+  }
+  if (!dispatchId) {
+    return fail(
+      `Outreach batch pre-flight returned no dispatchId. Nothing was sent. Unsent venues: ${unsentNames()}.`,
+      { status: preflightRes.status, stage: "preflight", callNumber: 0 },
+    );
   }
 
-  for (const group of groups) {
-    // Step 1: pre-flight for this group. Nothing is sent by this call.
-    const preflightPayload: Record<string, unknown> = {
-      venueIds: group.venueIds,
-      targetDates,
-      targetWeekend: { start: options.weekend.start, end: options.weekend.end },
-      templateType: options.templateType,
-      bookingPeriod,
-    };
-    if (group.customIntro) preflightPayload.customIntro = group.customIntro;
-    if (group.customBody) preflightPayload.customBody = group.customBody;
-
-    let preflightRes: Response;
+  // Step 2: repeat the send call, carrying only the dispatch id, until nothing remains.
+  let callNumber = 0;
+  let lastRemaining = Infinity;
+  while (true) {
+    callNumber++;
+    const ctx = { stage: "send" as const, callNumber, dispatchId };
+    let res: Response;
     try {
-      preflightRes = await fetchFn(`${baseUrl}/outreach/batch/preflight`, {
+      res = await fetchFn(`${baseUrl}/outreach/batch`, {
         method: "POST",
         headers: buildHeaders(token),
-        body: JSON.stringify(preflightPayload),
+        body: JSON.stringify({ dispatchId }),
       });
     } catch (err) {
       return fail(
-        `Outreach batch pre-flight network error: ${
-          (err as Error).message
-        }. Nothing was sent. Unsent venues: ${unsentNames()}.`,
-        { stage: "preflight", callNumber: 0 },
+        `Outreach batch send call ${callNumber} network error: ${(err as Error).message}. ` +
+          `Sent so far: ${aggregate.sent}. The reply to this call was lost, so venues it may have ` +
+          `emailed are listed as unsent; check the outreach records before re-running. ` +
+          `Unsent venues: ${unsentNames()}.`,
+        ctx,
       );
     }
-    if (!preflightRes.ok) {
-      const reason = await readRefusalText(preflightRes);
+    if (!res.ok) {
+      const reason = await readRefusalText(res);
       return fail(
-        `Outreach batch pre-flight refused with HTTP ${preflightRes.status}: ${reason}. ` +
-          `Nothing was sent. Unsent venues: ${unsentNames()}.`,
-        { status: preflightRes.status, stage: "preflight", callNumber: 0 },
+        `Outreach batch send call ${callNumber} refused with HTTP ${res.status}: ${reason}. ` +
+          `Sent before the refusal: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
       );
     }
-    let dispatchId: string | undefined;
+    let data: Record<string, unknown>;
     try {
-      const data = await preflightRes.json();
-      if (typeof data?.dispatchId === "string" && data.dispatchId.trim()) {
-        dispatchId = data.dispatchId.trim();
-      }
-    } catch {
-      // handled below: no usable dispatch id
-    }
-    if (!dispatchId) {
+      data = await res.json();
+    } catch (err) {
       return fail(
-        `Outreach batch pre-flight returned no dispatchId. Nothing was sent. Unsent venues: ${unsentNames()}.`,
-        { status: preflightRes.status, stage: "preflight", callNumber: 0 },
+        `Outreach batch send call ${callNumber} response unparseable: ${(err as Error).message}. ` +
+          `Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
       );
     }
 
-    // Step 2: repeat the send call, carrying only the dispatch id, until nothing remains.
-    let callNumber = 0;
-    let lastRemaining = Infinity;
-    while (true) {
-      callNumber++;
-      const ctx = { stage: "send" as const, callNumber, dispatchId };
-      let res: Response;
-      try {
-        res = await fetchFn(`${baseUrl}/outreach/batch`, {
-          method: "POST",
-          headers: buildHeaders(token),
-          body: JSON.stringify({ dispatchId }),
-        });
-      } catch (err) {
-        return fail(
-          `Outreach batch send call ${callNumber} network error: ${(err as Error).message}. ` +
-            `Sent so far: ${aggregate.sent}. The reply to this call was lost, so venues it may have ` +
-            `emailed are listed as unsent; check the outreach records before re-running. ` +
-            `Unsent venues: ${unsentNames()}.`,
-          ctx,
-        );
-      }
-      if (!res.ok) {
-        const reason = await readRefusalText(res);
-        return fail(
-          `Outreach batch send call ${callNumber} refused with HTTP ${res.status}: ${reason}. ` +
-            `Sent before the refusal: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
-          { ...ctx, status: res.status },
-        );
-      }
-      let data: Record<string, unknown>;
-      try {
-        data = await res.json();
-      } catch (err) {
-        return fail(
-          `Outreach batch send call ${callNumber} response unparseable: ${
-            (err as Error).message
-          }. ` +
-            `Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
-          { ...ctx, status: res.status },
-        );
-      }
-
-      aggregate.sent += typeof data.sent === "number" ? data.sent : 0;
-      if (Array.isArray(data.skipped)) {
-        aggregate.skipped.push(...(data.skipped as BatchDispatchResult["skipped"]));
-      }
-      if (Array.isArray(data.records)) {
-        aggregate.records.push(...(data.records as BatchDispatchResult["records"]));
-      }
-      if (typeof data.remaining !== "number") {
-        return fail(
-          `Outreach batch send call ${callNumber} reply has no numeric "remaining" count. ` +
-            `Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
-          { ...ctx, status: res.status },
-        );
-      }
-      options.onProgress?.({
-        callNumber,
-        sent: aggregate.sent,
-        skipped: aggregate.skipped.length,
-        remaining: data.remaining,
-      });
-      if (data.remaining <= 0) break;
-      if (data.remaining >= lastRemaining) {
-        return fail(
-          `Outreach batch send call ${callNumber} made no progress (${data.remaining} still remaining). ` +
-            `Stopping instead of looping. Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
-          { ...ctx, status: res.status },
-        );
-      }
-      lastRemaining = data.remaining;
+    aggregate.sent += typeof data.sent === "number" ? data.sent : 0;
+    if (Array.isArray(data.skipped)) {
+      aggregate.skipped.push(...(data.skipped as BatchDispatchResult["skipped"]));
     }
+    if (Array.isArray(data.records)) {
+      aggregate.records.push(...(data.records as BatchDispatchResult["records"]));
+    }
+    if (typeof data.remaining !== "number") {
+      return fail(
+        `Outreach batch send call ${callNumber} reply has no numeric "remaining" count. ` +
+          `Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
+    }
+    options.onProgress?.({
+      callNumber,
+      sent: aggregate.sent,
+      skipped: aggregate.skipped.length,
+      remaining: data.remaining,
+    });
+    if (data.remaining <= 0) break;
+    if (data.remaining >= lastRemaining) {
+      return fail(
+        `Outreach batch send call ${callNumber} made no progress (${data.remaining} still remaining). ` +
+          `Stopping instead of looping. Sent so far: ${aggregate.sent}. Unsent venues: ${unsentNames()}.`,
+        { ...ctx, status: res.status },
+      );
+    }
+    lastRemaining = data.remaining;
   }
-
   return aggregate;
 }
 
