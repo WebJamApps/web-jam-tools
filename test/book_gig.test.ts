@@ -38,7 +38,11 @@ import {
   validateVoiceRules,
   verifyPitchAgainstTemplate,
 } from "../src/book-gig/pitch.ts";
-import { formatDraftPayload, mergeWeekendRuns } from "../src/book-gig/gmail.ts";
+import {
+  formatDraftPayload,
+  mergeWeekendRuns,
+  type WeekendRunData,
+} from "../src/book-gig/gmail.ts";
 import {
   BatchDispatchError,
   checkGmailReplies,
@@ -59,6 +63,7 @@ import {
   SORTING_SCRIPT,
 } from "../src/book-gig/html.ts";
 import { openHtmlInBrowser } from "../src/book-gig/browser.ts";
+import { publishAndOpenReport, type PublishReportPayload } from "../src/book-gig/publish.ts";
 import {
   deduplicateCampaignsByVenue,
   formatLocationDisplay,
@@ -78,6 +83,7 @@ import type {
   CandidateVenue,
   EmailTemplate,
   OutreachCampaignRecord,
+  PitchEmail,
   TargetWeekend,
 } from "../src/book-gig/types.ts";
 
@@ -5809,4 +5815,660 @@ Deno.test("fetchCandidates: enriches candidate pool with bookingStatus and nextG
   assertEquals(enriched?.bookingStatus, "booked");
   assertEquals(enriched?.nextGig?._id, "gig-1");
   assertEquals(enriched?.distanceKm, 92.5);
+});
+
+Deno.test("publishAndOpenReport: Gate 1 and Gate 2 reports render strictly the curated set without resurrecting excluded venues (#994)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2027-01-08",
+    end: "2027-01-10",
+    rawText: "Jan 8-10 2027",
+    label: "January 8–10, 2027",
+    year: 2027,
+    month: 1,
+    days: [8, 9, 10],
+  };
+
+  // Simulating an initial 100-venue discovery sweep: 75 eligible venues and 25 excluded venues
+  const eligibleVenues: CandidateVenue[] = Array.from({ length: 75 }, (_, i) => ({
+    _id: `v-elig-${i + 1}`,
+    name: `Eligible Venue ${i + 1}`,
+    city: "Salem",
+    usState: "VA",
+    email: `booking${i + 1}@eligible.com`,
+    isExcluded: false,
+  }));
+
+  const excludedVenues: CandidateVenue[] = Array.from({ length: 25 }, (_, i) => ({
+    _id: `v-excl-${i + 1}`,
+    name: `Excluded Venue ${i + 1}`,
+    city: "Roanoke",
+    usState: "VA",
+    email: `booking${i + 1}@excluded.com`,
+    isExcluded: true,
+    exclusionReason: "seasonal-hold",
+    statusBadge: "Seasonal Hold: Mar 2027",
+  }));
+
+  const discoveryReportHtml = renderDarkHtml({
+    mode: "preview",
+    weekend,
+    location: { raw: "Salem, VA" },
+    candidates: [...eligibleVenues, ...excludedVenues],
+    density: { count: 75, isSparse: false },
+    pitches: [],
+  });
+
+  const scratchDir = await Deno.makeTempDir({ prefix: "book_gig_curated_report_" });
+  try {
+    let storedReportHtml = discoveryReportHtml;
+    let publishedHtml: string | null = null;
+
+    const mockFetch: typeof fetch = (input, init) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/outreach/report/") && (!init || init.method === "GET")) {
+        return Promise.resolve(new Response(storedReportHtml, { status: 200 }));
+      }
+      if (url.endsWith("/outreach/report") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string);
+        publishedHtml = body.htmlContent;
+        storedReportHtml = body.htmlContent;
+        return Promise.resolve(
+          new Response(JSON.stringify({ message: "Report saved successfully" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    };
+
+    // 1. Gate 1 review: operator approves strictly the 75 eligible venues
+    const gate1Result: BookGigResult = {
+      mode: "gate1",
+      weekend,
+      location: { raw: "Salem, VA" },
+      candidates: eligibleVenues,
+      density: { count: 75, isSparse: false },
+      pitches: [],
+      gate1Record: {
+        batchId: "2027-01-08-to-2027-01-10",
+        weekend: "2027-01-08-to-2027-01-10",
+        venueIds: eligibleVenues.map((v) => v._id),
+        approver: "Josh Sherman",
+      },
+    };
+
+    const gate1Published = await publishAndOpenReport(
+      gate1Result,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    assertEquals(gate1Published.result.candidates.length, 75);
+    assert(publishedHtml !== null);
+    const g1Html = publishedHtml as string;
+    // Verify none of the 25 excluded venues were resurrected into the Gate 1 review HTML
+    for (const excl of excludedVenues) {
+      assert(
+        !g1Html.includes(`data-venue-id="${excl._id}"`),
+        `Gate 1 report must not contain excluded venue ${excl._id}`,
+      );
+    }
+    const gate1Matches = (g1Html.match(/<tr data-venue-id="v-elig-/g) || []).length;
+    assertEquals(gate1Matches, 75);
+
+    // 2. Gate 2 review: operator reviews 75 pitch drafts for the 75 approved candidates
+    const gate2Pitches = eligibleVenues.map((v) => renderPitch(v, weekend));
+    const gate2Result: BookGigResult = {
+      mode: "gate2",
+      weekend,
+      location: { raw: "Salem, VA" },
+      candidates: eligibleVenues,
+      density: { count: 75, isSparse: false },
+      pitches: gate2Pitches,
+      gate2Status: "holding",
+    };
+
+    publishedHtml = null;
+    const gate2Published = await publishAndOpenReport(
+      gate2Result,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    assertEquals(gate2Published.result.candidates.length, 75);
+    assertEquals(gate2Published.result.pitches.length, 75);
+    assert(publishedHtml !== null);
+    const g2Html = publishedHtml as string;
+
+    // Check table rows in Gate 2 HTML artifact match exact approved count
+    const gate2Matches = (g2Html.match(/<tr data-venue-id="v-elig-/g) || []).length;
+    assertEquals(gate2Matches, 75);
+    for (const excl of excludedVenues) {
+      assert(
+        !g2Html.includes(`data-venue-id="${excl._id}"`),
+        `Gate 2 report must not contain excluded venue ${excl._id}`,
+      );
+    }
+  } finally {
+    await Deno.remove(scratchDir, { recursive: true });
+  }
+});
+
+Deno.test("mergeWeekendRuns: preserves explicit exclusions and holds when merging candidate entries (#994)", () => {
+  const weekend: TargetWeekend = {
+    start: "2027-01-08",
+    end: "2027-01-10",
+    rawText: "Jan 8-10 2027",
+    label: "January 8–10, 2027",
+    year: 2027,
+    month: 1,
+    days: [8, 9, 10],
+  };
+
+  // Case A: Existing candidate has explicit seasonal hold, new batch entry is unexcluded
+  const existingHoldCandidate: CandidateVenue = {
+    _id: "venue-hold-1",
+    name: "Winter Taproom",
+    email: "winter@taproom.com",
+    isExcluded: true,
+    exclusionReason: "seasonal-hold",
+    statusBadge: "Don't contact until 1 May 2027",
+    resumeBooking: "2027-05-01",
+    bookedThrough: "2026-12-31",
+    outreachEligible: false,
+  };
+
+  const incomingUnexcludedCandidate: CandidateVenue = {
+    _id: "venue-hold-1",
+    name: "Winter Taproom Updated",
+    email: "winter@taproom.com",
+    isExcluded: false,
+    outreachEligible: true,
+  };
+
+  const mergedA = mergeWeekendRuns(
+    { candidates: [existingHoldCandidate], pitches: [] },
+    {
+      mode: "send",
+      weekend,
+      candidates: [incomingUnexcludedCandidate],
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    },
+  );
+
+  assertEquals(mergedA.candidates.length, 1);
+  const candA = mergedA.candidates[0];
+  assertEquals(candA.isExcluded, true);
+  assertEquals(candA.exclusionReason, "seasonal-hold");
+  assertEquals(candA.statusBadge, "Don't contact until 1 May 2027");
+  assertEquals(candA.resumeBooking, "2027-05-01");
+  assertEquals(candA.bookedThrough, "2026-12-31");
+  assertEquals(candA.outreachEligible, false);
+
+  // Case B: Existing candidate was unexcluded, new batch candidate has explicit exclusion
+  const existingUnexcludedCandidate: CandidateVenue = {
+    _id: "venue-spacing-2",
+    name: "Downtown Bistro",
+    email: "music@downtownbistro.com",
+    isExcluded: false,
+  };
+
+  const incomingExcludedCandidate: CandidateVenue = {
+    _id: "venue-spacing-2",
+    name: "Downtown Bistro",
+    email: "music@downtownbistro.com",
+    isExcluded: true,
+    exclusionReason: "gig-spacing",
+    statusBadge: "[Gig Spacing: Nov 20 Show]",
+    bookedThrough: "2027-02-01",
+  };
+
+  const mergedB = mergeWeekendRuns(
+    { candidates: [existingUnexcludedCandidate], pitches: [] },
+    {
+      mode: "send",
+      weekend,
+      candidates: [incomingExcludedCandidate],
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    },
+  );
+
+  assertEquals(mergedB.candidates.length, 1);
+  const candB = mergedB.candidates[0];
+  assertEquals(candB.isExcluded, true);
+  assertEquals(candB.exclusionReason, "gig-spacing");
+  assertEquals(candB.statusBadge, "[Gig Spacing: Nov 20 Show]");
+  assertEquals(candB.bookedThrough, "2027-02-01");
+
+  // Case C: Gate 1 and Gate 2 modes strictly ignore existing discovery candidates and pitches
+  const discoveryCandidates: CandidateVenue[] = [
+    { _id: "disc-1", name: "D1", email: "d1@a.com" },
+    { _id: "disc-2", name: "D2", email: "d2@a.com", isExcluded: true },
+  ];
+  const gateCuratedCandidates: CandidateVenue[] = [
+    { _id: "gate-1", name: "G1", email: "g1@a.com", isExcluded: false },
+  ];
+
+  const mergedGate1 = mergeWeekendRuns(
+    { candidates: discoveryCandidates, pitches: [] },
+    {
+      mode: "gate1",
+      weekend,
+      candidates: gateCuratedCandidates,
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    },
+  );
+  assertEquals(mergedGate1.candidates.length, 1);
+  assertEquals(mergedGate1.candidates[0]._id, "gate-1");
+
+  const mergedGate2 = mergeWeekendRuns(
+    { candidates: discoveryCandidates, pitches: [] },
+    {
+      mode: "gate2",
+      weekend,
+      candidates: gateCuratedCandidates,
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    },
+  );
+  assertEquals(mergedGate2.candidates.length, 1);
+  assertEquals(mergedGate2.candidates[0]._id, "gate-1");
+});
+
+Deno.test("publishAndOpenReport: preserves accumulated dispatch history across intervening discovery and Gate 2 reviews (#994)", async () => {
+  const weekend: TargetWeekend = {
+    start: "2027-01-08",
+    end: "2027-01-10",
+    rawText: "Jan 8-10 2027",
+    label: "January 8–10, 2027",
+    year: 2027,
+    month: 1,
+    days: [8, 9, 10],
+  };
+
+  const venueA: CandidateVenue = {
+    _id: "venue-a",
+    name: "Batch 1 Taproom",
+    city: "Salem",
+    usState: "VA",
+    email: "a@taproom.com",
+    contactName: "Alice",
+  };
+  const pitchA = renderPitch(venueA, weekend);
+
+  const venueB: CandidateVenue = {
+    _id: "venue-b",
+    name: "Batch 2 Brewery",
+    city: "Roanoke",
+    usState: "VA",
+    email: "b@brewery.com",
+    contactName: "Bob",
+  };
+  const pitchB = renderPitch(venueB, weekend);
+
+  const venueCExcluded: CandidateVenue = {
+    _id: "venue-c-excluded",
+    name: "Winter Lodge (Hold)",
+    city: "Blacksburg",
+    usState: "VA",
+    email: "c@lodge.com",
+    isExcluded: true,
+    exclusionReason: "seasonal-hold",
+    statusBadge: "Seasonal Hold: Mar 2027",
+  };
+
+  const scratchDir = await Deno.makeTempDir({ prefix: "book_gig_intervening_review_" });
+  try {
+    const captured: { html: string | null; payload: PublishReportPayload | null } = {
+      html: null,
+      payload: null,
+    };
+
+    const mockFetch: typeof fetch = (input, init) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/outreach/report/") && (!init || init.method === "GET")) {
+        if (!captured.html) {
+          return Promise.resolve(new Response("Not found", { status: 404 }));
+        }
+        return Promise.resolve(new Response(captured.html, { status: 200 }));
+      }
+      if (url.endsWith("/outreach/report") && init?.method === "POST") {
+        const body = JSON.parse(init.body as string) as PublishReportPayload;
+        captured.payload = body;
+        captured.html = body.htmlContent;
+        return Promise.resolve(
+          new Response(JSON.stringify({ message: "Report saved successfully" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    };
+
+    // Step 1: Dispatch Batch 1 (venue A, 1 sent)
+    const batch1SendResult: BookGigResult = {
+      mode: "send",
+      weekend,
+      location: { raw: "Salem, VA" },
+      candidates: [venueA],
+      density: { count: 1, isSparse: true },
+      pitches: [pitchA],
+      batchDispatch: {
+        requested: 1,
+        sent: 1,
+        skipped: [],
+        records: [{ _id: "outreach-a", venueId: "venue-a" }],
+      },
+    };
+
+    const batch1Published = await publishAndOpenReport(
+      batch1SendResult,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    assertEquals(batch1Published.result.candidates.length, 1);
+    assertEquals(batch1Published.result.batchDispatch?.sent, 1);
+    assertEquals(captured.payload?.dispatchedCount, 1);
+    assert(captured.html !== null);
+    assertStringIncludes(captured.html, "Batch 1 Taproom");
+
+    // Step 2: Intervening discovery sweep discovering venue B (eligible) and venue C (excluded)
+    const discoveryResult: BookGigResult = {
+      mode: "preview",
+      weekend,
+      location: { raw: "Roanoke, VA" },
+      candidates: [venueB, venueCExcluded],
+      density: { count: 1, isSparse: true },
+      pitches: [],
+    };
+
+    const discoveryPublished = await publishAndOpenReport(
+      discoveryResult,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    // Discovery sweep renders the discovered set
+    assertEquals(discoveryPublished.result.candidates.length, 2);
+    // Preserves prior dispatch history
+    assertEquals(discoveryPublished.result.batchDispatch?.sent, 1);
+    assertEquals(captured.payload?.dispatchedCount, 1);
+
+    // Step 3: Intervening Gate 2 review for Batch 2 (strictly curated to venue B and pitch B)
+    const gate2ReviewResult: BookGigResult = {
+      mode: "gate2",
+      weekend,
+      location: { raw: "Roanoke, VA" },
+      candidates: [venueB],
+      density: { count: 1, isSparse: true },
+      pitches: [pitchB],
+      gate2Status: "holding",
+    };
+
+    const gate2Published = await publishAndOpenReport(
+      gate2ReviewResult,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    // Visible candidates and pitches must be strictly curated to the active review set
+    assertEquals(gate2Published.result.candidates.length, 1);
+    assertEquals(gate2Published.result.candidates[0]._id, "venue-b");
+    assertEquals(gate2Published.result.pitches.length, 1);
+    assertEquals(gate2Published.result.pitches[0].venueId, "venue-b");
+
+    // Must preserve prior dispatch history and NOT reset dispatchedCount to 0
+    assertEquals(gate2Published.result.batchDispatch?.sent, 1);
+    assertEquals(captured.payload?.dispatchedCount, 1);
+
+    // Visible Gate 2 HTML must show venue B, must NOT show venue A in review table, and must NOT resurrect venue C
+    assert(captured.html !== null);
+    assertStringIncludes(captured.html, 'data-venue-id="venue-b"');
+    assert(
+      !captured.html.includes('data-venue-id="venue-c-excluded"'),
+      "Gate 2 review artifact must not contain excluded venue C",
+    );
+    // In visible candidate rows, venue A is not part of the Gate 2 review candidate table
+    const g2CandidateRows = captured.html.match(/<tr data-venue-id="venue-a"/g) || [];
+    assertEquals(g2CandidateRows.length, 0);
+
+    // Step 4: Dispatch Batch 2 (venue B, 1 sent)
+    const batch2SendResult: BookGigResult = {
+      mode: "send",
+      weekend,
+      location: { raw: "Roanoke, VA" },
+      candidates: [venueB],
+      density: { count: 1, isSparse: true },
+      pitches: [pitchB],
+      batchDispatch: {
+        requested: 1,
+        sent: 1,
+        skipped: [],
+        records: [{ _id: "outreach-b", venueId: "venue-b" }],
+      },
+    };
+
+    const batch2Published = await publishAndOpenReport(
+      batch2SendResult,
+      { backendUrl: "https://mock-backend.web-jam.com", scratchDir, noOpen: true },
+      mockFetch,
+    );
+
+    // Must accumulate both batches: finishes with 2 dispatched instead of 1!
+    assertEquals(batch2Published.result.candidates.length, 2);
+    assertEquals(batch2Published.result.pitches.length, 2);
+    assertEquals(batch2Published.result.batchDispatch?.requested, 2);
+    assertEquals(batch2Published.result.batchDispatch?.sent, 2);
+    assertEquals(captured.payload?.dispatchedCount, 2);
+
+    // Final consolidated HTML must contain both venue A and venue B, and still exclude venue C
+    assert(captured.html !== null);
+    assertStringIncludes(captured.html, 'data-venue-id="venue-a"');
+    assertStringIncludes(captured.html, 'data-venue-id="venue-b"');
+    assert(
+      !captured.html.includes('data-venue-id="venue-c-excluded"'),
+      "Final consolidated dispatch report must never resurrect excluded venue C",
+    );
+  } finally {
+    await Deno.remove(scratchDir, { recursive: true });
+  }
+});
+
+Deno.test("mergeWeekendRuns: resolves dispatched entities by venueId rather than outreach record _id (#994)", () => {
+  const existing: WeekendRunData = {
+    candidates: [
+      { _id: "venue-a", name: "Venue A", city: "Salem, VA" } as CandidateVenue,
+    ],
+    pitches: [
+      { venueId: "venue-a", venueName: "Venue A", to: "a@venue.com", subject: "S", body: "B" },
+    ],
+    batchDispatch: {
+      requested: 1,
+      sent: 1,
+      skipped: [],
+      records: [{ _id: "outreach-a", venueId: "venue-a" }],
+    },
+  };
+
+  const gate2Review: BookGigResult = {
+    mode: "gate2",
+    weekend: {
+      start: "2027-01-08",
+      end: "2027-01-10",
+      rawText: "Jan 8-10 2027",
+      label: "January 8–10, 2027",
+      year: 2027,
+      month: 1,
+      days: [8, 9, 10],
+    },
+    candidates: [
+      { _id: "venue-b", name: "Venue B", city: "Roanoke, VA" } as CandidateVenue,
+    ],
+    density: { count: 1, isSparse: true },
+    pitches: [
+      { venueId: "venue-b", venueName: "Venue B", to: "b@venue.com", subject: "S", body: "B" },
+    ],
+  };
+
+  const merged = mergeWeekendRuns(existing, gate2Review);
+
+  // Visible review set is curated to Venue B
+  assertEquals(merged.candidates.length, 1);
+  assertEquals(merged.candidates[0]._id, "venue-b");
+  assertEquals(merged.pitches.length, 1);
+  assertEquals(merged.pitches[0].venueId, "venue-b");
+
+  // Embedded machine-readable run data must retain Venue A by venueId
+  const runDataCandidates =
+    (merged as unknown as { _runDataCandidates?: CandidateVenue[] })._runDataCandidates;
+  const runDataPitches = (merged as unknown as { _runDataPitches?: PitchEmail[] })._runDataPitches;
+  assert(runDataCandidates !== undefined);
+  assertEquals(runDataCandidates.length, 2);
+  assertEquals(runDataCandidates.map((c) => c._id), ["venue-a", "venue-b"]);
+  assert(runDataPitches !== undefined);
+  assertEquals(runDataPitches.length, 2);
+  assertEquals(runDataPitches.map((p) => p.venueId), ["venue-a", "venue-b"]);
+});
+
+Deno.test("mergeWeekendRuns: excludes skippedVenueIds from batches and resolves records by venueName (#994)", () => {
+  const existing: WeekendRunData = {
+    candidates: [
+      { _id: "venue-sent", name: "Sent Venue", city: "Salem, VA" } as CandidateVenue,
+      { _id: "venue-skipped", name: "Skipped Venue", city: "Salem, VA" } as CandidateVenue,
+      { _id: "venue-name-only", name: "Named Venue", city: "Roanoke, VA" } as CandidateVenue,
+    ],
+    pitches: [
+      {
+        venueId: "venue-sent",
+        venueName: "Sent Venue",
+        to: "sent@venue.com",
+        subject: "S1",
+        body: "B1",
+      },
+      {
+        venueId: "venue-skipped",
+        venueName: "Skipped Venue",
+        to: "skip@venue.com",
+        subject: "S2",
+        body: "B2",
+      },
+      { venueName: "Named Venue", to: "named@venue.com", subject: "S3", body: "B3" } as PitchEmail,
+    ],
+    batches: [
+      {
+        candidateIds: ["venue-sent", "venue-skipped"],
+        requested: 2,
+        sent: 1,
+        skippedVenueIds: ["venue-skipped"],
+      },
+    ],
+    batchDispatch: {
+      requested: 3,
+      sent: 2,
+      skipped: [{ venueId: "venue-skipped", venueName: "Skipped Venue", reason: "missing email" }],
+      // Record carrying venueName rather than venueId
+      records: [{ _id: "outreach-named", venueName: "Named Venue" }],
+    },
+  };
+
+  const gate2Review: BookGigResult = {
+    mode: "gate2",
+    weekend: {
+      start: "2027-01-08",
+      end: "2027-01-10",
+      rawText: "Jan 8-10 2027",
+      label: "January 8–10, 2027",
+      year: 2027,
+      month: 1,
+      days: [8, 9, 10],
+    },
+    candidates: [
+      { _id: "venue-new", name: "New Venue", city: "Blacksburg, VA" } as CandidateVenue,
+    ],
+    density: { count: 1, isSparse: true },
+    pitches: [
+      {
+        venueId: "venue-new",
+        venueName: "New Venue",
+        to: "new@venue.com",
+        subject: "S",
+        body: "B",
+      },
+    ],
+  };
+
+  const merged = mergeWeekendRuns(existing, gate2Review);
+
+  // Visible review set is curated to Venue New
+  assertEquals(merged.candidates.length, 1);
+  assertEquals(merged.candidates[0]._id, "venue-new");
+
+  // Embedded machine-readable run data must retain Sent Venue and Named Venue, but NOT Skipped Venue
+  const runDataCandidates =
+    (merged as unknown as { _runDataCandidates?: CandidateVenue[] })._runDataCandidates;
+  const runDataPitches = (merged as unknown as { _runDataPitches?: PitchEmail[] })._runDataPitches;
+  assert(runDataCandidates !== undefined);
+  assertEquals(runDataCandidates.length, 3);
+  assertEquals(runDataCandidates.map((c) => c._id || c.name), [
+    "venue-sent",
+    "venue-name-only",
+    "venue-new",
+  ]);
+
+  assert(runDataPitches !== undefined);
+  assertEquals(runDataPitches.length, 3);
+  assertEquals(runDataPitches.map((p) => p.venueId || p.venueName), [
+    "venue-sent",
+    "Named Venue",
+    "venue-new",
+  ]);
+});
+
+Deno.test("renderDarkHtml: synthesizes batches in run data when result.batchDispatch is present without _runDataBatches (#994)", () => {
+  const sendResult: BookGigResult = {
+    mode: "send",
+    weekend: {
+      start: "2027-01-08",
+      end: "2027-01-10",
+      rawText: "Jan 8-10 2027",
+      label: "January 8–10, 2027",
+      year: 2027,
+      month: 1,
+      days: [8, 9, 10],
+    },
+    candidates: [
+      { _id: "venue-1", name: "Venue One", city: "Salem, VA" } as CandidateVenue,
+      { _id: "venue-2", name: "Venue Two", city: "Salem, VA" } as CandidateVenue,
+    ],
+    density: { count: 2, isSparse: true },
+    pitches: [
+      {
+        venueId: "venue-1",
+        venueName: "Venue One",
+        to: "v1@example.com",
+        subject: "S1",
+        body: "B1",
+      },
+    ],
+    batchDispatch: {
+      requested: 2,
+      sent: 1,
+      skipped: [{ venueId: "venue-2", venueName: "Venue Two", reason: "no email" }],
+      records: [{ _id: "outreach-1", venueId: "venue-1" }],
+    },
+  };
+
+  // Render HTML directly from raw send result (which lacks _runDataBatches)
+  const html = renderDarkHtml(sendResult);
+  assert(html.includes('<script id="book-gig-run-data" type="application/json">'));
+
+  // Extract run data from HTML and verify batches array was synthesized
+  const extracted = extractRunDataFromHtml(html);
+  assert(extracted !== null);
+  assert(extracted.batches !== undefined);
+  assertEquals(extracted.batches.length, 1);
+  assertEquals(extracted.batches[0].candidateIds, ["venue-1", "venue-2"]);
+  assertEquals(extracted.batches[0].requested, 2);
+  assertEquals(extracted.batches[0].sent, 1);
+  assertEquals(extracted.batches[0].skippedVenueIds, ["venue-2"]);
 });
