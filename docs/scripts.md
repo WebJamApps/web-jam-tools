@@ -233,24 +233,20 @@ bash scripts/gitleaks.sh --repo /path/to/repo
 bash scripts/gitleaks.sh --repo /path/to/repo --log-opts="origin/dev..HEAD"
 ```
 
-### `install-git-secret-hook.sh`
+### `prove-push-guard.sh`
 
-Installs the push-time secret scanner (`gitleaks` pre-push hook) and shared `.gitleaks.toml`
-configuration into a target WebJamApps repository (web-jam-tools#658).
+Runs the design's "Proof before any new key" on the laptop, proving that git's global `pre-push` hook
+(`git-hooks/pre-push`, installed via `scripts/install-hooks.sh` setting `core.hooksPath`) prevents
+credential leaks before they can leave the machine (web-jam-tools#1404):
 
-- Auto-detects Node repos (`.husky/pre-push`) vs Deno repos (`.git/hooks/pre-push`).
-- Copies or reconciles the shared `.gitleaks.toml` rules and allowlist.
-- Supports drift checking via `--check`.
+1. Reads global git configuration and verifies `core.hooksPath` points to this clone's `git-hooks`.
+2. Sets up a throwaway repository under `/tmp` with a local bare remote.
+3. Commits a fake Google API key built at runtime and confirms the push is refused, naming file, line, and rule ID (never the secret value).
+4. Cleans the commit and confirms clean pushes succeed.
+5. Verifies push refusal when Docker is stopped and no gitleaks program is on PATH.
 
 ```bash
-# Install in current repository
-bash scripts/install-git-secret-hook.sh
-
-# Install into a sibling repository
-bash scripts/install-git-secret-hook.sh --repo ../JaMmusic
-
-# Check for drift
-bash scripts/install-git-secret-hook.sh --check
+bash scripts/prove-push-guard.sh
 ```
 
 ### `reaper-update.sh`

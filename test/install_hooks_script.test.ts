@@ -2804,3 +2804,113 @@ Deno.test(
     }
   },
 );
+
+Deno.test(
+  "install-hooks.sh sets git config --global core.hooksPath to the canonical clone's git-hooks directory, handles drift check, and leaves agent hooks untouched",
+  async () => {
+    const home = await Deno.makeTempDir();
+    try {
+      // 1. Install with redirected temp HOME
+      const res = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+        ],
+        { HOME: home },
+      );
+      assertEquals(res.code, 0, res.stdout + res.stderr);
+
+      // Verify core.hooksPath was set in temp HOME's git config
+      const gitHooksPathRes = await run(
+        "git",
+        ["config", "--global", "--get", "core.hooksPath"],
+        { HOME: home },
+      );
+      assertEquals(
+        gitHooksPathRes.code,
+        0,
+        `Failed to get core.hooksPath: ${gitHooksPathRes.stderr}`,
+      );
+      const setHooksPath = gitHooksPathRes.stdout.trim();
+      const expectedHooksPath = await Deno.realPath(`${REPO_ROOT}git-hooks`);
+      assertEquals(await Deno.realPath(setHooksPath), expectedHooksPath);
+
+      // Verify Claude ~/.claude/hooks does NOT contain pre-push
+      const claudePrePush = `${home}/.claude/hooks/pre-push`;
+      assert(
+        !(await pathExists(claudePrePush)),
+        "pre-push must not be symlinked into ~/.claude/hooks",
+      );
+
+      // Verify agy and codex hooks do not register pre-push
+      const agyHooksFile = `${home}/.gemini/config/hooks.json`;
+      if (await pathExists(agyHooksFile)) {
+        const agyContent = await Deno.readTextFile(agyHooksFile);
+        assert(!agyContent.includes("pre-push"), "agy hooks.json must not register pre-push");
+      }
+      const codexHooksFile = `${home}/.codex/hooks.json`;
+      if (await pathExists(codexHooksFile)) {
+        const codexContent = await Deno.readTextFile(codexHooksFile);
+        assert(!codexContent.includes("pre-push"), "codex hooks.json must not register pre-push");
+      }
+
+      // 2. Drift check passes when correctly set
+      const checkClean = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+          "--check",
+        ],
+        { HOME: home },
+      );
+      assertEquals(checkClean.code, 0, checkClean.stdout + checkClean.stderr);
+      assert(checkClean.stdout.includes("check passed (no drift)"));
+
+      // 3. Drift check fails when core.hooksPath is unset
+      await run(
+        "git",
+        ["config", "--global", "--unset", "core.hooksPath"],
+        { HOME: home },
+      );
+      const checkUnset = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+          "--check",
+        ],
+        { HOME: home },
+      );
+      assert(checkUnset.code !== 0, "Drift check must fail when core.hooksPath is unset");
+      assert(
+        checkUnset.stderr.includes("drift: git config --global core.hooksPath is unset"),
+        checkUnset.stderr,
+      );
+
+      // 4. Drift check fails when core.hooksPath points elsewhere
+      await run(
+        "git",
+        ["config", "--global", "core.hooksPath", "/tmp/unrelated-hooks"],
+        { HOME: home },
+      );
+      const checkWrong = await run(
+        "bash",
+        [
+          INSTALL_SCRIPT,
+          "--force",
+          "--check",
+        ],
+        { HOME: home },
+      );
+      assert(checkWrong.code !== 0, "Drift check must fail when core.hooksPath points elsewhere");
+      assert(
+        checkWrong.stderr.includes("does not point to"),
+        checkWrong.stderr,
+      );
+    } finally {
+      await Deno.remove(home, { recursive: true });
+    }
+  },
+);
