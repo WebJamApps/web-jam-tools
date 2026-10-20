@@ -378,3 +378,86 @@ exit \${REPO_HOOK_EXIT:-0}
     await Deno.remove(tempDir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("An executable .git/hooks/pre-push in the common repository directory runs when pushing from a linked worktree, and its non-zero exit refuses the push", async () => {
+  const mainDir = await Deno.makeTempDir({ prefix: "pre-push-worktree-main-" });
+  const worktreeDir = await Deno.makeTempDir({ prefix: "pre-push-worktree-linked-" });
+  try {
+    await runCmd(["git", "init", "-q"], mainDir);
+    await runCmd(["git", "config", "user.email", "test@example.com"], mainDir);
+    await runCmd(["git", "config", "user.name", "Test User"], mainDir);
+    await runCmd(["git", "commit", "--allow-empty", "-m", "init"], mainDir);
+
+    const { stubPath } = await createStub(mainDir, 0);
+
+    const repoHookPath = path.join(mainDir, ".git", "hooks", "pre-push");
+    const repoLogPath = path.join(mainDir, "worktree-hook-receipts.log");
+
+    const repoHookScript = `#!/usr/bin/env bash
+echo "ARGS: $@" > "${repoLogPath}"
+echo "STDIN:" >> "${repoLogPath}"
+cat >> "${repoLogPath}"
+exit \${REPO_HOOK_EXIT:-0}
+`;
+    await Deno.mkdir(path.dirname(repoHookPath), { recursive: true });
+    await Deno.writeTextFile(repoHookPath, repoHookScript);
+    await Deno.chmod(repoHookPath, 0o755);
+
+    // Create a linked worktree
+    const addWt = await runCmd(
+      ["git", "worktree", "add", "-b", "feat-worktree", worktreeDir],
+      mainDir,
+    );
+    assertEquals(addWt.code, 0, `worktree add failed: ${addWt.stderr}`);
+
+    const sha = "9999999999999999999999999999999999999999";
+    const stdinLine = `refs/heads/feat-worktree ${sha} refs/heads/feat-worktree ${ZERO_OID}\n`;
+    const hookArgs = ["origin", "git@github.com:WebJamApps/worktree-test.git"];
+
+    // 1. Repo hook exits 0: push from linked worktree proceeds
+    const resClean = await runCmd(
+      ["bash", HOOK_PATH, ...hookArgs],
+      worktreeDir,
+      stdinLine,
+      { GITLEAKS_SCRIPT: stubPath, REPO_HOOK_EXIT: "0" },
+    );
+    assertEquals(resClean.code, 0, `Push from linked worktree should succeed: ${resClean.stderr}`);
+
+    const logClean = await Deno.readTextFile(repoLogPath);
+    assertStringIncludes(logClean, "ARGS: origin git@github.com:WebJamApps/worktree-test.git");
+    assertStringIncludes(logClean, stdinLine);
+
+    // 2. Repo hook exits 42: push from linked worktree is refused with exit code 42
+    await Deno.remove(repoLogPath).catch(() => {});
+    const resRefused = await runCmd(
+      ["bash", HOOK_PATH, ...hookArgs],
+      worktreeDir,
+      stdinLine,
+      { GITLEAKS_SCRIPT: stubPath, REPO_HOOK_EXIT: "42" },
+    );
+    assertEquals(
+      resRefused.code,
+      42,
+      "Repository pre-push hook non-zero exit must refuse push from linked worktree",
+    );
+
+    // 3. Self-recursion check: symlink repo hook to HOOK_PATH should not recurse
+    await Deno.remove(repoHookPath).catch(() => {});
+    await Deno.symlink(HOOK_PATH, repoHookPath);
+    const resSymlink = await runCmd(
+      ["bash", HOOK_PATH, ...hookArgs],
+      worktreeDir,
+      stdinLine,
+      { GITLEAKS_SCRIPT: stubPath },
+    );
+    assertEquals(
+      resSymlink.code,
+      0,
+      "Self-referential repo hook symlink must be skipped without error",
+    );
+  } finally {
+    await runCmd(["git", "worktree", "remove", "--force", worktreeDir], mainDir).catch(() => {});
+    await Deno.remove(worktreeDir, { recursive: true }).catch(() => {});
+    await Deno.remove(mainDir, { recursive: true }).catch(() => {});
+  }
+});

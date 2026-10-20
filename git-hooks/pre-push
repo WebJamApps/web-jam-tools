@@ -81,15 +81,18 @@ if [ "${#REF_RANGES[@]}" -gt 0 ]; then
   fi
 fi
 
-# Run repository's own .git/hooks/pre-push if present and executable
-GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || true)"
-if [ -n "$GIT_DIR" ] && [ -f "$GIT_DIR/hooks/pre-push" ] && [ -x "$GIT_DIR/hooks/pre-push" ]; then
-  REPO_HOOK="$GIT_DIR/hooks/pre-push"
-  THIS_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
-  TARGET_HOOK="$(readlink -f "$REPO_HOOK" 2>/dev/null || echo "$REPO_HOOK")"
-  if [ "$THIS_SCRIPT" != "$TARGET_HOOK" ]; then
-    printf '%s' "$STDIN_DATA" | "$REPO_HOOK" "$@"
-    exit $?
+# Run repository's own hooks/pre-push if present and executable
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+if [ -n "$COMMON_DIR" ]; then
+  COMMON_DIR="$(readlink -f "$COMMON_DIR" 2>/dev/null || echo "$COMMON_DIR")"
+  REPO_HOOK="$COMMON_DIR/hooks/pre-push"
+  if [ -f "$REPO_HOOK" ] && [ -x "$REPO_HOOK" ]; then
+    THIS_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    TARGET_HOOK="$(readlink -f "$REPO_HOOK" 2>/dev/null || echo "$REPO_HOOK")"
+    if [ "$THIS_SCRIPT" != "$TARGET_HOOK" ]; then
+      printf '%s' "$STDIN_DATA" | "$REPO_HOOK" "$@"
+      exit $?
+    fi
   fi
 fi
 
