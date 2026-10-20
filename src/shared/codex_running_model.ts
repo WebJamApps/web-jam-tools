@@ -1,8 +1,15 @@
 import { join } from "@std/path";
 
+export interface InvocationContext {
+  conversationId?: string;
+  modelName?: string;
+  transcriptPath?: string;
+}
+
 export interface RunningModelOptions {
   env?: (name: string) => string | undefined;
   readRoster?: () => Promise<string[]>;
+  invocationContext?: InvocationContext | null;
 }
 
 /** Whether the supplied environment identifies a Codex session. */

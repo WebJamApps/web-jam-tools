@@ -74,6 +74,40 @@ Deno.test("rewriteCommand: two-line command keeps line break inside quotes", () 
   );
 });
 
+Deno.test("rewriteCommand: includes identity flags when context is provided", () => {
+  const rewritten = rewriteCommand("git status", {
+    conversationId: "alpha-conv-123",
+    modelName: "gemini-4-argon-high",
+    transcriptPath: "/tmp/alpha.jsonl",
+  });
+  assertEquals(
+    rewritten,
+    `${INSTALLED_SCRIPT_PATH} --conversation-id 'alpha-conv-123' --model-name 'gemini-4-argon-high' --transcript-path '/tmp/alpha.jsonl' 'git status'`,
+  );
+});
+
+Deno.test("rewriteCommand: escapes quotes in context identity flags", () => {
+  const rewritten = rewriteCommand("git status", {
+    conversationId: "alpha's-conv",
+    modelName: "Claude Sonnet 5.5 (High)",
+    transcriptPath: "/tmp/it's-alpha.jsonl",
+  });
+  assertEquals(
+    rewritten,
+    `${INSTALLED_SCRIPT_PATH} --conversation-id 'alpha'\\''s-conv' --model-name 'Claude Sonnet 5.5 (High)' --transcript-path '/tmp/it'\\''s-alpha.jsonl' 'git status'`,
+  );
+});
+
+Deno.test("rewriteCommand: includes only conversation-id flag when model and transcript are omitted", () => {
+  const rewritten = rewriteCommand("git status", {
+    conversationId: "conv-only",
+  });
+  assertEquals(
+    rewritten,
+    `${INSTALLED_SCRIPT_PATH} --conversation-id 'conv-only' 'git status'`,
+  );
+});
+
 Deno.test("containsInstalledScriptPath: detects all variants of installed script path", () => {
   assertEquals(
     containsInstalledScriptPath("/home/joshua/.claude/hooks/agy-skill-run.sh 'rm -rf x'"),
@@ -1405,7 +1439,7 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites helper subagent command whe
     assertEquals(res.parsed.decision, "allow");
     assertEquals(
       res.parsed.overwrite?.CommandLine,
-      "/home/joshua/.claude/hooks/agy-skill-run.sh 'git status'",
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${helperId}' --transcript-path '${helperTranscript}' 'git status'`,
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
@@ -1528,7 +1562,7 @@ Deno.test("Helper agent with captured helper input format: handlePreToolUse rewr
     assertEquals(res.decision, "allow");
     assertEquals(
       res.overwrite?.CommandLine,
-      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${childId}' --transcript-path '${childTranscript}' 'pwd'`,
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
@@ -1595,7 +1629,7 @@ Deno.test("Helper of a helper with captured helper input format: 2 steps up rewr
     assertEquals(res.decision, "allow");
     assertEquals(
       res.overwrite?.CommandLine,
-      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${conv2Id}' --transcript-path '${conv2Transcript}' 'pwd'`,
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
@@ -1810,7 +1844,7 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: rewrites helper subagent command wit
     assertEquals(res.parsed.decision, "allow");
     assertEquals(
       res.parsed.overwrite?.CommandLine,
-      "/home/joshua/.claude/hooks/agy-skill-run.sh 'git status'",
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${helperId}' --transcript-path '${helperTranscript}' 'git status'`,
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
@@ -2387,7 +2421,7 @@ Deno.test("Full-handler regression: helper launch prompt /pr-review + parent lat
     assertEquals(res.decision, "allow");
     assertEquals(
       res.overwrite?.CommandLine,
-      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${helperId}' --transcript-path '${childTranscript}' 'pwd'`,
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
@@ -2660,7 +2694,7 @@ Deno.test("Full-handler preservation: legitimate top-level conversation with no 
     assertEquals(res.decision, "allow");
     assertEquals(
       res.overwrite?.CommandLine,
-      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${convId}' --transcript-path '${transcriptPath}' 'pwd'`,
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
@@ -2701,7 +2735,7 @@ Deno.test("Full-handler preservation: legitimate top-level conversation with emp
     assertEquals(res.decision, "allow");
     assertEquals(
       res.overwrite?.CommandLine,
-      "/home/joshua/.claude/hooks/agy-skill-run.sh 'pwd'",
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${convId}' --transcript-path '${transcriptPath}' 'pwd'`,
     );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
@@ -2830,6 +2864,38 @@ Deno.test("E2E hooks/agy-skill-run-hook.sh: does NOT rewrite helper command when
     } finally {
       await Deno.chmod(helperMsgs, 0o755);
     }
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("handlePreToolUse: includes modelName flag when modelName is in payload", async () => {
+  const tmpDir = await Deno.makeTempDir({ prefix: "agy-hook-model-name-" });
+  try {
+    const convId = "top-level-conv-model";
+    const logsDir = join(tmpDir, convId, ".system_generated", "logs");
+    await Deno.mkdir(logsDir, { recursive: true });
+    const transcriptPath = join(logsDir, "transcript.jsonl");
+    await Deno.writeTextFile(
+      transcriptPath,
+      JSON.stringify({
+        type: "USER_INPUT",
+        content: "/work-issue web-jam-tools#1304",
+      }) + "\n",
+    );
+
+    const payload = {
+      toolCall: { name: "run_command", args: { CommandLine: "deno task running-model" } },
+      transcriptPath,
+      conversationId: convId,
+      modelName: "gemini-4-argon-high",
+    };
+    const res = handlePreToolUse(payload, MOCK_PLUGIN_SKILLS, MOCK_USER_SKILLS);
+    assertEquals(res.decision, "allow");
+    assertEquals(
+      res.overwrite?.CommandLine,
+      `/home/joshua/.claude/hooks/agy-skill-run.sh --conversation-id '${convId}' --model-name 'gemini-4-argon-high' --transcript-path '${transcriptPath}' 'deno task running-model'`,
+    );
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }

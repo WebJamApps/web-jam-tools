@@ -68,24 +68,6 @@ export async function claudeRecordedAuthor(
   return uniqueRosterModel(model, roster.filter((entry) => matchesClaudeModel(model, entry)));
 }
 
-async function agySessionModel(recordPath: string): Promise<string> {
-  const lines = (await Deno.readTextFile(recordPath)).split("\n");
-  const last = lines.findLast((line) => line.trim().length > 0);
-  if (!last) throw new Error("The agy hook record is empty");
-  const record: unknown = JSON.parse(last);
-  if (typeof record !== "object" || record === null || Array.isArray(record)) {
-    throw new Error("The newest agy hook record is not an object");
-  }
-  const fields = record as Record<string, unknown>;
-  if (typeof fields.conversationId !== "string" || !fields.conversationId.trim()) {
-    throw new Error("The newest agy hook record names no running conversation");
-  }
-  if (typeof fields.modelName !== "string" || !fields.modelName.trim()) {
-    throw new Error("The newest agy hook record has no recorded model");
-  }
-  return fields.modelName;
-}
-
 function matchesAgyModel(model: string, entry: string): boolean {
   if (entry === "Gemini Flash") {
     return model === "Gemini Flash" ||
@@ -105,12 +87,27 @@ function matchesAgyModel(model: string, entry: string): boolean {
   return false;
 }
 
+function safeEnv(env: (name: string) => string | undefined, name: string): string | undefined {
+  try {
+    return env(name);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Resolve the current surface's recorded model, never falling back from an identified session. */
 export async function resolveRunningModel(options: RunningModelOptions = {}): Promise<string> {
   const env = options.env ?? ((name: string) => Deno.env.get(name));
-  const codexId = env("CODEX_THREAD_ID");
-  const claudeId = env("CLAUDE_CODE_SESSION_ID");
+  const codexId = safeEnv(env, "CODEX_THREAD_ID");
+  const claudeId = safeEnv(env, "CLAUDE_CODE_SESSION_ID");
+  const agyId = options.invocationContext !== undefined
+    ? options.invocationContext?.conversationId
+    : safeEnv(env, "AGY_CONVERSATION_ID");
+
   if (codexId && claudeId) throw new Error("Two tools claim the session: Codex and Claude Code");
+  if (codexId && agyId) throw new Error("Two tools claim the session: Codex and agy");
+  if (claudeId && agyId) throw new Error("Two tools claim the session: Claude Code and agy");
+
   if (codexId) {
     const signature = await codexRunningModel({ ...options, env });
     return signature.slice("Codex — ".length);
@@ -123,14 +120,95 @@ export async function resolveRunningModel(options: RunningModelOptions = {}): Pr
       readRoster: () => Promise.resolve(roster),
     });
   }
+
   const recordPath = env("AGY_HOOK_RECORD_PATH") || "/tmp/agy-hook-invocations.jsonl";
-  let model: string;
+  let recordText: string;
   try {
-    model = await agySessionModel(recordPath);
+    recordText = await Deno.readTextFile(recordPath);
   } catch (error) {
     throw new Error(`Cannot read the agy model record ${recordPath}: ${error}`);
   }
-  return uniqueRosterModel(model, roster.filter((entry) => matchesAgyModel(model, entry)));
+
+  const lines = recordText.split("\n");
+  const records: Record<string, unknown>[] = [];
+  let hasNonEmpty = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    hasNonEmpty = true;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (error) {
+      throw new Error(`Cannot read the agy model record ${recordPath}: ${error}`);
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`The newest agy hook record is not an object in ${recordPath}`);
+    }
+    const fields = parsed as Record<string, unknown>;
+    if (typeof fields.conversationId !== "string" || !fields.conversationId.trim()) {
+      throw new Error(`The newest agy hook record names no running conversation in ${recordPath}`);
+    }
+    if (typeof fields.modelName !== "string" || !fields.modelName.trim()) {
+      throw new Error(`The newest agy hook record has no recorded model in ${recordPath}`);
+    }
+    records.push(fields);
+  }
+
+  if (!hasNonEmpty) {
+    throw new Error(`The agy hook record is empty: ${recordPath}`);
+  }
+
+  if (options.invocationContext === null) {
+    throw new Error("Missing trusted invocation context");
+  }
+
+  const contextConversationId = options.invocationContext !== undefined
+    ? options.invocationContext.conversationId
+    : safeEnv(env, "AGY_CONVERSATION_ID");
+  const contextModelName = options.invocationContext !== undefined
+    ? options.invocationContext.modelName
+    : safeEnv(env, "AGY_MODEL_NAME");
+  const contextTranscriptPath = options.invocationContext !== undefined
+    ? options.invocationContext.transcriptPath
+    : safeEnv(env, "AGY_TRANSCRIPT_PATH");
+
+  if (contextConversationId === undefined) {
+    throw new Error("Missing trusted invocation context");
+  }
+  if (!contextConversationId.trim()) {
+    throw new Error("Missing calling conversation identity");
+  }
+  if (contextModelName !== undefined && !contextModelName.trim()) {
+    throw new Error("Invocation context has missing model");
+  }
+
+  const matching = records.filter((r) => r.conversationId === contextConversationId);
+  if (matching.length === 0) {
+    throw new Error(
+      `No agy hook record matches conversation ${contextConversationId} in ${recordPath}`,
+    );
+  }
+  const latest = matching[matching.length - 1];
+  const recordedModel = latest.modelName as string;
+  const recordedTranscript = typeof latest.transcriptPath === "string"
+    ? latest.transcriptPath.trim()
+    : "";
+
+  if (
+    contextTranscriptPath !== undefined &&
+    recordedTranscript &&
+    contextTranscriptPath !== recordedTranscript
+  ) {
+    throw new Error(
+      `Contradictory context: transcriptPath ${contextTranscriptPath} does not match recorded transcriptPath ${recordedTranscript}`,
+    );
+  }
+
+  return uniqueRosterModel(
+    recordedModel,
+    roster.filter((entry) => matchesAgyModel(recordedModel, entry)),
+  );
 }
 
 export async function runRunningModel(
