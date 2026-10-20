@@ -336,41 +336,80 @@ export function validateIssueBodyCriteria(
 ): void {
   const lines = body.split(/\r?\n/);
   let inCriteria = false;
-  const criteriaLines: { line: string; lineNum: number }[] = [];
+  let criteriaLevel = 2;
+  const criteria: { text: string; lineNum: number }[] = [];
+  let currentCriterion: { text: string; lineNum: number } | null = null;
+
+  const flushCurrent = () => {
+    if (currentCriterion !== null) {
+      const trimmedText = currentCriterion.text.trim();
+      if (trimmedText.length > 0) {
+        criteria.push({ text: trimmedText, lineNum: currentCriterion.lineNum });
+      }
+      currentCriterion = null;
+    }
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const rawLine = lines[i];
     const trimmed = rawLine.trim();
 
-    if (/^##\s+Acceptance\s+criteria\b/i.test(trimmed)) {
-      inCriteria = true;
+    if (!inCriteria) {
+      const criteriaHeaderMatch = rawLine.match(/^(#{1,6})\s+Acceptance\s+criteria\b/i);
+      if (criteriaHeaderMatch) {
+        inCriteria = true;
+        criteriaLevel = criteriaHeaderMatch[1].length;
+      }
       continue;
-    } else if (inCriteria && /^##+\s+/.test(trimmed)) {
-      break;
     }
 
-    if (inCriteria) {
-      if (trimmed === "" || trimmed.startsWith("<!--")) continue;
-      criteriaLines.push({ line: trimmed, lineNum: i + 1 });
+    const headingMatch = rawLine.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      if (level <= criteriaLevel) {
+        flushCurrent();
+        break;
+      } else {
+        // Nested subsection within Acceptance criteria (e.g. ### Behavior)
+        flushCurrent();
+        continue;
+      }
+    }
+
+    if (trimmed === "" || trimmed.startsWith("<!--")) {
+      flushCurrent();
+      continue;
+    }
+
+    const isListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(rawLine);
+    if (isListItem) {
+      flushCurrent();
+      currentCriterion = { text: trimmed, lineNum: i + 1 };
+    } else if (currentCriterion !== null) {
+      currentCriterion.text += " " + trimmed;
+    } else {
+      currentCriterion = { text: trimmed, lineNum: i + 1 };
     }
   }
 
-  if (!inCriteria || criteriaLines.length === 0) {
+  flushCurrent();
+
+  if (!inCriteria || criteria.length === 0) {
     throw new Error(
       `Refused to file plan — issue "${title}" body has no "## Acceptance criteria" section.`,
     );
   }
 
-  for (const { line, lineNum } of criteriaLines) {
-    const check = checkCriterionOrClosesCell(line, designHeadings);
+  for (const { text, lineNum } of criteria) {
+    const check = checkCriterionOrClosesCell(text, designHeadings);
     if (!check.valid) {
       if (check.reason === "unknown-heading") {
         throw new Error(
-          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${line}"): names heading "${check.unknownHeading}", which does not exist in the design document.`,
+          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): names heading "${check.unknownHeading}", which does not exist in the design document.`,
         );
       } else {
         throw new Error(
-          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${line}"): neither a heading nor a command.`,
+          `Refused to file plan — issue "${title}" criterion line ${lineNum} ("${text}"): neither a heading nor a command.`,
         );
       }
     }

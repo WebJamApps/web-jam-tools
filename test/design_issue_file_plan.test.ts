@@ -14,6 +14,7 @@ import {
   parsePlanFile,
   parsePlanJson,
   runFilePlanCli,
+  validateIssueBodyCriteria,
 } from "../src/design-issue/file_plan.ts";
 import {
   type ApprovalCheckResult,
@@ -1615,6 +1616,139 @@ Deno.test("Appendix D Case 15: A plan whose `designDoc` cannot be read is refuse
       "cannot be read",
     );
     assertStringIncludes(error.message, nonExistentDesignDoc);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: throws when no acceptance criteria section exists", () => {
+  const headings = new Set(["the model-label rule"]);
+  assertThrows(
+    () => validateIssueBodyCriteria("Task", "## What this builds\n\nNo criteria", headings),
+    Error,
+    'has no "## Acceptance criteria" section',
+  );
+});
+
+Deno.test("validateIssueBodyCriteria: nested subsections (e.g. ### Behavior) are scanned and pass when all criteria are valid", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with grouped criteria in subsections",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n### Commands\n\n- [ ] `deno task test` passes\n\n### Behavior\n\n- [ ] builds "The model-label rule" as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: nested subsections (e.g. ### Behavior) are scanned and refuse invalid criteria before filing", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with invalid criterion in subsection",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n\n### Behavior\n\n- [ ] builds "Nope" as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "Refused to file plan",
+    );
+    assertStringIncludes(error.message, 'issue "Task with invalid criterion in subsection"');
+    assertStringIncludes(error.message, '- [ ] builds "Nope" as written');
+    assertStringIncludes(error.message, "Nope");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: wrapped criteria across continuation lines assemble into one criterion and pass", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with wrapped criterion",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "The model-label rule"\n  as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: wrapped criteria across continuation lines assemble into one criterion and refuse invalid heading", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with wrapped invalid criterion",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "Nope"\n  as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "Refused to file plan",
+    );
+    assertStringIncludes(error.message, 'issue "Task with wrapped invalid criterion"');
+    assertStringIncludes(error.message, '- [ ] builds "Nope" as written');
+    assertStringIncludes(error.message, "Nope");
   } finally {
     await Deno.remove(tmpDir, { recursive: true });
   }
