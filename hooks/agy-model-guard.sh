@@ -19,4 +19,4 @@
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-exec "$HOOK_DIR/lib/run_hook.sh" --group workflow --name agy-model-guard deno run --no-config --allow-read --allow-env --allow-write "$HOOK_DIR/lib/check_agy_session_model.ts"
+exec "$HOOK_DIR/lib/run_hook.sh" --group workflow --name agy-model-guard --allow-with-note "agy-model guard: could not determine modelName; proceeding. Verify the agy session uses an allowed high model before continuing." deno run --no-config --allow-read --allow-env --allow-write "$HOOK_DIR/lib/check_agy_session_model.ts"

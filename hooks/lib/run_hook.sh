@@ -97,7 +97,7 @@ fi
 
 # Buffer stdin if available (non-terminal)
 INPUT=""
-if [ ! -t 0 ]; then
+if [ "$CHECK_ONLY" -eq 0 ] && [ ! -t 0 ]; then
   INPUT="$(cat)"
 fi
 

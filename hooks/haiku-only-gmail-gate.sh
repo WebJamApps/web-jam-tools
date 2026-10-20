@@ -22,7 +22,7 @@ model=""
 if [ -n "$tp" ] && [ -f "$tp" ]; then
   # newest genuine assistant turn's model = current session model
   # (selected via hooks/lib/select_transcript_entry.ts, excluding isSidechain and isApiErrorMessage entries — web-jam-tools#566)
-  model="$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name haiku-only-gmail-gate deno run --no-config --allow-read "$SELECTOR" --model "$tp" 2>/dev/null)" || model=""
+  model="$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name haiku-only-gmail-gate --allow-with-note "Haiku Gmail gate: could not determine the session model from transcript_path; proceeding. Before using Gmail tools, verify the session is on Haiku or switch with /model haiku." deno run --no-config --allow-read "$SELECTOR" --model "$tp" 2>/dev/null)" || model=""
 fi
 
 if [[ "$model" == *'"hookSpecificOutput"'* ]]; then

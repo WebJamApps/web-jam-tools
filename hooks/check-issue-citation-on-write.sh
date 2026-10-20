@@ -15,12 +15,7 @@ CHECKER="$REPO_DIR/hooks/lib/check_issue_citation_on_write.ts"
 input=$(cat)
 
 status=0
-result=$(printf '%s' "$input" | "$REPO_DIR/hooks/lib/run_hook.sh" --group workflow --name check-issue-citation-on-write deno run --no-config --allow-env --allow-read "$CHECKER" 2>/dev/null) || status=$?
-
-if [[ "$result" == *'"hookSpecificOutput"'* ]]; then
-  printf '%s\n' "$result"
-  exit 0
-fi
+result=$(printf '%s' "$input" | deno run --no-config --allow-env --allow-read "$CHECKER" 2>/dev/null) || status=$?
 
 if [ "$status" -ne 0 ]; then
   result="PASS: citation check could not run (checker exited $status); proceeding"

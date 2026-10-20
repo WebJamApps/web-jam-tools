@@ -27,7 +27,7 @@ async function runRunner(
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: env ? { ...Deno.env.toObject(), ...env } : undefined,
+    env: { ...Deno.env.toObject(), BASH_ENV: "", ...(env ?? {}) },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
