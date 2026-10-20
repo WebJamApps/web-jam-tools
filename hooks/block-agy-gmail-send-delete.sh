@@ -7,7 +7,7 @@ set -euo pipefail
 
 HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 status=0
-result=$(deno run --no-config "$HOOK_DIR/lib/check_gmail_write.ts" 2>/dev/null) || status=$?
+result=$("$HOOK_DIR/lib/run_hook.sh" --group safety --name block-agy-gmail-send-delete deno run --no-config "$HOOK_DIR/lib/check_gmail_write.ts" 2>/dev/null) || status=$?
 if [ "$status" -ne 0 ]; then
   echo "BLOCKED (agy Gmail safety fence): classifier unavailable — refusing unreadable safety input. Ask Josh to repair the classifier." >&2
   exit 2

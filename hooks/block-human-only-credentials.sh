@@ -4,7 +4,5 @@
 # Exit 2 = block (stderr is shown to the model).
 set -euo pipefail
 
-input=$(cat)
-
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-printf '%s' "$input" | deno run --no-config --allow-env --allow-read "$HOOK_DIR/lib/detect_human_only_credentials.ts"
+exec "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-human-only-credentials deno run --no-config --allow-env --allow-read "$HOOK_DIR/lib/detect_human_only_credentials.ts" "$@"

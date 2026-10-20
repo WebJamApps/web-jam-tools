@@ -72,7 +72,11 @@ fi
 
 [ -n "$msg" ] || exit 0
 
-offenders="$(MSG_FOR_PY="$msg" deno run --no-config --allow-env "$DETECTOR" 2>/dev/null || true)"
+offenders="$(MSG_FOR_PY="$msg" "$HOOK_DIR/lib/run_hook.sh" --group workflow --name require-issue-citation-titles --event Stop deno run --no-config --allow-env "$DETECTOR" 2>/dev/null || true)"
+if [[ "$offenders" == *'"systemMessage"'* ]]; then
+  printf '%s\n' "$offenders"
+  exit 0
+fi
 [ -n "$offenders" ] || exit 0
 
 {

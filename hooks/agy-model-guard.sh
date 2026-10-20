@@ -19,14 +19,4 @@
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-input=$(cat)
-status=0
-result=$(printf '%s' "$input" | deno run --no-config --allow-read --allow-env --allow-write "$HOOK_DIR/lib/check_agy_session_model.ts" 2>&1) || status=$?
-case "$status" in
-  0) printf '%s' "$result" ;;
-  2) printf '%s\n' "$result" >&2; exit 2 ;;
-  *)
-    note="agy-model guard: could not determine modelName (checker exited $status); proceeding. Verify the agy session uses an allowed high model before continuing."
-    jq -cn --arg note "$note" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$note}}'
-    ;;
-esac
+exec "$HOOK_DIR/lib/run_hook.sh" --group workflow --name agy-model-guard deno run --no-config --allow-read --allow-env --allow-write "$HOOK_DIR/lib/check_agy_session_model.ts"

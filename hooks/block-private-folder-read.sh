@@ -18,4 +18,4 @@
 set -euo pipefail
 
 HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-exec deno run --no-config --allow-env --allow-read "$HOOK_DIR/lib/check_private_folder_read.ts" "$@"
+exec "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-private-folder-read deno run --no-config --allow-env --allow-read "$HOOK_DIR/lib/check_private_folder_read.ts" "$@"

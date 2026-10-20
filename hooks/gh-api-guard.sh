@@ -7,6 +7,9 @@
 # - Force prompt (JSON ask) if method is POST/PUT/PATCH or field flags are passed.
 set -euo pipefail
 
+HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+"$HOOK_DIR/lib/run_hook.sh" --check-only >/dev/null 2>&1 || true
+
 input=$(cat)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .toolCall.args.CommandLine // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0

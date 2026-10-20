@@ -159,8 +159,13 @@ if [ -z "$msg" ]; then
   exit 0
 fi
 
-if ! report="$(MSG_FOR_PY="$msg" deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>"$TMP_ERR")"; then
+if ! report="$(MSG_FOR_PY="$msg" "$HOOK_DIR/lib/run_hook.sh" --group workflow --name require-clear-communication --event Stop deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>"$TMP_ERR")"; then
   cannot_evaluate "run detector" "$(<"$TMP_ERR")"
+fi
+
+if [[ "$report" == *'"systemMessage"'* ]]; then
+  printf '%s\n' "$report"
+  exit 0
 fi
 
 if [ -z "$report" ]; then

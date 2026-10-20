@@ -39,8 +39,10 @@ if [ ! -f "$top/deno.json" ]; then
 fi
 
 # Check if deno is available
+HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 if ! command -v deno &>/dev/null; then
-  exit 0  # deno not available → allow (can't check anyway)
+  "$HOOK_DIR/lib/run_hook.sh" --group workflow --name fmt-push-guard
+  exit 0
 fi
 
 # Run fmt:check from the repo root

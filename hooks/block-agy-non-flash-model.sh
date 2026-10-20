@@ -45,11 +45,15 @@ HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
-result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check_agy_model.ts" 2>/dev/null) || true
+result=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-agy-non-flash-model deno run --no-config --allow-env "$HOOK_DIR/lib/check_agy_model.ts" 2>/dev/null) || true
 
 # python3/deno unavailable/crashed, or nothing came back: fail open — this is a
 # cost-control guard, not a secret-leak guard, so an unparseable command is
 # let through rather than guessed at.
+if [[ "$result" == *'"hookSpecificOutput"'* ]]; then
+  printf '%s\n' "$result"
+  exit 0
+fi
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
