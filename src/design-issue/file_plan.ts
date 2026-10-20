@@ -355,7 +355,7 @@ export function validateIssueBodyCriteria(
     const trimmed = rawLine.trim();
 
     if (!inCriteria) {
-      const criteriaHeaderMatch = rawLine.match(/^(#{1,6})\s+Acceptance\s+criteria\b/i);
+      const criteriaHeaderMatch = trimmed.match(/^(#{1,6})\s+Acceptance\s+criteria\b/i);
       if (criteriaHeaderMatch) {
         inCriteria = true;
         criteriaLevel = criteriaHeaderMatch[1].length;
@@ -363,7 +363,7 @@ export function validateIssueBodyCriteria(
       continue;
     }
 
-    const headingMatch = rawLine.match(/^(#{1,6})\s+(.*)$/);
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
     if (headingMatch) {
       const level = headingMatch[1].length;
       if (level <= criteriaLevel) {

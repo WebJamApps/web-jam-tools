@@ -1753,3 +1753,59 @@ Deno.test("validateIssueBodyCriteria: wrapped criteria across continuation lines
     await Deno.remove(tmpDir, { recursive: true });
   }
 });
+
+Deno.test("validateIssueBodyCriteria: indented acceptance criteria heading (e.g. '  ## Acceptance criteria') is recognized", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with indented criteria heading",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n  ## Acceptance criteria\n\n- [ ] builds "The model-label rule" as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: indented subsequent heading (e.g. '  ## Files changed') terminates the criteria section", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with indented next section",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "The model-label rule" as written\n\n  ## Files changed\n\n- src/index.ts\nUnrelated text that is neither a heading nor command',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
