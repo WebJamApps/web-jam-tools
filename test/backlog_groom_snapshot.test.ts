@@ -122,6 +122,8 @@ Deno.test("snapshot identity, completeness and one-hour freshness are mandatory"
     { ...snapshot, repositories: snapshot.repositories.slice(1) },
     { ...snapshot, repositories: snapshot.repositories.map(() => snapshot.repositories[0]) },
     { ...snapshot, completedAt: "invalid" },
+    { ...snapshot, startedAt: "2026-10-19T16:00:00Z" },
+    { ...snapshot, completedAt: "2026-10-19T16:00:00+00:00" },
     { ...snapshot, startedAt: "2020-01-01" },
     { ...snapshot, startedAt: "2026-10-20", completedAt: "2026-10-20" },
   ];
@@ -213,7 +215,7 @@ Deno.test("collector CLI publishes only complete snapshots, refuses overwrite an
     errorLog: (line: string) => errors.push(line),
   };
   try {
-    const output = `${dir}/snapshot.json`;
+    const output = `${dir}/nested/snapshot.json`;
     assertEquals(await runCollectCli(["--output", output, "--concurrency", "2"], options), 0);
     const saved = await readSnapshot(output);
     assertEquals(saved.repositories.length, 8);
@@ -229,9 +231,18 @@ Deno.test("collector CLI publishes only complete snapshots, refuses overwrite an
       1,
     );
     await assertRejects(() => Deno.stat(failed), Deno.errors.NotFound);
+    await Deno.mkdir(`${dir}/actual`);
+    await Deno.symlink(`${dir}/actual`, `${dir}/linked`);
+    assertEquals(
+      await runCollectCli(["--output", `${dir}/linked/nested/snapshot.json`], options),
+      1,
+    );
+    await assertRejects(() => Deno.stat(`${dir}/actual/nested`), Deno.errors.NotFound);
+    await Deno.remove(`${dir}/linked`);
+    await Deno.remove(`${dir}/actual`);
     const entries = [];
     for await (const item of Deno.readDir(dir)) entries.push(item.name);
-    assertEquals(entries, ["snapshot.json"]);
+    assertEquals(entries, ["nested"]);
     const noRead = {
       ...options,
       runner: () => {
@@ -250,4 +261,39 @@ Deno.test("collector CLI publishes only complete snapshots, refuses overwrite an
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
+});
+
+Deno.test("collector preserves explicit empty bodies and cross-repository native relationships", async () => {
+  const f = fixture((issue) => {
+    issue.type = { name: "Epic" };
+    issue.body = null;
+    issue.issue_dependencies_summary = { blocked_by: 1, blocking: 1 };
+    issue.sub_issues_summary = { total: 1 };
+  });
+  const related = {
+    ...raw("JaMmusic", 2),
+    type: { name: "Task" },
+    issue_field_values: [{ issue_field_name: "Priority", single_select_option: { name: "High" } }],
+  };
+  const runner: CommandRunner = (args) => {
+    if (args[1].endsWith("/parent")) {
+      return Promise.resolve({
+        code: 0,
+        stdout: JSON.stringify({ ...related, state: "closed" }),
+        stderr: "",
+      });
+    }
+    if (/\/(dependencies|sub_issues)/.test(args[1])) {
+      return Promise.resolve({ code: 0, stdout: JSON.stringify([[related]]), stderr: "" });
+    }
+    return f.runner(args);
+  };
+  const snapshot = await collectSnapshot(runner, 3, () => now);
+  const row = snapshot.repositories[0].issues[0];
+  assertEquals(row.issue.body, null);
+  assertEquals(row.parent?.state, "closed");
+  const facts = repositoryFacts(snapshot, "web-jam-tools").issues[0];
+  assertEquals(facts.children, [{ number: 2, priority: "High" }]);
+  assertEquals(facts.blockedByOpen, true);
+  assertEquals(facts.openWaiting, 1);
 });

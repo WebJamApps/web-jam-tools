@@ -152,7 +152,9 @@ export function validateSnapshot(value: unknown, now = new Date()): Snapshot {
   const started = Date.parse(String(snapshot.startedAt));
   const completed = Date.parse(String(snapshot.completedAt));
   if (
-    !Number.isFinite(started) || !Number.isFinite(completed) || completed < started ||
+    !Number.isFinite(started) || !Number.isFinite(completed) ||
+    new Date(started).toISOString() !== snapshot.startedAt ||
+    new Date(completed).toISOString() !== snapshot.completedAt || completed < started ||
     completed > now.getTime() + 60_000 || now.getTime() - started > 3_600_000
   ) {
     throw new Error("Snapshot is stale or has invalid timestamps; collect again");

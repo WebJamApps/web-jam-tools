@@ -3,6 +3,25 @@ import { dirname } from "@std/path";
 import type { CommandRunner } from "../shared/repos.ts";
 import { collectSnapshot, snapshotPath } from "./snapshot.ts";
 
+async function prepareDirectory(directory: string): Promise<void> {
+  // Inspect each existing component before creating children: recursive mkdir could write
+  // through a pre-existing symlink before a final realPath check noticed it.
+  const parts = directory.slice("/tmp/backlog-groom".length).split("/").filter(Boolean);
+  let current = "/tmp/backlog-groom";
+  for (let index = 0; index <= parts.length; index++) {
+    try {
+      const info = await Deno.lstat(current);
+      if (!info.isDirectory || info.isSymlink) {
+        throw new Error("Snapshot directory must not contain symlinks");
+      }
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+      await Deno.mkdir(current);
+    }
+    if (index < parts.length) current += `/${parts[index]}`;
+  }
+}
+
 export async function runCollectCli(
   args: string[],
   options: {
@@ -34,7 +53,7 @@ export async function runCollectCli(
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
       throw new Error("Concurrency must be an integer from 1 to 16");
     }
-    await Deno.mkdir(dirname(output), { recursive: true });
+    await prepareDirectory(dirname(output));
     if (await Deno.realPath(dirname(output)) !== dirname(output)) {
       throw new Error("Snapshot directory must not contain symlinks");
     }

@@ -152,6 +152,7 @@ Proposed Priority moves are shown as one batch for each repository.
 - **STOP and wait for Josh's response.**
 - Accept selective approvals (e.g., "approve 1, 2", "all except 3", "yes to all").
 - Execute ONLY approved actions on GitHub through the guarded commands: `deno task edit-issue` for a label, a milestone, or a body (and its `--priority <Level>` flag for a Priority level), and `deno task unblock-issue` for a dependency that blocks an issue on its own parent.
+- Before executing an approved item, re-read its relevant current issue values and prerequisites. If changed facts invalidate the proposal, return the revised item for approval. A snapshot never substitutes for this check.
 - Never touch unapproved items.
 
 ## Description Detail & Triggers

@@ -2084,7 +2084,7 @@ export function assertBacklogGroomRules(text: string): void {
     "skills/backlog-groom/SKILL.md must use deno task unblock-issue",
   );
 
-  // 5. Every workflow route must use the session or helper selected by the table.
+  // 5. Every workflow route must use the helper selected by the table.
   assertStringIncludes(
     text,
     'The helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5.',
@@ -2095,6 +2095,12 @@ export function assertBacklogGroomRules(text: string): void {
     "skills/backlog-groom/SKILL.md must not run the audit inline in the primary session",
   );
 
+  for (
+    const row of [
+      "| Claude Code | Haiku | a Haiku helper the session starts |",
+      "| Codex | Luna | a Luna helper the session starts |",
+    ]
+  ) assertStringIncludes(text, row, "must delegate cheap sessions to a helper too");
   for (const native of ["Agent", "collaboration.spawn_agent", "invoke_subagent"]) {
     assertStringIncludes(text, native, "must name native background delegation mechanism");
   }
