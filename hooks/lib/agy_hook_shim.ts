@@ -67,7 +67,12 @@ export interface AgyPayload {
   artifactDirectoryPath?: string;
   workspacePaths?: string[];
   modelName?: string;
+  cwd?: string;
   error?: unknown;
+}
+
+function isAbsolutePath(p: string): boolean {
+  return p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p);
 }
 
 export const DEFAULT_RECORD_PATH = "/tmp/agy-hook-invocations.jsonl";
@@ -288,6 +293,7 @@ export function recoverPostToolOutput(
 export interface NormalizedPayload {
   tool_name: string;
   tool_input: Record<string, unknown>;
+  cwd?: string;
   transcript_path?: string;
   tool_response?: { stdout: string };
   // Extra, non-Claude fields preserved verbatim so agy-native hooks (e.g.
@@ -301,6 +307,56 @@ export interface NormalizedPayload {
   workspacePaths?: string[];
 }
 
+/**
+ * Resolves the authoritative working directory context for file guards (such
+ * as block-out-of-tree-write.sh). Uses explicit cwd if given, otherwise falls
+ * back to workspacePaths. When multiple workspaces are present, matches against
+ * the target file path, defaulting to the primary workspace root if ambiguous.
+ */
+export function resolveCwd(
+  payload: AgyPayload,
+  toolInput: Record<string, unknown>,
+): string | undefined {
+  if (typeof payload.cwd === "string" && isAbsolutePath(payload.cwd)) {
+    return payload.cwd;
+  }
+  if (typeof toolInput.cwd === "string" && isAbsolutePath(toolInput.cwd)) {
+    return toolInput.cwd;
+  }
+  const rawCwd = payload.toolCall?.args?.Cwd ?? payload.toolCall?.args?.cwd;
+  if (typeof rawCwd === "string" && isAbsolutePath(rawCwd)) {
+    return rawCwd;
+  }
+  const wsPaths = Array.isArray(payload.workspacePaths)
+    ? payload.workspacePaths.filter((p): p is string => typeof p === "string" && isAbsolutePath(p))
+    : [];
+  if (wsPaths.length === 1) {
+    return wsPaths[0];
+  }
+  if (wsPaths.length > 1) {
+    const targetFile = typeof toolInput.file_path === "string"
+      ? toolInput.file_path
+      : typeof toolInput.path === "string"
+      ? toolInput.path
+      : typeof toolInput.TargetFile === "string"
+      ? toolInput.TargetFile
+      : undefined;
+    if (targetFile && isAbsolutePath(targetFile)) {
+      const matching = wsPaths.filter((wp) =>
+        targetFile === wp || targetFile.startsWith(wp.endsWith("/") ? wp : wp + "/")
+      );
+      if (matching.length === 1) {
+        return matching[0];
+      }
+      if (matching.length > 1) {
+        return matching.sort((a, b) => b.length - a.length)[0];
+      }
+    }
+    return wsPaths[0];
+  }
+  return undefined;
+}
+
 export function normalize(
   payload: AgyPayload,
   event: "PreToolUse" | "PostToolUse",
@@ -309,9 +365,15 @@ export function normalize(
   const rawName = payload.toolCall?.name ?? "";
   const args = payload.toolCall?.args ?? {};
   const toolName = mapAgyToolName(rawName, args);
+  const toolInput = buildToolInput(args);
+  const resolvedCwd = resolveCwd(payload, toolInput);
+  if (resolvedCwd && toolInput.cwd === undefined) {
+    toolInput.cwd = resolvedCwd;
+  }
   const normalized: NormalizedPayload = {
     tool_name: toolName,
-    tool_input: buildToolInput(args),
+    tool_input: toolInput,
+    cwd: resolvedCwd,
     transcript_path: payload.transcriptPath,
     modelName: payload.modelName,
     stepIdx: payload.stepIdx,

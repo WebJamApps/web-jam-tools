@@ -25,6 +25,7 @@ import {
   recordInvocation,
   recoverPostToolOutput,
   redactSensitiveText,
+  resolveCwd,
   RETAINED_RECORD_BYTES,
   runShim as runShimPure,
   toAgyReply,
@@ -391,6 +392,79 @@ Deno.test("normalize: PostToolUse attaches tool_response.stdout from the recover
   assertEquals(normalized.tool_response?.stdout, "captured output");
 });
 
+Deno.test("resolveCwd: selects explicit payload.cwd, toolInput.cwd, or args.Cwd", () => {
+  assertEquals(
+    resolveCwd({ cwd: "/workspace/explicit" }, {}),
+    "/workspace/explicit",
+  );
+  assertEquals(
+    resolveCwd({}, { cwd: "/workspace/input" }),
+    "/workspace/input",
+  );
+  assertEquals(
+    resolveCwd({ toolCall: { name: "run_command", args: { Cwd: "/workspace/args" } } }, {}),
+    "/workspace/args",
+  );
+});
+
+Deno.test("resolveCwd: single workspace path is resolved authoritative cwd", () => {
+  assertEquals(
+    resolveCwd({ workspacePaths: ["/workspace/single"] }, {}),
+    "/workspace/single",
+  );
+});
+
+Deno.test("resolveCwd: multiple workspace paths match targetFile or fall back to primary", () => {
+  const ws = ["/workspace/repo-a", "/workspace/repo-b", "/workspace/repo-b/nested"];
+  // Matches repo-b
+  assertEquals(
+    resolveCwd(
+      { workspacePaths: ws },
+      { file_path: "/workspace/repo-b/src/file.ts" },
+    ),
+    "/workspace/repo-b",
+  );
+  // Matches nested (longest match)
+  assertEquals(
+    resolveCwd(
+      { workspacePaths: ws },
+      { file_path: "/workspace/repo-b/nested/src/file.ts" },
+    ),
+    "/workspace/repo-b/nested",
+  );
+  // Unmatched target falls back to primary (first) root
+  assertEquals(
+    resolveCwd(
+      { workspacePaths: ws },
+      { file_path: "/outside/file.ts" },
+    ),
+    "/workspace/repo-a",
+  );
+});
+
+Deno.test("resolveCwd: ignores non-absolute paths and returns undefined when absent", () => {
+  assertEquals(
+    resolveCwd({ workspacePaths: ["relative/path", "another/relative"] }, {}),
+    undefined,
+  );
+  assertEquals(
+    resolveCwd({}, {}),
+    undefined,
+  );
+});
+
+Deno.test("normalize: populates top-level cwd and backfills tool_input.cwd", () => {
+  const { normalized } = normalize(
+    {
+      toolCall: { name: "write_to_file", args: { TargetFile: "/workspace/repo/new.txt" } },
+      workspacePaths: ["/workspace/repo"],
+    },
+    "PreToolUse",
+  );
+  assertEquals(normalized.cwd, "/workspace/repo");
+  assertEquals(normalized.tool_input.cwd, "/workspace/repo");
+});
+
 Deno.test("translateVerdict: exit 0, no output -> allow", () => {
   assertEquals(translateVerdict(0, "", ""), { decision: "allow" });
 });
@@ -548,7 +622,7 @@ Deno.test("matcher semantics: an unmapped/unknown agy tool name doesn't match a 
 
 async function withRepoOnBranch(
   branch: string,
-  fn: (filePath: string) => Promise<void>,
+  fn: (repoDir: string, filePath: string) => Promise<void>,
 ): Promise<void> {
   const dir = await Deno.makeTempDir({ prefix: "shim-git-test-" });
   try {
@@ -564,7 +638,7 @@ async function withRepoOnBranch(
     await Deno.writeTextFile(filePath, "// placeholder\n");
     await run("git", ["-C", dir, "add", "-A"]);
     await run("git", ["-C", dir, "commit", "-q", "-m", "init"]);
-    await fn(filePath);
+    await fn(dir, filePath);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -573,7 +647,7 @@ async function withRepoOnBranch(
 // --- Row 10 Replay: agy file-edit tools reach Edit|Write-registered guards (web-jam-tools#1057) ---
 
 Deno.test("replaying replace_file_content on protected branch denies under feature-branch-guard.sh", async () => {
-  await withRepoOnBranch("dev", async (filePath) => {
+  await withRepoOnBranch("dev", async (_dir, filePath) => {
     const res = await runShim(
       "PreToolUse",
       "Edit|Write",
@@ -590,7 +664,7 @@ Deno.test("replaying replace_file_content on protected branch denies under featu
 });
 
 Deno.test("replaying write_to_file on protected branch denies under feature-branch-guard.sh", async () => {
-  await withRepoOnBranch("dev", async (filePath) => {
+  await withRepoOnBranch("dev", async (_dir, filePath) => {
     const newFile = `${filePath}.new.txt`;
     const res = await runShim(
       "PreToolUse",
@@ -603,6 +677,28 @@ Deno.test("replaying write_to_file on protected branch denies under feature-bran
     assert(
       res.reason?.includes("protected branch 'dev'"),
       `expected protected branch reason, got: ${res.reason}`,
+    );
+  });
+});
+
+Deno.test("replaying replace_file_content targeting path outside workspace denies under block-out-of-tree-write.sh", async () => {
+  await withRepoOnBranch("feature/test", async (dir) => {
+    // Target is an out-of-workspace path outside /tmp (e.g. /home/joshua/outside-workspace.ts)
+    // while workspacePaths points to the test git repo.
+    const outOfWorkspaceTarget = "/home/joshua/outside-workspace.ts";
+    const res = await runShim(
+      "PreToolUse",
+      "Edit|Write|NotebookEdit",
+      "block-out-of-tree-write.sh",
+      agyReplaceFileContent(outOfWorkspaceTarget, "old text", "new text", {
+        workspacePaths: [dir],
+      }),
+    );
+    assertEquals(res.code, 0);
+    assertEquals(res.decision, "deny", res.stdout);
+    assert(
+      res.reason?.includes("out-of-tree write guard"),
+      `expected out-of-tree write guard reason, got: ${res.reason}`,
     );
   });
 });
