@@ -110,20 +110,131 @@ function agyRunCommand(command: string, extra: Record<string, unknown> = {}) {
   };
 }
 
+function agyReplaceFileContent(
+  targetFile: string,
+  targetContent = "old text",
+  replacementContent = "new text",
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    toolCall: {
+      name: "replace_file_content",
+      args: {
+        TargetFile: targetFile,
+        Instruction: "edit",
+        TargetContent: targetContent,
+        ReplacementContent: replacementContent,
+        StartLine: 1,
+        EndLine: 5,
+        AllowMultiple: false,
+        toolAction: "edit",
+        toolSummary: "File edit",
+      },
+    },
+    conversationId: "conv-1",
+    stepIdx: 1,
+    modelName: "gemini-3.8-flash-high",
+    artifactDirectoryPath: "/tmp/artifacts",
+    workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
+    ...extra,
+  };
+}
+
+function agyWriteToFile(
+  targetFile: string,
+  codeContent = "file content",
+  overwrite = true,
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    toolCall: {
+      name: "write_to_file",
+      args: {
+        TargetFile: targetFile,
+        CodeContent: codeContent,
+        Overwrite: overwrite,
+        Description: "create file",
+        toolAction: "write",
+        toolSummary: "File write",
+      },
+    },
+    conversationId: "conv-1",
+    stepIdx: 1,
+    modelName: "gemini-3.8-flash-high",
+    artifactDirectoryPath: "/tmp/artifacts",
+    workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
+    ...extra,
+  };
+}
+
+function agyCallMcpTool(
+  serverName: string,
+  toolName: string,
+  argumentsObj: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    toolCall: {
+      name: "call_mcp_tool",
+      args: {
+        ServerName: serverName,
+        ToolName: toolName,
+        Arguments: argumentsObj,
+        toolAction: "mcp",
+        toolSummary: "MCP tool call",
+      },
+    },
+    conversationId: "conv-1",
+    stepIdx: 1,
+    modelName: "gemini-3.8-flash-high",
+    artifactDirectoryPath: "/tmp/artifacts",
+    workspacePaths: ["/home/joshua/WebJamApps/web-jam-tools"],
+    ...extra,
+  };
+}
+
 // --- Unit tests: hooks/lib/agy_hook_shim.ts pure functions ---
 
-Deno.test("mapAgyToolName: run_command -> Bash (verified, finding 3); unknown names pass through", () => {
+Deno.test("mapAgyToolName: maps agy shell, file-edit, and GitHub MCP tools; unknown names pass through", () => {
   assertEquals(mapAgyToolName("run_command"), "Bash");
+  assertEquals(mapAgyToolName("replace_file_content"), "Edit");
+  assertEquals(mapAgyToolName("multi_replace_file_content"), "Edit");
+  assertEquals(mapAgyToolName("write_to_file"), "Write");
+  assertEquals(mapAgyToolName("issue_write"), "mcp__github__issue_write");
+  assertEquals(mapAgyToolName("sub_issue_write"), "mcp__github__sub_issue_write");
+  assertEquals(mapAgyToolName("mcp_github_issue_write"), "mcp__github__issue_write");
+  assertEquals(mapAgyToolName("mcp_github_sub_issue_write"), "mcp__github__sub_issue_write");
+  assertEquals(
+    mapAgyToolName("call_mcp_tool", { ServerName: "github", ToolName: "issue_write" }),
+    "mcp__github__issue_write",
+  );
+  assertEquals(
+    mapAgyToolName("call_mcp_tool", { ServerName: "github", ToolName: "sub_issue_write" }),
+    "mcp__github__sub_issue_write",
+  );
+  assertEquals(
+    mapAgyToolName("call_mcp_tool", { ServerName: "github", ToolName: "mcp_github_issue_write" }),
+    "mcp__github__issue_write",
+  );
+  assertEquals(
+    mapAgyToolName("call_mcp_tool", { ServerName: "github", ToolName: "issue_read" }),
+    "call_mcp_tool",
+  );
+  assertEquals(mapAgyToolName("call_mcp_tool"), "call_mcp_tool");
   assertEquals(mapAgyToolName("send_email"), "send_email");
+  assertEquals(mapAgyToolName("unknown_tool"), "unknown_tool");
   assertEquals(mapAgyToolName(""), "");
 });
 
 Deno.test("matcherMatches: alternation, regex, and non-match", () => {
   assert(matcherMatches("Bash", "Bash"));
   assert(matcherMatches("Bash|Edit|Write", "Edit"));
-  assert(matcherMatches("mcp__.*__issue_write", "mcp__gmail__issue_write"));
+  assert(matcherMatches("Bash|Edit|Write", "Write"));
+  assert(matcherMatches("mcp__.*__issue_write", "mcp__github__issue_write"));
+  assert(matcherMatches("mcp__.*__(issue_write|sub_issue_write)", "mcp__github__sub_issue_write"));
   assert(!matcherMatches("Bash", "Write"));
   assert(!matcherMatches("Edit|Write", "Bash"));
+  assert(!matcherMatches("mcp__.*__issue_write", "call_mcp_tool"));
 });
 
 Deno.test("matcherMatches: an unparseable matcher never matches (fails closed on enforcement)", () => {
@@ -141,6 +252,44 @@ Deno.test("buildToolInput: TargetFile/CodeContent -> file_path/content", () => {
   const out = buildToolInput({ TargetFile: ".env", CodeContent: "SECRET=x" });
   assertEquals(out.file_path, ".env");
   assertEquals(out.content, "SECRET=x");
+});
+
+Deno.test("buildToolInput: TargetContent/ReplacementContent -> old_string/new_string and content", () => {
+  const out = buildToolInput({
+    TargetFile: "foo.ts",
+    TargetContent: "old code",
+    ReplacementContent: "new code",
+  });
+  assertEquals(out.file_path, "foo.ts");
+  assertEquals(out.old_string, "old code");
+  assertEquals(out.new_string, "new code");
+  assertEquals(out.content, "new code");
+});
+
+Deno.test("buildToolInput: unpacks Arguments object or JSON string from call_mcp_tool", () => {
+  const outObj = buildToolInput({
+    ServerName: "github",
+    ToolName: "issue_write",
+    Arguments: {
+      method: "create",
+      title: "Test Issue",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+    },
+  });
+  assertEquals(outObj.method, "create");
+  assertEquals(outObj.title, "Test Issue");
+  assertEquals(outObj.owner, "WebJamApps");
+  assertEquals(outObj.repo, "web-jam-tools");
+  assertEquals(outObj.ServerName, "github");
+
+  const outStr = buildToolInput({
+    ServerName: "github",
+    ToolName: "issue_write",
+    Arguments: JSON.stringify({ method: "create", title: "From String" }),
+  });
+  assertEquals(outStr.method, "create");
+  assertEquals(outStr.title, "From String");
 });
 
 Deno.test("buildToolInput: ReplacementContent used when CodeContent absent", () => {
@@ -182,6 +331,55 @@ Deno.test("normalize: PreToolUse builds tool_name/tool_input/transcript_path, no
   assertEquals(normalized.transcript_path, "/tmp/t.jsonl");
   assertEquals(normalized.modelName, "gemini-3.8-flash-high");
   assertEquals(normalized.tool_response, undefined);
+});
+
+Deno.test("normalize: translates agy file-edit and MCP payloads into Claude-shaped tool_name and tool_input", () => {
+  const editPayload = normalize(
+    {
+      toolCall: {
+        name: "replace_file_content",
+        args: { TargetFile: "src/main.ts", TargetContent: "a", ReplacementContent: "b" },
+      },
+    },
+    "PreToolUse",
+  );
+  assertEquals(editPayload.toolName, "Edit");
+  assertEquals(editPayload.normalized.tool_name, "Edit");
+  assertEquals(editPayload.normalized.tool_input.file_path, "src/main.ts");
+  assertEquals(editPayload.normalized.tool_input.old_string, "a");
+  assertEquals(editPayload.normalized.tool_input.new_string, "b");
+
+  const writePayload = normalize(
+    {
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: "new.ts", CodeContent: "console.log('hi');" },
+      },
+    },
+    "PreToolUse",
+  );
+  assertEquals(writePayload.toolName, "Write");
+  assertEquals(writePayload.normalized.tool_name, "Write");
+  assertEquals(writePayload.normalized.tool_input.file_path, "new.ts");
+  assertEquals(writePayload.normalized.tool_input.content, "console.log('hi');");
+
+  const mcpPayload = normalize(
+    {
+      toolCall: {
+        name: "call_mcp_tool",
+        args: {
+          ServerName: "github",
+          ToolName: "issue_write",
+          Arguments: { method: "create", title: "New Bug", labels: ["Bug", "Sol"] },
+        },
+      },
+    },
+    "PreToolUse",
+  );
+  assertEquals(mcpPayload.toolName, "mcp__github__issue_write");
+  assertEquals(mcpPayload.normalized.tool_name, "mcp__github__issue_write");
+  assertEquals(mcpPayload.normalized.tool_input.method, "create");
+  assertEquals(mcpPayload.normalized.tool_input.title, "New Bug");
 });
 
 Deno.test("normalize: PostToolUse attaches tool_response.stdout from the recovered transcript text", () => {
@@ -345,6 +543,222 @@ Deno.test("matcher semantics: an unmapped/unknown agy tool name doesn't match a 
   const res = await runShim("PreToolUse", "Bash", "block-secret-dumps.sh", {
     toolCall: { name: "some_other_tool", args: { CommandLine: "rclone config show gdrive" } },
   });
+  assertEquals(res.decision, "allow", res.stdout);
+});
+
+// --- Row 10 Replay: agy file-edit tools reach Edit|Write-registered guards (web-jam-tools#1057) ---
+
+Deno.test("replaying replace_file_content on protected branch denies under feature-branch-guard.sh", async () => {
+  // Main repo clone (/home/joshua/WebJamApps/web-jam-tools) is on dev -> must deny
+  const res = await runShim(
+    "PreToolUse",
+    "Edit|Write",
+    "feature-branch-guard.sh",
+    agyReplaceFileContent("/home/joshua/WebJamApps/web-jam-tools/CLAUDE.md"),
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "deny", res.stdout);
+  assert(
+    res.reason?.includes("protected branch 'dev'"),
+    `expected protected branch reason, got: ${res.reason}`,
+  );
+});
+
+Deno.test("replaying write_to_file on protected branch denies under feature-branch-guard.sh", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Edit|Write",
+    "feature-branch-guard.sh",
+    agyWriteToFile("/home/joshua/WebJamApps/web-jam-tools/new-file.txt"),
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "deny", res.stdout);
+  assert(
+    res.reason?.includes("protected branch 'dev'"),
+    `expected protected branch reason, got: ${res.reason}`,
+  );
+});
+
+Deno.test("replaying replace_file_content outside git repo allows under feature-branch-guard.sh", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Edit|Write",
+    "feature-branch-guard.sh",
+    agyReplaceFileContent("/tmp/non-git-scratch.txt"),
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "allow", res.stdout);
+});
+
+// --- Row 10 Replay: agy GitHub MCP issue-write / sub_issue_write reach guards (web-jam-tools#1057) ---
+
+Deno.test("replaying call_mcp_tool issue_write lacking model label denies under require-model-label-on-issue-create.sh", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Bash|mcp__.*__issue_write",
+    "require-model-label-on-issue-create.sh",
+    agyCallMcpTool("github", "issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      type: "Task",
+      title: "Task with no model label",
+      labels: [],
+      body: "## What this builds\nTask",
+    }),
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "deny", res.stdout);
+  assert(
+    res.reason?.includes("model-label guard") || res.reason?.includes("model label"),
+    `expected model-label deny reason, got: ${res.reason}`,
+  );
+});
+
+Deno.test("replaying direct issue_write lacking model label denies under require-model-label-on-issue-create.sh", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Bash|mcp__.*__issue_write",
+    "require-model-label-on-issue-create.sh",
+    {
+      toolCall: {
+        name: "issue_write",
+        args: {
+          method: "create",
+          owner: "WebJamApps",
+          repo: "web-jam-tools",
+          type: "Task",
+          title: "Direct write no model label",
+          labels: [],
+          body: "## What this builds\nTask",
+        },
+      },
+    },
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "deny", res.stdout);
+  assert(
+    res.reason?.includes("model-label guard") || res.reason?.includes("model label"),
+    `expected model-label deny reason, got: ${res.reason}`,
+  );
+});
+
+Deno.test("replaying call_mcp_tool issue_write lacking approval token denies under require-approval-token-on-issue-write.sh", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Bash|mcp__.*__(issue_write|sub_issue_write)",
+    "require-approval-token-on-issue-write.sh",
+    agyCallMcpTool("github", "issue_write", {
+      method: "create",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      title: "Unapproved issue title",
+      type: "Task",
+      labels: ["Flash"],
+    }),
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "deny", res.stdout);
+  assert(
+    res.reason?.includes("plan") || res.reason?.includes("approval") ||
+      res.reason?.includes("token"),
+    `expected approval-token deny reason, got: ${res.reason}`,
+  );
+});
+
+Deno.test("replaying direct issue_write lacking approval token denies under require-approval-token-on-issue-write.sh", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Bash|mcp__.*__(issue_write|sub_issue_write)",
+    "require-approval-token-on-issue-write.sh",
+    {
+      toolCall: {
+        name: "issue_write",
+        args: {
+          method: "create",
+          owner: "WebJamApps",
+          repo: "web-jam-tools",
+          title: "Direct unapproved title",
+          type: "Task",
+          labels: ["Flash"],
+        },
+      },
+    },
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "deny", res.stdout);
+});
+
+Deno.test("replaying call_mcp_tool sub_issue_write lacking approval token denies under require-approval-token-on-issue-write.sh", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Bash|mcp__.*__(issue_write|sub_issue_write)",
+    "require-approval-token-on-issue-write.sh",
+    agyCallMcpTool("github", "sub_issue_write", {
+      method: "add",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      issue_number: 1055,
+      sub_issue_id: 1057,
+    }),
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "deny", res.stdout);
+});
+
+Deno.test("replaying direct sub_issue_write lacking approval token denies under require-approval-token-on-issue-write.sh", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Bash|mcp__.*__(issue_write|sub_issue_write)",
+    "require-approval-token-on-issue-write.sh",
+    {
+      toolCall: {
+        name: "sub_issue_write",
+        args: {
+          method: "add",
+          owner: "WebJamApps",
+          repo: "web-jam-tools",
+          issue_number: 1055,
+          sub_issue_id: 1057,
+        },
+      },
+    },
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "deny", res.stdout);
+});
+
+// --- Unmapped tools pass through and proceed ---
+
+Deno.test("replaying call_mcp_tool issue_read allows without firing write guards", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Bash|mcp__.*__issue_write",
+    "require-model-label-on-issue-create.sh",
+    agyCallMcpTool("github", "issue_read", {
+      method: "get",
+      owner: "WebJamApps",
+      repo: "web-jam-tools",
+      issue_number: 1055,
+    }),
+  );
+  assertEquals(res.code, 0);
+  assertEquals(res.decision, "allow", res.stdout);
+});
+
+Deno.test("unmapped agy tool name allows under Edit|Write matcher", async () => {
+  const res = await runShim(
+    "PreToolUse",
+    "Edit|Write",
+    "feature-branch-guard.sh",
+    {
+      toolCall: {
+        name: "custom_unmapped_action",
+        args: { TargetFile: "/home/joshua/WebJamApps/web-jam-tools/CLAUDE.md" },
+      },
+    },
+  );
+  assertEquals(res.code, 0);
   assertEquals(res.decision, "allow", res.stdout);
 });
 

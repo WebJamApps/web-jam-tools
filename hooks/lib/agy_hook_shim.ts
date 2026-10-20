@@ -164,11 +164,25 @@ export async function recordInvocation(
 
 // VERIFIED (web-jam-tools#432 finding 3, measured 2026-08-07): agy's shell
 // tool is `run_command`; Claude Code's equivalent tool name is `Bash`.
+// VERIFIED (web-jam-tools#1055 / web-jam-tools#1057, measured 2026-10-12): agy
+// native file-edit and GitHub MCP issue-write tools.
 const TOOL_NAME_MAP: Record<string, string> = {
   run_command: "Bash",
+  replace_file_content: "Edit",
+  multi_replace_file_content: "Edit",
+  write_to_file: "Write",
+  issue_write: "mcp__github__issue_write",
+  sub_issue_write: "mcp__github__sub_issue_write",
+  mcp_github_issue_write: "mcp__github__issue_write",
+  mcp_github_sub_issue_write: "mcp__github__sub_issue_write",
 };
 
-export function mapAgyToolName(name: string): string {
+export function mapAgyToolName(name: string, args?: Record<string, unknown>): string {
+  if (name === "call_mcp_tool" && args && typeof args.ToolName === "string") {
+    if (args.ToolName in TOOL_NAME_MAP) {
+      return TOOL_NAME_MAP[args.ToolName];
+    }
+  }
   return TOOL_NAME_MAP[name] ?? name;
 }
 
@@ -190,6 +204,22 @@ export function matcherMatches(matcher: string, toolName: string): boolean {
 
 export function buildToolInput(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...args };
+  if (
+    args.Arguments !== null &&
+    typeof args.Arguments === "object" &&
+    !Array.isArray(args.Arguments)
+  ) {
+    Object.assign(out, args.Arguments);
+  } else if (typeof args.Arguments === "string") {
+    try {
+      const parsed = JSON.parse(args.Arguments);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        Object.assign(out, parsed);
+      }
+    } catch {
+      // Unparseable JSON string in Arguments: leave out untouched
+    }
+  }
   if (out.command === undefined && args.CommandLine !== undefined) {
     out.command = args.CommandLine;
   }
@@ -198,6 +228,12 @@ export function buildToolInput(args: Record<string, unknown>): Record<string, un
   }
   if (out.file_path === undefined && args.TargetFile !== undefined) {
     out.file_path = args.TargetFile;
+  }
+  if (out.old_string === undefined && args.TargetContent !== undefined) {
+    out.old_string = args.TargetContent;
+  }
+  if (out.new_string === undefined && args.ReplacementContent !== undefined) {
+    out.new_string = args.ReplacementContent;
   }
   if (out.content === undefined) {
     if (args.CodeContent !== undefined) {
@@ -271,8 +307,8 @@ export function normalize(
   transcriptText?: string,
 ): { toolName: string; normalized: NormalizedPayload } {
   const rawName = payload.toolCall?.name ?? "";
-  const toolName = mapAgyToolName(rawName);
   const args = payload.toolCall?.args ?? {};
+  const toolName = mapAgyToolName(rawName, args);
   const normalized: NormalizedPayload = {
     tool_name: toolName,
     tool_input: buildToolInput(args),
@@ -453,10 +489,11 @@ export async function runShim(
   }
 
   const rawName = payload.toolCall?.name ?? "";
+  const rawArgs = payload.toolCall?.args;
   if (gmailFence && (typeof rawName !== "string" || !rawName)) {
     return { decision: "deny", reason: "Gmail safety fence could not identify the tool." };
   }
-  const toolName = mapAgyToolName(rawName);
+  const toolName = mapAgyToolName(rawName, rawArgs);
   if (!matcherMatches(matcher, toolName)) {
     return { decision: "allow" };
   }
