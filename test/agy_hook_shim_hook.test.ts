@@ -546,48 +546,83 @@ Deno.test("matcher semantics: an unmapped/unknown agy tool name doesn't match a 
   assertEquals(res.decision, "allow", res.stdout);
 });
 
+async function withRepoOnBranch(
+  branch: string,
+  fn: (filePath: string) => Promise<void>,
+): Promise<void> {
+  const dir = await Deno.makeTempDir({ prefix: "shim-git-test-" });
+  try {
+    const run = async (cmd: string, args: string[]) => {
+      const command = new Deno.Command(cmd, { args, stdout: "piped", stderr: "piped" });
+      const { code, stderr } = await command.output();
+      assertEquals(code, 0, new TextDecoder().decode(stderr));
+    };
+    await run("git", ["-C", dir, "init", "-q", "-b", branch]);
+    await run("git", ["-C", dir, "config", "user.email", "test@example.invalid"]);
+    await run("git", ["-C", dir, "config", "user.name", "Test"]);
+    const filePath = `${dir}/some-file.ts`;
+    await Deno.writeTextFile(filePath, "// placeholder\n");
+    await run("git", ["-C", dir, "add", "-A"]);
+    await run("git", ["-C", dir, "commit", "-q", "-m", "init"]);
+    await fn(filePath);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+}
+
 // --- Row 10 Replay: agy file-edit tools reach Edit|Write-registered guards (web-jam-tools#1057) ---
 
 Deno.test("replaying replace_file_content on protected branch denies under feature-branch-guard.sh", async () => {
-  // Main repo clone (/home/joshua/WebJamApps/web-jam-tools) is on dev -> must deny
-  const res = await runShim(
-    "PreToolUse",
-    "Edit|Write",
-    "feature-branch-guard.sh",
-    agyReplaceFileContent("/home/joshua/WebJamApps/web-jam-tools/CLAUDE.md"),
-  );
-  assertEquals(res.code, 0);
-  assertEquals(res.decision, "deny", res.stdout);
-  assert(
-    res.reason?.includes("protected branch 'dev'"),
-    `expected protected branch reason, got: ${res.reason}`,
-  );
+  await withRepoOnBranch("dev", async (filePath) => {
+    const res = await runShim(
+      "PreToolUse",
+      "Edit|Write",
+      "feature-branch-guard.sh",
+      agyReplaceFileContent(filePath),
+    );
+    assertEquals(res.code, 0);
+    assertEquals(res.decision, "deny", res.stdout);
+    assert(
+      res.reason?.includes("protected branch 'dev'"),
+      `expected protected branch reason, got: ${res.reason}`,
+    );
+  });
 });
 
 Deno.test("replaying write_to_file on protected branch denies under feature-branch-guard.sh", async () => {
-  const res = await runShim(
-    "PreToolUse",
-    "Edit|Write",
-    "feature-branch-guard.sh",
-    agyWriteToFile("/home/joshua/WebJamApps/web-jam-tools/new-file.txt"),
-  );
-  assertEquals(res.code, 0);
-  assertEquals(res.decision, "deny", res.stdout);
-  assert(
-    res.reason?.includes("protected branch 'dev'"),
-    `expected protected branch reason, got: ${res.reason}`,
-  );
+  await withRepoOnBranch("dev", async (filePath) => {
+    const newFile = `${filePath}.new.txt`;
+    const res = await runShim(
+      "PreToolUse",
+      "Edit|Write",
+      "feature-branch-guard.sh",
+      agyWriteToFile(newFile),
+    );
+    assertEquals(res.code, 0);
+    assertEquals(res.decision, "deny", res.stdout);
+    assert(
+      res.reason?.includes("protected branch 'dev'"),
+      `expected protected branch reason, got: ${res.reason}`,
+    );
+  });
 });
 
 Deno.test("replaying replace_file_content outside git repo allows under feature-branch-guard.sh", async () => {
-  const res = await runShim(
-    "PreToolUse",
-    "Edit|Write",
-    "feature-branch-guard.sh",
-    agyReplaceFileContent("/tmp/non-git-scratch.txt"),
-  );
-  assertEquals(res.code, 0);
-  assertEquals(res.decision, "allow", res.stdout);
+  const tmpDir = await Deno.makeTempDir({ prefix: "non-git-" });
+  try {
+    const nonRepoFile = `${tmpDir}/non-git-scratch.txt`;
+    await Deno.writeTextFile(nonRepoFile, "hello\n");
+    const res = await runShim(
+      "PreToolUse",
+      "Edit|Write",
+      "feature-branch-guard.sh",
+      agyReplaceFileContent(nonRepoFile),
+    );
+    assertEquals(res.code, 0);
+    assertEquals(res.decision, "allow", res.stdout);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
 });
 
 // --- Row 10 Replay: agy GitHub MCP issue-write / sub_issue_write reach guards (web-jam-tools#1057) ---
