@@ -126,8 +126,11 @@ that's what following this skill prevents.
    "read the comment first", "read comment first", "as discussed above", "as discussed in",
    "per the discussion", "in the epic", "see the epic"). Anyone (human or AI model) picking up an
    issue must be able to execute it directly from the issue body without hunting through issue
-   comments or parent epic threads for requirements. Sub-issues derived from an Epic must have their
-   full requirements authored directly in the sub-issue body first before creation. Note: Native issue
+   comments or parent epic threads for requirements. An issue filed from a Gate-1-approved design
+   stands alone through its pointer to that design and the instruction to stop if the path cannot
+   be read, per "Issues filed from a design point at it"; every other issue, including a sub-issue
+   of an Epic with no design, has its full requirements authored directly in its body before
+   creation. Note: Native issue
    type `Epic` (which is orthogonal to model labels) is exempt from this check on edit paths (`gh issue edit`
    or MCP update), allowing Epics to reference comments or sub-issues as discussion evolves.
 5. **Require Native Issue Type via MCP or `create-issue.ts`.** Every new issue creation MUST explicitly specify a

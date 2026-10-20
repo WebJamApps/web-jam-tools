@@ -102,6 +102,10 @@ export interface LintPlanOptions {
   runGh?: CommandRunner;
   /** Canonical design document path to check Gate 1 approval against. */
   designDocPath?: string;
+  /** In-memory design document markdown for checking Closes when headings without disk reads. */
+  designDocMarkdown?: string;
+  /** Explicit design document headings set for checking Closes when headings. */
+  designHeadings?: ReadonlySet<string>;
   /** Gate 1 state directory override (for testing). */
   stateDir?: string;
 }
@@ -319,6 +323,10 @@ export function validatePlanTable(
     ? [...options.modelLabels]
     : resolveTierVocabulary(options.schema);
   const activeRepos = options.activeRepos ?? ACTIVE_REPOS;
+  const designHeadings = options.designHeadings ??
+    (options.designDocMarkdown !== undefined
+      ? extractDesignHeadings(options.designDocMarkdown)
+      : undefined);
 
   for (const row of rows) {
     checkMissingAndTier(row, canonicalTiers, violations);
@@ -326,6 +334,9 @@ export function validatePlanTable(
     checkRepo(row, activeRepos, violations);
     checkTests(row, violations);
     checkTitlePersonalName(row, violations);
+    if (designHeadings !== undefined) {
+      checkClosesWhen(row, rows, designHeadings, violations);
+    }
   }
 
   checkJoshPairingAndComposite(rows, violations);
@@ -518,6 +529,136 @@ function checkJoshPairingAndComposite(
   }
 }
 
+/**
+ * Extracts headings from Markdown text (ignoring fenced code blocks).
+ * Headings match as written, ignoring case and leading '#' marks.
+ */
+export function extractDesignHeadings(markdown: string): Set<string> {
+  const headings = new Set<string>();
+  let inFence = false;
+  let fenceMarker = "";
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = marker;
+      } else if (marker === fenceMarker) {
+        inFence = false;
+        fenceMarker = "";
+      }
+      continue;
+    }
+    if (inFence) continue;
+    const match = rawLine.match(/^\s*#{1,6}\s+(.+?)\s*$/);
+    if (match) {
+      const text = match[1].replace(/\s+#+\s*$/, "").trim().toLowerCase();
+      if (text.length > 0) {
+        headings.add(text);
+      }
+    }
+  }
+  return headings;
+}
+
+export interface CriterionHeadingCheckResult {
+  valid: boolean;
+  reason?: "unknown-heading" | "neither-heading-nor-command";
+  unknownHeading?: string;
+}
+
+/**
+ * Validates a Closes when cell or an issue body acceptance criterion against design headings.
+ * Each criterion/cell must name a design heading in double quotes or carry a backtick-quoted command.
+ * Any double-quoted heading must exist in designHeadings (matched case-insensitively).
+ */
+export function checkCriterionOrClosesCell(
+  text: string,
+  designHeadings: ReadonlySet<string>,
+): CriterionHeadingCheckResult {
+  const quotedHeadings: string[] = [];
+  let hasCommand = false;
+
+  const tokenRegex = /`([^`\n]+)`|"([^"\n]*)"/g;
+  for (const match of text.matchAll(tokenRegex)) {
+    if (match[1] !== undefined) {
+      if (match[1].trim().length > 0) {
+        hasCommand = true;
+      }
+    } else if (match[2] !== undefined) {
+      quotedHeadings.push(match[2].trim());
+    }
+  }
+
+  for (const heading of quotedHeadings) {
+    if (heading === "" || !designHeadings.has(heading.toLowerCase())) {
+      return {
+        valid: false,
+        reason: "unknown-heading",
+        unknownHeading: heading,
+      };
+    }
+  }
+
+  if (quotedHeadings.length === 0 && !hasCommand) {
+    return {
+      valid: false,
+      reason: "neither-heading-nor-command",
+    };
+  }
+
+  return { valid: true };
+}
+
+function checkClosesWhen(
+  row: PlanTableRow,
+  allRows: PlanTableRow[],
+  designHeadings: ReadonlySet<string>,
+  violations: PlanTableViolation[],
+): void {
+  // Case 5: an epic closes when its children close
+  if (isEpicRow(row, allRows)) return;
+  // Case 6: a manual step (Josh)
+  const tier = stripMdMarkers(row.cells[COL_TIER]).trim();
+  if (tier === "Josh") return;
+
+  const raw = row.cells[COL_CLOSES];
+  const rowNum = stripMdMarkers(row.cells[COL_NUM]).trim() || String(allRows.indexOf(row) + 1);
+
+  if (isMissingValue(raw)) {
+    violations.push({
+      rule: "closes-when-missing",
+      line: row.line,
+      column: "Closes when",
+      message: `Row ${rowNum}: Closes when cell is missing ("${raw}")`,
+    });
+    return;
+  }
+
+  const check = checkCriterionOrClosesCell(raw, designHeadings);
+  if (!check.valid) {
+    if (check.reason === "unknown-heading") {
+      violations.push({
+        rule: "closes-when-unknown-heading",
+        line: row.line,
+        column: "Closes when",
+        message:
+          `Row ${rowNum}: Closes when cell names heading "${check.unknownHeading}", which the design document does not have`,
+      });
+    } else if (check.reason === "neither-heading-nor-command") {
+      violations.push({
+        rule: "closes-when-neither-heading-nor-command",
+        line: row.line,
+        column: "Closes when",
+        message:
+          `Row ${rowNum}: Closes when cell "${raw.trim()}" names neither a heading nor a command`,
+      });
+    }
+  }
+}
+
 /** Loads the canonical model-tier schema from `labels.yaml`, via `../fix-labels/diff.ts`'s
  * existing loader (read-only -- this module never edits that file or its schema). */
 export async function loadCanonicalSchema(
@@ -632,10 +773,29 @@ export async function lintPlanTableFile(
     throw new Error(`No Gate 2 plan table found in ${filePath}`);
   }
 
+  let designHeadings: ReadonlySet<string> | undefined = options?.designHeadings;
+  if (!designHeadings && options?.designDocMarkdown !== undefined) {
+    designHeadings = extractDesignHeadings(options.designDocMarkdown);
+  }
+  if (
+    !designHeadings &&
+    options?.designDocPath !== undefined &&
+    options.designDocPath.trim() !== ""
+  ) {
+    try {
+      const absDocPath = path.resolve(expandHome(options.designDocPath.trim()));
+      const designMarkdown = await Deno.readTextFile(absDocPath);
+      designHeadings = extractDesignHeadings(designMarkdown);
+    } catch {
+      // checkGate1ApprovalRecord will record any unreadable design doc violation
+    }
+  }
+
   const violations = validatePlanTable(parsed, {
     schema: options?.schema,
     modelLabels: options?.modelLabels ?? (options?.schema ? undefined : loadModelLabels()),
     activeRepos: options?.activeRepos,
+    designHeadings,
   });
   violations.push(
     ...await checkNeedsDesignRemovals(markdown, options?.fetchIssueBody ?? ghIssueBody),

@@ -1,6 +1,7 @@
 {
   "repo": "web-jam-tools",
   "milestone": "token-savings",
+  "designDoc": "test/fixtures/design-issue/fixture-design.md",
   "epic": {
     "title": "Fix plan-table validation gaps",
     "body": "## What this builds\n\nEpic container for plan-table validation and filing enhancements.\n\n## Acceptance criteria\n\n1. Closes when all child sub-issues close.",
@@ -15,7 +16,7 @@
     {
       "id": 1,
       "title": "Add cell validators for design:lint-plan",
-      "body": "## What this builds\n\nCell validators for Gate 2 plan table linting.\n\n## Acceptance criteria\n\n1. Unit tests pass covering cell validators.",
+      "body": "## What this builds\n\nCell validators for Gate 2 plan table linting.\n\n## Acceptance criteria\n\n- [ ] builds \"Architecture\" as written\n- [ ] `deno task test` passes",
       "type": "Task",
       "priority": "High",
       "tier": "Flash",
@@ -25,7 +26,7 @@
     {
       "id": 2,
       "title": "Add Tests-cell validation",
-      "body": "## What this builds\n\nValidation rules for Tests column in plan table.\n\n## Acceptance criteria\n\n1. Unit tests pass covering Tests column validation.",
+      "body": "## What this builds\n\nValidation rules for Tests column in plan table.\n\n## Acceptance criteria\n\n- [ ] builds \"Both surfaces\" as written\n- [ ] `deno task test` passes",
       "type": "Task",
       "priority": "High",
       "tier": "Flash",

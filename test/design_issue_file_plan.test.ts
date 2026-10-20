@@ -1,7 +1,8 @@
 // test/design_issue_file_plan.test.ts
 // Unit tests for `src/design-issue/file_plan.ts` and `deno task design:file-plan` (web-jam-tools#748).
 
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
+import * as path from "@std/path";
 import { TEST_AUTHOR, withPassingProbe } from "./authored_by_test_helpers.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
 import {
@@ -13,6 +14,7 @@ import {
   parsePlanFile,
   parsePlanJson,
   runFilePlanCli,
+  validateIssueBodyCriteria,
 } from "../src/design-issue/file_plan.ts";
 import {
   type ApprovalCheckResult,
@@ -107,9 +109,18 @@ Deno.test("parsePlanJson parses an object with epic and children", () => {
 
 /** Runs the real filer with a stubbed gh, recording native parent attachments. */
 async function fileParentFixture(plan: IssuePlanDoc) {
+  plan.designDoc ??= "test/fixtures/design-issue/fixture-design.md";
   const planPath = await Deno.makeTempFile({ suffix: ".json" });
   const items = [...(plan.epic ? [plan.epic] : []), ...(plan.children ?? [])];
-  for (const item of items) item.labels ??= ["Flash"];
+  for (const item of items) {
+    item.labels ??= ["Flash"];
+    if (
+      item.type?.toLowerCase() !== "epic" && !item.labels.includes("Josh") && item.tier !== "Josh"
+    ) {
+      item.body ??=
+        `## What this builds\n\n${item.title}\n\n## Acceptance criteria\n\n- [ ] \`deno task test\` passes\n`;
+    }
+  }
   const created = new Map<number, IssueData>();
   const parents = new Map<number, number>();
   const queries: string[] = [];
@@ -327,11 +338,14 @@ Deno.test('epics case 12: design:file-plan parent "WebJamApps/web-jam-tools#9999
       planPath,
       JSON.stringify({
         repo: "JaMmusic",
+        designDoc: "test/fixtures/design-issue/fixture-design.md",
         children: [
           {
             title: "Child with missing parent",
             labels: ["Flash"],
             parent: "WebJamApps/web-jam-tools#999999",
+            body:
+              "## What this builds\n\nChild with missing parent\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
           },
         ],
       }),
@@ -768,11 +782,14 @@ Deno.test("filePlan links external dependency citations (e.g. web-jam-tools#747)
     tempPlan,
     JSON.stringify({
       repo: "web-jam-tools",
+      designDoc: "test/fixtures/design-issue/fixture-design.md",
       children: [
         {
           title: "Dependent Issue",
           type: "Task",
           tier: "Flash",
+          body:
+            "## What this builds\n\nDependent Issue\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
           blocked_by: ["web-jam-tools#747"],
         },
       ],
@@ -861,6 +878,7 @@ Deno.test("filePlan files flat plan without epic and links dependencies", async 
     tempPlan,
     JSON.stringify({
       repo: "web-jam-tools",
+      designDoc: "test/fixtures/design-issue/fixture-design.md",
       children: [
         {
           id: "A",
@@ -868,6 +886,8 @@ Deno.test("filePlan files flat plan without epic and links dependencies", async 
           type: "Task",
           priority: "Low",
           tier: "Haiku",
+          body:
+            "## What this builds\n\nStandalone Task 1\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
         },
         {
           id: "B",
@@ -877,6 +897,8 @@ Deno.test("filePlan files flat plan without epic and links dependencies", async 
           tier: "Haiku",
           blocked_by: ["A"],
           parent: "none",
+          body:
+            "## What this builds\n\nStandalone Task 2\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
         },
       ],
     }),
@@ -962,9 +984,25 @@ Deno.test("filePlan throws when dependency linking fails", async () => {
     tempPlan,
     JSON.stringify({
       repo: "web-jam-tools",
+      designDoc: "test/fixtures/design-issue/fixture-design.md",
       children: [
-        { id: 1, title: "Task 1", type: "Task", tier: "Flash" },
-        { id: 2, title: "Task 2", type: "Task", tier: "Flash", blocked_by: [1] },
+        {
+          id: 1,
+          title: "Task 1",
+          type: "Task",
+          tier: "Flash",
+          body:
+            "## What this builds\n\nTask 1\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+        },
+        {
+          id: 2,
+          title: "Task 2",
+          type: "Task",
+          tier: "Flash",
+          blocked_by: [1],
+          body:
+            "## What this builds\n\nTask 2\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+        },
       ],
     }),
   );
@@ -1177,10 +1215,28 @@ Deno.test("filePlan: resolves position and explicit id dependencies accurately w
     tempPlan,
     JSON.stringify({
       repo: "web-jam-tools",
+      designDoc: "test/fixtures/design-issue/fixture-design.md",
       children: [
-        { title: "Child A (Position 1)", tier: "Flash" },
-        { id: "feat-b", title: "Child B (Position 2, explicit id feat-b)", tier: "Flash" },
-        { title: "Child C (Position 3)", tier: "Flash", blocked_by: [1, "feat-b"] },
+        {
+          title: "Child A (Position 1)",
+          tier: "Flash",
+          body:
+            "## What this builds\n\nChild A\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+        },
+        {
+          id: "feat-b",
+          title: "Child B (Position 2, explicit id feat-b)",
+          tier: "Flash",
+          body:
+            "## What this builds\n\nChild B\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+        },
+        {
+          title: "Child C (Position 3)",
+          tier: "Flash",
+          blocked_by: [1, "feat-b"],
+          body:
+            "## What this builds\n\nChild C\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n",
+        },
       ],
     }),
   );
@@ -1273,5 +1329,483 @@ Deno.test("filePlan: resolves position and explicit id dependencies accurately w
     assertEquals(linkedDependencies[1], { dependentNum: 702, blockingId: 7010 });
   } finally {
     await Deno.remove(tempPlan);
+  }
+});
+
+// --- Appendix D — Case Lists: Issues filed from a design point at it (Cases 7–15) ---
+// In every case the design document has a heading `### The model-label rule` and no heading `Nope`.
+const APPENDIX_D_DESIGN_CONTENT = `
+# Fixture Design Document
+
+### The model-label rule
+
+Section requirements.
+`;
+
+Deno.test('Appendix D Case 7: Body criterion `- [ ] builds "The model-label rule" as written` passes', async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with valid heading criterion",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nSomething\n\n## Acceptance criteria\n\n- [ ] builds "The model-label rule" as written',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D Case 8: Body criterion ``- [ ] `deno task test` passes`` passes", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with command criterion",
+            tier: "Flash",
+            body:
+              "## What this builds\n\nSomething\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test('Appendix D Case 9: Body criterion `- [ ] builds "Nope" as written` is refused before the first issue is filed, naming the item and the line', async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with Nope heading",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nSomething\n\n## Acceptance criteria\n\n- [ ] builds "Nope" as written',
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "Refused to file plan",
+    );
+    assertStringIncludes(error.message, 'issue "Task with Nope heading"');
+    assertStringIncludes(error.message, '- [ ] builds "Nope" as written');
+    assertStringIncludes(error.message, "Nope");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D Case 10: Body criterion `- [ ] The pull request merges` is refused the same way: neither a heading nor a command", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with neither heading nor command",
+            tier: "Flash",
+            body:
+              "## What this builds\n\nSomething\n\n## Acceptance criteria\n\n- [ ] The pull request merges",
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "neither a heading nor a command",
+    );
+    assertStringIncludes(error.message, 'issue "Task with neither heading nor command"');
+    assertStringIncludes(error.message, "- [ ] The pull request merges");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D Case 11: A body with no `## Acceptance criteria` section is refused the same way", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task without criteria section",
+            tier: "Flash",
+            body: "## What this builds\n\nOnly description here.",
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      'has no "## Acceptance criteria" section',
+    );
+    assertStringIncludes(error.message, 'issue "Task without criteria section"');
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D Case 12: The epic item's body with criterion `- [ ] Closes when all child sub-issues close` passes — the epic is not checked", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        epic: {
+          title: "Epic container",
+          tier: "Opus",
+          escalationReason: "Container epic",
+          body:
+            "## What this builds\n\nEpic\n\n## Acceptance criteria\n\n- [ ] Closes when all child sub-issues close",
+        },
+        children: [
+          {
+            title: "Child task",
+            tier: "Flash",
+            body:
+              "## What this builds\n\nChild\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.epic?.title, "Epic container");
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D Case 13: A `Josh`-labeled item's criterion `- [ ] Josh confirms he ran it` passes — the manual step is not checked", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Manual walkthrough step",
+            tier: "Josh",
+            labels: ["Josh"],
+            body:
+              "## What this builds\n\nManual walkthrough\n\n## Acceptance criteria\n\n- [ ] Josh confirms he ran it",
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D Case 14: A plan with no `designDoc` field is refused before the first issue is filed: the design document is not named", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        children: [
+          {
+            title: "Task with no designDoc in plan",
+            tier: "Flash",
+            body:
+              "## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "the design document is not named",
+    );
+    assertStringIncludes(error.message, 'missing "designDoc" field in plan');
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("Appendix D Case 15: A plan whose `designDoc` cannot be read is refused before the first issue is filed, naming the path", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const planPath = path.join(tmpDir, "plan.json");
+    const nonExistentDesignDoc = path.join(tmpDir, "non-existent-design.md");
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: nonExistentDesignDoc,
+        children: [
+          {
+            title: "Task with missing design doc file",
+            tier: "Flash",
+            body:
+              "## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes",
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "cannot be read",
+    );
+    assertStringIncludes(error.message, nonExistentDesignDoc);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: throws when no acceptance criteria section exists", () => {
+  const headings = new Set(["the model-label rule"]);
+  assertThrows(
+    () => validateIssueBodyCriteria("Task", "## What this builds\n\nNo criteria", headings),
+    Error,
+    'has no "## Acceptance criteria" section',
+  );
+});
+
+Deno.test("validateIssueBodyCriteria: nested subsections (e.g. ### Behavior) are scanned and pass when all criteria are valid", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with grouped criteria in subsections",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n### Commands\n\n- [ ] `deno task test` passes\n\n### Behavior\n\n- [ ] builds "The model-label rule" as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: nested subsections (e.g. ### Behavior) are scanned and refuse invalid criteria before filing", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with invalid criterion in subsection",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] `deno task test` passes\n\n### Behavior\n\n- [ ] builds "Nope" as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "Refused to file plan",
+    );
+    assertStringIncludes(error.message, 'issue "Task with invalid criterion in subsection"');
+    assertStringIncludes(error.message, '- [ ] builds "Nope" as written');
+    assertStringIncludes(error.message, "Nope");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: wrapped criteria across continuation lines assemble into one criterion and pass", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with wrapped criterion",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "The model-label rule"\n  as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: wrapped criteria across continuation lines assemble into one criterion and refuse invalid heading", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with wrapped invalid criterion",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "Nope"\n  as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const error = await assertRejects(
+      () => filePlan({ planPath, dryRun: false, approvalCheck: APPROVE_ALL }),
+      Error,
+      "Refused to file plan",
+    );
+    assertStringIncludes(error.message, 'issue "Task with wrapped invalid criterion"');
+    assertStringIncludes(error.message, '- [ ] builds "Nope" as written');
+    assertStringIncludes(error.message, "Nope");
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: indented acceptance criteria heading (e.g. '  ## Acceptance criteria') is recognized", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with indented criteria heading",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n  ## Acceptance criteria\n\n- [ ] builds "The model-label rule" as written\n\n## Files changed\n\n- src/index.ts',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
+  }
+});
+
+Deno.test("validateIssueBodyCriteria: indented subsequent heading (e.g. '  ## Files changed') terminates the criteria section", async () => {
+  const tmpDir = await Deno.makeTempDir();
+  try {
+    const designPath = path.join(tmpDir, "design.md");
+    const planPath = path.join(tmpDir, "plan.json");
+    await Deno.writeTextFile(designPath, APPENDIX_D_DESIGN_CONTENT);
+    await Deno.writeTextFile(
+      planPath,
+      JSON.stringify({
+        repo: "web-jam-tools",
+        designDoc: designPath,
+        children: [
+          {
+            title: "Task with indented next section",
+            tier: "Flash",
+            body:
+              '## What this builds\n\nTask\n\n## Acceptance criteria\n\n- [ ] builds "The model-label rule" as written\n\n  ## Files changed\n\n- src/index.ts\nUnrelated text that is neither a heading nor command',
+          },
+        ],
+      }),
+    );
+    const result = await filePlan({ planPath, dryRun: true, approvalCheck: APPROVE_ALL });
+    assertEquals(result.children.length, 1);
+  } finally {
+    await Deno.remove(tmpDir, { recursive: true });
   }
 });
