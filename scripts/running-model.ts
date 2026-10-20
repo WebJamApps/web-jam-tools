@@ -95,14 +95,99 @@ function safeEnv(env: (name: string) => string | undefined, name: string): strin
   }
 }
 
+/** Gmail safety probes deliberately contain no conversation/model or mailbox data. */
+function isGmailProbe(record: Record<string, unknown>): boolean {
+  const keys = ["timestamp", "event", "matcher", "targetHookPath", "toolCall"];
+  const tool = record.toolCall;
+  return Object.keys(record).every((key) => keys.includes(key)) &&
+    typeof record.timestamp === "string" &&
+    (record.event === "PreToolUse" || record.event === "PostToolUse") &&
+    typeof record.matcher === "string" &&
+    typeof record.targetHookPath === "string" &&
+    record.targetHookPath.endsWith("/block-agy-gmail-send-delete.sh") &&
+    typeof tool === "object" && tool !== null && !Array.isArray(tool) &&
+    Object.keys(tool).every((key) => key === "name") &&
+    (!("name" in tool) || typeof tool.name === "string");
+}
+
+/** Parse the shared log without treating its deliberately redacted probes as identity. */
+function agyRecords(text: string, path: string): Record<string, unknown>[] {
+  const lines = text.split("\n").filter((line) => line.trim());
+  if (!lines.length) throw new Error(`The agy hook record is empty: ${path}`);
+  const records: Record<string, unknown>[] = [];
+  for (const line of lines) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      throw new Error(`Cannot read the agy model record ${path}: ${error}`);
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`The agy hook record is not an object in ${path}`);
+    }
+    const record = parsed as Record<string, unknown>;
+    if (isGmailProbe(record)) continue;
+    if (typeof record.conversationId !== "string" || !record.conversationId.trim()) {
+      throw new Error(`The agy hook record names no running conversation in ${path}`);
+    }
+    if (typeof record.modelName !== "string" || !record.modelName.trim()) {
+      throw new Error(`The agy hook record has no recorded model in ${path}`);
+    }
+    records.push(record);
+  }
+  return records;
+}
+
+function agyRecordedAuthor(
+  records: Record<string, unknown>[],
+  context: NonNullable<RunningModelOptions["invocationContext"]>,
+  roster: string[],
+): string {
+  const { conversationId, modelName, transcriptPath } = context;
+  if (typeof conversationId !== "string" || !conversationId.trim()) {
+    throw new Error("Missing calling conversation identity");
+  }
+  if (typeof modelName !== "string" || !modelName.trim()) {
+    throw new Error("Invocation context has missing model");
+  }
+  if (typeof transcriptPath !== "string" || !transcriptPath.trim()) {
+    throw new Error("Invocation context has missing transcriptPath");
+  }
+  uniqueRosterModel(modelName, roster.filter((entry) => matchesAgyModel(modelName, entry)));
+
+  const conversation = records.filter((record) => record.conversationId === conversationId);
+  if (!conversation.length) {
+    throw new Error(`No agy hook record matches conversation ${conversationId}`);
+  }
+  // A row missing the second identity key cannot be safely attributed to either collision.
+  if (
+    conversation.some((record) =>
+      typeof record.transcriptPath !== "string" || !record.transcriptPath.trim()
+    )
+  ) {
+    throw new Error("The agy hook record has no recorded transcriptPath");
+  }
+  const latest = conversation.findLast((record) => record.transcriptPath === transcriptPath);
+  if (!latest) {
+    throw new Error("Contradictory context: no hook record matches the calling transcriptPath");
+  }
+  const recordedModel = latest.modelName as string;
+  const author = uniqueRosterModel(
+    recordedModel,
+    roster.filter((entry) => matchesAgyModel(recordedModel, entry)),
+  );
+  if (latest.modelName !== modelName) {
+    throw new Error("Contradictory context: modelName does not match the recorded model");
+  }
+  return author;
+}
+
 /** Resolve the current surface's recorded model, never falling back from an identified session. */
 export async function resolveRunningModel(options: RunningModelOptions = {}): Promise<string> {
   const env = options.env ?? ((name: string) => Deno.env.get(name));
   const codexId = safeEnv(env, "CODEX_THREAD_ID");
   const claudeId = safeEnv(env, "CLAUDE_CODE_SESSION_ID");
-  const agyId = options.invocationContext !== undefined
-    ? options.invocationContext?.conversationId
-    : safeEnv(env, "AGY_CONVERSATION_ID");
+  const agyId = safeEnv(env, "AGY_CONVERSATION_ID") || options.invocationContext?.conversationId;
 
   if (codexId && claudeId) throw new Error("Two tools claim the session: Codex and Claude Code");
   if (codexId && agyId) throw new Error("Two tools claim the session: Codex and agy");
@@ -129,35 +214,7 @@ export async function resolveRunningModel(options: RunningModelOptions = {}): Pr
     throw new Error(`Cannot read the agy model record ${recordPath}: ${error}`);
   }
 
-  const lines = recordText.split("\n");
-  const records: Record<string, unknown>[] = [];
-  let hasNonEmpty = false;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    hasNonEmpty = true;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch (error) {
-      throw new Error(`Cannot read the agy model record ${recordPath}: ${error}`);
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error(`The newest agy hook record is not an object in ${recordPath}`);
-    }
-    const fields = parsed as Record<string, unknown>;
-    if (typeof fields.conversationId !== "string" || !fields.conversationId.trim()) {
-      throw new Error(`The newest agy hook record names no running conversation in ${recordPath}`);
-    }
-    if (typeof fields.modelName !== "string" || !fields.modelName.trim()) {
-      throw new Error(`The newest agy hook record has no recorded model in ${recordPath}`);
-    }
-    records.push(fields);
-  }
-
-  if (!hasNonEmpty) {
-    throw new Error(`The agy hook record is empty: ${recordPath}`);
-  }
+  const records = agyRecords(recordText, recordPath);
 
   if (options.invocationContext === null) {
     throw new Error("Missing trusted invocation context");
@@ -176,39 +233,11 @@ export async function resolveRunningModel(options: RunningModelOptions = {}): Pr
   if (contextConversationId === undefined) {
     throw new Error("Missing trusted invocation context");
   }
-  if (!contextConversationId.trim()) {
-    throw new Error("Missing calling conversation identity");
-  }
-  if (contextModelName !== undefined && !contextModelName.trim()) {
-    throw new Error("Invocation context has missing model");
-  }
-
-  const matching = records.filter((r) => r.conversationId === contextConversationId);
-  if (matching.length === 0) {
-    throw new Error(
-      `No agy hook record matches conversation ${contextConversationId} in ${recordPath}`,
-    );
-  }
-  const latest = matching[matching.length - 1];
-  const recordedModel = latest.modelName as string;
-  const recordedTranscript = typeof latest.transcriptPath === "string"
-    ? latest.transcriptPath.trim()
-    : "";
-
-  if (
-    contextTranscriptPath !== undefined &&
-    recordedTranscript &&
-    contextTranscriptPath !== recordedTranscript
-  ) {
-    throw new Error(
-      `Contradictory context: transcriptPath ${contextTranscriptPath} does not match recorded transcriptPath ${recordedTranscript}`,
-    );
-  }
-
-  return uniqueRosterModel(
-    recordedModel,
-    roster.filter((entry) => matchesAgyModel(recordedModel, entry)),
-  );
+  return agyRecordedAuthor(records, {
+    conversationId: contextConversationId,
+    modelName: contextModelName,
+    transcriptPath: contextTranscriptPath,
+  }, roster);
 }
 
 export async function runRunningModel(

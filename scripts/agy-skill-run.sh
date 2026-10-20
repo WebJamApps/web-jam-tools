@@ -7,6 +7,9 @@
 # current working directory, passing the output and exit status back unchanged.
 set -u
 
+# Only this invocation's hook flags supply identity; never fill gaps from a parent run.
+unset AGY_CONVERSATION_ID AGY_MODEL_NAME AGY_TRANSCRIPT_PATH
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --conversation-id)

@@ -155,3 +155,28 @@ Deno.test("agy-skill-run.sh: fails with usage error on unknown option", async ()
   assertEquals(res.code, 1);
   assertStringIncludes(new TextDecoder().decode(res.stderr), "Usage:");
 });
+
+for (const flags of [[], ["--conversation-id", "this-call"]]) {
+  Deno.test(`agy-skill-run.sh: partial identity flags never inherit a parent's evidence: ${flags}`, async () => {
+    const result = await new Deno.Command("bash", {
+      args: [
+        SCRIPT_PATH,
+        ...flags,
+        'printf "%s|%s|%s" "${AGY_CONVERSATION_ID-unset}" "${AGY_MODEL_NAME-unset}" "${AGY_TRANSCRIPT_PATH-unset}"',
+      ],
+      env: {
+        AGY_CONVERSATION_ID: "parent-call",
+        AGY_MODEL_NAME: "gemini-3.8-flash-high",
+        AGY_TRANSCRIPT_PATH: "/tmp/parent.jsonl",
+      },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(result.code, 0);
+    assertEquals(
+      new TextDecoder().decode(result.stdout),
+      `${flags.length ? "this-call" : "unset"}|unset|unset`,
+    );
+    assertEquals(new TextDecoder().decode(result.stderr), "");
+  });
+}
