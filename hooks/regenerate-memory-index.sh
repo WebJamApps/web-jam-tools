@@ -65,14 +65,4 @@ if [ ! -f "$CLI_TS" ]; then
   exit 0
 fi
 
-if ! "$HOOK_DIR/lib/run_hook.sh" --group workflow --name regenerate-memory-index --check-only >/dev/null 2>&1; then
-  echo "warning: failed to regenerate memory index" >&2
-  exit 0
-fi
-
-if ! deno run --allow-read --allow-write --allow-env "$CLI_TS" --dir "$target_dir_resolved" >/dev/null 2>&1; then
-  echo "warning: failed to regenerate memory index" >&2
-  exit 0
-fi
-
-exit 0
+exec "$HOOK_DIR/lib/run_hook.sh" --group workflow --name regenerate-memory-index --event PostToolUse deno run --quiet --allow-read --allow-write --allow-env "$CLI_TS" --dir "$target_dir_resolved"

@@ -13,4 +13,19 @@
 set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-exec "$HOOK_DIR/lib/run_hook.sh" --group workflow --name agy-hook-shim deno run --no-config --allow-read --allow-run --allow-env --allow-write "$HOOK_DIR/lib/agy_hook_shim.ts" "$@"
+
+EVENT="${1:-PreToolUse}"
+TARGET="${3:-}"
+TARGET_NAME=""
+if [ -n "$TARGET" ]; then
+  TARGET_NAME="$(basename "$TARGET" .sh)"
+else
+  TARGET_NAME="agy-hook-shim"
+fi
+
+exec "$HOOK_DIR/lib/run_hook.sh" \
+  --surface agy \
+  --name "$TARGET_NAME" \
+  --event "$EVENT" \
+  --timeout 20s \
+  deno run --no-config --allow-read --allow-run --allow-env --allow-write "$HOOK_DIR/lib/agy_hook_shim.ts" "$@"

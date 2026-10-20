@@ -409,7 +409,8 @@ rules and do not reconstruct them from memory or from this file.
 39. **Shared Hook Runner Delegation & Fail-Closed/Fail-Open Invariants:**
     - **Delegate All Hook Entry Points Through the Shared Runner:** Every hook entry point in `hooks/*.sh` must delegate its execution through the shared runner `hooks/lib/run_hook.sh` (decision D-32).
     - **Preserve Group Default Fallback Behavior:** When Deno cannot run (missing on PATH, crashed with unexpected exit code, or timed out after 15s), the runner enforces the group default: safety guards fail closed (exit code 2 with standard refusal on stderr) and workflow guards fail open (exit code 0 with additionalContext/systemMessage on stdout, leaving terminal stderr clean).
-    - **Maintain Subprocess Isolation on Utility Tool Hooks:** Hooks executing helper CLIs or generating non-decision artifacts must isolate subprocess exits so normal utility failures do not masquerade as successful workflow allowances or suppress expected warning output.
+    - **Preserve Target Safety Invariants on Surface Shims:** Surface wrappers and translation boundaries (such as `hooks/agy-hook-shim.sh`) must inherit their fail-closed/fail-open fallback from the wrapped target hook's group, emitting native surface-specific denial envelopes (e.g. `{"decision":"deny"}` on PreToolUse, `overwrite_result` on PostToolUse in agy) so runner timeouts and runtime crashes never fail open on safety guards.
+    - **Propagate Safety Runner Refusals Without Absorption:** Callers and outer scripts invoking safety-guarded helper tasks must never absorb runner exit codes (`|| true`) or discard refusal stderr (`2>/dev/null`), ensuring fallback execution never bypasses a safety refusal.
 
 ## Opening pull requests (all WebJamApps repos)
 

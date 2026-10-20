@@ -267,3 +267,264 @@ Deno.test("run_hook.sh: infers group automatically from workflow guard name", as
     ),
   );
 });
+
+Deno.test("run_hook.sh: --surface agy safety PreToolUse missing Deno denies with exit 0 and native reason", async () => {
+  const res = await runRunner(
+    [
+      "--surface",
+      "agy",
+      "--group",
+      "safety",
+      "--name",
+      "test-safety",
+      "--event",
+      "PreToolUse",
+      "deno",
+      "eval",
+      "Deno.exit(0)",
+    ],
+    "",
+    { PATH: "/usr/bin:/bin" },
+  );
+
+  assertEquals(res.code, 0);
+  const parsed = JSON.parse(res.stdout);
+  assertEquals(parsed.decision, "deny");
+  assert(parsed.reason.includes("BLOCKED (test-safety): safety guard could not run"));
+  assert(res.stderr.includes("BLOCKED (test-safety): safety guard could not run"));
+});
+
+Deno.test("run_hook.sh: --surface agy safety PostToolUse missing Deno denies with exit 0 and overwrite_result", async () => {
+  const res = await runRunner(
+    [
+      "--surface",
+      "agy",
+      "--group",
+      "safety",
+      "--name",
+      "scan-output-for-secrets",
+      "--event",
+      "PostToolUse",
+      "deno",
+      "eval",
+      "Deno.exit(0)",
+    ],
+    "",
+    { PATH: "/usr/bin:/bin" },
+  );
+
+  assertEquals(res.code, 0);
+  const parsed = JSON.parse(res.stdout);
+  assert(!Object.prototype.hasOwnProperty.call(parsed, "decision"));
+  assert(parsed.overwrite_result.includes("[BLOCKED BY HOOK]"));
+  assert(parsed.overwrite_result.includes("scan-output-for-secrets"));
+  assert(res.stderr.includes("BLOCKED (scan-output-for-secrets): safety guard could not run"));
+});
+
+Deno.test("run_hook.sh: --surface agy workflow PreToolUse missing Deno allows with exit 0", async () => {
+  const res = await runRunner(
+    [
+      "--surface",
+      "agy",
+      "--group",
+      "workflow",
+      "--name",
+      "test-workflow",
+      "--event",
+      "PreToolUse",
+      "deno",
+      "eval",
+      "Deno.exit(0)",
+    ],
+    "",
+    { PATH: "/usr/bin:/bin" },
+  );
+
+  assertEquals(res.code, 0);
+  assertEquals(res.stderr, "");
+  const parsed = JSON.parse(res.stdout);
+  assertEquals(parsed.decision, "allow");
+});
+
+Deno.test("run_hook.sh: --surface agy workflow PostToolUse missing Deno allows with empty JSON", async () => {
+  const res = await runRunner(
+    [
+      "--surface",
+      "agy",
+      "--group",
+      "workflow",
+      "--name",
+      "test-workflow",
+      "--event",
+      "PostToolUse",
+      "deno",
+      "eval",
+      "Deno.exit(0)",
+    ],
+    "",
+    { PATH: "/usr/bin:/bin" },
+  );
+
+  assertEquals(res.code, 0);
+  assertEquals(res.stderr, "");
+  const parsed = JSON.parse(res.stdout);
+  assertEquals(Object.keys(parsed).length, 0);
+});
+
+Deno.test("hooks/agy-hook-shim.sh: preserves safety default on missing Deno", async () => {
+  const shimPath = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname;
+  const targetPath = new URL("../hooks/block-secret-dumps.sh", import.meta.url).pathname;
+  const cmd = new Deno.Command("bash", {
+    args: [shimPath, "PreToolUse", btoa("Bash"), targetPath],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(
+    new TextEncoder().encode(JSON.stringify({ toolCall: { name: "run_command" } })),
+  );
+  await writer.close();
+  const { code, stdout, stderr } = await child.output();
+
+  assertEquals(code, 0);
+  const parsed = JSON.parse(new TextDecoder().decode(stdout));
+  assertEquals(parsed.decision, "deny");
+  assert(parsed.reason.includes("BLOCKED (block-secret-dumps): safety guard could not run"));
+  assert(
+    new TextDecoder().decode(stderr).includes(
+      "BLOCKED (block-secret-dumps): safety guard could not run",
+    ),
+  );
+});
+
+Deno.test("hooks/agy-hook-shim.sh: preserves workflow default on missing Deno", async () => {
+  const shimPath = new URL("../hooks/agy-hook-shim.sh", import.meta.url).pathname;
+  const targetPath = new URL("../hooks/opus-delegation-gate.sh", import.meta.url).pathname;
+  const cmd = new Deno.Command("bash", {
+    args: [shimPath, "PreToolUse", btoa("Bash"), targetPath],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(
+    new TextEncoder().encode(JSON.stringify({ toolCall: { name: "run_command" } })),
+  );
+  await writer.close();
+  const { code, stdout } = await child.output();
+
+  assertEquals(code, 0);
+  const parsed = JSON.parse(new TextDecoder().decode(stdout));
+  assertEquals(parsed.decision, "allow");
+});
+
+Deno.test("hooks/block-secret-dumps.sh: propagates runner exit 2 and refusal on missing Deno", async () => {
+  const hookPath = new URL("../hooks/block-secret-dumps.sh", import.meta.url).pathname;
+  const cmd = new Deno.Command("bash", {
+    args: [hookPath],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(
+    new TextEncoder().encode(JSON.stringify({ tool_input: { command: 'cat .e""nv' } })),
+  );
+  await writer.close();
+  const { code, stderr } = await child.output();
+
+  assertEquals(code, 2);
+  const errText = new TextDecoder().decode(stderr);
+  assert(
+    errText.includes(
+      "BLOCKED (block-secret-dumps): safety guard could not run (Deno is unavailable on PATH). Refusing action (safety default: fail closed).",
+    ),
+  );
+});
+
+Deno.test("hooks/check-issue-citation-on-write.sh: allows with note on missing Deno", async () => {
+  const hookPath = new URL("../hooks/check-issue-citation-on-write.sh", import.meta.url).pathname;
+  const cmd = new Deno.Command("bash", {
+    args: [hookPath],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(
+    new TextEncoder().encode(
+      JSON.stringify({ tool_input: { command: "gh issue comment 1 -b 'hello'" } }),
+    ),
+  );
+  await writer.close();
+  const { code, stdout } = await child.output();
+
+  assertEquals(code, 0);
+  const parsed = JSON.parse(new TextDecoder().decode(stdout));
+  assertEquals(parsed.hookSpecificOutput.hookEventName, "PreToolUse");
+  assert(
+    parsed.hookSpecificOutput.additionalContext.includes(
+      "check-issue-citation-on-write: Deno is unavailable on PATH",
+    ),
+  );
+});
+
+Deno.test("hooks/fmt-push-guard.sh: allows with note on missing Deno", async () => {
+  const hookPath = new URL("../hooks/fmt-push-guard.sh", import.meta.url).pathname;
+  const cmd = new Deno.Command("bash", {
+    args: [hookPath],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(
+    new TextEncoder().encode(JSON.stringify({ tool_input: { command: "git push origin feat" } })),
+  );
+  await writer.close();
+  const { code, stdout } = await child.output();
+
+  assertEquals(code, 0);
+  const parsed = JSON.parse(new TextDecoder().decode(stdout));
+  assertEquals(parsed.hookSpecificOutput.hookEventName, "PreToolUse");
+  assert(
+    parsed.hookSpecificOutput.additionalContext.includes(
+      "fmt-push-guard: Deno is unavailable on PATH",
+    ),
+  );
+});
+
+Deno.test("hooks/require-issue-citation-titles.sh: emits systemMessage on missing Deno", async () => {
+  const hookPath = new URL("../hooks/require-issue-citation-titles.sh", import.meta.url).pathname;
+  const cmd = new Deno.Command("bash", {
+    args: [hookPath],
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(
+    new TextEncoder().encode(JSON.stringify({ last_assistant_message: "Here is text #123" })),
+  );
+  await writer.close();
+  const { code, stdout } = await child.output();
+
+  assertEquals(code, 0);
+  const parsed = JSON.parse(new TextDecoder().decode(stdout));
+  assert(
+    parsed.systemMessage.includes("require-issue-citation-titles: Deno is unavailable on PATH"),
+  );
+});

@@ -14,6 +14,8 @@ set -euo pipefail
 GROUP=""
 NAME=""
 EVENT=""
+SURFACE="claude"
+TIMEOUT="15s"
 CHECK_ONLY=0
 ALLOW_NOTE=""
 
@@ -29,6 +31,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --event)
       EVENT="$2"
+      shift 2
+      ;;
+    --surface)
+      SURFACE="$2"
+      shift 2
+      ;;
+    --timeout)
+      TIMEOUT="$2"
       shift 2
       ;;
     --allow-with-note)
@@ -137,7 +147,13 @@ emit_workflow_note() {
   local ev="${2:-PreToolUse}"
   local escaped
   escaped=$(printf '%s' "$note" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
-  if [ "$NAME" = "agy-skill-run-hook" ]; then
+  if [ "$SURFACE" = "agy" ]; then
+    if [ "$ev" = "PostToolUse" ]; then
+      printf '{}\n'
+    else
+      printf '{"decision":"allow"}\n'
+    fi
+  elif [ "$NAME" = "agy-skill-run-hook" ]; then
     printf '{"decision":"allow","hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$ev" "$escaped"
   elif [ "$ev" = "SessionStart" ] || [ "$ev" = "Stop" ]; then
     printf '{"systemMessage":"%s"}\n' "$escaped"
@@ -150,8 +166,20 @@ emit_workflow_note() {
 
 emit_safety_refusal() {
   local reason="$1"
-  echo "BLOCKED ($NAME): safety guard could not run ($reason). Refusing action (safety default: fail closed)." >&2
-  echo "Stop and report this refusal to Josh; do not retry the action through another route." >&2
+  if [ "$SURFACE" = "agy" ]; then
+    local escaped
+    escaped=$(printf 'BLOCKED (%s): safety guard could not run (%s).' "$NAME" "$reason" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
+    if [ "$EVENT" = "PostToolUse" ]; then
+      printf '{"overwrite_result":"[BLOCKED BY HOOK] %s — original tool output withheld by a PostToolUse guard."}\n' "$escaped"
+    else
+      printf '{"decision":"deny","reason":"%s"}\n' "$escaped"
+    fi
+    echo "BLOCKED ($NAME): safety guard could not run ($reason). Refusing action (safety default: fail closed)." >&2
+    echo "Stop and report this refusal to Josh; do not retry the action through another route." >&2
+  else
+    echo "BLOCKED ($NAME): safety guard could not run ($reason). Refusing action (safety default: fail closed)." >&2
+    echo "Stop and report this refusal to Josh; do not retry the action through another route." >&2
+  fi
 }
 
 # If explicit --allow-with-note was requested without a command to run
@@ -178,7 +206,11 @@ fi
 if [ -z "$DENO_BIN" ]; then
   if [ "$GROUP" = "safety" ]; then
     emit_safety_refusal "Deno is unavailable on PATH"
-    exit 2
+    if [ "$SURFACE" = "agy" ]; then
+      exit 0
+    else
+      exit 2
+    fi
   else
     note="$(get_workflow_note "$NAME: Deno is unavailable on PATH; proceeding via workflow default.")"
     emit_workflow_note "$note" "$EVENT"
@@ -206,7 +238,7 @@ trap 'rm -f "$STDOUT_FILE" "$STDERR_FILE"' EXIT
 
 set +e
 if command -v timeout >/dev/null 2>&1; then
-  printf '%s' "$INPUT" | timeout 15s "$DENO_BIN" "${CMD_ARGS[@]}" >"$STDOUT_FILE" 2>"$STDERR_FILE"
+  printf '%s' "$INPUT" | timeout "$TIMEOUT" "$DENO_BIN" "${CMD_ARGS[@]}" >"$STDOUT_FILE" 2>"$STDERR_FILE"
   STATUS=$?
 else
   printf '%s' "$INPUT" | "$DENO_BIN" "${CMD_ARGS[@]}" >"$STDOUT_FILE" 2>"$STDERR_FILE"
@@ -224,10 +256,14 @@ elif [ "$STATUS" -eq 2 ]; then
   exit 2
 elif [ "$STATUS" -eq 124 ]; then
   if [ "$GROUP" = "safety" ]; then
-    emit_safety_refusal "checker timed out after 15s"
-    exit 2
+    emit_safety_refusal "checker timed out after $TIMEOUT"
+    if [ "$SURFACE" = "agy" ]; then
+      exit 0
+    else
+      exit 2
+    fi
   else
-    note="$(get_workflow_note "$NAME: checker timed out after 15s; proceeding via workflow default.")"
+    note="$(get_workflow_note "$NAME: checker timed out after $TIMEOUT; proceeding via workflow default.")"
     emit_workflow_note "$note" "$EVENT"
     exit 0
   fi
@@ -235,7 +271,11 @@ else
   if [ "$GROUP" = "safety" ]; then
     cat "$STDERR_FILE" >&2
     emit_safety_refusal "checker failed with exit code $STATUS"
-    exit 2
+    if [ "$SURFACE" = "agy" ]; then
+      exit 0
+    else
+      exit 2
+    fi
   else
     note="$(get_workflow_note "$NAME: checker failed (exit $STATUS); proceeding via workflow default.")"
     emit_workflow_note "$note" "$EVENT"

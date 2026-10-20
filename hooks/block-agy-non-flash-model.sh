@@ -57,7 +57,10 @@ fi
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
-ALLOWED_SLUGS=$(deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-tiered")
+ALLOWED_SLUGS=$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-agy-non-flash-model deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-tiered")
+if [[ "$ALLOWED_SLUGS" == *'"hookSpecificOutput"'* ]] || [ -z "$ALLOWED_SLUGS" ]; then
+  ALLOWED_SLUGS="gemini-3.8-flash-high or gemini-3.8-flash-tiered"
+fi
 
 block() {
   echo "BLOCKED (agy-model guard): $1" >&2
