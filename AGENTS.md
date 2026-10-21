@@ -641,7 +641,7 @@ target list, deployment steps, and verification procedures.
     target designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic`
     `issueTypeId`), file the executable coding work as a child `Task` sub-issue attached under that
     Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached
-    under that same Epic (marked `Blocked` on the coding child).
+    under that same Epic (natively linked via `blocked_by` dependency to the coding child, without the `Blocked` label).
   - **Manual Step Issue & Document Title Rule**: Never prefix issue titles or runbook document
     titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional,
     action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and

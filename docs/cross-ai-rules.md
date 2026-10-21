@@ -60,7 +60,7 @@ Never create version-suffixed copies (V2, V3, -new, -copy) — edit the master.
 claude-opus-tasks.txt (Claude Opus lane) is RETIRED — the file no longer exists on disk (logged as
 "bridge dormant" in `web-jam-llms/bridge-log.md`, 2026-08-26); Opus work is tracked in GitHub issues.
 
-agy-tasks.txt (agy/Flash lane) is RETIRED (web-jam-tools#249) — Josh deleted it and moved agy/Flash
+agy-tasks.txt (agy/Flash lane) is RETIRED (web-jam-tools#249 "delegate skill: drop agy-tasks.txt queue mode — agy dispatch is GitHub-issues-only now") — Josh deleted it and moved agy/Flash
 dispatch to GitHub-issues-only; see `skills/delegate/SKILL.md`.
 
 claude-fable-tasks.txt is RETIRED — Fable was removed from Josh's Anthropic plan on 2026-07-21 and
@@ -309,7 +309,7 @@ skill.
     its runbook listed both the `claude` and the `agy` launch commands under one step with the
     question below them, and Josh opened two terminals, closed them, then reopened them one at a time
     to work out the intended order. His verdict: "these should have been 4 steps".
-- **NATIVE GITHUB DEPENDENCIES ARE THE SINGLE SOURCE OF TRUTH FOR ISSUE BLOCKERS — THE `Blocked` LABEL IS RESERVED EXCLUSIVELY FOR NON-GITHUB PREREQUISITES.** Native GitHub issue dependencies (`blocked_by`) are the canonical, single source of truth for all issue-to-issue dependencies across the workspace. An issue whose blocker is another GitHub issue MUST link the dependency natively and MUST NOT carry the `Blocked` label. Because native dependencies unblock and clear automatically in GitHub API and UI views when the upstream issue/PR closes, adding the `Blocked` label to an issue with native dependencies creates redundant metadata and perpetual "Blocked drift" requiring manual cleanup. The `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) is reserved exclusively for issues blocked by non-GitHub-issue prerequisites that cannot be expressed as a native GitHub dependency (e.g. assets or decisions from Josh, third-party vendor delays, manual credential generation, physical actions). Origin: web-jam-tools#725 "Stop using the Blocked label where it is redundant and causes upkeep for no reason" (see also historical references web-jam-tools#300 and web-jam-tools#329).
+- **NATIVE GITHUB DEPENDENCIES ARE THE SINGLE SOURCE OF TRUTH FOR ISSUE BLOCKERS — THE `Blocked` LABEL IS RESERVED EXCLUSIVELY FOR NON-GITHUB PREREQUISITES.** Native GitHub issue dependencies (`blocked_by`) are the canonical, single source of truth for all issue-to-issue dependencies across the workspace. An issue whose blocker is another GitHub issue MUST link the dependency natively and MUST NOT carry the `Blocked` label. Because native dependencies unblock and clear automatically in GitHub API and UI views when the upstream issue/PR closes, adding the `Blocked` label to an issue with native dependencies creates redundant metadata and perpetual "Blocked drift" requiring manual cleanup. The `Blocked` label (capital B, hex `B60205`, `repos: all` in `skills/fix-labels/labels.yaml`) is reserved exclusively for issues blocked by non-GitHub-issue prerequisites that cannot be expressed as a native GitHub dependency (e.g. assets or decisions from Josh, third-party vendor delays, manual credential generation, physical actions). Origin: web-jam-tools#725 "Stop using the Blocked label where it is redundant and causes upkeep for no reason" (see also historical references web-jam-tools#300 "Update /fix-labels: prune retired labels, add Flash Low, regenerate model-labels.json sidecar" and web-jam-tools#329 "Restore the Blocked label as canonical in labels.yaml — it was pruned in a batch Josh never ratified, and he wants it alongside native dependencies").
 - **RESTRICTED LAPTOP DROPBOX SCOPE & SECURITY GUARDRAILS:** Access to `~/Dropbox` on the laptop is
   restricted to three approved top-level folders: `joshandmariamusic`, `web-jam-llms`, and
   `mark_henrickson`. All other top-level `~/Dropbox/*` folders — including `Dropbox/WebJamApps` —
@@ -339,7 +339,7 @@ skill.
   assertions must explicitly verify the specific mode indicator or feature-specific output (e.g.
   asserting `DRY RUN (UPDATE` or exact flag output) to prove the feature took effect, rather than
   relying only on assertions shared with default paths.
-- **PRODUCTION BACKEND MUTATION GUARD & SKILL BOUNDARIES (wjt#1021):** HTTP mutations (`POST`,
+- **PRODUCTION BACKEND MUTATION GUARD & SKILL BOUNDARIES (web-jam-tools#1021 "hooks/backend-guard: guard production backend mutations and enforce venue-mining skill boundaries"):** HTTP mutations (`POST`,
   `PATCH`, `PUT`, `DELETE`) against the production backend (`https://webjamsalem.herokuapp.com`)
   are protected by a safety PreToolUse guard hook (`hooks/block-backend-mutation.sh`).
   - **Explicit Approval Gate for Venue Writes:** Mutating backend records requires an active
@@ -425,7 +425,7 @@ skill.
   merge, it should always remain open so we can install the hook and/or confirm the hook is working,
   then the issue gets closed manually"_.
 
-## DESIGN CLAIMS MUST CARRY RECEIPTS (wjt#305)
+## DESIGN CLAIMS MUST CARRY RECEIPTS (web-jam-tools#305 "cross-ai-rules.md: design claims must carry receipts, and a UI requirement can never be verified through an API")
 
 A settled design shipped an unverified claim as established fact, sitting unmarked right next to
 claims that HAD been verified with live commands. Josh had no way to tell an assertion from a
@@ -456,7 +456,7 @@ that basis, the org-wide migration in web-jam-tools#298 "Migrate existing issues
 Priority/Area fields, Type, and dependencies (org-wide)" was verified entirely through REST, and
 Josh then could not find the `Area` field in the browser at all.
 
-## EPIC AND SUB-ISSUE COHERENCE (wjt#326)
+## EPIC AND SUB-ISSUE COHERENCE (web-jam-tools#326 "Implement the connector-authorization audit findings: state-changing commands must prompt, not just warn — wildcard gh allow rules make consent impossible")
 
 An epic was put in front of Josh for approval while it contradicted its own sub-issues. Two
 permission rules he had never approved sat as acceptance criteria on a sub-issue while the epic
@@ -522,7 +522,7 @@ manual steps, which must never live only in a chat or a doc. Do not report a dec
 and recorded" when only a document was written. The document keeps the reasoning; the issue is the
 tracking surface; link them both ways.
 
-## STANDALONE EXECUTABLE ISSUES AND EPIC TYPES (wjt#342)
+## STANDALONE EXECUTABLE ISSUES AND EPIC TYPES (web-jam-tools#342 "Document AND enforce the executable-issue rule: Epic type marks design surface, every other issue body must stand alone")
 
 Every actionable GitHub issue body (not typed `Epic`) must be fully self-contained and executable on
 its own. An issue body may not rely on unresolvable pointer phrases such as "see the comment", "see
@@ -541,7 +541,7 @@ comment", "read the comment first", "read comment first", "as discussed above", 
   MCP `issue_write` update) to allow high-level tracking documents and comment-based discussions to
   evolve.
 
-## FE/BE COUPLING (wjt#240)
+## FE/BE COUPLING (web-jam-tools#240 "dispatching to sub-agents  -  part two improvements")
 
 A change with a back-end half and a front-end half can ship half-done — e.g. the "venue must have a
 physical address" BE rule shipped before the create-Gigs "new venue" FE flow collected an address,
