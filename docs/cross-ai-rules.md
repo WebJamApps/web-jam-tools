@@ -318,7 +318,7 @@ skill.
   constrain raw Bash commands (which use string-pattern matching for Bash permission rules), serving
   as an operational guardrail rather than an absolute security boundary (web-jam-tools#321 "Add the
   laptop Dropbox deny list, verify Flash confinement, and document the restricted scope").
-- - **APPROVAL IS PER GATE.** Approval of a design is not approval to file the tracking issue.
+- **APPROVAL IS PER GATE.** Approval of a design is not approval to file the tracking issue.
   Approval of an issue is not approval to dispatch. Each gate needs its own imperative from Josh
   naming that step. An agent writes the issue body to a file (or shows it in chat) and waits; the
   `gh issue create` call (or MCP `issue_write` create) follows only the words "file it" (or
