@@ -593,5 +593,7 @@ this section is the canonical rule text and conventions that Action enforces.
   (A session opened before the update keeps a stale view until its next launch — the session-start
   reminder + /memory-cleanup close that gap.)
 - Save-redirection during dispatch: in queue/dispatch sessions, route task state → the GitHub
-  issue/PR; project facts → that project's memory dir; only cross-project routing/strategy lessons →
-  web-jam-llms memory or this doc.
+  issue/PR; project facts → that project's memory dir; cross-project routing/strategy lessons →
+  web-jam-llms memory; operational rules that bind the whole AI team (voice, file placement,
+  protected files, hard rules) → this doc via PR (the single source of truth). Test: "would this
+  matter in a session about a different repo?"
