@@ -318,12 +318,16 @@ skill.
   constrain raw Bash commands (which use string-pattern matching for Bash permission rules), serving
   as an operational guardrail rather than an absolute security boundary (web-jam-tools#321 "Add the
   laptop Dropbox deny list, verify Flash confinement, and document the restricted scope").
-- **APPROVAL IS PER GATE.** Approval of a design is not approval to file the tracking issue.
+- - **APPROVAL IS PER GATE.** Approval of a design is not approval to file the tracking issue.
   Approval of an issue is not approval to dispatch. Each gate needs its own imperative from Josh
   naming that step. An agent writes the issue body to a file (or shows it in chat) and waits; the
   `gh issue create` call (or MCP `issue_write` create) follows only the words "file it" (or
-  equivalent). A dispatch (spawning a subagent, an agy/Flash handoff) follows only an explicit
-  instruction to dispatch. A single "go" is ambiguous across gates and must never be read as
+  equivalent). A dispatch (starting work on an issue by spawning a subagent or handing it to
+  agy/Flash) follows only an explicit instruction to dispatch. Once Josh has said go on a piece of
+  work, the session doing it may hand parts of that same work to a helper at the same level or
+  cheaper without a new go — that carries out an approved step, it does not open a new gate
+  (tier-order design `Token_Savings/model-tier-order-design-2026-10-02.md`, "As the subagent an agy
+  session hands execution to"). A single "go" is ambiguous across gates and must never be read as
   covering more than one — the expensive, hard-to-reverse half (issue noise, spawned tokens) is
   always the later gate, so collapsing gates fails in the direction that costs the most. Origin:
   2026-08-07, during web-jam-tools#426 "/handle-gmails: add recognizers that propose the follow-up
