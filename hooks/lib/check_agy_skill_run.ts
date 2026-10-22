@@ -34,12 +34,31 @@ export function getDefaultUserSkillsDir(): string {
 export const DEFAULT_PLUGIN_SKILLS_DIR = getDefaultPluginSkillsDir();
 export const DEFAULT_USER_SKILLS_DIR = getDefaultUserSkillsDir();
 
+export interface SkillRunContext {
+  conversationId?: string;
+  modelName?: string;
+  transcriptPath?: string;
+}
+
 /**
  * Rewrites a shell command to be executed via the installed agy-skill-run script.
- * Escapes internal single quotes as `'\''`.
+ * Escapes internal single quotes as `'\''` and appends identity flags when conversationId is present.
  */
-export function rewriteCommand(command: string): string {
+export function rewriteCommand(command: string, context?: SkillRunContext): string {
+  const flags: string[] = [];
+  if (context?.conversationId) {
+    flags.push(`--conversation-id '${context.conversationId.replaceAll("'", "'\\''")}'`);
+    if (context?.modelName) {
+      flags.push(`--model-name '${context.modelName.replaceAll("'", "'\\''")}'`);
+    }
+    if (context?.transcriptPath) {
+      flags.push(`--transcript-path '${context.transcriptPath.replaceAll("'", "'\\''")}'`);
+    }
+  }
   const escaped = command.replaceAll("'", "'\\''");
+  if (flags.length > 0) {
+    return `${INSTALLED_SCRIPT_PATH} ${flags.join(" ")} '${escaped}'`;
+  }
   return `${INSTALLED_SCRIPT_PATH} '${escaped}'`;
 }
 
@@ -713,6 +732,7 @@ export function handlePreToolUse(
       toolCall?: { name?: unknown; args?: { CommandLine?: unknown } };
       transcriptPath?: unknown;
       conversationId?: unknown;
+      modelName?: unknown;
     } | null;
 
     const toolName = p?.toolCall?.name;
@@ -740,13 +760,18 @@ export function handlePreToolUse(
 
     const transcriptPath = typeof p?.transcriptPath === "string" ? p.transcriptPath : undefined;
     const conversationId = typeof p?.conversationId === "string" ? p.conversationId : undefined;
+    const modelName = typeof p?.modelName === "string" ? p.modelName : undefined;
     const checkResult = isSkillRunOpen(transcriptPath, conversationId, pluginSkills, userSkills);
 
     if (checkResult.outcome === "open") {
       return {
         decision: "allow",
         overwrite: {
-          CommandLine: rewriteCommand(command),
+          CommandLine: rewriteCommand(command, {
+            conversationId,
+            modelName,
+            transcriptPath,
+          }),
         },
       };
     }

@@ -2,10 +2,15 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import { join } from "@std/path";
 import { runRunningModel } from "../scripts/running-model.ts";
 import { readAuthorRoster, type RunningModelOptions } from "../src/shared/codex_running_model.ts";
+import { runShim } from "../hooks/lib/agy_hook_shim.ts";
 
 const CODEX_ID = "01a10611-a947-7b00-87b3-414e9e2085eb";
 const CLAUDE_ID = "xyz";
-const FLASH_RECORD = { conversationId: "agy-conversation", modelName: "gemini-3.8-flash-high" };
+const FLASH_RECORD = {
+  conversationId: "agy-conversation",
+  modelName: "gemini-3.8-flash-high",
+  transcriptPath: "/tmp/agy-conversation.jsonl",
+};
 
 interface Fixture {
   home: string;
@@ -13,7 +18,7 @@ interface Fixture {
   options: RunningModelOptions;
   codex: (model: string, folder?: string) => Promise<void>;
   claude: (text: string, project?: string) => Promise<void>;
-  agy: (record?: unknown) => Promise<void>;
+  agy: (record?: unknown, setEnv?: boolean) => Promise<void>;
 }
 
 async function withFixture(test: (fixture: Fixture) => Promise<void>): Promise<void> {
@@ -42,8 +47,25 @@ async function withFixture(test: (fixture: Fixture) => Promise<void>): Promise<v
       await Deno.mkdir(directory, { recursive: true });
       await Deno.writeTextFile(join(directory, `${CLAUDE_ID}.jsonl`), text);
     },
-    agy: (record = FLASH_RECORD) =>
-      Deno.writeTextFile(env.AGY_HOOK_RECORD_PATH, JSON.stringify(record)),
+    agy: async (record: unknown = FLASH_RECORD, setEnv = true) => {
+      await Deno.writeTextFile(env.AGY_HOOK_RECORD_PATH, JSON.stringify(record) + "\n");
+      if (setEnv) {
+        const r = (record && typeof record === "object" && !Array.isArray(record))
+          ? (record as Record<string, unknown>)
+          : {};
+        env.AGY_CONVERSATION_ID = typeof r.conversationId === "string"
+          ? r.conversationId
+          : "agy-conversation";
+        env.AGY_MODEL_NAME = typeof r.modelName === "string"
+          ? r.modelName
+          : "gemini-3.8-flash-high";
+        if (typeof r.transcriptPath === "string") {
+          env.AGY_TRANSCRIPT_PATH = r.transcriptPath;
+        } else {
+          delete env.AGY_TRANSCRIPT_PATH;
+        }
+      }
+    },
   };
   try {
     await test(fixture);
@@ -110,7 +132,7 @@ Deno.test("running-model reads the newest Codex turn instead of the first model"
 Deno.test("running-model refuses a missing Codex record, even with a stale agy record", () =>
   withFixture(async (fixture) => {
     fixture.env.CODEX_THREAD_ID = CODEX_ID;
-    await fixture.agy();
+    await fixture.agy(FLASH_RECORD, false);
     await refuses(fixture, "No session file");
   }));
 
@@ -148,7 +170,7 @@ for (
 Deno.test("running-model refuses a missing Claude record, even with an agy record", () =>
   withFixture(async (fixture) => {
     fixture.env.CLAUDE_CODE_SESSION_ID = CLAUDE_ID;
-    await fixture.agy();
+    await fixture.agy(FLASH_RECORD, false);
     await refuses(fixture, "found 0");
   }));
 
@@ -268,7 +290,7 @@ Deno.test("running-model refuses two claiming tools before reading the roster or
   withFixture(async (fixture) => {
     fixture.env.CODEX_THREAD_ID = CODEX_ID;
     fixture.env.CLAUDE_CODE_SESSION_ID = CLAUDE_ID;
-    await fixture.agy();
+    await fixture.agy(FLASH_RECORD, false);
     fixture.options.readRoster = () => Promise.reject(new Error("must not read"));
     await refuses(fixture, "Two tools claim the session");
   }));
@@ -276,7 +298,7 @@ Deno.test("running-model refuses two claiming tools before reading the roster or
 for (const surface of ["codex", "claude"] as const) {
   Deno.test(`running-model prefers the ${surface} id over agy's shared record`, () =>
     withFixture(async (fixture) => {
-      await fixture.agy();
+      await fixture.agy(FLASH_RECORD, false);
       if (surface === "codex") {
         fixture.env.CODEX_THREAD_ID = CODEX_ID;
         await fixture.codex("gpt-6.1-sol");
@@ -350,3 +372,403 @@ for (const surface of ["codex", "claude", "agy", "none"] as const) {
       }
     }));
 }
+
+Deno.test("running-model resolves alpha Gemini Argon when newer beta Sonnet row is present", () =>
+  withFixture(async (fixture) => {
+    const alphaRecord = {
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    const betaRecord = {
+      conversationId: "beta",
+      modelName: "claude-sonnet-5-5-high",
+      transcriptPath: "/tmp/beta.jsonl",
+    };
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      `${JSON.stringify(alphaRecord)}\n${JSON.stringify(betaRecord)}\n`,
+    );
+    fixture.env.AGY_CONVERSATION_ID = "alpha";
+    fixture.env.AGY_MODEL_NAME = "gemini-4-argon-high";
+    fixture.env.AGY_TRANSCRIPT_PATH = "/tmp/alpha.jsonl";
+    await succeeds(fixture, "Gemini Argon");
+  }));
+
+Deno.test("running-model resolves beta Claude Sonnet 5.5 when newer alpha Argon row is present", () =>
+  withFixture(async (fixture) => {
+    const betaRecord = {
+      conversationId: "beta",
+      modelName: "claude-sonnet-5-5-high",
+      transcriptPath: "/tmp/beta.jsonl",
+    };
+    const alphaRecord = {
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      `${JSON.stringify(betaRecord)}\n${JSON.stringify(alphaRecord)}\n`,
+    );
+    fixture.env.AGY_CONVERSATION_ID = "beta";
+    fixture.env.AGY_MODEL_NAME = "claude-sonnet-5-5-high";
+    fixture.env.AGY_TRANSCRIPT_PATH = "/tmp/beta.jsonl";
+    await succeeds(fixture, "Claude Sonnet 5.5");
+  }));
+
+Deno.test("running-model resolves Gemini Flash via flash invocationContext", () =>
+  withFixture(async (fixture) => {
+    const record = {
+      conversationId: "flash",
+      modelName: "gemini-3.8-flash-high",
+      transcriptPath: "/tmp/flash.jsonl",
+    };
+    await fixture.agy(record, false);
+    fixture.options.invocationContext = {
+      conversationId: "flash",
+      modelName: "gemini-3.8-flash-high",
+      transcriptPath: "/tmp/flash.jsonl",
+    };
+    await succeeds(fixture, "Gemini Flash");
+  }));
+
+Deno.test("running-model resolves existing Flash compatibility form gemini-3.8-flash-tiered via invocationContext", () =>
+  withFixture(async (fixture) => {
+    const record = {
+      conversationId: "flash",
+      modelName: "gemini-3.8-flash-tiered",
+      transcriptPath: "/tmp/flash.jsonl",
+    };
+    await fixture.agy(record, false);
+    fixture.options.invocationContext = {
+      conversationId: "flash",
+      modelName: "gemini-3.8-flash-tiered",
+      transcriptPath: "/tmp/flash.jsonl",
+    };
+    await succeeds(fixture, "Gemini Flash");
+  }));
+
+Deno.test("running-model refuses contradictory context (transcript mismatch)", () =>
+  withFixture(async (fixture) => {
+    const record = {
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await fixture.agy(record, false);
+    fixture.options.invocationContext = {
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/beta.jsonl",
+    };
+    await refuses(fixture, "Contradictory context");
+  }));
+
+Deno.test("running-model refuses missing identity (empty conversationId)", () =>
+  withFixture(async (fixture) => {
+    const record = {
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await fixture.agy(record, false);
+    fixture.options.invocationContext = {
+      conversationId: "",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await refuses(fixture, "Missing calling conversation identity");
+  }));
+
+Deno.test("running-model refuses missing model (empty modelName)", () =>
+  withFixture(async (fixture) => {
+    const record = {
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await fixture.agy(record, false);
+    fixture.options.invocationContext = {
+      conversationId: "alpha",
+      modelName: "",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await refuses(fixture, "Invocation context has missing model");
+  }));
+
+Deno.test("running-model refuses unknown model (Totally Fake Model)", () =>
+  withFixture(async (fixture) => {
+    const record = {
+      conversationId: "alpha",
+      modelName: "Totally Fake Model",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await fixture.agy(record, false);
+    fixture.options.invocationContext = {
+      conversationId: "alpha",
+      modelName: "Totally Fake Model",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await refuses(fixture, "no author roster entry");
+  }));
+
+Deno.test("running-model refuses missing trusted context (invocationContext is null)", () =>
+  withFixture(async (fixture) => {
+    await fixture.agy(FLASH_RECORD, false);
+    fixture.options.invocationContext = null;
+    await refuses(fixture, "Missing trusted invocation context");
+  }));
+
+Deno.test("running-model refuses competing surface identities: CODEX_THREAD_ID and AGY_CONVERSATION_ID", () =>
+  withFixture(async (fixture) => {
+    fixture.env.CODEX_THREAD_ID = "codex-alpha";
+    fixture.env.AGY_CONVERSATION_ID = "alpha";
+    await fixture.agy(
+      {
+        conversationId: "alpha",
+        modelName: "gemini-4-argon-high",
+        transcriptPath: "/tmp/alpha.jsonl",
+      },
+      false,
+    );
+    await refuses(fixture, "Two tools claim the session: Codex and agy");
+  }));
+
+Deno.test("running-model refuses competing surface identities: CLAUDE_CODE_SESSION_ID and AGY_CONVERSATION_ID", () =>
+  withFixture(async (fixture) => {
+    fixture.env.CLAUDE_CODE_SESSION_ID = "claude-alpha";
+    fixture.env.AGY_CONVERSATION_ID = "alpha";
+    await fixture.agy(
+      {
+        conversationId: "alpha",
+        modelName: "gemini-4-argon-high",
+        transcriptPath: "/tmp/alpha.jsonl",
+      },
+      false,
+    );
+    await refuses(fixture, "Two tools claim the session: Claude Code and agy");
+  }));
+
+Deno.test("running-model refuses ambiguous roster match for Gemini Argon", () =>
+  withFixture(async (fixture) => {
+    await fixture.agy({
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    });
+    fixture.options.readRoster = () => Promise.resolve(["Gemini Argon", "Gemini Argon"]);
+    await refuses(fixture, "Two author roster entries stand for gemini-4-argon-high");
+  }));
+
+Deno.test("running-model refuses unreadable record file", () =>
+  withFixture(async (fixture) => {
+    fixture.env.AGY_CONVERSATION_ID = "alpha";
+    fixture.env.AGY_HOOK_RECORD_PATH = join(fixture.home, "non-existent-agy.jsonl");
+    await refuses(fixture, "Cannot read the agy model record");
+  }));
+
+Deno.test("running-model selects newest turn for the same conversation as ordinary history", () =>
+  withFixture(async (fixture) => {
+    const turn1 = {
+      conversationId: "alpha",
+      modelName: "gemini-3.8-flash-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    const turn2 = {
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      `${JSON.stringify(turn1)}\n${JSON.stringify(turn2)}\n`,
+    );
+    fixture.env.AGY_CONVERSATION_ID = "alpha";
+    fixture.env.AGY_MODEL_NAME = "gemini-4-argon-high";
+    fixture.env.AGY_TRANSCRIPT_PATH = "/tmp/alpha.jsonl";
+    await succeeds(fixture, "Gemini Argon");
+  }));
+
+Deno.test("running-model refuses an unmatched conversation identity without selecting newest global row", () =>
+  withFixture(async (fixture) => {
+    const alphaRecord = {
+      conversationId: "alpha",
+      modelName: "gemini-4-argon-high",
+      transcriptPath: "/tmp/alpha.jsonl",
+    };
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      `${JSON.stringify(alphaRecord)}\n`,
+    );
+    fixture.env.AGY_CONVERSATION_ID = "gamma";
+    fixture.env.AGY_MODEL_NAME = "gemini-4-argon-high";
+    fixture.env.AGY_TRANSCRIPT_PATH = "/tmp/gamma.jsonl";
+    await refuses(fixture, "No agy hook record matches conversation gamma");
+  }));
+
+for (const source of ["environment", "invocationContext"] as const) {
+  for (
+    const [modelName, reason] of [
+      [undefined, "missing model"],
+      ["   ", "missing model"],
+      ["Totally Fake Model", "no author roster entry"],
+      ["claude-sonnet-5-5-high", "Contradictory context: modelName"],
+    ] as const
+  ) {
+    Deno.test(`running-model refuses ${source} model ${modelName} against a valid row`, () =>
+      withFixture(async (fixture) => {
+        await fixture.agy();
+        if (source === "environment") {
+          if (modelName === undefined) delete fixture.env.AGY_MODEL_NAME;
+          else fixture.env.AGY_MODEL_NAME = modelName;
+        } else fixture.options.invocationContext = { ...FLASH_RECORD, modelName };
+        await refuses(fixture, reason);
+      }));
+  }
+  for (const transcriptPath of [undefined, "", "   "]) {
+    Deno.test(`running-model refuses missing ${source} transcript ${transcriptPath}`, () =>
+      withFixture(async (fixture) => {
+        await fixture.agy();
+        if (source === "environment") {
+          if (transcriptPath === undefined) delete fixture.env.AGY_TRANSCRIPT_PATH;
+          else fixture.env.AGY_TRANSCRIPT_PATH = transcriptPath;
+        } else fixture.options.invocationContext = { ...FLASH_RECORD, transcriptPath };
+        await refuses(fixture, "missing transcriptPath");
+      }));
+  }
+}
+
+for (const transcriptPath of [undefined, "", "   ", 42]) {
+  Deno.test(`running-model refuses a row without usable transcript evidence: ${transcriptPath}`, () =>
+    withFixture(async (fixture) => {
+      await fixture.agy({ ...FLASH_RECORD, transcriptPath }, false);
+      fixture.options.invocationContext = FLASH_RECORD;
+      await refuses(fixture, "no recorded transcriptPath");
+    }));
+}
+
+Deno.test("running-model isolates colliding conversation IDs by transcript and retains each history", () =>
+  withFixture(async (fixture) => {
+    const alpha = { ...FLASH_RECORD, modelName: "gemini-4-argon-high" };
+    const beta = {
+      ...alpha,
+      modelName: "claude-sonnet-5-5-high",
+      transcriptPath: "/tmp/beta.jsonl",
+    };
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      [FLASH_RECORD, beta, alpha, beta].map((row) => JSON.stringify(row)).join("\n"),
+    );
+    for (
+      const [context, expected] of [[alpha, "Gemini Argon"], [beta, "Claude Sonnet 5.5"]] as const
+    ) {
+      fixture.options.invocationContext = context;
+      await succeeds(fixture, expected);
+    }
+    fixture.options.invocationContext = { ...alpha, transcriptPath: "/tmp/unmatched.jsonl" };
+    await refuses(fixture, "Contradictory context");
+  }));
+
+Deno.test("running-model refuses a newer conflicting model instead of using a matching older turn", () =>
+  withFixture(async (fixture) => {
+    await fixture.agy();
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      JSON.stringify({ ...FLASH_RECORD, modelName: "gemini-4-argon-high" }) + "\n",
+      { append: true },
+    );
+    await refuses(fixture, "Contradictory context: modelName");
+  }));
+
+Deno.test("running-model accepts identity rows interleaved with actual redacted Gmail shim probes", () =>
+  withFixture(async (fixture) => {
+    await fixture.agy();
+    const recordPath = fixture.env.AGY_HOOK_RECORD_PATH;
+    for (const event of ["PreToolUse", "PostToolUse"] as const) {
+      for (const toolCall of [{ name: "read_email" }, {}]) {
+        await runShim(
+          event,
+          "never-matches",
+          "/fixture/hooks/block-agy-gmail-send-delete.sh",
+          JSON.stringify({ ...FLASH_RECORD, toolCall }),
+          recordPath,
+        );
+        await succeeds(fixture, "Gemini Flash");
+      }
+    }
+    // A subsequent complete row must still be usable with the probes in its history.
+    await Deno.writeTextFile(recordPath, JSON.stringify(FLASH_RECORD) + "\n", { append: true });
+    await succeeds(fixture, "Gemini Flash");
+    await Deno.writeTextFile(recordPath, "{broken", { append: true });
+    await refuses(fixture, "JSON");
+  }));
+
+Deno.test("running-model does not discard damaged identity evidence disguised as a Gmail probe", () =>
+  withFixture(async (fixture) => {
+    await fixture.agy();
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        event: "PreToolUse",
+        matcher: ".*",
+        targetHookPath: "/fixture/hooks/block-agy-gmail-send-delete.sh",
+        toolCall: { name: "read_email" },
+        conversationId: FLASH_RECORD.conversationId,
+      }) + "\n",
+      { append: true },
+    );
+    await refuses(fixture, "no recorded model");
+  }));
+
+for (const surfaceId of ["CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID"]) {
+  Deno.test(`running-model explicit context cannot hide competing ${surfaceId} and agy environment`, () =>
+    withFixture(async (fixture) => {
+      await fixture.agy();
+      fixture.env[surfaceId] = "competing-session";
+      fixture.options.invocationContext = {};
+      await refuses(fixture, "Two tools claim the session");
+    }));
+}
+
+Deno.test("agy runner carries complete identity through the scoped running-model task", () =>
+  withFixture(async (fixture) => {
+    const script = new URL("../scripts/agy-skill-run.sh", import.meta.url).pathname;
+    const collision = { ...FLASH_RECORD, transcriptPath: "/tmp/other-conversation.jsonl" };
+    const caller = { ...FLASH_RECORD, modelName: "gemini-4-argon-high" };
+    await Deno.writeTextFile(
+      fixture.env.AGY_HOOK_RECORD_PATH,
+      [caller, collision].map((row) => JSON.stringify(row)).join("\n"),
+    );
+    for (const model of [caller.modelName, FLASH_RECORD.modelName]) {
+      const result = await new Deno.Command("bash", {
+        args: [
+          script,
+          "--conversation-id",
+          caller.conversationId,
+          "--model-name",
+          model,
+          "--transcript-path",
+          caller.transcriptPath,
+          "deno task running-model",
+        ],
+        cwd: new URL("..", import.meta.url).pathname,
+        clearEnv: true,
+        env: { ...fixture.env, PATH: Deno.env.get("PATH") ?? "/usr/bin:/bin" },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      if (model === caller.modelName) {
+        assertEquals(result.code, 0);
+        assertEquals(new TextDecoder().decode(result.stdout), "Gemini Argon\n");
+      } else {
+        assertEquals(result.code, 1);
+        assertEquals(new TextDecoder().decode(result.stdout), "");
+        assertStringIncludes(
+          new TextDecoder().decode(result.stderr),
+          "Contradictory context: modelName",
+        );
+      }
+    }
+  }));

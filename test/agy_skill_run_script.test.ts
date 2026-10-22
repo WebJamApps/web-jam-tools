@@ -109,3 +109,74 @@ Deno.test("agy-skill-run.sh: handles complex pipes, redirects, and quotes", asyn
   assertEquals(res.code, 0);
   assertEquals(res.stdout.trim(), "it_s a _quoted_ test");
 });
+
+Deno.test("agy-skill-run.sh: exports identity flags to child environment", async () => {
+  const cmd = new Deno.Command("bash", {
+    args: [
+      SCRIPT_PATH,
+      "--conversation-id",
+      "conv-alpha-123",
+      "--model-name",
+      "gemini-4-argon-high",
+      "--transcript-path",
+      "/tmp/alpha.jsonl",
+      'echo "$AGY_CONVERSATION_ID|$AGY_MODEL_NAME|$AGY_TRANSCRIPT_PATH"',
+    ],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const { code, stdout, stderr } = await cmd.output();
+  assertEquals(code, 0);
+  assertEquals(
+    new TextDecoder().decode(stdout).trim(),
+    "conv-alpha-123|gemini-4-argon-high|/tmp/alpha.jsonl",
+  );
+  assertEquals(new TextDecoder().decode(stderr), "");
+});
+
+Deno.test("agy-skill-run.sh: fails with usage error when identity flag is missing its value", async () => {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH, "--conversation-id"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const res = await cmd.output();
+  assertEquals(res.code, 1);
+  assertStringIncludes(new TextDecoder().decode(res.stderr), "Usage:");
+});
+
+Deno.test("agy-skill-run.sh: fails with usage error on unknown option", async () => {
+  const cmd = new Deno.Command("bash", {
+    args: [SCRIPT_PATH, "--unknown-flag", "echo 1"],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const res = await cmd.output();
+  assertEquals(res.code, 1);
+  assertStringIncludes(new TextDecoder().decode(res.stderr), "Usage:");
+});
+
+for (const flags of [[], ["--conversation-id", "this-call"]]) {
+  Deno.test(`agy-skill-run.sh: partial identity flags never inherit a parent's evidence: ${flags}`, async () => {
+    const result = await new Deno.Command("bash", {
+      args: [
+        SCRIPT_PATH,
+        ...flags,
+        'printf "%s|%s|%s" "${AGY_CONVERSATION_ID-unset}" "${AGY_MODEL_NAME-unset}" "${AGY_TRANSCRIPT_PATH-unset}"',
+      ],
+      env: {
+        AGY_CONVERSATION_ID: "parent-call",
+        AGY_MODEL_NAME: "gemini-3.8-flash-high",
+        AGY_TRANSCRIPT_PATH: "/tmp/parent.jsonl",
+      },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(result.code, 0);
+    assertEquals(
+      new TextDecoder().decode(result.stdout),
+      `${flags.length ? "this-call" : "unset"}|unset|unset`,
+    );
+    assertEquals(new TextDecoder().decode(result.stderr), "");
+  });
+}
