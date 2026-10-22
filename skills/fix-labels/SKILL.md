@@ -70,7 +70,7 @@ Shape, for orientation (see `labels.yaml` for the actual current values):
 - **Model-tier** — `Haiku` / `Sonnet` / `Opus` / `Fable` / `Flash` across all 8
   repos. `Fable` is retired/dormant and marked `neverDelete` in the schema — the scripted diff never proposes
   removing it, in any repo.
-- **Status** — `parked` / `Josh` / `Blocked`, across all 8 repos. `Blocked` (capital B, `B60205`) is
+- **Status** — `Josh` / `Blocked`, across all 8 repos. `Blocked` (capital B, `B60205`) is
   reserved exclusively for issues unworkable due to external blockers (credentials, vendor delays,
   assets from Josh, physical prerequisites) — native GitHub dependencies (`blocked_by`) are the single
   source of truth for issue-to-issue blockers and do NOT carry the `Blocked` label (web-jam-tools#725).
@@ -186,6 +186,10 @@ gh issue list --repo WebJamApps/<repo> --label "<label>" --state open --json num
 The count is already in the task's report output — never propose a remove/delete line without it,
 and never let the model guess or skip it.
 
+`parked` is retired. If it remains on GitHub, the canonical diff proposes deletion with its
+open-issue blast radius and waits for Josh's per-item approval. Do not recreate it. Issues
+carrying the legacy label stay in backlog-groom audits while that separate approval is pending.
+
 ## Report format
 
 ```
@@ -193,7 +197,7 @@ and never let the model guess or skip it.
 
 ### JaMmusic
 - CREATE `Flash Low` (#FEF2C0) — missing
-- RECOLOR `parked` #0206d8 → #C2C2C2 — miscolored
+- DELETE `parked` — non-canonical — 0 open issues carry this label
 - REDESCRIBE `Haiku` "" → "Mechanical tasks: lookups, scans, single-file edits, typo/data fixes, and running test/build checks" — description drift
 - DELETE `codex` — non-canonical — 2 open issues carry this label
 

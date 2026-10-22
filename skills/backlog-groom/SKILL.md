@@ -14,21 +14,33 @@ Josh can name a focus milestone for that run: `/backlog-groom focus <milestone>`
 
 ## Which Model Does the Run
 
-Which model does the run depends on the model the session is on:
+The primary session always starts one audit helper so Josh can keep chatting. The helper owns
+reading, checking, the report, and approved edits; it does not repeat this dispatch step.
 
 | Tool | The session is on | Who does the run |
 |---|---|---|
 | Claude Code | Opus | a Sonnet helper the session starts |
-| Claude Code | Sonnet or Haiku | the session itself |
-| agy | Flash | the session itself |
+| Claude Code | Sonnet | a Sonnet helper the session starts |
+| Claude Code | Haiku | a Haiku helper the session starts |
+| agy | Flash | a Flash helper the session starts |
 | Codex | Astra | a Sol helper the session starts |
-| Codex | Sol or Luna | the session itself |
+| Codex | Sol | a Sol helper the session starts |
+| Codex | Luna | a Luna helper the session starts |
 
-The run is the reading, the checking, the report, and the edits. A session that hands the run to a helper does three things itself and nothing more: it starts the helper; it shows Josh the table the helper returns; and it passes his approvals back to the helper, which makes the edits. The helper runs at high effort, as every model does.
+The primary runs `deno task running-model` to learn its model from the session record, never
+from its own account of itself. If detection cannot tell, start a Sonnet helper on Claude Code
+or a Sol helper on Codex; agy starts a Flash helper. Helpers run at high effort.
 
-The session learns which model it is on from `deno task running-model`, never from its own account of itself. When that command cannot tell, the session hands the run to the helper its tool would use for the expensive model: Sonnet on Claude Code, Sol on Codex. On agy there is one model, so the session does the run.
+Use the surface's native background child mechanism: Claude Code `Agent` with the table's
+`model`, Codex `collaboration.spawn_agent` with the table's model named in the request, or agy
+`invoke_subagent` with `Model: "flash"`. On Codex, when specifying a different model, provide a
+self-contained task with `fork_turns: "none"`. Pass this skill, the requested focus milestone,
+the report path, and the strict per-item approval gate. Do not run a blocking CLI in the primary
+session as a substitute for a background helper. If the native mechanism is unavailable,
+report that limitation; do not silently do the audit inline.
 
-On Claude Code, dispatch that helper with `Agent(model: "sonnet")`. On Codex, start a helper with Sol named in the request.
+The primary starts the helper, shares brief progress, shows Josh the returned numbered findings,
+and passes his per-item approvals back to that same helper. The helper makes only approved edits.
 
 ## Repositories in Scope (8)
 
@@ -67,7 +79,7 @@ The audit inspects every open issue across all 8 repositories against six core c
   - `"as discussed in"` / `"per the discussion"`
   - `"in the epic"` / `"see epic for details"`
   - `"as noted below"` (without explicit inline specs)
-- **`Needs Design` Awareness:** For Epics or sub-issues that are not fully designed yet or require design clarification, recommend applying the canonical `Needs Design` status label or triaging/re-labeling to `Opus` for human design clarification rather than forcing immediate execution.
+- **`Needs Design` Awareness:** Missing a separate design document alone does not make a self-contained small task non-executable. Propose this label for unresolved design decisions or an incomplete executable spec, with per-item approval. For Epics or sub-issues that are not fully designed yet or require design clarification, recommend applying the canonical `Needs Design` status label or triaging/re-labeling to `Opus` for human design clarification rather than forcing immediate execution.
 
 ### 4. Native Issue Types, Epic & Untyped Issue Detection
 - **Untyped Issue Detection:** Flag every OPEN issue with an unset native `Type` field (i.e. native `Type` is missing/null/empty). Report the per-repo untyped ratio (e.g. "web-jam-tools: 38 of 44 open issues untyped") and provide suggested native types (`Task`, `Bug`, `Feature`, `Epic`) for each untyped issue based on context.
@@ -80,7 +92,7 @@ The audit inspects every open issue across all 8 repositories against six core c
 - **Stale Issues:** Open issues untouched for extended periods with no activity, pending external feedback, or superseded by newer architectural changes.
 
 ### 6. Milestone Coverage Drift
-- **Missing Milestone Detection:** Flag every OPEN, non-`parked` issue whose native GitHub `milestone` field is null.
+- **Missing Milestone Detection:** Flag every OPEN issue whose native GitHub `milestone` field is null.
 - **Suggested Milestone Heuristics (in priority order):**
   1. If the issue is a native sub-issue of an Epic that already has a Milestone assigned, suggest that parent Epic's Milestone.
   2. Otherwise, match the issue's title and body theme against the titles and descriptions of the repo's open Milestones.
@@ -89,7 +101,7 @@ The audit inspects every open issue across all 8 repositories against six core c
 ### 7. Priority
 
 The level each issue carries, checked against the spread with a focus milestone named for the run:
-- **Seventh Check (Priority):** Evaluates open issues against target level shares and calls the ranking entry point `deno task backlog-groom:rank` (via `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--focus <milestone>]`), reading judgments stored in `/tmp/backlog-groom`.
+- **Seventh Check (Priority):** Evaluates open issues against target level shares and calls the ranking entry point `deno task backlog-groom:rank` (via `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--snapshot <snapshot.json>] [--focus <milestone>]`), reading judgments stored in `/tmp/backlog-groom`.
 - **Focus Argument:** Takes `focus <milestone>` in the call (`/backlog-groom focus gig-outreach`, and `$backlog-groom focus gig-outreach` on Codex) and passes it to the ranking for that run only.
 - **One Batch per Repository:** Proposed Priority moves are shown as one batch for each repository.
 - **Where Rules Live (No Restatement):** The skill does not restate the level tests, the shares or the ranking:
@@ -105,18 +117,18 @@ The level each issue carries, checked against the spread with a focus milestone 
 
 ## Workflow & Execution Steps
 
-The session or helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5. The primary session presents the findings and receives Josh's approvals; when a helper is selected, it passes those approvals back to that helper.
+The helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5. The primary session presents the findings and receives Josh's approvals, then passes only those approvals back to that helper.
 
 ### Step 1: Scan & Collect
-1. Fetch all open issues for each of the 8 repos using `gh issue list` and `gh api`.
-2. Retrieve native `Priority`, `Type`, `issue_field_values`, and native dependencies (`blocked_by` API) for candidate issues.
-3. Exclude issues marked with the gray `parked` label (these are intentionally parked by Josh and skipped).
+1. Run `deno task backlog-groom:collect --output /tmp/backlog-groom/<unique-run>/snapshot.json` once. The bounded-concurrency collector reads all eight repos, issue bodies, native `Priority`, `Type`, `issue_field_values`, milestones, parent/children and dependencies. It publishes only a complete validated timestamped snapshot; failures refuse the run. See `docs/scripts.md` for the schema and freshness contract.
+2. Read that snapshot for the audit instead of repeating per-issue reads. Follow up with targeted read-only GitHub/code checks only where the snapshot cannot prove completion, external prerequisites, or referenced closed ancestors. Never infer satisfied external prerequisites from missing data.
+3. Include every open issue, including legacy `parked` labels. That retired label's deletion belongs to `/fix-labels`, with its own blast radius and per-item approval.
 
 ### Step 2: Analyze & Categorize
 1. Evaluate each issue against the 6 audit categories above.
 2. Formulate concrete, actionable proposed fixes for each finding (e.g. "Apply label `Sol` per triage table", "Remove redundant `Blocked` label (native dependencies govern blocking)", "Remove `Blocked` label & reconcile body (replace gating prose with satisfied prerequisite note and preserve unproven preconditions)", "Remove self-blocking dependency via deno task unblock-issue --repo <repo> --issue <n> --blocker <m>", "Set native Type to `Task`", "Set Milestone to `v1.2`", "Apply `Needs Design` label", "Close as duplicate of #45").
 3. Calculate per-repo untyped issue ratios (e.g. "web-jam-tools: 38 of 44 open issues untyped") and missing milestone ratios (e.g. "web-jam-tools: 12 of 44 open issues have no milestone").
-4. For Priority, the model doing the run judges the two facts no GitHub field records (something live is broken; a defect that costs something every time it is hit), hands the ranking a yes or a no for each, and gives its reason in one line beside every move it proposes (with `liveBroken`, `costlyDefect`, and a one-line `reason`). For repositories below the 20-issue floor, it also supplies `levelFromTests` from the canonical level tests `/file-issue` owns. The judgments JSON is stored in `/tmp/backlog-groom` (following the input schema in `docs/scripts.md` and `deno task backlog-groom:rank --help`), calling `deno task backlog-groom:rank --repo <repo> --judgments <file.json> [--focus <milestone>]`.
+4. For Priority, the model doing the run judges the two facts no GitHub field records (something live is broken; a defect that costs something every time it is hit), hands the ranking a yes or a no for each, and gives its reason in one line beside every move it proposes (with `liveBroken`, `costlyDefect`, and a one-line `reason`). For repositories below the 20-issue floor, it also supplies `levelFromTests` from the canonical level tests `/file-issue` owns. The judgments JSON is stored in `/tmp/backlog-groom` (following the input schema in `docs/scripts.md` and `deno task backlog-groom:rank --help`), calling `deno task backlog-groom:rank --repo <repo> --judgments <file.json> --snapshot /tmp/backlog-groom/<unique-run>/snapshot.json [--focus <milestone>]`. Ranking reuses the collected snapshot without GitHub rereads. It refuses snapshots over one hour old; recollect and reconsider affected findings before requesting approval. Snapshots are evidence for this run, never approval records.
 
 ### Step 3: Write Report File
 Write the full audit report to `~/Dropbox/web-jam-llms/backlog-groom-report.md` (replacing any existing file). Include an ISO timestamp, summary counts, untyped ratios, and missing milestone ratios per repo, and detailed findings.
@@ -140,6 +152,7 @@ Proposed Priority moves are shown as one batch for each repository.
 - **STOP and wait for Josh's response.**
 - Accept selective approvals (e.g., "approve 1, 2", "all except 3", "yes to all").
 - Execute ONLY approved actions on GitHub through the guarded commands: `deno task edit-issue` for a label, a milestone, or a body (and its `--priority <Level>` flag for a Priority level), and `deno task unblock-issue` for a dependency that blocks an issue on its own parent.
+- Before executing an approved item, re-read its relevant current issue values and prerequisites. If changed facts invalidate the proposal, return the revised item for approval. A snapshot never substitutes for this check.
 - Never touch unapproved items.
 
 ## Description Detail & Triggers

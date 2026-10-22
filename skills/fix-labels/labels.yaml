@@ -127,12 +127,6 @@ labels:
     modelTier: true
 
   # --- Status — all 8 repos ---
-  # `parked` and `Josh` are NOT priority/topic/type/dependency labels, so
-  # they are outside every web-jam-tools#300 prune category and are kept.
-  - name: parked
-    hex: "C2C2C2"
-    description: "Parked issue — work on hold until unparked"
-    repos: all
   - name: Josh
     hex: "795548"
     description: "Manual step requiring Josh (credential creation, vendor dashboard action, or physical step)"

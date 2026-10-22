@@ -255,15 +255,14 @@ Deno.test("Epic with no open children or no child levels receives no proposal", 
   assertEquals(result.moves, []);
 });
 
-Deno.test("parked issues are excluded before counts, ranking and judgments", () => {
+Deno.test("legacy parked labels do not exclude issues from counts, ranking or judgments", () => {
   const rows = issues(20);
   rows[19].labels = ["parked"];
-  const answers = judgments(rows.slice(0, 19));
+  const answers = judgments(rows);
   const result = rankIssues("web-jam-tools", rows, answers);
-  assertEquals(result.count, 19);
-  assertEquals(result.shares, null);
-  assert(!result.ranking.some((row) => row.number === 20));
-  assert(!result.moves.some((move) => move.number === 20));
+  assertEquals(result.count, 20);
+  assert(result.shares !== null);
+  assert(result.ranking.some((row) => row.number === 20));
 });
 
 Deno.test("ranking does not mutate caller facts or judgments", () => {
@@ -327,9 +326,9 @@ function apiRunner(data: Record<string, unknown>, calls: string[][] = []): Comma
   return (args) => {
     calls.push(args);
     assertEquals(args[0], "api");
-    assertEquals(args.slice(2), ["--method", "GET", "--paginate", "--slurp", "--jq", "add"]);
+    assertEquals(args.slice(2), ["--method", "GET", "--paginate", "--slurp"]);
     assert(args[1] in data, `Unexpected API read ${args[1]}`);
-    return Promise.resolve({ code: 0, stdout: JSON.stringify(data[args[1]]), stderr: "" });
+    return Promise.resolve({ code: 0, stdout: JSON.stringify([data[args[1]]]), stderr: "" });
   };
 }
 
@@ -347,7 +346,7 @@ function apiData(rows: ReturnType<typeof rawIssue>[] = [rawIssue(1)]) {
   return data;
 }
 
-Deno.test("GitHub adapter uses paginated native fields and counts open unparked dependents", async () => {
+Deno.test("GitHub adapter uses paginated native fields and counts open dependents including legacy parked labels", async () => {
   const data = apiData([
     rawIssue(1, { milestone: { title: "gig-outreach" } }),
     rawIssue(2, { labels: [{ name: "parked" }] }),
@@ -366,16 +365,16 @@ Deno.test("GitHub adapter uses paginated native fields and counts open unparked 
   ];
   const calls: string[][] = [];
   const result = await readRepository("web-jam-tools", apiRunner(data, calls));
-  assertEquals(result.issues.length, 1);
-  assertEquals(result.issues[0].openWaiting, 2);
+  assertEquals(result.issues.length, 2);
+  assertEquals(result.issues[0].openWaiting, 3);
   assertEquals(result.issues[0].blockedByOpen, true);
   assertEquals(result.issues[0].priority, "Medium");
   assertEquals(result.issues[0].milestone, "gig-outreach");
   assertEquals(result.milestones, ["gig-outreach"]);
-  assertEquals(calls.length, 4);
+  assertEquals(calls.length, 6);
 });
 
-Deno.test("GitHub adapter uses only native open unparked children for Epics", async () => {
+Deno.test("GitHub adapter uses native open children including legacy parked labels for Epics", async () => {
   const data = apiData([rawIssue(1, { type: { name: "Epic" }, issue_field_values: [] })]);
   data[`${root}/issues/1/sub_issues?per_page=100`] = [
     rawIssue(2),
@@ -386,6 +385,7 @@ Deno.test("GitHub adapter uses only native open unparked children for Epics", as
   const result = await readRepository("web-jam-tools", apiRunner(data));
   assertEquals(result.issues[0].children, [
     { number: 2, priority: "Medium" },
+    { number: 4, priority: "Medium" },
     { number: 5, priority: null },
   ]);
   assertEquals(result.issues[0].priority, null);
@@ -487,14 +487,14 @@ Deno.test("registered task reads its scoped input and executes the CLI with a lo
   await Deno.mkdir("/tmp/backlog-groom", { recursive: true });
   const directory = await Deno.makeTempDir({ dir: "/tmp/backlog-groom", prefix: "rank-test-" });
   try {
-    const rows = JSON.stringify([rawIssue(1, { issue_field_values: [] })]);
+    const rows = JSON.stringify([[rawIssue(1, { issue_field_values: [] })]]);
     const script = [
       "#!/bin/sh",
       '[ "$1" = api ] || exit 99',
       'case "$2" in',
       `  *issues?*) printf '%s' '${rows}' ;;`,
       '  *milestones?*) printf "%s" "[]" ;;',
-      '  *dependencies/*) printf "%s" "[]" ;;',
+      '  *dependencies/*|*sub_issues*) printf "%s" "[]" ;;',
       "  *) exit 98 ;;",
       "esac",
     ].join("\n");

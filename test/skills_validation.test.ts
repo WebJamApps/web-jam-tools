@@ -2035,12 +2035,12 @@ export function assertBacklogGroomRules(text: string): void {
   );
   assertStringIncludes(
     text,
-    "| Claude Code | Sonnet or Haiku | the session itself |",
-    "skills/backlog-groom/SKILL.md table must include Claude Code Sonnet or Haiku row",
+    "| Claude Code | Sonnet | a Sonnet helper the session starts |",
+    "skills/backlog-groom/SKILL.md table must include Claude Code Sonnet row",
   );
   assertStringIncludes(
     text,
-    "| agy | Flash | the session itself |",
+    "| agy | Flash | a Flash helper the session starts |",
     "skills/backlog-groom/SKILL.md table must include agy Flash row",
   );
   assertStringIncludes(
@@ -2057,7 +2057,7 @@ export function assertBacklogGroomRules(text: string): void {
   );
   assertStringIncludes(
     text,
-    "| Codex | Sol or Luna | the session itself |",
+    "| Codex | Sol | a Sol helper the session starts |",
     "skills/backlog-groom/SKILL.md must include Codex in table of who does the run",
   );
   assertStringIncludes(
@@ -2084,16 +2084,34 @@ export function assertBacklogGroomRules(text: string): void {
     "skills/backlog-groom/SKILL.md must use deno task unblock-issue",
   );
 
-  // 5. Every workflow route must use the session or helper selected by the table.
+  // 5. Every workflow route must use the helper selected by the table.
   assertStringIncludes(
     text,
-    'The session or helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5.',
-    "skills/backlog-groom/SKILL.md workflow must assign the full run to the selected session or helper",
+    'The helper selected by the table in "Which Model Does the Run" performs Steps 1–3 and the approved actions in Step 5.',
+    "skills/backlog-groom/SKILL.md workflow must assign the full run to the selected helper",
   );
   assertFalse(
-    /delegated\s+to\s+subagent/i.test(text),
-    "skills/backlog-groom/SKILL.md must not unconditionally delegate workflow steps to a subagent",
+    /the session itself/i.test(text),
+    "skills/backlog-groom/SKILL.md must not run the audit inline in the primary session",
   );
+
+  for (
+    const row of [
+      "| Claude Code | Haiku | a Haiku helper the session starts |",
+      "| Codex | Luna | a Luna helper the session starts |",
+    ]
+  ) assertStringIncludes(text, row, "must delegate cheap sessions to a helper too");
+  for (const native of ["Agent", "collaboration.spawn_agent", "invoke_subagent"]) {
+    assertStringIncludes(text, native, "must name native background delegation mechanism");
+  }
+  assertStringIncludes(
+    text,
+    "deno task backlog-groom:collect",
+    "must collect once before analysis",
+  );
+  assertStringIncludes(text, "--snapshot", "must reuse the snapshot for ranking");
+  assertStringIncludes(text, "Include every open issue", "must include legacy parked issues");
+  assertStringIncludes(text, "/fix-labels", "must route retired label deletion to fix-labels");
 
   // 6. Seventh check: Priority
   assertStringIncludes(
@@ -2239,21 +2257,11 @@ Deno.test(
       "must include Codex invocation $backlog-groom",
     );
 
-    // Retaining any one of the old headings must fail, even with the new table present.
-    for (
-      const heading of [
-        "### Step 1: Scan & Collect",
-        "### Step 2: Analyze & Categorize",
-        "### Step 3: Write Report File",
-      ]
-    ) {
-      const retainedDelegation = validText.replace(heading, `${heading} (Delegated to Subagent)`);
-      assertThrows(
-        () => assertBacklogGroomRules(retainedDelegation),
-        Error,
-        "must not unconditionally delegate workflow steps",
-      );
-    }
+    assertThrows(
+      () => assertBacklogGroomRules(validText + "\nThe session itself does the audit.\n"),
+      Error,
+      "must not run the audit inline",
+    );
     assertThrows(
       () => assertBacklogGroomRules(validText.replace("performs Steps 1–3", "performs Step 1")),
       Error,

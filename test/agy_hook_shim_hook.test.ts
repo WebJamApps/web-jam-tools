@@ -1206,46 +1206,27 @@ Deno.test("end-to-end: agy-hook-shim.sh records invocation payload to AGY_HOOK_R
 });
 
 Deno.test(
-  "regression (web-jam-tools#830): runShim helper sets AGY_HOOK_RECORD_PATH=off so production path is untouched",
+  "regression (web-jam-tools#830): runShim helper disables an inherited record path",
   async () => {
-    const prodPath = DEFAULT_RECORD_PATH;
-    let prodExistedBefore = false;
-    let prodContentBefore = "";
+    // Use a private sentinel so another live agy session cannot race this assertion.
+    const recordPath = await Deno.makeTempFile({ prefix: "shim-record-isolation-" });
+    const previous = Deno.env.get("AGY_HOOK_RECORD_PATH");
+    const sentinel = "Test recording must stay unchanged\n";
     try {
-      prodContentBefore = await Deno.readTextFile(prodPath);
-      prodExistedBefore = true;
-    } catch {
-      prodExistedBefore = false;
-    }
-
-    const res = await runShim(
-      "PreToolUse",
-      "Bash",
-      "block-secret-dumps.sh",
-      agyRunCommand("echo regression-web-jam-tools-830"),
-    );
-    assertEquals(res.decision, "allow");
-
-    if (prodExistedBefore) {
-      const prodContentAfter = await Deno.readTextFile(prodPath);
-      assertEquals(
-        prodContentAfter,
-        prodContentBefore,
-        "production record file must not be modified by test runs",
+      await Deno.writeTextFile(recordPath, sentinel);
+      Deno.env.set("AGY_HOOK_RECORD_PATH", recordPath);
+      const res = await runShim(
+        "PreToolUse",
+        "Bash",
+        "block-secret-dumps.sh",
+        agyRunCommand("echo regression-web-jam-tools-830"),
       );
-    } else {
-      let prodExistsAfter = false;
-      try {
-        await Deno.stat(prodPath);
-        prodExistsAfter = true;
-      } catch {
-        prodExistsAfter = false;
-      }
-      assertEquals(
-        prodExistsAfter,
-        false,
-        "production record file must not be created by test runs",
-      );
+      assertEquals(res.decision, "allow");
+      assertEquals(await Deno.readTextFile(recordPath), sentinel);
+    } finally {
+      if (previous === undefined) Deno.env.delete("AGY_HOOK_RECORD_PATH");
+      else Deno.env.set("AGY_HOOK_RECORD_PATH", previous);
+      await Deno.remove(recordPath);
     }
   },
 );

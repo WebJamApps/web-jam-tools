@@ -2,6 +2,7 @@ import { parseArgs } from "@std/cli/parse-args";
 import { type CommandRunner } from "../shared/repos.ts";
 import { readRepository } from "./github.ts";
 import { type Judgment, rankIssues, type RankResult } from "./rank.ts";
+import { readSnapshot, repositoryFacts } from "./snapshot.ts";
 
 interface CliOptions {
   runner?: CommandRunner;
@@ -43,7 +44,7 @@ export async function runRankCli(args: string[], options: CliOptions = {}): Prom
   const errorLog = options.errorLog ?? console.error;
   try {
     const flags = parseArgs(args, {
-      string: ["repo", "judgments", "focus"],
+      string: ["repo", "judgments", "focus", "snapshot"],
       boolean: ["help", "json"],
       alias: { h: "help" },
       unknown: (arg) => {
@@ -52,12 +53,13 @@ export async function runRankCli(args: string[], options: CliOptions = {}): Prom
     });
     if (flags.help) {
       log(
-        `Usage: deno task backlog-groom:rank --repo <active-repo> --judgments <file.json> [--focus <milestone>] [--json]
+        `Usage: deno task backlog-groom:rank --repo <active-repo> --judgments <file.json> [--snapshot <file.json>] [--focus <milestone>] [--json]
 
 Read-only: ranks one repository and proposes Priority moves.
 Judgments are keyed by issue number, each with liveBroken and costlyDefect booleans
 and a one-line reason. Below 20 non-Epics, also supply levelFromTests using file-issue.
-The task reads judgments only from /tmp/backlog-groom; store the input file there.`,
+The task reads inputs only from /tmp/backlog-groom. With --snapshot it makes no GitHub reads;
+snapshots must be complete, match the active repos, and be under one hour old.`,
       );
       return 0;
     }
@@ -66,7 +68,9 @@ The task reads judgments only from /tmp/backlog-groom; store the input file ther
     }
     const input = await (options.readTextFile ?? Deno.readTextFile)(flags.judgments);
     const judgments = parseJudgments(JSON.parse(input));
-    const { issues, milestones } = await readRepository(flags.repo, options.runner);
+    const { issues, milestones } = flags.snapshot
+      ? repositoryFacts(await readSnapshot(flags.snapshot, options.readTextFile), flags.repo)
+      : await readRepository(flags.repo, options.runner);
     const result = rankIssues(flags.repo, issues, judgments, milestones, flags.focus);
     log(flags.json ? JSON.stringify(result, null, 2) : formatReport(result));
     return 0;

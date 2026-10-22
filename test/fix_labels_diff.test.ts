@@ -295,8 +295,7 @@ Deno.test("loadSchema: parses the real labels.yaml with the expected shape", asy
     "Sol",
     "Sonnet",
   ]);
-  assertEquals(byName.get("parked")?.hex, "C2C2C2");
-  assertEquals(byName.get("parked")?.description, "Parked issue — work on hold until unparked");
+  assertEquals(byName.get("parked"), undefined);
   assertEquals(byName.get("Josh")?.hex, "795548");
   assertEquals(
     byName.get("Josh")?.description,
@@ -867,4 +866,20 @@ Deno.test("main: returns 1 and reports a scan failure loudly, never swallowing i
     assertEquals(logs, []);
     assert(errors[0].includes("scan failed"));
   });
+});
+
+Deno.test("retired parked label proposes deletion with blast radius rather than recreation", async () => {
+  const schema = await loadSchema(LABELS_YAML_PATH);
+  const runner = makeFakeRunner({ JaMmusic: [{ name: "parked", color: "C2C2C2" }] }, {
+    "JaMmusic::parked": 3,
+  });
+  const drift = await scanRepo(schema, "JaMmusic", runner);
+  const parked = findByName(drift, "parked");
+  assertEquals(parked?.action, "delete");
+  assertEquals(parked?.blastRadius, 3);
+  assertEquals(parked?.kind, "non-canonical");
+  assertEquals(
+    classifyRepoDrift(schema, "JaMmusic", []).some((item) => item.name === "parked"),
+    false,
+  );
 });
