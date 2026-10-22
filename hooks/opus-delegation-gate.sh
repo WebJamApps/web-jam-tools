@@ -180,10 +180,13 @@ else
   fi
 fi
 
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
 # Step 4: One invocation of opus_gate.ts decides the rest.
-gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval." deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
-if [[ "$gate_json" == *'"hookSpecificOutput"'* ]]; then
-  printf '%s\n' "$gate_json"
+gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval." --note-file "$NOTE_FILE" deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
+if [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
   exit 0
 fi
 decision="$(printf '%s' "$gate_json" | jq -r '.decision // empty' 2>/dev/null || true)"

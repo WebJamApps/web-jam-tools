@@ -65,4 +65,4 @@ if [ ! -f "$CLI_TS" ]; then
   exit 0
 fi
 
-exec "$HOOK_DIR/lib/run_hook.sh" --group workflow --name regenerate-memory-index --event PostToolUse deno run --quiet --allow-read --allow-write --allow-env "$CLI_TS" --dir "$target_dir_resolved"
+exec "$HOOK_DIR/lib/run_hook.sh" --group workflow --name regenerate-memory-index --event PostToolUse --discard-stdout deno run --quiet --allow-read --allow-write --allow-env "$CLI_TS" --quiet --dir "$target_dir_resolved"

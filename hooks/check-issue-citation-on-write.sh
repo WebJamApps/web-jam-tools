@@ -15,10 +15,16 @@ CHECKER="$REPO_DIR/hooks/lib/check_issue_citation_on_write.ts"
 
 input=$(cat)
 
-result=$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name check-issue-citation-on-write --event PreToolUse deno run --no-config --allow-env --allow-read "$CHECKER" 2>/dev/null) || true
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
 
-if [[ "$result" == *'"hookSpecificOutput"'* ]]; then
-  printf '%s\n' "$result"
+result=$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name check-issue-citation-on-write --event PreToolUse --note-file "$NOTE_FILE" deno run --no-config --allow-env --allow-read "$CHECKER") || true
+
+if [ -s "$NOTE_FILE" ]; then
+  note_content="$(cat "$NOTE_FILE")"
+  if [ "$note_content" != "__FALLBACK_STDERR__" ]; then
+    printf '%s\n' "$note_content"
+  fi
   exit 0
 fi
 

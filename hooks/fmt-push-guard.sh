@@ -40,9 +40,12 @@ fi
 
 HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
 # Run fmt:check from the repo root through the shared hook runner
 fmt_status=0
-fmt_out=$(cd "$top" && "$HOOK_DIR/lib/run_hook.sh" --group workflow --name fmt-push-guard --event PreToolUse deno eval '
+fmt_out=$(cd "$top" && "$HOOK_DIR/lib/run_hook.sh" --group workflow --name fmt-push-guard --event PreToolUse --note-file "$NOTE_FILE" deno eval '
   const cmd = new Deno.Command("deno", { args: ["task", "fmt:check"], stderr: "piped", stdout: "piped" });
   const out = await cmd.output();
   if (out.code === 0) Deno.exit(0);
@@ -57,8 +60,8 @@ fmt_out=$(cd "$top" && "$HOOK_DIR/lib/run_hook.sh" --group workflow --name fmt-p
 if [ "$fmt_status" -eq 2 ]; then
   printf '%s\n' "$fmt_out" >&2
   exit 2
-elif [[ "$fmt_out" == *'"hookSpecificOutput"'* ]]; then
-  printf '%s\n' "$fmt_out"
+elif [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
   exit 0
 fi
 

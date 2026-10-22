@@ -45,20 +45,23 @@ HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
-result=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-agy-non-flash-model deno run --no-config --allow-env "$HOOK_DIR/lib/check_agy_model.ts" 2>/dev/null) || true
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
+result=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-agy-non-flash-model --note-file "$NOTE_FILE" deno run --no-config --allow-env "$HOOK_DIR/lib/check_agy_model.ts" 2>/dev/null) || true
 
 # python3/deno unavailable/crashed, or nothing came back: fail open — this is a
 # cost-control guard, not a secret-leak guard, so an unparseable command is
 # let through rather than guessed at.
-if [[ "$result" == *'"hookSpecificOutput"'* ]]; then
-  printf '%s\n' "$result"
+if [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
   exit 0
 fi
 [ -z "$result" ] && exit 0
 [ "$result" = "OK" ] && exit 0
 
-ALLOWED_SLUGS=$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-agy-non-flash-model deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-tiered")
-if [[ "$ALLOWED_SLUGS" == *'"hookSpecificOutput"'* ]] || [ -z "$ALLOWED_SLUGS" ]; then
+ALLOWED_SLUGS=$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name block-agy-non-flash-model --note-file "$NOTE_FILE" deno run --no-config "$HOOK_DIR/lib/check_agy_model.ts" --allowed-slugs 2>/dev/null || echo "gemini-3.8-flash-high or gemini-3.8-flash-tiered")
+if [ -s "$NOTE_FILE" ] || [ -z "$ALLOWED_SLUGS" ]; then
   ALLOWED_SLUGS="gemini-3.8-flash-high or gemini-3.8-flash-tiered"
 fi
 

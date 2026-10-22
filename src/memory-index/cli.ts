@@ -20,17 +20,20 @@ function expandHome(path: string): string {
 
 export async function runCli(args: string[]): Promise<number> {
   const flags = parseArgs(args, {
-    boolean: ["check", "help"],
+    boolean: ["check", "help", "quiet"],
     string: ["dir", "protect"],
     collect: ["protect"],
     default: {
       check: false,
       help: false,
+      quiet: false,
     },
   });
 
   if (flags.help) {
-    console.log("Usage: deno task memory-index [--check] [--dir <path>] [--protect <slug>]...");
+    console.log(
+      "Usage: deno task memory-index [--check] [--quiet] [--dir <path>] [--protect <slug>]...",
+    );
     console.log("Generates MEMORY.md for the target memory directory.");
     console.log("--protect <slug> keeps that memory out of the done-checkpoint archive.");
     return 0;
@@ -42,8 +45,10 @@ export async function runCli(args: string[]): Promise<number> {
   const protectedSlugs = new Set<string>(flags.protect);
   const { entries, skipped } = await scanMemoryDirectory(targetDir);
 
-  for (const skip of skipped) {
-    console.error(`Skipped ${skip.filename}: ${skip.reason}`);
+  if (!flags.quiet) {
+    for (const skip of skipped) {
+      console.error(`Skipped ${skip.filename}: ${skip.reason}`);
+    }
   }
 
   if (flags.check) {
@@ -87,9 +92,11 @@ export async function runCli(args: string[]): Promise<number> {
   await Deno.writeTextFile(memoryMdPath, newContent);
 
   const byteCount = new TextEncoder().encode(newContent).length;
-  console.log(
-    `Wrote ${memoryMdPath} (${byteCount} bytes). Archived ${archivedCount} done checkpoints.`,
-  );
+  if (!flags.quiet) {
+    console.log(
+      `Wrote ${memoryMdPath} (${byteCount} bytes). Archived ${archivedCount} done checkpoints.`,
+    );
+  }
   return skipped.length > 0 ? 1 : 0;
 }
 

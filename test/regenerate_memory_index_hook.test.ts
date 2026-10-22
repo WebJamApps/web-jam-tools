@@ -89,6 +89,7 @@ for (const literalPath of REGENERATE_PATHS) {
 
       assertEquals(res.code, 0, `expected exit code 0, stderr: ${res.stderr}`);
       assertEquals(res.stderr, "", `expected empty stderr, got: ${res.stderr}`);
+      assertEquals(res.stdout, "", `expected empty stdout, got: ${res.stdout}`);
 
       const contentAfter = await Deno.readTextFile(memoryMdPath);
       assert(
@@ -158,6 +159,7 @@ for (const { name, payload } of NO_ACTION_CASES) {
 
       assertEquals(res.code, 0, `expected exit code 0, stderr: ${res.stderr}`);
       assertEquals(res.stderr, "", `expected empty stderr, got: ${res.stderr}`);
+      assertEquals(res.stdout, "", `expected empty stdout, got: ${res.stdout}`);
 
       const contentAfter = await Deno.readTextFile(memoryMdPath);
       assertEquals(

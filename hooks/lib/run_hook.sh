@@ -18,6 +18,8 @@ SURFACE="claude"
 TIMEOUT="15s"
 CHECK_ONLY=0
 ALLOW_NOTE=""
+NOTE_FILE=""
+DISCARD_STDOUT=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +46,14 @@ while [[ $# -gt 0 ]]; do
     --allow-with-note)
       ALLOW_NOTE="$2"
       shift 2
+      ;;
+    --note-file)
+      NOTE_FILE="$2"
+      shift 2
+      ;;
+    --discard-stdout)
+      DISCARD_STDOUT=1
+      shift
       ;;
     --check-only)
       CHECK_ONLY=1
@@ -145,22 +155,48 @@ fi
 emit_workflow_note() {
   local note="$1"
   local ev="${2:-PreToolUse}"
-  local escaped
-  escaped=$(printf '%s' "$note" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
+  local payload=""
+
   if [ "$SURFACE" = "agy" ]; then
     if [ "$ev" = "PostToolUse" ]; then
-      printf '{}\n'
+      payload='{}'
     else
-      printf '{"decision":"allow"}\n'
+      payload='{"decision":"allow"}'
     fi
   elif [ "$NAME" = "agy-skill-run-hook" ]; then
-    printf '{"decision":"allow","hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$ev" "$escaped"
+    local escaped
+    escaped=$(printf '%s' "$note" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
+    payload=$(printf '{"decision":"allow","hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}' "$ev" "$escaped")
   elif [ "$ev" = "SessionStart" ] || [ "$ev" = "Stop" ]; then
-    printf '{"systemMessage":"%s"}\n' "$escaped"
+    if command -v jq >/dev/null 2>&1; then
+      payload=$(jq -cn --arg m "$note" '{systemMessage: $m}' 2>/dev/null) || payload=""
+    fi
+    if [ -z "$payload" ]; then
+      local escaped
+      escaped=$(printf '%s' "$note" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
+      payload=$(printf '{"systemMessage":"%s"}' "$escaped")
+    fi
   elif [ "$ev" = "SessionEnd" ]; then
-    :
+    payload=""
   else
-    printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$ev" "$escaped"
+    if command -v jq >/dev/null 2>&1; then
+      payload=$(jq -cn --arg ev "$ev" --arg ctx "$note" '{hookSpecificOutput: {hookEventName: $ev, additionalContext: $ctx}}' 2>/dev/null) || payload=""
+    fi
+    if [ -z "$payload" ]; then
+      printf '%s\n' "$note" >&2
+    fi
+  fi
+
+  if [ -n "$NOTE_FILE" ]; then
+    if [ -n "$payload" ]; then
+      printf '%s\n' "$payload" >"$NOTE_FILE"
+    else
+      printf '__FALLBACK_STDERR__\n' >"$NOTE_FILE"
+    fi
+  else
+    if [ -n "$payload" ]; then
+      printf '%s\n' "$payload"
+    fi
   fi
 }
 
@@ -247,7 +283,9 @@ fi
 set -e
 
 if [ "$STATUS" -eq 0 ]; then
-  cat "$STDOUT_FILE"
+  if [ "$DISCARD_STDOUT" -eq 0 ]; then
+    cat "$STDOUT_FILE"
+  fi
   cat "$STDERR_FILE" >&2
   exit 0
 elif [ "$STATUS" -eq 2 ]; then
@@ -263,7 +301,11 @@ elif [ "$STATUS" -eq 124 ]; then
       exit 2
     fi
   else
-    note="$(get_workflow_note "$NAME: checker timed out after $TIMEOUT; proceeding via workflow default.")"
+    if [ "$NAME" = "check-issue-citation-on-write" ]; then
+      note="$(get_workflow_note "issue-citation guard: citation check could not run (checker timed out after $TIMEOUT); proceeding via workflow default.")"
+    else
+      note="$(get_workflow_note "$NAME: checker timed out after $TIMEOUT; proceeding via workflow default.")"
+    fi
     emit_workflow_note "$note" "$EVENT"
     exit 0
   fi
@@ -277,7 +319,11 @@ else
       exit 2
     fi
   else
-    note="$(get_workflow_note "$NAME: checker failed (exit $STATUS); proceeding via workflow default.")"
+    if [ "$NAME" = "check-issue-citation-on-write" ]; then
+      note="$(get_workflow_note "issue-citation guard: citation check could not run (checker exited $STATUS); proceeding via workflow default.")"
+    else
+      note="$(get_workflow_note "$NAME: checker failed (exit $STATUS); proceeding via workflow default.")"
+    fi
     emit_workflow_note "$note" "$EVENT"
     exit 0
   fi

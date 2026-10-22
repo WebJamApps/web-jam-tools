@@ -114,7 +114,8 @@ cannot_evaluate() {
 }
 
 TMP_ERR="$(mktemp)"
-trap 'rm -f "$TMP_ERR"' EXIT
+NOTE_FILE="$(mktemp)"
+trap 'rm -f "$TMP_ERR" "$NOTE_FILE"' EXIT
 
 if ! input="$(cat 2>"$TMP_ERR")"; then
   cannot_evaluate "read stdin payload" "$(<"$TMP_ERR")"
@@ -136,20 +137,20 @@ if [ -n "$tp" ]; then
   # Last genuine assistant transcript entry's text content, selected via
   # hooks/lib/select_transcript_entry.ts (excludes isSidechain and
   # isApiErrorMessage entries, bounds search to current turn — web-jam-tools#596).
-  if ! msg="$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name require-clear-communication --event Stop deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>"$TMP_ERR")"; then
+  if ! msg="$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name require-clear-communication --event Stop --note-file "$NOTE_FILE" deno run --no-config --allow-read "$SELECTOR" --text "$tp" 2>"$TMP_ERR")"; then
     cannot_evaluate "run selector" "$(<"$TMP_ERR")"
   fi
 elif printf '%s' "$input" | jq -e '.last_assistant_message != null and (.last_assistant_message | type == "string")' >/dev/null 2>&1; then
   # On Codex, Stop payload carries last_assistant_message directly (web-jam-tools#1139)
-  if ! msg="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name require-clear-communication --event Stop deno run --no-config --allow-read "$SELECTOR" --text 2>"$TMP_ERR")"; then
+  if ! msg="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name require-clear-communication --event Stop --note-file "$NOTE_FILE" deno run --no-config --allow-read "$SELECTOR" --text 2>"$TMP_ERR")"; then
     cannot_evaluate "run selector" "$(<"$TMP_ERR")"
   fi
 else
   cannot_evaluate "extract transcript_path" "payload carries no transcript_path"
 fi
 
-if [[ "$msg" == *'"systemMessage"'* ]]; then
-  printf '%s\n' "$msg"
+if [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
   exit 0
 fi
 
@@ -164,12 +165,12 @@ if [ -z "$msg" ]; then
   exit 0
 fi
 
-if ! report="$(MSG_FOR_PY="$msg" "$HOOK_DIR/lib/run_hook.sh" --group workflow --name require-clear-communication --event Stop deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>"$TMP_ERR")"; then
+if ! report="$(MSG_FOR_PY="$msg" "$HOOK_DIR/lib/run_hook.sh" --group workflow --name require-clear-communication --event Stop --note-file "$NOTE_FILE" deno run --config "$DENO_HOOK_CONFIG" --no-lock --allow-env --allow-read="$CONFIG" "$DETECTOR" 2>"$TMP_ERR")"; then
   cannot_evaluate "run detector" "$(<"$TMP_ERR")"
 fi
 
-if [[ "$report" == *'"systemMessage"'* ]]; then
-  printf '%s\n' "$report"
+if [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
   exit 0
 fi
 

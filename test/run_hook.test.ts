@@ -379,7 +379,7 @@ Deno.test("hooks/agy-hook-shim.sh: preserves safety default on missing Deno", as
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+    env: { ...Deno.env.toObject(), BASH_ENV: "", PATH: "/usr/bin:/bin" },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -408,7 +408,7 @@ Deno.test("hooks/agy-hook-shim.sh: preserves workflow default on missing Deno", 
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+    env: { ...Deno.env.toObject(), BASH_ENV: "", PATH: "/usr/bin:/bin" },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -430,7 +430,7 @@ Deno.test("hooks/block-secret-dumps.sh: propagates runner exit 2 and refusal on 
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+    env: { ...Deno.env.toObject(), BASH_ENV: "", PATH: "/usr/bin:/bin" },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -456,7 +456,7 @@ Deno.test("hooks/check-issue-citation-on-write.sh: allows with note on missing D
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+    env: { ...Deno.env.toObject(), BASH_ENV: "", PATH: "/usr/bin:/bin" },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -485,7 +485,7 @@ Deno.test("hooks/fmt-push-guard.sh: allows with note on missing Deno", async () 
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+    env: { ...Deno.env.toObject(), BASH_ENV: "", PATH: "/usr/bin:/bin" },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -512,7 +512,7 @@ Deno.test("hooks/require-issue-citation-titles.sh: emits systemMessage on missin
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-    env: { ...Deno.env.toObject(), PATH: "/usr/bin:/bin" },
+    env: { ...Deno.env.toObject(), BASH_ENV: "", PATH: "/usr/bin:/bin" },
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
@@ -527,4 +527,77 @@ Deno.test("hooks/require-issue-citation-titles.sh: emits systemMessage on missin
   assert(
     parsed.systemMessage.includes("require-issue-citation-titles: Deno is unavailable on PATH"),
   );
+});
+
+Deno.test("run_hook.sh: --note-file writes workflow fallback note to file and leaves stdout empty", async () => {
+  const noteFile = await Deno.makeTempFile();
+  try {
+    const res = await runRunner(
+      [
+        "--group",
+        "workflow",
+        "--name",
+        "test-workflow-note-file",
+        "--event",
+        "PreToolUse",
+        "--note-file",
+        noteFile,
+        "deno",
+        "eval",
+        "Deno.exit(0)",
+      ],
+      "",
+      { PATH: "/usr/bin:/bin" },
+    );
+    assertEquals(res.code, 0);
+    assertEquals(res.stdout, "");
+    const fileContent = await Deno.readTextFile(noteFile);
+    const parsed = JSON.parse(fileContent);
+    assertEquals(parsed.hookSpecificOutput.hookEventName, "PreToolUse");
+    assert(
+      parsed.hookSpecificOutput.additionalContext.includes(
+        "test-workflow-note-file: Deno is unavailable on PATH",
+      ),
+    );
+  } finally {
+    await Deno.remove(noteFile);
+  }
+});
+
+Deno.test("run_hook.sh: --note-file does not write to file on normal child exit 0", async () => {
+  const noteFile = await Deno.makeTempFile();
+  try {
+    const res = await runRunner([
+      "--group",
+      "workflow",
+      "--name",
+      "test-workflow-note-file-success",
+      "--note-file",
+      noteFile,
+      "deno",
+      "eval",
+      "console.log('child output message')",
+    ]);
+    assertEquals(res.code, 0);
+    assert(res.stdout.includes("child output message"));
+    const fileContent = await Deno.readTextFile(noteFile);
+    assertEquals(fileContent, "");
+  } finally {
+    await Deno.remove(noteFile);
+  }
+});
+
+Deno.test("run_hook.sh: --discard-stdout suppresses child stdout on exit 0", async () => {
+  const res = await runRunner([
+    "--group",
+    "workflow",
+    "--name",
+    "test-discard-stdout",
+    "--discard-stdout",
+    "deno",
+    "eval",
+    "console.log('this stdout will be discarded')",
+  ]);
+  assertEquals(res.code, 0);
+  assertEquals(res.stdout, "");
 });
