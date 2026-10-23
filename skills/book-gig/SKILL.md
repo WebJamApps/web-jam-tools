@@ -188,6 +188,31 @@ Batch outreach dispatch is protected by two distinct, mandatory refusals operati
 | Use corporate marketing copy or banned hype words | Violates cross-AI voice rules. Tone must remain genuine and personal. |
 | Invent unverified claims or musical genres | Anti-hallucination rule: only state facts given by Josh. |
 
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+16. **Never Invert Negative/Unset Flag Semantics & Never Overwrite Qualifying Context:** When
+    consuming backend reason or eligibility flags (such as `resumeBookingExpired`), never assume
+    `false` means the opposite state is active (`false` indicates no hold was set/expired, not an
+    active hold). Client badge logic must inspect explicit positive signals (e.g., future
+    `resumeBooking`) and must never overwrite server-authoritative qualifying fields
+    (`reason.spacingNote`). Candidate filter/rank pipelines must shallow-clone items rather than
+    mutating caller objects in place.
+
+18. **Positive Signal Verification for Compound Inferred States & Date Math Fidelity:**
+    - **Positive Signal Verification for Compound Inferred States:** Never infer state from a
+      default or ambiguous negative flag alone (e.g. `outreachEligible: false`). Always verify the
+      positive qualifying signal (e.g. active conversation evidence in `notes`) required by the
+      specification. On systems like `web-jam-back`, negative flags are often unvetted defaults or
+      permanent opt-outs rather than active alternative workflows.
+    - **Endpoint Query Alignment & Date Math Fidelity:** Client-side enrichment helpers must mirror
+      backend filtering sets (e.g. querying both `sent` and `replied` for cooldowns) and
+      calendar-month arithmetic (`setMonth` instead of 30-day fixed duration approximations) to
+      prevent boundary records from falling through without badges.
+
+
 ## Description Detail & Triggers
 
 Identify eligible venues for target performance weekends, filter by +- 2 months gig spacing, trigger venue-mining when density is sparse, generate voice-rule-compliant pitches, record Gate 1 venue-set approval, hold Gate 2 draft copy review loop and record fingerprints (--record-gate2), dispatch approved batches (--send --confirm-drafts), and track venue replies (--replies). Triggered by /book-gig <weekend> [location], "book gig", or "book gigs".

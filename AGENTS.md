@@ -56,35 +56,12 @@ rules and do not reconstruct them from memory or from this file.
    treat a non-git working directory as an implicit trusted repository root. Fail closed on non-git
    directories so writes to sensitive paths (such as `~/.claude/CLAUDE.md`) remain blocked even when
    a session is opened at home or outside a git repository.
-7. **Multi-Repo Dispatch Target Repo Override:** `scripts/handle-agy-tasks.sh` supports
-   `--repo <Name>` and `AGY_TARGET_REPO=<Name>` to dispatch an issue filed in one repository (e.g.
-   `web-jam-tools#505`) against a different target working repository (e.g. `JaMmusic`), setting
-   `REPO_DIR` and worktree paths to that target repo while keeping the branch name derived from the
-   issue.
-8. **Non-UI Task Land Opt-Out (`--no-land`):** `scripts/handle-agy-tasks.sh` supports `--no-land` to
-   skip checking the feature branch out into the developer's main repository clone after PR
-   creation, keeping non-UI work (backend, docs, tooling, config) from moving the local checkout
-   away from `dev`.
-9. **Skill Renames & Stale Symlink Pruning:** `skills/issue-design/` is renamed to
-   `skills/design-issue/` and `skills/draft-issue/` is renamed to `skills/file-issue/`.
-   `deno task install-skills` (`scripts/install-skills.ts`) saves skill backups outside the scanned
-   skill directories (in `skills-backups/`, automatically pruning backups older than 14 days),
-   migrates pre-existing in-place `.bak` copies out of skills directories, and prunes dangling
-   symlinks in both `~/.claude/skills` and `~/.gemini/config/plugins/webjam-tasks/skills`.
 10. **Pre-Existing Hook Permission & Git Index Immutability:** Do not stage or commit permission
     mode changes (`100644` → `100755`) on pre-existing hook files (`hooks/agy-hook-shim.sh`,
     `hooks/agy-model-guard.sh`, `hooks/block-agy-gmail-send-delete.sh`) unless the issue is
     explicitly about modifying those hook files. When local work requires executing shell scripts
     with `chmod +x`, ensure the git index mode matches `origin/dev` before committing by verifying
     `git diff origin/dev...HEAD --summary` carries no unrelated file mode changes.
-11. **Plan Table Dependency Key Namespacing & Pre-Validation:** In plan filing tools
-    (`deno task design:file-plan` / `src/design-issue/file_plan.ts`), dependency-resolution
-    registries must store 1-based position indices, explicit plan `id`s, issue titles, and external
-    GitHub issue citations in separate lookup namespaces with strict resolution precedence (explicit
-    ID -> 1-based position -> title -> external issue number). Plans must be pre-validated before
-    issue creation to reject ambiguous collisions (such as an explicit `id` conflicting with a
-    different item's position index, duplicate `id`s across items, or duplicate titles across items)
-    so incorrect `blocked_by` edges are never created on GitHub.
 12. **Task Command Verification in Documentation & CLIs:** Whenever documenting or printing runnable
     commands as `deno task <task-name> ...` or `npm run <script> ...` (in `SKILL.md`, CLI `--help`
     text, usage strings, or error messages), verify that the task/script name is actually registered
@@ -130,13 +107,6 @@ rules and do not reconstruct them from memory or from this file.
       contains and silently mutating the wrong record. Require exact ID, exact name, exact
       normalized name, or strict forward containment (`venue.includes(query)`) with a minimum length
       floor (>= 3 characters) and strict ambiguity detection.
-16. **Never Invert Negative/Unset Flag Semantics & Never Overwrite Qualifying Context:** When
-    consuming backend reason or eligibility flags (such as `resumeBookingExpired`), never assume
-    `false` means the opposite state is active (`false` indicates no hold was set/expired, not an
-    active hold). Client badge logic must inspect explicit positive signals (e.g., future
-    `resumeBooking`) and must never overwrite server-authoritative qualifying fields
-    (`reason.spacingNote`). Candidate filter/rank pipelines must shallow-clone items rather than
-    mutating caller objects in place.
 17. **Client-Side Candidate Enrichment & Safety Fencing:** When a client-side reporting tool is
     required to display granular status badges for records that a single backend endpoint (e.g.
     `GET /outreach/candidates`) filters out by design, do not introduce phantom fields that the
@@ -145,16 +115,6 @@ rules and do not reconstruct them from memory or from this file.
     `GET /outreach`), while strictly setting safety exclusion flags (`isExcluded: true`) so held,
     conflicting, or direct-chat venues are excluded from drafting, pitch generation, and batch
     dispatch.
-18. **Positive Signal Verification for Compound Inferred States & Date Math Fidelity:**
-    - **Positive Signal Verification for Compound Inferred States:** Never infer state from a
-      default or ambiguous negative flag alone (e.g. `outreachEligible: false`). Always verify the
-      positive qualifying signal (e.g. active conversation evidence in `notes`) required by the
-      specification. On systems like `web-jam-back`, negative flags are often unvetted defaults or
-      permanent opt-outs rather than active alternative workflows.
-    - **Endpoint Query Alignment & Date Math Fidelity:** Client-side enrichment helpers must mirror
-      backend filtering sets (e.g. querying both `sent` and `replied` for cooldowns) and
-      calendar-month arithmetic (`setMonth` instead of 30-day fixed duration approximations) to
-      prevent boundary records from falling through without badges.
 19. **Fail-Closed Confirmation Guards, Design Fidelity & CLI Test Isolation:**
     - **Fail-Closed Confirmation Guards:** Any confirmation flag (e.g. `--confirm-drafts`) must
       default-deny and fail closed on all non-affirmative, negative, empty, or malformed `=<value>`
@@ -209,27 +169,6 @@ rules and do not reconstruct them from memory or from this file.
       required variables (e.g. `HOME,WEB_JAM_LLM_TOKEN,WEB_JAM_BACK_URL`); and `--allow-read`
       restricted to the target skill/data directory and specific token file paths (e.g.
       `skills/venue-mining,$HOME/Dropbox/web-jam-llms/web-jam-llm.token`).
-    - **Three-Outcome Fail-Closed Harvesting & Sweeps:** External data sweeps and calendar
-      harvesters must enforce explicit three-outcome logic across all operational phases:
-      - _Cooldown Gates:_ (1) ready -> proceed; (2) locked -> refuse with duration remaining and
-        exit 1; (3) unparseable/error date -> fail closed (treated as locked; requires explicit
-        `--force`).
-      - _Data Sources:_ (1) HTTP 200 + valid JSON -> process; (2) HTTP non-200, network failure, or
-        unparseable payload -> fail closed with exit 1; (3) unsupported or missing publication type
-        -> fail closed with exit 1.
-      - _Database Deduplication:_ (1) valid array response -> deduplicate; (2) failure, timeout, or
-        non-array -> refuse and fail closed with exit 1; (3) explicit bypass flag (`--no-dedup`) ->
-        proceed without DB call and clearly label output as not deduplicated.
-    - **Word-Boundary Matching on Entity Classification:** Entity filtering keywords (for
-      non-venues, large halls, or theaters) must enforce word-boundary matching (e.g. whitespace
-      padding or regex word boundaries) rather than naive substring containment (`includes()`),
-      preventing false positives on substrings (e.g. "Macarena Grill" matching "arena"). Shared
-      lists must contain portable, generic keywords (`theater`, `theatre`, `pavilion`,
-      `amphitheater`), while venue-specific multi-word proper nouns live in local registry configs.
-    - **Clean Project Boundary Isolation:** Extraction and mining pipelines scoped to a specific
-      project (such as live acoustic duo booking) must never be overloaded with side-channel lead
-      generation or candidate bifurcations for other brands/ensembles (e.g. TimShermanMusic). Unfit
-      venues (large halls, arenas, theaters) must be dropped cleanly at the boundary.
 22. **Sticky Table Headers with Border Collapse:** When implementing sticky `th` headers in HTML
     tables using `border-collapse: collapse`, native CSS `border-top` / `border-bottom` dividers
     disappear or drop out during vertical scrolling in web engines. Always preserve divider lines by
@@ -304,62 +243,9 @@ rules and do not reconstruct them from memory or from this file.
       `stdout`/`stderr` handles. Executors must cancel streams and escalate termination (SIGTERM ->
       bounded grace period -> SIGKILL). Test suites must include subprocess regressions verifying
       timely return when signals are trapped and pipes are retained.
-29. **Skill Discovery Test Directory Isolation & Strict Helper Ancestry Verification:**
-    - **Isolated Installed-Skill Fixtures in Hook & Integration Tests:** When testing hooks,
-      scripts, or CLIs that discover installed skills from default user or plugin directories (such
-      as `~/.gemini/config/plugins/...` or `~/.gemini/skills`), test suites must never depend on the
-      presence of skills in the ambient developer environment or host directories. The discovery
-      mechanism must accept directory overrides via environment variables (e.g.
-      `AGY_PLUGIN_SKILLS_DIR`, `AGY_USER_SKILLS_DIR`), and shell integration/E2E tests must
-      construct isolated temporary skill fixture directories containing mocked `SKILL.md` files so
-      that automated CI environments (such as CircleCI under `/home/circleci`) reliably discover
-      skills without host dependency.
-    - **Strict Helper Ancestry & Structured Creation Record Validation:** In multi-agent
-      conversation hierarchies, permission inheritance or skill-run state propagation across helper
-      agents must establish authentic creation ancestry rather than accepting arbitrary inter-agent
-      traffic or incidental transcript mentions. The child agent's message inbox must strictly
-      verify that the message is a genuine helper creation message (`invoke_subagent`) directed
-      specifically to this helper's conversation ID, rejecting ordinary inter-agent messages
-      (`send_message`), missing or non-string recipients, mismatched recipients, or competing
-      messages claiming conflicting parent IDs. Reciprocally, the parent conversation record must be
-      validated against structured helper-creation results (such as authentic `invoke_subagent` tool
-      execution entries matching recognized creation header formats like
-      `Created the following subagents:` declaring the `conversationId`), strictly refusing loose
-      raw substring containment, generic model entries, assistant examples in planner responses, or
-      unrelated JSON/status responses containing the ID.
-    - **Helper Synthetic Launch Input & Ancestry Traversal:** Real helper transcripts contain the
-      parent's synthetic launch prompt as `source: "USER_EXPLICIT", type: "USER_INPUT"`. Transcript
-      parsers and hook permission evaluators must distinguish a helper's synthetic launch prompt
-      from Josh's own input. When evaluating permission or skill-run inheritance, hooks must follow
-      the verified helper ancestry to the authentic starting conversation rather than prematurely
-      evaluating the helper's synthetic prompt as a direct user command and returning unapproved
-      before consulting verified creation messages and parent ancestry. Test suites must cover the
-      captured authentic helper launch format, including chained helper-of-a-helper ancestry.
-    - **Keep Rejected Helper Ancestry from Authorizing Synthetic Launch Input:** When resolving
-      helper ancestry, evaluators must strictly distinguish a genuine top-level starting
-      conversation (where Josh typed) from rejected or indeterminate helper evidence (e.g. missing
-      recipient, non-string recipient, mismatched recipient, competing senders, or parent records
-      failing reciprocal verification). If helper ancestry is rejected, the evaluator must fail
-      closed to `not_open` (allow without rewriting) and NEVER fall through to evaluate the helper's
-      synthetic launch prompt as user input. Furthermore, helper transcripts must be read with
-      helper mode active (isolating synthetic launch prompts into helper launch metadata and keeping
-      `userMessages` empty). Test suites must include full-handler regressions where the helper's
-      synthetic launch prompt contains a slash command (e.g. `/pr-review`) across every refusal
-      case, verifying that rejected ancestry never rewrites or authorizes commands.
-    - **Preserve Indeterminate Ancestry on Helper Message Read and Parse Failures:** When inspecting
-      a helper's message inbox to discover its parent conversation, reading errors (such as
-      permissions or I/O failures when reading the messages directory or individual message files)
-      and parsing errors (such as malformed or truncated JSON in a message file) must never be
-      silently ignored or collapsed into a genuine starting conversation (`outcome: "none"`). Doing
-      so creates an approval bypass by allowing a helper whose creation message is malformed or
-      unreadable to fall through to direct-user evaluation, where its synthetic launch prompt (e.g.
-      `/pr-review`) would be treated as Josh's approval. Instead, read and parse failures must be
-      preserved and propagated as indeterminate ancestry (`outcome: "indeterminate"` /
-      `cannot_tell`), returning allow without rewriting (`overwrite: undefined`) while strictly
-      preserving the legitimate top-level/no-messages case (where the messages directory does not
-      exist or is empty). Test suites must include unit, full-handler, and E2E regressions covering
-      unreadable message directories, unreadable files, and malformed JSON messages with slash-command
-      launch prompts.
+29. **Helper Ancestry & Skill Discovery Test Isolation:** The helper-ancestry and skill-discovery
+    test-isolation rules for hooks live in [docs/agy-hooks.md](docs/agy-hooks.md) ("Helper ancestry
+    rules"). Read them before changing hook permission or skill-run inheritance.
 30. **First-Match Decision Table Ordering & Reachability Test Coverage:**
     - **Fallback / Catch-All Ordering After Specific Tests:** In top-down decision tables, pattern-matching cascades, or priority-selection rules evaluated under a first-match rule (such as `skills/file-issue/SKILL.md` rule 10 Priority level tests), catch-all or default fallback rows (e.g. "Nothing above fits", "default") must ALWAYS be ordered after all specific condition rows (including "Low" or lower-priority specific conditions). Even if an upstream design document drafts the default above lower levels, the agent must recognize that placing a fallback above specific tests makes subsequent rows unreachable dead rules, and order the fallback last.
     - **Reachability and Order Assertions in Rule Validation:** Unit and validation test suites for decision tables or skill instructions must never rely solely on disjoint `text.includes(...)` substring checks that only verify the presence of isolated rule strings. Tests must explicitly assert relative rule ordering and reachability (e.g. `lowIndex < mediumIndex`), and test suites must include negative regression cases verifying that misordering a fallback above specific tests fails validation.
@@ -416,64 +302,8 @@ rules and do not reconstruct them from memory or from this file.
 
 ## Opening pull requests (all WebJamApps repos)
 
-Finish a coding task by running the shared script — never `gh pr create` directly. This applies
-**however the task was started** (via `/work-issue` or just told to work an issue ad-hoc). Put your
-summary and the **real test output** IN THE PR via the flags — not only in the chat reply:
-
-```
-~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
-  --author "<tool> — <model>" \
-  --summary "<what changed and why>" \
-  --test-plan "<exact commands to verify + expected result>" \
-  --part-of   # include ONLY if the issue must stay open (partial PR / run-log / epic)
-```
-
-`--summary` and `--test-plan` are **required** — the script **refuses to open a PR with an empty or
-placeholder description** (web-jam-tools#77).
-
-`--test-evidence` is **OPTIONAL and normally omitted.** Always run the suites and confirm they pass
-before opening the PR. If included, test evidence must accurately reflect a complete run on the
-current commit — never stale or partial runs. Reserve the flag for evidence CI cannot show: a manual
-reproduction, a `curl` response, or a described screenshot. A PR with no "Test evidence" section is
-correct, and a reviewer must never raise a finding about its absence. It always opens a **draft** PR
-based on **`dev`**, with the issue number derived from the `<lane>/<issue#>-<slug>` branch name (or
-explicit `--issue` flag, which supports full URLs, `OWNER/REPO#N`, or bare `#N`/`N` and formats
-cross-repo closing lines as `Closes OWNER/REPO#N`) and a footer naming the tool + model (hard
-invariants — no flag overrides them). By default the PR closes the issue on merge (`Closes #N` or
-`Closes OWNER/REPO#N`); pass `--part-of` only when the issue must stay open (`Part of #N` or
-`Part of OWNER/REPO#N` for a partial PR, or a standing run-log/epic issue). (`--closes` is a
-deprecated no-op, still accepted.) Josh alone reviews and flips draft → ready. See
-`skills/draft-pr/SKILL.md`.
-
-### PR body formatting (do this every time)
-
-The script drops your `--summary` / `--test-plan` / `--test-evidence` values **verbatim** under
-their headers — it does not reformat them, so professional formatting is the **caller's** job. Fill
-every flag with proper markdown:
-
-- **Summary** → **bullet points**, one change per bullet — never a single run-on sentence.
-- **Shell commands** → a fenced `` ```sh `` code block, never inline prose.
-- **HTML or code** → wrap every `<tag>`, snippet, or symbol in backticks or a fenced block so GitHub
-  renders it literally. Never pass a raw `<sup>35</sup>`-style tag as prose — GitHub renders or
-  swallows it and garbles the body.
-- **Before/after** → add a short before → after snippet when it aids clarity.
-
-Example of a well-formed call (bulleted summary, fenced commands + output):
-
-````
-~/WebJamApps/web-jam-tools/scripts/create-draft-pr.sh \
-  --author "<tool> — <model>" \
-  --summary "- Add X so Y works
-- Refactor Z to stop duplicating W" \
-  --test-plan "Run:
-```sh
-npm test
-```
-Expect: lint + unit green." \
-  --test-evidence "```
-ok | 42 passed | 0 failed
-```"
-````
+Open every PR through the `draft-pr` skill (`skills/draft-pr/SKILL.md`), never `gh pr create`
+directly. It covers the script, its flags and PR body formatting.
 
 ### PR version-bump convention
 
@@ -508,8 +338,7 @@ deno task sast        # Semgrep: static analysis of src/
 
 `audit` and `sast` run via **Docker** (so they're identical locally and in CI) — Docker must be
 available. `audit` bridges Deno's npm deps to a `package-lock.json` (Trivy can't read `deno.lock`);
-JSR deps are not covered. SAST findings are **refactored, not suppressed**. Deploy on merge to
-`main` is added in web-jam-tools#69.
+JSR deps are not covered. SAST findings are **refactored, not suppressed**.
 
 ## Quota & Token Hygiene
 
@@ -519,20 +348,6 @@ JSR deps are not covered. SAST findings are **refactored, not suppressed**. Depl
   **not** decide the default lane for everyday work: that stays a cost decision (Flash bills to
   Google; Sol and Astra bill to Plus; Sonnet and Opus bill to the constrained Anthropic budget), so
   Flash remains the default implementation tier.
-- **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a
-  rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or
-  multi-repo tasks:
-  - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into
-    main turn outputs.
-  - Redirect large multi-line summaries, test plans, and evidence to temporary files in /tmp/
-    (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling
-    `create-draft-pr.sh`.
-  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Haiku`, or a `Flash`
-    subagent at the same level) when operating interactively on `Flash`.
-  - **Handoff on "Go":** Once requirements and implementation steps are aligned interactively on
-    `Flash`, and Josh says go ("go", "proceed", "start"), an agy session on Flash does the work
-    itself or hands it to a subagent at the same level (`invoke_subagent`, model `flash`) for
-    contained execution work (coding, running test suites, branch/PR creation).
   - **Subagent PR Author Accuracy:** When delegating execution tasks down to a subagent, instruct
     the subagent to pass `--author` matching its actual model tier (e.g.
     `--author "Claude Code — Haiku 5.5"` for Haiku subagents) when calling `create-draft-pr.sh`.
@@ -554,71 +369,12 @@ changes. If you cannot read that path, STOP and say so rather than guessing.
 
 ## Production Monitoring
 
-Uptime monitoring for production websites is managed via `deno task monitor:uptime`
-(`src/uptime/cli.ts`) and 24/7 Deno Deploy edge cron `deno task monitor:cron` (`src/uptime/cron.ts`
-using `Deno.cron`). See [docs/uptime-monitoring.md](docs/uptime-monitoring.md) for full guide,
-target list, deployment steps, and verification procedures.
-
-- **Monitored Targets:**
-  - `https://joshandmariamusic.com` (HTTP 200)
-  - `https://www.joshandmariamusic.com` (HTTP 200 / redirect)
-  - `https://web-jam.com` (HTTP 200)
-  - `https://web-jam.com/music` (Content-aware check: HTTP 200 AND presence of music content
-    elements)
-  - `https://collegelutheran.org` (HTTP 200)
-- **Alerting & Credentials:**
-  - Reads `GMAIL_USER` and `GMAIL_APP_PASSWORD` environment variables.
-  - Sends detailed failure alert emails to `joshua.v.sherman@gmail.com` and
-    `chemmariasherman@gmail.com` via Nodemailer on failure.
-  - Silent on success (exits with code 0).
-- **Deno Deploy 24/7 Schedules:**
-  - `Deno.cron("WebJam Production Uptime Check", "*/30 * * * *", ...)` runs every 30 minutes 24/7
-    (silent on success, email on failure).
-  - `Deno.cron("WebJam Production Daily Heartbeat", "0 12 * * *", ...)` runs daily at 8:00 AM EDT
-    (12:00 UTC) sending a self-health confirmation email to `joshua.v.sherman@gmail.com` and
-    `chemmariasherman@gmail.com`.
+Uptime monitoring targets, alerting and schedules: [docs/uptime-monitoring.md](docs/uptime-monitoring.md).
 
 ## Deno Deploy CLI & Runtime Rules
 
-- **Root Directory Positional Argument**: Always pass `.` (workspace root) as the positional root
-  argument to `deno deploy` (e.g. `deno deploy . --config deno.uptime.json --prod`). NEVER pass an
-  individual file path like `src/uptime/cron.ts` as the positional root argument because Deno Deploy
-  will set `/tmp/build/src` as the working directory, isolating it from root project files
-  (`deno.json`, `./monitor.ts`) and causing builds to hang or fail looking for dependencies.
-- **Entrypoint Configuration in Isolated Configs**: Entrypoint and app metadata must be configured
-  inside isolated `deno.<service>.json` config files (e.g. `deno.uptime.json`,
-  `deno.devotional.json`) under
-  `"deploy": { "org": "webjamapps", "app": "...", "entrypoint": "...", "exclude": [...] }` and
-  passed via `--config deno.<service>.json`. Do NOT pass `--entrypoint` to `deno deploy` (without
-  `create`), as `--entrypoint` is only a subcommand flag for `deno deploy create`.
-- **Deno Deploy Dynamic Containers Require `Deno.serve`**: In dynamic mode
-  (`--runtime-mode dynamic`), entrypoint scripts must include a `Deno.serve` listener guarded by
-  `import.meta.main` (e.g.
-  `if (import.meta.main && typeof Deno !== "undefined" && typeof Deno.serve === "function") Deno.serve(...)`).
-  Without `Deno.serve`, scripts containing only `Deno.cron` exit immediately after top-level
-  execution, causing Deno Deploy to report `The revision failed`.
-- **Token Security**: `DENO_DEPLOY_TOKEN` secrets are permanently masked in Deno Console and
-  CircleCI (`xxxxn9p8`). To align local CLI and CircleCI tokens, generate a fresh token in Deno
-  Console (`https://console.deno.com/account/tokens`), export locally
-  (`export DENO_DEPLOY_TOKEN="..."`), and update CircleCI via `circleci envvar create`.
-- **Pre-Push Formatting Check**: ALWAYS run `deno task fmt` AND verify `deno task fmt:check` passes
-  100% green before pushing EVERY commit (including minor test additions, bug fixes, or
-  documentation updates). Pushing without running `deno task fmt` can cause subtle formatting drift
-  (such as trailing newlines or quote style changes) that breaks CircleCI's strict `Format check`
-  gate.
-
-- **Endpoint Test Coverage & Coverage Gate**: When adding or updating HTTP endpoint routes or branch
-  logic in Deno modules (e.g. `src/uptime/cron.ts`), always export testable handler functions (like
-  `handleHttpReq`) and add corresponding unit tests in `test/*.test.ts` covering endpoints and error
-  paths. Uncovered HTTP endpoints lower module line coverage and can cause overall repository
-  coverage to drop below CircleCI's strict 90% line-coverage threshold
-  (`[coverage] FAIL: all-files line coverage < 90% threshold`).
-- **Uptime Test Endpoint Protection & Exact Secret Key Matching**: Test endpoints on the uptime
-  monitoring service (`/test-check` and `/test-heartbeat`) must strictly guard execution against an
-  exact matching `x-test-key` HTTP header configured via `UPTIME_TEST_KEY`. Any missing, empty, or
-  mismatched header, query parameter fallback (`?key=...`), case variation, or execution attempt
-  when `UPTIME_TEST_KEY` is unset or empty must fail closed with HTTP 404 Not Found and perform no
-  action.
+Read the Deno Deploy CLI and runtime rules in [docs/uptime-monitoring.md](docs/uptime-monitoring.md)
+("Deno Deploy CLI & Runtime Rules") before running `deno deploy` or changing a deployed entrypoint.
 
 ## Language & Runtime Standardization
 
@@ -630,45 +386,11 @@ target list, deployment steps, and verification procedures.
   CLI utilities) MUST validate each identifier against a strict safe alphanumeric pattern (e.g.,
   `/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/`) to prevent directory traversal and accidental
   reads/writes/trashes outside the target directory.
-- **Native Issue Field Updates & Issue Creation**: When updating native issue fields or
-  relationships in GitHub:
-  - **Priority Field**: Set via GraphQL mutation
-    `updateIssueFieldValue(input: { issueId, issueField: { fieldId: "IFSS_kgDOADumRA", singleSelectOptionId } })`.
-    Option global node IDs for `WebJamApps`: Urgent (`IFSSO_kgDOAGhNuA`), High (`IFSSO_kgDOAGhNuQ`),
-    Medium (`IFSSO_kgDOAGhNug`), Low (`IFSSO_kgDOAGhNuw`).
-  - **Type Field**: Set via GraphQL mutation `updateIssue(input: { id: issueId, issueTypeId })` with
-    `issueTypeId` resolved from `repository.issueTypes`.
-  - **Parent Issue Link**: Set via GraphQL mutation
-    `addSubIssue(input: { issueId: parentNodeId, subIssueId: childNodeId })`.
-  - **Helper Script**: Always use `scripts/create-issue.ts` (or `deno task create-issue`), which
-    automates creation, labels, milestone, native Type, Priority, parent link, and attribute
-    verification in one place.
-  - **Designed Issues with Paired Manual Steps Become Parent Epics**: When `/design-issue` resolves
-    an existing issue into paired implementation and Josh manual verification tasks, convert the
-    target designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic`
-    `issueTypeId`), file the executable coding work as a child `Task` sub-issue attached under that
-    Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached
-    under that same Epic (natively linked via `blocked_by` dependency to the coding child, without the `Blocked` label).
-  - **Manual Step Issue & Document Title Rule**: Never prefix issue titles or runbook document
-    titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional,
-    action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and
-    responsibility are designated exclusively by the `Josh` label or assignees, never by embedding a
-    personal name in the issue or document title.
 - **Version Scrubbing & Generic Comment Descriptions**: When executing version-migration tasks with
   explicit grep-to-zero requirements (such as removing retired model version strings), ensure all
   decorative occurrences—including header comments, rejection bullet lists, and example command
   strings—describe requirements generically (e.g., "every Flash slug below the 3.7 floor") rather
   than retaining or reintroducing retired version literals in comments.
-- **GitHub CLI `gh pr view --json reviews` Schema**: In GitHub CLI (`gh`), review commit SHAs are
-  located at `.commit.oid` (e.g. `.reviews[].commit.oid`), NOT at a top-level `.commit_id`. When
-  querying reviews via `gh pr view --json reviews`, always extract `.commit.oid` to obtain the
-  commit SHA.
-- **Distinguishing Automated vs. Manual PR Reviews**: When inspecting PR reviews to determine
-  whether an automated review (e.g. `/pr-review`) has already evaluated a PR, do not treat any
-  review at the head SHA as an automated review. Because both human and bot reviews may post under
-  the developer's identity, always filter reviews by their signature header (e.g.,
-  `## PR Review Summary`) to avoid incorrectly skipping automated reviews due to ad-hoc human review
-  comments.
 - **Agent PRs Must Never Auto-Close `Josh`-Labeled Issues**: Issues labeled `Josh` represent manual
   human steps, verification runs, and runbook tasks that no agent can perform or close. Automated
   agent pull requests must never generate `Closes #N` targeting an issue labeled `Josh`. When
@@ -705,19 +427,8 @@ target list, deployment steps, and verification procedures.
   source of truth for `AGENTS.md` (such as the tier order in `docs/ai-team-playbook.md`), point to
   it from `AGENTS.md` rather than restating it there, while preserving required synchronized
   statements in skills (such as `skills/delegate/SKILL.md` and `skills/pr-review/SKILL.md`) where
-  contracts and test suites require the chain. Origin: web-jam-tools#1297 review, which found a
-  restated tier order, a stale exception, and a routing rule contradicting the design.
-- **Audit Execution Order & Conditional Phrasing Alignment**: When updating workflow execution order
-  or precedence (such as deferring status check evaluation to the end of an audit pipeline), audit
-  all downstream checklist items and rules to remove or reconcile stale conditional pre-requisite
-  phrasing (e.g. "When CI is green...") that assumed the earlier evaluation order.
-- **PR Review Findings Scope & Exclusion of Git Mechanics Trivia**: In PR reviews, the
-  `### 🟡 Suggestions` section is strictly reserved for actionable code-quality, design, or test
-  improvements directly tied to the modified code in the diff. Never include process lectures, git
-  mechanics commentary, or speculative workflow heads-ups (such as predicting cross-PR version
-  collisions against other open PR branches). If an actual version collision occurs, it is evaluated
-  deterministically as a real Must Fix when the PR's own version fails to strictly exceed
-  `origin/dev`.
+  contracts and test suites require the chain.
+
 - **Static Analysis & SAST (Semgrep) ReDoS Safety**: In Deno/TypeScript tools, validators, and
   analyzers, avoid dynamic `new RegExp(...)` with runtime variable inputs (e.g.
   `new RegExp(`\\b${escapeRegExp(pattern)}\\b`, "i")`), which triggers Semgrep
@@ -727,8 +438,7 @@ target list, deployment steps, and verification procedures.
 - **Duplicate Pin-Test Locations for the Same Rule**: When a design/issue spec offers a choice
   between "a new test file... or an addition to an existing test file" for a pin test, treat it as
   exclusive-or, not both. Adding the identical `assertStringIncludes` assertions in both a
-  standalone file and an existing suite (as happened on
-  `web-jam-tools#793 "Add a Sized for Sonnet rule to the design-issue skill body"`) doubles
+  standalone file and an existing suite doubles
   maintenance cost for the same coverage with no added protection. Pick exactly one location before
   writing the test.
 - **Bundled Skill Override Identity Verification**: When calculating bundled skill limits or
@@ -746,19 +456,6 @@ target list, deployment steps, and verification procedures.
   blanket `try/catch` blocks that swallow assertion errors. Catch only `Deno.errors.NotFound`, run
   registration assertions outside `try/catch`, and write explicit negative tests against fixtures
   containing forbidden registrations to guarantee that violations actually fail the test suite.
-- **Executable Multi-Agent Runbooks & Accurate Tab Indexing**: When authoring manual verification
-  runbooks targeting multi-agent tmux environments (`scripts/agents.sh`), ensure tab indices match
-  the authoritative script layout (Tab 1: Claude Code, Tab 2: Codex, Tab 3: agy). Provide explicit
-  operational navigation instructions (such as detaching with `Ctrl-b d` or using an outside
-  terminal) after commands that attach to tmux sessions (`agents --restart`) before executing
-  background pane capture or verification checks.
-- **Propose-Then-Apply Backfill CLI Discipline**: When implementing database backfill or bulk
-  tag-classification CLI tools (e.g. `deno task venue-tag:backfill-types`), default to dry-run
-  preview mode displaying a formatted proposal table without database writes. Require an explicit
-  affirmative confirmation flag (`--apply`) evaluating to confirmed only on exact affirmative values
-  (`true`, `yes`, `1`, bare flag) and failing closed on malformed/negative values. Provide an
-  explicit overwrite opt-in (`--overwrite`) so pre-existing values are preserved by default, and
-  fail closed on network or validation errors during patch execution.
 
 ## Batch Email & Outreach Dispatch Safety
 
@@ -780,26 +477,6 @@ target list, deployment steps, and verification procedures.
   `"not explicitly approved"` or `"identity confirmed: no; name+city match failed"` matching
   positive phrases). Candidates with unverified, missing, or negative provenance/identity must fail
   closed with `outreachEligible: false` and require verified source evidence.
-- **Strict Physical Address Validation & Placeholder Rejection**: In candidate verification and
-  ingestion pipelines, never accept bare non-empty strings as valid physical addresses. Address
-  validators must explicitly reject placeholder values (`TBD`, `N/A`, `None`, `Pending`, `Unknown`,
-  `-`), all PO Box variations (including whitespace between initials such as `P. O. Box 42`,
-  `P.O. Box`, `PO Box`, `Post Office Box`), and generic downtown-only locations (including bare
-  `Downtown` and variations with city/state/ZIP suffixes such as `Downtown Roanoke, VA 24011`
-  without physical street numbers/names). Candidates lacking a drivable physical street address must
-  be routed to the skipped pool with reasons reported to the user, and payload builders must fail
-  closed.
-- **No Silent Default Classification in Categorization Pipelines**: When classifying candidates into
-  canonical categories (such as `venueType` under D-78), never silently assign a default category
-  (e.g. `MidRangeCafeBar`) when keyword matching encounters ambiguous, competing, or zero matches
-  without an explicit contextual resolver or configured fallback. Keep ambiguous candidates
-  unresolved (`undefined`) for human review in proposal tables, and ensure payload builders throw
-  rather than silently persisting a default type. Preserve explicit user edits across verification
-  and ingestion cycles.
-- **Batch Proposal Evidence Table Completeness**: When formatting candidate batches for human
-  approval in chat or CLI, the proposal table must always render complete evidence columns
-  (`Address`, `Email Source`, `Website`, `Type`, `Booking Email`, `Phone`, `Status`) by default
-  rather than omitting required evidence in a truncated compact summary.
 - **Agent Skill & Config Test Isolation from Live User Home**: Tests asserting that skills, hooks,
   or configurations install or resolve across agent surfaces (Claude Code, agy, Codex) must never
   read or assert directly against live personal workstation paths (`$HOME/.claude/...`,

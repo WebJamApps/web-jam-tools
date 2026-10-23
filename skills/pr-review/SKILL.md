@@ -623,6 +623,37 @@ This binds the reviewing model AND the session relaying the review to Josh:
 
 The reviewing model reports; it does not apply the fix itself. It names the defect, says plainly that it blocks merge, and the fix goes back to the PR's own lane on the PR's own branch.
 
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+- **GitHub CLI `gh pr view --json reviews` Schema**: In GitHub CLI (`gh`), review commit SHAs are
+  located at `.commit.oid` (e.g. `.reviews[].commit.oid`), NOT at a top-level `.commit_id`. When
+  querying reviews via `gh pr view --json reviews`, always extract `.commit.oid` to obtain the
+  commit SHA.
+
+- **Distinguishing Automated vs. Manual PR Reviews**: When inspecting PR reviews to determine
+  whether an automated review (e.g. `/pr-review`) has already evaluated a PR, do not treat any
+  review at the head SHA as an automated review. Because both human and bot reviews may post under
+  the developer's identity, always filter reviews by their signature header (e.g.,
+  `## PR Review Summary`) to avoid incorrectly skipping automated reviews due to ad-hoc human review
+  comments.
+
+- **Audit Execution Order & Conditional Phrasing Alignment**: When updating workflow execution order
+  or precedence (such as deferring status check evaluation to the end of an audit pipeline), audit
+  all downstream checklist items and rules to remove or reconcile stale conditional pre-requisite
+  phrasing (e.g. "When CI is green...") that assumed the earlier evaluation order.
+
+- **PR Review Findings Scope & Exclusion of Git Mechanics Trivia**: In PR reviews, the
+  `### 🟡 Suggestions` section is strictly reserved for actionable code-quality, design, or test
+  improvements directly tied to the modified code in the diff. Never include process lectures, git
+  mechanics commentary, or speculative workflow heads-ups (such as predicting cross-PR version
+  collisions against other open PR branches). If an actual version collision occurs, it is evaluated
+  deterministically as a real Must Fix when the PR's own version fails to strictly exceed
+  `origin/dev`.
+
+
 ## Description Detail & Triggers
 
 Cross-model PR review pipeline where reviewer tier is never below author tier (Sonnet reviews Flash/Haiku; Flash reviews Haiku; Opus reviews Sonnet/Flash on Josh's per-PR call). Triggered via `/pr-review <Repo>#<pr-num>` or `/pr-review` (auto-detects open candidate PRs). Audits PR diff against issue acceptance criteria, scope, single semver bump, package-lock engine alignment (--ignore-scripts), test evidence integrity, and AGENTS.md guardrails, posting structured feedback via `deno task post-pr-review` (the guarded route to `gh pr review --comment`).

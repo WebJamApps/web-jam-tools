@@ -327,6 +327,32 @@ Every artifact Josh reads — issue **title AND body**, PR **title AND descripti
 
 **Origin (2026-07-29, the milestone migration):** the design moved topics from a native `Area` issue field to Milestones. Opus amended the design via a comment and renamed WebJamApps/web-jam-tools#301, but left the issue BODY still specifying "read the native `Area` field" with `field.Area:` search qualifiers and an acceptance criterion "correctly derives Area from the native Area field". Josh: *"we decided on Milestone this is NOT ACCURATE !"* The body was then rewritten. Same session, same root defect: relying on a supplement instead of correcting the source.
 
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+- **Native Issue Field Updates & Issue Creation**: When updating native issue fields or
+  relationships in GitHub:
+  - **Priority Field**: Set via GraphQL mutation
+    `updateIssueFieldValue(input: { issueId, issueField: { fieldId: "IFSS_kgDOADumRA", singleSelectOptionId } })`.
+    Option global node IDs for `WebJamApps`: Urgent (`IFSSO_kgDOAGhNuA`), High (`IFSSO_kgDOAGhNuQ`),
+    Medium (`IFSSO_kgDOAGhNug`), Low (`IFSSO_kgDOAGhNuw`).
+  - **Type Field**: Set via GraphQL mutation `updateIssue(input: { id: issueId, issueTypeId })` with
+    `issueTypeId` resolved from `repository.issueTypes`.
+  - **Parent Issue Link**: Set via GraphQL mutation
+    `addSubIssue(input: { issueId: parentNodeId, subIssueId: childNodeId })`.
+  - **Helper Script**: Always use `scripts/create-issue.ts` (or `deno task create-issue`), which
+    automates creation, labels, milestone, native Type, Priority, parent link, and attribute
+    verification in one place.
+
+  - **Manual Step Issue & Document Title Rule**: Never prefix issue titles or runbook document
+    titles with personal names (e.g. do NOT name an issue "Josh: ..."). Use professional,
+    action-oriented titles like `Manual verification: ...` or `Verification: ...`. Ownership and
+    responsibility are designated exclusively by the `Josh` label or assignees, never by embedding a
+    personal name in the issue or document title.
+
+
 ## Description Detail & Triggers
 
 File a GitHub issue the WebJamApps way — deliverable-first body shape (`## What this builds`), a deliberately chosen model label, every referenced issue/PR cited as repo + number + title, a duplicate search first, epics closing when children close, native Priority set via MCP, and concrete closeable acceptance criteria (no perpetual trackers). Use this instead of calling `gh issue create` (or the GitHub MCP `issue_write` create path) directly. Triggered when a message opens with a filing verb (file, create, open, draft, make, add, log, raise, write), optionally behind a leading affirmation (yes/yeah/yep/ok/okay/sure, optional comma), optionally behind please/pls or can/could/would/will you (please), and optionally go ahead and, followed by up to three short filler words (a, an, the, new, another, quick, separate, follow-up) and then issue, ticket, bug, or bug report (singular or plural) — for example "file an issue", "please create a new issue", "can you open a ticket", "yes file the new issue", or "file the issues" — or when a task needs a tracking issue instead of just being done inline.
