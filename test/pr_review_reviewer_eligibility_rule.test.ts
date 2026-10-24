@@ -107,6 +107,19 @@ export const WORKED_CONVERSATION_SEQUENCES: readonly WorkedSequence[] = [
     outcome: "ineligible",
   },
   {
+    sequence: "Reviewed → branch rebased → review requested",
+    expectedResult:
+      "The reviewer reviews the whole pull request and says the rebase is why; eligibility covers every commit on it",
+    outcome: "eligible",
+  },
+  {
+    sequence:
+      "Sol writes → another model reviews → Luna fixes → branch rebased → Sol review requested",
+    expectedResult:
+      "Sol does not review; the whole-PR review covers Sol's own commits, so Sol names the eligible reviewer choices",
+    outcome: "ineligible",
+  },
+  {
     sequence: "A commit since the last review has no author the reviewer can establish",
     expectedResult: "Name the commit and ask Josh; do not guess",
     outcome: "undetermined",
@@ -229,9 +242,9 @@ function assertWorkedSequences(skillText: string): void {
   }
 }
 
-Deno.test("skills/pr-review/SKILL.md covers all 19 worked sequences and three eligibility outcomes", async () => {
+Deno.test("skills/pr-review/SKILL.md covers all 21 worked sequences and three eligibility outcomes", async () => {
   const skillText = await Deno.readTextFile(SKILL_MD_PATH);
-  assertEquals(WORKED_CONVERSATION_SEQUENCES.length, 19);
+  assertEquals(WORKED_CONVERSATION_SEQUENCES.length, 21);
 
   const eligibleCount = WORKED_CONVERSATION_SEQUENCES.filter((s) => s.outcome === "eligible")
     .length;
@@ -241,8 +254,8 @@ Deno.test("skills/pr-review/SKILL.md covers all 19 worked sequences and three el
     WORKED_CONVERSATION_SEQUENCES.filter((s) => s.outcome === "undetermined")
       .length;
 
-  assertEquals(eligibleCount, 5);
-  assertEquals(ineligibleCount, 12);
+  assertEquals(eligibleCount, 6);
+  assertEquals(ineligibleCount, 13);
   assertEquals(undeterminedCount, 2);
 
   assertWorkedSequences(skillText);
@@ -268,12 +281,26 @@ Deno.test("skills/pr-review/SKILL.md scopes eligibility, attribution and diff to
       "If a commit in the range is the reviewer's own, it does not review.",
       "If it cannot establish who wrote a commit in the range, it names that commit and asks Josh",
       "use that signed comment to establish the author of those fix commits",
+      "A rebase replays a pull request's commits onto a newer base",
+      "The reviewer does not stop or ask about the range.",
+      "It reviews the whole pull request as it stands against its base",
+      "Eligibility is then judged as for a first review, over the authors of every commit on the pull request.",
     ]
   ) assertStringIncludes(pairing, rule);
   assertStringIncludes(step1, "only automated reviews carrying");
   assertStringIncludes(step1, "the `## PR Review Summary` header set its start");
   assertStringIncludes(step1, "With no earlier automated review, the range is every PR commit.");
   assertStringIncludes(step1, "If the start cannot be established as an ancestor");
+  assertStringIncludes(step1, "the reviewer does not stop or ask about the range");
+  assertStringIncludes(step1, "reviews the whole pull request as it stands against its base");
+  assertFalse(
+    step1.includes("name the missing range evidence and ask Josh"),
+    "Step 1 must not tell the reviewer to ask Josh about the range after a rebase",
+  );
+  assertFalse(
+    skillText.includes("name the missing range evidence and ask Josh"),
+    "skill must not tell the reviewer to ask Josh about the range after a rebase",
+  );
   assertStringIncludes(step1, "For an unknown author, name the commit in the review range.");
   assertStringIncludes(
     step1,
@@ -288,11 +315,11 @@ Deno.test("skills/pr-review/SKILL.md scopes eligibility, attribution and diff to
   );
 });
 
-Deno.test("removing any of the five range cases from a scratch skill copy fails validation", async () => {
+Deno.test("removing any of the seven range cases from a scratch skill copy fails validation", async () => {
   const skillText = await Deno.readTextFile(SKILL_MD_PATH);
   const scratch = await Deno.makeTempFile({ suffix: ".md" });
   try {
-    for (const { sequence, expectedResult } of WORKED_CONVERSATION_SEQUENCES.slice(13, 18)) {
+    for (const { sequence, expectedResult } of WORKED_CONVERSATION_SEQUENCES.slice(13, 20)) {
       const row = `| ${sequence} | ${expectedResult} |`;
       assertStringIncludes(skillText, row);
       await Deno.writeTextFile(scratch, skillText.replace(row, ""));
@@ -302,4 +329,22 @@ Deno.test("removing any of the five range cases from a scratch skill copy fails 
   } finally {
     await Deno.remove(scratch);
   }
+});
+
+Deno.test("skills/pr-review/SKILL.md fails if the skill tells a reviewer to ask Josh about the range after a rebase", async () => {
+  const skillText = await Deno.readTextFile(SKILL_MD_PATH);
+  const step1 = between(skillText, "### Step 1:", "### Step 2:");
+
+  assertFalse(
+    step1.includes("name the missing range evidence and ask Josh"),
+    "skill must not tell reviewer to ask Josh about the range after a rebase",
+  );
+  assertFalse(
+    skillText.includes("name the missing range evidence and ask Josh"),
+    "skill must not tell reviewer to ask Josh about the range after a rebase",
+  );
+  assertStringIncludes(
+    step1,
+    "the reviewer does not stop or ask about the range",
+  );
 });

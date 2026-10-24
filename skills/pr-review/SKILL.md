@@ -77,6 +77,11 @@ Eligibility is judged against the commits a review covers. A re-review covers th
 
 Apply the named-model and reviewer-tier rules to every contributor in that range. Earlier contributions outside it do not disqualify the reviewer. The review states the commit range it covers and that the earlier commits are outside it; the previous review still stands for those earlier commits. If a commit in the range is the reviewer's own, it does not review. If it cannot establish who wrote a commit in the range, it names that commit and asks Josh; it does not guess.
 
+**A pull request rebased after its last review:**
+A rebase replays a pull request's commits onto a newer base, giving each of them a new ID, so the commit the newest automated review covered is no longer an ancestor of the head. The reviewer does not stop or ask about the range. It reviews the whole pull request as it stands against its base, and its review says in one line that the branch was rebased after the review at that commit and that this review therefore covers the whole pull request.
+
+Eligibility is then judged as for a first review, over the authors of every commit on the pull request. A rebase keeps each commit's author, so the models that wrote the work are still the ones named. A reviewer ineligible for the whole pull request says so and names the reviewer choices that are eligible, as it does for any other range. The rebased-away commit stays readable through GitHub, but nothing in this rule depends on it.
+
 **Establishing identity and authorship:**
 Use the active model information supplied by the surface, this conversation's model history, and explicit model-selection statements from Josh. A Sol attribution on an earlier commit does not mean the current reviewer is Sol: use the active session's model and Josh's explicit correction; never infer active identity from the earlier author. Identify contributions in the review range from the conversation and PR attribution, including fix commits. A PR's original author footer alone is insufficient when another model has added fixes. A fix-pr comment lists the commits it pushed and ends with `🤖 Fixed by <tool> — <model>`; use that signed comment to establish the author of those fix commits. On Codex, the established lookup is this session's latest `turn_context.payload.model` in its rollout JSONL, identified by `session_meta.id`. Claude Code and Antigravity use their active model information and conversation history; Josh's explicit identification can resolve a missing model name.
 
@@ -108,6 +113,8 @@ The skill's worked cases cover these concrete sequences and required results:
 | Sol writes → another model reviews → Sol and Luna both fix → Sol review requested | Sol does not review; one commit in the range is its own |
 | Sol writes → no review yet → Luna fixes → Sol review requested | Sol does not review; a first review covers every commit, Sol's included |
 | Sonnet writes → another model reviews → Sol fixes → Flash selected | Refuse because the reviewer ranks below the author of a commit in the range |
+| Reviewed → branch rebased → review requested | The reviewer reviews the whole pull request and says the rebase is why; eligibility covers every commit on it |
+| Sol writes → another model reviews → Luna fixes → branch rebased → Sol review requested | Sol does not review; the whole-PR review covers Sol's own commits, so Sol names the eligible reviewer choices |
 | A commit since the last review has no author the reviewer can establish | Name the commit and ask Josh; do not guess |
 | Contributor identity cannot be established | Explain the missing information and ask Josh; do not guess or delegate automatically |
 
@@ -166,7 +173,11 @@ apply the named-model eligibility rules under "Purpose & Model Pairing" above:
   `last_review_sha` and the current head as `head_sha`; the range is `last_review_sha..head_sha`.
   With no earlier automated review, the range is every PR commit. If the current head is already
   reviewed, post nothing as item 2 requires. If the start cannot be established as an ancestor of
-  the captured head (for example after a rebase), name the missing range evidence and ask Josh.
+  the captured head (for example after a rebase), the reviewer does not stop or ask about the range:
+  it reviews the whole pull request as it stands against its base, states in one line that the branch
+  was rebased after the review at that commit and that this review therefore covers the whole pull
+  request, and judges eligibility as for a first review over the authors of every commit on the pull
+  request.
 - Establish the active named model and all models responsible for implementation and fixes in that range
   (from current surface/session model information, Josh's explicit model selection or correction,
   conversation history, item 1's `commits` list which carries each commit's `authors`, and signed
