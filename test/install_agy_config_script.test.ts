@@ -17,6 +17,8 @@ for (const scenario of ["present", "absent", "unreadable", "source-error"] as co
     try {
       const binDir = `${dir}/.local/bin`;
       await Deno.mkdir(binDir, { recursive: true });
+      // Resolve the configured shell, but never a live Docker/env/service wrapper.
+      await Deno.symlink("/bin/bash", `${binDir}/bash`);
       const recordPath = `${dir}/record.json`;
       // Record only this synthetic environment value, never the inherited environment.
       await Deno.writeTextFile(
@@ -45,7 +47,7 @@ with open(os.environ["RECORD_PATH"], "w") as record:
       const output = await new Deno.Command(launcher.command, {
         args: launcher.args,
         clearEnv: true,
-        env: { HOME: dir, PATH: "/usr/bin:/bin", RECORD_PATH: recordPath },
+        env: { HOME: dir, PATH: binDir, RECORD_PATH: recordPath },
         stdout: "piped",
         stderr: "piped",
       }).output();
