@@ -518,3 +518,31 @@ Every other table is shown in the order the file holds it. A table whose order m
 - Tracking live priority after filing — native Priority field owns it.
 - Archiving or deleting design documents — Josh alone.
 
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+11. **Plan Table Dependency Key Namespacing & Pre-Validation:** In plan filing tools
+    (`deno task design:file-plan` / `src/design-issue/file_plan.ts`), dependency-resolution
+    registries must store 1-based position indices, explicit plan `id`s, issue titles, and external
+    GitHub issue citations in separate lookup namespaces with strict resolution precedence (explicit
+    ID -> 1-based position -> title -> external issue number). Plans must be pre-validated before
+    issue creation to reject ambiguous collisions (such as an explicit `id` conflicting with a
+    different item's position index, duplicate `id`s across items, or duplicate titles across items)
+    so incorrect `blocked_by` edges are never created on GitHub.
+
+  - **Designed Issues with Paired Manual Steps Become Parent Epics**: When `/design-issue` resolves
+    an existing issue into paired implementation and Josh manual verification tasks, convert the
+    target designed issue into native type `Epic` (via GraphQL `updateIssue` with the repo's `Epic`
+    `issueTypeId`), file the executable coding work as a child `Task` sub-issue attached under that
+    Epic, and file the paired `Josh` manual verification task as a child `Task` sub-issue attached
+    under that same Epic (natively linked via `blocked_by` dependency to the coding child, without the `Blocked` label).
+
+- **Executable Multi-Agent Runbooks & Accurate Tab Indexing**: When authoring manual verification
+  runbooks targeting multi-agent tmux environments (`scripts/agents.sh`), ensure tab indices match
+  the authoritative script layout (Tab 1: Claude Code, Tab 2: Codex, Tab 3: agy). Provide explicit
+  operational navigation instructions (such as detaching with `Ctrl-b d` or using an outside
+  terminal) after commands that attach to tmux sessions (`agents --restart`) before executing
+  background pane capture or verification checks.
+

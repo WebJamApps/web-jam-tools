@@ -327,6 +327,67 @@ Locate the associated outreach record for the venue (or target booking cycle) an
 Every field except `phone` is expected; `phone` may be null if not found. The `address`
 and `venueType` fields are mandatory.
 
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+    - **Three-Outcome Fail-Closed Harvesting & Sweeps:** External data sweeps and calendar
+      harvesters must enforce explicit three-outcome logic across all operational phases:
+      - _Cooldown Gates:_ (1) ready -> proceed; (2) locked -> refuse with duration remaining and
+        exit 1; (3) unparseable/error date -> fail closed (treated as locked; requires explicit
+        `--force`).
+      - _Data Sources:_ (1) HTTP 200 + valid JSON -> process; (2) HTTP non-200, network failure, or
+        unparseable payload -> fail closed with exit 1; (3) unsupported or missing publication type
+        -> fail closed with exit 1.
+      - _Database Deduplication:_ (1) valid array response -> deduplicate; (2) failure, timeout, or
+        non-array -> refuse and fail closed with exit 1; (3) explicit bypass flag (`--no-dedup`) ->
+        proceed without DB call and clearly label output as not deduplicated.
+
+    - **Word-Boundary Matching on Entity Classification:** Entity filtering keywords (for
+      non-venues, large halls, or theaters) must enforce word-boundary matching (e.g. whitespace
+      padding or regex word boundaries) rather than naive substring containment (`includes()`),
+      preventing false positives on substrings (e.g. "Macarena Grill" matching "arena"). Shared
+      lists must contain portable, generic keywords (`theater`, `theatre`, `pavilion`,
+      `amphitheater`), while venue-specific multi-word proper nouns live in local registry configs.
+
+    - **Clean Project Boundary Isolation:** Extraction and mining pipelines scoped to a specific
+      project (such as live acoustic duo booking) must never be overloaded with side-channel lead
+      generation or candidate bifurcations for other brands/ensembles (e.g. TimShermanMusic). Unfit
+      venues (large halls, arenas, theaters) must be dropped cleanly at the boundary.
+
+- **Propose-Then-Apply Backfill CLI Discipline**: When implementing database backfill or bulk
+  tag-classification CLI tools (e.g. `deno task venue-tag:backfill-types`), default to dry-run
+  preview mode displaying a formatted proposal table without database writes. Require an explicit
+  affirmative confirmation flag (`--apply`) evaluating to confirmed only on exact affirmative values
+  (`true`, `yes`, `1`, bare flag) and failing closed on malformed/negative values. Provide an
+  explicit overwrite opt-in (`--overwrite`) so pre-existing values are preserved by default, and
+  fail closed on network or validation errors during patch execution.
+
+- **Strict Physical Address Validation & Placeholder Rejection**: In candidate verification and
+  ingestion pipelines, never accept bare non-empty strings as valid physical addresses. Address
+  validators must explicitly reject placeholder values (`TBD`, `N/A`, `None`, `Pending`, `Unknown`,
+  `-`), all PO Box variations (including whitespace between initials such as `P. O. Box 42`,
+  `P.O. Box`, `PO Box`, `Post Office Box`), and generic downtown-only locations (including bare
+  `Downtown` and variations with city/state/ZIP suffixes such as `Downtown Roanoke, VA 24011`
+  without physical street numbers/names). Candidates lacking a drivable physical street address must
+  be routed to the skipped pool with reasons reported to the user, and payload builders must fail
+  closed.
+
+- **No Silent Default Classification in Categorization Pipelines**: When classifying candidates into
+  canonical categories (such as `venueType` under D-78), never silently assign a default category
+  (e.g. `MidRangeCafeBar`) when keyword matching encounters ambiguous, competing, or zero matches
+  without an explicit contextual resolver or configured fallback. Keep ambiguous candidates
+  unresolved (`undefined`) for human review in proposal tables, and ensure payload builders throw
+  rather than silently persisting a default type. Preserve explicit user edits across verification
+  and ingestion cycles.
+
+- **Batch Proposal Evidence Table Completeness**: When formatting candidate batches for human
+  approval in chat or CLI, the proposal table must always render complete evidence columns
+  (`Address`, `Email Source`, `Website`, `Type`, `Booking Email`, `Phone`, `Status`) by default
+  rather than omitting required evidence in a truncated compact summary.
+
+
 ## Description Detail & Triggers
 
 Mine net-new live-music venues for the gig-outreach DB from per-metro local events publications. Three seed modes — metro (seedless sweep), artist (harvest every venue an artist played), venue (verify/enrich one venue, incl. refreshing a DB record). Propose→Josh-approves→create via POST /venue (requires street address for every venue); auto-flip outreachEligible only on a viable booking/general email from a published source (venue site, Google Maps/Business listing, swept publication) — a probed/invented domain flips it only when the page identifies itself as that venue (D-49); NEVER pitches, NEVER scrapes Facebook. Metro registry lives in sources.yaml next to this file; sweep history, cooldowns, publications, coverage areas and exclude keywords live in the backend sweep-history API. Triggered by /venue-mining <metro|artist|venue> <name>, or Josh saying "mine venues", "venue sweep", "find venues in <metro>".

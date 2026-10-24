@@ -449,6 +449,38 @@ Report back:
   "version" (or `deno.json` for web-jam-tools) by hand, once per PR (see the
   `one-semver-bump-per-pr` memory).
 
+## Rules moved from AGENTS.md
+
+These rules apply to this skill's kind of work only, so they live here instead of in the
+always-loaded `AGENTS.md`.
+
+7. **Multi-Repo Dispatch Target Repo Override:** `scripts/handle-agy-tasks.sh` supports
+   `--repo <Name>` and `AGY_TARGET_REPO=<Name>` to dispatch an issue filed in one repository (e.g.
+   `web-jam-tools#505`) against a different target working repository (e.g. `JaMmusic`), setting
+   `REPO_DIR` and worktree paths to that target repo while keeping the branch name derived from the
+   issue.
+
+8. **Non-UI Task Land Opt-Out (`--no-land`):** `scripts/handle-agy-tasks.sh` supports `--no-land` to
+   skip checking the feature branch out into the developer's main repository clone after PR
+   creation, keeping non-UI work (backend, docs, tooling, config) from moving the local checkout
+   away from `dev`.
+
+- **Sliding Window Quota Preservation:** Google Antigravity (`agy`) tracks model token usage on a
+  rolling 5-hour sliding window. To avoid triggering 3+ hour rate limit resets during long or
+  multi-repo tasks:
+  - Keep command outputs compact: avoid printing thousands of lines of raw test logs directly into
+    main turn outputs.
+  - Redirect large multi-line summaries, test plans, and evidence to temporary files in /tmp/
+    (`--summary-file`, `--test-plan-file`, `--test-evidence-file`) when calling
+    `create-draft-pr.sh`.
+  - Delegate mechanical sub-tasks or heavy lookups to cheaper subagents (`Haiku`, or a `Flash`
+    subagent at the same level) when operating interactively on `Flash`.
+  - **Handoff on "Go":** Once requirements and implementation steps are aligned interactively on
+    `Flash`, and Josh says go ("go", "proceed", "start"), an agy session on Flash does the work
+    itself or hands it to a subagent at the same level (`invoke_subagent`, model `flash`) for
+    contained execution work (coding, running test suites, branch/PR creation).
+
+
 ## Description Detail & Triggers
 
 Local dispatch mechanics for handing work to a cheaper tier — the exact commands to hand a frontend/UI task to Flash via agy/Antigravity, and self-contained subagent prompt templates for Haiku/Sonnet/Opus. Does NOT decide which tier a task belongs to (that routing table lives in docs/ai-team-playbook.md, migrating from global CLAUDE.md per web-jam-tools#115) — this skill only fires once a tier is chosen, so the mechanics of the handoff are never skipped. Triggered when a Fable/Opus session is about to do mechanical or contained-coding work itself, or Josh/the session says "delegate" or "hand off".
