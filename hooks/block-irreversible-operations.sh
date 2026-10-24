@@ -6,9 +6,10 @@
 # hooks/lib/check_irreversible_operations.ts (web-jam-tools#524) — this script
 # is a thin wrapper: it extracts the tool call from stdin JSON, hands the raw
 # Bash command to the Deno lib, and turns a BLOCK result into Josh's
-# runnable-command message. The MCP tool_name checks (delete_file,
-# merge_pull_request) stay here since they match a JSON field name directly,
-# not free-form text, so they were never exposed to the heredoc/quoting bug.
+# runnable-command message. The MCP tool_name checks (GitHub operations and
+# Part R's named tools and server-scoped backstop) stay here since they match
+# a JSON field directly, not free-form text, so they were never exposed to
+# the heredoc/quoting bug.
 #
 # SCOPE: this guard only ever sees a Bash tool_input.command string and an
 # MCP tool_name. It does NOT see Write/Edit file writes. Claude Code and Codex
@@ -17,7 +18,7 @@
 set -euo pipefail
 
 input=$(cat)
-tool_name=$(printf '%s' "$input" | jq -r '.tool_name // .toolCall.name // empty' 2>/dev/null || true)
+tool_name=$(printf '%s' "$input" | jq -rs 'select(length == 1) | .[0] | (.tool_name // .toolCall.name) | select(type == "string" and test("^[^[:space:]]+$"))' 2>/dev/null || true)
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .toolCall.args.CommandLine // empty' 2>/dev/null || true)
 
 block() {
@@ -40,6 +41,20 @@ could_not_read() {
   exit 2
 }
 
+block_mcp() {
+  echo "BLOCKED (irreversible operation guard): MCP tool $tool_name" >&2
+  echo "This operation is irreversible and hard-blocked for AI autonomy." >&2
+  echo "Stop and report this refusal to Josh; do not retry through another route." >&2
+  echo "Josh must perform this operation in the service's own interface outside the agent." >&2
+  exit 2
+}
+
+[ -n "$tool_name" ] || could_not_read "guard could not read a nonempty string tool name — failing closed"
+
+# REAPER's local DAW operations are outside this guard's MCP scope. Check
+# its prefix before suffix rules so even midi_delete_file remains exempt.
+[[ "$tool_name" == mcp__reaper__* ]] && exit 0
+
 # MCP tools check (R-24)
 if [[ "$tool_name" =~ delete_file$ ]]; then
   block "GitHub MCP delete_file" "gh api -X DELETE repos/OWNER/REPO/contents/PATH"
@@ -47,6 +62,35 @@ fi
 if [[ "$tool_name" =~ merge_pull_request$ ]]; then
   block "GitHub MCP merge_pull_request" "gh pr merge <PR_NUMBER>"
 fi
+
+# Part R's literal irreversible tools (R-38). Keep these explicit, independently
+# of the backstop, so each named capability has its own control test.
+case "$tool_name" in
+  mcp__google-drive__deleteCalendarEvent|mcp__google-drive__deleteComment|\
+  mcp__google-drive__deleteGoogleSlide|mcp__google-drive__deleteSlideElement|\
+  mcp__google-drive__deleteSheet|mcp__google-drive__deleteRange|\
+  mcp__gmail__delete_email|mcp__gmail__batch_delete_emails|\
+  mcp__gmail__delete_filter|mcp__gmail__delete_label|\
+  mcp__claude_ai_Gmail__delete_label)
+    block_mcp
+    ;;
+esac
+
+case "$tool_name" in
+  mcp__google-drive__deleteItem)
+    # Drive deleteItem is recoverable Trash and remains in the permission
+    # layer's ask tier (R-39 / D-30).
+    ;;
+  mcp__google-drive__*|mcp__gmail__*|mcp__claude_ai_Gmail__*|\
+  mcp__claude_ai_Google_Drive__*|mcp__claude_ai_Dropbox__*)
+    # Strip the MCP and server prefixes; inspect the tool name, not its arguments.
+    mcp_tool="${tool_name#*__}"
+    mcp_tool="${mcp_tool#*__}"
+    case "${mcp_tool,,}" in
+      *delete*|*destroy*|*remove*|*purge*|*wipe*) block_mcp ;;
+    esac
+    ;;
+esac
 
 if [ -n "$cmd" ]; then
   HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
