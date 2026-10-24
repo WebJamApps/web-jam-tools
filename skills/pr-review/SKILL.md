@@ -650,8 +650,8 @@ always-loaded `AGENTS.md`.
   improvements directly tied to the modified code in the diff. Never include process lectures, git
   mechanics commentary, or speculative workflow heads-ups (such as predicting cross-PR version
   collisions against other open PR branches). If an actual version collision occurs, it is evaluated
-  deterministically as a real Must Fix when the PR's own version fails to strictly exceed
-  `origin/dev`.
+  deterministically as a Suggestion, not a Must Fix (Step 2 item 5), when the PR's own version fails
+  to strictly exceed `origin/dev`; CircleCI's version-bump gate still blocks the merge.
 
 
 ## Description Detail & Triggers
