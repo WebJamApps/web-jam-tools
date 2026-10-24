@@ -10,6 +10,7 @@ The WebJamApps development workflow relies on multiple AI coding assistants, MCP
 2. **Antigravity CLI (`agy`)** — Google's coding agent CLI (Gemini Flash / Pro), utilized for headless task dispatch and high-efficiency full-stack implementation.
 3. **OpenAI Codex CLI (`codex`)** — OpenAI's terminal-based coding assistant.
 4. **Cockos REAPER DAW (`reaper` & `reaper-update`)** — Digital audio workstation used for music projects, MIDI generation, stem bounces, and live tracking via the Reaper MCP server.
+5. **GitHub MCP (`github-mcp-server`)** — GitHub's released server program, used by agy.
 
 To keep these tools current without having to remember distinct update commands for each ecosystem, a master update script [`scripts/update-all.sh`](../scripts/update-all.sh) is provided.
 
@@ -150,7 +151,7 @@ REAPER is installed to `$REAPER_PREFIX`. Its default is the literal path `/home/
 
 ## Combined Updating with `update-all`
 
-To update all 4 development tools with a single command, use [`scripts/update-all.sh`](../scripts/update-all.sh).
+To update the development tools with a single command, use [`scripts/update-all.sh`](../scripts/update-all.sh).
 
 ### One-Time Setup (Recommended)
 
@@ -183,6 +184,8 @@ The script executes the updates in strict sequential order:
 2. `agy update`
 3. `codex update`
 4. `reaper-update` (resolves `reaper-update` in PATH, falling back to `scripts/reaper-update.sh`)
+5. Install or update `github-mcp-server` from the latest verified Linux release; see the
+   [GitHub MCP launch and update details](agy-hooks.md).
 
 At the conclusion of the run, a summary table is printed:
 
@@ -192,6 +195,7 @@ At the conclusion of the run, a summary table is printed:
 [update-all] agy update:      SUCCESS
 [update-all] codex update:    SUCCESS
 [update-all] reaper-update:   SUCCESS
+[update-all] github-mcp:      SUCCESS
 [update-all] =================================================
 ```
 
