@@ -324,9 +324,6 @@ export function renderDarkHtml(result: BookGigResult): string {
   // Hero Grid Stats
   let heroStatsHtml = "";
   if (result.repliesTracking || result.mode === "replies") {
-    const checked = result.repliesTracking?.checkReplies.checked ??
-      result.repliesTracking?.campaigns.length ?? 0;
-    const matched = result.repliesTracking?.checkReplies.matched ?? 0;
     const pending = result.repliesTracking?.pendingReplies.length ?? 0;
     const totalCampaigns = result.repliesTracking?.campaigns.length ?? 0;
 
@@ -334,10 +331,6 @@ export function renderDarkHtml(result: BookGigResult): string {
       <div class="stat-item">
         <span class="stat-label">Active Campaigns</span>
         <span class="stat-val">${totalCampaigns} tracked</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Replies Matched</span>
-        <span class="stat-val" style="color: var(--badge-green-txt);">${matched} of ${checked} checked</span>
       </div>
       <div class="stat-item">
         <span class="stat-label">Pending Action</span>

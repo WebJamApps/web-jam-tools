@@ -172,13 +172,6 @@ export interface BatchDispatchResult {
   records: unknown[];
 }
 
-export interface CheckRepliesResult {
-  checked: number;
-  matched: number;
-  classified: number;
-  bounced: number;
-}
-
 export interface OutreachSuggestion {
   intent?: string;
   confidence?: number;
@@ -212,7 +205,6 @@ export interface OutreachCampaignRecord {
 }
 
 export interface RepliesTrackingResult {
-  checkReplies: CheckRepliesResult;
   pendingReplies: OutreachCampaignRecord[];
   campaigns: OutreachCampaignRecord[];
   targetWeekend?: TargetWeekend;

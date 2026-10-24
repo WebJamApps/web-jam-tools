@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import type {
   BatchDispatchResult,
-  CheckRepliesResult,
   DraftFingerprintItem,
   EmailTemplate,
   Gate1ApprovalRecord,
@@ -339,42 +338,6 @@ export async function dispatchBatchOutreach(
     lastRemaining = data.remaining;
   }
   return aggregate;
-}
-
-/**
- * Trigger reply scan on Gmail via POST /outreach/check-replies
- */
-export async function checkGmailReplies(
-  options: BackendConfigOptions = {},
-  fetchFn: typeof fetch = fetch,
-): Promise<CheckRepliesResult> {
-  const { baseUrl, token } = await resolveBackendConfig(options);
-  const url = `${baseUrl}/outreach/check-replies`;
-
-  try {
-    const res = await fetchFn(url, {
-      method: "POST",
-      headers: buildHeaders(token),
-      body: "{}",
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      console.warn(`[book-gig] check-replies returned HTTP ${res.status}: ${errText}`);
-      return { checked: 0, matched: 0, classified: 0, bounced: 0 };
-    }
-
-    const data = await res.json();
-    return {
-      checked: data.checked ?? 0,
-      matched: data.matched ?? 0,
-      classified: data.classified ?? 0,
-      bounced: data.bounced ?? 0,
-    };
-  } catch (err) {
-    console.warn(`[book-gig] Error checking replies: ${(err as Error).message}`);
-    return { checked: 0, matched: 0, classified: 0, bounced: 0 };
-  }
 }
 
 /**

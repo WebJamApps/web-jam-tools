@@ -16,7 +16,6 @@
       "src/fix-labels/",
       "src/task-queue/",
       "src/dropbox-link/",
-      "src/outreach-cron/",
       "src/memory-index/",
       "src/devotional/"
     ]

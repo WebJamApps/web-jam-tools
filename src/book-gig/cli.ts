@@ -21,7 +21,6 @@ import { executeVenueHold } from "./cooldown.ts";
 import { Gate2ReviewSession, isExplicitWholeBatchApproval } from "./gate2.ts";
 import {
   BatchDispatchError,
-  checkGmailReplies,
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
   fetchPendingReplies,
@@ -151,7 +150,7 @@ export async function runBookGigCli(
   const parsed = parseBookGigArgs(args);
 
   // -------------------------------------------------------------------------
-  // Mode: Replies & Response Tracking (--replies / --check-replies)
+  // Mode: Replies & Response Tracking (--replies)
   // -------------------------------------------------------------------------
   if (parsed.mode === "replies") {
     console.log(`\n======================================================`);
@@ -166,14 +165,7 @@ export async function runBookGigCli(
     }
     console.log(`------------------------------------------------------\n`);
 
-    // 1. Scan Gmail for incoming replies
-    console.log(`Scanning Gmail inbox for incoming replies to active pitches...`);
-    const checkReplies = await checkGmailReplies({}, fetchFn);
-    console.log(
-      `Reply Scan Completed: ${checkReplies.checked} checked, ${checkReplies.matched} matched (${checkReplies.classified} classified, ${checkReplies.bounced} bounced).`,
-    );
-
-    // 2. Fetch pending replies & active campaigns
+    // 1. Fetch pending replies & active campaigns
     console.log(`Fetching live outreach records and venue metadata...`);
     const [pendingReplies, rawCampaigns, venueMap] = await Promise.all([
       fetchPendingReplies({}, fetchFn),
@@ -234,7 +226,6 @@ export async function runBookGigCli(
       density: { count: 0, isSparse: false },
       pitches: [],
       repliesTracking: {
-        checkReplies,
         pendingReplies: enrichedPending,
         campaigns,
         targetWeekend: parsed.weekend,

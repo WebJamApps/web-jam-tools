@@ -5,7 +5,7 @@ description: Identify eligible venues for target performance weekends, filter by
 
 # book-gig — Target Performance Weekend Booking Outreach
 
-Automate identifying eligible live-music venues, filtering them against Josh & Maria's performance history (+- 2 months gig-spacing), triggering `venue-mining` when target density is low, generating personalized booking pitches adhering to `docs/cross-ai-rules.md` voice rules, recording Gate 1 venue-set approval (`POST /outreach/approval/venue-set` via `--record-gate1`), holding the Gate 2 draft copy review loop and recording content fingerprints (`POST /outreach/approval/draft-fingerprints` via `--record-gate2`), dispatching approved batches via `POST /outreach/batch` (`--send --confirm-drafts`), and tracking live venue responses and AI suggestions (`--replies` / `--check-replies`).
+Automate identifying eligible live-music venues, filtering them against Josh & Maria's performance history (+- 2 months gig-spacing), triggering `venue-mining` when target density is low, generating personalized booking pitches adhering to `docs/cross-ai-rules.md` voice rules, recording Gate 1 venue-set approval (`POST /outreach/approval/venue-set` via `--record-gate1`), holding the Gate 2 draft copy review loop and recording content fingerprints (`POST /outreach/approval/draft-fingerprints` via `--record-gate2`), dispatching approved batches via `POST /outreach/batch` (`--send --confirm-drafts`), and tracking live venue responses and AI suggestions (`--replies`).
 
 ## Invocation
 
@@ -13,7 +13,7 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
 - `/book-gig --record-gate1 "<weekend>" [location] [--venues "id1,id2"] [--skip "id3"] [--approver "Josh"]` — Gate 1 venue-set approval mode (records server-side approval of the target venue set via `POST /outreach/approval/venue-set` once Josh approves the candidate table; authorizes ONLY the venue set and nothing else).
 - `/book-gig --record-gate2 "<weekend>" [location] [--confirm-all] [--tweak-venue "<name>" --custom-body "<text>"] [--approver "Josh"]` — Gate 2 draft copy approval & review loop mode (holds review loop for individual venue tweaks via `--tweak-venue`, updates the HTML review artifact, and records server-side draft fingerprints via `POST /outreach/approval/draft-fingerprints` ONLY upon explicit affirmative whole-batch approval via `--confirm-all` or explicit batch signoff statement; authorizes ONLY draft copy and nothing else).
 - `/book-gig --send "<weekend>" [location] --confirm-drafts [--venues "id1,id2" | --venue "id1"] [--skip "id3"]` — Batch dispatch mode (calls `POST /outreach/batch` to send pitches to approved venues, outputs HTML artifact link, and opens in Chrome; refuses unless BOTH Gate 1 and Gate 2 approval records exist and match, AND `--confirm-drafts` is passed on the command line; `--venue <name|id>` acts as an alias for a single target venue in `--send` mode).
-- `/book-gig --replies [weekend]` — Response tracking mode (scans Gmail for replies via `POST /outreach/check-replies`, displays live campaign status table, outputs HTML artifact link, and opens in Chrome).
+- `/book-gig --replies [weekend]` — Response tracking mode (displays live campaign status table and pending replies, outputs HTML artifact link, and opens in Chrome; replies are recorded through `/handle-gmails`).
 - `/book-gig --link-gig <venue-name>` — Gig linking mode (resolves single venue by exact normalized name, matches unlinked gig, and writes `venueId` via `PATCH /gig/:id` to correct a wrong new-versus-returning badge per D-26).
 - `/book-gig --hold "<venueId|venueName>" --until <YYYY-MM-DD>` — Contact hold mode (sets `resumeBooking` to resume date at UTC midnight via `PATCH /venue/:id`; also accepts `--resume`).
 - `/book-gig --booked-through <YYYY-MM-DD> --venue "<venueId|venueName>"` — Booked-through availability mode (sets `bookedThrough` to target date at UTC 23:59:59.999Z via `PATCH /venue/:id`; accepts `--venue` or `--hold`).
@@ -37,7 +37,7 @@ Automate identifying eligible live-music venues, filtering them against Josh & M
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --venues "id1,id2"` — dispatch only to specific approved candidate venues after reviewing and confirming drafts.
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --venue "Twin Creeks"` — dispatch outreach to a single candidate venue (convenient alias for `--venues`).
   - `deno task book-gig --send "Oct 16-18 2026" "Lynchburg, VA" --confirm-drafts --skip "id3"` — dispatch batch while excluding specific venues.
-  - `deno task book-gig --replies "Oct 16-18 2026"` — check replies and campaign status for target weekend.
+  - `deno task book-gig --replies "Oct 16-18 2026"` — show campaign status for target weekend.
   - `deno task book-gig --replies` — check all active outreach campaigns across all target dates.
   - `deno task book-gig --link-gig "Olde Salem Brewing"` — link matching gig to venue by exact normalized name.
   - `deno task book-gig --hold "Tequila's" --until 2027-01-01` — place contact hold on venue until Jan 1, 2027 (`resumeBooking`).
@@ -67,7 +67,7 @@ graph TD
     K -- "Missing Gate 1, Missing Gate 2, Fingerprint Divergence, or Missing --confirm-drafts" --> K1["REFUSE DISPATCH (Fail Closed)"]
     K -- "Both Gate 1 & Gate 2 Match + CLI --confirm-drafts" --> L["Calls POST /outreach/batch, CCs Josh+Maria, Logs Touches"]
     L --> M["Track Responses (deno task book-gig --replies)"]
-    M --> N["Calls POST /outreach/check-replies & Renders Status Table"]
+    M --> N["Fetches Pending Replies & Renders Status Table"]
 ```
 
 ### 1. Resolve Target Weekend & Location
@@ -165,10 +165,10 @@ Batch outreach dispatch is protected by two distinct, mandatory refusals operati
 - **Strict Prohibition for AI Assistants:** AI assistants on all surfaces (Claude Code and agy/Antigravity) are **STRICTLY PROHIBITED** from executing `--send` based on venue list approval alone, without explicit whole-batch draft approval, or without `--confirm-drafts`.
 - Dispatches pitch emails to candidate booking contacts, CCs Josh and Maria (`joshua.v.sherman@gmail.com`, `chemmariasherman@gmail.com`), initializes active campaigns in MongoDB (`status: 'sent'`), and logs email touches on venue timelines.
 
-### 6. Live Response Tracking (`--replies` / `--check-replies`)
+### 6. Live Response Tracking (`--replies`)
 - Track replies and campaign progression:
   `deno task book-gig --replies [target-weekend]`
-- Calls `POST /outreach/check-replies` on `web-jam-back` to perform Gmail IMAP reply detection.
+- Displays live campaign status table and pending replies without scanning (replies are recorded through `/handle-gmails`).
 - Fetches pending replies (`GET /outreach/replies/pending`) and active campaigns (`GET /outreach`), rendering a status table with live lifecycle badges (`sent`, `replied`, `interested`, `booked`, `not-interested`, `no-response`, `target-filled`), sent dates, and response snippets.
 - Highlights pending AI suggestions for review (`intent`, `confidence`, `suggestedAction`).
 - **Responsive Dark Mode HTML Artifact & First-Party URLs:** The database-served report at `https://www.web-jam.com/outreach/report/<weekend>` (via `POST`/`GET /outreach/report`) is the only durable copy — a second batch for the same weekend reads it back and merges into it. No file is ever written under `~/Dropbox/`. The run also writes the same rendered HTML to a disposable local scratch file purely so it can open immediately in Chrome; that file is never read back. Outputs both the live web-jam.com URL and the local `file://` link in chat / terminal logs, and automatically launches Google Chrome in the background to display the artifact (with `--no-open` supported for headless/CI runs).
