@@ -178,8 +178,8 @@ by any of this.
     "github": {
       "command": "bash",
       "args": [
-        "-lc",
-        "exec docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN=\"$GH_TOKEN\" ghcr.io/github/github-mcp-server stdio"
+        "-c",
+        "set +x; if ! . \"$HOME/.bashrc\" >/dev/null 2>&1; then printf '%s\\n' 'GitHub MCP: token source could not be read.' >&2; exit 1; fi; set +x; if [ -z \"${GH_TOKEN:-}\" ]; then printf '%s\\n' 'GitHub MCP: GH_TOKEN is unavailable.' >&2; exit 1; fi; GITHUB_PERSONAL_ACCESS_TOKEN=\"$GH_TOKEN\" exec \"$HOME/.local/bin/github-mcp-server\" stdio"
       ]
     },
     "gmail": {
@@ -192,6 +192,17 @@ by any of this.
   }
 }
 ```
+
+The GitHub entry runs the released binary at `~/.local/bin/github-mcp-server`, installed and
+updated by `deno task update:all` after REAPER. The updater discovers the latest Linux release,
+verifies its archive against that release's checksums file, then replaces the binary atomically.
+A failed update preserves the installed binary; `agents` still starts on the installed versions.
+
+The launcher explicitly sources `~/.bashrc` with output suppressed and refuses startup if sourcing
+fails or `GH_TOKEN` is empty. It uses `bash -c` so that this checked source is the startup path,
+rather than an implicit login-profile read before the check. The shell receives literal variable
+references in its arguments; the token reaches the server through its environment only. Shell
+tracing is disabled before and after sourcing. No Docker container is involved.
 
 ### Applying it — reproducible from this repo, but Josh's action to take
 

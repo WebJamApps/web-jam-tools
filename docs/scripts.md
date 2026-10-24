@@ -361,12 +361,13 @@ echo '{"model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | scripts/status
 
 ### `update-all.sh`
 
-Master update script that updates the local AI agent CLIs and DAW tooling in sequence:
+Master update script that updates the local AI agent CLIs, DAW tooling and GitHub MCP in sequence:
 
 1. `claude update` (Anthropic Claude Code CLI)
 2. `agy update` (Google Antigravity CLI)
 3. `codex update` (OpenAI Codex CLI)
 4. `reaper-update` (Cockos REAPER digital audio workstation)
+5. `github-mcp-server` (latest Linux release, checked against its release checksums)
 
 See [docs/local-dev-setup.md](local-dev-setup.md) for full developer environment setup and
 installation steps on Linux.
