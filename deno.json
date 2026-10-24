@@ -4,6 +4,8 @@
   "version": "1.56.9",
   "exports": "./src/uptime/cron.ts",
   "tasks": {
+    "check-token-expiry": "deno run --allow-run=gh --allow-env=HOME,PATH,GH_TOKEN,GITHUB_TOKEN,GITHUB_TOKEN_EXPIRY_TEST_HEADERS,GITHUB_TOKEN_EXPIRY_MOCK_FAILURE,GITHUB_TOKEN_EXPIRY_NOW src/github-token/check_expiry.ts",
+    "github-token:check-expiry": "deno run --allow-run=gh --allow-env=HOME,PATH,GH_TOKEN,GITHUB_TOKEN,GITHUB_TOKEN_EXPIRY_TEST_HEADERS,GITHUB_TOKEN_EXPIRY_MOCK_FAILURE,GITHUB_TOKEN_EXPIRY_NOW src/github-token/check_expiry.ts",
     "whoami": "bash -c 'exec deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,HOME --allow-read=.,\"${CODEX_HOME:-$HOME/.codex}/sessions\" --allow-run=bash scripts/whoami.ts'",
     "running-model": "bash -c 'exec deno run --allow-env=CODEX_THREAD_ID,CODEX_HOME,CLAUDE_CODE_SESSION_ID,HOME,AGY_HOOK_RECORD_PATH,AGY_CONVERSATION_ID,AGY_MODEL_NAME,AGY_TRANSCRIPT_PATH --allow-read=.,\"${CODEX_HOME:-$HOME/.codex}/sessions\",\"$HOME/.claude/projects\",\"${AGY_HOOK_RECORD_PATH:-/tmp/agy-hook-invocations.jsonl}\" --allow-run=bash scripts/running-model.ts'",
     "skill-start-check": "deno run --allow-run=tmux,claude,agy,setsid,kill --allow-read=.,skills,/tmp,$HOME/WebJamApps/web-jam-tools,$HOME/.claude/skills,$HOME/.gemini/config/plugins/webjam-tasks/skills --allow-write=/tmp --allow-env=HOME,TMPDIR,PATH,USER scripts/skill-start-check.ts",
