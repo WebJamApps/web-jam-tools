@@ -17,7 +17,7 @@ project directories that live alongside it on the same machine.
 
 - **`docs/`** — system-setup and integration documentation (rclone, Google APIs, etc.)
 - **`scripts/`** — workspace bootstrapping, environment checks, and example scraping/data-prep utilities
-- **`src/`** — Deno TypeScript tools: task-queue (CLI), gig-scraper (Playwright + xlsx), devotional (daily email sender), outreach-cron (cadence automation), dropbox-link (share-link CLI for Setlist play links)
+- **`src/`** — Deno TypeScript tools: task-queue (CLI), gig-scraper (Playwright + xlsx), devotional (daily email sender), dropbox-link (share-link CLI for Setlist play links)
 - **`skills/`** — Claude Code skills (single source of truth; symlinked into `~/.claude/skills`)
 - **`hooks/`** — Claude Code hooks (single source of truth; symlinked into `~/.claude/hooks`, wired into `~/.claude/settings.json` by `scripts/install-hooks.sh` — see [Claude Code hooks](#claude-code-hooks))
 - **`CLAUDE.md` / `GEMINI.md`** — orientation and rules for AI assistants working in the workspace

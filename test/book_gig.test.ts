@@ -45,7 +45,6 @@ import {
 } from "../src/book-gig/gmail.ts";
 import {
   BatchDispatchError,
-  checkGmailReplies,
   DEFAULT_BACKEND_URL,
   dispatchBatchOutreach,
   fetchOutreachCampaigns,
@@ -221,7 +220,7 @@ Deno.test("parseBookGigArgs: splits CLI arguments and extracts --send / --replie
   assertEquals(res4.weekend?.year, 2026);
   assertEquals(res4.location, undefined);
 
-  const res5 = parseBookGigArgs(["--check-replies"]);
+  const res5 = parseBookGigArgs(["--replies"]);
   assertEquals(res5.mode, "replies");
   assertEquals(res5.weekend, undefined);
 
@@ -1299,7 +1298,6 @@ Deno.test("renderDarkHtml: generates responsive Dark Mode HTML with live campaig
     density: { count: 0, isSparse: false },
     pitches: [],
     repliesTracking: {
-      checkReplies: { checked: 2, matched: 1, classified: 1, bounced: 0 },
       pendingReplies: [campaigns[0]],
       campaigns,
     },
@@ -2238,16 +2236,11 @@ Deno.test("runBookGigCli --send: success repeats send calls until remaining is 0
   assertEquals(result.batchDispatch?.requested, 3);
 });
 
-Deno.test("checkGmailReplies, fetchPendingReplies, fetchOutreachCampaigns, and fetchVenueMap: mocked backend API interactions", async () => {
+Deno.test("fetchPendingReplies, fetchOutreachCampaigns, and fetchVenueMap: mocked backend API interactions", async () => {
   const mockFetch: typeof fetch = (url) => {
     const u = String(url);
     if (u.includes("/outreach/check-replies")) {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({ checked: 3, matched: 1, classified: 1, bounced: 0 }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
+      throw new Error("Retired endpoint called: /outreach/check-replies");
     }
     if (u.includes("/outreach/replies/pending")) {
       return Promise.resolve(
@@ -2288,10 +2281,6 @@ Deno.test("checkGmailReplies, fetchPendingReplies, fetchOutreachCampaigns, and f
     }
     return Promise.resolve(new Response("Not found", { status: 404 }));
   };
-
-  const check = await checkGmailReplies({ backendUrl: "https://test.local" }, mockFetch);
-  assertEquals(check.checked, 3);
-  assertEquals(check.matched, 1);
 
   const pending = await fetchPendingReplies({ backendUrl: "https://test.local" }, mockFetch);
   assertEquals(pending.length, 1);
@@ -2430,12 +2419,7 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
       );
     }
     if (u.includes("/outreach/check-replies")) {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({ checked: 1, matched: 1, classified: 1, bounced: 0 }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
+      throw new Error("Retired endpoint called: /outreach/check-replies");
     }
     if (u.includes("/outreach/replies/pending")) {
       return Promise.resolve(
@@ -2537,7 +2521,6 @@ Deno.test("runBookGigCli: executes in discovery, --send, and --replies modes wit
     mockOpener,
   );
   assertEquals(resultReplies.mode, "replies");
-  assertEquals(resultReplies.repliesTracking?.checkReplies.matched, 1);
   assertEquals(resultReplies.repliesTracking?.campaigns.length, 1);
   assertEquals(resultReplies.repliesTracking?.pendingReplies.length, 1);
 });
@@ -5163,12 +5146,7 @@ Deno.test("runBookGigCli: --replies filters pending replies by weekend and dedup
   const mockFetch: typeof fetch = (input) => {
     const u = String(input);
     if (u.includes("/outreach/check-replies")) {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({ checked: 3, matched: 1, classified: 1, bounced: 0 }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-      );
+      throw new Error("Retired endpoint called: /outreach/check-replies");
     }
     if (u.includes("/outreach/replies/pending")) {
       return Promise.resolve(
@@ -5315,7 +5293,6 @@ Deno.test("renderDarkHtml: places sortable candidates table as first section ben
     density: { count: 1, isSparse: false },
     pitches: [],
     repliesTracking: {
-      checkReplies: { checked: 1, matched: 1, classified: 1, bounced: 0 },
       pendingReplies: [campaigns[0]],
       campaigns,
       targetWeekend: weekend,

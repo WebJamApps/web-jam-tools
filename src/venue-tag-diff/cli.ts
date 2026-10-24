@@ -5,7 +5,7 @@
 //
 // Run: deno task venue-tag:diff <proposal.json>
 //
-// Auth follows the same pattern as src/outreach-cron/advance_cadence.ts: the
+// Auth follows the standard workspace pattern: the
 // AI-agent bearer token is read from the WEB_JAM_LLM_TOKEN environment
 // variable, never from a file and never printed. The backend base URL
 // defaults to production and can be overridden via WEB_JAM_BACK_URL.
