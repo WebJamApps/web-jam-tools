@@ -77,6 +77,11 @@ Eligibility is judged against the commits a review covers. A re-review covers th
 
 Apply the named-model and reviewer-tier rules to every contributor in that range. Earlier contributions outside it do not disqualify the reviewer. The review states the commit range it covers and that the earlier commits are outside it; the previous review still stands for those earlier commits. If a commit in the range is the reviewer's own, it does not review. If it cannot establish who wrote a commit in the range, it names that commit and asks Josh; it does not guess.
 
+**A pull request rebased after its last review:**
+A rebase replays a pull request's commits onto a newer base, giving each of them a new ID, so the commit the newest automated review covered is no longer an ancestor of the head. The reviewer does not stop or ask about the range. It reviews the whole pull request as it stands against its base, and its review says in one line that the branch was rebased after the review at that commit and that this review therefore covers the whole pull request.
+
+Eligibility is then judged as for a first review, over the authors of every commit on the pull request. A rebase keeps each commit's author, so the models that wrote the work are still the ones named. A reviewer ineligible for the whole pull request says so and names the reviewer choices that are eligible, as it does for any other range. The rebased-away commit stays readable through GitHub, but nothing in this rule depends on it.
+
 **Establishing identity and authorship:**
 Use the active model information supplied by the surface, this conversation's model history, and explicit model-selection statements from Josh. A Sol attribution on an earlier commit does not mean the current reviewer is Sol: use the active session's model and Josh's explicit correction; never infer active identity from the earlier author. Identify contributions in the review range from the conversation and PR attribution, including fix commits. A PR's original author footer alone is insufficient when another model has added fixes. A fix-pr comment lists the commits it pushed and ends with `🤖 Fixed by <tool> — <model>`; use that signed comment to establish the author of those fix commits. On Codex, the established lookup is this session's latest `turn_context.payload.model` in its rollout JSONL, identified by `session_meta.id`. Claude Code and Antigravity use their active model information and conversation history; Josh's explicit identification can resolve a missing model name.
 
@@ -108,6 +113,8 @@ The skill's worked cases cover these concrete sequences and required results:
 | Sol writes → another model reviews → Sol and Luna both fix → Sol review requested | Sol does not review; one commit in the range is its own |
 | Sol writes → no review yet → Luna fixes → Sol review requested | Sol does not review; a first review covers every commit, Sol's included |
 | Sonnet writes → another model reviews → Sol fixes → Flash selected | Refuse because the reviewer ranks below the author of a commit in the range |
+| Reviewed → branch rebased → review requested | The reviewer reviews the whole pull request and says the rebase is why; eligibility covers every commit on it |
+| Sol writes → another model reviews → Luna fixes → branch rebased → Sol review requested | Sol does not review; the whole-PR review covers Sol's own commits, so Sol names the eligible reviewer choices |
 | A commit since the last review has no author the reviewer can establish | Name the commit and ask Josh; do not guess |
 | Contributor identity cannot be established | Explain the missing information and ask Josh; do not guess or delegate automatically |
 
@@ -166,7 +173,11 @@ apply the named-model eligibility rules under "Purpose & Model Pairing" above:
   `last_review_sha` and the current head as `head_sha`; the range is `last_review_sha..head_sha`.
   With no earlier automated review, the range is every PR commit. If the current head is already
   reviewed, post nothing as item 2 requires. If the start cannot be established as an ancestor of
-  the captured head (for example after a rebase), name the missing range evidence and ask Josh.
+  the captured head (for example after a rebase), the reviewer does not stop or ask about the range:
+  it reviews the whole pull request as it stands against its base, states in one line that the branch
+  was rebased after the review at that commit and that this review therefore covers the whole pull
+  request, and judges eligibility as for a first review over the authors of every commit on the pull
+  request.
 - Establish the active named model and all models responsible for implementation and fixes in that range
   (from current surface/session model information, Josh's explicit model selection or correction,
   conversation history, item 1's `commits` list which carries each commit's `authors`, and signed
@@ -199,7 +210,8 @@ missing, and leave reviewer selection to Josh. Session continuity alone never bl
      ```
    - Compare the commit SHA of the newest automated review (`last_review_sha` from `.commit.oid`) against the PR's current head commit SHA (`head_sha` from `.commits | last | .oid`).
    - If equal (and a prior automated review exists at that SHA), stop and report to Josh that the PR was already reviewed at that SHA with no new commits, and post NO review comment.
-   - If new commits exist after the newest review (or if the PR has no prior automated reviews), proceed when eligible for that range. When re-reviewing after new commits, state the exclusive start SHA and inclusive head SHA and that earlier commits are outside the review; their previous review still stands.
+   - If new commits exist after the newest review and `last_review_sha` is an ancestor of `head_sha`, proceed when eligible for that range (`last_review_sha..head_sha`). When re-reviewing after new commits, state the exclusive start SHA and inclusive head SHA and that earlier commits are outside the review; their previous review still stands.
+   - If `last_review_sha` is not an ancestor of `head_sha` (for example after a rebase), proceed with a whole-PR review against the base branch as established above, stating in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request (without stating an incremental range or excluding earlier commits).
    - **Record `head_sha`** from the query above (e.g. as `HEAD_SHA`) — this is the commit the diff
      fetched in item 4 below reflects, and every finding in this review is composed against it.
      Step 3 passes this same value back to `deno task post-pr-review --head-sha` (web-jam-tools#825)
@@ -221,13 +233,18 @@ missing, and leave reviewer selection to Josh. Session continuity alone never bl
    ```sh
    gh pr diff <pr-num> --repo WebJamApps/<Repo>
    ```
-   For a re-review, fetch the diff for the captured range instead:
+   For an incremental re-review (where `last_review_sha` is an ancestor of `head_sha`), fetch the diff
+   for the captured range instead:
    ```sh
    gh api repos/WebJamApps/<Repo>/compare/<last_review_sha>...<head_sha> -H 'Accept: application/vnd.github.diff'
    ```
    Limit findings and the review verdict to this range. Earlier code may be read as context for
-   changed callers and contracts; it remains outside the review. Step 3 still posts with the
-   captured `head_sha` so a moved branch cannot receive stale findings.
+   changed callers and contracts; it remains outside the review.
+   For a re-review after a rebase (where `last_review_sha` is not an ancestor of `head_sha`), do not
+   fetch the `compare` diff; use the whole-PR diff (`gh pr diff <pr-num>`) so the review evaluates the
+   rebased pull request as it stands against its base branch, and evaluate findings and the review
+   verdict across the whole pull request. Step 3 still posts with the captured `head_sha` so a moved
+   branch cannot receive stale findings.
 5. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
    ```sh
    gh issue view <issue-num> --repo WebJamApps/<Repo>
@@ -406,7 +423,10 @@ afterward.
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem. A 🟡 icon marks a non-blocking finding about the artifact being merged; a 🔵 icon marks a cosmetic PR/issue-body prose nit, which never blocks merge either.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
      - Exception: `Version bump check (PR branches only)` failing (or unresolved) is never listed here — Step 4 item 5's carve-out reports it under Suggestions instead of under `### 🛑 Must Fix Items`, whether it fails alone or alongside another job.
-   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
+   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it.
+     - **Incremental re-review (ancestor case)**: State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review.
+     - **Rebased PR (non-ancestor case)**: State in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request against its base (rather than stating an incremental range or excluding earlier commits).
+     A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
      The **Semver Bump** row is an exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
      The **Guardrails** and **Scope** rows are exceptions too. Guardrails is prefixed 🟡 when its only finding is raw `any` in a test file (Step 2 item 9); Scope is prefixed 🟡 when its only finding is leftover debug output in a test file (Step 2 item 4). Each is prefixed 🛑 when it has any other finding of its own, and ✅ otherwise.

@@ -456,6 +456,15 @@ Read the Deno Deploy CLI and runtime rules in [docs/uptime-monitoring.md](docs/u
   blanket `try/catch` blocks that swallow assertion errors. Catch only `Deno.errors.NotFound`, run
   registration assertions outside `try/catch`, and write explicit negative tests against fixtures
   containing forbidden registrations to guarantee that violations actually fail the test suite.
+- **End-to-End Execution Flow Parity Across Multi-Step Skills**: When adding an alternative
+  execution path or exception branch to an early step of a multi-step skill or pipeline (such as
+  routing rebased PRs to whole-PR review instead of incremental review in `skills/pr-review/SKILL.md`),
+  carry the branch cleanly through all downstream execution stages. Downstream artifact-fetching
+  commands (e.g. diff queries), scoping/filtering constraints, report section instructions (e.g.
+  `Changes Since Last Review`), and range-statement requirements must explicitly distinguish the
+  alternative path from the default path so later steps never execute commands or emit output
+  contradicting the early-step branch. Instruction tests must pin the distinction across both the
+  early branch and each downstream stage.
 
 ## Batch Email & Outreach Dispatch Safety
 
