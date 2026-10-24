@@ -3,12 +3,74 @@
 // Tests for scripts/install-agy-config.sh symlink creation, idempotency,
 // real-file backup preservation, and credential-literal guard.
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { findCredentialLiteral } from "../hooks/lib/detect_credential_literal.ts";
 
 const SCRIPT_PATH = new URL("../scripts/install-agy-config.sh", import.meta.url).pathname;
 const REPO_DIR = new URL("../", import.meta.url).pathname.replace(/\/$/, "");
 const MASTER_CONFIG_PATH = `${REPO_DIR}/agy/config/mcp_config.json`;
+
+for (const scenario of ["present", "absent", "unreadable", "source-error"] as const) {
+  Deno.test(`GitHub MCP launcher keeps canary out of arguments and fails closed: ${scenario}`, async () => {
+    const dir = await Deno.makeTempDir({ prefix: "github-mcp-launch-" });
+    const canary = "synthetic-mcp-canary-not-a-credential";
+    try {
+      const binDir = `${dir}/.local/bin`;
+      await Deno.mkdir(binDir, { recursive: true });
+      const recordPath = `${dir}/record.json`;
+      // Record only this synthetic environment value, never the inherited environment.
+      await Deno.writeTextFile(
+        `${binDir}/github-mcp-server`,
+        `#!/usr/bin/python3
+import json, os, sys
+with open(os.environ["RECORD_PATH"], "w") as record:
+    json.dump({"args": sys.argv, "token": os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN")}, record)
+`,
+      );
+      await Deno.chmod(`${binDir}/github-mcp-server`, 0o755);
+      if (scenario !== "unreadable") {
+        await Deno.writeTextFile(
+          `${dir}/.bashrc`,
+          scenario === "absent"
+            ? "# No token configured\n"
+            : scenario === "source-error"
+            ? `printf '%s' '${canary}' >&2\nreturn 1\n`
+            : `export GH_TOKEN='${canary}'\nset -x\n`,
+        );
+      }
+      const config = JSON.parse(await Deno.readTextFile(MASTER_CONFIG_PATH));
+      const launcher = config.mcpServers.github as { command: string; args: string[] };
+      assertEquals(launcher.command, "bash");
+      assert(!launcher.args.some((arg) => arg.includes(canary)));
+      const output = await new Deno.Command(launcher.command, {
+        args: launcher.args,
+        clearEnv: true,
+        env: { HOME: dir, PATH: "/usr/bin:/bin", RECORD_PATH: recordPath },
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      const printed = new TextDecoder().decode(output.stdout) +
+        new TextDecoder().decode(output.stderr);
+      assert(!printed.includes(canary), "launcher must never print the canary");
+      if (scenario === "present") {
+        assertEquals(output.code, 0, printed);
+        const received = JSON.parse(await Deno.readTextFile(recordPath));
+        assertEquals(received.args, [`${binDir}/github-mcp-server`, "stdio"]);
+        assertEquals(received.token, canary);
+        assert(!received.args.some((arg: string) => arg.includes(canary)));
+      } else {
+        assertEquals(output.code, 1, printed);
+        assertStringIncludes(printed, "GitHub MCP:");
+        await assertRejects(
+          () => Deno.stat(recordPath),
+          Deno.errors.NotFound,
+        );
+      }
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+}
 
 Deno.test("master agy/config/mcp_config.json is valid JSON, contains no credentials, and defines reaper, playwright, github, gmail", async () => {
   const content = await Deno.readTextFile(MASTER_CONFIG_PATH);
