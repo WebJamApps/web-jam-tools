@@ -306,12 +306,74 @@ Deno.test("skills/pr-review/SKILL.md scopes eligibility, attribution and diff to
     step1,
     "state the exclusive start SHA and inclusive head SHA and that earlier commits are outside the review",
   );
+  assertStringIncludes(
+    step1,
+    "For an incremental re-review (where `last_review_sha` is an ancestor of `head_sha`), fetch the diff",
+  );
   assertStringIncludes(step1, "compare/<last_review_sha>...<head_sha>");
   assertStringIncludes(step1, "Limit findings and the review verdict to this range.");
+  assertStringIncludes(
+    step1,
+    "For a re-review after a rebase (where `last_review_sha` is not an ancestor of `head_sha`), do not\n   fetch the `compare` diff; use the whole-PR diff (`gh pr diff <pr-num>`)",
+  );
+  assertStringIncludes(
+    step1,
+    "evaluate findings and the review",
+  );
+  assertStringIncludes(
+    step1,
+    "verdict across the whole pull request",
+  );
   assert(
     step1.indexOf("Establish the review range") <
       step1.indexOf("Stop if the active model contributed"),
     "the range must be determined before the contributor restrictions are applied",
+  );
+});
+
+Deno.test("skills/pr-review/SKILL.md routes rebased PRs through whole-PR diff and review output instead of incremental range", async () => {
+  const skillText = await Deno.readTextFile(SKILL_MD_PATH);
+  const step1 = between(skillText, "### Step 1:", "### Step 2:");
+  const step3 = between(skillText, "### Step 3:", "### Step 4:");
+
+  // Step 1 item 2: Already-reviewed check restricts incremental range to ancestor case
+  assertStringIncludes(
+    step1,
+    "If new commits exist after the newest review and `last_review_sha` is an ancestor of `head_sha`",
+  );
+  assertStringIncludes(
+    step1,
+    "If `last_review_sha` is not an ancestor of `head_sha` (for example after a rebase), proceed with a whole-PR review against the base branch",
+  );
+
+  // Step 1 item 4: Diff fetching routes rebase to whole-PR diff
+  assertStringIncludes(
+    step1,
+    "For an incremental re-review (where `last_review_sha` is an ancestor of `head_sha`), fetch the diff",
+  );
+  assertStringIncludes(
+    step1,
+    "For a re-review after a rebase (where `last_review_sha` is not an ancestor of `head_sha`), do not\n   fetch the `compare` diff; use the whole-PR diff (`gh pr diff <pr-num>`)",
+  );
+  assertStringIncludes(
+    step1,
+    "evaluate findings and the review",
+  );
+  assertStringIncludes(
+    step1,
+    "verdict across the whole pull request",
+  );
+
+  // Step 3: Changes Since Last Review separates incremental ancestor from rebased case
+  assertStringIncludes(step3, "Incremental re-review (ancestor case)");
+  assertStringIncludes(
+    step3,
+    "State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review.",
+  );
+  assertStringIncludes(step3, "Rebased PR (non-ancestor case)");
+  assertStringIncludes(
+    step3,
+    "State in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request against its base (rather than stating an incremental range or excluding earlier commits).",
   );
 });
 

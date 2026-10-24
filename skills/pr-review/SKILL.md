@@ -210,7 +210,8 @@ missing, and leave reviewer selection to Josh. Session continuity alone never bl
      ```
    - Compare the commit SHA of the newest automated review (`last_review_sha` from `.commit.oid`) against the PR's current head commit SHA (`head_sha` from `.commits | last | .oid`).
    - If equal (and a prior automated review exists at that SHA), stop and report to Josh that the PR was already reviewed at that SHA with no new commits, and post NO review comment.
-   - If new commits exist after the newest review (or if the PR has no prior automated reviews), proceed when eligible for that range. When re-reviewing after new commits, state the exclusive start SHA and inclusive head SHA and that earlier commits are outside the review; their previous review still stands.
+   - If new commits exist after the newest review and `last_review_sha` is an ancestor of `head_sha`, proceed when eligible for that range (`last_review_sha..head_sha`). When re-reviewing after new commits, state the exclusive start SHA and inclusive head SHA and that earlier commits are outside the review; their previous review still stands.
+   - If `last_review_sha` is not an ancestor of `head_sha` (for example after a rebase), proceed with a whole-PR review against the base branch as established above, stating in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request (without stating an incremental range or excluding earlier commits).
    - **Record `head_sha`** from the query above (e.g. as `HEAD_SHA`) — this is the commit the diff
      fetched in item 4 below reflects, and every finding in this review is composed against it.
      Step 3 passes this same value back to `deno task post-pr-review --head-sha` (web-jam-tools#825)
@@ -232,13 +233,18 @@ missing, and leave reviewer selection to Josh. Session continuity alone never bl
    ```sh
    gh pr diff <pr-num> --repo WebJamApps/<Repo>
    ```
-   For a re-review, fetch the diff for the captured range instead:
+   For an incremental re-review (where `last_review_sha` is an ancestor of `head_sha`), fetch the diff
+   for the captured range instead:
    ```sh
    gh api repos/WebJamApps/<Repo>/compare/<last_review_sha>...<head_sha> -H 'Accept: application/vnd.github.diff'
    ```
    Limit findings and the review verdict to this range. Earlier code may be read as context for
-   changed callers and contracts; it remains outside the review. Step 3 still posts with the
-   captured `head_sha` so a moved branch cannot receive stale findings.
+   changed callers and contracts; it remains outside the review.
+   For a re-review after a rebase (where `last_review_sha` is not an ancestor of `head_sha`), do not
+   fetch the `compare` diff; use the whole-PR diff (`gh pr diff <pr-num>`) so the review evaluates the
+   rebased pull request as it stands against its base branch, and evaluate findings and the review
+   verdict across the whole pull request. Step 3 still posts with the captured `head_sha` so a moved
+   branch cannot receive stale findings.
 5. If the PR references a GitHub issue (e.g., `Closes #N` or `Part of #N`), fetch the issue description and acceptance criteria:
    ```sh
    gh issue view <issue-num> --repo WebJamApps/<Repo>
@@ -417,7 +423,10 @@ afterward.
    - **Icon meaning**: A 🛑 icon marks an unresolved problem that blocks merge, and nothing else. Narration, context, notes on which commits arrived, and a previously-reported finding that has since been fixed never carry 🛑 — a fixed finding is reported with ✅ (see "Changes Since Last Review" below), because it is no longer a problem. A 🟡 icon marks a non-blocking finding about the artifact being merged; a 🔵 icon marks a cosmetic PR/issue-body prose nit, which never blocks merge either.
    - **Must Fix Items** (`### 🛑 Must Fix Items`): List only unresolved problems that block merge — Snyk security failures, merge conflicts, or blocking bugs still present in the reviewed commit. This initial post never includes CircleCI here; a CircleCI failure (or unresolved-at-cap status) surfaces as a new Must Fix line in Step 4's failure follow-up, posted only when CircleCI does not pass. Prefix each individual must-fix finding line with 🛑. If none, render `### Must Fix Items` with `✅ None` (never render a stop sign for an empty Must Fix section). **Nothing but Must Fix items may appear between the `**🛑 Changes Requested**` verdict line and this heading** — no narration, no delta summary, no commit notes.
      - Exception: `Version bump check (PR branches only)` failing (or unresolved) is never listed here — Step 4 item 5's carve-out reports it under Suggestions instead of under `### 🛑 Must Fix Items`, whether it fails alone or alongside another job.
-   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it. State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review. A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
+   - **Changes Since Last Review** (`### Changes Since Last Review`, re-review only): When this run evaluates what changed since the last review, that narration — including which commits arrived and which previously-reported findings are now fixed — goes in this section, **placed after `### 🛑 Must Fix Items`**, never before it.
+     - **Incremental re-review (ancestor case)**: State `last_review_sha..head_sha` (exclusive start, inclusive end) and that earlier commits are outside this review and retain their previous review.
+     - **Rebased PR (non-ancestor case)**: State in one line that the branch was rebased after the review at `<last_review_sha>` and that this review therefore covers the whole pull request against its base (rather than stating an incremental range or excluding earlier commits).
+     A finding fixed since the last review is reported here with ✅ (e.g. `✅ Fixed: <what was wrong> — <how it was resolved>`), never as a bullet under the red verdict. Omit this section on a first-pass review with no prior automated review to diff against.
    - **Checklist Verification**: Status of mergeability, Snyk audits, scope, semver bump, package-lock engine alignment, test plan, architectural audits, and guardrails. The initial post never carries a CircleCI row, and no later post ever restates this checklist — when CircleCI fails, Step 4's follow-up reports that failure alone rather than reprinting these rows. Place the severity icon (✅ or 🛑) immediately after the bold check label and colon on each line (e.g. `- **Mergeability**: ✅ ...`, `- **Snyk**: ✅ ...`).
      The **Semver Bump** row is an exception to that icon pairing: since a version-bump finding is a Suggestion, not a Must Fix (Step 2 item 5), that row is prefixed 🟡 whenever the version has fallen behind `origin/dev` or was gratuitously double-bumped, and prefixed ✅ otherwise — it is never prefixed with the Must-Fix stop-sign icon.
      The **Guardrails** and **Scope** rows are exceptions too. Guardrails is prefixed 🟡 when its only finding is raw `any` in a test file (Step 2 item 9); Scope is prefixed 🟡 when its only finding is leftover debug output in a test file (Step 2 item 4). Each is prefixed 🛑 when it has any other finding of its own, and ✅ otherwise.
