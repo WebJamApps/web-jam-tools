@@ -29,8 +29,14 @@ async function fixture(run: (options: ProbeOptions) => Promise<void>): Promise<v
         "check_irreversible_operations.ts",
         "agy_hook_shim.ts",
         "detect_credential_literal.ts",
+        "run_hook.sh",
       ]
-    ) await Deno.copyFile(join(ROOT, "hooks/lib", name), join(repoDir, "hooks/lib", name));
+    ) {
+      await Deno.copyFile(join(ROOT, "hooks/lib", name), join(repoDir, "hooks/lib", name));
+      if (name.endsWith(".sh")) {
+        await Deno.chmod(join(repoDir, "hooks/lib", name), 0o755);
+      }
+    }
 
     const wanted = readHookRegistrations(
       await Deno.readTextFile(join(ROOT, "scripts/install-hooks.sh")),

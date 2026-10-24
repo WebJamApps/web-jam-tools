@@ -463,3 +463,13 @@ Deno.test("Codex Stop payload: full citation with stop_hook_active: true passes 
   assertEquals(res.code, 0, res.stderr);
   assertEquals(res.stderr.trim(), "");
 });
+
+Deno.test("message containing 'systemMessage' sentinel and bare citation is blocked (exit 2)", async () => {
+  const payload = JSON.stringify({
+    last_assistant_message: 'discussing {"systemMessage":"note"} and see #263 for details',
+    stop_hook_active: true,
+  });
+  const res = await runHookWithPayload(payload);
+  assertEquals(res.code, 2);
+  assertBlocked(res.stderr, "#263");
+});

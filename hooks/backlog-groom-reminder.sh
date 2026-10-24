@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+"$HOOK_DIR/lib/run_hook.sh" --check-only >/dev/null 2>&1 || true
+
 GROOM_PATH="${BACKLOG_GROOM_PATH:-$HOME/Dropbox/web-jam-llms/backlog-groom-report.md}"
 MAX_AGE="${BACKLOG_GROOM_MAX_AGE_DAYS:-7}"
 

@@ -126,7 +126,7 @@ if [ "$tool_name" = "Bash" ]; then
       target_path="$candidate"
       break
     fi
-  done < <(printf '%s' "$input" | deno run --no-config --allow-read --allow-env=HOME "$HOOK_DIR/lib/bash_write_targets.ts" 2>/dev/null || true)
+  done < <(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate deno run --no-config --allow-read --allow-env=HOME "$HOOK_DIR/lib/bash_write_targets.ts" 2>/dev/null || true)
   if [ -z "$target_path" ]; then
     exit 0
   fi
@@ -140,13 +140,13 @@ elif [ "$tool_name" = "apply_patch" ]; then
 
   patch_paths=()
   parse_error=""
-  parsed_output="$(printf '%s' "$input" | deno run --no-config "$HOOK_DIR/lib/parse_apply_patch.ts" 2>&1)" || parse_error="$parsed_output"
+  parsed_output="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate deno run --no-config "$HOOK_DIR/lib/parse_apply_patch.ts" 2>&1)" || parse_error="$parsed_output"
   while IFS= read -r line; do
     [ -n "$line" ] && patch_paths+=("$line")
   done <<< "$parsed_output"
 
   if [ -n "$parse_error" ] || [ ${#patch_paths[@]} -eq 0 ]; then
-    gate_json="$(printf '%s' "$input" | deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
+    gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval." deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
     decision="$(printf '%s' "$gate_json" | jq -r '.decision // empty' 2>/dev/null || true)"
     if [ "$decision" = "allow" ]; then
       exit 0
@@ -180,8 +180,15 @@ else
   fi
 fi
 
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
 # Step 4: One invocation of opus_gate.ts decides the rest.
-gate_json="$(printf '%s' "$input" | deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
+gate_json="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name opus-delegation-gate --allow-with-note "The Opus delegation gate checker returned no usable decision; proceeding by workflow default. If this is an unapproved Opus repository edit, delegate it or ask Josh for approval." --note-file "$NOTE_FILE" deno run --no-config --allow-read --allow-run=timeout --allow-env --allow-write "$GATE_LIB" 2>/dev/null || true)"
+if [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
+  exit 0
+fi
 decision="$(printf '%s' "$gate_json" | jq -r '.decision // empty' 2>/dev/null || true)"
 kind="$(printf '%s' "$gate_json" | jq -r '.kind // empty' 2>/dev/null || true)"
 why="$(printf '%s' "$gate_json" | jq -r '.why // empty' 2>/dev/null || true)"

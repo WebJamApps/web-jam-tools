@@ -24,7 +24,7 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 [ -z "$cmd" ] && exit 0
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-match=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/detect_credential_literal.ts" 2>/dev/null) || true
+match=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-secret-literals deno run --no-config --allow-env "$HOOK_DIR/lib/detect_credential_literal.ts")
 
 if [ -n "$match" ]; then
   echo "BLOCKED (secret-literal guard): this command contains a credential-shaped literal ($match)." >&2

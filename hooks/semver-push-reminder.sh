@@ -58,10 +58,17 @@ fi
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
 # Strip heredoc BODIES that are consumed as data (INTERPRETER-fed bodies,
 # e.g. `bash <<EOF`, stay in scope — see normalize_command.ts).
 no_heredoc=$(CMD_FOR_PY="$cmd" NORMALIZE_MODE=heredoc-only \
-  deno run --no-config --allow-env "$HOOK_DIR/lib/normalize_command.ts" 2>/dev/null) || true
+  "$HOOK_DIR/lib/run_hook.sh" --group workflow --name semver-push-reminder --note-file "$NOTE_FILE" deno run --no-config --allow-env "$HOOK_DIR/lib/normalize_command.ts" 2>/dev/null) || true
+if [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
+  exit 0
+fi
 [ -z "$no_heredoc" ] && no_heredoc="$cmd"
 
 # Strip quoted-string CONTENTS (both quote styles) so `git push` mentioned

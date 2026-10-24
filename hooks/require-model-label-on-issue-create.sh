@@ -28,8 +28,16 @@ MODEL_LABELS_JSON="$REPO_DIR/skills/fix-labels/model-labels.json"
 
 input=$(cat)
 
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
 status=0
-result=$(printf '%s' "$input" | MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" deno run --no-config --allow-env --allow-read --allow-run=gh,"$REPO_DIR/scripts/create-draft-pr.sh" "$REPO_DIR/hooks/lib/check_model_label_on_issue_create.ts" 2>/dev/null) || status=$?
+result=$(printf '%s' "$input" | MODEL_LABELS_JSON_PATH="$MODEL_LABELS_JSON" REPO_DIR="$REPO_DIR" "$REPO_DIR/hooks/lib/run_hook.sh" --group workflow --name require-model-label-on-issue-create --note-file "$NOTE_FILE" deno run --no-config --allow-env --allow-read --allow-run=gh,"$REPO_DIR/scripts/create-draft-pr.sh" "$REPO_DIR/hooks/lib/check_model_label_on_issue_create.ts" 2>/dev/null) || status=$?
+
+if [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
+  exit 0
+fi
 
 if [ "$status" -ne 0 ]; then
   result="PASS: could not determine issue model-label requirements (checker exited $status); proceeding. Verify the model label, native type, and body before creating or editing an issue."

@@ -89,6 +89,7 @@ for (const literalPath of REGENERATE_PATHS) {
 
       assertEquals(res.code, 0, `expected exit code 0, stderr: ${res.stderr}`);
       assertEquals(res.stderr, "", `expected empty stderr, got: ${res.stderr}`);
+      assertEquals(res.stdout, "", `expected empty stdout, got: ${res.stdout}`);
 
       const contentAfter = await Deno.readTextFile(memoryMdPath);
       assert(
@@ -158,6 +159,7 @@ for (const { name, payload } of NO_ACTION_CASES) {
 
       assertEquals(res.code, 0, `expected exit code 0, stderr: ${res.stderr}`);
       assertEquals(res.stderr, "", `expected empty stderr, got: ${res.stderr}`);
+      assertEquals(res.stdout, "", `expected empty stdout, got: ${res.stdout}`);
 
       const contentAfter = await Deno.readTextFile(memoryMdPath);
       assertEquals(
@@ -192,17 +194,11 @@ Deno.test("generator failure: fails open (proceeds, exits 0) and prints exactly 
     );
 
     assertEquals(res.code, 0, `expected hook to proceed with exit 0, got ${res.code}`);
-    assertEquals(res.stdout, "", "expected empty stdout");
-
-    const lines = res.stderr.trim().split("\n").filter(Boolean);
-    assertEquals(
-      lines.length,
-      1,
-      `expected exactly one warning line in stderr, got: ${JSON.stringify(lines)}`,
-    );
+    const note = JSON.parse(res.stdout);
+    assertEquals(note.hookSpecificOutput.hookEventName, "PostToolUse");
     assertStringIncludes(
-      lines[0],
-      "warning: failed to regenerate memory index",
+      note.hookSpecificOutput.additionalContext,
+      "regenerate-memory-index",
     );
   } finally {
     await Deno.remove(fixtureHome, { recursive: true });

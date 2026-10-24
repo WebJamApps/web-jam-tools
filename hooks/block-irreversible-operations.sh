@@ -53,7 +53,7 @@ if [ -n "$cmd" ]; then
   stderr_file=$(mktemp)
   trap "rm -f '$stderr_file'" EXIT
 
-  if ! result=$(CMD_FOR_PY="$cmd" deno run --no-config --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>"$stderr_file"); then
+  if ! result=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-irreversible-operations deno run --no-config --allow-env "$HOOK_DIR/lib/check_irreversible_operations.ts" 2>"$stderr_file"); then
     could_not_read "guard could not evaluate the command — failing closed: $(cat "$stderr_file")"
   fi
 

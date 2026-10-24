@@ -8,7 +8,7 @@ set -euo pipefail
 
 HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 out=""
-if ! out=$(deno run --no-config --allow-read --allow-env "$HOOK_DIR/lib/check_agy_skill_run.ts"); then
+if ! out=$("$HOOK_DIR/lib/run_hook.sh" --group workflow --name agy-skill-run-hook deno run --no-config --allow-read --allow-env "$HOOK_DIR/lib/check_agy_skill_run.ts"); then
   echo '{"decision":"allow"}'
   exit 0
 fi

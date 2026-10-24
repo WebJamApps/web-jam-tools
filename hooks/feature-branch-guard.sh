@@ -15,10 +15,16 @@ tool_name=$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null || tr
 
 files=()
 if [ "$tool_name" = "apply_patch" ]; then
-  parsed_output="$(printf '%s' "$input" | deno run --no-config "$HOOK_DIR/lib/parse_apply_patch.ts" 2>/dev/null)" || {
+  NOTE_FILE=$(mktemp)
+  trap 'rm -f "$NOTE_FILE"' EXIT
+  parsed_output="$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name feature-branch-guard --note-file "$NOTE_FILE" deno run --no-config "$HOOK_DIR/lib/parse_apply_patch.ts" 2>/dev/null)" || {
     echo "BLOCKED: apply_patch contains no parseable file path (malformed or unrecognized patch text)." >&2
     exit 2
   }
+  if [ -s "$NOTE_FILE" ]; then
+    cat "$NOTE_FILE"
+    exit 0
+  fi
   while IFS= read -r line; do
     [ -n "$line" ] && files+=("$line")
   done <<< "$parsed_output"

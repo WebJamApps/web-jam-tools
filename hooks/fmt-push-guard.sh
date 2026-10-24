@@ -38,17 +38,31 @@ if [ ! -f "$top/deno.json" ]; then
   exit 0  # not a Deno project → allow
 fi
 
-# Check if deno is available
-if ! command -v deno &>/dev/null; then
-  exit 0  # deno not available → allow (can't check anyway)
-fi
+HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Run fmt:check from the repo root
-if ! (cd "$top" && deno task fmt:check 2>&1); then
-  echo "BLOCKED: Formatting issues detected. Fix them before pushing:" >&2
-  echo "  cd '$top' && deno task fmt" >&2
-  echo "(rule: fmt-push-guard)" >&2
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
+
+# Run fmt:check from the repo root through the shared hook runner
+fmt_status=0
+fmt_out=$(cd "$top" && "$HOOK_DIR/lib/run_hook.sh" --group workflow --name fmt-push-guard --event PreToolUse --note-file "$NOTE_FILE" deno eval '
+  const cmd = new Deno.Command("deno", { args: ["task", "fmt:check"], stderr: "piped", stdout: "piped" });
+  const out = await cmd.output();
+  if (out.code === 0) Deno.exit(0);
+  const text = new TextDecoder().decode(out.stderr) + new TextDecoder().decode(out.stdout);
+  if (text.includes("not formatted") || text.includes("Checked")) {
+    console.error("BLOCKED: Formatting issues detected. Fix them before pushing:\n  cd \"" + Deno.cwd() + "\" && deno task fmt\n(rule: fmt-push-guard)");
+    Deno.exit(2);
+  }
+  throw new Error(text || "fmt:check failed");
+' 2>&1) || fmt_status=$?
+
+if [ "$fmt_status" -eq 2 ]; then
+  printf '%s\n' "$fmt_out" >&2
   exit 2
+elif [ -s "$NOTE_FILE" ]; then
+  cat "$NOTE_FILE"
+  exit 0
 fi
 
 exit 0

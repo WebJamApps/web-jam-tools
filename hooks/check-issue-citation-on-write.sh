@@ -9,17 +9,26 @@
 # Fail OPEN on parse errors (workflow guard, D-16, D-20). Exit 2 on bare citation (stderr shown to model).
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"/.. && pwd)"
+HOOK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+REPO_DIR="$(cd "$HOOK_DIR/.." && pwd)"
 CHECKER="$REPO_DIR/hooks/lib/check_issue_citation_on_write.ts"
 
 input=$(cat)
 
-status=0
-result=$(printf '%s' "$input" | deno run --no-config --allow-env --allow-read "$CHECKER" 2>/dev/null) || status=$?
+NOTE_FILE=$(mktemp)
+trap 'rm -f "$NOTE_FILE"' EXIT
 
-if [ "$status" -ne 0 ]; then
-  result="PASS: citation check could not run (checker exited $status); proceeding"
-elif [ -z "$result" ]; then
+result=$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group workflow --name check-issue-citation-on-write --event PreToolUse --note-file "$NOTE_FILE" deno run --no-config --allow-env --allow-read "$CHECKER") || true
+
+if [ -s "$NOTE_FILE" ]; then
+  note_content="$(cat "$NOTE_FILE")"
+  if [ "$note_content" != "__FALLBACK_STDERR__" ]; then
+    printf '%s\n' "$note_content"
+  fi
+  exit 0
+fi
+
+if [ -z "$result" ]; then
   result="PASS: citation check could not run (checker returned no result); proceeding"
 fi
 
