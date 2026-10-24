@@ -24,6 +24,10 @@
 # does not run when the session already exists and the command only attaches.
 # Override the command with AGENTS_UPDATE_CMD.
 #
+# Straight after that, in the same situations, it checks GitHub token expiry (web-jam-tools#1534)
+# and warns from 14 days before expiry. A failed check only warns and never stops the agents
+# from starting. Override the command with AGENTS_CHECK_TOKEN_EXPIRY_CMD.
+#
 # Right after that, in the same situations, it runs scripts/update-scripts.sh in the
 # foreground so the installed hooks and skills are current too. A failed run prints a
 # warning and the agents start anyway; it never changes the exit code. Override the
@@ -97,6 +101,7 @@ CLAUDE_CMD="${AGENTS_CLAUDE_CMD:-claude --settings $CLAUDE_SETTINGS}"
 CODEX_CMD="${AGENTS_CODEX_CMD:-codex -c 'hooks.PermissionRequest=[{matcher=\".*\",hooks=[{type=\"command\",command=\"$HOME/.claude/hooks/agent-alert.sh codex prompt\"}]}]' -c 'notify=[\"$HOME/.claude/hooks/agent-alert.sh\", \"codex\", \"finished\"]'}"
 AGY_CMD="${AGENTS_AGY_CMD:-agy}"
 UPDATE_CMD="${AGENTS_UPDATE_CMD:-$REPO_DIR/scripts/update-all.sh}"
+CHECK_TOKEN_EXPIRY_CMD="${AGENTS_CHECK_TOKEN_EXPIRY_CMD:-deno task --config "$REPO_DIR/deno.json" check-token-expiry}"
 UPDATE_SCRIPTS_CMD="${AGENTS_UPDATE_SCRIPTS_CMD:-$REPO_DIR/scripts/update-scripts.sh}"
 AGY_CONFIG_CMD="${AGENTS_AGY_CONFIG_CMD:-agy -p /config}"
 # agy skips the laptop's login keyring whenever any SSH_* variable is set, so a
@@ -254,6 +259,12 @@ fi
 # A failed update must never stop the agents from starting.
 if ! bash -c "$UPDATE_CMD"; then
   echo "warning: update-all failed; starting the agents on the versions already installed" >&2
+fi
+
+# Check GitHub token expiry right after update-all (not when only attaching, web-jam-tools#1534).
+# A failed check or warning must never stop the agents from starting.
+if ! bash -c "$CHECK_TOKEN_EXPIRY_CMD"; then
+  echo "warning: GitHub token expiry check failed; starting the agents anyway" >&2
 fi
 
 # Update the installed hooks right after the agents (same situations; never blocks startup).

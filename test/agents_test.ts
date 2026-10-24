@@ -29,10 +29,11 @@ async function run(
     args,
     stdout: "piped",
     stderr: "piped",
-    // Default the laptop-window step and agy-config check to stubs so tests stay isolated.
+    // Default the laptop-window step, agy-config check, and token-expiry check to stubs so tests stay isolated.
     env: {
       ...Deno.env.toObject(),
       AGENTS_LAPTOP_WINDOW_CMD: "true",
+      AGENTS_CHECK_TOKEN_EXPIRY_CMD: "true",
       AGENTS_AGY_CONFIG_CMD: "printf 'toolPermission\\trequest-review\\n'",
       ...(env ?? {}),
     },
@@ -534,6 +535,74 @@ Deno.test("agents.sh still creates the session and exits 0, with a warning, when
     assertEquals(has.code, 0);
   });
 });
+
+Deno.test(
+  "agents.sh runs check-token-expiry after update-all and before update-scripts when creating a new session, and not when it only attaches (web-jam-tools#1534)",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const marker = `${tmpDir}/order.txt`;
+      const sessionState = `if tmux -L ${socketName} has-session -t agents 2>/dev/null; ` +
+        `then echo session-existed; else echo no-session-yet; fi`;
+      const env = {
+        TMUX_TMPDIR: tmpDir,
+        AGENTS_CLAUDE_CMD: "sleep 60",
+        AGENTS_CODEX_CMD: "sleep 60",
+        AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_UPDATE_CMD: `echo update-all >> "${marker}"`,
+        AGENTS_CHECK_TOKEN_EXPIRY_CMD:
+          `echo "check-token-expiry $(${sessionState})" >> "${marker}"`,
+        AGENTS_UPDATE_SCRIPTS_CMD: `echo "update-scripts $(${sessionState})" >> "${marker}"`,
+        AGENTS_LAPTOP_WINDOW_CMD: "true",
+      };
+      const res1 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(res1.code, 0, res1.stderr);
+      const expected = [
+        "update-all",
+        "check-token-expiry no-session-yet",
+        "update-scripts no-session-yet",
+      ];
+      assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), expected);
+
+      // Second run only attaches, so check-token-expiry does not run again.
+      const res2 = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], env);
+      assertEquals(res2.code, 0, res2.stderr);
+      assertEquals((await Deno.readTextFile(marker)).trim().split("\n"), expected);
+    });
+  },
+);
+
+Deno.test(
+  "agents.sh starts the agents and exits 0 whatever check-token-expiry reports (web-jam-tools#1534)",
+  async () => {
+    await withThrowawayTmux(async (socketName, tmpDir) => {
+      const res = await run("bash", [AGENTS_SCRIPT, "-L", socketName, "--no-attach"], {
+        TMUX_TMPDIR: tmpDir,
+        AGENTS_CLAUDE_CMD: "sleep 60",
+        AGENTS_CODEX_CMD: "sleep 60",
+        AGENTS_AGY_CMD: "sleep 60",
+        AGENTS_UPDATE_CMD: "true",
+        AGENTS_CHECK_TOKEN_EXPIRY_CMD: "echo 'warning: GitHub token expires soon' >&2; exit 1",
+        AGENTS_UPDATE_SCRIPTS_CMD: "true",
+        AGENTS_LAPTOP_WINDOW_CMD: "true",
+      });
+      assertEquals(res.code, 0, res.stderr);
+      assert(
+        res.stderr.includes("warning: GitHub token expires soon"),
+        `expected check warning in: ${res.stderr}`,
+      );
+      assert(
+        res.stderr.includes(
+          "warning: GitHub token expiry check failed; starting the agents anyway",
+        ),
+        `expected failure warning in: ${res.stderr}`,
+      );
+      const has = await run("tmux", ["-L", socketName, "has-session", "-t", "agents"], {
+        TMUX_TMPDIR: tmpDir,
+      });
+      assertEquals(has.code, 0);
+    });
+  },
+);
 
 // ---- Laptop window over SSH (web-jam-tools#1128) ----
 
