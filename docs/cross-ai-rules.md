@@ -363,6 +363,25 @@ skill.
 - **DESIGN WORK RUNS THROUGH `/design-issue`:** Design work — options, trade-offs, decisions worth
   recording — does not happen in plain chat. The moment a conversation turns into design, invoke
   `/design-issue` and work inside it.
+- **NO ISSUE IS FILED OR ATTACHED TO AN EPIC OUTSIDE `/design-issue`:** A new issue, and an existing
+  issue added to an epic as a child, comes only from a `/design-issue` Gate 2 plan that Josh
+  approved. The one exception is an issue Josh explicitly tells the agent to create in that turn,
+  such as a `Needs Design` placeholder or his own `/file-issue`, and nothing is filed or attached
+  under a placeholder until its design run. New work an agent finds mid-session (a defect, a gap, a
+  follow-up) is reported to Josh with full details and options; the agent never files it, and never
+  steers Josh toward filing it, as a shortcut around the design run. A plan that turns out to be
+  missing a step after filing is a defect in the run, never a reason to file more issues outside it.
+  Origin: Josh, 2026-10-23: "you cannot just file and add issue to epics without running the
+  design-issue skill first, add this as a standing rule, no more churn on issues !"
+- **EVERY DECISION OR QUESTION PUT TO JOSH CARRIES FULL DETAILS AND A RECOMMENDATION:** In any
+  context, not only design runs, every decision or question put to Josh carries: (1) the facts it
+  turns on, checked first, with no "not verified" left that a cheap check can settle; (2) every
+  option, with what it costs, what work it creates and what it risks; (3) the agent's
+  recommendation, last, with its reason. A re-ask counts too: a decision raised again after a block,
+  an interruption or any turn in between is laid out in full again, never as "see above". When
+  several decisions are open, show a short index and then lay out each one in full, one at a time.
+  Origin: Josh, 2026-10-23: "i need full details for any decision/question and your recommendation
+  --- this should be a firm rule!"
 - **MAINTAINABILITY AND NON-DUPLICATION ARE FIRST-ORDER DESIGN CRITERIA — NOT AFTERTHOUGHTS.**
   Every design decision is judged on who has to keep the result in step and what happens when they
   don't. A design that is correct on the day it ships and rots quietly afterwards has failed. Five
@@ -517,8 +536,10 @@ and it lands hardest on exactly the items that got deferred because they were ha
 
 ### Rule 4 — a ruling becomes a tracked issue in the same session
 
-A ruling becomes a tracked issue in the same session. When Josh decides something, file the GitHub
-issue for it before the session ends. Writing it into a design document, a Dropbox record, or agent
+A ruling becomes a tracked issue in the same session. When Josh decides something, the GitHub
+issue for it is filed before the session ends, through a `/design-issue` Gate 2 plan or because
+Josh explicitly tells the agent to create it (see "NO ISSUE IS FILED OR ATTACHED TO AN EPIC OUTSIDE
+`/design-issue`"). Writing it into a design document, a Dropbox record, or agent
 memory is not tracking the work — none of those carry a routing label, none can be dispatched, and
 none can be closed. A decision recorded only in a document surfaces again only if someone happens to
 re-read that document. This applies with particular force when the resulting work is Josh's own
