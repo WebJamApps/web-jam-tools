@@ -544,6 +544,17 @@ export async function runShim(
     recordPath,
   );
 
+  if (
+    targetHookPath.endsWith("/block-irreversible-operations.sh") &&
+    (typeof payload.toolCall?.name !== "string" || !payload.toolCall.name ||
+      /\s/.test(payload.toolCall.name))
+  ) {
+    // An unreadable name cannot establish a matcher non-match. Let the safety
+    // hook emit its own refusal and remedy, without trusting a conflicting
+    // Claude-shaped tool_name that may also be present in the agy payload.
+    return await invokeTargetHook(targetHookPath, { tool_name: "" });
+  }
+
   if (!parsedRaw || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
     return gmailFence
       ? { decision: "deny", reason: "Gmail safety fence could not read the tool payload." }
@@ -585,6 +596,13 @@ export async function runShim(
 
   const { normalized } = normalize(payload, event, transcriptText);
 
+  return await invokeTargetHook(targetHookPath, normalized);
+}
+
+async function invokeTargetHook(
+  targetHookPath: string,
+  payload: NormalizedPayload | { tool_name: string },
+): Promise<AgyVerdict> {
   const cmd = new Deno.Command("bash", {
     args: [targetHookPath],
     stdin: "piped",
@@ -593,7 +611,7 @@ export async function runShim(
   });
   const child = cmd.spawn();
   const writer = child.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(JSON.stringify(normalized)));
+  await writer.write(new TextEncoder().encode(JSON.stringify(payload)));
   await writer.close();
   const { code, stdout, stderr } = await child.output();
   return translateVerdict(

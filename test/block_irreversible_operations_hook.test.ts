@@ -176,6 +176,42 @@ Deno.test("Part R tool names also evaluate from native agy payloads", async () =
   }
 });
 
+for (
+  const input of [
+    "not JSON",
+    "null",
+    "[]",
+    "{}",
+    '{"toolCall":{"args":{}}}',
+    ...[
+      null,
+      "",
+      "   ",
+      42,
+      false,
+      [],
+      {},
+      "Bash\n",
+      "mcp__gmail__purge_thread\n",
+      "Bash\nmcp__gmail__purge_thread",
+    ].map((name) => JSON.stringify({ toolCall: { name, args: {} } })),
+    '{"tool_name":"Bash","toolCall":{"args":{}}}',
+    '{"toolCall":{"name":"Bash"}}\n{"toolCall":{"name":"mcp__gmail__purge_thread"}}',
+  ]
+) {
+  Deno.test(`agy unreadable tool name fails closed: ${input}`, async () => {
+    const result = await runPayload(
+      input,
+      [SHIM_PATH, "PreToolUse", btoa("Bash|mcp__.*"), HOOK_PATH],
+    );
+    assertEquals(result.code, 0, result.stderr);
+    const verdict = JSON.parse(result.stdout);
+    assertEquals(verdict.decision, "deny", result.stdout);
+    assertEquals(verdict.reason.includes("could not read a nonempty string tool name"), true);
+    assertEquals(verdict.reason.includes("same guard"), true);
+  });
+}
+
 Deno.test("agy shim translates Part R refusals and preserves exemptions", async () => {
   const cases = [
     ...PART_R_TOOLS.map((tool) => ({ tool, decision: "deny" })),
