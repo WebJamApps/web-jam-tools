@@ -459,6 +459,37 @@ Deno.test("skills/file-issue/SKILL.md item 14 splits both-surfaces acceptance cr
   );
 });
 
+Deno.test("skills/file-issue/SKILL.md item 14 defines the three single-surface exemptions and forbids exempting hooks registered by agy or Codex (web-jam-tools#819)", async () => {
+  const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
+  const text = await Deno.readTextFile(fileIssuePath);
+
+  assert(
+    text.includes("work on a path under `~/.claude/`") ||
+      text.includes("Work on a path under `~/.claude/`"),
+    "skills/file-issue/SKILL.md item 14 must name the ~/.claude/ exemption",
+  );
+  assertStringIncludes(
+    text,
+    "work on a Claude Code settings file",
+  );
+  assertStringIncludes(
+    text,
+    "work on a hook that the installers register on Claude Code alone",
+  );
+  assertStringIncludes(
+    text,
+    "The issue names which of the three made it exempt and, for a hook, shows where it is registered.",
+  );
+  assertStringIncludes(
+    text,
+    "Where a hook is registered cannot be established, it is not exempt (fails closed).",
+  );
+  assertStringIncludes(
+    text,
+    "A hook that agy or Codex also registers is never exempt, whatever its event",
+  );
+});
+
 Deno.test("skills/file-issue/SKILL.md contains the issue titles rule for PM audience, skill/feature prefix, and Epic citation (#869)", async () => {
   const fileIssuePath = `${SKILLS_DIR}file-issue/SKILL.md`;
   const text = await Deno.readTextFile(fileIssuePath);
