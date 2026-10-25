@@ -110,6 +110,34 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
   const settingsDir = await Deno.makeTempDir();
   const settingsPath = `${settingsDir}/settings.json`;
   try {
+    // Start with the old matcher on both surfaces to prove an upgrade replaces it.
+    await Deno.writeTextFile(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{
+            matcher: "Edit|Write",
+            hooks: [{ type: "command", command: "$HOME/.claude/hooks/feature-branch-guard.sh" }],
+          }],
+        },
+      }),
+    );
+    await Deno.writeTextFile(
+      `${settingsDir}/hooks.json`,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [{
+            matcher: ".*",
+            hooks: [{
+              type: "command",
+              command: `$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+                btoa("Edit|Write")
+              } $HOME/.claude/hooks/feature-branch-guard.sh`,
+            }],
+          }],
+        },
+      }),
+    );
     const res = await run("bash", [
       INSTALL_SCRIPT,
       "--hooks-dir",
@@ -256,6 +284,27 @@ Deno.test("install-hooks.sh --hooks-dir + --settings-path writes only inside tho
     const allAgyPreToolUseCmds: string[] = agyHooks.hooks.PreToolUse.flatMap(
       (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((h) => h.command),
     );
+    const featureEntries = settings.hooks.PreToolUse.flatMap(
+      (entry: { matcher: string; hooks: Array<{ command: string }> }) =>
+        entry.hooks.filter((h) => h.command.endsWith("/feature-branch-guard.sh"))
+          .map(() => entry.matcher),
+    );
+    assertEquals(featureEntries, ["Bash|Edit|Write"]);
+    assertEquals(
+      allAgyPreToolUseCmds.filter((c) => c.endsWith("/feature-branch-guard.sh")),
+      [`$HOME/.claude/hooks/agy-hook-shim.sh PreToolUse ${
+        btoa("Bash|Edit|Write")
+      } $HOME/.claude/hooks/feature-branch-guard.sh`],
+    );
+    const check = await run("bash", [
+      INSTALL_SCRIPT,
+      "--hooks-dir",
+      hooksDir,
+      "--settings-path",
+      settingsPath,
+      "--check",
+    ]);
+    assertEquals(check.code, 0, check.stdout + check.stderr);
     const secretLiteralsCmd = allAgyPreToolUseCmds.find((c) =>
       c.includes("block-secret-literals.sh")
     );
