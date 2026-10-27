@@ -12,7 +12,8 @@
 // Claude Code Bash tool call, it never passes through the *installed*
 // PreToolUse hook itself — only through the copy of the script under test.
 
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
+import { checkSecretDumpSideEffects } from "../hooks/lib/check_secret_dump_side_effects.ts";
 
 const SCRIPT_PATH = new URL("../hooks/block-secret-dumps.sh", import.meta.url).pathname;
 
@@ -22,7 +23,10 @@ interface RunResult {
 }
 
 async function runHook(command: string): Promise<RunResult> {
-  const input = JSON.stringify({ tool_input: { command } });
+  return await runPayloadHook(JSON.stringify({ tool_input: { command } }));
+}
+
+async function runPayloadHook(input: string): Promise<RunResult> {
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH],
     stdin: "piped",
@@ -587,4 +591,189 @@ function assertBlocked(stderr: string) {
   if (!stderr.includes("BLOCKED (secret-dump guard)")) {
     throw new Error(`expected BLOCKED message in stderr, got: ${stderr}`);
   }
+}
+
+// Literal cases from the hooks design, "Commands that print secrets as a side effect".
+// Payload data only: no process listing, container query or environment dump is executed.
+const sideEffectCases: Array<[string, number]> = [
+  ["ps aux", 2],
+  ["ps -ef", 2],
+  ["ps -f -p 1234", 2],
+  ["ps -F", 2],
+  ["ps u", 2],
+  ["ps e", 2],
+  ["ps -o args -p 1234", 2],
+  ["ps -o cmd -p 1234", 2],
+  ["ps -o command -p 1234", 2],
+  ["pgrep -fa 'deno (task|test)|docker run'", 2],
+  ["pgrep -a docker", 2],
+  ["pgrep --list-full docker", 2],
+  ["cat /proc/1234/cmdline", 2],
+  ["cat /proc/*/cmdline", 2],
+  ["strings /proc/1234/environ", 2],
+  ["xargs -0 < /proc/1234/environ", 2],
+  ["cat /proc/self/environ", 2],
+  ["tr '\\0' '\\n' < /proc/self/environ", 2],
+  ["cat /proc/thread-self/environ", 2],
+  ["pstree -a", 2],
+  ["pstree --arguments", 2],
+  ["top -c", 2],
+  ["htop -c", 2],
+  ["docker inspect 3f2a", 2],
+  ["docker container inspect 3f2a", 2],
+  ["docker top 3f2a", 2],
+  ["docker ps --no-trunc", 2],
+  ["systemctl status docker", 2],
+  ["set", 2],
+  ["export", 2],
+  ["export -p", 2],
+  ["declare", 2],
+  ["declare -x", 2],
+  ["declare -p", 2],
+  ["declare -px", 2],
+  ["typeset", 2],
+  ["typeset -x", 2],
+  ["typeset -p", 2],
+  ["declare -p GH_TOKEN", 2],
+  ['sh -c "ps aux"', 2],
+  ["echo x | xargs ps -ef", 2],
+  ["bash -c 'export -p'", 2],
+  ["sh -c set", 2],
+  ["pgrep -f docker", 0],
+  ["pgrep -l docker", 0],
+  ["ps -o pid,etime,stat -p 1234", 0],
+  ["kill -0 1234", 0],
+  ["set -euo pipefail", 0],
+  ["set -e", 0],
+  ["set -o pipefail", 0],
+  ["set --", 0],
+  ['export PATH="$PATH:/home/joshua/.local/bin"', 0],
+  ["export FOO=bar", 0],
+  ["declare -a items", 0],
+  ["declare -p PATH", 0],
+  ["compgen -v", 0],
+  ['gh issue create --title "x" --body "never run ps aux or read /proc/1/cmdline"', 0],
+  ['git commit -m "document why ps aux is blocked"', 0],
+];
+
+for (const [command, expected] of sideEffectCases) {
+  Deno.test(`side-effect design row: ${command}`, async () => {
+    assertEquals(
+      checkSecretDumpSideEffects(JSON.stringify({ tool_input: { command } })) !== undefined,
+      expected === 2,
+    );
+    const result = await runHook(command);
+    assertEquals(result.code, expected, result.stderr);
+    if (expected === 2) {
+      assertBlocked(result.stderr);
+      assertStringIncludes(result.stderr, "Safe alternative:");
+      assertStringIncludes(result.stderr, "ps -o pid,etime,stat");
+    }
+  });
+}
+
+const sideEffectRegressions: Array<[string, number]> = [
+  ["ps", 2],
+  ["ps -o pid,args -p 1234", 2],
+  ["ps -o pid -o command", 2],
+  ["ps -o pid -f -p 1234", 2],
+  ["ps -o", 2],
+  ["ps -o pid -p", 2],
+  ["ps -o pid,unknown", 2],
+  ["ps o pid,ppid,etime,etimes,stat,state,comm,user,%cpu,%mem,rss,vsz,tty,start,time -p 1234", 0],
+  ["ps -opid,stat -p1234", 0],
+  ["ps opid,stat -e", 0],
+  ["ps -o pid -o comm --pid 1234", 0],
+  ["FOO=bar env /usr/bin/ps aux", 2],
+  ["echo x | xargs -n 1 /bin/sh -c 'ps aux'", 2],
+  ["bash <<'EOF'\nps aux\nEOF", 2],
+  ["cat <<'EOF'\nps aux\nexport -p\n/proc/1/cmdline\nEOF", 0],
+  ["echo ready # ps aux", 0],
+  ["echo ready\nps aux", 2],
+  ["echo ready; export -p", 2],
+  ["pgrep -alf docker", 2],
+  ["pgrep -- -a", 0],
+  ["pstree -p", 0],
+  ["top -b -n 1", 0],
+  ["htop --help", 0],
+  ["docker ps", 0],
+  ["docker version", 0],
+  ["systemctl is-active docker", 0],
+  ["cat /proc/1234/status", 0],
+  ["cat </proc/1234/environ", 2],
+  ['git commit -m "/proc/1/cmdline"', 0],
+  ['gh issue create --title "x" --body="/proc/1/environ"', 0],
+  ["declare -p MY_API_KEY", 2],
+  ["typeset -p PASSWORD", 2],
+  ["export -p GH_TOKEN", 2],
+  ["export -p PATH", 2],
+  ["declare -x FOO=bar", 0],
+  ["export GH_TOKEN", 0],
+  ["typeset -a items", 0],
+  ["set -- one two", 0],
+  ["", 0],
+  ["sudo ".repeat(30) + "ps aux", 2],
+  ["eval ".repeat(10) + "ps aux", 2],
+];
+
+for (const [command, expected] of sideEffectRegressions) {
+  Deno.test(`side-effect regression: ${command}`, async () => {
+    assertEquals(
+      checkSecretDumpSideEffects(JSON.stringify({ tool_input: { command } })) !== undefined,
+      expected === 2,
+    );
+    const result = await runHook(command);
+    assertEquals(result.code, expected, result.stderr);
+  });
+}
+
+// Both unreadable JSON and unreadable shell text use the design's raw-word fallback.
+for (
+  const word of [
+    "ps",
+    "pgrep",
+    "/proc/",
+    "pstree",
+    "top",
+    "htop",
+    "docker",
+    "systemctl",
+    "declare",
+    "typeset",
+  ]
+) {
+  for (
+    const payload of [
+      `{"tool_input":{"command":"${word}`,
+      JSON.stringify({ tool_input: { command: `${word} "unclosed` } }),
+      JSON.stringify({ tool_input: { command: [word] } }),
+    ]
+  ) {
+    Deno.test(`unreadable dump payload: ${payload}`, async () => {
+      assertStringIncludes(checkSecretDumpSideEffects(payload) ?? "", "could not be read");
+      const result = await runPayloadHook(payload);
+      assertEquals(result.code, 2, result.stderr);
+      assertStringIncludes(result.stderr, "could not be read");
+      assertStringIncludes(result.stderr, "Safe alternative:");
+    });
+  }
+}
+
+for (
+  const payload of [
+    "{broken unrelated payload",
+    "{}",
+    "null",
+    JSON.stringify({ tool_input: { command: null } }),
+    JSON.stringify({ tool_input: { command: 'echo "unclosed' } }),
+    JSON.stringify({ tool_input: { command: 'set "unclosed' } }),
+    JSON.stringify({ tool_input: { command: 'export "unclosed' } }),
+    JSON.stringify({ tool_input: { command: 'echo postscript desktop "unclosed' } }),
+  ]
+) {
+  Deno.test(`unreadable unrelated payload stays allowed: ${payload}`, async () => {
+    assertEquals(checkSecretDumpSideEffects(payload), undefined);
+    const result = await runPayloadHook(payload);
+    assertEquals(result.code, 0, result.stderr);
+  });
 }

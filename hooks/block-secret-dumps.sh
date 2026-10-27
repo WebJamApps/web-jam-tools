@@ -10,6 +10,23 @@
 set -euo pipefail
 
 input=$(cat)
+
+block() {
+  echo "BLOCKED (secret-dump guard): $1" >&2
+  echo "Safe alternative: $2" >&2
+  echo "(rule: feedback-never-dump-secrets-via-config — override by rephrasing to a redacted/targeted form)" >&2
+  exit 2
+}
+
+HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+# Check the original payload before jq can discard an unreadable command. The
+# checker reuses the shared parser; it never executes the supplied command.
+side_effect=$(printf '%s' "$input" | "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-secret-dumps deno run --no-config "$HOOK_DIR/lib/check_secret_dump_side_effects.ts")
+if [ -n "$side_effect" ]; then
+  block "$side_effect" \
+        "pgrep -f <pattern> (PIDs), pgrep -l <pattern> (names), ps -o pid,etime,stat -p <pid>, or kill -0 <pid>; inspect a single non-secret variable with declare -p PATH."
+fi
+
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 [ -z "$cmd" ] && exit 0
 
@@ -43,15 +60,7 @@ cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 # bias to safety, per the issue's guidance.
 # Resolve this hook's REAL directory (it is installed as a symlink into
 # ~/.claude/hooks, so readlink -f is required) to find the shared normalizer.
-HOOK_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 c=$(CMD_FOR_PY="$cmd" "$HOOK_DIR/lib/run_hook.sh" --group safety --name block-secret-dumps deno run --no-config --allow-env "$HOOK_DIR/lib/normalize_command.ts")
-
-block() {
-  echo "BLOCKED (secret-dump guard): $1" >&2
-  echo "Safe alternative: $2" >&2
-  echo "(rule: feedback-never-dump-secrets-via-config — override by rephrasing to a redacted/targeted form)" >&2
-  exit 2
-}
 
 # rclone config show/dump prints the OAuth access + refresh token
 if printf '%s' "$c" | grep -Eq 'rclone +config +(show|dump)'; then
