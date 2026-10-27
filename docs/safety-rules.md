@@ -10,6 +10,7 @@ These rules apply across all repositories and agent surfaces (including agy and 
 - No AI deletes or force-pushes a remote branch without an explicit imperative from Josh naming that branch or the pull request it belongs to.
 - Plain `--force` is banned outright. `--force-with-lease` is gated and requires explicit interactive confirmation.
 - The fact that a pull request is merged does not authorize deleting any branch.
+- For all WebJamApps branch pushes, use `deno task --config ~/WebJamApps/web-jam-tools/deno.json push --repo-dir "$PWD"` from the target worktree. Never invoke `git push` directly. For force-with-lease, Josh must answer the push task's interactive prompt; never answer it on his behalf.
 
 ## 3. No Real Outreach, Spending, or New Connections Without Approval
 - Never send real outreach emails or contact venues, churches, or third parties directly; all outreach is draft-only for Josh's review (batch dispatch carve-out in `/book-gig` requires dual Gate 1 and Gate 2 server approvals).
