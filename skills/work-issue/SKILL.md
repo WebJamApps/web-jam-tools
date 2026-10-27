@@ -80,6 +80,10 @@ An issue `<Repo>#<num>` is **startable** when it passes all four checks below:
      gh pr list --repo WebJamApps/<Repo> --state open --json headRefName,body,reviews,commits,statusCheckRollup \
        --jq '.[] | select((.body // "") | test("(?i)(closes|part of)\\s+(?:(?:WebJamApps/)?<Repo>)?#<num>([^0-9]|$)"))'
      ```
+   - **Repair missing issue visibility first**: For an existing implementation PR, apply
+     [Visible implementation PR links](../../docs/cross-ai-rules.md#visible-implementation-pr-links)
+     before reporting that the issue is already in flight or resuming fixes. Repair the issue body
+     link and verify it by reading the issue back; report an unsuccessful repair as incomplete.
    - **Fix-bucket resume carve-out**: If an OPEN PR exists for this issue, check whether it belongs to the **fix bucket** — having changes requested (one or more Must Fix items in its current automated review) or failing CI checks (`statusCheckRollup` has failures/errors). If so, the skill proceeds in **resume mode** rather than stopping:
      - No new branch is cut off `dev`.
      - It relies on the resume mechanism in `scripts/handle-agy-tasks.sh` (which auto-detects an existing branch or open PR for the issue and resumes the PR's head branch).
@@ -382,6 +386,10 @@ When an issue's deliverables are strictly external documents (such as manual ver
    on merge (`Closes #N`); pass `--part-of` ONLY when the issue must stay open (`Part of #N`
    for a partial PR, or a standing run-log/epic issue). (`--closes` is a deprecated no-op,
    still accepted.) Never run `gh pr create` directly. Josh reviews the diff and flips the draft → ready on GitHub.
+
+Before reporting a newly created PR complete, finish
+[Visible implementation PR links](../../docs/cross-ai-rules.md#visible-implementation-pr-links)
+as part of the draft-PR workflow.
 
 ## Unattended Codex launches
 

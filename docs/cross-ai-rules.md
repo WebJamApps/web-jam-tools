@@ -448,6 +448,32 @@ skill.
   merge, it should always remain open so we can install the hook and/or confirm the hook is working,
   then the issue gets closed manually"_.
 
+## Visible implementation PR links
+
+**EVERY ISSUE WITH AN IMPLEMENTATION PR MUST NAME THAT PR NEAR THE TOP OF ITS BODY.**
+The agent creating or resuming the PR owns this step on Claude Code, agy/Antigravity and Codex.
+Josh must be able to open an issue and immediately see that implementation already exists, without
+searching its timeline or asking an agent to start the work again.
+
+- Add a prominent `**Implementation PR:**` line linking to the PR by its repository, number and
+  title. When several PRs contribute, retain each link. Preserve the issue's existing requirements,
+  acceptance checkboxes and other PR links; read its current body before editing it through
+  `deno task edit-issue`.
+- This is required for draft and ready PRs, including `Part of` and `--no-close` work whose issue
+  must remain open for installation or verification. A mention in the PR body or issue timeline
+  alone does not satisfy this rule. Keep the existing issue-closing policy; adding a visible link
+  never authorizes closing the issue or adding a closing relationship.
+- After writing, read the issue back and verify that its body contains the correct PR URL before
+  reporting the PR task finished. If the update or verification fails, report that step as
+  incomplete with the failure; do not claim that the issue-to-PR handoff is complete.
+- When `work-issue` finds an existing implementation PR, repair any missing body link before
+  reporting that review or merge is pending, or resuming fixes. Check the PR's current state and
+  retain the existing in-flight and completion checks; a missing link is never permission to start
+  duplicate implementation.
+
+Josh's ruling, 2026-10-27: "this needs to be a firm rule so that I do not keep asking you to work
+issues that have already been worked and have an open PR!"
+
 ## DESIGN CLAIMS MUST CARRY RECEIPTS (web-jam-tools#305 "cross-ai-rules.md: design claims must carry receipts, and a UI requirement can never be verified through an API")
 
 A settled design shipped an unverified claim as established fact, sitting unmarked right next to

@@ -30,6 +30,12 @@ be split out.
 It **refuses to open a PR with an empty or placeholder description** (web-jam-tools#77).
 Josh alone reviews and flips draft → ready on GitHub.
 
+After creating or reusing a PR tied to an issue, complete
+[Visible implementation PR links](../../docs/cross-ai-rules.md#visible-implementation-pr-links)
+before reporting the task finished. Use the returned PR URL and current title to update the issue
+through `deno task edit-issue`, then read the issue back. A successful PR creation alone does not
+complete this workflow when that required issue update or verification failed.
+
 ## Before you run it
 
 1. You are on a feature branch named `claude/<issue#>-<slug>` (the issue number in
