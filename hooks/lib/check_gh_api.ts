@@ -1,4 +1,9 @@
-/** gh-api-guard decisions, using the shared shell parser before the legacy fallback. */
+/**
+ * gh-api-guard decisions (R-6 consent rules), using the shared shell parser before the legacy fallback.
+ * - Deny (exit 2) if method is DELETE (-X DELETE / --method DELETE), except for the narrow
+ *   reversible carve-out of removing an issue dependency (allowedDependencyRemoval).
+ * - Force prompt (JSON ask) if method is POST/PUT/PATCH or field flags are passed.
+ */
 import {
   ASSIGN_RE,
   MAX_WRAPPER_RECURSION_DEPTH,
@@ -21,7 +26,25 @@ function normalizedText(command: string): string {
   return command.toLowerCase().replace(/["']/g, "");
 }
 
-// Preserve the existing exception: only the entire direct command may match.
+/**
+ * Narrow carve-out: allow ONLY removing an issue dependency —
+ *   gh api --method DELETE repos/<owner>/<repo>/issues/<N>/dependencies/blocked_by/<ID>
+ * (or the -X DELETE spelling) — because it is reversible: the dependency
+ * can be re-added with the corresponding POST to .../dependencies/blocked_by.
+ * Everything else that is a DELETE stays denied.
+ *
+ * Safety posture (this must never become a general DELETE bypass):
+ *  1. The path is matched anchored to the full (whitespace-squeezed)
+ *     command, not merely as a substring — "blocked_by" appearing
+ *     anywhere else (a comment, a different path) does not match.
+ *  2. Any shell metacharacter that could chain or embed another command
+ *     (`;`, `&&`, `||`, `|`, backtick, `$(`, or an embedded newline)
+ *     disqualifies the command from the carve-out outright, so a DELETE
+ *     hidden in a compound/chained command is always denied.
+ *  3. Extra trailing arguments, a different owner/repo/issue/dependency
+ *     id shape, or a different endpoint all fail the anchored match and
+ *     fall through to the standard deny below.
+ */
 function allowedDependencyRemoval(command: string): boolean {
   const text = normalizedText(command);
   if (/[\n;|&`]|\$\(/.test(text)) return false;
