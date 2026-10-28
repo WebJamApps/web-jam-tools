@@ -1,35 +1,132 @@
-import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+  assertThrows,
+} from "@std/assert";
 import {
   createOrGetSharedLink,
+  DEFAULT_KEEPASS_DB_SUFFIX,
+  DEFAULT_KEEPASS_ENTRY,
   dropboxSecrets,
   main,
+  parseKeepassShowOutput,
   refreshAccessToken,
   shareLinkForms,
   toAccountRelativePath,
 } from "../src/dropbox-link/dropbox_link_cli.ts";
 
-// --- mock harness: stub `fetch` by URL and set/restore env, around one test ---
+// --- mock harness: stub `fetch`, `keepassxc-cli` via `Deno.Command`, console, and env ---
 
 type Route = { status?: number; body: string };
 
-const ENV = {
-  DROPBOX_APP_KEY: "key123",
-  DROPBOX_APP_SECRET: "secret456",
-  DROPBOX_REFRESH_TOKEN: "rtoken789",
+interface KeepassStubConfig {
+  code?: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+interface CapturedInvocation {
+  cmd: string | URL;
+  options?: Deno.CommandOptions;
+}
+
+interface MockResult {
+  logs: string[];
+  errors: string[];
+  commands: CapturedInvocation[];
+  requests: Array<{ url: string; headers: Headers; body: string }>;
+}
+
+const STUB_SECRETS = {
+  appKey: "kp-app-key-123",
+  appSecret: "kp-app-secret-456",
+  refreshToken: "kp-refresh-token-789",
 } as const;
 
+const DEFAULT_KEEPASS_STDOUT = [
+  `Title: ${DEFAULT_KEEPASS_ENTRY}`,
+  `UserName: ${STUB_SECRETS.appKey}`,
+  `Password: ${STUB_SECRETS.appSecret}`,
+  "URL: ",
+  `Notes: ${STUB_SECRETS.refreshToken}`,
+  "Uuid: {00000000-0000-0000-0000-000000000000}",
+  "Tags: ",
+].join("\n");
+
 async function withMocks(
-  opts: { routes?: Record<string, Route | Route[]>; env?: Record<string, string | undefined> },
-  fn: () => void | Promise<void>,
-): Promise<void> {
+  opts: {
+    routes?: Record<string, Route | Route[]>;
+    env?: Record<string, string | undefined>;
+    keepass?: KeepassStubConfig;
+  },
+  fn: (ctx: MockResult) => void | Promise<void>,
+): Promise<MockResult> {
   const savedFetch = globalThis.fetch;
+  const SavedCommand = Deno.Command;
+  const savedLog = console.log;
+  const savedError = console.error;
   const envKeys = Object.keys(opts.env ?? {});
   const savedEnv = new Map(envKeys.map((k) => [k, Deno.env.get(k)]));
   const callCounts = new Map<string, number>();
+
+  const ctx: MockResult = {
+    logs: [],
+    errors: [],
+    commands: [],
+    requests: [],
+  };
+
+  console.log = (...args: unknown[]) => {
+    ctx.logs.push(args.map(String).join(" "));
+  };
+  console.error = (...args: unknown[]) => {
+    ctx.errors.push(args.map(String).join(" "));
+  };
+
+  const kpConfig: Required<KeepassStubConfig> = {
+    code: opts.keepass?.code ?? 0,
+    stdout: opts.keepass?.stdout ?? DEFAULT_KEEPASS_STDOUT,
+    stderr: opts.keepass?.stderr ?? "",
+  };
+
+  Deno.Command = class StubCommand extends SavedCommand {
+    constructor(cmd: string | URL, options?: Deno.CommandOptions) {
+      ctx.commands.push({ cmd, options });
+      if (String(cmd) === "keepassxc-cli") {
+        super("sh", {
+          args: ["-c", "exit $KP_STUB_CODE"],
+          env: { KP_STUB_CODE: String(kpConfig.code) },
+          stdin: "null",
+          stdout: "piped",
+          stderr: "piped",
+        });
+        return;
+      }
+      super(cmd, options);
+    }
+
+    override async output(): Promise<Deno.CommandOutput> {
+      const real = await super.output();
+      return {
+        success: kpConfig.code === 0 && real.success,
+        code: kpConfig.code,
+        signal: null,
+        stdout: new TextEncoder().encode(kpConfig.stdout),
+        stderr: new TextEncoder().encode(kpConfig.stderr),
+      };
+    }
+  } as typeof Deno.Command;
+
   try {
     if (opts.routes) {
-      globalThis.fetch = ((input: string | URL | Request) => {
+      globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.toString();
+        const headers = new Headers(init?.headers);
+        const body = init?.body ? String(init.body) : "";
+        ctx.requests.push({ url, headers, body });
+
         const entry = opts.routes![url];
         if (!entry) return Promise.resolve(new Response("not found", { status: 404 }));
         if (Array.isArray(entry)) {
@@ -45,61 +142,153 @@ async function withMocks(
       if (v === undefined) Deno.env.delete(k);
       else Deno.env.set(k, v);
     }
-    await fn();
+    await fn(ctx);
   } finally {
     globalThis.fetch = savedFetch;
+    Deno.Command = SavedCommand;
+    console.log = savedLog;
+    console.error = savedError;
     for (const [k, v] of savedEnv) {
       if (v === undefined) Deno.env.delete(k);
       else Deno.env.set(k, v);
     }
   }
+  return ctx;
 }
 
-// --- dropboxSecrets: env-var sourcing + validation ---
+function assertNoSecretsPrinted(ctx: MockResult, secrets = STUB_SECRETS): void {
+  const combined = [...ctx.logs, ...ctx.errors].join("\n");
+  for (const val of [secrets.appKey, secrets.appSecret, secrets.refreshToken]) {
+    assert(
+      !combined.includes(val),
+      `Expected output not to contain secret "${val}", but got:\n${combined}`,
+    );
+  }
+}
 
-Deno.test("dropboxSecrets returns the trio when all vars are present", async () => {
-  await withMocks({ env: ENV }, () => {
-    assertEquals(dropboxSecrets(), {
-      appKey: "key123",
-      appSecret: "secret456",
-      refreshToken: "rtoken789",
-    });
+// --- dropboxSecrets: KeePass runtime lookup via keepassxc-cli ---
+
+Deno.test("dropboxSecrets reads appKey, appSecret, and refreshToken via keepassxc-cli and ignores shell env vars", async () => {
+  await withMocks({
+    env: {
+      HOME: "/home/testuser",
+      DROPBOX_APP_KEY: "env-ignored-key",
+      DROPBOX_APP_SECRET: "env-ignored-secret",
+      DROPBOX_REFRESH_TOKEN: "env-ignored-token",
+    },
+  }, async (ctx) => {
+    const secrets = await dropboxSecrets();
+    assertEquals(secrets, STUB_SECRETS);
+    assertEquals(ctx.commands.length, 1);
+    assertEquals(ctx.commands[0].cmd, "keepassxc-cli");
+    assertEquals(ctx.commands[0].options?.args, [
+      "show",
+      "--show-protected",
+      "--all",
+      `/home/testuser${DEFAULT_KEEPASS_DB_SUFFIX}`,
+      DEFAULT_KEEPASS_ENTRY,
+    ]);
+    assertEquals(ctx.commands[0].options?.stdin, "inherit");
+    assertEquals(ctx.commands[0].options?.stdout, "piped");
+    assertEquals(ctx.commands[0].options?.stderr, "inherit");
+    assertNoSecretsPrinted(ctx);
   });
 });
 
-Deno.test("dropboxSecrets throws when a secret is missing", async () => {
-  await withMocks({ env: { ...ENV, DROPBOX_REFRESH_TOKEN: undefined } }, () => {
-    assertThrows(() => dropboxSecrets(), Error, "Missing Dropbox OAuth secrets");
+Deno.test("parseKeepassShowOutput parses explicit DROPBOX_* key-value lines in Notes or attributes", () => {
+  const stdout = [
+    "Title: webjam-setlist-links",
+    "UserName: ",
+    "Password: ",
+    "Notes: DROPBOX_APP_KEY=explicit-key-1",
+    "DROPBOX_APP_SECRET=explicit-secret-2",
+    "export DROPBOX_REFRESH_TOKEN='explicit-refresh-3'",
+    "KPH: APP_KEY: explicit-key-override",
+  ].join("\n");
+  assertEquals(parseKeepassShowOutput(stdout), {
+    appKey: "explicit-key-override",
+    appSecret: "explicit-secret-2",
+    refreshToken: "explicit-refresh-3",
+  });
+});
+
+Deno.test("dropboxSecrets stops and prints nothing secret when the entry is missing or the master password is wrong", async () => {
+  await withMocks({
+    keepass: {
+      code: 1,
+      stdout: DEFAULT_KEEPASS_STDOUT,
+      stderr: "Error while reading the database: Invalid credentials were provided",
+    },
+  }, async (ctx) => {
+    const err = await assertRejects(
+      () => dropboxSecrets({ dbPath: "/tmp/test.kdbx", entry: "webjam-setlist-links" }),
+      Error,
+      "keepassxc-cli failed to read KeePass entry",
+    );
+    for (const secret of Object.values(STUB_SECRETS)) {
+      assert(!err.message.includes(secret));
+    }
+    assertNoSecretsPrinted(ctx);
+  });
+});
+
+Deno.test("dropboxSecrets throws without leaking partial secrets when a field is missing from the entry", async () => {
+  const partialStdout = [
+    "Title: webjam-setlist-links",
+    `UserName: ${STUB_SECRETS.appKey}`,
+    `Password: ${STUB_SECRETS.appSecret}`,
+    "Notes: ",
+  ].join("\n");
+  await withMocks({ keepass: { code: 0, stdout: partialStdout } }, async (ctx) => {
+    const err = await assertRejects(
+      () => dropboxSecrets(),
+      Error,
+      "Missing Dropbox OAuth secrets in KeePass entry",
+    );
+    assert(!err.message.includes(STUB_SECRETS.appKey));
+    assert(!err.message.includes(STUB_SECRETS.appSecret));
+    assertNoSecretsPrinted(ctx);
   });
 });
 
 // --- refreshAccessToken: OAuth refresh-token grant (HTTP Basic auth) ---
 
-Deno.test("refreshAccessToken returns the minted access token", async () => {
+Deno.test("refreshAccessToken exchanges the KeePass-sourced secrets for an access token", async () => {
   await withMocks({
-    env: ENV,
     routes: {
       "https://api.dropboxapi.com/oauth2/token": {
         body: JSON.stringify({ access_token: "AT123" }),
       },
     },
-  }, async () => {
+  }, async (ctx) => {
     assertEquals(await refreshAccessToken(), "AT123");
+    assertEquals(ctx.requests.length, 1);
+    assertEquals(
+      ctx.requests[0].headers.get("Authorization"),
+      `Basic ${btoa(`${STUB_SECRETS.appKey}:${STUB_SECRETS.appSecret}`)}`,
+    );
+    assertStringIncludes(ctx.requests[0].body, `refresh_token=${STUB_SECRETS.refreshToken}`);
+    assertNoSecretsPrinted(ctx);
   });
 });
 
-Deno.test("refreshAccessToken throws on a non-OK token response", async () => {
+Deno.test("refreshAccessToken throws and redacts secrets on a non-OK token response", async () => {
   await withMocks({
-    env: ENV,
-    routes: { "https://api.dropboxapi.com/oauth2/token": { status: 400, body: "bad_grant" } },
-  }, async () => {
-    await assertRejects(() => refreshAccessToken(), Error, "dropbox token refresh");
+    routes: {
+      "https://api.dropboxapi.com/oauth2/token": {
+        status: 400,
+        body: `bad_grant ${STUB_SECRETS.refreshToken}`,
+      },
+    },
+  }, async (ctx) => {
+    const err = await assertRejects(() => refreshAccessToken(), Error, "dropbox token refresh");
+    assert(!err.message.includes(STUB_SECRETS.refreshToken));
+    assertNoSecretsPrinted(ctx);
   });
 });
 
 Deno.test("refreshAccessToken throws when the response has no access_token", async () => {
   await withMocks({
-    env: ENV,
     routes: { "https://api.dropboxapi.com/oauth2/token": { body: JSON.stringify({}) } },
   }, async () => {
     await assertRejects(() => refreshAccessToken(), Error, "returned no access_token");
@@ -262,52 +451,78 @@ Deno.test("createOrGetSharedLink throws on a non-409 error status", async () => 
   });
 });
 
-// --- main: batch mode end-to-end (token refresh once, then per-path resolve) ---
+// --- main: batch mode end-to-end (KeePass read + token refresh once, then per-path resolve) ---
 
-Deno.test("main resolves multiple paths (account-relative + local) and returns 0", async () => {
+Deno.test("main reads the stubbed KeePass key at run time, resolves paths, and never prints any secret", async () => {
   await withMocks({
-    env: ENV,
     routes: {
       "https://api.dropboxapi.com/oauth2/token": { body: JSON.stringify({ access_token: "AT" }) },
       "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings": {
         body: JSON.stringify({ url: "https://www.dropbox.com/scl/fi/x/song.mp3?rlkey=k&dl=0" }),
       },
     },
-  }, async () => {
+  }, async (ctx) => {
     const code = await main([
       "/joshandmariamusic/a.mp3",
       "/home/joshua/Dropbox/joshandmariamusic/b.mp3",
     ]);
     assertEquals(code, 0);
+    assertEquals(ctx.commands.length, 1);
+    assertEquals(ctx.commands[0].cmd, "keepassxc-cli");
+    assertStringIncludes(ctx.logs.join("\n"), "setlist: https://www.dropbox.com/scl/fi/x/song.mp3");
+    assertStringIncludes(
+      ctx.logs.join("\n"),
+      "widget:  https://dl.dropboxusercontent.com/scl/fi/x/song.mp3",
+    );
+    assertNoSecretsPrinted(ctx);
+  });
+});
+
+Deno.test("main stops with exit 1 and prints nothing secret when the KeePass entry is missing or the master password is wrong", async () => {
+  await withMocks({
+    keepass: { code: 1, stdout: DEFAULT_KEEPASS_STDOUT },
+    routes: {},
+  }, async (ctx) => {
+    const code = await main(["/joshandmariamusic/a.mp3"]);
+    assertEquals(code, 1);
+    assertEquals(ctx.requests.length, 0);
+    assertNoSecretsPrinted(ctx);
   });
 });
 
 Deno.test("main returns 1 and reports per-path when one path fails but others succeed", async () => {
   await withMocks({
-    env: ENV,
     routes: {
       "https://api.dropboxapi.com/oauth2/token": { body: JSON.stringify({ access_token: "AT" }) },
       "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings": {
         body: JSON.stringify({ url: "https://www.dropbox.com/scl/fi/x/song.mp3?rlkey=k&dl=0" }),
       },
     },
-  }, async () => {
+  }, async (ctx) => {
     const code = await main(["/ok.mp3", "unclassifiable/path.mp3"]);
     assertEquals(code, 1);
+    assertNoSecretsPrinted(ctx);
   });
 });
 
-Deno.test("main returns 1 without a network call when no paths are given", async () => {
-  await withMocks({ routes: {} }, async () => {
+Deno.test("main returns 1 without a network or KeePass call when no paths are given", async () => {
+  await withMocks({ routes: {} }, async (ctx) => {
     assertEquals(await main([]), 1);
+    assertEquals(ctx.commands.length, 0);
+    assertEquals(ctx.requests.length, 0);
   });
 });
 
-Deno.test("main returns 1 when the token refresh itself fails", async () => {
+Deno.test("main returns 1 and prints nothing secret when the token refresh itself fails", async () => {
   await withMocks({
-    env: ENV,
-    routes: { "https://api.dropboxapi.com/oauth2/token": { status: 401, body: "invalid_grant" } },
-  }, async () => {
+    routes: {
+      "https://api.dropboxapi.com/oauth2/token": {
+        status: 401,
+        body: `invalid_grant ${STUB_SECRETS.refreshToken}`,
+      },
+    },
+  }, async (ctx) => {
     assertEquals(await main(["/a.mp3"]), 1);
+    assertNoSecretsPrinted(ctx);
   });
 });
