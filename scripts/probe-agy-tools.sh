@@ -44,10 +44,18 @@ if [ -n "$LOG_PATH" ]; then
   fi
 fi
 
-ALLOW_READ=""
-for target in "${read_paths[@]}"; do
-  ALLOW_READ+="${ALLOW_READ:+,}${target//,/,,}"
-done
+# JSON arrays preserve literal commas without granting the containing directory.
+permission_config="$(mktemp -t probe-permissions-XXXXXX.json)"
+trap 'rm -f "$permission_config"' EXIT
+"$DENO_BIN" run --no-config - "$(cat "$REPO_DIR/deno.json")" "${read_paths[@]}" > "$permission_config" <<'JS'
+import { resolve } from "node:path";
+const { imports } = JSON.parse(Deno.args.shift());
+console.log(JSON.stringify({
+  imports,
+  permissions: { launcher: { read: [...new Set(Deno.args.map((p) => resolve(p)))] } },
+}));
+JS
 
-exec "$DENO_BIN" run --allow-read="$ALLOW_READ" \
+"$DENO_BIN" run --config "$permission_config" -P=launcher \
+  --lock "$REPO_DIR/deno.lock" --frozen \
   "$REPO_DIR/scripts/probe-agy-tools.ts" --log "$LOG_PATH" "$@"
