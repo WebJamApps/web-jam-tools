@@ -3,9 +3,9 @@
 #
 # Inspects CLI arguments, resolves required input file paths, allocates an isolated temporary
 # output directory for OCR rendering, and invokes Deno with strictly scoped permissions:
-#   --allow-read=<module files, temporary output directory, resolved input files, dictionary>
-#   --allow-write=<temporary output directory>
-#   --allow-run=pdftoppm,tesseract
+#   read: module files, temporary output directory, resolved input files, dictionary
+#   write: temporary output directory; run: pdftoppm,tesseract
+# Exact paths are passed in a generated config permission set, including literal commas.
 #
 # AGENTS.md Rule 21 compliant: zero bare --allow-read or --allow-write permissions.
 set -euo pipefail
@@ -175,14 +175,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [ "$is_help" = true ]; then
-  exec "$DENO_BIN" run \
-    --allow-read="${MODULE_READ_DIR//,/,,},${CONFIG_FILE//,/,,}" \
-    "$REPO_DIR/src/sheet-music/lyric_check.ts" "${passthrough_args[@]}"
-fi
-
 created_temp=false
-if [ -n "$custom_temp_dir" ]; then
+TEMP_DIR=""
+if [ "$is_help" = true ]; then
+  # Help only needs the module files, with no input, output or subprocess grants.
+  read_targets=()
+elif [ -n "$custom_temp_dir" ]; then
   TEMP_DIR="$custom_temp_dir"
   mkdir -p "$TEMP_DIR"
 else
@@ -191,16 +189,23 @@ else
   passthrough_args+=("--temp-dir" "$TEMP_DIR")
 fi
 
+permission_config=""
 cleanup() {
+  if [ -n "$permission_config" ]; then
+    rm -f "$permission_config"
+  fi
   if [ "$created_temp" = true ] && [ -d "$TEMP_DIR" ]; then
     rm -rf "$TEMP_DIR"
   fi
 }
 trap cleanup EXIT
 
-read_paths=("$MODULE_READ_DIR" "$CONFIG_FILE" "$TEMP_DIR")
+read_paths=("$MODULE_READ_DIR" "$CONFIG_FILE")
+if [ -n "$TEMP_DIR" ]; then
+  read_paths+=("$TEMP_DIR")
+fi
 
-if [ "$dict_specified" = false ]; then
+if [ "$is_help" = false ] && [ "$dict_specified" = false ]; then
   read_paths+=("/usr/share/dict/american-english" "/usr/share/dict")
 fi
 
@@ -215,25 +220,23 @@ for target in "${read_targets[@]}"; do
   fi
 done
 
-declare -A seen_paths
-unique_paths=()
-for p in "${read_paths[@]}"; do
-  if [ -z "${seen_paths["$p"]:-}" ]; then
-    seen_paths["$p"]=1
-    # Deno separates permission paths with commas; doubled commas encode a literal comma.
-    unique_paths+=("${p//,/,,}")
-  fi
-done
-
-IFS=','
-ALLOW_READ="${unique_paths[*]}"
-unset IFS
+permission_config="$(mktemp -t lyric-permissions-XXXXXX.json)"
+"$DENO_BIN" run --no-config - "$(cat "$CONFIG_FILE")" "$TEMP_DIR" "${read_paths[@]}" > "$permission_config" <<'JS'
+import { resolve } from "node:path";
+const { imports } = JSON.parse(Deno.args.shift());
+const [output, ...inputs] = Deno.args;
+const launcher = { read: [...new Set(inputs.map((p) => resolve(p)))] };
+if (output) {
+  launcher.write = [resolve(output)];
+  launcher.run = ["pdftoppm", "tesseract"];
+}
+console.log(JSON.stringify({ imports, permissions: { launcher } }));
+JS
 
 set +e
 "$DENO_BIN" run \
-  --allow-read="$ALLOW_READ" \
-  --allow-write="${TEMP_DIR//,/,,}" \
-  --allow-run=pdftoppm,tesseract \
+  --config "$permission_config" -P=launcher \
+  --lock "$REPO_DIR/deno.lock" --frozen \
   "$REPO_DIR/src/sheet-music/lyric_check.ts" \
   "${passthrough_args[@]}"
 EXIT_CODE=$?

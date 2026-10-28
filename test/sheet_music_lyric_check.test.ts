@@ -830,6 +830,20 @@ Deno.test("lyric launcher accepts commas in song, vision, dictionary, and OCR ou
     const dictPath = path.join(tempDir, "reference,words.txt");
     const outputDir = path.join(tempDir, "rendered,pages");
     const pdfPath = path.join(tempDir, "scan,input.pdf");
+    const configPath = path.join(tempDir, "permissions.json");
+    const argsPath = path.join(tempDir, "deno-args.txt");
+    const denoWrapper = path.join(tempDir, "record-deno");
+    await Deno.writeTextFile(
+      denoWrapper,
+      `#!/bin/sh
+if [ "$2" = "--config" ]; then
+  cp "$3" "$LYRIC_TEST_CONFIG"
+  printf '%s\\n' "$@" > "$LYRIC_TEST_ARGS"
+fi
+exec "$LYRIC_TEST_DENO" "$@"
+`,
+    );
+    await Deno.chmod(denoWrapper, 0o755);
     await Deno.writeTextFile(
       songPath,
       JSON.stringify({ sections: [{ lines: [{ lyrics: "bright morning" }] }] }),
@@ -866,12 +880,32 @@ if [ "$1" = "--version" ]; then exit 0; fi
     for (const readingArgs of [["--vision", visionPath], ["--pdf", pdfPath, "--dict", dictPath]]) {
       const output = await new Deno.Command("bash", {
         args: [launcherPath, "--song", songPath, "--temp-dir", outputDir, ...readingArgs],
-        env: { PATH: `${tempDir}:${Deno.env.get("PATH") ?? ""}` },
+        env: {
+          PATH: `${tempDir}:${Deno.env.get("PATH") ?? ""}`,
+          DENO_BIN: denoWrapper,
+          LYRIC_TEST_CONFIG: configPath,
+          LYRIC_TEST_ARGS: argsPath,
+          LYRIC_TEST_DENO: Deno.execPath(),
+        },
         stdout: "piped",
         stderr: "piped",
       }).output();
       assertEquals(output.code, 0, new TextDecoder().decode(output.stderr));
       assertStringIncludes(new TextDecoder().decode(output.stdout), "[PASS]");
+      const permissions = JSON.parse(await Deno.readTextFile(configPath)).permissions.launcher;
+      assertEquals(permissions.write, [outputDir]);
+      assertEquals(permissions.run, ["pdftoppm", "tesseract"]);
+      assertEquals(Object.keys(permissions).sort(), ["read", "run", "write"]);
+      assertEquals(permissions.read.includes(songPath), true);
+      assertEquals(permissions.read.includes(readingArgs[1]), true);
+      assertEquals(permissions.read.includes(tempDir), false);
+      assertEquals(permissions.read.includes("/"), false);
+      assertEquals(permissions.read.includes("."), false);
+      const args = (await Deno.readTextFile(argsPath)).trim().split("\n");
+      await assertRejects(
+        () => Deno.stat(args[args.indexOf("--config") + 1]),
+        Deno.errors.NotFound,
+      );
     }
     assertEquals(
       await Deno.readTextFile(path.join(outputDir, "page-2.png")),

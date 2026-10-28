@@ -4,7 +4,7 @@
 // verifies tool argument parsing, PreToolUse detection for agy file edit
 // and GitHub MCP tools, JSON output, and strict fail-closed refusal on write calls.
 
-import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert";
 import { analyzeProbeLog, formatProbeReport } from "../scripts/probe-agy-tools.ts";
 
 const SCRIPT_PATH = new URL("../scripts/probe-agy-tools.sh", import.meta.url).pathname;
@@ -234,12 +234,14 @@ Deno.test("probe launcher scopes permissions and supports explicit and environme
   try {
     const logPath = `${dir}/selected,log.jsonl`;
     const argsPath = `${dir}/deno-args.txt`;
+    const configPath = `${dir}/permissions.json`;
     const wrapperPath = `${dir}/record-deno`;
     await Deno.writeTextFile(logPath, `${SAFE_RECORD}\n`);
     await Deno.writeTextFile(
       wrapperPath,
       `#!/bin/sh
 printf '%s\\n' "$@" > "$PROBE_TEST_ARGS"
+if [ "$2" = "--config" ]; then cp "$3" "$PROBE_TEST_CONFIG"; fi
 exec "$PROBE_TEST_DENO" "$@"
 `,
     );
@@ -250,6 +252,7 @@ exec "$PROBE_TEST_DENO" "$@"
         env: {
           DENO_BIN: wrapperPath,
           PROBE_TEST_ARGS: argsPath,
+          PROBE_TEST_CONFIG: configPath,
           PROBE_TEST_DENO: Deno.execPath(),
           // Explicit log selection must override even an unreadable environment fallback.
           AGY_HOOK_RECORD_PATH: logArgs.length ? `${dir}/missing.jsonl` : logPath,
@@ -263,13 +266,36 @@ exec "$PROBE_TEST_DENO" "$@"
       const denoArgs = (await Deno.readTextFile(argsPath)).trim().split("\n");
       assertEquals(denoArgs.includes("--allow-read"), false);
       assertEquals(denoArgs.some((arg) => arg.startsWith("--allow-env")), false);
-      const readArg = denoArgs.find((arg) => arg.startsWith("--allow-read="))!;
-      const grants = readArg.slice("--allow-read=".length).replaceAll(",,", "\0").split(",")
-        .map((entry) => entry.replaceAll("\0", ","));
+      assertEquals(denoArgs.includes("-P=launcher"), true);
+      const permissions = JSON.parse(await Deno.readTextFile(configPath)).permissions.launcher;
+      const grants: string[] = permissions.read;
+      assertEquals(Object.keys(permissions), ["read"]);
       assertEquals(grants.includes(logPath), true);
       assertEquals(grants.some((entry) => entry === dir || entry === "/" || entry === "."), false);
       assertEquals(grants.length, 3);
+      await assertRejects(
+        () => Deno.stat(denoArgs[denoArgs.indexOf("--config") + 1]),
+        Deno.errors.NotFound,
+      );
     }
+
+    // Check Deno's runtime view of permissions outside the selected log.
+    const audit = `${dir}/audit.ts`;
+    await Deno.writeTextFile(
+      audit,
+      `console.log(JSON.stringify(await Promise.all([
+        { name: "read", path: Deno.args[0] },
+        { name: "write", path: Deno.args[1] },
+        { name: "env", variable: "HOME" },
+        { name: "net", host: "example.com" },
+        { name: "run", command: "bash" },
+      ].map(async (p) => (await Deno.permissions.query(p)).state))));`,
+    );
+    const auditOutput = await new Deno.Command(Deno.execPath(), {
+      args: ["run", "--config", configPath, "-P=launcher", audit, `${dir}/neighbor`, logPath],
+    }).output();
+    assertEquals(auditOutput.code, 0, new TextDecoder().decode(auditOutput.stderr));
+    assertEquals(JSON.parse(new TextDecoder().decode(auditOutput.stdout)), Array(5).fill("prompt"));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

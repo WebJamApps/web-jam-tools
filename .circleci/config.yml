@@ -27,6 +27,56 @@ executors:
     docker:
       - image: cimg/node:24.19.0
 
+commands:
+  install-deno:
+    steps:
+      - restore_cache:
+          keys:
+            - deno-bin-v1-{{ checksum ".circleci/deno-version" }}
+      - run:
+          name: Install Deno
+          command: |
+            set -euo pipefail
+            release_file=".circleci/deno-version"
+            if [ ! -r "$release_file" ]; then
+              echo "ERROR: cannot read $release_file" >&2
+              exit 1
+            fi
+            version="$(sed -n 's/^version=//p' "$release_file")"
+            expected_sha="$(sed -n 's/^sha256=//p' "$release_file")"
+            if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ ! "$expected_sha" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "ERROR: missing or malformed version or sha256 in $release_file" >&2
+              exit 1
+            fi
+            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
+            installed_version="$("$HOME/.deno/bin/deno" --version 2>/dev/null | head -n 1 || true)"
+            if [[ "$installed_version" == "deno ${version#v} "* ]]; then
+              echo "Deno $version restored from cache"
+              exit 0
+            fi
+            url="https://github.com/denoland/deno/releases/download/$version/deno-x86_64-unknown-linux-gnu.zip"
+            stage="$(mktemp -d)"
+            trap 'rm -rf "$stage"' EXIT
+            if ! curl -fsSL --retry 3 --retry-all-errors --retry-delay 3 \
+              --connect-timeout 15 --max-time 120 --speed-limit 102400 --speed-time 30 \
+              "$url" -o "$stage/deno.zip"; then
+              echo "ERROR: download failed: $url (expected SHA-256 $expected_sha)" >&2
+              exit 1
+            fi
+            actual_sha="$(sha256sum "$stage/deno.zip" | cut -d ' ' -f 1)"
+            if [ "$actual_sha" != "$expected_sha" ]; then
+              echo "ERROR: SHA-256 mismatch: $url (expected $expected_sha, actual $actual_sha)" >&2
+              exit 1
+            fi
+            mkdir -p "$HOME/.deno/bin"
+            unzip -oq "$stage/deno.zip" deno -d "$HOME/.deno/bin"
+            chmod +x "$HOME/.deno/bin/deno"
+            "$HOME/.deno/bin/deno" --version
+      - save_cache:
+          key: deno-bin-v1-{{ checksum ".circleci/deno-version" }}
+          paths:
+            - /home/circleci/.deno/bin
+
 jobs:
   gate:
     executor: ci
@@ -38,12 +88,10 @@ jobs:
       DENO_DIR: /home/circleci/.cache/deno
     steps:
       - checkout
+      - install-deno
       - run:
-          name: Install Deno + Trivy + Semgrep + shellcheck
+          name: Install Trivy + Semgrep + shellcheck + gitleaks
           command: |
-            # Deno (pinned)
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.5
-            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
             # Trivy (pinned)
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
               | sudo sh -s -- -b /usr/local/bin v0.71.0
@@ -53,18 +101,22 @@ jobs:
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
             # shellcheck (pinned) — static binary, no apt version pin available
             SHELLCHECK_VERSION="v0.10.0"
-            curl -fsSL \
+            curl -fsSL --retry 3 --retry-all-errors --retry-delay 3 \
+              --connect-timeout 15 --max-time 120 --speed-limit 102400 --speed-time 30 \
               "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
               -o /tmp/shellcheck.tar.xz
             tar -xJf /tmp/shellcheck.tar.xz -C /tmp
             # gitleaks (latest release via redirect)
-            LATEST_TAG="$(curl -sI https://github.com/gitleaks/gitleaks/releases/latest | grep -i '^location:' | sed -e 's/.*tag\///' -e 's/\r//' || true)"
+            LATEST_TAG="$(curl -fsSLI --retry 3 --retry-all-errors --retry-delay 3 \
+              --connect-timeout 15 --max-time 120 --speed-limit 102400 --speed-time 30 \
+              https://github.com/gitleaks/gitleaks/releases/latest | grep -i '^location:' | sed -e 's/.*tag\///' -e 's/\r//' || true)"
             if [ -z "$LATEST_TAG" ]; then
               echo "ERROR: failed to resolve latest gitleaks release from redirect" >&2
               exit 1
             fi
             GITLEAKS_VERSION="${LATEST_TAG#v}"
-            curl -fsSL \
+            curl -fsSL --retry 3 --retry-all-errors --retry-delay 3 \
+              --connect-timeout 15 --max-time 120 --speed-limit 102400 --speed-time 30 \
               "https://github.com/gitleaks/gitleaks/releases/download/${LATEST_TAG}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
               -o /tmp/gitleaks.tar.gz
             tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
@@ -247,11 +299,7 @@ jobs:
     executor: ci
     steps:
       - checkout
-      - run:
-          name: Install Deno
-          command: |
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.5
-            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
+      - install-deno
       - run:
           name: Deploy web-jam-devotional (production)
           command: |
@@ -266,11 +314,7 @@ jobs:
     executor: ci
     steps:
       - checkout
-      - run:
-          name: Install Deno
-          command: |
-            curl -fsSL https://deno.land/install.sh | sh -s v2.9.5
-            echo 'export PATH="$HOME/.deno/bin:$PATH"' >> "$BASH_ENV"
+      - install-deno
       - run:
           name: Deploy web-jam-uptime (production)
           command: |
