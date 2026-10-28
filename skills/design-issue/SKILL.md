@@ -1,6 +1,6 @@
 ---
 name: design-issue
-description: Design-then-issue-plan workflow prior to filing GitHub issues. Design work runs through this skill. Never dispatches (ends at "the issues exist").
+description: Design-then-issue-plan workflow prior to filing GitHub issues. Design work runs through this skill. Never dispatches build work (ends at "the issues exist"); its end-of-run memory PR is the one exception.
 metadata:
   version: v1
   publisher: josh
