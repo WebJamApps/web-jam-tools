@@ -183,12 +183,26 @@ function assertNoSecretsPrinted(ctx: MockResult, secrets = STUB_SECRETS): void {
   }
 }
 
+async function withTempPasswordFile(
+  password: string,
+  fn: (ttyFile: string) => Promise<void>,
+): Promise<void> {
+  const { stdout } = await new Deno.Command("sh", {
+    args: ["-c", 'f=$(mktemp); printf "%s\\n" "$1" > "$f"; printf "%s" "$f"', "sh", password],
+    stdout: "piped",
+  }).output();
+  const ttyFile = new TextDecoder().decode(stdout).trim();
+  try {
+    await fn(ttyFile);
+  } finally {
+    await new Deno.Command("rm", { args: ["-f", ttyFile] }).output().catch(() => {});
+  }
+}
+
 // --- dropboxSecrets: KeePass runtime lookup via keepassxc-cli ---
 
 Deno.test("dropboxSecrets reads appKey, appSecret, and refreshToken via keepassxc-cli and ignores shell env vars", async () => {
-  const ttyFile = await Deno.makeTempFile();
-  await Deno.writeTextFile(ttyFile, "synth-master-pass\n");
-  try {
+  await withTempPasswordFile("synth-master-pass", async (ttyFile) => {
     await withMocks({
       env: {
         HOME: "/home/testuser",
@@ -214,9 +228,7 @@ Deno.test("dropboxSecrets reads appKey, appSecret, and refreshToken via keepassx
       assertEquals(ctx.commands[0].options?.stderr, "inherit");
       assertNoSecretsPrinted(ctx);
     });
-  } finally {
-    await Deno.remove(ttyFile).catch(() => {});
-  }
+  });
 });
 
 Deno.test("parseKeepassShowOutput parses explicit DROPBOX_* key-value lines in Notes or attributes", () => {
@@ -566,9 +578,7 @@ Deno.test("readStdinPaths returns empty array when stdin is a terminal and parse
 });
 
 Deno.test("runCli preserves piped stdin paths while reading KeePass master password from independent ttyPath", async () => {
-  const ttyFile = await Deno.makeTempFile();
-  await Deno.writeTextFile(ttyFile, "synth-master-pass\n");
-  try {
+  await withTempPasswordFile("synth-master-pass", async (ttyFile) => {
     await withMocks({
       keepass: { expectedPassword: "synth-master-pass" },
       routes: {
@@ -591,105 +601,101 @@ Deno.test("runCli preserves piped stdin paths while reading KeePass master passw
       assertStringIncludes(ctx.logs.join("\n"), "/b.mp3 -> /b.mp3");
       assertNoSecretsPrinted(ctx);
     });
-  } finally {
-    await Deno.remove(ttyFile).catch(() => {});
-  }
+  });
 });
 
 Deno.test("CLI entry point with piped batch paths reads master password from /dev/tty in a PTY instead of exhausted stdin", async () => {
-  const tempDir = await Deno.makeTempDir();
-  try {
-    const fakeBinDir = `${tempDir}/bin`;
-    await Deno.mkdir(fakeBinDir);
-    const fakeKeepass = `${fakeBinDir}/keepassxc-cli`;
-    await Deno.writeTextFile(
-      fakeKeepass,
-      [
-        "#!/bin/sh",
-        'printf "Enter password to unlock %s: " "$4" >&2',
-        "IFS= read -r pw",
-        'if [ "$pw" != "synth-pty-pass" ]; then',
-        '  printf "Error while reading the database: Invalid credentials were provided\\n" >&2',
-        "  exit 1",
-        "fi",
-        'printf "Title: webjam-setlist-links\\nUserName: kp-app-key-123\\nPassword: kp-app-secret-456\\nNotes: kp-refresh-token-789\\n"',
-      ].join("\n"),
-    );
-    await Deno.chmod(fakeKeepass, 0o755);
+  const cliUrl = new URL("../src/dropbox-link/dropbox_link_cli.ts", import.meta.url).pathname;
+  const pyScript = [
+    "import fcntl, os, pty, select, stat, subprocess, sys, tempfile, termios",
+    "with tempfile.TemporaryDirectory() as temp_dir:",
+    "    fake_bin_dir = os.path.join(temp_dir, 'bin')",
+    "    os.mkdir(fake_bin_dir)",
+    "    fake_keepass = os.path.join(fake_bin_dir, 'keepassxc-cli')",
+    "    with open(fake_keepass, 'w', encoding='utf-8') as f:",
+    "        f.write('\\n'.join([",
+    "            '#!/bin/sh',",
+    '            \'printf "Enter password to unlock %s: " "$4" >&2\',',
+    "            'IFS= read -r pw',",
+    '            \'if [ "$pw" != "synth-pty-pass" ]; then\',',
+    "            '  printf \"Error while reading the database: Invalid credentials were provided\\\\n\" >&2',",
+    "            '  exit 1',",
+    "            'fi',",
+    "            'printf \"Title: webjam-setlist-links\\\\nUserName: kp-app-key-123\\\\nPassword: kp-app-secret-456\\\\nNotes: kp-refresh-token-789\\\\n\"',",
+    "        ]) + '\\n')",
+    "    os.chmod(fake_keepass, stat.S_IRWXU)",
+    "    preload_path = os.path.join(temp_dir, 'preload_fetch.ts')",
+    "    with open(preload_path, 'w', encoding='utf-8') as f:",
+    "        f.write('\\n'.join([",
+    '            "globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {",',
+    "            \"  const url = typeof input === 'string' ? input : input.toString();\",",
+    "            \"  if (url.endsWith('/oauth2/token')) {\",",
+    "            \"    return Promise.resolve(new Response(JSON.stringify({ access_token: 'AT-PTY' }), { status: 200 }));\",",
+    '            "  }",',
+    "            \"  if (url.endsWith('/create_shared_link_with_settings')) {\",",
+    '            "    const body = init?.body ? JSON.parse(String(init.body)) : {};",',
+    "            \"    const name = String(body.path || '/song.mp3').replace(/^\\\\/+/, '');\",",
+    '            "    return Promise.resolve(new Response(JSON.stringify({ url: `https://www.dropbox.com/scl/fi/id/${name}?rlkey=rk&dl=0` }), { status: 200 }));",',
+    '            "  }",',
+    "            \"  return Promise.resolve(new Response('not found', { status: 404 }));\",",
+    '            "}) as typeof fetch;",',
+    "        ]) + '\\n')",
+    "    master, slave = pty.openpty()",
+    "    def setup_ctty():",
+    "        os.setsid()",
+    "        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)",
+    "    env = dict(os.environ)",
+    "    env['PATH'] = fake_bin_dir + ':' + env.get('PATH', '')",
+    "    env['DROPBOX_KEEPASS_DB'] = os.path.join(temp_dir, 'synth.kdbx')",
+    "    proc = subprocess.Popen(",
+    "        [sys.argv[1], 'run', '--preload', preload_path, '--allow-net=api.dropboxapi.com', '--allow-env=HOME,DROPBOX_KEEPASS_DB,DROPBOX_KEEPASS_ENTRY', '--allow-read=/dev/tty', '--allow-run=keepassxc-cli', sys.argv[2], '--'],",
+    "        stdin=subprocess.PIPE,",
+    "        stdout=subprocess.PIPE,",
+    "        stderr=slave,",
+    "        env=env,",
+    "        preexec_fn=setup_ctty,",
+    "        close_fds=True,",
+    "    )",
+    "    os.close(slave)",
+    "    assert proc.stdin is not None",
+    "    proc.stdin.write(b'/a.mp3\\n/b.mp3\\n')",
+    "    proc.stdin.close()",
+    "    proc.stdin = None",
+    "    prompt_buf = b''",
+    "    while b'Enter password to unlock' not in prompt_buf:",
+    "        rlist, _, _ = select.select([master], [], [], 10)",
+    "        if not rlist:",
+    "            break",
+    "        chunk = os.read(master, 1024)",
+    "        if not chunk:",
+    "            break",
+    "        prompt_buf += chunk",
+    "    os.write(master, b'synth-pty-pass\\n')",
+    "    out, _ = proc.communicate(timeout=10)",
+    "    os.close(master)",
+    "    sys.stdout.write(out.decode())",
+    "    sys.exit(proc.returncode)",
+  ].join("\n");
 
-    const preloadPath = `${tempDir}/preload_fetch.ts`;
-    await Deno.writeTextFile(
-      preloadPath,
-      [
-        "globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {",
-        "  const url = typeof input === 'string' ? input : input.toString();",
-        "  if (url.endsWith('/oauth2/token')) {",
-        "    return Promise.resolve(new Response(JSON.stringify({ access_token: 'AT-PTY' }), { status: 200 }));",
-        "  }",
-        "  if (url.endsWith('/create_shared_link_with_settings')) {",
-        "    const body = init?.body ? JSON.parse(String(init.body)) : {};",
-        "    const name = String(body.path || '/song.mp3').replace(/^\\/+/, '');",
-        "    return Promise.resolve(new Response(JSON.stringify({ url: `https://www.dropbox.com/scl/fi/id/${name}?rlkey=rk&dl=0` }), { status: 200 }));",
-        "  }",
-        "  return Promise.resolve(new Response('not found', { status: 404 }));",
-        "}) as typeof fetch;",
-      ].join("\n"),
-    );
+  const { code, stdout, stderr } = await new Deno.Command("python3", {
+    args: [
+      "-c",
+      pyScript,
+      Deno.execPath(),
+      cliUrl,
+    ],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
 
-    const cliUrl = new URL("../src/dropbox-link/dropbox_link_cli.ts", import.meta.url).pathname;
-    const pyScript = [
-      "import fcntl, os, pty, subprocess, sys, termios",
-      "master, slave = pty.openpty()",
-      "def setup_ctty():",
-      "    os.setsid()",
-      "    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)",
-      "env = dict(os.environ)",
-      "env['PATH'] = sys.argv[1] + ':' + env.get('PATH', '')",
-      "env['DROPBOX_KEEPASS_DB'] = sys.argv[4]",
-      "proc = subprocess.Popen(",
-      "    [sys.argv[2], 'run', '--preload', sys.argv[3], '--allow-net=api.dropboxapi.com', '--allow-env=HOME,DROPBOX_KEEPASS_DB,DROPBOX_KEEPASS_ENTRY', '--allow-read=/dev/tty', '--allow-run=keepassxc-cli', sys.argv[5], '--'],",
-      "    stdin=subprocess.PIPE,",
-      "    stdout=subprocess.PIPE,",
-      "    stderr=slave,",
-      "    env=env,",
-      "    preexec_fn=setup_ctty,",
-      "    close_fds=True,",
-      ")",
-      "os.close(slave)",
-      "proc.stdin.write(b'/a.mp3\\n/b.mp3\\n')",
-      "proc.stdin.close()",
-      "os.write(master, b'synth-pty-pass\\n')",
-      "out, _ = proc.communicate(timeout=10)",
-      "os.close(master)",
-      "sys.stdout.write(out.decode())",
-      "sys.exit(proc.returncode)",
-    ].join("\n");
-
-    const { code, stdout, stderr } = await new Deno.Command("python3", {
-      args: [
-        "-c",
-        pyScript,
-        fakeBinDir,
-        Deno.execPath(),
-        preloadPath,
-        `${tempDir}/synth.kdbx`,
-        cliUrl,
-      ],
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-
-    const outText = new TextDecoder().decode(stdout);
-    const errText = new TextDecoder().decode(stderr);
-    assertEquals(code, 0, `Expected exit 0, got ${code}. stderr: ${errText}\nstdout: ${outText}`);
-    assertStringIncludes(outText, "/a.mp3 -> /a.mp3");
-    assertStringIncludes(outText, "/b.mp3 -> /b.mp3");
-    assertStringIncludes(outText, "setlist: https://www.dropbox.com/scl/fi/id/a.mp3?rlkey=rk&dl=0");
-    assertStringIncludes(outText, "setlist: https://www.dropbox.com/scl/fi/id/b.mp3?rlkey=rk&dl=0");
-    assert(!outText.includes("kp-app-key-123"));
-    assert(!outText.includes("kp-app-secret-456"));
-    assert(!outText.includes("kp-refresh-token-789"));
-  } finally {
-    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
-  }
+  const outText = new TextDecoder().decode(stdout);
+  const errText = new TextDecoder().decode(stderr);
+  assertEquals(code, 0, `Expected exit 0, got ${code}. stderr: ${errText}\nstdout: ${outText}`);
+  assertStringIncludes(outText, "/a.mp3 -> /a.mp3");
+  assertStringIncludes(outText, "/b.mp3 -> /b.mp3");
+  assertStringIncludes(outText, "setlist: https://www.dropbox.com/scl/fi/id/a.mp3?rlkey=rk&dl=0");
+  assertStringIncludes(outText, "setlist: https://www.dropbox.com/scl/fi/id/b.mp3?rlkey=rk&dl=0");
+  assert(!outText.includes("kp-app-key-123"));
+  assert(!outText.includes("kp-app-secret-456"));
+  assert(!outText.includes("kp-refresh-token-789"));
 });
