@@ -25,6 +25,8 @@
 //   deno task dropbox:link -- ~/Dropbox/joshandmariamusic/song.mp3
 //   printf '/a.mp3\n/b.mp3\n' | deno task dropbox:link --
 
+import fs from "node:fs";
+
 const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
 const CREATE_LINK_URL = "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings";
 const LIST_LINKS_URL = "https://api.dropboxapi.com/2/sharing/list_shared_links";
@@ -44,6 +46,7 @@ export interface DropboxSecretsOptions {
   dbPath?: string;
   entry?: string;
   home?: string;
+  ttyPath?: string;
 }
 
 function redactSecrets(text: string, secrets: DropboxSecrets): string {
@@ -132,22 +135,41 @@ export async function dropboxSecrets(
   const dbPath = options.dbPath ?? Deno.env.get("DROPBOX_KEEPASS_DB") ??
     `${home}${DEFAULT_KEEPASS_DB_SUFFIX}`;
   const entry = options.entry ?? Deno.env.get("DROPBOX_KEEPASS_ENTRY") ?? DEFAULT_KEEPASS_ENTRY;
+  const ttyPath = options.ttyPath ?? "/dev/tty";
 
-  const command = new Deno.Command("keepassxc-cli", {
-    args: ["show", "--show-protected", "--all", dbPath, entry],
-    stdin: "inherit",
-    stdout: "piped",
-    stderr: "inherit",
-  });
-  const { code, stdout } = await command.output();
-  if (code !== 0) {
-    throw new Error(
-      `keepassxc-cli failed to read KeePass entry "${entry}" from ${dbPath} (exit ${code})`,
-    );
+  // Open an independent terminal file descriptor (/dev/tty by default) for the
+  // KeePass master-password prompt so piped batch paths on Deno.stdin (consumed
+  // to EOF by readStdinPaths()) never starve keepassxc-cli of terminal input.
+  let ttyFd: number | null = null;
+  try {
+    ttyFd = fs.openSync(ttyPath, "r");
+  } catch (err) {
+    if (options.ttyPath) {
+      throw err;
+    }
   }
 
-  const decoded = new TextDecoder().decode(stdout);
-  return parseKeepassShowOutput(decoded, entry);
+  try {
+    const command = new Deno.Command("keepassxc-cli", {
+      args: ["show", "--show-protected", "--all", dbPath, entry],
+      stdin: (ttyFd ?? "inherit") as "inherit",
+      stdout: "piped",
+      stderr: "inherit",
+    });
+    const { code, stdout } = await command.output();
+    if (code !== 0) {
+      throw new Error(
+        `keepassxc-cli failed to read KeePass entry "${entry}" from ${dbPath} (exit ${code})`,
+      );
+    }
+
+    const decoded = new TextDecoder().decode(stdout);
+    return parseKeepassShowOutput(decoded, entry);
+  } finally {
+    if (ttyFd !== null) {
+      fs.closeSync(ttyFd);
+    }
+  }
 }
 
 // Exchange the KeePass-stored refresh token for a short-lived access token. The
@@ -289,14 +311,17 @@ function printResult(r: LinkResult): void {
 // Batch entry point: resolves every path against one refreshed access token.
 // Returns 0 only if every path succeeded; a failure on one path doesn't stop
 // the rest (each is reported and the run still exits non-zero).
-export async function main(rawPaths: string[]): Promise<number> {
+export async function main(
+  rawPaths: string[],
+  options: DropboxSecretsOptions = {},
+): Promise<number> {
   if (rawPaths.length === 0) {
     console.error("[dropbox-link] no paths given; pass path args or pipe paths on stdin");
     return 1;
   }
   let accessToken: string;
   try {
-    accessToken = await refreshAccessToken();
+    accessToken = await refreshAccessToken(options);
   } catch (err) {
     console.error(`[dropbox-link] ${err instanceof Error ? err.message : String(err)}`);
     return 1;
@@ -315,17 +340,30 @@ export async function main(rawPaths: string[]): Promise<number> {
   return exitCode;
 }
 
-async function readStdinPaths(): Promise<string[]> {
-  if (Deno.stdin.isTerminal()) return [];
-  const text = await new Response(Deno.stdin.readable).text();
+export interface StdinReader {
+  isTerminal(): boolean;
+  readable: ReadableStream<Uint8Array>;
+}
+
+export async function readStdinPaths(stdin: StdinReader = Deno.stdin): Promise<string[]> {
+  if (stdin.isTerminal()) return [];
+  const text = await new Response(stdin.readable).text();
   return text.split("\n").map((l) => l.trim()).filter(Boolean);
 }
 
+export async function runCli(
+  args: string[] = Deno.args,
+  stdin: StdinReader = Deno.stdin,
+  options: DropboxSecretsOptions = {},
+): Promise<number> {
+  const argPaths = args.filter((a) => a !== "--");
+  const stdinPaths = await readStdinPaths(stdin);
+  return await main([...argPaths, ...stdinPaths], options);
+}
+
 if (import.meta.main) {
-  const argPaths = Deno.args.filter((a) => a !== "--");
-  const stdinPaths = await readStdinPaths();
   try {
-    Deno.exit(await main([...argPaths, ...stdinPaths]));
+    Deno.exit(await runCli());
   } catch (err) {
     console.error(err);
     Deno.exit(1);
