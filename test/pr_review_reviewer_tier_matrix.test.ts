@@ -148,7 +148,7 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
   // Reconciled reviewer choices stated in prose
   assertStringIncludes(
     text,
-    "The reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.",
+    "For automatic selection, the reviewer choices are Flash for Haiku and Luna authors, Sol for a Flash author, Sonnet, Astra, or Opus for a Sol author, and Sol for a Sonnet author (Opus only when Josh names the pull request); Opus or Josh reviews Astra, and Josh reviews Opus.",
   );
 
   // Sol reviews on Codex
