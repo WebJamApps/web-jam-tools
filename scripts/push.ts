@@ -28,7 +28,11 @@ import {
 } from "../hooks/lib/fix_run.ts";
 import { resolve } from "@std/path";
 import { signedFixComment } from "../src/shared/fix_comment.ts";
-import type { RunningModelOptions } from "../src/shared/codex_running_model.ts";
+import {
+  isAgySession,
+  resolveSigningAuthor,
+  type RunningModelOptions,
+} from "../src/shared/codex_running_model.ts";
 import type { CodexSkillCall } from "../hooks/lib/codex_session_reader.ts";
 
 export type PushOutcome = "allowed" | "refused" | "refused-fail-closed";
@@ -354,6 +358,15 @@ export async function runPush(
 
   if (decision.outcome !== "allowed") {
     console.error(`Refused (${decision.rule}): ${decision.reason}`);
+    return 1;
+  }
+
+  // Verify agy identity even for a plain push; this does not establish a fix run
+  // or replace the independent force-push confirmation below.
+  try {
+    if (isAgySession(options?.signing)) await resolveSigningAuthor(undefined, options?.signing);
+  } catch (error) {
+    console.error(`Refused (signing): ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
 

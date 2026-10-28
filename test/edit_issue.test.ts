@@ -7,6 +7,36 @@ import {
   PRIORITY_MAP,
 } from "../src/create-issue/lib.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
+import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
+
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`agy body replacement signs as ${identity.conversationId}`, () =>
+    withAgySigningFixture(async (signing) => {
+      const { deps, calls } = footerDeps("Content\n🤖 Authored by agy — Gemini Flash\n");
+      deps.signing = signing;
+      assertEquals(
+        await run([...BASE, "--author", "agy — Gemini Flash", "--body-file", "/tmp/b.md"], deps),
+        0,
+      );
+      const edit = calls.find((cmd) => cmd[0] === "gh")!;
+      assertEquals(
+        edit[edit.indexOf("--body") + 1].trimEnd().endsWith(`🤖 Authored by ${identity.author}`),
+        true,
+      );
+    }, identity));
+}
+
+Deno.test("agy body replacement missing record refuses before any subprocess call", () =>
+  withAgySigningFixture(async (signing, _env, recordPath) => {
+    const { deps, calls } = footerDeps("Content");
+    deps.signing = signing;
+    await Deno.remove(recordPath);
+    assertEquals(
+      await run([...BASE, "--author", "agy — Gemini Flash", "--body-file", "/tmp/b.md"], deps),
+      1,
+    );
+    assertEquals(calls, []);
+  }));
 import { type Deps, findBodyFlags, run } from "../scripts/edit-issue.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 

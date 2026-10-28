@@ -5,6 +5,56 @@ import { type Deps, run } from "../scripts/post-pr-review.ts";
 import { variedFakeBody } from "./support/varied_fake_value.ts";
 import { REVIEW_SUMMARY_HEADER } from "../scripts/gh-write/guard.ts";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
+import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
+
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`agy closing review signs as ${identity.conversationId}, preserving earlier quoted signatures`, () =>
+    withAgySigningFixture(async (signing) => {
+      const body =
+        `${REVIEW_SUMMARY_HEADER}\r\nEarlier:\r\n🤖 Reviewed by agy — Gemini Flash\r\nNotes\r\n🤖 Reviewed by agy — Gemini Flash\r\n`;
+      const calls: string[][] = [];
+      assertEquals(
+        await run(
+          ARGS,
+          fakeDeps({
+            signing,
+            readFileText: () => Promise.resolve(body),
+            runCmd: (cmd) => {
+              calls.push(cmd);
+              return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+            },
+          }),
+        ),
+        0,
+      );
+      const post = calls.find((cmd) => cmd[2] === "review")!;
+      const expected = body.slice(0, body.lastIndexOf("🤖 Reviewed")) +
+        `🤖 Reviewed by ${identity.author}\r\n`;
+      if (expected === body) {
+        assertEquals(post.slice(-2), ["--body-file", "/tmp/example-review.md"]);
+      } else assertEquals(post[post.indexOf("--body") + 1], expected);
+    }, identity));
+}
+
+Deno.test("agy review refuses missing identity before any GitHub call", () =>
+  withAgySigningFixture(async (signing, _env, recordPath) => {
+    await Deno.remove(recordPath);
+    const calls: string[][] = [];
+    assertEquals(
+      await run(
+        ARGS,
+        fakeDeps({
+          signing,
+          runCmd: (cmd) => {
+            calls.push(cmd);
+            return Promise.resolve({ code: 0, stdout: "{}", stderr: "" });
+          },
+        }),
+      ),
+      1,
+    );
+    assertEquals(calls, []);
+  }));
 
 const REVIEWER_LINE = "🤖 Reviewed by Claude Code — Claude Sonnet 5.5";
 

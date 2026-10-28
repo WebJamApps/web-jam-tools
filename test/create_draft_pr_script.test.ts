@@ -10,21 +10,50 @@
 // resolves an issue number and never calls `gh` — the guards under test here
 // all fire before any gh call, so this keeps the suite network-free.
 
-import { assertEquals, assertMatch, assertNotMatch } from "@std/assert";
+import { assertEquals, assertMatch, assertNotMatch, assertStringIncludes } from "@std/assert";
 import { LUNA_SIGNATURE, withSigningFixture } from "./support/codex_signing_fixture.ts";
+import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
 
 const SCRIPT_PATH = new URL("../scripts/create-draft-pr.sh", import.meta.url).pathname;
+
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`agy draft and update use ${identity.conversationId} with no typed author`, () =>
+    withAgySigningFixture(async (_options, env) => {
+      const dir = await makeFixtureRepo();
+      try {
+        const args = baseArgs().slice(2);
+        for (const extra of [[], ["--update"]]) {
+          const result = await runScript(dir, [...args, ...extra], env);
+          assertEquals(result.code, 0, result.stderr);
+          assertStringIncludes(result.stdout, `🤖 Work by ${identity.author}`);
+        }
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    }, identity));
+}
+
+Deno.test("agy missing record refuses draft creation before push or GitHub write", () =>
+  withModelLabelFixture(async ({ repo, env, invocations }) => {
+    const result = await runScriptWithoutDryRun(repo, baseArgs({ author: "agy — Gemini Flash" }), {
+      ...env,
+      WJT_SURFACE: "agy",
+    });
+    assertEquals(result.code, 1);
+    assertStringIncludes(result.stderr, "Cannot read");
+    assertEquals(await invocations(), []);
+  }));
 
 for (
   const [name, author, forced, expected] of [
     ["c/i: empty Codex session keeps Opus", "Claude Code — Opus", "", "Claude Code — Opus"],
     [
-      "d: forced Flash replaces typed Opus",
+      "d: forced Flash without context refuses",
       "Claude Code — Opus",
       "agy — Gemini Flash",
-      "agy — Gemini Flash",
+      undefined,
     ],
-    ["e: forced author alone", undefined, "agy — Gemini Flash", "agy — Gemini Flash"],
+    ["e: forced author alone refuses", undefined, "agy — Gemini Flash", undefined],
     ["j: no author source", undefined, "", undefined],
   ] as const
 ) {
@@ -36,7 +65,12 @@ for (
       const result = await runScript(dir, args, { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: forced });
       assertEquals(result.code, expected ? 0 : 1, result.stderr);
       if (expected) assertEquals(result.stdout.includes(`🤖 Work by ${expected}`), true);
-      else assertEquals(result.stderr.includes("--author is required"), true);
+      else {
+        assertEquals(
+          result.stderr.includes(forced ? "Cannot read" : "--author is required"),
+          true,
+        );
+      }
     } finally {
       await Deno.remove(dir, { recursive: true });
     }
@@ -238,7 +272,17 @@ async function runScript(
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, ...args, "--dry-run"],
     cwd,
-    env: { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: "", ...env },
+    env: {
+      CODEX_THREAD_ID: "",
+      CLAUDE_CODE_SESSION_ID: "",
+      WJT_SURFACE: "",
+      AGY_CONVERSATION_ID: "",
+      AGY_MODEL_NAME: "",
+      AGY_TRANSCRIPT_PATH: "",
+      AGY_HOOK_RECORD_PATH: `${cwd}/missing-hook-record.jsonl`,
+      FORCED_PR_AUTHOR: "",
+      ...env,
+    },
     clearEnv: false,
     stdout: "piped",
     stderr: "piped",
@@ -261,7 +305,17 @@ async function runScriptWithoutDryRun(
   const cmd = new Deno.Command("bash", {
     args: [SCRIPT_PATH, ...args],
     cwd,
-    env: { CODEX_THREAD_ID: "", FORCED_PR_AUTHOR: "", ...env },
+    env: {
+      CODEX_THREAD_ID: "",
+      CLAUDE_CODE_SESSION_ID: "",
+      WJT_SURFACE: "",
+      AGY_CONVERSATION_ID: "",
+      AGY_MODEL_NAME: "",
+      AGY_TRANSCRIPT_PATH: "",
+      AGY_HOOK_RECORD_PATH: `${cwd}/missing-hook-record.jsonl`,
+      FORCED_PR_AUTHOR: "",
+      ...env,
+    },
     clearEnv: false,
     stdout: "piped",
     stderr: "piped",
@@ -346,19 +400,19 @@ Deno.test("creates/dry-runs a PR cleanly with only --author, --summary, and --te
 Deno.test("roster match is by substring: agy's full model name passes", async () => {
   const res = await runScript(
     repoDir,
-    baseArgs({ author: "agy — Gemini Flash" }),
+    ["--check-author", "agy — Gemini Flash"],
   );
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("roster: an author signed `Gemini Flash (High)` still passes (web-jam-tools#1202)", async () => {
-  const res = await runScript(repoDir, baseArgs({ author: "agy — Gemini Flash (High)" }));
+  const res = await runScript(repoDir, ["--check-author", "agy — Gemini Flash (High)"]);
   assertEquals(res.code, 0, res.stderr);
 });
 
 Deno.test("roster: the retired medium level is refused in any letter case (web-jam-tools#1202)", async () => {
   for (const author of ["agy — Gemini Flash (Medium)", "agy — gemini FLASH (medium)"]) {
-    const res = await runScript(repoDir, baseArgs({ author }));
+    const res = await runScript(repoDir, ["--check-author", author]);
     assertEquals(res.code, 1, author);
     assertMatch(res.stderr, /does not name a model on the roster/);
   }
@@ -382,24 +436,24 @@ Deno.test("roster: plain 'Claude Code — Sonnet 5' is refused now that Sonnet 5
 
 // --- FORCED_PR_AUTHOR override (handle-agy-tasks.sh mechanism) ---
 
-Deno.test("FORCED_PR_AUTHOR overrides a bad --author and wins", async () => {
-  const res = await runScript(
-    repoDir,
-    baseArgs({ author: OFF_ROSTER_AUTHOR }),
-    { FORCED_PR_AUTHOR: "agy — Gemini Flash (High)" },
-  );
-  assertEquals(res.code, 0, res.stderr);
-  assertMatch(res.stdout, /🤖 Work by agy — Gemini Flash \(High\)/);
-});
+Deno.test("verified agy record overrides both bad typed author and forced Flash", () =>
+  withAgySigningFixture(async (_options, env) => {
+    const res = await runScript(repoDir, baseArgs({ author: OFF_ROSTER_AUTHOR }), {
+      ...env,
+      FORCED_PR_AUTHOR: "agy — Gemini Flash",
+    });
+    assertEquals(res.code, 0, res.stderr);
+    assertEquals(res.stdout.includes("🤖 Work by agy — Gemini Argon"), true);
+  }));
 
-Deno.test("FORCED_PR_AUTHOR is still roster-checked, not a bypass", async () => {
+Deno.test("FORCED_PR_AUTHOR without a trusted record cannot sign", async () => {
   const res = await runScript(
     repoDir,
     baseArgs({ author: VALID_AUTHOR }),
     { FORCED_PR_AUTHOR: OFF_ROSTER_AUTHOR },
   );
   assertEquals(res.code, 1);
-  assertMatch(res.stderr, /does not name a model on the roster/);
+  assertStringIncludes(res.stderr, "Cannot read");
 });
 
 // --- evidence check also applies to --test-evidence-file (web-jam-tools#145 path) ---
@@ -1259,7 +1313,12 @@ Deno.test("opening a PR when current branch matches --base is refused", async ()
 // --- --base passed through to gh pr create/edit tests ---
 
 async function makeMockGhWithArgCapture(
-  options: { labelFailure?: boolean; initialLabels?: string[]; issueLabels?: string[] } = {},
+  options: {
+    labelFailure?: boolean;
+    initialLabels?: string[];
+    issueLabels?: string[];
+    author?: string;
+  } = {},
 ) {
   const dir = await Deno.makeTempDir({ prefix: "mock-gh-args-" });
   const argsLogPath = `${dir}/gh-invocations.txt`;
@@ -1330,7 +1389,12 @@ async function withModelLabelFixture(
     env: Record<string, string>;
     invocations: () => Promise<string[][]>;
   }) => Promise<void>,
-  options: { labelFailure?: boolean; initialLabels?: string[]; issueLabels?: string[] } = {},
+  options: {
+    labelFailure?: boolean;
+    initialLabels?: string[];
+    issueLabels?: string[];
+    author?: string;
+  } = {},
 ): Promise<void> {
   const repo = await makeFixtureRepo();
   const { dir, argsLogPath } = await makeMockGhWithArgCapture(options);
@@ -1340,21 +1404,25 @@ async function withModelLabelFixture(
       '#!/usr/bin/env bash\nif [ "$1" = "push" ]; then exit 0; fi\nexec /usr/bin/git "$@"\n',
     );
     await Deno.chmod(`${dir}/git`, 0o755);
-    await test({
-      repo,
-      dir,
-      env: { PATH: `${dir}:${Deno.env.get("PATH")}` },
-      invocations: async () => {
-        try {
-          return (await Deno.readTextFile(argsLogPath))
-            .split("=== gh invocation ===\n").slice(1)
-            .map((call) => call.split("\n=== end ===")[0].split("\n"));
-        } catch (error) {
-          if (error instanceof Deno.errors.NotFound) return [];
-          throw error;
-        }
-      },
-    });
+    const invoke = (signingEnv: Record<string, string> = {}) =>
+      test({
+        repo,
+        dir,
+        env: { ...signingEnv, PATH: `${dir}:${Deno.env.get("PATH")}` },
+        invocations: async () => {
+          try {
+            return (await Deno.readTextFile(argsLogPath))
+              .split("=== gh invocation ===\n").slice(1)
+              .map((call) => call.split("\n=== end ===")[0].split("\n"));
+          } catch (error) {
+            if (error instanceof Deno.errors.NotFound) return [];
+            throw error;
+          }
+        },
+      });
+    const identity = AGY_IDENTITIES.find((entry) => entry.author === options.author);
+    if (identity) await withAgySigningFixture((_options, env) => invoke(env), identity);
+    else await invoke();
   } finally {
     await Deno.remove(repo, { recursive: true });
     await Deno.remove(dir, { recursive: true });
@@ -1385,7 +1453,7 @@ for (const [author, label] of MODEL_LABEL_CASES) {
       assertEquals(calls[0].includes("--add-label"), false);
       assertEquals(calls[0].join("\n").includes(`🤖 Work by ${author}`), true);
       assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", label]);
-    }));
+    }, { author }));
 
   Deno.test(`model label: missing ${label} preserves the new PR and reports repository`, () =>
     withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
@@ -1399,7 +1467,7 @@ for (const [author, label] of MODEL_LABEL_CASES) {
         ["pr", "create"],
         ["pr", "edit"],
       ]);
-    }, { labelFailure: true }));
+    }, { labelFailure: true, author }));
 
   Deno.test(`model label: dry run signed ${author} prints ${label} with no writes`, () =>
     withModelLabelFixture(async ({ repo, dir, env, invocations }) => {
@@ -1415,7 +1483,7 @@ for (const [author, label] of MODEL_LABEL_CASES) {
         false,
       );
       assertEquals(await Deno.readTextFile(`${dir}/labels`), "");
-    }));
+    }, { author }));
 }
 
 Deno.test("model label: Fable opens the draft before reporting no tier-order label", () =>
@@ -1450,17 +1518,28 @@ for (const initialLabels of [["Flash"], []]) {
     }, { initialLabels }));
 }
 
-Deno.test("model label: forced signing author controls footer and label", () =>
-  withModelLabelFixture(async ({ repo, env, invocations }) => {
-    const result = await runScriptWithoutDryRun(repo, baseArgs({ author: "Codex — GPT-6.1 Sol" }), {
-      ...env,
-      FORCED_PR_AUTHOR: "agy — Gemini Flash",
-    });
-    assertEquals(result.code, 0, result.stderr);
-    const calls = await invocations();
-    assertEquals(calls[0].join("\n").includes("🤖 Work by agy — Gemini Flash"), true);
-    assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", "Flash"]);
-  }));
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`model label: verified ${identity.conversationId} controls footer and label`, () =>
+    withModelLabelFixture(async ({ repo, env, invocations }) => {
+      const result = await runScriptWithoutDryRun(
+        repo,
+        baseArgs({ author: "agy — Gemini Flash" }),
+        {
+          ...env,
+          FORCED_PR_AUTHOR: "agy — Gemini Flash",
+        },
+      );
+      assertEquals(result.code, 0, result.stderr);
+      const calls = await invocations();
+      assertEquals(calls[0].join("\n").includes(`🤖 Work by ${identity.author}`), true);
+      const label = identity.conversationId === "alpha"
+        ? "Argon"
+        : identity.conversationId === "beta"
+        ? "Sonnet"
+        : "Flash";
+      assertEquals(calls[1], ["pr", "edit", LABEL_PR_URL, "--add-label", label]);
+    }, { author: identity.author }));
+}
 
 Deno.test("model label: Sol signature wins over the issue's Flash label", () =>
   withModelLabelFixture(async ({ repo, env, invocations }) => {

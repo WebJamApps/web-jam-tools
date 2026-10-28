@@ -18,6 +18,31 @@
  */
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
+import { AGY_IDENTITIES, withAgySigningFixture } from "./support/agy_signing_fixture.ts";
+
+for (const identity of AGY_IDENTITIES) {
+  Deno.test(`agy ${identity.conversationId}: recorded identity allows plain pushes but grants no force approval`, () =>
+    withAgySigningFixture(async (signing, _env, recordPath) => {
+      let pushes = 0;
+      const options = {
+        signing,
+        branch: "feature-fixture",
+        readSkillCall: () => Promise.resolve(null),
+        spawnPush: () => {
+          pushes++;
+          return Promise.resolve(0);
+        },
+        confirmForce: () => false,
+      };
+      assertEquals(await pushWithContext([], undefined, options), 0);
+      assertEquals(pushes, 1);
+      assertEquals(await pushWithContext(["--force-with-lease"], undefined, options), 1);
+      assertEquals(pushes, 1);
+      await Deno.remove(recordPath);
+      assertEquals(await pushWithContext([], undefined, options), 1);
+      assertEquals(pushes, 1);
+    }, identity));
+}
 import {
   confirmForcePush,
   evaluatePush,
@@ -40,6 +65,29 @@ const runPush: typeof pushWithContext = (args, cwd, options) =>
 
 const SCRIPT_PATH = new URL("../scripts/push.ts", import.meta.url).pathname;
 const SHARED_CONFIG_PATH = new URL("../deno.json", import.meta.url).pathname;
+
+Deno.test("a forced agy name with no invocation context cannot push", () =>
+  withAgySigningFixture(async (signing, env) => {
+    delete env.AGY_CONVERSATION_ID;
+    delete env.AGY_MODEL_NAME;
+    delete env.AGY_TRANSCRIPT_PATH;
+    delete env.WJT_SURFACE;
+    env.FORCED_PR_AUTHOR = "agy — Gemini Flash";
+    let pushes = 0;
+    assertEquals(
+      await pushWithContext([], undefined, {
+        signing,
+        branch: "feature-fixture",
+        readSkillCall: () => Promise.resolve(null),
+        spawnPush: () => {
+          pushes++;
+          return Promise.resolve(0);
+        },
+      }),
+      1,
+    );
+    assertEquals(pushes, 0);
+  }));
 
 const fixBody = (author: string) => `Fixed formatting.\n\n🤖 Fixed by ${author}\n`;
 
@@ -333,7 +381,8 @@ async function createFixtureRepo(): Promise<FixtureEnv> {
   const fixtureDenoConfig = JSON.stringify(
     {
       tasks: {
-        push: `deno run --allow-run=git "${SCRIPT_PATH}"`,
+        push:
+          `deno run --allow-env=WJT_SURFACE,AGY_CONVERSATION_ID,AGY_MODEL_NAME,AGY_TRANSCRIPT_PATH,FORCED_PR_AUTHOR --allow-run=git "${SCRIPT_PATH}"`,
       },
     },
     null,
@@ -610,7 +659,13 @@ for (const form of ["canonical", "repo-dir", "shared-config", "short-config", "d
           "--force-with-lease",
         ];
       } else if (form === "direct-script") {
-        args = ["run", "--allow-run=git", SCRIPT_PATH, "--force-with-lease"];
+        args = [
+          "run",
+          "--allow-env=WJT_SURFACE,AGY_CONVERSATION_ID,AGY_MODEL_NAME,AGY_TRANSCRIPT_PATH,FORCED_PR_AUTHOR",
+          "--allow-run=git",
+          SCRIPT_PATH,
+          "--force-with-lease",
+        ];
       }
       // A piped affirmative answer must not substitute for terminal confirmation.
       const child = new Deno.Command(Deno.execPath(), {

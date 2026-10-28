@@ -11,6 +11,7 @@
  */
 import { findCredentialLiteral } from "../../hooks/lib/detect_credential_literal.ts";
 import {
+  isAgySession,
   isCodexSession,
   resolveSigningAuthor,
   type RunningModelOptions,
@@ -120,6 +121,7 @@ export interface FooterAuthorEntry {
 
 const WORK_BY_LINE = /^\s*🤖 Work by(?:\s+(.*))?$/u;
 const REVIEWED_BY_LINE = /^\s*🤖 Reviewed by(?:\s+(.*))?$/u;
+const FIXED_BY_LINE = /^\s*🤖 Fixed by(?:\s+(.*))?$/u;
 
 /** Rewrite signing lines without changing any other text or line endings. */
 export async function rewriteSigningLines(
@@ -133,17 +135,26 @@ export async function rewriteSigningLines(
   const indices = lines.flatMap((line, index) => {
     const matched = closingReviewerOnly
       ? index === last && REVIEWED_BY_LINE.test(line)
-      : WORK_BY_LINE.test(line) || REVIEWED_BY_LINE.test(line);
+      : WORK_BY_LINE.test(line) || REVIEWED_BY_LINE.test(line) || FIXED_BY_LINE.test(line);
     return matched ? [index] : [];
   });
   if (indices.length === 0) return body;
   const first = lines[indices[0]];
-  const typed = (first.match(WORK_BY_LINE) ?? first.match(REVIEWED_BY_LINE))?.[1]?.trim();
+  const typed = (first.match(WORK_BY_LINE) ?? first.match(REVIEWED_BY_LINE) ??
+    first.match(FIXED_BY_LINE))?.[1]?.trim();
   const author = await resolveSigningAuthor(typed, options);
-  if (!isCodexSession(options)) return body;
+  const codex = isCodexSession(options);
+  if (!codex && !isAgySession(options) && author === typed) return body;
   for (const index of indices) {
+    // The push path already verified a Codex fix's parent/helper ancestry.
+    // Reposting must not replace its permitted helper with the parent.
+    if (codex && FIXED_BY_LINE.test(lines[index])) continue;
     const prefix = lines[index].match(/^\s*/u)?.[0] ?? "";
-    const kind = WORK_BY_LINE.test(lines[index]) ? "Work" : "Reviewed";
+    const kind = WORK_BY_LINE.test(lines[index])
+      ? "Work"
+      : FIXED_BY_LINE.test(lines[index])
+      ? "Fixed"
+      : "Reviewed";
     lines[index] = `${prefix}🤖 ${kind} by ${author}`;
   }
   return lines.join("");
