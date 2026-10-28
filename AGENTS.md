@@ -493,3 +493,11 @@ Read the Deno Deploy CLI and runtime rules in [docs/uptime-monitoring.md](docs/u
   (`Deno.makeTempDir()`) with isolated destination parameters (`--claude-dest`, `--agy-dest`,
   `allowUnsafeForTesting: true`), ensuring test suites pass deterministically in clean CI and
   container environments without preinstalled agent surfaces.
+- **Independent Terminal Input (`/dev/tty`) for Interactive Prompts After Reading Piped `stdin`**:
+  When a CLI tool reads batch data from `Deno.stdin` (such as piped file paths consumed to EOF) and
+  subsequently spawns an interactive subprocess that prompts on its standard input (such as
+  `keepassxc-cli` prompting for a master password), never pass `stdin: "inherit"` to the
+  subprocess, which hands it the already-exhausted pipe. Open an independent terminal file
+  descriptor (`/dev/tty` via `fs.openSync(ttyPath, "r")`, injectable via `ttyPath` for tests) and
+  pass it to `Deno.Command`'s `stdin` (closing it in `finally`), and test the CLI entry point
+  end-to-end with piped `stdin` rather than only stubbing `Deno.Command` with `stdin: "null"`.
