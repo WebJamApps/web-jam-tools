@@ -12,7 +12,7 @@ metadata:
 
 Design work does not happen in plain chat. The moment a conversation turns into design — options, trade-offs, decisions worth recording — the session runs `/design-issue` and works inside it. That single rule is what lets the design machinery live in the skill instead of in memory, loading only when design is actually happening.
 
-**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/work-issue`.
+**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/work-issue`. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
@@ -244,7 +244,7 @@ Nothing is filed to GitHub until GATE 2 passes.
 
 A measure-first run reaches Gate 1 like any other run — only later: Gate 1 waits until the run's own measurement has reported and the document has been revised from it, since there is no design to approve until then. Gate 2 fires afterward, unchanged; it never presents the measurement as a plan-table row, because the measurement already happened inside the run, before Gate 1.
 
-A third gate — dispatch — exists as a standing rule and is not this skill's to hold, because the skill never dispatches at all.
+A third gate — dispatch — exists as a standing rule and is not this skill's to hold, because the skill never dispatches at all. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
@@ -284,6 +284,8 @@ These are properties of the skill, written as explicit refusals:
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
 | leave superseded drafts, renamed artifacts, or obsolete intermediate runbook files behind in Dropbox upon deliverable finalization | destination folders must contain only active, canonical deliverables to prevent the accumulation of stale working duplicates |
+
+The dispatch rows above carry one exception. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
