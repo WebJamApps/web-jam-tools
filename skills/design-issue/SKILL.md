@@ -1,6 +1,6 @@
 ---
 name: design-issue
-description: Design-then-issue-plan workflow prior to filing GitHub issues. Design work runs through this skill. Never dispatches (ends at "the issues exist").
+description: Design-then-issue-plan workflow prior to filing GitHub issues. Design work runs through this skill. Never dispatches build work (ends at "the issues exist"); its end-of-run memory PR is the one exception.
 metadata:
   version: v1
   publisher: josh
@@ -12,7 +12,7 @@ metadata:
 
 Design work does not happen in plain chat. The moment a conversation turns into design — options, trade-offs, decisions worth recording — the session runs `/design-issue` and works inside it. That single rule is what lets the design machinery live in the skill instead of in memory, loading only when design is actually happening.
 
-**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/work-issue`.
+**ABSOLUTE STANDING RULE:** The skill **NEVER dispatches.** It ends at "the issues exist". It never spawns a build agent, hands work to a lane, starts a worktree, or runs `/work-issue`. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
@@ -123,6 +123,7 @@ A decision is not ready to put to Josh until these conditions are met:
 7. **A ruling already given settles what it settles.** Before putting a decision, check whether Josh's rulings in this run, or the design document's standing rules, already determine the answer. When they do, write the answer into the design and list it at Gate 1; ask only the forks nothing already settles, and irreversible actions. Josh, 2026-10-16: "Sol or Sonnet or Argon all three are eligible and i am not sure why you are giving me these choices you should have been able to figure out this answer".
 8. **Nothing new arrives with the recommendation.** Before the first piece of a decision is sent, read the code that every option and every add-on touches, including the part the recommendation would change. Anything the recommendation needs that is in no option becomes its own option or its own decision, with its own facts and costs, before the pick is asked for. Josh, 2026-10-11: "ok this is the kind of information I needed up front when I was approving option 2 not afterwards when I had already approved it, please try to do better next time".
 9. **A rule is stated as Josh ruled it.** A rule the design states (which label, which model, who reviews) carries no condition Josh did not ask for, such as "once the lane is built" or "until the label exists, use X", and no such condition is put to him as a decision. A tool he already uses is usable; anything unbuilt around it is a follow-up issue, not a precondition. When he has ruled "A or B", the design says "A or B". Josh, 2026-10-02: "i think this is sounding like beauracracy again and i am not sure why we are discussing this ? Codex is running on plus right now and I can use it if I want to use it. We will complete the issues as time/token permits, having labels that match is a very minor thing here, please stop this discussion".
+10. **A ruling goes into the design document and nothing more.** When Josh picks an option during a run, the ruling is written into the design and the run moves straight to the next decision. Any manual step the ruling implies is planned as its own `Josh` issue at Gate 2, with its runbook, and is never handed to him mid-run as "run this now", even when the option text said "today" or "now". Josh, 2026-10-28: "why am i running this now!? we are in the middle of a design-issue run!"
 
 #### Failure Shapes Ruled Out:
 - **The bare fork:** Two labeled options and an "I lean 1" with nothing under either.
@@ -228,6 +229,7 @@ When a run finishes on Claude Code, the skill reads the memory surfaces for rule
 - **Guard rules are NEVER candidates.** A guard rule (an approval gate, a deletion guard, a credential rule, an authorization-to-spend rule) must fire in sessions that act without loading the skill. Guard rules are never offered as consume, never offered as delete, and never split; they stay in memory whole and are omitted from the table entirely.
 - **Executed by script, never by hand.** The file surgery is performed by `scripts/consume_memory_rules.ts` in `web-jam-tools` (dry-run by default, moves to trash never `rm`, keeps a word-for-word copy of each consumed rule and checks that copy byte for byte, strips removed slugs from `MEMORY.md`, and reports dangling links).
 - **Where the copy of a consumed rule is kept.** In a file of its own beside the design document, `~/Dropbox/web-jam-llms/<Theme>/<topic>-captured-rules.md`, and never in the design document. Gate 1 approval is tied to the exact text of the design document, and Phase 4 runs after that approval, so a step of Phase 4 that wrote into the design document would leave it reading "changed since approval" with no change to the design. The captured-rules file is a record of what left memory. It is not design, it is not presented at Gate 1, and it has no approval.
+- **The end of the run ships the consumes in one step: one pull request and the memory deletions together.** `scripts/consume_memory_rules.ts` removes the memory files and keeps the copies; it never writes a skill body. Once Josh approves the table, the run hands every skill-body edit to a Sonnet subagent, which opens one pull request carrying all of them, and the run executes `scripts/consume_memory_rules.ts --delete` at the same time, without waiting for the merge. No issue is filed for either. Josh, 2026-10-28: "i just want you to dispatch this to sonnet and make the PR now, I do not want an issue filed to add the memory, this is way too much beauracracy, idiotic !" and "this should be the standard way for the end of the design-issue run, the PR is pushed up with the memory adds and the other memory is deleted all at the same time at the end of the design-issue run !"
 
 ---
 
@@ -242,7 +244,7 @@ Nothing is filed to GitHub until GATE 2 passes.
 
 A measure-first run reaches Gate 1 like any other run — only later: Gate 1 waits until the run's own measurement has reported and the document has been revised from it, since there is no design to approve until then. Gate 2 fires afterward, unchanged; it never presents the measurement as a plan-table row, because the measurement already happened inside the run, before Gate 1.
 
-A third gate — dispatch — exists as a standing rule and is not this skill's to hold, because the skill never dispatches at all.
+A third gate — dispatch — exists as a standing rule and is not this skill's to hold, because the skill never dispatches at all. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
@@ -282,6 +284,8 @@ These are properties of the skill, written as explicit refusals:
 | **dispatch — spawn a build agent, hand work to a lane, start a worktree, run `/work-issue`** | absolute standing rule |
 | offer dispatch as a next step in the same breath as reporting what it filed | same rule, quieter failure |
 | leave superseded drafts, renamed artifacts, or obsolete intermediate runbook files behind in Dropbox upon deliverable finalization | destination folders must contain only active, canonical deliverables to prevent the accumulation of stale working duplicates |
+
+The dispatch rows above carry one exception. The one named exception: Phase 4's consume pull request, which carries the skill-body edits of the memory rules Josh approved in the end-of-run table, is handed to a Sonnet subagent at the end of the run.
 
 ---
 
