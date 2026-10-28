@@ -500,4 +500,9 @@ Read the Deno Deploy CLI and runtime rules in [docs/uptime-monitoring.md](docs/u
   subprocess, which hands it the already-exhausted pipe. Open an independent terminal file
   descriptor (`/dev/tty` via `fs.openSync(ttyPath, "r")`, injectable via `ttyPath` for tests) and
   pass it to `Deno.Command`'s `stdin` (closing it in `finally`), and test the CLI entry point
-  end-to-end with piped `stdin` rather than only stubbing `Deno.Command` with `stdin: "null"`.
+  end-to-end with piped `stdin` rather than only stubbing `Deno.Command` with `stdin: "null"`. In
+  Python PTY subprocess helpers (`subprocess.Popen` + `pty.openpty()`) that close `proc.stdin` early
+  to deliver EOF on piped `stdin` before calling `proc.communicate(timeout=...)`, always set
+  `proc.stdin = None` immediately after `proc.stdin.close()` so Python 3.12 runtimes in CI do not
+  call `self.stdin.flush()` and fail with `ValueError: flush of closed file`, and ensure new test
+  fixtures respect the exact permission flags documented in the issue and PR test plan.
