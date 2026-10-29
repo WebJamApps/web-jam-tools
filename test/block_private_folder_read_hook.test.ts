@@ -725,6 +725,12 @@ Deno.test("private-folder policy refuses untracked directory changes", async () 
       "cd /tmp/*; ls",
       'cd "$UNKNOWN_DIRECTORY"; ls',
       "command pushd /tmp; ls",
+      "cd ~/Dropbox/web-jam-llms; builtin cd ..; ls",
+      "cd ~/Dropbox/web-jam-llms; eval 'cd ..'; ls",
+      "cd ~/Dropbox/web-jam-llms; source /tmp/step.sh; ls",
+      "cd ~/Dropbox/web-jam-llms; . /tmp/step.sh; ls",
+      "command builtin cd /tmp; ls",
+      "command eval 'cd /tmp'; ls",
     ]
   ) {
     assert(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS) !== null, command);

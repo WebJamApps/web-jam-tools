@@ -19,8 +19,10 @@ import * as path from "jsr:@std/path@^1.0.0";
 import {
   ASSIGN_RE,
   findHeredocMarker,
+  MAX_WRAPPER_ITERATIONS,
   MAX_WRAPPER_RECURSION_DEPTH,
   resolveThroughWrappers,
+  resolveWrapperLayer,
   splitOnOperators,
   splitShellTokens,
   stripHeredocs,
@@ -331,6 +333,37 @@ function scriptArgument(argv: string[]): string | undefined {
   return undefined;
 }
 
+const UNRESOLVED_SHELL_COMMANDS = new Set([
+  "builtin",
+  "eval",
+  "source",
+  ".",
+  "pushd",
+  "popd",
+]);
+
+function checkUnresolvedShellCommand(tokens: string[]): void {
+  let current = tokens;
+  let iterations = 0;
+  while (current.length && iterations < MAX_WRAPPER_ITERATIONS) {
+    let i = 0;
+    while (i < current.length && (ASSIGN_RE.test(current[i]) || current[i] === "exec")) i++;
+    if (i >= current.length) return;
+    const token = current[i];
+    const name = token === "." ? "." : path.basename(token);
+    if (UNRESOLVED_SHELL_COMMANDS.has(name)) {
+      if (name === "pushd" || name === "popd") {
+        throw new Error("cannot resolve shell directory stack");
+      }
+      throw new Error(`cannot resolve ${name} execution`);
+    }
+    const layer = resolveWrapperLayer(current.slice(i));
+    if (!layer || layer.kind === "nested") return;
+    current = layer.argv;
+    iterations++;
+  }
+}
+
 function inspectShell(
   command: string,
   context: InspectionContext,
@@ -394,6 +427,7 @@ function inspectShell(
     while (invocation.length && (ASSIGN_RE.test(invocation[0]) || invocation[0] === "exec")) {
       invocation.shift();
     }
+    checkUnresolvedShellCommand(invocation);
     const resolved = resolveThroughWrappers(invocation);
     if (resolved.kind === "cap-exceeded") throw new Error("wrapper nesting limit");
     if (resolved.kind === "nested") {
@@ -404,7 +438,7 @@ function inspectShell(
     }
     const argv = resolved.argv.slice();
     while (argv.length && (ASSIGN_RE.test(argv[0]) || argv[0] === "exec")) argv.shift();
-    const name = path.basename(argv[0] ?? "");
+    const name = argv[0] === "." ? "." : path.basename(argv[0] ?? "");
     if (name === "dropbox") return "Dropbox desktop command";
     if (sweepCommand(argv, context)) return "whole-home sweep";
     if (INTERPRETERS.has(name)) {
@@ -422,6 +456,9 @@ function inspectShell(
     }
     if (name === "pushd" || name === "popd") {
       throw new Error("cannot resolve shell directory stack");
+    }
+    if (name === "builtin" || name === "eval" || name === "source" || name === ".") {
+      throw new Error(`cannot resolve ${name} execution`);
     }
     if (name === "cd") {
       const destinations = argv.slice(1);
