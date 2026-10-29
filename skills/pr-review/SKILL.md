@@ -15,9 +15,10 @@ This skill provides a systematic pipeline for automated cross-model pull request
 Cross-model review ensures fresh perspective and catches model-specific blind spots before Josh does final human review and merge.
 
 **Direct named requests authorize the current reviewer (Josh, 2026-10-28).** When Josh directly
-invokes `/pr-review` or `$pr-review` with a PR number or URL, perform that review in the current
-session. Do not ask him to confirm the reviewer pairing, require a model switch, or delegate merely
-because the current model differs from a default reviewer, ranks below an author, or the author's
+invokes `/pr-review` or `$pr-review` with a PR number or URL
+(typed by Josh in the session, not passed on by an agent or script), perform that review in the
+current session. Do not ask him to confirm the reviewer pairing, require a model switch, or delegate
+merely because the current model differs from a default reviewer, ranks below an author, or the author's
 named model (for example, Gemini Argon) has no entry in the tier table. His direct invocation is the
 reviewer-selection authorization. Establish the actual reviewer and contributors, preserve the ban
 on reviewing the current model's own contributions, and keep the duplicate-review and head-SHA

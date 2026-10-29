@@ -166,6 +166,34 @@ Deno.test("skills/pr-review/SKILL.md states reviewer-tier rule, default reviewer
     text,
     "An unattended Sol review launch passes `--dangerously-bypass-hook-trust` and sets `WJT_UNATTENDED=1`.",
   );
+
+  // Direct named request authorization
+  assertStringIncludes(
+    text,
+    "**Direct named requests authorize the current reviewer (Josh, 2026-10-28).**",
+  );
+  assertStringIncludes(
+    text,
+    "typed by Josh in the session, not passed on by an agent or script",
+  );
+  assertStringIncludes(
+    text,
+    "A missing tier-table entry is not an unknown contributor identity.",
+  );
+
+  // Automatic-selection scoping on Step 1 stop bullets
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if the review range carries Astra contributions",
+  );
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if any commit in the review range names an Opus author or co-author",
+  );
+  assertStringIncludes(
+    text,
+    "- For automatic selection only: Stop if the active model ranks below any contributor's tier in the review range",
+  );
 });
 
 Deno.test("reviewer-matrix assertions detect stale table and prose values", async () => {
