@@ -713,6 +713,29 @@ Deno.test("private-folder hook refuses malformed command and cwd payloads", asyn
   }
 });
 
+Deno.test("private-folder policy refuses untracked directory changes", async () => {
+  for (
+    const command of [
+      "pushd ~/Dropbox/web-jam-llms >/dev/null; pushd .. >/dev/null; ls",
+      "cd ~/Dropbox/web-jam-llms; pushd /tmp; popd; cd ..; ls",
+      "popd; ls",
+      "cd ~/Dropbox/web-jam-llms; cd /tmp; cd -; cd ..; ls",
+      "cd -P /tmp; ls",
+      "cd ~/Dropbox/web-jam-llms; cd /tmp; cd ~-; cd ..; ls",
+      "cd /tmp/*; ls",
+      'cd "$UNKNOWN_DIRECTORY"; ls',
+      "command pushd /tmp; ls",
+    ]
+  ) {
+    assert(checkPrivateFolderCommand(command, EXPECTED_16_FOLDERS) !== null, command);
+    const result = await runHook({ tool_name: "Bash", tool_input: { command } });
+    assertEquals(result.code, 2, command);
+    assertEquals(result.stdout, "", command);
+    assertStringIncludes(result.stderr, "cannot resolve", command);
+  }
+  assertEquals(checkPrivateFolderCommand("cd -- /tmp; ls", EXPECTED_16_FOLDERS), null);
+});
+
 Deno.test("private-folder path variables come only from real assignments in the current shell", () => {
   for (
     const command of [

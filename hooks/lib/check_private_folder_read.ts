@@ -420,8 +420,20 @@ function inspectShell(
         continue;
       }
     }
+    if (name === "pushd" || name === "popd") {
+      throw new Error("cannot resolve shell directory stack");
+    }
     if (name === "cd") {
-      parentContext.cwd = resolvedPath(argv[1] ?? context.home, context);
+      const destinations = argv.slice(1);
+      if (destinations[0] === "--") destinations.shift();
+      const destination = destinations[0] ?? context.home;
+      if (
+        destinations.length > 1 || destination.startsWith("-") ||
+        /^~(?!\/|$)/.test(destination) || /[*?[\]{}]/.test(expandedPath(destination, context))
+      ) {
+        throw new Error("cannot resolve cd target");
+      }
+      parentContext.cwd = resolvedPath(destination, context);
       context = parentContext;
       continue;
     }
