@@ -66,12 +66,7 @@ async function createFixtureHome(): Promise<string> {
 }
 
 async function cleanupFixtureHome(tmpHome: string): Promise<void> {
-<<<<<<< HEAD
-  await runBash(`rm -rf "$1" /tmp/clean.py`, { 1: tmpHome });
-  await runBash(`rm -rf "${tmpHome}" /tmp/clean.py`);
-=======
-  await runBash(`rm -rf "${tmpHome}"`);
->>>>>>> cd224a7 (test(hooks): isolate production-media script fixtures)
+  await runBash(`rm -rf "$FIXTURE_HOME"`, { FIXTURE_HOME: tmpHome });
 }
 
 async function runHookLauncher(
